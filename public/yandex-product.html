@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Добавить товар Yandex Market</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <h1>Добавить товар Yandex Market</h1>
+          <p>Отдельная форма для карточки ЯМ: категория, описание, производитель, изображения, штрихкоды и дополнительные параметры.</p>
+        </div>
+        <div class="header-actions">
+          <a class="secondary-link-button" href="/">Назад в склад</a>
+          <a class="secondary-link-button" href="/ozon-product.html">Форма Ozon</a>
+          <button id="logoutButton" class="secondary-button" type="button">Выйти</button>
+        </div>
+      </header>
+
+      <section class="ozon-builder">
+        <form id="yandexProductForm" class="ozon-form">
+          <div class="form-steps">
+            <span class="active">1. Основное</span>
+            <span>2. Категория</span>
+            <span>3. Медиа и коды</span>
+            <span>4. JSON-поля</span>
+            <span>5. Выгрузка</span>
+          </div>
+          <section class="form-section">
+            <h2>Основное</h2>
+            <label>
+              Кабинет ЯМ
+              <select name="target" id="yandexTargetInput" required></select>
+            </label>
+            <label>
+              SKU / артикул продавца
+              <input name="offerId" type="text" required />
+            </label>
+            <label>
+              Название
+              <input name="name" type="text" required />
+            </label>
+            <label>
+              Производитель / бренд
+              <input name="vendor" type="text" required />
+            </label>
+            <label>
+              Категория ЯМ ID
+              <input name="marketCategoryId" type="number" min="1" required />
+            </label>
+            <label>
+              Цена в кабинете, RUB
+              <input name="price" type="number" min="0" step="1" />
+            </label>
+            <label>
+              Описание
+              <textarea name="description" required></textarea>
+            </label>
+          </section>
+
+          <section class="form-section wide">
+            <h2>Медиа и коды</h2>
+            <label>
+              Изображения
+              <textarea name="pictures" placeholder="Один URL на строку" required></textarea>
+            </label>
+            <div class="image-importer">
+              <div>
+                <strong>Импорт изображений</strong>
+                <span>PNG, JPG, WEBP или GIF до 10 МБ. URL добавится в список изображений.</span>
+              </div>
+              <input id="yandexImageUpload" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple />
+              <button id="yandexImageUploadButton" class="secondary-button compact-button" type="button">Импортировать</button>
+              <small id="yandexImageUploadStatus">Файлы ещё не выбраны.</small>
+            </div>
+            <label>
+              Штрихкоды
+              <textarea name="barcodes" placeholder="Один код на строку"></textarea>
+            </label>
+            <label>
+              Дополнительные поля ЯМ JSON
+              <textarea name="extraJson" class="code-area">{}</textarea>
+            </label>
+          </section>
+
+          <div class="form-actions">
+            <button id="saveYandexDraftButton" class="secondary-button" type="button">Сохранить в личный склад</button>
+            <button class="primary-button" type="submit">Выгрузить в Yandex Market</button>
+            <div id="yandexProductStatus" class="rate-info">Заполните форму. Выгрузка произойдет только после подтверждения.</div>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script src="/yandex-product.js"></script>
+  </body>
+</html>

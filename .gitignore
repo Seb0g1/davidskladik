@@ -1,0 +1,7 @@
+node_modules/
+.env
+data/
+output/
+config/ozon-product-rules.json
+*.log
+.claude/

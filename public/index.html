@@ -1,0 +1,441 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Личный склад</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <h1>Личный склад</h1>
+          <p>Ozon и Yandex Market, поставщики PriceMaster, стоп-листы и управляемая замена цены.</p>
+        </div>
+        <div class="header-actions">
+          <a class="primary-link-button" href="/ozon-product.html">Добавить товар Ozon</a>
+          <a class="secondary-link-button" href="/yandex-product.html">Добавить товар ЯМ</a>
+          <button id="logoutButton" class="secondary-button" type="button">Выйти</button>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="Разделы">
+        <button class="tab-button active" type="button" data-tab="warehouse">Личный склад</button>
+        <button class="tab-button" type="button" data-tab="suppliers">Поставщики</button>
+        <button class="tab-button" type="button" data-tab="accounts">Кабинеты</button>
+        <button class="tab-button" type="button" data-tab="bulk">Массовые цены</button>
+      </nav>
+
+      <section id="warehouseTab" class="tab-panel active">
+        <section class="control-panel">
+          <div class="warehouse-topbar">
+            <div class="segmented" aria-label="Фильтр маркетплейса">
+              <button class="segment active" type="button" data-marketplace="all">Все</button>
+              <button class="segment" type="button" data-marketplace="ozon">Ozon</button>
+              <button class="segment" type="button" data-marketplace="yandex">Yandex Market</button>
+            </div>
+            <label class="search-control">
+              Поиск
+              <input id="warehouseSearchInput" type="search" placeholder="Название, артикул, поставщик" />
+            </label>
+            <label class="status-control">
+              Статус маркетплейса
+              <select id="ozonStateFilter">
+                <option value="all">Все статусы</option>
+                <option value="active">Активные</option>
+                <option value="archived">Архив</option>
+                <option value="inactive">Неактивные</option>
+                <option value="out_of_stock">Нет в наличии</option>
+                <option value="unknown">Не загружен</option>
+              </select>
+            </label>
+            <label class="rate-control">
+              Курс USD/RUB
+              <input id="warehouseUsdRateInput" type="number" min="1" step="0.0001" required />
+            </label>
+            <button id="warehouseSyncButton" class="secondary-button sync-button" type="button">Синхронизировать Ozon + ЯМ</button>
+            <button id="warehouseRefreshPricesButton" class="secondary-button" type="button">Обновить видимые фото</button>
+            <button id="warehouseSelectChangedButton" class="secondary-button" type="button" disabled>Выбрать изменения</button>
+            <button id="warehouseSendButton" class="danger-button" type="button" disabled>Обновить цены</button>
+          </div>
+          <div id="warehouseSyncProgress" class="sync-progress hidden" aria-live="polite">
+            <div class="sync-progress-head">
+              <div>
+                <span id="syncProgressTitle">Синхронизация маркетплейсов</span>
+                <strong id="syncProgressStage">Подготовка...</strong>
+              </div>
+              <div class="sync-head-actions">
+                <div id="syncProgressTargets" class="sync-targets">Ozon + Yandex Market</div>
+                <button id="syncProgressClose" class="icon-button" type="button" aria-label="Свернуть синхронизацию">×</button>
+              </div>
+            </div>
+            <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div id="syncProgressBar" class="progress-fill"></div>
+            </div>
+            <p id="syncProgressMeta">Загружаю товары, цены, статусы, остатки и изображения.</p>
+          </div>
+          <button id="syncMiniProgress" class="sync-mini hidden" type="button" aria-live="polite">
+            <span id="syncMiniStage">Синхронизация</span>
+            <strong id="syncMiniPercent">0%</strong>
+            <i><b id="syncMiniBar"></b></i>
+          </button>
+          <div id="warehouseStatus" class="rate-info">Склад загружается...</div>
+          <div class="daily-sync-panel">
+            <div>
+              <span>Ежедневное обновление</span>
+              <strong id="dailySyncStatus">Проверяю расписание...</strong>
+              <p id="dailySyncMeta">База PriceMaster и склад обновляются по расписанию.</p>
+            </div>
+            <button id="dailySyncRunButton" class="secondary-button compact-button" type="button">Запустить сейчас</button>
+          </div>
+          <div id="syncLogList" class="sync-log-list"></div>
+        </section>
+
+        <section class="summary-strip" aria-label="Итоги склада">
+          <article>
+            <span>Товаров</span>
+            <strong id="warehouseTotal">0</strong>
+          </article>
+          <article>
+            <span>Готово</span>
+            <strong id="warehouseReady">0</strong>
+          </article>
+          <article>
+            <span>Цена изменилась</span>
+            <strong id="warehouseChanged">0</strong>
+          </article>
+          <article>
+            <span>Без поставщика</span>
+            <strong id="warehouseNoSupplier">0</strong>
+          </article>
+          <article>
+            <span>Архив Ozon</span>
+            <strong id="warehouseOzonArchived">0</strong>
+          </article>
+          <article>
+            <span>Неактивные Ozon</span>
+            <strong id="warehouseOzonInactive">0</strong>
+          </article>
+          <article>
+            <span>Нет наличия Ozon</span>
+            <strong id="warehouseOzonOutOfStock">0</strong>
+          </article>
+        </section>
+
+        <section class="warehouse-workspace">
+          <div class="workspace-main">
+            <div class="section-heading">
+              <div>
+                <h2>Товары склада</h2>
+                <p id="warehouseRateInfo">Курс загружается...</p>
+              </div>
+              <button id="manualProductToggle" class="secondary-button compact-button" type="button">Добавить вручную</button>
+            </div>
+
+            <form id="warehouseForm" class="inline-product-form hidden">
+              <label>
+                Маркетплейс
+                <select id="warehouseTargetInput"></select>
+              </label>
+              <label>
+                Артикул
+                <input id="warehouseOfferInput" type="text" placeholder="OZON-123 или YM-123" required />
+              </label>
+              <label>
+                Название
+                <input id="warehouseNameInput" type="text" placeholder="Название карточки" required />
+              </label>
+              <label>
+                Ключевое слово
+                <input id="warehouseKeywordInput" type="text" placeholder="Для уточнения связи" />
+              </label>
+              <label>
+                Наценка
+                <input id="warehouseMarkupInput" type="number" min="0" step="0.01" placeholder="По умолчанию" />
+              </label>
+              <button class="primary-button" type="submit">Добавить в склад</button>
+            </form>
+
+            <form id="bulkMarkupForm" class="bulk-markup-panel">
+              <div>
+                <strong>Наценка для выбранных</strong>
+                <span>Можно выбрать объединённые карточки или отдельные строки Ozon/ЯМ.</span>
+              </div>
+              <input id="bulkMarkupInput" type="number" min="0.01" step="0.01" placeholder="Например 1.70" />
+              <button class="secondary-button compact-button" type="submit">Применить</button>
+            </form>
+            <div class="bulk-markup-panel merge-panel">
+              <div>
+                <strong>Ручное объединение</strong>
+                <span>Выберите товары галочками, чтобы объединить в одну карточку или разъединить.</span>
+              </div>
+              <button id="mergeProductsButton" class="secondary-button compact-button" type="button">Объединить</button>
+              <button id="unmergeProductsButton" class="secondary-button compact-button" type="button">Разъединить</button>
+            </div>
+
+            <div class="warehouse-viewbar" aria-label="Вид товаров склада">
+              <div>
+                <strong>Вид склада</strong>
+                <span>Карточки как на маркетплейсах или компактный список с фото.</span>
+              </div>
+              <div class="segmented compact-segmented">
+                <button class="segment active" type="button" data-warehouse-view="cards">Карточки</button>
+                <button class="segment" type="button" data-warehouse-view="list">Список</button>
+              </div>
+            </div>
+
+            <div id="warehouseCards" class="product-grid">
+              <div class="empty">Склад еще не загружен.</div>
+            </div>
+            <div class="load-more-row">
+              <button id="warehouseLoadMoreButton" class="secondary-button" type="button">Показать еще</button>
+              <span id="warehouseVisibleInfo">Показано 0 товаров</span>
+            </div>
+          </div>
+
+          <aside class="warehouse-detail" id="warehouseDetail">
+            <div class="detail-empty">
+              <strong>Выберите товар</strong>
+              <span>Здесь будут привязки PriceMaster, доступные поставщики и действия по карточке.</span>
+            </div>
+          </aside>
+        </section>
+      </section>
+
+      <section id="suppliersTab" class="tab-panel">
+        <section class="control-panel">
+          <form id="supplierForm" class="supplier-form">
+            <input id="supplierIdInput" type="hidden" />
+            <label>
+              Поставщик
+              <input id="supplierNameInput" type="text" placeholder="Название как в PriceMaster" required />
+            </label>
+            <label>
+              Заметка
+              <input id="supplierNoteInput" type="text" placeholder="Например: отпуск до 15 мая" />
+            </label>
+            <label>
+              Причина стопа
+              <input id="supplierStopReasonInput" type="text" placeholder="Например: отпуск, нет прайса, проверка" />
+            </label>
+            <div class="form-inline-actions">
+              <button id="supplierSaveButton" class="primary-button" type="submit">Добавить поставщика</button>
+              <button id="supplierCancelEditButton" class="secondary-button hidden" type="button">Отменить</button>
+            </div>
+          </form>
+          <div id="supplierStatus" class="rate-info">Поставщики загружаются...</div>
+        </section>
+
+        <section class="supplier-board" id="supplierBoard">
+          <div class="empty">Поставщики еще не загружены.</div>
+        </section>
+      </section>
+
+      <section id="accountsTab" class="tab-panel">
+        <section class="control-panel accounts-hero">
+          <div>
+            <h2>Кабинеты маркетплейсов</h2>
+            <p>Добавляйте несколько кабинетов Ozon и Yandex Market, выбирайте нужный кабинет в складе и формах товара.</p>
+          </div>
+          <button id="reloadAccountsButton" class="secondary-button" type="button">Обновить список</button>
+        </section>
+
+        <section class="accounts-layout">
+          <form id="accountForm" class="account-form">
+            <h3 id="accountFormTitle">Добавить кабинет</h3>
+            <input id="accountIdInput" name="id" type="hidden" />
+            <label>
+              Маркетплейс
+              <select id="accountMarketplaceInput" name="marketplace">
+                <option value="ozon">Ozon</option>
+                <option value="yandex">Yandex Market</option>
+              </select>
+            </label>
+            <label>
+              Название
+              <input id="accountNameInput" name="name" type="text" placeholder="Например: Ozon основной" required />
+            </label>
+            <label class="account-ozon-field">
+              Ozon Client-Id
+              <input id="accountClientIdInput" name="clientId" type="text" autocomplete="off" />
+            </label>
+            <label>
+              API Key
+              <input id="accountApiKeyInput" name="apiKey" type="password" autocomplete="new-password" />
+            </label>
+            <label class="account-yandex-field hidden">
+              Yandex Business ID
+              <input id="accountBusinessIdInput" name="businessId" type="text" inputmode="numeric" />
+            </label>
+            <label class="account-yandex-field hidden">
+              Campaign ID
+              <input id="accountCampaignIdInput" name="campaignId" type="text" inputmode="numeric" />
+            </label>
+            <div class="form-inline-actions">
+              <button id="accountSaveButton" class="primary-button" type="submit">Сохранить кабинет</button>
+              <button id="accountCancelEditButton" class="secondary-button hidden" type="button">Отменить</button>
+            </div>
+            <div id="accountStatus" class="rate-info">Ключи не показываются полностью после сохранения.</div>
+          </form>
+
+          <section id="accountsBoard" class="accounts-board">
+            <div class="empty">Кабинеты загружаются...</div>
+          </section>
+          <section class="hidden-accounts-panel">
+            <div class="section-heading compact-heading">
+              <div>
+                <h3>Скрытые кабинеты</h3>
+                <p>Кабинеты из .env, которые временно убраны из интерфейса.</p>
+              </div>
+            </div>
+            <div id="hiddenAccountsBoard" class="hidden-accounts-list">
+              <div class="empty-mini">Скрытых кабинетов нет.</div>
+            </div>
+          </section>
+        </section>
+      </section>
+
+      <section id="bulkTab" class="tab-panel">
+        <section class="control-panel" aria-label="Настройки предпросмотра">
+          <form id="previewForm" class="controls">
+            <label>
+              Курс USD/RUB
+              <input id="usdRateInput" type="number" min="1" step="0.0001" required />
+            </label>
+            <label>
+              Наценка Ozon
+              <input id="ozonMarkupInput" type="number" min="0.01" step="0.01" required />
+            </label>
+            <label>
+              Наценка Яндекс
+              <input id="yandexMarkupInput" type="number" min="0.01" step="0.01" required />
+            </label>
+            <label>
+              Лимит товаров
+              <input id="limitInput" type="number" min="1" value="200" required />
+            </label>
+            <label>
+              Поиск артикула
+              <input id="searchInput" type="search" placeholder="Например B100HR31" />
+            </label>
+
+            <div class="target-list" id="targetList"></div>
+
+            <label class="supplier-rules">
+              Наценка по поставщикам
+              <textarea id="supplierMarkupInput" placeholder="Веста=1.72&#10;Инна=1.60"></textarea>
+            </label>
+
+            <div class="control-actions">
+              <button id="refreshRateButton" class="secondary-button" type="button">Обновить курс</button>
+              <button class="primary-button" type="submit">Показать предпросмотр</button>
+            </div>
+          </form>
+          <div id="rateInfo" class="rate-info">Курс загружается...</div>
+        </section>
+
+        <section class="summary-strip" aria-label="Итоги">
+          <article>
+            <span>Товаров PriceMaster</span>
+            <strong id="sourceCount">0</strong>
+          </article>
+          <article>
+            <span>Строк к проверке</span>
+            <strong id="rowCount">0</strong>
+          </article>
+          <article>
+            <span>Отличаются цены</span>
+            <strong id="changedCount">0</strong>
+          </article>
+          <article>
+            <span>Выбрано</span>
+            <strong id="selectedCount">0</strong>
+          </article>
+        </section>
+
+        <section class="preview-panel">
+          <div class="preview-toolbar">
+            <div id="statusText">Настройте курс, наценку и нажмите предпросмотр. Автоматической отправки нет.</div>
+            <div class="toolbar-actions">
+              <button id="selectChangedButton" class="secondary-button" type="button" disabled>Выбрать отличающиеся</button>
+              <button id="sendButton" class="danger-button" type="button" disabled>Отправить выбранное</button>
+            </div>
+          </div>
+
+          <div class="filters-panel">
+            <label>
+              Фильтр статуса
+              <select id="statusFilter">
+                <option value="all">Все строки</option>
+                <option value="found">Только найденные</option>
+                <option value="not_found">Только не найденные</option>
+                <option value="changed">Только где цена отличается</option>
+              </select>
+            </label>
+            <label>
+              Маркетплейс
+              <select id="marketplaceFilter">
+                <option value="all">Все маркетплейсы</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Маркетплейс</th>
+                  <th>Артикул</th>
+                  <th>Товар</th>
+                  <th>USD</th>
+                  <th>Наценка</th>
+                  <th>Текущая цена</th>
+                  <th>Новая цена</th>
+                  <th>Статус</th>
+                </tr>
+              </thead>
+              <tbody id="previewBody">
+                <tr><td colspan="9" class="empty">Предпросмотр еще не создан.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <template id="linkFormTemplate">
+      <form class="inline-link-form">
+        <input name="article" type="text" placeholder="Артикул PriceMaster" required />
+        <input name="keyword" type="text" placeholder="Ключевое слово" />
+        <input name="supplierName" type="text" placeholder="Поставщик" />
+        <input name="priority" type="number" min="1" step="1" value="100" />
+        <button class="secondary-button" type="submit">Привязать</button>
+      </form>
+    </template>
+
+    <template id="supplierArticleFormTemplate">
+      <form class="supplier-article-form">
+        <input name="id" type="hidden" />
+        <input name="article" type="text" placeholder="Артикул поставщика" required />
+        <input name="keyword" type="text" placeholder="Ключевое слово" />
+        <input name="priority" type="number" min="1" step="1" value="100" />
+        <button class="secondary-button" type="submit">Добавить артикул</button>
+      </form>
+    </template>
+
+    <div id="confirmModal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <div class="confirm-card">
+        <h3 id="confirmTitle">Подтвердите действие</h3>
+        <p id="confirmText">Продолжить?</p>
+        <div class="confirm-actions">
+          <button id="confirmCancel" class="secondary-button" type="button">Отменить</button>
+          <button id="confirmOk" class="danger-button" type="button">Подтвердить</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

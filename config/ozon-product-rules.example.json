@@ -1,0 +1,15 @@
+{
+  "priceMultiplier": 1,
+  "currencyCode": "RUB",
+  "vat": "0",
+  "categoryId": null,
+  "dimensionUnit": "mm",
+  "depth": null,
+  "width": null,
+  "height": null,
+  "weightUnit": "g",
+  "weight": null,
+  "primaryImageUrl": "",
+  "descriptionTemplate": "{name}",
+  "attributes": []
+}

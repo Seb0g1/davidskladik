@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Добавить товар Ozon</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <h1>Добавить товар Ozon</h1>
+          <p>Отдельная форма создания карточки Ozon с обязательными полями и расширенными JSON-атрибутами.</p>
+        </div>
+        <div class="header-actions">
+          <a class="secondary-link-button" href="/">Назад в склад</a>
+          <button id="logoutButton" class="secondary-button" type="button">Выйти</button>
+        </div>
+      </header>
+
+      <section class="ozon-builder">
+        <form id="ozonProductForm" class="ozon-form">
+          <div class="form-steps">
+            <span class="active">1. Основное</span>
+            <span>2. Габариты</span>
+            <span>3. Медиа</span>
+            <span>4. Характеристики</span>
+            <span>5. Выгрузка</span>
+          </div>
+          <section class="form-section">
+            <h2>Основное</h2>
+            <label>
+              Кабинет Ozon
+              <select name="target" id="ozonTargetInput" required></select>
+            </label>
+            <label>
+              Артикул продавца
+              <input name="offerId" type="text" required />
+            </label>
+            <label>
+              Название
+              <input name="name" type="text" required />
+            </label>
+            <label>
+              Бренд / производитель
+              <input name="vendor" type="text" placeholder="Для выгрузки в Яндекс и атрибутов" />
+            </label>
+            <label>
+              Описание
+              <textarea name="description" required></textarea>
+            </label>
+            <label>
+              Категория Ozon ID
+              <input name="categoryId" type="number" min="1" required />
+            </label>
+            <label>
+              Цена, RUB
+              <input name="price" type="number" min="1" step="1" required />
+            </label>
+            <label>
+              Старая цена, RUB
+              <input name="oldPrice" type="number" min="0" step="1" />
+            </label>
+            <label>
+              НДС
+              <select name="vat">
+                <option value="0">Без НДС</option>
+                <option value="0.1">10%</option>
+                <option value="0.2">20%</option>
+              </select>
+            </label>
+            <label>
+              Валюта
+              <input name="currencyCode" type="text" value="RUB" required />
+            </label>
+          </section>
+
+          <section class="form-section">
+            <h2>Габариты и коды</h2>
+            <label>
+              Ширина
+              <input name="width" type="number" min="1" step="1" required />
+            </label>
+            <label>
+              Высота
+              <input name="height" type="number" min="1" step="1" required />
+            </label>
+            <label>
+              Глубина
+              <input name="depth" type="number" min="1" step="1" required />
+            </label>
+            <label>
+              Единица габаритов
+              <select name="dimensionUnit">
+                <option value="mm">mm</option>
+                <option value="cm">cm</option>
+                <option value="in">in</option>
+              </select>
+            </label>
+            <label>
+              Вес
+              <input name="weight" type="number" min="1" step="1" required />
+            </label>
+            <label>
+              Единица веса
+              <select name="weightUnit">
+                <option value="g">g</option>
+                <option value="kg">kg</option>
+                <option value="lb">lb</option>
+              </select>
+            </label>
+            <label>
+              Штрихкод
+              <input name="barcode" type="text" />
+            </label>
+            <label>
+              Дополнительные штрихкоды
+              <textarea name="barcodes" placeholder="Один на строку"></textarea>
+            </label>
+          </section>
+
+          <section class="form-section wide">
+            <h2>Медиа и атрибуты</h2>
+            <label>
+              Главное изображение
+              <input name="primaryImage" type="url" placeholder="https://..." />
+            </label>
+            <label>
+              Изображения
+              <textarea name="images" placeholder="Один URL на строку"></textarea>
+            </label>
+            <div class="image-importer">
+              <div>
+                <strong>Импорт изображений</strong>
+                <span>PNG, JPG, WEBP или GIF до 10 МБ. URL добавится в список изображений.</span>
+              </div>
+              <input id="ozonImageUpload" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple />
+              <button id="ozonImageUploadButton" class="secondary-button compact-button" type="button">Импортировать</button>
+              <small id="ozonImageUploadStatus">Файлы ещё не выбраны.</small>
+            </div>
+            <label>
+              Фото 360
+              <textarea name="images360" placeholder="Один URL на строку"></textarea>
+            </label>
+            <label>
+              Цветное изображение
+              <input name="colorImage" type="url" placeholder="https://..." />
+            </label>
+            <label>
+              attributes JSON
+              <textarea name="attributesJson" class="code-area">[]</textarea>
+            </label>
+            <label>
+              complex_attributes JSON
+              <textarea name="complexAttributesJson" class="code-area">[]</textarea>
+            </label>
+            <label>
+              Любые дополнительные поля Ozon JSON
+              <textarea name="extraJson" class="code-area">{}</textarea>
+            </label>
+          </section>
+
+          <section class="form-section wide">
+            <h2>Данные для Yandex Market</h2>
+            <label>
+              Категория ЯМ ID
+              <input name="marketCategoryId" type="number" min="1" />
+            </label>
+            <label>
+              Изображения ЯМ
+              <textarea name="yandexPictures" placeholder="Если пусто, используются изображения Ozon"></textarea>
+            </label>
+            <label>
+              Дополнительные поля ЯМ JSON
+              <textarea name="yandexExtraJson" class="code-area">{}</textarea>
+            </label>
+          </section>
+
+          <div class="form-actions">
+            <button id="saveWarehouseDraftButton" class="secondary-button" type="button">Сохранить в личный склад</button>
+            <button class="primary-button" type="submit">Отправить товар в Ozon</button>
+            <div id="ozonProductStatus" class="rate-info">Заполните форму. Отправка произойдет только после подтверждения.</div>
+          </div>
+        </form>
+      </section>
+    </main>
+
+    <script src="/ozon-product.js"></script>
+  </body>
+</html>
