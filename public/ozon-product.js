@@ -395,7 +395,7 @@ async function suggestVendors() {
   const target = String(form.elements.target?.value || "").trim();
   vendorSuggestions.innerHTML = "";
   vendorSuggestions.hidden = true;
-  if (q.length < 2 || !categoryId || !target) return;
+  if (q.length < 2 || !target) return;
   const cacheKey = `${target}|${categoryId}|${q.toLowerCase()}`;
   const cached = brandSuggestCache.get(cacheKey);
   if (cached && Date.now() - cached.at < BRAND_CACHE_TTL_MS) {

@@ -1946,6 +1946,9 @@ function mergeProducts(existingProducts, importedProducts) {
         id: current?.id || imported.id,
         keyword: current?.keyword || imported.keyword,
         markup: current?.markup || imported.markup,
+        autoPriceEnabled: current?.autoPriceEnabled !== undefined ? current.autoPriceEnabled : imported.autoPriceEnabled,
+        autoPriceMin: current?.autoPriceMin ?? imported.autoPriceMin,
+        autoPriceMax: current?.autoPriceMax ?? imported.autoPriceMax,
         links: current?.links || [],
         createdAt: current?.createdAt || imported.createdAt,
       }),
@@ -2811,7 +2814,11 @@ app.get("/api/ozon/brands/suggest", async (request, response, next) => {
     const categoryId = Number(request.query.categoryId || 0);
     const target = cleanText(request.query.target || "ozon");
     const limit = cleanLimit(request.query.limit, 20, 100);
-    if (!query || !categoryId) return response.json({ brands: [] });
+    if (!query) return response.json({ brands: [] });
+    if (!categoryId) {
+      const fallback = await listBrandFallbackCandidates(query, Math.min(limit, 40));
+      return response.json({ brands: fallback, source: "fallback" });
+    }
     const account = getOzonAccountByTarget(target) || getOzonAccountByTarget("ozon");
     if (!account) {
       const fallback = await listBrandFallbackCandidates(query, Math.min(limit, 40));
