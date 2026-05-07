@@ -1,45 +1,35 @@
+const MAIN_TAB_STORAGE_KEY = "magicVibesActiveTab";
+const VALID_MAIN_TABS = new Set(["warehouse", "suppliers", "accounts"]);
+
 const state = {
-  rows: [],
-  filteredRows: [],
   targets: [],
   warehouse: [],
   filteredWarehouse: [],
   suppliers: [],
+  supplierView: "active",
+  supplierSearch: "",
   accounts: [],
   hiddenAccounts: [],
   selectedWarehouseProductId: null,
   selectedWarehouseGroupKey: null,
   warehouseMarketplace: "all",
   ozonStateFilter: "all",
+  warehouseAutoOnly: false,
   warehouseViewMode: localStorage.getItem("warehouseViewMode") || "cards",
   warehouseVisibleLimit: 80,
   enrichedProductIds: new Set(),
+  retryQueue: [],
+  retryQueueSelectedKeys: new Set(),
+  retryQueueSort: "newest",
+  retryQueueMarketplace: "all",
+  retryQueueSearch: "",
+  retryQueueLastRun: null,
 };
 
 const elements = {
   logoutButton: document.querySelector("#logoutButton"),
   tabButtons: document.querySelectorAll(".tab-button"),
   tabPanels: document.querySelectorAll(".tab-panel"),
-  previewForm: document.querySelector("#previewForm"),
-  usdRateInput: document.querySelector("#usdRateInput"),
-  ozonMarkupInput: document.querySelector("#ozonMarkupInput"),
-  yandexMarkupInput: document.querySelector("#yandexMarkupInput"),
-  supplierMarkupInput: document.querySelector("#supplierMarkupInput"),
-  limitInput: document.querySelector("#limitInput"),
-  searchInput: document.querySelector("#searchInput"),
-  targetList: document.querySelector("#targetList"),
-  rateInfo: document.querySelector("#rateInfo"),
-  refreshRateButton: document.querySelector("#refreshRateButton"),
-  statusFilter: document.querySelector("#statusFilter"),
-  marketplaceFilter: document.querySelector("#marketplaceFilter"),
-  sourceCount: document.querySelector("#sourceCount"),
-  rowCount: document.querySelector("#rowCount"),
-  changedCount: document.querySelector("#changedCount"),
-  selectedCount: document.querySelector("#selectedCount"),
-  statusText: document.querySelector("#statusText"),
-  selectChangedButton: document.querySelector("#selectChangedButton"),
-  sendButton: document.querySelector("#sendButton"),
-  previewBody: document.querySelector("#previewBody"),
   warehouseForm: document.querySelector("#warehouseForm"),
   warehouseTargetInput: document.querySelector("#warehouseTargetInput"),
   warehouseUsdRateInput: document.querySelector("#warehouseUsdRateInput"),
@@ -51,9 +41,14 @@ const elements = {
   bulkMarkupInput: document.querySelector("#bulkMarkupInput"),
   mergeProductsButton: document.querySelector("#mergeProductsButton"),
   unmergeProductsButton: document.querySelector("#unmergeProductsButton"),
+  autoPriceEnableSelectedButton: document.querySelector("#autoPriceEnableSelectedButton"),
+  autoPriceDisableSelectedButton: document.querySelector("#autoPriceDisableSelectedButton"),
+  autoPriceDisableAllButton: document.querySelector("#autoPriceDisableAllButton"),
   manualProductToggle: document.querySelector("#manualProductToggle"),
   warehouseSyncButton: document.querySelector("#warehouseSyncButton"),
   warehouseRefreshPricesButton: document.querySelector("#warehouseRefreshPricesButton"),
+  warehouseDryRunButton: document.querySelector("#warehouseDryRunButton"),
+  warehouseRetryQueueButton: document.querySelector("#warehouseRetryQueueButton"),
   warehouseSyncProgress: document.querySelector("#warehouseSyncProgress"),
   syncProgressTitle: document.querySelector("#syncProgressTitle"),
   syncProgressStage: document.querySelector("#syncProgressStage"),
@@ -71,12 +66,31 @@ const elements = {
   syncLogList: document.querySelector("#syncLogList"),
   warehouseSearchInput: document.querySelector("#warehouseSearchInput"),
   ozonStateFilter: document.querySelector("#ozonStateFilter"),
+  warehouseAutoPriceOnlyInput: document.querySelector("#warehouseAutoPriceOnlyInput"),
+  warehouseMinDiffRubInput: document.querySelector("#warehouseMinDiffRubInput"),
+  warehouseMinDiffPctInput: document.querySelector("#warehouseMinDiffPctInput"),
   warehouseStatus: document.querySelector("#warehouseStatus"),
+  warehouseNoSupplierAlert: document.querySelector("#warehouseNoSupplierAlert"),
+  noSupplierPanel: document.querySelector("#noSupplierPanel"),
+  noSupplierMeta: document.querySelector("#noSupplierMeta"),
+  noSupplierList: document.querySelector("#noSupplierList"),
+  retryQueuePanel: document.querySelector("#retryQueuePanel"),
+  retryQueueMeta: document.querySelector("#retryQueueMeta"),
+  retryQueueStats: document.querySelector("#retryQueueStats"),
+  retryQueueList: document.querySelector("#retryQueueList"),
+  retryQueueSearchInput: document.querySelector("#retryQueueSearchInput"),
+  retryQueueMarketplaceFilterInput: document.querySelector("#retryQueueMarketplaceFilterInput"),
+  retryQueueSortInput: document.querySelector("#retryQueueSortInput"),
+  retryQueueRefreshButton: document.querySelector("#retryQueueRefreshButton"),
+  retryQueueRetrySelectedButton: document.querySelector("#retryQueueRetrySelectedButton"),
+  retryQueueClearButton: document.querySelector("#retryQueueClearButton"),
   warehouseRateInfo: document.querySelector("#warehouseRateInfo"),
   warehouseCards: document.querySelector("#warehouseCards"),
   warehouseViewButtons: document.querySelectorAll("[data-warehouse-view]"),
   warehouseLoadMoreButton: document.querySelector("#warehouseLoadMoreButton"),
   warehouseVisibleInfo: document.querySelector("#warehouseVisibleInfo"),
+  warehouseToolbarHint: document.querySelector("#warehouseToolbarHint"),
+  warehouseSelectionLine: document.querySelector("#warehouseSelectionLine"),
   warehouseDetail: document.querySelector("#warehouseDetail"),
   warehouseTotal: document.querySelector("#warehouseTotal"),
   warehouseReady: document.querySelector("#warehouseReady"),
@@ -96,8 +110,19 @@ const elements = {
   supplierSaveButton: document.querySelector("#supplierSaveButton"),
   supplierCancelEditButton: document.querySelector("#supplierCancelEditButton"),
   supplierStatus: document.querySelector("#supplierStatus"),
+  supplierSearchInput: document.querySelector("#supplierSearchInput"),
   supplierBoard: document.querySelector("#supplierBoard"),
+  supplierViewButtons: document.querySelectorAll("[data-supplier-view]"),
   supplierArticleFormTemplate: document.querySelector("#supplierArticleFormTemplate"),
+  supplierInactiveModal: document.querySelector("#supplierInactiveModal"),
+  supplierInactiveForm: document.querySelector("#supplierInactiveForm"),
+  supplierInactiveSupplierId: document.querySelector("#supplierInactiveSupplierId"),
+  supplierInactiveCommentInput: document.querySelector("#supplierInactiveCommentInput"),
+  supplierInactiveUntilInput: document.querySelector("#supplierInactiveUntilInput"),
+  supplierInactiveUnknownInput: document.querySelector("#supplierInactiveUnknownInput"),
+  supplierInactiveQuickButtons: document.querySelectorAll("[data-inactive-quick]"),
+  supplierInactiveCancel: document.querySelector("#supplierInactiveCancel"),
+  supplierInactiveSubmit: document.querySelector("#supplierInactiveSubmit"),
   accountForm: document.querySelector("#accountForm"),
   accountFormTitle: document.querySelector("#accountFormTitle"),
   accountIdInput: document.querySelector("#accountIdInput"),
@@ -191,6 +216,51 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function normalizeSupplierName(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Доп. строки к цене Ozon из Seller API (акция, старая цена, минимум). */
+function ozonCabinetPriceNote(item) {
+  if (!item || item.marketplace !== "ozon") return "";
+  const bits = [];
+  const m = item.ozon?.marketingSellerPrice;
+  const cur = Number(item.currentPrice || 0);
+  if (m && cur && Math.abs(Number(m) - cur) >= 1) bits.push(`акция селлера ${formatMoney(m)}`);
+  if (item.ozon?.marketingPrice && (!m || Math.abs(Number(item.ozon.marketingPrice) - cur) >= 1)) {
+    bits.push(`маркетинг ${formatMoney(item.ozon.marketingPrice)}`);
+  }
+  if (item.ozon?.oldPrice) bits.push(`зачёркнутая ${formatMoney(item.ozon.oldPrice)}`);
+  if (item.ozonMinPrice) bits.push(`мин. в кабинете ${formatMoney(item.ozonMinPrice)}`);
+  return bits.length ? bits.join(" · ") : "";
+}
+
+function marketplaceCurrentLabel(item) {
+  if (!item) return "Текущая";
+  return item.marketplace === "ozon" ? "Цена в Ozon" : "Текущая";
+}
+
+function showToast(message, variant = "warn") {
+  const text = String(message || "").trim();
+  if (!text) return;
+  let root = document.getElementById("toastRoot");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "toastRoot";
+    root.className = "toast-stack";
+    document.body.appendChild(root);
+  }
+  const el = document.createElement("div");
+  el.className = `toast toast--${variant === "error" ? "error" : "warn"}`;
+  el.textContent = text;
+  root.appendChild(el);
+  setTimeout(() => el.remove(), 14000);
+}
+
 async function api(path, options) {
   const response = await fetch(path, options);
   if (response.status === 401) {
@@ -204,6 +274,200 @@ async function api(path, options) {
   }
   return response.json();
 }
+
+const pmSuggestControllers = new WeakMap();
+
+function closeAllPmSuggestPanels(exceptWrap) {
+  document.querySelectorAll(".pm-suggest-panel").forEach((panel) => {
+    const wrap = panel.closest(".pm-autocomplete-wrap");
+    if (exceptWrap && wrap === exceptWrap) return;
+    panel.hidden = true;
+    panel.replaceChildren();
+  });
+}
+
+function ensurePmSuggestPanel(wrap) {
+  let panel = wrap.querySelector(".pm-suggest-panel");
+  if (!panel) {
+    panel = document.createElement("div");
+    panel.className = "pm-suggest-panel";
+    panel.hidden = true;
+    panel.setAttribute("role", "listbox");
+    wrap.appendChild(panel);
+  }
+  return panel;
+}
+
+function dedupeOfferRows(rows) {
+  const seen = new Set();
+  const out = [];
+  for (const row of rows) {
+    const key = `${row.article || ""}|${row.partnerName || ""}|${row.name || ""}|${row.rowId || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
+function renderPmPartnerPanel(panel, items, input) {
+  panel.replaceChildren();
+  if (!items.length) {
+    const empty = document.createElement("div");
+    empty.className = "pm-suggest-empty";
+    empty.textContent = "Нет поставщиков по этому запросу.";
+    panel.appendChild(empty);
+    panel.hidden = false;
+    return;
+  }
+  for (const row of items) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pm-suggest-option";
+    btn.setAttribute("role", "option");
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => {
+      input.value = row.name || "";
+      closeAllPmSuggestPanels(null);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const title = document.createElement("span");
+    title.className = "pm-suggest-title";
+    title.textContent = row.name || "";
+    const meta = document.createElement("span");
+    meta.className = "pm-suggest-meta";
+    meta.textContent = `PartnerID ${row.id}`;
+    btn.append(title, meta);
+    panel.appendChild(btn);
+  }
+  panel.hidden = false;
+}
+
+function renderPmOfferPanel(panel, rows, input) {
+  const form = input.closest("form");
+  panel.replaceChildren();
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "pm-suggest-empty";
+    empty.textContent = "Нет строк прайса по запросу.";
+    panel.appendChild(empty);
+    panel.hidden = false;
+    return;
+  }
+  for (const row of rows) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "pm-suggest-option";
+    btn.setAttribute("role", "option");
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => {
+      input.value = row.article || "";
+      const supplierInput = form?.querySelector('[name="supplierName"]');
+      if (supplierInput && !String(supplierInput.value || "").trim() && row.partnerName) {
+        supplierInput.value = row.partnerName;
+      }
+      closeAllPmSuggestPanels(null);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const title = document.createElement("span");
+    title.className = "pm-suggest-title";
+    title.textContent = row.article || "";
+    const line = document.createElement("span");
+    line.className = "pm-suggest-line";
+    line.textContent = row.name || "";
+    const meta = document.createElement("span");
+    meta.className = "pm-suggest-meta";
+    const partner = row.partnerName || "—";
+    const usd = Number(row.price || 0).toFixed(2);
+    meta.textContent = `${partner} · $${usd}`;
+    btn.append(title, line, meta);
+    panel.appendChild(btn);
+  }
+  panel.hidden = false;
+}
+
+async function runPmSuggestFetch(input) {
+  const wrap = input.closest(".pm-autocomplete-wrap");
+  if (!wrap) return;
+  const kind = input.dataset.pmSuggest;
+  if (!kind) return;
+
+  const q = String(input.value || "").trim();
+  const panel = ensurePmSuggestPanel(wrap);
+
+  const prev = pmSuggestControllers.get(input);
+  if (prev) prev.abort();
+  if (!q) {
+    panel.hidden = true;
+    panel.replaceChildren();
+    return;
+  }
+
+  closeAllPmSuggestPanels(wrap);
+
+  const controller = new AbortController();
+  pmSuggestControllers.set(input, controller);
+
+  try {
+    if (kind === "partner") {
+      const response = await fetch(`/api/partners/search?q=${encodeURIComponent(q)}&limit=40`, { signal: controller.signal });
+      if (response.status === 401) {
+        window.location.href = "/login.html";
+        return;
+      }
+      if (!response.ok) throw new Error("partner search");
+      const data = await response.json();
+      renderPmPartnerPanel(panel, data.items || [], input);
+    } else if (kind === "offer") {
+      const response = await fetch(`/api/offers?search=${encodeURIComponent(q)}&limit=80`, { signal: controller.signal });
+      if (response.status === 401) {
+        window.location.href = "/login.html";
+        return;
+      }
+      if (!response.ok) throw new Error("offers search");
+      const payload = await response.json();
+      const raw = Array.isArray(payload) ? payload : [];
+      renderPmOfferPanel(panel, dedupeOfferRows(raw), input);
+    }
+  } catch (error) {
+    if (error.name === "AbortError") return;
+    panel.replaceChildren();
+    const err = document.createElement("div");
+    err.className = "pm-suggest-empty";
+    err.textContent = "Не удалось загрузить подсказки.";
+    panel.appendChild(err);
+    panel.hidden = false;
+  }
+}
+
+function schedulePmSuggest(input) {
+  const wrap = input.closest(".pm-autocomplete-wrap");
+  if (!wrap) return;
+  clearTimeout(input._pmSuggestTimer);
+  input._pmSuggestTimer = setTimeout(() => runPmSuggestFetch(input), 280);
+}
+
+document.addEventListener("input", (event) => {
+  const el = event.target.closest("[data-pm-suggest]");
+  if (!el) return;
+  schedulePmSuggest(el);
+});
+
+document.addEventListener("focusin", (event) => {
+  const el = event.target.closest("[data-pm-suggest]");
+  if (!el) return;
+  if (String(el.value || "").trim().length) schedulePmSuggest(el);
+});
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".pm-autocomplete-wrap")) return;
+  closeAllPmSuggestPanels(null);
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeAllPmSuggestPanels(null);
+});
 
 function marketLabel(product) {
   return product.marketplace === "yandex" ? "Yandex Market" : "Ozon";
@@ -315,6 +579,7 @@ function buildWarehouseGroups(products) {
       links,
       suppliers,
       selectedSupplier: variants.find((product) => product.selectedSupplier)?.selectedSupplier || primary.selectedSupplier,
+      selectedSupplierReason: variants.find((product) => product.selectedSupplierReason)?.selectedSupplierReason || primary.selectedSupplierReason || "",
       ready: variants.some((product) => product.ready),
       changed: variants.some((product) => product.changed),
       supplierCount: Math.max(...variants.map((product) => product.supplierCount || 0), 0),
@@ -323,6 +588,42 @@ function buildWarehouseGroups(products) {
       productIds: variants.map((product) => product.id),
     };
   });
+}
+
+/** Порядок в каталоге: сначала активные витрины, затем прочие статусы. */
+const WAREHOUSE_LISTING_STATE_RANK = {
+  active: 0,
+  unknown: 1,
+  out_of_stock: 2,
+  inactive: 3,
+  archived: 4,
+};
+
+function variantListingRank(product) {
+  const code = product.marketplaceState?.code || "unknown";
+  return WAREHOUSE_LISTING_STATE_RANK[code] ?? 1;
+}
+
+/** Лучший статус среди вариантов карточки: если хотя бы один канал активен — группа вверху списка. */
+function groupListingRank(group) {
+  const variants = group.variants || group.products || [];
+  if (!variants.length) return 99;
+  return Math.min(...variants.map(variantListingRank));
+}
+
+function sortWarehouseGroups(groups) {
+  return [...groups].sort((a, b) => {
+    const ra = groupListingRank(a);
+    const rb = groupListingRank(b);
+    if (ra !== rb) return ra - rb;
+    if (Boolean(b.changed) !== Boolean(a.changed)) return a.changed ? -1 : 1;
+    if (Boolean(b.ready) !== Boolean(a.ready)) return a.ready ? -1 : 1;
+    return String(a.name || "").localeCompare(String(b.name || ""), "ru", { sensitivity: "base" });
+  });
+}
+
+function getSortedWarehouseGroups() {
+  return sortWarehouseGroups(buildWarehouseGroups(state.filteredWarehouse));
 }
 
 function ozonUrl(product) {
@@ -465,13 +766,6 @@ function focusWarehouseDetailOnSmallScreen() {
   }
 }
 
-function selectedRows() {
-  return Array.from(document.querySelectorAll(".row-check:checked")).map((input) => {
-    const row = state.filteredRows[Number(input.dataset.index)];
-    return { target: row.target, offerId: row.offerId, price: row.nextPrice };
-  });
-}
-
 function selectedWarehouseIds() {
   return Array.from(document.querySelectorAll(".warehouse-check:checked")).flatMap((input) =>
     String(input.dataset.productIds || input.value || "")
@@ -481,34 +775,58 @@ function selectedWarehouseIds() {
   );
 }
 
-function updateSelection() {
-  const selected = selectedRows().length;
-  elements.selectedCount.textContent = formatNumber(selected);
-  elements.sendButton.disabled = selected === 0;
+function ozonStateFilterLabel(code) {
+  const map = {
+    all: "все статусы Ozon",
+    active: "только активные",
+    archived: "архив",
+    inactive: "неактивные",
+    out_of_stock: "нет в наличии",
+    unknown: "статус не загружен",
+  };
+  return map[code] || code;
+}
 
+function refreshWarehouseToolbarHints() {
+  const hint = elements.warehouseToolbarHint;
+  if (!hint) return;
+  const total = state.warehouse.length;
+  const filtered = state.filteredWarehouse.length;
+  const groupCount = getSortedWarehouseGroups().length;
+  const market =
+    state.warehouseMarketplace === "all"
+      ? "все площадки"
+      : state.warehouseMarketplace === "ozon"
+        ? "только Ozon"
+        : "только Yandex Market";
+  const ozonPart =
+    state.warehouseMarketplace !== "yandex"
+      ? ` · ${ozonStateFilterLabel(state.ozonStateFilter)}`
+      : "";
+  const q = elements.warehouseSearchInput?.value?.trim();
+  const searchPart = q ? ` · поиск «${q}»` : "";
+  const autoPart = state.warehouseAutoOnly ? " · только AUTO" : "";
+
+  if (!total) {
+    hint.textContent = "Склад пуст — добавьте товары вручную или синхронизируйте кабинеты.";
+  } else {
+    hint.textContent = `На экране ${formatNumber(groupCount)} карточек (${formatNumber(filtered)} строк) из ${formatNumber(total)} · ${market}${ozonPart}${searchPart}${autoPart} · сверху активные на Ozon/ЯМ`;
+  }
+
+  if (elements.warehouseSelectionLine) {
+    const n = selectedWarehouseIds().length;
+    elements.warehouseSelectionLine.textContent = n ? `Выбрано для обновления цен: ${formatNumber(n)}` : "";
+  }
+}
+
+function updateSelection() {
   const warehouseSelected = selectedWarehouseIds().length;
   elements.warehouseSendButton.disabled = warehouseSelected === 0;
+  refreshWarehouseToolbarHints();
 }
 
 function renderTargets() {
-  const visibleTargets = state.targets.length ? state.targets : [];
   const manualTargets = state.targets.filter((target) => target.configured !== false);
-
-  elements.targetList.innerHTML = visibleTargets
-    .map(
-      (target) => `
-        <label class="target-option">
-          <input type="checkbox" name="target" value="${escapeHtml(target.id)}" checked />
-          <span>${escapeHtml(target.name)}</span>
-        </label>
-      `,
-    )
-    .join("");
-
-  elements.marketplaceFilter.innerHTML = `
-    <option value="all">Все маркетплейсы</option>
-    ${visibleTargets.map((target) => `<option value="${escapeHtml(target.id)}">${escapeHtml(target.name)}</option>`).join("")}
-  `;
 
   elements.warehouseTargetInput.innerHTML = manualTargets.length
     ? manualTargets.map((target) => `<option value="${escapeHtml(target.id)}">${escapeHtml(target.name)}</option>`).join("")
@@ -522,6 +840,7 @@ function applyWarehouseFilters() {
     const marketOk = state.warehouseMarketplace === "all" || product.marketplace === state.warehouseMarketplace;
     const ozonStateOk = state.ozonStateFilter === "all"
       || (product.marketplaceState?.code || "unknown") === state.ozonStateFilter;
+    const autoOk = !state.warehouseAutoOnly || product.autoPriceEnabled !== false;
     const supplier = product.selectedSupplier;
     const searchHaystack = [
       product.name,
@@ -534,7 +853,7 @@ function applyWarehouseFilters() {
     ]
       .join(" ")
       .toLowerCase();
-    return marketOk && ozonStateOk && (!query || searchHaystack.includes(query));
+    return marketOk && ozonStateOk && autoOk && (!query || searchHaystack.includes(query));
   });
 
   if (!state.filteredWarehouse.some((product) => product.id === state.selectedWarehouseProductId)) {
@@ -542,7 +861,7 @@ function applyWarehouseFilters() {
   }
 
   renderWarehouseCards();
-  renderWarehouseDetail(buildWarehouseGroups(state.filteredWarehouse).find((group) => group.key === state.selectedWarehouseGroupKey));
+  renderWarehouseDetail(getSortedWarehouseGroups().find((group) => group.key === state.selectedWarehouseGroupKey));
 }
 
 function renderWarehouse(data) {
@@ -559,20 +878,56 @@ function renderWarehouse(data) {
   elements.warehouseOzonOutOfStock.textContent = formatNumber(data.ozonOutOfStock || 0);
   elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(data.usdRate)} RUB/USD`;
   elements.warehouseSelectChangedButton.disabled = !state.warehouse.length;
-  elements.warehouseStatus.textContent = data.sourceError
-    ? `Склад загружен, но PriceMaster сейчас недоступен: ${data.sourceError}`
-    : "Склад загружен. Стоп-поставщики исключаются из выбора автоматически.";
+  if (data.sourceError) {
+    elements.warehouseStatus.textContent = `Склад загружен, но PriceMaster сейчас недоступен: ${data.sourceError}`;
+    elements.warehouseStatus.classList.add("is-warn");
+    elements.warehouseStatus.classList.remove("is-ok");
+  } else {
+    elements.warehouseStatus.textContent = "Склад загружен. Стоп-поставщики исключаются из выбора автоматически.";
+    elements.warehouseStatus.classList.add("is-ok");
+    elements.warehouseStatus.classList.remove("is-warn");
+  }
+  if (Array.isArray(data.noSupplierAlerts) && data.noSupplierAlerts.length) {
+    elements.warehouseNoSupplierAlert.textContent = `Нет активного поставщика: ${data.noSupplierAlerts.slice(0, 6).map((item) => item.offerId || item.name || item.id).join(", ")}`;
+    elements.warehouseNoSupplierAlert.classList.remove("hidden");
+    elements.warehouseNoSupplierAlert.classList.add("is-warn");
+    if (elements.noSupplierPanel && elements.noSupplierMeta && elements.noSupplierList) {
+      elements.noSupplierPanel.classList.remove("hidden");
+      elements.noSupplierMeta.textContent = `В ошибках ${formatNumber(data.noSupplierAlerts.length)} товаров. Цена выставляется 0, статус: проверить наличие.`;
+      elements.noSupplierList.innerHTML = data.noSupplierAlerts
+        .map((item) => `
+          <div class="history-row">
+            <div>
+              <strong>${escapeHtml(item.offerId || item.name || item.id)}</strong>
+              <span>${escapeHtml(item.name || "Без названия")} · ${escapeHtml(marketLabel(item))} · цена ${formatMoney(item.nextPrice || 0)} · ${escapeHtml(item.action || "Проверить наличие")}</span>
+            </div>
+            <small>нет поставщика</small>
+          </div>
+        `)
+        .join("");
+    }
+  } else {
+    elements.warehouseNoSupplierAlert.classList.add("hidden");
+    elements.noSupplierPanel?.classList.add("hidden");
+  }
+  if (Array.isArray(data.syncWarnings) && data.syncWarnings.length) {
+    data.syncWarnings.forEach((w) => showToast(w, "warn"));
+  }
   applyWarehouseFilters();
   renderSuppliers();
   updateSelection();
 }
 
 function renderWarehouseCards() {
-  const groups = buildWarehouseGroups(state.filteredWarehouse);
+  const groups = getSortedWarehouseGroups();
   elements.warehouseCards.classList.toggle("list-view", state.warehouseViewMode === "list");
   elements.warehouseViewButtons.forEach((button) => button.classList.toggle("active", button.dataset.warehouseView === state.warehouseViewMode));
   if (!groups.length) {
-    elements.warehouseCards.innerHTML = `<div class="empty">Нет товаров под выбранные фильтры.</div>`;
+    const emptyInner =
+      state.warehouse.length === 0
+        ? `<strong>Склад пуст</strong><span>Добавьте товар вручную или выполните синхронизацию с маркетплейсами.</span>`
+        : `<strong>Нет карточек по фильтру</strong><span>Измените поиск или фильтры — на складе есть ${formatNumber(state.warehouse.length)} строк.</span>`;
+    elements.warehouseCards.innerHTML = `<div class="empty warehouse-empty-state">${emptyInner}</div>`;
     elements.warehouseLoadMoreButton.classList.add("hidden");
     elements.warehouseVisibleInfo.textContent = "Показано 0 товаров";
     updateSelection();
@@ -603,6 +958,7 @@ function renderWarehouseCards() {
           <div class="product-card-top">
             <input class="warehouse-check" type="checkbox" data-product-ids="${escapeHtml(group.productIds.join(","))}" />
             <span class="market-stack">${group.marketplaceLabels.map((label) => `<span class="market-badge ${label === "Ozon" ? "ozon" : "yandex"}">${escapeHtml(label)}</span>`).join("")}</span>
+            <span class="badge ${group.variants.every((item) => item.autoPriceEnabled !== false) ? "ok" : "neutral"}">${group.variants.every((item) => item.autoPriceEnabled !== false) ? "AUTO" : "MANUAL"}</span>
             <span class="badge ${group.changed ? "warn" : group.ready ? "ok" : "neutral"}">${group.changed ? "Есть изменения" : group.ready ? "Готово" : "Нет поставщика"}</span>
           </div>
           <h3>${escapeHtml(productName)}</h3>
@@ -619,7 +975,7 @@ function renderWarehouseCards() {
                       <span class="market-badge ${item.marketplace}">${escapeHtml(marketLabel(item))}</span>
                       <span class="badge ${marketplaceStateClass(item)}">${escapeHtml(marketplaceStateLabel(item))}</span>
                     </div>
-                    <div><span>Текущая</span><strong>${formatMoney(item.currentPrice)}</strong></div>
+                    <div><span>${escapeHtml(marketplaceCurrentLabel(item))}</span><strong>${formatMoney(item.currentPrice)}</strong>${item.marketplace === "ozon" && ozonCabinetPriceNote(item) ? `<span class="price-hint">${escapeHtml(ozonCabinetPriceNote(item))}</span>` : ""}</div>
                     <div><span>Новая</span><strong>${formatMoney(item.nextPrice)}</strong></div>
                     <div><span>Наценка</span><strong>${Number(item.markupCoefficient || 0).toFixed(2)}</strong></div>
                   </div>
@@ -629,7 +985,7 @@ function renderWarehouseCards() {
           </div>
           <div class="supplier-mini">
             <span>${supplier ? escapeHtml(supplier.partnerName || supplier.supplierName || "Поставщик") : "Нет доступного поставщика"}</span>
-            <small>${group.availableSupplierCount}/${group.supplierCount} поставщиков</small>
+            <small>${group.availableSupplierCount}/${group.supplierCount} поставщиков · ${escapeHtml(group.selectedSupplierReason || "")}</small>
           </div>
           <div class="card-actions">
             <button class="secondary-button compact-button select-product" type="button" data-group-key="${escapeHtml(group.key)}">Открыть</button>
@@ -670,6 +1026,7 @@ function renderWarehouseDetail(group) {
   const url = marketplaceUrl(product);
   const ozonLink = ozonUrl(product);
   const yandexVariant = variants.find((item) => item.marketplace === "yandex");
+  const ozonVariant = variants.find((item) => item.marketplace === "ozon");
   const yandexLink = yandexVariant ? marketplaceUrl(yandexVariant) : "";
   const image = group.image || productImage(product);
   const productName = group.name || displayProductName(product);
@@ -696,10 +1053,11 @@ function renderWarehouseDetail(group) {
     </div>
 
     <div class="detail-metrics">
-      <div><span>Текущая</span><strong>${formatMoney(product.currentPrice)}</strong></div>
+      <div><span>${escapeHtml(marketplaceCurrentLabel(product))}</span><strong>${formatMoney(product.currentPrice)}</strong>${product.marketplace === "ozon" && ozonCabinetPriceNote(product) ? `<span class="price-hint">${escapeHtml(ozonCabinetPriceNote(product))}</span>` : ""}</div>
       ${product.marketplace === "ozon" ? `<div><span>Мин. Ozon</span><strong>${formatMoney(product.ozonMinPrice)}</strong></div>` : ""}
       <div><span>Новая</span><strong>${formatMoney(product.nextPrice)}</strong></div>
       <div><span>Наценка</span><strong>${Number(product.markupCoefficient || 0).toFixed(2)}</strong></div>
+      <div><span>Ozon send</span><strong>${escapeHtml(product.lastOzonPriceSend?.status || "—")}</strong><small>${escapeHtml(product.lastOzonPriceSend?.at ? formatDate(product.lastOzonPriceSend.at) : "")}${product.lastOzonPriceSend?.detail ? ` · ${escapeHtml(product.lastOzonPriceSend.detail)}` : ""}</small></div>
     </div>
 
     <section class="detail-section">
@@ -713,11 +1071,24 @@ function renderWarehouseDetail(group) {
                   <span class="market-badge ${item.marketplace}">${escapeHtml(marketLabel(item))}</span>
                   <span class="badge ${marketplaceStateClass(item)}">${escapeHtml(marketplaceStateLabel(item))}</span>
                   <strong>${formatMoney(item.currentPrice)} → ${formatMoney(item.nextPrice)}</strong>
-                  <small>${item.marketplace === "ozon" ? `Мин. Ozon: ${formatMoney(item.ozonMinPrice)}` : "Цена ЯМ хранится отдельно"}</small>
+                  <small>${item.marketplace === "ozon" ? `Мин. Ozon: ${formatMoney(item.ozonMinPrice)}${ozonCabinetPriceNote(item) ? ` · ${escapeHtml(ozonCabinetPriceNote(item))}` : ""}` : "Цена ЯМ хранится отдельно"}</small>
                 </div>
                 <label>
                   Наценка
-                  <input name="markup" type="number" min="0.01" step="0.01" value="${Number(item.markupCoefficient || item.markup || 0).toFixed(2)}" />
+                  <input name="markup" type="number" min="0.01" step="0.01" value="${Number(item.markupCoefficient || item.markup || 0).toFixed(2)}" data-usd-price="${escapeHtml(item.selectedSupplier?.price || "")}" data-current-price="${escapeHtml(item.currentPrice || "")}" />
+                  <small class="markup-live-preview">Предпросмотр: ${formatMoney(item.nextPrice)}</small>
+                </label>
+                <label>
+                  AUTO
+                  <input name="autoPriceEnabled" type="checkbox" ${item.autoPriceEnabled !== false ? "checked" : ""} />
+                </label>
+                <label>
+                  minPrice
+                  <input name="autoPriceMin" type="number" min="0" step="1" value="${item.autoPriceMin || ""}" />
+                </label>
+                <label>
+                  maxPrice
+                  <input name="autoPriceMax" type="number" min="0" step="1" value="${item.autoPriceMax || ""}" />
                 </label>
                 <button class="secondary-button compact-button" type="submit">Сохранить</button>
               </form>
@@ -757,7 +1128,7 @@ function renderWarehouseDetail(group) {
                   <div class="history-row">
                     <div>
                       <strong>${escapeHtml(entry.market)}: ${formatMoney(entry.oldPrice)} → ${formatMoney(entry.newPrice)}</strong>
-                      <span>${escapeHtml(entry.supplierName || "Поставщик не указан")}${entry.supplierArticle ? ` · ${escapeHtml(entry.supplierArticle)}` : ""}</span>
+                      <span>${escapeHtml(entry.supplierName || "Поставщик не указан")}${entry.supplierArticle ? ` · ${escapeHtml(entry.supplierArticle)}` : ""}${entry.reason ? ` · ${escapeHtml(entry.reason)}` : ""}${entry.status ? ` · ${escapeHtml(entry.status)}` : ""}${entry.error ? ` · ${escapeHtml(entry.error)}` : ""}</span>
                     </div>
                     <small>${formatDate(entry.at)}</small>
                   </div>
@@ -838,7 +1209,7 @@ function renderWarehouseDetail(group) {
           <span>${escapeHtml(exportText(product, "ozon"))}</span>
           <button class="primary-button compact-button export-product" type="button" data-product-id="${escapeHtml(product.id)}" data-target="${escapeHtml(product.marketplace === "ozon" ? product.target : "ozon")}">Выгрузить в Ozon</button>
           ${ozonLink ? `<a class="text-link" href="${escapeHtml(ozonLink)}" target="_blank" rel="noopener">Открыть в Ozon</a>` : '<small>Публичная ссылка появится после синхронизации с SKU Ozon.</small>'}
-          <a class="text-link" href="/ozon-product.html?offerId=${encodeURIComponent(product.offerId)}&name=${encodeURIComponent(productName)}">Заполнить поля Ozon</a>
+          <a class="text-link" href="/ozon-product.html?productId=${encodeURIComponent(ozonVariant?.id || product.id)}&offerId=${encodeURIComponent(product.offerId)}&name=${encodeURIComponent(productName)}">Заполнить поля Ozon</a>
         </div>
         <div class="export-tile">
           <strong>Yandex Market</strong>
@@ -854,28 +1225,79 @@ function renderWarehouseDetail(group) {
 }
 
 function renderSuppliers() {
+  const activeSuppliers = state.suppliers.filter((supplier) => !supplier.stopped);
+  const inactiveSuppliers = state.suppliers.filter((supplier) => supplier.stopped);
+  const scopedSuppliers = state.supplierView === "inactive" ? inactiveSuppliers : activeSuppliers;
+  const query = normalizeSupplierName(state.supplierSearch || "");
+  const visibleSuppliers = query
+    ? scopedSuppliers.filter((supplier) => {
+      const haystack = [
+        supplier.name,
+        supplier.note,
+        supplier.stopReason,
+      ]
+        .map((value) => normalizeSupplierName(value))
+        .join(" ");
+      return haystack.includes(query);
+    })
+    : scopedSuppliers;
+  elements.supplierViewButtons?.forEach((button) => {
+    const active = button.dataset.supplierView === state.supplierView;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+
   if (!state.suppliers.length) {
     elements.supplierBoard.innerHTML = `<div class="empty">Добавьте поставщика, чтобы управлять стопом и артикулами.</div>`;
     elements.supplierStatus.textContent = "Поставщиков пока нет.";
     return;
   }
 
-  const stoppedCount = state.suppliers.filter((supplier) => supplier.stopped).length;
-  elements.supplierStatus.textContent = `Поставщиков: ${formatNumber(state.suppliers.length)}. На стопе: ${formatNumber(stoppedCount)}.`;
-  elements.supplierBoard.innerHTML = state.suppliers
+  elements.supplierStatus.textContent = `Активных: ${formatNumber(activeSuppliers.length)}. Инактив: ${formatNumber(inactiveSuppliers.length)}.`;
+  if (!visibleSuppliers.length) {
+    const emptyMessage = query
+      ? `По запросу «${escapeHtml(state.supplierSearch)}» ничего не найдено.`
+      : (state.supplierView === "inactive" ? "Нет поставщиков в инактиве." : "Нет активных поставщиков.");
+    elements.supplierBoard.innerHTML = `<div class="empty">${emptyMessage}</div>`;
+    return;
+  }
+
+  const soonItems = state.supplierView === "inactive"
+    ? visibleSuppliers.filter((supplier) => supplierReturnsSoon(supplier, 14)).slice(0, 6)
+    : [];
+  const soonBlock = soonItems.length
+    ? `
+      <section class="detail-section">
+        <h3>Скоро вернутся (14 дней)</h3>
+        <div class="history-list">
+          ${soonItems
+            .map((supplier) => `<div class="history-row"><div><strong>${escapeHtml(supplier.name)}</strong><span>${escapeHtml(formatSupplierInactiveInfo(supplier))}</span></div><small>${supplier.inactiveUntil ? formatDate(supplier.inactiveUntil) : "—"}</small></div>`)
+            .join("")}
+        </div>
+      </section>
+    `
+    : "";
+
+  elements.supplierBoard.innerHTML = `${soonBlock}${visibleSuppliers
     .map(
       (supplier) => `
         <article class="supplier-panel ${supplier.stopped ? "stopped" : ""}" data-supplier-id="${escapeHtml(supplier.id)}">
           <div class="supplier-panel-head">
             <div>
-              <h3>${escapeHtml(supplier.name)}</h3>
+              <h3>
+                ${escapeHtml(supplier.name)}
+                <span class="supplier-source-badge ${supplier.source === "pricemaster" ? "supplier-source-badge--pm" : "supplier-source-badge--local"}">
+                  ${supplier.source === "pricemaster" ? "из PriceMaster" : "локальный"}
+                </span>
+              </h3>
               <p>${supplier.note ? escapeHtml(supplier.note) : "Без заметки"}</p>
               ${supplier.stopReason ? `<small class="stop-note">Причина стопа: ${escapeHtml(supplier.stopReason)}</small>` : ""}
+              ${supplier.stopped ? `<small class="stop-note">${escapeHtml(formatSupplierInactiveInfo(supplier))}</small>` : ""}
             </div>
             <div class="supplier-actions">
               <label class="switch-line">
                 <input class="supplier-stop-toggle" type="checkbox" ${supplier.stopped ? "checked" : ""} />
-                <span>${supplier.stopped ? "Стоп" : "Работает"}</span>
+                <span>${supplier.stopped ? "Инактив" : "Активен"}</span>
               </label>
               <button class="secondary-button compact-button edit-supplier" type="button">Изменить</button>
             </div>
@@ -907,7 +1329,103 @@ function renderSuppliers() {
         </article>
       `,
     )
-    .join("");
+    .join("")}`;
+}
+
+function formatSupplierInactiveInfo(supplier) {
+  if (!supplier?.stopped) return "";
+  const comment = String(supplier.inactiveComment || supplier.stopReason || "").trim();
+  const dateText = supplier.inactiveUntil
+    ? `до ${formatDate(supplier.inactiveUntil)}`
+    : (supplier.inactiveUntilUnknown ? "срок неизвестен" : "");
+  return [comment || "Инактив", dateText].filter(Boolean).join(" · ");
+}
+
+function supplierReturnsSoon(supplier, days = 14) {
+  if (!supplier?.stopped || !supplier.inactiveUntil) return false;
+  const now = new Date();
+  const until = new Date(supplier.inactiveUntil);
+  if (Number.isNaN(until.getTime())) return false;
+  const diffDays = (until.getTime() - now.getTime()) / (24 * 60 * 60 * 1000);
+  return diffDays >= -0.5 && diffDays <= days;
+}
+
+function supplierInactiveDefaultDate() {
+  const nextMonth = new Date();
+  nextMonth.setMonth(nextMonth.getMonth() + 1);
+  return nextMonth.toISOString().slice(0, 10);
+}
+
+function openSupplierInactiveModal(supplier) {
+  if (!elements.supplierInactiveModal || !elements.supplierInactiveForm) {
+    return Promise.resolve(null);
+  }
+  elements.supplierInactiveSupplierId.value = supplier.id;
+  elements.supplierInactiveCommentInput.value = supplier.inactiveComment || supplier.stopReason || "";
+  elements.supplierInactiveUnknownInput.checked = Boolean(supplier.inactiveUntilUnknown) || !supplier.inactiveUntil;
+  elements.supplierInactiveUntilInput.value = supplier.inactiveUntil || supplierInactiveDefaultDate();
+  elements.supplierInactiveUntilInput.disabled = elements.supplierInactiveUnknownInput.checked;
+  elements.supplierInactiveModal.classList.remove("hidden");
+  elements.supplierInactiveCommentInput.focus();
+
+  return new Promise((resolve) => {
+    const cleanup = (value) => {
+      elements.supplierInactiveModal.classList.add("hidden");
+      elements.supplierInactiveForm.removeEventListener("submit", onSubmit);
+      elements.supplierInactiveCancel?.removeEventListener("click", onCancel);
+      elements.supplierInactiveModal.removeEventListener("click", onBackdrop);
+      elements.supplierInactiveUnknownInput?.removeEventListener("change", onUnknownChange);
+      elements.supplierInactiveQuickButtons?.forEach((btn) => btn.removeEventListener("click", onQuickDate));
+      document.removeEventListener("keydown", onKeydown);
+      resolve(value);
+    };
+    const onUnknownChange = () => {
+      elements.supplierInactiveUntilInput.disabled = elements.supplierInactiveUnknownInput.checked;
+      if (!elements.supplierInactiveUnknownInput.checked && !elements.supplierInactiveUntilInput.value) {
+        elements.supplierInactiveUntilInput.value = supplierInactiveDefaultDate();
+      }
+    };
+    const onCancel = () => cleanup(null);
+    const onQuickDate = (event) => {
+      const mode = event.currentTarget.dataset.inactiveQuick;
+      const base = new Date();
+      if (mode === "+7") base.setDate(base.getDate() + 7);
+      else if (mode === "+14") base.setDate(base.getDate() + 14);
+      else if (mode === "eom") base.setMonth(base.getMonth() + 1, 0);
+      else return;
+      elements.supplierInactiveUnknownInput.checked = false;
+      elements.supplierInactiveUntilInput.disabled = false;
+      elements.supplierInactiveUntilInput.value = base.toISOString().slice(0, 10);
+    };
+    const onBackdrop = (event) => {
+      if (event.target === elements.supplierInactiveModal) cleanup(null);
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Escape") cleanup(null);
+    };
+    const onSubmit = (event) => {
+      event.preventDefault();
+      const comment = elements.supplierInactiveCommentInput.value.trim();
+      const unknown = elements.supplierInactiveUnknownInput.checked;
+      const date = unknown ? "" : elements.supplierInactiveUntilInput.value.trim();
+      if (!comment) {
+        elements.supplierInactiveCommentInput.focus();
+        return;
+      }
+      if (!unknown && !date) {
+        elements.supplierInactiveUntilInput.focus();
+        return;
+      }
+      cleanup({ comment, unknown, date });
+    };
+
+    elements.supplierInactiveForm.addEventListener("submit", onSubmit);
+    elements.supplierInactiveCancel?.addEventListener("click", onCancel);
+    elements.supplierInactiveModal.addEventListener("click", onBackdrop);
+    elements.supplierInactiveUnknownInput?.addEventListener("change", onUnknownChange);
+    elements.supplierInactiveQuickButtons?.forEach((btn) => btn.addEventListener("click", onQuickDate));
+    document.addEventListener("keydown", onKeydown);
+  });
 }
 
 function resetSupplierForm() {
@@ -1045,63 +1563,6 @@ async function loadAccounts() {
   renderTargets();
 }
 
-function formatCurrentPrice(row) {
-  if (row.currentPrice) return formatMoney(row.currentPrice);
-  if (row.currentPriceStatus === "not_found") return "Нет на маркетплейсе";
-  if (row.currentPriceStatus === "no_price") return "Цена не задана";
-  return "Не получена";
-}
-
-function applyFilters() {
-  const status = elements.statusFilter.value;
-  const marketplace = elements.marketplaceFilter.value;
-  state.filteredRows = state.rows.filter((row) => {
-    const statusOk =
-      status === "all" ||
-      (status === "found" && row.currentPriceStatus !== "not_found") ||
-      (status === "not_found" && row.currentPriceStatus === "not_found") ||
-      (status === "changed" && row.changed);
-    const marketplaceOk = marketplace === "all" || row.target === marketplace || row.marketplace === marketplace;
-    return statusOk && marketplaceOk;
-  });
-  renderRows(state.filteredRows);
-}
-
-function renderRows(rows) {
-  if (!rows.length) {
-    elements.previewBody.innerHTML = `<tr><td colspan="9" class="empty">Нет строк для предпросмотра.</td></tr>`;
-    updateSelection();
-    return;
-  }
-
-  elements.previewBody.innerHTML = rows
-    .map(
-      (row, index) => `
-        <tr>
-          <td><input class="row-check" data-index="${index}" type="checkbox" ${row.ready ? "" : "disabled"} /></td>
-          <td>${escapeHtml(row.targetName)}</td>
-          <td>${escapeHtml(row.offerId)}</td>
-          <td class="name-cell">${escapeHtml(row.name)}<br /><span>${escapeHtml(row.partnerName || "")}</span></td>
-          <td>${formatUsd(row.usdPrice)}</td>
-          <td>${Number(row.markupCoefficient || 0).toFixed(2)}</td>
-          <td class="money">${formatCurrentPrice(row)}</td>
-          <td class="money">${formatMoney(row.nextPrice)}</td>
-          <td>${
-            row.currentPriceStatus === "not_found"
-              ? '<span class="badge neutral">Нет товара</span>'
-              : row.currentPriceStatus === "no_price"
-                ? '<span class="badge neutral">Нет цены</span>'
-                : row.changed
-                  ? '<span class="badge warn">Цена отличается</span>'
-                  : '<span class="badge ok">Без изменений</span>'
-          }</td>
-        </tr>
-      `,
-    )
-    .join("");
-  updateSelection();
-}
-
 function renderDailySync(status = {}) {
   if (!elements.dailySyncStatus || !elements.dailySyncMeta) return;
   const statusText = status.running
@@ -1143,6 +1604,75 @@ async function loadDailySync() {
   return status;
 }
 
+function renderRetryQueue(data = {}) {
+  const items = Array.isArray(data.items) ? data.items : [];
+  const filtered = items.filter((item) => {
+    const marketOk = state.retryQueueMarketplace === "all" || String(item.marketplace || "").toLowerCase() === state.retryQueueMarketplace;
+    const q = String(state.retryQueueSearch || "").trim().toLowerCase();
+    if (!q) return marketOk;
+    const haystack = [
+      item.offerId,
+      item.target,
+      item.error,
+      item.marketplace,
+      item.queueKey,
+    ].join(" ").toLowerCase();
+    return marketOk && haystack.includes(q);
+  });
+  const errorCounts = new Map();
+  for (const item of filtered) {
+    const key = String(item.error || "unknown");
+    errorCounts.set(key, Number(errorCounts.get(key) || 0) + 1);
+  }
+  const sorted = [...filtered].sort((a, b) => {
+    if (state.retryQueueSort === "oldest") return new Date(a.queuedAt || 0) - new Date(b.queuedAt || 0);
+    if (state.retryQueueSort === "errors") {
+      const ea = Number(errorCounts.get(String(a.error || "unknown")) || 0);
+      const eb = Number(errorCounts.get(String(b.error || "unknown")) || 0);
+      return eb - ea || (new Date(b.queuedAt || 0) - new Date(a.queuedAt || 0));
+    }
+    return new Date(b.queuedAt || 0) - new Date(a.queuedAt || 0);
+  });
+  state.retryQueue = sorted;
+  const validKeys = new Set(sorted.map((item) => String(item.queueKey)));
+  state.retryQueueSelectedKeys = new Set([...state.retryQueueSelectedKeys].filter((key) => validKeys.has(key)));
+  if (!elements.retryQueuePanel || !elements.retryQueueList || !elements.retryQueueMeta) return;
+  const hasItems = sorted.length > 0;
+  elements.retryQueuePanel.classList.toggle("hidden", !hasItems);
+  elements.retryQueueMeta.textContent = hasItems
+    ? `В очереди ${formatNumber(sorted.length)} из ${formatNumber(items.length)}. Последнее обновление: ${data.updatedAt ? formatDate(data.updatedAt) : "—"}.`
+    : `Нет элементов по текущему фильтру (${formatNumber(items.length)} всего).`;
+  if (elements.retryQueueStats) {
+    const retried = Number(state.retryQueueLastRun?.retried || 0);
+    const failed = Number(state.retryQueueLastRun?.failed || 0);
+    elements.retryQueueStats.innerHTML = [
+      `<span class="badge ok">success ${formatNumber(retried > 0 ? retried : 0)}</span>`,
+      `<span class="badge warn">error ${formatNumber(sorted.length)}</span>`,
+      `<span class="badge neutral">retried ${formatNumber(retried)}</span>`,
+      failed ? `<small>fail ${formatNumber(failed)}</small>` : "",
+    ].join(" ");
+  }
+  elements.retryQueueRetrySelectedButton.disabled = !state.retryQueueSelectedKeys.size;
+  elements.retryQueueList.innerHTML = hasItems
+    ? sorted.slice(0, 150).map((item) => `
+        <label class="history-row">
+          <input class="retry-queue-check" type="checkbox" data-queue-key="${escapeHtml(item.queueKey)}" ${state.retryQueueSelectedKeys.has(String(item.queueKey)) ? "checked" : ""} />
+          <div>
+            <strong>${escapeHtml(item.offerId || item.id || "offer")}</strong>
+            <span>${escapeHtml(item.marketplace || "")} · ${escapeHtml(item.target || "")} · ${formatMoney(item.price)} · попыток ${formatNumber(item.attempts || 1)} · ${escapeHtml(item.error || "ошибка отправки")} · <b class="retry-state ${Number(item.attempts || 1) > 1 ? "retry-state--retried" : "retry-state--error"}">${Number(item.attempts || 1) > 1 ? "retried" : "error"}</b></span>
+          </div>
+          <small>${item.queuedAt ? formatDate(item.queuedAt) : "—"}</small>
+        </label>
+      `).join("")
+    : '<div class="empty-mini">Очередь пуста.</div>';
+}
+
+async function loadRetryQueue() {
+  const data = await api("/api/warehouse/prices/retry-queue");
+  renderRetryQueue(data);
+  return data;
+}
+
 async function loadWarehouse(sync = false, refreshPrices = false) {
   const stopProgress = sync || refreshPrices ? startSyncProgress(sync ? "sync" : "prices") : null;
   elements.warehouseSyncButton.disabled = sync;
@@ -1163,6 +1693,7 @@ async function loadWarehouse(sync = false, refreshPrices = false) {
       renderTargets();
     }
     renderWarehouse(data);
+    await loadRetryQueue().catch(() => {});
     if (stopProgress) stopProgress(true);
   } catch (error) {
     if (stopProgress) stopProgress(false);
@@ -1173,36 +1704,49 @@ async function loadWarehouse(sync = false, refreshPrices = false) {
   }
 }
 
-async function loadRate(force = false) {
-  const savedRate = localStorage.getItem("manualUsdRate") || elements.warehouseUsdRateInput.value || elements.usdRateInput.value || "75.345";
-  elements.usdRateInput.value = savedRate;
+async function loadRate(fixedRate) {
+  const hasFixed = Number(fixedRate) > 0;
+  const savedRate = hasFixed
+    ? String(fixedRate)
+    : (localStorage.getItem("manualUsdRate") || elements.warehouseUsdRateInput.value || "75.345");
   elements.warehouseUsdRateInput.value = savedRate;
-  elements.rateInfo.textContent = `Курс задаётся вручную: ${formatNumber(savedRate)} RUB/USD.`;
-  elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(savedRate)} RUB/USD`;
-  return { rate: Number(savedRate), source: "manual", fetchedAt: new Date().toISOString() };
+  elements.warehouseUsdRateInput.readOnly = hasFixed;
+  elements.warehouseUsdRateInput.title = hasFixed ? "Курс фиксируется в разделе «Настройки»." : "";
+  elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(savedRate)} RUB/USD${hasFixed ? " · фиксированный" : ""}`;
+  return { rate: Number(savedRate), source: hasFixed ? "settings" : "manual", fetchedAt: new Date().toISOString() };
 }
 
 async function loadSettings() {
   const data = await api("/api/marketplaces");
+  const fixedRate = data.settings?.fixedUsdRate || data.defaults?.usdRate;
   state.targets = data.targets || [];
   state.accounts = data.accounts || [];
   state.hiddenAccounts = data.hiddenAccounts || [];
-  elements.ozonMarkupInput.value = data.defaults?.ozonMarkup || 1.7;
-  elements.yandexMarkupInput.value = data.defaults?.yandexMarkup || 1.6;
   renderTargets();
   renderAccounts();
   renderHiddenAccounts();
   updateAccountFormMode();
-  await loadRate(false);
-  await Promise.all([loadWarehouse(false), loadDailySync()]);
+  await loadRate(fixedRate);
+  const refreshPricesOnFirstLoad = sessionStorage.getItem("mvInitialPriceRefreshDone") !== "1";
+  if (refreshPricesOnFirstLoad) sessionStorage.setItem("mvInitialPriceRefreshDone", "1");
+  await Promise.all([loadWarehouse(false, refreshPricesOnFirstLoad), loadDailySync()]);
+}
+
+function applyMainTab(tab) {
+  const safe = VALID_MAIN_TABS.has(tab) ? tab : "warehouse";
+  elements.tabButtons.forEach((item) => item.classList.toggle("active", item.dataset.tab === safe));
+  elements.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.id === `${safe}Tab`));
 }
 
 elements.tabButtons.forEach((button) => {
   button.addEventListener("click", () => {
-    elements.tabButtons.forEach((item) => item.classList.toggle("active", item === button));
-    elements.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.id === `${button.dataset.tab}Tab`));
+    const tab = button.dataset.tab;
+    if (tab) localStorage.setItem(MAIN_TAB_STORAGE_KEY, tab);
+    applyMainTab(tab);
   });
 });
+
+applyMainTab(localStorage.getItem(MAIN_TAB_STORAGE_KEY) || "warehouse");
 
 document.querySelectorAll("[data-marketplace]").forEach((button) => {
   button.addEventListener("click", () => {
@@ -1218,18 +1762,17 @@ elements.warehouseSearchInput.addEventListener("input", () => {
   applyWarehouseFilters();
 });
 
-elements.warehouseUsdRateInput?.addEventListener("input", () => {
-  const value = elements.warehouseUsdRateInput.value;
-  localStorage.setItem("manualUsdRate", value);
-  if (elements.usdRateInput) elements.usdRateInput.value = value;
-  elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(value)} RUB/USD`;
+elements.warehouseAutoPriceOnlyInput?.addEventListener("change", () => {
+  state.warehouseAutoOnly = Boolean(elements.warehouseAutoPriceOnlyInput.checked);
+  state.warehouseVisibleLimit = 80;
+  applyWarehouseFilters();
 });
 
-elements.usdRateInput?.addEventListener("input", () => {
-  const value = elements.usdRateInput.value;
+elements.warehouseUsdRateInput?.addEventListener("input", () => {
+  if (elements.warehouseUsdRateInput.readOnly) return;
+  const value = elements.warehouseUsdRateInput.value;
   localStorage.setItem("manualUsdRate", value);
-  if (elements.warehouseUsdRateInput) elements.warehouseUsdRateInput.value = value;
-  elements.rateInfo.textContent = `Курс задаётся вручную: ${formatNumber(value)} RUB/USD.`;
+  elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(value)} RUB/USD`;
 });
 
 elements.ozonStateFilter?.addEventListener("change", () => {
@@ -1327,6 +1870,59 @@ elements.unmergeProductsButton?.addEventListener("click", async () => {
   }
 });
 
+async function setAutoPriceForSelected(enabled) {
+  const productIds = selectedWarehouseIds();
+  if (!productIds.length) {
+    elements.warehouseStatus.textContent = "Выберите товары для изменения AUTO-режима.";
+    return;
+  }
+  const result = await api("/api/warehouse/products/auto-price/bulk", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ productIds, enabled }),
+  });
+  elements.warehouseStatus.textContent = `AUTO ${enabled ? "включен" : "выключен"}: ${formatNumber(result.changed)} товаров.`;
+  await loadWarehouse(false);
+}
+
+elements.autoPriceEnableSelectedButton?.addEventListener("click", () => {
+  setAutoPriceForSelected(true).catch((error) => {
+    elements.warehouseStatus.textContent = error.message;
+  });
+});
+
+elements.autoPriceDisableSelectedButton?.addEventListener("click", () => {
+  setAutoPriceForSelected(false).catch((error) => {
+    elements.warehouseStatus.textContent = error.message;
+  });
+});
+
+elements.autoPriceDisableAllButton?.addEventListener("click", async () => {
+  if (!(await confirmAction({ title: "Выключить AUTO у всех?", text: "Отключить автоматическую отправку цен для всех товаров?", okText: "Выключить" }))) return;
+  try {
+    let result;
+    try {
+      result = await api("/api/warehouse/products/auto-price/all", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: false }),
+      });
+    } catch (error) {
+      // Backward-compatible fallback when server is not restarted yet.
+      if (!/404/.test(String(error.message || ""))) throw error;
+      result = await api("/api/warehouse/products/auto-price/bulk", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: state.warehouse.map((item) => item.id), enabled: false }),
+      });
+    }
+    elements.warehouseStatus.textContent = `AUTO отключен у всех: ${formatNumber(result.changed || state.warehouse.length)} товаров.`;
+    await loadWarehouse(false);
+  } catch (error) {
+    elements.warehouseStatus.textContent = error.message;
+  }
+});
+
 elements.warehouseSyncButton.addEventListener("click", () => {
   loadWarehouse(true).catch((error) => {
     elements.warehouseStatus.textContent = error.message;
@@ -1375,12 +1971,30 @@ elements.warehouseCards.addEventListener("click", (event) => {
   if (!groupKey) return;
   state.selectedWarehouseGroupKey = groupKey;
   renderWarehouseCards();
-  renderWarehouseDetail(buildWarehouseGroups(state.filteredWarehouse).find((group) => group.key === groupKey));
+  renderWarehouseDetail(getSortedWarehouseGroups().find((group) => group.key === groupKey));
   focusWarehouseDetailOnSmallScreen();
 });
 
 elements.warehouseCards.addEventListener("change", (event) => {
   if (event.target.classList.contains("warehouse-check")) updateSelection();
+});
+
+elements.warehouseDetail.addEventListener("input", (event) => {
+  const input = event.target.closest('.variant-markup-row input[name="markup"]');
+  if (!input) return;
+  const usd = Number(input.dataset.usdPrice || 0);
+  const markup = Number(input.value || 0);
+  const rate = Number(elements.warehouseUsdRateInput?.value || 0);
+  const next = usd > 0 && markup > 0 && rate > 0 ? Math.round(usd * rate * markup) : 0;
+  const current = Number(input.dataset.currentPrice || 0);
+  const preview = input.closest("label")?.querySelector(".markup-live-preview");
+  if (!preview) return;
+  if (next > 0) {
+    const delta = current > 0 ? ` (${next > current ? "+" : ""}${Math.round(next - current)} ₽)` : "";
+    preview.textContent = `Предпросмотр: ${formatMoney(next)}${delta}`;
+  } else {
+    preview.textContent = "Предпросмотр: —";
+  }
 });
 
 elements.warehouseDetail.addEventListener("submit", async (event) => {
@@ -1392,9 +2006,14 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
       await api(`/api/warehouse/products/${markupForm.dataset.productId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ markup: Number(formData.get("markup") || 0) }),
+        body: JSON.stringify({
+          markup: Number(formData.get("markup") || 0),
+          autoPriceEnabled: formData.get("autoPriceEnabled") === "on",
+          autoPriceMin: Number(formData.get("autoPriceMin") || 0) || null,
+          autoPriceMax: Number(formData.get("autoPriceMax") || 0) || null,
+        }),
       });
-      elements.warehouseStatus.textContent = "Наценка для маркетплейса сохранена.";
+      elements.warehouseStatus.textContent = "Наценка и AUTO-настройки сохранены.";
       await loadWarehouse(false);
     } catch (error) {
       elements.warehouseStatus.textContent = error.message;
@@ -1476,7 +2095,13 @@ elements.warehouseSendButton.addEventListener("click", async () => {
     const result = await api("/api/warehouse/prices/send", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirmed: true, productIds, usdRate: Number(elements.warehouseUsdRateInput.value) }),
+      body: JSON.stringify({
+        confirmed: true,
+        productIds,
+        usdRate: Number(elements.warehouseUsdRateInput.value),
+        minDiffRub: Number(elements.warehouseMinDiffRubInput?.value || 0),
+        minDiffPct: Number(elements.warehouseMinDiffPctInput?.value || 0),
+      }),
     });
     elements.warehouseStatus.textContent = `Готово: отправлено ${formatNumber(result.sent)} цен.`;
     await loadWarehouse(false);
@@ -1484,6 +2109,110 @@ elements.warehouseSendButton.addEventListener("click", async () => {
     elements.warehouseStatus.textContent = error.message;
   } finally {
     updateSelection();
+  }
+});
+
+elements.warehouseDryRunButton?.addEventListener("click", async () => {
+  const productIds = selectedWarehouseIds();
+  if (!productIds.length) {
+    elements.warehouseStatus.textContent = "Выберите товары для dry-run.";
+    return;
+  }
+  elements.warehouseStatus.textContent = "Считаю dry-run...";
+  try {
+    const result = await api("/api/warehouse/prices/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        confirmed: true,
+        dryRun: true,
+        productIds,
+        usdRate: Number(elements.warehouseUsdRateInput.value),
+        minDiffRub: Number(elements.warehouseMinDiffRubInput?.value || 0),
+        minDiffPct: Number(elements.warehouseMinDiffPctInput?.value || 0),
+      }),
+    });
+    elements.warehouseStatus.textContent = `Dry-run: готово к отправке ${formatNumber(result.readyToSend || 0)}, пропущено ${formatNumber((result.skipped || []).length)}.`;
+  } catch (error) {
+    elements.warehouseStatus.textContent = error.message;
+  }
+});
+
+elements.warehouseRetryQueueButton?.addEventListener("click", async () => {
+  if (!(await confirmAction({ title: "Повторить очередь?", text: "Отправить повторно неотправленные цены?", okText: "Повторить", danger: false }))) return;
+  elements.warehouseStatus.textContent = "Повторяю очередь отправки...";
+  try {
+    const result = await api("/api/warehouse/prices/retry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmed: true }),
+    });
+    state.retryQueueLastRun = { retried: Number(result.retried || 0), failed: Number(result.failed || 0), at: new Date().toISOString() };
+    elements.warehouseStatus.textContent = `Retry: отправлено ${formatNumber(result.retried || 0)}, осталось в очереди ${formatNumber(result.remaining || 0)}.`;
+    await loadWarehouse(false);
+  } catch (error) {
+    elements.warehouseStatus.textContent = error.message;
+  }
+});
+
+elements.retryQueueRefreshButton?.addEventListener("click", () => {
+  loadRetryQueue().catch((error) => {
+    elements.warehouseStatus.textContent = error.message;
+  });
+});
+
+elements.retryQueueSortInput?.addEventListener("change", () => {
+  state.retryQueueSort = elements.retryQueueSortInput.value || "newest";
+  renderRetryQueue({ items: state.retryQueue });
+});
+
+elements.retryQueueMarketplaceFilterInput?.addEventListener("change", () => {
+  state.retryQueueMarketplace = elements.retryQueueMarketplaceFilterInput.value || "all";
+  renderRetryQueue({ items: state.retryQueue });
+});
+
+elements.retryQueueSearchInput?.addEventListener("input", () => {
+  state.retryQueueSearch = elements.retryQueueSearchInput.value || "";
+  renderRetryQueue({ items: state.retryQueue });
+});
+
+elements.retryQueueList?.addEventListener("change", (event) => {
+  const checkbox = event.target.closest(".retry-queue-check");
+  if (!checkbox) return;
+  const key = String(checkbox.dataset.queueKey || "");
+  if (!key) return;
+  if (checkbox.checked) state.retryQueueSelectedKeys.add(key);
+  else state.retryQueueSelectedKeys.delete(key);
+  elements.retryQueueRetrySelectedButton.disabled = !state.retryQueueSelectedKeys.size;
+});
+
+elements.retryQueueRetrySelectedButton?.addEventListener("click", async () => {
+  if (!state.retryQueueSelectedKeys.size) return;
+  elements.warehouseStatus.textContent = "Повторяю выбранные элементы из очереди...";
+  try {
+    const result = await api("/api/warehouse/prices/retry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirmed: true, queueKeys: Array.from(state.retryQueueSelectedKeys) }),
+    });
+    state.retryQueueLastRun = { retried: Number(result.retried || 0), failed: Number(result.failed || 0), at: new Date().toISOString() };
+    elements.warehouseStatus.textContent = `Retry выбранных: отправлено ${formatNumber(result.retried || 0)}, осталось ${formatNumber(result.remaining || 0)}.`;
+    state.retryQueueSelectedKeys.clear();
+    await loadWarehouse(false);
+  } catch (error) {
+    elements.warehouseStatus.textContent = error.message;
+  }
+});
+
+elements.retryQueueClearButton?.addEventListener("click", async () => {
+  if (!(await confirmAction({ title: "Очистить очередь?", text: "Удалить все элементы retry-очереди?", okText: "Очистить" }))) return;
+  try {
+    await api("/api/warehouse/prices/retry-queue", { method: "DELETE" });
+    state.retryQueueSelectedKeys.clear();
+    await loadRetryQueue();
+    elements.warehouseStatus.textContent = "Очередь retry очищена.";
+  } catch (error) {
+    elements.warehouseStatus.textContent = error.message;
   }
 });
 
@@ -1512,18 +2241,59 @@ elements.supplierCancelEditButton?.addEventListener("click", () => {
   elements.supplierStatus.textContent = "Редактирование поставщика отменено.";
 });
 
+elements.supplierViewButtons?.forEach((button) => {
+  button.addEventListener("click", () => {
+    state.supplierView = button.dataset.supplierView === "inactive" ? "inactive" : "active";
+    renderSuppliers();
+  });
+});
+
+elements.supplierSearchInput?.addEventListener("input", () => {
+  state.supplierSearch = elements.supplierSearchInput.value.trim();
+  renderSuppliers();
+});
+
 elements.supplierBoard.addEventListener("change", async (event) => {
   const toggle = event.target.closest(".supplier-stop-toggle");
   if (!toggle) return;
   const panel = event.target.closest(".supplier-panel");
   const name = panel.querySelector("h3")?.textContent || "поставщика";
   const stopped = toggle.checked;
-  if (stopped && !(await confirmAction({
-    title: "Поставить поставщика на стоп?",
-    text: `${name}: все его артикулы будут считаться недоступными и не попадут в выбор цены.`,
-    okText: "Поставить на стоп",
+  const supplier = state.suppliers.find((item) => item.id === panel.dataset.supplierId);
+
+  if (stopped) {
+    const modalResult = await openSupplierInactiveModal(supplier || { id: panel.dataset.supplierId });
+    if (!modalResult) {
+      toggle.checked = false;
+      return;
+    }
+    try {
+      await api(`/api/suppliers/${panel.dataset.supplierId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stopped: true,
+          stopReason: modalResult.comment,
+          inactiveComment: modalResult.comment,
+          inactiveUntil: modalResult.unknown ? null : modalResult.date,
+          inactiveUntilUnknown: modalResult.unknown,
+        }),
+      });
+      await loadWarehouse(false);
+    } catch (error) {
+      toggle.checked = false;
+      elements.supplierStatus.textContent = error.message;
+    }
+    return;
+  }
+
+  if (!(await confirmAction({
+    title: "Вернуть поставщика в актив?",
+    text: `${name}: поставщик снова будет участвовать в выборе цены.`,
+    okText: "Вернуть в актив",
+    danger: false,
   }))) {
-    toggle.checked = false;
+    toggle.checked = true;
     return;
   }
 
@@ -1531,10 +2301,16 @@ elements.supplierBoard.addEventListener("change", async (event) => {
     await api(`/api/suppliers/${panel.dataset.supplierId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stopped }),
+      body: JSON.stringify({
+        stopped: false,
+        inactiveComment: "",
+        inactiveUntil: null,
+        inactiveUntilUnknown: false,
+      }),
     });
     await loadWarehouse(false);
   } catch (error) {
+    toggle.checked = true;
     elements.supplierStatus.textContent = error.message;
   }
 });
@@ -1693,63 +2469,6 @@ elements.hiddenAccountsBoard?.addEventListener("click", async (event) => {
   }
 });
 
-elements.previewForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const targets = Array.from(document.querySelectorAll('input[name="target"]:checked')).map((input) => input.value);
-  if (!targets.length) {
-    elements.statusText.textContent = "Выберите хотя бы один маркетплейс.";
-    return;
-  }
-
-  elements.statusText.textContent = "Готовлю предпросмотр. В маркетплейсы ничего не отправляется.";
-  elements.selectChangedButton.disabled = true;
-  elements.sendButton.disabled = true;
-
-  try {
-    const preview = await api("/api/marketplaces/prices/preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        usdRate: Number(elements.usdRateInput.value),
-        ozonMarkup: Number(elements.ozonMarkupInput.value),
-        yandexMarkup: Number(elements.yandexMarkupInput.value),
-        supplierMarkups: elements.supplierMarkupInput.value,
-        limit: Number(elements.limitInput.value),
-        search: elements.searchInput.value.trim(),
-        targets,
-      }),
-    });
-
-    state.rows = preview.rows || [];
-    elements.sourceCount.textContent = formatNumber(preview.sourceItems);
-    elements.rowCount.textContent = formatNumber(state.rows.length);
-    elements.changedCount.textContent = formatNumber(preview.changed);
-    elements.statusText.textContent = `Предпросмотр готов. Курс: ${preview.usdRate}. Ozon: ${preview.targetMarkups.ozon}. Яндекс: ${preview.targetMarkups.yandex}. Не найдено: ${formatNumber(preview.notFound)}. Без цены: ${formatNumber(preview.noPrice)}.`;
-    elements.selectChangedButton.disabled = state.rows.length === 0;
-    applyFilters();
-  } catch (error) {
-    elements.statusText.textContent = error.message;
-    state.rows = [];
-    applyFilters();
-  }
-});
-
-elements.previewBody.addEventListener("change", (event) => {
-  if (event.target.classList.contains("row-check")) updateSelection();
-});
-
-elements.statusFilter.addEventListener("change", applyFilters);
-elements.marketplaceFilter.addEventListener("change", applyFilters);
-
-elements.refreshRateButton.addEventListener("click", async () => {
-  try {
-    await loadRate(true);
-    elements.rateInfo.textContent = "Автозагрузка курса отключена. Введите курс вручную.";
-  } catch (error) {
-    elements.rateInfo.textContent = error.message;
-  }
-});
-
 elements.syncProgressClose?.addEventListener("click", () => {
   elements.warehouseSyncProgress?.classList.add("hidden");
   elements.syncMiniProgress?.classList.remove("hidden");
@@ -1760,42 +2479,101 @@ elements.syncMiniProgress?.addEventListener("click", () => {
   elements.warehouseSyncProgress?.classList.remove("hidden");
 });
 
-elements.selectChangedButton.addEventListener("click", () => {
-  document.querySelectorAll(".row-check").forEach((input) => {
-    const row = state.filteredRows[Number(input.dataset.index)];
-    input.checked = Boolean(row?.ready && row.changed);
-  });
-  updateSelection();
-});
-
-elements.sendButton.addEventListener("click", async () => {
-  const items = selectedRows();
-  if (!items.length) return;
-  if (!(await confirmAction({ title: "Отправить цены?", text: `Отправить ${items.length} выбранных цен на маркетплейсы?`, okText: "Отправить", danger: false }))) return;
-
-  elements.sendButton.disabled = true;
-  elements.statusText.textContent = "Отправляю выбранные цены...";
-  try {
-    const result = await api("/api/marketplaces/prices/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirmed: true, items }),
-    });
-    elements.statusText.textContent = `Отправка завершена: ${formatNumber(result.sent)} строк.`;
-  } catch (error) {
-    elements.statusText.textContent = error.message;
-  } finally {
-    updateSelection();
-  }
-});
-
 elements.logoutButton.addEventListener("click", async () => {
   await fetch("/api/logout", { method: "POST" }).catch(() => {});
   window.location.href = "/login.html";
 });
 
+function setupIosSelectRoot(root) {
+  const select = root.querySelector("select.ios-select-native");
+  const trigger = root.querySelector(".ios-select-trigger");
+  const menu = root.querySelector(".ios-select-menu");
+  const valueEl = root.querySelector(".ios-select-value");
+  if (!select || !trigger || !menu || !valueEl) return;
+
+  function syncFromSelect() {
+    const opt = select.options[select.selectedIndex];
+    valueEl.textContent = opt?.textContent?.trim() || "";
+  }
+
+  function close() {
+    menu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+    root.classList.remove("is-open");
+  }
+
+  function open() {
+    menu.replaceChildren();
+    Array.from(select.options).forEach((opt, index) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.setAttribute("role", "option");
+      btn.className = "ios-select-option";
+      if (opt.selected) btn.classList.add("ios-select-option--active");
+      btn.dataset.value = opt.value;
+      btn.textContent = opt.textContent;
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", () => {
+        if (select.selectedIndex !== index) {
+          select.selectedIndex = index;
+          select.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        syncFromSelect();
+        close();
+      });
+      menu.appendChild(btn);
+    });
+    menu.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    root.classList.add("is-open");
+  }
+
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (root.classList.contains("is-open")) close();
+    else open();
+  });
+
+  select.addEventListener("change", syncFromSelect);
+  syncFromSelect();
+}
+
+function initIosSelects() {
+  if (!document.documentElement.dataset.iosSelectBound) {
+    document.documentElement.dataset.iosSelectBound = "1";
+    document.addEventListener("click", (e) => {
+      document.querySelectorAll("[data-ios-select].is-open").forEach((root) => {
+        if (!root.contains(e.target)) {
+          const trigger = root.querySelector(".ios-select-trigger");
+          const menu = root.querySelector(".ios-select-menu");
+          if (menu) menu.hidden = true;
+          if (trigger) trigger.setAttribute("aria-expanded", "false");
+          root.classList.remove("is-open");
+        }
+      });
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      document.querySelectorAll("[data-ios-select].is-open").forEach((root) => {
+        const trigger = root.querySelector(".ios-select-trigger");
+        const menu = root.querySelector(".ios-select-menu");
+        if (menu) menu.hidden = true;
+        if (trigger) trigger.setAttribute("aria-expanded", "false");
+        root.classList.remove("is-open");
+        trigger?.focus();
+      });
+    });
+  }
+  document.querySelectorAll("[data-ios-select]").forEach((root) => setupIosSelectRoot(root));
+}
+
+initIosSelects();
+
+if (elements.supplierInactiveUntilInput) {
+  elements.supplierInactiveUntilInput.min = new Date().toISOString().slice(0, 10);
+}
+
 loadSettings().catch((error) => {
-  elements.statusText.textContent = error.message;
   elements.warehouseStatus.textContent = error.message;
   elements.supplierStatus.textContent = error.message;
 });

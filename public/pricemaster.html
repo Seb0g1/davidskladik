@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PriceMaster + аудит | Magic Vibes - Склад</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <h1>PriceMaster + аудит</h1>
+          <p>Список товаров из PriceMaster и журнал изменений цен/активности поставщиков.</p>
+        </div>
+        <div class="header-actions">
+          <a class="secondary-link-button" href="/">Личный склад</a>
+          <a class="secondary-link-button" href="/settings.html">Настройки</a>
+          <button id="logoutButton" class="secondary-button" type="button">Выйти</button>
+        </div>
+      </header>
+
+      <section class="control-panel">
+        <div class="warehouse-topbar-v2">
+          <label>
+            Поиск (артикул / название / штрихкод)
+            <input id="pmSearchInput" type="search" placeholder="Например, Dior или 12345" />
+          </label>
+          <label>
+            Тип изменения
+            <select id="pmChangeTypeFilter">
+              <option value="all">Все типы</option>
+              <option value="new">new</option>
+              <option value="price_changed">price_changed</option>
+              <option value="inactive">inactive</option>
+              <option value="returned">returned</option>
+            </select>
+          </label>
+          <label>
+            Поставщик (история)
+            <input id="pmSupplierFilter" type="search" placeholder="Например, Allscent" />
+          </label>
+          <button id="pmExportCsvButton" class="secondary-button" type="button">Экспорт CSV</button>
+          <button id="pmReloadButton" class="secondary-button" type="button">Обновить</button>
+        </div>
+        <div id="pmStatus" class="rate-info">Загружаю данные…</div>
+      </section>
+
+      <section class="summary-strip">
+        <article><span>Товаров PriceMaster</span><strong id="pmOffersCount">0</strong></article>
+        <article><span>Изменений в истории</span><strong id="pmHistoryCount">0</strong></article>
+      </section>
+
+      <section class="warehouse-workspace">
+        <section class="workspace-main">
+          <h2>Товары PriceMaster</h2>
+          <div id="pmOffersTable" class="history-list"></div>
+        </section>
+        <aside class="warehouse-detail">
+          <h2>Аудит / История</h2>
+          <div id="pmHistoryList" class="history-list"></div>
+        </aside>
+      </section>
+    </main>
+    <script src="/pricemaster.js"></script>
+  </body>
+</html>

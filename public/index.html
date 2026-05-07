@@ -3,17 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Личный склад</title>
+    <meta name="description" content="Панель Magic Vibes — склад: Ozon, Яндекс Маркет, PriceMaster, цены и поставщики." />
+    <meta name="theme-color" content="#2563eb" />
+    <title>Magic Vibes - Склад</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c3aed'/%3E%3Cpath fill='%23fff' d='M8 22V10h2.8l3.4 6.1L17.5 10H20v12h-2.5v-7.2l-2.8 5h-1.4l-2.8-5V22H8z'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="app-shell">
       <header class="app-header">
         <div>
-          <h1>Личный склад</h1>
+          <h1 class="site-brand"><span class="brand-name">Magic Vibes</span><span class="brand-sep"> — </span><span class="brand-tag">Склад</span></h1>
           <p>Ozon и Yandex Market, поставщики PriceMaster, стоп-листы и управляемая замена цены.</p>
         </div>
         <div class="header-actions">
+          <a class="secondary-link-button" href="/settings.html">Настройки</a>
+          <a class="secondary-link-button" href="/pricemaster.html">PriceMaster + аудит</a>
           <a class="primary-link-button" href="/ozon-product.html">Добавить товар Ozon</a>
           <a class="secondary-link-button" href="/yandex-product.html">Добавить товар ЯМ</a>
           <button id="logoutButton" class="secondary-button" type="button">Выйти</button>
@@ -24,40 +29,79 @@
         <button class="tab-button active" type="button" data-tab="warehouse">Личный склад</button>
         <button class="tab-button" type="button" data-tab="suppliers">Поставщики</button>
         <button class="tab-button" type="button" data-tab="accounts">Кабинеты</button>
-        <button class="tab-button" type="button" data-tab="bulk">Массовые цены</button>
       </nav>
 
       <section id="warehouseTab" class="tab-panel active">
-        <section class="control-panel">
-          <div class="warehouse-topbar">
-            <div class="segmented" aria-label="Фильтр маркетплейса">
-              <button class="segment active" type="button" data-marketplace="all">Все</button>
-              <button class="segment" type="button" data-marketplace="ozon">Ozon</button>
-              <button class="segment" type="button" data-marketplace="yandex">Yandex Market</button>
+        <section class="control-panel warehouse-control-panel">
+          <header class="warehouse-panel-head">
+            <div class="warehouse-panel-head__text">
+              <p class="warehouse-kicker">Личный склад</p>
+              <p id="warehouseToolbarHint" class="warehouse-toolbar-hint">Загрузка…</p>
             </div>
-            <label class="search-control">
-              Поиск
-              <input id="warehouseSearchInput" type="search" placeholder="Название, артикул, поставщик" />
-            </label>
-            <label class="status-control">
-              Статус маркетплейса
-              <select id="ozonStateFilter">
-                <option value="all">Все статусы</option>
-                <option value="active">Активные</option>
-                <option value="archived">Архив</option>
-                <option value="inactive">Неактивные</option>
-                <option value="out_of_stock">Нет в наличии</option>
-                <option value="unknown">Не загружен</option>
-              </select>
-            </label>
-            <label class="rate-control">
-              Курс USD/RUB
-              <input id="warehouseUsdRateInput" type="number" min="1" step="0.0001" required />
-            </label>
-            <button id="warehouseSyncButton" class="secondary-button sync-button" type="button">Синхронизировать Ozon + ЯМ</button>
-            <button id="warehouseRefreshPricesButton" class="secondary-button" type="button">Обновить видимые фото</button>
-            <button id="warehouseSelectChangedButton" class="secondary-button" type="button" disabled>Выбрать изменения</button>
-            <button id="warehouseSendButton" class="danger-button" type="button" disabled>Обновить цены</button>
+          </header>
+          <div class="warehouse-topbar-v2">
+            <div class="wh-cluster wh-cluster--filters">
+              <span class="wh-cluster-label" id="wh-cluster-filters-label">Фильтры и поиск</span>
+              <div class="wh-cluster-body">
+                <div class="segmented" role="group" aria-labelledby="wh-cluster-filters-label">
+                  <button class="segment active" type="button" data-marketplace="all">Все</button>
+                  <button class="segment" type="button" data-marketplace="ozon">Ozon</button>
+                  <button class="segment" type="button" data-marketplace="yandex">Yandex Market</button>
+                </div>
+                <label class="search-control">
+                  Поиск
+                  <input id="warehouseSearchInput" type="search" placeholder="Название, артикул, поставщик…" autocomplete="off" />
+                </label>
+                <div class="status-control ios-field">
+                  <span class="ios-field-caption" id="ozonStateCaption">Статус Ozon</span>
+                  <div class="ios-select" data-ios-select>
+                    <select id="ozonStateFilter" class="ios-select-native" aria-hidden="true" tabindex="-1">
+                      <option value="all">Все статусы</option>
+                      <option value="active">Активные</option>
+                      <option value="archived">Архив</option>
+                      <option value="inactive">Неактивные</option>
+                      <option value="out_of_stock">Нет в наличии</option>
+                      <option value="unknown">Не загружен</option>
+                    </select>
+                    <button type="button" class="ios-select-trigger" id="ozonStateFilterButton" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="ozonStateCaption ozonStateFilterValue">
+                      <span class="ios-select-value" id="ozonStateFilterValue">Все статусы</span>
+                      <span class="ios-select-chevron" aria-hidden="true"></span>
+                    </button>
+                    <div class="ios-select-menu" id="ozonStateFilterMenu" role="listbox" hidden></div>
+                  </div>
+                </div>
+                <label class="search-control">
+                  <input id="warehouseAutoPriceOnlyInput" type="checkbox" />
+                  Только автоцены
+                </label>
+              </div>
+            </div>
+            <div class="wh-cluster wh-cluster--pricing">
+              <span class="wh-cluster-label" id="wh-cluster-pricing-label">Курс и действия</span>
+              <div class="wh-cluster-body wh-cluster-body--pricing">
+                <label class="rate-control">
+                  Курс USD/RUB
+                  <input id="warehouseUsdRateInput" type="number" min="1" step="0.0001" required aria-describedby="warehouseRateInfo" />
+                </label>
+                <label class="rate-control">
+                  Порог RUB
+                  <input id="warehouseMinDiffRubInput" type="number" min="0" step="1" value="0" />
+                </label>
+                <label class="rate-control">
+                  Порог %
+                  <input id="warehouseMinDiffPctInput" type="number" min="0" step="0.1" value="0" />
+                </label>
+                <div class="wh-actions" role="group" aria-labelledby="wh-cluster-pricing-label">
+                  <button id="warehouseSyncButton" class="secondary-button sync-button" type="button">Синхронизировать Ozon + ЯМ</button>
+                  <button id="warehouseRefreshPricesButton" class="secondary-button" type="button">Обновить цены</button>
+                  <button id="autoPriceDisableAllButton" class="secondary-button" type="button">AUTO всем выкл</button>
+                  <button id="warehouseDryRunButton" class="secondary-button" type="button">Dry-run</button>
+                  <button id="warehouseRetryQueueButton" class="secondary-button" type="button">Повторить неотправленные</button>
+                  <button id="warehouseSelectChangedButton" class="secondary-button" type="button" disabled>Выбрать изменения</button>
+                  <button id="warehouseSendButton" class="danger-button" type="button" disabled>Обновить цены</button>
+                </div>
+              </div>
+            </div>
           </div>
           <div id="warehouseSyncProgress" class="sync-progress hidden" aria-live="polite">
             <div class="sync-progress-head">
@@ -80,8 +124,44 @@
             <strong id="syncMiniPercent">0%</strong>
             <i><b id="syncMiniBar"></b></i>
           </button>
-          <div id="warehouseStatus" class="rate-info">Склад загружается...</div>
-          <div class="daily-sync-panel">
+          <div id="warehouseStatus" class="rate-info warehouse-status-banner">Склад загружается...</div>
+          <div id="warehouseNoSupplierAlert" class="rate-info warehouse-status-banner hidden"></div>
+          <section id="noSupplierPanel" class="control-panel hidden">
+            <div class="section-heading">
+              <div>
+                <h3>Ошибки наличия</h3>
+                <p id="noSupplierMeta">Товары без активных поставщиков.</p>
+              </div>
+            </div>
+            <div id="noSupplierList" class="history-list"></div>
+          </section>
+          <section id="retryQueuePanel" class="control-panel hidden">
+            <div class="section-heading">
+              <div>
+                <h3>Очередь повторной отправки</h3>
+                <p id="retryQueueMeta">Нет элементов в очереди.</p>
+                <div id="retryQueueStats" class="state-stack"></div>
+              </div>
+              <div class="form-inline-actions">
+                <input id="retryQueueSearchInput" type="search" placeholder="Поиск: offerId / ошибка / target" />
+                <select id="retryQueueMarketplaceFilterInput">
+                  <option value="all">Все площадки</option>
+                  <option value="ozon">Ozon</option>
+                  <option value="yandex">Yandex</option>
+                </select>
+                <select id="retryQueueSortInput">
+                  <option value="newest">Сначала новые</option>
+                  <option value="oldest">Сначала старые</option>
+                  <option value="errors">Частые ошибки</option>
+                </select>
+                <button id="retryQueueRefreshButton" class="secondary-button compact-button" type="button">Обновить</button>
+                <button id="retryQueueRetrySelectedButton" class="secondary-button compact-button" type="button">Повторить выбранные</button>
+                <button id="retryQueueClearButton" class="secondary-button compact-button" type="button">Очистить очередь</button>
+              </div>
+            </div>
+            <div id="retryQueueList" class="history-list"></div>
+          </section>
+          <div class="daily-sync-panel warehouse-daily-sync-inline">
             <div>
               <span>Ежедневное обновление</span>
               <strong id="dailySyncStatus">Проверяю расписание...</strong>
@@ -89,46 +169,47 @@
             </div>
             <button id="dailySyncRunButton" class="secondary-button compact-button" type="button">Запустить сейчас</button>
           </div>
-          <div id="syncLogList" class="sync-log-list"></div>
+          <div id="syncLogList" class="sync-log-list warehouse-sync-log-inline"></div>
         </section>
 
-        <section class="summary-strip" aria-label="Итоги склада">
-          <article>
-            <span>Товаров</span>
-            <strong id="warehouseTotal">0</strong>
+        <section class="summary-strip summary-strip--warehouse" aria-label="Итоги склада">
+          <article class="summary-tile" data-tone="neutral">
+            <span class="summary-tile-label">Товаров</span>
+            <strong id="warehouseTotal" class="summary-tile-value">0</strong>
           </article>
-          <article>
-            <span>Готово</span>
-            <strong id="warehouseReady">0</strong>
+          <article class="summary-tile" data-tone="ok">
+            <span class="summary-tile-label">Готово к цене</span>
+            <strong id="warehouseReady" class="summary-tile-value">0</strong>
           </article>
-          <article>
-            <span>Цена изменилась</span>
-            <strong id="warehouseChanged">0</strong>
+          <article class="summary-tile" data-tone="warn">
+            <span class="summary-tile-label">Нужно обновить</span>
+            <strong id="warehouseChanged" class="summary-tile-value">0</strong>
           </article>
-          <article>
-            <span>Без поставщика</span>
-            <strong id="warehouseNoSupplier">0</strong>
+          <article class="summary-tile" data-tone="muted">
+            <span class="summary-tile-label">Без поставщика</span>
+            <strong id="warehouseNoSupplier" class="summary-tile-value">0</strong>
           </article>
-          <article>
-            <span>Архив Ozon</span>
-            <strong id="warehouseOzonArchived">0</strong>
+          <article class="summary-tile summary-tile--compact" data-tone="ozon">
+            <span class="summary-tile-label">Архив Ozon</span>
+            <strong id="warehouseOzonArchived" class="summary-tile-value">0</strong>
           </article>
-          <article>
-            <span>Неактивные Ozon</span>
-            <strong id="warehouseOzonInactive">0</strong>
+          <article class="summary-tile summary-tile--compact" data-tone="ozon">
+            <span class="summary-tile-label">Неактивные</span>
+            <strong id="warehouseOzonInactive" class="summary-tile-value">0</strong>
           </article>
-          <article>
-            <span>Нет наличия Ozon</span>
-            <strong id="warehouseOzonOutOfStock">0</strong>
+          <article class="summary-tile summary-tile--compact" data-tone="ozon">
+            <span class="summary-tile-label">Нет наличия</span>
+            <strong id="warehouseOzonOutOfStock" class="summary-tile-value">0</strong>
           </article>
         </section>
 
         <section class="warehouse-workspace">
           <div class="workspace-main">
-            <div class="section-heading">
+            <div class="section-heading section-heading--warehouse">
               <div>
-                <h2>Товары склада</h2>
-                <p id="warehouseRateInfo">Курс загружается...</p>
+                <h2>Каталог</h2>
+                <p id="warehouseRateInfo" class="warehouse-rate-line">Курс загружается...</p>
+                <p id="warehouseSelectionLine" class="warehouse-selection-line" aria-live="polite"></p>
               </div>
               <button id="manualProductToggle" class="secondary-button compact-button" type="button">Добавить вручную</button>
             </div>
@@ -140,7 +221,9 @@
               </label>
               <label>
                 Артикул
-                <input id="warehouseOfferInput" type="text" placeholder="OZON-123 или YM-123" required />
+                <span class="pm-autocomplete-wrap">
+                  <input id="warehouseOfferInput" type="text" placeholder="OZON-123 или артикул из прайса" required autocomplete="off" data-pm-suggest="offer" />
+                </span>
               </label>
               <label>
                 Название
@@ -172,6 +255,8 @@
               </div>
               <button id="mergeProductsButton" class="secondary-button compact-button" type="button">Объединить</button>
               <button id="unmergeProductsButton" class="secondary-button compact-button" type="button">Разъединить</button>
+              <button id="autoPriceEnableSelectedButton" class="secondary-button compact-button" type="button">AUTO вкл</button>
+              <button id="autoPriceDisableSelectedButton" class="secondary-button compact-button" type="button">AUTO выкл</button>
             </div>
 
             <div class="warehouse-viewbar" aria-label="Вид товаров склада">
@@ -186,7 +271,10 @@
             </div>
 
             <div id="warehouseCards" class="product-grid">
-              <div class="empty">Склад еще не загружен.</div>
+              <div class="empty warehouse-empty-state">
+                <strong>Склад ещё не загружен</strong>
+                <span>Дождитесь ответа сервера или нажмите синхронизацию с маркетплейсами.</span>
+              </div>
             </div>
             <div class="load-more-row">
               <button id="warehouseLoadMoreButton" class="secondary-button" type="button">Показать еще</button>
@@ -205,11 +293,22 @@
 
       <section id="suppliersTab" class="tab-panel">
         <section class="control-panel">
+          <div class="supplier-section-head">
+            <div class="segmented supplier-view-tabs" role="tablist" aria-label="Раздел поставщиков">
+              <button class="segment active" type="button" data-supplier-view="active" role="tab" aria-selected="true">Активные</button>
+              <button class="segment" type="button" data-supplier-view="inactive" role="tab" aria-selected="false">Инактив</button>
+            </div>
+            <label class="supplier-search-field">
+              <input id="supplierSearchInput" type="search" placeholder="Поиск поставщика..." autocomplete="off" />
+            </label>
+          </div>
           <form id="supplierForm" class="supplier-form">
             <input id="supplierIdInput" type="hidden" />
             <label>
               Поставщик
-              <input id="supplierNameInput" type="text" placeholder="Название как в PriceMaster" required />
+              <span class="pm-autocomplete-wrap">
+                <input id="supplierNameInput" type="text" placeholder="Название как в PriceMaster" required autocomplete="off" data-pm-suggest="partner" />
+              </span>
             </label>
             <label>
               Заметка
@@ -295,121 +394,17 @@
           </section>
         </section>
       </section>
-
-      <section id="bulkTab" class="tab-panel">
-        <section class="control-panel" aria-label="Настройки предпросмотра">
-          <form id="previewForm" class="controls">
-            <label>
-              Курс USD/RUB
-              <input id="usdRateInput" type="number" min="1" step="0.0001" required />
-            </label>
-            <label>
-              Наценка Ozon
-              <input id="ozonMarkupInput" type="number" min="0.01" step="0.01" required />
-            </label>
-            <label>
-              Наценка Яндекс
-              <input id="yandexMarkupInput" type="number" min="0.01" step="0.01" required />
-            </label>
-            <label>
-              Лимит товаров
-              <input id="limitInput" type="number" min="1" value="200" required />
-            </label>
-            <label>
-              Поиск артикула
-              <input id="searchInput" type="search" placeholder="Например B100HR31" />
-            </label>
-
-            <div class="target-list" id="targetList"></div>
-
-            <label class="supplier-rules">
-              Наценка по поставщикам
-              <textarea id="supplierMarkupInput" placeholder="Веста=1.72&#10;Инна=1.60"></textarea>
-            </label>
-
-            <div class="control-actions">
-              <button id="refreshRateButton" class="secondary-button" type="button">Обновить курс</button>
-              <button class="primary-button" type="submit">Показать предпросмотр</button>
-            </div>
-          </form>
-          <div id="rateInfo" class="rate-info">Курс загружается...</div>
-        </section>
-
-        <section class="summary-strip" aria-label="Итоги">
-          <article>
-            <span>Товаров PriceMaster</span>
-            <strong id="sourceCount">0</strong>
-          </article>
-          <article>
-            <span>Строк к проверке</span>
-            <strong id="rowCount">0</strong>
-          </article>
-          <article>
-            <span>Отличаются цены</span>
-            <strong id="changedCount">0</strong>
-          </article>
-          <article>
-            <span>Выбрано</span>
-            <strong id="selectedCount">0</strong>
-          </article>
-        </section>
-
-        <section class="preview-panel">
-          <div class="preview-toolbar">
-            <div id="statusText">Настройте курс, наценку и нажмите предпросмотр. Автоматической отправки нет.</div>
-            <div class="toolbar-actions">
-              <button id="selectChangedButton" class="secondary-button" type="button" disabled>Выбрать отличающиеся</button>
-              <button id="sendButton" class="danger-button" type="button" disabled>Отправить выбранное</button>
-            </div>
-          </div>
-
-          <div class="filters-panel">
-            <label>
-              Фильтр статуса
-              <select id="statusFilter">
-                <option value="all">Все строки</option>
-                <option value="found">Только найденные</option>
-                <option value="not_found">Только не найденные</option>
-                <option value="changed">Только где цена отличается</option>
-              </select>
-            </label>
-            <label>
-              Маркетплейс
-              <select id="marketplaceFilter">
-                <option value="all">Все маркетплейсы</option>
-              </select>
-            </label>
-          </div>
-
-          <div class="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th></th>
-                  <th>Маркетплейс</th>
-                  <th>Артикул</th>
-                  <th>Товар</th>
-                  <th>USD</th>
-                  <th>Наценка</th>
-                  <th>Текущая цена</th>
-                  <th>Новая цена</th>
-                  <th>Статус</th>
-                </tr>
-              </thead>
-              <tbody id="previewBody">
-                <tr><td colspan="9" class="empty">Предпросмотр еще не создан.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </section>
     </main>
 
     <template id="linkFormTemplate">
       <form class="inline-link-form">
-        <input name="article" type="text" placeholder="Артикул PriceMaster" required />
+        <span class="pm-autocomplete-wrap">
+          <input name="article" type="text" placeholder="Артикул PriceMaster" required autocomplete="off" data-pm-suggest="offer" />
+        </span>
         <input name="keyword" type="text" placeholder="Ключевое слово" />
-        <input name="supplierName" type="text" placeholder="Поставщик" />
+        <span class="pm-autocomplete-wrap">
+          <input name="supplierName" type="text" placeholder="Поставщик" autocomplete="off" data-pm-suggest="partner" />
+        </span>
         <input name="priority" type="number" min="1" step="1" value="100" />
         <button class="secondary-button" type="submit">Привязать</button>
       </form>
@@ -418,7 +413,9 @@
     <template id="supplierArticleFormTemplate">
       <form class="supplier-article-form">
         <input name="id" type="hidden" />
-        <input name="article" type="text" placeholder="Артикул поставщика" required />
+        <span class="pm-autocomplete-wrap">
+          <input name="article" type="text" placeholder="Артикул поставщика" required autocomplete="off" data-pm-suggest="offer" />
+        </span>
         <input name="keyword" type="text" placeholder="Ключевое слово" />
         <input name="priority" type="number" min="1" step="1" value="100" />
         <button class="secondary-button" type="submit">Добавить артикул</button>
@@ -433,6 +430,37 @@
           <button id="confirmCancel" class="secondary-button" type="button">Отменить</button>
           <button id="confirmOk" class="danger-button" type="button">Подтвердить</button>
         </div>
+      </div>
+    </div>
+
+    <div id="supplierInactiveModal" class="confirm-modal hidden" role="dialog" aria-modal="true" aria-labelledby="supplierInactiveTitle">
+      <div class="confirm-card supplier-inactive-card">
+        <h3 id="supplierInactiveTitle">Перевести поставщика в инактив</h3>
+        <p>Укажите комментарий и дату. Если дата неизвестна — отметьте «Неизвестно».</p>
+        <form id="supplierInactiveForm" class="supplier-inactive-form">
+          <input id="supplierInactiveSupplierId" type="hidden" />
+          <label>
+            Комментарий
+            <textarea id="supplierInactiveCommentInput" placeholder="Причина и детали инактива" required></textarea>
+          </label>
+          <label>
+            Дата возврата
+            <input id="supplierInactiveUntilInput" type="date" />
+          </label>
+          <div class="form-inline-actions">
+            <button class="secondary-button compact-button" type="button" data-inactive-quick="+7">+7 дней</button>
+            <button class="secondary-button compact-button" type="button" data-inactive-quick="+14">+14 дней</button>
+            <button class="secondary-button compact-button" type="button" data-inactive-quick="eom">Конец месяца</button>
+          </div>
+          <label class="switch-line">
+            <input id="supplierInactiveUnknownInput" type="checkbox" />
+            <span>Неизвестно</span>
+          </label>
+          <div class="confirm-actions">
+            <button id="supplierInactiveCancel" class="secondary-button" type="button">Отменить</button>
+            <button id="supplierInactiveSubmit" class="danger-button" type="submit">Перевести в инактив</button>
+          </div>
+        </form>
       </div>
     </div>
 

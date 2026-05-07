@@ -1,6 +1,28 @@
 const content = document.querySelector("#productPageContent");
 const title = document.querySelector("#productPageTitle");
 const meta = document.querySelector("#productPageMeta");
+const SITE_DOC_TITLE = "Magic Vibes - Склад";
+
+function setDocTitle(pageTitle) {
+  document.title = pageTitle ? `${pageTitle} · ${SITE_DOC_TITLE}` : SITE_DOC_TITLE;
+}
+
+function showToast(message) {
+  const text = String(message || "").trim();
+  if (!text) return;
+  let root = document.getElementById("toastRoot");
+  if (!root) {
+    root = document.createElement("div");
+    root.id = "toastRoot";
+    root.className = "toast-stack";
+    document.body.appendChild(root);
+  }
+  const el = document.createElement("div");
+  el.className = "toast toast--warn";
+  el.textContent = text;
+  root.appendChild(el);
+  setTimeout(() => el.remove(), 14000);
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -14,6 +36,20 @@ function escapeHtml(value) {
 function formatMoney(value) {
   const number = Number(value || 0);
   return number > 0 ? `${new Intl.NumberFormat("ru-RU").format(Math.round(number))} ₽` : "-";
+}
+
+function ozonCabinetPriceNote(item) {
+  if (!item || item.marketplace !== "ozon") return "";
+  const bits = [];
+  const m = item.ozon?.marketingSellerPrice;
+  const cur = Number(item.currentPrice || 0);
+  if (m && cur && Math.abs(Number(m) - cur) >= 1) bits.push(`акция селлера ${formatMoney(m)}`);
+  if (item.ozon?.marketingPrice && (!m || Math.abs(Number(item.ozon.marketingPrice) - cur) >= 1)) {
+    bits.push(`маркетинг ${formatMoney(item.ozon.marketingPrice)}`);
+  }
+  if (item.ozon?.oldPrice) bits.push(`зачёркнутая ${formatMoney(item.ozon.oldPrice)}`);
+  if (item.ozonMinPrice) bits.push(`мин. ${formatMoney(item.ozonMinPrice)}`);
+  return bits.length ? bits.join(" · ") : "";
 }
 
 function formatDate(value) {
@@ -44,17 +80,7 @@ async function api(url) {
   return data;
 }
 
-async function main() {
-  const params = new URLSearchParams(window.location.search);
-  const key = params.get("group") || "";
-  const data = await api("/api/warehouse");
-  const products = data.products || [];
-  const variants = products.filter((product) => groupKey(product) === key || product.id === params.get("id"));
-  if (!variants.length) {
-    content.innerHTML = `<div class="empty">Товар не найден.</div>`;
-    return;
-  }
-
+function renderProductPage(variants) {
   const primary = variants[0];
   const image = productImage(primary);
   const suppliers = variants.flatMap((product) => product.suppliers || []);
@@ -65,6 +91,7 @@ async function main() {
 
   title.textContent = primary.name || primary.offerId || "Карточка товара";
   meta.textContent = `${primary.offerId || "-"} · ${variants.map(marketLabel).join(" + ")}`;
+  setDocTitle(primary.name || primary.offerId || "Карточка товара");
   content.innerHTML = `
     <section class="product-page-hero">
       <div class="detail-media">${image ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(primary.name)}" />` : `<div class="product-image-empty">Нет фото</div>`}</div>
@@ -75,8 +102,8 @@ async function main() {
             <div class="variant-markup-row">
               <div>
                 <span class="market-badge ${item.marketplace}">${escapeHtml(marketLabel(item))}</span>
-                <strong>${formatMoney(item.currentPrice)} → ${formatMoney(item.nextPrice)}</strong>
-                <small>${escapeHtml(item.marketplaceState?.label || "Статус не загружен")}</small>
+                <strong>${item.marketplace === "ozon" ? "В кабинете Ozon: " : ""}${formatMoney(item.currentPrice)} → ${formatMoney(item.nextPrice)}</strong>
+                <small>${escapeHtml(item.marketplaceState?.label || "Статус не загружен")}${item.marketplace === "ozon" && ozonCabinetPriceNote(item) ? ` · ${escapeHtml(ozonCabinetPriceNote(item))}` : ""}</small>
               </div>
               <div><strong>Наценка ${Number(item.markupCoefficient || 0).toFixed(2)}</strong></div>
             </div>
@@ -108,6 +135,48 @@ async function main() {
   `;
 }
 
+async function loadProductPage(refreshPrices) {
+  const params = new URLSearchParams(window.location.search);
+  const key = params.get("group") || "";
+  const id = params.get("id");
+  const url = refreshPrices ? "/api/warehouse?refreshPrices=true" : "/api/warehouse";
+  const data = await api(url);
+  const products = data.products || [];
+  const variants = products.filter((product) => groupKey(product) === key || product.id === id);
+  if (!variants.length) {
+    content.innerHTML = `<div class="empty">Товар не найден.</div>`;
+    setDocTitle("Товар не найден");
+    return { data, variants: [] };
+  }
+  renderProductPage(variants);
+  return { data, variants };
+}
+
+async function main() {
+  const params = new URLSearchParams(window.location.search);
+  const refreshFromUrl = params.get("refreshPrices") === "1" || params.get("refresh") === "1";
+  const { data } = await loadProductPage(refreshFromUrl);
+  if (Array.isArray(data.syncWarnings) && data.syncWarnings.length) {
+    data.syncWarnings.forEach((msg) => showToast(msg));
+  }
+}
+
+document.getElementById("productRefreshPrices")?.addEventListener("click", async () => {
+  const btn = document.getElementById("productRefreshPrices");
+  if (btn) btn.disabled = true;
+  try {
+    const { data } = await loadProductPage(true);
+    if (Array.isArray(data.syncWarnings) && data.syncWarnings.length) {
+      data.syncWarnings.forEach((msg) => showToast(msg));
+    }
+  } catch (e) {
+    content.innerHTML = `<div class="empty">${escapeHtml(e.message)}</div>`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
 main().catch((error) => {
   content.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+  setDocTitle("Ошибка");
 });

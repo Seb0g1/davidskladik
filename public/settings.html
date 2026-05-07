@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Настройки | Magic Vibes - Склад</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <h1>Настройки</h1>
+          <p>Фиксированный курс USD/RUB и гибкие правила наценки по цене поставщика.</p>
+        </div>
+        <div class="header-actions">
+          <a class="secondary-link-button" href="/">Личный склад</a>
+          <a class="secondary-link-button" href="/pricemaster.html">PriceMaster + аудит</a>
+          <button id="logoutButton" class="secondary-button" type="button">Выйти</button>
+        </div>
+      </header>
+
+      <section class="control-panel">
+        <form id="settingsForm" class="settings-form">
+          <label>
+            Фиксированный курс USD/RUB
+            <input id="fixedUsdRateInput" name="fixedUsdRate" type="number" min="0.0001" step="0.0001" required />
+          </label>
+
+          <label>
+            Базовая наценка Ozon
+            <input id="defaultOzonMarkupInput" name="defaultOzonMarkup" type="number" min="0.0001" step="0.0001" required />
+          </label>
+
+          <label>
+            Базовая наценка Yandex Market
+            <input id="defaultYandexMarkupInput" name="defaultYandexMarkup" type="number" min="0.0001" step="0.0001" required />
+          </label>
+
+          <section class="detail-section">
+            <h3>Гибкие правила наценки</h3>
+            <p>Пример: если цена поставщика от 10 USD — коэффициент 3.0; от 20 USD — 2.8.</p>
+            <div id="markupRulesList" class="settings-rules-list"></div>
+            <button id="addMarkupRuleButton" class="secondary-button compact-button" type="button">Добавить правило</button>
+          </section>
+
+          <div class="form-inline-actions">
+            <button class="primary-button" type="submit">Сохранить настройки</button>
+          </div>
+        </form>
+        <div id="settingsStatus" class="rate-info">Загружаю настройки...</div>
+      </section>
+    </main>
+    <script src="/settings.js"></script>
+  </body>
+</html>

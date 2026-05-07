@@ -6,6 +6,11 @@ const targetInput = document.querySelector("#yandexTargetInput");
 const imageUploadInput = document.querySelector("#yandexImageUpload");
 const imageUploadButton = document.querySelector("#yandexImageUploadButton");
 const imageUploadStatus = document.querySelector("#yandexImageUploadStatus");
+const formTitle = document.querySelector("#yandexFormTitle");
+const formLede = document.querySelector("#yandexFormLede");
+const submitYandexButton = document.querySelector("#submitYandexButton");
+
+let editingProductId = "";
 
 function queryValue(name) {
   return new URLSearchParams(window.location.search).get(name) || "";
@@ -93,6 +98,7 @@ async function loadTargets() {
 }
 
 function setInitialValues() {
+  editingProductId = queryValue("productId");
   const offerId = queryValue("offerId");
   const name = queryValue("name");
   if (offerId) form.elements.offerId.value = offerId;
@@ -100,6 +106,34 @@ function setInitialValues() {
     form.elements.name.value = name;
     form.elements.description.value = name;
   }
+}
+
+function applyYandexDraft(product = {}) {
+  const yandex = product.yandex || {};
+  const mappings = [
+    ["offerId", product.offerId || yandex.offerId || ""],
+    ["name", product.name || yandex.name || ""],
+    ["vendor", yandex.vendor || ""],
+    ["marketCategoryId", yandex.marketCategoryId || ""],
+    ["price", yandex.price || ""],
+    ["description", yandex.description || product.name || ""],
+    ["pictures", Array.isArray(yandex.pictures) ? yandex.pictures.join("\n") : (yandex.pictures || "")],
+    ["barcodes", Array.isArray(yandex.barcodes) ? yandex.barcodes.join("\n") : (yandex.barcodes || "")],
+    ["extraJson", JSON.stringify(yandex.extra || {}, null, 2)],
+  ];
+  for (const [name, value] of mappings) {
+    if (form.elements[name] && value !== undefined && value !== null) form.elements[name].value = value;
+  }
+}
+
+async function loadExistingProduct() {
+  if (!editingProductId) return;
+  const data = await api(`/api/warehouse/products/${encodeURIComponent(editingProductId)}`);
+  applyYandexDraft(data.product || {});
+  if (formTitle) formTitle.textContent = "Редактирование карточки Яндекс Маркета";
+  if (formLede) formLede.textContent = "Режим редактирования Яндекс Маркета: меняете только ЯМ-карточку и отправляете обновление в ЯМ.";
+  if (submitYandexButton) submitYandexButton.textContent = "Обновить в Yandex Market";
+  statusBox.textContent = "Режим редактирования: изменения этой карточки можно отправить в Yandex Market.";
 }
 
 function collectFormData() {
@@ -128,14 +162,14 @@ function buildWarehousePayload(data) {
 }
 
 function findSavedProduct(warehouse, data) {
-  return (warehouse.products || []).find((product) => product.target === data.target && product.offerId === data.offerId);
+  return (warehouse.products || []).find((product) => product.id === editingProductId || (product.target === data.target && product.offerId === data.offerId));
 }
 
 async function saveWarehouseDraft(data) {
   const result = await api("/api/warehouse/products", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildWarehousePayload(data)),
+    body: JSON.stringify(editingProductId ? { ...buildWarehousePayload(data), id: editingProductId } : buildWarehousePayload(data)),
   });
   const product = findSavedProduct(result.warehouse, data);
   if (!product) throw new Error("Товар сохранен, но не найден в ответе склада.");
@@ -170,7 +204,7 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (!window.confirm("Выгрузить карточку товара в Yandex Market? Это отправит данные в Partner API.")) return;
+  if (!window.confirm(`${editingProductId ? "Обновить" : "Выгрузить"} карточку товара в Yandex Market? Это отправит данные в Partner API.`)) return;
 
   statusBox.textContent = "Сохраняю draft и отправляю товар в Yandex Market...";
   try {
@@ -180,7 +214,7 @@ form.addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ confirmed: true, target: data.target }),
     });
-    statusBox.textContent = `Товар выгружен в Yandex Market. Отправлено: ${result.sent || 1}.`;
+    statusBox.textContent = `${editingProductId ? "Изменения отправлены" : "Товар выгружен"} в Yandex Market. Отправлено: ${result.sent || 1}.`;
   } catch (error) {
     statusBox.textContent = error.message;
   }
@@ -192,6 +226,6 @@ logoutButton.addEventListener("click", async () => {
 });
 
 setInitialValues();
-loadTargets().catch((error) => {
+Promise.all([loadTargets(), loadExistingProduct()]).catch((error) => {
   statusBox.textContent = error.message;
 });

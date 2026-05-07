@@ -3,98 +3,138 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Добавить товар Yandex Market</title>
+    <meta name="theme-color" content="#fc3f1d" />
+    <title>Добавить товар Yandex Market | Magic Vibes - Склад</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c3aed'/%3E%3Cpath fill='%23fff' d='M8 22V10h2.8l3.4 6.1L17.5 10H20v12h-2.5v-7.2l-2.8 5h-1.4l-2.8-5V22H8z'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="app-shell">
-      <header class="app-header">
-        <div>
-          <h1>Добавить товар Yandex Market</h1>
-          <p>Отдельная форма для карточки ЯМ: категория, описание, производитель, изображения, штрихкоды и дополнительные параметры.</p>
+    <main class="app-shell product-builder-page product-builder-page--yandex" data-product-builder>
+      <header class="builder-page-header">
+        <div class="builder-page-header__intro">
+          <div class="builder-page-header__eyebrow">
+            <a class="builder-back-link" href="/">← Личный склад</a>
+            <span class="market-badge market-badge--yandex" title="Карточка для Yandex Market API">Яндекс Маркет</span>
+          </div>
+          <h1 id="yandexFormTitle">Новая карточка Яндекс Маркета</h1>
+          <p id="yandexFormLede" class="builder-page-header__lede">
+            Категория, описание, производитель и медиа. Выгрузка выполняется вручную после проверки полей.
+          </p>
         </div>
-        <div class="header-actions">
-          <a class="secondary-link-button" href="/">Назад в склад</a>
+        <div class="builder-page-header__actions">
+          <a class="secondary-link-button" href="/settings.html">Настройки</a>
+          <a class="secondary-link-button" href="/pricemaster.html">PriceMaster + аудит</a>
           <a class="secondary-link-button" href="/ozon-product.html">Форма Ozon</a>
           <button id="logoutButton" class="secondary-button" type="button">Выйти</button>
         </div>
       </header>
 
-      <section class="ozon-builder">
-        <form id="yandexProductForm" class="ozon-form">
-          <div class="form-steps">
-            <span class="active">1. Основное</span>
-            <span>2. Категория</span>
-            <span>3. Медиа и коды</span>
-            <span>4. JSON-поля</span>
-            <span>5. Выгрузка</span>
-          </div>
-          <section class="form-section">
-            <h2>Основное</h2>
-            <label>
-              Кабинет ЯМ
-              <select name="target" id="yandexTargetInput" required></select>
-            </label>
-            <label>
-              SKU / артикул продавца
-              <input name="offerId" type="text" required />
-            </label>
-            <label>
-              Название
-              <input name="name" type="text" required />
-            </label>
-            <label>
-              Производитель / бренд
-              <input name="vendor" type="text" required />
-            </label>
-            <label>
-              Категория ЯМ ID
-              <input name="marketCategoryId" type="number" min="1" required />
-            </label>
-            <label>
-              Цена в кабинете, RUB
-              <input name="price" type="number" min="0" step="1" />
-            </label>
-            <label>
-              Описание
-              <textarea name="description" required></textarea>
-            </label>
-          </section>
+      <div class="builder-layout">
+        <aside class="builder-rail" aria-label="Навигация по форме">
+          <nav class="builder-stepper" aria-label="Разделы формы">
+            <button type="button" class="builder-step is-active" data-scroll-target="pb-ym-main" aria-current="step">
+              <span class="builder-step__num">1</span>
+              <span class="builder-step__label">Товар</span>
+              <span class="builder-step__hint">SKU, название, категория</span>
+            </button>
+            <button type="button" class="builder-step" data-scroll-target="pb-ym-media" aria-current="false">
+              <span class="builder-step__num">2</span>
+              <span class="builder-step__label">Медиа и JSON</span>
+              <span class="builder-step__hint">Фото, штрихкоды</span>
+            </button>
+            <button type="button" class="builder-step" data-scroll-target="pb-ym-actions" aria-current="false">
+              <span class="builder-step__num">3</span>
+              <span class="builder-step__label">Отправка</span>
+              <span class="builder-step__hint">Склад и ЯМ</span>
+            </button>
+          </nav>
+        </aside>
 
-          <section class="form-section wide">
-            <h2>Медиа и коды</h2>
-            <label>
-              Изображения
-              <textarea name="pictures" placeholder="Один URL на строку" required></textarea>
-            </label>
-            <div class="image-importer">
-              <div>
-                <strong>Импорт изображений</strong>
-                <span>PNG, JPG, WEBP или GIF до 10 МБ. URL добавится в список изображений.</span>
+        <div class="builder-content">
+          <section class="ozon-builder">
+            <form id="yandexProductForm" class="ozon-form product-builder-form">
+              <section id="pb-ym-main" class="form-section builder-track-section product-form-panel">
+                <div class="product-form-panel__head">
+                  <h2>Основное</h2>
+                  <p class="product-form-panel__desc">Привязка к кабинету из настроек и обязательные поля карточки.</p>
+                </div>
+                <label>
+                  Кабинет ЯМ
+                  <select name="target" id="yandexTargetInput" required></select>
+                </label>
+                <label>
+                  SKU / артикул продавца
+                  <input name="offerId" type="text" required autocomplete="off" />
+                </label>
+                <label>
+                  Название
+                  <input name="name" type="text" required />
+                </label>
+                <label>
+                  Производитель / бренд
+                  <input name="vendor" type="text" required />
+                </label>
+                <label>
+                  Категория ЯМ ID
+                  <input name="marketCategoryId" type="number" min="1" required />
+                </label>
+                <label>
+                  Цена в кабинете, RUB
+                  <input name="price" type="number" min="0" step="1" />
+                </label>
+                <label class="field-span-2">
+                  Описание
+                  <textarea name="description" required></textarea>
+                </label>
+              </section>
+
+              <section id="pb-ym-media" class="form-section wide builder-track-section product-form-panel">
+                <div class="product-form-panel__head">
+                  <h2>Медиа и коды</h2>
+                  <p class="product-form-panel__desc">Минимум одно изображение по правилам маркетплейса. Дополнительные поля — в JSON.</p>
+                </div>
+                <label class="field-span-2">
+                  Изображения
+                  <textarea name="pictures" placeholder="Один URL на строку" required></textarea>
+                </label>
+                <div class="image-importer image-importer--modern">
+                  <div class="image-importer__text">
+                    <strong>Импорт изображений</strong>
+                    <span>PNG, JPG, WEBP или GIF до 10 МБ. URL добавятся в список выше.</span>
+                  </div>
+                  <div class="image-importer__controls">
+                    <input id="yandexImageUpload" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple />
+                    <button id="yandexImageUploadButton" class="secondary-button compact-button" type="button">Загрузить</button>
+                  </div>
+                  <small id="yandexImageUploadStatus" class="image-importer__status">Файлы ещё не выбраны.</small>
+                </div>
+                <label class="field-span-2">
+                  Штрихкоды
+                  <textarea name="barcodes" placeholder="Один код на строку"></textarea>
+                </label>
+                <label class="field-span-2">
+                  Дополнительные поля ЯМ JSON
+                  <textarea name="extraJson" class="code-area">{}</textarea>
+                </label>
+              </section>
+
+              <div id="pb-ym-actions" class="form-actions builder-track-section builder-actions-panel">
+                <div class="builder-actions-panel__note">
+                  <strong>Без автоматической отправки</strong>
+                  <span id="yandexProductStatus" class="builder-status-line">Заполните форму. Выгрузка только после подтверждения.</span>
+                </div>
+                <div class="builder-actions-panel__buttons">
+                  <button id="saveYandexDraftButton" class="secondary-button" type="button">Сохранить в личный склад</button>
+                  <button id="submitYandexButton" class="primary-button" type="submit">Выгрузить в Yandex Market</button>
+                </div>
               </div>
-              <input id="yandexImageUpload" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple />
-              <button id="yandexImageUploadButton" class="secondary-button compact-button" type="button">Импортировать</button>
-              <small id="yandexImageUploadStatus">Файлы ещё не выбраны.</small>
-            </div>
-            <label>
-              Штрихкоды
-              <textarea name="barcodes" placeholder="Один код на строку"></textarea>
-            </label>
-            <label>
-              Дополнительные поля ЯМ JSON
-              <textarea name="extraJson" class="code-area">{}</textarea>
-            </label>
+            </form>
           </section>
-
-          <div class="form-actions">
-            <button id="saveYandexDraftButton" class="secondary-button" type="button">Сохранить в личный склад</button>
-            <button class="primary-button" type="submit">Выгрузить в Yandex Market</button>
-            <div id="yandexProductStatus" class="rate-info">Заполните форму. Выгрузка произойдет только после подтверждения.</div>
-          </div>
-        </form>
-      </section>
+        </div>
+      </div>
     </main>
 
+    <script src="/product-builder-ui.js"></script>
     <script src="/yandex-product.js"></script>
   </body>
 </html>
