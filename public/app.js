@@ -71,9 +71,6 @@ const elements = {
   warehouseMinDiffPctInput: document.querySelector("#warehouseMinDiffPctInput"),
   warehouseStatus: document.querySelector("#warehouseStatus"),
   warehouseNoSupplierAlert: document.querySelector("#warehouseNoSupplierAlert"),
-  noSupplierPanel: document.querySelector("#noSupplierPanel"),
-  noSupplierMeta: document.querySelector("#noSupplierMeta"),
-  noSupplierList: document.querySelector("#noSupplierList"),
   retryQueuePanel: document.querySelector("#retryQueuePanel"),
   retryQueueMeta: document.querySelector("#retryQueueMeta"),
   retryQueueStats: document.querySelector("#retryQueueStats"),
@@ -888,27 +885,12 @@ function renderWarehouse(data) {
     elements.warehouseStatus.classList.remove("is-warn");
   }
   if (Array.isArray(data.noSupplierAlerts) && data.noSupplierAlerts.length) {
-    elements.warehouseNoSupplierAlert.textContent = `Нет активного поставщика: ${data.noSupplierAlerts.slice(0, 6).map((item) => item.offerId || item.name || item.id).join(", ")}`;
+    const preview = data.noSupplierAlerts.slice(0, 4).map((item) => item.offerId || item.name || item.id).join(", ");
+    elements.warehouseNoSupplierAlert.innerHTML = `Нет активного поставщика: ${escapeHtml(preview)}. <a href="/no-supplier.html">Открыть страницу ошибок</a>`;
     elements.warehouseNoSupplierAlert.classList.remove("hidden");
     elements.warehouseNoSupplierAlert.classList.add("is-warn");
-    if (elements.noSupplierPanel && elements.noSupplierMeta && elements.noSupplierList) {
-      elements.noSupplierPanel.classList.remove("hidden");
-      elements.noSupplierMeta.textContent = `В ошибках ${formatNumber(data.noSupplierAlerts.length)} товаров. Цена выставляется 0, статус: проверить наличие.`;
-      elements.noSupplierList.innerHTML = data.noSupplierAlerts
-        .map((item) => `
-          <div class="history-row">
-            <div>
-              <strong>${escapeHtml(item.offerId || item.name || item.id)}</strong>
-              <span>${escapeHtml(item.name || "Без названия")} · ${escapeHtml(marketLabel(item))} · цена ${formatMoney(item.nextPrice || 0)} · ${escapeHtml(item.action || "Проверить наличие")}</span>
-            </div>
-            <small>нет поставщика</small>
-          </div>
-        `)
-        .join("");
-    }
   } else {
     elements.warehouseNoSupplierAlert.classList.add("hidden");
-    elements.noSupplierPanel?.classList.add("hidden");
   }
   if (Array.isArray(data.syncWarnings) && data.syncWarnings.length) {
     data.syncWarnings.forEach((w) => showToast(w, "warn"));

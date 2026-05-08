@@ -1572,8 +1572,9 @@ const ozonCategoryCacheTtlMs = 10 * 60 * 1000;
 function flattenOzonCategoryTree(nodes = [], result = []) {
   for (const node of nodes || []) {
     const id = Number(node.description_category_id || node.category_id || node.id || 0);
+    const descriptionTypeId = Number(node.description_type_id || node.type_id || node.descriptionTypeId || 0);
     const name = cleanText(node.category_name || node.name || node.title);
-    if (id && name) result.push({ id, name });
+    if (id && name) result.push({ id, name, descriptionTypeId });
     const children = node.children || node.child || node.items || [];
     if (Array.isArray(children) && children.length) flattenOzonCategoryTree(children, result);
   }
@@ -1601,6 +1602,23 @@ function buildOzonAttributesTemplate(rows = []) {
       values: [],
     }))
     .filter((row) => row.id > 0);
+}
+
+function buildNoSupplierAlerts(products = [], { limit = 12 } = {}) {
+  const rows = (products || [])
+    .filter((product) => !product.selectedSupplier && Number(product.supplierCount || 0) > 0)
+    .map((product) => ({
+      id: product.id,
+      offerId: product.offerId,
+      name: product.name,
+      marketplace: product.marketplace,
+      nextPrice: 0,
+      supplierCount: Number(product.supplierCount || 0),
+      availableSupplierCount: Number(product.availableSupplierCount || 0),
+      action: "Проверить наличие",
+    }));
+  if (Number.isFinite(Number(limit)) && Number(limit) > 0) return rows.slice(0, Number(limit));
+  return rows;
 }
 
 function syncWarehouseSuppliersFromPriceMaster(warehouse, partners = []) {
@@ -2543,21 +2561,11 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     total: products.length,
     ready: products.filter((product) => product.ready).length,
     changed: products.filter((product) => product.changed).length,
-    withoutSupplier: products.filter((product) => !product.selectedSupplier).length,
+    withoutSupplier: products.filter((product) => !product.selectedSupplier && Number(product.supplierCount || 0) > 0).length,
     ozonArchived: products.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "archived").length,
     ozonInactive: products.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "inactive").length,
     ozonOutOfStock: products.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "out_of_stock").length,
-    noSupplierAlerts: products
-      .filter((product) => !product.selectedSupplier)
-      .slice(0, 12)
-      .map((product) => ({
-        id: product.id,
-        offerId: product.offerId,
-        name: product.name,
-        marketplace: product.marketplace,
-        nextPrice: 0,
-        action: "Проверить наличие",
-      })),
+    noSupplierAlerts: buildNoSupplierAlerts(products, { limit: 12 }),
     syncWarnings,
   };
 }
@@ -2824,10 +2832,18 @@ app.get("/api/ozon/brands/suggest", async (request, response, next) => {
       const fallback = await listBrandFallbackCandidates(query, Math.min(limit, 40));
       return response.json({ brands: fallback, source: "fallback" });
     }
+    const categories = await getOzonCategoryList(account);
+    const selectedCategory = categories.find((item) => Number(item.id) === categoryId);
+    const descriptionTypeId = Number(selectedCategory?.descriptionTypeId || 0);
+    if (!descriptionTypeId) {
+      const fallback = await listBrandFallbackCandidates(query, Math.min(limit, 40));
+      return response.json({ brands: fallback, source: "fallback" });
+    }
 
     const payload = {
       attribute_id: 85,
       description_category_id: categoryId,
+      description_type_id: descriptionTypeId,
       language: "DEFAULT",
       limit,
       last_value_id: 0,
@@ -3275,6 +3291,22 @@ app.get("/api/warehouse", async (request, response, next) => {
     const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
     const refreshPrices = request.query.refreshPrices === "true";
     response.json(await buildWarehouseView({ sync, limit, usdRate, refreshPrices }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/warehouse/no-supplier", async (request, response, next) => {
+  try {
+    const sync = request.query.sync === "true";
+    const refreshPrices = request.query.refreshPrices === "true";
+    const data = await buildWarehouseView({ sync, refreshPrices });
+    response.json({
+      createdAt: data.createdAt,
+      total: data.total,
+      withoutSupplier: data.withoutSupplier,
+      alerts: buildNoSupplierAlerts(data.products, { limit: Number.POSITIVE_INFINITY }),
+    });
   } catch (error) {
     next(error);
   }

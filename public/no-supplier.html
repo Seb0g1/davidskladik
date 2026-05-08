@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Товары без активных поставщиков." />
+    <title>Ошибки наличия - Magic Vibes</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="app-header">
+        <div>
+          <h1 class="site-brand"><span class="brand-name">Magic Vibes</span><span class="brand-sep"> — </span><span class="brand-tag">Ошибки наличия</span></h1>
+          <p>Список карточек, где есть привязки, но нет активного поставщика.</p>
+        </div>
+        <div class="header-actions">
+          <a class="secondary-link-button" href="/">Назад в склад</a>
+          <button id="refreshNoSupplierButton" class="secondary-button" type="button">Обновить</button>
+        </div>
+      </header>
+
+      <section class="control-panel">
+        <div id="noSupplierStatus" class="rate-info">Загрузка ошибок наличия...</div>
+        <div id="noSupplierMeta" class="warehouse-toolbar-hint"></div>
+        <div id="noSupplierList" class="history-list"></div>
+      </section>
+    </main>
+    <script src="/no-supplier.js"></script>
+  </body>
+</html>
