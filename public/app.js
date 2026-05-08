@@ -1655,6 +1655,24 @@ async function loadRetryQueue() {
   return data;
 }
 
+async function sendOzonPricesNow(productIds = []) {
+  const ids = (Array.isArray(productIds) ? productIds : []).map(String);
+  const ozonIds = ids.filter((id) => state.warehouse.some((product) => product.id === id && product.marketplace === "ozon"));
+  if (!ozonIds.length) return { sent: 0, skipped: 0, reason: "no_ozon_products" };
+  const result = await api("/api/warehouse/prices/send", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      confirmed: true,
+      productIds: ozonIds,
+      usdRate: Number(elements.warehouseUsdRateInput?.value || 0),
+      minDiffRub: 0,
+      minDiffPct: 0,
+    }),
+  });
+  return { sent: Number(result.sent || 0), skipped: Array.isArray(result.skipped) ? result.skipped.length : 0 };
+}
+
 async function loadWarehouse(sync = false, refreshPrices = false) {
   const stopProgress = sync || refreshPrices ? startSyncProgress(sync ? "sync" : "prices") : null;
   elements.warehouseSyncButton.disabled = sync;
@@ -2006,6 +2024,7 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
   const data = new FormData(form);
+  const shouldSendOzonPriceNow = event.submitter?.name === "sendPriceOzonNow";
   try {
     const productIds = String(form.dataset.productIds || form.dataset.productId || "")
       .split(",")
@@ -2019,6 +2038,16 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
       });
     }
     await loadWarehouse(false);
+    if (shouldSendOzonPriceNow) {
+      elements.warehouseStatus.textContent = "Отправляю новую цену в Ozon...";
+      const sent = await sendOzonPricesNow(productIds);
+      elements.warehouseStatus.textContent = sent.reason === "no_ozon_products"
+        ? "Привязка сохранена. Для этого товара нет цели Ozon для отправки цены."
+        : `Готово: в Ozon отправлено ${formatNumber(sent.sent)} цен, пропущено ${formatNumber(sent.skipped)}.`;
+      await loadWarehouse(false);
+    } else {
+      elements.warehouseStatus.textContent = "Привязка поставщика сохранена.";
+    }
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }

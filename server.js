@@ -29,7 +29,12 @@ const loginLimiter = rateLimit({
 });
 
 const app = express();
-const trustProxyHops = Number(process.env.TRUST_PROXY_HOPS || 0);
+const trustProxyEnv = process.env.TRUST_PROXY_HOPS;
+const trustProxyHops = Number(
+  trustProxyEnv !== undefined && trustProxyEnv !== null && String(trustProxyEnv).trim() !== ""
+    ? trustProxyEnv
+    : (process.env.NODE_ENV === "production" ? 1 : 0),
+);
 if (Number.isFinite(trustProxyHops) && trustProxyHops > 0) {
   app.set("trust proxy", trustProxyHops);
 }
