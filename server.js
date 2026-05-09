@@ -72,6 +72,7 @@ let dailySyncNextRunAt = null;
 let dailySyncPromise = null;
 let warehouseWritePromise = Promise.resolve();
 const warehouseViewCache = new Map();
+let lastWarehouseViewSnapshot = null;
 let immediateAutoPushTimer = null;
 let immediateAutoPushAll = false;
 const immediateAutoPushIds = new Set();
@@ -2645,6 +2646,7 @@ async function buildWarehouseViewCached(params = {}) {
   const ttlMs = 1200;
   if (cached && Date.now() - cached.at < ttlMs) return cached.data;
   const data = await buildWarehouseView(params);
+  lastWarehouseViewSnapshot = data;
   warehouseViewCache.set(key, { at: Date.now(), data });
   return data;
 }
@@ -3370,8 +3372,17 @@ app.get("/api/warehouse", async (request, response, next) => {
     const limit = request.query.limit ? Number(request.query.limit) : Number.POSITIVE_INFINITY;
     const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
     const refreshPrices = request.query.refreshPrices === "true";
-    response.json(await buildWarehouseViewCached({ sync, limit, usdRate, refreshPrices }));
+    const data = await buildWarehouseViewCached({ sync, limit, usdRate, refreshPrices });
+    response.json(data);
   } catch (error) {
+    logger.warn("warehouse view failed, serving snapshot if available", { detail: error?.message || String(error) });
+    if (lastWarehouseViewSnapshot) {
+      return response.json({
+        ...lastWarehouseViewSnapshot,
+        sourceError: error?.message || String(error),
+        stale: true,
+      });
+    }
     next(error);
   }
 });
