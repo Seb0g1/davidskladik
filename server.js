@@ -4478,7 +4478,9 @@ function startServer() {
         const warehouse = await buildWarehouseView({ sync: true });
         const automation = await runNoSupplierMarketplaceAutomation(warehouse);
         const autoPricePush = await sendWarehousePrices({
-          usdRate: Number(process.env.DEFAULT_USD_RATE || 0) || undefined,
+          // Use fixedUsdRate from app settings (or CBR fallback) instead of env default
+          // so auto-push follows the rate configured in the UI.
+          usdRate: undefined,
           minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
           minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
           dryRun: false,
