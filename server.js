@@ -2521,10 +2521,16 @@ async function getWarehouseMinPriceMaps(products, { refresh = false } = {}) {
   return { map: result, mutated };
 }
 
-async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, limit = Number.POSITIVE_INFINITY, refreshPrices = false } = {}) {
+async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, limit = Number.POSITIVE_INFINITY, refreshPrices = false, productIds = null } = {}) {
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || (await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);
   let warehouse = await readWarehouse();
+  const scopedProductIds = Array.isArray(productIds) && productIds.length
+    ? new Set(productIds.map((id) => String(id)))
+    : null;
+  if (scopedProductIds) {
+    warehouse.products = (warehouse.products || []).filter((product) => scopedProductIds.has(String(product.id)));
+  }
   try {
     const partners = await listPriceMasterPartners();
     const syncedSuppliers = syncWarehouseSuppliersFromPriceMaster(warehouse, partners);
@@ -3268,11 +3274,19 @@ app.get("/api/settings", async (_request, response, next) => {
 app.put("/api/settings", async (request, response, next) => {
   try {
     const settings = await writeAppSettings(request.body || {});
-    await appendAudit(request, "settings.update", {
-      fixedUsdRate: settings.fixedUsdRate,
-      markupRules: settings.markupRules.length,
-    });
-    queueImmediateAutoPricePush([], "settings_update");
+    try {
+      await appendAudit(request, "settings.update", {
+        fixedUsdRate: settings.fixedUsdRate,
+        markupRules: settings.markupRules.length,
+      });
+    } catch (auditError) {
+      logger.warn("settings audit append failed", { detail: auditError?.message || String(auditError) });
+    }
+    try {
+      queueImmediateAutoPricePush([], "settings_update");
+    } catch (queueError) {
+      logger.warn("settings immediate auto push queue failed", { detail: queueError?.message || String(queueError) });
+    }
     response.json({ ok: true, settings });
   } catch (error) {
     next(error);
@@ -3456,9 +3470,16 @@ app.get("/api/warehouse", async (request, response, next) => {
 
 app.get("/api/warehouse/brands", async (request, response, next) => {
   try {
-    const warehouse = await readWarehouse();
+    let products = [];
+    try {
+      const view = await buildWarehouseViewCached({ sync: false, refreshPrices: false });
+      products = Array.isArray(view?.products) ? view.products : [];
+    } catch (_error) {
+      const warehouse = await readWarehouse();
+      products = Array.isArray(warehouse?.products) ? warehouse.products : [];
+    }
     const unique = new Map();
-    for (const product of warehouse.products || []) {
+    for (const product of products) {
       const b = resolveWarehouseBrand(product);
       if (!b) continue;
       const key = b.toLowerCase();
@@ -3475,6 +3496,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
   try {
     const sync = request.query.sync === "true";
     const refreshPrices = request.query.refreshPrices === "true";
+    const fast = request.query.fast === "true";
     const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
     const page = Math.max(1, Number(request.query.page || 1) || 1);
     const pageSize = Math.min(250, Math.max(10, Number(request.query.pageSize || 60) || 60));
@@ -3485,8 +3507,54 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     const stateCode = cleanText(request.query.state || "all");
     const brandFilter = cleanText(request.query.brand || "");
 
-    const data = await buildWarehouseViewCached({ sync, usdRate, refreshPrices });
-    let rows = Array.isArray(data.products) ? data.products.slice() : [];
+    let rows = [];
+    let data = null;
+
+    // Fast path for large catalogs: return cards from local warehouse snapshot immediately.
+    // Full supplier matching and recalculation will be loaded in background from the client.
+    if (fast && !sync && !refreshPrices) {
+      const warehouse = await readWarehouse();
+      rows = (warehouse.products || []).map((item) => {
+        const links = Array.isArray(item.links) ? item.links : [];
+        const currentPrice = Number(item.marketplacePrice || 0) || null;
+        const minPrice = Number(item.marketplaceMinPrice || 0) || null;
+        return {
+          ...item,
+          brand: resolveWarehouseBrand(item),
+          autoPriceEnabled: links.length > 0 ? true : item.autoPriceEnabled !== false,
+          currentPrice,
+          ozonMinPrice: minPrice,
+          nextPrice: currentPrice,
+          changed: false,
+          ready: Boolean(links.length),
+          selectedSupplier: null,
+          suppliers: [],
+          supplierCount: 0,
+          availableSupplierCount: 0,
+          links,
+          hasLinks: links.length > 0,
+          noSupplierAutomation: item.noSupplierAutomation || {},
+          marketplaceState: item.marketplaceState || {},
+          partial: true,
+        };
+      });
+      data = {
+        createdAt: new Date().toISOString(),
+        total: rows.length,
+        ready: rows.filter((item) => item.ready).length,
+        changed: 0,
+        withoutSupplier: rows.filter((item) => !item.hasLinks).length,
+        ozonArchived: rows.filter((item) => item.marketplace === "ozon" && item.marketplaceState?.code === "archived").length,
+        ozonInactive: rows.filter((item) => item.marketplace === "ozon" && item.marketplaceState?.code === "inactive").length,
+        ozonOutOfStock: rows.filter((item) => item.marketplace === "ozon" && item.marketplaceState?.code === "out_of_stock").length,
+        usdRate: Number(process.env.DEFAULT_USD_RATE || 95),
+        sourceError: "",
+        noSupplierAlerts: [],
+      };
+    } else {
+      data = await buildWarehouseViewCached({ sync, usdRate, refreshPrices });
+      rows = Array.isArray(data.products) ? data.products.slice() : [];
+    }
 
     if (q) {
       rows = rows.filter((item) => {
@@ -3524,7 +3592,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
       selectedSupplier: item.selectedSupplier || null,
       noSupplierAutomation: item.noSupplierAutomation || {},
       marketplaceState: item.marketplaceState || {},
-      partial: false,
+      partial: Boolean(item.partial),
     }));
 
     response.json({
@@ -3979,7 +4047,10 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
   const rubThreshold = Math.max(0, Number(minDiffRub || 0));
   const pctThreshold = Math.max(0, Number(minDiffPct || 0));
-  const preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
+  const preview = await buildWarehouseView({
+    usdRate: Number(usdRate || 0) || undefined,
+    productIds: ids && ids.size ? Array.from(ids) : null,
+  });
   const selected = ids ? preview.products.filter((product) => ids.has(product.id)) : preview.products;
   const skipped = [];
   const items = [];
@@ -4964,8 +5035,15 @@ app.use((error, request, response, _next) => {
     err: error,
   });
   const uploadError = error instanceof multer.MulterError;
+  const pmErrorCodes = new Set(["ECONNREFUSED", "ETIMEDOUT", "PROTOCOL_CONNECTION_LOST", "ER_ACCESS_DENIED_ERROR", "ER_BAD_DB_ERROR"]);
+  const pmError = pmErrorCodes.has(String(error.code || ""));
+  const message = uploadError
+    ? "Не удалось загрузить изображение"
+    : pmError
+      ? "Не удалось выполнить запрос к Price Master"
+      : (error.message || "Внутренняя ошибка сервера");
   response.status(uploadError ? 400 : error.statusCode || 500).json({
-    error: uploadError ? "Не удалось загрузить изображение" : "Не удалось выполнить запрос к Price Master",
+    error: message,
     detail: error.code || error.message,
     ozon: error.ozon,
   });

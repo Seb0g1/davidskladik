@@ -315,6 +315,40 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function resolveBrandFromOzonAttributes(item) {
+  const attrs = item?.ozon?.attributes;
+  if (!Array.isArray(attrs)) return "";
+  for (const attr of attrs) {
+    const name = String(attr?.name || attr?.attribute_name || "").toLowerCase();
+    const description = String(attr?.description || "").toLowerCase();
+    if (!name.includes("бренд") && !name.includes("brand") && !description.includes("бренд") && !description.includes("brand")) continue;
+    const values = attr?.values ?? attr?.value;
+    if (Array.isArray(values) && values.length) {
+      const first = values[0];
+      const text = typeof first === "object" && first
+        ? String((first.value ?? first.dictionary_value_name ?? first.name) || "").trim()
+        : String(first || "").trim();
+      if (text) return text;
+    } else if (values != null && typeof values !== "object") {
+      const text = String(values).trim();
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
+function resolveWarehouseBrandName(item) {
+  return String(
+    item?.brand
+      || item?.ozon?.brand
+      || item?.ozon?.vendor
+      || resolveBrandFromOzonAttributes(item)
+      || item?.yandex?.brand
+      || item?.yandex?.vendor
+      || "",
+  ).trim();
+}
+
 function normalizeSupplierName(value) {
   return String(value || "")
     .toLowerCase()
@@ -1891,7 +1925,7 @@ function currentWarehousePageParams() {
   return params;
 }
 
-async function loadWarehousePage({ reset = false, sync = false, refreshPrices = false } = {}) {
+async function loadWarehousePage({ reset = false, sync = false, refreshPrices = false, fast = false } = {}) {
   if (!reset && !state.warehouseHasMore) return;
   if (!reset && state.warehouseLoadingPage) return;
 
@@ -1903,6 +1937,7 @@ async function loadWarehousePage({ reset = false, sync = false, refreshPrices = 
     params.set("page", String(reset ? 1 : state.warehousePage + 1));
     if (sync) params.set("sync", "true");
     if (refreshPrices) params.set("refreshPrices", "true");
+    if (fast) params.set("fast", "true");
     const data = await api(`/api/warehouse/products/page?${params}`);
     if (token !== state.warehouseRequestToken) return;
     renderWarehouse({
@@ -1921,6 +1956,7 @@ async function loadWarehousePage({ reset = false, sync = false, refreshPrices = 
 
 async function loadWarehouse(sync = false, refreshPrices = false, options = {}) {
   const silent = Boolean(options.silent);
+  const fast = Boolean(options.fast);
   if (!silent) captureWarehouseScroll();
   const stopProgress = !silent && (sync || refreshPrices) ? startSyncProgress(sync ? "sync" : "prices") : null;
   if (!silent) {
@@ -1930,7 +1966,9 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
       ? `Синхронизирую ${syncTargetNames().join(" + ")}: товары, цены, статусы, остатки и изображения...`
       : refreshPrices
         ? `Обновляю цены по ${syncTargetNames().join(" + ")}...`
-        : "Обновляю список по фильтрам и курсу…";
+        : fast
+          ? "Быстро загружаю карточки…"
+          : "Обновляю список по фильтрам и курсу…";
   }
   try {
     state.warehousePage = 0;
@@ -1938,11 +1976,11 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
     state.warehouseTotalFiltered = 0;
     // Do not clear selectedWarehouseGroupKey / selectedWarehouseProductId here:
     // after link save or refresh, applyWarehouseFilters() would fall back to the first card.
-    await loadWarehousePage({ reset: true, sync, refreshPrices });
+    await loadWarehousePage({ reset: true, sync, refreshPrices, fast });
     const requestedPage = Math.max(1, Number(state.warehouseRestorePage || 1));
     for (let page = 2; page <= requestedPage && state.warehouseHasMore; page += 1) {
       // Restore long-list context after refresh by preloading previously opened pages.
-      await loadWarehousePage({ reset: false, sync: false, refreshPrices: false });
+      await loadWarehousePage({ reset: false, sync: false, refreshPrices: false, fast });
     }
     state.warehouseRestorePage = 1;
     if (!silent) restoreWarehouseScroll();
@@ -1997,7 +2035,7 @@ async function refreshWarehouseBrandSelect() {
   }
   const byKey = new Map(brands.map((b) => [String(b || "").toLowerCase(), b]));
   for (const p of state.warehouse || []) {
-    const b = String(p.brand || p.ozon?.brand || p.ozon?.vendor || p.yandex?.vendor || "").trim();
+    const b = resolveWarehouseBrandName(p);
     if (!b) continue;
     const k = b.toLowerCase();
     if (!byKey.has(k)) byKey.set(k, b);
@@ -2050,11 +2088,11 @@ async function loadSettings() {
   await loadRate(fixedRate);
   const refreshPricesAfterFirstPaint = sessionStorage.getItem("mvInitialPriceRefreshDone") !== "1";
   if (refreshPricesAfterFirstPaint) sessionStorage.setItem("mvInitialPriceRefreshDone", "1");
-  await Promise.all([loadWarehouse(false, false), loadDailySync()]);
+  await Promise.all([loadWarehouse(false, false, { fast: true }), loadDailySync()]);
   if (refreshPricesAfterFirstPaint) {
     queueMicrotask(() => {
-      loadWarehouse(false, true, { silent: true }).catch((error) => {
-        elements.warehouseStatus.textContent = error.message;
+      loadWarehouse(false, false, { silent: true }).catch((error) => {
+        elements.warehouseStatus.textContent = `Фоновая догрузка полного расчета не удалась: ${error.message}`;
       });
     });
   }
@@ -2302,7 +2340,8 @@ elements.warehouseLoadMoreButton.addEventListener("click", () => {
     renderWarehouseCards();
     return;
   }
-  loadWarehousePage({ reset: false }).catch((error) => {
+  const preferFast = (state.warehouse || []).some((item) => item.partial);
+  loadWarehousePage({ reset: false, fast: preferFast }).catch((error) => {
     elements.warehouseStatus.textContent = error.message;
   });
 });
