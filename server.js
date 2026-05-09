@@ -4045,7 +4045,6 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
         detail: failedEntry ? failedEntry.error : "ok",
       };
     }
-    product.updatedAt = sentAt;
   }
   await writeWarehouse(warehouse);
 
