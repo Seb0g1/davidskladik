@@ -619,6 +619,10 @@ function cleanText(value) {
   return String(value || "").trim();
 }
 
+function resolveWarehouseBrand(product = {}) {
+  return cleanText(product.brand || product.ozon?.vendor || product.yandex?.vendor || "");
+}
+
 function firstImageUrl(value) {
   if (Array.isArray(value)) return cleanText(value[0]);
   const text = cleanText(value);
@@ -2206,6 +2210,7 @@ function applyOzonInfoToWarehouseProduct(product, info = {}, account = {}, stock
     ozon: {
       ...(product.ozon || {}),
       offerId: product.offerId,
+      vendor: cleanText(info.brand || info.vendor || (product.ozon || {}).vendor || ""),
       name: info.name || product.ozon?.name || product.name,
       description: info.description || product.ozon?.description || "",
       categoryId: info.description_category_id || info.category_id || product.ozon?.categoryId,
@@ -2585,8 +2590,9 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
 
     return {
       ...product,
+      brand: resolveWarehouseBrand(product),
       markupCoefficient,
-      autoPriceEnabled: product.autoPriceEnabled !== false,
+      autoPriceEnabled: normalizedLinks.length > 0 ? true : product.autoPriceEnabled !== false,
       autoPriceMin: minAuto > 0 ? minAuto : null,
       autoPriceMax: maxAuto > 0 ? maxAuto : null,
       currentPrice,
@@ -3394,6 +3400,23 @@ app.get("/api/warehouse", async (request, response, next) => {
   }
 });
 
+app.get("/api/warehouse/brands", async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const unique = new Map();
+    for (const product of warehouse.products || []) {
+      const b = resolveWarehouseBrand(product);
+      if (!b) continue;
+      const key = b.toLowerCase();
+      if (!unique.has(key)) unique.set(key, b);
+    }
+    const brands = Array.from(unique.values()).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
+    response.json({ brands });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/warehouse/products/page", async (request, response, next) => {
   try {
     const sync = request.query.sync === "true";
@@ -3406,6 +3429,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     const linked = cleanText(request.query.linked || "all");
     const marketplace = cleanText(request.query.marketplace || "all");
     const stateCode = cleanText(request.query.state || "all");
+    const brandFilter = cleanText(request.query.brand || "");
 
     const data = await buildWarehouseViewCached({ sync, usdRate, refreshPrices });
     let rows = Array.isArray(data.products) ? data.products.slice() : [];
@@ -3431,6 +3455,10 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     if (linked === "unlinked") rows = rows.filter((item) => !item.hasLinks);
     if (marketplace !== "all") rows = rows.filter((item) => cleanText(item.marketplace) === marketplace);
     if (stateCode !== "all") rows = rows.filter((item) => cleanText(item.marketplaceState?.code) === stateCode);
+    if (brandFilter) {
+      const needle = brandFilter.toLowerCase();
+      rows = rows.filter((item) => resolveWarehouseBrand(item).toLowerCase() === needle);
+    }
 
     const total = rows.length;
     const offset = (page - 1) * pageSize;
@@ -3867,6 +3895,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const index = product.links.findIndex((item) => item.id === link.id);
     if (index >= 0) product.links[index] = link;
     else product.links.push(link);
+    if (product.links.length > 0) product.autoPriceEnabled = true;
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
     queueImmediateAutoPricePush([product.id], "link_add_or_update");
   } catch (error) {

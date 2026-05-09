@@ -17,6 +17,7 @@ const state = {
   ozonStateFilter: "all",
   warehouseAutoOnly: false,
   warehouseLinkFilter: "all",
+  warehouseBrandFilter: "",
   warehouseAnimateAutoFocus: localStorage.getItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY) !== "0",
   warehouseViewMode: localStorage.getItem("warehouseViewMode") || "cards",
   warehouseVisibleLimit: 80,
@@ -81,6 +82,7 @@ const elements = {
   ozonStateFilter: document.querySelector("#ozonStateFilter"),
   warehouseAutoPriceOnlyInput: document.querySelector("#warehouseAutoPriceOnlyInput"),
   warehouseLinkFilterInput: document.querySelector("#warehouseLinkFilterInput"),
+  warehouseBrandFilterInput: document.querySelector("#warehouseBrandFilterInput"),
   warehouseAnimateAutoFocusInput: document.querySelector("#warehouseAnimateAutoFocusInput"),
   warehouseMinDiffRubInput: document.querySelector("#warehouseMinDiffRubInput"),
   warehouseMinDiffPctInput: document.querySelector("#warehouseMinDiffPctInput"),
@@ -183,6 +185,8 @@ function applyWarehouseStateFromUrl() {
   if (marketplace && ["all", "ozon", "yandex"].includes(marketplace)) state.warehouseMarketplace = marketplace;
   if (stateCode && elements.ozonStateFilter?.querySelector(`option[value="${stateCode}"]`)) state.ozonStateFilter = stateCode;
   if (linked && ["all", "linked", "unlinked"].includes(linked)) state.warehouseLinkFilter = linked;
+  const brand = params.get("brand");
+  if (brand !== null) state.warehouseBrandFilter = String(brand);
   state.warehouseAutoOnly = autoOnly === "1" || autoOnly === "true";
   if (view === "list" || view === "cards") state.warehouseViewMode = view;
   state.warehouseRestorePage = Math.min(WAREHOUSE_URL_PAGE_MAX, toPositiveInt(page, 1));
@@ -199,6 +203,7 @@ function syncWarehouseStateToUrl({ replace = true } = {}) {
   if (state.warehouseMarketplace !== "all") params.set("marketplace", state.warehouseMarketplace);
   if (state.ozonStateFilter !== "all") params.set("state", state.ozonStateFilter);
   if (state.warehouseLinkFilter !== "all") params.set("linked", state.warehouseLinkFilter);
+  if (state.warehouseBrandFilter) params.set("brand", state.warehouseBrandFilter);
   if (state.warehouseAutoOnly) params.set("autoOnly", "1");
   if (state.warehouseViewMode !== "cards") params.set("view", state.warehouseViewMode);
   if (state.warehousePage > 1) params.set("page", String(state.warehousePage));
@@ -670,10 +675,13 @@ function buildWarehouseGroups(products) {
       return (rank[a.marketplace] ?? 9) - (rank[b.marketplace] ?? 9) || String(a.targetName).localeCompare(String(b.targetName));
     });
     const primary = variants[0];
+    const brandLabel =
+      variants.map((p) => String(p.brand || p.ozon?.vendor || p.yandex?.vendor || "").trim()).find(Boolean) || "";
     const links = variants.flatMap((product) => (product.links || []).map((link) => ({ ...link, productId: product.id })));
     const suppliers = variants.flatMap((product) => product.suppliers || []);
     return {
       ...group,
+      brand: brandLabel,
       primary,
       variants,
       links,
@@ -928,11 +936,12 @@ function refreshWarehouseToolbarHints() {
     : state.warehouseLinkFilter === "linked"
       ? " · только подвязанные"
       : " · только не подвязанные";
+  const brandPart = state.warehouseBrandFilter ? ` · бренд «${state.warehouseBrandFilter}»` : "";
 
   if (!total) {
     hint.textContent = "Склад пуст — добавьте товары вручную или синхронизируйте кабинеты.";
   } else {
-    hint.textContent = `На экране ${formatNumber(groupCount)} карточек (${formatNumber(loaded)} загружено из ${formatNumber(total)}) · ${market}${ozonPart}${searchPart}${autoPart}${linkPart} · сверху активные на Ozon/ЯМ`;
+    hint.textContent = `На экране ${formatNumber(groupCount)} карточек (${formatNumber(loaded)} загружено из ${formatNumber(total)}) · ${market}${ozonPart}${searchPart}${autoPart}${linkPart}${brandPart} · сверху активные на Ozon/ЯМ`;
   }
 
   if (elements.warehouseSelectionLine) {
@@ -982,7 +991,7 @@ function applyWarehouseFilters() {
   }
 
   renderWarehouseCards();
-  renderWarehouseDetail(groups.find((group) => group.key === state.selectedWarehouseGroupKey));
+  renderWarehouseDetail(groups.find((group) => group.key === state.selectedWarehouseGroupKey) ?? null);
   syncWarehouseStateToUrl();
 }
 
@@ -1098,6 +1107,7 @@ function renderWarehouseCards() {
             <span class="badge ${group.changed ? "warn" : group.ready ? "ok" : "neutral"}">${group.changed ? "Есть изменения" : group.ready ? "Готово" : "Нет поставщика"}</span>
           </div>
           <h3>${escapeHtml(productName)}</h3>
+          ${group.brand ? `<p class="product-brand-line muted">${escapeHtml(group.brand)}</p>` : ""}
           <div class="product-meta">
             <span>${escapeHtml(group.offerId || product.offerId)}</span>
             <span>${group.variants.length > 1 ? "Объединено Ozon + ЯМ" : escapeHtml(marketLabel(product))}</span>
@@ -1893,17 +1903,19 @@ function currentWarehousePageParams() {
   if (state.ozonStateFilter !== "all") params.set("state", state.ozonStateFilter);
   if (state.warehouseAutoOnly) params.set("autoOnly", "true");
   if (state.warehouseLinkFilter !== "all") params.set("linked", state.warehouseLinkFilter);
+  if (state.warehouseBrandFilter) params.set("brand", state.warehouseBrandFilter);
   const query = elements.warehouseSearchInput.value.trim();
   if (query) params.set("q", query);
   return params;
 }
 
 async function loadWarehousePage({ reset = false, sync = false, refreshPrices = false } = {}) {
-  if (state.warehouseLoadingPage) return;
   if (!reset && !state.warehouseHasMore) return;
+  if (!reset && state.warehouseLoadingPage) return;
+
+  const token = ++state.warehouseRequestToken;
   state.warehouseLoadingPage = true;
   renderWarehouseCards();
-  const token = ++state.warehouseRequestToken;
   try {
     const params = currentWarehousePageParams();
     params.set("page", String(reset ? 1 : state.warehousePage + 1));
@@ -1918,7 +1930,9 @@ async function loadWarehousePage({ reset = false, sync = false, refreshPrices = 
     });
     syncWarehouseStateToUrl();
   } finally {
-    state.warehouseLoadingPage = false;
+    if (token === state.warehouseRequestToken) {
+      state.warehouseLoadingPage = false;
+    }
     renderWarehouseCards();
   }
 }
@@ -1932,7 +1946,7 @@ async function loadWarehouse(sync = false, refreshPrices = false) {
     ? `Синхронизирую ${syncTargetNames().join(" + ")}: товары, цены, статусы, остатки и изображения...`
     : refreshPrices
       ? `Обновляю цены по ${syncTargetNames().join(" + ")}...`
-      : "Обновляю склад...";
+      : "Обновляю список по фильтрам и курсу…";
   try {
     state.warehousePage = 0;
     state.warehouseHasMore = true;
@@ -1974,8 +1988,33 @@ function queueWarehouseFilterReload(delayMs = 260) {
   warehouseFilterReloadTimer = window.setTimeout(() => {
     loadWarehouse(false).catch((error) => {
       elements.warehouseStatus.textContent = error.message;
+      applyWarehouseFilters();
     });
   }, delayMs);
+}
+
+async function refreshWarehouseBrandSelect() {
+  const sel = elements.warehouseBrandFilterInput;
+  if (!sel) return;
+  try {
+    const payload = await api("/api/warehouse/brands");
+    const brands = Array.isArray(payload.brands) ? payload.brands : [];
+    const want = state.warehouseBrandFilter;
+    sel.innerHTML = `<option value="">Все бренды</option>${brands
+      .map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`)
+      .join("")}`;
+    if (want && brands.includes(want)) sel.value = want;
+    else {
+      sel.value = "";
+      state.warehouseBrandFilter = "";
+    }
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+  } catch (_error) {
+    sel.innerHTML = `<option value="">Все бренды</option>`;
+    sel.value = "";
+    state.warehouseBrandFilter = "";
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+  }
 }
 
 async function loadRate(fixedRate) {
@@ -2004,6 +2043,7 @@ async function loadSettings() {
   const refreshPricesOnFirstLoad = sessionStorage.getItem("mvInitialPriceRefreshDone") !== "1";
   if (refreshPricesOnFirstLoad) sessionStorage.setItem("mvInitialPriceRefreshDone", "1");
   await Promise.all([loadWarehouse(false, refreshPricesOnFirstLoad), loadDailySync()]);
+  await refreshWarehouseBrandSelect();
 }
 
 function applyMainTab(tab) {
@@ -2026,6 +2066,7 @@ setWarehouseMarketplaceUI(state.warehouseMarketplace);
 if (elements.ozonStateFilter) elements.ozonStateFilter.value = state.ozonStateFilter;
 if (elements.warehouseAutoPriceOnlyInput) elements.warehouseAutoPriceOnlyInput.checked = state.warehouseAutoOnly;
 if (elements.warehouseLinkFilterInput) elements.warehouseLinkFilterInput.value = state.warehouseLinkFilter;
+if (elements.warehouseBrandFilterInput) elements.warehouseBrandFilterInput.value = state.warehouseBrandFilter;
 if (elements.warehouseAnimateAutoFocusInput) elements.warehouseAnimateAutoFocusInput.checked = state.warehouseAnimateAutoFocus;
 
 document.querySelectorAll("[data-marketplace]").forEach((button) => {
@@ -2069,6 +2110,22 @@ elements.warehouseAutoPriceOnlyInput?.addEventListener("change", () => {
 
 elements.warehouseLinkFilterInput?.addEventListener("change", () => {
   state.warehouseLinkFilter = String(elements.warehouseLinkFilterInput.value || "all");
+  state.warehouseVisibleLimit = 80;
+  state.warehousePage = 0;
+  state.warehouseRestorePage = 1;
+  state.selectedWarehouseGroupKey = null;
+  state.warehouseAutoFocusGroupKey = null;
+  state.warehouseScrollTop = 0;
+  syncWarehouseStateToUrl();
+  queueWarehouseFilterReload();
+});
+
+elements.warehouseBrandFilterInput?.addEventListener("change", (event) => {
+  state.warehouseBrandFilter = String(elements.warehouseBrandFilterInput.value || "").trim();
+  if (event.isTrusted === false) {
+    syncWarehouseStateToUrl();
+    return;
+  }
   state.warehouseVisibleLimit = 80;
   state.warehousePage = 0;
   state.warehouseRestorePage = 1;
@@ -2407,6 +2464,10 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(Object.fromEntries(data.entries())),
       });
+    }
+    if (state.warehouseLinkFilter === "unlinked") {
+      state.selectedWarehouseGroupKey = null;
+      renderWarehouseDetail(null);
     }
     queueWarehouseRefresh();
     if (shouldSendOzonPriceNow) {
@@ -3018,6 +3079,7 @@ window.addEventListener("popstate", () => {
   if (elements.ozonStateFilter) elements.ozonStateFilter.value = state.ozonStateFilter;
   if (elements.warehouseAutoPriceOnlyInput) elements.warehouseAutoPriceOnlyInput.checked = state.warehouseAutoOnly;
   if (elements.warehouseLinkFilterInput) elements.warehouseLinkFilterInput.value = state.warehouseLinkFilter;
+  if (elements.warehouseBrandFilterInput) elements.warehouseBrandFilterInput.value = state.warehouseBrandFilter;
   if (elements.warehouseAnimateAutoFocusInput) elements.warehouseAnimateAutoFocusInput.checked = state.warehouseAnimateAutoFocus;
   if (elements.warehouseSearchInput) {
     const params = new URLSearchParams(window.location.search);
