@@ -1937,8 +1937,8 @@ async function loadWarehouse(sync = false, refreshPrices = false) {
     state.warehousePage = 0;
     state.warehouseHasMore = true;
     state.warehouseTotalFiltered = 0;
-    state.selectedWarehouseGroupKey = null;
-    state.selectedWarehouseProductId = null;
+    // Do not clear selectedWarehouseGroupKey / selectedWarehouseProductId here:
+    // after link save or refresh, applyWarehouseFilters() would fall back to the first card.
     await loadWarehousePage({ reset: true, sync, refreshPrices });
     const requestedPage = Math.max(1, Number(state.warehouseRestorePage || 1));
     for (let page = 2; page <= requestedPage && state.warehouseHasMore; page += 1) {
