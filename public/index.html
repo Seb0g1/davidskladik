@@ -71,9 +71,18 @@
                     <div class="ios-select-menu" id="ozonStateFilterMenu" role="listbox" hidden></div>
                   </div>
                 </div>
-                <label class="search-control">
+                <label class="search-control auto-toggle-control" for="warehouseAutoPriceOnlyInput">
+                  <span>Только автоцены</span>
                   <input id="warehouseAutoPriceOnlyInput" type="checkbox" />
-                  Только автоцены
+                  <span class="toggle-ui" aria-hidden="true"></span>
+                </label>
+                <label class="search-control">
+                  Привязки
+                  <select id="warehouseLinkFilterInput">
+                    <option value="all">Все</option>
+                    <option value="linked">Подвязанные</option>
+                    <option value="unlinked">Не подвязанные</option>
+                  </select>
                 </label>
               </div>
             </div>
@@ -397,7 +406,6 @@
         <span class="pm-autocomplete-wrap">
           <input name="supplierName" type="text" placeholder="Поставщик" autocomplete="off" data-pm-suggest="partner" />
         </span>
-        <input name="priority" type="number" min="1" step="1" value="100" />
         <button class="secondary-button" type="submit">Привязать</button>
         <button class="primary-button compact-button" type="submit" name="sendPriceOzonNow" value="1">Привязать + обновить цену Ozon</button>
       </form>
@@ -410,7 +418,6 @@
           <input name="article" type="text" placeholder="Артикул поставщика" required autocomplete="off" data-pm-suggest="offer" />
         </span>
         <input name="keyword" type="text" placeholder="Ключевое слово" />
-        <input name="priority" type="number" min="1" step="1" value="100" />
         <button class="secondary-button" type="submit">Добавить артикул</button>
       </form>
     </template>

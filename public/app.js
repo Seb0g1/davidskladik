@@ -15,6 +15,7 @@ const state = {
   warehouseMarketplace: "all",
   ozonStateFilter: "all",
   warehouseAutoOnly: false,
+  warehouseLinkFilter: "all",
   warehouseViewMode: localStorage.getItem("warehouseViewMode") || "cards",
   warehouseVisibleLimit: 80,
   enrichedProductIds: new Set(),
@@ -67,6 +68,7 @@ const elements = {
   warehouseSearchInput: document.querySelector("#warehouseSearchInput"),
   ozonStateFilter: document.querySelector("#ozonStateFilter"),
   warehouseAutoPriceOnlyInput: document.querySelector("#warehouseAutoPriceOnlyInput"),
+  warehouseLinkFilterInput: document.querySelector("#warehouseLinkFilterInput"),
   warehouseMinDiffRubInput: document.querySelector("#warehouseMinDiffRubInput"),
   warehouseMinDiffPctInput: document.querySelector("#warehouseMinDiffPctInput"),
   warehouseStatus: document.querySelector("#warehouseStatus"),
@@ -803,11 +805,16 @@ function refreshWarehouseToolbarHints() {
   const q = elements.warehouseSearchInput?.value?.trim();
   const searchPart = q ? ` · поиск «${q}»` : "";
   const autoPart = state.warehouseAutoOnly ? " · только AUTO" : "";
+  const linkPart = state.warehouseLinkFilter === "all"
+    ? ""
+    : state.warehouseLinkFilter === "linked"
+      ? " · только подвязанные"
+      : " · только не подвязанные";
 
   if (!total) {
     hint.textContent = "Склад пуст — добавьте товары вручную или синхронизируйте кабинеты.";
   } else {
-    hint.textContent = `На экране ${formatNumber(groupCount)} карточек (${formatNumber(filtered)} строк) из ${formatNumber(total)} · ${market}${ozonPart}${searchPart}${autoPart} · сверху активные на Ozon/ЯМ`;
+    hint.textContent = `На экране ${formatNumber(groupCount)} карточек (${formatNumber(filtered)} строк) из ${formatNumber(total)} · ${market}${ozonPart}${searchPart}${autoPart}${linkPart} · сверху активные на Ozon/ЯМ`;
   }
 
   if (elements.warehouseSelectionLine) {
@@ -838,6 +845,10 @@ function applyWarehouseFilters() {
     const ozonStateOk = state.ozonStateFilter === "all"
       || (product.marketplaceState?.code || "unknown") === state.ozonStateFilter;
     const autoOk = !state.warehouseAutoOnly || product.autoPriceEnabled !== false;
+    const linksCount = Number(product.links?.length || 0);
+    const linkOk = state.warehouseLinkFilter === "all"
+      || (state.warehouseLinkFilter === "linked" && linksCount > 0)
+      || (state.warehouseLinkFilter === "unlinked" && linksCount === 0);
     const supplier = product.selectedSupplier;
     const searchHaystack = [
       product.name,
@@ -850,7 +861,7 @@ function applyWarehouseFilters() {
     ]
       .join(" ")
       .toLowerCase();
-    return marketOk && ozonStateOk && autoOk && (!query || searchHaystack.includes(query));
+    return marketOk && ozonStateOk && autoOk && linkOk && (!query || searchHaystack.includes(query));
   });
 
   if (!state.filteredWarehouse.some((product) => product.id === state.selectedWarehouseProductId)) {
@@ -891,6 +902,10 @@ function renderWarehouse(data) {
     elements.warehouseNoSupplierAlert.classList.add("is-warn");
   } else {
     elements.warehouseNoSupplierAlert.classList.add("hidden");
+  }
+  if (Array.isArray(data.autoArchiveAlerts) && data.autoArchiveAlerts.length) {
+    const sample = data.autoArchiveAlerts.slice(0, 4).map((item) => item.offerId || item.name || item.id).join(", ");
+    showToast(`Автоархив кандидаты (без подвязок): ${sample}`, "warn");
   }
   if (Array.isArray(data.syncWarnings) && data.syncWarnings.length) {
     data.syncWarnings.forEach((w) => showToast(w, "warn"));
@@ -1057,7 +1072,7 @@ function renderWarehouseDetail(group) {
                 </div>
                 <label>
                   Наценка
-                  <input name="markup" type="number" min="0.01" step="0.01" value="${Number(item.markupCoefficient || item.markup || 0).toFixed(2)}" data-usd-price="${escapeHtml(item.selectedSupplier?.price || "")}" data-current-price="${escapeHtml(item.currentPrice || "")}" />
+                  <input name="markup" type="number" min="0.01" step="0.01" value="${item.markup > 0 ? Number(item.markup).toFixed(2) : ""}" placeholder="По правилам из настроек" data-usd-price="${escapeHtml(item.selectedSupplier?.price || "")}" data-current-price="${escapeHtml(item.currentPrice || "")}" />
                   <small class="markup-live-preview">Предпросмотр: ${formatMoney(item.nextPrice)}</small>
                 </label>
                 <label>
@@ -1145,7 +1160,12 @@ function renderWarehouseDetail(group) {
                     <div class="link-item">
                       <div>
                         <strong>${escapeHtml(link.article)}</strong>
-                        <span>${escapeHtml(link.supplierName || "Любой поставщик")}${link.keyword ? ` · ${escapeHtml(link.keyword)}` : ""}</span>
+                        <span>
+                          ${escapeHtml(link.supplierName || "Любой поставщик")}
+                          ${link.keyword ? ` · ${escapeHtml(link.keyword)}` : ""}
+                          ${link.missingInPriceMaster ? " · нет в PriceMaster" : ""}
+                          ${!link.missingInPriceMaster && Number(link.availableCount || 0) === 0 ? " · нет активного остатка" : ""}
+                        </span>
                       </div>
                       <button class="text-button delete-link" type="button" data-product-id="${escapeHtml(link.productId || product.id)}" data-link-id="${escapeHtml(link.id)}">Удалить</button>
                     </div>
@@ -1293,7 +1313,7 @@ function renderSuppliers() {
                         <div class="supplier-article">
                           <div>
                             <strong>${escapeHtml(article.article)}</strong>
-                            <span>${article.keyword || "Без ключевого слова"} · приоритет ${article.priority}</span>
+                            <span>${article.keyword || "Без ключевого слова"}</span>
                           </div>
                           <div class="supplier-article-actions">
                             <button class="secondary-button compact-button edit-supplier-article" type="button" data-article-id="${escapeHtml(article.id)}">Изменить</button>
@@ -1435,7 +1455,6 @@ function fillSupplierArticleForm(panel, article) {
   form.elements.id.value = article.id || "";
   form.elements.article.value = article.article || "";
   form.elements.keyword.value = article.keyword || "";
-  form.elements.priority.value = article.priority || 100;
   form.querySelector("button[type='submit']").textContent = "Сохранить артикул";
   form.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
@@ -1704,6 +1723,16 @@ async function loadWarehouse(sync = false, refreshPrices = false) {
   }
 }
 
+let warehouseRefreshTimer = null;
+function queueWarehouseRefresh(delayMs = 160) {
+  if (warehouseRefreshTimer) window.clearTimeout(warehouseRefreshTimer);
+  warehouseRefreshTimer = window.setTimeout(() => {
+    loadWarehouse(false).catch((error) => {
+      elements.warehouseStatus.textContent = error.message;
+    });
+  }, delayMs);
+}
+
 async function loadRate(fixedRate) {
   const hasFixed = Number(fixedRate) > 0;
   const savedRate = hasFixed
@@ -1768,6 +1797,12 @@ elements.warehouseAutoPriceOnlyInput?.addEventListener("change", () => {
   applyWarehouseFilters();
 });
 
+elements.warehouseLinkFilterInput?.addEventListener("change", () => {
+  state.warehouseLinkFilter = String(elements.warehouseLinkFilterInput.value || "all");
+  state.warehouseVisibleLimit = 80;
+  applyWarehouseFilters();
+});
+
 elements.warehouseUsdRateInput?.addEventListener("input", () => {
   if (elements.warehouseUsdRateInput.readOnly) return;
   const value = elements.warehouseUsdRateInput.value;
@@ -1804,7 +1839,7 @@ elements.warehouseForm.addEventListener("submit", async (event) => {
     });
     elements.warehouseForm.reset();
     elements.warehouseForm.classList.add("hidden");
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }
@@ -1826,7 +1861,7 @@ elements.bulkMarkupForm?.addEventListener("submit", async (event) => {
     });
     elements.warehouseStatus.textContent = `Наценка ${markup.toFixed(2)} применена: ${formatNumber(result.changed)} товаров Ozon/ЯМ.`;
     elements.bulkMarkupForm.reset();
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }
@@ -1882,7 +1917,7 @@ async function setAutoPriceForSelected(enabled) {
     body: JSON.stringify({ productIds, enabled }),
   });
   elements.warehouseStatus.textContent = `AUTO ${enabled ? "включен" : "выключен"}: ${formatNumber(result.changed)} товаров.`;
-  await loadWarehouse(false);
+  queueWarehouseRefresh();
 }
 
 elements.autoPriceEnableSelectedButton?.addEventListener("click", () => {
@@ -1917,7 +1952,7 @@ elements.autoPriceDisableAllButton?.addEventListener("click", async () => {
       });
     }
     elements.warehouseStatus.textContent = `AUTO отключен у всех: ${formatNumber(result.changed || state.warehouse.length)} товаров.`;
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }
@@ -1955,7 +1990,7 @@ elements.dailySyncRunButton?.addEventListener("click", async () => {
   try {
     const status = await api("/api/daily-sync/run", { method: "POST" });
     renderDailySync(status);
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
   } catch (error) {
     elements.dailySyncMeta.textContent = error.message;
   } finally {
@@ -2014,7 +2049,7 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
         }),
       });
       elements.warehouseStatus.textContent = "Наценка и AUTO-настройки сохранены.";
-      await loadWarehouse(false);
+      queueWarehouseRefresh();
     } catch (error) {
       elements.warehouseStatus.textContent = error.message;
     }
@@ -2037,14 +2072,14 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
         body: JSON.stringify(Object.fromEntries(data.entries())),
       });
     }
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
     if (shouldSendOzonPriceNow) {
       elements.warehouseStatus.textContent = "Отправляю новую цену в Ozon...";
       const sent = await sendOzonPricesNow(productIds);
       elements.warehouseStatus.textContent = sent.reason === "no_ozon_products"
         ? "Привязка сохранена. Для этого товара нет цели Ozon для отправки цены."
         : `Готово: в Ozon отправлено ${formatNumber(sent.sent)} цен, пропущено ${formatNumber(sent.skipped)}.`;
-      await loadWarehouse(false);
+      queueWarehouseRefresh();
     } else {
       elements.warehouseStatus.textContent = "Привязка поставщика сохранена.";
     }
@@ -2071,16 +2106,16 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
         body: JSON.stringify({ confirmed: true, target }),
       });
       elements.warehouseStatus.textContent = `Готово: карточка выгружена в ${label}. Отправлено: ${formatNumber(result.sent || 1)}.`;
-      await loadWarehouse(false);
+      queueWarehouseRefresh();
       return;
     }
     if (linkButton) {
       await api(`/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}`, { method: "DELETE" });
-      await loadWarehouse(false);
+      queueWarehouseRefresh();
     }
     if (productButton && await confirmAction({ title: "Удалить товар?", text: "Удалить товар из личного склада?", okText: "Удалить" })) {
       await api(`/api/warehouse/products/${productButton.dataset.productId}`, { method: "DELETE" });
-      await loadWarehouse(false);
+      queueWarehouseRefresh();
     }
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
@@ -2115,7 +2150,7 @@ elements.warehouseSendButton.addEventListener("click", async () => {
       }),
     });
     elements.warehouseStatus.textContent = `Готово: отправлено ${formatNumber(result.sent)} цен.`;
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   } finally {
@@ -2160,7 +2195,7 @@ elements.warehouseRetryQueueButton?.addEventListener("click", async () => {
     });
     state.retryQueueLastRun = { retried: Number(result.retried || 0), failed: Number(result.failed || 0), at: new Date().toISOString() };
     elements.warehouseStatus.textContent = `Retry: отправлено ${formatNumber(result.retried || 0)}, осталось в очереди ${formatNumber(result.remaining || 0)}.`;
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }
@@ -2209,7 +2244,7 @@ elements.retryQueueRetrySelectedButton?.addEventListener("click", async () => {
     state.retryQueueLastRun = { retried: Number(result.retried || 0), failed: Number(result.failed || 0), at: new Date().toISOString() };
     elements.warehouseStatus.textContent = `Retry выбранных: отправлено ${formatNumber(result.retried || 0)}, осталось ${formatNumber(result.remaining || 0)}.`;
     state.retryQueueSelectedKeys.clear();
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }
@@ -2241,7 +2276,7 @@ elements.supplierForm.addEventListener("submit", async (event) => {
       }),
     });
     resetSupplierForm();
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
   } catch (error) {
     elements.supplierStatus.textContent = error.message;
   }
@@ -2290,7 +2325,7 @@ elements.supplierBoard.addEventListener("change", async (event) => {
           inactiveUntilUnknown: modalResult.unknown,
         }),
       });
-      await loadWarehouse(false);
+      queueWarehouseRefresh();
     } catch (error) {
       toggle.checked = false;
       elements.supplierStatus.textContent = error.message;
@@ -2319,7 +2354,7 @@ elements.supplierBoard.addEventListener("change", async (event) => {
         inactiveUntilUnknown: false,
       }),
     });
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
   } catch (error) {
     toggle.checked = true;
     elements.supplierStatus.textContent = error.message;
@@ -2339,7 +2374,7 @@ elements.supplierBoard.addEventListener("submit", async (event) => {
     });
     form.reset();
     form.querySelector("button[type='submit']").textContent = "Добавить артикул";
-    await loadWarehouse(false);
+    queueWarehouseRefresh();
   } catch (error) {
     elements.supplierStatus.textContent = error.message;
   }
@@ -2366,11 +2401,11 @@ elements.supplierBoard.addEventListener("click", async (event) => {
     }
     if (deleteSupplier && await confirmAction({ title: "Удалить поставщика?", text: "Поставщик и его локальные артикулы будут удалены.", okText: "Удалить" })) {
       await api(`/api/suppliers/${panel.dataset.supplierId}`, { method: "DELETE" });
-      await loadWarehouse(false);
+      queueWarehouseRefresh();
     }
     if (deleteArticle && await confirmAction({ title: "Удалить артикул?", text: "Артикул поставщика будет удалён из локального списка.", okText: "Удалить" })) {
       await api(`/api/suppliers/${panel.dataset.supplierId}/articles/${deleteArticle.dataset.articleId}`, { method: "DELETE" });
-      await loadWarehouse(false);
+      queueWarehouseRefresh();
     }
   } catch (error) {
     elements.supplierStatus.textContent = error.message;

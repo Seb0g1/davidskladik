@@ -9,6 +9,14 @@ function ruleRow(rule = {}) {
   row.className = "settings-rule-row";
   row.innerHTML = `
     <label>
+      Площадка
+      <select name="marketplace">
+        <option value="all" ${String(rule.marketplace || "all") === "all" ? "selected" : ""}>Все</option>
+        <option value="ozon" ${String(rule.marketplace || "") === "ozon" ? "selected" : ""}>Ozon</option>
+        <option value="yandex" ${String(rule.marketplace || "") === "yandex" ? "selected" : ""}>Yandex Market</option>
+      </select>
+    </label>
+    <label>
       От цены, USD
       <input name="minUsd" type="number" min="0" step="0.0001" value="${Number(rule.minUsd || 0)}" required />
     </label>
@@ -35,13 +43,14 @@ async function api(path, options) {
 function renderRules(rules = []) {
   rulesList.innerHTML = "";
   for (const rule of rules) rulesList.appendChild(ruleRow(rule));
-  if (!rules.length) rulesList.appendChild(ruleRow({ minUsd: 0, coefficient: 1.7 }));
+  if (!rules.length) rulesList.appendChild(ruleRow({ marketplace: "all", minUsd: 0, coefficient: 1.7 }));
 }
 
 function collectRules() {
   const rows = [...rulesList.querySelectorAll(".settings-rule-row")];
   return rows
     .map((row) => ({
+      marketplace: String(row.querySelector('select[name="marketplace"]').value || "all"),
       minUsd: Number(row.querySelector('input[name="minUsd"]').value || 0),
       coefficient: Number(row.querySelector('input[name="coefficient"]').value || 0),
     }))
@@ -83,7 +92,7 @@ settingsForm.addEventListener("submit", async (event) => {
 });
 
 addRuleButton?.addEventListener("click", () => {
-  rulesList.appendChild(ruleRow({ minUsd: 0, coefficient: 1 }));
+  rulesList.appendChild(ruleRow({ marketplace: "all", minUsd: 0, coefficient: 1 }));
 });
 
 rulesList?.addEventListener("click", (event) => {
@@ -91,7 +100,7 @@ rulesList?.addEventListener("click", (event) => {
   if (!btn) return;
   const row = event.target.closest(".settings-rule-row");
   if (row) row.remove();
-  if (!rulesList.querySelector(".settings-rule-row")) rulesList.appendChild(ruleRow({ minUsd: 0, coefficient: 1.7 }));
+  if (!rulesList.querySelector(".settings-rule-row")) rulesList.appendChild(ruleRow({ marketplace: "all", minUsd: 0, coefficient: 1.7 }));
 });
 
 logoutButton?.addEventListener("click", async () => {
