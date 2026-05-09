@@ -76,14 +76,21 @@
                   <input id="warehouseAutoPriceOnlyInput" type="checkbox" />
                   <span class="toggle-ui" aria-hidden="true"></span>
                 </label>
-                <label class="search-control">
-                  Привязки
-                  <select id="warehouseLinkFilterInput">
-                    <option value="all">Все</option>
-                    <option value="linked">Подвязанные</option>
-                    <option value="unlinked">Не подвязанные</option>
-                  </select>
-                </label>
+                <div class="status-control ios-field">
+                  <span class="ios-field-caption" id="warehouseLinkFilterCaption">Привязки</span>
+                  <div class="ios-select" data-ios-select>
+                    <select id="warehouseLinkFilterInput" class="ios-select-native" aria-hidden="true" tabindex="-1">
+                      <option value="all">Все</option>
+                      <option value="linked">Подвязанные</option>
+                      <option value="unlinked">Не подвязанные</option>
+                    </select>
+                    <button type="button" class="ios-select-trigger" id="warehouseLinkFilterButton" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="warehouseLinkFilterCaption warehouseLinkFilterValue">
+                      <span class="ios-select-value" id="warehouseLinkFilterValue">Все</span>
+                      <span class="ios-select-chevron" aria-hidden="true"></span>
+                    </button>
+                    <div class="ios-select-menu" id="warehouseLinkFilterMenu" role="listbox" hidden></div>
+                  </div>
+                </div>
               </div>
             </div>
             <div class="wh-cluster wh-cluster--pricing">
