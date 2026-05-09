@@ -7,6 +7,7 @@ const compression = require("compression");
 const rateLimit = require("express-rate-limit");
 const multer = require("multer");
 const mysql = require("mysql2/promise");
+const { Queue, Worker } = require("bullmq");
 require("dotenv").config();
 
 const logger = require("./lib/logger");
@@ -61,6 +62,9 @@ const sessionTtlMs = 1000 * 60 * 60 * 12;
 const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || 0);
 const autoZeroStockOnNoSupplier = process.env.AUTO_ZERO_STOCK_ON_NO_SUPPLIER !== "false";
 const autoArchiveOnNoLinks = process.env.AUTO_ARCHIVE_ON_NO_LINKS === "true";
+const autoRestoreOnSupplierReturn = process.env.AUTO_RESTORE_ON_SUPPLIER_RETURN !== "false";
+const bullmqEnabled = process.env.BULLMQ_ENABLED === "true";
+const redisUrl = cleanText(process.env.REDIS_URL);
 const dailySyncTime = process.env.DAILY_SYNC_TIME || "11:00";
 const dailySyncEnabled = process.env.DAILY_SYNC_ENABLED !== "false";
 const ozonBaseUrl = "https://api-seller.ozon.ru";
@@ -77,6 +81,8 @@ let immediateAutoPushTimer = null;
 let immediateAutoPushAll = false;
 const immediateAutoPushIds = new Set();
 let immediateAutoPushChain = Promise.resolve();
+let marketplaceQueue = null;
+let marketplaceWorker = null;
 
 function warehouseViewCacheKey({ sync = false, limit = Number.POSITIVE_INFINITY, usdRate, refreshPrices = false } = {}) {
   const limitKey = Number.isFinite(Number(limit)) ? Number(limit) : "all";
@@ -812,6 +818,7 @@ function normalizeWarehouseProduct(input = {}) {
     noSupplierAutomation: {
       stockZeroAt: input.noSupplierAutomation?.stockZeroAt || null,
       archivedAt: input.noSupplierAutomation?.archivedAt || null,
+      recoveredAt: input.noSupplierAutomation?.recoveredAt || null,
       lastError: input.noSupplierAutomation?.lastError || null,
     },
     createdAt: input.createdAt || new Date().toISOString(),
@@ -3387,6 +3394,108 @@ app.get("/api/warehouse", async (request, response, next) => {
   }
 });
 
+app.get("/api/warehouse/products/page", async (request, response, next) => {
+  try {
+    const sync = request.query.sync === "true";
+    const refreshPrices = request.query.refreshPrices === "true";
+    const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
+    const page = Math.max(1, Number(request.query.page || 1) || 1);
+    const pageSize = Math.min(250, Math.max(10, Number(request.query.pageSize || 60) || 60));
+    const q = cleanText(request.query.q || "").toLowerCase();
+    const autoOnly = request.query.autoOnly === "true";
+    const linked = cleanText(request.query.linked || "all");
+    const marketplace = cleanText(request.query.marketplace || "all");
+    const stateCode = cleanText(request.query.state || "all");
+
+    const data = await buildWarehouseViewCached({ sync, usdRate, refreshPrices });
+    let rows = Array.isArray(data.products) ? data.products.slice() : [];
+
+    if (q) {
+      rows = rows.filter((item) => {
+        const haystack = [
+          item.id,
+          item.offerId,
+          item.name,
+          item.brand,
+          item.categoryName,
+          item.sku,
+          item.barcode,
+        ]
+          .map((value) => cleanText(value || "").toLowerCase())
+          .join(" ");
+        return haystack.includes(q);
+      });
+    }
+    if (autoOnly) rows = rows.filter((item) => item.autoPriceEnabled !== false);
+    if (linked === "linked") rows = rows.filter((item) => item.hasLinks);
+    if (linked === "unlinked") rows = rows.filter((item) => !item.hasLinks);
+    if (marketplace !== "all") rows = rows.filter((item) => cleanText(item.marketplace) === marketplace);
+    if (stateCode !== "all") rows = rows.filter((item) => cleanText(item.marketplaceState?.code) === stateCode);
+
+    const total = rows.length;
+    const offset = (page - 1) * pageSize;
+    const items = rows.slice(offset, offset + pageSize).map((item) => ({
+      id: item.id,
+      offerId: item.offerId,
+      name: item.name,
+      marketplace: item.marketplace,
+      target: item.target,
+      price: item.price,
+      suggestedPrice: item.suggestedPrice,
+      calculatedPrice: item.calculatedPrice,
+      autoPriceEnabled: item.autoPriceEnabled !== false,
+      hasLinks: Boolean(item.hasLinks),
+      selectedSupplier: item.selectedSupplier
+        ? {
+            supplierName: item.selectedSupplier.supplierName || "",
+            article: item.selectedSupplier.article || "",
+            calculatedPrice: item.selectedSupplier.calculatedPrice || 0,
+            availableCount: item.selectedSupplier.availableCount || 0,
+          }
+        : null,
+      noSupplierAutomation: item.noSupplierAutomation || {},
+      marketplaceState: item.marketplaceState || {},
+      updatedAt: item.updatedAt,
+      partial: true,
+    }));
+
+    response.json({
+      createdAt: data.createdAt,
+      totalAll: data.total,
+      ready: data.ready,
+      changed: data.changed,
+      withoutSupplier: data.withoutSupplier,
+      ozonArchived: data.ozonArchived || 0,
+      ozonInactive: data.ozonInactive || 0,
+      ozonOutOfStock: data.ozonOutOfStock || 0,
+      usdRate: data.usdRate,
+      sourceError: data.sourceError || "",
+      noSupplierAlerts: Array.isArray(data.noSupplierAlerts) ? data.noSupplierAlerts.slice(0, 10) : [],
+      page,
+      pageSize,
+      total,
+      hasMore: offset + items.length < total,
+      items,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/warehouse/products/:id/detail", async (request, response, next) => {
+  try {
+    const sync = request.query.sync === "true";
+    const refreshPrices = request.query.refreshPrices === "true";
+    const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
+    const data = await buildWarehouseViewCached({ sync, usdRate, refreshPrices });
+    const product = (data.products || []).find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар не найден." });
+    response.json({ product, createdAt: data.createdAt });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/warehouse/no-supplier", async (request, response, next) => {
   try {
     const sync = request.query.sync === "true";
@@ -3593,6 +3702,14 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const expectedUpdatedAt = cleanText(request.body.expectedUpdatedAt || "");
+    if (expectedUpdatedAt && cleanText(product.updatedAt || "") !== expectedUpdatedAt) {
+      return response.status(409).json({
+        error: "Конфликт обновления: карточка уже изменена другим пользователем.",
+        code: "warehouse_product_conflict",
+        currentUpdatedAt: product.updatedAt || null,
+      });
+    }
 
     if (request.body.markup !== undefined) {
       const markup = Number(request.body.markup);
@@ -3620,11 +3737,36 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
 app.patch("/api/warehouse/products/markups/bulk", async (request, response, next) => {
   try {
     const ids = new Set((Array.isArray(request.body.productIds) ? request.body.productIds : []).map(String));
+    const optimisticLocks = new Map(
+      (Array.isArray(request.body.optimisticLocks) ? request.body.optimisticLocks : [])
+        .map((item) => [String(item?.id || ""), cleanText(item?.expectedUpdatedAt || "")]),
+    );
     const markup = Number(request.body.markup);
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для изменения наценки." });
     if (!Number.isFinite(markup) || markup <= 0) return response.status(400).json({ error: "Укажите наценку больше нуля." });
 
     const warehouse = await readWarehouse();
+    const conflicts = [];
+    for (const product of warehouse.products) {
+      if (!ids.has(product.id)) continue;
+      const expectedUpdatedAt = optimisticLocks.get(product.id);
+      if (!expectedUpdatedAt) continue;
+      if (cleanText(product.updatedAt || "") !== expectedUpdatedAt) {
+        conflicts.push({
+          id: product.id,
+          offerId: product.offerId || "",
+          expectedUpdatedAt,
+          currentUpdatedAt: product.updatedAt || null,
+        });
+      }
+    }
+    if (conflicts.length) {
+      return response.status(409).json({
+        error: "Конфликт обновления: часть карточек уже изменена другим пользователем.",
+        code: "warehouse_bulk_conflict",
+        conflicts,
+      });
+    }
     let changed = 0;
     for (const product of warehouse.products) {
       if (!ids.has(product.id)) continue;
@@ -3643,10 +3785,35 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
 app.patch("/api/warehouse/products/auto-price/bulk", async (request, response, next) => {
   try {
     const ids = new Set((Array.isArray(request.body.productIds) ? request.body.productIds : []).map(String));
+    const optimisticLocks = new Map(
+      (Array.isArray(request.body.optimisticLocks) ? request.body.optimisticLocks : [])
+        .map((item) => [String(item?.id || ""), cleanText(item?.expectedUpdatedAt || "")]),
+    );
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для изменения AUTO-режима." });
     const enabled = Boolean(request.body.enabled);
 
     const warehouse = await readWarehouse();
+    const conflicts = [];
+    for (const product of warehouse.products) {
+      if (!ids.has(product.id)) continue;
+      const expectedUpdatedAt = optimisticLocks.get(product.id);
+      if (!expectedUpdatedAt) continue;
+      if (cleanText(product.updatedAt || "") !== expectedUpdatedAt) {
+        conflicts.push({
+          id: product.id,
+          offerId: product.offerId || "",
+          expectedUpdatedAt,
+          currentUpdatedAt: product.updatedAt || null,
+        });
+      }
+    }
+    if (conflicts.length) {
+      return response.status(409).json({
+        error: "Конфликт обновления: часть карточек уже изменена другим пользователем.",
+        code: "warehouse_bulk_conflict",
+        conflicts,
+      });
+    }
     let changed = 0;
     for (const product of warehouse.products) {
       if (!ids.has(product.id)) continue;
@@ -3910,6 +4077,63 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   return { ok: true, sent: items.length - failed.length, failed: failed.length, queued: deduped.length, skipped, results };
 }
 
+async function processMarketplaceJob(name, data = {}) {
+  if (name === "auto-price-push") {
+    return sendWarehousePrices({
+      productIds: Array.isArray(data.productIds) ? data.productIds : undefined,
+      usdRate: data.usdRate,
+      minDiffRub: Number(data.minDiffRub || 0),
+      minDiffPct: Number(data.minDiffPct || 0),
+      dryRun: false,
+    });
+  }
+  if (name === "no-supplier-automation") {
+    const preview = await buildWarehouseView({ sync: true });
+    return runNoSupplierMarketplaceAutomation(preview);
+  }
+  if (name === "supplier-recovery-automation") {
+    const preview = await buildWarehouseView({ sync: false });
+    return runSupplierRecoveryAutomation(preview);
+  }
+  return null;
+}
+
+function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
+  if (marketplaceQueue) {
+    marketplaceQueue.add(name, data, {
+      priority,
+      removeOnComplete: 2000,
+      removeOnFail: 2000,
+    }).catch((error) => logger.warn("queue add failed", { name, detail: error?.message || String(error) }));
+    return;
+  }
+  processMarketplaceJob(name, data).catch((error) => logger.warn("inline marketplace job failed", { name, detail: error?.message || String(error) }));
+}
+
+function initMarketplaceQueue() {
+  if (!bullmqEnabled || !redisUrl) {
+    logger.info("marketplace queue disabled, using inline mode");
+    return;
+  }
+  try {
+    const connection = { url: redisUrl, maxRetriesPerRequest: null };
+    marketplaceQueue = new Queue("marketplace-tasks", { connection });
+    marketplaceWorker = new Worker(
+      "marketplace-tasks",
+      async (job) => processMarketplaceJob(job.name, job.data || {}),
+      { connection, concurrency: 4 },
+    );
+    marketplaceWorker.on("failed", (job, error) => {
+      logger.warn("marketplace job failed", { job: job?.name, detail: error?.message || String(error) });
+    });
+    logger.info("marketplace queue enabled", { mode: "bullmq" });
+  } catch (error) {
+    marketplaceQueue = null;
+    marketplaceWorker = null;
+    logger.warn("marketplace queue init failed, fallback to inline mode", { detail: error?.message || String(error) });
+  }
+}
+
 function queueImmediateAutoPricePush(productIds = [], reason = "price_change_detected") {
   if (Array.isArray(productIds) && productIds.length) {
     productIds.forEach((id) => immediateAutoPushIds.add(String(id)));
@@ -3924,20 +4148,17 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
     immediateAutoPushTimer = null;
     immediateAutoPushChain = immediateAutoPushChain
       .then(async () => {
-        const result = await sendWarehousePrices({
-          productIds: ids,
-          usdRate: undefined,
-          minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
-          minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
-          dryRun: false,
-        });
-        logger.info("immediate auto price push complete", {
-          reason,
-          sent: result.sent || 0,
-          failed: result.failed || 0,
-          skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
-          scope: ids ? ids.length : "all",
-        });
+        queueMarketplaceJob(
+          "auto-price-push",
+          {
+            productIds: ids,
+            usdRate: undefined,
+            minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
+            minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
+          },
+          { priority: 1 },
+        );
+        logger.info("immediate auto price push queued", { reason, scope: ids ? ids.length : "all" });
       })
       .catch((error) => {
         logger.warn("immediate auto price push failed", { reason, detail: error?.message || String(error) });
@@ -4354,6 +4575,111 @@ async function archiveProductsOnMarketplaces(products = []) {
   return actions;
 }
 
+async function restoreStocksOnMarketplaces(products = []) {
+  const actions = [];
+  const byTarget = new Map();
+  for (const product of products) {
+    if (!product?.id || !product?.offerId || !product?.target) continue;
+    const key = `${product.marketplace}:${product.target}`;
+    if (!byTarget.has(key)) byTarget.set(key, []);
+    byTarget.get(key).push(product);
+  }
+
+  for (const [key, items] of byTarget.entries()) {
+    const [marketplace, target] = key.split(":");
+    if (marketplace === "ozon") {
+      const account = getOzonAccountByTarget(target);
+      if (!account) continue;
+      for (const chunk of chunkArray(items, 100)) {
+        const payload = {
+          stocks: chunk.map((item) => ({
+            offer_id: String(item.offerId || "").trim(),
+            stock: Math.max(1, Number(item.marketplaceState?.stock || 1)),
+          })),
+        };
+        try {
+          await ozonRequest("/v2/products/stocks", payload, account);
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: true })));
+        } catch (error) {
+          const detail = error?.message || "restore_stock_failed";
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: false, error: detail })));
+        }
+      }
+      continue;
+    }
+    if (marketplace === "yandex") {
+      const shop = getYandexShopByTarget(target);
+      if (!shop) continue;
+      for (const chunk of chunkArray(items, 500)) {
+        const payload = {
+          offers: chunk.map((item) => ({
+            offerId: String(item.offerId || "").trim(),
+            stock: Math.max(1, Number(item.marketplaceState?.stock || 1)),
+          })),
+        };
+        try {
+          await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offers/stocks`, payload);
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: true })));
+        } catch (error) {
+          const detail = error?.message || "restore_stock_failed";
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: false, error: detail })));
+        }
+      }
+    }
+  }
+  return actions;
+}
+
+async function unarchiveProductsOnMarketplaces(products = []) {
+  const actions = [];
+  const byTarget = new Map();
+  for (const product of products) {
+    if (!product?.id || !product?.target) continue;
+    const key = `${product.marketplace}:${product.target}`;
+    if (!byTarget.has(key)) byTarget.set(key, []);
+    byTarget.get(key).push(product);
+  }
+
+  for (const [key, items] of byTarget.entries()) {
+    const [marketplace, target] = key.split(":");
+    if (marketplace === "ozon") {
+      const account = getOzonAccountByTarget(target);
+      if (!account) continue;
+      for (const chunk of chunkArray(items, 100)) {
+        const productIds = chunk.map((item) => Number(item.productId || 0)).filter((id) => id > 0);
+        if (!productIds.length) continue;
+        try {
+          await ozonRequest("/v1/product/unarchive", { product_id: productIds }, account);
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "unarchive", ok: true })));
+        } catch (error) {
+          const detail = error?.message || "unarchive_failed";
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "unarchive", ok: false, error: detail })));
+        }
+      }
+      continue;
+    }
+    if (marketplace === "yandex") {
+      const shop = getYandexShopByTarget(target);
+      if (!shop) continue;
+      for (const chunk of chunkArray(items, 500)) {
+        try {
+          await yandexRequest(
+            shop,
+            "POST",
+            `/v2/businesses/${shop.businessId}/offer-mappings/update`,
+            { offers: chunk.map((item) => ({ offerId: String(item.offerId || "").trim(), archived: false })) },
+          );
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "unarchive", ok: true })));
+        } catch (error) {
+          const detail = error?.message || "unarchive_failed";
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "unarchive", ok: false, error: detail })));
+        }
+      }
+    }
+  }
+  return actions;
+}
+
 function pickNoSupplierAutomationCandidates(products = []) {
   const list = Array.isArray(products) ? products : [];
   const linkedNoSupplier = list.filter((product) => product.hasLinks && !product.selectedSupplier);
@@ -4406,6 +4732,56 @@ async function runNoSupplierMarketplaceAutomation(preview) {
   };
 }
 
+async function runSupplierRecoveryAutomation(preview) {
+  if (!autoRestoreOnSupplierReturn) {
+    return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
+  }
+  const products = Array.isArray(preview?.products) ? preview.products : [];
+  const recovered = products.filter(
+    (product) =>
+      product.hasLinks
+      && product.selectedSupplier
+      && Boolean(product.noSupplierAutomation?.stockZeroAt)
+      && !product.noSupplierAutomation?.recoveredAt,
+  );
+  if (!recovered.length) return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
+  const [stockActions, unarchiveActions] = await Promise.all([
+    restoreStocksOnMarketplaces(recovered),
+    unarchiveProductsOnMarketplaces(recovered),
+  ]);
+  const warehouse = await readWarehouse();
+  const now = new Date().toISOString();
+  for (const product of warehouse.products) {
+    if (!recovered.some((item) => item.id === product.id)) continue;
+    product.noSupplierAutomation = product.noSupplierAutomation || {};
+    product.noSupplierAutomation.recoveredAt = now;
+    product.noSupplierAutomation.stockZeroAt = null;
+    product.noSupplierAutomation.archivedAt = null;
+    product.noSupplierAutomation.lastError = null;
+  }
+  await writeWarehouse(warehouse);
+  queueMarketplaceJob(
+    "auto-price-push",
+    {
+      productIds: recovered.map((item) => item.id),
+      usdRate: undefined,
+      minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
+      minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
+    },
+    { priority: 2 },
+  );
+
+  const errors = [...stockActions, ...unarchiveActions]
+    .filter((item) => !item.ok)
+    .map((item) => ({ id: item.id, type: item.type, error: item.error }));
+  return {
+    recovered: recovered.length,
+    restoredStocks: stockActions.filter((item) => item.ok).length,
+    unarchived: unarchiveActions.filter((item) => item.ok).length,
+    errors,
+  };
+}
+
 function msUntilNextDailyRun(timeString, now = new Date()) {
   const [rawHour = "11", rawMinute = "0"] = String(timeString || "11:00").split(":");
   const hour = Math.min(Math.max(Number(rawHour) || 11, 0), 23);
@@ -4432,6 +4808,7 @@ async function runDailyRefresh(trigger = "manual") {
       const priceMaster = await runSync();
       const warehouse = await buildWarehouseView({ sync: true });
       const automation = await runNoSupplierMarketplaceAutomation(warehouse);
+      const recovery = await runSupplierRecoveryAutomation(warehouse);
       return await writeDailySyncState(withDailySyncLog({
         status: "ok",
         trigger,
@@ -4446,6 +4823,7 @@ async function runDailyRefresh(trigger = "manual") {
           sourceError: warehouse.sourceError,
           zeroStockSent: automation.zeroStockSent,
           autoArchived: automation.archived,
+          recovered: recovery.recovered,
         },
       }));
     } catch (error) {
@@ -4521,6 +4899,7 @@ app.use((error, request, response, _next) => {
 });
 
 function startServer() {
+  initMarketplaceQueue();
   app.listen(port, () => {
     logger.info("server started", {
       port,
@@ -4545,13 +4924,11 @@ function startServer() {
         const result = await runSync();
         const warehouse = await buildWarehouseView({ sync: true });
         const automation = await runNoSupplierMarketplaceAutomation(warehouse);
-        const autoPricePush = await sendWarehousePrices({
-          // Use fixedUsdRate from app settings (or CBR fallback) instead of env default
-          // so auto-push follows the rate configured in the UI.
+        const recovery = await runSupplierRecoveryAutomation(warehouse);
+        const autoPricePush = await processMarketplaceJob("auto-price-push", {
           usdRate: undefined,
           minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
           minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
-          dryRun: false,
         });
         logger.info("auto sync complete", {
           items: result.items,
@@ -4559,6 +4936,7 @@ function startServer() {
           at: result.createdAt,
           zeroStockSent: automation.zeroStockSent,
           autoArchived: automation.archived,
+          recovered: recovery.recovered,
           autoPriceSent: autoPricePush.sent || 0,
           autoPriceFailed: autoPricePush.failed || 0,
           autoPriceSkipped: Array.isArray(autoPricePush.skipped) ? autoPricePush.skipped.length : 0,

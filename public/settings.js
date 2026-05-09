@@ -3,6 +3,8 @@ const rulesList = document.querySelector("#markupRulesList");
 const addRuleButton = document.querySelector("#addMarkupRuleButton");
 const statusBox = document.querySelector("#settingsStatus");
 const logoutButton = document.querySelector("#logoutButton");
+const settingsAnimateAutoFocusInput = document.querySelector("#settingsAnimateAutoFocusInput");
+const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 
 function ruleRow(rule = {}) {
   const row = document.createElement("div");
@@ -65,6 +67,9 @@ async function loadSettings() {
   settingsForm.elements.defaultOzonMarkup.value = settings.defaultMarkups?.ozon || 1.7;
   settingsForm.elements.defaultYandexMarkup.value = settings.defaultMarkups?.yandex || 1.6;
   renderRules(settings.markupRules || []);
+  if (settingsAnimateAutoFocusInput) {
+    settingsAnimateAutoFocusInput.checked = localStorage.getItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY) !== "0";
+  }
   statusBox.textContent = "Настройки загружены.";
 }
 
@@ -101,6 +106,12 @@ rulesList?.addEventListener("click", (event) => {
   const row = event.target.closest(".settings-rule-row");
   if (row) row.remove();
   if (!rulesList.querySelector(".settings-rule-row")) rulesList.appendChild(ruleRow({ marketplace: "all", minUsd: 0, coefficient: 1.7 }));
+});
+
+settingsAnimateAutoFocusInput?.addEventListener("change", () => {
+  const enabled = Boolean(settingsAnimateAutoFocusInput.checked);
+  localStorage.setItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY, enabled ? "1" : "0");
+  statusBox.textContent = `UI-настройка сохранена: авто-фокус ${enabled ? "с анимацией" : "без анимации"}.`;
 });
 
 logoutButton?.addEventListener("click", async () => {

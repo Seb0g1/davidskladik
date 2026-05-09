@@ -1,5 +1,6 @@
 const MAIN_TAB_STORAGE_KEY = "magicVibesActiveTab";
 const VALID_MAIN_TABS = new Set(["warehouse", "suppliers", "accounts"]);
+const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 
 const state = {
   targets: [],
@@ -16,8 +17,19 @@ const state = {
   ozonStateFilter: "all",
   warehouseAutoOnly: false,
   warehouseLinkFilter: "all",
+  warehouseAnimateAutoFocus: localStorage.getItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY) !== "0",
   warehouseViewMode: localStorage.getItem("warehouseViewMode") || "cards",
   warehouseVisibleLimit: 80,
+  warehousePageSize: 60,
+  warehousePage: 0,
+  warehouseRestorePage: 1,
+  warehouseHasMore: true,
+  warehouseLoadingPage: false,
+  warehouseTotalFiltered: 0,
+  warehouseRequestToken: 0,
+  warehouseScrollTop: 0,
+  warehouseLastGroupOrder: [],
+  warehouseAutoFocusGroupKey: null,
   enrichedProductIds: new Set(),
   retryQueue: [],
   retryQueueSelectedKeys: new Set(),
@@ -69,6 +81,7 @@ const elements = {
   ozonStateFilter: document.querySelector("#ozonStateFilter"),
   warehouseAutoPriceOnlyInput: document.querySelector("#warehouseAutoPriceOnlyInput"),
   warehouseLinkFilterInput: document.querySelector("#warehouseLinkFilterInput"),
+  warehouseAnimateAutoFocusInput: document.querySelector("#warehouseAnimateAutoFocusInput"),
   warehouseMinDiffRubInput: document.querySelector("#warehouseMinDiffRubInput"),
   warehouseMinDiffPctInput: document.querySelector("#warehouseMinDiffPctInput"),
   warehouseStatus: document.querySelector("#warehouseStatus"),
@@ -138,6 +151,91 @@ const elements = {
   confirmCancel: document.querySelector("#confirmCancel"),
   confirmOk: document.querySelector("#confirmOk"),
 };
+
+const WAREHOUSE_URL_PAGE_MAX = 500;
+const WAREHOUSE_SCROLL_SESSION_KEY = "magicVibesWarehouseScrollY";
+
+function toPositiveInt(value, fallback = 1) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 1) return fallback;
+  return Math.floor(n);
+}
+
+function setWarehouseMarketplaceUI(value) {
+  document.querySelectorAll("[data-marketplace]").forEach((item) => {
+    item.classList.toggle("active", item.dataset.marketplace === value);
+  });
+}
+
+function applyWarehouseStateFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const q = params.get("q");
+  const marketplace = params.get("marketplace");
+  const stateCode = params.get("state");
+  const linked = params.get("linked");
+  const autoOnly = params.get("autoOnly");
+  const view = params.get("view");
+  const page = params.get("page");
+  const group = params.get("group");
+  const scroll = params.get("s");
+
+  if (q !== null && elements.warehouseSearchInput) elements.warehouseSearchInput.value = q;
+  if (marketplace && ["all", "ozon", "yandex"].includes(marketplace)) state.warehouseMarketplace = marketplace;
+  if (stateCode && elements.ozonStateFilter?.querySelector(`option[value="${stateCode}"]`)) state.ozonStateFilter = stateCode;
+  if (linked && ["all", "linked", "unlinked"].includes(linked)) state.warehouseLinkFilter = linked;
+  state.warehouseAutoOnly = autoOnly === "1" || autoOnly === "true";
+  if (view === "list" || view === "cards") state.warehouseViewMode = view;
+  state.warehouseRestorePage = Math.min(WAREHOUSE_URL_PAGE_MAX, toPositiveInt(page, 1));
+  state.warehousePage = 0;
+  state.selectedWarehouseGroupKey = group ? String(group) : null;
+  state.selectedWarehouseProductId = null;
+  state.warehouseScrollTop = Math.max(0, Number(scroll || 0) || 0);
+}
+
+function syncWarehouseStateToUrl({ replace = true } = {}) {
+  const params = new URLSearchParams();
+  const q = elements.warehouseSearchInput?.value?.trim();
+  if (q) params.set("q", q);
+  if (state.warehouseMarketplace !== "all") params.set("marketplace", state.warehouseMarketplace);
+  if (state.ozonStateFilter !== "all") params.set("state", state.ozonStateFilter);
+  if (state.warehouseLinkFilter !== "all") params.set("linked", state.warehouseLinkFilter);
+  if (state.warehouseAutoOnly) params.set("autoOnly", "1");
+  if (state.warehouseViewMode !== "cards") params.set("view", state.warehouseViewMode);
+  if (state.warehousePage > 1) params.set("page", String(state.warehousePage));
+  if (state.selectedWarehouseGroupKey) params.set("group", state.selectedWarehouseGroupKey);
+  if (state.warehouseScrollTop > 0) params.set("s", String(Math.round(state.warehouseScrollTop)));
+  const next = `${window.location.pathname}${params.toString() ? `?${params}` : ""}`;
+  if (replace) window.history.replaceState(null, "", next);
+  else window.history.pushState(null, "", next);
+}
+
+function captureWarehouseScroll() {
+  state.warehouseScrollTop = Math.max(0, Number(window.scrollY || window.pageYOffset || 0));
+  try {
+    sessionStorage.setItem(WAREHOUSE_SCROLL_SESSION_KEY, String(Math.round(state.warehouseScrollTop)));
+  } catch (_error) {
+    // Ignore private mode/storage quota issues.
+  }
+}
+
+function resolveWarehouseRestoreScroll() {
+  if (state.warehouseScrollTop > 0) return state.warehouseScrollTop;
+  try {
+    const saved = Number(sessionStorage.getItem(WAREHOUSE_SCROLL_SESSION_KEY) || 0);
+    return Number.isFinite(saved) && saved > 0 ? saved : 0;
+  } catch (_error) {
+    return 0;
+  }
+}
+
+function restoreWarehouseScroll() {
+  const target = resolveWarehouseRestoreScroll();
+  if (!target) return;
+  window.requestAnimationFrame(() => {
+    window.scrollTo({ top: target, behavior: "auto" });
+    window.requestAnimationFrame(() => window.scrollTo({ top: target, behavior: "auto" }));
+  });
+}
 
 if (elements.warehouseSyncProgress) document.body.appendChild(elements.warehouseSyncProgress);
 if (elements.syncMiniProgress) document.body.appendChild(elements.syncMiniProgress);
@@ -269,7 +367,10 @@ async function api(path, options) {
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
     const missing = Array.isArray(detail.missing) ? ` Не хватает: ${detail.missing.join(", ")}` : "";
-    throw new Error(`${detail.detail || detail.error || "Ошибка запроса"}${missing}`);
+    const error = new Error(`${detail.detail || detail.error || "Ошибка запроса"}${missing}`);
+    error.status = response.status;
+    error.payload = detail;
+    throw error;
   }
   return response.json();
 }
@@ -774,6 +875,23 @@ function selectedWarehouseIds() {
   );
 }
 
+function selectedWarehouseLocks() {
+  const uniqueIds = Array.from(new Set(selectedWarehouseIds().map(String)));
+  const byId = new Map((state.warehouse || []).map((item) => [String(item.id), item]));
+  return uniqueIds.map((id) => ({
+    id,
+    expectedUpdatedAt: String(byId.get(id)?.updatedAt || ""),
+  }));
+}
+
+function conflictOfferPreview(conflicts = []) {
+  const offers = conflicts
+    .map((item) => String(item?.offerId || "").trim())
+    .filter(Boolean)
+    .slice(0, 3);
+  return offers.length ? offers.join(", ") : "";
+}
+
 function ozonStateFilterLabel(code) {
   const map = {
     all: "все статусы Ozon",
@@ -789,8 +907,8 @@ function ozonStateFilterLabel(code) {
 function refreshWarehouseToolbarHints() {
   const hint = elements.warehouseToolbarHint;
   if (!hint) return;
-  const total = state.warehouse.length;
-  const filtered = state.filteredWarehouse.length;
+  const total = Number(state.warehouseTotalFiltered || 0);
+  const loaded = state.filteredWarehouse.length;
   const groupCount = getSortedWarehouseGroups().length;
   const market =
     state.warehouseMarketplace === "all"
@@ -814,7 +932,7 @@ function refreshWarehouseToolbarHints() {
   if (!total) {
     hint.textContent = "Склад пуст — добавьте товары вручную или синхронизируйте кабинеты.";
   } else {
-    hint.textContent = `На экране ${formatNumber(groupCount)} карточек (${formatNumber(filtered)} строк) из ${formatNumber(total)} · ${market}${ozonPart}${searchPart}${autoPart}${linkPart} · сверху активные на Ozon/ЯМ`;
+    hint.textContent = `На экране ${formatNumber(groupCount)} карточек (${formatNumber(loaded)} загружено из ${formatNumber(total)}) · ${market}${ozonPart}${searchPart}${autoPart}${linkPart} · сверху активные на Ozon/ЯМ`;
   }
 
   if (elements.warehouseSelectionLine) {
@@ -839,52 +957,61 @@ function renderTargets() {
 }
 
 function applyWarehouseFilters() {
-  const query = elements.warehouseSearchInput.value.trim().toLowerCase();
-  state.filteredWarehouse = state.warehouse.filter((product) => {
-    const marketOk = state.warehouseMarketplace === "all" || product.marketplace === state.warehouseMarketplace;
-    const ozonStateOk = state.ozonStateFilter === "all"
-      || (product.marketplaceState?.code || "unknown") === state.ozonStateFilter;
-    const autoOk = !state.warehouseAutoOnly || product.autoPriceEnabled !== false;
-    const linksCount = Number(product.links?.length || 0);
-    const linkOk = state.warehouseLinkFilter === "all"
-      || (state.warehouseLinkFilter === "linked" && linksCount > 0)
-      || (state.warehouseLinkFilter === "unlinked" && linksCount === 0);
-    const supplier = product.selectedSupplier;
-    const searchHaystack = [
-      product.name,
-      product.offerId,
-      product.productId,
-      product.keyword,
-      supplier?.partnerName,
-      supplier?.article,
-      ...(product.links || []).map((link) => `${link.article} ${link.supplierName} ${link.keyword}`),
-    ]
-      .join(" ")
-      .toLowerCase();
-    return marketOk && ozonStateOk && autoOk && linkOk && (!query || searchHaystack.includes(query));
-  });
+  const previousOrder = Array.isArray(state.warehouseLastGroupOrder) ? state.warehouseLastGroupOrder : [];
+  const previousSelectedKey = state.selectedWarehouseGroupKey;
+  const previousIndex = previousSelectedKey ? previousOrder.indexOf(previousSelectedKey) : -1;
+  state.filteredWarehouse = Array.isArray(state.warehouse) ? state.warehouse.slice() : [];
+
+  const groups = getSortedWarehouseGroups();
+  if (state.selectedWarehouseGroupKey && !groups.some((group) => group.key === state.selectedWarehouseGroupKey)) {
+    state.selectedWarehouseGroupKey = null;
+  }
+  if (!state.selectedWarehouseGroupKey && groups.length) {
+    if (previousIndex >= 0) {
+      const nearestIndex = Math.min(previousIndex, groups.length - 1);
+      state.selectedWarehouseGroupKey = groups[nearestIndex]?.key || groups[0].key;
+      if (state.selectedWarehouseGroupKey) state.warehouseAutoFocusGroupKey = state.selectedWarehouseGroupKey;
+    } else {
+      state.selectedWarehouseGroupKey = groups[0].key;
+    }
+  }
+  state.warehouseLastGroupOrder = groups.map((group) => group.key);
 
   if (!state.filteredWarehouse.some((product) => product.id === state.selectedWarehouseProductId)) {
     state.selectedWarehouseProductId = state.filteredWarehouse[0]?.id || null;
   }
 
   renderWarehouseCards();
-  renderWarehouseDetail(getSortedWarehouseGroups().find((group) => group.key === state.selectedWarehouseGroupKey));
+  renderWarehouseDetail(groups.find((group) => group.key === state.selectedWarehouseGroupKey));
+  syncWarehouseStateToUrl();
 }
 
 function renderWarehouse(data) {
-  state.warehouse = data.products || [];
-  state.suppliers = data.suppliers || state.suppliers || [];
-  state.warehouseVisibleLimit = 80;
-  state.enrichedProductIds = new Set();
-  elements.warehouseTotal.textContent = formatNumber(data.total);
-  elements.warehouseReady.textContent = formatNumber(data.ready);
-  elements.warehouseChanged.textContent = formatNumber(data.changed);
-  elements.warehouseNoSupplier.textContent = formatNumber(data.withoutSupplier);
+  const mode = data.mode || "replace";
+  const products = Array.isArray(data.products) ? data.products : [];
+  if (mode === "append") {
+    const byId = new Map(state.warehouse.map((product) => [product.id, product]));
+    products.forEach((product) => byId.set(product.id, product));
+    state.warehouse = Array.from(byId.values());
+  } else {
+    state.warehouse = products;
+    state.enrichedProductIds = new Set();
+    state.warehouseVisibleLimit = 80;
+  }
+  state.warehouseHasMore = Boolean(data.hasMore);
+  state.warehousePage = Number(data.page || state.warehousePage || 1);
+  state.warehouseTotalFiltered = Number(data.total || state.warehouseTotalFiltered || state.warehouse.length);
+  if (data.suppliers?.length) state.suppliers = data.suppliers;
+  elements.warehouseTotal.textContent = formatNumber(data.totalAll ?? data.total ?? state.warehouse.length);
+  elements.warehouseReady.textContent = formatNumber(data.ready || 0);
+  elements.warehouseChanged.textContent = formatNumber(data.changed || 0);
+  elements.warehouseNoSupplier.textContent = formatNumber(data.withoutSupplier || 0);
   elements.warehouseOzonArchived.textContent = formatNumber(data.ozonArchived || 0);
   elements.warehouseOzonInactive.textContent = formatNumber(data.ozonInactive || 0);
   elements.warehouseOzonOutOfStock.textContent = formatNumber(data.ozonOutOfStock || 0);
-  elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(data.usdRate)} RUB/USD`;
+  if (data.usdRate) {
+    elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(data.usdRate)} RUB/USD`;
+  }
   elements.warehouseSelectChangedButton.disabled = !state.warehouse.length;
   if (data.sourceError) {
     elements.warehouseStatus.textContent = `Склад загружен, но PriceMaster сейчас недоступен: ${data.sourceError}`;
@@ -943,8 +1070,9 @@ function renderWarehouseCards() {
         .filter((entry) => entry.url);
       const image = group.image || productImage(product);
       const productName = group.name;
+      const autoFocus = state.warehouseAnimateAutoFocus && state.warehouseAutoFocusGroupKey === group.key;
       return `
-        <article class="product-card ${selected ? "selected" : ""}" data-group-key="${escapeHtml(group.key)}">
+        <article class="product-card ${selected ? "selected" : ""} ${autoFocus ? "auto-focus-highlight" : ""}" data-group-key="${escapeHtml(group.key)}">
           <div class="product-image">
             ${
               image
@@ -998,10 +1126,48 @@ function renderWarehouseCards() {
     })
     .join("");
   const visibleCount = Math.min(state.warehouseVisibleLimit, groups.length);
-  elements.warehouseVisibleInfo.textContent = `Показано ${formatNumber(visibleCount)} из ${formatNumber(groups.length)} объединённых карточек`;
-  elements.warehouseLoadMoreButton.classList.toggle("hidden", visibleCount >= groups.length);
+  const hasMoreClient = visibleCount < groups.length;
+  elements.warehouseVisibleInfo.textContent = `Показано ${formatNumber(visibleCount)} из ${formatNumber(state.warehouseTotalFiltered || groups.length)} строк (загружено ${formatNumber(state.warehouse.length)})`;
+  elements.warehouseLoadMoreButton.classList.toggle("hidden", !hasMoreClient && !state.warehouseHasMore);
+  elements.warehouseLoadMoreButton.disabled = state.warehouseLoadingPage;
+  elements.warehouseLoadMoreButton.textContent = state.warehouseLoadingPage ? "Загрузка..." : "Показать ещё";
   updateSelection();
   enrichVisibleProducts(visibleGroups.flatMap((group) => group.variants));
+  if (state.warehouseAutoFocusGroupKey) {
+    const key = state.warehouseAutoFocusGroupKey;
+    const card = elements.warehouseCards.querySelector(`.product-card[data-group-key="${CSS.escape(key)}"]`);
+    if (card) {
+      card.scrollIntoView({ behavior: state.warehouseAnimateAutoFocus ? "smooth" : "auto", block: "center", inline: "nearest" });
+      if (state.warehouseAnimateAutoFocus) {
+        window.setTimeout(() => {
+          state.warehouseAutoFocusGroupKey = null;
+          const current = elements.warehouseCards.querySelector(`.product-card[data-group-key="${CSS.escape(key)}"]`);
+          current?.classList.remove("auto-focus-highlight");
+        }, 1400);
+      } else {
+        state.warehouseAutoFocusGroupKey = null;
+      }
+    }
+  }
+}
+
+function mergeWarehouseProduct(product) {
+  const index = state.warehouse.findIndex((item) => item.id === product.id);
+  if (index >= 0) state.warehouse[index] = product;
+  else state.warehouse.push(product);
+}
+
+async function ensureWarehouseGroupDetailed(groupKey) {
+  const group = getSortedWarehouseGroups().find((item) => item.key === groupKey);
+  if (!group) return null;
+  const partialIds = (group.variants || []).filter((item) => item.partial).map((item) => item.id);
+  if (!partialIds.length) return group;
+  const details = await Promise.all(
+    partialIds.map((id) => api(`/api/warehouse/products/${encodeURIComponent(id)}/detail`).then((payload) => payload.product)),
+  );
+  details.filter(Boolean).forEach((product) => mergeWarehouseProduct(product));
+  applyWarehouseFilters();
+  return getSortedWarehouseGroups().find((item) => item.key === groupKey) || null;
 }
 
 function renderWarehouseDetail(group) {
@@ -1064,6 +1230,7 @@ function renderWarehouseDetail(group) {
           .map(
             (item) => `
               <form class="variant-markup-row" data-product-id="${escapeHtml(item.id)}">
+                <input name="expectedUpdatedAt" type="hidden" value="${escapeHtml(item.updatedAt || "")}" />
                 <div>
                   <span class="market-badge ${item.marketplace}">${escapeHtml(marketLabel(item))}</span>
                   <span class="badge ${marketplaceStateClass(item)}">${escapeHtml(marketplaceStateLabel(item))}</span>
@@ -1693,7 +1860,46 @@ async function sendOzonPricesNow(productIds = []) {
   return { sent: Number(result.sent || 0), skipped: Array.isArray(result.skipped) ? result.skipped.length : 0 };
 }
 
+function currentWarehousePageParams() {
+  const params = new URLSearchParams();
+  params.set("pageSize", String(state.warehousePageSize));
+  if (elements.warehouseUsdRateInput.value) params.set("usdRate", elements.warehouseUsdRateInput.value);
+  if (state.warehouseMarketplace !== "all") params.set("marketplace", state.warehouseMarketplace);
+  if (state.ozonStateFilter !== "all") params.set("state", state.ozonStateFilter);
+  if (state.warehouseAutoOnly) params.set("autoOnly", "true");
+  if (state.warehouseLinkFilter !== "all") params.set("linked", state.warehouseLinkFilter);
+  const query = elements.warehouseSearchInput.value.trim();
+  if (query) params.set("q", query);
+  return params;
+}
+
+async function loadWarehousePage({ reset = false, sync = false, refreshPrices = false } = {}) {
+  if (state.warehouseLoadingPage) return;
+  if (!reset && !state.warehouseHasMore) return;
+  state.warehouseLoadingPage = true;
+  renderWarehouseCards();
+  const token = ++state.warehouseRequestToken;
+  try {
+    const params = currentWarehousePageParams();
+    params.set("page", String(reset ? 1 : state.warehousePage + 1));
+    if (sync) params.set("sync", "true");
+    if (refreshPrices) params.set("refreshPrices", "true");
+    const data = await api(`/api/warehouse/products/page?${params}`);
+    if (token !== state.warehouseRequestToken) return;
+    renderWarehouse({
+      ...data,
+      mode: reset ? "replace" : "append",
+      products: data.items || [],
+    });
+    syncWarehouseStateToUrl();
+  } finally {
+    state.warehouseLoadingPage = false;
+    renderWarehouseCards();
+  }
+}
+
 async function loadWarehouse(sync = false, refreshPrices = false) {
+  captureWarehouseScroll();
   const stopProgress = sync || refreshPrices ? startSyncProgress(sync ? "sync" : "prices") : null;
   elements.warehouseSyncButton.disabled = sync;
   elements.warehouseRefreshPricesButton.disabled = refreshPrices;
@@ -1703,16 +1909,19 @@ async function loadWarehouse(sync = false, refreshPrices = false) {
       ? `Обновляю цены по ${syncTargetNames().join(" + ")}...`
       : "Обновляю склад...";
   try {
-    const params = new URLSearchParams();
-    if (sync) params.set("sync", "true");
-    if (refreshPrices) params.set("refreshPrices", "true");
-    if (elements.warehouseUsdRateInput.value) params.set("usdRate", elements.warehouseUsdRateInput.value);
-    const data = await api(`/api/warehouse${params.toString() ? `?${params}` : ""}`);
-    if (data.targets?.length) {
-      state.targets = data.targets;
-      renderTargets();
+    state.warehousePage = 0;
+    state.warehouseHasMore = true;
+    state.warehouseTotalFiltered = 0;
+    state.selectedWarehouseGroupKey = null;
+    state.selectedWarehouseProductId = null;
+    await loadWarehousePage({ reset: true, sync, refreshPrices });
+    const requestedPage = Math.max(1, Number(state.warehouseRestorePage || 1));
+    for (let page = 2; page <= requestedPage && state.warehouseHasMore; page += 1) {
+      // Restore long-list context after refresh by preloading previously opened pages.
+      await loadWarehousePage({ reset: false, sync: false, refreshPrices: false });
     }
-    renderWarehouse(data);
+    state.warehouseRestorePage = 1;
+    restoreWarehouseScroll();
     await loadRetryQueue().catch(() => {});
     if (stopProgress) stopProgress(true);
   } catch (error) {
@@ -1728,6 +1937,16 @@ let warehouseRefreshTimer = null;
 function queueWarehouseRefresh(delayMs = 160) {
   if (warehouseRefreshTimer) window.clearTimeout(warehouseRefreshTimer);
   warehouseRefreshTimer = window.setTimeout(() => {
+    loadWarehouse(false).catch((error) => {
+      elements.warehouseStatus.textContent = error.message;
+    });
+  }, delayMs);
+}
+
+let warehouseFilterReloadTimer = null;
+function queueWarehouseFilterReload(delayMs = 260) {
+  if (warehouseFilterReloadTimer) window.clearTimeout(warehouseFilterReloadTimer);
+  warehouseFilterReloadTimer = window.setTimeout(() => {
     loadWarehouse(false).catch((error) => {
       elements.warehouseStatus.textContent = error.message;
     });
@@ -1777,31 +1996,67 @@ elements.tabButtons.forEach((button) => {
 });
 
 applyMainTab(localStorage.getItem(MAIN_TAB_STORAGE_KEY) || "warehouse");
+applyWarehouseStateFromUrl();
+setWarehouseMarketplaceUI(state.warehouseMarketplace);
+if (elements.ozonStateFilter) elements.ozonStateFilter.value = state.ozonStateFilter;
+if (elements.warehouseAutoPriceOnlyInput) elements.warehouseAutoPriceOnlyInput.checked = state.warehouseAutoOnly;
+if (elements.warehouseLinkFilterInput) elements.warehouseLinkFilterInput.value = state.warehouseLinkFilter;
+if (elements.warehouseAnimateAutoFocusInput) elements.warehouseAnimateAutoFocusInput.checked = state.warehouseAnimateAutoFocus;
 
 document.querySelectorAll("[data-marketplace]").forEach((button) => {
   button.addEventListener("click", () => {
-    document.querySelectorAll("[data-marketplace]").forEach((item) => item.classList.toggle("active", item === button));
+    setWarehouseMarketplaceUI(button.dataset.marketplace);
     state.warehouseMarketplace = button.dataset.marketplace;
     state.warehouseVisibleLimit = 80;
-    applyWarehouseFilters();
+    state.warehousePage = 0;
+    state.warehouseRestorePage = 1;
+    state.selectedWarehouseGroupKey = null;
+    state.warehouseAutoFocusGroupKey = null;
+    state.warehouseScrollTop = 0;
+    syncWarehouseStateToUrl();
+    window.scrollTo({ top: 0, behavior: "auto" });
+    queueWarehouseFilterReload();
   });
 });
 
 elements.warehouseSearchInput.addEventListener("input", () => {
   state.warehouseVisibleLimit = 80;
-  applyWarehouseFilters();
+  state.warehousePage = 0;
+  state.warehouseRestorePage = 1;
+  state.selectedWarehouseGroupKey = null;
+  state.warehouseAutoFocusGroupKey = null;
+  state.warehouseScrollTop = 0;
+  syncWarehouseStateToUrl();
+  queueWarehouseFilterReload();
 });
 
 elements.warehouseAutoPriceOnlyInput?.addEventListener("change", () => {
   state.warehouseAutoOnly = Boolean(elements.warehouseAutoPriceOnlyInput.checked);
   state.warehouseVisibleLimit = 80;
-  applyWarehouseFilters();
+  state.warehousePage = 0;
+  state.warehouseRestorePage = 1;
+  state.selectedWarehouseGroupKey = null;
+  state.warehouseAutoFocusGroupKey = null;
+  state.warehouseScrollTop = 0;
+  syncWarehouseStateToUrl();
+  queueWarehouseFilterReload();
 });
 
 elements.warehouseLinkFilterInput?.addEventListener("change", () => {
   state.warehouseLinkFilter = String(elements.warehouseLinkFilterInput.value || "all");
   state.warehouseVisibleLimit = 80;
-  applyWarehouseFilters();
+  state.warehousePage = 0;
+  state.warehouseRestorePage = 1;
+  state.selectedWarehouseGroupKey = null;
+  state.warehouseAutoFocusGroupKey = null;
+  state.warehouseScrollTop = 0;
+  syncWarehouseStateToUrl();
+  queueWarehouseFilterReload();
+});
+
+elements.warehouseAnimateAutoFocusInput?.addEventListener("change", () => {
+  state.warehouseAnimateAutoFocus = Boolean(elements.warehouseAnimateAutoFocusInput.checked);
+  localStorage.setItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY, state.warehouseAnimateAutoFocus ? "1" : "0");
 });
 
 elements.warehouseUsdRateInput?.addEventListener("input", () => {
@@ -1814,10 +2069,16 @@ elements.warehouseUsdRateInput?.addEventListener("input", () => {
 elements.ozonStateFilter?.addEventListener("change", () => {
   state.ozonStateFilter = elements.ozonStateFilter.value;
   state.warehouseVisibleLimit = 80;
+  state.warehousePage = 0;
+  state.warehouseRestorePage = 1;
+  state.selectedWarehouseGroupKey = null;
+  state.warehouseAutoFocusGroupKey = null;
+  state.warehouseScrollTop = 0;
+  syncWarehouseStateToUrl();
   if (state.ozonStateFilter !== "all" && !state.warehouse.some((product) => product.marketplaceState?.code && product.marketplaceState.code !== "unknown")) {
     elements.warehouseStatus.textContent = "Для фильтра по статусам нажмите «Синхронизировать», чтобы загрузить архив, активность и остатки Ozon + ЯМ.";
   }
-  applyWarehouseFilters();
+  queueWarehouseFilterReload();
 });
 
 elements.manualProductToggle.addEventListener("click", () => {
@@ -1849,6 +2110,7 @@ elements.warehouseForm.addEventListener("submit", async (event) => {
 elements.bulkMarkupForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const productIds = selectedWarehouseIds();
+  const optimisticLocks = selectedWarehouseLocks();
   const markup = Number(elements.bulkMarkupInput.value || 0);
   if (!productIds.length) {
     elements.warehouseStatus.textContent = "Выберите одну или несколько объединённых карточек.";
@@ -1858,12 +2120,22 @@ elements.bulkMarkupForm?.addEventListener("submit", async (event) => {
     const result = await api("/api/warehouse/products/markups/bulk", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productIds, markup }),
+      body: JSON.stringify({ productIds, markup, optimisticLocks }),
     });
     elements.warehouseStatus.textContent = `Наценка ${markup.toFixed(2)} применена: ${formatNumber(result.changed)} товаров Ozon/ЯМ.`;
     elements.bulkMarkupForm.reset();
     queueWarehouseRefresh();
   } catch (error) {
+    if (error?.status === 409) {
+      const conflictItems = Array.isArray(error?.payload?.conflicts) ? error.payload.conflicts : [];
+      const conflicts = conflictItems.length;
+      const offerPreview = conflictOfferPreview(conflictItems);
+      const suffix = offerPreview ? ` Примеры: ${offerPreview}.` : "";
+      elements.warehouseStatus.textContent = `Конфликт bulk-наценки (${formatNumber(conflicts)}).${suffix} Обновляю данные...`;
+      showToast(`Часть карточек уже изменена другим менеджером.${suffix}`, "warn");
+      queueWarehouseRefresh();
+      return;
+    }
     elements.warehouseStatus.textContent = error.message;
   }
 });
@@ -1880,8 +2152,8 @@ elements.mergeProductsButton?.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ productIds }),
     });
-    renderWarehouse(result.warehouse);
     elements.warehouseStatus.textContent = `Объединено товаров: ${formatNumber(result.changed)}.`;
+    queueWarehouseRefresh();
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }
@@ -1899,8 +2171,8 @@ elements.unmergeProductsButton?.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ productIds }),
     });
-    renderWarehouse(result.warehouse);
     elements.warehouseStatus.textContent = `Разъединено товаров: ${formatNumber(result.changed)}.`;
+    queueWarehouseRefresh();
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }
@@ -1908,17 +2180,32 @@ elements.unmergeProductsButton?.addEventListener("click", async () => {
 
 async function setAutoPriceForSelected(enabled) {
   const productIds = selectedWarehouseIds();
+  const optimisticLocks = selectedWarehouseLocks();
   if (!productIds.length) {
     elements.warehouseStatus.textContent = "Выберите товары для изменения AUTO-режима.";
     return;
   }
-  const result = await api("/api/warehouse/products/auto-price/bulk", {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ productIds, enabled }),
-  });
-  elements.warehouseStatus.textContent = `AUTO ${enabled ? "включен" : "выключен"}: ${formatNumber(result.changed)} товаров.`;
-  queueWarehouseRefresh();
+  try {
+    const result = await api("/api/warehouse/products/auto-price/bulk", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productIds, enabled, optimisticLocks }),
+    });
+    elements.warehouseStatus.textContent = `AUTO ${enabled ? "включен" : "выключен"}: ${formatNumber(result.changed)} товаров.`;
+    queueWarehouseRefresh();
+  } catch (error) {
+    if (error?.status === 409) {
+      const conflictItems = Array.isArray(error?.payload?.conflicts) ? error.payload.conflicts : [];
+      const conflicts = conflictItems.length;
+      const offerPreview = conflictOfferPreview(conflictItems);
+      const suffix = offerPreview ? ` Примеры: ${offerPreview}.` : "";
+      elements.warehouseStatus.textContent = `Конфликт bulk-AUTO (${formatNumber(conflicts)}).${suffix} Обновляю данные...`;
+      showToast(`Часть карточек уже изменена другим менеджером.${suffix}`, "warn");
+      queueWarehouseRefresh();
+      return;
+    }
+    throw error;
+  }
 }
 
 elements.autoPriceEnableSelectedButton?.addEventListener("click", () => {
@@ -1973,14 +2260,22 @@ elements.warehouseRefreshPricesButton.addEventListener("click", () => {
 });
 
 elements.warehouseLoadMoreButton.addEventListener("click", () => {
-  state.warehouseVisibleLimit += 80;
-  renderWarehouseCards();
+  const groups = getSortedWarehouseGroups();
+  if (state.warehouseVisibleLimit < groups.length) {
+    state.warehouseVisibleLimit += 80;
+    renderWarehouseCards();
+    return;
+  }
+  loadWarehousePage({ reset: false }).catch((error) => {
+    elements.warehouseStatus.textContent = error.message;
+  });
 });
 
 elements.warehouseViewButtons.forEach((button) => {
   button.addEventListener("click", () => {
     state.warehouseViewMode = button.dataset.warehouseView === "list" ? "list" : "cards";
     localStorage.setItem("warehouseViewMode", state.warehouseViewMode);
+    syncWarehouseStateToUrl();
     renderWarehouseCards();
   });
 });
@@ -1999,15 +2294,23 @@ elements.dailySyncRunButton?.addEventListener("click", async () => {
   }
 });
 
-elements.warehouseCards.addEventListener("click", (event) => {
+elements.warehouseCards.addEventListener("click", async (event) => {
   if (event.target.classList.contains("warehouse-check")) return;
   const card = event.target.closest(".product-card");
   const button = event.target.closest(".select-product");
   const groupKey = button?.dataset.groupKey || card?.dataset.groupKey;
   if (!groupKey) return;
   state.selectedWarehouseGroupKey = groupKey;
+  state.warehouseAutoFocusGroupKey = null;
+  syncWarehouseStateToUrl();
   renderWarehouseCards();
   renderWarehouseDetail(getSortedWarehouseGroups().find((group) => group.key === groupKey));
+  try {
+    const detailed = await ensureWarehouseGroupDetailed(groupKey);
+    if (state.selectedWarehouseGroupKey === groupKey) renderWarehouseDetail(detailed);
+  } catch (error) {
+    elements.warehouseStatus.textContent = `Не удалось загрузить детали товара: ${error.message}`;
+  }
   focusWarehouseDetailOnSmallScreen();
 });
 
@@ -2047,11 +2350,18 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
           autoPriceEnabled: formData.get("autoPriceEnabled") === "on",
           autoPriceMin: Number(formData.get("autoPriceMin") || 0) || null,
           autoPriceMax: Number(formData.get("autoPriceMax") || 0) || null,
+          expectedUpdatedAt: String(formData.get("expectedUpdatedAt") || ""),
         }),
       });
       elements.warehouseStatus.textContent = "Наценка и AUTO-настройки сохранены.";
       queueWarehouseRefresh();
     } catch (error) {
+      if (error?.status === 409) {
+        elements.warehouseStatus.textContent = "Конфликт изменений: товар уже обновлен другим пользователем. Обновляю данные...";
+        showToast("Карточка была изменена другим менеджером. Данные перезагружены.", "warn");
+        queueWarehouseRefresh();
+        return;
+      }
       elements.warehouseStatus.textContent = error.message;
     }
     return;
@@ -2614,7 +2924,48 @@ function initIosSelects() {
   document.querySelectorAll("[data-ios-select]").forEach((root) => setupIosSelectRoot(root));
 }
 
+function initWarehouseInfiniteScroll() {
+  if (!elements.warehouseLoadMoreButton || !("IntersectionObserver" in window)) return;
+  const observer = new IntersectionObserver((entries) => {
+    const entry = entries[0];
+    if (!entry?.isIntersecting || state.warehouseLoadingPage) return;
+    if (elements.warehouseLoadMoreButton.classList.contains("hidden")) return;
+    elements.warehouseLoadMoreButton.click();
+  }, { rootMargin: "280px 0px 280px 0px" });
+  observer.observe(elements.warehouseLoadMoreButton);
+}
+
+function initWarehouseScrollTracking() {
+  let timer = null;
+  window.addEventListener("scroll", () => {
+    if (timer) window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      captureWarehouseScroll();
+      syncWarehouseStateToUrl();
+    }, 140);
+  }, { passive: true });
+  window.addEventListener("beforeunload", captureWarehouseScroll, { passive: true });
+}
+
+window.addEventListener("popstate", () => {
+  applyWarehouseStateFromUrl();
+  setWarehouseMarketplaceUI(state.warehouseMarketplace);
+  if (elements.ozonStateFilter) elements.ozonStateFilter.value = state.ozonStateFilter;
+  if (elements.warehouseAutoPriceOnlyInput) elements.warehouseAutoPriceOnlyInput.checked = state.warehouseAutoOnly;
+  if (elements.warehouseLinkFilterInput) elements.warehouseLinkFilterInput.value = state.warehouseLinkFilter;
+  if (elements.warehouseAnimateAutoFocusInput) elements.warehouseAnimateAutoFocusInput.checked = state.warehouseAnimateAutoFocus;
+  if (elements.warehouseSearchInput) {
+    const params = new URLSearchParams(window.location.search);
+    elements.warehouseSearchInput.value = params.get("q") || "";
+  }
+  loadWarehouse(false).catch((error) => {
+    elements.warehouseStatus.textContent = error.message;
+  });
+});
+
 initIosSelects();
+initWarehouseInfiniteScroll();
+initWarehouseScrollTracking();
 
 if (elements.supplierInactiveUntilInput) {
   elements.supplierInactiveUntilInput.min = new Date().toISOString().slice(0, 10);
