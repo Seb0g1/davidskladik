@@ -3771,35 +3771,10 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
 app.patch("/api/warehouse/products/auto-price/bulk", async (request, response, next) => {
   try {
     const ids = new Set((Array.isArray(request.body.productIds) ? request.body.productIds : []).map(String));
-    const optimisticLocks = new Map(
-      (Array.isArray(request.body.optimisticLocks) ? request.body.optimisticLocks : [])
-        .map((item) => [String(item?.id || ""), cleanText(item?.expectedUpdatedAt || "")]),
-    );
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для изменения AUTO-режима." });
     const enabled = Boolean(request.body.enabled);
 
     const warehouse = await readWarehouse();
-    const conflicts = [];
-    for (const product of warehouse.products) {
-      if (!ids.has(product.id)) continue;
-      const expectedUpdatedAt = optimisticLocks.get(product.id);
-      if (!expectedUpdatedAt) continue;
-      if (cleanText(product.updatedAt || "") !== expectedUpdatedAt) {
-        conflicts.push({
-          id: product.id,
-          offerId: product.offerId || "",
-          expectedUpdatedAt,
-          currentUpdatedAt: product.updatedAt || null,
-        });
-      }
-    }
-    if (conflicts.length) {
-      return response.status(409).json({
-        error: "Конфликт обновления: часть карточек уже изменена другим пользователем.",
-        code: "warehouse_bulk_conflict",
-        conflicts,
-      });
-    }
     let changed = 0;
     for (const product of warehouse.products) {
       if (!ids.has(product.id)) continue;
