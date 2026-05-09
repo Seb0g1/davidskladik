@@ -1986,7 +1986,10 @@ function withDailySyncLog(state) {
     warehouseReady: state.warehouse?.ready || 0,
     warehouseChanged: state.warehouse?.changed || 0,
     withoutSupplier: state.warehouse?.withoutSupplier || 0,
-    error: state.error || state.warehouse?.sourceError || null,
+    pricePushSent: state.warehouse?.pricePush?.sent ?? null,
+    pricePushFailed: state.warehouse?.pricePush?.failed ?? null,
+    pricePushSkipped: state.warehouse?.pricePush?.skipped ?? null,
+    error: state.error || state.warehouse?.sourceError || state.warehouse?.pricePush?.error || null,
   };
   return { ...state, logs: [entry, ...logs].slice(0, 30) };
 }
@@ -4798,6 +4801,21 @@ async function runDailyRefresh(trigger = "manual") {
       const warehouse = await buildWarehouseView({ sync: true });
       const automation = await runNoSupplierMarketplaceAutomation(warehouse);
       const recovery = await runSupplierRecoveryAutomation(warehouse);
+      let pricePush = null;
+      if (trigger === "manual") {
+        try {
+          pricePush = await sendWarehousePrices({
+            usdRate: undefined,
+            minDiffRub: 0,
+            minDiffPct: 0,
+            dryRun: false,
+          });
+        } catch (err) {
+          const detail = err?.message || String(err);
+          pricePush = { sent: 0, failed: 0, skipped: [], error: detail };
+          logger.warn("manual daily sync price push failed", { detail });
+        }
+      }
       return await writeDailySyncState(withDailySyncLog({
         status: "ok",
         trigger,
@@ -4813,6 +4831,14 @@ async function runDailyRefresh(trigger = "manual") {
           zeroStockSent: automation.zeroStockSent,
           autoArchived: automation.archived,
           recovered: recovery.recovered,
+          pricePush: pricePush
+            ? {
+                sent: Number(pricePush.sent || 0),
+                failed: Number(pricePush.failed || 0),
+                skipped: Array.isArray(pricePush.skipped) ? pricePush.skipped.length : 0,
+                error: pricePush.error || null,
+              }
+            : null,
         },
       }));
     } catch (error) {

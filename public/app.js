@@ -1781,11 +1781,16 @@ function renderDailySync(status = {}) {
   const totals = status.warehouse
     ? ` Склад: ${formatNumber(status.warehouse.total)} товаров, ${formatNumber(status.warehouse.changed)} с изменениями.`
     : "";
+  const pricePush = status.warehouse?.pricePush;
+  const priceTotals =
+    pricePush && (pricePush.sent > 0 || pricePush.failed > 0 || pricePush.skipped > 0 || pricePush.error)
+      ? ` Цены MP: отправлено ${formatNumber(pricePush.sent)}, сбоев ${formatNumber(pricePush.failed)}, пропущено ${formatNumber(pricePush.skipped)}.${pricePush.error ? ` Ошибка отправки: ${pricePush.error}` : ""}`
+      : "";
 
   elements.dailySyncStatus.textContent = status.enabled === false
     ? "Выключено"
     : `${statusText}, ${status.time || "11:00"}`;
-  elements.dailySyncMeta.textContent = `Последний запуск: ${last}. Следующий: ${next}.${totals}${status.error ? ` Ошибка: ${status.error}` : ""}`;
+  elements.dailySyncMeta.textContent = `Последний запуск: ${last}. Следующий: ${next}.${totals}${priceTotals}${status.error ? ` Ошибка: ${status.error}` : ""}`;
   if (elements.syncLogList) {
     const logs = Array.isArray(status.logs) ? status.logs.slice(0, 5) : [];
     elements.syncLogList.innerHTML = logs.length
@@ -1793,7 +1798,7 @@ function renderDailySync(status = {}) {
           <div class="sync-log-row">
             <div>
               <strong>${escapeHtml(log.status === "ok" ? "Успешно" : log.status === "failed" ? "Ошибка" : "Запуск")}</strong>
-              <span>${formatDate(log.at)} · PriceMaster: ${formatNumber(log.priceMasterItems)} / изменений ${formatNumber(log.priceMasterChanges)} · Склад: ${formatNumber(log.warehouseTotal)} / изменилось ${formatNumber(log.warehouseChanged)}</span>
+              <span>${formatDate(log.at)} · PriceMaster: ${formatNumber(log.priceMasterItems)} / изменений ${formatNumber(log.priceMasterChanges)} · Склад: ${formatNumber(log.warehouseTotal)} / изменилось ${formatNumber(log.warehouseChanged)}${log.pricePushSent != null ? ` · Цены: +${formatNumber(log.pricePushSent)} / сбой ${formatNumber(log.pricePushFailed || 0)} / пропуск ${formatNumber(log.pricePushSkipped || 0)}` : ""}</span>
             </div>
             ${log.error ? `<small>${escapeHtml(log.error)}</small>` : ""}
           </div>
