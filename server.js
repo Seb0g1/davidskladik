@@ -554,6 +554,16 @@ function getYandexShopByTarget(targetId) {
   return shops.find((shop) => shop.id === targetId) || null;
 }
 
+function matchesOzonTarget(targetId, accountId) {
+  const target = cleanText(targetId || "");
+  return target === cleanText(accountId || "") || target === "ozon";
+}
+
+function matchesYandexTarget(targetId, shopId) {
+  const target = cleanText(targetId || "");
+  return target === cleanText(shopId || "") || target === "yandex";
+}
+
 function marketplaceTargets() {
   const ozonAccounts = getOzonAccounts();
   const yandexShops = getYandexShops();
@@ -3789,7 +3799,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const results = [];
   const failed = [];
   for (const account of getOzonAccounts()) {
-    const targetItems = items.filter((item) => item.target === account.id);
+    const targetItems = items.filter((item) => item.marketplace === "ozon" && matchesOzonTarget(item.target, account.id));
     const ozonItems = targetItems
       .map((item) => ({
         offer_id: String(item.offerId || "").trim(),
@@ -3809,7 +3819,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   }
 
   for (const shop of getYandexShops()) {
-    const targetItems = items.filter((item) => item.target === shop.id);
+    const targetItems = items.filter((item) => item.marketplace === "yandex" && matchesYandexTarget(item.target, shop.id));
     const yandexItems = targetItems
       .map((item) => ({
         offerId: String(item.offerId || "").trim(),
@@ -3957,7 +3967,7 @@ app.post("/api/warehouse/prices/retry", async (request, response, next) => {
     const failed = [];
 
     for (const account of getOzonAccounts()) {
-      const targetItems = items.filter((item) => item.target === account.id);
+      const targetItems = items.filter((item) => item.marketplace === "ozon" && matchesOzonTarget(item.target, account.id));
       const ozonItems = targetItems.map((item) => ({ offer_id: String(item.offerId || "").trim(), price: String(roundPrice(item.price)), currency_code: "RUB" }))
         .filter((item) => item.offer_id && Number(item.price) > 0);
       if (!ozonItems.length) continue;
@@ -3977,7 +3987,7 @@ app.post("/api/warehouse/prices/retry", async (request, response, next) => {
     }
 
     for (const shop of getYandexShops()) {
-      const targetItems = items.filter((item) => item.target === shop.id);
+      const targetItems = items.filter((item) => item.marketplace === "yandex" && matchesYandexTarget(item.target, shop.id));
       const yandexItems = targetItems.map((item) => ({ offerId: String(item.offerId || "").trim(), price: { value: roundPrice(item.price), currencyId: "RUR" } }))
         .filter((item) => item.offerId && item.price.value > 0);
       if (!yandexItems.length) continue;
