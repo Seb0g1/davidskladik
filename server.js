@@ -3435,28 +3435,14 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     const total = rows.length;
     const offset = (page - 1) * pageSize;
     const items = rows.slice(offset, offset + pageSize).map((item) => ({
-      id: item.id,
-      offerId: item.offerId,
-      name: item.name,
-      marketplace: item.marketplace,
-      target: item.target,
-      price: item.price,
-      suggestedPrice: item.suggestedPrice,
-      calculatedPrice: item.calculatedPrice,
+      ...item,
       autoPriceEnabled: item.autoPriceEnabled !== false,
-      hasLinks: Boolean(item.hasLinks),
-      selectedSupplier: item.selectedSupplier
-        ? {
-            supplierName: item.selectedSupplier.supplierName || "",
-            article: item.selectedSupplier.article || "",
-            calculatedPrice: item.selectedSupplier.calculatedPrice || 0,
-            availableCount: item.selectedSupplier.availableCount || 0,
-          }
-        : null,
+      links: Array.isArray(item.links) ? item.links : [],
+      suppliers: Array.isArray(item.suppliers) ? item.suppliers : [],
+      selectedSupplier: item.selectedSupplier || null,
       noSupplierAutomation: item.noSupplierAutomation || {},
       marketplaceState: item.marketplaceState || {},
-      updatedAt: item.updatedAt,
-      partial: true,
+      partial: false,
     }));
 
     response.json({
