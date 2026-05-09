@@ -88,10 +88,13 @@ let immediateAutoPushChain = Promise.resolve();
 let marketplaceQueue = null;
 let marketplaceWorker = null;
 
-function warehouseViewCacheKey({ sync = false, limit = Number.POSITIVE_INFINITY, usdRate, refreshPrices = false } = {}) {
+function warehouseViewCacheKey({ sync = false, limit = Number.POSITIVE_INFINITY, usdRate, refreshPrices = false, productIds = null } = {}) {
   const limitKey = Number.isFinite(Number(limit)) ? Number(limit) : "all";
   const rateKey = Number.isFinite(Number(usdRate)) && Number(usdRate) > 0 ? Number(usdRate) : "default";
-  return JSON.stringify({ sync: Boolean(sync), refreshPrices: Boolean(refreshPrices), limit: limitKey, usdRate: rateKey });
+  const scopeKey = Array.isArray(productIds) && productIds.length
+    ? productIds.map((id) => String(id)).sort().join(",")
+    : "all";
+  return JSON.stringify({ sync: Boolean(sync), refreshPrices: Boolean(refreshPrices), limit: limitKey, usdRate: rateKey, scope: scopeKey });
 }
 
 function invalidateWarehouseViewCache() {
@@ -2528,9 +2531,6 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
   const scopedProductIds = Array.isArray(productIds) && productIds.length
     ? new Set(productIds.map((id) => String(id)))
     : null;
-  if (scopedProductIds) {
-    warehouse.products = (warehouse.products || []).filter((product) => scopedProductIds.has(String(product.id)));
-  }
   try {
     const partners = await listPriceMasterPartners();
     const syncedSuppliers = syncWarehouseSuppliersFromPriceMaster(warehouse, partners);
@@ -2555,7 +2555,11 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     syncWarnings.forEach((detail) => logger.warn("warehouse sync warning", { detail }));
   }
 
-  const links = warehouse.products.flatMap((product) => product.links || []);
+  const viewProducts = scopedProductIds
+    ? (warehouse.products || []).filter((product) => scopedProductIds.has(String(product.id)))
+    : warehouse.products || [];
+
+  const links = viewProducts.flatMap((product) => product.links || []);
   let matchMap = new Map();
   let sourceError = null;
   try {
@@ -2565,15 +2569,15 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
   }
 
   const [priceMapResult, minPriceResult] = await Promise.all([
-    getWarehousePriceMaps(warehouse.products, { refresh: refreshPrices }),
-    getWarehouseMinPriceMaps(warehouse.products, { refresh: refreshPrices }),
+    getWarehousePriceMaps(viewProducts, { refresh: refreshPrices }),
+    getWarehouseMinPriceMaps(viewProducts, { refresh: refreshPrices }),
   ]);
   const priceMap = priceMapResult.map;
   const minPriceMap = minPriceResult.map;
   if (refreshPrices && (priceMapResult.mutated || minPriceResult.mutated)) {
     await writeWarehouse(warehouse);
   }
-  const products = warehouse.products.map((product) => {
+  const products = viewProducts.map((product) => {
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
     const suppliers = normalizedLinks.flatMap((link) =>
       (matchMap.get(link.id) || []).map((match) => ({
@@ -3623,7 +3627,7 @@ app.get("/api/warehouse/products/:id/detail", async (request, response, next) =>
     const sync = request.query.sync === "true";
     const refreshPrices = request.query.refreshPrices === "true";
     const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
-    const data = await buildWarehouseViewCached({ sync, usdRate, refreshPrices });
+    const data = await buildWarehouseViewCached({ sync, usdRate, refreshPrices, productIds: [request.params.id] });
     const product = (data.products || []).find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар не найден." });
     response.json({ product, createdAt: data.createdAt });
@@ -4022,7 +4026,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     if (index >= 0) product.links[index] = link;
     else product.links.push(link);
     if (product.links.length > 0) product.autoPriceEnabled = true;
-    response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    const saved = await writeWarehouse(warehouse);
+    const updated = (saved.products || []).find((item) => item.id === product.id) || product;
+    response.json({ ok: true, product: updated });
     queueImmediateAutoPricePush([product.id], "link_add_or_update");
   } catch (error) {
     next(error);
@@ -4036,7 +4042,9 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     product.links = (product.links || []).filter((link) => link.id !== request.params.linkId);
     if (!product.links.length) product.autoPriceEnabled = false;
-    response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    const saved = await writeWarehouse(warehouse);
+    const updated = (saved.products || []).find((item) => item.id === product.id) || product;
+    response.json({ ok: true, product: updated });
     queueImmediateAutoPricePush([request.params.productId], "link_delete");
   } catch (error) {
     next(error);

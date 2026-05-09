@@ -1197,6 +1197,22 @@ function mergeWarehouseProduct(product) {
   else state.warehouse.push(product);
 }
 
+function applyLocalWarehouseProductUpdate(product) {
+  if (!product?.id) return;
+  mergeWarehouseProduct(product);
+  applyWarehouseFilters();
+}
+
+function refreshOpenWarehouseDetailIfNeeded() {
+  const key = state.selectedWarehouseGroupKey;
+  if (!key) return;
+  ensureWarehouseGroupDetailed(key)
+    .then((group) => {
+      if (state.selectedWarehouseGroupKey === key && group) renderWarehouseDetail(group);
+    })
+    .catch(() => {});
+}
+
 async function ensureWarehouseGroupDetailed(groupKey) {
   const group = getSortedWarehouseGroups().find((item) => item.key === groupKey);
   if (!group) return null;
@@ -2450,18 +2466,25 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
       .split(",")
       .map((id) => id.trim())
       .filter(Boolean);
-    for (const productId of productIds) {
-      await api(`/api/warehouse/products/${productId}/links`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(Object.fromEntries(data.entries())),
-      });
+    const results = await Promise.all(
+      productIds.map((productId) =>
+        api(`/api/warehouse/products/${productId}/links`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(Object.fromEntries(data.entries())),
+        }),
+      ),
+    );
+    for (const res of results) {
+      if (res?.product) applyLocalWarehouseProductUpdate(res.product);
     }
     if (state.warehouseLinkFilter === "unlinked") {
       state.selectedWarehouseGroupKey = null;
       renderWarehouseDetail(null);
+    } else {
+      refreshOpenWarehouseDetailIfNeeded();
     }
-    queueWarehouseRefresh();
+    refreshWarehouseBrandSelect().catch(() => {});
     if (shouldSendOzonPriceNow) {
       elements.warehouseStatus.textContent = "Отправляю новую цену в Ozon...";
       const sent = await sendOzonPricesNow(productIds);
@@ -2534,8 +2557,18 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       return;
     }
     if (linkButton) {
-      await api(`/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}`, { method: "DELETE" });
-      queueWarehouseRefresh();
+      linkButton.disabled = true;
+      try {
+        const res = await api(`/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}`, {
+          method: "DELETE",
+        });
+        if (res?.product) applyLocalWarehouseProductUpdate(res.product);
+        refreshOpenWarehouseDetailIfNeeded();
+        refreshWarehouseBrandSelect().catch(() => {});
+        elements.warehouseStatus.textContent = "Привязка удалена.";
+      } finally {
+        linkButton.disabled = false;
+      }
     }
     if (productButton && await confirmAction({ title: "Удалить товар?", text: "Удалить товар из личного склада?", okText: "Удалить" })) {
       await api(`/api/warehouse/products/${productButton.dataset.productId}`, { method: "DELETE" });
