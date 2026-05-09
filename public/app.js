@@ -1064,6 +1064,17 @@ function renderWarehouseCards() {
       const product = group.primary;
       const supplier = group.selectedSupplier;
       const selected = group.key === state.selectedWarehouseGroupKey;
+      const autoEnabledCount = group.variants.filter((item) => item.autoPriceEnabled !== false).length;
+      const autoBadgeLabel = autoEnabledCount === group.variants.length
+        ? "AUTO"
+        : autoEnabledCount === 0
+          ? "MANUAL"
+          : "MIXED";
+      const autoBadgeClass = autoEnabledCount === group.variants.length
+        ? "ok"
+        : autoEnabledCount === 0
+          ? "neutral"
+          : "warn";
       const url = marketplaceUrl(product);
       const variantLinks = group.variants
         .map((item) => ({ item, url: marketplaceUrl(item) }))
@@ -1083,7 +1094,7 @@ function renderWarehouseCards() {
           <div class="product-card-top">
             <input class="warehouse-check" type="checkbox" data-product-ids="${escapeHtml(group.productIds.join(","))}" />
             <span class="market-stack">${group.marketplaceLabels.map((label) => `<span class="market-badge ${label === "Ozon" ? "ozon" : "yandex"}">${escapeHtml(label)}</span>`).join("")}</span>
-            <span class="badge ${group.variants.every((item) => item.autoPriceEnabled !== false) ? "ok" : "neutral"}">${group.variants.every((item) => item.autoPriceEnabled !== false) ? "AUTO" : "MANUAL"}</span>
+            <span class="badge ${autoBadgeClass}" title="AUTO считается по всем площадкам в карточке">${autoBadgeLabel}</span>
             <span class="badge ${group.changed ? "warn" : group.ready ? "ok" : "neutral"}">${group.changed ? "Есть изменения" : group.ready ? "Готово" : "Нет поставщика"}</span>
           </div>
           <h3>${escapeHtml(productName)}</h3>
@@ -1183,6 +1194,7 @@ function renderWarehouseDetail(group) {
 
   const product = group.primary || group;
   const variants = group.variants || [product];
+  const autoEnabledCount = variants.filter((item) => item.autoPriceEnabled !== false).length;
   const supplier = group.selectedSupplier || product.selectedSupplier;
   const suppliers = group.suppliers || product.suppliers || [];
   const links = group.links || product.links || [];
@@ -1201,7 +1213,7 @@ function renderWarehouseDetail(group) {
         <span class="market-stack">${Array.from(new Set(variants.map((item) => marketLabel(item)))).map((label) => `<span class="market-badge ${label === "Ozon" ? "ozon" : "yandex"}">${escapeHtml(label)}</span>`).join("")}</span>
         <span class="state-stack">${variants.map((item) => `<span class="badge ${marketplaceStateClass(item)}">${escapeHtml(marketplaceStateLabel(item))}</span>`).join("")}</span>
         <h2>${escapeHtml(productName)}</h2>
-        <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}</p>
+        <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}${variants.length > 1 ? ` · AUTO: ${autoEnabledCount}/${variants.length}` : ""}</p>
       </div>
       <button class="text-button delete-product" type="button" data-product-id="${escapeHtml(product.id)}">Удалить</button>
       <a class="secondary-link-button compact-button" href="/product.html?group=${encodeURIComponent(group.key || productGroupKey(product))}">Страница</a>
@@ -1224,7 +1236,20 @@ function renderWarehouseDetail(group) {
     </div>
 
     <section class="detail-section">
-      <h3>Маркетплейсы и наценка</h3>
+      <div class="section-heading compact-heading">
+        <div>
+          <h3>Маркетплейсы и наценка</h3>
+          <p>AUTO по карточке: ${autoEnabledCount}/${variants.length}</p>
+        </div>
+        <button
+          class="secondary-button compact-button card-auto-toggle"
+          type="button"
+          data-group-product-ids="${escapeHtml(groupProductIds.join(","))}"
+          data-enabled="${autoEnabledCount === variants.length ? "1" : "0"}"
+        >
+          ${autoEnabledCount === variants.length ? "AUTO выкл для всей карточки" : "AUTO вкл для всей карточки"}
+        </button>
+      </div>
       <div class="marketplace-variant-list">
         ${variants
           .map(
@@ -2396,6 +2421,46 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     }
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
+  }
+});
+
+elements.warehouseDetail.addEventListener("click", async (event) => {
+  const toggleButton = event.target.closest(".card-auto-toggle");
+  if (!toggleButton) return;
+  const productIds = String(toggleButton.dataset.groupProductIds || "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (!productIds.length) return;
+  const enable = String(toggleButton.dataset.enabled || "0") !== "1";
+  const byId = new Map((state.warehouse || []).map((item) => [String(item.id), item]));
+  const optimisticLocks = productIds.map((id) => ({
+    id,
+    expectedUpdatedAt: String(byId.get(id)?.updatedAt || ""),
+  }));
+
+  toggleButton.disabled = true;
+  try {
+    const result = await api("/api/warehouse/products/auto-price/bulk", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productIds, enabled: enable, optimisticLocks }),
+    });
+    elements.warehouseStatus.textContent = `AUTO ${enable ? "включен" : "выключен"} для карточки: ${formatNumber(result.changed)} вариантов.`;
+    queueWarehouseRefresh();
+  } catch (error) {
+    if (error?.status === 409) {
+      const conflictItems = Array.isArray(error?.payload?.conflicts) ? error.payload.conflicts : [];
+      const offerPreview = conflictOfferPreview(conflictItems);
+      const suffix = offerPreview ? ` Примеры: ${offerPreview}.` : "";
+      elements.warehouseStatus.textContent = `Конфликт AUTO для карточки.${suffix} Обновляю данные...`;
+      showToast(`Часть вариантов уже изменена другим менеджером.${suffix}`, "warn");
+      queueWarehouseRefresh();
+      return;
+    }
+    elements.warehouseStatus.textContent = error.message;
+  } finally {
+    toggleButton.disabled = false;
   }
 });
 
