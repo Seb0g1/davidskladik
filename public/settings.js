@@ -90,7 +90,8 @@ settingsForm.addEventListener("submit", async (event) => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    statusBox.textContent = "Настройки сохранены.";
+    statusBox.textContent =
+      "Настройки сохранены. Карточки, где вручную указана наценка, не меняются сами — очистите поле «Наценка» на складе или нажмите «По настройкам».";
   } catch (error) {
     statusBox.textContent = error.message;
   }

@@ -67,6 +67,10 @@ const bullmqEnabled = process.env.BULLMQ_ENABLED === "true";
 const redisUrl = cleanText(process.env.REDIS_URL);
 const dailySyncTime = process.env.DAILY_SYNC_TIME || "11:00";
 const dailySyncEnabled = process.env.DAILY_SYNC_ENABLED !== "false";
+/** Если true (по умолчанию), после ежедневной синхронизации по расписанию отправляем цены на площадки (как «Запустить сейчас»). Отключить: DAILY_SYNC_SEND_PRICES=false */
+const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
+/** Кэш расчёта склада без sync/refreshPrices; короче — быстрее ответ при частых запросах. */
+const warehouseViewCacheTtlMs = Math.max(400, Number(process.env.WAREHOUSE_VIEW_CACHE_MS || 8000));
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
@@ -619,8 +623,37 @@ function cleanText(value) {
   return String(value || "").trim();
 }
 
+function brandFromOzonAttributes(product = {}) {
+  const attrs = product?.ozon?.attributes;
+  if (!Array.isArray(attrs)) return "";
+  for (const attr of attrs) {
+    const rawName = `${cleanText(attr?.name || attr?.attribute_name || "")} ${cleanText(attr?.description || "")}`.toLowerCase();
+    if (!rawName.includes("бренд") && !rawName.includes("brand")) continue;
+    const vals = attr.values ?? attr.value;
+    if (Array.isArray(vals) && vals.length) {
+      const first = vals[0];
+      const text = typeof first === "object" && first ? cleanText(first.value ?? first.dictionary_value_name ?? first.name) : cleanText(first);
+      if (text) return text;
+    } else if (vals != null && typeof vals !== "object") {
+      const text = cleanText(vals);
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
 function resolveWarehouseBrand(product = {}) {
-  return cleanText(product.brand || product.ozon?.vendor || product.yandex?.vendor || "");
+  const oz = product.ozon || {};
+  const ya = product.yandex || {};
+  return cleanText(
+    product.brand
+      || oz.brand
+      || oz.vendor
+      || brandFromOzonAttributes(product)
+      || ya.brand
+      || ya.vendor
+      || "",
+  );
 }
 
 function firstImageUrl(value) {
@@ -678,6 +711,7 @@ function normalizeOzonDraft(input = {}) {
   const draft = compactObject({
     offerId: cleanText(input.offerId || input.offer_id),
     name: cleanText(input.name),
+    brand: cleanText(input.brand),
     vendor: cleanText(input.vendor || input.brand),
     description: cleanText(input.description),
     categoryId: Number(input.categoryId || input.category_id || 0) || undefined,
@@ -2213,6 +2247,8 @@ function applyOzonInfoToWarehouseProduct(product, info = {}, account = {}, stock
     ozon: {
       ...(product.ozon || {}),
       offerId: product.offerId,
+      attributes: Array.isArray(info.attributes) ? info.attributes : product.ozon?.attributes || [],
+      brand: cleanText(info.brand || (product.ozon || {}).brand || ""),
       vendor: cleanText(info.brand || info.vendor || (product.ozon || {}).vendor || ""),
       name: info.name || product.ozon?.name || product.name,
       description: info.description || product.ozon?.description || "",
@@ -2579,6 +2615,20 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     const fallbackMarkup = product.marketplace === "ozon"
       ? Number(targetMarkups.ozon || appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
       : Number(targetMarkups.yandex || appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
+    const appSettingsForMarkup = {
+      ...appSettings,
+      defaultMarkups: {
+        ozon: Number(targetMarkups.ozon || appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7),
+        yandex: Number(targetMarkups.yandex || appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6),
+      },
+    };
+    const inheritedMarkupCoefficient = resolveMarkupCoefficient({
+      productMarkup: 0,
+      marketplace: product.marketplace,
+      supplierUsdPrice: selectedSupplier?.price || 0,
+      appSettings: appSettingsForMarkup,
+    });
+    const markupFixed = Number(product.markup) > 0;
     const markupCoefficient = Number(product.markup || selectedSupplier?.markupCoefficient || fallbackMarkup);
     const rawNextPrice = selectedSupplier
       ? Number(selectedSupplier.calculatedPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient))
@@ -2595,6 +2645,8 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       ...product,
       brand: resolveWarehouseBrand(product),
       markupCoefficient,
+      markupFixed,
+      inheritedMarkupCoefficient,
       autoPriceEnabled: normalizedLinks.length > 0 ? true : product.autoPriceEnabled !== false,
       autoPriceMin: minAuto > 0 ? minAuto : null,
       autoPriceMax: maxAuto > 0 ? maxAuto : null,
@@ -2659,8 +2711,7 @@ async function buildWarehouseViewCached(params = {}) {
   if (params.sync || params.refreshPrices) return buildWarehouseView(params);
   const key = warehouseViewCacheKey(params);
   const cached = warehouseViewCache.get(key);
-  const ttlMs = 1200;
-  if (cached && Date.now() - cached.at < ttlMs) return cached.data;
+  if (cached && Date.now() - cached.at < warehouseViewCacheTtlMs) return cached.data;
   const data = await buildWarehouseView(params);
   lastWarehouseViewSnapshot = data;
   warehouseViewCache.set(key, { at: Date.now(), data });
@@ -3453,7 +3504,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
         return haystack.includes(q);
       });
     }
-    if (autoOnly) rows = rows.filter((item) => item.autoPriceEnabled !== false);
+    if (autoOnly) rows = rows.filter((item) => item.hasLinks);
     if (linked === "linked") rows = rows.filter((item) => item.hasLinks);
     if (linked === "unlinked") rows = rows.filter((item) => !item.hasLinks);
     if (marketplace !== "all") rows = rows.filter((item) => cleanText(item.marketplace) === marketplace);
@@ -3732,7 +3783,10 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
       const markup = Number(request.body.markup);
       product.markup = Number.isFinite(markup) && markup > 0 ? markup : 0;
     }
-    if (request.body.autoPriceEnabled !== undefined) product.autoPriceEnabled = Boolean(request.body.autoPriceEnabled);
+    if (request.body.autoPriceEnabled !== undefined) {
+      const hasLinks = (product.links || []).length > 0;
+      product.autoPriceEnabled = hasLinks ? true : Boolean(request.body.autoPriceEnabled);
+    }
     if (request.body.autoPriceMin !== undefined) {
       const value = Number(request.body.autoPriceMin);
       product.autoPriceMin = Number.isFinite(value) && value > 0 ? roundPrice(value) : null;
@@ -3742,6 +3796,7 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
       product.autoPriceMax = Number.isFinite(value) && value > 0 ? roundPrice(value) : null;
     }
     if (request.body.keyword !== undefined) product.keyword = cleanText(request.body.keyword);
+    if ((product.links || []).length > 0) product.autoPriceEnabled = true;
     product.updatedAt = new Date().toISOString();
 
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
@@ -3912,6 +3967,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     const product = warehouse.products.find((item) => item.id === request.params.productId);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     product.links = (product.links || []).filter((link) => link.id !== request.params.linkId);
+    if (!product.links.length) product.autoPriceEnabled = false;
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
     queueImmediateAutoPricePush([request.params.productId], "link_delete");
   } catch (error) {
@@ -3933,7 +3989,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       skipped.push({ id: product.id, offerId: product.offerId, reason: "not_ready" });
       continue;
     }
-    if (product.autoPriceEnabled === false) {
+    if (product.autoPriceEnabled === false && !product.hasLinks) {
       skipped.push({ id: product.id, offerId: product.offerId, reason: "auto_disabled" });
       continue;
     }
@@ -4802,7 +4858,9 @@ async function runDailyRefresh(trigger = "manual") {
       const automation = await runNoSupplierMarketplaceAutomation(warehouse);
       const recovery = await runSupplierRecoveryAutomation(warehouse);
       let pricePush = null;
-      if (trigger === "manual") {
+      const shouldSendPrices =
+        trigger === "manual" || (trigger === "schedule" && dailySyncSendPrices);
+      if (shouldSendPrices) {
         try {
           pricePush = await sendWarehousePrices({
             usdRate: undefined,
@@ -4813,7 +4871,7 @@ async function runDailyRefresh(trigger = "manual") {
         } catch (err) {
           const detail = err?.message || String(err);
           pricePush = { sent: 0, failed: 0, skipped: [], error: detail };
-          logger.warn("manual daily sync price push failed", { detail });
+          logger.warn("daily sync price push failed", { trigger, detail });
         }
       }
       return await writeDailySyncState(withDailySyncLog({
@@ -4926,7 +4984,7 @@ function startServer() {
       logger.info("auto sync enabled", { everyMinutes: autoSyncMinutes });
     }
     if (dailySyncEnabled) {
-      logger.info("daily sync enabled", { time: dailySyncTime });
+      logger.info("daily sync enabled", { time: dailySyncTime, sendPrices: dailySyncSendPrices });
     }
     pruneUploadDirectory().catch((err) => logger.warn("initial upload prune failed", { detail: err?.message || String(err) }));
   });

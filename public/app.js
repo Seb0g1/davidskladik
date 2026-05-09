@@ -55,9 +55,6 @@ const elements = {
   bulkMarkupInput: document.querySelector("#bulkMarkupInput"),
   mergeProductsButton: document.querySelector("#mergeProductsButton"),
   unmergeProductsButton: document.querySelector("#unmergeProductsButton"),
-  autoPriceEnableSelectedButton: document.querySelector("#autoPriceEnableSelectedButton"),
-  autoPriceDisableSelectedButton: document.querySelector("#autoPriceDisableSelectedButton"),
-  autoPriceDisableAllButton: document.querySelector("#autoPriceDisableAllButton"),
   manualProductToggle: document.querySelector("#manualProductToggle"),
   warehouseSyncButton: document.querySelector("#warehouseSyncButton"),
   warehouseRefreshPricesButton: document.querySelector("#warehouseRefreshPricesButton"),
@@ -930,7 +927,7 @@ function refreshWarehouseToolbarHints() {
       : "";
   const q = elements.warehouseSearchInput?.value?.trim();
   const searchPart = q ? ` · поиск «${q}»` : "";
-  const autoPart = state.warehouseAutoOnly ? " · только AUTO" : "";
+  const autoPart = state.warehouseAutoOnly ? " · только с привязкой PM" : "";
   const linkPart = state.warehouseLinkFilter === "all"
     ? ""
     : state.warehouseLinkFilter === "linked"
@@ -1073,17 +1070,6 @@ function renderWarehouseCards() {
       const product = group.primary;
       const supplier = group.selectedSupplier;
       const selected = group.key === state.selectedWarehouseGroupKey;
-      const autoEnabledCount = group.variants.filter((item) => item.autoPriceEnabled !== false).length;
-      const autoBadgeLabel = autoEnabledCount === group.variants.length
-        ? "AUTO"
-        : autoEnabledCount === 0
-          ? "MANUAL"
-          : "MIXED";
-      const autoBadgeClass = autoEnabledCount === group.variants.length
-        ? "ok"
-        : autoEnabledCount === 0
-          ? "neutral"
-          : "warn";
       const url = marketplaceUrl(product);
       const variantLinks = group.variants
         .map((item) => ({ item, url: marketplaceUrl(item) }))
@@ -1103,7 +1089,6 @@ function renderWarehouseCards() {
           <div class="product-card-top">
             <input class="warehouse-check" type="checkbox" data-product-ids="${escapeHtml(group.productIds.join(","))}" />
             <span class="market-stack">${group.marketplaceLabels.map((label) => `<span class="market-badge ${label === "Ozon" ? "ozon" : "yandex"}">${escapeHtml(label)}</span>`).join("")}</span>
-            <span class="badge ${autoBadgeClass}" title="AUTO считается по всем площадкам в карточке">${autoBadgeLabel}</span>
             <span class="badge ${group.changed ? "warn" : group.ready ? "ok" : "neutral"}">${group.changed ? "Есть изменения" : group.ready ? "Готово" : "Нет поставщика"}</span>
           </div>
           <h3>${escapeHtml(productName)}</h3>
@@ -1123,7 +1108,7 @@ function renderWarehouseCards() {
                     </div>
                     <div><span>${escapeHtml(marketplaceCurrentLabel(item))}</span><strong>${formatMoney(item.currentPrice)}</strong>${item.marketplace === "ozon" && ozonCabinetPriceNote(item) ? `<span class="price-hint">${escapeHtml(ozonCabinetPriceNote(item))}</span>` : ""}</div>
                     <div><span>Новая</span><strong>${formatMoney(item.nextPrice)}</strong></div>
-                    <div><span>Наценка</span><strong>${Number(item.markupCoefficient || 0).toFixed(2)}</strong></div>
+                    <div><span>Наценка</span><strong>${Number(item.markupCoefficient || 0).toFixed(2)}</strong>${item.markupFixed ? ` <span class="muted" title="Своя наценка на карточке; правила из «Настроек» не подставляются автоматически.">фикс</span>` : ""}</div>
                   </div>
                 `,
               )
@@ -1204,7 +1189,6 @@ function renderWarehouseDetail(group) {
 
   const product = group.primary || group;
   const variants = group.variants || [product];
-  const autoEnabledCount = variants.filter((item) => item.autoPriceEnabled !== false).length;
   const supplier = group.selectedSupplier || product.selectedSupplier;
   const suppliers = group.suppliers || product.suppliers || [];
   const links = group.links || product.links || [];
@@ -1223,7 +1207,7 @@ function renderWarehouseDetail(group) {
         <span class="market-stack">${Array.from(new Set(variants.map((item) => marketLabel(item)))).map((label) => `<span class="market-badge ${label === "Ozon" ? "ozon" : "yandex"}">${escapeHtml(label)}</span>`).join("")}</span>
         <span class="state-stack">${variants.map((item) => `<span class="badge ${marketplaceStateClass(item)}">${escapeHtml(marketplaceStateLabel(item))}</span>`).join("")}</span>
         <h2>${escapeHtml(productName)}</h2>
-        <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}${variants.length > 1 ? ` · AUTO: ${autoEnabledCount}/${variants.length}` : ""}</p>
+        <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}</p>
       </div>
       <button class="text-button delete-product" type="button" data-product-id="${escapeHtml(product.id)}">Удалить</button>
       <a class="secondary-link-button compact-button" href="/product.html?group=${encodeURIComponent(group.key || productGroupKey(product))}">Страница</a>
@@ -1249,16 +1233,8 @@ function renderWarehouseDetail(group) {
       <div class="section-heading compact-heading">
         <div>
           <h3>Маркетплейсы и наценка</h3>
-          <p>AUTO по карточке: ${autoEnabledCount}/${variants.length}</p>
+          <p>При активной привязке к PriceMaster цена считается и может отправляться без отдельного режима AUTO.</p>
         </div>
-        <button
-          class="secondary-button compact-button card-auto-toggle"
-          type="button"
-          data-group-product-ids="${escapeHtml(groupProductIds.join(","))}"
-          data-enabled="${autoEnabledCount === variants.length ? "1" : "0"}"
-        >
-          ${autoEnabledCount === variants.length ? "AUTO выкл для всей карточки" : "AUTO вкл для всей карточки"}
-        </button>
       </div>
       <div class="marketplace-variant-list">
         ${variants
@@ -1276,11 +1252,12 @@ function renderWarehouseDetail(group) {
                   Наценка
                   <input name="markup" type="number" min="0.01" step="0.01" value="${item.markup > 0 ? Number(item.markup).toFixed(2) : ""}" placeholder="По правилам из настроек" data-usd-price="${escapeHtml(item.selectedSupplier?.price || "")}" data-current-price="${escapeHtml(item.currentPrice || "")}" />
                   <small class="markup-live-preview">Предпросмотр: ${formatMoney(item.nextPrice)}</small>
-                </label>
-                <label class="variant-auto-toggle" for="autoPriceEnabled-${escapeHtml(item.id)}">
-                  <span>AUTO</span>
-                  <input id="autoPriceEnabled-${escapeHtml(item.id)}" name="autoPriceEnabled" type="checkbox" ${item.autoPriceEnabled !== false ? "checked" : ""} />
-                  <span class="toggle-ui" aria-hidden="true"></span>
+                  ${
+                    item.markupFixed
+                      ? `<small class="muted markup-inherit-hint">Сейчас зафиксирован коэффициент на карточке — изменения в разделе «Настройки» на эту строку не действуют. По правилам сейчас было бы <strong>${Number(item.inheritedMarkupCoefficient || 0).toFixed(2)}</strong>.</small>
+                         <button type="button" class="secondary-button compact-button reset-markup-to-settings" data-product-id="${escapeHtml(item.id)}">По настройкам</button>`
+                      : `<small class="muted markup-inherit-hint">Пустое поле — коэффициент из «Настроек» и порогов по USD.</small>`
+                  }
                 </label>
                 <label>
                   minPrice
@@ -1942,16 +1919,19 @@ async function loadWarehousePage({ reset = false, sync = false, refreshPrices = 
   }
 }
 
-async function loadWarehouse(sync = false, refreshPrices = false) {
-  captureWarehouseScroll();
-  const stopProgress = sync || refreshPrices ? startSyncProgress(sync ? "sync" : "prices") : null;
-  elements.warehouseSyncButton.disabled = sync;
-  elements.warehouseRefreshPricesButton.disabled = refreshPrices;
-  elements.warehouseStatus.textContent = sync
-    ? `Синхронизирую ${syncTargetNames().join(" + ")}: товары, цены, статусы, остатки и изображения...`
-    : refreshPrices
-      ? `Обновляю цены по ${syncTargetNames().join(" + ")}...`
-      : "Обновляю список по фильтрам и курсу…";
+async function loadWarehouse(sync = false, refreshPrices = false, options = {}) {
+  const silent = Boolean(options.silent);
+  if (!silent) captureWarehouseScroll();
+  const stopProgress = !silent && (sync || refreshPrices) ? startSyncProgress(sync ? "sync" : "prices") : null;
+  if (!silent) {
+    elements.warehouseSyncButton.disabled = sync;
+    elements.warehouseRefreshPricesButton.disabled = refreshPrices;
+    elements.warehouseStatus.textContent = sync
+      ? `Синхронизирую ${syncTargetNames().join(" + ")}: товары, цены, статусы, остатки и изображения...`
+      : refreshPrices
+        ? `Обновляю цены по ${syncTargetNames().join(" + ")}...`
+        : "Обновляю список по фильтрам и курсу…";
+  }
   try {
     state.warehousePage = 0;
     state.warehouseHasMore = true;
@@ -1965,15 +1945,21 @@ async function loadWarehouse(sync = false, refreshPrices = false) {
       await loadWarehousePage({ reset: false, sync: false, refreshPrices: false });
     }
     state.warehouseRestorePage = 1;
-    restoreWarehouseScroll();
+    if (!silent) restoreWarehouseScroll();
     await loadRetryQueue().catch(() => {});
+    await refreshWarehouseBrandSelect().catch(() => {});
     if (stopProgress) stopProgress(true);
+    if (silent && refreshPrices) {
+      elements.warehouseStatus.textContent = "Цены маркетплейсов подгружены в список.";
+    }
   } catch (error) {
     if (stopProgress) stopProgress(false);
     throw error;
   } finally {
-    elements.warehouseSyncButton.disabled = false;
-    elements.warehouseRefreshPricesButton.disabled = false;
+    if (!silent) {
+      elements.warehouseSyncButton.disabled = false;
+      elements.warehouseRefreshPricesButton.disabled = false;
+    }
   }
 }
 
@@ -2001,25 +1987,42 @@ function queueWarehouseFilterReload(delayMs = 260) {
 async function refreshWarehouseBrandSelect() {
   const sel = elements.warehouseBrandFilterInput;
   if (!sel) return;
+  const wantRaw = String(state.warehouseBrandFilter || "").trim();
+  let brands = [];
   try {
     const payload = await api("/api/warehouse/brands");
-    const brands = Array.isArray(payload.brands) ? payload.brands : [];
-    const want = state.warehouseBrandFilter;
-    sel.innerHTML = `<option value="">Все бренды</option>${brands
-      .map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`)
-      .join("")}`;
-    if (want && brands.includes(want)) sel.value = want;
-    else {
-      sel.value = "";
-      state.warehouseBrandFilter = "";
-    }
-    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    brands = Array.isArray(payload.brands) ? payload.brands.slice() : [];
   } catch (_error) {
-    sel.innerHTML = `<option value="">Все бренды</option>`;
+    brands = [];
+  }
+  const byKey = new Map(brands.map((b) => [String(b || "").toLowerCase(), b]));
+  for (const p of state.warehouse || []) {
+    const b = String(p.brand || p.ozon?.brand || p.ozon?.vendor || p.yandex?.vendor || "").trim();
+    if (!b) continue;
+    const k = b.toLowerCase();
+    if (!byKey.has(k)) byKey.set(k, b);
+  }
+  const merged = Array.from(byKey.values()).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
+  sel.innerHTML = `<option value="">Все бренды</option>${merged
+    .map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`)
+    .join("")}`;
+  let matched = "";
+  if (wantRaw) {
+    const hit = merged.find((b) => String(b).toLowerCase() === wantRaw.toLowerCase());
+    if (hit) matched = hit;
+  }
+  if (matched) {
+    sel.value = matched;
+    state.warehouseBrandFilter = matched;
+  } else {
     sel.value = "";
     state.warehouseBrandFilter = "";
-    sel.dispatchEvent(new Event("change", { bubbles: true }));
   }
+  sel.dispatchEvent(new Event("change", { bubbles: true }));
+  const root = sel.closest("[data-ios-select]");
+  const valueEl = root?.querySelector(".ios-select-value");
+  const opt = sel.options[sel.selectedIndex];
+  if (valueEl && opt) valueEl.textContent = opt.textContent.trim();
 }
 
 async function loadRate(fixedRate) {
@@ -2045,10 +2048,16 @@ async function loadSettings() {
   renderHiddenAccounts();
   updateAccountFormMode();
   await loadRate(fixedRate);
-  const refreshPricesOnFirstLoad = sessionStorage.getItem("mvInitialPriceRefreshDone") !== "1";
-  if (refreshPricesOnFirstLoad) sessionStorage.setItem("mvInitialPriceRefreshDone", "1");
-  await Promise.all([loadWarehouse(false, refreshPricesOnFirstLoad), loadDailySync()]);
-  await refreshWarehouseBrandSelect();
+  const refreshPricesAfterFirstPaint = sessionStorage.getItem("mvInitialPriceRefreshDone") !== "1";
+  if (refreshPricesAfterFirstPaint) sessionStorage.setItem("mvInitialPriceRefreshDone", "1");
+  await Promise.all([loadWarehouse(false, false), loadDailySync()]);
+  if (refreshPricesAfterFirstPaint) {
+    queueMicrotask(() => {
+      loadWarehouse(false, true, { silent: true }).catch((error) => {
+        elements.warehouseStatus.textContent = error.message;
+      });
+    });
+  }
 }
 
 function applyMainTab(tab) {
@@ -2057,11 +2066,19 @@ function applyMainTab(tab) {
   elements.tabPanels.forEach((panel) => panel.classList.toggle("active", panel.id === `${safe}Tab`));
 }
 
+let previousWarehouseMainTab = localStorage.getItem(MAIN_TAB_STORAGE_KEY) || "warehouse";
 elements.tabButtons.forEach((button) => {
   button.addEventListener("click", () => {
     const tab = button.dataset.tab;
     if (tab) localStorage.setItem(MAIN_TAB_STORAGE_KEY, tab);
+    const prev = previousWarehouseMainTab;
+    previousWarehouseMainTab = tab;
     applyMainTab(tab);
+    if (tab === "warehouse" && prev !== "warehouse") {
+      loadWarehouse(false).catch((error) => {
+        elements.warehouseStatus.textContent = error.message;
+      });
+    }
   });
 });
 
@@ -2265,74 +2282,6 @@ elements.unmergeProductsButton?.addEventListener("click", async () => {
   }
 });
 
-async function setAutoPriceForSelected(enabled) {
-  const productIds = selectedWarehouseIds();
-  const optimisticLocks = selectedWarehouseLocks();
-  if (!productIds.length) {
-    elements.warehouseStatus.textContent = "Выберите товары для изменения AUTO-режима.";
-    return;
-  }
-  try {
-    const result = await api("/api/warehouse/products/auto-price/bulk", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productIds, enabled, optimisticLocks }),
-    });
-    elements.warehouseStatus.textContent = `AUTO ${enabled ? "включен" : "выключен"}: ${formatNumber(result.changed)} товаров.`;
-    queueWarehouseRefresh();
-  } catch (error) {
-    if (error?.status === 409) {
-      const conflictItems = Array.isArray(error?.payload?.conflicts) ? error.payload.conflicts : [];
-      const conflicts = conflictItems.length;
-      const offerPreview = conflictOfferPreview(conflictItems);
-      const suffix = offerPreview ? ` Примеры: ${offerPreview}.` : "";
-      elements.warehouseStatus.textContent = `Конфликт bulk-AUTO (${formatNumber(conflicts)}).${suffix} Обновляю данные...`;
-      showToast(`Часть карточек уже изменена другим менеджером.${suffix}`, "warn");
-      queueWarehouseRefresh();
-      return;
-    }
-    throw error;
-  }
-}
-
-elements.autoPriceEnableSelectedButton?.addEventListener("click", () => {
-  setAutoPriceForSelected(true).catch((error) => {
-    elements.warehouseStatus.textContent = error.message;
-  });
-});
-
-elements.autoPriceDisableSelectedButton?.addEventListener("click", () => {
-  setAutoPriceForSelected(false).catch((error) => {
-    elements.warehouseStatus.textContent = error.message;
-  });
-});
-
-elements.autoPriceDisableAllButton?.addEventListener("click", async () => {
-  if (!(await confirmAction({ title: "Выключить AUTO у всех?", text: "Отключить автоматическую отправку цен для всех товаров?", okText: "Выключить" }))) return;
-  try {
-    let result;
-    try {
-      result = await api("/api/warehouse/products/auto-price/all", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: false }),
-      });
-    } catch (error) {
-      // Backward-compatible fallback when server is not restarted yet.
-      if (!/404/.test(String(error.message || ""))) throw error;
-      result = await api("/api/warehouse/products/auto-price/bulk", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productIds: state.warehouse.map((item) => item.id), enabled: false }),
-      });
-    }
-    elements.warehouseStatus.textContent = `AUTO отключен у всех: ${formatNumber(result.changed || state.warehouse.length)} товаров.`;
-    queueWarehouseRefresh();
-  } catch (error) {
-    elements.warehouseStatus.textContent = error.message;
-  }
-});
-
 elements.warehouseSyncButton.addEventListener("click", () => {
   loadWarehouse(true).catch((error) => {
     elements.warehouseStatus.textContent = error.message;
@@ -2434,13 +2383,12 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           markup: Number(formData.get("markup") || 0),
-          autoPriceEnabled: formData.get("autoPriceEnabled") === "on",
           autoPriceMin: Number(formData.get("autoPriceMin") || 0) || null,
           autoPriceMax: Number(formData.get("autoPriceMax") || 0) || null,
           expectedUpdatedAt: String(formData.get("expectedUpdatedAt") || ""),
         }),
       });
-      elements.warehouseStatus.textContent = "Наценка и AUTO-настройки сохранены.";
+      elements.warehouseStatus.textContent = "Наценка и лимиты цены сохранены.";
       queueWarehouseRefresh();
     } catch (error) {
       if (error?.status === 409) {
@@ -2491,42 +2439,37 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
 });
 
 elements.warehouseDetail.addEventListener("click", async (event) => {
-  const toggleButton = event.target.closest(".card-auto-toggle");
-  if (!toggleButton) return;
-  const productIds = String(toggleButton.dataset.groupProductIds || "")
-    .split(",")
-    .map((id) => id.trim())
-    .filter(Boolean);
-  if (!productIds.length) return;
-  const enable = String(toggleButton.dataset.enabled || "0") !== "1";
-  const byId = new Map((state.warehouse || []).map((item) => [String(item.id), item]));
-  const optimisticLocks = productIds.map((id) => ({
-    id,
-    expectedUpdatedAt: String(byId.get(id)?.updatedAt || ""),
-  }));
-
-  toggleButton.disabled = true;
-  try {
-    const result = await api("/api/warehouse/products/auto-price/bulk", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productIds, enabled: enable, optimisticLocks }),
-    });
-    elements.warehouseStatus.textContent = `AUTO ${enable ? "включен" : "выключен"} для карточки: ${formatNumber(result.changed)} вариантов.`;
-    queueWarehouseRefresh();
-  } catch (error) {
-    if (error?.status === 409) {
-      const conflictItems = Array.isArray(error?.payload?.conflicts) ? error.payload.conflicts : [];
-      const offerPreview = conflictOfferPreview(conflictItems);
-      const suffix = offerPreview ? ` Примеры: ${offerPreview}.` : "";
-      elements.warehouseStatus.textContent = `Конфликт AUTO для карточки.${suffix} Обновляю данные...`;
-      showToast(`Часть вариантов уже изменена другим менеджером.${suffix}`, "warn");
+  const resetMarkupBtn = event.target.closest(".reset-markup-to-settings");
+  if (resetMarkupBtn) {
+    const productId = resetMarkupBtn.dataset.productId;
+    const form = resetMarkupBtn.closest(".variant-markup-row");
+    if (!productId || !form) return;
+    const formData = new FormData(form);
+    resetMarkupBtn.disabled = true;
+    try {
+      await api(`/api/warehouse/products/${encodeURIComponent(productId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          markup: 0,
+          expectedUpdatedAt: String(formData.get("expectedUpdatedAt") || ""),
+        }),
+      });
+      const input = form.querySelector('input[name="markup"]');
+      if (input) input.value = "";
+      elements.warehouseStatus.textContent = "Наценка снята — действуют правила из «Настроек».";
       queueWarehouseRefresh();
-      return;
+    } catch (error) {
+      if (error?.status === 409) {
+        elements.warehouseStatus.textContent = "Конфликт изменений. Обновляю склад…";
+        queueWarehouseRefresh();
+      } else {
+        elements.warehouseStatus.textContent = error.message;
+      }
+    } finally {
+      resetMarkupBtn.disabled = false;
     }
-    elements.warehouseStatus.textContent = error.message;
-  } finally {
-    toggleButton.disabled = false;
+    return;
   }
 });
 
@@ -3098,6 +3041,20 @@ window.addEventListener("popstate", () => {
 initIosSelects();
 initWarehouseInfiniteScroll();
 initWarehouseScrollTracking();
+
+let lastVisibilityWarehouseRefreshAt = 0;
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  try {
+    if ((localStorage.getItem(MAIN_TAB_STORAGE_KEY) || "warehouse") !== "warehouse") return;
+  } catch (_error) {
+    return;
+  }
+  const now = Date.now();
+  if (now - lastVisibilityWarehouseRefreshAt < 90_000) return;
+  lastVisibilityWarehouseRefreshAt = now;
+  loadWarehouse(false, false, { silent: true }).catch(() => {});
+});
 
 if (elements.supplierInactiveUntilInput) {
   elements.supplierInactiveUntilInput.min = new Date().toISOString().slice(0, 10);

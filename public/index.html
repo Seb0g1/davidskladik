@@ -72,7 +72,7 @@
                   </div>
                 </div>
                 <label class="search-control auto-toggle-control" for="warehouseAutoPriceOnlyInput">
-                  <span>Только автоцены</span>
+                  <span>Только с привязкой PM</span>
                   <input id="warehouseAutoPriceOnlyInput" type="checkbox" />
                   <span class="toggle-ui" aria-hidden="true"></span>
                 </label>
@@ -124,7 +124,6 @@
                 <div class="wh-actions" role="group" aria-labelledby="wh-cluster-pricing-label">
                   <button id="warehouseSyncButton" class="secondary-button sync-button" type="button">Синхронизировать Ozon + ЯМ</button>
                   <button id="warehouseRefreshPricesButton" class="secondary-button" type="button">Обновить цены</button>
-                  <button id="autoPriceDisableAllButton" class="secondary-button" type="button">AUTO всем выкл</button>
                   <button id="warehouseDryRunButton" class="secondary-button" type="button">Dry-run</button>
                   <button id="warehouseRetryQueueButton" class="secondary-button" type="button">Повторить неотправленные</button>
                   <button id="warehouseSelectChangedButton" class="secondary-button" type="button" disabled>Выбрать изменения</button>
@@ -276,8 +275,6 @@
               </div>
               <button id="mergeProductsButton" class="secondary-button compact-button" type="button">Объединить</button>
               <button id="unmergeProductsButton" class="secondary-button compact-button" type="button">Разъединить</button>
-              <button id="autoPriceEnableSelectedButton" class="secondary-button compact-button" type="button">AUTO вкл</button>
-              <button id="autoPriceDisableSelectedButton" class="secondary-button compact-button" type="button">AUTO выкл</button>
             </div>
 
             <div class="warehouse-viewbar" aria-label="Вид товаров склада">
