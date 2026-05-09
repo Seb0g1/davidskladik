@@ -31,24 +31,26 @@ function ruleRow(rule = {}) {
   return row;
 }
 
-async function api(path, options) {
-  const response = await fetch(path, options);
+async function api(path, options = {}) {
+  const response = await fetch(path, { credentials: "same-origin", ...options });
   if (response.status === 401) {
     window.location.href = "/login.html";
     throw new Error("Требуется вход");
   }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || payload.detail || "Ошибка запроса");
+  if (!response.ok) throw new Error(payload.error || payload.detail || `Ошибка запроса (${response.status})`);
   return payload;
 }
 
 function renderRules(rules = []) {
+  if (!rulesList) return;
   rulesList.innerHTML = "";
   for (const rule of rules) rulesList.appendChild(ruleRow(rule));
   if (!rules.length) rulesList.appendChild(ruleRow({ marketplace: "all", minUsd: 0, coefficient: 1.7 }));
 }
 
 function collectRules() {
+  if (!rulesList) return [];
   const rows = [...rulesList.querySelectorAll(".settings-rule-row")];
   return rows
     .map((row) => ({
@@ -61,8 +63,27 @@ function collectRules() {
 }
 
 async function loadSettings() {
-  const data = await api("/api/settings");
-  const settings = data.settings || {};
+  if (!settingsForm || !statusBox) return;
+  statusBox.textContent = "Загружаю настройки...";
+  let response = await fetch("/api/settings", { credentials: "same-origin" });
+  let payload = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    window.location.href = "/login.html";
+    throw new Error("Требуется вход");
+  }
+  if (!response.ok && [404, 500, 502, 503].includes(response.status)) {
+    response = await fetch("/api/marketplaces", { credentials: "same-origin" });
+    payload = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      window.location.href = "/login.html";
+      throw new Error("Требуется вход");
+    }
+    if (!response.ok) throw new Error(payload.error || payload.detail || `Ошибка загрузки (${response.status})`);
+    payload = { settings: payload.settings || {} };
+  } else if (!response.ok) {
+    throw new Error(payload.error || payload.detail || `Ошибка загрузки (${response.status})`);
+  }
+  const settings = payload.settings || {};
   settingsForm.elements.fixedUsdRate.value = settings.fixedUsdRate || 95;
   settingsForm.elements.defaultOzonMarkup.value = settings.defaultMarkups?.ozon || 1.7;
   settingsForm.elements.defaultYandexMarkup.value = settings.defaultMarkups?.yandex || 1.6;
@@ -73,7 +94,7 @@ async function loadSettings() {
   statusBox.textContent = "Настройки загружены.";
 }
 
-settingsForm.addEventListener("submit", async (event) => {
+settingsForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const payload = {
     fixedUsdRate: Number(settingsForm.elements.fixedUsdRate.value),
@@ -85,11 +106,28 @@ settingsForm.addEventListener("submit", async (event) => {
   };
   statusBox.textContent = "Сохраняю настройки...";
   try {
-    await api("/api/settings", {
+    let response = await fetch("/api/settings", {
       method: "PUT",
+      credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    let body = await response.json().catch(() => ({}));
+    if ([404, 405, 500, 502, 503].includes(response.status)) {
+      response = await fetch("/api/settings", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      body = await response.json().catch(() => ({}));
+    }
+    if (response.status === 401) {
+      window.location.href = "/login.html";
+      throw new Error("Требуется вход");
+    }
+    if (!response.ok) throw new Error(body.error || body.detail || `Ошибка сохранения (${response.status})`);
+    await loadSettings();
     statusBox.textContent =
       "Настройки сохранены. Карточки, где вручную указана наценка, не меняются сами — очистите поле «Наценка» на складе или нажмите «По настройкам».";
   } catch (error) {
@@ -121,5 +159,5 @@ logoutButton?.addEventListener("click", async () => {
 });
 
 loadSettings().catch((error) => {
-  statusBox.textContent = error.message;
+  if (statusBox) statusBox.textContent = error.message;
 });

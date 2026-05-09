@@ -54,6 +54,7 @@ const dailySyncPath = path.join(dataDir, "daily-sync.json");
 const marketplaceAccountsPath = path.join(dataDir, "marketplace-accounts.json");
 const auditLogPath = path.join(dataDir, "audit-log.jsonl");
 const appSettingsPath = path.join(dataDir, "app-settings.json");
+const ozonInfoSyncOffsetPath = path.join(dataDir, "ozon-info-sync-offset.json");
 const priceRetryQueuePath = path.join(dataDir, "price-retry-queue.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
@@ -79,6 +80,7 @@ let dailySyncTimer = null;
 let dailySyncNextRunAt = null;
 let dailySyncPromise = null;
 let warehouseWritePromise = Promise.resolve();
+const WAREHOUSE_VIEW_CACHE_MAX = 40;
 const warehouseViewCache = new Map();
 let lastWarehouseViewSnapshot = null;
 let immediateAutoPushTimer = null;
@@ -149,6 +151,13 @@ function timingSafeEqual(a, b) {
 }
 
 function parseCookies(header = "") {
+  const safeDecode = (str) => {
+    try {
+      return decodeURIComponent(str);
+    } catch {
+      return str;
+    }
+  };
   return Object.fromEntries(
     header
       .split(";")
@@ -156,7 +165,7 @@ function parseCookies(header = "") {
       .filter(Boolean)
       .map((part) => {
         const index = part.indexOf("=");
-        return [decodeURIComponent(part.slice(0, index)), decodeURIComponent(part.slice(index + 1))];
+        return [safeDecode(part.slice(0, index)), safeDecode(part.slice(index + 1))];
       }),
   );
 }
@@ -204,6 +213,9 @@ function consumeUploadQuota(request, fileCount) {
   const max = Math.max(1, Number(process.env.UPLOAD_MAX_FILES_PER_SESSION || 200));
   const key = uploadSessionKey(request);
   const now = Date.now();
+  for (const [k, v] of uploadSessionStats) {
+    if (v.resetAt < now) uploadSessionStats.delete(k);
+  }
   let entry = uploadSessionStats.get(key);
   if (!entry || entry.resetAt < now) {
     entry = { count: 0, resetAt: now + UPLOAD_QUOTA_WINDOW_MS };
@@ -422,12 +434,8 @@ async function readMarketplaceAccounts() {
 }
 
 async function writeMarketplaceAccounts(accounts) {
-  await fs.mkdir(dataDir, { recursive: true });
   const normalized = accounts.map((account) => normalizeMarketplaceAccount(account));
-  await fs.writeFile(
-    marketplaceAccountsPath,
-    JSON.stringify({ updatedAt: new Date().toISOString(), accounts: normalized }, null, 2),
-  );
+  await atomicWriteJsonFile(marketplaceAccountsPath, { updatedAt: new Date().toISOString(), accounts: normalized });
   return normalized;
 }
 
@@ -951,8 +959,7 @@ async function readCachedExchangeRate() {
 }
 
 async function writeExchangeRate(rate) {
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(exchangeRatePath, JSON.stringify(rate, null, 2), "utf8");
+  await atomicWriteJsonFile(exchangeRatePath, rate);
 }
 
 function parseApiResponse(text) {
@@ -1598,6 +1605,21 @@ function normalizeAppSettings(input = {}) {
   };
 }
 
+async function atomicWriteJsonFile(filePath, data) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  const temporaryPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rename(temporaryPath, filePath);
+      break;
+    } catch (error) {
+      if (attempt === 4 || !["EPERM", "EBUSY", "EACCES"].includes(error.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
+    }
+  }
+}
+
 async function readAppSettings() {
   try {
     const parsed = JSON.parse(await fs.readFile(appSettingsPath, "utf8"));
@@ -1611,8 +1633,7 @@ async function readAppSettings() {
 async function writeAppSettings(settings) {
   const normalized = normalizeAppSettings(settings);
   invalidateWarehouseViewCache();
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(appSettingsPath, JSON.stringify(normalized, null, 2), "utf8");
+  await atomicWriteJsonFile(appSettingsPath, normalized);
   return normalized;
 }
 
@@ -1906,8 +1927,7 @@ async function readSnapshot() {
 }
 
 async function writeSnapshot(snapshot) {
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2), "utf8");
+  await atomicWriteJsonFile(snapshotPath, snapshot);
 }
 
 async function readPriceRetryQueue() {
@@ -1924,12 +1944,11 @@ async function readPriceRetryQueue() {
 }
 
 async function writePriceRetryQueue(queue) {
-  await fs.mkdir(dataDir, { recursive: true });
   const payload = {
     updatedAt: new Date().toISOString(),
     items: Array.isArray(queue.items) ? queue.items : [],
   };
-  await fs.writeFile(priceRetryQueuePath, JSON.stringify(payload, null, 2), "utf8");
+  await atomicWriteJsonFile(priceRetryQueuePath, payload);
   return payload;
 }
 
@@ -1994,7 +2013,6 @@ async function readDailySyncState() {
 }
 
 async function writeDailySyncState(state) {
-  await fs.mkdir(dataDir, { recursive: true });
   const current = await readDailySyncState().catch(() => ({}));
   const payload = {
     enabled: dailySyncEnabled,
@@ -2007,7 +2025,7 @@ async function writeDailySyncState(state) {
   if (Array.isArray(state.logs)) {
     payload.logs = [...state.logs, ...(Array.isArray(current.logs) ? current.logs : [])].slice(0, 30);
   }
-  await fs.writeFile(dailySyncPath, JSON.stringify(payload, null, 2), "utf8");
+  await atomicWriteJsonFile(dailySyncPath, payload);
   return payload;
 }
 
@@ -2072,6 +2090,28 @@ function mergeProducts(existingProducts, importedProducts) {
   return Array.from(map.values()).sort((a, b) => a.targetName.localeCompare(b.targetName) || a.name.localeCompare(b.name));
 }
 
+async function readOzonInfoSyncState() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(ozonInfoSyncOffsetPath, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function persistOzonInfoSyncOffset(accountId, nextOffset) {
+  try {
+    const prev = await readOzonInfoSyncState();
+    const offsets = {
+      ...(prev.offsets && typeof prev.offsets === "object" ? prev.offsets : {}),
+      [String(accountId)]: nextOffset,
+    };
+    await atomicWriteJsonFile(ozonInfoSyncOffsetPath, { offsets });
+  } catch (error) {
+    logger.warn("ozon info sync offset write failed", { account: accountId, detail: error?.message || String(error) });
+  }
+}
+
 async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
   const accounts = getOzonAccounts().filter((account) => account.clientId && account.apiKey);
   const imported = [];
@@ -2089,15 +2129,34 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
       let stockMap = new Map();
       let priceMap = new Map();
       try {
-        const infoLimit = Number(process.env.OZON_SYNC_INFO_LIMIT || 300);
-        const infoOfferIds = products
-          .slice(0, Number.isFinite(infoLimit) && infoLimit > 0 ? infoLimit : 300)
-          .map((product) => product.offer_id);
+        const infoLimitRaw = Number(process.env.OZON_SYNC_INFO_LIMIT || 300);
+        const infoLimit = Number.isFinite(infoLimitRaw) && infoLimitRaw > 0 ? Math.floor(infoLimitRaw) : 300;
+        const total = products.length;
+        const rotateEnabled = process.env.OZON_SYNC_INFO_ROTATE !== "false";
+        let infoOfferIds = [];
+        let rotateStart = 0;
+        let rotateBucket = 0;
+        if (total > 0) {
+          rotateBucket = Math.min(infoLimit, total);
+          if (rotateEnabled) {
+            const state = await readOzonInfoSyncState();
+            rotateStart = Number(state.offsets?.[String(account.id)] || 0) % total;
+            for (let i = 0; i < rotateBucket; i += 1) {
+              infoOfferIds.push(products[(rotateStart + i) % total].offer_id);
+            }
+          } else {
+            infoOfferIds = products.slice(0, rotateBucket).map((product) => product.offer_id);
+          }
+        }
         [infoMap, stockMap, priceMap] = await Promise.all([
           getOzonProductInfoMap(infoOfferIds, account),
           getOzonStockMap(infoOfferIds, account),
           getOzonPriceMap(infoOfferIds, account),
         ]);
+        if (rotateEnabled && total > 0 && rotateBucket > 0) {
+          const next = (rotateStart + rotateBucket) % total;
+          await persistOzonInfoSyncOffset(account.id, next);
+        }
       } catch (error) {
         infoMap = new Map();
         stockMap = new Map();
@@ -2725,6 +2784,10 @@ async function buildWarehouseViewCached(params = {}) {
   const data = await buildWarehouseView(params);
   lastWarehouseViewSnapshot = data;
   warehouseViewCache.set(key, { at: Date.now(), data });
+  if (warehouseViewCache.size > WAREHOUSE_VIEW_CACHE_MAX) {
+    const oldestKey = warehouseViewCache.keys().next().value;
+    warehouseViewCache.delete(oldestKey);
+  }
   return data;
 }
 
@@ -3275,7 +3338,7 @@ app.get("/api/settings", async (_request, response, next) => {
   }
 });
 
-app.put("/api/settings", async (request, response, next) => {
+async function persistAppSettingsAndRespond(request, response, next) {
   try {
     const settings = await writeAppSettings(request.body || {});
     try {
@@ -3295,6 +3358,15 @@ app.put("/api/settings", async (request, response, next) => {
   } catch (error) {
     next(error);
   }
+}
+
+app.put("/api/settings", async (request, response, next) => {
+  await persistAppSettingsAndRespond(request, response, next);
+});
+
+/** Некоторые прокси/хостинги режут PUT; POST — тот же смысл сохранения. */
+app.post("/api/settings", async (request, response, next) => {
+  await persistAppSettingsAndRespond(request, response, next);
 });
 
 app.get("/api/marketplace-accounts", (_request, response) => {
@@ -5050,9 +5122,10 @@ app.use((error, request, response, _next) => {
     : pmError
       ? "Не удалось выполнить запрос к Price Master"
       : (error.message || "Внутренняя ошибка сервера");
+  const isDev = process.env.NODE_ENV !== "production";
   response.status(uploadError ? 400 : error.statusCode || 500).json({
     error: message,
-    detail: error.code || error.message,
+    detail: isDev ? (error.code || error.message) : undefined,
     ozon: error.ozon,
   });
 });
@@ -5078,7 +5151,13 @@ function startServer() {
   scheduleDailySync();
 
   if (autoSyncMinutes > 0) {
+    let autoSyncRunning = false;
     setInterval(async () => {
+      if (autoSyncRunning) {
+        logger.warn("auto sync skipped: previous run still in progress");
+        return;
+      }
+      autoSyncRunning = true;
       try {
         const result = await runSync();
         const warehouse = await buildWarehouseView({ sync: true });
@@ -5105,6 +5184,8 @@ function startServer() {
         }
       } catch (error) {
         logger.error("auto sync failed", { detail: error.code || error.message, err: error });
+      } finally {
+        autoSyncRunning = false;
       }
     }, autoSyncMinutes * 60 * 1000);
   }

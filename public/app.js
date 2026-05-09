@@ -312,7 +312,8 @@ function escapeHtml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function resolveBrandFromOzonAttributes(item) {
@@ -1053,7 +1054,14 @@ function renderWarehouse(data) {
     elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(data.usdRate)} RUB/USD`;
   }
   elements.warehouseSelectChangedButton.disabled = !state.warehouse.length;
-  if (data.sourceError) {
+  if (data.stale) {
+    const staleMsg = data.sourceError
+      ? `Данные устарели — PriceMaster недоступен: ${data.sourceError}`
+      : "Данные устарели — показан последний успешный снимок. Попробуйте обновить страницу или нажмите «Синхронизировать».";
+    elements.warehouseStatus.textContent = staleMsg;
+    elements.warehouseStatus.classList.add("is-warn");
+    elements.warehouseStatus.classList.remove("is-ok");
+  } else if (data.sourceError) {
     elements.warehouseStatus.textContent = `Склад загружен, но PriceMaster сейчас недоступен: ${data.sourceError}`;
     elements.warehouseStatus.classList.add("is-warn");
     elements.warehouseStatus.classList.remove("is-ok");
@@ -1206,11 +1214,28 @@ function applyLocalWarehouseProductUpdate(product) {
 function refreshOpenWarehouseDetailIfNeeded() {
   const key = state.selectedWarehouseGroupKey;
   if (!key) return;
-  ensureWarehouseGroupDetailed(key)
-    .then((group) => {
-      if (state.selectedWarehouseGroupKey === key && group) renderWarehouseDetail(group);
-    })
-    .catch(() => {});
+  reloadOpenWarehouseDetailFromServer(key).catch(() => {
+    queueWarehouseRefresh();
+  });
+}
+
+async function reloadOpenWarehouseDetailFromServer(groupKey) {
+  if (!groupKey) return;
+  let group = getSortedWarehouseGroups().find((item) => item.key === groupKey);
+  if (!group) return;
+  const ids = (group.variants || []).map((v) => v.id).filter(Boolean);
+  if (!ids.length) return;
+  const details = await Promise.all(
+    ids.map((id) =>
+      api(`/api/warehouse/products/${encodeURIComponent(id)}/detail`)
+        .then((payload) => payload.product)
+        .catch(() => null),
+    ),
+  );
+  details.filter(Boolean).forEach((product) => mergeWarehouseProduct(product));
+  applyWarehouseFilters();
+  group = getSortedWarehouseGroups().find((item) => item.key === groupKey);
+  if (state.selectedWarehouseGroupKey === groupKey && group) renderWarehouseDetail(group);
 }
 
 async function ensureWarehouseGroupDetailed(groupKey) {
@@ -2461,6 +2486,11 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   const form = event.target;
   const data = new FormData(form);
   const shouldSendOzonPriceNow = event.submitter?.name === "sendPriceOzonNow";
+  const submitters = [...form.querySelectorAll('button[type="submit"],input[type="submit"]')];
+  submitters.forEach((el) => {
+    el.disabled = true;
+  });
+  elements.warehouseStatus.textContent = "Сохраняю привязку...";
   try {
     const productIds = String(form.dataset.productIds || form.dataset.productId || "")
       .split(",")
@@ -2482,7 +2512,9 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
       state.selectedWarehouseGroupKey = null;
       renderWarehouseDetail(null);
     } else {
-      refreshOpenWarehouseDetailIfNeeded();
+      await reloadOpenWarehouseDetailFromServer(state.selectedWarehouseGroupKey).catch(() => {
+        refreshOpenWarehouseDetailIfNeeded();
+      });
     }
     refreshWarehouseBrandSelect().catch(() => {});
     if (shouldSendOzonPriceNow) {
@@ -2497,6 +2529,10 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     }
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
+  } finally {
+    submitters.forEach((el) => {
+      el.disabled = false;
+    });
   }
 });
 
@@ -2563,7 +2599,9 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
           method: "DELETE",
         });
         if (res?.product) applyLocalWarehouseProductUpdate(res.product);
-        refreshOpenWarehouseDetailIfNeeded();
+        await reloadOpenWarehouseDetailFromServer(state.selectedWarehouseGroupKey).catch(() => {
+          refreshOpenWarehouseDetailIfNeeded();
+        });
         refreshWarehouseBrandSelect().catch(() => {});
         elements.warehouseStatus.textContent = "Привязка удалена.";
       } finally {
