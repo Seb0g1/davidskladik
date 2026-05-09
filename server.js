@@ -72,6 +72,10 @@ let dailySyncNextRunAt = null;
 let dailySyncPromise = null;
 let warehouseWritePromise = Promise.resolve();
 const warehouseViewCache = new Map();
+let immediateAutoPushTimer = null;
+let immediateAutoPushAll = false;
+const immediateAutoPushIds = new Set();
+let immediateAutoPushChain = Promise.resolve();
 
 function warehouseViewCacheKey({ sync = false, limit = Number.POSITIVE_INFINITY, usdRate, refreshPrices = false } = {}) {
   const limitKey = Number.isFinite(Number(limit)) ? Number(limit) : "all";
@@ -3189,6 +3193,7 @@ app.put("/api/settings", async (request, response, next) => {
       fixedUsdRate: settings.fixedUsdRate,
       markupRules: settings.markupRules.length,
     });
+    queueImmediateAutoPricePush([], "settings_update");
     response.json({ ok: true, settings });
   } catch (error) {
     next(error);
@@ -3421,6 +3426,7 @@ app.post("/api/suppliers", async (request, response, next) => {
 
     await appendAudit(request, "supplier.save", { id: supplier.id, name: supplier.name });
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    queueImmediateAutoPricePush([], "supplier_save");
   } catch (error) {
     next(error);
   }
@@ -3584,6 +3590,7 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
     product.updatedAt = new Date().toISOString();
 
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    queueImmediateAutoPricePush([product.id], "product_patch");
   } catch (error) {
     next(error);
   }
@@ -3606,6 +3613,7 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
     }
 
     response.json({ ok: true, changed, warehouse: await writeWarehouse(warehouse) });
+    queueImmediateAutoPricePush(Array.from(ids), "bulk_markup_patch");
   } catch (error) {
     next(error);
   }
@@ -3627,6 +3635,7 @@ app.patch("/api/warehouse/products/auto-price/bulk", async (request, response, n
     }
 
     response.json({ ok: true, changed, warehouse: await writeWarehouse(warehouse) });
+    if (enabled) queueImmediateAutoPricePush(Array.from(ids), "bulk_auto_enable");
   } catch (error) {
     next(error);
   }
@@ -3644,6 +3653,7 @@ app.patch("/api/warehouse/products/auto-price/all", async (request, response, ne
       changed += 1;
     }
     response.json({ ok: true, changed, warehouse: await writeWarehouse(warehouse) });
+    if (enabled) queueImmediateAutoPricePush([], "auto_all_enable");
   } catch (error) {
     next(error);
   }
@@ -3709,6 +3719,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     if (index >= 0) product.links[index] = link;
     else product.links.push(link);
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    queueImmediateAutoPricePush([product.id], "link_add_or_update");
   } catch (error) {
     next(error);
   }
@@ -3721,6 +3732,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     product.links = (product.links || []).filter((link) => link.id !== request.params.linkId);
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    queueImmediateAutoPricePush([request.params.productId], "link_delete");
   } catch (error) {
     next(error);
   }
@@ -3875,6 +3887,41 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   await writePriceRetryQueue({ items: deduped });
 
   return { ok: true, sent: items.length - failed.length, failed: failed.length, queued: deduped.length, skipped, results };
+}
+
+function queueImmediateAutoPricePush(productIds = [], reason = "price_change_detected") {
+  if (Array.isArray(productIds) && productIds.length) {
+    productIds.forEach((id) => immediateAutoPushIds.add(String(id)));
+  } else {
+    immediateAutoPushAll = true;
+  }
+  if (immediateAutoPushTimer) return;
+  immediateAutoPushTimer = setTimeout(() => {
+    const ids = immediateAutoPushAll ? undefined : Array.from(immediateAutoPushIds);
+    immediateAutoPushAll = false;
+    immediateAutoPushIds.clear();
+    immediateAutoPushTimer = null;
+    immediateAutoPushChain = immediateAutoPushChain
+      .then(async () => {
+        const result = await sendWarehousePrices({
+          productIds: ids,
+          usdRate: undefined,
+          minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
+          minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
+          dryRun: false,
+        });
+        logger.info("immediate auto price push complete", {
+          reason,
+          sent: result.sent || 0,
+          failed: result.failed || 0,
+          skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
+          scope: ids ? ids.length : "all",
+        });
+      })
+      .catch((error) => {
+        logger.warn("immediate auto price push failed", { reason, detail: error?.message || String(error) });
+      });
+  }, 1200);
 }
 
 app.post("/api/warehouse/prices/send", async (request, response, next) => {
