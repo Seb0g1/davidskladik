@@ -1075,9 +1075,10 @@ function renderWarehouseDetail(group) {
                   <input name="markup" type="number" min="0.01" step="0.01" value="${item.markup > 0 ? Number(item.markup).toFixed(2) : ""}" placeholder="По правилам из настроек" data-usd-price="${escapeHtml(item.selectedSupplier?.price || "")}" data-current-price="${escapeHtml(item.currentPrice || "")}" />
                   <small class="markup-live-preview">Предпросмотр: ${formatMoney(item.nextPrice)}</small>
                 </label>
-                <label>
-                  AUTO
-                  <input name="autoPriceEnabled" type="checkbox" ${item.autoPriceEnabled !== false ? "checked" : ""} />
+                <label class="variant-auto-toggle" for="autoPriceEnabled-${escapeHtml(item.id)}">
+                  <span>AUTO</span>
+                  <input id="autoPriceEnabled-${escapeHtml(item.id)}" name="autoPriceEnabled" type="checkbox" ${item.autoPriceEnabled !== false ? "checked" : ""} />
+                  <span class="toggle-ui" aria-hidden="true"></span>
                 </label>
                 <label>
                   minPrice

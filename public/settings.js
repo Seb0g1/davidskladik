@@ -8,23 +8,23 @@ function ruleRow(rule = {}) {
   const row = document.createElement("div");
   row.className = "settings-rule-row";
   row.innerHTML = `
-    <label>
+    <label class="settings-rule-field">
       Площадка
-      <select name="marketplace">
+      <select name="marketplace" class="settings-rule-input settings-rule-select">
         <option value="all" ${String(rule.marketplace || "all") === "all" ? "selected" : ""}>Все</option>
         <option value="ozon" ${String(rule.marketplace || "") === "ozon" ? "selected" : ""}>Ozon</option>
         <option value="yandex" ${String(rule.marketplace || "") === "yandex" ? "selected" : ""}>Yandex Market</option>
       </select>
     </label>
-    <label>
+    <label class="settings-rule-field">
       От цены, USD
-      <input name="minUsd" type="number" min="0" step="0.0001" value="${Number(rule.minUsd || 0)}" required />
+      <input name="minUsd" class="settings-rule-input" type="number" min="0" step="0.0001" value="${Number(rule.minUsd || 0)}" required />
     </label>
-    <label>
+    <label class="settings-rule-field">
       Коэффициент
-      <input name="coefficient" type="number" min="0.0001" step="0.0001" value="${Number(rule.coefficient || 1)}" required />
+      <input name="coefficient" class="settings-rule-input" type="number" min="0.0001" step="0.0001" value="${Number(rule.coefficient || 1)}" required />
     </label>
-    <button class="text-button remove-rule" type="button">Удалить</button>
+    <button class="secondary-button compact-button remove-rule" type="button">Удалить</button>
   `;
   return row;
 }
