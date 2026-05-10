@@ -106,6 +106,24 @@ function invalidateWarehouseViewCache() {
 app.use(express.json({ limit: "1mb" }));
 app.use(compression({ threshold: 1024 }));
 
+/** Рано в стеке: иначе в части окружений запрос не доходит до обработчика (видно как HTML «Cannot GET /api/diagnostics/auto-price»). */
+async function handleAutoPriceDiagnosticsRequest(request, response, next) {
+  const session = readSession(request);
+  if (!session) {
+    return response.status(401).json({ error: "Требуется вход" });
+  }
+  request.session = session;
+  try {
+    response.setHeader("Cache-Control", "private, no-store");
+    response.json(await buildAutoPriceDiagnosticsPayload());
+  } catch (error) {
+    next(error);
+  }
+}
+
+app.get("/api/diagnostics/auto-price", handleAutoPriceDiagnosticsRequest);
+app.get("/diagnostics/auto-price", handleAutoPriceDiagnosticsRequest);
+
 /** Для сравнения с белым списком в requireAuth и ранней отдачи /api/version. */
 function normalizeAuthPath(raw) {
   let s = String(raw || "");
@@ -429,24 +447,6 @@ app.get("/api/session", (request, response) => {
   const session = readSession(request);
   response.json({ authenticated: Boolean(session), username: session?.username || null, role: session?.role || null });
 });
-
-/** Диагностика автоцен: до глобального requireAuth; второй путь — если nginx срезает префикс /api. */
-async function handleAutoPriceDiagnosticsRequest(request, response, next) {
-  const session = readSession(request);
-  if (!session) {
-    return response.status(401).json({ error: "Требуется вход" });
-  }
-  request.session = session;
-  try {
-    response.setHeader("Cache-Control", "private, no-store");
-    response.json(await buildAutoPriceDiagnosticsPayload());
-  } catch (error) {
-    next(error);
-  }
-}
-
-app.get("/api/diagnostics/auto-price", handleAutoPriceDiagnosticsRequest);
-app.get("/diagnostics/auto-price", handleAutoPriceDiagnosticsRequest);
 
 app.use(requireAuth);
 
@@ -3180,7 +3180,7 @@ function compareSnapshots(previousItems, currentOffers) {
   return { currentItems, changes };
 }
 
-app.get(["/api", "/api/"], (_request, response) => {
+app.get(/^\/api\/?$/, (_request, response) => {
   response.json({
     ok: true,
     message: "This is the API base URL. Open a concrete path (for example /api/health).",
