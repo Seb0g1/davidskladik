@@ -2729,7 +2729,19 @@ async function loadAutoPriceDiagnostics() {
   if (!elements.autoPriceDiagPanel || !elements.autoPriceDiagBody || !elements.autoPriceDiagMeta) return;
   elements.autoPriceDiagMeta.textContent = "Загружаю...";
   try {
-    const data = await api("/api/warehouse/auto-price/diagnostics");
+    const urls = ["/api/warehouse/auto-price/diagnostics", "/api/warehouse/diagnostics/auto-price"];
+    let res = await fetch(urls[0], { credentials: "same-origin" });
+    if (res.status === 404) {
+      res = await fetch(urls[1], { credentials: "same-origin" });
+    }
+    if (res.status === 401) {
+      window.location.href = "/login.html";
+      return;
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || data.detail || `Диагностика недоступна (${res.status}). Обновите сервер (git pull + pm2 restart).`);
+    }
     const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString("ru-RU") : "—");
     const stats = data.ozonStats || {};
     const queue = data.retryQueue || {};

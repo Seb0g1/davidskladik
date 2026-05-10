@@ -2064,6 +2064,27 @@ async function readPriceRetryQueue() {
 
 const PRICE_RETRY_QUEUE_MAX = Math.max(100, Number(process.env.PRICE_RETRY_QUEUE_MAX || 5000));
 
+/** Только плоские поля — иначе JSON.stringify очереди падает (например, объект supplier из sendWarehousePrices). */
+function serializePriceRetryQueueItem(item) {
+  if (!item || typeof item !== "object") return null;
+  const id = String(item.id || "").trim();
+  const target = String(item.target || "").trim();
+  const offerId = String(item.offerId || "").trim();
+  const queueKey = String(item.queueKey || "").trim() || (id && target ? `${id}:${target}` : "");
+  if (!queueKey) return null;
+  return {
+    id,
+    target,
+    offerId,
+    price: Number(item.price) || 0,
+    marketplace: String(item.marketplace || ""),
+    error: String(item.error || ""),
+    queueKey,
+    queuedAt: String(item.queuedAt || new Date().toISOString()),
+    attempts: Math.max(0, Math.floor(Number(item.attempts || 0))),
+  };
+}
+
 function capPriceRetryQueue(items, source = "queue") {
   const list = Array.isArray(items) ? items.filter(Boolean) : [];
   if (list.length <= PRICE_RETRY_QUEUE_MAX) return list;
@@ -2090,7 +2111,11 @@ function capPriceRetryQueue(items, source = "queue") {
 }
 
 async function writePriceRetryQueue(queue, { source = "queue" } = {}) {
-  const items = capPriceRetryQueue(Array.isArray(queue.items) ? queue.items : [], source);
+  const raw = Array.isArray(queue.items) ? queue.items : [];
+  const items = capPriceRetryQueue(
+    raw.map((item) => serializePriceRetryQueueItem(item)).filter(Boolean),
+    source,
+  );
   const payload = {
     updatedAt: new Date().toISOString(),
     items,
@@ -4645,13 +4670,27 @@ app.post("/api/warehouse/prices/send", async (request, response, next) => {
     if (request.body.confirmed !== true) {
       return response.status(400).json({ error: "Prices were not sent because manual confirmation is required." });
     }
-    response.json(await sendWarehousePrices({
+    const payload = await sendWarehousePrices({
       productIds: Array.isArray(request.body.productIds) ? request.body.productIds : [],
       usdRate: Number(request.body.usdRate || 0) || undefined,
       minDiffRub: Number(request.body.minDiffRub || 0),
       minDiffPct: Number(request.body.minDiffPct || 0),
       dryRun: request.body.dryRun === true,
-    }));
+    });
+    try {
+      response.json(payload);
+    } catch (serializeError) {
+      logger.error("warehouse prices send: response json failed", { detail: serializeError?.message || String(serializeError) });
+      response.json({
+        ok: payload.ok,
+        sent: payload.sent,
+        failed: payload.failed,
+        queued: payload.queued,
+        skipped: payload.skipped,
+        results: [],
+        warning: "Ответ Ozon слишком объёмный для лога; отправка могла выполниться — смотрите lastOzonPriceSend у товара.",
+      });
+    }
   } catch (error) {
     next(error);
   }
@@ -4737,95 +4776,108 @@ app.get("/api/warehouse/prices/retry-queue", async (_request, response, next) =>
   }
 });
 
-app.get("/api/warehouse/auto-price/diagnostics", async (_request, response, next) => {
-  try {
-    const queue = await readPriceRetryQueue();
-    const warehouse = await readWarehouse();
-    const products = Array.isArray(warehouse.products) ? warehouse.products : [];
+async function buildAutoPriceDiagnosticsPayload() {
+  const queue = await readPriceRetryQueue();
+  const warehouse = await readWarehouse();
+  const products = Array.isArray(warehouse.products) ? warehouse.products : [];
 
-    const recentSends = [];
-    for (const product of products) {
-      const history = Array.isArray(product.priceHistory) ? product.priceHistory : [];
-      for (const entry of history.slice(-3)) {
-        recentSends.push({
-          productId: product.id,
-          offerId: product.offerId,
-          name: product.name,
-          marketplace: entry.marketplace,
-          target: entry.target,
-          at: entry.at,
-          oldPrice: entry.oldPrice,
-          newPrice: entry.newPrice,
-          status: entry.status,
-          error: entry.error,
-          reason: entry.reason,
-        });
-      }
-    }
-    recentSends.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
-
-    const ozonRecent = recentSends.filter((item) => item.marketplace === "ozon").slice(0, 50);
-    const ozonStats = {
-      total: 0,
-      success: 0,
-      error: 0,
-      lastSuccessAt: null,
-      lastErrorAt: null,
-      lastErrorMessage: null,
-    };
-    for (const item of recentSends.filter((entry) => entry.marketplace === "ozon")) {
-      ozonStats.total += 1;
-      if (item.status === "success") {
-        ozonStats.success += 1;
-        if (!ozonStats.lastSuccessAt || new Date(item.at) > new Date(ozonStats.lastSuccessAt)) ozonStats.lastSuccessAt = item.at;
-      } else {
-        ozonStats.error += 1;
-        if (!ozonStats.lastErrorAt || new Date(item.at) > new Date(ozonStats.lastErrorAt)) {
-          ozonStats.lastErrorAt = item.at;
-          ozonStats.lastErrorMessage = item.error || null;
-        }
-      }
-    }
-
-    const lastSendByProduct = products
-      .map((product) => product.lastOzonPriceSend ? {
+  const recentSends = [];
+  for (const product of products) {
+    const history = Array.isArray(product.priceHistory) ? product.priceHistory : [];
+    for (const entry of history.slice(-3)) {
+      recentSends.push({
         productId: product.id,
         offerId: product.offerId,
         name: product.name,
-        ...product.lastOzonPriceSend,
-      } : null)
-      .filter(Boolean)
-      .sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0))
-      .slice(0, 30);
+        marketplace: entry.marketplace,
+        target: entry.target,
+        at: entry.at,
+        oldPrice: entry.oldPrice,
+        newPrice: entry.newPrice,
+        status: entry.status,
+        error: entry.error,
+        reason: entry.reason,
+      });
+    }
+  }
+  recentSends.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
 
-    response.json({
-      ok: true,
-      now: new Date().toISOString(),
-      bootAt: SERVER_BOOT_AT,
-      autoPushPending: {
-        scheduled: Boolean(immediateAutoPushTimer),
-        all: immediateAutoPushAll,
-        ids: Array.from(immediateAutoPushIds),
-      },
-      retryQueue: {
-        updatedAt: queue.updatedAt,
-        total: (queue.items || []).length,
-        topAttempts: (queue.items || [])
-          .slice()
-          .sort((a, b) => Number(b.attempts || 0) - Number(a.attempts || 0))
-          .slice(0, 10)
-          .map((item) => ({
-            queueKey: item.queueKey || `${item.id}:${item.target}`,
-            offerId: item.offerId,
-            attempts: Number(item.attempts || 0),
-            queuedAt: item.queuedAt,
-            error: item.error,
-          })),
-      },
-      ozonStats,
-      ozonRecent,
-      lastOzonSendByProduct: lastSendByProduct,
-    });
+  const ozonRecent = recentSends.filter((item) => item.marketplace === "ozon").slice(0, 50);
+  const ozonStats = {
+    total: 0,
+    success: 0,
+    error: 0,
+    lastSuccessAt: null,
+    lastErrorAt: null,
+    lastErrorMessage: null,
+  };
+  for (const item of recentSends.filter((entry) => entry.marketplace === "ozon")) {
+    ozonStats.total += 1;
+    if (item.status === "success") {
+      ozonStats.success += 1;
+      if (!ozonStats.lastSuccessAt || new Date(item.at) > new Date(ozonStats.lastSuccessAt)) ozonStats.lastSuccessAt = item.at;
+    } else {
+      ozonStats.error += 1;
+      if (!ozonStats.lastErrorAt || new Date(item.at) > new Date(ozonStats.lastErrorAt)) {
+        ozonStats.lastErrorAt = item.at;
+        ozonStats.lastErrorMessage = item.error || null;
+      }
+    }
+  }
+
+  const lastSendByProduct = products
+    .map((product) => product.lastOzonPriceSend ? {
+      productId: product.id,
+      offerId: product.offerId,
+      name: product.name,
+      ...product.lastOzonPriceSend,
+    } : null)
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0))
+    .slice(0, 30);
+
+  return {
+    ok: true,
+    now: new Date().toISOString(),
+    bootAt: SERVER_BOOT_AT,
+    autoPushPending: {
+      scheduled: Boolean(immediateAutoPushTimer),
+      all: immediateAutoPushAll,
+      ids: Array.from(immediateAutoPushIds),
+    },
+    retryQueue: {
+      updatedAt: queue.updatedAt,
+      total: (queue.items || []).length,
+      topAttempts: (queue.items || [])
+        .slice()
+        .sort((a, b) => Number(b.attempts || 0) - Number(a.attempts || 0))
+        .slice(0, 10)
+        .map((item) => ({
+          queueKey: item.queueKey || `${item.id}:${item.target}`,
+          offerId: item.offerId,
+          attempts: Number(item.attempts || 0),
+          queuedAt: item.queuedAt,
+          error: item.error,
+        })),
+    },
+    ozonStats,
+    ozonRecent,
+    lastOzonSendByProduct: lastSendByProduct,
+  };
+}
+
+/** Два URL: основной и короткий алиас (удобнее прокси/кэш). */
+app.get("/api/warehouse/diagnostics/auto-price", async (_request, response, next) => {
+  try {
+    response.json(await buildAutoPriceDiagnosticsPayload());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/warehouse/auto-price/diagnostics", async (_request, response, next) => {
+  try {
+    response.json(await buildAutoPriceDiagnosticsPayload());
   } catch (error) {
     next(error);
   }
