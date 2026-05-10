@@ -297,6 +297,14 @@ function formatUsd(value) {
   }).format(Number(value || 0));
 }
 
+function supplierUsdPriceLabel(supplier) {
+  const usd = formatUsd(supplier?.price || 0);
+  if (supplier?.convertedFromRub && Number(supplier.originalPrice || 0) > 0) {
+    return `${usd} (из ${formatMoney(supplier.originalPrice)})`;
+  }
+  return usd;
+}
+
 function formatDate(value) {
   if (!value) return "";
   return new Intl.DateTimeFormat("ru-RU", {
@@ -1309,7 +1317,7 @@ function renderWarehouseDetail(group) {
         supplier
           ? `<div class="supplier-card">
               <strong>${escapeHtml(supplier.partnerName || supplier.supplierName || "Поставщик")}</strong>
-              <span>${escapeHtml(supplier.article)} · ${formatUsd(supplier.price)} · ${formatDate(supplier.docDate)}</span>
+              <span>${escapeHtml(supplier.article)} · ${escapeHtml(supplierUsdPriceLabel(supplier))} · ${formatDate(supplier.docDate)}</span>
               <p>${escapeHtml(supplier.name || "")}</p>
             </div>`
           : '<div class="empty-mini">Нет доступного поставщика. Добавьте привязку или проверьте наличие в PriceMaster.</div>'

@@ -9,7 +9,7 @@ process.env.AUTO_ARCHIVE_ON_NO_LINKS = "true";
 process.env.PUBLIC_BASE_URL = "http://localhost";
 process.env.DISABLE_BACKGROUND_JOBS = "true";
 
-const { app, resolveMarkupCoefficient, pickNoSupplierAutomationCandidates } = require("../server.js");
+const { app, resolveMarkupCoefficient, normalizePriceMasterPrice, pickNoSupplierAutomationCandidates } = require("../server.js");
 
 test("GET /health", async () => {
   const res = await request(app).get("/health").expect(200);
@@ -99,6 +99,21 @@ test("resolveMarkupCoefficient uses product markup override", () => {
     },
   });
   assert.equal(value, 2.2);
+});
+
+test("normalizePriceMasterPrice converts ruble-like values to USD", () => {
+  const value = normalizePriceMasterPrice(9500, 95);
+  assert.equal(value.sourceCurrency, "RUB");
+  assert.equal(value.convertedFromRub, true);
+  assert.equal(value.price, 100);
+  assert.equal(value.originalPrice, 9500);
+});
+
+test("normalizePriceMasterPrice keeps dollar-like values in USD", () => {
+  const value = normalizePriceMasterPrice(26.6, 95);
+  assert.equal(value.sourceCurrency, "USD");
+  assert.equal(value.convertedFromRub, false);
+  assert.equal(value.price, 26.6);
 });
 
 test("automation ignores products without links", () => {

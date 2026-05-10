@@ -71,6 +71,8 @@ const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
 const pmDbPoolSize = Math.max(1, Number(process.env.PM_DB_POOL_SIZE || 8) || 8);
 const pmDbConnectTimeoutMs = Math.max(1000, Number(process.env.PM_DB_CONNECT_TIMEOUT_MS || 10000) || 10000);
 const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CACHE_MS || 120000) || 120000);
+const priceMasterCurrencyMode = String(process.env.PM_PRICE_CURRENCY || "auto").trim().toLowerCase();
+const priceMasterRubThreshold = Math.max(1, Number(process.env.PM_RUB_PRICE_THRESHOLD || 100) || 100);
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
@@ -620,6 +622,21 @@ function targetById(targetId) {
 
 function calculateRubPrice(usdPrice, usdRate, markupCoefficient) {
   return roundPrice(Number(usdPrice || 0) * Number(usdRate || 0) * Number(markupCoefficient || 0));
+}
+
+function normalizePriceMasterPrice(rawPrice, usdRate, currency = "") {
+  const originalPrice = Number(rawPrice || 0);
+  const rate = Number(usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+  const explicitCurrency = cleanText(currency).toUpperCase();
+  const mode = explicitCurrency || priceMasterCurrencyMode.toUpperCase();
+  const isRub = mode === "RUB" || mode === "RUR" || (mode === "AUTO" && originalPrice >= priceMasterRubThreshold);
+  const price = isRub && rate > 0 ? originalPrice / rate : originalPrice;
+  return {
+    price: Number(Number(price || 0).toFixed(4)),
+    originalPrice,
+    sourceCurrency: isRub ? "RUB" : "USD",
+    convertedFromRub: Boolean(isRub),
+  };
 }
 
 function cleanText(value) {
@@ -1308,7 +1325,7 @@ async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY) {
   return items.slice(0, maxItems);
 }
 
-async function getPriceMasterOffersByArticle(offerIds) {
+async function getPriceMasterOffersByArticle(offerIds, usdRate) {
   if (!offerIds.length) return new Map();
 
   const map = new Map();
@@ -1339,9 +1356,10 @@ async function getPriceMasterOffersByArticle(offerIds) {
 
     for (const row of rows) {
       if (!map.has(row.article)) {
+        const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate);
         map.set(row.article, {
           ...row,
-          price: Number(row.price || 0),
+          ...normalizedPrice,
           active: Boolean(row.active),
           isNew: Boolean(row.isNew),
         });
@@ -1354,11 +1372,13 @@ async function getPriceMasterOffersByArticle(offerIds) {
 
 async function buildOzonPricePreview({ limit = 500, multiplier = 1, onlyChanged = true } = {}) {
   const safeMultiplier = Number.isFinite(Number(multiplier)) ? Number(multiplier) : 1;
+  const settings = await readAppSettings();
+  const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
   const ozonProducts = await getOzonProducts(limit);
   const offerIds = ozonProducts.map((item) => item.offer_id).filter(Boolean);
   const [ozonPriceMap, pmOfferMap] = await Promise.all([
     getOzonPriceMap(offerIds),
-    getPriceMasterOffersByArticle(offerIds),
+    getPriceMasterOffersByArticle(offerIds, usdRate),
   ]);
 
   const rows = ozonProducts.map((product) => {
@@ -1464,10 +1484,12 @@ async function getPriceMasterProductCandidates({ limit = 200, search = "" } = {}
     params,
   );
 
+  const settings = await readAppSettings();
+  const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
   const unique = new Map();
   for (const row of rows) {
     if (!unique.has(row.offerId)) {
-      unique.set(row.offerId, { ...row, price: Number(row.price || 0) });
+      unique.set(row.offerId, { ...row, ...normalizePriceMasterPrice(row.price, usdRate) });
     }
   }
   return Array.from(unique.values());
@@ -2301,7 +2323,7 @@ function stoppedSupplierMap(suppliers = []) {
   );
 }
 
-async function getPriceMasterMatchesForLinks(links, managedSuppliers = []) {
+async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate) {
   const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article);
   if (!normalizedLinks.length) return new Map();
 
@@ -2353,7 +2375,8 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = []) {
       })
       .map((row) => {
         const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
-        const price = stoppedSupplier ? 0 : Number(row.price || 0);
+        const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate);
+        const price = stoppedSupplier ? 0 : normalizedPrice.price;
         const active = stoppedSupplier ? false : Boolean(row.active);
         return {
           ...link,
@@ -2363,7 +2386,9 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = []) {
           partnerId: row.partnerId,
           partnerName: row.partnerName,
           price,
-          originalPrice: Number(row.price || 0),
+          originalPrice: normalizedPrice.originalPrice,
+          sourceCurrency: normalizedPrice.sourceCurrency,
+          convertedFromRub: normalizedPrice.convertedFromRub,
           active,
           stopped: Boolean(stoppedSupplier),
           stopReason: stoppedSupplier?.note || null,
@@ -2545,7 +2570,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
   let matchMap = new Map();
   let sourceError = null;
   try {
-    matchMap = await getPriceMasterMatchesForLinks(links, warehouse.suppliers);
+    matchMap = await getPriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
   } catch (error) {
     sourceError = error.code || error.message;
   }
@@ -3054,6 +3079,8 @@ app.get("/api/offers", async (request, response, next) => {
     const limit = cleanLimit(request.query.limit, 150, 500);
     const search = String(request.query.search || "").trim();
     const partner = String(request.query.partner || "").trim();
+    const settings = await readAppSettings();
+    const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const params = [];
     const conditions = ["r.Ignored = 0"];
 
@@ -3092,7 +3119,7 @@ app.get("/api/offers", async (request, response, next) => {
       params,
     );
 
-    response.json(rows);
+    response.json(rows.map((row) => ({ ...row, ...normalizePriceMasterPrice(row.price, usdRate) })));
   } catch (error) {
     next(error);
   }
@@ -5077,7 +5104,7 @@ function startServer() {
   }
 }
 
-module.exports = { app, startServer, resolveMarkupCoefficient, pickNoSupplierAutomationCandidates };
+module.exports = { app, startServer, resolveMarkupCoefficient, normalizePriceMasterPrice, pickNoSupplierAutomationCandidates };
 
 if (require.main === module) {
   startServer();
