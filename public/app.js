@@ -2440,7 +2440,9 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
       renderWarehouseDetail(currentGroup);
     }
     elements.warehouseStatus.textContent = `Привязка сохранена: ${formatNumber(result.changed || productIds.length)} товар(ов). Цена отправится автоматически.`;
-    queueWarehouseRefresh();
+    window.setTimeout(() => {
+      if (!document.hidden) loadWarehouse(false).catch(() => {});
+    }, 8000);
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }
@@ -2519,7 +2521,9 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
         renderWarehouseDetail(currentGroup || null);
       }
       elements.warehouseStatus.textContent = "Привязка удалена. Автоцена пересчитается по оставшимся привязкам.";
-      queueWarehouseRefresh();
+      window.setTimeout(() => {
+        if (!document.hidden) loadWarehouse(false).catch(() => {});
+      }, 8000);
     }
     if (productButton && await confirmAction({ title: "Удалить товар?", text: "Удалить товар из личного склада?", okText: "Удалить" })) {
       await api(`/api/warehouse/products/${productButton.dataset.productId}`, { method: "DELETE" });

@@ -70,7 +70,7 @@ const dailySyncEnabled = process.env.DAILY_SYNC_ENABLED !== "false";
 const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
 const pmDbPoolSize = Math.max(1, Number(process.env.PM_DB_POOL_SIZE || 8) || 8);
 const pmDbConnectTimeoutMs = Math.max(1000, Number(process.env.PM_DB_CONNECT_TIMEOUT_MS || 10000) || 10000);
-const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CACHE_MS || 1200) || 1200);
+const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CACHE_MS || 120000) || 120000);
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
@@ -80,6 +80,7 @@ let dailySyncNextRunAt = null;
 let dailySyncPromise = null;
 let warehouseWritePromise = Promise.resolve();
 const warehouseViewCache = new Map();
+const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
 let immediateAutoPushTimer = null;
 let immediateAutoPushAll = false;
@@ -96,6 +97,7 @@ function warehouseViewCacheKey({ sync = false, limit = Number.POSITIVE_INFINITY,
 
 function invalidateWarehouseViewCache() {
   warehouseViewCache.clear();
+  warehouseViewBuilds.clear();
 }
 
 app.use(express.json({ limit: "1mb" }));
@@ -2687,10 +2689,19 @@ async function buildWarehouseViewCached(params = {}) {
   const cached = warehouseViewCache.get(key);
   const ttlMs = warehouseViewCacheMs;
   if (cached && Date.now() - cached.at < ttlMs) return cached.data;
-  const data = await buildWarehouseView(params);
-  lastWarehouseViewSnapshot = data;
-  warehouseViewCache.set(key, { at: Date.now(), data });
-  return data;
+  const existingBuild = warehouseViewBuilds.get(key);
+  if (existingBuild) return existingBuild;
+  const build = buildWarehouseView(params)
+    .then((data) => {
+      lastWarehouseViewSnapshot = data;
+      warehouseViewCache.set(key, { at: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      warehouseViewBuilds.delete(key);
+    });
+  warehouseViewBuilds.set(key, build);
+  return build;
 }
 
 async function appendHistory(syncResult) {
