@@ -2745,24 +2745,37 @@ async function loadAutoPriceDiagnostics() {
   elements.autoPriceDiagMeta.textContent = "Загружаю...";
   try {
     let data = null;
-    const rMp = await fetch("/api/marketplaces?autoPriceDiagnostics=1", { credentials: "same-origin" });
-    if (rMp.status === 401) {
+    const rDirect = await fetch("/api/diagnostics/auto-price", { credentials: "same-origin" });
+    if (rDirect.status === 401) {
       window.location.href = "/login.html";
       return;
     }
-    const mpPayload = rMp.ok ? await rMp.json().catch(() => ({})) : {};
-    if (mpPayload.autoPriceDiagnostics && mpPayload.autoPriceDiagnostics.ok === true) {
-      data = mpPayload.autoPriceDiagnostics;
-    } else if (mpPayload.autoPriceDiagnosticsError) {
-      elements.autoPriceDiagMeta.textContent = `Ошибка: ${mpPayload.autoPriceDiagnosticsError}`;
-      elements.autoPriceDiagBody.innerHTML = `<div class="empty-mini">${escapeHtml(String(mpPayload.autoPriceDiagnosticsError))}</div>`;
-      elements.autoPriceDiagPanel.classList.remove("hidden");
-      return;
+    if (rDirect.ok) {
+      const direct = await rDirect.json().catch(() => null);
+      if (direct && direct.ok === true) {
+        data = direct;
+      }
+    }
+    if (!data || data.ok !== true) {
+      const rMp = await fetch("/api/marketplaces?autoPriceDiagnostics=1", { credentials: "same-origin" });
+      if (rMp.status === 401) {
+        window.location.href = "/login.html";
+        return;
+      }
+      const mpPayload = rMp.ok ? await rMp.json().catch(() => ({})) : {};
+      if (mpPayload.autoPriceDiagnostics && mpPayload.autoPriceDiagnostics.ok === true) {
+        data = mpPayload.autoPriceDiagnostics;
+      } else if (mpPayload.autoPriceDiagnosticsError) {
+        elements.autoPriceDiagMeta.textContent = `Ошибка: ${mpPayload.autoPriceDiagnosticsError}`;
+        elements.autoPriceDiagBody.innerHTML = `<div class="empty-mini">${escapeHtml(String(mpPayload.autoPriceDiagnosticsError))}</div>`;
+        elements.autoPriceDiagPanel.classList.remove("hidden");
+        return;
+      }
     }
     if (!data || data.ok !== true) {
       elements.autoPriceDiagMeta.textContent = "Диагностика недоступна на этом сервере";
       elements.autoPriceDiagBody.innerHTML =
-        '<div class="empty-mini"><p>Нужен актуальный <code>server.js</code> с полем <code>autoPriceDiagnostics</code> в ответе <code>GET /api/marketplaces?autoPriceDiagnostics=1</code> — выполните <code>git pull</code> и перезапуск PM2.</p><p>Обновите страницу без кэша (Ctrl+F5): для <code>app.js</code> сервер отдаёт <code>Cache-Control: no-store</code>.</p><p>Если любые <code>/api/…</code> дают 404, проверьте nginx: весь префикс <code>/api</code> должен проксироваться в Node.</p></div>';
+        '<div class="empty-mini"><p>Нужен актуальный <code>server.js</code> с маршрутом <code>GET /api/diagnostics/auto-price</code> (или полем <code>autoPriceDiagnostics</code> в <code>GET /api/marketplaces?autoPriceDiagnostics=1</code>) — <code>git pull</code> и <code>pm2 restart davidsklad</code>.</p><p>Если ответ без диагностики, проверьте кэш прокси на <code>/api/marketplaces</code> (должен учитывать query или не кэшировать).</p><p>Обновите страницу (Ctrl+F5). Если <code>/api/…</code> — 404, весь префикс <code>/api</code> должен идти в Node.</p></div>';
       elements.autoPriceDiagPanel.classList.remove("hidden");
       return;
     }

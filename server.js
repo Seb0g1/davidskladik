@@ -3169,6 +3169,7 @@ app.get(["/api", "/api/"], (_request, response) => {
       warehouse: "/api/warehouse",
       marketplaces: "/api/marketplaces",
       marketplacesAutoPriceDiag: "/api/marketplaces?autoPriceDiagnostics=1",
+      autoPriceDiagnosticsPath: "/api/diagnostics/auto-price",
       marketplacesWarehouseBrands: "/api/marketplaces?warehouseBrands=1",
       settings: "/api/settings",
     },
@@ -3576,7 +3577,20 @@ app.get("/api/marketplaces", async (request, response, next) => {
         payload.warehouseBrandsError = brandsError?.message || String(brandsError);
       }
     }
+    if (wantDiag || wantWarehouseBrands) {
+      response.setHeader("Cache-Control", "private, no-store");
+    }
     response.json(payload);
+  } catch (error) {
+    next(error);
+  }
+});
+
+/** Отдельный URL без query — иначе прокси/CDN может отдать кэш ответа /api/marketplaces без диагностики. */
+app.get("/api/diagnostics/auto-price", async (_request, response, next) => {
+  try {
+    response.setHeader("Cache-Control", "private, no-store");
+    response.json(await buildAutoPriceDiagnosticsPayload());
   } catch (error) {
     next(error);
   }
