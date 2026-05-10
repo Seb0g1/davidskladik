@@ -3561,7 +3561,13 @@ app.post("/api/telegram/test", async (_request, response, next) => {
       });
     }
     const result = await sendTelegramNotification("Тестовое уведомление Magic Vibes: Telegram подключен.");
-    if (!result.ok) return response.status(500).json({ ok: false, error: result.error || "Telegram notification failed" });
+    if (!result.ok) {
+      return response.status(400).json({
+        ok: false,
+        error: result.error || "Telegram notification failed",
+        hint: "Проверьте, что бот добавлен в чат, в чате отправлено любое сообщение после добавления бота, а TELEGRAM_CHAT_ID взят из getUpdates. Для ссылки вида web.telegram.org/k/#-3960374694 часто нужен chat_id -1003960374694.",
+      });
+    }
     response.json({ ok: true });
   } catch (error) {
     next(error);
@@ -3576,7 +3582,14 @@ app.post("/api/telegram/daily-report/run", async (_request, response, next) => {
         error: "TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы или уведомления выключены.",
       });
     }
-    response.json(await sendDailyTelegramReport("manual"));
+    const result = await sendDailyTelegramReport("manual");
+    if (result && result.ok === false && !result.skipped) {
+      return response.status(400).json({
+        ...result,
+        hint: "Проверьте TELEGRAM_CHAT_ID и права бота в чате. Для супергрупп chat_id часто начинается с -100.",
+      });
+    }
+    response.json(result);
   } catch (error) {
     next(error);
   }
