@@ -14,6 +14,7 @@ const {
   resolveMarkupCoefficient,
   normalizePriceMasterPrice,
   pickNoSupplierAutomationCandidates,
+  pickSupplierRecoveryCandidates,
   warehouseBrandMatches,
 } = require("../server.js");
 
@@ -180,11 +181,32 @@ test("automation queues linked product for stock=0 when supplier disappeared", (
   assert.equal(toZeroStock[0].id, "linked-no-supplier");
 });
 
-test("automation queues archive only after stock zero mark", () => {
+test("automation queues archive for linked product without supplier", () => {
   const { toArchive } = pickNoSupplierAutomationCandidates([
     { id: "candidate", hasLinks: true, selectedSupplier: null, noSupplierAutomation: { stockZeroAt: "2026-01-01T00:00:00.000Z" }, marketplaceState: { code: "inactive" } },
     { id: "not-ready", hasLinks: true, selectedSupplier: null, noSupplierAutomation: {}, marketplaceState: { code: "inactive" } },
   ]);
-  assert.equal(toArchive.length, 1);
+  assert.equal(toArchive.length, 2);
   assert.equal(toArchive[0].id, "candidate");
+});
+
+test("recovery queues archived linked product when supplier is available", () => {
+  const recovered = pickSupplierRecoveryCandidates([
+    {
+      id: "archived-with-supplier",
+      hasLinks: true,
+      selectedSupplier: { price: 10, available: true },
+      noSupplierAutomation: {},
+      marketplaceState: { code: "archived" },
+    },
+    {
+      id: "active-with-supplier",
+      hasLinks: true,
+      selectedSupplier: { price: 10, available: true },
+      noSupplierAutomation: {},
+      marketplaceState: { code: "active" },
+    },
+  ]);
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0].id, "archived-with-supplier");
 });

@@ -4154,6 +4154,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     };
     writeWarehouseInBackground(warehouse, "link_bulk_add_or_update");
     response.json({ ok: true, changed: savedProducts.length, products: savedProducts, persisted: "queued" });
+    queueMarketplaceJob("supplier-recovery-automation", { productIds: updatedIds }, { priority: 1 });
     queueImmediateAutoPricePush(updatedIds, "link_bulk_add_or_update");
   } catch (error) {
     next(error);
@@ -4183,6 +4184,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     };
     writeWarehouseInBackground(warehouse, "link_add_or_update");
     response.json({ ok: true, product: savedProduct, links: savedProduct.links || [], persisted: "queued" });
+    queueMarketplaceJob("supplier-recovery-automation", { productIds: [product.id] }, { priority: 1 });
     queueImmediateAutoPricePush([product.id], "link_add_or_update");
   } catch (error) {
     next(error);
@@ -4377,7 +4379,7 @@ async function processMarketplaceJob(name, data = {}) {
   }
   if (name === "supplier-recovery-automation") {
     const preview = await buildWarehouseView({ sync: false });
-    return runSupplierRecoveryAutomation(preview);
+    return runSupplierRecoveryAutomation(preview, { productIds: data.productIds });
   }
   return null;
 }
@@ -4976,12 +4978,26 @@ function pickNoSupplierAutomationCandidates(products = []) {
     toArchive: autoArchiveOnNoLinks
       ? linkedNoSupplier.filter(
           (product) =>
-            Boolean(product.noSupplierAutomation?.stockZeroAt)
-            && !product.noSupplierAutomation?.archivedAt
+            !product.noSupplierAutomation?.archivedAt
             && product.marketplaceState?.code !== "archived",
         )
       : [],
   };
+}
+
+function pickSupplierRecoveryCandidates(products = [], { productIds } = {}) {
+  const idSet = Array.isArray(productIds) && productIds.length
+    ? new Set(productIds.map((id) => String(id || "").trim()).filter(Boolean))
+    : null;
+  return (Array.isArray(products) ? products : []).filter((product) => {
+    if (idSet && !idSet.has(String(product.id))) return false;
+    if (!product.hasLinks || !product.selectedSupplier) return false;
+    if (product.noSupplierAutomation?.recoveredAt && !product.noSupplierAutomation?.stockZeroAt && product.marketplaceState?.code === "active") return false;
+    return Boolean(product.noSupplierAutomation?.stockZeroAt)
+      || Boolean(product.noSupplierAutomation?.archivedAt)
+      || product.marketplaceState?.code === "archived"
+      || product.marketplaceState?.code === "out_of_stock";
+  });
 }
 
 async function runNoSupplierMarketplaceAutomation(preview) {
@@ -4993,10 +5009,14 @@ async function runNoSupplierMarketplaceAutomation(preview) {
     return { zeroStockSent: 0, archived: 0, errors: [] };
   }
 
-  const [stockActions, archiveActions] = await Promise.all([
-    sendZeroStocksToMarketplace(toZeroStock),
-    archiveProductsOnMarketplaces(toArchive),
-  ]);
+  const stockActions = await sendZeroStocksToMarketplace(toZeroStock);
+  const stockOkIds = new Set(stockActions.filter((item) => item.ok).map((item) => item.id));
+  const archiveMap = new Map();
+  for (const product of toArchive) archiveMap.set(product.id, product);
+  for (const product of toZeroStock) {
+    if (stockOkIds.has(product.id)) archiveMap.set(product.id, product);
+  }
+  const archiveActions = await archiveProductsOnMarketplaces(Array.from(archiveMap.values()));
   const allActions = [...stockActions, ...archiveActions];
   if (!allActions.length) return { zeroStockSent: 0, archived: 0, errors: [] };
 
@@ -5018,18 +5038,12 @@ async function runNoSupplierMarketplaceAutomation(preview) {
   };
 }
 
-async function runSupplierRecoveryAutomation(preview) {
+async function runSupplierRecoveryAutomation(preview, options = {}) {
   if (!autoRestoreOnSupplierReturn) {
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
   }
   const products = Array.isArray(preview?.products) ? preview.products : [];
-  const recovered = products.filter(
-    (product) =>
-      product.hasLinks
-      && product.selectedSupplier
-      && Boolean(product.noSupplierAutomation?.stockZeroAt)
-      && !product.noSupplierAutomation?.recoveredAt,
-  );
+  const recovered = pickSupplierRecoveryCandidates(products, options);
   if (!recovered.length) return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
   const [stockActions, unarchiveActions] = await Promise.all([
     restoreStocksOnMarketplaces(recovered),
@@ -5293,6 +5307,7 @@ module.exports = {
   resolveMarkupCoefficient,
   normalizePriceMasterPrice,
   pickNoSupplierAutomationCandidates,
+  pickSupplierRecoveryCandidates,
   resolveWarehouseBrand,
   warehouseBrandMatches,
 };
