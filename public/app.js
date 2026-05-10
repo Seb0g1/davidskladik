@@ -127,6 +127,7 @@ const elements = {
   supplierStopReasonInput: document.querySelector("#supplierStopReasonInput"),
   supplierSaveButton: document.querySelector("#supplierSaveButton"),
   supplierCancelEditButton: document.querySelector("#supplierCancelEditButton"),
+  supplierLoadButton: document.querySelector("#supplierLoadButton"),
   supplierStatus: document.querySelector("#supplierStatus"),
   supplierSearchInput: document.querySelector("#supplierSearchInput"),
   supplierBoard: document.querySelector("#supplierBoard"),
@@ -1437,6 +1438,23 @@ function formatSupplierSyncStatus() {
   return "";
 }
 
+async function loadSuppliers({ silent = false } = {}) {
+  if (!silent) {
+    elements.supplierStatus.textContent = "Загружаю поставщиков из PriceMaster...";
+    elements.supplierLoadButton?.setAttribute("disabled", "disabled");
+  }
+  try {
+    const data = await api("/api/suppliers");
+    state.suppliers = Array.isArray(data.suppliers) ? data.suppliers : [];
+    state.supplierSync = data.supplierSync || null;
+    renderSuppliers();
+  } catch (error) {
+    elements.supplierStatus.textContent = error.message;
+  } finally {
+    elements.supplierLoadButton?.removeAttribute("disabled");
+  }
+}
+
 function renderSuppliers() {
   const activeSuppliers = state.suppliers.filter((supplier) => !supplier.stopped);
   const inactiveSuppliers = state.suppliers.filter((supplier) => supplier.stopped);
@@ -2105,7 +2123,7 @@ async function loadSettings() {
   await loadRate(fixedRate);
   const refreshPricesOnFirstLoad = sessionStorage.getItem("mvInitialPriceRefreshDone") !== "1";
   if (refreshPricesOnFirstLoad) sessionStorage.setItem("mvInitialPriceRefreshDone", "1");
-  await Promise.all([loadWarehouse(false, refreshPricesOnFirstLoad), loadDailySync()]);
+  await Promise.all([loadWarehouse(false, refreshPricesOnFirstLoad), loadSuppliers({ silent: true }), loadDailySync()]);
   await refreshWarehouseBrandSelect();
 }
 
@@ -2817,6 +2835,7 @@ elements.supplierForm.addEventListener("submit", async (event) => {
       }),
     });
     resetSupplierForm();
+    await loadSuppliers({ silent: true });
     queueWarehouseRefresh();
   } catch (error) {
     elements.supplierStatus.textContent = error.message;
@@ -2826,6 +2845,12 @@ elements.supplierForm.addEventListener("submit", async (event) => {
 elements.supplierCancelEditButton?.addEventListener("click", () => {
   resetSupplierForm();
   elements.supplierStatus.textContent = "Редактирование поставщика отменено.";
+});
+
+elements.supplierLoadButton?.addEventListener("click", () => {
+  state.supplierSearch = "";
+  if (elements.supplierSearchInput) elements.supplierSearchInput.value = "";
+  loadSuppliers();
 });
 
 elements.supplierViewButtons?.forEach((button) => {
@@ -2866,6 +2891,7 @@ elements.supplierBoard.addEventListener("change", async (event) => {
           inactiveUntilUnknown: modalResult.unknown,
         }),
       });
+      await loadSuppliers({ silent: true });
       queueWarehouseRefresh();
     } catch (error) {
       toggle.checked = false;
@@ -2895,6 +2921,7 @@ elements.supplierBoard.addEventListener("change", async (event) => {
         inactiveUntilUnknown: false,
       }),
     });
+    await loadSuppliers({ silent: true });
     queueWarehouseRefresh();
   } catch (error) {
     toggle.checked = true;
@@ -2915,6 +2942,7 @@ elements.supplierBoard.addEventListener("submit", async (event) => {
     });
     form.reset();
     form.querySelector("button[type='submit']").textContent = "Добавить артикул";
+    await loadSuppliers({ silent: true });
     queueWarehouseRefresh();
   } catch (error) {
     elements.supplierStatus.textContent = error.message;
@@ -2942,10 +2970,12 @@ elements.supplierBoard.addEventListener("click", async (event) => {
     }
     if (deleteSupplier && await confirmAction({ title: "Удалить поставщика?", text: "Поставщик и его локальные артикулы будут удалены.", okText: "Удалить" })) {
       await api(`/api/suppliers/${panel.dataset.supplierId}`, { method: "DELETE" });
+      await loadSuppliers({ silent: true });
       queueWarehouseRefresh();
     }
     if (deleteArticle && await confirmAction({ title: "Удалить артикул?", text: "Артикул поставщика будет удалён из локального списка.", okText: "Удалить" })) {
       await api(`/api/suppliers/${panel.dataset.supplierId}/articles/${deleteArticle.dataset.articleId}`, { method: "DELETE" });
+      await loadSuppliers({ silent: true });
       queueWarehouseRefresh();
     }
   } catch (error) {
