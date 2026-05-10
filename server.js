@@ -641,8 +641,43 @@ function cleanText(value) {
   return String(value || "").trim();
 }
 
+function extractBrandFromAttributes(attributes = []) {
+  for (const attribute of attributes || []) {
+    const id = Number(attribute.id || attribute.attribute_id || 0);
+    const name = cleanText(attribute.name || attribute.attribute_name || attribute.attributeName).toLowerCase();
+    if (id !== 85 && name !== "бренд" && name !== "brand") continue;
+    const values = Array.isArray(attribute.values) ? attribute.values : [];
+    const fromValues = values
+      .map((item) => cleanText(item.value || item.name || item.text))
+      .find(Boolean);
+    return fromValues || cleanText(attribute.value);
+  }
+  return "";
+}
+
 function resolveWarehouseBrand(product = {}) {
-  return cleanText(product.brand || product.ozon?.vendor || product.yandex?.vendor || "");
+  return cleanText(
+    product.brand ||
+      product.vendor ||
+      product.brandName ||
+      product.ozon?.vendor ||
+      product.ozon?.brand ||
+      product.yandex?.vendor ||
+      product.yandex?.brand ||
+      extractBrandFromAttributes(product.ozon?.attributes),
+  );
+}
+
+function warehouseBrandSearchHaystack(product = {}) {
+  return [
+    resolveWarehouseBrand(product),
+    product.name,
+    product.ozon?.name,
+    product.yandex?.name,
+  ]
+    .map((value) => cleanText(value).toLowerCase())
+    .filter(Boolean)
+    .join(" ");
 }
 
 function firstImageUrl(value) {
@@ -3552,7 +3587,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     if (stateCode !== "all") rows = rows.filter((item) => cleanText(item.marketplaceState?.code) === stateCode);
     if (brandFilter) {
       const needle = brandFilter.toLowerCase();
-      rows = rows.filter((item) => resolveWarehouseBrand(item).toLowerCase().includes(needle));
+      rows = rows.filter((item) => warehouseBrandSearchHaystack(item).includes(needle));
     }
 
     const total = rows.length;
