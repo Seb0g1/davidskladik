@@ -417,7 +417,19 @@ app.get("/api/session", (request, response) => {
   response.json({ authenticated: Boolean(session), username: session?.username || null, role: session?.role || null });
 });
 
+/** Диагностика автоцен: два пути — см. nginx proxy_pass (иногда /api срезается и в Node приходит /diagnostics/...). */
+async function handleAutoPriceDiagnosticsGet(_request, response, next) {
+  try {
+    response.setHeader("Cache-Control", "private, no-store");
+    response.json(await buildAutoPriceDiagnosticsPayload());
+  } catch (error) {
+    next(error);
+  }
+}
+
 app.use(requireAuth);
+app.get("/api/diagnostics/auto-price", handleAutoPriceDiagnosticsGet);
+app.get("/diagnostics/auto-price", handleAutoPriceDiagnosticsGet);
 app.use(
   express.static(publicDir, {
     setHeaders(res, staticPath) {
@@ -3581,16 +3593,6 @@ app.get("/api/marketplaces", async (request, response, next) => {
       response.setHeader("Cache-Control", "private, no-store");
     }
     response.json(payload);
-  } catch (error) {
-    next(error);
-  }
-});
-
-/** Отдельный URL без query — иначе прокси/CDN может отдать кэш ответа /api/marketplaces без диагностики. */
-app.get("/api/diagnostics/auto-price", async (_request, response, next) => {
-  try {
-    response.setHeader("Cache-Control", "private, no-store");
-    response.json(await buildAutoPriceDiagnosticsPayload());
   } catch (error) {
     next(error);
   }
