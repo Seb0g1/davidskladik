@@ -74,6 +74,9 @@ const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CA
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
+const telegramBotToken = cleanText(process.env.TELEGRAM_BOT_TOKEN);
+const telegramChatId = cleanText(process.env.TELEGRAM_CHAT_ID);
+const telegramNotificationsEnabled = process.env.TELEGRAM_NOTIFICATIONS_ENABLED !== "false";
 
 let dailySyncTimer = null;
 let dailySyncNextRunAt = null;
@@ -92,6 +95,72 @@ const immediateAutoPushIds = new Set();
 let immediateAutoPushChain = Promise.resolve();
 let marketplaceQueue = null;
 let marketplaceWorker = null;
+
+function telegramReady() {
+  return telegramNotificationsEnabled && Boolean(telegramBotToken && telegramChatId);
+}
+
+function compactTelegramText(value, maxLength = 3500) {
+  const text = cleanText(value);
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 20)}\n...`;
+}
+
+async function sendTelegramNotification(text, extra = {}) {
+  if (!telegramReady()) return { ok: false, skipped: true };
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: telegramChatId,
+        text: compactTelegramText(text),
+        disable_web_page_preview: true,
+        ...extra,
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.description || `Telegram API error ${response.status}`);
+    }
+    return { ok: true };
+  } catch (error) {
+    logger.warn("telegram notification failed", { detail: error?.message || String(error) });
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+function notifyTelegram(text, extra = {}) {
+  sendTelegramNotification(text, extra).catch((error) => {
+    logger.warn("telegram notification failed", { detail: error?.message || String(error) });
+  });
+}
+
+function formatTelegramNumber(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return "0";
+  return new Intl.NumberFormat("ru-RU").format(number);
+}
+
+function formatSyncNotification({ title, trigger, priceMaster, warehouse, automation, recovery, pricePush, error }) {
+  const lines = [`${title}`];
+  if (trigger) lines.push(`Запуск: ${trigger}`);
+  if (priceMaster) lines.push(`PriceMaster: ${formatTelegramNumber(priceMaster.items || 0)} позиций, изменений ${formatTelegramNumber(priceMaster.changes || 0)}`);
+  if (warehouse) {
+    lines.push(`Склад: ${formatTelegramNumber(warehouse.total || 0)} товаров, готовы к цене ${formatTelegramNumber(warehouse.ready || 0)}, изменились ${formatTelegramNumber(warehouse.changed || 0)}`);
+  }
+  if (automation) {
+    lines.push(`Автоматизация: stock=0 ${formatTelegramNumber(automation.zeroStockSent || 0)}, архив ${formatTelegramNumber(automation.archived || 0)}`);
+  }
+  if (recovery) lines.push(`Восстановлено: ${formatTelegramNumber(recovery.recovered || 0)}, разархивировано ${formatTelegramNumber(recovery.unarchived || 0)}`);
+  if (pricePush) {
+    const skippedCount = Array.isArray(pricePush.skipped) ? pricePush.skipped.length : Number(pricePush.skipped || 0);
+    lines.push(`Цены: отправлено ${formatTelegramNumber(pricePush.sent || 0)}, ошибок ${formatTelegramNumber(pricePush.failed || 0)}, пропущено ${formatTelegramNumber(skippedCount || 0)}`);
+    if (pricePush.error) lines.push(`Ошибка цен: ${pricePush.error}`);
+  }
+  if (error) lines.push(`Ошибка: ${error}`);
+  return lines.join("\n");
+}
 
 function warehouseViewCacheKey({ sync = false, limit = Number.POSITIVE_INFINITY, usdRate, refreshPrices = false } = {}) {
   const limitKey = Number.isFinite(Number(limit)) ? Number(limit) : "all";
@@ -3420,7 +3489,30 @@ app.get("/api/marketplaces", (_request, response) => {
 
 app.get("/api/settings", async (_request, response, next) => {
   try {
-    response.json({ settings: await readAppSettings() });
+    response.json({
+      settings: await readAppSettings(),
+      telegram: {
+        configured: telegramReady(),
+        enabled: telegramNotificationsEnabled,
+        chatId: telegramChatId ? maskSecret(telegramChatId) : "",
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/telegram/test", async (_request, response, next) => {
+  try {
+    if (!telegramReady()) {
+      return response.status(400).json({
+        ok: false,
+        error: "TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы или уведомления выключены.",
+      });
+    }
+    const result = await sendTelegramNotification("Тестовое уведомление Magic Vibes: Telegram подключен.");
+    if (!result.ok) return response.status(500).json({ ok: false, error: result.error || "Telegram notification failed" });
+    response.json({ ok: true });
   } catch (error) {
     next(error);
   }
@@ -5125,7 +5217,7 @@ async function runDailyRefresh(trigger = "manual") {
           logger.warn("manual daily sync price push failed", { detail });
         }
       }
-      return await writeDailySyncState(withDailySyncLog({
+      const state = await writeDailySyncState(withDailySyncLog({
         status: "ok",
         trigger,
         startedAt,
@@ -5150,14 +5242,30 @@ async function runDailyRefresh(trigger = "manual") {
             : null,
         },
       }));
+      notifyTelegram(formatSyncNotification({
+        title: trigger === "manual" ? "Ручной цикл завершён" : "Ежедневная синхронизация завершена",
+        trigger,
+        priceMaster,
+        warehouse,
+        automation,
+        recovery,
+        pricePush,
+      }));
+      return state;
     } catch (error) {
-      return await writeDailySyncState(withDailySyncLog({
+      const state = await writeDailySyncState(withDailySyncLog({
         status: "failed",
         trigger,
         startedAt,
         lastRunAt: new Date().toISOString(),
         error: error.code || error.message,
       }));
+      notifyTelegram(formatSyncNotification({
+        title: trigger === "manual" ? "Ручной цикл завершился ошибкой" : "Ежедневная синхронизация завершилась ошибкой",
+        trigger,
+        error: error.code || error.message,
+      }));
+      return state;
     }
   })().finally(() => {
     dailySyncPromise = null;
@@ -5212,10 +5320,48 @@ async function runAutoSyncCycle(trigger = "auto") {
     if (automation.errors.length) {
       logger.warn("no-supplier automation errors", { count: automation.errors.length, sample: automation.errors.slice(0, 10) });
     }
+    notifyTelegram(formatSyncNotification({
+      title: "Фоновая синхронизация завершена",
+      trigger,
+      priceMaster: result,
+      warehouse,
+      automation,
+      recovery,
+      pricePush: autoPricePush,
+    }));
     return { status: "ok", result, warehouse, automation, recovery, autoPricePush };
   } finally {
     autoSyncRunning = false;
   }
+}
+
+async function runManualWarehouseSync(trigger = "manual_sync") {
+  const priceMaster = await runSync();
+  const warehouse = await buildWarehouseView({ sync: true });
+  const automation = await runNoSupplierMarketplaceAutomation(warehouse);
+  const recovery = await runSupplierRecoveryAutomation(warehouse);
+  notifyTelegram(formatSyncNotification({
+    title: "Склад синхронизирован вручную",
+    trigger,
+    priceMaster,
+    warehouse,
+    automation,
+    recovery,
+  }));
+  return {
+    ok: true,
+    trigger,
+    priceMaster,
+    warehouse: {
+      total: warehouse.total,
+      ready: warehouse.ready,
+      changed: warehouse.changed,
+      withoutSupplier: warehouse.withoutSupplier,
+      zeroStockSent: automation.zeroStockSent,
+      autoArchived: automation.archived,
+      recovered: recovery.recovered,
+    },
+  };
 }
 
 function scheduleAutoSync(delayMs = 10_000) {
@@ -5234,6 +5380,11 @@ function scheduleAutoSync(delayMs = 10_000) {
       scheduleAutoSync(nextMinutes * 60 * 1000);
     } catch (error) {
       logger.error("auto sync failed", { detail: error.code || error.message, err: error });
+      notifyTelegram(formatSyncNotification({
+        title: "Фоновая синхронизация завершилась ошибкой",
+        trigger: "interval",
+        error: error.code || error.message,
+      }));
       scheduleAutoSync(Math.max(5, Number(autoSyncMinutes || 30) || 30) * 60 * 1000);
     }
   }, delayMs);
@@ -5259,6 +5410,19 @@ app.post("/api/daily-sync/run", async (_request, response, next) => {
   try {
     response.json(await runDailyRefresh("manual"));
   } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/sync/run", async (_request, response, next) => {
+  try {
+    response.json(await runManualWarehouseSync("manual"));
+  } catch (error) {
+    notifyTelegram(formatSyncNotification({
+      title: "Ручная синхронизация склада завершилась ошибкой",
+      trigger: "manual",
+      error: error.code || error.message,
+    }));
     next(error);
   }
 });

@@ -9,6 +9,8 @@ const autoSyncMinutesInput = document.querySelector("#autoSyncMinutesInput");
 const manualSyncButton = document.querySelector("#manualSyncButton");
 const manualPriceUpdateButton = document.querySelector("#manualPriceUpdateButton");
 const manualSyncStatus = document.querySelector("#manualSyncStatus");
+const telegramTestButton = document.querySelector("#telegramTestButton");
+const telegramStatus = document.querySelector("#telegramStatus");
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 
 function ruleRow(rule = {}) {
@@ -73,6 +75,11 @@ async function loadSettings() {
   settingsForm.elements.defaultYandexMarkup.value = settings.defaultMarkups?.yandex || 1.6;
   if (autoSyncEnabledInput) autoSyncEnabledInput.checked = settings.automation?.autoSyncEnabled !== false;
   if (autoSyncMinutesInput) autoSyncMinutesInput.value = settings.automation?.autoSyncMinutes || 30;
+  if (telegramStatus) {
+    telegramStatus.textContent = data.telegram?.configured
+      ? `Telegram подключен. Чат: ${data.telegram.chatId || "задан"}.`
+      : "Telegram не настроен: задайте TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в .env.";
+  }
   renderRules(settings.markupRules || []);
   if (settingsAnimateAutoFocusInput) {
     settingsAnimateAutoFocusInput.checked = localStorage.getItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY) !== "0";
@@ -130,8 +137,10 @@ manualSyncButton?.addEventListener("click", async () => {
   if (manualPriceUpdateButton) manualPriceUpdateButton.disabled = true;
   if (manualSyncStatus) manualSyncStatus.textContent = "Синхронизирую склад: товары, статусы, остатки и фото...";
   try {
-    await api("/api/warehouse/products/page?sync=true&page=1&pageSize=10");
-    if (manualSyncStatus) manualSyncStatus.textContent = "Склад синхронизирован. Можно вернуться на главную и обновить список.";
+    const result = await api("/api/warehouse/sync/run", { method: "POST" });
+    const total = result?.warehouse?.total ?? 0;
+    const changed = result?.warehouse?.changed ?? 0;
+    if (manualSyncStatus) manualSyncStatus.textContent = `Склад синхронизирован. Товаров: ${total}, изменений цены: ${changed}.`;
   } catch (error) {
     if (manualSyncStatus) manualSyncStatus.textContent = error.message;
   } finally {
@@ -154,6 +163,19 @@ manualPriceUpdateButton?.addEventListener("click", async () => {
   } finally {
     if (manualSyncButton) manualSyncButton.disabled = false;
     manualPriceUpdateButton.disabled = false;
+  }
+});
+
+telegramTestButton?.addEventListener("click", async () => {
+  telegramTestButton.disabled = true;
+  if (telegramStatus) telegramStatus.textContent = "Отправляю тестовое уведомление...";
+  try {
+    await api("/api/telegram/test", { method: "POST" });
+    if (telegramStatus) telegramStatus.textContent = "Тестовое уведомление отправлено в Telegram.";
+  } catch (error) {
+    if (telegramStatus) telegramStatus.textContent = error.message;
+  } finally {
+    telegramTestButton.disabled = false;
   }
 });
 
