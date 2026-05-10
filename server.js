@@ -1865,22 +1865,66 @@ async function writeAppSettings(settings) {
   return normalized;
 }
 
+function normalizePriceMasterPartnerRows(rows = []) {
+  const unique = new Map();
+  for (const row of rows || []) {
+    const partnerId = cleanText(row.partnerId ?? row.PartnerID ?? row.id);
+    const name = cleanText(row.name ?? row.PartnerName ?? row.partnerName);
+    if (!name) continue;
+    const key = partnerId || normalizeSupplierName(name);
+    if (!unique.has(key)) unique.set(key, { partnerId, name });
+  }
+  return Array.from(unique.values()).sort((left, right) =>
+    String(left.name).localeCompare(String(right.name), "ru", { sensitivity: "base" }),
+  );
+}
+
 async function listPriceMasterPartners() {
-  const [rows] = await pool.query(`
-    SELECT DISTINCT
-      p.PartnerID AS partnerId,
-      p.PartnerName AS name
-    FROM Partners p
-    JOIN OfferDocs d ON d.PartnerID = p.PartnerID
-    WHERE p.PartnerName IS NOT NULL AND TRIM(p.PartnerName) <> ''
-    ORDER BY p.PartnerName
-  `);
-  return rows
-    .map((row) => ({
-      partnerId: cleanText(row.partnerId),
-      name: cleanText(row.name),
-    }))
-    .filter((row) => row.name);
+  const queries = [
+    {
+      label: "partners_with_offers",
+      sql: `
+        SELECT DISTINCT
+          p.PartnerID AS partnerId,
+          p.PartnerName AS name
+        FROM Partners p
+        JOIN OfferDocs d ON d.PartnerID = p.PartnerID
+        WHERE p.PartnerName IS NOT NULL AND TRIM(p.PartnerName) <> ''
+        ORDER BY p.PartnerName
+      `,
+    },
+    {
+      label: "partners_all",
+      sql: `
+        SELECT DISTINCT
+          PartnerID AS partnerId,
+          PartnerName AS name
+        FROM Partners
+        WHERE PartnerName IS NOT NULL AND TRIM(PartnerName) <> ''
+        ORDER BY PartnerName
+      `,
+      allowEmpty: true,
+    },
+  ];
+  let lastError = null;
+  for (const query of queries) {
+    try {
+      const [rows] = await pool.query(query.sql);
+      const partners = normalizePriceMasterPartnerRows(rows);
+      if (partners.length || query.allowEmpty) {
+        if (query.label !== "partners_with_offers") {
+          logger.info("PriceMaster partners loaded with fallback", { source: query.label, partners: partners.length });
+        }
+        return partners;
+      }
+      logger.warn("PriceMaster partners query returned no rows, trying fallback", { source: query.label });
+    } catch (error) {
+      lastError = error;
+      logger.warn("PriceMaster partners query failed, trying fallback", { source: query.label, detail: error.message });
+    }
+  }
+  if (lastError) throw lastError;
+  return [];
 }
 
 async function listBrandFallbackCandidates(query, limit = 40) {
@@ -2798,14 +2842,20 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || (await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);
   let warehouse = await readWarehouse();
+  const supplierSync = { ok: false, partners: 0, imported: 0, changed: false, error: null };
   try {
     const partners = await listPriceMasterPartners();
     const syncedSuppliers = syncWarehouseSuppliersFromPriceMaster(warehouse, partners);
+    supplierSync.ok = true;
+    supplierSync.partners = partners.length;
+    supplierSync.imported = syncedSuppliers.imported;
+    supplierSync.changed = syncedSuppliers.changed;
     if (syncedSuppliers.changed) {
       await writeWarehouse(warehouse);
       logger.info("imported suppliers from PriceMaster", { imported: syncedSuppliers.imported });
     }
   } catch (error) {
+    supplierSync.error = error.message;
     logger.warn("supplier import from PriceMaster failed", { detail: error.message });
   }
   const autoReactivated = applySupplierAutoReactivate(warehouse);
@@ -2939,6 +2989,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     createdAt: new Date().toISOString(),
     usdRate: rate,
     sourceError,
+    supplierSync,
     targets: marketplaceTargets(),
     suppliers: warehouse.suppliers,
     products,
@@ -3920,14 +3971,20 @@ app.get("/api/warehouse/no-supplier", async (request, response, next) => {
 app.get("/api/suppliers", async (_request, response, next) => {
   try {
     const warehouse = await readWarehouse();
+    const supplierSync = { ok: false, partners: 0, imported: 0, changed: false, error: null };
     try {
       const partners = await listPriceMasterPartners();
       const syncedSuppliers = syncWarehouseSuppliersFromPriceMaster(warehouse, partners);
+      supplierSync.ok = true;
+      supplierSync.partners = partners.length;
+      supplierSync.imported = syncedSuppliers.imported;
+      supplierSync.changed = syncedSuppliers.changed;
       if (syncedSuppliers.changed) {
         await writeWarehouse(warehouse);
         logger.info("imported suppliers from PriceMaster via suppliers api", { imported: syncedSuppliers.imported });
       }
     } catch (error) {
+      supplierSync.error = error.message;
       logger.warn("supplier import from PriceMaster in /api/suppliers failed", { detail: error.message });
     }
     const autoReactivated = applySupplierAutoReactivate(warehouse);
@@ -3935,7 +3992,7 @@ app.get("/api/suppliers", async (_request, response, next) => {
       await writeWarehouse(warehouse);
       logger.info("supplier auto-reactivated from suppliers api", { count: autoReactivated.length, suppliers: autoReactivated });
     }
-    response.json({ suppliers: warehouse.suppliers || [] });
+    response.json({ suppliers: warehouse.suppliers || [], supplierSync });
   } catch (error) {
     next(error);
   }

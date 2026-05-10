@@ -7,6 +7,7 @@ const state = {
   warehouse: [],
   filteredWarehouse: [],
   suppliers: [],
+  supplierSync: null,
   supplierView: "active",
   supplierSearch: "",
   accounts: [],
@@ -1033,7 +1034,8 @@ function renderWarehouse(data) {
   state.warehouseHasMore = Boolean(data.hasMore);
   state.warehousePage = Number(data.page || state.warehousePage || 1);
   state.warehouseTotalFiltered = Number(data.total || state.warehouseTotalFiltered || state.warehouse.length);
-  if (data.suppliers?.length) state.suppliers = data.suppliers;
+  if (Array.isArray(data.suppliers)) state.suppliers = data.suppliers;
+  if (data.supplierSync) state.supplierSync = data.supplierSync;
   elements.warehouseTotal.textContent = formatNumber(data.totalAll ?? data.total ?? state.warehouse.length);
   elements.warehouseReady.textContent = formatNumber(data.ready || 0);
   elements.warehouseChanged.textContent = formatNumber(data.changed || 0);
@@ -1419,6 +1421,22 @@ function renderWarehouseDetail(group) {
   `;
 }
 
+function formatSupplierSyncStatus() {
+  const sync = state.supplierSync;
+  if (!sync) return "";
+  if (sync.error) {
+    return `PriceMaster: поставщики не импортированы (${sync.error}). Проверьте PM_DB_* и таблицу Partners.`;
+  }
+  if (sync.ok && Number(sync.partners || 0) > 0) {
+    const imported = Number(sync.imported || 0);
+    return imported > 0
+      ? `PriceMaster: найдено ${formatNumber(sync.partners)} поставщиков, новых импортировано ${formatNumber(imported)}.`
+      : `PriceMaster: найдено ${formatNumber(sync.partners)} поставщиков, список актуален.`;
+  }
+  if (sync.ok) return "PriceMaster подключен, но поставщики не найдены в таблице Partners.";
+  return "";
+}
+
 function renderSuppliers() {
   const activeSuppliers = state.suppliers.filter((supplier) => !supplier.stopped);
   const inactiveSuppliers = state.suppliers.filter((supplier) => supplier.stopped);
@@ -1444,11 +1462,12 @@ function renderSuppliers() {
 
   if (!state.suppliers.length) {
     elements.supplierBoard.innerHTML = `<div class="empty">Добавьте поставщика, чтобы управлять стопом и артикулами.</div>`;
-    elements.supplierStatus.textContent = "Поставщиков пока нет.";
+    elements.supplierStatus.textContent = formatSupplierSyncStatus() || "Поставщиков пока нет.";
     return;
   }
 
-  elements.supplierStatus.textContent = `Активных: ${formatNumber(activeSuppliers.length)}. Инактив: ${formatNumber(inactiveSuppliers.length)}.`;
+  const syncStatus = formatSupplierSyncStatus();
+  elements.supplierStatus.textContent = `Активных: ${formatNumber(activeSuppliers.length)}. Инактив: ${formatNumber(inactiveSuppliers.length)}.${syncStatus ? ` ${syncStatus}` : ""}`;
   if (!visibleSuppliers.length) {
     const emptyMessage = query
       ? `По запросу «${escapeHtml(state.supplierSearch)}» ничего не найдено.`
