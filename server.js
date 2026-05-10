@@ -106,6 +106,54 @@ function invalidateWarehouseViewCache() {
 app.use(express.json({ limit: "1mb" }));
 app.use(compression({ threshold: 1024 }));
 
+/** Для сравнения с белым списком в requireAuth и ранней отдачи /api/version. */
+function normalizeAuthPath(raw) {
+  let s = String(raw || "");
+  const q = s.indexOf("?");
+  if (q >= 0) s = s.slice(0, q);
+  if (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
+  return s;
+}
+
+const SERVER_BOOT_AT = new Date().toISOString();
+let SERVER_BUILD_INFO = { commit: null, builtAt: null };
+try {
+  SERVER_BUILD_INFO = {
+    commit:
+      process.env.GIT_COMMIT
+      || require("child_process").execSync("git rev-parse --short HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim()
+      || null,
+    builtAt: process.env.BUILD_TIME || null,
+  };
+} catch {
+  SERVER_BUILD_INFO = { commit: process.env.GIT_COMMIT || null, builtAt: process.env.BUILD_TIME || null };
+}
+
+function handleVersionGet(_request, response) {
+  response.json({
+    service: "magic-vibes-warehouse",
+    bootAt: SERVER_BOOT_AT,
+    commit: SERVER_BUILD_INFO.commit,
+    builtAt: SERVER_BUILD_INFO.builtAt,
+    nodeVersion: process.version,
+    routes: {
+      warehouseBrands: true,
+      pricesSend: true,
+    },
+    time: new Date().toISOString(),
+  });
+}
+
+/** Сразу после базовых middleware: версия без сессии (Express 5 + прокси). */
+app.use((request, response, next) => {
+  if (request.method !== "GET") return next();
+  const pathname = normalizeAuthPath(request.path);
+  if (pathname === "/api/version" || pathname === "/version") {
+    return handleVersionGet(request, response);
+  }
+  next();
+});
+
 const uploadTempDir = path.join(uploadImageDir, ".incoming");
 require("fs").mkdirSync(uploadTempDir, { recursive: true });
 
@@ -293,6 +341,7 @@ async function pruneUploadDirectory() {
 }
 
 function requireAuth(request, response, next) {
+  const pathKey = normalizeAuthPath(request.path);
   const publicPaths = [
     "/login",
     "/login.html",
@@ -306,9 +355,9 @@ function requireAuth(request, response, next) {
     "/health",
     "/version",
   ];
-  if (publicPaths.includes(request.path)) return next();
-  if (request.path.startsWith("/uploads/images/")) return next();
-  if (request.path === "/api/login" || request.path === "/api/session" || request.path === "/api/version") return next();
+  if (publicPaths.includes(pathKey)) return next();
+  if (pathKey.startsWith("/uploads/images/")) return next();
+  if (pathKey === "/api/login" || pathKey === "/api/session" || pathKey === "/api/version") return next();
 
   const session = readSession(request);
   if (session) {
@@ -316,49 +365,16 @@ function requireAuth(request, response, next) {
     return next();
   }
 
-  if (request.path.startsWith("/api/")) {
+  if (pathKey.startsWith("/api/")) {
     return response.status(401).json({ error: "Требуется вход" });
   }
 
   return response.redirect("/login.html");
 }
 
-const SERVER_BOOT_AT = new Date().toISOString();
-let SERVER_BUILD_INFO = { commit: null, builtAt: null };
-try {
-  SERVER_BUILD_INFO = {
-    commit:
-      process.env.GIT_COMMIT
-      || require("child_process").execSync("git rev-parse --short HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim()
-      || null,
-    builtAt: process.env.BUILD_TIME || null,
-  };
-} catch {
-  SERVER_BUILD_INFO = { commit: process.env.GIT_COMMIT || null, builtAt: process.env.BUILD_TIME || null };
-}
-
 app.get("/health", (_request, response) => {
   response.json({ ok: true, service: "magic-vibes-warehouse", time: new Date().toISOString() });
 });
-
-function handleVersionGet(_request, response) {
-  response.json({
-    service: "magic-vibes-warehouse",
-    bootAt: SERVER_BOOT_AT,
-    commit: SERVER_BUILD_INFO.commit,
-    builtAt: SERVER_BUILD_INFO.builtAt,
-    nodeVersion: process.version,
-    routes: {
-      warehouseBrands: true,
-      pricesSend: true,
-    },
-    time: new Date().toISOString(),
-  });
-}
-
-/** Без авторизации; дублируем на `/version` на случай прокси, который не прокидывает `/api/*`. */
-app.get("/api/version", handleVersionGet);
-app.get("/version", handleVersionGet);
 
 app.post("/api/login", loginLimiter, (request, response) => {
   const username = String(request.body.username || "");
