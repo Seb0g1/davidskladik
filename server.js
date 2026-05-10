@@ -54,6 +54,7 @@ const dailySyncPath = path.join(dataDir, "daily-sync.json");
 const marketplaceAccountsPath = path.join(dataDir, "marketplace-accounts.json");
 const auditLogPath = path.join(dataDir, "audit-log.jsonl");
 const appSettingsPath = path.join(dataDir, "app-settings.json");
+const ozonInfoSyncOffsetPath = path.join(dataDir, "ozon-info-sync-offset.json");
 const priceRetryQueuePath = path.join(dataDir, "price-retry-queue.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
@@ -79,6 +80,7 @@ let dailySyncTimer = null;
 let dailySyncNextRunAt = null;
 let dailySyncPromise = null;
 let warehouseWritePromise = Promise.resolve();
+const WAREHOUSE_VIEW_CACHE_MAX = 40;
 const warehouseViewCache = new Map();
 let lastWarehouseViewSnapshot = null;
 let immediateAutoPushTimer = null;
@@ -104,8 +106,17 @@ function invalidateWarehouseViewCache() {
 app.use(express.json({ limit: "1mb" }));
 app.use(compression({ threshold: 1024 }));
 
+const uploadTempDir = path.join(uploadImageDir, ".incoming");
+require("fs").mkdirSync(uploadTempDir, { recursive: true });
+
 const uploadImages = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_request, _file, callback) => callback(null, uploadTempDir),
+    filename: (_request, file, callback) => {
+      const ext = (file.originalname && path.extname(file.originalname)) || "";
+      callback(null, `${Date.now()}-${crypto.randomUUID()}${ext}`);
+    },
+  }),
   limits: {
     fileSize: 10 * 1024 * 1024,
     files: 10,
@@ -149,6 +160,13 @@ function timingSafeEqual(a, b) {
 }
 
 function parseCookies(header = "") {
+  const safeDecode = (str) => {
+    try {
+      return decodeURIComponent(str);
+    } catch {
+      return str;
+    }
+  };
   return Object.fromEntries(
     header
       .split(";")
@@ -156,7 +174,7 @@ function parseCookies(header = "") {
       .filter(Boolean)
       .map((part) => {
         const index = part.indexOf("=");
-        return [decodeURIComponent(part.slice(0, index)), decodeURIComponent(part.slice(index + 1))];
+        return [safeDecode(part.slice(0, index)), safeDecode(part.slice(index + 1))];
       }),
   );
 }
@@ -204,6 +222,9 @@ function consumeUploadQuota(request, fileCount) {
   const max = Math.max(1, Number(process.env.UPLOAD_MAX_FILES_PER_SESSION || 200));
   const key = uploadSessionKey(request);
   const now = Date.now();
+  for (const [k, v] of uploadSessionStats) {
+    if (v.resetAt < now) uploadSessionStats.delete(k);
+  }
   let entry = uploadSessionStats.get(key);
   if (!entry || entry.resetAt < now) {
     entry = { count: 0, resetAt: now + UPLOAD_QUOTA_WINDOW_MS };
@@ -272,10 +293,22 @@ async function pruneUploadDirectory() {
 }
 
 function requireAuth(request, response, next) {
-  const publicPaths = ["/login", "/login.html", "/styles.css", "/login.js", "/app.js", "/product.js", "/product-builder-ui.js", "/ozon-product.js", "/yandex-product.js", "/health"];
+  const publicPaths = [
+    "/login",
+    "/login.html",
+    "/styles.css",
+    "/login.js",
+    "/app.js",
+    "/product.js",
+    "/product-builder-ui.js",
+    "/ozon-product.js",
+    "/yandex-product.js",
+    "/health",
+    "/version",
+  ];
   if (publicPaths.includes(request.path)) return next();
   if (request.path.startsWith("/uploads/images/")) return next();
-  if (request.path === "/api/login" || request.path === "/api/session") return next();
+  if (request.path === "/api/login" || request.path === "/api/session" || request.path === "/api/version") return next();
 
   const session = readSession(request);
   if (session) {
@@ -290,9 +323,42 @@ function requireAuth(request, response, next) {
   return response.redirect("/login.html");
 }
 
+const SERVER_BOOT_AT = new Date().toISOString();
+let SERVER_BUILD_INFO = { commit: null, builtAt: null };
+try {
+  SERVER_BUILD_INFO = {
+    commit:
+      process.env.GIT_COMMIT
+      || require("child_process").execSync("git rev-parse --short HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim()
+      || null,
+    builtAt: process.env.BUILD_TIME || null,
+  };
+} catch {
+  SERVER_BUILD_INFO = { commit: process.env.GIT_COMMIT || null, builtAt: process.env.BUILD_TIME || null };
+}
+
 app.get("/health", (_request, response) => {
   response.json({ ok: true, service: "magic-vibes-warehouse", time: new Date().toISOString() });
 });
+
+function handleVersionGet(_request, response) {
+  response.json({
+    service: "magic-vibes-warehouse",
+    bootAt: SERVER_BOOT_AT,
+    commit: SERVER_BUILD_INFO.commit,
+    builtAt: SERVER_BUILD_INFO.builtAt,
+    nodeVersion: process.version,
+    routes: {
+      warehouseBrands: true,
+      pricesSend: true,
+    },
+    time: new Date().toISOString(),
+  });
+}
+
+/** Без авторизации; дублируем на `/version` на случай прокси, который не прокидывает `/api/*`. */
+app.get("/api/version", handleVersionGet);
+app.get("/version", handleVersionGet);
 
 app.post("/api/login", loginLimiter, (request, response) => {
   const username = String(request.body.username || "");
@@ -422,12 +488,8 @@ async function readMarketplaceAccounts() {
 }
 
 async function writeMarketplaceAccounts(accounts) {
-  await fs.mkdir(dataDir, { recursive: true });
   const normalized = accounts.map((account) => normalizeMarketplaceAccount(account));
-  await fs.writeFile(
-    marketplaceAccountsPath,
-    JSON.stringify({ updatedAt: new Date().toISOString(), accounts: normalized }, null, 2),
-  );
+  await atomicWriteJsonFile(marketplaceAccountsPath, { updatedAt: new Date().toISOString(), accounts: normalized });
   return normalized;
 }
 
@@ -951,8 +1013,7 @@ async function readCachedExchangeRate() {
 }
 
 async function writeExchangeRate(rate) {
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(exchangeRatePath, JSON.stringify(rate, null, 2), "utf8");
+  await atomicWriteJsonFile(exchangeRatePath, rate);
 }
 
 function parseApiResponse(text) {
@@ -962,6 +1023,69 @@ function parseApiResponse(text) {
   } catch (_error) {
     return { raw: text.slice(0, 1000) };
   }
+}
+
+const MARKETPLACE_RETRY_MAX_ATTEMPTS = Math.max(1, Number(process.env.MARKETPLACE_RETRY_MAX_ATTEMPTS || 4));
+const MARKETPLACE_RETRY_BASE_MS = Math.max(50, Number(process.env.MARKETPLACE_RETRY_BASE_MS || 500));
+const MARKETPLACE_RETRY_MAX_MS = Math.max(MARKETPLACE_RETRY_BASE_MS, Number(process.env.MARKETPLACE_RETRY_MAX_MS || 15000));
+
+function shouldRetryMarketplaceStatus(status) {
+  return status === 408 || status === 425 || status === 429 || (status >= 500 && status < 600);
+}
+
+function parseRetryAfter(headerValue) {
+  if (!headerValue) return null;
+  const seconds = Number(headerValue);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const dateMs = Date.parse(headerValue);
+  if (Number.isFinite(dateMs)) {
+    const wait = dateMs - Date.now();
+    return wait > 0 ? wait : 0;
+  }
+  return null;
+}
+
+async function fetchWithMarketplaceRetry(url, init, source) {
+  let lastError = null;
+  for (let attempt = 0; attempt < MARKETPLACE_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(url, init);
+      if (!shouldRetryMarketplaceStatus(response.status) || attempt === MARKETPLACE_RETRY_MAX_ATTEMPTS - 1) {
+        return response;
+      }
+      const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+      const backoff = Math.min(MARKETPLACE_RETRY_MAX_MS, MARKETPLACE_RETRY_BASE_MS * 2 ** attempt);
+      const jitter = Math.floor(Math.random() * Math.min(250, backoff));
+      const waitMs = retryAfterMs != null ? retryAfterMs : backoff + jitter;
+      logger.warn(`${source}: HTTP ${response.status}, retry in ${waitMs}ms (attempt ${attempt + 1}/${MARKETPLACE_RETRY_MAX_ATTEMPTS})`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      try { response.body?.cancel?.(); } catch {}
+    } catch (error) {
+      lastError = error;
+      if (attempt === MARKETPLACE_RETRY_MAX_ATTEMPTS - 1) throw error;
+      const backoff = Math.min(MARKETPLACE_RETRY_MAX_MS, MARKETPLACE_RETRY_BASE_MS * 2 ** attempt);
+      const jitter = Math.floor(Math.random() * Math.min(250, backoff));
+      logger.warn(`${source}: network error "${error?.message || error}", retry in ${backoff + jitter}ms (attempt ${attempt + 1}/${MARKETPLACE_RETRY_MAX_ATTEMPTS})`);
+      await new Promise((resolve) => setTimeout(resolve, backoff + jitter));
+    }
+  }
+  throw lastError || new Error(`${source}: retries exhausted`);
+}
+
+function assertJsonResponse(data, source) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    const error = new Error(`${source}: empty or non-JSON response`);
+    error.statusCode = 502;
+    throw error;
+  }
+  if (typeof data.raw === "string" && Object.keys(data).length === 1) {
+    const sample = data.raw.slice(0, 200).replace(/\s+/g, " ").trim();
+    const error = new Error(`${source}: invalid JSON response (got: "${sample}")`);
+    error.statusCode = 502;
+    error.responseSample = data.raw;
+    throw error;
+  }
+  return data;
 }
 
 async function getUsdRate({ force = false } = {}) {
@@ -1009,7 +1133,7 @@ async function ozonRequest(pathname, body, account = null) {
     throw error;
   }
 
-  const response = await fetch(`${ozonBaseUrl}${pathname}`, {
+  const response = await fetchWithMarketplaceRetry(`${ozonBaseUrl}${pathname}`, {
     method: "POST",
     headers: {
       "Client-Id": clientId,
@@ -1017,7 +1141,7 @@ async function ozonRequest(pathname, body, account = null) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body || {}),
-  });
+  }, `Ozon ${pathname}`);
 
   const text = await response.text();
   const data = parseApiResponse(text);
@@ -1029,7 +1153,7 @@ async function ozonRequest(pathname, body, account = null) {
     throw error;
   }
 
-  return data;
+  return assertJsonResponse(data, "Ozon API");
 }
 
 async function yandexRequest(shop, method, pathname, body) {
@@ -1039,14 +1163,14 @@ async function yandexRequest(shop, method, pathname, body) {
     throw error;
   }
 
-  const response = await fetch(`${yandexBaseUrl}${pathname}`, {
+  const response = await fetchWithMarketplaceRetry(`${yandexBaseUrl}${pathname}`, {
     method,
     headers: {
       "Api-Key": shop.apiKey,
       "Content-Type": "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
-  });
+  }, `Yandex ${method} ${pathname}`);
 
   const text = await response.text();
   const data = parseApiResponse(text);
@@ -1058,7 +1182,7 @@ async function yandexRequest(shop, method, pathname, body) {
     throw error;
   }
 
-  return data;
+  return assertJsonResponse(data, "Yandex Market API");
 }
 
 async function getOzonProducts(limit = Number.POSITIVE_INFINITY, account = null) {
@@ -1906,8 +2030,7 @@ async function readSnapshot() {
 }
 
 async function writeSnapshot(snapshot) {
-  await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2), "utf8");
+  await atomicWriteJsonFile(snapshotPath, snapshot);
 }
 
 async function readPriceRetryQueue() {
@@ -1923,13 +2046,40 @@ async function readPriceRetryQueue() {
   }
 }
 
-async function writePriceRetryQueue(queue) {
-  await fs.mkdir(dataDir, { recursive: true });
+const PRICE_RETRY_QUEUE_MAX = Math.max(100, Number(process.env.PRICE_RETRY_QUEUE_MAX || 5000));
+
+function capPriceRetryQueue(items, source = "queue") {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (list.length <= PRICE_RETRY_QUEUE_MAX) return list;
+  const score = (item) => {
+    const attempts = Number(item.attempts || 0);
+    const queuedAt = Date.parse(item.queuedAt || "") || Date.now();
+    return attempts * 1e12 - queuedAt;
+  };
+  const sorted = [...list].sort((a, b) => score(a) - score(b));
+  const kept = sorted.slice(0, PRICE_RETRY_QUEUE_MAX);
+  const dropped = sorted.slice(PRICE_RETRY_QUEUE_MAX);
+  logger.warn("price retry queue overflow: dropped items", {
+    source,
+    dropped: dropped.length,
+    keeping: kept.length,
+    sampleDropped: dropped.slice(0, 5).map((item) => ({
+      queueKey: item.queueKey || `${item.id}:${item.target}`,
+      attempts: Number(item.attempts || 0),
+      queuedAt: item.queuedAt || null,
+      lastError: item.error || null,
+    })),
+  });
+  return kept;
+}
+
+async function writePriceRetryQueue(queue, { source = "queue" } = {}) {
+  const items = capPriceRetryQueue(Array.isArray(queue.items) ? queue.items : [], source);
   const payload = {
     updatedAt: new Date().toISOString(),
-    items: Array.isArray(queue.items) ? queue.items : [],
+    items,
   };
-  await fs.writeFile(priceRetryQueuePath, JSON.stringify(payload, null, 2), "utf8");
+  await atomicWriteJsonFile(priceRetryQueuePath, payload);
   return payload;
 }
 
@@ -1957,11 +2107,11 @@ async function writeWarehouse(warehouse) {
     const payload = {
       createdAt: warehouse.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      products: Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [],
-      suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
+      products: Array.isArray(warehouse.products) ? warehouse.products : [],
+      suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers : [],
     };
     const temporaryPath = `${warehousePath}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temporaryPath, JSON.stringify(payload, null, 2), "utf8");
+    await fs.writeFile(temporaryPath, JSON.stringify(payload), "utf8");
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
         await fs.rename(temporaryPath, warehousePath);
@@ -1994,7 +2144,6 @@ async function readDailySyncState() {
 }
 
 async function writeDailySyncState(state) {
-  await fs.mkdir(dataDir, { recursive: true });
   const current = await readDailySyncState().catch(() => ({}));
   const payload = {
     enabled: dailySyncEnabled,
@@ -2007,7 +2156,7 @@ async function writeDailySyncState(state) {
   if (Array.isArray(state.logs)) {
     payload.logs = [...state.logs, ...(Array.isArray(current.logs) ? current.logs : [])].slice(0, 30);
   }
-  await fs.writeFile(dailySyncPath, JSON.stringify(payload, null, 2), "utf8");
+  await atomicWriteJsonFile(dailySyncPath, payload);
   return payload;
 }
 
@@ -2072,6 +2221,28 @@ function mergeProducts(existingProducts, importedProducts) {
   return Array.from(map.values()).sort((a, b) => a.targetName.localeCompare(b.targetName) || a.name.localeCompare(b.name));
 }
 
+async function readOzonInfoSyncState() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(ozonInfoSyncOffsetPath, "utf8"));
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+async function persistOzonInfoSyncOffset(accountId, nextOffset) {
+  try {
+    const prev = await readOzonInfoSyncState();
+    const offsets = {
+      ...(prev.offsets && typeof prev.offsets === "object" ? prev.offsets : {}),
+      [String(accountId)]: nextOffset,
+    };
+    await atomicWriteJsonFile(ozonInfoSyncOffsetPath, { offsets });
+  } catch (error) {
+    logger.warn("ozon info sync offset write failed", { account: accountId, detail: error?.message || String(error) });
+  }
+}
+
 async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
   const accounts = getOzonAccounts().filter((account) => account.clientId && account.apiKey);
   const imported = [];
@@ -2089,15 +2260,34 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
       let stockMap = new Map();
       let priceMap = new Map();
       try {
-        const infoLimit = Number(process.env.OZON_SYNC_INFO_LIMIT || 300);
-        const infoOfferIds = products
-          .slice(0, Number.isFinite(infoLimit) && infoLimit > 0 ? infoLimit : 300)
-          .map((product) => product.offer_id);
+        const infoLimitRaw = Number(process.env.OZON_SYNC_INFO_LIMIT || 300);
+        const infoLimit = Number.isFinite(infoLimitRaw) && infoLimitRaw > 0 ? Math.floor(infoLimitRaw) : 300;
+        const total = products.length;
+        const rotateEnabled = process.env.OZON_SYNC_INFO_ROTATE !== "false";
+        let infoOfferIds = [];
+        let rotateStart = 0;
+        let rotateBucket = 0;
+        if (total > 0) {
+          rotateBucket = Math.min(infoLimit, total);
+          if (rotateEnabled) {
+            const syncState = await readOzonInfoSyncState();
+            rotateStart = Number(syncState.offsets?.[String(account.id)] || 0) % total;
+            for (let i = 0; i < rotateBucket; i += 1) {
+              infoOfferIds.push(products[(rotateStart + i) % total].offer_id);
+            }
+          } else {
+            infoOfferIds = products.slice(0, rotateBucket).map((p) => p.offer_id);
+          }
+        }
         [infoMap, stockMap, priceMap] = await Promise.all([
           getOzonProductInfoMap(infoOfferIds, account),
           getOzonStockMap(infoOfferIds, account),
           getOzonPriceMap(infoOfferIds, account),
         ]);
+        if (rotateEnabled && total > 0 && rotateBucket > 0) {
+          const next = (rotateStart + rotateBucket) % total;
+          await persistOzonInfoSyncOffset(account.id, next);
+        }
       } catch (error) {
         infoMap = new Map();
         stockMap = new Map();
@@ -2543,8 +2733,12 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
   }
   const autoReactivated = applySupplierAutoReactivate(warehouse);
   if (autoReactivated.length) {
-    await writeWarehouse(warehouse);
-    logger.info("supplier auto-reactivated by date", { count: autoReactivated.length, suppliers: autoReactivated });
+    try {
+      await writeWarehouse(warehouse);
+      logger.info("supplier auto-reactivated by date", { count: autoReactivated.length, suppliers: autoReactivated });
+    } catch (persistError) {
+      logger.warn("supplier auto-reactivate persist failed", { detail: persistError?.message || String(persistError) });
+    }
   }
   let syncWarnings = [];
   if (sync) {
@@ -2725,6 +2919,10 @@ async function buildWarehouseViewCached(params = {}) {
   const data = await buildWarehouseView(params);
   lastWarehouseViewSnapshot = data;
   warehouseViewCache.set(key, { at: Date.now(), data });
+  if (warehouseViewCache.size > WAREHOUSE_VIEW_CACHE_MAX) {
+    const oldestKey = warehouseViewCache.keys().next().value;
+    warehouseViewCache.delete(oldestKey);
+  }
   return data;
 }
 
@@ -2754,14 +2952,52 @@ async function appendHistory(syncResult) {
   }
 }
 
+async function readLastJsonLines(filePath, limit) {
+  let handle = null;
+  try {
+    handle = await fs.open(filePath, "r");
+    const stat = await handle.stat();
+    if (!stat.size) return [];
+    const chunkSize = 64 * 1024;
+    let position = stat.size;
+    let buffer = Buffer.alloc(0);
+    const lines = [];
+    while (position > 0 && lines.length <= limit) {
+      const readSize = Math.min(chunkSize, position);
+      position -= readSize;
+      const chunk = Buffer.alloc(readSize);
+      await handle.read(chunk, 0, readSize, position);
+      buffer = Buffer.concat([chunk, buffer]);
+      let newlineIndex = buffer.lastIndexOf(0x0a);
+      while (newlineIndex !== -1 && lines.length <= limit) {
+        const line = buffer.slice(newlineIndex + 1).toString("utf8").trim();
+        if (line) lines.push(line);
+        buffer = buffer.slice(0, newlineIndex);
+        newlineIndex = buffer.lastIndexOf(0x0a);
+      }
+    }
+    if (buffer.length && lines.length <= limit) {
+      const line = buffer.toString("utf8").trim();
+      if (line) lines.push(line);
+    }
+    return lines.slice(0, limit);
+  } finally {
+    if (handle) await handle.close().catch(() => {});
+  }
+}
+
 async function readHistory(limit = 300) {
   try {
-    const content = await fs.readFile(historyPath, "utf8");
-    const lines = content.trim().split("\n").filter(Boolean);
-    return lines
-      .slice(-limit)
-      .reverse()
-      .map((line) => JSON.parse(line));
+    const lines = await readLastJsonLines(historyPath, limit);
+    const result = [];
+    for (const line of lines) {
+      try {
+        result.push(JSON.parse(line));
+      } catch (parseError) {
+        logger.warn("history line parse failed", { detail: parseError?.message || String(parseError) });
+      }
+    }
+    return result;
   } catch (error) {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -3275,7 +3511,7 @@ app.get("/api/settings", async (_request, response, next) => {
   }
 });
 
-app.put("/api/settings", async (request, response, next) => {
+async function persistAppSettingsAndRespond(request, response, next) {
   try {
     const settings = await writeAppSettings(request.body || {});
     try {
@@ -3286,15 +3522,26 @@ app.put("/api/settings", async (request, response, next) => {
     } catch (auditError) {
       logger.warn("settings audit append failed", { detail: auditError?.message || String(auditError) });
     }
-    try {
-      queueImmediateAutoPricePush([], "settings_update");
-    } catch (queueError) {
-      logger.warn("settings immediate auto push queue failed", { detail: queueError?.message || String(queueError) });
-    }
+    response.once("finish", () => {
+      try {
+        queueImmediateAutoPricePush([], "settings_update");
+      } catch (queueError) {
+        logger.warn("settings immediate auto push queue failed", { detail: queueError?.message || String(queueError) });
+      }
+    });
     response.json({ ok: true, settings });
   } catch (error) {
     next(error);
   }
+}
+
+app.put("/api/settings", async (request, response, next) => {
+  await persistAppSettingsAndRespond(request, response, next);
+});
+
+/** Некоторые прокси режут PUT; POST — то же сохранение настроек. */
+app.post("/api/settings", async (request, response, next) => {
+  await persistAppSettingsAndRespond(request, response, next);
 });
 
 app.get("/api/marketplace-accounts", (_request, response) => {
@@ -3423,7 +3670,12 @@ app.post("/api/uploads/images", uploadImages.array("images", 10), async (request
     const files = Array.isArray(request.files) ? request.files : [];
     if (!files.length) return response.status(400).json({ error: "Выберите хотя бы одно изображение." });
 
-    consumeUploadQuota(request, files.length);
+    try {
+      consumeUploadQuota(request, files.length);
+    } catch (quotaError) {
+      await Promise.all(files.map((f) => fs.unlink(f.path).catch(() => {})));
+      throw quotaError;
+    }
 
     await fs.mkdir(uploadImageDir, { recursive: true });
     const saved = [];
@@ -3431,7 +3683,12 @@ app.post("/api/uploads/images", uploadImages.array("images", 10), async (request
       const extension = imageExtension(file);
       const fileName = `${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}${extension}`;
       const filePath = path.join(uploadImageDir, fileName);
-      await fs.writeFile(filePath, file.buffer);
+      try {
+        await fs.rename(file.path, filePath);
+      } catch (renameError) {
+        await fs.copyFile(file.path, filePath);
+        await fs.unlink(file.path).catch(() => {});
+      }
       const relativeUrl = `/uploads/images/${fileName}`;
       saved.push({
         originalName: file.originalname,
@@ -3447,6 +3704,9 @@ app.post("/api/uploads/images", uploadImages.array("images", 10), async (request
       pruneUploadDirectory().catch((err) => logger.warn("upload prune failed", { detail: err?.message || String(err) }));
     });
   } catch (error) {
+    if (Array.isArray(request.files)) {
+      await Promise.all(request.files.map((f) => fs.unlink(f.path).catch(() => {})));
+    }
     next(error);
   }
 });
@@ -3636,6 +3896,23 @@ app.get("/api/warehouse/products/:id/detail", async (request, response, next) =>
   }
 });
 
+app.get("/api/warehouse/products/details", async (request, response, next) => {
+  try {
+    const ids = String(request.query.ids || "")
+      .split(",")
+      .map((id) => cleanText(id))
+      .filter(Boolean);
+    if (!ids.length) return response.json({ products: [] });
+    const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
+    const data = await buildWarehouseViewCached({ sync: false, usdRate, refreshPrices: false, productIds: ids });
+    const idSet = new Set(ids);
+    const products = (data.products || []).filter((item) => idSet.has(item.id));
+    response.json({ products, createdAt: data.createdAt });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/warehouse/no-supplier", async (request, response, next) => {
   try {
     const sync = request.query.sync === "true";
@@ -3667,8 +3944,12 @@ app.get("/api/suppliers", async (_request, response, next) => {
     }
     const autoReactivated = applySupplierAutoReactivate(warehouse);
     if (autoReactivated.length) {
-      await writeWarehouse(warehouse);
-      logger.info("supplier auto-reactivated from suppliers api", { count: autoReactivated.length, suppliers: autoReactivated });
+      try {
+        await writeWarehouse(warehouse);
+        logger.info("supplier auto-reactivated from suppliers api", { count: autoReactivated.length, suppliers: autoReactivated });
+      } catch (persistError) {
+        logger.warn("supplier auto-reactivate persist failed (suppliers api)", { detail: persistError?.message || String(persistError) });
+      }
     }
     response.json({ suppliers: warehouse.suppliers || [] });
   } catch (error) {
@@ -3781,6 +4062,24 @@ app.delete("/api/suppliers/:supplierId/articles/:articleId", async (request, res
   }
 });
 
+function checkOptimisticUpdatedAt(product, request) {
+  const expectedUpdatedAt = cleanText(
+    request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt || "",
+  );
+  if (!expectedUpdatedAt) return null;
+  if (cleanText(product.updatedAt || "") !== expectedUpdatedAt) {
+    return {
+      status: 409,
+      body: {
+        error: "Конфликт обновления: карточка уже изменена другим пользователем.",
+        code: "warehouse_product_conflict",
+        currentUpdatedAt: product.updatedAt || null,
+      },
+    };
+  }
+  return null;
+}
+
 app.post("/api/warehouse/products", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
@@ -3793,6 +4092,8 @@ app.post("/api/warehouse/products", async (request, response, next) => {
     );
     if (index >= 0) {
       const current = warehouse.products[index];
+      const conflict = checkOptimisticUpdatedAt(current, request);
+      if (conflict) return response.status(conflict.status).json(conflict.body);
       warehouse.products[index] = normalizeWarehouseProduct({
         ...current,
         ...input,
@@ -3890,11 +4191,23 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
     if (!Number.isFinite(markup) || markup <= 0) return response.status(400).json({ error: "Укажите наценку больше нуля." });
 
     const warehouse = await readWarehouse();
+    const targets = warehouse.products.filter((product) => ids.has(product.id));
+    const missingLocks = targets
+      .filter((product) => {
+        const lock = optimisticLocks.get(product.id);
+        return !lock || !cleanText(lock);
+      })
+      .map((product) => ({ id: product.id, offerId: product.offerId || "", currentUpdatedAt: product.updatedAt || null }));
+    if (missingLocks.length) {
+      return response.status(400).json({
+        error: "Bulk-наценка требует optimisticLocks для каждого товара.",
+        code: "warehouse_bulk_locks_required",
+        missingLocks,
+      });
+    }
     const conflicts = [];
-    for (const product of warehouse.products) {
-      if (!ids.has(product.id)) continue;
+    for (const product of targets) {
       const expectedUpdatedAt = optimisticLocks.get(product.id);
-      if (!expectedUpdatedAt) continue;
       if (cleanText(product.updatedAt || "") !== expectedUpdatedAt) {
         conflicts.push({
           id: product.id,
@@ -4006,7 +4319,12 @@ app.patch("/api/warehouse/products/ungroup", async (request, response, next) => 
 app.delete("/api/warehouse/products/:id", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
-    warehouse.products = warehouse.products.filter((product) => product.id !== request.params.id);
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (product) {
+      const conflict = checkOptimisticUpdatedAt(product, request);
+      if (conflict) return response.status(conflict.status).json(conflict.body);
+    }
+    warehouse.products = warehouse.products.filter((item) => item.id !== request.params.id);
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
   } catch (error) {
     next(error);
@@ -4018,6 +4336,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+
+    const conflict = checkOptimisticUpdatedAt(product, request);
+    if (conflict) return response.status(conflict.status).json(conflict.body);
 
     const link = normalizeWarehouseLink(request.body);
     if (!link.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
@@ -4040,6 +4361,8 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.productId);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const conflict = checkOptimisticUpdatedAt(product, request);
+    if (conflict) return response.status(conflict.status).json(conflict.body);
     product.links = (product.links || []).filter((link) => link.id !== request.params.linkId);
     if (!product.links.length) product.autoPriceEnabled = false;
     const saved = await writeWarehouse(warehouse);
@@ -4198,10 +4521,18 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     attempts: Number(item.attempts || 0) + 1,
   }));
   const merged = [...(queueState.items || []), ...failedQueued];
-  const deduped = Array.from(new Map(merged.map((item) => [item.queueKey || `${item.id}:${item.target}`, item])).values()).slice(0, 5000);
-  await writePriceRetryQueue({ items: deduped });
+  const deduped = Array.from(new Map(merged.map((item) => [item.queueKey || `${item.id}:${item.target}`, item])).values());
+  const written = await writePriceRetryQueue({ items: deduped }, { source: "send_warehouse_prices" });
 
-  return { ok: true, sent: items.length - failed.length, failed: failed.length, queued: deduped.length, skipped, results };
+  const safeResults = results.map((entry) => {
+    try {
+      return { target: entry.target, response: JSON.parse(JSON.stringify(entry.response)) };
+    } catch {
+      return { target: entry.target, response: null, responseNote: "omit_non_json" };
+    }
+  });
+
+  return { ok: true, sent: items.length - failed.length, failed: failed.length, queued: written.items.length, skipped, results: safeResults };
 }
 
 async function processMarketplaceJob(name, data = {}) {
@@ -4368,8 +4699,8 @@ app.post("/api/warehouse/prices/retry", async (request, response, next) => {
     const processedKeys = new Set(items.map((item) => String(item.queueKey || `${item.id}:${item.target}`)));
     const untouched = queue.items.filter((item) => !processedKeys.has(String(item.queueKey || `${item.id}:${item.target}`)));
     const remaining = [...failed, ...untouched];
-    await writePriceRetryQueue({ items: remaining.slice(0, 5000) });
-    response.json({ ok: true, retried: items.length - failed.length, failed: failed.length, remaining: remaining.length, results });
+    const written = await writePriceRetryQueue({ items: remaining }, { source: "manual_retry" });
+    response.json({ ok: true, retried: items.length - failed.length, failed: failed.length, remaining: written.items.length, results });
   } catch (error) {
     next(error);
   }
@@ -4385,6 +4716,100 @@ app.get("/api/warehouse/prices/retry-queue", async (_request, response, next) =>
       }))
       .sort((a, b) => new Date(b.queuedAt || 0) - new Date(a.queuedAt || 0));
     response.json({ ok: true, updatedAt: queue.updatedAt, total: items.length, items });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/warehouse/auto-price/diagnostics", async (_request, response, next) => {
+  try {
+    const queue = await readPriceRetryQueue();
+    const warehouse = await readWarehouse();
+    const products = Array.isArray(warehouse.products) ? warehouse.products : [];
+
+    const recentSends = [];
+    for (const product of products) {
+      const history = Array.isArray(product.priceHistory) ? product.priceHistory : [];
+      for (const entry of history.slice(-3)) {
+        recentSends.push({
+          productId: product.id,
+          offerId: product.offerId,
+          name: product.name,
+          marketplace: entry.marketplace,
+          target: entry.target,
+          at: entry.at,
+          oldPrice: entry.oldPrice,
+          newPrice: entry.newPrice,
+          status: entry.status,
+          error: entry.error,
+          reason: entry.reason,
+        });
+      }
+    }
+    recentSends.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
+
+    const ozonRecent = recentSends.filter((item) => item.marketplace === "ozon").slice(0, 50);
+    const ozonStats = {
+      total: 0,
+      success: 0,
+      error: 0,
+      lastSuccessAt: null,
+      lastErrorAt: null,
+      lastErrorMessage: null,
+    };
+    for (const item of recentSends.filter((entry) => entry.marketplace === "ozon")) {
+      ozonStats.total += 1;
+      if (item.status === "success") {
+        ozonStats.success += 1;
+        if (!ozonStats.lastSuccessAt || new Date(item.at) > new Date(ozonStats.lastSuccessAt)) ozonStats.lastSuccessAt = item.at;
+      } else {
+        ozonStats.error += 1;
+        if (!ozonStats.lastErrorAt || new Date(item.at) > new Date(ozonStats.lastErrorAt)) {
+          ozonStats.lastErrorAt = item.at;
+          ozonStats.lastErrorMessage = item.error || null;
+        }
+      }
+    }
+
+    const lastSendByProduct = products
+      .map((product) => product.lastOzonPriceSend ? {
+        productId: product.id,
+        offerId: product.offerId,
+        name: product.name,
+        ...product.lastOzonPriceSend,
+      } : null)
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0))
+      .slice(0, 30);
+
+    response.json({
+      ok: true,
+      now: new Date().toISOString(),
+      bootAt: SERVER_BOOT_AT,
+      autoPushPending: {
+        scheduled: Boolean(immediateAutoPushTimer),
+        all: immediateAutoPushAll,
+        ids: Array.from(immediateAutoPushIds),
+      },
+      retryQueue: {
+        updatedAt: queue.updatedAt,
+        total: (queue.items || []).length,
+        topAttempts: (queue.items || [])
+          .slice()
+          .sort((a, b) => Number(b.attempts || 0) - Number(a.attempts || 0))
+          .slice(0, 10)
+          .map((item) => ({
+            queueKey: item.queueKey || `${item.id}:${item.target}`,
+            offerId: item.offerId,
+            attempts: Number(item.attempts || 0),
+            queuedAt: item.queuedAt,
+            error: item.error,
+          })),
+      },
+      ozonStats,
+      ozonRecent,
+      lastOzonSendByProduct: lastSendByProduct,
+    });
   } catch (error) {
     next(error);
   }
@@ -4826,6 +5251,13 @@ function pickNoSupplierAutomationCandidates(products = []) {
 }
 
 async function runNoSupplierMarketplaceAutomation(preview) {
+  if (preview?.stale || preview?.sourceError) {
+    logger.warn("no-supplier automation skipped: warehouse view is stale", {
+      stale: Boolean(preview?.stale),
+      sourceError: preview?.sourceError || null,
+    });
+    return { zeroStockSent: 0, archived: 0, errors: [], skipped: "stale_view" };
+  }
   const products = Array.isArray(preview?.products) ? preview.products : [];
   const now = new Date().toISOString();
   const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates(products);
@@ -4863,6 +5295,13 @@ async function runSupplierRecoveryAutomation(preview) {
   if (!autoRestoreOnSupplierReturn) {
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
   }
+  if (preview?.stale || preview?.sourceError) {
+    logger.warn("supplier recovery skipped: warehouse view is stale", {
+      stale: Boolean(preview?.stale),
+      sourceError: preview?.sourceError || null,
+    });
+    return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [], skipped: "stale_view" };
+  }
   const products = Array.isArray(preview?.products) ? preview.products : [];
   const recovered = products.filter(
     (product) =>
@@ -4872,37 +5311,71 @@ async function runSupplierRecoveryAutomation(preview) {
       && !product.noSupplierAutomation?.recoveredAt,
   );
   if (!recovered.length) return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
+
+  const needsUnarchive = recovered.filter((product) => Boolean(product.noSupplierAutomation?.archivedAt));
   const [stockActions, unarchiveActions] = await Promise.all([
     restoreStocksOnMarketplaces(recovered),
-    unarchiveProductsOnMarketplaces(recovered),
+    needsUnarchive.length ? unarchiveProductsOnMarketplaces(needsUnarchive) : Promise.resolve([]),
   ]);
+
+  const stockOkById = new Map();
+  for (const action of stockActions) {
+    if (!stockOkById.has(action.id)) stockOkById.set(action.id, true);
+    if (!action.ok) stockOkById.set(action.id, false);
+  }
+  const unarchiveOkById = new Map();
+  for (const action of unarchiveActions) {
+    if (!unarchiveOkById.has(action.id)) unarchiveOkById.set(action.id, true);
+    if (!action.ok) unarchiveOkById.set(action.id, false);
+  }
+  const errorsById = new Map();
+  for (const action of [...stockActions, ...unarchiveActions]) {
+    if (action.ok) continue;
+    if (!errorsById.has(action.id)) errorsById.set(action.id, action.error || `${action.type}_failed`);
+  }
+
+  const fullySucceeded = recovered.filter((product) => {
+    const stockOk = stockOkById.get(product.id) === true;
+    const wasArchived = Boolean(product.noSupplierAutomation?.archivedAt);
+    const unarchiveOk = !wasArchived || unarchiveOkById.get(product.id) === true;
+    return stockOk && unarchiveOk;
+  });
+
   const warehouse = await readWarehouse();
   const now = new Date().toISOString();
   for (const product of warehouse.products) {
     if (!recovered.some((item) => item.id === product.id)) continue;
     product.noSupplierAutomation = product.noSupplierAutomation || {};
-    product.noSupplierAutomation.recoveredAt = now;
-    product.noSupplierAutomation.stockZeroAt = null;
-    product.noSupplierAutomation.archivedAt = null;
-    product.noSupplierAutomation.lastError = null;
+    if (fullySucceeded.some((item) => item.id === product.id)) {
+      product.noSupplierAutomation.recoveredAt = now;
+      product.noSupplierAutomation.stockZeroAt = null;
+      product.noSupplierAutomation.archivedAt = null;
+      product.noSupplierAutomation.lastError = null;
+    } else {
+      product.noSupplierAutomation.lastError = errorsById.get(product.id) || "recovery_partial_failure";
+    }
   }
   await writeWarehouse(warehouse);
-  queueMarketplaceJob(
-    "auto-price-push",
-    {
-      productIds: recovered.map((item) => item.id),
-      usdRate: undefined,
-      minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
-      minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
-    },
-    { priority: 2 },
-  );
+
+  if (fullySucceeded.length) {
+    queueMarketplaceJob(
+      "auto-price-push",
+      {
+        productIds: fullySucceeded.map((item) => item.id),
+        usdRate: undefined,
+        minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
+        minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
+      },
+      { priority: 2 },
+    );
+  }
 
   const errors = [...stockActions, ...unarchiveActions]
     .filter((item) => !item.ok)
     .map((item) => ({ id: item.id, type: item.type, error: item.error }));
   return {
-    recovered: recovered.length,
+    recovered: fullySucceeded.length,
+    attempted: recovered.length,
     restoredStocks: stockActions.filter((item) => item.ok).length,
     unarchived: unarchiveActions.filter((item) => item.ok).length,
     errors,
@@ -5043,16 +5516,24 @@ app.use((error, request, response, _next) => {
     err: error,
   });
   const uploadError = error instanceof multer.MulterError;
-  const pmErrorCodes = new Set(["ECONNREFUSED", "ETIMEDOUT", "PROTOCOL_CONNECTION_LOST", "ER_ACCESS_DENIED_ERROR", "ER_BAD_DB_ERROR"]);
-  const pmError = pmErrorCodes.has(String(error.code || ""));
+  const code = String(error.code || "");
+  const mysqlLike =
+    code.startsWith("ER_")
+    || code === "PROTOCOL_CONNECTION_LOST"
+    || code === "ER_ACCESS_DENIED_ERROR"
+    || code === "ER_BAD_DB_ERROR";
+  const networkDown = new Set(["ECONNREFUSED", "ETIMEDOUT"]).has(code);
   const message = uploadError
     ? "Не удалось загрузить изображение"
-    : pmError
+    : mysqlLike
       ? "Не удалось выполнить запрос к Price Master"
-      : (error.message || "Внутренняя ошибка сервера");
+      : networkDown
+        ? "Нет соединения с сервером (БД, Redis или внешний API). Проверьте .env и доступность сети."
+        : (error.message || "Внутренняя ошибка сервера");
+  const isDev = process.env.NODE_ENV !== "production";
   response.status(uploadError ? 400 : error.statusCode || 500).json({
     error: message,
-    detail: error.code || error.message,
+    detail: isDev ? (error.code || error.message) : undefined,
     ozon: error.ozon,
   });
 });
@@ -5064,6 +5545,7 @@ function startServer() {
       port,
       url: `http://localhost:${port}`,
       healthPath: "/health",
+      versionPaths: ["/api/version", "/version"],
       trustProxyHops: trustProxyHops || 0,
     });
     if (autoSyncMinutes > 0) {
@@ -5078,7 +5560,13 @@ function startServer() {
   scheduleDailySync();
 
   if (autoSyncMinutes > 0) {
+    let autoSyncRunning = false;
     setInterval(async () => {
+      if (autoSyncRunning) {
+        logger.warn("auto sync skipped: previous run still in progress");
+        return;
+      }
+      autoSyncRunning = true;
       try {
         const result = await runSync();
         const warehouse = await buildWarehouseView({ sync: true });
@@ -5105,12 +5593,14 @@ function startServer() {
         }
       } catch (error) {
         logger.error("auto sync failed", { detail: error.code || error.message, err: error });
+      } finally {
+        autoSyncRunning = false;
       }
     }, autoSyncMinutes * 60 * 1000);
   }
 }
 
-module.exports = { app, startServer, resolveMarkupCoefficient, pickNoSupplierAutomationCandidates };
+module.exports = { app, startServer, handleVersionGet, resolveMarkupCoefficient, pickNoSupplierAutomationCandidates };
 
 if (require.main === module) {
   startServer();

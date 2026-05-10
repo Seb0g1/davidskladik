@@ -15,6 +15,18 @@ test("GET /health", async () => {
   assert.ok(res.body.service);
 });
 
+test("GET /api/version без сессии", async () => {
+  const res = await request(app).get("/api/version").expect(200);
+  assert.equal(res.body.service, "magic-vibes-warehouse");
+  assert.ok(res.body.bootAt);
+  assert.ok(res.body.time);
+});
+
+test("GET /version без сессии (алиас)", async () => {
+  const res = await request(app).get("/version").expect(200);
+  assert.equal(res.body.service, "magic-vibes-warehouse");
+});
+
 test("POST /api/login неверный пароль", async () => {
   await request(app)
     .post("/api/login")

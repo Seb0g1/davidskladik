@@ -60,6 +60,12 @@ const elements = {
   warehouseRefreshPricesButton: document.querySelector("#warehouseRefreshPricesButton"),
   warehouseDryRunButton: document.querySelector("#warehouseDryRunButton"),
   warehouseRetryQueueButton: document.querySelector("#warehouseRetryQueueButton"),
+  warehouseAutoPriceDiagButton: document.querySelector("#warehouseAutoPriceDiagButton"),
+  autoPriceDiagPanel: document.querySelector("#autoPriceDiagPanel"),
+  autoPriceDiagMeta: document.querySelector("#autoPriceDiagMeta"),
+  autoPriceDiagBody: document.querySelector("#autoPriceDiagBody"),
+  autoPriceDiagRefreshButton: document.querySelector("#autoPriceDiagRefreshButton"),
+  autoPriceDiagCloseButton: document.querySelector("#autoPriceDiagCloseButton"),
   warehouseSyncProgress: document.querySelector("#warehouseSyncProgress"),
   syncProgressTitle: document.querySelector("#syncProgressTitle"),
   syncProgressStage: document.querySelector("#syncProgressStage"),
@@ -312,7 +318,8 @@ function escapeHtml(value) {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;");
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 function resolveBrandFromOzonAttributes(item) {
@@ -1053,7 +1060,14 @@ function renderWarehouse(data) {
     elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(data.usdRate)} RUB/USD`;
   }
   elements.warehouseSelectChangedButton.disabled = !state.warehouse.length;
-  if (data.sourceError) {
+  if (data.stale) {
+    const staleMsg = data.sourceError
+      ? `Данные устарели — PriceMaster недоступен: ${data.sourceError}`
+      : "Данные устарели — показан последний успешный снимок. Попробуйте обновить страницу или нажмите «Синхронизировать».";
+    elements.warehouseStatus.textContent = staleMsg;
+    elements.warehouseStatus.classList.add("is-warn");
+    elements.warehouseStatus.classList.remove("is-ok");
+  } else if (data.sourceError) {
     elements.warehouseStatus.textContent = `Склад загружен, но PriceMaster сейчас недоступен: ${data.sourceError}`;
     elements.warehouseStatus.classList.add("is-warn");
     elements.warehouseStatus.classList.remove("is-ok");
@@ -1206,11 +1220,24 @@ function applyLocalWarehouseProductUpdate(product) {
 function refreshOpenWarehouseDetailIfNeeded() {
   const key = state.selectedWarehouseGroupKey;
   if (!key) return;
-  ensureWarehouseGroupDetailed(key)
-    .then((group) => {
-      if (state.selectedWarehouseGroupKey === key && group) renderWarehouseDetail(group);
-    })
-    .catch(() => {});
+  reloadOpenWarehouseDetailFromServer(key).catch(() => {
+    queueWarehouseRefresh();
+  });
+}
+
+async function reloadOpenWarehouseDetailFromServer(groupKey) {
+  if (!groupKey) return;
+  let group = getSortedWarehouseGroups().find((item) => item.key === groupKey);
+  if (!group) return;
+  const ids = (group.variants || []).map((v) => v.id).filter(Boolean);
+  if (!ids.length) return;
+  const payload = await api(`/api/warehouse/products/details?ids=${encodeURIComponent(ids.join(","))}`)
+    .catch(() => ({ products: [] }));
+  const products = Array.isArray(payload?.products) ? payload.products : [];
+  products.forEach((product) => mergeWarehouseProduct(product));
+  applyWarehouseFilters();
+  group = getSortedWarehouseGroups().find((item) => item.key === groupKey);
+  if (state.selectedWarehouseGroupKey === groupKey && group) renderWarehouseDetail(group);
 }
 
 async function ensureWarehouseGroupDetailed(groupKey) {
@@ -1218,9 +1245,9 @@ async function ensureWarehouseGroupDetailed(groupKey) {
   if (!group) return null;
   const partialIds = (group.variants || []).filter((item) => item.partial).map((item) => item.id);
   if (!partialIds.length) return group;
-  const details = await Promise.all(
-    partialIds.map((id) => api(`/api/warehouse/products/${encodeURIComponent(id)}/detail`).then((payload) => payload.product)),
-  );
+  const payload = await api(`/api/warehouse/products/details?ids=${encodeURIComponent(partialIds.join(","))}`)
+    .catch(() => ({ products: [] }));
+  const details = Array.isArray(payload?.products) ? payload.products : [];
   details.filter(Boolean).forEach((product) => mergeWarehouseProduct(product));
   applyWarehouseFilters();
   return getSortedWarehouseGroups().find((item) => item.key === groupKey) || null;
@@ -1259,7 +1286,7 @@ function renderWarehouseDetail(group) {
         <h2>${escapeHtml(productName)}</h2>
         <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}</p>
       </div>
-      <button class="text-button delete-product" type="button" data-product-id="${escapeHtml(product.id)}">Удалить</button>
+      <button class="text-button delete-product" type="button" data-product-id="${escapeHtml(product.id)}" data-expected-updated-at="${escapeHtml(product.updatedAt || "")}">Удалить</button>
       <a class="secondary-link-button compact-button" href="/product.html?group=${encodeURIComponent(group.key || productGroupKey(product))}">Страница</a>
     </div>
 
@@ -1397,7 +1424,7 @@ function renderWarehouseDetail(group) {
                           ${!link.missingInPriceMaster && Number(link.availableCount || 0) === 0 ? " · нет активного остатка" : ""}
                         </span>
                       </div>
-                      <button class="text-button delete-link" type="button" data-product-id="${escapeHtml(link.productId || product.id)}" data-link-id="${escapeHtml(link.id)}">Удалить</button>
+                      <button class="text-button delete-link" type="button" data-product-id="${escapeHtml(link.productId || product.id)}" data-link-id="${escapeHtml(link.id)}" data-expected-updated-at="${escapeHtml((variants.find((v) => v.id === (link.productId || product.id)) || product).updatedAt || "")}">Удалить</button>
                     </div>
                   `,
                 )
@@ -1405,7 +1432,10 @@ function renderWarehouseDetail(group) {
             : '<div class="empty-mini">Связей пока нет.</div>'
         }
       </div>
-      ${elements.linkFormTemplate.innerHTML.replace("<form", `<form data-product-id="${escapeHtml(product.id)}" data-product-ids="${escapeHtml(groupProductIds.join(","))}"`)}
+      ${elements.linkFormTemplate.innerHTML.replace(
+        "<form",
+        `<form data-product-id="${escapeHtml(product.id)}" data-product-ids="${escapeHtml(groupProductIds.join(","))}" data-product-updated-ats="${escapeHtml(variants.map((v) => `${v.id}:${v.updatedAt || ""}`).join("|"))}"`,
+      )}
     </section>
 
     <section class="detail-section">
@@ -2044,8 +2074,15 @@ async function refreshWarehouseBrandSelect() {
   const wantRaw = String(state.warehouseBrandFilter || "").trim();
   let brands = [];
   try {
-    const payload = await api("/api/warehouse/brands");
-    brands = Array.isArray(payload.brands) ? payload.brands.slice() : [];
+    const res = await fetch("/api/warehouse/brands", { credentials: "same-origin" });
+    if (res.status === 401) {
+      window.location.href = "/login.html";
+      return;
+    }
+    if (res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      brands = Array.isArray(payload.brands) ? payload.brands.slice() : [];
+    }
   } catch (_error) {
     brands = [];
   }
@@ -2461,17 +2498,29 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   const form = event.target;
   const data = new FormData(form);
   const shouldSendOzonPriceNow = event.submitter?.name === "sendPriceOzonNow";
+  const submitters = [...form.querySelectorAll('button[type="submit"],input[type="submit"]')];
+  submitters.forEach((el) => {
+    el.disabled = true;
+  });
+  elements.warehouseStatus.textContent = "Сохраняю привязку...";
   try {
     const productIds = String(form.dataset.productIds || form.dataset.productId || "")
       .split(",")
       .map((id) => id.trim())
       .filter(Boolean);
+    const updatedAtsByProductId = new Map(
+      String(form.dataset.productUpdatedAts || "")
+        .split("|")
+        .map((entry) => entry.split(":"))
+        .map(([id, at]) => [String(id || ""), String(at || "")]),
+    );
+    const linkPayload = Object.fromEntries(data.entries());
     const results = await Promise.all(
       productIds.map((productId) =>
         api(`/api/warehouse/products/${productId}/links`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(Object.fromEntries(data.entries())),
+          body: JSON.stringify({ ...linkPayload, expectedUpdatedAt: updatedAtsByProductId.get(productId) || "" }),
         }),
       ),
     );
@@ -2482,7 +2531,9 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
       state.selectedWarehouseGroupKey = null;
       renderWarehouseDetail(null);
     } else {
-      refreshOpenWarehouseDetailIfNeeded();
+      await reloadOpenWarehouseDetailFromServer(state.selectedWarehouseGroupKey).catch(() => {
+        refreshOpenWarehouseDetailIfNeeded();
+      });
     }
     refreshWarehouseBrandSelect().catch(() => {});
     if (shouldSendOzonPriceNow) {
@@ -2497,8 +2548,10 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     }
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
-  }
-});
+  } finally {
+    submitters.forEach((el) => {
+      el.disabled = false;
+    });
 
 elements.warehouseDetail.addEventListener("click", async (event) => {
   const resetMarkupBtn = event.target.closest(".reset-markup-to-settings");
@@ -2559,9 +2612,11 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
     if (linkButton) {
       linkButton.disabled = true;
       try {
-        const res = await api(`/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}`, {
-          method: "DELETE",
-        });
+        const expectedUpdatedAt = String(linkButton.dataset.expectedUpdatedAt || "");
+        const url = expectedUpdatedAt
+          ? `/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}?expectedUpdatedAt=${encodeURIComponent(expectedUpdatedAt)}`
+          : `/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}`;
+        const res = await api(url, { method: "DELETE" });
         if (res?.product) applyLocalWarehouseProductUpdate(res.product);
         refreshOpenWarehouseDetailIfNeeded();
         refreshWarehouseBrandSelect().catch(() => {});
@@ -2571,7 +2626,11 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       }
     }
     if (productButton && await confirmAction({ title: "Удалить товар?", text: "Удалить товар из личного склада?", okText: "Удалить" })) {
-      await api(`/api/warehouse/products/${productButton.dataset.productId}`, { method: "DELETE" });
+      const expectedUpdatedAt = String(productButton.dataset.expectedUpdatedAt || "");
+      const url = expectedUpdatedAt
+        ? `/api/warehouse/products/${productButton.dataset.productId}?expectedUpdatedAt=${encodeURIComponent(expectedUpdatedAt)}`
+        : `/api/warehouse/products/${productButton.dataset.productId}`;
+      await api(url, { method: "DELETE" });
       queueWarehouseRefresh();
     }
   } catch (error) {
@@ -2662,6 +2721,104 @@ elements.retryQueueRefreshButton?.addEventListener("click", () => {
   loadRetryQueue().catch((error) => {
     elements.warehouseStatus.textContent = error.message;
   });
+});
+
+async function loadAutoPriceDiagnostics() {
+  if (!elements.autoPriceDiagPanel || !elements.autoPriceDiagBody || !elements.autoPriceDiagMeta) return;
+  elements.autoPriceDiagMeta.textContent = "Загружаю...";
+  try {
+    const data = await api("/api/warehouse/auto-price/diagnostics");
+    const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString("ru-RU") : "—");
+    const stats = data.ozonStats || {};
+    const queue = data.retryQueue || {};
+    const recent = Array.isArray(data.ozonRecent) ? data.ozonRecent : [];
+    const lastByProduct = Array.isArray(data.lastOzonSendByProduct) ? data.lastOzonSendByProduct : [];
+    const pending = data.autoPushPending || {};
+
+    elements.autoPriceDiagMeta.innerHTML = `
+      <span><strong>Сейчас:</strong> ${fmtTime(data.now)} · сервер запущен ${fmtTime(data.bootAt)}</span>
+      ${pending.scheduled ? ` · <strong>В очереди немедленный пуш</strong> (${pending.all ? "все товары" : `${pending.ids?.length || 0} id`})` : ""}
+    `;
+
+    const recentRows = recent.length
+      ? recent.slice(0, 25).map((item) => `
+          <div class="history-row ${item.status === "success" ? "is-ok" : "is-warn"}">
+            <div>
+              <strong>${escapeHtml(item.offerId || item.productId || "—")}</strong>
+              <span> · ${escapeHtml(item.name || "")}</span>
+              <span> · ${escapeHtml(item.target || "")}</span>
+            </div>
+            <div>
+              ${formatMoney(item.oldPrice || 0)} → <strong>${formatMoney(item.newPrice || 0)}</strong>
+              · ${escapeHtml(String(item.status || ""))}
+              ${item.error ? ` · <span class="is-warn">${escapeHtml(item.error)}</span>` : ""}
+            </div>
+            <small>${fmtTime(item.at)} · ${escapeHtml(item.reason || "")}</small>
+          </div>
+        `).join("")
+      : '<div class="empty-mini">Нет недавних отправок Ozon в priceHistory.</div>';
+
+    const lastByProductRows = lastByProduct.length
+      ? lastByProduct.slice(0, 20).map((item) => `
+          <div class="history-row ${item.status === "success" ? "is-ok" : "is-warn"}">
+            <div><strong>${escapeHtml(item.offerId || "—")}</strong> · ${escapeHtml(item.name || "")}</div>
+            <div>${escapeHtml(String(item.status || ""))} · ${escapeHtml(item.detail || "")}</div>
+            <small>${fmtTime(item.at)}</small>
+          </div>
+        `).join("")
+      : '<div class="empty-mini">Нет lastOzonPriceSend ни у одного товара.</div>';
+
+    const queueRows = (queue.topAttempts || []).length
+      ? (queue.topAttempts || []).map((item) => `
+          <div class="history-row is-warn">
+            <div><strong>${escapeHtml(item.offerId || item.queueKey || "—")}</strong> · ${escapeHtml(String(item.attempts || 0))} попыток</div>
+            <div>${escapeHtml(item.error || "—")}</div>
+            <small>${fmtTime(item.queuedAt)}</small>
+          </div>
+        `).join("")
+      : '<div class="empty-mini">Очередь пуста.</div>';
+
+    elements.autoPriceDiagBody.innerHTML = `
+      <div class="diag-grid">
+        <section>
+          <h4>Ozon — суммарно</h4>
+          <p>Всего записей: <strong>${formatNumber(stats.total || 0)}</strong> · успехов: <strong>${formatNumber(stats.success || 0)}</strong> · ошибок: <strong>${formatNumber(stats.error || 0)}</strong></p>
+          <p>Последний успех: <strong>${fmtTime(stats.lastSuccessAt)}</strong></p>
+          <p>Последняя ошибка: <strong>${fmtTime(stats.lastErrorAt)}</strong>${stats.lastErrorMessage ? ` · <span class="is-warn">${escapeHtml(stats.lastErrorMessage)}</span>` : ""}</p>
+        </section>
+        <section>
+          <h4>Очередь ретраев</h4>
+          <p>Обновлена: <strong>${fmtTime(queue.updatedAt)}</strong> · в очереди: <strong>${formatNumber(queue.total || 0)}</strong></p>
+          ${queueRows}
+        </section>
+        <section>
+          <h4>lastOzonPriceSend по товарам</h4>
+          ${lastByProductRows}
+        </section>
+        <section>
+          <h4>Последние отправки Ozon (priceHistory)</h4>
+          ${recentRows}
+        </section>
+      </div>
+    `;
+    elements.autoPriceDiagPanel.classList.remove("hidden");
+  } catch (error) {
+    elements.autoPriceDiagMeta.textContent = `Ошибка: ${error.message}`;
+  }
+}
+
+elements.warehouseAutoPriceDiagButton?.addEventListener("click", () => {
+  loadAutoPriceDiagnostics().catch((error) => {
+    if (elements.autoPriceDiagMeta) elements.autoPriceDiagMeta.textContent = error.message;
+  });
+});
+
+elements.autoPriceDiagRefreshButton?.addEventListener("click", () => {
+  loadAutoPriceDiagnostics().catch(() => {});
+});
+
+elements.autoPriceDiagCloseButton?.addEventListener("click", () => {
+  elements.autoPriceDiagPanel?.classList.add("hidden");
 });
 
 elements.retryQueueSortInput?.addEventListener("change", () => {

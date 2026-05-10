@@ -2807,6 +2807,24 @@ td {
   border-radius: 14px;
   background: rgba(255,255,255,0.72);
 }
+.diag-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-top: 8px;
+}
+.diag-grid section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.6);
+}
+.diag-grid section h4 { margin: 0 0 4px 0; }
+.diag-grid section p { margin: 0; }
+.empty-mini { opacity: 0.6; padding: 6px 0; }
 
 .retry-queue-check {
   margin-top: 3px;

@@ -126,6 +126,7 @@
                   <button id="warehouseRefreshPricesButton" class="secondary-button" type="button">Обновить цены</button>
                   <button id="warehouseDryRunButton" class="secondary-button" type="button">Dry-run</button>
                   <button id="warehouseRetryQueueButton" class="secondary-button" type="button">Повторить неотправленные</button>
+                  <button id="warehouseAutoPriceDiagButton" class="secondary-button" type="button" title="Сводка: что отправилось в Ozon, что в очереди ретраев">Диагностика автоцен</button>
                   <button id="warehouseSelectChangedButton" class="secondary-button" type="button" disabled>Выбрать изменения</button>
                   <button id="warehouseSendButton" class="danger-button" type="button" disabled>Обновить цены</button>
                 </div>
@@ -180,6 +181,19 @@
               </div>
             </div>
             <div id="retryQueueList" class="history-list"></div>
+          </section>
+          <section id="autoPriceDiagPanel" class="control-panel hidden">
+            <div class="section-heading">
+              <div>
+                <h3>Диагностика автоцен</h3>
+                <p id="autoPriceDiagMeta">Загружаю...</p>
+              </div>
+              <div class="form-inline-actions">
+                <button id="autoPriceDiagRefreshButton" class="secondary-button compact-button" type="button">Обновить</button>
+                <button id="autoPriceDiagCloseButton" class="secondary-button compact-button" type="button">Свернуть</button>
+              </div>
+            </div>
+            <div id="autoPriceDiagBody" class="history-list"></div>
           </section>
           <div class="daily-sync-panel warehouse-daily-sync-inline">
             <div>
