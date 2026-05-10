@@ -8,6 +8,7 @@ const rateLimit = require("express-rate-limit");
 const multer = require("multer");
 const mysql = require("mysql2/promise");
 const { Queue, Worker } = require("bullmq");
+const ExcelJS = require("exceljs");
 require("dotenv").config();
 
 const logger = require("./lib/logger");
@@ -77,6 +78,8 @@ const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const telegramBotToken = cleanText(process.env.TELEGRAM_BOT_TOKEN);
 const telegramChatId = cleanText(process.env.TELEGRAM_CHAT_ID);
 const telegramNotificationsEnabled = process.env.TELEGRAM_NOTIFICATIONS_ENABLED !== "false";
+const telegramDailyReportEnabled = process.env.TELEGRAM_DAILY_REPORT_ENABLED !== "false";
+const telegramDailyReportTime = process.env.TELEGRAM_DAILY_REPORT_TIME || "22:00";
 
 let dailySyncTimer = null;
 let dailySyncNextRunAt = null;
@@ -84,6 +87,8 @@ let dailySyncPromise = null;
 let autoSyncTimer = null;
 let autoSyncRunning = false;
 let autoSyncNextRunAt = null;
+let telegramDailyReportTimer = null;
+let telegramDailyReportNextRunAt = null;
 let warehouseWritePromise = Promise.resolve();
 let warehouseMemoryCache = null;
 const warehouseViewCache = new Map();
@@ -126,6 +131,32 @@ async function sendTelegramNotification(text, extra = {}) {
     return { ok: true };
   } catch (error) {
     logger.warn("telegram notification failed", { detail: error?.message || String(error) });
+    return { ok: false, error: error?.message || String(error) };
+  }
+}
+
+async function sendTelegramDocument({ buffer, filename, caption }) {
+  if (!telegramReady()) return { ok: false, skipped: true };
+  try {
+    const form = new FormData();
+    form.append("chat_id", telegramChatId);
+    if (caption) form.append("caption", compactTelegramText(caption, 1000));
+    form.append(
+      "document",
+      new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
+      filename,
+    );
+    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendDocument`, {
+      method: "POST",
+      body: form,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) {
+      throw new Error(payload.description || `Telegram API error ${response.status}`);
+    }
+    return { ok: true };
+  } catch (error) {
+    logger.warn("telegram document failed", { detail: error?.message || String(error) });
     return { ok: false, error: error?.message || String(error) };
   }
 }
@@ -626,6 +657,22 @@ async function readAudit(limit = 200) {
   try {
     const content = await fs.readFile(auditLogPath, "utf8");
     return content.trim().split("\n").filter(Boolean).slice(-limit).reverse().map((line) => JSON.parse(line));
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function readAuditSince(since) {
+  try {
+    const sinceMs = new Date(since).getTime();
+    const content = await fs.readFile(auditLogPath, "utf8");
+    return content
+      .trim()
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+      .filter((entry) => new Date(entry.at).getTime() >= sinceMs);
   } catch (error) {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -3495,6 +3542,9 @@ app.get("/api/settings", async (_request, response, next) => {
         configured: telegramReady(),
         enabled: telegramNotificationsEnabled,
         chatId: telegramChatId ? maskSecret(telegramChatId) : "",
+        dailyReportEnabled: telegramDailyReportEnabled,
+        dailyReportTime: telegramDailyReportTime,
+        dailyReportNextRunAt: telegramDailyReportNextRunAt,
       },
     });
   } catch (error) {
@@ -3513,6 +3563,20 @@ app.post("/api/telegram/test", async (_request, response, next) => {
     const result = await sendTelegramNotification("Тестовое уведомление Magic Vibes: Telegram подключен.");
     if (!result.ok) return response.status(500).json({ ok: false, error: result.error || "Telegram notification failed" });
     response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/telegram/daily-report/run", async (_request, response, next) => {
+  try {
+    if (!telegramReady()) {
+      return response.status(400).json({
+        ok: false,
+        error: "TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы или уведомления выключены.",
+      });
+    }
+    response.json(await sendDailyTelegramReport("manual"));
   } catch (error) {
     next(error);
   }
@@ -4246,6 +4310,13 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     };
     writeWarehouseInBackground(warehouse, "link_bulk_add_or_update");
     response.json({ ok: true, changed: savedProducts.length, products: savedProducts, persisted: "queued" });
+    appendAudit(request, "warehouse.links.bulk_save", {
+      productIds: updatedIds,
+      article: baseLink.article,
+      keyword: baseLink.keyword,
+      supplierName: baseLink.supplierName,
+      priceCurrency: baseLink.priceCurrency,
+    }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     queueMarketplaceJob("supplier-recovery-automation", { productIds: updatedIds }, { priority: 1 });
     queueImmediateAutoPricePush(updatedIds, "link_bulk_add_or_update");
   } catch (error) {
@@ -4276,6 +4347,15 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     };
     writeWarehouseInBackground(warehouse, "link_add_or_update");
     response.json({ ok: true, product: savedProduct, links: savedProduct.links || [], persisted: "queued" });
+    appendAudit(request, "warehouse.link.save", {
+      productId: product.id,
+      offerId: product.offerId,
+      name: product.name,
+      article: link.article,
+      keyword: link.keyword,
+      supplierName: link.supplierName,
+      priceCurrency: link.priceCurrency,
+    }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     queueMarketplaceJob("supplier-recovery-automation", { productIds: [product.id] }, { priority: 1 });
     queueImmediateAutoPricePush([product.id], "link_add_or_update");
   } catch (error) {
@@ -4299,6 +4379,12 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     };
     writeWarehouseInBackground(warehouse, "link_delete");
     response.json({ ok: true, product: savedProduct, links: savedProduct.links || [], persisted: "queued" });
+    appendAudit(request, "warehouse.link.delete", {
+      productId: product.id,
+      offerId: product.offerId,
+      name: product.name,
+      linkId: request.params.linkId,
+    }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     if ((savedProduct.links || []).length) queueImmediateAutoPricePush([request.params.productId], "link_delete");
   } catch (error) {
     next(error);
@@ -5184,6 +5270,249 @@ function msUntilNextDailyRun(timeString, now = new Date()) {
   return next.getTime() - now.getTime();
 }
 
+function isWithinDateRange(value, since, until = new Date()) {
+  const time = new Date(value || 0).getTime();
+  return Number.isFinite(time) && time >= since.getTime() && time <= until.getTime();
+}
+
+function dateStamp(date = new Date()) {
+  return date.toISOString().slice(0, 10);
+}
+
+function reportProductRow(product = {}) {
+  return {
+    marketplace: product.marketplace || "",
+    target: product.targetName || product.target || "",
+    offerId: product.offerId || "",
+    productId: product.productId || "",
+    name: product.name || "",
+    status: product.marketplaceState?.label || product.marketplaceState?.code || "",
+    currentPrice: product.marketplacePrice || product.currentPrice || "",
+    links: (product.links || []).map((link) => [link.article, link.keyword, link.supplierName].filter(Boolean).join(" / ")).join("; "),
+  };
+}
+
+async function collectDailyReportData({ since = new Date(Date.now() - 24 * 60 * 60 * 1000), until = new Date() } = {}) {
+  const warehouse = await readWarehouse();
+  const audit = await readAuditSince(since);
+  const products = warehouse.products || [];
+  const productById = new Map(products.map((product) => [product.id, product]));
+
+  const linkEvents = audit
+    .filter((entry) => ["warehouse.link.save", "warehouse.links.bulk_save", "warehouse.link.delete"].includes(entry.action))
+    .map((entry) => {
+      const details = entry.details || {};
+      return {
+        at: entry.at,
+        action: entry.action,
+        user: entry.user || "",
+        count: Array.isArray(details.productIds) ? details.productIds.length : 1,
+        productId: details.productId || (Array.isArray(details.productIds) ? details.productIds.join(", ") : ""),
+        offerId: details.offerId || "",
+        name: details.name || "",
+        article: details.article || "",
+        keyword: details.keyword || "",
+        supplierName: details.supplierName || "",
+        priceCurrency: details.priceCurrency || "",
+      };
+    });
+
+  const priceEvents = [];
+  const supplierLost = [];
+  const archiveEvents = [];
+  const recoveryEvents = [];
+  const errors = [];
+
+  for (const product of products) {
+    const base = reportProductRow(product);
+    for (const history of product.priceHistory || []) {
+      if (!isWithinDateRange(history.at, since, until)) continue;
+      priceEvents.push({
+        at: history.at,
+        ...base,
+        oldPrice: history.oldPrice || "",
+        newPrice: history.newPrice || "",
+        markup: history.markup || "",
+        supplierName: history.supplierName || "",
+        supplierArticle: history.supplierArticle || "",
+        usdPrice: history.usdPrice || "",
+        usdRate: history.usdRate || "",
+        reason: history.reason || "",
+        result: history.status || "",
+        error: history.error || "",
+      });
+      if (history.status === "error") errors.push({ at: history.at, type: "price", ...base, error: history.error || "send_failed" });
+    }
+
+    const auto = product.noSupplierAutomation || {};
+    if (isWithinDateRange(auto.stockZeroAt, since, until)) {
+      supplierLost.push({
+        at: auto.stockZeroAt,
+        ...base,
+        event: "stock_zero",
+        selectedSupplier: product.selectedSupplier?.partnerName || product.selectedSupplier?.supplierName || "",
+        lastError: auto.lastError || "",
+      });
+    }
+    if (isWithinDateRange(auto.archivedAt, since, until)) {
+      archiveEvents.push({ at: auto.archivedAt, ...base, event: "archived", lastError: auto.lastError || "" });
+    }
+    if (isWithinDateRange(auto.recoveredAt, since, until)) {
+      recoveryEvents.push({
+        at: auto.recoveredAt,
+        ...base,
+        event: "recovered",
+        selectedSupplier: product.selectedSupplier?.partnerName || product.selectedSupplier?.supplierName || "",
+      });
+    }
+  }
+
+  return {
+    since,
+    until,
+    totals: {
+      products: products.length,
+      linkedEvents: linkEvents.reduce((sum, item) => sum + Number(item.count || 1), 0),
+      priceUpdated: priceEvents.filter((item) => item.result === "success").length,
+      priceFailed: priceEvents.filter((item) => item.result === "error").length,
+      suppliersLost: supplierLost.length,
+      archived: archiveEvents.length,
+      recovered: recoveryEvents.length,
+      errors: errors.length,
+    },
+    linkEvents,
+    priceEvents,
+    supplierLost,
+    archiveEvents,
+    recoveryEvents,
+    errors,
+    productById,
+  };
+}
+
+function addReportSheet(workbook, name, rows, columns) {
+  const sheet = workbook.addWorksheet(name);
+  sheet.columns = columns.map((column) => ({
+    header: column.header,
+    key: column.key,
+    width: column.width || 18,
+  }));
+  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+  sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF172033" } };
+  sheet.addRows(rows);
+  sheet.views = [{ state: "frozen", ySplit: 1 }];
+  sheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: Math.max(1, rows.length + 1), column: columns.length },
+  };
+  sheet.eachRow((row) => {
+    row.alignment = { vertical: "top", wrapText: true };
+  });
+  return sheet;
+}
+
+async function buildDailyReportWorkbook(report) {
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Magic Vibes";
+  workbook.created = new Date();
+  workbook.modified = new Date();
+
+  addReportSheet(
+    workbook,
+    "Сводка",
+    [
+      { metric: "Период с", value: report.since.toISOString() },
+      { metric: "Период по", value: report.until.toISOString() },
+      { metric: "Товаров в складе", value: report.totals.products },
+      { metric: "Привязано/изменено привязок", value: report.totals.linkedEvents },
+      { metric: "Цен успешно обновлено", value: report.totals.priceUpdated },
+      { metric: "Ошибок обновления цен", value: report.totals.priceFailed },
+      { metric: "Поставщиков пропало", value: report.totals.suppliersLost },
+      { metric: "Товаров архивировано", value: report.totals.archived },
+      { metric: "Товаров восстановлено", value: report.totals.recovered },
+      { metric: "Ошибок", value: report.totals.errors },
+    ],
+    [
+      { header: "Показатель", key: "metric", width: 34 },
+      { header: "Значение", key: "value", width: 28 },
+    ],
+  );
+
+  const productColumns = [
+    { header: "Дата", key: "at", width: 22 },
+    { header: "Маркетплейс", key: "marketplace", width: 14 },
+    { header: "Кабинет", key: "target", width: 18 },
+    { header: "Артикул", key: "offerId", width: 22 },
+    { header: "Название", key: "name", width: 50 },
+    { header: "Статус", key: "status", width: 22 },
+  ];
+
+  addReportSheet(workbook, "Привязки", report.linkEvents, [
+    { header: "Дата", key: "at", width: 22 },
+    { header: "Действие", key: "action", width: 24 },
+    { header: "Пользователь", key: "user", width: 16 },
+    { header: "Кол-во", key: "count", width: 10 },
+    { header: "ID товара", key: "productId", width: 28 },
+    { header: "Артикул MP", key: "offerId", width: 22 },
+    { header: "Название", key: "name", width: 46 },
+    { header: "Артикул PM", key: "article", width: 22 },
+    { header: "Ключ", key: "keyword", width: 18 },
+    { header: "Поставщик", key: "supplierName", width: 26 },
+    { header: "Валюта", key: "priceCurrency", width: 10 },
+  ]);
+
+  addReportSheet(workbook, "Цены", report.priceEvents, [
+    ...productColumns,
+    { header: "Старая цена", key: "oldPrice", width: 14 },
+    { header: "Новая цена", key: "newPrice", width: 14 },
+    { header: "Наценка", key: "markup", width: 12 },
+    { header: "Поставщик", key: "supplierName", width: 26 },
+    { header: "Артикул поставщика", key: "supplierArticle", width: 24 },
+    { header: "USD цена", key: "usdPrice", width: 12 },
+    { header: "Курс", key: "usdRate", width: 12 },
+    { header: "Причина", key: "reason", width: 34 },
+    { header: "Результат", key: "result", width: 14 },
+    { header: "Ошибка", key: "error", width: 34 },
+  ]);
+
+  addReportSheet(workbook, "Пропал поставщик", report.supplierLost, [
+    ...productColumns,
+    { header: "Событие", key: "event", width: 14 },
+    { header: "Привязки", key: "links", width: 44 },
+    { header: "Ошибка", key: "lastError", width: 34 },
+  ]);
+  addReportSheet(workbook, "Архив", report.archiveEvents, [...productColumns, { header: "Событие", key: "event", width: 14 }, { header: "Ошибка", key: "lastError", width: 34 }]);
+  addReportSheet(workbook, "Восстановлено", report.recoveryEvents, [...productColumns, { header: "Событие", key: "event", width: 14 }, { header: "Поставщик", key: "selectedSupplier", width: 26 }]);
+  addReportSheet(workbook, "Ошибки", report.errors, [...productColumns, { header: "Тип", key: "type", width: 14 }, { header: "Ошибка", key: "error", width: 40 }]);
+
+  return workbook.xlsx.writeBuffer();
+}
+
+function dailyReportCaption(report) {
+  return [
+    `Ежедневный отчёт Magic Vibes за ${dateStamp(report.since)} - ${dateStamp(report.until)}`,
+    `Привязок: ${formatTelegramNumber(report.totals.linkedEvents)}`,
+    `Цен обновлено: ${formatTelegramNumber(report.totals.priceUpdated)}`,
+    `Поставщиков пропало: ${formatTelegramNumber(report.totals.suppliersLost)}`,
+    `Архивировано: ${formatTelegramNumber(report.totals.archived)}`,
+    `Восстановлено: ${formatTelegramNumber(report.totals.recovered)}`,
+    `Ошибок: ${formatTelegramNumber(report.totals.errors + report.totals.priceFailed)}`,
+  ].join("\n");
+}
+
+async function sendDailyTelegramReport(trigger = "schedule") {
+  if (!telegramDailyReportEnabled || !telegramReady()) return { ok: false, skipped: true };
+  const until = new Date();
+  const since = new Date(until.getTime() - 24 * 60 * 60 * 1000);
+  const report = await collectDailyReportData({ since, until });
+  const buffer = await buildDailyReportWorkbook(report);
+  const filename = `magic-vibes-report-${dateStamp(until)}.xlsx`;
+  const caption = dailyReportCaption(report);
+  const result = await sendTelegramDocument({ buffer, filename, caption });
+  logger.info("telegram daily report sent", { trigger, ok: result.ok, filename });
+  return { ...result, filename, totals: report.totals };
+}
+
 async function runDailyRefresh(trigger = "manual") {
   if (dailySyncPromise) return dailySyncPromise;
 
@@ -5287,6 +5616,23 @@ function scheduleDailySync() {
       logger.error("daily sync failed", { detail: error.code || error.message, err: error });
     } finally {
       scheduleDailySync();
+    }
+  }, delay);
+}
+
+function scheduleTelegramDailyReport() {
+  if (!telegramDailyReportEnabled || !telegramReady()) return;
+  if (telegramDailyReportTimer) clearTimeout(telegramDailyReportTimer);
+  const delay = msUntilNextDailyRun(telegramDailyReportTime);
+  telegramDailyReportNextRunAt = new Date(Date.now() + delay).toISOString();
+  telegramDailyReportTimer = setTimeout(async () => {
+    try {
+      await sendDailyTelegramReport("schedule");
+    } catch (error) {
+      logger.warn("telegram daily report failed", { detail: error?.message || String(error) });
+      notifyTelegram(`Ежедневный Telegram-отчёт не сформировался\nОшибка: ${error?.message || String(error)}`);
+    } finally {
+      scheduleTelegramDailyReport();
     }
   }, delay);
 }
@@ -5455,6 +5801,12 @@ function startServer() {
     if (dailySyncEnabled) {
       logger.info("daily sync enabled", { time: dailySyncTime, sendPrices: dailySyncSendPrices });
     }
+    if (telegramReady()) {
+      logger.info("telegram notifications enabled", {
+        dailyReportEnabled: telegramDailyReportEnabled,
+        dailyReportTime: telegramDailyReportTime,
+      });
+    }
     pruneUploadDirectory().catch((err) => logger.warn("initial upload prune failed", { detail: err?.message || String(err) }));
     readWarehouse()
       .then((warehouse) => logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length }))
@@ -5462,6 +5814,7 @@ function startServer() {
   });
 
   scheduleDailySync();
+  scheduleTelegramDailyReport();
   scheduleAutoSync(10_000);
 }
 

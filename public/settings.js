@@ -10,6 +10,7 @@ const manualSyncButton = document.querySelector("#manualSyncButton");
 const manualPriceUpdateButton = document.querySelector("#manualPriceUpdateButton");
 const manualSyncStatus = document.querySelector("#manualSyncStatus");
 const telegramTestButton = document.querySelector("#telegramTestButton");
+const telegramReportButton = document.querySelector("#telegramReportButton");
 const telegramStatus = document.querySelector("#telegramStatus");
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 
@@ -77,7 +78,7 @@ async function loadSettings() {
   if (autoSyncMinutesInput) autoSyncMinutesInput.value = settings.automation?.autoSyncMinutes || 30;
   if (telegramStatus) {
     telegramStatus.textContent = data.telegram?.configured
-      ? `Telegram подключен. Чат: ${data.telegram.chatId || "задан"}.`
+      ? `Telegram подключен. Чат: ${data.telegram.chatId || "задан"}. Ежедневный отчёт: ${data.telegram.dailyReportTime || "22:00"}.`
       : "Telegram не настроен: задайте TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в .env.";
   }
   renderRules(settings.markupRules || []);
@@ -176,6 +177,24 @@ telegramTestButton?.addEventListener("click", async () => {
     if (telegramStatus) telegramStatus.textContent = error.message;
   } finally {
     telegramTestButton.disabled = false;
+  }
+});
+
+telegramReportButton?.addEventListener("click", async () => {
+  telegramReportButton.disabled = true;
+  if (telegramTestButton) telegramTestButton.disabled = true;
+  if (telegramStatus) telegramStatus.textContent = "Формирую Excel-отчёт и отправляю в Telegram...";
+  try {
+    const result = await api("/api/telegram/daily-report/run", { method: "POST" });
+    const totals = result.totals || {};
+    if (telegramStatus) {
+      telegramStatus.textContent = `Отчёт отправлен: цен ${totals.priceUpdated || 0}, привязок ${totals.linkedEvents || 0}, пропавших поставщиков ${totals.suppliersLost || 0}.`;
+    }
+  } catch (error) {
+    if (telegramStatus) telegramStatus.textContent = error.message;
+  } finally {
+    telegramReportButton.disabled = false;
+    if (telegramTestButton) telegramTestButton.disabled = false;
   }
 });
 
