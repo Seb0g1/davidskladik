@@ -60,7 +60,7 @@ const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
 const sessionCookieName = "pm_session";
 const sessionTtlMs = 1000 * 60 * 60 * 12;
-const autoSyncMinutes = Number(process.env.DEFAULT_AUTO_SYNC_MINUTES || 30);
+const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || process.env.DEFAULT_AUTO_SYNC_MINUTES || 30);
 const autoZeroStockOnNoSupplier = process.env.AUTO_ZERO_STOCK_ON_NO_SUPPLIER !== "false";
 const autoArchiveOnNoLinks = process.env.AUTO_ARCHIVE_ON_NO_LINKS === "true";
 const autoRestoreOnSupplierReturn = process.env.AUTO_RESTORE_ON_SUPPLIER_RETURN !== "false";
@@ -1902,6 +1902,19 @@ async function listPriceMasterPartners() {
         FROM Partners
         WHERE PartnerName IS NOT NULL AND TRIM(PartnerName) <> ''
         ORDER BY PartnerName
+      `,
+    },
+    {
+      label: "offer_docs_partners",
+      sql: `
+        SELECT DISTINCT
+          d.PartnerID AS partnerId,
+          COALESCE(NULLIF(TRIM(p.PartnerName), ''), CONCAT('Partner ', d.PartnerID)) AS name
+        FROM OfferDocs d
+        JOIN OfferRows r ON r.DocID = d.DocID
+        LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+        WHERE d.PartnerID IS NOT NULL AND r.Ignored = 0
+        ORDER BY name
       `,
       allowEmpty: true,
     },
@@ -5628,6 +5641,7 @@ async function runDailyRefresh(trigger = "manual") {
           changed: warehouse.changed,
           withoutSupplier: warehouse.withoutSupplier,
           sourceError: warehouse.sourceError,
+          supplierSync: warehouse.supplierSync,
           zeroStockSent: automation.zeroStockSent,
           autoArchived: automation.archived,
           recovered: recovery.recovered,
@@ -5773,6 +5787,7 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
       ready: warehouse.ready,
       changed: warehouse.changed,
       withoutSupplier: warehouse.withoutSupplier,
+      supplierSync: warehouse.supplierSync,
       zeroStockSent: automation.zeroStockSent,
       autoArchived: automation.archived,
       recovered: recovery.recovered,
