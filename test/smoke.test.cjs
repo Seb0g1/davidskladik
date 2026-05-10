@@ -6,6 +6,8 @@ process.env.APP_PASSWORD = process.env.APP_PASSWORD || "smoke-test-password";
 process.env.APP_SESSION_SECRET = process.env.APP_SESSION_SECRET || "smoke-test-session-secret-min-32-chars!";
 process.env.APP_USER = process.env.APP_USER || "admin";
 process.env.AUTO_ARCHIVE_ON_NO_LINKS = "true";
+process.env.PUBLIC_BASE_URL = "http://localhost";
+process.env.DISABLE_BACKGROUND_JOBS = "true";
 
 const { app, resolveMarkupCoefficient, pickNoSupplierAutomationCandidates } = require("../server.js");
 
@@ -29,6 +31,35 @@ test("POST /api/login успех", async () => {
     .expect(200);
   assert.equal(res.body.ok, true);
   assert.ok(res.headers["set-cookie"]);
+});
+
+test("PUT /api/settings saves markup settings", async () => {
+  const agent = request.agent(app);
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  const before = await agent.get("/api/settings").expect(200);
+  const previous = before.body.settings;
+  try {
+    const res = await agent
+      .put("/api/settings")
+      .send({
+        fixedUsdRate: 95,
+        defaultMarkups: { ozon: 1.91, yandex: 1.62 },
+        markupRules: [{ marketplace: "all", minUsd: 0, coefficient: 1.91 }],
+      })
+      .expect(200);
+
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.settings.defaultMarkups.ozon, 1.91);
+    assert.equal(res.body.settings.markupRules[0].coefficient, 1.91);
+  } finally {
+    if (previous) {
+      await agent.put("/api/settings").send(previous);
+    }
+  }
 });
 
 test("resolveMarkupCoefficient applies threshold >= 10 USD", () => {

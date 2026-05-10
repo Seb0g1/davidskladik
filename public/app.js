@@ -175,7 +175,6 @@ function applyWarehouseStateFromUrl() {
   const marketplace = params.get("marketplace");
   const stateCode = params.get("state");
   const linked = params.get("linked");
-  const autoOnly = params.get("autoOnly");
   const view = params.get("view");
   const page = params.get("page");
   const group = params.get("group");
@@ -187,7 +186,7 @@ function applyWarehouseStateFromUrl() {
   if (linked && ["all", "linked", "unlinked"].includes(linked)) state.warehouseLinkFilter = linked;
   const brand = params.get("brand");
   if (brand !== null) state.warehouseBrandFilter = String(brand);
-  state.warehouseAutoOnly = autoOnly === "1" || autoOnly === "true";
+  state.warehouseAutoOnly = false;
   if (view === "list" || view === "cards") state.warehouseViewMode = view;
   state.warehouseRestorePage = Math.min(WAREHOUSE_URL_PAGE_MAX, toPositiveInt(page, 1));
   state.warehousePage = 0;
@@ -204,7 +203,6 @@ function syncWarehouseStateToUrl({ replace = true } = {}) {
   if (state.ozonStateFilter !== "all") params.set("state", state.ozonStateFilter);
   if (state.warehouseLinkFilter !== "all") params.set("linked", state.warehouseLinkFilter);
   if (state.warehouseBrandFilter) params.set("brand", state.warehouseBrandFilter);
-  if (state.warehouseAutoOnly) params.set("autoOnly", "1");
   if (state.warehouseViewMode !== "cards") params.set("view", state.warehouseViewMode);
   if (state.warehousePage > 1) params.set("page", String(state.warehousePage));
   if (state.selectedWarehouseGroupKey) params.set("group", state.selectedWarehouseGroupKey);
@@ -930,7 +928,7 @@ function refreshWarehouseToolbarHints() {
       : "";
   const q = elements.warehouseSearchInput?.value?.trim();
   const searchPart = q ? ` · поиск «${q}»` : "";
-  const autoPart = state.warehouseAutoOnly ? " · только AUTO" : "";
+  const autoPart = "";
   const linkPart = state.warehouseLinkFilter === "all"
     ? ""
     : state.warehouseLinkFilter === "linked"
@@ -1073,17 +1071,6 @@ function renderWarehouseCards() {
       const product = group.primary;
       const supplier = group.selectedSupplier;
       const selected = group.key === state.selectedWarehouseGroupKey;
-      const autoEnabledCount = group.variants.filter((item) => item.autoPriceEnabled !== false).length;
-      const autoBadgeLabel = autoEnabledCount === group.variants.length
-        ? "AUTO"
-        : autoEnabledCount === 0
-          ? "MANUAL"
-          : "MIXED";
-      const autoBadgeClass = autoEnabledCount === group.variants.length
-        ? "ok"
-        : autoEnabledCount === 0
-          ? "neutral"
-          : "warn";
       const url = marketplaceUrl(product);
       const variantLinks = group.variants
         .map((item) => ({ item, url: marketplaceUrl(item) }))
@@ -1103,7 +1090,6 @@ function renderWarehouseCards() {
           <div class="product-card-top">
             <input class="warehouse-check" type="checkbox" data-product-ids="${escapeHtml(group.productIds.join(","))}" />
             <span class="market-stack">${group.marketplaceLabels.map((label) => `<span class="market-badge ${label === "Ozon" ? "ozon" : "yandex"}">${escapeHtml(label)}</span>`).join("")}</span>
-            <span class="badge ${autoBadgeClass}" title="AUTO считается по всем площадкам в карточке">${autoBadgeLabel}</span>
             <span class="badge ${group.changed ? "warn" : group.ready ? "ok" : "neutral"}">${group.changed ? "Есть изменения" : group.ready ? "Готово" : "Нет поставщика"}</span>
           </div>
           <h3>${escapeHtml(productName)}</h3>
@@ -1204,7 +1190,6 @@ function renderWarehouseDetail(group) {
 
   const product = group.primary || group;
   const variants = group.variants || [product];
-  const autoEnabledCount = variants.filter((item) => item.autoPriceEnabled !== false).length;
   const supplier = group.selectedSupplier || product.selectedSupplier;
   const suppliers = group.suppliers || product.suppliers || [];
   const links = group.links || product.links || [];
@@ -1223,7 +1208,7 @@ function renderWarehouseDetail(group) {
         <span class="market-stack">${Array.from(new Set(variants.map((item) => marketLabel(item)))).map((label) => `<span class="market-badge ${label === "Ozon" ? "ozon" : "yandex"}">${escapeHtml(label)}</span>`).join("")}</span>
         <span class="state-stack">${variants.map((item) => `<span class="badge ${marketplaceStateClass(item)}">${escapeHtml(marketplaceStateLabel(item))}</span>`).join("")}</span>
         <h2>${escapeHtml(productName)}</h2>
-        <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}${variants.length > 1 ? ` · AUTO: ${autoEnabledCount}/${variants.length}` : ""}</p>
+        <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}</p>
       </div>
       <button class="text-button delete-product" type="button" data-product-id="${escapeHtml(product.id)}">Удалить</button>
       <a class="secondary-link-button compact-button" href="/product.html?group=${encodeURIComponent(group.key || productGroupKey(product))}">Страница</a>
@@ -1249,16 +1234,8 @@ function renderWarehouseDetail(group) {
       <div class="section-heading compact-heading">
         <div>
           <h3>Маркетплейсы и наценка</h3>
-          <p>AUTO по карточке: ${autoEnabledCount}/${variants.length}</p>
+          <p>Цена отправляется автоматически после изменения наценки, курса, поставщика или прайса.</p>
         </div>
-        <button
-          class="secondary-button compact-button card-auto-toggle"
-          type="button"
-          data-group-product-ids="${escapeHtml(groupProductIds.join(","))}"
-          data-enabled="${autoEnabledCount === variants.length ? "1" : "0"}"
-        >
-          ${autoEnabledCount === variants.length ? "AUTO выкл для всей карточки" : "AUTO вкл для всей карточки"}
-        </button>
       </div>
       <div class="marketplace-variant-list">
         ${variants
@@ -1276,19 +1253,6 @@ function renderWarehouseDetail(group) {
                   Наценка
                   <input name="markup" type="number" min="0.01" step="0.01" value="${item.markup > 0 ? Number(item.markup).toFixed(2) : ""}" placeholder="По правилам из настроек" data-usd-price="${escapeHtml(item.selectedSupplier?.price || "")}" data-current-price="${escapeHtml(item.currentPrice || "")}" />
                   <small class="markup-live-preview">Предпросмотр: ${formatMoney(item.nextPrice)}</small>
-                </label>
-                <label class="variant-auto-toggle" for="autoPriceEnabled-${escapeHtml(item.id)}">
-                  <span>AUTO</span>
-                  <input id="autoPriceEnabled-${escapeHtml(item.id)}" name="autoPriceEnabled" type="checkbox" ${item.autoPriceEnabled !== false ? "checked" : ""} />
-                  <span class="toggle-ui" aria-hidden="true"></span>
-                </label>
-                <label>
-                  minPrice
-                  <input name="autoPriceMin" type="number" min="0" step="1" value="${item.autoPriceMin || ""}" />
-                </label>
-                <label>
-                  maxPrice
-                  <input name="autoPriceMax" type="number" min="0" step="1" value="${item.autoPriceMax || ""}" />
                 </label>
                 <button class="secondary-button compact-button" type="submit">Сохранить</button>
               </form>
@@ -1906,7 +1870,6 @@ function currentWarehousePageParams() {
   if (elements.warehouseUsdRateInput.value) params.set("usdRate", elements.warehouseUsdRateInput.value);
   if (state.warehouseMarketplace !== "all") params.set("marketplace", state.warehouseMarketplace);
   if (state.ozonStateFilter !== "all") params.set("state", state.ozonStateFilter);
-  if (state.warehouseAutoOnly) params.set("autoOnly", "true");
   if (state.warehouseLinkFilter !== "all") params.set("linked", state.warehouseLinkFilter);
   if (state.warehouseBrandFilter) params.set("brand", state.warehouseBrandFilter);
   const query = elements.warehouseSearchInput.value.trim();
@@ -2163,7 +2126,7 @@ elements.ozonStateFilter?.addEventListener("change", () => {
   state.warehouseScrollTop = 0;
   syncWarehouseStateToUrl();
   if (state.ozonStateFilter !== "all" && !state.warehouse.some((product) => product.marketplaceState?.code && product.marketplaceState.code !== "unknown")) {
-    elements.warehouseStatus.textContent = "Для фильтра по статусам нажмите «Синхронизировать», чтобы загрузить архив, активность и остатки Ozon + ЯМ.";
+    elements.warehouseStatus.textContent = "Статусы Ozon + ЯМ обновляются автоматически по расписанию.";
   }
   queueWarehouseFilterReload();
 });
@@ -2434,13 +2397,10 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           markup: Number(formData.get("markup") || 0),
-          autoPriceEnabled: formData.get("autoPriceEnabled") === "on",
-          autoPriceMin: Number(formData.get("autoPriceMin") || 0) || null,
-          autoPriceMax: Number(formData.get("autoPriceMax") || 0) || null,
           expectedUpdatedAt: String(formData.get("expectedUpdatedAt") || ""),
         }),
       });
-      elements.warehouseStatus.textContent = "Наценка и AUTO-настройки сохранены.";
+      elements.warehouseStatus.textContent = "Наценка сохранена. Автоотправка цены поставлена в очередь.";
       queueWarehouseRefresh();
     } catch (error) {
       if (error?.status === 409) {
@@ -2457,34 +2417,30 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
   const data = new FormData(form);
-  const shouldSendOzonPriceNow = event.submitter?.name === "sendPriceOzonNow";
   try {
     const productIds = String(form.dataset.productIds || form.dataset.productId || "")
       .split(",")
       .map((id) => id.trim())
       .filter(Boolean);
-    for (const productId of productIds) {
-      await api(`/api/warehouse/products/${productId}/links`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(Object.fromEntries(data.entries())),
-      });
-    }
+    const result = await api("/api/warehouse/products/links/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...Object.fromEntries(data.entries()), productIds }),
+    });
+    if (Array.isArray(result.products)) result.products.forEach((product) => mergeWarehouseProduct(product));
+    applyWarehouseFilters();
+    renderWarehouseCards();
+    const currentGroup = state.selectedWarehouseGroupKey
+      ? getSortedWarehouseGroups().find((group) => group.key === state.selectedWarehouseGroupKey)
+      : null;
     if (state.warehouseLinkFilter === "unlinked") {
       state.selectedWarehouseGroupKey = null;
       renderWarehouseDetail(null);
+    } else if (currentGroup) {
+      renderWarehouseDetail(currentGroup);
     }
+    elements.warehouseStatus.textContent = `Привязка сохранена: ${formatNumber(result.changed || productIds.length)} товар(ов). Цена отправится автоматически.`;
     queueWarehouseRefresh();
-    if (shouldSendOzonPriceNow) {
-      elements.warehouseStatus.textContent = "Отправляю новую цену в Ozon...";
-      const sent = await sendOzonPricesNow(productIds);
-      elements.warehouseStatus.textContent = sent.reason === "no_ozon_products"
-        ? "Привязка сохранена. Для этого товара нет цели Ozon для отправки цены."
-        : `Готово: в Ozon отправлено ${formatNumber(sent.sent)} цен, пропущено ${formatNumber(sent.skipped)}.`;
-      queueWarehouseRefresh();
-    } else {
-      elements.warehouseStatus.textContent = "Привязка поставщика сохранена.";
-    }
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }
@@ -2552,7 +2508,17 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       return;
     }
     if (linkButton) {
-      await api(`/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}`, { method: "DELETE" });
+      const result = await api(`/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}`, { method: "DELETE" });
+      if (result.product) {
+        mergeWarehouseProduct(result.product);
+        applyWarehouseFilters();
+        renderWarehouseCards();
+        const currentGroup = state.selectedWarehouseGroupKey
+          ? getSortedWarehouseGroups().find((group) => group.key === state.selectedWarehouseGroupKey)
+          : null;
+        renderWarehouseDetail(currentGroup || null);
+      }
+      elements.warehouseStatus.textContent = "Привязка удалена. Автоцена пересчитается по оставшимся привязкам.";
       queueWarehouseRefresh();
     }
     if (productButton && await confirmAction({ title: "Удалить товар?", text: "Удалить товар из личного склада?", okText: "Удалить" })) {

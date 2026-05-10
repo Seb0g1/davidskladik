@@ -71,7 +71,7 @@
                     <div class="ios-select-menu" id="ozonStateFilterMenu" role="listbox" hidden></div>
                   </div>
                 </div>
-                <label class="search-control auto-toggle-control" for="warehouseAutoPriceOnlyInput">
+                <label class="search-control auto-toggle-control hidden" for="warehouseAutoPriceOnlyInput">
                   <span>Только автоцены</span>
                   <input id="warehouseAutoPriceOnlyInput" type="checkbox" />
                   <span class="toggle-ui" aria-hidden="true"></span>
@@ -107,7 +107,7 @@
               </div>
             </div>
             <div class="wh-cluster wh-cluster--pricing">
-              <span class="wh-cluster-label" id="wh-cluster-pricing-label">Курс и действия</span>
+              <span class="wh-cluster-label" id="wh-cluster-pricing-label">Курс</span>
               <div class="wh-cluster-body wh-cluster-body--pricing">
                 <label class="rate-control">
                   Курс USD/RUB
@@ -115,20 +115,20 @@
                 </label>
                 <label class="rate-control">
                   Порог RUB
-                  <input id="warehouseMinDiffRubInput" type="number" min="0" step="1" value="0" />
+                  <input id="warehouseMinDiffRubInput" class="hidden" type="number" min="0" step="1" value="0" />
                 </label>
                 <label class="rate-control">
                   Порог %
-                  <input id="warehouseMinDiffPctInput" type="number" min="0" step="0.1" value="0" />
+                  <input id="warehouseMinDiffPctInput" class="hidden" type="number" min="0" step="0.1" value="0" />
                 </label>
-                <div class="wh-actions" role="group" aria-labelledby="wh-cluster-pricing-label">
-                  <button id="warehouseSyncButton" class="secondary-button sync-button" type="button">Синхронизировать Ozon + ЯМ</button>
-                  <button id="warehouseRefreshPricesButton" class="secondary-button" type="button">Обновить цены</button>
-                  <button id="autoPriceDisableAllButton" class="secondary-button" type="button">AUTO всем выкл</button>
-                  <button id="warehouseDryRunButton" class="secondary-button" type="button">Dry-run</button>
-                  <button id="warehouseRetryQueueButton" class="secondary-button" type="button">Повторить неотправленные</button>
-                  <button id="warehouseSelectChangedButton" class="secondary-button" type="button" disabled>Выбрать изменения</button>
-                  <button id="warehouseSendButton" class="danger-button" type="button" disabled>Обновить цены</button>
+                <div class="wh-actions hidden" role="group" aria-labelledby="wh-cluster-pricing-label">
+                  <button id="warehouseSyncButton" class="secondary-button sync-button hidden" type="button">Синхронизировать Ozon + ЯМ</button>
+                  <button id="warehouseRefreshPricesButton" class="secondary-button hidden" type="button">Обновить цены</button>
+                  <button id="autoPriceDisableAllButton" class="secondary-button hidden" type="button">AUTO всем выкл</button>
+                  <button id="warehouseDryRunButton" class="secondary-button hidden" type="button">Dry-run</button>
+                  <button id="warehouseRetryQueueButton" class="secondary-button hidden" type="button">Повторить неотправленные</button>
+                  <button id="warehouseSelectChangedButton" class="secondary-button hidden" type="button" disabled>Выбрать изменения</button>
+                  <button id="warehouseSendButton" class="danger-button hidden" type="button" disabled>Обновить цены</button>
                 </div>
               </div>
             </div>
@@ -186,9 +186,9 @@
             <div>
               <span>Ежедневное обновление</span>
               <strong id="dailySyncStatus">Проверяю расписание...</strong>
-              <p id="dailySyncMeta">База PriceMaster и склад по расписанию. «Запустить сейчас» дополнительно отправляет цены на Ozon/ЯМ без порогов (все готовые к отправке).</p>
+              <p id="dailySyncMeta">База PriceMaster, склад, остатки и цены обновляются автоматически по расписанию. Ручные запуски скрыты из основной панели.</p>
             </div>
-            <button id="dailySyncRunButton" class="secondary-button compact-button" type="button">Запустить сейчас</button>
+            <button id="dailySyncRunButton" class="secondary-button compact-button hidden" type="button">Запустить сейчас</button>
           </div>
           <div id="syncLogList" class="sync-log-list warehouse-sync-log-inline"></div>
         </section>
@@ -276,8 +276,8 @@
               </div>
               <button id="mergeProductsButton" class="secondary-button compact-button" type="button">Объединить</button>
               <button id="unmergeProductsButton" class="secondary-button compact-button" type="button">Разъединить</button>
-              <button id="autoPriceEnableSelectedButton" class="secondary-button compact-button" type="button">AUTO вкл</button>
-              <button id="autoPriceDisableSelectedButton" class="secondary-button compact-button" type="button">AUTO выкл</button>
+              <button id="autoPriceEnableSelectedButton" class="secondary-button compact-button hidden" type="button">AUTO вкл</button>
+              <button id="autoPriceDisableSelectedButton" class="secondary-button compact-button hidden" type="button">AUTO выкл</button>
             </div>
 
             <div class="warehouse-viewbar" aria-label="Вид товаров склада">
@@ -427,7 +427,6 @@
           <input name="supplierName" type="text" placeholder="Поставщик" autocomplete="off" data-pm-suggest="partner" />
         </span>
         <button class="secondary-button" type="submit">Привязать</button>
-        <button class="primary-button compact-button" type="submit" name="sendPriceOzonNow" value="1">Привязать + обновить цену Ozon</button>
       </form>
     </template>
 

@@ -67,6 +67,10 @@ const bullmqEnabled = process.env.BULLMQ_ENABLED === "true";
 const redisUrl = cleanText(process.env.REDIS_URL);
 const dailySyncTime = process.env.DAILY_SYNC_TIME || "11:00";
 const dailySyncEnabled = process.env.DAILY_SYNC_ENABLED !== "false";
+const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
+const pmDbPoolSize = Math.max(1, Number(process.env.PM_DB_POOL_SIZE || 8) || 8);
+const pmDbConnectTimeoutMs = Math.max(1000, Number(process.env.PM_DB_CONNECT_TIMEOUT_MS || 10000) || 10000);
+const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CACHE_MS || 1200) || 1200);
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
@@ -118,7 +122,8 @@ const pool = mysql.createPool({
   password: process.env.PM_DB_PASSWORD,
   database: process.env.PM_DB_NAME,
   waitForConnections: true,
-  connectionLimit: 8,
+  connectionLimit: pmDbPoolSize,
+  connectTimeout: pmDbConnectTimeoutMs,
   decimalNumbers: true,
   dateStrings: true,
 });
@@ -1575,7 +1580,17 @@ async function writeAppSettings(settings) {
   const normalized = normalizeAppSettings(settings);
   invalidateWarehouseViewCache();
   await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(appSettingsPath, JSON.stringify(normalized, null, 2), "utf8");
+  const temporaryPath = `${appSettingsPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(normalized, null, 2), "utf8");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rename(temporaryPath, appSettingsPath);
+      break;
+    } catch (error) {
+      if (attempt === 4 || !["EPERM", "EBUSY", "EACCES"].includes(error.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
+    }
+  }
   return normalized;
 }
 
@@ -1924,7 +1939,7 @@ async function writeWarehouse(warehouse) {
       suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
     };
     const temporaryPath = `${warehousePath}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temporaryPath, JSON.stringify(payload, null, 2), "utf8");
+    await fs.writeFile(temporaryPath, JSON.stringify(payload), "utf8");
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
         await fs.rename(temporaryPath, warehousePath);
@@ -2312,16 +2327,23 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = []) {
     rows.push(...chunkRows);
   }
 
+  const rowsByArticle = new Map();
+  for (const row of rows) {
+    const key = cleanText(row.article);
+    if (!rowsByArticle.has(key)) rowsByArticle.set(key, []);
+    rowsByArticle.get(key).push(row);
+  }
+
   const map = new Map();
   for (const link of normalizedLinks) {
-    const matches = rows
+    const matches = (rowsByArticle.get(link.article) || [])
       .filter((row) => {
         const supplierOk =
           !link.supplierName ||
           normalizeSupplierName(row.partnerName) === normalizeSupplierName(link.supplierName);
         const partnerOk = !link.partnerId || String(row.partnerId) === String(link.partnerId);
         const keywordOk = includesKeyword(row.name, link.keyword);
-        return row.article === link.article && supplierOk && partnerOk && keywordOk;
+        return supplierOk && partnerOk && keywordOk;
       })
       .map((row) => {
         const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
@@ -2659,7 +2681,7 @@ async function buildWarehouseViewCached(params = {}) {
   if (params.sync || params.refreshPrices) return buildWarehouseView(params);
   const key = warehouseViewCacheKey(params);
   const cached = warehouseViewCache.get(key);
-  const ttlMs = 1200;
+  const ttlMs = warehouseViewCacheMs;
   if (cached && Date.now() - cached.at < ttlMs) return cached.data;
   const data = await buildWarehouseView(params);
   lastWarehouseViewSnapshot = data;
@@ -3214,19 +3236,29 @@ app.get("/api/settings", async (_request, response, next) => {
   }
 });
 
-app.put("/api/settings", async (request, response, next) => {
+async function saveSettingsHandler(request, response, next) {
   try {
     const settings = await writeAppSettings(request.body || {});
-    await appendAudit(request, "settings.update", {
+    appendAudit(request, "settings.update", {
       fixedUsdRate: settings.fixedUsdRate,
+      defaultMarkups: settings.defaultMarkups,
       markupRules: settings.markupRules.length,
+    }).catch((auditError) => {
+      logger.warn("settings audit append failed", { detail: auditError?.message || String(auditError) });
     });
-    queueImmediateAutoPricePush([], "settings_update");
+    try {
+      queueImmediateAutoPricePush([], "settings_update");
+    } catch (queueError) {
+      logger.warn("settings auto price queue failed", { detail: queueError?.message || String(queueError) });
+    }
     response.json({ ok: true, settings });
   } catch (error) {
     next(error);
   }
-});
+}
+
+app.put("/api/settings", saveSettingsHandler);
+app.post("/api/settings", saveSettingsHandler);
 
 app.get("/api/marketplace-accounts", (_request, response) => {
   response.json({
@@ -3608,6 +3640,9 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
     const saved = await writeWarehouse(warehouse);
     await appendAudit(request, "supplier.update", { id: supplier.id, stopped: supplier.stopped, name: supplier.name });
     response.json({ ok: true, warehouse: saved });
+    queueMarketplaceJob("no-supplier-automation", {}, { priority: 1 });
+    queueMarketplaceJob("supplier-recovery-automation", {}, { priority: 2 });
+    queueImmediateAutoPricePush([], "supplier_update");
   } catch (error) {
     next(error);
   }
@@ -3620,6 +3655,7 @@ app.delete("/api/suppliers/:id", async (request, response, next) => {
     const saved = await writeWarehouse(warehouse);
     await appendAudit(request, "supplier.delete", { id: request.params.id });
     response.json({ ok: true, warehouse: saved });
+    queueMarketplaceJob("no-supplier-automation", {}, { priority: 1 });
   } catch (error) {
     next(error);
   }
@@ -3641,6 +3677,7 @@ app.post("/api/suppliers/:id/articles", async (request, response, next) => {
     const saved = await writeWarehouse(warehouse);
     await appendAudit(request, "supplier.article.save", { supplierId: supplier.id, article: article.article });
     response.json({ ok: true, warehouse: saved });
+    queueImmediateAutoPricePush([], "supplier_article_save");
   } catch (error) {
     next(error);
   }
@@ -3653,6 +3690,7 @@ app.delete("/api/suppliers/:supplierId/articles/:articleId", async (request, res
     if (!supplier) return response.status(404).json({ error: "Поставщик не найден." });
     supplier.articles = (supplier.articles || []).filter((article) => article.id !== request.params.articleId);
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    queueMarketplaceJob("no-supplier-automation", {}, { priority: 1 });
   } catch (error) {
     next(error);
   }
@@ -3886,6 +3924,47 @@ app.delete("/api/warehouse/products/:id", async (request, response, next) => {
   }
 });
 
+app.post("/api/warehouse/products/links/bulk", async (request, response, next) => {
+  try {
+    const ids = new Set((Array.isArray(request.body.productIds) ? request.body.productIds : [])
+      .map((id) => String(id || "").trim())
+      .filter(Boolean));
+    if (!ids.size) return response.status(400).json({ error: "Выберите товары для привязки." });
+
+    const baseLink = normalizeWarehouseLink(request.body);
+    if (!baseLink.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
+
+    const warehouse = await readWarehouse();
+    const now = new Date().toISOString();
+    const updatedIds = [];
+
+    for (const product of warehouse.products) {
+      if (!ids.has(String(product.id))) continue;
+      const link = normalizeWarehouseLink({
+        ...baseLink,
+        id: ids.size > 1 && !request.body.id ? crypto.randomUUID() : baseLink.id,
+        createdAt: baseLink.createdAt || now,
+      });
+      product.links = Array.isArray(product.links) ? product.links : [];
+      const index = product.links.findIndex((item) => item.id === link.id);
+      if (index >= 0) product.links[index] = link;
+      else product.links.push(link);
+      product.autoPriceEnabled = true;
+      product.updatedAt = now;
+      updatedIds.push(product.id);
+    }
+
+    if (!updatedIds.length) return response.status(404).json({ error: "Товары склада не найдены." });
+
+    const saved = await writeWarehouse(warehouse);
+    const savedProducts = saved.products.filter((product) => updatedIds.includes(product.id));
+    response.json({ ok: true, changed: savedProducts.length, products: savedProducts });
+    queueImmediateAutoPricePush(updatedIds, "link_bulk_add_or_update");
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/warehouse/products/:id/links", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
@@ -3899,7 +3978,10 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     if (index >= 0) product.links[index] = link;
     else product.links.push(link);
     if (product.links.length > 0) product.autoPriceEnabled = true;
-    response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    product.updatedAt = new Date().toISOString();
+    const saved = await writeWarehouse(warehouse);
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    response.json({ ok: true, product: savedProduct, links: savedProduct.links || [] });
     queueImmediateAutoPricePush([product.id], "link_add_or_update");
   } catch (error) {
     next(error);
@@ -3912,8 +3994,11 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     const product = warehouse.products.find((item) => item.id === request.params.productId);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     product.links = (product.links || []).filter((link) => link.id !== request.params.linkId);
-    response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
-    queueImmediateAutoPricePush([request.params.productId], "link_delete");
+    product.updatedAt = new Date().toISOString();
+    const saved = await writeWarehouse(warehouse);
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    response.json({ ok: true, product: savedProduct, links: savedProduct.links || [] });
+    if ((savedProduct.links || []).length) queueImmediateAutoPricePush([request.params.productId], "link_delete");
   } catch (error) {
     next(error);
   }
@@ -3929,12 +4014,12 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const items = [];
 
   for (const product of selected) {
-    if (!product.ready) {
-      skipped.push({ id: product.id, offerId: product.offerId, reason: "not_ready" });
+    if (!product.hasLinks) {
+      skipped.push({ id: product.id, offerId: product.offerId, reason: "no_pricemaster_link" });
       continue;
     }
-    if (product.autoPriceEnabled === false) {
-      skipped.push({ id: product.id, offerId: product.offerId, reason: "auto_disabled" });
+    if (!product.ready) {
+      skipped.push({ id: product.id, offerId: product.offerId, reason: "not_ready" });
       continue;
     }
     const current = Number(product.currentPrice || 0);
@@ -4091,6 +4176,7 @@ async function processMarketplaceJob(name, data = {}) {
 }
 
 function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return;
   if (marketplaceQueue) {
     marketplaceQueue.add(name, data, {
       priority,
@@ -4127,6 +4213,7 @@ function initMarketplaceQueue() {
 }
 
 function queueImmediateAutoPricePush(productIds = [], reason = "price_change_detected") {
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return;
   if (Array.isArray(productIds) && productIds.length) {
     productIds.forEach((id) => immediateAutoPushIds.add(String(id)));
   } else {
@@ -4802,7 +4889,8 @@ async function runDailyRefresh(trigger = "manual") {
       const automation = await runNoSupplierMarketplaceAutomation(warehouse);
       const recovery = await runSupplierRecoveryAutomation(warehouse);
       let pricePush = null;
-      if (trigger === "manual") {
+      const shouldSendPrices = trigger === "manual" || (trigger === "schedule" && dailySyncSendPrices);
+      if (shouldSendPrices) {
         try {
           pricePush = await sendWarehousePrices({
             usdRate: undefined,
@@ -4926,7 +5014,7 @@ function startServer() {
       logger.info("auto sync enabled", { everyMinutes: autoSyncMinutes });
     }
     if (dailySyncEnabled) {
-      logger.info("daily sync enabled", { time: dailySyncTime });
+      logger.info("daily sync enabled", { time: dailySyncTime, sendPrices: dailySyncSendPrices });
     }
     pruneUploadDirectory().catch((err) => logger.warn("initial upload prune failed", { detail: err?.message || String(err) }));
   });
