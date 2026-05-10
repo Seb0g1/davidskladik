@@ -426,10 +426,16 @@
         <span class="pm-autocomplete-wrap">
           <input name="supplierName" type="text" placeholder="Поставщик" autocomplete="off" data-pm-suggest="partner" />
         </span>
-        <select name="priceCurrency" title="Валюта цены поставщика">
-          <option value="USD">Цена в $</option>
-          <option value="RUB">Цена в ₽</option>
-        </select>
+        <span class="link-currency-toggle" title="Валюта цены поставщика">
+          <label>
+            <input type="radio" name="priceCurrency" value="USD" checked />
+            <span>$</span>
+          </label>
+          <label>
+            <input type="radio" name="priceCurrency" value="RUB" />
+            <span>₽</span>
+          </label>
+        </span>
         <button class="secondary-button" type="submit">Привязать</button>
       </form>
     </template>
