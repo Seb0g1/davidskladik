@@ -695,6 +695,30 @@ function warehouseBrandSearchHaystack(product = {}) {
     .join(" ");
 }
 
+function warehouseBrandDeepHaystack(product = {}) {
+  return normalizeSearchText(
+    JSON.stringify({
+      brand: product.brand,
+      vendor: product.vendor,
+      brandName: product.brandName,
+      name: product.name,
+      offerId: product.offerId,
+      sku: product.sku,
+      barcode: product.barcode,
+      ozon: product.ozon,
+      yandex: product.yandex,
+      marketplaceState: product.marketplaceState,
+    }),
+  );
+}
+
+function warehouseBrandMatches(product = {}, brandFilter = "") {
+  const needle = normalizeSearchText(brandFilter);
+  if (!needle) return true;
+  if (warehouseBrandSearchHaystack(product).includes(needle)) return true;
+  return warehouseBrandDeepHaystack(product).includes(needle);
+}
+
 function firstImageUrl(value) {
   if (Array.isArray(value)) return cleanText(value[0]);
   const text = cleanText(value);
@@ -3600,10 +3624,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     if (linked === "unlinked") rows = rows.filter((item) => !item.hasLinks);
     if (marketplace !== "all") rows = rows.filter((item) => cleanText(item.marketplace) === marketplace);
     if (stateCode !== "all") rows = rows.filter((item) => cleanText(item.marketplaceState?.code) === stateCode);
-    if (brandFilter) {
-      const needle = normalizeSearchText(brandFilter);
-      rows = rows.filter((item) => warehouseBrandSearchHaystack(item).includes(needle));
-    }
+    if (brandFilter) rows = rows.filter((item) => warehouseBrandMatches(item, brandFilter));
 
     const total = rows.length;
     const offset = (page - 1) * pageSize;
@@ -5187,7 +5208,15 @@ function startServer() {
   }
 }
 
-module.exports = { app, startServer, resolveMarkupCoefficient, normalizePriceMasterPrice, pickNoSupplierAutomationCandidates };
+module.exports = {
+  app,
+  startServer,
+  resolveMarkupCoefficient,
+  normalizePriceMasterPrice,
+  pickNoSupplierAutomationCandidates,
+  resolveWarehouseBrand,
+  warehouseBrandMatches,
+};
 
 if (require.main === module) {
   startServer();

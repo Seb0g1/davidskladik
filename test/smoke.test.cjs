@@ -9,7 +9,13 @@ process.env.AUTO_ARCHIVE_ON_NO_LINKS = "true";
 process.env.PUBLIC_BASE_URL = "http://localhost";
 process.env.DISABLE_BACKGROUND_JOBS = "true";
 
-const { app, resolveMarkupCoefficient, normalizePriceMasterPrice, pickNoSupplierAutomationCandidates } = require("../server.js");
+const {
+  app,
+  resolveMarkupCoefficient,
+  normalizePriceMasterPrice,
+  pickNoSupplierAutomationCandidates,
+  warehouseBrandMatches,
+} = require("../server.js");
 
 test("GET /health", async () => {
   const res = await request(app).get("/health").expect(200);
@@ -114,6 +120,35 @@ test("normalizePriceMasterPrice keeps dollar-like values in USD", () => {
   assert.equal(value.sourceCurrency, "USD");
   assert.equal(value.convertedFromRub, false);
   assert.equal(value.price, 9500);
+});
+
+test("warehouse brand filter falls back to marketplace product data", () => {
+  const product = {
+    name: "Нишевый аромат без бренда в корне",
+    ozon: {
+      name: "AMOUAGE Guidance 100 ml",
+      attributes: [],
+    },
+  };
+
+  assert.equal(warehouseBrandMatches(product, "Amouage"), true);
+});
+
+test("warehouse brand filter finds brand in raw Ozon attributes", () => {
+  const product = {
+    name: "Товар без названия бренда",
+    ozon: {
+      attributes: [
+        {
+          id: 85,
+          name: "Бренд",
+          values: [{ value: "Amouage" }],
+        },
+      ],
+    },
+  };
+
+  assert.equal(warehouseBrandMatches(product, "Amouage"), true);
 });
 
 test("automation ignores products without links", () => {
