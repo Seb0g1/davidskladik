@@ -106,8 +106,25 @@ function invalidateWarehouseViewCache() {
 app.use(express.json({ limit: "1mb" }));
 app.use(compression({ threshold: 1024 }));
 
-/** Рано в стеке: иначе в части окружений запрос не доходит до обработчика (видно как HTML «Cannot GET /api/diagnostics/auto-price»). */
-async function handleAutoPriceDiagnosticsRequest(request, response, next) {
+/** Для сравнения с белым списком в requireAuth и ранней отдачи /api/version. */
+function normalizeAuthPath(raw) {
+  let s = String(raw || "");
+  const q = s.indexOf("?");
+  if (q >= 0) s = s.slice(0, q);
+  if (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
+  return s;
+}
+
+/**
+ * Диагностика автоцен: явный app.use + сравнение path (без path-to-regexp для этого URL).
+ * Иначе в Express 5 часть окружений отдаёт HTML «Cannot GET /api/diagnostics/auto-price».
+ */
+app.use(async function autoPriceDiagnosticsMiddleware(request, response, next) {
+  if (request.method !== "GET") return next();
+  const pathname = normalizeAuthPath(request.path);
+  if (pathname !== "/api/diagnostics/auto-price" && pathname !== "/diagnostics/auto-price") {
+    return next();
+  }
   const session = readSession(request);
   if (!session) {
     return response.status(401).json({ error: "Требуется вход" });
@@ -119,19 +136,7 @@ async function handleAutoPriceDiagnosticsRequest(request, response, next) {
   } catch (error) {
     next(error);
   }
-}
-
-app.get("/api/diagnostics/auto-price", handleAutoPriceDiagnosticsRequest);
-app.get("/diagnostics/auto-price", handleAutoPriceDiagnosticsRequest);
-
-/** Для сравнения с белым списком в requireAuth и ранней отдачи /api/version. */
-function normalizeAuthPath(raw) {
-  let s = String(raw || "");
-  const q = s.indexOf("?");
-  if (q >= 0) s = s.slice(0, q);
-  if (s.length > 1 && s.endsWith("/")) s = s.slice(0, -1);
-  return s;
-}
+});
 
 const SERVER_BOOT_AT = new Date().toISOString();
 let SERVER_BUILD_INFO = { commit: null, builtAt: null };
