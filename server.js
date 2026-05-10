@@ -418,6 +418,15 @@ app.get("/api/session", (request, response) => {
 });
 
 /** Диагностика автоцен: два пути — см. nginx proxy_pass (иногда /api срезается и в Node приходит /diagnostics/...). */
+function requireSessionForDiagnostics(request, response, next) {
+  const session = readSession(request);
+  if (!session) {
+    return response.status(401).json({ error: "Требуется вход" });
+  }
+  request.session = session;
+  return next();
+}
+
 async function handleAutoPriceDiagnosticsGet(_request, response, next) {
   try {
     response.setHeader("Cache-Control", "private, no-store");
@@ -427,9 +436,10 @@ async function handleAutoPriceDiagnosticsGet(_request, response, next) {
   }
 }
 
+app.get("/api/diagnostics/auto-price", requireSessionForDiagnostics, handleAutoPriceDiagnosticsGet);
+app.get("/diagnostics/auto-price", requireSessionForDiagnostics, handleAutoPriceDiagnosticsGet);
+
 app.use(requireAuth);
-app.get("/api/diagnostics/auto-price", handleAutoPriceDiagnosticsGet);
-app.get("/diagnostics/auto-price", handleAutoPriceDiagnosticsGet);
 app.use(
   express.static(publicDir, {
     setHeaders(res, staticPath) {
