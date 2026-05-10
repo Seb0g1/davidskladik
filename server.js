@@ -357,7 +357,9 @@ function requireAuth(request, response, next) {
   ];
   if (publicPaths.includes(pathKey)) return next();
   if (pathKey.startsWith("/uploads/images/")) return next();
-  if (pathKey === "/api/login" || pathKey === "/api/session" || pathKey === "/api/version") return next();
+  if (pathKey === "/api/login" || pathKey === "/api/session" || pathKey === "/api/version" || pathKey === "/api/health") {
+    return next();
+  }
 
   const session = readSession(request);
   if (session) {
@@ -416,7 +418,16 @@ app.get("/api/session", (request, response) => {
 });
 
 app.use(requireAuth);
-app.use(express.static(publicDir));
+app.use(
+  express.static(publicDir, {
+    setHeaders(res, staticPath) {
+      const base = path.basename(staticPath);
+      if (base === "app.js" || base === "settings.js" || base === "login.js" || base === "product.js") {
+        res.setHeader("Cache-Control", "no-store, max-age=0");
+      }
+    },
+  }),
+);
 
 function cleanLimit(value, fallback = 100, max = 500) {
   const parsed = Number.parseInt(value, 10);
@@ -3148,6 +3159,22 @@ function compareSnapshots(previousItems, currentOffers) {
   return { currentItems, changes };
 }
 
+app.get(["/api", "/api/"], (_request, response) => {
+  response.json({
+    ok: true,
+    message: "This is the API base URL. Open a concrete path (for example /api/health).",
+    paths: {
+      health: "/api/health",
+      session: "/api/session",
+      warehouse: "/api/warehouse",
+      marketplaces: "/api/marketplaces",
+      marketplacesAutoPriceDiag: "/api/marketplaces?autoPriceDiagnostics=1",
+      marketplacesWarehouseBrands: "/api/marketplaces?warehouseBrands=1",
+      settings: "/api/settings",
+    },
+  });
+});
+
 app.get("/api/health", async (_request, response, next) => {
   try {
     const [rows] = await pool.query("SELECT VERSION() AS version, NOW() AS serverTime");
@@ -3514,34 +3541,45 @@ app.post("/api/ozon/products/create", async (request, response, next) => {
   }
 });
 
-app.get("/api/marketplaces", (_request, response) => {
-  readAppSettings()
-    .then((settings) => {
-      response.json({
-        defaults: {
-          usdRate: Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95),
-          ozonMarkup: Number(settings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7),
-          yandexMarkup: Number(settings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6),
-        },
-        settings,
-        targets: marketplaceTargets(),
-        accounts: getMarketplaceAccounts().map(sanitizeMarketplaceAccount),
-        hiddenAccounts: getHiddenMarketplaceAccounts().map(sanitizeMarketplaceAccount),
-      });
-    })
-    .catch(() => {
-      response.json({
-        defaults: {
-          usdRate: Number(process.env.DEFAULT_USD_RATE || 95),
-          ozonMarkup: Number(process.env.DEFAULT_OZON_MARKUP || 1.7),
-          yandexMarkup: Number(process.env.DEFAULT_YANDEX_MARKUP || 1.6),
-        },
-        settings: defaultAppSettings(),
-        targets: marketplaceTargets(),
-        accounts: getMarketplaceAccounts().map(sanitizeMarketplaceAccount),
-        hiddenAccounts: getHiddenMarketplaceAccounts().map(sanitizeMarketplaceAccount),
-      });
-    });
+app.get("/api/marketplaces", async (request, response, next) => {
+  try {
+    const wantDiag = String(request.query?.autoPriceDiagnostics || request.query?.autoPriceDiag || "") === "1";
+    const wantWarehouseBrands = String(request.query?.warehouseBrands || request.query?.includeWarehouseBrands || "") === "1";
+    let settings;
+    try {
+      settings = await readAppSettings();
+    } catch (_readError) {
+      settings = defaultAppSettings();
+    }
+    const payload = {
+      defaults: {
+        usdRate: Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95),
+        ozonMarkup: Number(settings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7),
+        yandexMarkup: Number(settings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6),
+      },
+      settings,
+      targets: marketplaceTargets(),
+      accounts: getMarketplaceAccounts().map(sanitizeMarketplaceAccount),
+      hiddenAccounts: getHiddenMarketplaceAccounts().map(sanitizeMarketplaceAccount),
+    };
+    if (wantDiag) {
+      try {
+        payload.autoPriceDiagnostics = await buildAutoPriceDiagnosticsPayload();
+      } catch (diagError) {
+        payload.autoPriceDiagnosticsError = diagError?.message || String(diagError);
+      }
+    }
+    if (wantWarehouseBrands) {
+      try {
+        payload.warehouseBrands = await listWarehouseBrandsSorted();
+      } catch (brandsError) {
+        payload.warehouseBrandsError = brandsError?.message || String(brandsError);
+      }
+    }
+    response.json(payload);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/settings", async (_request, response, next) => {
@@ -3774,6 +3812,25 @@ app.post("/api/uploads/images", uploadImages.array("images", 10), async (request
   }
 });
 
+async function listWarehouseBrandsSorted() {
+  let products = [];
+  try {
+    const view = await buildWarehouseViewCached({ sync: false, refreshPrices: false });
+    products = Array.isArray(view?.products) ? view.products : [];
+  } catch (_error) {
+    const warehouse = await readWarehouse();
+    products = Array.isArray(warehouse?.products) ? warehouse.products : [];
+  }
+  const unique = new Map();
+  for (const product of products) {
+    const b = resolveWarehouseBrand(product);
+    if (!b) continue;
+    const key = b.toLowerCase();
+    if (!unique.has(key)) unique.set(key, b);
+  }
+  return Array.from(unique.values()).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
+}
+
 app.get("/api/warehouse", async (request, response, next) => {
   try {
     const sync = request.query.sync === "true";
@@ -3797,22 +3854,7 @@ app.get("/api/warehouse", async (request, response, next) => {
 
 app.get("/api/warehouse/brands", async (request, response, next) => {
   try {
-    let products = [];
-    try {
-      const view = await buildWarehouseViewCached({ sync: false, refreshPrices: false });
-      products = Array.isArray(view?.products) ? view.products : [];
-    } catch (_error) {
-      const warehouse = await readWarehouse();
-      products = Array.isArray(warehouse?.products) ? warehouse.products : [];
-    }
-    const unique = new Map();
-    for (const product of products) {
-      const b = resolveWarehouseBrand(product);
-      if (!b) continue;
-      const key = b.toLowerCase();
-      if (!unique.has(key)) unique.set(key, b);
-    }
-    const brands = Array.from(unique.values()).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
+    const brands = await listWarehouseBrandsSorted();
     response.json({ brands });
   } catch (error) {
     next(error);
@@ -4576,16 +4618,24 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   }
   await writeWarehouse(warehouse);
 
-  const queueState = await readPriceRetryQueue();
-  const failedQueued = failed.map((item) => ({
-    ...item,
-    queueKey: `${item.id}:${item.target}`,
-    queuedAt: sentAt,
-    attempts: Number(item.attempts || 0) + 1,
-  }));
-  const merged = [...(queueState.items || []), ...failedQueued];
-  const deduped = Array.from(new Map(merged.map((item) => [item.queueKey || `${item.id}:${item.target}`, item])).values());
-  const written = await writePriceRetryQueue({ items: deduped }, { source: "send_warehouse_prices" });
+  let queuedCount = 0;
+  let queuePersistWarning = null;
+  try {
+    const queueState = await readPriceRetryQueue();
+    const failedQueued = failed.map((item) => ({
+      ...item,
+      queueKey: `${item.id}:${item.target}`,
+      queuedAt: sentAt,
+      attempts: Number(item.attempts || 0) + 1,
+    }));
+    const merged = [...(queueState.items || []), ...failedQueued];
+    const deduped = Array.from(new Map(merged.map((item) => [item.queueKey || `${item.id}:${item.target}`, item])).values());
+    const written = await writePriceRetryQueue({ items: deduped }, { source: "send_warehouse_prices" });
+    queuedCount = written.items.length;
+  } catch (queueError) {
+    queuePersistWarning = queueError?.message || String(queueError);
+    logger.error("sendWarehousePrices: retry queue persist failed", { detail: queuePersistWarning, err: queueError });
+  }
 
   const safeResults = results.map((entry) => {
     try {
@@ -4595,7 +4645,15 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     }
   });
 
-  return { ok: true, sent: items.length - failed.length, failed: failed.length, queued: written.items.length, skipped, results: safeResults };
+  return {
+    ok: true,
+    sent: items.length - failed.length,
+    failed: failed.length,
+    queued: queuedCount,
+    skipped,
+    results: safeResults,
+    ...(queuePersistWarning ? { queuePersistWarning } : {}),
+  };
 }
 
 async function processMarketplaceJob(name, data = {}) {

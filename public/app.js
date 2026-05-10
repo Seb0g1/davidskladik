@@ -2074,14 +2074,29 @@ async function refreshWarehouseBrandSelect() {
   const wantRaw = String(state.warehouseBrandFilter || "").trim();
   let brands = [];
   try {
-    const res = await fetch("/api/warehouse/brands", { credentials: "same-origin" });
+    let res = await fetch("/api/marketplaces?warehouseBrands=1", { credentials: "same-origin" });
     if (res.status === 401) {
       window.location.href = "/login.html";
       return;
     }
     if (res.ok) {
       const payload = await res.json().catch(() => ({}));
-      brands = Array.isArray(payload.brands) ? payload.brands.slice() : [];
+      if (Array.isArray(payload.warehouseBrands)) {
+        brands = payload.warehouseBrands.slice();
+      }
+    }
+    if (!brands.length) {
+      res = await fetch("/api/warehouse/brands", { credentials: "same-origin" });
+      if (res.status === 401) {
+        window.location.href = "/login.html";
+        return;
+      }
+      if (res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        if (Array.isArray(payload.brands)) {
+          brands = payload.brands.slice();
+        }
+      }
     }
   } catch (_error) {
     brands = [];
@@ -2729,18 +2744,27 @@ async function loadAutoPriceDiagnostics() {
   if (!elements.autoPriceDiagPanel || !elements.autoPriceDiagBody || !elements.autoPriceDiagMeta) return;
   elements.autoPriceDiagMeta.textContent = "Загружаю...";
   try {
-    const urls = ["/api/warehouse/auto-price/diagnostics", "/api/warehouse/diagnostics/auto-price"];
-    let res = await fetch(urls[0], { credentials: "same-origin" });
-    if (res.status === 404) {
-      res = await fetch(urls[1], { credentials: "same-origin" });
-    }
-    if (res.status === 401) {
+    let data = null;
+    const rMp = await fetch("/api/marketplaces?autoPriceDiagnostics=1", { credentials: "same-origin" });
+    if (rMp.status === 401) {
       window.location.href = "/login.html";
       return;
     }
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      throw new Error(data.error || data.detail || `Диагностика недоступна (${res.status}). Обновите сервер (git pull + pm2 restart).`);
+    const mpPayload = rMp.ok ? await rMp.json().catch(() => ({})) : {};
+    if (mpPayload.autoPriceDiagnostics && mpPayload.autoPriceDiagnostics.ok === true) {
+      data = mpPayload.autoPriceDiagnostics;
+    } else if (mpPayload.autoPriceDiagnosticsError) {
+      elements.autoPriceDiagMeta.textContent = `Ошибка: ${mpPayload.autoPriceDiagnosticsError}`;
+      elements.autoPriceDiagBody.innerHTML = `<div class="empty-mini">${escapeHtml(String(mpPayload.autoPriceDiagnosticsError))}</div>`;
+      elements.autoPriceDiagPanel.classList.remove("hidden");
+      return;
+    }
+    if (!data || data.ok !== true) {
+      elements.autoPriceDiagMeta.textContent = "Диагностика недоступна на этом сервере";
+      elements.autoPriceDiagBody.innerHTML =
+        '<div class="empty-mini"><p>Нужен актуальный <code>server.js</code> с полем <code>autoPriceDiagnostics</code> в ответе <code>GET /api/marketplaces?autoPriceDiagnostics=1</code> — выполните <code>git pull</code> и перезапуск PM2.</p><p>Обновите страницу без кэша (Ctrl+F5): для <code>app.js</code> сервер отдаёт <code>Cache-Control: no-store</code>.</p><p>Если любые <code>/api/…</code> дают 404, проверьте nginx: весь префикс <code>/api</code> должен проксироваться в Node.</p></div>';
+      elements.autoPriceDiagPanel.classList.remove("hidden");
+      return;
     }
     const fmtTime = (iso) => (iso ? new Date(iso).toLocaleString("ru-RU") : "—");
     const stats = data.ozonStats || {};
