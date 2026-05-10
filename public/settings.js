@@ -6,6 +6,9 @@ const logoutButton = document.querySelector("#logoutButton");
 const settingsAnimateAutoFocusInput = document.querySelector("#settingsAnimateAutoFocusInput");
 const autoSyncEnabledInput = document.querySelector("#autoSyncEnabledInput");
 const autoSyncMinutesInput = document.querySelector("#autoSyncMinutesInput");
+const manualSyncButton = document.querySelector("#manualSyncButton");
+const manualPriceUpdateButton = document.querySelector("#manualPriceUpdateButton");
+const manualSyncStatus = document.querySelector("#manualSyncStatus");
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 
 function ruleRow(rule = {}) {
@@ -120,6 +123,38 @@ settingsAnimateAutoFocusInput?.addEventListener("change", () => {
   const enabled = Boolean(settingsAnimateAutoFocusInput.checked);
   localStorage.setItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY, enabled ? "1" : "0");
   statusBox.textContent = `UI-настройка сохранена: авто-фокус ${enabled ? "с анимацией" : "без анимации"}.`;
+});
+
+manualSyncButton?.addEventListener("click", async () => {
+  manualSyncButton.disabled = true;
+  if (manualPriceUpdateButton) manualPriceUpdateButton.disabled = true;
+  if (manualSyncStatus) manualSyncStatus.textContent = "Синхронизирую склад: товары, статусы, остатки и фото...";
+  try {
+    await api("/api/warehouse/products/page?sync=true&page=1&pageSize=10");
+    if (manualSyncStatus) manualSyncStatus.textContent = "Склад синхронизирован. Можно вернуться на главную и обновить список.";
+  } catch (error) {
+    if (manualSyncStatus) manualSyncStatus.textContent = error.message;
+  } finally {
+    manualSyncButton.disabled = false;
+    if (manualPriceUpdateButton) manualPriceUpdateButton.disabled = false;
+  }
+});
+
+manualPriceUpdateButton?.addEventListener("click", async () => {
+  if (manualSyncButton) manualSyncButton.disabled = true;
+  manualPriceUpdateButton.disabled = true;
+  if (manualSyncStatus) manualSyncStatus.textContent = "Запускаю полный цикл обновления цен и отправки на маркетплейсы...";
+  try {
+    const result = await api("/api/daily-sync/run", { method: "POST" });
+    const sent = result?.warehouse?.pricePush?.sent ?? result?.logs?.[0]?.pricePushSent ?? 0;
+    const failed = result?.warehouse?.pricePush?.failed ?? result?.logs?.[0]?.pricePushFailed ?? 0;
+    if (manualSyncStatus) manualSyncStatus.textContent = `Цены обновлены. Отправлено: ${sent}, ошибок: ${failed}.`;
+  } catch (error) {
+    if (manualSyncStatus) manualSyncStatus.textContent = error.message;
+  } finally {
+    if (manualSyncButton) manualSyncButton.disabled = false;
+    manualPriceUpdateButton.disabled = false;
+  }
 });
 
 logoutButton?.addEventListener("click", async () => {
