@@ -254,6 +254,18 @@ function readSession(request) {
   }
 }
 
+/** Secure-cookie только при реальном HTTPS (прокси → X-Forwarded-Proto), не от PUBLIC_BASE_URL — иначе curl/http://127.0.0.1 не шлёт cookie. */
+function sessionCookieSecureForRequest(request) {
+  if (String(process.env.SESSION_COOKIE_SECURE || "").toLowerCase() === "false") return false;
+  if (String(process.env.SESSION_COOKIE_SECURE || "").toLowerCase() === "true") return true;
+  const forwarded = String(request.get("x-forwarded-proto") || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  if (forwarded === "https") return true;
+  return Boolean(request.secure);
+}
+
 const uploadSessionStats = new Map();
 const UPLOAD_QUOTA_WINDOW_MS = 24 * 60 * 60 * 1000;
 
@@ -396,7 +408,7 @@ app.post("/api/login", loginLimiter, (request, response) => {
   }
 
   const token = createSessionToken(username);
-  const secure = String(process.env.PUBLIC_BASE_URL || "").startsWith("https://");
+  const secure = sessionCookieSecureForRequest(request);
   response.cookie(sessionCookieName, token, {
     httpOnly: true,
     sameSite: "lax",
@@ -407,8 +419,9 @@ app.post("/api/login", loginLimiter, (request, response) => {
   response.json({ ok: true, username });
 });
 
-app.post("/api/logout", (_request, response) => {
-  response.clearCookie(sessionCookieName, { path: "/" });
+app.post("/api/logout", (request, response) => {
+  const secure = sessionCookieSecureForRequest(request);
+  response.clearCookie(sessionCookieName, { path: "/", secure, httpOnly: true, sameSite: "lax" });
   response.json({ ok: true });
 });
 
