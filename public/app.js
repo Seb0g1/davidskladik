@@ -13,6 +13,7 @@ const state = {
   hiddenAccounts: [],
   selectedWarehouseProductId: null,
   selectedWarehouseGroupKey: null,
+  selectedWarehouseDetailGroup: null,
   warehouseMarketplace: "all",
   ozonStateFilter: "all",
   warehouseAutoOnly: false,
@@ -978,7 +979,8 @@ function applyWarehouseFilters() {
   state.filteredWarehouse = Array.isArray(state.warehouse) ? state.warehouse.slice() : [];
 
   const groups = getSortedWarehouseGroups();
-  if (state.selectedWarehouseGroupKey && !groups.some((group) => group.key === state.selectedWarehouseGroupKey)) {
+  const selectedInFiltered = groups.find((group) => group.key === state.selectedWarehouseGroupKey) || null;
+  if (state.selectedWarehouseGroupKey && !selectedInFiltered && state.selectedWarehouseDetailGroup?.key !== state.selectedWarehouseGroupKey) {
     state.selectedWarehouseGroupKey = null;
   }
   if (!state.selectedWarehouseGroupKey && groups.length) {
@@ -997,7 +999,10 @@ function applyWarehouseFilters() {
   }
 
   renderWarehouseCards();
-  renderWarehouseDetail(groups.find((group) => group.key === state.selectedWarehouseGroupKey) ?? null);
+  renderWarehouseDetail(
+    groups.find((group) => group.key === state.selectedWarehouseGroupKey)
+      || (state.selectedWarehouseDetailGroup?.key === state.selectedWarehouseGroupKey ? state.selectedWarehouseDetailGroup : null),
+  );
   syncWarehouseStateToUrl();
 }
 
@@ -1195,6 +1200,7 @@ function renderWarehouseDetail(group) {
     `;
     return;
   }
+  state.selectedWarehouseDetailGroup = group;
 
   const product = group.primary || group;
   const variants = group.variants || [product];
@@ -1970,26 +1976,19 @@ function queueWarehouseFilterReload(delayMs = 260) {
 }
 
 async function refreshWarehouseBrandSelect() {
-  const sel = elements.warehouseBrandFilterInput;
-  if (!sel) return;
+  const input = elements.warehouseBrandFilterInput;
+  if (!input) return;
+  const list = document.querySelector("#warehouseBrandOptions");
   try {
     const payload = await api("/api/warehouse/brands");
     const brands = Array.isArray(payload.brands) ? payload.brands : [];
     const want = state.warehouseBrandFilter;
-    sel.innerHTML = `<option value="">Все бренды</option>${brands
-      .map((b) => `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`)
-      .join("")}`;
-    if (want && brands.includes(want)) sel.value = want;
-    else {
-      sel.value = "";
-      state.warehouseBrandFilter = "";
+    if (list) {
+      list.innerHTML = brands.map((b) => `<option value="${escapeHtml(b)}"></option>`).join("");
     }
-    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    input.value = want || "";
   } catch (_error) {
-    sel.innerHTML = `<option value="">Все бренды</option>`;
-    sel.value = "";
-    state.warehouseBrandFilter = "";
-    sel.dispatchEvent(new Event("change", { bubbles: true }));
+    if (list) list.innerHTML = "";
   }
 }
 
@@ -2096,12 +2095,8 @@ elements.warehouseLinkFilterInput?.addEventListener("change", () => {
   queueWarehouseFilterReload();
 });
 
-elements.warehouseBrandFilterInput?.addEventListener("change", (event) => {
+elements.warehouseBrandFilterInput?.addEventListener("input", () => {
   state.warehouseBrandFilter = String(elements.warehouseBrandFilterInput.value || "").trim();
-  if (event.isTrusted === false) {
-    syncWarehouseStateToUrl();
-    return;
-  }
   state.warehouseVisibleLimit = 80;
   state.warehousePage = 0;
   state.warehouseRestorePage = 1;
@@ -2109,7 +2104,7 @@ elements.warehouseBrandFilterInput?.addEventListener("change", (event) => {
   state.warehouseAutoFocusGroupKey = null;
   state.warehouseScrollTop = 0;
   syncWarehouseStateToUrl();
-  queueWarehouseFilterReload();
+  queueWarehouseFilterReload(360);
 });
 
 elements.warehouseAnimateAutoFocusInput?.addEventListener("change", () => {
@@ -2441,11 +2436,10 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     const currentGroup = state.selectedWarehouseGroupKey
       ? getSortedWarehouseGroups().find((group) => group.key === state.selectedWarehouseGroupKey)
       : null;
-    if (state.warehouseLinkFilter === "unlinked") {
-      state.selectedWarehouseGroupKey = null;
-      renderWarehouseDetail(null);
-    } else if (currentGroup) {
+    if (currentGroup) {
       renderWarehouseDetail(currentGroup);
+    } else if (state.selectedWarehouseDetailGroup) {
+      renderWarehouseDetail(state.selectedWarehouseDetailGroup);
     }
     elements.warehouseStatus.textContent = `Привязка сохранена: ${formatNumber(result.changed || productIds.length)} товар(ов). Цена отправится автоматически.`;
     window.setTimeout(() => {

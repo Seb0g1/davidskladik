@@ -3541,7 +3541,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     if (stateCode !== "all") rows = rows.filter((item) => cleanText(item.marketplaceState?.code) === stateCode);
     if (brandFilter) {
       const needle = brandFilter.toLowerCase();
-      rows = rows.filter((item) => resolveWarehouseBrand(item).toLowerCase() === needle);
+      rows = rows.filter((item) => resolveWarehouseBrand(item).toLowerCase().includes(needle));
     }
 
     const total = rows.length;

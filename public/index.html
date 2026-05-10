@@ -91,22 +91,14 @@
                     <div class="ios-select-menu" id="warehouseLinkFilterMenu" role="listbox" hidden></div>
                   </div>
                 </div>
-                <div class="status-control ios-field">
-                  <span class="ios-field-caption" id="warehouseBrandFilterCaption">Бренд</span>
-                  <div class="ios-select" data-ios-select>
-                    <select id="warehouseBrandFilterInput" class="ios-select-native" aria-hidden="true" tabindex="-1">
-                      <option value="">Все бренды</option>
-                    </select>
-                    <button type="button" class="ios-select-trigger" id="warehouseBrandFilterButton" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="warehouseBrandFilterCaption warehouseBrandFilterValue">
-                      <span class="ios-select-value" id="warehouseBrandFilterValue">Все бренды</span>
-                      <span class="ios-select-chevron" aria-hidden="true"></span>
-                    </button>
-                    <div class="ios-select-menu" id="warehouseBrandFilterMenu" role="listbox" hidden></div>
-                  </div>
-                </div>
+                <label class="search-control brand-filter-control">
+                  Бренд
+                  <input id="warehouseBrandFilterInput" type="search" list="warehouseBrandOptions" placeholder="Первые буквы бренда" autocomplete="off" />
+                  <datalist id="warehouseBrandOptions"></datalist>
+                </label>
               </div>
             </div>
-            <div class="wh-cluster wh-cluster--pricing">
+            <div class="wh-cluster wh-cluster--pricing hidden">
               <span class="wh-cluster-label" id="wh-cluster-pricing-label">Курс</span>
               <div class="wh-cluster-body wh-cluster-body--pricing">
                 <label class="rate-control">
