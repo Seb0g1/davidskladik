@@ -430,9 +430,8 @@ app.get("/api/session", (request, response) => {
   response.json({ authenticated: Boolean(session), username: session?.username || null, role: session?.role || null });
 });
 
-/** Диагностика автоцен: Router + один handler (Express 5 надёжнее, чем app.get с цепочкой middleware). Два mount — nginx может срезать префикс /api. */
-const autoPriceDiagnosticsRouter = express.Router();
-autoPriceDiagnosticsRouter.get("/auto-price", async (request, response, next) => {
+/** Диагностика автоцен: до глобального requireAuth; второй путь — если nginx срезает префикс /api. */
+async function handleAutoPriceDiagnosticsRequest(request, response, next) {
   const session = readSession(request);
   if (!session) {
     return response.status(401).json({ error: "Требуется вход" });
@@ -444,22 +443,12 @@ autoPriceDiagnosticsRouter.get("/auto-price", async (request, response, next) =>
   } catch (error) {
     next(error);
   }
-});
+}
 
-app.use("/api/diagnostics", autoPriceDiagnosticsRouter);
-app.use("/diagnostics", autoPriceDiagnosticsRouter);
+app.get("/api/diagnostics/auto-price", handleAutoPriceDiagnosticsRequest);
+app.get("/diagnostics/auto-price", handleAutoPriceDiagnosticsRequest);
 
 app.use(requireAuth);
-app.use(
-  express.static(publicDir, {
-    setHeaders(res, staticPath) {
-      const base = path.basename(staticPath);
-      if (base === "app.js" || base === "settings.js" || base === "login.js" || base === "product.js") {
-        res.setHeader("Cache-Control", "no-store, max-age=0");
-      }
-    },
-  }),
-);
 
 function cleanLimit(value, fallback = 100, max = 500) {
   const parsed = Number.parseInt(value, 10);
@@ -5691,6 +5680,17 @@ app.post("/api/daily-sync/run", async (_request, response, next) => {
     next(error);
   }
 });
+
+app.use(
+  express.static(publicDir, {
+    setHeaders(res, staticPath) {
+      const base = path.basename(staticPath);
+      if (base === "app.js" || base === "settings.js" || base === "login.js" || base === "product.js") {
+        res.setHeader("Cache-Control", "no-store, max-age=0");
+      }
+    },
+  }),
+);
 
 app.use((error, request, response, _next) => {
   logger.error("request error", {
