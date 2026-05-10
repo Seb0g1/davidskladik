@@ -9,6 +9,7 @@ const multer = require("multer");
 const mysql = require("mysql2/promise");
 const { Queue, Worker } = require("bullmq");
 const ExcelJS = require("exceljs");
+const { ProxyAgent: UndiciProxyAgent } = require("undici");
 require("dotenv").config();
 
 const logger = require("./lib/logger");
@@ -80,6 +81,8 @@ const telegramChatId = cleanText(process.env.TELEGRAM_CHAT_ID);
 const telegramNotificationsEnabled = process.env.TELEGRAM_NOTIFICATIONS_ENABLED !== "false";
 const telegramDailyReportEnabled = process.env.TELEGRAM_DAILY_REPORT_ENABLED !== "false";
 const telegramDailyReportTime = process.env.TELEGRAM_DAILY_REPORT_TIME || "22:00";
+const telegramProxyUrl = cleanText(process.env.TELEGRAM_PROXY_URL);
+const telegramApiBaseUrl = cleanText(process.env.TELEGRAM_API_BASE_URL || "https://api.telegram.org");
 
 let dailySyncTimer = null;
 let dailySyncNextRunAt = null;
@@ -100,9 +103,24 @@ const immediateAutoPushIds = new Set();
 let immediateAutoPushChain = Promise.resolve();
 let marketplaceQueue = null;
 let marketplaceWorker = null;
+let telegramProxyDispatcher = null;
 
 function telegramReady() {
   return telegramNotificationsEnabled && Boolean(telegramBotToken && telegramChatId);
+}
+
+function telegramApiUrl(method) {
+  return `${telegramApiBaseUrl.replace(/\/+$/, "")}/bot${telegramBotToken}/${method}`;
+}
+
+function telegramFetchOptions(options = {}) {
+  if (!telegramProxyUrl) return options;
+  const url = new URL(telegramProxyUrl);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("TELEGRAM_PROXY_URL supports only HTTP/HTTPS proxy for Bot API. MTProto proxy is for Telegram clients, not api.telegram.org Bot API. Use HTTP proxy or TELEGRAM_API_BASE_URL gateway.");
+  }
+  if (!telegramProxyDispatcher) telegramProxyDispatcher = new UndiciProxyAgent(telegramProxyUrl);
+  return { ...options, dispatcher: telegramProxyDispatcher };
 }
 
 function compactTelegramText(value, maxLength = 3500) {
@@ -114,7 +132,7 @@ function compactTelegramText(value, maxLength = 3500) {
 async function sendTelegramNotification(text, extra = {}) {
   if (!telegramReady()) return { ok: false, skipped: true };
   try {
-    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+    const response = await fetch(telegramApiUrl("sendMessage"), telegramFetchOptions({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -123,7 +141,7 @@ async function sendTelegramNotification(text, extra = {}) {
         disable_web_page_preview: true,
         ...extra,
       }),
-    });
+    }));
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload.ok === false) {
       throw new Error(payload.description || `Telegram API error ${response.status}`);
@@ -146,10 +164,10 @@ async function sendTelegramDocument({ buffer, filename, caption }) {
       new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
       filename,
     );
-    const response = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendDocument`, {
+    const response = await fetch(telegramApiUrl("sendDocument"), telegramFetchOptions({
       method: "POST",
       body: form,
-    });
+    }));
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload.ok === false) {
       const error = new Error(payload.description || `Telegram API error ${response.status}`);
@@ -3621,6 +3639,8 @@ app.get("/api/settings", async (_request, response, next) => {
         dailyReportEnabled: telegramDailyReportEnabled,
         dailyReportTime: telegramDailyReportTime,
         dailyReportNextRunAt: telegramDailyReportNextRunAt,
+        proxyEnabled: Boolean(telegramProxyUrl),
+        apiBaseUrl: telegramApiBaseUrl.replace(/bot.+$/i, "bot***"),
       },
     });
   } catch (error) {
@@ -5912,6 +5932,8 @@ function startServer() {
       logger.info("telegram notifications enabled", {
         dailyReportEnabled: telegramDailyReportEnabled,
         dailyReportTime: telegramDailyReportTime,
+        proxyEnabled: Boolean(telegramProxyUrl),
+        apiBaseUrl: telegramApiBaseUrl,
       });
     }
     pruneUploadDirectory().catch((err) => logger.warn("initial upload prune failed", { detail: err?.message || String(err) }));
