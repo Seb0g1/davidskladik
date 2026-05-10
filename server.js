@@ -696,20 +696,7 @@ function warehouseBrandSearchHaystack(product = {}) {
 }
 
 function warehouseBrandDeepHaystack(product = {}) {
-  return normalizeSearchText(
-    JSON.stringify({
-      brand: product.brand,
-      vendor: product.vendor,
-      brandName: product.brandName,
-      name: product.name,
-      offerId: product.offerId,
-      sku: product.sku,
-      barcode: product.barcode,
-      ozon: product.ozon,
-      yandex: product.yandex,
-      marketplaceState: product.marketplaceState,
-    }),
-  );
+  return normalizeSearchText(JSON.stringify(product));
 }
 
 function warehouseBrandMatches(product = {}, brandFilter = "") {

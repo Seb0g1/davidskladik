@@ -151,6 +151,19 @@ test("warehouse brand filter finds brand in raw Ozon attributes", () => {
   assert.equal(warehouseBrandMatches(product, "Amouage"), true);
 });
 
+test("warehouse brand filter scans non-standard marketplace fields", () => {
+  const product = {
+    name: "Товар без бренда в названии",
+    ozon: {
+      rawPayload: {
+        brand_name_from_api: "Amouage",
+      },
+    },
+  };
+
+  assert.equal(warehouseBrandMatches(product, "Amouage"), true);
+});
+
 test("automation ignores products without links", () => {
   const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates([
     { id: "nolinks", hasLinks: false, selectedSupplier: null, noSupplierAutomation: {} },
