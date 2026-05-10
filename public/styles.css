@@ -1801,6 +1801,20 @@ td {
   line-height: 1.4;
 }
 
+.brand-filter-control {
+  position: relative;
+  overflow: visible;
+}
+
+.brand-filter-control input {
+  width: 100%;
+}
+
+.brand-suggest-panel {
+  top: calc(100% + 8px);
+  z-index: 260;
+}
+
 .empty {
   padding: 34px 14px;
   color: var(--muted);

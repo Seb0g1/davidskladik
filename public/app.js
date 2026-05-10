@@ -19,6 +19,7 @@ const state = {
   warehouseAutoOnly: false,
   warehouseLinkFilter: "all",
   warehouseBrandFilter: "",
+  warehouseBrands: [],
   warehouseAnimateAutoFocus: localStorage.getItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY) !== "0",
   warehouseViewMode: localStorage.getItem("warehouseViewMode") || "cards",
   warehouseVisibleLimit: 80,
@@ -84,6 +85,7 @@ const elements = {
   warehouseAutoPriceOnlyInput: document.querySelector("#warehouseAutoPriceOnlyInput"),
   warehouseLinkFilterInput: document.querySelector("#warehouseLinkFilterInput"),
   warehouseBrandFilterInput: document.querySelector("#warehouseBrandFilterInput"),
+  warehouseBrandSuggestions: document.querySelector("#warehouseBrandSuggestions"),
   warehouseAnimateAutoFocusInput: document.querySelector("#warehouseAnimateAutoFocusInput"),
   warehouseMinDiffRubInput: document.querySelector("#warehouseMinDiffRubInput"),
   warehouseMinDiffPctInput: document.querySelector("#warehouseMinDiffPctInput"),
@@ -1975,20 +1977,65 @@ function queueWarehouseFilterReload(delayMs = 260) {
   }, delayMs);
 }
 
+function closeWarehouseBrandSuggestions() {
+  if (!elements.warehouseBrandSuggestions) return;
+  elements.warehouseBrandSuggestions.hidden = true;
+  elements.warehouseBrandSuggestions.innerHTML = "";
+}
+
+function renderWarehouseBrandSuggestions() {
+  const input = elements.warehouseBrandFilterInput;
+  const panel = elements.warehouseBrandSuggestions;
+  if (!input || !panel) return;
+  const q = String(input.value || "").trim().toLowerCase();
+  panel.innerHTML = "";
+  if (!q) {
+    closeWarehouseBrandSuggestions();
+    return;
+  }
+
+  const matches = (state.warehouseBrands || [])
+    .map((brand) => String(brand || "").trim())
+    .filter(Boolean)
+    .filter((brand) => brand.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const aa = a.toLowerCase();
+      const bb = b.toLowerCase();
+      const aStarts = aa.startsWith(q) ? 0 : 1;
+      const bStarts = bb.startsWith(q) ? 0 : 1;
+      return aStarts - bStarts || a.localeCompare(b, "ru", { sensitivity: "base" });
+    })
+    .slice(0, 14);
+
+  if (!matches.length) {
+    panel.innerHTML = `<div class="pm-suggest-empty">Бренд не найден. Можно искать по части названия.</div>`;
+    panel.hidden = false;
+    return;
+  }
+
+  panel.innerHTML = matches
+    .map((brand) => `
+      <button class="pm-suggest-option" type="button" role="option" data-brand="${escapeHtml(brand)}">
+        <span class="pm-suggest-title">${escapeHtml(brand)}</span>
+        <span class="pm-suggest-meta">Фильтр бренда</span>
+      </button>
+    `)
+    .join("");
+  panel.hidden = false;
+}
+
 async function refreshWarehouseBrandSelect() {
   const input = elements.warehouseBrandFilterInput;
   if (!input) return;
-  const list = document.querySelector("#warehouseBrandOptions");
   try {
     const payload = await api("/api/warehouse/brands");
     const brands = Array.isArray(payload.brands) ? payload.brands : [];
     const want = state.warehouseBrandFilter;
-    if (list) {
-      list.innerHTML = brands.map((b) => `<option value="${escapeHtml(b)}"></option>`).join("");
-    }
+    state.warehouseBrands = brands;
     input.value = want || "";
   } catch (_error) {
-    if (list) list.innerHTML = "";
+    state.warehouseBrands = [];
+    closeWarehouseBrandSuggestions();
   }
 }
 
@@ -2097,6 +2144,7 @@ elements.warehouseLinkFilterInput?.addEventListener("change", () => {
 
 elements.warehouseBrandFilterInput?.addEventListener("input", () => {
   state.warehouseBrandFilter = String(elements.warehouseBrandFilterInput.value || "").trim();
+  renderWarehouseBrandSuggestions();
   state.warehouseVisibleLimit = 80;
   state.warehousePage = 0;
   state.warehouseRestorePage = 1;
@@ -2105,6 +2153,33 @@ elements.warehouseBrandFilterInput?.addEventListener("input", () => {
   state.warehouseScrollTop = 0;
   syncWarehouseStateToUrl();
   queueWarehouseFilterReload(360);
+});
+
+elements.warehouseBrandFilterInput?.addEventListener("focus", renderWarehouseBrandSuggestions);
+
+elements.warehouseBrandSuggestions?.addEventListener("mousedown", (event) => {
+  event.preventDefault();
+});
+
+elements.warehouseBrandSuggestions?.addEventListener("click", (event) => {
+  const option = event.target.closest("[data-brand]");
+  if (!option) return;
+  const brand = String(option.dataset.brand || "").trim();
+  elements.warehouseBrandFilterInput.value = brand;
+  state.warehouseBrandFilter = brand;
+  closeWarehouseBrandSuggestions();
+  state.warehouseVisibleLimit = 80;
+  state.warehousePage = 0;
+  state.warehouseRestorePage = 1;
+  state.selectedWarehouseGroupKey = null;
+  state.warehouseAutoFocusGroupKey = null;
+  state.warehouseScrollTop = 0;
+  syncWarehouseStateToUrl();
+  queueWarehouseFilterReload(80);
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".brand-filter-control")) closeWarehouseBrandSuggestions();
 });
 
 elements.warehouseAnimateAutoFocusInput?.addEventListener("change", () => {
