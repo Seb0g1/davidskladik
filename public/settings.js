@@ -117,7 +117,10 @@ settingsForm?.addEventListener("submit", async (event) => {
       throw new Error("Требуется вход");
     }
     const result = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(result.error || result.detail || `Ошибка запроса (${res.status})`);
+    if (!res.ok) {
+      const parts = [result.error, result.detail].filter(Boolean);
+      throw new Error(parts.length ? parts.join(" — ") : `Ошибка запроса (${res.status})`);
+    }
     statusBox.textContent =
       "Настройки сохранены. Карточки, где вручную указана наценка, не меняются сами — очистите поле «Наценка» на складе или нажмите «По настройкам».";
   } catch (error) {

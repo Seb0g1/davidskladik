@@ -3563,14 +3563,36 @@ async function persistAppSettingsAndRespond(request, response, next) {
     } catch (auditError) {
       logger.warn("settings audit append failed", { detail: auditError?.message || String(auditError) });
     }
-    response.once("finish", () => {
-      try {
-        queueImmediateAutoPricePush([], "settings_update");
-      } catch (queueError) {
-        logger.warn("settings immediate auto push queue failed", { detail: queueError?.message || String(queueError) });
-      }
-    });
-    response.json({ ok: true, settings });
+    let safeSettings;
+    try {
+      safeSettings = JSON.parse(JSON.stringify(settings));
+    } catch (cloneError) {
+      logger.warn("settings snapshot for response failed", { detail: cloneError?.message || String(cloneError) });
+      safeSettings = {
+        fixedUsdRate: settings.fixedUsdRate,
+        defaultMarkups: settings.defaultMarkups,
+        markupRules: Array.isArray(settings.markupRules) ? settings.markupRules : [],
+      };
+    }
+    try {
+      response.json({ ok: true, settings: safeSettings });
+    } catch (jsonError) {
+      logger.error("settings response.json failed", { detail: jsonError?.message || String(jsonError) });
+      return response.status(500).json({
+        error: "Настройки записаны на диск, но ответ не удалось отправить. Обновите страницу (F5).",
+        detail: process.env.NODE_ENV !== "production" ? String(jsonError?.message || jsonError) : undefined,
+      });
+    }
+    /** Не привязываем к «finish» ответа: избегаем гонок с фоновыми задачами. Отключить: AUTO_PRICE_PUSH_ON_SETTINGS=false */
+    if (process.env.AUTO_PRICE_PUSH_ON_SETTINGS !== "false") {
+      setImmediate(() => {
+        try {
+          queueImmediateAutoPricePush([], "settings_update");
+        } catch (queueError) {
+          logger.warn("settings immediate auto push queue failed", { detail: queueError?.message || String(queueError) });
+        }
+      });
+    }
   } catch (error) {
     next(error);
   }
@@ -5585,11 +5607,13 @@ app.use((error, request, response, _next) => {
   });
   const uploadError = error instanceof multer.MulterError;
   const code = String(error.code || "");
+  /** Текст про Price Master только при явных признаках MySQL (меньше ложных срабатываний). */
   const mysqlLike =
-    code.startsWith("ER_")
+    Boolean(error?.sqlMessage || error?.sqlState)
     || code === "PROTOCOL_CONNECTION_LOST"
     || code === "ER_ACCESS_DENIED_ERROR"
-    || code === "ER_BAD_DB_ERROR";
+    || code === "ER_BAD_DB_ERROR"
+    || (code.startsWith("ER_") && (typeof error?.errno === "number" || error?.fatal === true));
   const networkDown = new Set(["ECONNREFUSED", "ETIMEDOUT"]).has(code);
   const message = uploadError
     ? "Не удалось загрузить изображение"
