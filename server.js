@@ -430,27 +430,24 @@ app.get("/api/session", (request, response) => {
   response.json({ authenticated: Boolean(session), username: session?.username || null, role: session?.role || null });
 });
 
-/** Диагностика автоцен: два пути — см. nginx proxy_pass (иногда /api срезается и в Node приходит /diagnostics/...). */
-function requireSessionForDiagnostics(request, response, next) {
+/** Диагностика автоцен: Router + один handler (Express 5 надёжнее, чем app.get с цепочкой middleware). Два mount — nginx может срезать префикс /api. */
+const autoPriceDiagnosticsRouter = express.Router();
+autoPriceDiagnosticsRouter.get("/auto-price", async (request, response, next) => {
   const session = readSession(request);
   if (!session) {
     return response.status(401).json({ error: "Требуется вход" });
   }
   request.session = session;
-  return next();
-}
-
-async function handleAutoPriceDiagnosticsGet(_request, response, next) {
   try {
     response.setHeader("Cache-Control", "private, no-store");
     response.json(await buildAutoPriceDiagnosticsPayload());
   } catch (error) {
     next(error);
   }
-}
+});
 
-app.get("/api/diagnostics/auto-price", requireSessionForDiagnostics, handleAutoPriceDiagnosticsGet);
-app.get("/diagnostics/auto-price", requireSessionForDiagnostics, handleAutoPriceDiagnosticsGet);
+app.use("/api/diagnostics", autoPriceDiagnosticsRouter);
+app.use("/diagnostics", autoPriceDiagnosticsRouter);
 
 app.use(requireAuth);
 app.use(
