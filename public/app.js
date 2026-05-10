@@ -2552,6 +2552,8 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     submitters.forEach((el) => {
       el.disabled = false;
     });
+  }
+});
 
 elements.warehouseDetail.addEventListener("click", async (event) => {
   const resetMarkupBtn = event.target.closest(".reset-markup-to-settings");
@@ -3280,7 +3282,7 @@ document.addEventListener("visibilitychange", () => {
     return;
   }
   const now = Date.now();
-  if (now - lastVisibilityWarehouseRefreshAt < 90_000) return;
+  if (now - lastVisibilityWarehouseRefreshAt < 90000) return;
   lastVisibilityWarehouseRefreshAt = now;
   loadWarehouse(false, false, { silent: true }).catch(() => {});
 });
