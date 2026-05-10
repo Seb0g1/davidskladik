@@ -152,12 +152,24 @@ async function sendTelegramDocument({ buffer, filename, caption }) {
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || payload.ok === false) {
-      throw new Error(payload.description || `Telegram API error ${response.status}`);
+      const error = new Error(payload.description || `Telegram API error ${response.status}`);
+      error.statusCode = response.status;
+      error.telegram = payload;
+      throw error;
     }
     return { ok: true };
   } catch (error) {
-    logger.warn("telegram document failed", { detail: error?.message || String(error) });
-    return { ok: false, error: error?.message || String(error) };
+    logger.warn("telegram document failed", {
+      detail: error?.message || String(error),
+      statusCode: error?.statusCode,
+      telegram: error?.telegram,
+    });
+    return {
+      ok: false,
+      error: error?.message || String(error),
+      statusCode: error?.statusCode || null,
+      telegram: error?.telegram || null,
+    };
   }
 }
 
@@ -3644,13 +3656,23 @@ app.post("/api/telegram/daily-report/run", async (_request, response, next) => {
       return response.status(400).json({
         ok: false,
         error: "TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы или уведомления выключены.",
+        hint: "Проверьте .env, путь запуска PM2 и выполните pm2 restart davidsklad --update-env.",
+      });
+    }
+    if (!telegramDailyReportEnabled) {
+      return response.status(400).json({
+        ok: false,
+        skipped: true,
+        error: "Ежедневные Telegram-отчёты выключены.",
+        hint: "Установите TELEGRAM_DAILY_REPORT_ENABLED=true в .env и перезапустите PM2 с --update-env.",
       });
     }
     const result = await sendDailyTelegramReport("manual");
-    if (result && result.ok === false && !result.skipped) {
+    if (result && result.ok === false) {
       return response.status(400).json({
         ...result,
-        hint: "Проверьте TELEGRAM_CHAT_ID и права бота в чате. Для супергрупп chat_id часто начинается с -100.",
+        error: result.error || "Telegram daily report failed",
+        hint: "Проверьте TELEGRAM_CHAT_ID, что бот добавлен в чат и имеет право отправлять файлы. Для супергрупп chat_id часто начинается с -100.",
       });
     }
     response.json(result);

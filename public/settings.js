@@ -46,7 +46,16 @@ async function api(path, options) {
     throw new Error("Требуется вход");
   }
   const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || payload.detail || "Ошибка запроса");
+  if (!response.ok) {
+    const message = [
+      payload.error || payload.detail || payload.description || "Ошибка запроса",
+      payload.hint,
+      payload.telegram?.description,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    throw new Error(message);
+  }
   return payload;
 }
 
