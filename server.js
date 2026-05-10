@@ -71,8 +71,6 @@ const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
 const pmDbPoolSize = Math.max(1, Number(process.env.PM_DB_POOL_SIZE || 8) || 8);
 const pmDbConnectTimeoutMs = Math.max(1000, Number(process.env.PM_DB_CONNECT_TIMEOUT_MS || 10000) || 10000);
 const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CACHE_MS || 120000) || 120000);
-const priceMasterCurrencyMode = String(process.env.PM_PRICE_CURRENCY || "auto").trim().toLowerCase();
-const priceMasterRubThreshold = Math.max(1, Number(process.env.PM_RUB_PRICE_THRESHOLD || 100) || 100);
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
@@ -624,12 +622,11 @@ function calculateRubPrice(usdPrice, usdRate, markupCoefficient) {
   return roundPrice(Number(usdPrice || 0) * Number(usdRate || 0) * Number(markupCoefficient || 0));
 }
 
-function normalizePriceMasterPrice(rawPrice, usdRate, currency = "") {
+function normalizePriceMasterPrice(rawPrice, usdRate, currency = "USD") {
   const originalPrice = Number(rawPrice || 0);
   const rate = Number(usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
-  const explicitCurrency = cleanText(currency).toUpperCase();
-  const mode = explicitCurrency || priceMasterCurrencyMode.toUpperCase();
-  const isRub = mode === "RUB" || mode === "RUR" || (mode === "AUTO" && originalPrice >= priceMasterRubThreshold);
+  const mode = cleanText(currency || "USD").toUpperCase();
+  const isRub = mode === "RUB" || mode === "RUR";
   const price = isRub && rate > 0 ? originalPrice / rate : originalPrice;
   return {
     price: Number(Number(price || 0).toFixed(4)),
@@ -857,12 +854,14 @@ function normalizeWarehouseProduct(input = {}) {
 }
 
 function normalizeWarehouseLink(input = {}) {
+  const priceCurrency = cleanText(input.priceCurrency || input.price_currency || input.currency).toUpperCase();
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
     article: cleanText(input.article || input.offerId || input.nativeId),
     keyword: cleanText(input.keyword),
     supplierName: cleanText(input.supplierName || input.partnerName),
     partnerId: cleanText(input.partnerId),
+    priceCurrency: priceCurrency === "RUB" || priceCurrency === "RUR" ? "RUB" : "USD",
     priority: Number.isFinite(Number(input.priority)) ? Number(input.priority) : 100,
     createdAt: input.createdAt || new Date().toISOString(),
   };
@@ -2375,7 +2374,7 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
       })
       .map((row) => {
         const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
-        const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate);
+        const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate, link.priceCurrency);
         const price = stoppedSupplier ? 0 : normalizedPrice.price;
         const active = stoppedSupplier ? false : Boolean(row.active);
         return {

@@ -101,8 +101,8 @@ test("resolveMarkupCoefficient uses product markup override", () => {
   assert.equal(value, 2.2);
 });
 
-test("normalizePriceMasterPrice converts ruble-like values to USD", () => {
-  const value = normalizePriceMasterPrice(9500, 95);
+test("normalizePriceMasterPrice converts explicitly ruble values to USD", () => {
+  const value = normalizePriceMasterPrice(9500, 95, "RUB");
   assert.equal(value.sourceCurrency, "RUB");
   assert.equal(value.convertedFromRub, true);
   assert.equal(value.price, 100);
@@ -110,10 +110,10 @@ test("normalizePriceMasterPrice converts ruble-like values to USD", () => {
 });
 
 test("normalizePriceMasterPrice keeps dollar-like values in USD", () => {
-  const value = normalizePriceMasterPrice(26.6, 95);
+  const value = normalizePriceMasterPrice(9500, 95);
   assert.equal(value.sourceCurrency, "USD");
   assert.equal(value.convertedFromRub, false);
-  assert.equal(value.price, 26.6);
+  assert.equal(value.price, 9500);
 });
 
 test("automation ignores products without links", () => {
