@@ -1882,7 +1882,7 @@ async function sendOzonPricesNow(productIds = []) {
 
 function currentWarehousePageParams() {
   const params = new URLSearchParams();
-  params.set("pageSize", String(state.warehousePageSize));
+  params.set("pageSize", String(state.warehouseBrandFilter ? 250 : state.warehousePageSize));
   if (elements.warehouseUsdRateInput.value) params.set("usdRate", elements.warehouseUsdRateInput.value);
   if (state.warehouseMarketplace !== "all") params.set("marketplace", state.warehouseMarketplace);
   if (state.ozonStateFilter !== "all") params.set("state", state.ozonStateFilter);
@@ -1942,6 +1942,13 @@ async function loadWarehouse(sync = false, refreshPrices = false) {
     for (let page = 2; page <= requestedPage && state.warehouseHasMore; page += 1) {
       // Restore long-list context after refresh by preloading previously opened pages.
       await loadWarehousePage({ reset: false, sync: false, refreshPrices: false });
+    }
+    if (state.warehouseBrandFilter) {
+      for (let page = state.warehousePage + 1; page <= 80 && state.warehouseHasMore; page += 1) {
+        await loadWarehousePage({ reset: false, sync: false, refreshPrices: false });
+      }
+      state.warehouseVisibleLimit = Math.max(state.warehouseVisibleLimit, state.warehouse.length);
+      renderWarehouseCards();
     }
     state.warehouseRestorePage = 1;
     restoreWarehouseScroll();

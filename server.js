@@ -655,6 +655,20 @@ function extractBrandFromAttributes(attributes = []) {
   return "";
 }
 
+function flattenAttributeText(attributes = []) {
+  return (attributes || [])
+    .flatMap((attribute) => [
+      attribute?.name,
+      attribute?.attribute_name,
+      attribute?.attributeName,
+      attribute?.value,
+      ...(Array.isArray(attribute?.values) ? attribute.values.flatMap((item) => [item?.value, item?.name, item?.text]) : []),
+    ])
+    .map(cleanText)
+    .filter(Boolean)
+    .join(" ");
+}
+
 function resolveWarehouseBrand(product = {}) {
   return cleanText(
     product.brand ||
@@ -674,8 +688,9 @@ function warehouseBrandSearchHaystack(product = {}) {
     product.name,
     product.ozon?.name,
     product.yandex?.name,
+    flattenAttributeText(product.ozon?.attributes),
   ]
-    .map((value) => cleanText(value).toLowerCase())
+    .map((value) => normalizeSearchText(value))
     .filter(Boolean)
     .join(" ");
 }
@@ -3586,7 +3601,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     if (marketplace !== "all") rows = rows.filter((item) => cleanText(item.marketplace) === marketplace);
     if (stateCode !== "all") rows = rows.filter((item) => cleanText(item.marketplaceState?.code) === stateCode);
     if (brandFilter) {
-      const needle = brandFilter.toLowerCase();
+      const needle = normalizeSearchText(brandFilter);
       rows = rows.filter((item) => warehouseBrandSearchHaystack(item).includes(needle));
     }
 
