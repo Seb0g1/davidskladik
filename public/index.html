@@ -98,10 +98,10 @@
                 </label>
               </div>
             </div>
-            <div class="wh-cluster wh-cluster--pricing hidden">
-              <span class="wh-cluster-label" id="wh-cluster-pricing-label">Курс</span>
+            <div class="wh-cluster wh-cluster--pricing">
+              <span class="wh-cluster-label" id="wh-cluster-pricing-label">Ручной запуск</span>
               <div class="wh-cluster-body wh-cluster-body--pricing">
-                <label class="rate-control">
+                <label class="rate-control hidden">
                   Курс USD/RUB
                   <input id="warehouseUsdRateInput" type="number" min="1" step="0.0001" required aria-describedby="warehouseRateInfo" />
                 </label>
@@ -113,9 +113,9 @@
                   Порог %
                   <input id="warehouseMinDiffPctInput" class="hidden" type="number" min="0" step="0.1" value="0" />
                 </label>
-                <div class="wh-actions hidden" role="group" aria-labelledby="wh-cluster-pricing-label">
-                  <button id="warehouseSyncButton" class="secondary-button sync-button hidden" type="button">Синхронизировать Ozon + ЯМ</button>
-                  <button id="warehouseRefreshPricesButton" class="secondary-button hidden" type="button">Обновить цены</button>
+                <div class="wh-actions" role="group" aria-labelledby="wh-cluster-pricing-label">
+                  <button id="warehouseSyncButton" class="secondary-button sync-button" type="button">Синхронизировать склад</button>
+                  <button id="warehouseRefreshPricesButton" class="secondary-button" type="button">Обновить цены</button>
                   <button id="autoPriceDisableAllButton" class="secondary-button hidden" type="button">AUTO всем выкл</button>
                   <button id="warehouseDryRunButton" class="secondary-button hidden" type="button">Dry-run</button>
                   <button id="warehouseRetryQueueButton" class="secondary-button hidden" type="button">Повторить неотправленные</button>

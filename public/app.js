@@ -2402,11 +2402,22 @@ elements.warehouseSyncButton.addEventListener("click", () => {
   });
 });
 
-elements.warehouseRefreshPricesButton.addEventListener("click", () => {
-  state.enrichedProductIds = new Set();
-  loadWarehouse(false, true).catch((error) => {
+elements.warehouseRefreshPricesButton.addEventListener("click", async () => {
+  const finishProgress = startSyncProgress("prices");
+  elements.warehouseRefreshPricesButton.disabled = true;
+  elements.warehouseStatus.textContent = "Запускаю ручное обновление цен...";
+  try {
+    const status = await api("/api/daily-sync/run", { method: "POST" });
+    renderDailySync(status);
+    state.enrichedProductIds = new Set();
+    await loadWarehouse(false, true);
+    elements.warehouseStatus.textContent = "Цены обновлены: склад и маркетплейсы пересчитаны вручную.";
+  } catch (error) {
     elements.warehouseStatus.textContent = error.message;
-  });
+  } finally {
+    finishProgress();
+    elements.warehouseRefreshPricesButton.disabled = false;
+  }
 });
 
 elements.warehouseLoadMoreButton.addEventListener("click", () => {
