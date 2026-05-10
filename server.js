@@ -79,6 +79,7 @@ let dailySyncTimer = null;
 let dailySyncNextRunAt = null;
 let dailySyncPromise = null;
 let warehouseWritePromise = Promise.resolve();
+let warehouseMemoryCache = null;
 const warehouseViewCache = new Map();
 const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
@@ -1936,17 +1937,20 @@ async function writePriceRetryQueue(queue) {
 }
 
 async function readWarehouse() {
+  if (warehouseMemoryCache) return warehouseMemoryCache;
   try {
     const warehouse = JSON.parse(await fs.readFile(warehousePath, "utf8"));
-    return {
+    warehouseMemoryCache = {
       createdAt: warehouse.createdAt || new Date().toISOString(),
       updatedAt: warehouse.updatedAt || null,
       products: Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [],
       suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
     };
+    return warehouseMemoryCache;
   } catch (error) {
     if (error.code === "ENOENT") {
-      return { createdAt: new Date().toISOString(), updatedAt: null, products: [], suppliers: [] };
+      warehouseMemoryCache = { createdAt: new Date().toISOString(), updatedAt: null, products: [], suppliers: [] };
+      return warehouseMemoryCache;
     }
     throw error;
   }
@@ -1962,6 +1966,7 @@ async function writeWarehouse(warehouse) {
       products: Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [],
       suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
     };
+    warehouseMemoryCache = payload;
     const temporaryPath = `${warehousePath}.${process.pid}.${Date.now()}.tmp`;
     await fs.writeFile(temporaryPath, JSON.stringify(payload), "utf8");
     for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -1976,6 +1981,12 @@ async function writeWarehouse(warehouse) {
     return payload;
   });
   return warehouseWritePromise;
+}
+
+function writeWarehouseInBackground(warehouse, reason = "warehouse_background_write") {
+  writeWarehouse(warehouse).catch((error) => {
+    logger.error("warehouse background write failed", { reason, detail: error?.message || String(error) });
+  });
 }
 
 async function readDailySyncState() {
@@ -4005,9 +4016,17 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 
     if (!updatedIds.length) return response.status(404).json({ error: "Товары склада не найдены." });
 
-    const saved = await writeWarehouse(warehouse);
-    const savedProducts = saved.products.filter((product) => updatedIds.includes(product.id));
-    response.json({ ok: true, changed: savedProducts.length, products: savedProducts });
+    const savedProducts = warehouse.products
+      .filter((product) => updatedIds.includes(product.id))
+      .map(normalizeWarehouseProduct);
+    warehouseMemoryCache = {
+      createdAt: warehouse.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      products: warehouse.products,
+      suppliers: warehouse.suppliers,
+    };
+    writeWarehouseInBackground(warehouse, "link_bulk_add_or_update");
+    response.json({ ok: true, changed: savedProducts.length, products: savedProducts, persisted: "queued" });
     queueImmediateAutoPricePush(updatedIds, "link_bulk_add_or_update");
   } catch (error) {
     next(error);
@@ -4028,9 +4047,15 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     else product.links.push(link);
     if (product.links.length > 0) product.autoPriceEnabled = true;
     product.updatedAt = new Date().toISOString();
-    const saved = await writeWarehouse(warehouse);
-    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
-    response.json({ ok: true, product: savedProduct, links: savedProduct.links || [] });
+    const savedProduct = normalizeWarehouseProduct(product);
+    warehouseMemoryCache = {
+      createdAt: warehouse.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      products: warehouse.products,
+      suppliers: warehouse.suppliers,
+    };
+    writeWarehouseInBackground(warehouse, "link_add_or_update");
+    response.json({ ok: true, product: savedProduct, links: savedProduct.links || [], persisted: "queued" });
     queueImmediateAutoPricePush([product.id], "link_add_or_update");
   } catch (error) {
     next(error);
@@ -4044,9 +4069,15 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     product.links = (product.links || []).filter((link) => link.id !== request.params.linkId);
     product.updatedAt = new Date().toISOString();
-    const saved = await writeWarehouse(warehouse);
-    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
-    response.json({ ok: true, product: savedProduct, links: savedProduct.links || [] });
+    const savedProduct = normalizeWarehouseProduct(product);
+    warehouseMemoryCache = {
+      createdAt: warehouse.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      products: warehouse.products,
+      suppliers: warehouse.suppliers,
+    };
+    writeWarehouseInBackground(warehouse, "link_delete");
+    response.json({ ok: true, product: savedProduct, links: savedProduct.links || [], persisted: "queued" });
     if ((savedProduct.links || []).length) queueImmediateAutoPricePush([request.params.productId], "link_delete");
   } catch (error) {
     next(error);
@@ -5066,6 +5097,9 @@ function startServer() {
       logger.info("daily sync enabled", { time: dailySyncTime, sendPrices: dailySyncSendPrices });
     }
     pruneUploadDirectory().catch((err) => logger.warn("initial upload prune failed", { detail: err?.message || String(err) }));
+    readWarehouse()
+      .then((warehouse) => logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length }))
+      .catch((err) => logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) }));
   });
 
   scheduleDailySync();
