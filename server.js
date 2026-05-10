@@ -11,6 +11,7 @@ const { Queue, Worker } = require("bullmq");
 require("dotenv").config();
 
 const logger = require("./lib/logger");
+const { cleanupDataDirectory, rotateHistoryFile } = require("./lib/cleanup");
 
 if (process.env.NODE_ENV === "production") {
   const secret = process.env.APP_SESSION_SECRET;
@@ -106,8 +107,89 @@ function invalidateWarehouseViewCache() {
 app.use(express.json({ limit: "1mb" }));
 app.use(compression({ threshold: 1024 }));
 
+/**
+ * Лёгкая защита от CSRF: для мутирующих API-запросов проверяем Origin/Referer.
+ * SameSite=lax cookie уже отсекает большинство сценариев, но cross-site fetch
+ * с Content-Type: application/json пройдёт без preflight, поэтому подстраховываемся.
+ *
+ * Логика:
+ *   - проверяем только методы, меняющие состояние (POST/PUT/PATCH/DELETE);
+ *   - применяем только к /api/*; статические и /uploads/* не трогаем;
+ *   - /api/login пропускаем (там rate-limit и нет «опасных» данных пользователя);
+ *   - если Origin/Referer присутствуют — должны совпадать с PUBLIC_BASE_URL или текущим хостом;
+ *   - если оба заголовка отсутствуют — в production отказываем, в dev пропускаем.
+ */
+function isSafeMethod(method) {
+  return method === "GET" || method === "HEAD" || method === "OPTIONS";
+}
+
+function allowedOriginHosts(request) {
+  const hosts = new Set();
+  const publicBase = String(process.env.PUBLIC_BASE_URL || "").trim();
+  if (publicBase) {
+    try {
+      hosts.add(new URL(publicBase).host);
+    } catch (_e) {
+      /* ignore malformed PUBLIC_BASE_URL */
+    }
+  }
+  const requestHost = request.get("host");
+  if (requestHost) hosts.add(requestHost);
+  return hosts;
+}
+
+function csrfGuard(request, response, next) {
+  if (isSafeMethod(request.method)) return next();
+  if (!request.path.startsWith("/api/")) return next();
+  if (request.path === "/api/login") return next();
+
+  const origin = request.get("origin");
+  const referer = request.get("referer");
+  const allowed = allowedOriginHosts(request);
+
+  const headerHost = (rawValue) => {
+    if (!rawValue) return null;
+    try {
+      return new URL(rawValue).host;
+    } catch (_e) {
+      return null;
+    }
+  };
+
+  const originHost = headerHost(origin);
+  const refererHost = headerHost(referer);
+
+  if (originHost) {
+    if (!allowed.has(originHost)) {
+      return response.status(403).json({ error: "Запрос отклонён: чужой Origin" });
+    }
+    return next();
+  }
+  if (refererHost) {
+    if (!allowed.has(refererHost)) {
+      return response.status(403).json({ error: "Запрос отклонён: чужой Referer" });
+    }
+    return next();
+  }
+  if (process.env.NODE_ENV === "production") {
+    return response.status(403).json({ error: "Запрос отклонён: отсутствует Origin/Referer" });
+  }
+  return next();
+}
+
+app.use(csrfGuard);
+
+const uploadTempDir = path.join(uploadImageDir, ".incoming");
+require("fs").mkdirSync(uploadTempDir, { recursive: true });
+
 const uploadImages = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: (_request, _file, callback) => callback(null, uploadTempDir),
+    filename: (_request, file, callback) => {
+      const ext = (file.originalname && path.extname(file.originalname)) || "";
+      callback(null, `${Date.now()}-${crypto.randomUUID()}${ext}`);
+    },
+  }),
   limits: {
     fileSize: 10 * 1024 * 1024,
     files: 10,
@@ -127,9 +209,14 @@ const pool = mysql.createPool({
   password: process.env.PM_DB_PASSWORD,
   database: process.env.PM_DB_NAME,
   waitForConnections: true,
-  connectionLimit: 8,
+  connectionLimit: Number(process.env.PM_DB_POOL_SIZE || 8),
   decimalNumbers: true,
   dateStrings: true,
+  // Держим TCP-соединение живым: иначе после простоя ловим ECONNRESET от файрволов/балансировщиков.
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10000,
+  // Таймаут установки соединения — иначе при недоступной БД процесс висит дольше нужного.
+  connectTimeout: Number(process.env.PM_DB_CONNECT_TIMEOUT_MS || 10000),
 });
 
 function base64Url(input) {
@@ -283,15 +370,49 @@ async function pruneUploadDirectory() {
   }
 }
 
+function issueSessionCookie(response, username) {
+  const token = createSessionToken(username);
+  const secure = String(process.env.PUBLIC_BASE_URL || "").startsWith("https://");
+  response.cookie(sessionCookieName, token, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure,
+    maxAge: sessionTtlMs,
+    path: "/",
+  });
+}
+
+function maybeRefreshSessionCookie(request, response, session) {
+  if (!session?.expiresAt || !session.username) return;
+  const remaining = session.expiresAt - Date.now();
+  if (remaining < sessionTtlMs / 2) {
+    issueSessionCookie(response, session.username);
+  }
+}
+
 function requireAuth(request, response, next) {
-  const publicPaths = ["/login", "/login.html", "/styles.css", "/login.js", "/app.js", "/product.js", "/product-builder-ui.js", "/ozon-product.js", "/yandex-product.js", "/health"];
+  const publicPaths = [
+    "/login",
+    "/login.html",
+    "/styles.css",
+    "/login.js",
+    "/app.js",
+    "/product.js",
+    "/product-builder-ui.js",
+    "/ozon-product.js",
+    "/yandex-product.js",
+    "/lib/api.js",
+    "/health",
+    "/health/ready",
+  ];
   if (publicPaths.includes(request.path)) return next();
   if (request.path.startsWith("/uploads/images/")) return next();
-  if (request.path === "/api/login" || request.path === "/api/session") return next();
+  if (request.path === "/api/login" || request.path === "/api/session" || request.path === "/api/version") return next();
 
   const session = readSession(request);
   if (session) {
     request.session = session;
+    maybeRefreshSessionCookie(request, response, session);
     return next();
   }
 
@@ -302,8 +423,64 @@ function requireAuth(request, response, next) {
   return response.redirect("/login.html");
 }
 
+const SERVER_BOOT_AT = new Date().toISOString();
+let SERVER_BUILD_INFO = { commit: null, builtAt: null };
+try {
+  SERVER_BUILD_INFO = {
+    commit:
+      process.env.GIT_COMMIT
+      || require("child_process").execSync("git rev-parse --short HEAD", { cwd: __dirname, stdio: ["ignore", "pipe", "ignore"] }).toString().trim()
+      || null,
+    builtAt: process.env.BUILD_TIME || null,
+  };
+} catch {
+  SERVER_BUILD_INFO = { commit: process.env.GIT_COMMIT || null, builtAt: process.env.BUILD_TIME || null };
+}
+
 app.get("/health", (_request, response) => {
   response.json({ ok: true, service: "magic-vibes-warehouse", time: new Date().toISOString() });
+});
+
+/** Полезно для проверки «обновился ли прод» — открыть `/api/version` в браузере. */
+app.get("/api/version", (_request, response) => {
+  response.json({
+    service: "magic-vibes-warehouse",
+    bootAt: SERVER_BOOT_AT,
+    commit: SERVER_BUILD_INFO.commit,
+    builtAt: SERVER_BUILD_INFO.builtAt,
+    nodeVersion: process.version,
+    routes: {
+      warehouseBrands: true,
+      pricesSend: true,
+    },
+    time: new Date().toISOString(),
+  });
+});
+
+/**
+ * Глубокий health-check: проверяет MySQL. Используется балансировщиками/k8s.
+ * Возвращает 503, если БД недоступна, чтобы трафик не шёл на сломанный инстанс.
+ */
+app.get("/health/ready", async (_request, response) => {
+  const startedAt = Date.now();
+  try {
+    await pool.query("SELECT 1");
+    response.json({
+      ok: true,
+      service: "magic-vibes-warehouse",
+      mysql: "ok",
+      latencyMs: Date.now() - startedAt,
+      time: new Date().toISOString(),
+    });
+  } catch (error) {
+    response.status(503).json({
+      ok: false,
+      service: "magic-vibes-warehouse",
+      mysql: "fail",
+      detail: error.code || error.message,
+      time: new Date().toISOString(),
+    });
+  }
 });
 
 app.post("/api/login", loginLimiter, (request, response) => {
@@ -323,15 +500,7 @@ app.post("/api/login", loginLimiter, (request, response) => {
     return response.status(401).json({ error: "Неверный логин или пароль" });
   }
 
-  const token = createSessionToken(username);
-  const secure = String(process.env.PUBLIC_BASE_URL || "").startsWith("https://");
-  response.cookie(sessionCookieName, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure,
-    maxAge: sessionTtlMs,
-    path: "/",
-  });
+  issueSessionCookie(response, username);
   response.json({ ok: true, username });
 });
 
@@ -971,6 +1140,69 @@ function parseApiResponse(text) {
   }
 }
 
+const MARKETPLACE_RETRY_MAX_ATTEMPTS = Math.max(1, Number(process.env.MARKETPLACE_RETRY_MAX_ATTEMPTS || 4));
+const MARKETPLACE_RETRY_BASE_MS = Math.max(50, Number(process.env.MARKETPLACE_RETRY_BASE_MS || 500));
+const MARKETPLACE_RETRY_MAX_MS = Math.max(MARKETPLACE_RETRY_BASE_MS, Number(process.env.MARKETPLACE_RETRY_MAX_MS || 15000));
+
+function shouldRetryMarketplaceStatus(status) {
+  return status === 408 || status === 425 || status === 429 || (status >= 500 && status < 600);
+}
+
+function parseRetryAfter(headerValue) {
+  if (!headerValue) return null;
+  const seconds = Number(headerValue);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const dateMs = Date.parse(headerValue);
+  if (Number.isFinite(dateMs)) {
+    const wait = dateMs - Date.now();
+    return wait > 0 ? wait : 0;
+  }
+  return null;
+}
+
+async function fetchWithMarketplaceRetry(url, init, source) {
+  let lastError = null;
+  for (let attempt = 0; attempt < MARKETPLACE_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetch(url, init);
+      if (!shouldRetryMarketplaceStatus(response.status) || attempt === MARKETPLACE_RETRY_MAX_ATTEMPTS - 1) {
+        return response;
+      }
+      const retryAfterMs = parseRetryAfter(response.headers.get("retry-after"));
+      const backoff = Math.min(MARKETPLACE_RETRY_MAX_MS, MARKETPLACE_RETRY_BASE_MS * 2 ** attempt);
+      const jitter = Math.floor(Math.random() * Math.min(250, backoff));
+      const waitMs = retryAfterMs != null ? retryAfterMs : backoff + jitter;
+      logger.warn(`${source}: HTTP ${response.status}, retry in ${waitMs}ms (attempt ${attempt + 1}/${MARKETPLACE_RETRY_MAX_ATTEMPTS})`);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      try { response.body?.cancel?.(); } catch {}
+    } catch (error) {
+      lastError = error;
+      if (attempt === MARKETPLACE_RETRY_MAX_ATTEMPTS - 1) throw error;
+      const backoff = Math.min(MARKETPLACE_RETRY_MAX_MS, MARKETPLACE_RETRY_BASE_MS * 2 ** attempt);
+      const jitter = Math.floor(Math.random() * Math.min(250, backoff));
+      logger.warn(`${source}: network error "${error?.message || error}", retry in ${backoff + jitter}ms (attempt ${attempt + 1}/${MARKETPLACE_RETRY_MAX_ATTEMPTS})`);
+      await new Promise((resolve) => setTimeout(resolve, backoff + jitter));
+    }
+  }
+  throw lastError || new Error(`${source}: retries exhausted`);
+}
+
+function assertJsonResponse(data, source) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    const error = new Error(`${source}: empty or non-JSON response`);
+    error.statusCode = 502;
+    throw error;
+  }
+  if (typeof data.raw === "string" && Object.keys(data).length === 1) {
+    const sample = data.raw.slice(0, 200).replace(/\s+/g, " ").trim();
+    const error = new Error(`${source}: invalid JSON response (got: "${sample}")`);
+    error.statusCode = 502;
+    error.responseSample = data.raw;
+    throw error;
+  }
+  return data;
+}
+
 async function getUsdRate({ force = false } = {}) {
   const cached = await readCachedExchangeRate();
   if (!force && cached?.rate && Date.now() - new Date(cached.fetchedAt).getTime() < exchangeRateTtlMs) {
@@ -1016,7 +1248,7 @@ async function ozonRequest(pathname, body, account = null) {
     throw error;
   }
 
-  const response = await fetch(`${ozonBaseUrl}${pathname}`, {
+  const response = await fetchWithMarketplaceRetry(`${ozonBaseUrl}${pathname}`, {
     method: "POST",
     headers: {
       "Client-Id": clientId,
@@ -1024,7 +1256,7 @@ async function ozonRequest(pathname, body, account = null) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body || {}),
-  });
+  }, `Ozon ${pathname}`);
 
   const text = await response.text();
   const data = parseApiResponse(text);
@@ -1036,7 +1268,7 @@ async function ozonRequest(pathname, body, account = null) {
     throw error;
   }
 
-  return data;
+  return assertJsonResponse(data, "Ozon API");
 }
 
 async function yandexRequest(shop, method, pathname, body) {
@@ -1046,14 +1278,14 @@ async function yandexRequest(shop, method, pathname, body) {
     throw error;
   }
 
-  const response = await fetch(`${yandexBaseUrl}${pathname}`, {
+  const response = await fetchWithMarketplaceRetry(`${yandexBaseUrl}${pathname}`, {
     method,
     headers: {
       "Api-Key": shop.apiKey,
       "Content-Type": "application/json",
     },
     body: body ? JSON.stringify(body) : undefined,
-  });
+  }, `Yandex ${method} ${pathname}`);
 
   const text = await response.text();
   const data = parseApiResponse(text);
@@ -1065,7 +1297,7 @@ async function yandexRequest(shop, method, pathname, body) {
     throw error;
   }
 
-  return data;
+  return assertJsonResponse(data, "Yandex Market API");
 }
 
 async function getOzonProducts(limit = Number.POSITIVE_INFINITY, account = null) {
@@ -1943,10 +2175,39 @@ async function readPriceRetryQueue() {
   }
 }
 
-async function writePriceRetryQueue(queue) {
+const PRICE_RETRY_QUEUE_MAX = Math.max(100, Number(process.env.PRICE_RETRY_QUEUE_MAX || 5000));
+
+function capPriceRetryQueue(items, source = "queue") {
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (list.length <= PRICE_RETRY_QUEUE_MAX) return list;
+  /** Сортируем «лучшие» (новые/мало попыток) — в начало, «худшие» (старые/много попыток) — в конец, чтобы отрезать их. */
+  const score = (item) => {
+    const attempts = Number(item.attempts || 0);
+    const queuedAt = Date.parse(item.queuedAt || "") || Date.now();
+    return attempts * 1e12 - queuedAt;
+  };
+  const sorted = [...list].sort((a, b) => score(a) - score(b));
+  const kept = sorted.slice(0, PRICE_RETRY_QUEUE_MAX);
+  const dropped = sorted.slice(PRICE_RETRY_QUEUE_MAX);
+  logger.warn("price retry queue overflow: dropped items", {
+    source,
+    dropped: dropped.length,
+    keeping: kept.length,
+    sampleDropped: dropped.slice(0, 5).map((item) => ({
+      queueKey: item.queueKey || `${item.id}:${item.target}`,
+      attempts: Number(item.attempts || 0),
+      queuedAt: item.queuedAt || null,
+      lastError: item.error || null,
+    })),
+  });
+  return kept;
+}
+
+async function writePriceRetryQueue(queue, { source = "queue" } = {}) {
+  const items = capPriceRetryQueue(Array.isArray(queue.items) ? queue.items : [], source);
   const payload = {
     updatedAt: new Date().toISOString(),
-    items: Array.isArray(queue.items) ? queue.items : [],
+    items,
   };
   await atomicWriteJsonFile(priceRetryQueuePath, payload);
   return payload;
@@ -1971,16 +2232,23 @@ async function readWarehouse() {
 
 async function writeWarehouse(warehouse) {
   invalidateWarehouseViewCache();
+  /**
+   * Все мутирующие маршруты добавляют товары/поставщиков уже через
+   * normalizeWarehouseProduct/normalizeManagedSupplier (а readWarehouse нормализует
+   * всё при чтении). Повторная сериализующая нормализация N=20–30k объектов
+   * на КАЖДУЮ запись — главный тормоз привязки/отвязки. Пишем как есть.
+   */
   warehouseWritePromise = warehouseWritePromise.then(async () => {
     await fs.mkdir(dataDir, { recursive: true });
     const payload = {
       createdAt: warehouse.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      products: Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [],
-      suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
+      products: Array.isArray(warehouse.products) ? warehouse.products : [],
+      suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers : [],
     };
     const temporaryPath = `${warehousePath}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temporaryPath, JSON.stringify(payload, null, 2), "utf8");
+    /** Без pretty-print: -50% времени stringify и -25% размера на 30k товаров. */
+    await fs.writeFile(temporaryPath, JSON.stringify(payload), "utf8");
     for (let attempt = 0; attempt < 5; attempt += 1) {
       try {
         await fs.rename(temporaryPath, warehousePath);
@@ -2813,18 +3081,60 @@ async function appendHistory(syncResult) {
   );
 
   if (lines.length) {
+    // Перед записью пробуем ротировать, чтобы файл не рос неограниченно.
+    await rotateHistoryFile(historyPath).catch((err) =>
+      logger.warn("history rotation failed", { detail: err?.message || String(err) }),
+    );
     await fs.appendFile(historyPath, `${lines.join("\n")}\n`, "utf8");
+  }
+}
+
+async function readLastJsonLines(filePath, limit) {
+  let handle = null;
+  try {
+    handle = await fs.open(filePath, "r");
+    const stat = await handle.stat();
+    if (!stat.size) return [];
+    const chunkSize = 64 * 1024;
+    let position = stat.size;
+    let buffer = Buffer.alloc(0);
+    const lines = [];
+    while (position > 0 && lines.length <= limit) {
+      const readSize = Math.min(chunkSize, position);
+      position -= readSize;
+      const chunk = Buffer.alloc(readSize);
+      await handle.read(chunk, 0, readSize, position);
+      buffer = Buffer.concat([chunk, buffer]);
+      let newlineIndex = buffer.lastIndexOf(0x0a);
+      while (newlineIndex !== -1 && lines.length <= limit) {
+        const line = buffer.slice(newlineIndex + 1).toString("utf8").trim();
+        if (line) lines.push(line);
+        buffer = buffer.slice(0, newlineIndex);
+        newlineIndex = buffer.lastIndexOf(0x0a);
+      }
+    }
+    if (buffer.length && lines.length <= limit) {
+      const line = buffer.toString("utf8").trim();
+      if (line) lines.push(line);
+    }
+    return lines.slice(0, limit);
+  } finally {
+    if (handle) await handle.close().catch(() => {});
   }
 }
 
 async function readHistory(limit = 300) {
   try {
-    const content = await fs.readFile(historyPath, "utf8");
-    const lines = content.trim().split("\n").filter(Boolean);
-    return lines
-      .slice(-limit)
-      .reverse()
-      .map((line) => JSON.parse(line));
+    const lines = await readLastJsonLines(historyPath, limit);
+    const result = [];
+    for (const line of lines) {
+      try {
+        result.push(JSON.parse(line));
+      } catch (parseError) {
+        logger.warn("history line parse failed", { detail: parseError?.message || String(parseError) });
+      }
+    }
+    return result;
   } catch (error) {
     if (error.code === "ENOENT") return [];
     throw error;
@@ -3495,7 +3805,12 @@ app.post("/api/uploads/images", uploadImages.array("images", 10), async (request
     const files = Array.isArray(request.files) ? request.files : [];
     if (!files.length) return response.status(400).json({ error: "Выберите хотя бы одно изображение." });
 
-    consumeUploadQuota(request, files.length);
+    try {
+      consumeUploadQuota(request, files.length);
+    } catch (quotaError) {
+      await Promise.all(files.map((f) => fs.unlink(f.path).catch(() => {})));
+      throw quotaError;
+    }
 
     await fs.mkdir(uploadImageDir, { recursive: true });
     const saved = [];
@@ -3503,7 +3818,12 @@ app.post("/api/uploads/images", uploadImages.array("images", 10), async (request
       const extension = imageExtension(file);
       const fileName = `${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}${extension}`;
       const filePath = path.join(uploadImageDir, fileName);
-      await fs.writeFile(filePath, file.buffer);
+      try {
+        await fs.rename(file.path, filePath);
+      } catch (renameError) {
+        await fs.copyFile(file.path, filePath);
+        await fs.unlink(file.path).catch(() => {});
+      }
       const relativeUrl = `/uploads/images/${fileName}`;
       saved.push({
         originalName: file.originalname,
@@ -3519,6 +3839,9 @@ app.post("/api/uploads/images", uploadImages.array("images", 10), async (request
       pruneUploadDirectory().catch((err) => logger.warn("upload prune failed", { detail: err?.message || String(err) }));
     });
   } catch (error) {
+    if (Array.isArray(request.files)) {
+      await Promise.all(request.files.map((f) => fs.unlink(f.path).catch(() => {})));
+    }
     next(error);
   }
 });
@@ -3708,6 +4031,27 @@ app.get("/api/warehouse/products/:id/detail", async (request, response, next) =>
   }
 });
 
+/**
+ * Batch-вариант detail: один запрос вместо N после привязки/отвязки.
+ * GET /api/warehouse/products/details?ids=a,b,c
+ */
+app.get("/api/warehouse/products/details", async (request, response, next) => {
+  try {
+    const ids = String(request.query.ids || "")
+      .split(",")
+      .map((id) => cleanText(id))
+      .filter(Boolean);
+    if (!ids.length) return response.json({ products: [] });
+    const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
+    const data = await buildWarehouseViewCached({ sync: false, usdRate, refreshPrices: false, productIds: ids });
+    const idSet = new Set(ids);
+    const products = (data.products || []).filter((item) => idSet.has(item.id));
+    response.json({ products, createdAt: data.createdAt });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/warehouse/no-supplier", async (request, response, next) => {
   try {
     const sync = request.query.sync === "true";
@@ -3853,6 +4197,24 @@ app.delete("/api/suppliers/:supplierId/articles/:articleId", async (request, res
   }
 });
 
+function checkOptimisticUpdatedAt(product, request) {
+  const expectedUpdatedAt = cleanText(
+    request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt || "",
+  );
+  if (!expectedUpdatedAt) return null;
+  if (cleanText(product.updatedAt || "") !== expectedUpdatedAt) {
+    return {
+      status: 409,
+      body: {
+        error: "Конфликт обновления: карточка уже изменена другим пользователем.",
+        code: "warehouse_product_conflict",
+        currentUpdatedAt: product.updatedAt || null,
+      },
+    };
+  }
+  return null;
+}
+
 app.post("/api/warehouse/products", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
@@ -3865,6 +4227,8 @@ app.post("/api/warehouse/products", async (request, response, next) => {
     );
     if (index >= 0) {
       const current = warehouse.products[index];
+      const conflict = checkOptimisticUpdatedAt(current, request);
+      if (conflict) return response.status(conflict.status).json(conflict.body);
       warehouse.products[index] = normalizeWarehouseProduct({
         ...current,
         ...input,
@@ -3962,11 +4326,23 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
     if (!Number.isFinite(markup) || markup <= 0) return response.status(400).json({ error: "Укажите наценку больше нуля." });
 
     const warehouse = await readWarehouse();
+    const targets = warehouse.products.filter((product) => ids.has(product.id));
+    const missingLocks = targets
+      .filter((product) => {
+        const lock = optimisticLocks.get(product.id);
+        return !lock || !cleanText(lock);
+      })
+      .map((product) => ({ id: product.id, offerId: product.offerId || "", currentUpdatedAt: product.updatedAt || null }));
+    if (missingLocks.length) {
+      return response.status(400).json({
+        error: "Bulk-наценка требует optimisticLocks для каждого товара.",
+        code: "warehouse_bulk_locks_required",
+        missingLocks,
+      });
+    }
     const conflicts = [];
-    for (const product of warehouse.products) {
-      if (!ids.has(product.id)) continue;
+    for (const product of targets) {
       const expectedUpdatedAt = optimisticLocks.get(product.id);
-      if (!expectedUpdatedAt) continue;
       if (cleanText(product.updatedAt || "") !== expectedUpdatedAt) {
         conflicts.push({
           id: product.id,
@@ -4078,7 +4454,12 @@ app.patch("/api/warehouse/products/ungroup", async (request, response, next) => 
 app.delete("/api/warehouse/products/:id", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
-    warehouse.products = warehouse.products.filter((product) => product.id !== request.params.id);
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (product) {
+      const conflict = checkOptimisticUpdatedAt(product, request);
+      if (conflict) return response.status(conflict.status).json(conflict.body);
+    }
+    warehouse.products = warehouse.products.filter((item) => item.id !== request.params.id);
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
   } catch (error) {
     next(error);
@@ -4090,6 +4471,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+
+    const conflict = checkOptimisticUpdatedAt(product, request);
+    if (conflict) return response.status(conflict.status).json(conflict.body);
 
     const link = normalizeWarehouseLink(request.body);
     if (!link.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
@@ -4112,6 +4496,8 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.productId);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const conflict = checkOptimisticUpdatedAt(product, request);
+    if (conflict) return response.status(conflict.status).json(conflict.body);
     product.links = (product.links || []).filter((link) => link.id !== request.params.linkId);
     if (!product.links.length) product.autoPriceEnabled = false;
     const saved = await writeWarehouse(warehouse);
@@ -4270,10 +4656,10 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     attempts: Number(item.attempts || 0) + 1,
   }));
   const merged = [...(queueState.items || []), ...failedQueued];
-  const deduped = Array.from(new Map(merged.map((item) => [item.queueKey || `${item.id}:${item.target}`, item])).values()).slice(0, 5000);
-  await writePriceRetryQueue({ items: deduped });
+  const deduped = Array.from(new Map(merged.map((item) => [item.queueKey || `${item.id}:${item.target}`, item])).values());
+  const written = await writePriceRetryQueue({ items: deduped }, { source: "send_warehouse_prices" });
 
-  return { ok: true, sent: items.length - failed.length, failed: failed.length, queued: deduped.length, skipped, results };
+  return { ok: true, sent: items.length - failed.length, failed: failed.length, queued: written.items.length, skipped, results };
 }
 
 async function processMarketplaceJob(name, data = {}) {
@@ -4440,8 +4826,8 @@ app.post("/api/warehouse/prices/retry", async (request, response, next) => {
     const processedKeys = new Set(items.map((item) => String(item.queueKey || `${item.id}:${item.target}`)));
     const untouched = queue.items.filter((item) => !processedKeys.has(String(item.queueKey || `${item.id}:${item.target}`)));
     const remaining = [...failed, ...untouched];
-    await writePriceRetryQueue({ items: remaining.slice(0, 5000) });
-    response.json({ ok: true, retried: items.length - failed.length, failed: failed.length, remaining: remaining.length, results });
+    const written = await writePriceRetryQueue({ items: remaining }, { source: "manual_retry" });
+    response.json({ ok: true, retried: items.length - failed.length, failed: failed.length, remaining: written.items.length, results });
   } catch (error) {
     next(error);
   }
@@ -4457,6 +4843,105 @@ app.get("/api/warehouse/prices/retry-queue", async (_request, response, next) =>
       }))
       .sort((a, b) => new Date(b.queuedAt || 0) - new Date(a.queuedAt || 0));
     response.json({ ok: true, updatedAt: queue.updatedAt, total: items.length, items });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Сводка по автоцене: что и куда отправлялось, что лежит в очереди ретраев,
+ * есть ли «горячий» немедленный пуш. Эндпоинт читает только локальные JSON и
+ * срез последних priceHistory без обращения к БД/маркетплейсам.
+ */
+app.get("/api/warehouse/auto-price/diagnostics", async (_request, response, next) => {
+  try {
+    const queue = await readPriceRetryQueue();
+    const warehouse = await readWarehouse();
+    const products = Array.isArray(warehouse.products) ? warehouse.products : [];
+
+    const recentSends = [];
+    for (const product of products) {
+      const history = Array.isArray(product.priceHistory) ? product.priceHistory : [];
+      for (const entry of history.slice(-3)) {
+        recentSends.push({
+          productId: product.id,
+          offerId: product.offerId,
+          name: product.name,
+          marketplace: entry.marketplace,
+          target: entry.target,
+          at: entry.at,
+          oldPrice: entry.oldPrice,
+          newPrice: entry.newPrice,
+          status: entry.status,
+          error: entry.error,
+          reason: entry.reason,
+        });
+      }
+    }
+    recentSends.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
+
+    const ozonRecent = recentSends.filter((item) => item.marketplace === "ozon").slice(0, 50);
+    const ozonStats = {
+      total: 0,
+      success: 0,
+      error: 0,
+      lastSuccessAt: null,
+      lastErrorAt: null,
+      lastErrorMessage: null,
+    };
+    for (const item of recentSends.filter((entry) => entry.marketplace === "ozon")) {
+      ozonStats.total += 1;
+      if (item.status === "success") {
+        ozonStats.success += 1;
+        if (!ozonStats.lastSuccessAt || new Date(item.at) > new Date(ozonStats.lastSuccessAt)) ozonStats.lastSuccessAt = item.at;
+      } else {
+        ozonStats.error += 1;
+        if (!ozonStats.lastErrorAt || new Date(item.at) > new Date(ozonStats.lastErrorAt)) {
+          ozonStats.lastErrorAt = item.at;
+          ozonStats.lastErrorMessage = item.error || null;
+        }
+      }
+    }
+
+    const lastSendByProduct = products
+      .map((product) => product.lastOzonPriceSend ? {
+        productId: product.id,
+        offerId: product.offerId,
+        name: product.name,
+        ...product.lastOzonPriceSend,
+      } : null)
+      .filter(Boolean)
+      .sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0))
+      .slice(0, 30);
+
+    response.json({
+      ok: true,
+      now: new Date().toISOString(),
+      bootAt: SERVER_BOOT_AT,
+      autoPushPending: {
+        scheduled: Boolean(immediateAutoPushTimer),
+        all: immediateAutoPushAll,
+        ids: Array.from(immediateAutoPushIds),
+      },
+      retryQueue: {
+        updatedAt: queue.updatedAt,
+        total: (queue.items || []).length,
+        topAttempts: (queue.items || [])
+          .slice()
+          .sort((a, b) => Number(b.attempts || 0) - Number(a.attempts || 0))
+          .slice(0, 10)
+          .map((item) => ({
+            queueKey: item.queueKey || `${item.id}:${item.target}`,
+            offerId: item.offerId,
+            attempts: Number(item.attempts || 0),
+            queuedAt: item.queuedAt,
+            error: item.error,
+          })),
+      },
+      ozonStats,
+      ozonRecent,
+      lastOzonSendByProduct: lastSendByProduct,
+    });
   } catch (error) {
     next(error);
   }
@@ -4898,6 +5383,13 @@ function pickNoSupplierAutomationCandidates(products = []) {
 }
 
 async function runNoSupplierMarketplaceAutomation(preview) {
+  if (preview?.stale || preview?.sourceError) {
+    logger.warn("no-supplier automation skipped: warehouse view is stale", {
+      stale: Boolean(preview?.stale),
+      sourceError: preview?.sourceError || null,
+    });
+    return { zeroStockSent: 0, archived: 0, errors: [], skipped: "stale_view" };
+  }
   const products = Array.isArray(preview?.products) ? preview.products : [];
   const now = new Date().toISOString();
   const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates(products);
@@ -4935,6 +5427,13 @@ async function runSupplierRecoveryAutomation(preview) {
   if (!autoRestoreOnSupplierReturn) {
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
   }
+  if (preview?.stale || preview?.sourceError) {
+    logger.warn("supplier recovery skipped: warehouse view is stale", {
+      stale: Boolean(preview?.stale),
+      sourceError: preview?.sourceError || null,
+    });
+    return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [], skipped: "stale_view" };
+  }
   const products = Array.isArray(preview?.products) ? preview.products : [];
   const recovered = products.filter(
     (product) =>
@@ -4944,37 +5443,71 @@ async function runSupplierRecoveryAutomation(preview) {
       && !product.noSupplierAutomation?.recoveredAt,
   );
   if (!recovered.length) return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
+
+  const needsUnarchive = recovered.filter((product) => Boolean(product.noSupplierAutomation?.archivedAt));
   const [stockActions, unarchiveActions] = await Promise.all([
     restoreStocksOnMarketplaces(recovered),
-    unarchiveProductsOnMarketplaces(recovered),
+    needsUnarchive.length ? unarchiveProductsOnMarketplaces(needsUnarchive) : Promise.resolve([]),
   ]);
+
+  const stockOkById = new Map();
+  for (const action of stockActions) {
+    if (!stockOkById.has(action.id)) stockOkById.set(action.id, true);
+    if (!action.ok) stockOkById.set(action.id, false);
+  }
+  const unarchiveOkById = new Map();
+  for (const action of unarchiveActions) {
+    if (!unarchiveOkById.has(action.id)) unarchiveOkById.set(action.id, true);
+    if (!action.ok) unarchiveOkById.set(action.id, false);
+  }
+  const errorsById = new Map();
+  for (const action of [...stockActions, ...unarchiveActions]) {
+    if (action.ok) continue;
+    if (!errorsById.has(action.id)) errorsById.set(action.id, action.error || `${action.type}_failed`);
+  }
+
+  const fullySucceeded = recovered.filter((product) => {
+    const stockOk = stockOkById.get(product.id) === true;
+    const wasArchived = Boolean(product.noSupplierAutomation?.archivedAt);
+    const unarchiveOk = !wasArchived || unarchiveOkById.get(product.id) === true;
+    return stockOk && unarchiveOk;
+  });
+
   const warehouse = await readWarehouse();
   const now = new Date().toISOString();
   for (const product of warehouse.products) {
     if (!recovered.some((item) => item.id === product.id)) continue;
     product.noSupplierAutomation = product.noSupplierAutomation || {};
-    product.noSupplierAutomation.recoveredAt = now;
-    product.noSupplierAutomation.stockZeroAt = null;
-    product.noSupplierAutomation.archivedAt = null;
-    product.noSupplierAutomation.lastError = null;
+    if (fullySucceeded.some((item) => item.id === product.id)) {
+      product.noSupplierAutomation.recoveredAt = now;
+      product.noSupplierAutomation.stockZeroAt = null;
+      product.noSupplierAutomation.archivedAt = null;
+      product.noSupplierAutomation.lastError = null;
+    } else {
+      product.noSupplierAutomation.lastError = errorsById.get(product.id) || "recovery_partial_failure";
+    }
   }
   await writeWarehouse(warehouse);
-  queueMarketplaceJob(
-    "auto-price-push",
-    {
-      productIds: recovered.map((item) => item.id),
-      usdRate: undefined,
-      minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
-      minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
-    },
-    { priority: 2 },
-  );
+
+  if (fullySucceeded.length) {
+    queueMarketplaceJob(
+      "auto-price-push",
+      {
+        productIds: fullySucceeded.map((item) => item.id),
+        usdRate: undefined,
+        minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
+        minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
+      },
+      { priority: 2 },
+    );
+  }
 
   const errors = [...stockActions, ...unarchiveActions]
     .filter((item) => !item.ok)
     .map((item) => ({ id: item.id, type: item.type, error: item.error }));
   return {
-    recovered: recovered.length,
+    recovered: fullySucceeded.length,
+    attempted: recovered.length,
     restoredStocks: stockActions.filter((item) => item.ok).length,
     unarchived: unarchiveActions.filter((item) => item.ok).length,
     errors,
@@ -5130,8 +5663,66 @@ app.use((error, request, response, _next) => {
   });
 });
 
+/**
+ * Транзиентные ошибки сети/БД, которые имеет смысл повторить.
+ */
+const TRANSIENT_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "PROTOCOL_CONNECTION_LOST",
+]);
+
+function isTransientError(error) {
+  if (!error) return false;
+  const code = String(error.code || "");
+  if (TRANSIENT_ERROR_CODES.has(code)) return true;
+  return /econnreset|etimedout|fetch failed|socket hang up/i.test(String(error.message || ""));
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Выполняет async-функцию с экспоненциальным backoff на транзиентных ошибках.
+ * Возвращает результат функции; пробрасывает последнюю ошибку, если все попытки исчерпаны.
+ */
+async function withRetry(fn, { attempts = 3, baseDelayMs = 1000, label = "retry" } = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts || !isTransientError(error)) throw error;
+      const wait = baseDelayMs * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
+      logger.warn("transient error, will retry", {
+        label,
+        attempt,
+        nextDelayMs: wait,
+        detail: error.code || error.message,
+      });
+      await delay(wait);
+    }
+  }
+  throw lastError;
+}
+
 function startServer() {
   initMarketplaceQueue();
+
+  // На старте чистим осиротевшие *.tmp / *.corrupt-* / старые *.backup-*.
+  cleanupDataDirectory(dataDir).catch((err) =>
+    logger.warn("initial data cleanup failed", { detail: err?.message || String(err) }),
+  );
+  rotateHistoryFile(historyPath).catch((err) =>
+    logger.warn("initial history rotation failed", { detail: err?.message || String(err) }),
+  );
+
   app.listen(port, () => {
     logger.info("server started", {
       port,
@@ -5159,7 +5750,7 @@ function startServer() {
       }
       autoSyncRunning = true;
       try {
-        const result = await runSync();
+        const result = await withRetry(() => runSync(), { attempts: 3, baseDelayMs: 2000, label: "runSync" });
         const warehouse = await buildWarehouseView({ sync: true });
         const automation = await runNoSupplierMarketplaceAutomation(warehouse);
         const recovery = await runSupplierRecoveryAutomation(warehouse);
@@ -5191,7 +5782,17 @@ function startServer() {
   }
 }
 
-module.exports = { app, startServer, resolveMarkupCoefficient, pickNoSupplierAutomationCandidates };
+module.exports = {
+  app,
+  startServer,
+  resolveMarkupCoefficient,
+  pickNoSupplierAutomationCandidates,
+  withRetry,
+  isTransientError,
+  parseMoneyValue,
+  pickOzonCabinetListedPrice,
+  roundPrice,
+};
 
 if (require.main === module) {
   startServer();

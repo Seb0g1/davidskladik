@@ -6,3 +6,13 @@ output/
 config/ozon-product-rules.json
 *.log
 .claude/
+
+# IDE / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Тесты
+coverage/
+.nyc_output/

@@ -3,12 +3,16 @@
   "version": "1.0.0",
   "description": "Magic Vibes - Склад: панель PriceMaster, Ozon и Yandex Market.",
   "main": "server.js",
+  "engines": {
+    "node": ">=18.18"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
     "inspect:db": "node scripts/inspect-db.js",
-    "test": "node --test test/smoke.test.cjs",
-    "audit": "npm audit"
+    "test": "node --test \"test/**/*.test.cjs\"",
+    "audit": "npm audit --omit=dev",
+    "cleanup:data": "node scripts/cleanup-data.js"
   },
   "keywords": [],
   "author": "",

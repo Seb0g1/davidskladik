@@ -6,6 +6,9 @@ const logoutButton = document.querySelector("#logoutButton");
 const settingsAnimateAutoFocusInput = document.querySelector("#settingsAnimateAutoFocusInput");
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 
+// window.api инициализируется в /lib/api.js (fetch + 401 + JSON-обработка).
+const api = window.api;
+
 function ruleRow(rule = {}) {
   const row = document.createElement("div");
   row.className = "settings-rule-row";
@@ -31,17 +34,6 @@ function ruleRow(rule = {}) {
   return row;
 }
 
-async function api(path, options = {}) {
-  const response = await fetch(path, { credentials: "same-origin", ...options });
-  if (response.status === 401) {
-    window.location.href = "/login.html";
-    throw new Error("Требуется вход");
-  }
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || payload.detail || `Ошибка запроса (${response.status})`);
-  return payload;
-}
-
 function renderRules(rules = []) {
   if (!rulesList) return;
   rulesList.innerHTML = "";
@@ -65,23 +57,17 @@ function collectRules() {
 async function loadSettings() {
   if (!settingsForm || !statusBox) return;
   statusBox.textContent = "Загружаю настройки...";
-  let response = await fetch("/api/settings", { credentials: "same-origin" });
-  let payload = await response.json().catch(() => ({}));
-  if (response.status === 401) {
-    window.location.href = "/login.html";
-    throw new Error("Требуется вход");
-  }
-  if (!response.ok && [404, 500, 502, 503].includes(response.status)) {
-    response = await fetch("/api/marketplaces", { credentials: "same-origin" });
-    payload = await response.json().catch(() => ({}));
-    if (response.status === 401) {
-      window.location.href = "/login.html";
-      throw new Error("Требуется вход");
+  let payload;
+  try {
+    payload = await api("/api/settings");
+  } catch (error) {
+    if (error.status && [404, 500, 502, 503].includes(error.status)) {
+      // На некоторых старых сборках настройки лежали в /api/marketplaces.
+      payload = await api("/api/marketplaces");
+      payload = { settings: payload.settings || {} };
+    } else {
+      throw error;
     }
-    if (!response.ok) throw new Error(payload.error || payload.detail || `Ошибка загрузки (${response.status})`);
-    payload = { settings: payload.settings || {} };
-  } else if (!response.ok) {
-    throw new Error(payload.error || payload.detail || `Ошибка загрузки (${response.status})`);
   }
   const settings = payload.settings || {};
   settingsForm.elements.fixedUsdRate.value = settings.fixedUsdRate || 95;
@@ -106,27 +92,16 @@ settingsForm?.addEventListener("submit", async (event) => {
   };
   statusBox.textContent = "Сохраняю настройки...";
   try {
-    let response = await fetch("/api/settings", {
-      method: "PUT",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    let body = await response.json().catch(() => ({}));
-    if ([404, 405, 500, 502, 503].includes(response.status)) {
-      response = await fetch("/api/settings", {
-        method: "POST",
-        credentials: "same-origin",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      body = await response.json().catch(() => ({}));
+    try {
+      await api.put("/api/settings", payload);
+    } catch (error) {
+      // Метод не поддерживается на старом бэке — пробуем POST один раз.
+      if (error.status === 404 || error.status === 405) {
+        await api.post("/api/settings", payload);
+      } else {
+        throw error;
+      }
     }
-    if (response.status === 401) {
-      window.location.href = "/login.html";
-      throw new Error("Требуется вход");
-    }
-    if (!response.ok) throw new Error(body.error || body.detail || `Ошибка сохранения (${response.status})`);
     await loadSettings();
     statusBox.textContent =
       "Настройки сохранены. Карточки, где вручную указана наценка, не меняются сами — очистите поле «Наценка» на складе или нажмите «По настройкам».";
@@ -154,7 +129,7 @@ settingsAnimateAutoFocusInput?.addEventListener("change", () => {
 });
 
 logoutButton?.addEventListener("click", async () => {
-  await fetch("/api/logout", { method: "POST" }).catch(() => {});
+  await api.post("/api/logout").catch(() => {});
   window.location.href = "/login.html";
 });
 
