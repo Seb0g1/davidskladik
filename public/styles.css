@@ -2864,6 +2864,15 @@ td {
   padding: 14px;
 }
 
+.account-card.sync-disabled {
+  opacity: 0.72;
+}
+
+.account-sync-note {
+  color: var(--muted);
+  font-weight: 800;
+}
+
 .account-card.not-configured {
   border-color: #f0c97a;
   background: #fffaf0;

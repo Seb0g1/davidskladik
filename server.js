@@ -59,7 +59,7 @@ const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
 const sessionCookieName = "pm_session";
 const sessionTtlMs = 1000 * 60 * 60 * 12;
-const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || 0);
+const autoSyncMinutes = Number(process.env.DEFAULT_AUTO_SYNC_MINUTES || 30);
 const autoZeroStockOnNoSupplier = process.env.AUTO_ZERO_STOCK_ON_NO_SUPPLIER !== "false";
 const autoArchiveOnNoLinks = process.env.AUTO_ARCHIVE_ON_NO_LINKS === "true";
 const autoRestoreOnSupplierReturn = process.env.AUTO_RESTORE_ON_SUPPLIER_RETURN !== "false";
@@ -78,6 +78,9 @@ const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 let dailySyncTimer = null;
 let dailySyncNextRunAt = null;
 let dailySyncPromise = null;
+let autoSyncTimer = null;
+let autoSyncRunning = false;
+let autoSyncNextRunAt = null;
 let warehouseWritePromise = Promise.resolve();
 let warehouseMemoryCache = null;
 const warehouseViewCache = new Map();
@@ -391,6 +394,15 @@ function roundPrice(value) {
   return Math.round(number);
 }
 
+function parseBooleanSetting(value, fallback = true) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  const text = String(value).trim().toLowerCase();
+  if (["false", "0", "off", "no", "нет"].includes(text)) return false;
+  if (["true", "1", "on", "yes", "да"].includes(text)) return true;
+  return fallback;
+}
+
 function normalizeMarketplaceAccount(input = {}, current = {}) {
   const marketplace = cleanText(input.marketplace || current.marketplace).toLowerCase() === "yandex" ? "yandex" : "ozon";
   const fallbackName = marketplace === "ozon" ? "Ozon" : "Yandex Market";
@@ -403,6 +415,7 @@ function normalizeMarketplaceAccount(input = {}, current = {}) {
     businessId: cleanText(input.businessId ?? input.business_id ?? current.businessId),
     campaignId: cleanText(input.campaignId ?? input.campaign_id ?? current.campaignId),
     hidden: Boolean(input.hidden ?? current.hidden),
+    syncEnabled: parseBooleanSetting(input.syncEnabled ?? input.sync_enabled, current.syncEnabled !== false),
     createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -514,6 +527,7 @@ function sanitizeMarketplaceAccount(account = {}) {
     source: account.source || "local",
     readOnly: Boolean(account.readOnly),
     inheritedFromEnv: Boolean(account.inheritedFromEnv),
+    syncEnabled: account.syncEnabled !== false,
     updatedAt: account.updatedAt || account.createdAt || null,
   };
 }
@@ -549,12 +563,20 @@ async function readAudit(limit = 200) {
   }
 }
 
-function getOzonAccounts() {
-  return getMarketplaceAccounts().filter((account) => account.marketplace === "ozon");
+function isAccountSyncEnabled(account = {}) {
+  return account.syncEnabled !== false;
 }
 
-function getYandexShops() {
-  return getMarketplaceAccounts().filter((account) => account.marketplace === "yandex");
+function getOzonAccounts({ includeSyncDisabled = false } = {}) {
+  return getMarketplaceAccounts()
+    .filter((account) => account.marketplace === "ozon")
+    .filter((account) => includeSyncDisabled || isAccountSyncEnabled(account));
+}
+
+function getYandexShops({ includeSyncDisabled = false } = {}) {
+  return getMarketplaceAccounts()
+    .filter((account) => account.marketplace === "yandex")
+    .filter((account) => includeSyncDisabled || isAccountSyncEnabled(account));
 }
 
 function getOzonAccountByTarget(targetId) {
@@ -603,7 +625,7 @@ function marketplaceTargets() {
           source: shop.source,
           readOnly: Boolean(shop.readOnly),
         }))
-      : [{ id: "yandex", marketplace: "yandex", name: "Yandex Market", configured: false }]),
+      : []),
   ];
 }
 
@@ -617,6 +639,18 @@ function targetById(targetId) {
     if (shop) return { id: shop.id, marketplace: "yandex", name: shop.name || "Yandex Market", businessId: shop.businessId };
   }
   return marketplaceTargets().find((target) => target.id === targetId) || null;
+}
+
+function isWarehouseProductTargetEnabled(product = {}) {
+  const marketplace = cleanText(product.marketplace || "").toLowerCase();
+  if (!marketplace) return true;
+  const accounts = marketplace === "yandex" ? getYandexShops() : getOzonAccounts();
+  if (!accounts.length) return marketplace !== "yandex";
+  return accounts.some((account) => (
+    marketplace === "yandex"
+      ? matchesYandexTarget(product.target, account.id)
+      : matchesOzonTarget(product.target, account.id)
+  ));
 }
 
 function calculateRubPrice(usdPrice, usdRate, markupCoefficient) {
@@ -1113,25 +1147,46 @@ async function yandexRequest(shop, method, pathname, body) {
 async function getOzonProducts(limit = Number.POSITIVE_INFINITY, account = null) {
   const parsedLimit = Number(limit);
   const maxItems = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : Number.MAX_SAFE_INTEGER;
-  const items = [];
-  let lastId = "";
+  const byKey = new Map();
+  const visibilityModes = ["ALL", "ARCHIVED"];
 
-  while (items.length < maxItems) {
-    const batchLimit = Math.min(1000, maxItems - items.length);
-    const data = await ozonRequest("/v3/product/list", {
-      filter: { visibility: "ALL" },
-      limit: batchLimit,
-      last_id: lastId,
-    }, account);
+  async function loadVisibility(visibility) {
+    const items = [];
+    let lastId = "";
+    const visibilityMax = visibility === "ALL" ? maxItems : Number.MAX_SAFE_INTEGER;
 
-    const batch = data.result?.items || [];
-    items.push(...batch);
-    lastId = data.result?.last_id || "";
+    while (items.length < visibilityMax) {
+      const batchLimit = Math.min(1000, visibilityMax - items.length);
+      const data = await ozonRequest("/v3/product/list", {
+        filter: { visibility },
+        limit: batchLimit,
+        last_id: lastId,
+      }, account);
 
-    if (!batch.length || !lastId) break;
+      const batch = data.result?.items || [];
+      items.push(...batch);
+      lastId = data.result?.last_id || "";
+
+      if (!batch.length || !lastId) break;
+    }
+    return items;
   }
 
-  return items;
+  for (const visibility of visibilityModes) {
+    try {
+      const items = await loadVisibility(visibility);
+      for (const item of items) {
+        const key = cleanText(item.offer_id || item.product_id || JSON.stringify(item));
+        if (!key) continue;
+        byKey.set(key, { ...item, visibility: item.visibility || visibility });
+      }
+    } catch (error) {
+      if (visibility === "ALL") throw error;
+      logger.warn("ozon archived list failed", { account: account?.id, visibility, detail: error?.message || String(error) });
+    }
+  }
+
+  return Array.from(byKey.values());
 }
 
 async function getOzonProductInfoMap(offerIds, account = null) {
@@ -1614,6 +1669,10 @@ function defaultAppSettings() {
       ozon: Number(process.env.DEFAULT_OZON_MARKUP || 1.7),
       yandex: Number(process.env.DEFAULT_YANDEX_MARKUP || 1.6),
     },
+    automation: {
+      autoSyncEnabled: autoSyncMinutes > 0,
+      autoSyncMinutes: Math.max(5, Number(autoSyncMinutes || 30) || 30),
+    },
     markupRules: [],
   };
 }
@@ -1638,6 +1697,12 @@ function normalizeAppSettings(input = {}) {
     ozon: Number(input.defaultMarkups?.ozon ?? input.default_ozon_markup ?? fallback.defaultMarkups.ozon),
     yandex: Number(input.defaultMarkups?.yandex ?? input.default_yandex_markup ?? fallback.defaultMarkups.yandex),
   };
+  const rawAutomation = input.automation || {};
+  const automationEnabled = parseBooleanSetting(
+    rawAutomation.autoSyncEnabled ?? input.autoSyncEnabled ?? input.auto_sync_enabled,
+    fallback.automation.autoSyncEnabled,
+  );
+  const automationMinutes = Number(rawAutomation.autoSyncMinutes ?? input.autoSyncMinutes ?? input.auto_sync_minutes ?? fallback.automation.autoSyncMinutes);
   const rules = Array.isArray(input.markupRules)
     ? input.markupRules.map(normalizeMarkupRule).filter(Boolean)
     : [];
@@ -1647,6 +1712,10 @@ function normalizeAppSettings(input = {}) {
     defaultMarkups: {
       ozon: Number.isFinite(defaultMarkups.ozon) && defaultMarkups.ozon > 0 ? defaultMarkups.ozon : fallback.defaultMarkups.ozon,
       yandex: Number.isFinite(defaultMarkups.yandex) && defaultMarkups.yandex > 0 ? defaultMarkups.yandex : fallback.defaultMarkups.yandex,
+    },
+    automation: {
+      autoSyncEnabled: automationEnabled,
+      autoSyncMinutes: Number.isFinite(automationMinutes) && automationMinutes >= 5 ? Math.round(automationMinutes) : fallback.automation.autoSyncMinutes,
     },
     markupRules: rules,
   };
@@ -2163,7 +2232,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
       let stockMap = new Map();
       let priceMap = new Map();
       try {
-        const infoLimit = Number(process.env.OZON_SYNC_INFO_LIMIT || 300);
+        const infoLimit = Number(process.env.OZON_SYNC_INFO_LIMIT || products.length || 300);
         const infoOfferIds = products
           .slice(0, Number.isFinite(infoLimit) && infoLimit > 0 ? infoLimit : 300)
           .map((product) => product.offer_id);
@@ -2655,7 +2724,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
   if (refreshPrices && (priceMapResult.mutated || minPriceResult.mutated)) {
     await writeWarehouse(warehouse);
   }
-  const products = warehouse.products.map((product) => {
+  const products = warehouse.products.filter(isWarehouseProductTargetEnabled).map((product) => {
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
     const suppliers = normalizedLinks.flatMap((link) =>
       (matchMap.get(link.id) || []).map((match) => ({
@@ -5100,6 +5169,62 @@ function scheduleDailySync() {
   }, delay);
 }
 
+async function runAutoSyncCycle(trigger = "auto") {
+  if (autoSyncRunning) return { status: "already_running" };
+  autoSyncRunning = true;
+  try {
+    const result = await runSync();
+    const warehouse = await buildWarehouseView({ sync: true });
+    const automation = await runNoSupplierMarketplaceAutomation(warehouse);
+    const recovery = await runSupplierRecoveryAutomation(warehouse);
+    const autoPricePush = await processMarketplaceJob("auto-price-push", {
+      usdRate: undefined,
+      minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
+      minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
+    });
+    logger.info("auto sync complete", {
+      trigger,
+      items: result.items,
+      changes: result.changes,
+      at: result.createdAt,
+      warehouseTotal: warehouse.total,
+      zeroStockSent: automation.zeroStockSent,
+      autoArchived: automation.archived,
+      recovered: recovery.recovered,
+      autoPriceSent: autoPricePush.sent || 0,
+      autoPriceFailed: autoPricePush.failed || 0,
+      autoPriceSkipped: Array.isArray(autoPricePush.skipped) ? autoPricePush.skipped.length : 0,
+    });
+    if (automation.errors.length) {
+      logger.warn("no-supplier automation errors", { count: automation.errors.length, sample: automation.errors.slice(0, 10) });
+    }
+    return { status: "ok", result, warehouse, automation, recovery, autoPricePush };
+  } finally {
+    autoSyncRunning = false;
+  }
+}
+
+function scheduleAutoSync(delayMs = 10_000) {
+  if (autoSyncTimer) clearTimeout(autoSyncTimer);
+  autoSyncNextRunAt = new Date(Date.now() + delayMs).toISOString();
+  autoSyncTimer = setTimeout(async () => {
+    try {
+      const settings = await readAppSettings();
+      const config = settings.automation || defaultAppSettings().automation;
+      if (config.autoSyncEnabled !== false) {
+        await runAutoSyncCycle("interval");
+      } else {
+        logger.info("auto sync skipped: disabled in settings");
+      }
+      const nextMinutes = Math.max(5, Number(config.autoSyncMinutes || autoSyncMinutes || 30) || 30);
+      scheduleAutoSync(nextMinutes * 60 * 1000);
+    } catch (error) {
+      logger.error("auto sync failed", { detail: error.code || error.message, err: error });
+      scheduleAutoSync(Math.max(5, Number(autoSyncMinutes || 30) || 30) * 60 * 1000);
+    }
+  }, delayMs);
+}
+
 app.post("/api/sync", async (_request, response, next) => {
   try {
     response.json(await runSync());
@@ -5148,9 +5273,7 @@ function startServer() {
       healthPath: "/health",
       trustProxyHops: trustProxyHops || 0,
     });
-    if (autoSyncMinutes > 0) {
-      logger.info("auto sync enabled", { everyMinutes: autoSyncMinutes });
-    }
+    logger.info("auto sync scheduler enabled", { defaultEveryMinutes: Math.max(5, Number(autoSyncMinutes || 30) || 30) });
     if (dailySyncEnabled) {
       logger.info("daily sync enabled", { time: dailySyncTime, sendPrices: dailySyncSendPrices });
     }
@@ -5161,38 +5284,7 @@ function startServer() {
   });
 
   scheduleDailySync();
-
-  if (autoSyncMinutes > 0) {
-    setInterval(async () => {
-      try {
-        const result = await runSync();
-        const warehouse = await buildWarehouseView({ sync: true });
-        const automation = await runNoSupplierMarketplaceAutomation(warehouse);
-        const recovery = await runSupplierRecoveryAutomation(warehouse);
-        const autoPricePush = await processMarketplaceJob("auto-price-push", {
-          usdRate: undefined,
-          minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
-          minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
-        });
-        logger.info("auto sync complete", {
-          items: result.items,
-          changes: result.changes,
-          at: result.createdAt,
-          zeroStockSent: automation.zeroStockSent,
-          autoArchived: automation.archived,
-          recovered: recovery.recovered,
-          autoPriceSent: autoPricePush.sent || 0,
-          autoPriceFailed: autoPricePush.failed || 0,
-          autoPriceSkipped: Array.isArray(autoPricePush.skipped) ? autoPricePush.skipped.length : 0,
-        });
-        if (automation.errors.length) {
-          logger.warn("no-supplier automation errors", { count: automation.errors.length, sample: automation.errors.slice(0, 10) });
-        }
-      } catch (error) {
-        logger.error("auto sync failed", { detail: error.code || error.message, err: error });
-      }
-    }, autoSyncMinutes * 60 * 1000);
-  }
+  scheduleAutoSync(10_000);
 }
 
 module.exports = {

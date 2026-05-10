@@ -54,6 +54,20 @@
             </label>
           </section>
 
+          <section class="detail-section">
+            <h3>Фоновое обновление</h3>
+            <p>Склад, PriceMaster, статусы маркетплейсов и отправка цен обновляются автоматически без кнопок на главной.</p>
+            <label class="search-control auto-toggle-control" for="autoSyncEnabledInput">
+              <span>Включить фоновое обновление</span>
+              <input id="autoSyncEnabledInput" name="autoSyncEnabled" type="checkbox" />
+              <span class="toggle-ui" aria-hidden="true"></span>
+            </label>
+            <label>
+              Интервал обновления, минут
+              <input id="autoSyncMinutesInput" name="autoSyncMinutes" type="number" min="5" step="1" required />
+            </label>
+          </section>
+
           <div class="form-inline-actions">
             <button class="primary-button" type="submit">Сохранить настройки</button>
           </div>

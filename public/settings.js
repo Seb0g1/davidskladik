@@ -4,6 +4,8 @@ const addRuleButton = document.querySelector("#addMarkupRuleButton");
 const statusBox = document.querySelector("#settingsStatus");
 const logoutButton = document.querySelector("#logoutButton");
 const settingsAnimateAutoFocusInput = document.querySelector("#settingsAnimateAutoFocusInput");
+const autoSyncEnabledInput = document.querySelector("#autoSyncEnabledInput");
+const autoSyncMinutesInput = document.querySelector("#autoSyncMinutesInput");
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 
 function ruleRow(rule = {}) {
@@ -66,6 +68,8 @@ async function loadSettings() {
   settingsForm.elements.fixedUsdRate.value = settings.fixedUsdRate || 95;
   settingsForm.elements.defaultOzonMarkup.value = settings.defaultMarkups?.ozon || 1.7;
   settingsForm.elements.defaultYandexMarkup.value = settings.defaultMarkups?.yandex || 1.6;
+  if (autoSyncEnabledInput) autoSyncEnabledInput.checked = settings.automation?.autoSyncEnabled !== false;
+  if (autoSyncMinutesInput) autoSyncMinutesInput.value = settings.automation?.autoSyncMinutes || 30;
   renderRules(settings.markupRules || []);
   if (settingsAnimateAutoFocusInput) {
     settingsAnimateAutoFocusInput.checked = localStorage.getItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY) !== "0";
@@ -80,6 +84,10 @@ settingsForm.addEventListener("submit", async (event) => {
     defaultMarkups: {
       ozon: Number(settingsForm.elements.defaultOzonMarkup.value),
       yandex: Number(settingsForm.elements.defaultYandexMarkup.value),
+    },
+    automation: {
+      autoSyncEnabled: Boolean(autoSyncEnabledInput?.checked),
+      autoSyncMinutes: Number(autoSyncMinutesInput?.value || 30),
     },
     markupRules: collectRules(),
   };

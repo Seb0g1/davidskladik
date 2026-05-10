@@ -144,6 +144,7 @@ const elements = {
   accountFormTitle: document.querySelector("#accountFormTitle"),
   accountIdInput: document.querySelector("#accountIdInput"),
   accountMarketplaceInput: document.querySelector("#accountMarketplaceInput"),
+  accountSyncEnabledInput: document.querySelector("#accountSyncEnabledInput"),
   accountSaveButton: document.querySelector("#accountSaveButton"),
   accountCancelEditButton: document.querySelector("#accountCancelEditButton"),
   accountStatus: document.querySelector("#accountStatus"),
@@ -967,6 +968,15 @@ function updateSelection() {
 
 function renderTargets() {
   const manualTargets = state.targets.filter((target) => target.configured !== false);
+  const availableMarketplaces = new Set(["all", ...manualTargets.map((target) => target.marketplace)]);
+  document.querySelectorAll("[data-marketplace]").forEach((button) => {
+    const marketplace = button.dataset.marketplace;
+    button.classList.toggle("hidden", !availableMarketplaces.has(marketplace));
+  });
+  if (!availableMarketplaces.has(state.warehouseMarketplace)) {
+    state.warehouseMarketplace = availableMarketplaces.has("ozon") ? "ozon" : "all";
+    setWarehouseMarketplaceUI(state.warehouseMarketplace);
+  }
 
   elements.warehouseTargetInput.innerHTML = manualTargets.length
     ? manualTargets.map((target) => `<option value="${escapeHtml(target.id)}">${escapeHtml(target.name)}</option>`).join("")
@@ -1653,16 +1663,19 @@ function renderAccounts() {
   elements.accountsBoard.innerHTML = state.accounts
     .map((account) => {
       const isOzon = account.marketplace === "ozon";
+      const syncEnabled = account.syncEnabled !== false;
       return `
-        <article class="account-card ${account.configured ? "configured" : "not-configured"}" data-account-id="${escapeHtml(account.id)}">
+        <article class="account-card ${account.configured ? "configured" : "not-configured"} ${syncEnabled ? "" : "sync-disabled"}" data-account-id="${escapeHtml(account.id)}">
           <div class="account-card-head">
             <div>
               <span class="market-badge ${escapeHtml(account.marketplace)}">${isOzon ? "Ozon" : "Yandex Market"}</span>
               <h3>${escapeHtml(account.name)}</h3>
+              <p class="account-sync-note">${syncEnabled ? "Загрузка товаров включена" : "Загрузка товаров выключена"}</p>
               <p>${account.readOnly ? "Задан в .env" : account.inheritedFromEnv ? "Переопределён из интерфейса" : "Локальная настройка"} · ${account.configured ? "ключи подключены" : "не настроен"}</p>
             </div>
             <div class="account-actions">
               ${account.readOnly ? `<span class="readonly-note">Из .env</span>` : ""}
+              <button class="secondary-button compact-button toggle-account-sync" type="button">${syncEnabled ? "Отключить загрузку" : "Включить загрузку"}</button>
               <button class="secondary-button compact-button edit-account" type="button">Изменить</button>
               <button class="text-button delete-account" type="button">${account.readOnly ? "Скрыть" : "Удалить"}</button>
             </div>
@@ -1712,6 +1725,7 @@ function updateAccountFormMode() {
 function resetAccountForm() {
   elements.accountForm?.reset();
   if (elements.accountIdInput) elements.accountIdInput.value = "";
+  if (elements.accountSyncEnabledInput) elements.accountSyncEnabledInput.checked = true;
   if (elements.accountFormTitle) elements.accountFormTitle.textContent = "Добавить кабинет";
   if (elements.accountSaveButton) elements.accountSaveButton.textContent = "Сохранить кабинет";
   elements.accountCancelEditButton?.classList.add("hidden");
@@ -1727,6 +1741,7 @@ function startAccountEdit(account) {
   elements.accountForm.elements.apiKey.value = "";
   elements.accountForm.elements.businessId.value = account.businessId || "";
   elements.accountForm.elements.campaignId.value = account.campaignId || "";
+  if (elements.accountSyncEnabledInput) elements.accountSyncEnabledInput.checked = account.syncEnabled !== false;
   if (elements.accountFormTitle) elements.accountFormTitle.textContent = "Редактировать кабинет";
   if (elements.accountSaveButton) elements.accountSaveButton.textContent = "Сохранить изменения";
   elements.accountCancelEditButton?.classList.remove("hidden");
@@ -2928,6 +2943,7 @@ elements.reloadAccountsButton?.addEventListener("click", async () => {
 elements.accountForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const formData = Object.fromEntries(new FormData(elements.accountForm).entries());
+  formData.syncEnabled = elements.accountSyncEnabledInput?.checked ? "true" : "false";
   const accountId = String(formData.id || "").trim();
   const isEditing = Boolean(accountId);
   elements.accountStatus.textContent = isEditing ? "Сохраняю изменения кабинета..." : "Сохраняю кабинет...";
@@ -2954,9 +2970,40 @@ elements.accountForm?.addEventListener("submit", async (event) => {
 
 elements.accountsBoard?.addEventListener("click", async (event) => {
   const editButton = event.target.closest(".edit-account");
+  const toggleSyncButton = event.target.closest(".toggle-account-sync");
   const deleteButton = event.target.closest(".delete-account");
   const card = event.target.closest(".account-card");
   if (!card) return;
+
+  if (toggleSyncButton) {
+    const account = state.accounts.find((item) => item.id === card.dataset.accountId);
+    const nextEnabled = account?.syncEnabled === false;
+    elements.accountStatus.textContent = nextEnabled ? "Включаю загрузку кабинета..." : "Отключаю загрузку кабинета...";
+    try {
+      const result = await api(`/api/marketplace-accounts/${encodeURIComponent(card.dataset.accountId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ syncEnabled: nextEnabled }),
+      });
+      state.accounts = result.accounts || [];
+      state.hiddenAccounts = result.hiddenAccounts || [];
+      state.targets = result.targets || state.targets;
+      renderAccounts();
+      renderHiddenAccounts();
+      renderTargets();
+      if (!nextEnabled && state.warehouseMarketplace === account?.marketplace) {
+        state.warehouseMarketplace = "all";
+        setWarehouseMarketplaceUI(state.warehouseMarketplace);
+      }
+      loadWarehouse(false).catch(() => {});
+      elements.accountStatus.textContent = nextEnabled
+        ? "Загрузка кабинета включена. Он снова появится в складе после фонового обновления."
+        : "Загрузка кабинета выключена. API этого кабинета не будет участвовать в фоне и фильтрах.";
+    } catch (error) {
+      elements.accountStatus.textContent = error.message;
+    }
+    return;
+  }
 
   if (editButton) {
     const account = state.accounts.find((item) => item.id === card.dataset.accountId);
