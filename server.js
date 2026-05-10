@@ -686,6 +686,7 @@ function normalizeOzonDraft(input = {}) {
     vendor: cleanText(input.vendor || input.brand),
     description: cleanText(input.description),
     categoryId: Number(input.categoryId || input.category_id || 0) || undefined,
+    typeId: Number(input.typeId || input.type_id || input.descriptionTypeId || input.description_type_id || 0) || undefined,
     price: Number(input.price || 0) || undefined,
     minPrice: Number(input.minPrice || input.min_price || 0) || undefined,
     oldPrice: Number(input.oldPrice || input.old_price || 0) || undefined,
@@ -2111,9 +2112,11 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
           marketplaceState: pickOzonState(product, info, stockInfo),
           ozon: {
             offerId: product.offer_id,
+            vendor: cleanText(info.brand || info.vendor || ""),
             name: info.name || product.name || product.offer_id,
             description: info.description || "",
             categoryId: info.description_category_id || info.category_id,
+            typeId: info.type_id || info.description_type_id,
             price: cabinetPrice || undefined,
             minPrice: priceDetails.minPrice || undefined,
             oldPrice: priceDetails.oldPrice || parseMoneyValue(info.old_price) || undefined,
@@ -2232,6 +2235,7 @@ function applyOzonInfoToWarehouseProduct(product, info = {}, account = {}, stock
       name: info.name || product.ozon?.name || product.name,
       description: info.description || product.ozon?.description || "",
       categoryId: info.description_category_id || info.category_id || product.ozon?.categoryId,
+      typeId: info.type_id || info.description_type_id || product.ozon?.typeId,
       price: cabinetPrice || undefined,
       minPrice: priceDetails.minPrice || product.ozon?.minPrice || undefined,
       oldPrice: priceDetails.oldPrice || parseMoneyValue(info.old_price) || product.ozon?.oldPrice || undefined,
@@ -2962,14 +2966,18 @@ app.get("/api/ozon/brands/suggest", async (request, response, next) => {
     const payload = {
       attribute_id: 85,
       description_category_id: categoryId,
-      description_type_id: descriptionTypeId,
+      type_id: descriptionTypeId,
       language: "DEFAULT",
       limit,
       last_value_id: 0,
       value: query,
     };
     const data = await ozonRequest("/v1/description-category/attribute/values", payload, account);
-    const raw = data.result || data.values || [];
+    const raw = Array.isArray(data.result)
+      ? data.result
+      : Array.isArray(data.result?.values)
+        ? data.result.values
+        : data.values || [];
     const brands = Array.isArray(raw)
       ? raw
           .map((item) => cleanText(item.value || item.name))
@@ -3014,8 +3022,12 @@ app.get("/api/ozon/categories/:id/attributes-template", async (request, response
     if (!categoryId) return response.json({ template: [] });
     const account = getOzonAccountByTarget(target) || getOzonAccountByTarget("ozon");
     if (!account) return response.json({ template: [] });
+    const categories = await getOzonCategoryList(account);
+    const selectedCategory = categories.find((item) => Number(item.id) === categoryId);
+    const descriptionTypeId = Number(selectedCategory?.descriptionTypeId || 0);
     const data = await ozonRequest("/v1/description-category/attribute", {
       description_category_id: categoryId,
+      ...(descriptionTypeId ? { type_id: descriptionTypeId } : {}),
       language: "DEFAULT",
     }, account);
     const rows = data.result || data.attributes || [];
