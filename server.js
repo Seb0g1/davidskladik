@@ -3096,6 +3096,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
 
   return {
     createdAt: new Date().toISOString(),
+    updatedAt: warehouse.updatedAt || warehouse.createdAt || null,
     usdRate: rate,
     sourceError,
     supplierSync,
@@ -4134,6 +4135,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
 
     response.json({
       createdAt: data.createdAt,
+      updatedAt: data.updatedAt || null,
       totalAll: data.total,
       ready: data.ready,
       changed: data.changed,
@@ -4210,6 +4212,39 @@ app.get("/api/suppliers", async (_request, response, next) => {
       logger.info("supplier auto-reactivated from suppliers api", { count: autoReactivated.length, suppliers: autoReactivated });
     }
     response.json({ suppliers: warehouse.suppliers || [], supplierSync });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/live-status", async (_request, response, next) => {
+  try {
+    const [warehouse, dailySync] = await Promise.all([
+      readWarehouse(),
+      getDailySyncStatus().catch((error) => ({ error: error?.message || String(error) })),
+    ]);
+    response.json({
+      ok: true,
+      now: new Date().toISOString(),
+      warehouse: {
+        updatedAt: warehouse.updatedAt || warehouse.createdAt || null,
+        createdAt: warehouse.createdAt || null,
+        products: Array.isArray(warehouse.products) ? warehouse.products.length : 0,
+        suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.length : 0,
+      },
+      dailySync: {
+        updatedAt: dailySync.updatedAt || dailySync.lastRunAt || null,
+        status: dailySync.status || "idle",
+        running: Boolean(dailySync.running),
+        lastRunAt: dailySync.lastRunAt || null,
+        nextRunAt: dailySync.nextRunAt || null,
+        error: dailySync.error || null,
+      },
+      autoSync: {
+        running: Boolean(autoSyncRunning),
+        nextRunAt: autoSyncNextRunAt || null,
+      },
+    });
   } catch (error) {
     next(error);
   }

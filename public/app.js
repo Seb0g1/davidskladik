@@ -31,6 +31,11 @@ const state = {
   warehouseLoadingPage: false,
   warehouseTotalFiltered: 0,
   warehouseRequestToken: 0,
+  warehouseLivePollTimer: null,
+  warehouseLiveRefreshRunning: false,
+  warehouseLiveRefreshQueued: false,
+  warehouseLastUpdatedAt: "",
+  dailySyncLastUpdatedAt: "",
   warehouseScrollTop: 0,
   warehouseLastGroupOrder: [],
   warehouseAutoFocusGroupKey: null,
@@ -1026,6 +1031,7 @@ function applyWarehouseFilters() {
 function renderWarehouse(data) {
   const mode = data.mode || "replace";
   const products = Array.isArray(data.products) ? data.products : [];
+  if (data.updatedAt) state.warehouseLastUpdatedAt = String(data.updatedAt);
   if (mode === "append") {
     const byId = new Map(state.warehouse.map((product) => [product.id, product]));
     products.forEach((product) => byId.set(product.id, product));
@@ -1856,6 +1862,7 @@ function renderDailySync(status = {}) {
 
 async function loadDailySync() {
   const status = await api("/api/daily-sync");
+  if (status.updatedAt || status.lastRunAt) state.dailySyncLastUpdatedAt = String(status.updatedAt || status.lastRunAt);
   renderDailySync(status);
   return status;
 }
@@ -1988,17 +1995,20 @@ async function loadWarehousePage({ reset = false, sync = false, refreshPrices = 
   }
 }
 
-async function loadWarehouse(sync = false, refreshPrices = false) {
+async function loadWarehouse(sync = false, refreshPrices = false, options = {}) {
+  const silent = Boolean(options.silent);
   captureWarehouseScroll();
   const stopProgress = sync || refreshPrices ? startSyncProgress(sync ? "sync" : "prices") : null;
   elements.warehouseSyncButton.disabled = sync;
   elements.warehouseRefreshPricesButton.disabled = refreshPrices;
+  const previousWarehouseStatus = elements.warehouseStatus?.textContent || "";
   elements.warehouseStatus.textContent = sync
     ? `Синхронизирую ${syncTargetNames().join(" + ")}: товары, цены, статусы, остатки и изображения...`
     : refreshPrices
       ? `Обновляю цены по ${syncTargetNames().join(" + ")}...`
       : "Обновляю список по фильтрам и курсу…";
   try {
+    if (silent && elements.warehouseStatus) elements.warehouseStatus.textContent = previousWarehouseStatus;
     state.warehousePage = 0;
     state.warehouseHasMore = true;
     state.warehouseTotalFiltered = 0;
@@ -2028,6 +2038,76 @@ async function loadWarehouse(sync = false, refreshPrices = false) {
     elements.warehouseSyncButton.disabled = false;
     elements.warehouseRefreshPricesButton.disabled = false;
   }
+}
+
+function warehouseLiveRefreshShouldWait() {
+  if (document.hidden) return true;
+  if (state.warehouseLoadingPage || state.warehouseLiveRefreshRunning) return true;
+  const active = document.activeElement;
+  if (!active) return false;
+  if (active.matches?.("input, textarea, select, [contenteditable='true']")) {
+    return Boolean(active.closest?.("#warehouseDetail, .warehouse-control-panel, #warehouseForm"));
+  }
+  return false;
+}
+
+async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
+  const warehouseUpdatedAt = String(status?.warehouse?.updatedAt || "");
+  const dailyUpdatedAt = String(status?.dailySync?.updatedAt || status?.dailySync?.lastRunAt || "");
+  const warehouseChanged = warehouseUpdatedAt && warehouseUpdatedAt !== state.warehouseLastUpdatedAt;
+  const dailyChanged = dailyUpdatedAt && dailyUpdatedAt !== state.dailySyncLastUpdatedAt;
+  if (!force && !warehouseChanged && !dailyChanged) return;
+  if (warehouseLiveRefreshShouldWait()) {
+    state.warehouseLiveRefreshQueued = true;
+    return;
+  }
+
+  state.warehouseLiveRefreshRunning = true;
+  state.warehouseLiveRefreshQueued = false;
+  try {
+    const restorePage = Math.max(1, Number(state.warehousePage || 1));
+    const selectedKey = state.selectedWarehouseGroupKey;
+    state.warehouseRestorePage = restorePage;
+    await Promise.all([
+      loadWarehouse(false, false, { silent: true }),
+      loadDailySync().catch(() => null),
+      loadRetryQueue().catch(() => null),
+    ]);
+    if (selectedKey) {
+      const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
+        .find((item) => item.key === selectedKey);
+      if (group) {
+        state.selectedWarehouseGroupKey = selectedKey;
+        state.selectedWarehouseDetailGroup = group;
+        renderWarehouseDetail(group);
+        renderWarehouseCards();
+      }
+    }
+  } finally {
+    state.warehouseLiveRefreshRunning = false;
+  }
+}
+
+async function checkWarehouseLiveStatus({ force = false } = {}) {
+  try {
+    const status = await api("/api/live-status");
+    await refreshWarehouseFromLiveStatus(status, { force });
+  } catch (_error) {
+    // Live refresh must never interrupt normal work on the page.
+  }
+}
+
+function startWarehouseLiveRefresh() {
+  if (state.warehouseLivePollTimer) window.clearInterval(state.warehouseLivePollTimer);
+  state.warehouseLivePollTimer = window.setInterval(() => {
+    checkWarehouseLiveStatus().catch(() => {});
+  }, 15000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) checkWarehouseLiveStatus({ force: state.warehouseLiveRefreshQueued }).catch(() => {});
+  });
+  window.addEventListener("focus", () => {
+    checkWarehouseLiveStatus({ force: state.warehouseLiveRefreshQueued }).catch(() => {});
+  });
 }
 
 let warehouseRefreshTimer = null;
@@ -2140,6 +2220,7 @@ async function loadSettings() {
   if (refreshPricesOnFirstLoad) sessionStorage.setItem("mvInitialPriceRefreshDone", "1");
   await Promise.all([loadWarehouse(false, refreshPricesOnFirstLoad), loadSuppliers({ silent: true }), loadDailySync()]);
   await refreshWarehouseBrandSelect();
+  startWarehouseLiveRefresh();
 }
 
 function applyMainTab(tab) {
