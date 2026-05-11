@@ -1259,6 +1259,10 @@ function renderWarehouseDetail(group) {
   const image = group.image || productImage(product);
   const productName = group.name || displayProductName(product);
   const groupProductIds = variants.map((item) => item.id);
+  const ozonForAi = ozonVariant || (product.marketplace === "ozon" ? product : null);
+  const aiOzonHref = ozonForAi
+    ? `/ozon-product.html?productId=${encodeURIComponent(ozonForAi.id)}&offerId=${encodeURIComponent(ozonForAi.offerId || product.offerId)}&name=${encodeURIComponent(productName)}&ai=1`
+    : "";
 
   elements.warehouseDetail.innerHTML = `
     <div class="detail-head">
@@ -1272,11 +1276,21 @@ function renderWarehouseDetail(group) {
       <a class="secondary-link-button compact-button" href="/product.html?group=${encodeURIComponent(group.key || productGroupKey(product))}">Страница</a>
     </div>
 
-    <div class="detail-media">
+    <div class="detail-media-wrap">
+      <div class="detail-media">
+        ${
+          image
+            ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(productName)}" loading="lazy" />`
+            : `<div class="product-image-empty">${escapeHtml(marketLabel(product))}</div>`
+        }
+      </div>
       ${
-        image
-          ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(productName)}" loading="lazy" />`
-          : `<div class="product-image-empty">${escapeHtml(marketLabel(product))}</div>`
+        aiOzonHref
+          ? `<div class="detail-media-actions">
+              <a class="secondary-button compact-button" href="${escapeHtml(aiOzonHref)}">AI-фото Ozon</a>
+              <small>Откроется форма карточки: генерация и проверка черновика перед отправкой в Ozon.</small>
+            </div>`
+          : ""
       }
     </div>
 

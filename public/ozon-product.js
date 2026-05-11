@@ -827,6 +827,11 @@ logoutButton.addEventListener("click", async () => {
 
 setInitialValues();
 Promise.all([loadTargets(), loadExistingProduct()])
+  .then(() => {
+    if (queryValue("ai") === "1") {
+      document.getElementById("pb-ozon-ai")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  })
   .catch((error) => {
     statusBox.textContent = error.message;
   });

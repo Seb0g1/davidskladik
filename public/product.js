@@ -83,6 +83,11 @@ async function api(url) {
 function renderProductPage(variants) {
   const primary = variants[0];
   const image = productImage(primary);
+  const ozonProduct = variants.find((item) => item.marketplace === "ozon");
+  const productTitle = primary.name || primary.offerId || "Карточка товара";
+  const aiOzonHref = ozonProduct
+    ? `/ozon-product.html?productId=${encodeURIComponent(ozonProduct.id)}&offerId=${encodeURIComponent(ozonProduct.offerId || primary.offerId || "")}&name=${encodeURIComponent(productTitle)}&ai=1`
+    : "";
   const suppliers = variants.flatMap((product) => product.suppliers || []);
   const links = variants.flatMap((product) => product.links || []);
   const history = variants
@@ -94,7 +99,17 @@ function renderProductPage(variants) {
   setDocTitle(primary.name || primary.offerId || "Карточка товара");
   content.innerHTML = `
     <section class="product-page-hero">
-      <div class="detail-media">${image ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(primary.name)}" />` : `<div class="product-image-empty">Нет фото</div>`}</div>
+      <div class="detail-media-wrap">
+        <div class="detail-media">${image ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(primary.name)}" />` : `<div class="product-image-empty">Нет фото</div>`}</div>
+        ${
+          aiOzonHref
+            ? `<div class="detail-media-actions">
+                <a class="secondary-button compact-button" href="${escapeHtml(aiOzonHref)}">AI-фото Ozon</a>
+                <small>Генерация продающего фото по текущему изображению и названию; черновик проверяется перед отправкой в Ozon.</small>
+              </div>`
+            : ""
+        }
+      </div>
       <div class="detail-section">
         <h3>Маркетплейсы</h3>
         <div class="marketplace-variant-list">

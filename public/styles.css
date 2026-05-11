@@ -2634,6 +2634,35 @@ td {
   background: #f2f5f8;
 }
 
+.detail-media-wrap {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.detail-media-wrap .detail-media {
+  margin-bottom: 0;
+}
+
+.detail-media-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.detail-media-actions small {
+  flex: 1 1 160px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.product-page-hero .detail-media-wrap {
+  margin-bottom: 0;
+}
+
 .supplier-board {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));
