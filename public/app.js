@@ -2223,9 +2223,7 @@ async function loadSettings() {
   renderHiddenAccounts();
   updateAccountFormMode();
   await loadRate(fixedRate);
-  const refreshPricesOnFirstLoad = sessionStorage.getItem("mvInitialPriceRefreshDone") !== "1";
-  if (refreshPricesOnFirstLoad) sessionStorage.setItem("mvInitialPriceRefreshDone", "1");
-  await Promise.all([loadWarehouse(false, refreshPricesOnFirstLoad), loadSuppliers({ silent: true }), loadDailySync()]);
+  await Promise.all([loadWarehouse(false, false, { silent: true }), loadSuppliers({ silent: true }), loadDailySync()]);
   await refreshWarehouseBrandSelect();
   startWarehouseLiveRefresh();
 }

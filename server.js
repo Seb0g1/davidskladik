@@ -62,6 +62,7 @@ const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.exa
 const sessionCookieName = "pm_session";
 const sessionTtlMs = 1000 * 60 * 60 * 12;
 const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || process.env.DEFAULT_AUTO_SYNC_MINUTES || 30);
+const autoSyncInitialDelaySeconds = Math.max(30, Number(process.env.AUTO_SYNC_INITIAL_DELAY_SECONDS || 120) || 120);
 const autoZeroStockOnNoSupplier = process.env.AUTO_ZERO_STOCK_ON_NO_SUPPLIER !== "false";
 const autoArchiveOnNoLinks = process.env.AUTO_ARCHIVE_ON_NO_LINKS === "true";
 const autoRestoreOnSupplierReturn = process.env.AUTO_RESTORE_ON_SUPPLIER_RETURN !== "false";
@@ -106,6 +107,7 @@ let immediateAutoPushAll = false;
 const immediateAutoPushIds = new Set();
 let immediateAutoPushChain = Promise.resolve();
 const changedPriceAutoPushAt = new Map();
+let changedPriceAutoPushLastBatchAt = 0;
 let marketplaceQueue = null;
 let marketplaceWorker = null;
 let telegramProxyDispatcher = null;
@@ -5041,6 +5043,8 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
 function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_prices_detected") {
   const now = Date.now();
   const cooldownMs = Math.max(30_000, Number(process.env.AUTO_PRICE_CHANGED_COOLDOWN_MS || 180_000) || 180_000);
+  const batchCooldownMs = Math.max(5_000, Number(process.env.AUTO_PRICE_CHANGED_BATCH_COOLDOWN_MS || 60_000) || 60_000);
+  if (changedPriceAutoPushLastBatchAt && now - changedPriceAutoPushLastBatchAt < batchCooldownMs) return 0;
   const ids = (Array.isArray(products) ? products : [])
     .filter((product) => product?.hasLinks && product.ready && product.changed && Number(product.nextPrice || 0) > 0)
     .map((product) => product.id)
@@ -5052,6 +5056,7 @@ function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_
       return true;
     });
   if (!ids.length) return 0;
+  changedPriceAutoPushLastBatchAt = now;
   queueImmediateAutoPricePush(ids, reason);
   return ids.length;
 }
@@ -6227,7 +6232,10 @@ function startServer() {
       healthPath: "/health",
       trustProxyHops: trustProxyHops || 0,
     });
-    logger.info("auto sync scheduler enabled", { defaultEveryMinutes: Math.max(5, Number(autoSyncMinutes || 30) || 30) });
+    logger.info("auto sync scheduler enabled", {
+      defaultEveryMinutes: Math.max(5, Number(autoSyncMinutes || 30) || 30),
+      initialDelaySeconds: autoSyncInitialDelaySeconds,
+    });
     if (dailySyncEnabled) {
       logger.info("daily sync enabled", { time: dailySyncTime, sendPrices: dailySyncSendPrices });
     }
@@ -6247,7 +6255,7 @@ function startServer() {
 
   scheduleDailySync();
   scheduleTelegramDailyReport();
-  scheduleAutoSync(10_000);
+  scheduleAutoSync(autoSyncInitialDelaySeconds * 1000);
 }
 
 module.exports = {
