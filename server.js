@@ -4807,8 +4807,6 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
 
 async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDiffPct = 0, dryRun = false } = {}) {
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
-  const rubThreshold = Math.max(0, Number(minDiffRub || 0));
-  const pctThreshold = Math.max(0, Number(minDiffPct || 0));
   const preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
   const selected = ids ? preview.products.filter((product) => ids.has(product.id)) : preview.products;
   const skipped = [];
@@ -4826,17 +4824,8 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     const current = Number(product.currentPrice || 0);
     const nextValue = Number(product.nextPrice || 0);
     const diffRub = Math.abs(nextValue - current);
-    const diffPct = current > 0 ? (diffRub / current) * 100 : 100;
     if (diffRub <= 0) {
       skipped.push({ id: product.id, offerId: product.offerId, reason: "unchanged" });
-      continue;
-    }
-    if (rubThreshold > 0 && diffRub < rubThreshold) {
-      skipped.push({ id: product.id, offerId: product.offerId, reason: "below_rub_threshold", diffRub });
-      continue;
-    }
-    if (pctThreshold > 0 && diffPct < pctThreshold) {
-      skipped.push({ id: product.id, offerId: product.offerId, reason: "below_pct_threshold", diffPct: roundPrice(diffPct) });
       continue;
     }
     items.push({
@@ -4960,8 +4949,8 @@ async function processMarketplaceJob(name, data = {}) {
     return sendWarehousePrices({
       productIds: Array.isArray(data.productIds) ? data.productIds : undefined,
       usdRate: data.usdRate,
-      minDiffRub: Number(data.minDiffRub || 0),
-      minDiffPct: Number(data.minDiffPct || 0),
+      minDiffRub: 0,
+      minDiffPct: 0,
       dryRun: false,
     });
   }
@@ -5033,8 +5022,8 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
           {
             productIds: ids,
             usdRate: undefined,
-            minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
-            minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
+            minDiffRub: 0,
+            minDiffPct: 0,
           },
           { priority: 1 },
         );
@@ -5657,8 +5646,8 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     {
       productIds: recovered.map((item) => item.id),
       usdRate: undefined,
-      minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
-      minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
+      minDiffRub: 0,
+      minDiffPct: 0,
     },
     { priority: 2 },
   );
@@ -6062,8 +6051,8 @@ async function runAutoSyncCycle(trigger = "auto") {
     const recovery = await runSupplierRecoveryAutomation(warehouse);
     const autoPricePush = await processMarketplaceJob("auto-price-push", {
       usdRate: undefined,
-      minDiffRub: Number(process.env.AUTO_PRICE_MIN_DIFF_RUB || 0),
-      minDiffPct: Number(process.env.AUTO_PRICE_MIN_DIFF_PCT || 0),
+      minDiffRub: 0,
+      minDiffPct: 0,
     });
     logger.info("auto sync complete", {
       trigger,
