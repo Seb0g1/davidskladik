@@ -316,6 +316,13 @@
               Причина стопа
               <input id="supplierStopReasonInput" type="text" placeholder="Например: отпуск, нет прайса, проверка" />
             </label>
+            <label>
+              Валюта цен в PriceMaster
+              <select id="supplierPriceCurrencyInput">
+                <option value="USD">USD - поставщик выгружает в долларах</option>
+                <option value="RUB">RUB - поставщик выгружает в рублях</option>
+              </select>
+            </label>
             <div class="form-inline-actions">
               <button id="supplierSaveButton" class="primary-button" type="submit">Добавить поставщика</button>
               <button id="supplierCancelEditButton" class="secondary-button hidden" type="button">Отменить</button>

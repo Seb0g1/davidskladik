@@ -1158,11 +1158,13 @@ function normalizeSupplierArticle(input = {}) {
 function normalizeManagedSupplier(input = {}) {
   const inactiveUntil = cleanText(input.inactiveUntil || input.inactive_until);
   const stopped = Boolean(input.stopped);
+  const priceCurrency = cleanText(input.priceCurrency || input.price_currency || input.currency || "USD").toUpperCase();
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
     partnerId: cleanText(input.partnerId || input.partner_id),
     source: cleanText(input.source || "manual"),
     name: cleanText(input.name),
+    priceCurrency: priceCurrency === "RUB" || priceCurrency === "RUR" ? "RUB" : "USD",
     stopped,
     note: cleanText(input.note),
     stopReason: cleanText(input.stopReason || input.stop_reason),
@@ -2814,11 +2816,32 @@ function stoppedSupplierMap(suppliers = []) {
   );
 }
 
+function managedSupplierMaps(suppliers = []) {
+  const byName = new Map();
+  const byPartnerId = new Map();
+  for (const supplier of suppliers || []) {
+    const normalized = normalizeManagedSupplier(supplier);
+    if (normalized.name) byName.set(normalizeSupplierName(normalized.name), normalized);
+    if (normalized.partnerId) byPartnerId.set(String(normalized.partnerId), normalized);
+  }
+  return { byName, byPartnerId };
+}
+
+function findManagedSupplierForPriceMasterRow(row = {}, maps = managedSupplierMaps()) {
+  return maps.byPartnerId.get(String(row.partnerId || "")) || maps.byName.get(normalizeSupplierName(row.partnerName)) || null;
+}
+
+function resolvePriceMasterRowCurrency(row = {}, link = {}, maps = managedSupplierMaps()) {
+  const supplier = findManagedSupplierForPriceMasterRow(row, maps);
+  return supplier?.priceCurrency || link.priceCurrency || "USD";
+}
+
 async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate) {
   const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article);
   if (!normalizedLinks.length) return new Map();
 
   const stoppedMap = stoppedSupplierMap(managedSuppliers);
+  const supplierMaps = managedSupplierMaps(managedSuppliers);
   const rowsByArticle = await getPriceMasterArticleIndex();
 
   const map = new Map();
@@ -2834,7 +2857,8 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
       })
       .map((row) => {
         const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
-        const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate, link.priceCurrency);
+        const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
+        const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate, priceCurrency);
         const price = stoppedSupplier ? 0 : normalizedPrice.price;
         const active = stoppedSupplier ? false : Boolean(row.active);
         return {
@@ -2845,6 +2869,7 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
           partnerId: row.partnerId,
           partnerName: row.partnerName,
           price,
+          priceCurrency,
           originalPrice: normalizedPrice.originalPrice,
           sourceCurrency: normalizedPrice.sourceCurrency,
           convertedFromRub: normalizedPrice.convertedFromRub,
@@ -2861,9 +2886,10 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
   return map;
 }
 
-async function findPriceMasterRowsForLink(linkInput, usdRate) {
+async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers = []) {
   const link = normalizeWarehouseLink(linkInput);
   if (!link.article) return [];
+  const supplierMaps = managedSupplierMaps(managedSuppliers);
   const [rows] = await pool.query(
     `
     SELECT
@@ -2894,19 +2920,23 @@ async function findPriceMasterRowsForLink(linkInput, usdRate) {
       const keywordOk = includesKeyword(row.name, link.keyword);
       return supplierOk && partnerOk && keywordOk;
     })
-    .map((row) => ({
-      ...row,
-      ...normalizePriceMasterPrice(row.price, usdRate, link.priceCurrency),
-      active: Boolean(row.active),
-      ignored: Boolean(row.ignored),
-    }));
+    .map((row) => {
+      const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
+      return {
+        ...row,
+        priceCurrency,
+        ...normalizePriceMasterPrice(row.price, usdRate, priceCurrency),
+        active: Boolean(row.active),
+        ignored: Boolean(row.ignored),
+      };
+    });
 }
 
-async function assertPriceMasterLinkExists(linkInput, usdRate) {
+async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers = []) {
   const link = normalizeWarehouseLink(linkInput);
-  const matches = await findPriceMasterRowsForLink(link, usdRate);
+  const matches = await findPriceMasterRowsForLink(link, usdRate, managedSuppliers);
   if (matches.length) return matches;
-  const articleRows = await findPriceMasterRowsForLink({ ...link, supplierName: "", partnerId: "", keyword: "" }, usdRate);
+  const articleRows = await findPriceMasterRowsForLink({ ...link, supplierName: "", partnerId: "", keyword: "" }, usdRate, managedSuppliers);
   const detailParts = [`артикул "${link.article}" должен совпадать с PriceMaster точно`];
   if (!articleRows.length) {
     detailParts.push("в PriceMaster нет строки с таким точным артикулом");
@@ -4447,7 +4477,7 @@ app.post("/api/suppliers", async (request, response, next) => {
       warehouse.suppliers.push(supplier);
     }
 
-    await appendAudit(request, "supplier.save", { id: supplier.id, name: supplier.name });
+    await appendAudit(request, "supplier.save", { id: supplier.id, name: supplier.name, priceCurrency: supplier.priceCurrency });
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
     queueImmediateAutoPricePush([], "supplier_save");
   } catch (error) {
@@ -4466,6 +4496,9 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
       stopped: request.body.stopped !== undefined ? Boolean(request.body.stopped) : supplier.stopped,
       note: request.body.note !== undefined ? cleanText(request.body.note) : supplier.note,
       stopReason: request.body.stopReason !== undefined ? cleanText(request.body.stopReason) : supplier.stopReason,
+      priceCurrency: request.body.priceCurrency !== undefined
+        ? normalizeManagedSupplier({ priceCurrency: request.body.priceCurrency }).priceCurrency
+        : (supplier.priceCurrency || "USD"),
       inactiveComment: request.body.inactiveComment !== undefined ? cleanText(request.body.inactiveComment) : (supplier.inactiveComment || ""),
       inactiveUntil: request.body.inactiveUntil !== undefined ? (cleanText(request.body.inactiveUntil) || null) : (supplier.inactiveUntil || null),
       inactiveUntilUnknown: request.body.inactiveUntilUnknown !== undefined ? Boolean(request.body.inactiveUntilUnknown) : Boolean(supplier.inactiveUntilUnknown),
@@ -4482,7 +4515,12 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
     }
 
     const saved = await writeWarehouse(warehouse);
-    await appendAudit(request, "supplier.update", { id: supplier.id, stopped: supplier.stopped, name: supplier.name });
+    await appendAudit(request, "supplier.update", {
+      id: supplier.id,
+      stopped: supplier.stopped,
+      name: supplier.name,
+      priceCurrency: supplier.priceCurrency,
+    });
     response.json({ ok: true, warehouse: saved });
     queueMarketplaceJob("no-supplier-automation", {}, { priority: 1 });
     queueMarketplaceJob("supplier-recovery-automation", {}, { priority: 2 });
@@ -4779,9 +4817,8 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     if (!baseLink.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
-    await assertPriceMasterLinkExists(baseLink, usdRate);
-
     const warehouse = await readWarehouse();
+    await assertPriceMasterLinkExists(baseLink, usdRate, warehouse.suppliers);
     const now = new Date().toISOString();
     const updatedIds = [];
 
@@ -4836,7 +4873,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     if (!link.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
-    await assertPriceMasterLinkExists(link, usdRate);
+    await assertPriceMasterLinkExists(link, usdRate, warehouse.suppliers);
     product.links = Array.isArray(product.links) ? product.links : [];
     const index = product.links.findIndex((item) => item.id === link.id);
     if (index >= 0) product.links[index] = link;
@@ -6449,6 +6486,8 @@ module.exports = {
   startServer,
   resolveMarkupCoefficient,
   resolveAvailabilityPolicy,
+  normalizeManagedSupplier,
+  resolvePriceMasterRowCurrency,
   normalizePriceMasterPrice,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,

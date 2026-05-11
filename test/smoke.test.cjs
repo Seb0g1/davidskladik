@@ -13,6 +13,8 @@ const {
   app,
   resolveMarkupCoefficient,
   resolveAvailabilityPolicy,
+  normalizeManagedSupplier,
+  resolvePriceMasterRowCurrency,
   normalizePriceMasterPrice,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
@@ -157,6 +159,23 @@ test("normalizePriceMasterPrice keeps dollar-like values in USD", () => {
   assert.equal(value.sourceCurrency, "USD");
   assert.equal(value.convertedFromRub, false);
   assert.equal(value.price, 9500);
+});
+
+test("normalizeManagedSupplier defaults PriceMaster currency to USD", () => {
+  const supplier = normalizeManagedSupplier({ name: "Supplier" });
+  assert.equal(supplier.priceCurrency, "USD");
+});
+
+test("resolvePriceMasterRowCurrency prefers supplier fixed currency", () => {
+  const currency = resolvePriceMasterRowCurrency(
+    { partnerId: "88", partnerName: "Supplier" },
+    { priceCurrency: "USD" },
+    {
+      byPartnerId: new Map([["88", { priceCurrency: "RUB" }]]),
+      byName: new Map(),
+    },
+  );
+  assert.equal(currency, "RUB");
 });
 
 test("pickWarehouseSupplier chooses the cheapest available calculated price", () => {

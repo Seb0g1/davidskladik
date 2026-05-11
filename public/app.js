@@ -131,6 +131,7 @@ const elements = {
   supplierNameInput: document.querySelector("#supplierNameInput"),
   supplierNoteInput: document.querySelector("#supplierNoteInput"),
   supplierStopReasonInput: document.querySelector("#supplierStopReasonInput"),
+  supplierPriceCurrencyInput: document.querySelector("#supplierPriceCurrencyInput"),
   supplierSaveButton: document.querySelector("#supplierSaveButton"),
   supplierCancelEditButton: document.querySelector("#supplierCancelEditButton"),
   supplierLoadButton: document.querySelector("#supplierLoadButton"),
@@ -1550,6 +1551,7 @@ function renderSuppliers() {
                 <span class="supplier-source-badge ${supplier.source === "pricemaster" ? "supplier-source-badge--pm" : "supplier-source-badge--local"}">
                   ${supplier.source === "pricemaster" ? "из PriceMaster" : "локальный"}
                 </span>
+                <span class="supplier-source-badge">${supplier.priceCurrency === "RUB" ? "PriceMaster: RUB" : "PriceMaster: USD"}</span>
               </h3>
               <p>${supplier.note ? escapeHtml(supplier.note) : "Без заметки"}</p>
               ${supplier.stopReason ? `<small class="stop-note">Причина стопа: ${escapeHtml(supplier.stopReason)}</small>` : ""}
@@ -1692,6 +1694,7 @@ function openSupplierInactiveModal(supplier) {
 function resetSupplierForm() {
   elements.supplierForm.reset();
   elements.supplierIdInput.value = "";
+  if (elements.supplierPriceCurrencyInput) elements.supplierPriceCurrencyInput.value = "USD";
   elements.supplierSaveButton.textContent = "Добавить поставщика";
   elements.supplierCancelEditButton?.classList.add("hidden");
 }
@@ -1702,6 +1705,7 @@ function startSupplierEdit(supplier) {
   elements.supplierNameInput.value = supplier.name || "";
   elements.supplierNoteInput.value = supplier.note || "";
   elements.supplierStopReasonInput.value = supplier.stopReason || "";
+  if (elements.supplierPriceCurrencyInput) elements.supplierPriceCurrencyInput.value = supplier.priceCurrency === "RUB" ? "RUB" : "USD";
   elements.supplierSaveButton.textContent = "Сохранить поставщика";
   elements.supplierCancelEditButton?.classList.remove("hidden");
   elements.supplierStatus.textContent = "Редактируйте поставщика. Причина стопа будет видна в карточках и логике наличия.";
@@ -2924,6 +2928,7 @@ elements.supplierForm.addEventListener("submit", async (event) => {
         name: elements.supplierNameInput.value.trim(),
         note: elements.supplierNoteInput.value.trim(),
         stopReason: elements.supplierStopReasonInput.value.trim(),
+        priceCurrency: elements.supplierPriceCurrencyInput?.value || "USD",
       }),
     });
     resetSupplierForm();
