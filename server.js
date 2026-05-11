@@ -11,6 +11,7 @@ const { Queue, Worker } = require("bullmq");
 const ExcelJS = require("exceljs");
 const { ProxyAgent: UndiciProxyAgent } = require("undici");
 const OpenAI = require("openai");
+const sharp = require("sharp");
 const { toFile } = require("openai/uploads");
 require("dotenv").config();
 
@@ -89,7 +90,14 @@ const telegramDailyReportTime = process.env.TELEGRAM_DAILY_REPORT_TIME || "22:00
 const telegramProxyUrl = cleanText(process.env.TELEGRAM_PROXY_URL);
 const telegramApiBaseUrl = cleanText(process.env.TELEGRAM_API_BASE_URL || "https://api.telegram.org");
 const openaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
-const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1536x1024");
+const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1024x1024");
+const ozonAiImageTargetPx = (() => {
+  const raw = process.env.OZON_AI_IMAGE_TARGET_PX;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return 1000;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 64) return 0;
+  return Math.min(4096, Math.floor(n));
+})();
 const openaiImageQuality = cleanText(process.env.OPENAI_IMAGE_QUALITY || "auto");
 const openaiImageFormat = cleanText(process.env.OPENAI_IMAGE_FORMAT || "png");
 const openaiBaseUrl = cleanText(process.env.OPENAI_BASE_URL);
@@ -2463,6 +2471,25 @@ function imageBase64FromOpenAiImageEditResult(result) {
   return "";
 }
 
+async function resizeOzonAiImageOutputBuffer(buffer, format) {
+  if (!ozonAiImageTargetPx) return buffer;
+  try {
+    let pipeline = sharp(buffer).rotate();
+    pipeline = pipeline.resize(ozonAiImageTargetPx, ozonAiImageTargetPx, { fit: "cover", position: "centre" });
+    const fmt = cleanText(format).toLowerCase();
+    if (fmt === "jpeg" || fmt === "jpg") return await pipeline.jpeg({ quality: 92, mozjpeg: true }).toBuffer();
+    if (fmt === "webp") return await pipeline.webp({ quality: 92 }).toBuffer();
+    return await pipeline.png({ compressionLevel: 9 }).toBuffer();
+  } catch (error) {
+    logger.warn("ozon ai image resize to target px failed, keeping original buffer", { detail: error?.message || String(error) });
+    return buffer;
+  }
+}
+
+function ozonAiImageStoredSizeLabel() {
+  return ozonAiImageTargetPx ? `${ozonAiImageTargetPx}x${ozonAiImageTargetPx}` : openaiImageSize;
+}
+
 function normalizeOpenAiImageError(error) {
   const detail = cleanText(error?.message || error?.error?.message || error?.detail);
   if (/billing hard limit|hard limit has been reached|quota|insufficient_quota/i.test(detail)) {
@@ -2627,11 +2654,14 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batch
     throw error;
   }
 
+  let outBuffer = Buffer.from(imageBase64, "base64");
+  outBuffer = await resizeOzonAiImageOutputBuffer(outBuffer, openaiImageFormat);
+
   await fs.mkdir(aiImageDir, { recursive: true });
   const extension = aiImageExtension(openaiImageFormat);
   const fileName = `${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}${extension}`;
   const filePath = path.join(aiImageDir, fileName);
-  await fs.writeFile(filePath, Buffer.from(imageBase64, "base64"));
+  await fs.writeFile(filePath, outBuffer);
 
   const relativeUrl = `/uploads/ai-images/${fileName}`;
   return normalizeAiImageDraft({
@@ -2644,7 +2674,7 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batch
     variantIndex,
     variantTotal,
     model: openaiImageModel,
-    size: openaiImageSize,
+    size: ozonAiImageStoredSizeLabel(),
     quality: openaiImageQuality,
     format: openaiImageFormat,
   });

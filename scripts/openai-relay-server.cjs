@@ -122,7 +122,7 @@ app.post("/v1/openai-image-edit", async (req, res) => {
       model,
       image: image.length === 1 ? image[0] : image,
       prompt,
-      size: String(body.size || "1536x1024"),
+      size: String(body.size || "1024x1024"),
       quality: String(body.quality || "auto"),
       output_format: String(body.output_format || "png"),
     };
