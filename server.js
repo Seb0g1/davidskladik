@@ -94,6 +94,8 @@ let telegramDailyReportTimer = null;
 let telegramDailyReportNextRunAt = null;
 let warehouseWritePromise = Promise.resolve();
 let warehouseMemoryCache = null;
+let priceMasterSnapshotMemoryCache = null;
+let priceMasterArticleIndexCache = null;
 const warehouseViewCache = new Map();
 const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
@@ -2305,11 +2307,14 @@ function likeSearch(value) {
 }
 
 async function readSnapshot() {
+  if (priceMasterSnapshotMemoryCache) return priceMasterSnapshotMemoryCache;
   try {
-    return JSON.parse(await fs.readFile(snapshotPath, "utf8"));
+    priceMasterSnapshotMemoryCache = JSON.parse(await fs.readFile(snapshotPath, "utf8"));
+    return priceMasterSnapshotMemoryCache;
   } catch (error) {
     if (error.code === "ENOENT") {
-      return { createdAt: null, items: {}, changes: [] };
+      priceMasterSnapshotMemoryCache = { createdAt: null, items: {}, changes: [] };
+      return priceMasterSnapshotMemoryCache;
     }
     throw error;
   }
@@ -2318,6 +2323,43 @@ async function readSnapshot() {
 async function writeSnapshot(snapshot) {
   await fs.mkdir(dataDir, { recursive: true });
   await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2), "utf8");
+  priceMasterSnapshotMemoryCache = snapshot;
+  priceMasterArticleIndexCache = null;
+}
+
+async function getPriceMasterSnapshotMeta() {
+  const snapshot = await readSnapshot();
+  const items = snapshot.items || {};
+  const changes = Array.isArray(snapshot.changes) ? snapshot.changes : [];
+  return {
+    syncId: snapshot.syncId || null,
+    updatedAt: snapshot.createdAt || null,
+    items: Object.keys(items).length,
+    changes: changes.length,
+  };
+}
+
+async function getPriceMasterArticleIndex() {
+  const snapshot = await readSnapshot();
+  if (priceMasterArticleIndexCache?.syncId === snapshot.syncId && priceMasterArticleIndexCache?.createdAt === snapshot.createdAt) {
+    return priceMasterArticleIndexCache.index;
+  }
+  const index = new Map();
+  for (const row of Object.values(snapshot.items || {})) {
+    const article = cleanText(row.article);
+    if (!article) continue;
+    if (!index.has(article)) index.set(article, []);
+    index.get(article).push(row);
+  }
+  for (const rows of index.values()) {
+    rows.sort((a, b) => new Date(b.docDate || 0) - new Date(a.docDate || 0) || Number(b.rowId || 0) - Number(a.rowId || 0));
+  }
+  priceMasterArticleIndexCache = {
+    syncId: snapshot.syncId || null,
+    createdAt: snapshot.createdAt || null,
+    index,
+  };
+  return index;
 }
 
 async function readPriceRetryQueue() {
@@ -2745,39 +2787,7 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
   if (!normalizedLinks.length) return new Map();
 
   const stoppedMap = stoppedSupplierMap(managedSuppliers);
-  const articles = Array.from(new Set(normalizedLinks.map((link) => link.article)));
-  const rows = [];
-  for (const chunk of chunkArray(articles, 300)) {
-    const placeholders = chunk.map(() => "?").join(",");
-    const [chunkRows] = await pool.query(
-      `
-      SELECT
-        r.NativeID AS article,
-        r.NativeName AS name,
-        r.NativePrice AS price,
-        r.Active AS active,
-        r.Ignored AS ignored,
-        r.RowID AS rowId,
-        d.DocDate AS docDate,
-        d.PartnerID AS partnerId,
-        p.PartnerName AS partnerName
-      FROM OfferRows r
-      JOIN OfferDocs d ON d.DocID = r.DocID
-      LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
-      WHERE r.NativeID IN (${placeholders}) AND r.Ignored = 0
-      ORDER BY r.NativeID, d.DocDate DESC, r.RowID DESC
-      `,
-      chunk,
-    );
-    rows.push(...chunkRows);
-  }
-
-  const rowsByArticle = new Map();
-  for (const row of rows) {
-    const key = cleanText(row.article);
-    if (!rowsByArticle.has(key)) rowsByArticle.set(key, []);
-    rowsByArticle.get(key).push(row);
-  }
+  const rowsByArticle = await getPriceMasterArticleIndex();
 
   const map = new Map();
   for (const link of normalizedLinks) {
@@ -3174,6 +3184,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     usdRate: rate,
     sourceError,
     supplierSync,
+    priceMaster: await getPriceMasterSnapshotMeta(),
     targets: marketplaceTargets(),
     suppliers: warehouse.suppliers,
     products,
@@ -4218,6 +4229,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
       ozonInactive: data.ozonInactive || 0,
       ozonOutOfStock: data.ozonOutOfStock || 0,
       usdRate: data.usdRate,
+      priceMaster: data.priceMaster || await getPriceMasterSnapshotMeta(),
       sourceError: data.sourceError || "",
       noSupplierAlerts: Array.isArray(data.noSupplierAlerts) ? data.noSupplierAlerts.slice(0, 10) : [],
       page,
@@ -4306,6 +4318,7 @@ app.get("/api/live-status", async (_request, response, next) => {
         products: Array.isArray(warehouse.products) ? warehouse.products.length : 0,
         suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.length : 0,
       },
+      priceMaster: await getPriceMasterSnapshotMeta(),
       dailySync: {
         updatedAt: dailySync.updatedAt || dailySync.lastRunAt || null,
         status: dailySync.status || "idle",

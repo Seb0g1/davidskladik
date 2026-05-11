@@ -35,6 +35,7 @@ const state = {
   warehouseLiveRefreshRunning: false,
   warehouseLiveRefreshQueued: false,
   warehouseLastUpdatedAt: "",
+  priceMasterLastUpdatedAt: "",
   dailySyncLastUpdatedAt: "",
   warehouseScrollTop: 0,
   warehouseLastGroupOrder: [],
@@ -1032,6 +1033,7 @@ function renderWarehouse(data) {
   const mode = data.mode || "replace";
   const products = Array.isArray(data.products) ? data.products : [];
   if (data.updatedAt) state.warehouseLastUpdatedAt = String(data.updatedAt);
+  if (data.priceMaster?.updatedAt) state.priceMasterLastUpdatedAt = String(data.priceMaster.updatedAt);
   if (mode === "append") {
     const byId = new Map(state.warehouse.map((product) => [product.id, product]));
     products.forEach((product) => byId.set(product.id, product));
@@ -1065,6 +1067,9 @@ function renderWarehouse(data) {
     elements.warehouseStatus.textContent = "Склад загружен. Стоп-поставщики исключаются из выбора автоматически.";
     elements.warehouseStatus.classList.add("is-ok");
     elements.warehouseStatus.classList.remove("is-warn");
+  }
+  if (data.priceMaster?.updatedAt && !data.sourceError) {
+    elements.warehouseStatus.textContent += ` PriceMaster обновлен: ${formatDate(data.priceMaster.updatedAt)}.`;
   }
   if (Array.isArray(data.noSupplierAlerts) && data.noSupplierAlerts.length) {
     const preview = data.noSupplierAlerts.slice(0, 4).map((item) => item.offerId || item.name || item.id).join(", ");
@@ -2053,10 +2058,12 @@ function warehouseLiveRefreshShouldWait() {
 
 async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
   const warehouseUpdatedAt = String(status?.warehouse?.updatedAt || "");
+  const priceMasterUpdatedAt = String(status?.priceMaster?.updatedAt || "");
   const dailyUpdatedAt = String(status?.dailySync?.updatedAt || status?.dailySync?.lastRunAt || "");
   const warehouseChanged = warehouseUpdatedAt && warehouseUpdatedAt !== state.warehouseLastUpdatedAt;
+  const priceMasterChanged = priceMasterUpdatedAt && priceMasterUpdatedAt !== state.priceMasterLastUpdatedAt;
   const dailyChanged = dailyUpdatedAt && dailyUpdatedAt !== state.dailySyncLastUpdatedAt;
-  if (!force && !warehouseChanged && !dailyChanged) return;
+  if (!force && !warehouseChanged && !priceMasterChanged && !dailyChanged) return;
   if (warehouseLiveRefreshShouldWait()) {
     state.warehouseLiveRefreshQueued = true;
     return;
