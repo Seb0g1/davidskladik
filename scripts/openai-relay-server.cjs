@@ -2,7 +2,8 @@
  * Минимальный relay для OpenAI Images API: запускайте на VPS в регионе, где OpenAI не блокирует API.
  *
  * На relay-хосте (EU/US и т.п.):
- *   OPENAI_API_KEY=sk-...
+ *   OPENAI_API_KEY=sk-...   (для api.aitunnel.ru подставьте sk-aitunnel-... — имя переменной то же)
+ *   OPENAI_BASE_URL=https://api.aitunnel.ru/v1   (опционально; по умолчанию официальный OpenAI)
  *   OPENAI_RELAY_SECRET=длинный-случайный-секрет
  *   RELAY_PORT=8787
  *   node scripts/openai-relay-server.cjs
@@ -21,12 +22,25 @@ const OpenAI = require("openai");
 const { toFile } = require("openai/uploads");
 
 const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || "").trim();
+const OPENAI_BASE_URL = String(process.env.OPENAI_BASE_URL || "").trim();
 const RELAY_SECRET = String(process.env.OPENAI_RELAY_SECRET || "").trim();
 const PORT = Number(process.env.RELAY_PORT || 8787);
 
 function supportsInputFidelity(model) {
   const normalized = String(model || "").trim().toLowerCase();
-  return normalized && normalized !== "gpt-image-2";
+  if (!normalized || normalized === "gpt-image-2") return false;
+  return normalized.startsWith("gpt-image-1");
+}
+
+function imageBase64FromEditResult(result) {
+  const first = result?.data?.[0];
+  if (!first) return "";
+  if (typeof first.b64_json === "string" && first.b64_json.length) return first.b64_json;
+  const url = typeof first.url === "string" ? first.url.trim() : "";
+  if (!url) return "";
+  const dataMatch = /^data:[^;]+;base64,([\s\S]+)$/i.exec(url);
+  if (dataMatch) return dataMatch[1].replace(/\s+/g, "");
+  return "";
 }
 
 function normalizeImageModel(model) {
@@ -100,7 +114,9 @@ app.post("/v1/openai-image-edit", async (req, res) => {
       const refFileName = String(ref.fileName || `reference-${index + 1}.${refMime.includes("webp") ? "webp" : refMime.includes("jpg") || refMime.includes("jpeg") ? "jpg" : "png"}`);
       image.push(await toFile(refBuffer, refFileName, { type: refMime || "image/png" }));
     }
-    const client = new OpenAI({ apiKey: OPENAI_API_KEY });
+    const clientOptions = { apiKey: OPENAI_API_KEY };
+    if (OPENAI_BASE_URL) clientOptions.baseURL = OPENAI_BASE_URL;
+    const client = new OpenAI(clientOptions);
     const model = normalizeImageModel(body.model || "gpt-image-2");
     const editRequest = {
       model,
@@ -113,11 +129,15 @@ app.post("/v1/openai-image-edit", async (req, res) => {
     if (supportsInputFidelity(model) && body.input_fidelity) {
       editRequest.input_fidelity = body.input_fidelity === "low" ? "low" : "high";
     }
+    if (body.image_config != null && body.image_config !== "") {
+      editRequest.image_config =
+        typeof body.image_config === "string" ? body.image_config : JSON.stringify(body.image_config);
+    }
     const result = await client.images.edit(editRequest);
 
-    const b64 = result?.data?.[0]?.b64_json;
+    const b64 = imageBase64FromEditResult(result);
     if (!b64) {
-      return res.status(502).json({ error: "Пустой ответ OpenAI.", code: "relay_openai_empty" });
+      return res.status(502).json({ error: "Пустой ответ провайдера (нет b64_json / data URL в url).", code: "relay_openai_empty" });
     }
     return res.json({ ok: true, b64_json: b64 });
   } catch (error) {

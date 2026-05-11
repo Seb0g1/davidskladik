@@ -92,12 +92,25 @@ const openaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_
 const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1536x1024");
 const openaiImageQuality = cleanText(process.env.OPENAI_IMAGE_QUALITY || "auto");
 const openaiImageFormat = cleanText(process.env.OPENAI_IMAGE_FORMAT || "png");
+const openaiBaseUrl = cleanText(process.env.OPENAI_BASE_URL);
 const openaiRelayUrl = cleanText(process.env.OPENAI_RELAY_URL);
 const openaiRelaySecret = cleanText(process.env.OPENAI_RELAY_SECRET);
 const openaiRelayTimeoutMs = Math.max(30_000, Number(process.env.OPENAI_RELAY_TIMEOUT_MS || 180_000) || 180_000);
+let openaiImageConfig = null;
+{
+  const raw = cleanText(process.env.OPENAI_IMAGE_CONFIG);
+  if (raw) {
+    try {
+      openaiImageConfig = JSON.parse(raw);
+    } catch (_e) {
+      logger.warn("OPENAI_IMAGE_CONFIG is not valid JSON, ignored", { detail: raw.slice(0, 120) });
+    }
+  }
+}
 function openAiImageSupportsInputFidelity(model = openaiImageModel) {
   const normalized = cleanText(model).toLowerCase();
-  return normalized && normalized !== "gpt-image-2";
+  if (!normalized || normalized === "gpt-image-2") return false;
+  return normalized.startsWith("gpt-image-1");
 }
 function normalizeOpenAiImageModelName(model) {
   const normalized = cleanText(model);
@@ -2434,7 +2447,20 @@ function getOpenAiClient() {
     error.code = "openai_api_key_missing";
     throw error;
   }
-  return new OpenAI({ apiKey });
+  const options = { apiKey };
+  if (openaiBaseUrl) options.baseURL = openaiBaseUrl;
+  return new OpenAI(options);
+}
+
+function imageBase64FromOpenAiImageEditResult(result) {
+  const first = result?.data?.[0];
+  if (!first) return "";
+  if (typeof first.b64_json === "string" && first.b64_json.length) return first.b64_json;
+  const url = typeof first.url === "string" ? first.url.trim() : "";
+  if (!url) return "";
+  const dataMatch = /^data:[^;]+;base64,([\s\S]+)$/i.exec(url);
+  if (dataMatch) return dataMatch[1].replace(/\s+/g, "");
+  return "";
 }
 
 function normalizeOpenAiImageError(error) {
@@ -2481,6 +2507,7 @@ async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType, 
     };
     if (referenceImages.length) body.referenceImages = referenceImages;
     if (openAiImageSupportsInputFidelity(openaiImageModel)) body.input_fidelity = "high";
+    if (openaiImageConfig && typeof openaiImageConfig === "object") body.image_config = openaiImageConfig;
     const response = await fetch(openaiRelayUrl, {
       method: "POST",
       headers: {
@@ -2584,8 +2611,11 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batch
         output_format: openaiImageFormat,
       };
       if (openAiImageSupportsInputFidelity(openaiImageModel)) editRequest.input_fidelity = "high";
+      if (openaiImageConfig && typeof openaiImageConfig === "object") {
+        editRequest.image_config = JSON.stringify(openaiImageConfig);
+      }
       const result = await client.images.edit(editRequest);
-      imageBase64 = result?.data?.[0]?.b64_json;
+      imageBase64 = imageBase64FromOpenAiImageEditResult(result);
     }
   } catch (error) {
     throw normalizeOpenAiImageError(error);
