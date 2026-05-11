@@ -87,13 +87,22 @@ const telegramDailyReportEnabled = process.env.TELEGRAM_DAILY_REPORT_ENABLED !==
 const telegramDailyReportTime = process.env.TELEGRAM_DAILY_REPORT_TIME || "22:00";
 const telegramProxyUrl = cleanText(process.env.TELEGRAM_PROXY_URL);
 const telegramApiBaseUrl = cleanText(process.env.TELEGRAM_API_BASE_URL || "https://api.telegram.org");
-const openaiImageModel = cleanText(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
+const openaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
 const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1536x1024");
 const openaiImageQuality = cleanText(process.env.OPENAI_IMAGE_QUALITY || "auto");
 const openaiImageFormat = cleanText(process.env.OPENAI_IMAGE_FORMAT || "png");
 const openaiRelayUrl = cleanText(process.env.OPENAI_RELAY_URL);
 const openaiRelaySecret = cleanText(process.env.OPENAI_RELAY_SECRET);
 const openaiRelayTimeoutMs = Math.max(30_000, Number(process.env.OPENAI_RELAY_TIMEOUT_MS || 180_000) || 180_000);
+function openAiImageSupportsInputFidelity(model = openaiImageModel) {
+  const normalized = cleanText(model).toLowerCase();
+  return normalized && normalized !== "gpt-image-2";
+}
+function normalizeOpenAiImageModelName(model) {
+  const normalized = cleanText(model);
+  if (normalized.toLowerCase() === "gpt-image-1.5-high-fidelity") return "gpt-image-1.5";
+  return normalized;
+}
 const ozonAiImageDefaultPrompt = cleanText(process.env.OZON_AI_IMAGE_PROMPT)
   || 'Сгенерируй продающее изображение для карточки товара на Ozon. Используй название товара: "{productName}". Сохрани узнаваемость товара с исходного фото, улучшив фон, свет, композицию и визуальную привлекательность для маркетплейса. Не добавляй логотипы, водяные знаки, недостоверные характеристики или лишний текст.';
 
@@ -2413,26 +2422,38 @@ function getOpenAiClient() {
   return new OpenAI({ apiKey });
 }
 
+function normalizeOpenAiImageError(error) {
+  const detail = cleanText(error?.message || error?.error?.message || error?.detail);
+  if (/billing hard limit|hard limit has been reached|quota|insufficient_quota/i.test(detail)) {
+    const billingError = new Error("Лимит биллинга OpenAI исчерпан на relay/API-ключе. Пополните баланс или увеличьте hard limit в OpenAI Billing, затем повторите генерацию.");
+    billingError.statusCode = 402;
+    billingError.code = "openai_billing_limit";
+    return billingError;
+  }
+  return error;
+}
+
 async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), openaiRelayTimeoutMs);
   try {
+    const body = {
+      prompt,
+      sourceImageBase64: sourceBuffer.toString("base64"),
+      sourceMimeType: cleanText(sourceMimeType) || "image/png",
+      model: openaiImageModel,
+      size: openaiImageSize,
+      quality: openaiImageQuality,
+      output_format: openaiImageFormat,
+    };
+    if (openAiImageSupportsInputFidelity(openaiImageModel)) body.input_fidelity = "high";
     const response = await fetch(openaiRelayUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${openaiRelaySecret}`,
       },
-      body: JSON.stringify({
-        prompt,
-        sourceImageBase64: sourceBuffer.toString("base64"),
-        sourceMimeType: cleanText(sourceMimeType) || "image/png",
-        model: openaiImageModel,
-        size: openaiImageSize,
-        quality: openaiImageQuality,
-        output_format: openaiImageFormat,
-        input_fidelity: "high",
-      }),
+      body: JSON.stringify(body),
       signal: controller.signal,
     });
     const payload = await response.json().catch(() => ({}));
@@ -2441,7 +2462,7 @@ async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType }
       const error = new Error(message);
       error.statusCode = Number.isFinite(Number(payload.statusCode)) ? Number(payload.statusCode) : (response.status >= 400 && response.status < 600 ? response.status : 502);
       error.code = cleanText(payload.code) || "openai_relay_error";
-      throw error;
+      throw normalizeOpenAiImageError(error);
     }
     const imageBase64 = payload.b64_json || payload.imageBase64;
     if (!imageBase64) {
@@ -2509,21 +2530,26 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl }, req
 
   const generatedPrompt = buildOzonAiImagePrompt(product, prompt);
   let imageBase64;
-  if (isOpenAiRelayConfigured()) {
-    imageBase64 = await fetchOpenAiImageViaRelay({ prompt: generatedPrompt, sourceBuffer, sourceMimeType });
-  } else {
-    const client = getOpenAiClient();
-    const image = await toFile(sourceBuffer, sourceFileName, { type: sourceMimeType });
-    const result = await client.images.edit({
-      model: openaiImageModel,
-      image,
-      prompt: generatedPrompt,
-      size: openaiImageSize,
-      quality: openaiImageQuality,
-      output_format: openaiImageFormat,
-      input_fidelity: "high",
-    });
-    imageBase64 = result?.data?.[0]?.b64_json;
+  try {
+    if (isOpenAiRelayConfigured()) {
+      imageBase64 = await fetchOpenAiImageViaRelay({ prompt: generatedPrompt, sourceBuffer, sourceMimeType });
+    } else {
+      const client = getOpenAiClient();
+      const image = await toFile(sourceBuffer, sourceFileName, { type: sourceMimeType });
+      const editRequest = {
+        model: openaiImageModel,
+        image,
+        prompt: generatedPrompt,
+        size: openaiImageSize,
+        quality: openaiImageQuality,
+        output_format: openaiImageFormat,
+      };
+      if (openAiImageSupportsInputFidelity(openaiImageModel)) editRequest.input_fidelity = "high";
+      const result = await client.images.edit(editRequest);
+      imageBase64 = result?.data?.[0]?.b64_json;
+    }
+  } catch (error) {
+    throw normalizeOpenAiImageError(error);
   }
   if (!imageBase64) {
     const error = new Error("OpenAI не вернул изображение. Попробуйте повторить генерацию.");

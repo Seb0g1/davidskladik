@@ -1,6 +1,24 @@
 const content = document.querySelector("#productPageContent");
+let currentVariants = [];
+let aiImageProductId = null;
+let aiImageBusy = false;
 const title = document.querySelector("#productPageTitle");
 const meta = document.querySelector("#productPageMeta");
+const aiElements = {
+  modal: document.querySelector("#aiImageModal"),
+  closeButton: document.querySelector("#aiImageCloseButton"),
+  productName: document.querySelector("#aiImageProductName"),
+  productMeta: document.querySelector("#aiImageProductMeta"),
+  currentPreview: document.querySelector("#aiImageCurrentPreview"),
+  preview: document.querySelector("#aiImagePreview"),
+  sourceInput: document.querySelector("#aiImageSourceInput"),
+  promptInput: document.querySelector("#aiImagePromptInput"),
+  status: document.querySelector("#aiImageStatus"),
+  generateButton: document.querySelector("#aiImageGenerateButton"),
+  approveButton: document.querySelector("#aiImageApproveButton"),
+  rejectButton: document.querySelector("#aiImageRejectButton"),
+  cancelButton: document.querySelector("#aiImageCancelButton"),
+};
 const SITE_DOC_TITLE = "Magic Vibes - Склад";
 
 function setDocTitle(pageTitle) {
@@ -69,8 +87,8 @@ function groupKey(product) {
   return product.offerId ? `offer:${String(product.offerId).toLowerCase()}` : `name:${String(product.name || "").toLowerCase()}`;
 }
 
-async function api(url) {
-  const response = await fetch(url);
+async function api(url, options = {}) {
+  const response = await fetch(url, options);
   if (response.status === 401) {
     window.location.href = "/login.html";
     throw new Error("Требуется вход");
@@ -80,14 +98,179 @@ async function api(url) {
   return data;
 }
 
+function firstValueFromImageList(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).find(Boolean) || "";
+  return String(value || "")
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .find(Boolean) || "";
+}
+
+function latestAiImageDraft(product) {
+  const drafts = Array.isArray(product?.aiImages) ? product.aiImages : [];
+  return drafts[drafts.length - 1] || null;
+}
+
+function aiImageStatusLabel(status) {
+  if (status === "approved") return "принято";
+  if (status === "rejected") return "отменено";
+  return "ждет проверки";
+}
+
+function aiImageSourceForProduct(product) {
+  const ozon = product?.ozon || {};
+  return firstValueFromImageList(ozon.primaryImage)
+    || firstValueFromImageList(ozon.images)
+    || firstValueFromImageList(product?.imageUrl)
+    || productImage(product)
+    || "";
+}
+
+function defaultAiImagePrompt(product) {
+  const name = product?.name || product?.offerId || "товар";
+  return [
+    `Сделай продающее фото для карточки Ozon товара «${name}».`,
+    "Сохрани реальный товар с исходного изображения, улучши свет, фон и композицию.",
+    "Фон чистый, аккуратный, маркетплейсный; без лишнего текста, логотипов, водяных знаков и недостоверных характеристик.",
+    "Товар должен выглядеть натурально, премиально и подходить для главного фото.",
+  ].join(" ");
+}
+
+function selectedAiImageProduct() {
+  return currentVariants.find((item) => String(item.id) === String(aiImageProductId)) || null;
+}
+
+function mergeCurrentProduct(product) {
+  if (!product?.id) return;
+  const index = currentVariants.findIndex((item) => item.id === product.id);
+  if (index >= 0) currentVariants[index] = product;
+  else currentVariants.push(product);
+}
+
+function setAiImageBusy(isBusy, text = "") {
+  aiImageBusy = Boolean(isBusy);
+  [aiElements.generateButton, aiElements.approveButton, aiElements.rejectButton, aiElements.cancelButton, aiElements.closeButton].forEach((button) => {
+    if (button) button.disabled = aiImageBusy;
+  });
+  if (aiElements.status && text) aiElements.status.textContent = text;
+}
+
+function renderAiImageModal(product = selectedAiImageProduct()) {
+  if (!aiElements.modal || !product) return;
+  const draft = latestAiImageDraft(product);
+  const sourceImageUrl = aiElements.sourceInput?.value || aiImageSourceForProduct(product);
+  const currentImage = draft?.resultUrl || sourceImageUrl || productImage(product);
+  const canReview = draft?.status === "pending" && !aiImageBusy;
+  if (aiElements.productName) aiElements.productName.textContent = product.name || product.offerId || "Товар";
+  if (aiElements.productMeta) aiElements.productMeta.textContent = `${marketLabel(product)} · ${product.offerId || product.productId || product.id || ""}`;
+  if (aiElements.sourceInput && !aiElements.sourceInput.value) aiElements.sourceInput.value = sourceImageUrl || "";
+  if (aiElements.promptInput && !aiElements.promptInput.value) aiElements.promptInput.value = defaultAiImagePrompt(product);
+  if (aiElements.currentPreview) {
+    aiElements.currentPreview.innerHTML = sourceImageUrl
+      ? `<img src="${escapeHtml(sourceImageUrl)}" alt="Исходное фото" loading="lazy" />`
+      : `<div class="product-image-empty">Добавьте URL исходного фото</div>`;
+  }
+  if (aiElements.preview) {
+    aiElements.preview.innerHTML = currentImage
+      ? `<img src="${escapeHtml(currentImage)}" alt="AI-фото Ozon" loading="lazy" />`
+      : `<div class="product-image-empty">AI-превью появится здесь</div>`;
+  }
+  if (aiElements.generateButton) aiElements.generateButton.textContent = draft ? "Переделать" : "Сгенерировать";
+  if (aiElements.approveButton) aiElements.approveButton.disabled = !canReview;
+  if (aiElements.rejectButton) aiElements.rejectButton.disabled = !canReview;
+  if (aiElements.generateButton) aiElements.generateButton.disabled = aiImageBusy;
+  if (aiElements.status && !aiImageBusy) {
+    aiElements.status.textContent = draft
+      ? `Последний черновик: ${aiImageStatusLabel(draft.status)}.`
+      : "Черновика пока нет. Проверьте исходное фото и нажмите «Сгенерировать».";
+  }
+}
+
+async function openAiImageModal(productId) {
+  if (!productId || !aiElements.modal) return;
+  aiImageProductId = productId;
+  if (aiElements.sourceInput) aiElements.sourceInput.value = "";
+  if (aiElements.promptInput) aiElements.promptInput.value = "";
+  aiElements.modal.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  renderAiImageModal();
+  setAiImageBusy(true, "Загружаю данные карточки...");
+  try {
+    const result = await api(`/api/warehouse/products/${encodeURIComponent(productId)}`);
+    if (result.product) mergeCurrentProduct(result.product);
+    renderAiImageModal(result.product || selectedAiImageProduct());
+  } catch (error) {
+    if (aiElements.status) aiElements.status.textContent = error.message;
+  } finally {
+    setAiImageBusy(false);
+    renderAiImageModal();
+  }
+}
+
+function closeAiImageModal() {
+  aiElements.modal?.classList.add("hidden");
+  document.body.classList.remove("modal-open");
+  aiImageProductId = null;
+  aiImageBusy = false;
+}
+
+async function generateAiImage() {
+  const product = selectedAiImageProduct();
+  if (!product?.id) return;
+  let finalStatus = "";
+  setAiImageBusy(true, "Генерирую AI-фото через relay...");
+  try {
+    const result = await api(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceImageUrl: String(aiElements.sourceInput?.value || aiImageSourceForProduct(product) || "").trim(),
+        prompt: String(aiElements.promptInput?.value || "").trim(),
+      }),
+    });
+    if (result.product) mergeCurrentProduct(result.product);
+    renderProductPage(currentVariants);
+    renderAiImageModal(result.product || selectedAiImageProduct());
+    finalStatus = "AI-фото готово. Можно одобрить, отменить или переделать.";
+  } catch (error) {
+    finalStatus = error.message;
+  } finally {
+    setAiImageBusy(false);
+    renderAiImageModal();
+    if (aiElements.status && finalStatus) aiElements.status.textContent = finalStatus;
+  }
+}
+
+async function reviewAiImage(action) {
+  const product = selectedAiImageProduct();
+  const draft = latestAiImageDraft(product);
+  if (!product?.id || !draft?.id) return;
+  let finalStatus = "";
+  setAiImageBusy(true, action === "approve" ? "Одобряю фото..." : "Отменяю черновик...");
+  try {
+    const result = await api(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/${encodeURIComponent(draft.id)}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (result.product) mergeCurrentProduct(result.product);
+    renderProductPage(currentVariants);
+    renderAiImageModal(result.product || selectedAiImageProduct());
+    finalStatus = action === "approve" ? "Фото одобрено и поставлено главным в карточке." : "Черновик отменен.";
+  } catch (error) {
+    finalStatus = error.message;
+  } finally {
+    setAiImageBusy(false);
+    renderAiImageModal();
+    if (aiElements.status && finalStatus) aiElements.status.textContent = finalStatus;
+  }
+}
+
 function renderProductPage(variants) {
   const primary = variants[0];
   const image = productImage(primary);
   const ozonProduct = variants.find((item) => item.marketplace === "ozon");
   const productTitle = primary.name || primary.offerId || "Карточка товара";
-  const aiOzonHref = ozonProduct
-    ? `/ozon-product.html?productId=${encodeURIComponent(ozonProduct.id)}&offerId=${encodeURIComponent(ozonProduct.offerId || primary.offerId || "")}&name=${encodeURIComponent(productTitle)}&ai=1`
-    : "";
   const suppliers = variants.flatMap((product) => product.suppliers || []);
   const links = variants.flatMap((product) => product.links || []);
   const history = variants
@@ -102,10 +285,10 @@ function renderProductPage(variants) {
       <div class="detail-media-wrap">
         <div class="detail-media">${image ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(primary.name)}" />` : `<div class="product-image-empty">Нет фото</div>`}</div>
         ${
-          aiOzonHref
+          ozonProduct
             ? `<div class="detail-media-actions">
-                <a class="secondary-button compact-button" href="${escapeHtml(aiOzonHref)}">AI-фото Ozon</a>
-                <small>Генерация продающего фото по текущему изображению и названию; черновик проверяется перед отправкой в Ozon.</small>
+                <button class="secondary-button compact-button ai-photo-open" type="button" data-product-id="${escapeHtml(ozonProduct.id)}">AI-фото Ozon</button>
+                <small>Предпросмотр откроется здесь: можно одобрить, отменить или переделать без перехода на другую страницу.</small>
               </div>`
             : ""
         }
@@ -163,6 +346,7 @@ async function loadProductPage(refreshPrices) {
     setDocTitle("Товар не найден");
     return { data, variants: [] };
   }
+  currentVariants = variants;
   renderProductPage(variants);
   return { data, variants };
 }
@@ -189,6 +373,25 @@ document.getElementById("productRefreshPrices")?.addEventListener("click", async
   } finally {
     if (btn) btn.disabled = false;
   }
+});
+
+content.addEventListener("click", async (event) => {
+  const button = event.target.closest(".ai-photo-open");
+  if (!button) return;
+  await openAiImageModal(button.dataset.productId);
+});
+
+aiElements.closeButton?.addEventListener("click", closeAiImageModal);
+aiElements.cancelButton?.addEventListener("click", closeAiImageModal);
+aiElements.modal?.addEventListener("click", (event) => {
+  if (event.target === aiElements.modal && !aiImageBusy) closeAiImageModal();
+});
+aiElements.generateButton?.addEventListener("click", generateAiImage);
+aiElements.approveButton?.addEventListener("click", () => reviewAiImage("approve"));
+aiElements.rejectButton?.addEventListener("click", () => reviewAiImage("reject"));
+aiElements.sourceInput?.addEventListener("input", () => renderAiImageModal());
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !aiElements.modal?.classList.contains("hidden") && !aiImageBusy) closeAiImageModal();
 });
 
 main().catch((error) => {

@@ -47,6 +47,9 @@ const state = {
   retryQueueMarketplace: "all",
   retryQueueSearch: "",
   retryQueueLastRun: null,
+  aiImageProductId: null,
+  aiImageDraft: null,
+  aiImageBusy: false,
 };
 
 const elements = {
@@ -165,6 +168,19 @@ const elements = {
   confirmText: document.querySelector("#confirmText"),
   confirmCancel: document.querySelector("#confirmCancel"),
   confirmOk: document.querySelector("#confirmOk"),
+  aiImageModal: document.querySelector("#aiImageModal"),
+  aiImageCloseButton: document.querySelector("#aiImageCloseButton"),
+  aiImageProductName: document.querySelector("#aiImageProductName"),
+  aiImageProductMeta: document.querySelector("#aiImageProductMeta"),
+  aiImageCurrentPreview: document.querySelector("#aiImageCurrentPreview"),
+  aiImagePreview: document.querySelector("#aiImagePreview"),
+  aiImageSourceInput: document.querySelector("#aiImageSourceInput"),
+  aiImagePromptInput: document.querySelector("#aiImagePromptInput"),
+  aiImageStatus: document.querySelector("#aiImageStatus"),
+  aiImageGenerateButton: document.querySelector("#aiImageGenerateButton"),
+  aiImageApproveButton: document.querySelector("#aiImageApproveButton"),
+  aiImageRejectButton: document.querySelector("#aiImageRejectButton"),
+  aiImageCancelButton: document.querySelector("#aiImageCancelButton"),
 };
 
 const WAREHOUSE_URL_PAGE_MAX = 500;
@@ -1221,6 +1237,195 @@ function renderDetailForProductIds(productIds = []) {
   return true;
 }
 
+function latestAiImageDraft(product) {
+  const drafts = Array.isArray(product?.aiImages) ? product.aiImages : [];
+  return drafts[drafts.length - 1] || null;
+}
+
+function aiImageStatusLabel(status) {
+  if (status === "approved") return "принято";
+  if (status === "rejected") return "отменено";
+  return "ждет проверки";
+}
+
+function aiImageSourceForProduct(product) {
+  const ozon = product?.ozon || {};
+  return firstValueFromImageList(ozon.primaryImage)
+    || firstValueFromImageList(ozon.images)
+    || firstValueFromImageList(product?.imageUrl)
+    || productImage(product)
+    || "";
+}
+
+function defaultAiImagePrompt(product) {
+  const name = displayProductName(product);
+  return [
+    `Сделай продающее фото для карточки Ozon товара «${name}».`,
+    "Сохрани реальный товар с исходного изображения, улучши свет, фон и композицию.",
+    "Фон чистый, аккуратный, маркетплейсный; без лишнего текста, логотипов, водяных знаков и недостоверных характеристик.",
+    "Товар должен выглядеть натурально, премиально и подходить для главного фото.",
+  ].join(" ");
+}
+
+function firstValueFromImageList(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).find(Boolean) || "";
+  return String(value || "")
+    .split(/\r?\n|,/)
+    .map((item) => item.trim())
+    .find(Boolean) || "";
+}
+
+function selectedAiImageProduct() {
+  if (!state.aiImageProductId) return null;
+  return (state.warehouse || []).find((item) => String(item.id) === String(state.aiImageProductId)) || null;
+}
+
+function setAiImageModalBusy(isBusy, text = "") {
+  state.aiImageBusy = Boolean(isBusy);
+  [
+    elements.aiImageGenerateButton,
+    elements.aiImageApproveButton,
+    elements.aiImageRejectButton,
+    elements.aiImageCancelButton,
+    elements.aiImageCloseButton,
+  ].forEach((button) => {
+    if (button) button.disabled = state.aiImageBusy;
+  });
+  if (elements.aiImageStatus && text) elements.aiImageStatus.textContent = text;
+}
+
+function renderAiImageModal(product = selectedAiImageProduct()) {
+  if (!elements.aiImageModal || !product) return;
+  const draft = latestAiImageDraft(product);
+  state.aiImageDraft = draft;
+  const sourceImageUrl = elements.aiImageSourceInput?.value || aiImageSourceForProduct(product);
+  const currentImage = draft?.resultUrl || sourceImageUrl || productImage(product);
+  const canReview = draft?.status === "pending" && !state.aiImageBusy;
+
+  if (elements.aiImageProductName) elements.aiImageProductName.textContent = displayProductName(product);
+  if (elements.aiImageProductMeta) {
+    elements.aiImageProductMeta.textContent = `${marketLabel(product)} · ${product.offerId || product.productId || product.id || ""}`;
+  }
+  if (elements.aiImageSourceInput && !elements.aiImageSourceInput.value) elements.aiImageSourceInput.value = sourceImageUrl || "";
+  if (elements.aiImagePromptInput && !elements.aiImagePromptInput.value) elements.aiImagePromptInput.value = defaultAiImagePrompt(product);
+  if (elements.aiImageCurrentPreview) {
+    elements.aiImageCurrentPreview.innerHTML = sourceImageUrl
+      ? `<img src="${escapeHtml(sourceImageUrl)}" alt="Исходное фото" loading="lazy" />`
+      : `<div class="product-image-empty">Добавьте URL исходного фото</div>`;
+  }
+  if (elements.aiImagePreview) {
+    elements.aiImagePreview.innerHTML = currentImage
+      ? `<img src="${escapeHtml(currentImage)}" alt="AI-фото Ozon" loading="lazy" />`
+      : `<div class="product-image-empty">AI-превью появится здесь</div>`;
+  }
+
+  if (elements.aiImageGenerateButton) elements.aiImageGenerateButton.textContent = draft ? "Переделать" : "Сгенерировать";
+  if (elements.aiImageApproveButton) elements.aiImageApproveButton.disabled = !canReview;
+  if (elements.aiImageRejectButton) elements.aiImageRejectButton.disabled = !canReview;
+  if (elements.aiImageGenerateButton) elements.aiImageGenerateButton.disabled = state.aiImageBusy;
+
+  if (elements.aiImageStatus && !state.aiImageBusy) {
+    if (!draft) {
+      elements.aiImageStatus.textContent = "Проверьте заготовленный промпт и нажмите «Сгенерировать».";
+    } else {
+      const created = draft.createdAt ? new Date(draft.createdAt).toLocaleString("ru-RU") : "только что";
+      elements.aiImageStatus.textContent = `Последний черновик: ${aiImageStatusLabel(draft.status)} · ${created}.`;
+    }
+  }
+}
+
+async function openAiImageModal(productId) {
+  if (!productId || !elements.aiImageModal) return;
+  state.aiImageProductId = productId;
+  state.aiImageDraft = null;
+  if (elements.aiImageSourceInput) elements.aiImageSourceInput.value = "";
+  if (elements.aiImagePromptInput) elements.aiImagePromptInput.value = "";
+  elements.aiImageModal.classList.remove("hidden");
+  document.body.classList.add("modal-open");
+
+  const cached = selectedAiImageProduct();
+  if (cached) renderAiImageModal(cached);
+  setAiImageModalBusy(true, "Загружаю данные карточки...");
+  try {
+    const result = await api(`/api/warehouse/products/${encodeURIComponent(productId)}`);
+    if (result.product) mergeWarehouseProduct(result.product);
+    renderAiImageModal(result.product || cached);
+  } catch (error) {
+    if (elements.aiImageStatus) elements.aiImageStatus.textContent = error.message;
+  } finally {
+    setAiImageModalBusy(false);
+    renderAiImageModal();
+  }
+}
+
+function closeAiImageModal() {
+  if (!elements.aiImageModal) return;
+  elements.aiImageModal.classList.add("hidden");
+  document.body.classList.remove("modal-open");
+  state.aiImageProductId = null;
+  state.aiImageDraft = null;
+  state.aiImageBusy = false;
+}
+
+async function generateAiImageFromMain() {
+  const product = selectedAiImageProduct();
+  if (!product?.id) return;
+  const sourceImageUrl = String(elements.aiImageSourceInput?.value || aiImageSourceForProduct(product) || "").trim();
+  const prompt = String(elements.aiImagePromptInput?.value || "").trim();
+  let finalStatus = "";
+  setAiImageModalBusy(true, "Генерирую AI-фото через relay. Обычно это занимает до минуты...");
+  try {
+    const result = await api(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sourceImageUrl, prompt }),
+    });
+    if (result.product) mergeWarehouseProduct(result.product);
+    applyWarehouseFilters();
+    renderWarehouseCards();
+    renderDetailForProductIds([product.id]);
+    renderAiImageModal(result.product || selectedAiImageProduct());
+    finalStatus = "AI-фото готово. Можно одобрить, отменить или переделать.";
+  } catch (error) {
+    finalStatus = error.message;
+  } finally {
+    setAiImageModalBusy(false);
+    renderAiImageModal();
+    if (elements.aiImageStatus && finalStatus) elements.aiImageStatus.textContent = finalStatus;
+  }
+}
+
+async function reviewAiImageFromMain(action) {
+  const product = selectedAiImageProduct();
+  const draft = state.aiImageDraft || latestAiImageDraft(product);
+  if (!product?.id || !draft?.id) return;
+  let finalStatus = "";
+  setAiImageModalBusy(true, action === "approve" ? "Одобряю фото и ставлю его главным..." : "Отменяю черновик...");
+  try {
+    const result = await api(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/${encodeURIComponent(draft.id)}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (result.product) mergeWarehouseProduct(result.product);
+    applyWarehouseFilters();
+    renderWarehouseCards();
+    renderDetailForProductIds([product.id]);
+    renderAiImageModal(result.product || selectedAiImageProduct());
+    finalStatus = action === "approve"
+      ? "Фото поставлено главным в карточке."
+      : "Черновик отменен. Карточка не изменена.";
+    if (action === "approve") elements.warehouseStatus.textContent = finalStatus;
+  } catch (error) {
+    finalStatus = error.message;
+  } finally {
+    setAiImageModalBusy(false);
+    renderAiImageModal();
+    if (elements.aiImageStatus && finalStatus) elements.aiImageStatus.textContent = finalStatus;
+    if (action === "approve" && finalStatus && !/ошиб|error/i.test(finalStatus)) closeAiImageModal();
+  }
+}
+
 async function ensureWarehouseGroupDetailed(groupKey) {
   const group = getSortedWarehouseGroups().find((item) => item.key === groupKey);
   if (!group) return null;
@@ -1260,9 +1465,6 @@ function renderWarehouseDetail(group) {
   const productName = group.name || displayProductName(product);
   const groupProductIds = variants.map((item) => item.id);
   const ozonForAi = ozonVariant || (product.marketplace === "ozon" ? product : null);
-  const aiOzonHref = ozonForAi
-    ? `/ozon-product.html?productId=${encodeURIComponent(ozonForAi.id)}&offerId=${encodeURIComponent(ozonForAi.offerId || product.offerId)}&name=${encodeURIComponent(productName)}&ai=1`
-    : "";
 
   elements.warehouseDetail.innerHTML = `
     <div class="detail-head">
@@ -1285,10 +1487,10 @@ function renderWarehouseDetail(group) {
         }
       </div>
       ${
-        aiOzonHref
+        ozonForAi
           ? `<div class="detail-media-actions">
-              <a class="secondary-button compact-button" href="${escapeHtml(aiOzonHref)}">AI-фото Ozon</a>
-              <small>Откроется форма карточки: генерация и проверка черновика перед отправкой в Ozon.</small>
+              <button class="secondary-button compact-button ai-photo-open" type="button" data-product-id="${escapeHtml(ozonForAi.id)}">AI-фото Ozon</button>
+              <small>Предпросмотр откроется здесь: можно одобрить, отменить или переделать без перехода на другую страницу.</small>
             </div>`
           : ""
       }
@@ -2712,6 +2914,12 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
 });
 
 elements.warehouseDetail.addEventListener("click", async (event) => {
+  const aiPhotoButton = event.target.closest(".ai-photo-open");
+  if (aiPhotoButton) {
+    await openAiImageModal(aiPhotoButton.dataset.productId);
+    return;
+  }
+
   const toggleButton = event.target.closest(".card-auto-toggle");
   if (!toggleButton) return;
   const productIds = String(toggleButton.dataset.groupProductIds || "")
@@ -2788,6 +2996,21 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
     }
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
+  }
+});
+
+elements.aiImageCloseButton?.addEventListener("click", closeAiImageModal);
+elements.aiImageCancelButton?.addEventListener("click", closeAiImageModal);
+elements.aiImageModal?.addEventListener("click", (event) => {
+  if (event.target === elements.aiImageModal && !state.aiImageBusy) closeAiImageModal();
+});
+elements.aiImageGenerateButton?.addEventListener("click", generateAiImageFromMain);
+elements.aiImageApproveButton?.addEventListener("click", () => reviewAiImageFromMain("approve"));
+elements.aiImageRejectButton?.addEventListener("click", () => reviewAiImageFromMain("reject"));
+elements.aiImageSourceInput?.addEventListener("input", () => renderAiImageModal());
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !elements.aiImageModal?.classList.contains("hidden") && !state.aiImageBusy) {
+    closeAiImageModal();
   }
 });
 

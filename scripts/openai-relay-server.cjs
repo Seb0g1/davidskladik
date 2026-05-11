@@ -24,6 +24,17 @@ const OPENAI_API_KEY = String(process.env.OPENAI_API_KEY || "").trim();
 const RELAY_SECRET = String(process.env.OPENAI_RELAY_SECRET || "").trim();
 const PORT = Number(process.env.RELAY_PORT || 8787);
 
+function supportsInputFidelity(model) {
+  const normalized = String(model || "").trim().toLowerCase();
+  return normalized && normalized !== "gpt-image-2";
+}
+
+function normalizeImageModel(model) {
+  const normalized = String(model || "").trim();
+  if (normalized.toLowerCase() === "gpt-image-1.5-high-fidelity") return "gpt-image-1.5";
+  return normalized || "gpt-image-2";
+}
+
 function timingSafeEqual(a, b) {
   const first = Buffer.from(String(a));
   const second = Buffer.from(String(b));
@@ -79,15 +90,19 @@ app.post("/v1/openai-image-edit", async (req, res) => {
 
     const image = await toFile(buffer, fileName, { type: sourceMimeType || "image/png" });
     const client = new OpenAI({ apiKey: OPENAI_API_KEY });
-    const result = await client.images.edit({
-      model: String(body.model || "gpt-image-2"),
+    const model = normalizeImageModel(body.model || "gpt-image-2");
+    const editRequest = {
+      model,
       image,
       prompt,
       size: String(body.size || "1536x1024"),
       quality: String(body.quality || "auto"),
       output_format: String(body.output_format || "png"),
-      input_fidelity: body.input_fidelity === "low" ? "low" : "high",
-    });
+    };
+    if (supportsInputFidelity(model) && body.input_fidelity) {
+      editRequest.input_fidelity = body.input_fidelity === "low" ? "low" : "high";
+    }
+    const result = await client.images.edit(editRequest);
 
     const b64 = result?.data?.[0]?.b64_json;
     if (!b64) {
