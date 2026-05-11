@@ -1899,6 +1899,10 @@ function defaultAppSettings() {
       autoSyncMinutes: Math.max(5, Number(autoSyncMinutes || 30) || 30),
     },
     markupRules: [],
+    availabilityRules: [
+      { marketplace: "all", minAvailableSuppliers: 5, coefficientDelta: -0.05, targetStock: 10 },
+      { marketplace: "all", minAvailableSuppliers: 1, coefficientDelta: 0, targetStock: 3 },
+    ],
   };
 }
 
@@ -1912,6 +1916,23 @@ function normalizeMarkupRule(input = {}) {
     minUsd: Math.max(0, Number(minUsd.toFixed(4))),
     coefficient: Number(coefficient.toFixed(4)),
     marketplace,
+  };
+}
+
+function normalizeAvailabilityRule(input = {}) {
+  const minAvailableSuppliers = Number(input.minAvailableSuppliers ?? input.min_available_suppliers ?? input.minSuppliers ?? 0);
+  const coefficientDelta = Number(input.coefficientDelta ?? input.coefficient_delta ?? input.markupDelta ?? 0);
+  const targetStock = Number(input.targetStock ?? input.target_stock ?? input.stock ?? 0);
+  const rawMarketplace = cleanText(input.marketplace || input.target || "all").toLowerCase();
+  const marketplace = rawMarketplace === "ozon" || rawMarketplace === "yandex" ? rawMarketplace : "all";
+  if (!Number.isFinite(minAvailableSuppliers) || minAvailableSuppliers < 0) return null;
+  if (!Number.isFinite(coefficientDelta)) return null;
+  if (!Number.isFinite(targetStock) || targetStock < 0) return null;
+  return {
+    marketplace,
+    minAvailableSuppliers: Math.max(0, Math.round(minAvailableSuppliers)),
+    coefficientDelta: Number(coefficientDelta.toFixed(4)),
+    targetStock: Math.max(0, Math.round(targetStock)),
   };
 }
 
@@ -1932,6 +1953,13 @@ function normalizeAppSettings(input = {}) {
     ? input.markupRules.map(normalizeMarkupRule).filter(Boolean)
     : [];
   rules.sort((a, b) => a.minUsd - b.minUsd);
+  const availabilityRules = Array.isArray(input.availabilityRules)
+    ? input.availabilityRules.map(normalizeAvailabilityRule).filter(Boolean)
+    : fallback.availabilityRules.map(normalizeAvailabilityRule).filter(Boolean);
+  availabilityRules.sort((a, b) =>
+    Number(b.minAvailableSuppliers || 0) - Number(a.minAvailableSuppliers || 0)
+    || String(a.marketplace || "all").localeCompare(String(b.marketplace || "all")),
+  );
   return {
     fixedUsdRate: Number.isFinite(fixedUsdRate) && fixedUsdRate > 0 ? fixedUsdRate : fallback.fixedUsdRate,
     defaultMarkups: {
@@ -1943,6 +1971,7 @@ function normalizeAppSettings(input = {}) {
       autoSyncMinutes: Number.isFinite(automationMinutes) && automationMinutes >= 5 ? Math.round(automationMinutes) : fallback.automation.autoSyncMinutes,
     },
     markupRules: rules,
+    availabilityRules,
   };
 }
 
@@ -2925,6 +2954,25 @@ function resolveMarkupCoefficient({ productMarkup, marketplace, supplierUsdPrice
   return Number(matched?.coefficient || fallback);
 }
 
+function resolveAvailabilityPolicy({ marketplace, availableSupplierCount = 0, baseMarkup = 0, appSettings } = {}) {
+  const count = Math.max(0, Number(availableSupplierCount || 0));
+  const rules = Array.isArray(appSettings?.availabilityRules) ? appSettings.availabilityRules : [];
+  const scopedRules = rules.filter((rule) => !rule.marketplace || rule.marketplace === "all" || rule.marketplace === marketplace);
+  const sorted = [...scopedRules].sort((a, b) => Number(b.minAvailableSuppliers || 0) - Number(a.minAvailableSuppliers || 0));
+  const matched = sorted.find((rule) => count >= Number(rule.minAvailableSuppliers || 0)) || null;
+  const base = Number(baseMarkup || 0);
+  const delta = Number(matched?.coefficientDelta || 0);
+  const markupCoefficient = base > 0 ? Math.max(0.0001, Number((base + delta).toFixed(4))) : base;
+  const targetStock = matched ? Math.max(0, Math.round(Number(matched.targetStock || 0))) : null;
+  return {
+    rule: matched,
+    baseMarkup: base,
+    coefficientDelta: delta,
+    markupCoefficient,
+    targetStock,
+  };
+}
+
 function storedMarketplacePrice(product = {}) {
   const ozonPrice = Number(product.ozon?.price || 0);
   const yandexPrice = Number(product.yandex?.price || 0);
@@ -3130,13 +3178,30 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
         missingInPriceMaster: matched.length === 0,
       };
     });
+    const availableSupplierCount = suppliers.filter((supplier) => supplier.available).length;
     const selectedSupplier = pickWarehouseSupplier(suppliers);
     const fallbackMarkup = product.marketplace === "ozon"
       ? Number(targetMarkups.ozon || appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
       : Number(targetMarkups.yandex || appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
-    const markupCoefficient = Number(product.markup || selectedSupplier?.markupCoefficient || fallbackMarkup);
-    const rawNextPrice = selectedSupplier
-      ? Number(selectedSupplier.calculatedPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient))
+    const baseMarkupCoefficient = Number(product.markup || selectedSupplier?.markupCoefficient || fallbackMarkup);
+    const availabilityPolicy = resolveAvailabilityPolicy({
+      marketplace: product.marketplace,
+      availableSupplierCount,
+      baseMarkup: baseMarkupCoefficient,
+      appSettings,
+    });
+    const markupCoefficient = Number(availabilityPolicy.markupCoefficient || baseMarkupCoefficient);
+    const selectedSupplierWithPolicy = selectedSupplier
+      ? {
+          ...selectedSupplier,
+          baseMarkupCoefficient,
+          markupCoefficient,
+          availabilityRule: availabilityPolicy.rule,
+          calculatedPrice: calculateRubPrice(selectedSupplier.price, rate, markupCoefficient),
+        }
+      : null;
+    const rawNextPrice = selectedSupplierWithPolicy
+      ? Number(selectedSupplierWithPolicy.calculatedPrice || calculateRubPrice(selectedSupplierWithPolicy.price, rate, markupCoefficient))
       : 0;
     const minAuto = Number(product.autoPriceMin || 0);
     const maxAuto = Number(product.autoPriceMax || 0);
@@ -3157,8 +3222,8 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       ozonMinPrice,
       nextPrice,
       changed: nextPrice > 0 && nextPrice !== currentPrice,
-      ready: Boolean(selectedSupplier && nextPrice > 0),
-      selectedSupplier,
+      ready: Boolean(selectedSupplierWithPolicy && nextPrice > 0),
+      selectedSupplier: selectedSupplierWithPolicy,
       fallbackSuppliers: suppliers
         .filter((supplier) => supplier.available)
         .slice(0, 3)
@@ -3174,7 +3239,9 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       links,
       suppliers,
       supplierCount: suppliers.length,
-      availableSupplierCount: suppliers.filter((supplier) => supplier.available).length,
+      availableSupplierCount,
+      availabilityRule: availabilityPolicy.rule,
+      targetStock: selectedSupplierWithPolicy ? availabilityPolicy.targetStock : null,
       hasLinks: links.length > 0,
       autoArchiveCandidate: links.length === 0,
       status: selectedSupplier ? (nextPrice !== currentPrice ? "price_changed" : "ok") : "no_supplier",
@@ -3278,13 +3345,30 @@ async function buildFreshWarehouseProducts(productIds = []) {
         missingInPriceMaster: matched.length === 0,
       };
     });
+    const availableSupplierCount = suppliers.filter((supplier) => supplier.available).length;
     const selectedSupplier = pickWarehouseSupplier(suppliers);
     const fallbackMarkup = product.marketplace === "ozon"
       ? Number(appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
       : Number(appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
-    const markupCoefficient = Number(product.markup || selectedSupplier?.markupCoefficient || fallbackMarkup);
-    const rawNextPrice = selectedSupplier
-      ? Number(selectedSupplier.calculatedPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient))
+    const baseMarkupCoefficient = Number(product.markup || selectedSupplier?.markupCoefficient || fallbackMarkup);
+    const availabilityPolicy = resolveAvailabilityPolicy({
+      marketplace: product.marketplace,
+      availableSupplierCount,
+      baseMarkup: baseMarkupCoefficient,
+      appSettings,
+    });
+    const markupCoefficient = Number(availabilityPolicy.markupCoefficient || baseMarkupCoefficient);
+    const selectedSupplierWithPolicy = selectedSupplier
+      ? {
+          ...selectedSupplier,
+          baseMarkupCoefficient,
+          markupCoefficient,
+          availabilityRule: availabilityPolicy.rule,
+          calculatedPrice: calculateRubPrice(selectedSupplier.price, rate, markupCoefficient),
+        }
+      : null;
+    const rawNextPrice = selectedSupplierWithPolicy
+      ? Number(selectedSupplierWithPolicy.calculatedPrice || calculateRubPrice(selectedSupplierWithPolicy.price, rate, markupCoefficient))
       : 0;
     const minAuto = Number(product.autoPriceMin || 0);
     const maxAuto = Number(product.autoPriceMax || 0);
@@ -3305,8 +3389,8 @@ async function buildFreshWarehouseProducts(productIds = []) {
       ozonMinPrice,
       nextPrice,
       changed: nextPrice > 0 && nextPrice !== currentPrice,
-      ready: Boolean(selectedSupplier && nextPrice > 0),
-      selectedSupplier,
+      ready: Boolean(selectedSupplierWithPolicy && nextPrice > 0),
+      selectedSupplier: selectedSupplierWithPolicy,
       fallbackSuppliers: suppliers
         .filter((supplier) => supplier.available)
         .slice(0, 3)
@@ -3322,7 +3406,9 @@ async function buildFreshWarehouseProducts(productIds = []) {
       links,
       suppliers,
       supplierCount: suppliers.length,
-      availableSupplierCount: suppliers.filter((supplier) => supplier.available).length,
+      availableSupplierCount,
+      availabilityRule: availabilityPolicy.rule,
+      targetStock: selectedSupplierWithPolicy ? availabilityPolicy.targetStock : null,
       hasLinks: links.length > 0,
       autoArchiveCandidate: links.length === 0,
       status: selectedSupplier ? (nextPrice !== currentPrice ? "price_changed" : "ok") : "no_supplier",
@@ -3959,6 +4045,7 @@ async function saveSettingsHandler(request, response, next) {
       fixedUsdRate: settings.fixedUsdRate,
       defaultMarkups: settings.defaultMarkups,
       markupRules: settings.markupRules.length,
+      availabilityRules: settings.availabilityRules.length,
     }).catch((auditError) => {
       logger.warn("settings audit append failed", { detail: auditError?.message || String(auditError) });
     });
@@ -4816,6 +4903,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const selected = ids ? preview.products.filter((product) => ids.has(product.id)) : preview.products;
   const skipped = [];
   const items = [];
+  const stockItems = [];
 
   for (const product of selected) {
     if (!product.hasLinks) {
@@ -4826,6 +4914,9 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       skipped.push({ id: product.id, offerId: product.offerId, reason: "not_ready" });
       continue;
     }
+    const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
+    const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
+    if (targetStock > 0 && targetStock !== currentStock) stockItems.push(product);
     const current = Number(product.currentPrice || 0);
     const nextValue = Number(product.nextPrice || 0);
     const diffRub = Math.abs(nextValue - current);
@@ -4845,7 +4936,17 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     });
   }
 
-  if (dryRun) return { ok: true, dryRun: true, selected: selected.length, readyToSend: items.length, skipped, items };
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      selected: selected.length,
+      readyToSend: items.length,
+      stockReadyToSend: stockItems.length,
+      skipped,
+      items,
+    };
+  }
 
   const results = [];
   const failed = [];
@@ -4891,6 +4992,8 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     }
   }
 
+  const stockActions = await sendTargetStocksToMarketplace(stockItems);
+
   const warehouse = await readWarehouse();
   const sentAt = new Date().toISOString();
   const successIds = new Set(items.map((item) => item.id));
@@ -4933,6 +5036,15 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       };
     }
   }
+  for (const action of stockActions) {
+    if (!action.ok) continue;
+    const product = warehouse.products.find((entry) => entry.id === action.id);
+    if (!product) continue;
+    product.marketplaceState = {
+      ...(product.marketplaceState || {}),
+      stock: Math.max(0, Math.round(Number(action.stock || 0))),
+    };
+  }
   await writeWarehouse(warehouse);
 
   const queueState = await readPriceRetryQueue();
@@ -4946,7 +5058,17 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const deduped = Array.from(new Map(merged.map((item) => [item.queueKey || `${item.id}:${item.target}`, item])).values()).slice(0, 5000);
   await writePriceRetryQueue({ items: deduped });
 
-  return { ok: true, sent: items.length - failed.length, failed: failed.length, queued: deduped.length, skipped, results };
+  return {
+    ok: true,
+    sent: items.length - failed.length,
+    failed: failed.length,
+    stockSent: stockActions.filter((item) => item.ok).length,
+    stockFailed: stockActions.filter((item) => !item.ok).length,
+    queued: deduped.length,
+    skipped,
+    results,
+    stockActions,
+  };
 }
 
 async function processMarketplaceJob(name, data = {}) {
@@ -5046,7 +5168,13 @@ function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_
   const batchCooldownMs = Math.max(5_000, Number(process.env.AUTO_PRICE_CHANGED_BATCH_COOLDOWN_MS || 60_000) || 60_000);
   if (changedPriceAutoPushLastBatchAt && now - changedPriceAutoPushLastBatchAt < batchCooldownMs) return 0;
   const ids = (Array.isArray(products) ? products : [])
-    .filter((product) => product?.hasLinks && product.ready && product.changed && Number(product.nextPrice || 0) > 0)
+    .filter((product) => {
+      if (!product?.hasLinks || !product.ready) return false;
+      if (product.changed && Number(product.nextPrice || 0) > 0) return true;
+      const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
+      const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
+      return targetStock > 0 && targetStock !== currentStock;
+    })
     .map((product) => product.id)
     .filter(Boolean)
     .filter((id) => {
@@ -5419,6 +5547,64 @@ async function sendZeroStocksToMarketplace(products = []) {
   return actions;
 }
 
+async function sendTargetStocksToMarketplace(products = []) {
+  const actions = [];
+  const byTarget = new Map();
+  for (const product of products) {
+    const stock = Math.max(0, Math.round(Number(product?.targetStock || 0)));
+    if (!product?.id || !product?.offerId || !product?.target || stock <= 0) continue;
+    const key = `${product.marketplace}:${product.target}`;
+    if (!byTarget.has(key)) byTarget.set(key, []);
+    byTarget.get(key).push({ ...product, targetStock: stock });
+  }
+
+  for (const [key, items] of byTarget.entries()) {
+    const [marketplace, target] = key.split(":");
+    if (marketplace === "ozon") {
+      const account = getOzonAccountByTarget(target);
+      if (!account) continue;
+      for (const chunk of chunkArray(items, 100)) {
+        const payload = {
+          stocks: chunk.map((item) => ({
+            offer_id: String(item.offerId || "").trim(),
+            stock: item.targetStock,
+          })),
+        };
+        try {
+          await ozonRequest("/v2/products/stocks", payload, account);
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", stock: item.targetStock, ok: true })));
+        } catch (error) {
+          const detail = error?.message || "target_stock_failed";
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", stock: item.targetStock, ok: false, error: detail })));
+        }
+      }
+      continue;
+    }
+
+    if (marketplace === "yandex") {
+      const shop = getYandexShopByTarget(target);
+      if (!shop) continue;
+      for (const chunk of chunkArray(items, 500)) {
+        const payload = {
+          offers: chunk.map((item) => ({
+            offerId: String(item.offerId || "").trim(),
+            stock: item.targetStock,
+          })),
+        };
+        try {
+          await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offers/stocks`, payload);
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", stock: item.targetStock, ok: true })));
+        } catch (error) {
+          const detail = error?.message || "target_stock_failed";
+          actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", stock: item.targetStock, ok: false, error: detail })));
+        }
+      }
+    }
+  }
+
+  return actions;
+}
+
 async function archiveProductsOnMarketplaces(products = []) {
   const actions = [];
   const byTarget = new Map();
@@ -5489,7 +5675,7 @@ async function restoreStocksOnMarketplaces(products = []) {
         const payload = {
           stocks: chunk.map((item) => ({
             offer_id: String(item.offerId || "").trim(),
-            stock: Math.max(1, Number(item.marketplaceState?.stock || 1)),
+            stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
           })),
         };
         try {
@@ -5509,7 +5695,7 @@ async function restoreStocksOnMarketplaces(products = []) {
         const payload = {
           offers: chunk.map((item) => ({
             offerId: String(item.offerId || "").trim(),
-            stock: Math.max(1, Number(item.marketplaceState?.stock || 1)),
+            stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
           })),
         };
         try {
@@ -6262,6 +6448,7 @@ module.exports = {
   app,
   startServer,
   resolveMarkupCoefficient,
+  resolveAvailabilityPolicy,
   normalizePriceMasterPrice,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,

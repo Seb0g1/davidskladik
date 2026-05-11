@@ -1,6 +1,8 @@
 const settingsForm = document.querySelector("#settingsForm");
 const rulesList = document.querySelector("#markupRulesList");
 const addRuleButton = document.querySelector("#addMarkupRuleButton");
+const availabilityRulesList = document.querySelector("#availabilityRulesList");
+const addAvailabilityRuleButton = document.querySelector("#addAvailabilityRuleButton");
 const statusBox = document.querySelector("#settingsStatus");
 const logoutButton = document.querySelector("#logoutButton");
 const settingsAnimateAutoFocusInput = document.querySelector("#settingsAnimateAutoFocusInput");
@@ -35,6 +37,35 @@ function ruleRow(rule = {}) {
       <input name="coefficient" class="settings-rule-input" type="number" min="0.0001" step="0.0001" value="${Number(rule.coefficient || 1)}" required />
     </label>
     <button class="secondary-button compact-button remove-rule" type="button">Удалить</button>
+  `;
+  return row;
+}
+
+function availabilityRuleRow(rule = {}) {
+  const row = document.createElement("div");
+  row.className = "settings-rule-row";
+  row.innerHTML = `
+    <label class="settings-rule-field">
+      Площадка
+      <select name="availabilityMarketplace" class="settings-rule-input settings-rule-select">
+        <option value="all" ${String(rule.marketplace || "all") === "all" ? "selected" : ""}>Все</option>
+        <option value="ozon" ${String(rule.marketplace || "") === "ozon" ? "selected" : ""}>Ozon</option>
+        <option value="yandex" ${String(rule.marketplace || "") === "yandex" ? "selected" : ""}>Yandex Market</option>
+      </select>
+    </label>
+    <label class="settings-rule-field">
+      Доступных поставщиков от
+      <input name="minAvailableSuppliers" class="settings-rule-input" type="number" min="0" step="1" value="${Number(rule.minAvailableSuppliers || 0)}" required />
+    </label>
+    <label class="settings-rule-field">
+      Поправка к коэффициенту
+      <input name="coefficientDelta" class="settings-rule-input" type="number" step="0.0001" value="${Number(rule.coefficientDelta || 0)}" required />
+    </label>
+    <label class="settings-rule-field">
+      Остаток
+      <input name="targetStock" class="settings-rule-input" type="number" min="0" step="1" value="${Number(rule.targetStock || 0)}" required />
+    </label>
+    <button class="secondary-button compact-button remove-availability-rule" type="button">Удалить</button>
   `;
   return row;
 }
@@ -77,6 +108,38 @@ function collectRules() {
     .sort((a, b) => a.minUsd - b.minUsd);
 }
 
+function renderAvailabilityRules(rules = []) {
+  if (!availabilityRulesList) return;
+  availabilityRulesList.innerHTML = "";
+  const rows = rules.length
+    ? rules
+    : [
+        { marketplace: "all", minAvailableSuppliers: 5, coefficientDelta: -0.05, targetStock: 10 },
+        { marketplace: "all", minAvailableSuppliers: 1, coefficientDelta: 0, targetStock: 3 },
+      ];
+  for (const rule of rows) availabilityRulesList.appendChild(availabilityRuleRow(rule));
+}
+
+function collectAvailabilityRules() {
+  if (!availabilityRulesList) return [];
+  const rows = [...availabilityRulesList.querySelectorAll(".settings-rule-row")];
+  return rows
+    .map((row) => ({
+      marketplace: String(row.querySelector('select[name="availabilityMarketplace"]').value || "all"),
+      minAvailableSuppliers: Number(row.querySelector('input[name="minAvailableSuppliers"]').value || 0),
+      coefficientDelta: Number(row.querySelector('input[name="coefficientDelta"]').value || 0),
+      targetStock: Number(row.querySelector('input[name="targetStock"]').value || 0),
+    }))
+    .filter((rule) =>
+      Number.isFinite(rule.minAvailableSuppliers)
+      && rule.minAvailableSuppliers >= 0
+      && Number.isFinite(rule.coefficientDelta)
+      && Number.isFinite(rule.targetStock)
+      && rule.targetStock >= 0,
+    )
+    .sort((a, b) => b.minAvailableSuppliers - a.minAvailableSuppliers);
+}
+
 async function loadSettings() {
   const data = await api("/api/settings");
   const settings = data.settings || {};
@@ -91,6 +154,7 @@ async function loadSettings() {
       : "Telegram не настроен: задайте TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в .env.";
   }
   renderRules(settings.markupRules || []);
+  renderAvailabilityRules(settings.availabilityRules || []);
   if (settingsAnimateAutoFocusInput) {
     settingsAnimateAutoFocusInput.checked = localStorage.getItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY) !== "0";
   }
@@ -110,6 +174,7 @@ settingsForm.addEventListener("submit", async (event) => {
       autoSyncMinutes: Number(autoSyncMinutesInput?.value || 30),
     },
     markupRules: collectRules(),
+    availabilityRules: collectAvailabilityRules(),
   };
   statusBox.textContent = "Сохраняю настройки...";
   try {
@@ -140,6 +205,20 @@ settingsAnimateAutoFocusInput?.addEventListener("change", () => {
   const enabled = Boolean(settingsAnimateAutoFocusInput.checked);
   localStorage.setItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY, enabled ? "1" : "0");
   statusBox.textContent = `UI-настройка сохранена: авто-фокус ${enabled ? "с анимацией" : "без анимации"}.`;
+});
+
+addAvailabilityRuleButton?.addEventListener("click", () => {
+  availabilityRulesList?.appendChild(availabilityRuleRow({ marketplace: "all", minAvailableSuppliers: 1, coefficientDelta: 0, targetStock: 3 }));
+});
+
+availabilityRulesList?.addEventListener("click", (event) => {
+  const btn = event.target.closest(".remove-availability-rule");
+  if (!btn) return;
+  const row = event.target.closest(".settings-rule-row");
+  if (row) row.remove();
+  if (!availabilityRulesList.querySelector(".settings-rule-row")) {
+    renderAvailabilityRules([]);
+  }
 });
 
 manualSyncButton?.addEventListener("click", async () => {

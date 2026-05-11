@@ -12,6 +12,7 @@ process.env.DISABLE_BACKGROUND_JOBS = "true";
 const {
   app,
   resolveMarkupCoefficient,
+  resolveAvailabilityPolicy,
   normalizePriceMasterPrice,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
@@ -57,12 +58,14 @@ test("PUT /api/settings saves markup settings", async () => {
         fixedUsdRate: 95,
         defaultMarkups: { ozon: 1.91, yandex: 1.62 },
         markupRules: [{ marketplace: "all", minUsd: 0, coefficient: 1.91 }],
+        availabilityRules: [{ marketplace: "all", minAvailableSuppliers: 5, coefficientDelta: -0.05, targetStock: 10 }],
       })
       .expect(200);
 
     assert.equal(res.body.ok, true);
     assert.equal(res.body.settings.defaultMarkups.ozon, 1.91);
     assert.equal(res.body.settings.markupRules[0].coefficient, 1.91);
+    assert.equal(res.body.settings.availabilityRules[0].targetStock, 10);
   } finally {
     if (previous) {
       await agent.put("/api/settings").send(previous);
@@ -107,6 +110,38 @@ test("resolveMarkupCoefficient uses product markup override", () => {
     },
   });
   assert.equal(value, 2.2);
+});
+
+test("resolveAvailabilityPolicy lowers markup and raises stock for many suppliers", () => {
+  const policy = resolveAvailabilityPolicy({
+    marketplace: "ozon",
+    availableSupplierCount: 5,
+    baseMarkup: 1.7,
+    appSettings: {
+      availabilityRules: [
+        { marketplace: "all", minAvailableSuppliers: 5, coefficientDelta: -0.05, targetStock: 10 },
+        { marketplace: "all", minAvailableSuppliers: 1, coefficientDelta: 0, targetStock: 3 },
+      ],
+    },
+  });
+  assert.equal(policy.markupCoefficient, 1.65);
+  assert.equal(policy.targetStock, 10);
+});
+
+test("resolveAvailabilityPolicy keeps base markup and small stock for few suppliers", () => {
+  const policy = resolveAvailabilityPolicy({
+    marketplace: "ozon",
+    availableSupplierCount: 1,
+    baseMarkup: 1.7,
+    appSettings: {
+      availabilityRules: [
+        { marketplace: "all", minAvailableSuppliers: 5, coefficientDelta: -0.05, targetStock: 10 },
+        { marketplace: "all", minAvailableSuppliers: 1, coefficientDelta: 0, targetStock: 3 },
+      ],
+    },
+  });
+  assert.equal(policy.markupCoefficient, 1.7);
+  assert.equal(policy.targetStock, 3);
 });
 
 test("normalizePriceMasterPrice converts explicitly ruble values to USD", () => {

@@ -713,6 +713,7 @@ function buildWarehouseGroups(products) {
       changed: variants.some((product) => product.changed),
       supplierCount: Math.max(...variants.map((product) => product.supplierCount || 0), 0),
       availableSupplierCount: Math.max(...variants.map((product) => product.availableSupplierCount || 0), 0),
+      targetStock: Math.max(...variants.map((product) => Number(product.targetStock || 0)), 0),
       marketplaceLabels: Array.from(new Set(variants.map((product) => marketLabel(product)))),
       productIds: variants.map((product) => product.id),
     };
@@ -1152,6 +1153,7 @@ function renderWarehouseCards() {
                     <div><span>${escapeHtml(marketplaceCurrentLabel(item))}</span><strong>${formatMoney(item.currentPrice)}</strong>${item.marketplace === "ozon" && ozonCabinetPriceNote(item) ? `<span class="price-hint">${escapeHtml(ozonCabinetPriceNote(item))}</span>` : ""}</div>
                     <div><span>Новая</span><strong>${formatMoney(item.nextPrice)}</strong></div>
                     <div><span>Наценка</span><strong>${Number(item.markupCoefficient || 0).toFixed(2)}</strong></div>
+                    <div><span>Остаток</span><strong>${Number(item.targetStock || 0) || "—"}</strong></div>
                   </div>
                 `,
               )
@@ -1282,6 +1284,7 @@ function renderWarehouseDetail(group) {
       ${product.marketplace === "ozon" ? `<div><span>Мин. Ozon</span><strong>${formatMoney(product.ozonMinPrice)}</strong></div>` : ""}
       <div><span>Новая</span><strong>${formatMoney(product.nextPrice)}</strong></div>
       <div><span>Наценка</span><strong>${Number(product.markupCoefficient || 0).toFixed(2)}</strong></div>
+      <div><span>Целевой остаток</span><strong>${Number(product.targetStock || 0) || "—"}</strong></div>
       <div><span>Ozon send</span><strong>${escapeHtml(product.lastOzonPriceSend?.status || "—")}</strong><small>${escapeHtml(product.lastOzonPriceSend?.at ? formatDate(product.lastOzonPriceSend.at) : "")}${product.lastOzonPriceSend?.detail ? ` · ${escapeHtml(product.lastOzonPriceSend.detail)}` : ""}</small></div>
     </div>
 
