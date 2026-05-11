@@ -88,12 +88,23 @@ app.post("/v1/openai-image-edit", async (req, res) => {
           ? "source.webp"
           : "source.png";
 
-    const image = await toFile(buffer, fileName, { type: sourceMimeType || "image/png" });
+    const image = [await toFile(buffer, fileName, { type: sourceMimeType || "image/png" })];
+    const references = Array.isArray(body.referenceImages) ? body.referenceImages.slice(0, 4) : [];
+    for (let index = 0; index < references.length; index += 1) {
+      const ref = references[index] || {};
+      const refBase64 = String(ref.base64 || ref.sourceImageBase64 || "").trim();
+      if (!refBase64) continue;
+      const refMime = String(ref.mimeType || ref.sourceMimeType || "image/png").split(";")[0].trim().toLowerCase();
+      const refBuffer = Buffer.from(refBase64, "base64");
+      if (!refBuffer.length) continue;
+      const refFileName = String(ref.fileName || `reference-${index + 1}.${refMime.includes("webp") ? "webp" : refMime.includes("jpg") || refMime.includes("jpeg") ? "jpg" : "png"}`);
+      image.push(await toFile(refBuffer, refFileName, { type: refMime || "image/png" }));
+    }
     const client = new OpenAI({ apiKey: OPENAI_API_KEY });
     const model = normalizeImageModel(body.model || "gpt-image-2");
     const editRequest = {
       model,
-      image,
+      image: image.length === 1 ? image[0] : image,
       prompt,
       size: String(body.size || "1536x1024"),
       quality: String(body.quality || "auto"),

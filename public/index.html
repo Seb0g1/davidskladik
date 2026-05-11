@@ -467,14 +467,42 @@
           </section>
         </div>
 
+        <div id="aiImageGallery" class="ai-inline-gallery" aria-label="Варианты AI-фото"></div>
+
         <label class="ai-inline-field">
           URL исходного фото
           <input id="aiImageSourceInput" type="url" placeholder="https://..." />
         </label>
+
+        <div class="ai-inline-options">
+          <label class="ai-inline-field ai-inline-field--small">
+            Сколько фото
+            <select id="aiImageCountInput">
+              <option value="1">1 фото</option>
+              <option value="2">2 фото</option>
+              <option value="3" selected>3 фото</option>
+              <option value="4">4 фото</option>
+            </select>
+          </label>
+          <div class="ai-inline-note">
+            Логотип Magic Vibes берется из public/logo.png и добавляется как референс к каждому варианту.
+          </div>
+        </div>
+
         <label class="ai-inline-field">
           Промпт для генерации
           <textarea id="aiImagePromptInput" rows="5" placeholder="Промпт заполнится автоматически по товару"></textarea>
         </label>
+
+        <div id="aiImageProgress" class="ai-inline-progress" hidden>
+          <div class="ai-inline-progress-head">
+            <strong>Генерация карточек</strong>
+            <span id="aiImageProgressMeta">Готовлю запрос...</span>
+          </div>
+          <div class="ai-inline-progress-track">
+            <div id="aiImageProgressBar" class="ai-inline-progress-bar"></div>
+          </div>
+        </div>
 
         <div class="ai-inline-actions">
           <button id="aiImageGenerateButton" class="primary-button" type="button">Сгенерировать</button>

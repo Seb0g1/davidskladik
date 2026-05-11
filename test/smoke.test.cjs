@@ -353,6 +353,81 @@ test("AI image draft approval updates local Ozon image fields only", async () =>
   }
 });
 
+test("AI image batch approval keeps selected image first and saves batch gallery", async () => {
+  const agent = request.agent(app);
+  const smokeId = `smoke-ai-batch-${Date.now()}`;
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: smokeId,
+        target: "ozon",
+        offerId: smokeId,
+        name: "Smoke AI Batch Product",
+        ozon: {
+          offerId: smokeId,
+          name: "Smoke AI Batch Product",
+          primaryImage: "http://localhost/uploads/images/original.png",
+          images: ["http://localhost/uploads/images/original.png"],
+        },
+        aiImages: [
+          {
+            id: "draft-batch-1",
+            batchId: "batch-smoke",
+            variantIndex: 1,
+            variantTotal: 3,
+            status: "pending",
+            sourceImageUrl: "http://localhost/uploads/images/original.png",
+            resultUrl: "http://localhost/uploads/ai-images/generated-1.png",
+            prompt: "Main slide",
+          },
+          {
+            id: "draft-batch-2",
+            batchId: "batch-smoke",
+            variantIndex: 2,
+            variantTotal: 3,
+            status: "pending",
+            sourceImageUrl: "http://localhost/uploads/images/original.png",
+            resultUrl: "http://localhost/uploads/ai-images/generated-2.png",
+            prompt: "Benefits slide",
+          },
+          {
+            id: "draft-batch-3",
+            batchId: "batch-smoke",
+            variantIndex: 3,
+            variantTotal: 3,
+            status: "pending",
+            sourceImageUrl: "http://localhost/uploads/images/original.png",
+            resultUrl: "http://localhost/uploads/ai-images/generated-3.png",
+            prompt: "Notes slide",
+          },
+        ],
+      })
+      .expect(200);
+
+    const res = await agent
+      .post(`/api/warehouse/products/${encodeURIComponent(smokeId)}/ai-images/draft-batch-2/approve`)
+      .send({})
+      .expect(200);
+
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.product.ozon.primaryImage, "http://localhost/uploads/ai-images/generated-2.png");
+    assert.deepEqual(res.body.product.ozon.images.slice(0, 3), [
+      "http://localhost/uploads/ai-images/generated-2.png",
+      "http://localhost/uploads/ai-images/generated-1.png",
+      "http://localhost/uploads/ai-images/generated-3.png",
+    ]);
+    assert.equal(res.body.product.aiImages.every((item) => item.status === "approved"), true);
+  } finally {
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}`).expect(200);
+  }
+});
+
 test("automation ignores products without links", () => {
   const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates([
     { id: "nolinks", hasLinks: false, selectedSupplier: null, noSupplierAutomation: {} },

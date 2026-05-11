@@ -51,6 +51,7 @@ const configDir = path.join(__dirname, "config");
 const publicDir = path.join(__dirname, "public");
 const uploadImageDir = path.join(publicDir, "uploads", "images");
 const aiImageDir = path.join(publicDir, "uploads", "ai-images");
+const aiImageLogoPath = path.join(publicDir, "logo.png");
 const snapshotPath = path.join(dataDir, "snapshot.json");
 const historyPath = path.join(dataDir, "history.jsonl");
 const exchangeRatePath = path.join(dataDir, "exchange-rate.json");
@@ -1130,6 +1131,10 @@ function normalizeAiImageDraft(input = {}) {
     productName: cleanText(input.productName || input.product_name),
     sourceImageUrl: cleanText(input.sourceImageUrl || input.source_image_url),
     resultUrl: cleanText(input.resultUrl || input.result_url || input.url),
+    batchId: cleanText(input.batchId || input.batch_id),
+    variantIndex: Number(input.variantIndex || input.variant_index || 0) || 0,
+    variantTotal: Number(input.variantTotal || input.variant_total || 0) || 0,
+    layout: cleanText(input.layout),
     model: cleanText(input.model),
     size: cleanText(input.size),
     quality: cleanText(input.quality),
@@ -2369,12 +2374,22 @@ function buildOzonWarehouseProductItem(product, overrides = {}) {
   return buildOzonManualProductItem(body);
 }
 
-function buildOzonAiImagePrompt(product, promptOverride = "") {
+function buildOzonAiImagePrompt(product, promptOverride = "", options = {}) {
   const productName = cleanText(product?.name || product?.ozon?.name || product?.offerId || "товар");
   const template = cleanText(promptOverride) || ozonAiImageDefaultPrompt;
-  return template.includes("{productName}")
+  const base = template.includes("{productName}")
     ? template.replaceAll("{productName}", productName)
     : `${template}\n\nНазвание товара: ${productName}`;
+  const variantIndex = Number(options.variantIndex || 0);
+  const variantTotal = Number(options.variantTotal || 0);
+  if (!variantIndex || variantTotal <= 1) return base;
+  const variantBriefs = [
+    "Вариант 1: главный продающий слайд. Сделай крупный товар, сильный заголовок из названия, тип товара и объем, минимум лишнего текста.",
+    "Вариант 2: слайд преимуществ. Сделай 2-3 аккуратных инфоблока с иконками: стиль, назначение, подарок/ежедневное использование, без медицинских обещаний.",
+    "Вариант 3: слайд характера аромата. Если товар парфюмерный, покажи ноты/настроение/характер; если нет, покажи ключевые свойства из названия.",
+    "Вариант 4: чистый premium marketplace packshot. Больше воздуха, бренд-зона с логотипом, короткий заголовок и один главный акцент.",
+  ];
+  return `${base}\n\n${variantBriefs[variantIndex - 1] || variantBriefs[0]}\nЭто вариант ${variantIndex} из ${variantTotal}; композиция должна заметно отличаться от других вариантов.`;
 }
 
 function isOpenAiRelayConfigured() {
@@ -2433,7 +2448,25 @@ function normalizeOpenAiImageError(error) {
   return error;
 }
 
-async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType }) {
+async function readAiLogoReference() {
+  try {
+    const buffer = await fs.readFile(aiImageLogoPath);
+    return {
+      sourceBuffer: buffer,
+      sourceMimeType: imageMimeFromPath(aiImageLogoPath),
+      sourceFileName: path.basename(aiImageLogoPath),
+      payload: {
+        base64: buffer.toString("base64"),
+        mimeType: imageMimeFromPath(aiImageLogoPath),
+        fileName: path.basename(aiImageLogoPath),
+      },
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType, referenceImages = [] }) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), openaiRelayTimeoutMs);
   try {
@@ -2446,6 +2479,7 @@ async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType }
       quality: openaiImageQuality,
       output_format: openaiImageFormat,
     };
+    if (referenceImages.length) body.referenceImages = referenceImages;
     if (openAiImageSupportsInputFidelity(openaiImageModel)) body.input_fidelity = "high";
     const response = await fetch(openaiRelayUrl, {
       method: "POST",
@@ -2485,7 +2519,7 @@ async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType }
   }
 }
 
-async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl }, request) {
+async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batchId, variantIndex = 1, variantTotal = 1 }, request) {
   const sourceUrl = cleanText(sourceImageUrl) || firstImageUrl(product.ozon?.primaryImage || product.ozon?.images || product.imageUrl);
   if (!sourceUrl) {
     const error = new Error("Укажите исходное фото товара перед генерацией AI-изображения.");
@@ -2528,17 +2562,22 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl }, req
     throw error;
   }
 
-  const generatedPrompt = buildOzonAiImagePrompt(product, prompt);
+  const generatedPrompt = buildOzonAiImagePrompt(product, prompt, { variantIndex, variantTotal });
+  const logoReference = await readAiLogoReference();
+  const referenceImages = logoReference?.payload ? [logoReference.payload] : [];
   let imageBase64;
   try {
     if (isOpenAiRelayConfigured()) {
-      imageBase64 = await fetchOpenAiImageViaRelay({ prompt: generatedPrompt, sourceBuffer, sourceMimeType });
+      imageBase64 = await fetchOpenAiImageViaRelay({ prompt: generatedPrompt, sourceBuffer, sourceMimeType, referenceImages });
     } else {
       const client = getOpenAiClient();
-      const image = await toFile(sourceBuffer, sourceFileName, { type: sourceMimeType });
+      const image = [await toFile(sourceBuffer, sourceFileName, { type: sourceMimeType })];
+      if (logoReference) {
+        image.push(await toFile(logoReference.sourceBuffer, logoReference.sourceFileName, { type: logoReference.sourceMimeType }));
+      }
       const editRequest = {
         model: openaiImageModel,
-        image,
+        image: image.length === 1 ? image[0] : image,
         prompt: generatedPrompt,
         size: openaiImageSize,
         quality: openaiImageQuality,
@@ -2571,6 +2610,9 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl }, req
     productName: product.name || product.ozon?.name,
     sourceImageUrl: sourceUrl,
     resultUrl: `${uploadBaseUrl(request)}${relativeUrl}`,
+    batchId,
+    variantIndex,
+    variantTotal,
     model: openaiImageModel,
     size: openaiImageSize,
     quality: openaiImageQuality,
@@ -4944,20 +4986,31 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
 
-    const draft = await generateOzonAiImageDraft(product, {
-      prompt: request.body.prompt,
-      sourceImageUrl: request.body.sourceImageUrl,
-    }, request);
-    product.aiImages = normalizeAiImageDrafts([...(product.aiImages || []), draft]);
+    const count = Math.min(4, Math.max(1, Math.floor(Number(request.body.count || request.body.imagesCount || 1) || 1)));
+    const batchId = crypto.randomUUID();
+    const drafts = [];
+    for (let index = 1; index <= count; index += 1) {
+      drafts.push(await generateOzonAiImageDraft(product, {
+        prompt: request.body.prompt,
+        sourceImageUrl: request.body.sourceImageUrl,
+        batchId,
+        variantIndex: index,
+        variantTotal: count,
+      }, request));
+    }
+    const draft = drafts[drafts.length - 1];
+    product.aiImages = normalizeAiImageDrafts([...(product.aiImages || []), ...drafts]);
     product.updatedAt = new Date().toISOString();
 
     const saved = await writeWarehouse(warehouse);
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
-    response.json({ ok: true, draft, product: savedProduct });
+    response.json({ ok: true, draft, drafts, batchId, product: savedProduct });
     appendAudit(request, "warehouse.ai_image.generate", {
       productId: product.id,
       offerId: product.offerId,
       draftId: draft.id,
+      batchId,
+      count,
     }).catch((auditError) => logger.warn("ai image generate audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
     next(error);
@@ -4975,14 +5028,24 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
     if (!draft) return response.status(404).json({ error: "AI-черновик изображения не найден." });
     if (!draft.resultUrl) return response.status(400).json({ error: "В AI-черновике нет URL результата." });
 
+    const batchDrafts = draft.batchId
+      ? product.aiImages.filter((item) => item.batchId === draft.batchId && item.resultUrl)
+      : [draft];
     draft.status = "approved";
     draft.reviewedAt = new Date().toISOString();
+    batchDrafts.forEach((item) => {
+      if (item.status === "pending") {
+        item.status = "approved";
+        item.reviewedAt = draft.reviewedAt;
+      }
+    });
     const ozon = product.ozon || {};
     const images = splitList(ozon.images);
+    const batchUrls = [draft.resultUrl, ...batchDrafts.map((item) => item.resultUrl).filter((url) => url && url !== draft.resultUrl)];
     product.ozon = normalizeOzonDraft({
       ...ozon,
       primaryImage: draft.resultUrl,
-      images: [draft.resultUrl, ...images.filter((url) => url !== draft.resultUrl)],
+      images: [...batchUrls, ...images.filter((url) => !batchUrls.includes(url))],
     });
     product.imageUrl = draft.resultUrl;
     product.updatedAt = new Date().toISOString();
@@ -5012,6 +5075,14 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/reject", async (request
 
     draft.status = "rejected";
     draft.reviewedAt = new Date().toISOString();
+    if (draft.batchId) {
+      product.aiImages
+        .filter((item) => item.batchId === draft.batchId && item.status === "pending")
+        .forEach((item) => {
+          item.status = "rejected";
+          item.reviewedAt = draft.reviewedAt;
+        });
+    }
     product.updatedAt = new Date().toISOString();
 
     const saved = await writeWarehouse(warehouse);

@@ -174,9 +174,14 @@ const elements = {
   aiImageProductMeta: document.querySelector("#aiImageProductMeta"),
   aiImageCurrentPreview: document.querySelector("#aiImageCurrentPreview"),
   aiImagePreview: document.querySelector("#aiImagePreview"),
+  aiImageGallery: document.querySelector("#aiImageGallery"),
   aiImageSourceInput: document.querySelector("#aiImageSourceInput"),
+  aiImageCountInput: document.querySelector("#aiImageCountInput"),
   aiImagePromptInput: document.querySelector("#aiImagePromptInput"),
   aiImageStatus: document.querySelector("#aiImageStatus"),
+  aiImageProgress: document.querySelector("#aiImageProgress"),
+  aiImageProgressBar: document.querySelector("#aiImageProgressBar"),
+  aiImageProgressMeta: document.querySelector("#aiImageProgressMeta"),
   aiImageGenerateButton: document.querySelector("#aiImageGenerateButton"),
   aiImageApproveButton: document.querySelector("#aiImageApproveButton"),
   aiImageRejectButton: document.querySelector("#aiImageRejectButton"),
@@ -1242,6 +1247,14 @@ function latestAiImageDraft(product) {
   return drafts[drafts.length - 1] || null;
 }
 
+function latestAiImageBatch(product) {
+  const drafts = Array.isArray(product?.aiImages) ? product.aiImages : [];
+  const latest = drafts[drafts.length - 1] || null;
+  if (!latest) return [];
+  const batch = latest.batchId ? drafts.filter((item) => item.batchId === latest.batchId) : [latest];
+  return batch.filter((item) => item.resultUrl).sort((a, b) => Number(a.variantIndex || 0) - Number(b.variantIndex || 0));
+}
+
 function aiImageStatusLabel(status) {
   if (status === "approved") return "принято";
   if (status === "rejected") return "отменено";
@@ -1260,10 +1273,12 @@ function aiImageSourceForProduct(product) {
 function defaultAiImagePrompt(product) {
   const name = displayProductName(product);
   return [
-    `Сделай продающее фото для карточки Ozon товара «${name}».`,
-    "Сохрани реальный товар с исходного изображения, улучши свет, фон и композицию.",
-    "Фон чистый, аккуратный, маркетплейсный; без лишнего текста, логотипов, водяных знаков и недостоверных характеристик.",
-    "Товар должен выглядеть натурально, премиально и подходить для главного фото.",
+    `Сделай современную премиальную карточку для маркетплейса Ozon по товару «${name}».`,
+    "Используй исходное фото как главный объект, сохрани узнаваемость флакона/упаковки, но сделай красивую рекламную композицию уровня брендового баннера.",
+    "Оформи как квадратный e-commerce слайд: крупный товар, темный или чистый премиальный фон, аккуратные инфоблоки, короткие преимущества, современная типографика.",
+    "Текст на карточке должен быть на русском и основан на названии товара: тип товара, объем, аромат/назначение, 2-3 сильных преимущества. Не выдумывай медицинские свойства.",
+    "Используй фирменный логотип Magic Vibes из приложенного референса. Размести логотип один раз аккуратно в углу или в бренд-зоне, не перекрывай товар.",
+    "Сделай разные композиции для каждого варианта: главный слайд, слайд преимуществ, слайд нот/характера аромата.",
   ].join(" ");
 }
 
@@ -1294,13 +1309,22 @@ function setAiImageModalBusy(isBusy, text = "") {
   if (elements.aiImageStatus && text) elements.aiImageStatus.textContent = text;
 }
 
+function setAiImageProgress(visible, percent = 0, text = "") {
+  if (!elements.aiImageProgress) return;
+  elements.aiImageProgress.hidden = !visible;
+  if (elements.aiImageProgressBar) elements.aiImageProgressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  if (elements.aiImageProgressMeta) elements.aiImageProgressMeta.textContent = text;
+}
+
 function renderAiImageModal(product = selectedAiImageProduct()) {
   if (!elements.aiImageModal || !product) return;
   const draft = latestAiImageDraft(product);
-  state.aiImageDraft = draft;
+  const batch = latestAiImageBatch(product);
+  if (!state.aiImageDraft || !batch.some((item) => item.id === state.aiImageDraft?.id)) state.aiImageDraft = draft;
+  const selectedDraft = state.aiImageDraft || draft;
   const sourceImageUrl = elements.aiImageSourceInput?.value || aiImageSourceForProduct(product);
-  const currentImage = draft?.resultUrl || sourceImageUrl || productImage(product);
-  const canReview = draft?.status === "pending" && !state.aiImageBusy;
+  const currentImage = selectedDraft?.resultUrl || sourceImageUrl || productImage(product);
+  const canReview = selectedDraft?.status === "pending" && !state.aiImageBusy;
 
   if (elements.aiImageProductName) elements.aiImageProductName.textContent = displayProductName(product);
   if (elements.aiImageProductMeta) {
@@ -1319,6 +1343,16 @@ function renderAiImageModal(product = selectedAiImageProduct()) {
       : `<div class="product-image-empty">AI-превью появится здесь</div>`;
   }
 
+  if (elements.aiImageGallery) {
+    elements.aiImageGallery.innerHTML = batch.length
+      ? batch.map((item) => `
+          <button class="ai-inline-thumb ${item.id === selectedDraft?.id ? "active" : ""}" type="button" data-draft-id="${escapeHtml(item.id)}">
+            <img src="${escapeHtml(item.resultUrl)}" alt="AI-вариант ${escapeHtml(item.variantIndex || "")}" loading="lazy" />
+            <span>${escapeHtml(item.variantIndex ? `Вариант ${item.variantIndex}` : aiImageStatusLabel(item.status))}</span>
+          </button>
+        `).join("")
+      : "";
+  }
   if (elements.aiImageGenerateButton) elements.aiImageGenerateButton.textContent = draft ? "Переделать" : "Сгенерировать";
   if (elements.aiImageApproveButton) elements.aiImageApproveButton.disabled = !canReview;
   if (elements.aiImageRejectButton) elements.aiImageRejectButton.disabled = !canReview;
@@ -1328,8 +1362,8 @@ function renderAiImageModal(product = selectedAiImageProduct()) {
     if (!draft) {
       elements.aiImageStatus.textContent = "Проверьте заготовленный промпт и нажмите «Сгенерировать».";
     } else {
-      const created = draft.createdAt ? new Date(draft.createdAt).toLocaleString("ru-RU") : "только что";
-      elements.aiImageStatus.textContent = `Последний черновик: ${aiImageStatusLabel(draft.status)} · ${created}.`;
+      const created = selectedDraft?.createdAt ? new Date(selectedDraft.createdAt).toLocaleString("ru-RU") : "только что";
+      elements.aiImageStatus.textContent = `Выбранный вариант: ${aiImageStatusLabel(selectedDraft?.status)} · ${created}.`;
     }
   }
 }
@@ -1365,6 +1399,7 @@ function closeAiImageModal() {
   state.aiImageProductId = null;
   state.aiImageDraft = null;
   state.aiImageBusy = false;
+  setAiImageProgress(false, 0, "");
 }
 
 async function generateAiImageFromMain() {
@@ -1372,23 +1407,37 @@ async function generateAiImageFromMain() {
   if (!product?.id) return;
   const sourceImageUrl = String(elements.aiImageSourceInput?.value || aiImageSourceForProduct(product) || "").trim();
   const prompt = String(elements.aiImagePromptInput?.value || "").trim();
+  const count = Math.max(1, Math.min(4, Number(elements.aiImageCountInput?.value || 3) || 3));
   let finalStatus = "";
-  setAiImageModalBusy(true, "Генерирую AI-фото через relay. Обычно это занимает до минуты...");
+  let progress = 8;
+  let progressTimer = null;
+  setAiImageProgress(true, progress, `Готовлю ${count} фото и логотип...`);
+  setAiImageModalBusy(true, `Генерирую ${count} AI-фото через relay. Можно подождать прямо в этой модалке.`);
+  progressTimer = window.setInterval(() => {
+    progress = Math.min(92, progress + Math.max(2, Math.round((92 - progress) * 0.08)));
+    setAiImageProgress(true, progress, `Генерирую варианты: ${Math.round(progress)}%`);
+  }, 1200);
   try {
     const result = await api(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sourceImageUrl, prompt }),
+      body: JSON.stringify({ sourceImageUrl, prompt, count }),
     });
+    const drafts = Array.isArray(result.drafts) ? result.drafts : [result.draft].filter(Boolean);
+    state.aiImageDraft = drafts[0] || null;
     if (result.product) mergeWarehouseProduct(result.product);
     applyWarehouseFilters();
     renderWarehouseCards();
     renderDetailForProductIds([product.id]);
     renderAiImageModal(result.product || selectedAiImageProduct());
-    finalStatus = "AI-фото готово. Можно одобрить, отменить или переделать.";
+    setAiImageProgress(true, 100, `Готово: ${drafts.length || count} фото`);
+    finalStatus = drafts.length > 1
+      ? "AI-фото готовы. Выберите вариант ниже, затем поставьте его главным или отмените пакет."
+      : "AI-фото готово. Можно одобрить, отменить или переделать.";
   } catch (error) {
     finalStatus = error.message;
   } finally {
+    if (progressTimer) window.clearInterval(progressTimer);
     setAiImageModalBusy(false);
     renderAiImageModal();
     if (elements.aiImageStatus && finalStatus) elements.aiImageStatus.textContent = finalStatus;
@@ -3008,6 +3057,15 @@ elements.aiImageGenerateButton?.addEventListener("click", generateAiImageFromMai
 elements.aiImageApproveButton?.addEventListener("click", () => reviewAiImageFromMain("approve"));
 elements.aiImageRejectButton?.addEventListener("click", () => reviewAiImageFromMain("reject"));
 elements.aiImageSourceInput?.addEventListener("input", () => renderAiImageModal());
+elements.aiImageGallery?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-draft-id]");
+  if (!button || state.aiImageBusy) return;
+  const product = selectedAiImageProduct();
+  const draft = (product?.aiImages || []).find((item) => String(item.id) === String(button.dataset.draftId));
+  if (!draft) return;
+  state.aiImageDraft = draft;
+  renderAiImageModal(product);
+});
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && !elements.aiImageModal?.classList.contains("hidden") && !state.aiImageBusy) {
     closeAiImageModal();
