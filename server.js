@@ -105,6 +105,7 @@ let immediateAutoPushTimer = null;
 let immediateAutoPushAll = false;
 const immediateAutoPushIds = new Set();
 let immediateAutoPushChain = Promise.resolve();
+const changedPriceAutoPushAt = new Map();
 let marketplaceQueue = null;
 let marketplaceWorker = null;
 let telegramProxyDispatcher = null;
@@ -4134,6 +4135,7 @@ app.get("/api/warehouse", async (request, response, next) => {
     const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
     const refreshPrices = request.query.refreshPrices === "true";
     const data = await buildWarehouseViewCached({ sync, limit, usdRate, refreshPrices });
+    if (!sync && !refreshPrices) queueChangedWarehousePrices(data.products, "warehouse_view_detected_changed_prices");
     response.json(data);
   } catch (error) {
     logger.warn("warehouse view failed, serving snapshot if available", { detail: error?.message || String(error) });
@@ -4181,6 +4183,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
 
     const data = await buildWarehouseViewCached({ sync, usdRate, refreshPrices });
     let rows = Array.isArray(data.products) ? data.products.slice() : [];
+    if (!sync && !refreshPrices) queueChangedWarehousePrices(rows, "warehouse_page_detected_changed_prices");
 
     if (q) {
       rows = rows.filter((item) => {
@@ -5033,6 +5036,24 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
         logger.warn("immediate auto price push failed", { reason, detail: error?.message || String(error) });
       });
   }, 1200);
+}
+
+function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_prices_detected") {
+  const now = Date.now();
+  const cooldownMs = Math.max(30_000, Number(process.env.AUTO_PRICE_CHANGED_COOLDOWN_MS || 180_000) || 180_000);
+  const ids = (Array.isArray(products) ? products : [])
+    .filter((product) => product?.hasLinks && product.ready && product.changed && Number(product.nextPrice || 0) > 0)
+    .map((product) => product.id)
+    .filter(Boolean)
+    .filter((id) => {
+      const last = Number(changedPriceAutoPushAt.get(String(id)) || 0);
+      if (last && now - last < cooldownMs) return false;
+      changedPriceAutoPushAt.set(String(id), now);
+      return true;
+    });
+  if (!ids.length) return 0;
+  queueImmediateAutoPricePush(ids, reason);
+  return ids.length;
 }
 
 app.post("/api/warehouse/prices/send", async (request, response, next) => {
