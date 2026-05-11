@@ -15,6 +15,7 @@ const {
   normalizePriceMasterPrice,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
+  pickWarehouseSupplier,
   warehouseBrandMatches,
 } = require("../server.js");
 
@@ -121,6 +122,15 @@ test("normalizePriceMasterPrice keeps dollar-like values in USD", () => {
   assert.equal(value.sourceCurrency, "USD");
   assert.equal(value.convertedFromRub, false);
   assert.equal(value.price, 9500);
+});
+
+test("pickWarehouseSupplier chooses the cheapest available calculated price", () => {
+  const picked = pickWarehouseSupplier([
+    { partnerName: "Expensive", available: true, price: 20, calculatedPrice: 3400, docDate: "2026-01-01" },
+    { partnerName: "Cheap", available: true, price: 10, calculatedPrice: 1700, docDate: "2026-01-02" },
+    { partnerName: "Missing", available: false, price: 1, calculatedPrice: 100, docDate: "2026-01-03" },
+  ]);
+  assert.equal(picked.partnerName, "Cheap");
 });
 
 test("warehouse brand filter falls back to marketplace product data", () => {

@@ -2745,6 +2745,72 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
   return map;
 }
 
+async function findPriceMasterRowsForLink(linkInput, usdRate) {
+  const link = normalizeWarehouseLink(linkInput);
+  if (!link.article) return [];
+  const [rows] = await pool.query(
+    `
+    SELECT
+      r.NativeID AS article,
+      r.NativeName AS name,
+      r.NativePrice AS price,
+      r.Active AS active,
+      r.Ignored AS ignored,
+      r.RowID AS rowId,
+      d.DocDate AS docDate,
+      d.PartnerID AS partnerId,
+      p.PartnerName AS partnerName
+    FROM OfferRows r
+    JOIN OfferDocs d ON d.DocID = r.DocID
+    LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+    WHERE BINARY TRIM(r.NativeID) = BINARY ? AND r.Ignored = 0
+    ORDER BY d.DocDate DESC, r.RowID DESC
+    LIMIT 200
+    `,
+    [link.article],
+  );
+  return rows
+    .filter((row) => {
+      const supplierOk =
+        !link.supplierName ||
+        normalizeSupplierName(row.partnerName) === normalizeSupplierName(link.supplierName);
+      const partnerOk = !link.partnerId || String(row.partnerId) === String(link.partnerId);
+      const keywordOk = includesKeyword(row.name, link.keyword);
+      return supplierOk && partnerOk && keywordOk;
+    })
+    .map((row) => ({
+      ...row,
+      ...normalizePriceMasterPrice(row.price, usdRate, link.priceCurrency),
+      active: Boolean(row.active),
+      ignored: Boolean(row.ignored),
+    }));
+}
+
+async function assertPriceMasterLinkExists(linkInput, usdRate) {
+  const link = normalizeWarehouseLink(linkInput);
+  const matches = await findPriceMasterRowsForLink(link, usdRate);
+  if (matches.length) return matches;
+  const articleRows = await findPriceMasterRowsForLink({ ...link, supplierName: "", partnerId: "", keyword: "" }, usdRate);
+  const detailParts = [`артикул "${link.article}" должен совпадать с PriceMaster точно`];
+  if (!articleRows.length) {
+    detailParts.push("в PriceMaster нет строки с таким точным артикулом");
+  } else {
+    if (link.supplierName) detailParts.push(`поставщик должен быть "${link.supplierName}"`);
+    if (link.keyword) detailParts.push(`название должно содержать ключ "${link.keyword}"`);
+  }
+  const error = new Error(`Привязка не сохранена: ${detailParts.join(", ")}.`);
+  error.statusCode = 400;
+  error.code = "PM_LINK_NOT_FOUND";
+  error.matches = articleRows.slice(0, 10).map((row) => ({
+    article: row.article,
+    name: row.name,
+    partnerName: row.partnerName,
+    price: row.price,
+    active: row.active,
+  }));
+  throw error;
+}
+
 function pickWarehouseSupplier(matches) {
   return [...matches]
     .filter((match) => match.available)
@@ -3077,6 +3143,102 @@ async function buildWarehouseViewCached(params = {}) {
     });
   warehouseViewBuilds.set(key, build);
   return build;
+}
+
+async function buildFreshWarehouseProducts(productIds = []) {
+  const wanted = new Set((productIds || []).map((id) => String(id)));
+  if (!wanted.size) return [];
+  const appSettings = await readAppSettings();
+  const rate = Number(appSettings.fixedUsdRate || (await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);
+  const warehouse = await readWarehouse();
+  const productsToBuild = (warehouse.products || []).filter((product) => wanted.has(String(product.id)));
+  if (!productsToBuild.length) return [];
+  const links = productsToBuild.flatMap((product) => product.links || []);
+  const matchMap = await getPriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
+  const [priceMapResult, minPriceResult] = await Promise.all([
+    getWarehousePriceMaps(productsToBuild, { refresh: true }),
+    getWarehouseMinPriceMaps(productsToBuild, { refresh: true }),
+  ]);
+  if (priceMapResult.mutated || minPriceResult.mutated) await writeWarehouse(warehouse);
+  const priceMap = priceMapResult.map;
+  const minPriceMap = minPriceResult.map;
+
+  return productsToBuild.map((product) => {
+    const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
+    const suppliers = normalizedLinks.flatMap((link) =>
+      (matchMap.get(link.id) || []).map((match) => {
+        const markupCoefficient = resolveMarkupCoefficient({
+          productMarkup: product.markup,
+          marketplace: product.marketplace,
+          supplierUsdPrice: match.price,
+          appSettings,
+        });
+        return {
+          ...match,
+          markupCoefficient,
+          calculatedPrice: calculateRubPrice(match.price, rate, markupCoefficient),
+        };
+      }),
+    );
+    const links = normalizedLinks.map((link) => {
+      const matched = matchMap.get(link.id) || [];
+      return {
+        ...link,
+        matchedCount: matched.length,
+        availableCount: matched.filter((item) => item.available).length,
+        missingInPriceMaster: matched.length === 0,
+      };
+    });
+    const selectedSupplier = pickWarehouseSupplier(suppliers);
+    const fallbackMarkup = product.marketplace === "ozon"
+      ? Number(appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
+      : Number(appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
+    const markupCoefficient = Number(product.markup || selectedSupplier?.markupCoefficient || fallbackMarkup);
+    const rawNextPrice = selectedSupplier
+      ? Number(selectedSupplier.calculatedPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient))
+      : 0;
+    const minAuto = Number(product.autoPriceMin || 0);
+    const maxAuto = Number(product.autoPriceMax || 0);
+    let nextPrice = rawNextPrice;
+    if (nextPrice > 0 && minAuto > 0 && nextPrice < minAuto) nextPrice = minAuto;
+    if (nextPrice > 0 && maxAuto > 0 && nextPrice > maxAuto) nextPrice = maxAuto;
+    const currentPrice = priceMap.get(product.id) || null;
+    const ozonMinPrice = product.marketplace === "ozon" ? minPriceMap.get(product.id) || null : null;
+
+    return {
+      ...product,
+      brand: resolveWarehouseBrand(product),
+      markupCoefficient,
+      autoPriceEnabled: normalizedLinks.length > 0 ? true : product.autoPriceEnabled !== false,
+      autoPriceMin: minAuto > 0 ? minAuto : null,
+      autoPriceMax: maxAuto > 0 ? maxAuto : null,
+      currentPrice,
+      ozonMinPrice,
+      nextPrice,
+      changed: nextPrice > 0 && nextPrice !== currentPrice,
+      ready: Boolean(selectedSupplier && nextPrice > 0),
+      selectedSupplier,
+      fallbackSuppliers: suppliers
+        .filter((supplier) => supplier.available)
+        .slice(0, 3)
+        .map((supplier) => ({
+          partnerName: supplier.partnerName || supplier.supplierName || "",
+          article: supplier.article || "",
+          price: supplier.price,
+          calculatedPrice: supplier.calculatedPrice,
+        })),
+      selectedSupplierReason: selectedSupplier
+        ? "Выбран доступный поставщик с минимальной расчётной ценой."
+        : "Нет доступного поставщика.",
+      links,
+      suppliers,
+      supplierCount: suppliers.length,
+      availableSupplierCount: suppliers.filter((supplier) => supplier.available).length,
+      hasLinks: links.length > 0,
+      autoArchiveCandidate: links.length === 0,
+      status: selectedSupplier ? (nextPrice !== currentPrice ? "price_changed" : "ok") : "no_supplier",
+    };
+  });
 }
 
 async function appendHistory(syncResult) {
@@ -4401,6 +4563,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 
     const baseLink = normalizeWarehouseLink(request.body);
     if (!baseLink.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
+    const settings = await readAppSettings();
+    const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+    await assertPriceMasterLinkExists(baseLink, usdRate);
 
     const warehouse = await readWarehouse();
     const now = new Date().toISOString();
@@ -4424,17 +4589,15 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 
     if (!updatedIds.length) return response.status(404).json({ error: "Товары склада не найдены." });
 
-    const savedProducts = warehouse.products
-      .filter((product) => updatedIds.includes(product.id))
-      .map(normalizeWarehouseProduct);
     warehouseMemoryCache = {
       createdAt: warehouse.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       products: warehouse.products,
       suppliers: warehouse.suppliers,
     };
-    writeWarehouseInBackground(warehouse, "link_bulk_add_or_update");
-    response.json({ ok: true, changed: savedProducts.length, products: savedProducts, persisted: "queued" });
+    await writeWarehouse(warehouse);
+    const savedProducts = await buildFreshWarehouseProducts(updatedIds);
+    response.json({ ok: true, changed: savedProducts.length || updatedIds.length, products: savedProducts, persisted: "written" });
     appendAudit(request, "warehouse.links.bulk_save", {
       productIds: updatedIds,
       article: baseLink.article,
@@ -4457,21 +4620,24 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
 
     const link = normalizeWarehouseLink(request.body);
     if (!link.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
+    const settings = await readAppSettings();
+    const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+    await assertPriceMasterLinkExists(link, usdRate);
     product.links = Array.isArray(product.links) ? product.links : [];
     const index = product.links.findIndex((item) => item.id === link.id);
     if (index >= 0) product.links[index] = link;
     else product.links.push(link);
     if (product.links.length > 0) product.autoPriceEnabled = true;
     product.updatedAt = new Date().toISOString();
-    const savedProduct = normalizeWarehouseProduct(product);
     warehouseMemoryCache = {
       createdAt: warehouse.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       products: warehouse.products,
       suppliers: warehouse.suppliers,
     };
-    writeWarehouseInBackground(warehouse, "link_add_or_update");
-    response.json({ ok: true, product: savedProduct, links: savedProduct.links || [], persisted: "queued" });
+    await writeWarehouse(warehouse);
+    const [savedProduct] = await buildFreshWarehouseProducts([product.id]);
+    response.json({ ok: true, product: savedProduct || normalizeWarehouseProduct(product), links: (savedProduct || product).links || [], persisted: "written" });
     appendAudit(request, "warehouse.link.save", {
       productId: product.id,
       offerId: product.offerId,
@@ -4495,22 +4661,23 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     product.links = (product.links || []).filter((link) => link.id !== request.params.linkId);
     product.updatedAt = new Date().toISOString();
-    const savedProduct = normalizeWarehouseProduct(product);
     warehouseMemoryCache = {
       createdAt: warehouse.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
       products: warehouse.products,
       suppliers: warehouse.suppliers,
     };
-    writeWarehouseInBackground(warehouse, "link_delete");
-    response.json({ ok: true, product: savedProduct, links: savedProduct.links || [], persisted: "queued" });
+    await writeWarehouse(warehouse);
+    const [savedProduct] = await buildFreshWarehouseProducts([product.id]);
+    const responseProduct = savedProduct || normalizeWarehouseProduct(product);
+    response.json({ ok: true, product: responseProduct, links: responseProduct.links || [], persisted: "written" });
     appendAudit(request, "warehouse.link.delete", {
       productId: product.id,
       offerId: product.offerId,
       name: product.name,
       linkId: request.params.linkId,
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
-    if ((savedProduct.links || []).length) queueImmediateAutoPricePush([request.params.productId], "link_delete");
+    if ((responseProduct.links || []).length) queueImmediateAutoPricePush([request.params.productId], "link_delete");
   } catch (error) {
     next(error);
   }
@@ -5904,13 +6071,17 @@ app.use((error, request, response, _next) => {
   logger.error("request error", {
     path: request.path,
     method: request.method,
-    detail: error.code || error.message,
+    detail: error.statusCode ? error.message : (error.code || error.message),
+    code: error.code || null,
+    matches: error.matches || undefined,
     err: error,
   });
   const uploadError = error instanceof multer.MulterError;
   response.status(uploadError ? 400 : error.statusCode || 500).json({
     error: uploadError ? "Не удалось загрузить изображение" : "Не удалось выполнить запрос к Price Master",
-    detail: error.code || error.message,
+    detail: error.statusCode ? error.message : (error.code || error.message),
+    code: error.code || null,
+    matches: error.matches || undefined,
     ozon: error.ozon,
   });
 });
@@ -5954,6 +6125,7 @@ module.exports = {
   normalizePriceMasterPrice,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
+  pickWarehouseSupplier,
   resolveWarehouseBrand,
   warehouseBrandMatches,
 };

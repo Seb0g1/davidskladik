@@ -384,7 +384,10 @@ async function api(path, options) {
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
     const missing = Array.isArray(detail.missing) ? ` Не хватает: ${detail.missing.join(", ")}` : "";
-    const error = new Error(`${detail.detail || detail.error || "Ошибка запроса"}${missing}`);
+    const matchHint = Array.isArray(detail.matches) && detail.matches.length
+      ? ` Найдено по артикулу: ${detail.matches.slice(0, 3).map((item) => [item.partnerName, item.name].filter(Boolean).join(" / ")).join("; ")}`
+      : "";
+    const error = new Error(`${detail.detail || detail.error || "Ошибка запроса"}${missing}${matchHint}`);
     error.status = response.status;
     error.payload = detail;
     throw error;
@@ -1190,6 +1193,18 @@ function mergeWarehouseProduct(product) {
   const index = state.warehouse.findIndex((item) => item.id === product.id);
   if (index >= 0) state.warehouse[index] = product;
   else state.warehouse.push(product);
+}
+
+function renderDetailForProductIds(productIds = []) {
+  const ids = new Set((productIds || []).map(String));
+  if (!ids.size) return false;
+  const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
+    .find((item) => (item.productIds || []).some((id) => ids.has(String(id))));
+  if (!group) return false;
+  state.selectedWarehouseGroupKey = group.key;
+  state.selectedWarehouseDetailGroup = group;
+  renderWarehouseDetail(group);
+  return true;
 }
 
 async function ensureWarehouseGroupDetailed(groupKey) {
@@ -2565,6 +2580,8 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
   const data = new FormData(form);
+  const submitButton = form.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.disabled = true;
   try {
     const productIds = String(form.dataset.productIds || form.dataset.productId || "")
       .split(",")
@@ -2578,20 +2595,12 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     if (Array.isArray(result.products)) result.products.forEach((product) => mergeWarehouseProduct(product));
     applyWarehouseFilters();
     renderWarehouseCards();
-    const currentGroup = state.selectedWarehouseGroupKey
-      ? getSortedWarehouseGroups().find((group) => group.key === state.selectedWarehouseGroupKey)
-      : null;
-    if (currentGroup) {
-      renderWarehouseDetail(currentGroup);
-    } else if (state.selectedWarehouseDetailGroup) {
-      renderWarehouseDetail(state.selectedWarehouseDetailGroup);
-    }
+    renderDetailForProductIds(productIds);
     elements.warehouseStatus.textContent = `Привязка сохранена: ${formatNumber(result.changed || productIds.length)} товар(ов). Цена отправится автоматически.`;
-    window.setTimeout(() => {
-      if (!document.hidden) loadWarehouse(false).catch(() => {});
-    }, 8000);
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
+  } finally {
+    if (submitButton) submitButton.disabled = false;
   }
 });
 
@@ -2662,15 +2671,9 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
         mergeWarehouseProduct(result.product);
         applyWarehouseFilters();
         renderWarehouseCards();
-        const currentGroup = state.selectedWarehouseGroupKey
-          ? getSortedWarehouseGroups().find((group) => group.key === state.selectedWarehouseGroupKey)
-          : null;
-        renderWarehouseDetail(currentGroup || null);
+        renderDetailForProductIds([result.product.id || linkButton.dataset.productId]);
       }
       elements.warehouseStatus.textContent = "Привязка удалена. Автоцена пересчитается по оставшимся привязкам.";
-      window.setTimeout(() => {
-        if (!document.hidden) loadWarehouse(false).catch(() => {});
-      }, 8000);
     }
     if (productButton && await confirmAction({ title: "Удалить товар?", text: "Удалить товар из личного склада?", okText: "Удалить" })) {
       await api(`/api/warehouse/products/${productButton.dataset.productId}`, { method: "DELETE" });
