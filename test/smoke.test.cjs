@@ -20,6 +20,7 @@ const {
   pickSupplierRecoveryCandidates,
   pickWarehouseSupplier,
   warehouseBrandMatches,
+  normalizeWarehouseProduct,
 } = require("../server.js");
 
 test("GET /health", async () => {
@@ -227,6 +228,121 @@ test("warehouse brand filter scans non-standard marketplace fields", () => {
   };
 
   assert.equal(warehouseBrandMatches(product, "Amouage"), true);
+});
+
+test("normalizeWarehouseProduct preserves AI image draft review state", () => {
+  const product = normalizeWarehouseProduct({
+    target: "ozon",
+    offerId: "ai-draft-1",
+    name: "AI Test Product",
+    aiImages: [
+      {
+        id: "draft-1",
+        status: "approved",
+        sourceImageUrl: "http://localhost/uploads/images/source.png",
+        resultUrl: "http://localhost/uploads/ai-images/result.png",
+        prompt: "Generate for {productName}",
+        reviewedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  });
+
+  assert.equal(product.aiImages.length, 1);
+  assert.equal(product.aiImages[0].status, "approved");
+  assert.equal(product.aiImages[0].resultUrl, "http://localhost/uploads/ai-images/result.png");
+});
+
+test("AI image generation requires OpenAI key before creating draft", async () => {
+  const agent = request.agent(app);
+  const smokeId = `smoke-ai-${Date.now()}`;
+  let product;
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  const saved = await agent
+    .post("/api/warehouse/products")
+    .send({
+      id: smokeId,
+      target: "ozon",
+      offerId: smokeId,
+      name: "Smoke AI Product",
+      ozon: {
+        offerId: smokeId,
+        name: "Smoke AI Product",
+        primaryImage: "http://localhost/uploads/images/source.png",
+      },
+    })
+    .expect(200);
+
+  product = saved.body.warehouse.products.find((item) => item.id === smokeId);
+  assert.ok(product);
+
+  const previousKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  try {
+    const res = await agent
+      .post(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`)
+      .send({ sourceImageUrl: "http://localhost/uploads/images/source.png" })
+      .expect(400);
+
+    assert.equal(res.body.code, "openai_api_key_missing");
+  } finally {
+    if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousKey;
+    if (product?.id) await agent.delete(`/api/warehouse/products/${encodeURIComponent(product.id)}`).expect(200);
+  }
+});
+
+test("AI image draft approval updates local Ozon image fields only", async () => {
+  const agent = request.agent(app);
+  const smokeId = `smoke-ai-approve-${Date.now()}`;
+  const draftId = "draft-approved-smoke";
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: smokeId,
+        target: "ozon",
+        offerId: smokeId,
+        name: "Smoke AI Approve Product",
+        ozon: {
+          offerId: smokeId,
+          name: "Smoke AI Approve Product",
+          primaryImage: "http://localhost/uploads/images/original.png",
+          images: ["http://localhost/uploads/images/original.png"],
+        },
+        aiImages: [
+          {
+            id: draftId,
+            status: "pending",
+            sourceImageUrl: "http://localhost/uploads/images/original.png",
+            resultUrl: "http://localhost/uploads/ai-images/generated.png",
+            prompt: "Generate marketplace image",
+          },
+        ],
+      })
+      .expect(200);
+
+    const res = await agent
+      .post(`/api/warehouse/products/${encodeURIComponent(smokeId)}/ai-images/${encodeURIComponent(draftId)}/approve`)
+      .send({})
+      .expect(200);
+
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.product.ozon.primaryImage, "http://localhost/uploads/ai-images/generated.png");
+    assert.equal(res.body.product.ozon.images[0], "http://localhost/uploads/ai-images/generated.png");
+    assert.equal(res.body.product.aiImages[0].status, "approved");
+    assert.equal(res.body.result, undefined);
+  } finally {
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}`).expect(200);
+  }
 });
 
 test("automation ignores products without links", () => {

@@ -209,6 +209,25 @@
                   </div>
                   <small id="ozonImageUploadStatus" class="image-importer__status">Файлы ещё не выбраны.</small>
                 </div>
+                <div class="ai-image-panel field-span-2">
+                  <div class="ai-image-panel__head">
+                    <div>
+                      <strong>AI-изображение для Ozon</strong>
+                      <span>Генерация создаст черновик для проверки и не отправит его в Ozon.</span>
+                    </div>
+                    <button id="ozonAiGenerateButton" class="secondary-button compact-button" type="button">Сгенерировать</button>
+                  </div>
+                  <label>
+                    Исходное фото
+                    <input id="ozonAiSourceImage" type="url" placeholder="Берется главное изображение, можно указать другой URL PNG/JPG/WEBP" />
+                  </label>
+                  <label>
+                    Промт
+                    <textarea id="ozonAiPrompt" class="code-area" rows="4">Сгенерируй продающее изображение для карточки товара на Ozon. Используй название товара: "{productName}". Сохрани узнаваемость товара с исходного фото, улучшив фон, свет, композицию и визуальную привлекательность для маркетплейса. Не добавляй логотипы, водяные знаки, недостоверные характеристики или лишний текст.</textarea>
+                  </label>
+                  <div id="ozonAiPreview" class="ai-image-preview" hidden></div>
+                  <small id="ozonAiStatus" class="image-importer__status">AI-черновиков пока нет.</small>
+                </div>
                 <label class="field-span-2">
                   Фото 360
                   <textarea name="images360" placeholder="Один URL на строку"></textarea>

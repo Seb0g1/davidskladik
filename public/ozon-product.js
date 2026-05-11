@@ -23,8 +23,14 @@ const readyStatus = document.querySelector("#ozonReadyStatus");
 const readyMeta = document.querySelector("#ozonReadyMeta");
 const scrollToMissingFieldButton = document.querySelector("#scrollToMissingFieldButton");
 const requiredChecklist = document.querySelector("#ozonRequiredChecklist");
+const aiGenerateButton = document.querySelector("#ozonAiGenerateButton");
+const aiSourceImageInput = document.querySelector("#ozonAiSourceImage");
+const aiPromptInput = document.querySelector("#ozonAiPrompt");
+const aiPreview = document.querySelector("#ozonAiPreview");
+const aiStatus = document.querySelector("#ozonAiStatus");
 
 let editingProductId = "";
+let currentProduct = null;
 let vendorSuggestAbort = null;
 let vendorActiveIndex = -1;
 let categorySuggestAbort = null;
@@ -147,6 +153,60 @@ function chooseCategoryOption(option) {
   categoryActiveIndex = -1;
 }
 
+function sourceImageFromForm() {
+  return String(aiSourceImageInput?.value || form.elements.primaryImage?.value || form.elements.images?.value || "")
+    .split(/\r?\n|,/)
+    .map((value) => value.trim())
+    .find(Boolean) || "";
+}
+
+function latestAiDraft(product = currentProduct) {
+  const drafts = Array.isArray(product?.aiImages) ? product.aiImages : [];
+  return drafts[drafts.length - 1] || null;
+}
+
+function aiStatusLabel(status) {
+  if (status === "approved") return "принято";
+  if (status === "rejected") return "отклонено";
+  return "ожидает проверки";
+}
+
+function renderAiDraft(product = currentProduct) {
+  const draft = latestAiDraft(product);
+  if (aiSourceImageInput && !aiSourceImageInput.value) aiSourceImageInput.value = sourceImageFromForm();
+  if (!aiPreview || !aiStatus) return;
+  if (!draft) {
+    aiPreview.hidden = true;
+    aiPreview.innerHTML = "";
+    aiStatus.textContent = editingProductId
+      ? "AI-черновиков пока нет."
+      : "Заполните название и фото, затем можно генерировать AI-изображение.";
+    return;
+  }
+
+  aiPreview.hidden = false;
+  const canReview = draft.status === "pending";
+  aiPreview.innerHTML = `
+    <div class="ai-image-preview__media">
+      <img src="${escapeHtml(draft.resultUrl || "")}" alt="AI-черновик изображения Ozon" loading="lazy" />
+      <div class="ai-image-preview__meta">
+        <strong>Статус: ${escapeHtml(aiStatusLabel(draft.status))}</strong>
+        <span>Модель: ${escapeHtml(draft.model || "OpenAI Images")}</span>
+        <span>Размер: ${escapeHtml(draft.size || "auto")}</span>
+        <span>Создано: ${escapeHtml(draft.createdAt ? new Date(draft.createdAt).toLocaleString("ru-RU") : "только что")}</span>
+      </div>
+    </div>
+    <div class="ai-image-preview__actions">
+      <button class="primary-button compact-button" type="button" data-ai-action="approve" data-draft-id="${escapeHtml(draft.id)}" ${canReview ? "" : "disabled"}>Принять в Ozon-поля</button>
+      <button class="secondary-button compact-button" type="button" data-ai-action="reject" data-draft-id="${escapeHtml(draft.id)}" ${canReview ? "" : "disabled"}>Отклонить</button>
+      <a class="text-link" href="${escapeHtml(draft.resultUrl || "")}" target="_blank" rel="noopener">Открыть изображение</a>
+    </div>
+  `;
+  aiStatus.textContent = canReview
+    ? "Проверьте результат. Принятие только заполнит поля формы, отправка в Ozon останется ручной."
+    : `Последний AI-черновик: ${aiStatusLabel(draft.status)}.`;
+}
+
 function queryValue(name) {
   return new URLSearchParams(window.location.search).get(name) || "";
 }
@@ -164,6 +224,7 @@ function setInitialValues() {
 }
 
 function applyOzonDraft(product = {}) {
+  currentProduct = product;
   const ozon = product.ozon || {};
   const mappings = [
     ["offerId", product.offerId || ozon.offerId || ""],
@@ -197,6 +258,8 @@ function applyOzonDraft(product = {}) {
   for (const [name, value] of mappings) {
     if (form.elements[name] && value !== undefined && value !== null) form.elements[name].value = value;
   }
+  if (aiSourceImageInput && !aiSourceImageInput.value) aiSourceImageInput.value = sourceImageFromForm();
+  renderAiDraft(product);
 }
 
 async function loadExistingProduct() {
@@ -294,6 +357,7 @@ async function importProductImages() {
     const urls = uploaded.map((file) => file.url).filter(Boolean);
     if (!form.elements.primaryImage.value && urls[0]) form.elements.primaryImage.value = urls[0];
     appendLines(form.elements.images, urls);
+    if (aiSourceImageInput && !aiSourceImageInput.value && urls[0]) aiSourceImageInput.value = urls[0];
     imageUploadStatus.textContent = `Импортировано изображений: ${urls.length}.`;
     imageUploadInput.value = "";
   } catch (error) {
@@ -385,7 +449,71 @@ async function saveWarehouseDraft(data) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(editingProductId ? { ...buildWarehousePayload(data), id: editingProductId } : buildWarehousePayload(data)),
   });
-  return { response, product: findSavedProduct(response.warehouse, data) };
+  const product = findSavedProduct(response.warehouse, data);
+  if (product) {
+    currentProduct = product;
+    editingProductId = product.id || editingProductId;
+    renderAiDraft(product);
+  }
+  return { response, product };
+}
+
+async function ensureProductForAi() {
+  let data;
+  try {
+    data = collectFormData();
+  } catch (error) {
+    throw new Error(`Проверьте форму перед генерацией: ${error.message}`);
+  }
+  const saved = await saveWarehouseDraft(data);
+  if (!saved.product?.id) throw new Error("Не удалось сохранить товар перед генерацией AI-изображения.");
+  return saved.product;
+}
+
+async function generateAiImageDraft() {
+  if (!aiGenerateButton) return;
+  aiGenerateButton.disabled = true;
+  if (aiStatus) aiStatus.textContent = "Сохраняю товар и запускаю генерацию. Это может занять до минуты...";
+  try {
+    const product = await ensureProductForAi();
+    const sourceImageUrl = sourceImageFromForm();
+    const result = await api(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sourceImageUrl,
+        prompt: aiPromptInput?.value || "",
+      }),
+    });
+    currentProduct = result.product || currentProduct;
+    renderAiDraft(currentProduct);
+    if (aiStatus) aiStatus.textContent = "AI-черновик готов. Проверьте изображение и примите его, если результат подходит.";
+  } catch (error) {
+    if (aiStatus) aiStatus.textContent = error.message;
+  } finally {
+    aiGenerateButton.disabled = false;
+  }
+}
+
+async function reviewAiImageDraft(action, draftId) {
+  if (!editingProductId || !draftId) return;
+  if (aiStatus) aiStatus.textContent = action === "approve" ? "Принимаю AI-изображение в поля Ozon..." : "Отклоняю AI-черновик...";
+  try {
+    const result = await api(`/api/warehouse/products/${encodeURIComponent(editingProductId)}/ai-images/${encodeURIComponent(draftId)}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    currentProduct = result.product || currentProduct;
+    applyOzonDraft(currentProduct);
+    if (aiStatus) {
+      aiStatus.textContent = action === "approve"
+        ? "AI-изображение принято в поля Ozon. Отправка в Ozon произойдет только по кнопке отправки и подтверждению."
+        : "AI-черновик отклонен.";
+    }
+  } catch (error) {
+    if (aiStatus) aiStatus.textContent = error.message;
+  }
 }
 
 async function suggestVendors() {
@@ -524,6 +652,12 @@ imageUploadButton.addEventListener("click", importProductImages);
 imageUploadInput.addEventListener("change", () => {
   const count = imageUploadInput.files.length;
   imageUploadStatus.textContent = count ? `Выбрано файлов: ${count}.` : "Файлы ещё не выбраны.";
+});
+aiGenerateButton?.addEventListener("click", generateAiImageDraft);
+aiPreview?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-ai-action]");
+  if (!button) return;
+  reviewAiImageDraft(button.dataset.aiAction, button.dataset.draftId);
 });
 vendorInput?.addEventListener("input", () => {
   window.clearTimeout(vendorInput._suggestTimer);
@@ -696,4 +830,5 @@ Promise.all([loadTargets(), loadExistingProduct()])
   .catch((error) => {
     statusBox.textContent = error.message;
   });
+renderAiDraft();
 updateReadinessSidebar();

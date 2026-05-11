@@ -10,6 +10,8 @@ const mysql = require("mysql2/promise");
 const { Queue, Worker } = require("bullmq");
 const ExcelJS = require("exceljs");
 const { ProxyAgent: UndiciProxyAgent } = require("undici");
+const OpenAI = require("openai");
+const { toFile } = require("openai/uploads");
 require("dotenv").config();
 
 const logger = require("./lib/logger");
@@ -48,6 +50,7 @@ const dataDir = path.join(__dirname, "data");
 const configDir = path.join(__dirname, "config");
 const publicDir = path.join(__dirname, "public");
 const uploadImageDir = path.join(publicDir, "uploads", "images");
+const aiImageDir = path.join(publicDir, "uploads", "ai-images");
 const snapshotPath = path.join(dataDir, "snapshot.json");
 const historyPath = path.join(dataDir, "history.jsonl");
 const exchangeRatePath = path.join(dataDir, "exchange-rate.json");
@@ -84,6 +87,12 @@ const telegramDailyReportEnabled = process.env.TELEGRAM_DAILY_REPORT_ENABLED !==
 const telegramDailyReportTime = process.env.TELEGRAM_DAILY_REPORT_TIME || "22:00";
 const telegramProxyUrl = cleanText(process.env.TELEGRAM_PROXY_URL);
 const telegramApiBaseUrl = cleanText(process.env.TELEGRAM_API_BASE_URL || "https://api.telegram.org");
+const openaiImageModel = cleanText(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
+const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1536x1024");
+const openaiImageQuality = cleanText(process.env.OPENAI_IMAGE_QUALITY || "auto");
+const openaiImageFormat = cleanText(process.env.OPENAI_IMAGE_FORMAT || "png");
+const ozonAiImageDefaultPrompt = cleanText(process.env.OZON_AI_IMAGE_PROMPT)
+  || 'Сгенерируй продающее изображение для карточки товара на Ozon. Используй название товара: "{productName}". Сохрани узнаваемость товара с исходного фото, улучшив фон, свет, композицию и визуальную привлекательность для маркетплейса. Не добавляй логотипы, водяные знаки, недостоверные характеристики или лишний текст.';
 
 let dailySyncTimer = null;
 let dailySyncNextRunAt = null;
@@ -445,6 +454,7 @@ function requireAuth(request, response, next) {
   const publicPaths = ["/login", "/login.html", "/styles.css", "/login.js", "/app.js", "/product.js", "/product-builder-ui.js", "/ozon-product.js", "/yandex-product.js", "/health"];
   if (publicPaths.includes(request.path)) return next();
   if (request.path.startsWith("/uploads/images/")) return next();
+  if (request.path.startsWith("/uploads/ai-images/")) return next();
   if (request.path === "/api/login" || request.path === "/api/session") return next();
 
   const session = readSession(request);
@@ -525,6 +535,37 @@ function imageExtension(file) {
     "image/gif": ".gif",
   };
   return byMime[String(file.mimetype || "").toLowerCase()] || path.extname(file.originalname || "").toLowerCase() || ".img";
+}
+
+function imageMimeFromPath(filePath) {
+  const extension = path.extname(filePath || "").toLowerCase();
+  const byExtension = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+  };
+  return byExtension[extension] || "image/png";
+}
+
+function supportedOpenAiSourceMime(mimeType) {
+  return /^image\/(png|jpe?g|webp)$/i.test(cleanText(mimeType));
+}
+
+function fileNameFromImageMime(mimeType, fallback = "source.png") {
+  const mime = cleanText(mimeType).toLowerCase();
+  if (mime.includes("jpeg") || mime.includes("jpg")) return "source.jpg";
+  if (mime.includes("webp")) return "source.webp";
+  if (mime.includes("png")) return "source.png";
+  return fallback;
+}
+
+function aiImageExtension(format = openaiImageFormat) {
+  const normalized = cleanText(format || "png").toLowerCase();
+  if (normalized === "jpeg" || normalized === "jpg") return ".jpg";
+  if (normalized === "webp") return ".webp";
+  return ".png";
 }
 
 function chunkArray(items, size) {
@@ -929,6 +970,29 @@ function firstImageUrl(value) {
   return text.split(/\r?\n|,/).map(cleanText).find(Boolean) || "";
 }
 
+function localPublicFilePathFromUrl(value, request) {
+  const raw = cleanText(value);
+  if (!raw) return "";
+  let pathname = raw;
+  if (/^https?:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      const base = new URL(uploadBaseUrl(request));
+      if (parsed.origin !== base.origin) return "";
+      pathname = parsed.pathname;
+    } catch (_error) {
+      return "";
+    }
+  }
+  const decodedPathname = decodeURIComponent(pathname.split("?")[0] || "");
+  if (!decodedPathname.startsWith("/uploads/")) return "";
+  const normalized = path.normalize(decodedPathname.replace(/^\/+/, ""));
+  const fullPath = path.join(publicDir, normalized);
+  const relative = path.relative(publicDir, fullPath);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return "";
+  return fullPath;
+}
+
 function normalizeSearchText(value) {
   return String(value || "")
     .toLowerCase()
@@ -1043,6 +1107,32 @@ function normalizeProductExports(exports = {}) {
   );
 }
 
+function normalizeAiImageDraft(input = {}) {
+  if (!input || typeof input !== "object") return null;
+  const status = cleanText(input.status || "pending").toLowerCase();
+  const allowedStatus = new Set(["pending", "approved", "rejected"]);
+  const draft = compactObject({
+    id: cleanText(input.id) || crypto.randomUUID(),
+    status: allowedStatus.has(status) ? status : "pending",
+    prompt: cleanText(input.prompt),
+    productName: cleanText(input.productName || input.product_name),
+    sourceImageUrl: cleanText(input.sourceImageUrl || input.source_image_url),
+    resultUrl: cleanText(input.resultUrl || input.result_url || input.url),
+    model: cleanText(input.model),
+    size: cleanText(input.size),
+    quality: cleanText(input.quality),
+    format: cleanText(input.format),
+    createdAt: input.createdAt || input.created_at || new Date().toISOString(),
+    reviewedAt: input.reviewedAt || input.reviewed_at || null,
+  });
+  return draft.resultUrl || draft.sourceImageUrl || draft.prompt ? draft : null;
+}
+
+function normalizeAiImageDrafts(input = []) {
+  const drafts = Array.isArray(input) ? input : [];
+  return drafts.map(normalizeAiImageDraft).filter(Boolean).slice(-50);
+}
+
 function normalizeMarketplaceState(input = {}) {
   if (!input || typeof input !== "object") {
     return { code: "unknown", label: "Статус не загружен" };
@@ -1118,6 +1208,7 @@ function normalizeWarehouseProduct(input = {}) {
     yandex: yandexDraft,
     marketplaceState: normalizeMarketplaceState(input.marketplaceState || input.marketplace_state || input.ozonState),
     exports: normalizeProductExports(input.exports),
+    aiImages: normalizeAiImageDrafts(input.aiImages || input.ai_images || input.imageDrafts),
     priceHistory: Array.isArray(input.priceHistory) ? input.priceHistory.slice(-100) : [],
     noSupplierAutomation: {
       stockZeroAt: input.noSupplierAutomation?.stockZeroAt || null,
@@ -2264,6 +2355,106 @@ function buildOzonWarehouseProductItem(product, overrides = {}) {
   };
 
   return buildOzonManualProductItem(body);
+}
+
+function buildOzonAiImagePrompt(product, promptOverride = "") {
+  const productName = cleanText(product?.name || product?.ozon?.name || product?.offerId || "товар");
+  const template = cleanText(promptOverride) || ozonAiImageDefaultPrompt;
+  return template.includes("{productName}")
+    ? template.replaceAll("{productName}", productName)
+    : `${template}\n\nНазвание товара: ${productName}`;
+}
+
+function getOpenAiClient() {
+  const apiKey = cleanText(process.env.OPENAI_API_KEY);
+  if (!apiKey) {
+    const error = new Error("OPENAI_API_KEY не задан. Добавьте ключ OpenAI в .env, чтобы генерировать изображения.");
+    error.statusCode = 400;
+    error.code = "openai_api_key_missing";
+    throw error;
+  }
+  return new OpenAI({ apiKey });
+}
+
+async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl }, request) {
+  const sourceUrl = cleanText(sourceImageUrl) || firstImageUrl(product.ozon?.primaryImage || product.ozon?.images || product.imageUrl);
+  if (!sourceUrl) {
+    const error = new Error("Укажите исходное фото товара перед генерацией AI-изображения.");
+    error.statusCode = 400;
+    error.code = "source_image_required";
+    throw error;
+  }
+
+  const client = getOpenAiClient();
+  const sourcePath = localPublicFilePathFromUrl(sourceUrl, request);
+  let sourceBuffer;
+  let sourceFileName;
+  let sourceMimeType;
+  if (sourcePath) {
+    sourceBuffer = await fs.readFile(sourcePath);
+    sourceMimeType = imageMimeFromPath(sourcePath);
+    sourceFileName = path.basename(sourcePath);
+  } else if (/^https?:\/\//i.test(sourceUrl)) {
+    const sourceResponse = await fetch(sourceUrl);
+    if (!sourceResponse.ok) {
+      const error = new Error(`Не удалось скачать исходное фото для AI-генерации: HTTP ${sourceResponse.status}.`);
+      error.statusCode = 400;
+      error.code = "source_image_fetch_failed";
+      throw error;
+    }
+    sourceMimeType = cleanText(sourceResponse.headers.get("content-type")).split(";")[0];
+    if (!supportedOpenAiSourceMime(sourceMimeType)) {
+      const error = new Error("Исходное фото должно быть PNG, JPG или WEBP.");
+      error.statusCode = 400;
+      error.code = "unsupported_source_image";
+      throw error;
+    }
+    sourceBuffer = Buffer.from(await sourceResponse.arrayBuffer());
+    sourceFileName = fileNameFromImageMime(sourceMimeType);
+  } else {
+    const error = new Error("Укажите исходное фото как URL или загрузите его через импорт изображений.");
+    error.statusCode = 400;
+    error.code = "source_image_url_required";
+    throw error;
+  }
+
+  const generatedPrompt = buildOzonAiImagePrompt(product, prompt);
+  const image = await toFile(sourceBuffer, sourceFileName, { type: sourceMimeType });
+  const result = await client.images.edit({
+    model: openaiImageModel,
+    image,
+    prompt: generatedPrompt,
+    size: openaiImageSize,
+    quality: openaiImageQuality,
+    output_format: openaiImageFormat,
+    input_fidelity: "high",
+  });
+  const imageBase64 = result?.data?.[0]?.b64_json;
+  if (!imageBase64) {
+    const error = new Error("OpenAI не вернул изображение. Попробуйте повторить генерацию.");
+    error.statusCode = 502;
+    error.code = "openai_image_empty";
+    throw error;
+  }
+
+  await fs.mkdir(aiImageDir, { recursive: true });
+  const extension = aiImageExtension(openaiImageFormat);
+  const fileName = `${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}${extension}`;
+  const filePath = path.join(aiImageDir, fileName);
+  await fs.writeFile(filePath, Buffer.from(imageBase64, "base64"));
+
+  const relativeUrl = `/uploads/ai-images/${fileName}`;
+  return normalizeAiImageDraft({
+    status: "pending",
+    prompt: generatedPrompt,
+    productName: product.name || product.ozon?.name,
+    sourceImageUrl: sourceUrl,
+    resultUrl: `${uploadBaseUrl(request)}${relativeUrl}`,
+    model: openaiImageModel,
+    size: openaiImageSize,
+    quality: openaiImageQuality,
+    format: openaiImageFormat,
+  });
 }
 
 function buildYandexOfferMapping(product, overrides = {}) {
@@ -4600,6 +4791,7 @@ app.post("/api/warehouse/products", async (request, response, next) => {
         ozon: hasObjectData(input.ozon) ? input.ozon : current.ozon,
         yandex: hasObjectData(input.yandex) ? input.yandex : current.yandex,
         exports: { ...(current.exports || {}), ...(input.exports || {}) },
+        aiImages: input.aiImages?.length ? input.aiImages : current.aiImages,
         priceHistory: current.priceHistory || [],
         links: current.links,
         createdAt: current.createdAt,
@@ -4620,6 +4812,95 @@ app.get("/api/warehouse/products/:id", async (request, response, next) => {
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     response.json({ product });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/products/:id/ai-images/generate", async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+
+    const draft = await generateOzonAiImageDraft(product, {
+      prompt: request.body.prompt,
+      sourceImageUrl: request.body.sourceImageUrl,
+    }, request);
+    product.aiImages = normalizeAiImageDrafts([...(product.aiImages || []), draft]);
+    product.updatedAt = new Date().toISOString();
+
+    const saved = await writeWarehouse(warehouse);
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    response.json({ ok: true, draft, product: savedProduct });
+    appendAudit(request, "warehouse.ai_image.generate", {
+      productId: product.id,
+      offerId: product.offerId,
+      draftId: draft.id,
+    }).catch((auditError) => logger.warn("ai image generate audit failed", { detail: auditError?.message || String(auditError) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+
+    product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
+    const draft = product.aiImages.find((item) => item.id === request.params.draftId);
+    if (!draft) return response.status(404).json({ error: "AI-черновик изображения не найден." });
+    if (!draft.resultUrl) return response.status(400).json({ error: "В AI-черновике нет URL результата." });
+
+    draft.status = "approved";
+    draft.reviewedAt = new Date().toISOString();
+    const ozon = product.ozon || {};
+    const images = splitList(ozon.images);
+    product.ozon = normalizeOzonDraft({
+      ...ozon,
+      primaryImage: draft.resultUrl,
+      images: [draft.resultUrl, ...images.filter((url) => url !== draft.resultUrl)],
+    });
+    product.imageUrl = draft.resultUrl;
+    product.updatedAt = new Date().toISOString();
+
+    const saved = await writeWarehouse(warehouse);
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    response.json({ ok: true, draft, product: savedProduct });
+    appendAudit(request, "warehouse.ai_image.approve", {
+      productId: product.id,
+      offerId: product.offerId,
+      draftId: draft.id,
+    }).catch((auditError) => logger.warn("ai image approve audit failed", { detail: auditError?.message || String(auditError) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/products/:id/ai-images/:draftId/reject", async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+
+    product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
+    const draft = product.aiImages.find((item) => item.id === request.params.draftId);
+    if (!draft) return response.status(404).json({ error: "AI-черновик изображения не найден." });
+
+    draft.status = "rejected";
+    draft.reviewedAt = new Date().toISOString();
+    product.updatedAt = new Date().toISOString();
+
+    const saved = await writeWarehouse(warehouse);
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    response.json({ ok: true, draft, product: savedProduct });
+    appendAudit(request, "warehouse.ai_image.reject", {
+      productId: product.id,
+      offerId: product.offerId,
+      draftId: draft.id,
+    }).catch((auditError) => logger.warn("ai image reject audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
     next(error);
   }
@@ -6494,6 +6775,7 @@ module.exports = {
   pickWarehouseSupplier,
   resolveWarehouseBrand,
   warehouseBrandMatches,
+  normalizeWarehouseProduct,
 };
 
 if (require.main === module) {
