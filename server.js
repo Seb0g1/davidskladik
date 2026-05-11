@@ -91,6 +91,9 @@ const openaiImageModel = cleanText(process.env.OPENAI_IMAGE_MODEL || "gpt-image-
 const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1536x1024");
 const openaiImageQuality = cleanText(process.env.OPENAI_IMAGE_QUALITY || "auto");
 const openaiImageFormat = cleanText(process.env.OPENAI_IMAGE_FORMAT || "png");
+const openaiRelayUrl = cleanText(process.env.OPENAI_RELAY_URL);
+const openaiRelaySecret = cleanText(process.env.OPENAI_RELAY_SECRET);
+const openaiRelayTimeoutMs = Math.max(30_000, Number(process.env.OPENAI_RELAY_TIMEOUT_MS || 180_000) || 180_000);
 const ozonAiImageDefaultPrompt = cleanText(process.env.OZON_AI_IMAGE_PROMPT)
   || 'Сгенерируй продающее изображение для карточки товара на Ozon. Используй название товара: "{productName}". Сохрани узнаваемость товара с исходного фото, улучшив фон, свет, композицию и визуальную привлекательность для маркетплейса. Не добавляй логотипы, водяные знаки, недостоверные характеристики или лишний текст.';
 
@@ -2365,15 +2368,100 @@ function buildOzonAiImagePrompt(product, promptOverride = "") {
     : `${template}\n\nНазвание товара: ${productName}`;
 }
 
+function isOpenAiRelayConfigured() {
+  return Boolean(openaiRelayUrl && openaiRelaySecret);
+}
+
+function isOpenAiDirectConfigured() {
+  return Boolean(cleanText(process.env.OPENAI_API_KEY));
+}
+
+function assertOpenAiRelayEnvPair() {
+  if (openaiRelayUrl && !openaiRelaySecret) {
+    const error = new Error("Задан OPENAI_RELAY_URL, но не задан OPENAI_RELAY_SECRET.");
+    error.statusCode = 400;
+    error.code = "openai_relay_secret_missing";
+    throw error;
+  }
+  if (!openaiRelayUrl && openaiRelaySecret) {
+    const error = new Error("Задан OPENAI_RELAY_SECRET без OPENAI_RELAY_URL.");
+    error.statusCode = 400;
+    error.code = "openai_relay_url_missing";
+    throw error;
+  }
+}
+
+function assertImageGenerationConfigured() {
+  assertOpenAiRelayEnvPair();
+  if (isOpenAiRelayConfigured() || isOpenAiDirectConfigured()) return;
+  const error = new Error(
+    "Генерация недоступна: задайте OPENAI_API_KEY на этом сервере или вынесите вызов OpenAI на VPS в поддерживаемом регионе и укажите OPENAI_RELAY_URL + OPENAI_RELAY_SECRET (см. scripts/openai-relay-server.cjs).",
+  );
+  error.statusCode = 400;
+  error.code = "openai_not_configured";
+  throw error;
+}
+
 function getOpenAiClient() {
   const apiKey = cleanText(process.env.OPENAI_API_KEY);
   if (!apiKey) {
-    const error = new Error("OPENAI_API_KEY не задан. Добавьте ключ OpenAI в .env, чтобы генерировать изображения.");
+    const error = new Error("OPENAI_API_KEY не задан для прямого вызова OpenAI.");
     error.statusCode = 400;
     error.code = "openai_api_key_missing";
     throw error;
   }
   return new OpenAI({ apiKey });
+}
+
+async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), openaiRelayTimeoutMs);
+  try {
+    const response = await fetch(openaiRelayUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${openaiRelaySecret}`,
+      },
+      body: JSON.stringify({
+        prompt,
+        sourceImageBase64: sourceBuffer.toString("base64"),
+        sourceMimeType: cleanText(sourceMimeType) || "image/png",
+        model: openaiImageModel,
+        size: openaiImageSize,
+        quality: openaiImageQuality,
+        output_format: openaiImageFormat,
+        input_fidelity: "high",
+      }),
+      signal: controller.signal,
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = cleanText(payload.detail || payload.error) || `Relay HTTP ${response.status}`;
+      const error = new Error(message);
+      error.statusCode = Number.isFinite(Number(payload.statusCode)) ? Number(payload.statusCode) : (response.status >= 400 && response.status < 600 ? response.status : 502);
+      error.code = cleanText(payload.code) || "openai_relay_error";
+      throw error;
+    }
+    const imageBase64 = payload.b64_json || payload.imageBase64;
+    if (!imageBase64) {
+      const error = new Error("Relay не вернул изображение (пустой b64_json).");
+      error.statusCode = 502;
+      error.code = "openai_relay_empty";
+      throw error;
+    }
+    return imageBase64;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      const timeoutError = new Error(`Таймаут relay OpenAI (${Math.round(openaiRelayTimeoutMs / 1000)} с). Увеличьте OPENAI_RELAY_TIMEOUT_MS или проверьте сеть.`);
+      timeoutError.statusCode = 504;
+      timeoutError.code = "openai_relay_timeout";
+      throw timeoutError;
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl }, request) {
@@ -2385,7 +2473,8 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl }, req
     throw error;
   }
 
-  const client = getOpenAiClient();
+  assertImageGenerationConfigured();
+
   const sourcePath = localPublicFilePathFromUrl(sourceUrl, request);
   let sourceBuffer;
   let sourceFileName;
@@ -2419,17 +2508,23 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl }, req
   }
 
   const generatedPrompt = buildOzonAiImagePrompt(product, prompt);
-  const image = await toFile(sourceBuffer, sourceFileName, { type: sourceMimeType });
-  const result = await client.images.edit({
-    model: openaiImageModel,
-    image,
-    prompt: generatedPrompt,
-    size: openaiImageSize,
-    quality: openaiImageQuality,
-    output_format: openaiImageFormat,
-    input_fidelity: "high",
-  });
-  const imageBase64 = result?.data?.[0]?.b64_json;
+  let imageBase64;
+  if (isOpenAiRelayConfigured()) {
+    imageBase64 = await fetchOpenAiImageViaRelay({ prompt: generatedPrompt, sourceBuffer, sourceMimeType });
+  } else {
+    const client = getOpenAiClient();
+    const image = await toFile(sourceBuffer, sourceFileName, { type: sourceMimeType });
+    const result = await client.images.edit({
+      model: openaiImageModel,
+      image,
+      prompt: generatedPrompt,
+      size: openaiImageSize,
+      quality: openaiImageQuality,
+      output_format: openaiImageFormat,
+      input_fidelity: "high",
+    });
+    imageBase64 = result?.data?.[0]?.b64_json;
+  }
   if (!imageBase64) {
     const error = new Error("OpenAI не вернул изображение. Попробуйте повторить генерацию.");
     error.statusCode = 502;

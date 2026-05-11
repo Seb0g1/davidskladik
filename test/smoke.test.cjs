@@ -280,17 +280,25 @@ test("AI image generation requires OpenAI key before creating draft", async () =
   assert.ok(product);
 
   const previousKey = process.env.OPENAI_API_KEY;
+  const previousRelayUrl = process.env.OPENAI_RELAY_URL;
+  const previousRelaySecret = process.env.OPENAI_RELAY_SECRET;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_RELAY_URL;
+  delete process.env.OPENAI_RELAY_SECRET;
   try {
     const res = await agent
       .post(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`)
       .send({ sourceImageUrl: "http://localhost/uploads/images/source.png" })
       .expect(400);
 
-    assert.equal(res.body.code, "openai_api_key_missing");
+    assert.equal(res.body.code, "openai_not_configured");
   } finally {
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;
+    if (previousRelayUrl === undefined) delete process.env.OPENAI_RELAY_URL;
+    else process.env.OPENAI_RELAY_URL = previousRelayUrl;
+    if (previousRelaySecret === undefined) delete process.env.OPENAI_RELAY_SECRET;
+    else process.env.OPENAI_RELAY_SECRET = previousRelaySecret;
     if (product?.id) await agent.delete(`/api/warehouse/products/${encodeURIComponent(product.id)}`).expect(200);
   }
 });

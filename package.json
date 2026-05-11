@@ -8,6 +8,7 @@
     "dev": "node server.js",
     "inspect:db": "node scripts/inspect-db.js",
     "test": "node --test test/smoke.test.cjs",
+    "relay:openai": "node scripts/openai-relay-server.cjs",
     "audit": "npm audit"
   },
   "keywords": [],
