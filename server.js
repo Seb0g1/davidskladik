@@ -97,6 +97,8 @@ let warehouseMemoryCache = null;
 const warehouseViewCache = new Map();
 const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
+let ozonRequestChain = Promise.resolve();
+let ozonLastRequestAt = 0;
 let immediateAutoPushTimer = null;
 let immediateAutoPushAll = false;
 const immediateAutoPushIds = new Set();
@@ -104,6 +106,27 @@ let immediateAutoPushChain = Promise.resolve();
 let marketplaceQueue = null;
 let marketplaceWorker = null;
 let telegramProxyDispatcher = null;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function describeFetchError(error) {
+  const parts = [error?.message || String(error)];
+  const cause = error?.cause;
+  if (cause) {
+    const causeParts = [
+      cause.code,
+      cause.errno,
+      cause.syscall,
+      cause.address,
+      cause.port,
+      cause.message,
+    ].filter(Boolean);
+    if (causeParts.length) parts.push(`cause=${causeParts.join(" ")}`);
+  }
+  return parts.join("; ");
+}
 
 function telegramReady() {
   return telegramNotificationsEnabled && Boolean(telegramBotToken && telegramChatId);
@@ -148,8 +171,13 @@ async function sendTelegramNotification(text, extra = {}) {
     }
     return { ok: true };
   } catch (error) {
-    logger.warn("telegram notification failed", { detail: error?.message || String(error) });
-    return { ok: false, error: error?.message || String(error) };
+    const detail = describeFetchError(error);
+    logger.warn("telegram notification failed", {
+      detail,
+      proxyEnabled: Boolean(telegramProxyUrl),
+      apiBaseUrl: telegramApiBaseUrl,
+    });
+    return { ok: false, error: detail };
   }
 }
 
@@ -177,14 +205,17 @@ async function sendTelegramDocument({ buffer, filename, caption }) {
     }
     return { ok: true };
   } catch (error) {
+    const detail = describeFetchError(error);
     logger.warn("telegram document failed", {
-      detail: error?.message || String(error),
+      detail,
       statusCode: error?.statusCode,
       telegram: error?.telegram,
+      proxyEnabled: Boolean(telegramProxyUrl),
+      apiBaseUrl: telegramApiBaseUrl,
     });
     return {
       ok: false,
-      error: error?.message || String(error),
+      error: detail,
       statusCode: error?.statusCode || null,
       telegram: error?.telegram || null,
     };
@@ -193,7 +224,7 @@ async function sendTelegramDocument({ buffer, filename, caption }) {
 
 function notifyTelegram(text, extra = {}) {
   sendTelegramNotification(text, extra).catch((error) => {
-    logger.warn("telegram notification failed", { detail: error?.message || String(error) });
+    logger.warn("telegram notification failed", { detail: describeFetchError(error) });
   });
 }
 
@@ -1227,6 +1258,32 @@ async function getUsdRate({ force = false } = {}) {
   }
 }
 
+function isOzonRateLimitError(error) {
+  const message = String(error?.message || "").toLowerCase();
+  const status = Number(error?.statusCode || error?.status || 0);
+  return status === 429 || message.includes("rate limit") || message.includes("too many request");
+}
+
+function ozonRetryDelayMs(attempt, response = null) {
+  const retryAfter = Number(response?.headers?.get?.("retry-after") || 0);
+  if (Number.isFinite(retryAfter) && retryAfter > 0) return Math.min(30_000, retryAfter * 1000);
+  const base = Math.max(500, Number(process.env.OZON_RATE_LIMIT_RETRY_MS || 1200) || 1200);
+  return Math.min(30_000, base * attempt * attempt);
+}
+
+function enqueueOzonRequest(task) {
+  const minIntervalMs = Math.max(0, Number(process.env.OZON_REQUEST_MIN_INTERVAL_MS || 450) || 450);
+  const run = async () => {
+    const waitMs = Math.max(0, ozonLastRequestAt + minIntervalMs - Date.now());
+    if (waitMs > 0) await sleep(waitMs);
+    ozonLastRequestAt = Date.now();
+    return task();
+  };
+  const queued = ozonRequestChain.then(run, run);
+  ozonRequestChain = queued.catch(() => {});
+  return queued;
+}
+
 async function ozonRequest(pathname, body, account = null) {
   const selectedAccount = account || getOzonAccountByTarget("ozon");
   const clientId = selectedAccount?.clientId;
@@ -1238,27 +1295,44 @@ async function ozonRequest(pathname, body, account = null) {
     throw error;
   }
 
-  const response = await fetch(`${ozonBaseUrl}${pathname}`, {
-    method: "POST",
-    headers: {
-      "Client-Id": clientId,
-      "Api-Key": apiKey,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body || {}),
+  return enqueueOzonRequest(async () => {
+    const maxAttempts = Math.max(1, Number(process.env.OZON_REQUEST_MAX_ATTEMPTS || 4) || 4);
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await fetch(`${ozonBaseUrl}${pathname}`, {
+          method: "POST",
+          headers: {
+            "Client-Id": clientId,
+            "Api-Key": apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(body || {}),
+        });
+
+        const text = await response.text();
+        const data = parseApiResponse(text);
+
+        if (!response.ok) {
+          const message = data.message || data.error || `Ozon API error ${response.status}`;
+          const error = new Error(message);
+          error.statusCode = response.status;
+          error.ozon = data;
+          if (!isOzonRateLimitError(error) || attempt >= maxAttempts) throw error;
+          lastError = error;
+          await sleep(ozonRetryDelayMs(attempt, response));
+          continue;
+        }
+
+        return data;
+      } catch (error) {
+        if (!isOzonRateLimitError(error) || attempt >= maxAttempts) throw error;
+        lastError = error;
+        await sleep(ozonRetryDelayMs(attempt));
+      }
+    }
+    throw lastError || new Error("Ozon API request failed");
   });
-
-  const text = await response.text();
-  const data = parseApiResponse(text);
-
-  if (!response.ok) {
-    const error = new Error(data.message || data.error || `Ozon API error ${response.status}`);
-    error.statusCode = response.status;
-    error.ozon = data;
-    throw error;
-  }
-
-  return data;
 }
 
 async function yandexRequest(shop, method, pathname, body) {
