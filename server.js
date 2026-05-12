@@ -133,6 +133,15 @@ const ozonAiImageDefaultPrompt = cleanText(process.env.OZON_AI_IMAGE_PROMPT)
 let dailySyncTimer = null;
 let dailySyncNextRunAt = null;
 let dailySyncPromise = null;
+let manualWarehouseSyncPromise = null;
+let manualWarehouseSyncState = {
+  status: "idle",
+  trigger: null,
+  startedAt: null,
+  finishedAt: null,
+  result: null,
+  error: null,
+};
 let autoSyncTimer = null;
 let autoSyncRunning = false;
 let autoSyncNextRunAt = null;
@@ -7559,6 +7568,61 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
   };
 }
 
+function getManualWarehouseSyncStatus() {
+  return {
+    ...manualWarehouseSyncState,
+    running: manualWarehouseSyncState.status === "running",
+  };
+}
+
+function startManualWarehouseSync(trigger = "manual") {
+  if (manualWarehouseSyncPromise) return { started: false, status: getManualWarehouseSyncStatus() };
+  const startedAt = new Date().toISOString();
+  manualWarehouseSyncState = {
+    status: "running",
+    trigger,
+    startedAt,
+    finishedAt: null,
+    result: null,
+    error: null,
+  };
+  manualWarehouseSyncPromise = runManualWarehouseSync(trigger)
+    .then((result) => {
+      manualWarehouseSyncState = {
+        status: "ok",
+        trigger,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        result,
+        error: null,
+      };
+      return result;
+    })
+    .catch((error) => {
+      const detail = error?.code || error?.message || String(error);
+      manualWarehouseSyncState = {
+        status: "failed",
+        trigger,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        result: null,
+        error: detail,
+      };
+      notifyTelegram(formatSyncNotification({
+        title: "Р СѓС‡РЅР°СЏ СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ СЃРєР»Р°РґР° Р·Р°РІРµСЂС€РёР»Р°СЃСЊ РѕС€РёР±РєРѕР№",
+        trigger,
+        error: detail,
+      }));
+      logger.error("manual warehouse sync failed", { detail, err: error });
+      throw error;
+    })
+    .finally(() => {
+      manualWarehouseSyncPromise = null;
+    });
+  manualWarehouseSyncPromise.catch(() => {});
+  return { started: true, status: getManualWarehouseSyncStatus() };
+}
+
 function scheduleAutoSync(delayMs = 10_000) {
   if (autoSyncTimer) clearTimeout(autoSyncTimer);
   autoSyncNextRunAt = new Date(Date.now() + delayMs).toISOString();
@@ -7603,7 +7667,27 @@ app.get("/api/daily-sync", async (_request, response, next) => {
 
 app.post("/api/daily-sync/run", requireAdmin, async (_request, response, next) => {
   try {
-    response.json(await runDailyRefresh("manual"));
+    const alreadyRunning = Boolean(dailySyncPromise);
+    if (!alreadyRunning) {
+      runDailyRefresh("manual").catch((error) => {
+        logger.error("manual daily sync background failed", { detail: error?.code || error?.message || String(error), err: error });
+      });
+    }
+    const status = await getDailySyncStatus();
+    response.status(202).json({
+      ok: true,
+      started: !alreadyRunning,
+      running: true,
+      status: status.status === "running" ? status : { ...status, status: "running", trigger: "manual" },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/warehouse/sync/status", requireAdmin, async (_request, response, next) => {
+  try {
+    response.json(getManualWarehouseSyncStatus());
   } catch (error) {
     next(error);
   }
@@ -7611,7 +7695,13 @@ app.post("/api/daily-sync/run", requireAdmin, async (_request, response, next) =
 
 app.post("/api/warehouse/sync/run", requireAdmin, async (_request, response, next) => {
   try {
-    response.json(await runManualWarehouseSync("manual"));
+    const result = startManualWarehouseSync("manual");
+    response.status(202).json({
+      ok: true,
+      started: result.started,
+      running: true,
+      status: result.status,
+    });
   } catch (error) {
     notifyTelegram(formatSyncNotification({
       title: "Ручная синхронизация склада завершилась ошибкой",

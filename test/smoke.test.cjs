@@ -130,6 +130,17 @@ test("admin can add employees and managers cannot open admin areas", async () =>
   }
 });
 
+test("admin can read manual warehouse sync status without starting long request", async () => {
+  const agent = request.agent(app);
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+  const res = await agent.get("/api/warehouse/sync/status").expect(200);
+  assert.ok(["idle", "running", "ok", "failed"].includes(res.body.status));
+  assert.equal(typeof res.body.running, "boolean");
+});
+
 test("PUT /api/settings saves markup settings", async () => {
   const agent = request.agent(app);
   await agent

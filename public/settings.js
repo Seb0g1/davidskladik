@@ -104,6 +104,56 @@ async function api(path, options) {
   return payload;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function manualWarehouseSyncText(status) {
+  if (!status) return "РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ Р·Р°РїСѓС‰РµРЅР° РІ С„РѕРЅРµ...";
+  if (status.status === "running") {
+    return `РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РёРґС‘С‚ РІ С„РѕРЅРµ${status.startedAt ? ` СЃ ${new Date(status.startedAt).toLocaleTimeString("ru-RU")}` : ""}. РЎС‚СЂР°РЅРёС†Сѓ РјРѕР¶РЅРѕ РЅРµ РґРµСЂР¶Р°С‚СЊ РѕС‚РєСЂС‹С‚РѕР№.`;
+  }
+  if (status.status === "ok") {
+    const total = status.result?.warehouse?.total ?? 0;
+    const changed = status.result?.warehouse?.changed ?? 0;
+    return `РЎРєР»Р°Рґ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅ. РўРѕРІР°СЂРѕРІ: ${total}, РёР·РјРµРЅРµРЅРёР№ С†РµРЅС‹: ${changed}.`;
+  }
+  if (status.status === "failed") return `РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РЅРµ СѓРґР°Р»Р°СЃСЊ: ${status.error || "РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°"}`;
+  return "Р СѓС‡РЅРѕР№ Р·Р°РїСѓСЃРє РЅРµ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ.";
+}
+
+async function pollManualWarehouseSync() {
+  for (;;) {
+    await sleep(2500);
+    const status = await api("/api/warehouse/sync/status");
+    if (manualSyncStatus) manualSyncStatus.textContent = manualWarehouseSyncText(status);
+    if (status.status !== "running") return status;
+  }
+}
+
+function dailySyncText(status) {
+  if (!status) return "РћР±РЅРѕРІР»РµРЅРёРµ С†РµРЅ Р·Р°РїСѓС‰РµРЅРѕ РІ С„РѕРЅРµ...";
+  if (status.status === "running") {
+    return `Р¦РµРЅС‹ Рё СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РѕР±РЅРѕРІР»СЏСЋС‚СЃСЏ РІ С„РѕРЅРµ${status.startedAt ? ` СЃ ${new Date(status.startedAt).toLocaleTimeString("ru-RU")}` : ""}.`;
+  }
+  if (status.status === "ok") {
+    const sent = status.warehouse?.pricePush?.sent ?? status.logs?.[0]?.pricePushSent ?? 0;
+    const failed = status.warehouse?.pricePush?.failed ?? status.logs?.[0]?.pricePushFailed ?? 0;
+    return `Р¦РµРЅС‹ РѕР±РЅРѕРІР»РµРЅС‹. РћС‚РїСЂР°РІР»РµРЅРѕ: ${sent}, РѕС€РёР±РѕРє: ${failed}.`;
+  }
+  if (status.status === "failed") return `РћР±РЅРѕРІР»РµРЅРёРµ РЅРµ СѓРґР°Р»РѕСЃСЊ: ${status.error || "РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°"}`;
+  return "Р СѓС‡РЅРѕР№ Р·Р°РїСѓСЃРє РЅРµ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ.";
+}
+
+async function pollDailySync() {
+  for (;;) {
+    await sleep(2500);
+    const status = await api("/api/daily-sync");
+    if (manualSyncStatus) manualSyncStatus.textContent = dailySyncText(status);
+    if (status.status !== "running") return status;
+  }
+}
+
 function sourceLabel(source) {
   if (source === "env") return ".env";
   if (source === "env-json") return "APP_USERS_JSON";
@@ -333,12 +383,11 @@ employeeList?.addEventListener("click", async (event) => {
 manualSyncButton?.addEventListener("click", async () => {
   manualSyncButton.disabled = true;
   if (manualPriceUpdateButton) manualPriceUpdateButton.disabled = true;
-  if (manualSyncStatus) manualSyncStatus.textContent = "Синхронизирую склад: товары, статусы, остатки и фото...";
+  if (manualSyncStatus) manualSyncStatus.textContent = "Запускаю синхронизацию склада в фоне...";
   try {
     const result = await api("/api/warehouse/sync/run", { method: "POST" });
-    const total = result?.warehouse?.total ?? 0;
-    const changed = result?.warehouse?.changed ?? 0;
-    if (manualSyncStatus) manualSyncStatus.textContent = `Склад синхронизирован. Товаров: ${total}, изменений цены: ${changed}.`;
+    if (manualSyncStatus) manualSyncStatus.textContent = manualWarehouseSyncText(result.status);
+    await pollManualWarehouseSync();
   } catch (error) {
     if (manualSyncStatus) manualSyncStatus.textContent = error.message;
   } finally {
@@ -350,12 +399,11 @@ manualSyncButton?.addEventListener("click", async () => {
 manualPriceUpdateButton?.addEventListener("click", async () => {
   if (manualSyncButton) manualSyncButton.disabled = true;
   manualPriceUpdateButton.disabled = true;
-  if (manualSyncStatus) manualSyncStatus.textContent = "Запускаю полный цикл обновления цен и отправки на маркетплейсы...";
+  if (manualSyncStatus) manualSyncStatus.textContent = "Запускаю обновление цен в фоне...";
   try {
     const result = await api("/api/daily-sync/run", { method: "POST" });
-    const sent = result?.warehouse?.pricePush?.sent ?? result?.logs?.[0]?.pricePushSent ?? 0;
-    const failed = result?.warehouse?.pricePush?.failed ?? result?.logs?.[0]?.pricePushFailed ?? 0;
-    if (manualSyncStatus) manualSyncStatus.textContent = `Цены обновлены. Отправлено: ${sent}, ошибок: ${failed}.`;
+    if (manualSyncStatus) manualSyncStatus.textContent = dailySyncText(result.status);
+    await pollDailySync();
   } catch (error) {
     if (manualSyncStatus) manualSyncStatus.textContent = error.message;
   } finally {
