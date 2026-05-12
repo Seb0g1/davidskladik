@@ -1890,7 +1890,7 @@ function renderWarehouseDetail(group) {
                       </div>
                       <div class="supplier-line-actions">
                         <div class="money">${formatUsd(item.price)}</div>
-                        <button class="secondary-button compact-button add-supplier-draft" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" data-article="${escapeHtml(item.article || "")}" data-supplier-name="${escapeHtml(item.partnerName || item.supplierName || "")}" data-partner-id="${escapeHtml(item.partnerId || "")}" data-price-currency="${escapeHtml(item.priceCurrency || item.sourceCurrency || "USD")}">Р’ С‡РµСЂРЅРѕРІРёРє</button>
+                        <button class="secondary-button compact-button add-supplier-draft" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" data-article="${escapeHtml(item.article || "")}" data-supplier-name="${escapeHtml(item.partnerName || item.supplierName || "")}" data-partner-id="${escapeHtml(item.partnerId || "")}" data-price-currency="${escapeHtml(item.priceCurrency || item.sourceCurrency || "USD")}">&#1042; &#1095;&#1077;&#1088;&#1085;&#1086;&#1074;&#1080;&#1082;</button>
                       </div>
                     </div>
                   `,
@@ -3171,7 +3171,7 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   setPendingLinkDrafts(draftKey, nextDrafts);
   form.reset();
   renderWarehouseDetail(state.selectedWarehouseDetailGroup);
-  elements.warehouseStatus.textContent = `В черновике ${formatNumber(nextDrafts.length)} привязок. Сохраните их одним пакетом, чтобы пересчитать цену.`;
+  elements.warehouseStatus.textContent = `\u0412 \u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a\u0435 ${formatNumber(nextDrafts.length)} \u043f\u0440\u0438\u0432\u044f\u0437\u043e\u043a. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0438", \u0447\u0442\u043e\u0431\u044b \u043f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u044c \u0438\u0445 \u043a \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0435.`;
   return;
 });
 
@@ -3229,7 +3229,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       priceCurrency: String(addSupplierDraftButton.dataset.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD",
     };
     if (!draft.article) {
-      elements.warehouseStatus.textContent = "РЈ РїРѕСЃС‚Р°РІС‰РёРєР° РЅРµС‚ Р°СЂС‚РёРєСѓР»Р° PriceMaster.";
+      elements.warehouseStatus.textContent = "\u0423 \u043f\u043e\u0441\u0442\u0430\u0432\u0449\u0438\u043a\u0430 \u043d\u0435\u0442 \u0430\u0440\u0442\u0438\u043a\u0443\u043b\u0430 PriceMaster.";
       return;
     }
     const existing = getPendingLinkDrafts(key);
@@ -3245,7 +3245,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       : [...existing, draft];
     setPendingLinkDrafts(key, nextDrafts);
     renderWarehouseDetail(state.selectedWarehouseDetailGroup);
-    elements.warehouseStatus.textContent = `Р’ С‡РµСЂРЅРѕРІРёРєРµ ${formatNumber(nextDrafts.length)} РїСЂРёРІСЏР·РѕРє. РЎРѕС…СЂР°РЅРёС‚Рµ РёС… РѕРґРЅРёРј РїР°РєРµС‚РѕРј.`;
+    elements.warehouseStatus.textContent = `\u0412 \u0447\u0435\u0440\u043d\u043e\u0432\u0438\u043a\u0435 ${formatNumber(nextDrafts.length)} \u043f\u0440\u0438\u0432\u044f\u0437\u043e\u043a. \u041d\u0430\u0436\u043c\u0438\u0442\u0435 "\u0421\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0438", \u0447\u0442\u043e\u0431\u044b \u043f\u0440\u0438\u043c\u0435\u043d\u0438\u0442\u044c \u0438\u0445 \u043a \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0435.`;
     return;
   }
   if (removeDraftButton) {

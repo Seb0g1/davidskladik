@@ -6460,6 +6460,13 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
           { priority: 1 },
         );
         if (result && typeof result === "object" && "sent" in result) {
+          const skippedReasons = Array.isArray(result.skipped)
+            ? result.skipped.reduce((acc, item) => {
+              const reason = item.reason || "unknown";
+              acc[reason] = (acc[reason] || 0) + 1;
+              return acc;
+            }, {})
+            : {};
           logger.info("immediate auto price push complete", {
             reason,
             scope: ids ? ids.length : "all",
@@ -6468,6 +6475,7 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
             stockSent: result.stockSent,
             stockFailed: result.stockFailed,
             skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
+            skippedReasons,
           });
         }
       })
