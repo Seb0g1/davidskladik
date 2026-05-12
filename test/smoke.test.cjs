@@ -644,6 +644,34 @@ test("Ozon stock payload targets configured warehouses and zeros all of them", a
   }
 });
 
+test("Ozon stock payload reuses stored warehouses without obsolete list call", async () => {
+  const previous = process.env.OZON_STOCK_WAREHOUSE_IDS;
+  delete process.env.OZON_STOCK_WAREHOUSE_IDS;
+  try {
+    const payload = await buildOzonStockPayloadItems(
+      [{
+        offerId: "sku-stored",
+        marketplaceState: {
+          warehouses: [
+            { warehouseId: "333", warehouseName: "Gingir", stock: 4 },
+            { warehouse_id: "444", name: "Backup", present: 1 },
+          ],
+        },
+      }],
+      { id: "ozon" },
+      () => 0,
+      { allWarehouses: true },
+    );
+    assert.deepEqual(payload, [
+      { offer_id: "sku-stored", warehouse_id: 333, stock: 0 },
+      { offer_id: "sku-stored", warehouse_id: 444, stock: 0 },
+    ]);
+  } finally {
+    if (previous === undefined) delete process.env.OZON_STOCK_WAREHOUSE_IDS;
+    else process.env.OZON_STOCK_WAREHOUSE_IDS = previous;
+  }
+});
+
 test("warehouse link identity ignores client draft id duplicates", () => {
   const a = warehouseLinkIdentityKey({ id: "draft-1", article: "A-1", partnerId: "88", supplierName: " Supplier ", keyword: "Blue", priceCurrency: "rub" });
   const b = warehouseLinkIdentityKey({ id: "draft-2", article: "A-1", partnerId: "88", supplierName: "supplier", keyword: "blue", priceCurrency: "RUB" });

@@ -80,6 +80,7 @@ const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
 const pmDbPoolSize = Math.max(1, Number(process.env.PM_DB_POOL_SIZE || 8) || 8);
 const pmDbConnectTimeoutMs = Math.max(1000, Number(process.env.PM_DB_CONNECT_TIMEOUT_MS || 10000) || 10000);
 const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CACHE_MS || 120000) || 120000);
+const ozonWarehouseListEnabled = process.env.OZON_WAREHOUSE_LIST_ENABLED === "true";
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
@@ -1771,6 +1772,22 @@ async function resolveOzonStockWarehouses(account = null, product = null) {
   }
 
   const configuredNames = parseOzonStockWarehouseNames(account);
+  const storedWarehouses = Array.isArray(product?.marketplaceState?.warehouses)
+    ? product.marketplaceState.warehouses.map(normalizeOzonWarehouse).filter(Boolean)
+    : [];
+  if (storedWarehouses.length) {
+    if (configuredNames.length) {
+      const matchedStored = storedWarehouses.filter((warehouse) =>
+        configuredNames.some((name) => normalizeSupplierName(warehouse.warehouseName).includes(name)),
+      );
+      if (matchedStored.length) return matchedStored;
+    } else {
+      return storedWarehouses;
+    }
+  }
+
+  if (!ozonWarehouseListEnabled) return [];
+
   try {
     const warehouses = await getOzonWarehouses(account);
     if (configuredNames.length) {
@@ -1785,13 +1802,7 @@ async function resolveOzonStockWarehouses(account = null, product = null) {
       detail: error?.message || String(error),
     });
   }
-
-  const storedWarehouses = Array.isArray(product?.marketplaceState?.warehouses)
-    ? product.marketplaceState.warehouses
-    : [];
-  return storedWarehouses
-    .map(normalizeOzonWarehouse)
-    .filter(Boolean);
+  return [];
 }
 
 async function buildOzonStockPayloadItems(items = [], account = null, stockResolver = () => 0, { allWarehouses = false } = {}) {
