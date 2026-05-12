@@ -21,7 +21,7 @@ const state = {
   warehouseLinkFilter: "all",
   warehouseBrandFilter: "",
   warehouseBrands: [],
-  warehouseAnimateAutoFocus: localStorage.getItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY) !== "0",
+  warehouseAnimateAutoFocus: localStorage.getItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY) === "1",
   warehouseViewMode: localStorage.getItem("warehouseViewMode") || "cards",
   warehouseVisibleLimit: 80,
   warehousePageSize: 60,
@@ -40,6 +40,7 @@ const state = {
   warehouseScrollTop: 0,
   warehouseLastGroupOrder: [],
   warehouseAutoFocusGroupKey: null,
+  warehouseAllowAutoScroll: false,
   enrichedProductIds: new Set(),
   retryQueue: [],
   retryQueueSelectedKeys: new Set(),
@@ -977,6 +978,13 @@ function focusWarehouseDetailOnSmallScreen() {
   }
 }
 
+function restoreWindowScroll(top) {
+  if (!Number.isFinite(Number(top))) return;
+  window.requestAnimationFrame(() => {
+    window.scrollTo({ top: Math.max(0, Number(top) || 0), behavior: "auto" });
+  });
+}
+
 function selectedWarehouseIds() {
   return Array.from(document.querySelectorAll(".warehouse-check:checked")).flatMap((input) =>
     String(input.dataset.productIds || input.value || "")
@@ -1092,7 +1100,6 @@ function applyWarehouseFilters() {
     if (previousIndex >= 0) {
       const nearestIndex = Math.min(previousIndex, groups.length - 1);
       state.selectedWarehouseGroupKey = groups[nearestIndex]?.key || groups[0].key;
-      if (state.selectedWarehouseGroupKey) state.warehouseAutoFocusGroupKey = state.selectedWarehouseGroupKey;
     } else {
       state.selectedWarehouseGroupKey = groups[0].key;
     }
@@ -1269,15 +1276,19 @@ function renderWarehouseCards() {
     const key = state.warehouseAutoFocusGroupKey;
     const card = elements.warehouseCards.querySelector(`.product-card[data-group-key="${CSS.escape(key)}"]`);
     if (card) {
-      card.scrollIntoView({ behavior: state.warehouseAnimateAutoFocus ? "smooth" : "auto", block: "center", inline: "nearest" });
+      if (state.warehouseAllowAutoScroll) {
+        card.scrollIntoView({ behavior: state.warehouseAnimateAutoFocus ? "smooth" : "auto", block: "center", inline: "nearest" });
+      }
       if (state.warehouseAnimateAutoFocus) {
         window.setTimeout(() => {
           state.warehouseAutoFocusGroupKey = null;
+          state.warehouseAllowAutoScroll = false;
           const current = elements.warehouseCards.querySelector(`.product-card[data-group-key="${CSS.escape(key)}"]`);
           current?.classList.remove("auto-focus-highlight");
         }, 1400);
       } else {
         state.warehouseAutoFocusGroupKey = null;
+        state.warehouseAllowAutoScroll = false;
       }
     }
   }
@@ -1295,7 +1306,6 @@ function mergeWarehouseProducts(products = []) {
     if (product?.id) mergeWarehouseProduct(product);
   });
   applyWarehouseFilters();
-  renderWarehouseCards();
   renderDetailForProductIds(products.map((product) => product.id).filter(Boolean));
   return true;
 }
@@ -2461,6 +2471,7 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
   state.warehouseLiveRefreshRunning = true;
   state.warehouseLiveRefreshQueued = false;
   try {
+    const scrollTop = window.scrollY || window.pageYOffset || 0;
     const restorePage = Math.max(1, Number(state.warehousePage || 1));
     const selectedKey = state.selectedWarehouseGroupKey;
     state.warehouseRestorePage = restorePage;
@@ -2479,6 +2490,7 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
         renderWarehouseCards();
       }
     }
+    restoreWindowScroll(scrollTop);
   } finally {
     state.warehouseLiveRefreshRunning = false;
   }
@@ -2734,6 +2746,7 @@ document.addEventListener("click", (event) => {
 elements.warehouseAnimateAutoFocusInput?.addEventListener("change", () => {
   state.warehouseAnimateAutoFocus = Boolean(elements.warehouseAnimateAutoFocusInput.checked);
   localStorage.setItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY, state.warehouseAnimateAutoFocus ? "1" : "0");
+  state.warehouseAllowAutoScroll = false;
 });
 
 elements.warehouseUsdRateInput?.addEventListener("input", () => {

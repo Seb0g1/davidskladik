@@ -2386,7 +2386,7 @@ td {
   background: rgba(255,255,255,0.68);
   box-shadow: inset 0 1px 0 rgba(255,255,255,0.72);
   cursor: pointer;
-  transition: border-color 0.16s ease, transform 0.16s ease, box-shadow 0.16s ease;
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease;
 }
 
 .product-grid.list-view .product-card {
@@ -2432,7 +2432,6 @@ td {
 .product-card.selected {
   border-color: rgba(10, 132, 255, 0.55);
   box-shadow: 0 18px 44px rgba(10, 132, 255, 0.14), inset 0 1px 0 rgba(255,255,255,0.9);
-  transform: translateY(-1px);
 }
 
 .product-card > :not(.product-image) {
