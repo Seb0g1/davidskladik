@@ -45,6 +45,26 @@ test("POST /api/login успех", async () => {
   assert.ok(res.headers["set-cookie"]);
 });
 
+test("POST /api/login supports APP_USERS_JSON roles", async () => {
+  const previousUsers = process.env.APP_USERS_JSON;
+  process.env.APP_USERS_JSON = JSON.stringify([
+    { username: "manager", password: "manager-pass", role: "manager" },
+  ]);
+  try {
+    const res = await request(app)
+      .post("/api/login")
+      .send({ username: "manager", password: "manager-pass" })
+      .expect(200);
+
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.username, "manager");
+    assert.equal(res.body.role, "manager");
+  } finally {
+    if (previousUsers === undefined) delete process.env.APP_USERS_JSON;
+    else process.env.APP_USERS_JSON = previousUsers;
+  }
+});
+
 test("PUT /api/settings saves markup settings", async () => {
   const agent = request.agent(app);
   await agent
@@ -300,6 +320,44 @@ test("AI image generation requires OpenAI key before creating draft", async () =
     if (previousRelaySecret === undefined) delete process.env.OPENAI_RELAY_SECRET;
     else process.env.OPENAI_RELAY_SECRET = previousRelaySecret;
     if (product?.id) await agent.delete(`/api/warehouse/products/${encodeURIComponent(product.id)}`).expect(200);
+  }
+});
+
+test("warehouse product patch rejects stale expectedUpdatedAt", async () => {
+  const agent = request.agent(app);
+  const smokeId = `smoke-lock-${Date.now()}`;
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    const created = await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: smokeId,
+        target: "ozon",
+        offerId: smokeId,
+        name: "Smoke Lock Product",
+      })
+      .expect(200);
+
+    const currentUpdatedAt = created.body.product.updatedAt;
+    assert.ok(currentUpdatedAt);
+
+    await agent
+      .patch(`/api/warehouse/products/${encodeURIComponent(smokeId)}`)
+      .send({ markup: 1.77, expectedUpdatedAt: "2026-01-01T00:00:00.000Z" })
+      .expect(409);
+
+    const ok = await agent
+      .patch(`/api/warehouse/products/${encodeURIComponent(smokeId)}`)
+      .send({ markup: 1.77, expectedUpdatedAt: currentUpdatedAt })
+      .expect(200);
+
+    assert.equal(ok.body.product.markup, 1.77);
+  } finally {
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}`).expect(200);
   }
 });
 

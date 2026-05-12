@@ -374,11 +374,38 @@ function parseCookies(header = "") {
   );
 }
 
-function createSessionToken(username) {
+function configuredUsers() {
+  const rawUsers = cleanText(process.env.APP_USERS_JSON || "");
+  if (rawUsers) {
+    try {
+      const parsed = JSON.parse(rawUsers);
+      if (Array.isArray(parsed)) {
+        return parsed
+          .map((item) => ({
+            username: cleanText(item.username || item.user || item.login),
+            password: cleanText(item.password),
+            role: cleanText(item.role || "manager") || "manager",
+          }))
+          .filter((item) => item.username && item.password);
+      }
+    } catch (error) {
+      logger.warn("APP_USERS_JSON parse failed", { detail: error?.message || String(error) });
+    }
+  }
+  return [{
+    username: process.env.APP_USER || "admin",
+    password: process.env.APP_PASSWORD || "",
+    role: process.env.APP_ROLE || "admin",
+  }];
+}
+
+function createSessionToken(user) {
+  const username = typeof user === "string" ? user : user.username;
+  const role = typeof user === "string" ? process.env.APP_ROLE || "admin" : user.role || "manager";
   const payload = base64Url(
     JSON.stringify({
       username,
-      role: process.env.APP_ROLE || "admin",
+      role,
       expiresAt: Date.now() + sessionTtlMs,
     }),
   );
@@ -511,21 +538,19 @@ app.get("/health", (_request, response) => {
 app.post("/api/login", loginLimiter, (request, response) => {
   const username = String(request.body.username || "");
   const password = String(request.body.password || "");
-  const expectedUser = process.env.APP_USER || "admin";
-  const expectedPassword = process.env.APP_PASSWORD || "";
+  const users = configuredUsers();
 
-  if (!expectedPassword) {
-    return response.status(500).json({ error: "APP_PASSWORD не задан в .env" });
+  if (!users.length || users.every((item) => !item.password)) {
+    return response.status(500).json({ error: "APP_PASSWORD или APP_USERS_JSON не задан в .env" });
   }
 
-  const userOk = timingSafeEqual(username, expectedUser);
-  const passwordOk = timingSafeEqual(password, expectedPassword);
+  const user = users.find((item) => timingSafeEqual(username, item.username) && timingSafeEqual(password, item.password));
 
-  if (!userOk || !passwordOk) {
+  if (!user) {
     return response.status(401).json({ error: "Неверный логин или пароль" });
   }
 
-  const token = createSessionToken(username);
+  const token = createSessionToken(user);
   const secure = String(process.env.PUBLIC_BASE_URL || "").startsWith("https://");
   response.cookie(sessionCookieName, token, {
     httpOnly: true,
@@ -534,7 +559,7 @@ app.post("/api/login", loginLimiter, (request, response) => {
     maxAge: sessionTtlMs,
     path: "/",
   });
-  response.json({ ok: true, username });
+  response.json({ ok: true, username: user.username, role: user.role });
 });
 
 app.post("/api/logout", (_request, response) => {
@@ -789,6 +814,9 @@ async function appendAudit(request, action, details = {}) {
     user: request.session?.username || "system",
     role: request.session?.role || "admin",
     action,
+    productId: details.productId || details.productIds || null,
+    oldValue: details.oldValue ?? details.before ?? null,
+    newValue: details.newValue ?? details.after ?? null,
     details,
   };
   await fs.appendFile(auditLogPath, `${JSON.stringify(entry)}\n`, "utf8");
@@ -1304,6 +1332,63 @@ function normalizeManagedSupplier(input = {}) {
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+}
+
+function supplierImpactCount(warehouse = {}, supplier = {}) {
+  const supplierName = normalizeSupplierName(supplier.name);
+  const partnerId = cleanText(supplier.partnerId);
+  const productIds = new Set();
+  for (const product of warehouse.products || []) {
+    for (const link of product.links || []) {
+      const nameMatches = supplierName && normalizeSupplierName(link.supplierName) === supplierName;
+      const idMatches = partnerId && String(link.partnerId || "") === partnerId;
+      if (nameMatches || idMatches) productIds.add(product.id);
+    }
+  }
+  return productIds.size;
+}
+
+function cloneAuditValue(value) {
+  return value == null ? null : JSON.parse(JSON.stringify(value));
+}
+
+function productConflict(product, expectedUpdatedAt) {
+  const expected = cleanText(expectedUpdatedAt || "");
+  if (!expected) return null;
+  if (cleanText(product?.updatedAt || "") === expected) return null;
+  return {
+    id: product.id,
+    offerId: product.offerId || product.ozon?.offerId || product.yandex?.offerId || "",
+    expectedUpdatedAt: expected,
+    currentUpdatedAt: product.updatedAt || null,
+  };
+}
+
+function productLocksFromRequest(body = {}) {
+  const locks = new Map();
+  if (body.expectedUpdatedAt && body.productId) locks.set(String(body.productId), cleanText(body.expectedUpdatedAt));
+  if (body.expectedUpdatedAt && Array.isArray(body.productIds) && body.productIds.length === 1) {
+    locks.set(String(body.productIds[0]), cleanText(body.expectedUpdatedAt));
+  }
+  for (const item of Array.isArray(body.optimisticLocks) ? body.optimisticLocks : []) {
+    const id = cleanText(item?.id);
+    if (id) locks.set(id, cleanText(item?.expectedUpdatedAt || ""));
+  }
+  return locks;
+}
+
+function collectProductConflicts(products = [], locks = new Map()) {
+  return products
+    .map((product) => productConflict(product, locks.get(String(product.id))))
+    .filter(Boolean);
+}
+
+function conflictResponse(response, conflicts) {
+  return response.status(409).json({
+    error: "Конфликт обновления: карточка уже изменена другим пользователем.",
+    code: conflicts.length > 1 ? "warehouse_bulk_conflict" : "warehouse_product_conflict",
+    conflicts,
+  });
 }
 
 function normalizeSupplierName(value) {
@@ -4833,7 +4918,13 @@ app.get("/api/suppliers", async (_request, response, next) => {
       await writeWarehouse(warehouse);
       logger.info("supplier auto-reactivated from suppliers api", { count: autoReactivated.length, suppliers: autoReactivated });
     }
-    response.json({ suppliers: warehouse.suppliers || [], supplierSync });
+    response.json({
+      suppliers: (warehouse.suppliers || []).map((supplier) => ({
+        ...supplier,
+        impactProductCount: supplierImpactCount(warehouse, supplier),
+      })),
+      supplierSync,
+    });
   } catch (error) {
     next(error);
   }
@@ -4880,6 +4971,7 @@ app.post("/api/suppliers", async (request, response, next) => {
     if (!supplier.name) return response.status(400).json({ error: "Укажите название поставщика." });
 
     const index = warehouse.suppliers.findIndex((item) => item.id === supplier.id);
+    const before = index >= 0 ? cloneAuditValue(warehouse.suppliers[index]) : null;
     if (index >= 0) {
       warehouse.suppliers[index] = normalizeManagedSupplier({
         ...warehouse.suppliers[index],
@@ -4890,8 +4982,15 @@ app.post("/api/suppliers", async (request, response, next) => {
     } else {
       warehouse.suppliers.push(supplier);
     }
+    const after = index >= 0 ? warehouse.suppliers[index] : supplier;
 
-    await appendAudit(request, "supplier.save", { id: supplier.id, name: supplier.name, priceCurrency: supplier.priceCurrency });
+    await appendAudit(request, "supplier.save", {
+      id: supplier.id,
+      name: supplier.name,
+      priceCurrency: supplier.priceCurrency,
+      oldValue: before,
+      newValue: after,
+    });
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
     queueImmediateAutoPricePush([], "supplier_save");
   } catch (error) {
@@ -4904,6 +5003,7 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
     const warehouse = await readWarehouse();
     const supplier = warehouse.suppliers.find((item) => item.id === request.params.id);
     if (!supplier) return response.status(404).json({ error: "Поставщик не найден." });
+    const before = cloneAuditValue(supplier);
 
     Object.assign(supplier, {
       name: request.body.name !== undefined ? cleanText(request.body.name) : supplier.name,
@@ -4934,6 +5034,8 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
       stopped: supplier.stopped,
       name: supplier.name,
       priceCurrency: supplier.priceCurrency,
+      oldValue: before,
+      newValue: supplier,
     });
     response.json({ ok: true, warehouse: saved });
     queueMarketplaceJob("no-supplier-automation", {}, { priority: 1 });
@@ -4947,9 +5049,10 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
 app.delete("/api/suppliers/:id", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
+    const before = warehouse.suppliers.find((supplier) => supplier.id === request.params.id) || null;
     warehouse.suppliers = warehouse.suppliers.filter((supplier) => supplier.id !== request.params.id);
     const saved = await writeWarehouse(warehouse);
-    await appendAudit(request, "supplier.delete", { id: request.params.id });
+    await appendAudit(request, "supplier.delete", { id: request.params.id, oldValue: before });
     response.json({ ok: true, warehouse: saved });
     queueMarketplaceJob("no-supplier-automation", {}, { priority: 1 });
   } catch (error) {
@@ -4967,11 +5070,12 @@ app.post("/api/suppliers/:id/articles", async (request, response, next) => {
     if (!article.article) return response.status(400).json({ error: "Укажите артикул поставщика." });
     supplier.articles = Array.isArray(supplier.articles) ? supplier.articles : [];
     const index = supplier.articles.findIndex((item) => item.id === article.id);
+    const before = index >= 0 ? cloneAuditValue(supplier.articles[index]) : null;
     if (index >= 0) supplier.articles[index] = article;
     else supplier.articles.push(article);
 
     const saved = await writeWarehouse(warehouse);
-    await appendAudit(request, "supplier.article.save", { supplierId: supplier.id, article: article.article });
+    await appendAudit(request, "supplier.article.save", { supplierId: supplier.id, article: article.article, oldValue: before, newValue: article });
     response.json({ ok: true, warehouse: saved });
     queueImmediateAutoPricePush([], "supplier_article_save");
   } catch (error) {
@@ -4984,8 +5088,10 @@ app.delete("/api/suppliers/:supplierId/articles/:articleId", async (request, res
     const warehouse = await readWarehouse();
     const supplier = warehouse.suppliers.find((item) => item.id === request.params.supplierId);
     if (!supplier) return response.status(404).json({ error: "Поставщик не найден." });
+    const before = (supplier.articles || []).find((article) => article.id === request.params.articleId) || null;
     supplier.articles = (supplier.articles || []).filter((article) => article.id !== request.params.articleId);
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    await appendAudit(request, "supplier.article.delete", { supplierId: supplier.id, articleId: request.params.articleId, oldValue: before });
     queueMarketplaceJob("no-supplier-automation", {}, { priority: 1 });
   } catch (error) {
     next(error);
@@ -5002,6 +5108,7 @@ app.post("/api/warehouse/products", async (request, response, next) => {
     const index = warehouse.products.findIndex(
       (product) => product.id === input.id || (product.target === input.target && product.offerId === input.offerId),
     );
+    const before = index >= 0 ? cloneAuditValue(warehouse.products[index]) : null;
     if (index >= 0) {
       const current = warehouse.products[index];
       warehouse.products[index] = normalizeWarehouseProduct({
@@ -5023,7 +5130,16 @@ app.post("/api/warehouse/products", async (request, response, next) => {
       warehouse.products.push(input);
     }
 
-    response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    await writeWarehouse(warehouse);
+    const product = index >= 0 ? warehouse.products[index] : input;
+    const [freshProduct] = await buildFreshWarehouseProducts([product.id]);
+    await appendAudit(request, index >= 0 ? "warehouse.product.save" : "warehouse.product.create", {
+      productId: product.id,
+      offerId: product.offerId,
+      oldValue: before,
+      newValue: product,
+    });
+    response.json({ ok: true, product: freshProduct || normalizeWarehouseProduct(product), warehouse });
   } catch (error) {
     next(error);
   }
@@ -5045,6 +5161,9 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const conflict = productConflict(product, request.body.expectedUpdatedAt);
+    if (conflict) return conflictResponse(response, [conflict]);
+    const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], updatedAt: product.updatedAt });
 
     const count = Math.min(4, Math.max(1, Math.floor(Number(request.body.count || request.body.imagesCount || 1) || 1)));
     const batchId = crypto.randomUUID();
@@ -5071,6 +5190,8 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
       draftId: draft.id,
       batchId,
       count,
+      oldValue: before,
+      newValue: { id: savedProduct.id, aiImages: savedProduct.aiImages || [], updatedAt: savedProduct.updatedAt },
     }).catch((auditError) => logger.warn("ai image generate audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
     next(error);
@@ -5082,6 +5203,9 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const conflict = productConflict(product, request.body.expectedUpdatedAt);
+    if (conflict) return conflictResponse(response, [conflict]);
+    const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], ozon: product.ozon || {}, imageUrl: product.imageUrl || "", updatedAt: product.updatedAt });
 
     product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
     const draft = product.aiImages.find((item) => item.id === request.params.draftId);
@@ -5117,6 +5241,8 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
       productId: product.id,
       offerId: product.offerId,
       draftId: draft.id,
+      oldValue: before,
+      newValue: { id: savedProduct.id, aiImages: savedProduct.aiImages || [], ozon: savedProduct.ozon || {}, imageUrl: savedProduct.imageUrl || "", updatedAt: savedProduct.updatedAt },
     }).catch((auditError) => logger.warn("ai image approve audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
     next(error);
@@ -5128,6 +5254,9 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/reject", async (request
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const conflict = productConflict(product, request.body.expectedUpdatedAt);
+    if (conflict) return conflictResponse(response, [conflict]);
+    const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], updatedAt: product.updatedAt });
 
     product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
     const draft = product.aiImages.find((item) => item.id === request.params.draftId);
@@ -5152,6 +5281,8 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/reject", async (request
       productId: product.id,
       offerId: product.offerId,
       draftId: draft.id,
+      oldValue: before,
+      newValue: { id: savedProduct.id, aiImages: savedProduct.aiImages || [], updatedAt: savedProduct.updatedAt },
     }).catch((auditError) => logger.warn("ai image reject audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
     next(error);
@@ -5180,6 +5311,7 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
         currentUpdatedAt: product.updatedAt || null,
       });
     }
+    const before = cloneAuditValue(product);
 
     if (request.body.markup !== undefined) {
       const markup = Number(request.body.markup);
@@ -5197,7 +5329,15 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
     if (request.body.keyword !== undefined) product.keyword = cleanText(request.body.keyword);
     product.updatedAt = new Date().toISOString();
 
-    response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    await writeWarehouse(warehouse);
+    const [freshProduct] = await buildFreshWarehouseProducts([product.id]);
+    await appendAudit(request, "warehouse.product.update", {
+      productId: product.id,
+      offerId: product.offerId,
+      oldValue: before,
+      newValue: product,
+    });
+    response.json({ ok: true, product: freshProduct || normalizeWarehouseProduct(product) });
     queueImmediateAutoPricePush([product.id], "product_patch");
   } catch (error) {
     next(error);
@@ -5238,14 +5378,25 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
       });
     }
     let changed = 0;
+    const changedIds = [];
+    const oldValues = [];
     for (const product of warehouse.products) {
       if (!ids.has(product.id)) continue;
+      oldValues.push(cloneAuditValue({ id: product.id, markup: product.markup, updatedAt: product.updatedAt }));
       product.markup = markup;
       product.updatedAt = new Date().toISOString();
       changed += 1;
+      changedIds.push(product.id);
     }
 
-    response.json({ ok: true, changed, warehouse: await writeWarehouse(warehouse) });
+    await writeWarehouse(warehouse);
+    const products = await buildFreshWarehouseProducts(changedIds);
+    await appendAudit(request, "warehouse.markups.bulk_update", {
+      productIds: changedIds,
+      oldValue: oldValues,
+      newValue: products.map((product) => ({ id: product.id, markup: product.markup, updatedAt: product.updatedAt })),
+    });
+    response.json({ ok: true, changed, products });
     queueImmediateAutoPricePush(Array.from(ids), "bulk_markup_patch");
   } catch (error) {
     next(error);
@@ -5259,15 +5410,29 @@ app.patch("/api/warehouse/products/auto-price/bulk", async (request, response, n
     const enabled = Boolean(request.body.enabled);
 
     const warehouse = await readWarehouse();
+    const productsToChange = warehouse.products.filter((product) => ids.has(product.id));
+    const conflicts = collectProductConflicts(productsToChange, productLocksFromRequest(request.body));
+    if (conflicts.length) return conflictResponse(response, conflicts);
     let changed = 0;
+    const changedIds = [];
+    const oldValues = [];
     for (const product of warehouse.products) {
       if (!ids.has(product.id)) continue;
+      oldValues.push(cloneAuditValue({ id: product.id, autoPriceEnabled: product.autoPriceEnabled, updatedAt: product.updatedAt }));
       product.autoPriceEnabled = enabled;
       product.updatedAt = new Date().toISOString();
       changed += 1;
+      changedIds.push(product.id);
     }
 
-    response.json({ ok: true, changed, warehouse: await writeWarehouse(warehouse) });
+    await writeWarehouse(warehouse);
+    const products = await buildFreshWarehouseProducts(changedIds);
+    await appendAudit(request, "warehouse.auto_price.bulk_update", {
+      productIds: changedIds,
+      oldValue: oldValues,
+      newValue: products.map((product) => ({ id: product.id, autoPriceEnabled: product.autoPriceEnabled, updatedAt: product.updatedAt })),
+    });
+    response.json({ ok: true, changed, products });
     if (enabled) queueImmediateAutoPricePush(Array.from(ids), "bulk_auto_enable");
   } catch (error) {
     next(error);
@@ -5279,13 +5444,17 @@ app.patch("/api/warehouse/products/auto-price/all", async (request, response, ne
     const enabled = Boolean(request.body.enabled);
     const warehouse = await readWarehouse();
     let changed = 0;
+    const changedIds = [];
     for (const product of warehouse.products) {
       if (Boolean(product.autoPriceEnabled !== false) === enabled) continue;
       product.autoPriceEnabled = enabled;
       product.updatedAt = new Date().toISOString();
       changed += 1;
+      changedIds.push(product.id);
     }
-    response.json({ ok: true, changed, warehouse: await writeWarehouse(warehouse) });
+    await writeWarehouse(warehouse);
+    await appendAudit(request, "warehouse.auto_price.all_update", { productIds: changedIds, newValue: { enabled } });
+    response.json({ ok: true, changed, products: [] });
     if (enabled) queueImmediateAutoPricePush([], "auto_all_enable");
   } catch (error) {
     next(error);
@@ -5297,15 +5466,25 @@ app.patch("/api/warehouse/products/group", async (request, response, next) => {
     const ids = new Set((Array.isArray(request.body.productIds) ? request.body.productIds : []).map(String));
     if (ids.size < 2) return response.status(400).json({ error: "Выберите минимум два товара для объединения." });
     const warehouse = await readWarehouse();
+    const productsToChange = warehouse.products.filter((product) => ids.has(product.id));
+    const conflicts = collectProductConflicts(productsToChange, productLocksFromRequest(request.body));
+    if (conflicts.length) return conflictResponse(response, conflicts);
     const groupId = cleanText(request.body.groupId) || `manual-${crypto.randomUUID()}`;
     let changed = 0;
+    const changedIds = [];
+    const oldValues = [];
     for (const product of warehouse.products) {
       if (!ids.has(product.id)) continue;
+      oldValues.push(cloneAuditValue({ id: product.id, manualGroupId: product.manualGroupId, updatedAt: product.updatedAt }));
       product.manualGroupId = groupId;
       product.updatedAt = new Date().toISOString();
       changed += 1;
+      changedIds.push(product.id);
     }
-    response.json({ ok: true, groupId, changed, warehouse: await writeWarehouse(warehouse) });
+    await writeWarehouse(warehouse);
+    const products = await buildFreshWarehouseProducts(changedIds);
+    await appendAudit(request, "warehouse.group", { productIds: changedIds, oldValue: oldValues, newValue: { groupId } });
+    response.json({ ok: true, groupId, changed, products });
   } catch (error) {
     next(error);
   }
@@ -5316,14 +5495,24 @@ app.patch("/api/warehouse/products/ungroup", async (request, response, next) => 
     const ids = new Set((Array.isArray(request.body.productIds) ? request.body.productIds : []).map(String));
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для разъединения." });
     const warehouse = await readWarehouse();
+    const productsToChange = warehouse.products.filter((product) => ids.has(product.id));
+    const conflicts = collectProductConflicts(productsToChange, productLocksFromRequest(request.body));
+    if (conflicts.length) return conflictResponse(response, conflicts);
     let changed = 0;
+    const changedIds = [];
+    const oldValues = [];
     for (const product of warehouse.products) {
       if (!ids.has(product.id)) continue;
+      oldValues.push(cloneAuditValue({ id: product.id, manualGroupId: product.manualGroupId, updatedAt: product.updatedAt }));
       product.manualGroupId = "";
       product.updatedAt = new Date().toISOString();
       changed += 1;
+      changedIds.push(product.id);
     }
-    response.json({ ok: true, changed, warehouse: await writeWarehouse(warehouse) });
+    await writeWarehouse(warehouse);
+    const products = await buildFreshWarehouseProducts(changedIds);
+    await appendAudit(request, "warehouse.ungroup", { productIds: changedIds, oldValue: oldValues, newValue: { groupId: "" } });
+    response.json({ ok: true, changed, products });
   } catch (error) {
     next(error);
   }
@@ -5332,8 +5521,14 @@ app.patch("/api/warehouse/products/ungroup", async (request, response, next) => 
 app.delete("/api/warehouse/products/:id", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const conflict = productConflict(product, request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt);
+    if (conflict) return conflictResponse(response, [conflict]);
     warehouse.products = warehouse.products.filter((product) => product.id !== request.params.id);
-    response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
+    await writeWarehouse(warehouse);
+    await appendAudit(request, "warehouse.product.delete", { productId: product.id, offerId: product.offerId, oldValue: product });
+    response.json({ ok: true, deletedId: request.params.id });
   } catch (error) {
     next(error);
   }
@@ -5351,12 +5546,17 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const warehouse = await readWarehouse();
+    const productsToChange = warehouse.products.filter((product) => ids.has(String(product.id)));
+    const conflicts = collectProductConflicts(productsToChange, productLocksFromRequest(request.body));
+    if (conflicts.length) return conflictResponse(response, conflicts);
     await assertPriceMasterLinkExists(baseLink, usdRate, warehouse.suppliers);
     const now = new Date().toISOString();
     const updatedIds = [];
+    const oldValues = [];
 
     for (const product of warehouse.products) {
       if (!ids.has(String(product.id))) continue;
+      oldValues.push(cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt }));
       const link = normalizeWarehouseLink({
         ...baseLink,
         id: ids.size > 1 && !request.body.id ? crypto.randomUUID() : baseLink.id,
@@ -5388,6 +5588,8 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       keyword: baseLink.keyword,
       supplierName: baseLink.supplierName,
       priceCurrency: baseLink.priceCurrency,
+      oldValue: oldValues,
+      newValue: savedProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     queueMarketplaceJob("supplier-recovery-automation", { productIds: updatedIds }, { priority: 1 });
     queueImmediateAutoPricePush(updatedIds, "link_bulk_add_or_update");
@@ -5401,6 +5603,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const conflict = productConflict(product, request.body.expectedUpdatedAt);
+    if (conflict) return conflictResponse(response, [conflict]);
+    const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
 
     const link = normalizeWarehouseLink(request.body);
     if (!link.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
@@ -5430,6 +5635,8 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       keyword: link.keyword,
       supplierName: link.supplierName,
       priceCurrency: link.priceCurrency,
+      oldValue: before,
+      newValue: { id: savedProduct?.id || product.id, links: (savedProduct || product).links || [], updatedAt: (savedProduct || product).updatedAt },
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     queueMarketplaceJob("supplier-recovery-automation", { productIds: [product.id] }, { priority: 1 });
     queueImmediateAutoPricePush([product.id], "link_add_or_update");
@@ -5443,6 +5650,9 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.productId);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const conflict = productConflict(product, request.query?.expectedUpdatedAt || request.body?.expectedUpdatedAt);
+    if (conflict) return conflictResponse(response, [conflict]);
+    const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
     product.links = (product.links || []).filter((link) => link.id !== request.params.linkId);
     product.updatedAt = new Date().toISOString();
     warehouseMemoryCache = {
@@ -5460,6 +5670,8 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
       offerId: product.offerId,
       name: product.name,
       linkId: request.params.linkId,
+      oldValue: before,
+      newValue: { id: responseProduct.id, links: responseProduct.links || [], updatedAt: responseProduct.updatedAt },
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     if ((responseProduct.links || []).length) queueImmediateAutoPricePush([request.params.productId], "link_delete");
   } catch (error) {
@@ -5874,6 +6086,9 @@ app.post("/api/warehouse/products/:id/export", async (request, response, next) =
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const conflict = productConflict(product, request.body.expectedUpdatedAt);
+    if (conflict) return conflictResponse(response, [conflict]);
+    const before = cloneAuditValue({ id: product.id, exports: product.exports || {}, updatedAt: product.updatedAt });
 
     const targetId = cleanText(request.body.target || product.target || product.marketplace);
     const targetMeta = targetById(targetId) || { id: targetId, marketplace: targetId, name: targetId };
@@ -5896,8 +6111,17 @@ app.post("/api/warehouse/products/:id/export", async (request, response, next) =
       };
       product.exports[account.id] = exportState;
       product.exports.ozon = exportState;
+      product.updatedAt = new Date().toISOString();
       await writeWarehouse(warehouse);
-      return response.json({ ok: true, target: account.id, sent: 1, item: built.item, result });
+      const [freshProduct] = await buildFreshWarehouseProducts([product.id]);
+      await appendAudit(request, "warehouse.product.export", {
+        productId: product.id,
+        offerId: product.offerId,
+        target: account.id,
+        oldValue: before,
+        newValue: { id: product.id, exports: product.exports, updatedAt: product.updatedAt },
+      });
+      return response.json({ ok: true, target: account.id, sent: 1, item: built.item, result, product: freshProduct || normalizeWarehouseProduct(product) });
     }
 
     if (targetMeta.marketplace === "yandex" || targetId === "yandex") {
@@ -5922,8 +6146,17 @@ app.post("/api/warehouse/products/:id/export", async (request, response, next) =
       };
       product.exports[shop.id] = exportState;
       product.exports.yandex = exportState;
+      product.updatedAt = new Date().toISOString();
       await writeWarehouse(warehouse);
-      return response.json({ ok: true, target: shop.id, sent: 1, offer: built.offer, result });
+      const [freshProduct] = await buildFreshWarehouseProducts([product.id]);
+      await appendAudit(request, "warehouse.product.export", {
+        productId: product.id,
+        offerId: product.offerId,
+        target: shop.id,
+        oldValue: before,
+        newValue: { id: product.id, exports: product.exports, updatedAt: product.updatedAt },
+      });
+      return response.json({ ok: true, target: shop.id, sent: 1, offer: built.offer, result, product: freshProduct || normalizeWarehouseProduct(product) });
     }
 
     return response.status(400).json({ error: "Неизвестный маркетплейс для выгрузки." });

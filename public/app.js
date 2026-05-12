@@ -1264,6 +1264,30 @@ function mergeWarehouseProduct(product) {
   else state.warehouse.push(product);
 }
 
+function mergeWarehouseProducts(products = []) {
+  if (!Array.isArray(products) || !products.length) return false;
+  products.forEach((product) => {
+    if (product?.id) mergeWarehouseProduct(product);
+  });
+  applyWarehouseFilters();
+  renderWarehouseCards();
+  renderDetailForProductIds(products.map((product) => product.id).filter(Boolean));
+  return true;
+}
+
+function handleProductConflict(error, context = "операции") {
+  if (error?.status !== 409) return false;
+  const conflictItems = Array.isArray(error?.payload?.conflicts)
+    ? error.payload.conflicts
+    : (error?.payload?.currentUpdatedAt ? [error.payload] : []);
+  const offerPreview = conflictOfferPreview(conflictItems);
+  const suffix = offerPreview ? ` Примеры: ${offerPreview}.` : "";
+  elements.warehouseStatus.textContent = `Конфликт ${context}: карточка уже изменена другим пользователем.${suffix} Обновляю данные...`;
+  showToast(`Карточка была изменена другим менеджером.${suffix}`, "warn");
+  queueWarehouseRefresh();
+  return true;
+}
+
 function renderDetailForProductIds(productIds = []) {
   const ids = new Set((productIds || []).map(String));
   if (!ids.size) return false;
@@ -1455,7 +1479,7 @@ async function generateAiImageFromMain() {
     const result = await api(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sourceImageUrl, prompt, count }),
+      body: JSON.stringify({ sourceImageUrl, prompt, count, expectedUpdatedAt: product.updatedAt || "" }),
     });
     const drafts = Array.isArray(result.drafts) ? result.drafts : [result.draft].filter(Boolean);
     state.aiImageDraft = drafts[0] || null;
@@ -1469,6 +1493,7 @@ async function generateAiImageFromMain() {
       ? "AI-фото готовы. Выберите вариант ниже, затем поставьте его главным или отмените пакет."
       : "AI-фото готово. Можно одобрить, отменить или переделать.";
   } catch (error) {
+    if (handleProductConflict(error, "AI-фото")) return;
     finalStatus = error.message;
   } finally {
     if (progressTimer) window.clearInterval(progressTimer);
@@ -1488,7 +1513,7 @@ async function reviewAiImageFromMain(action) {
     const result = await api(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/${encodeURIComponent(draft.id)}/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ expectedUpdatedAt: product.updatedAt || "" }),
     });
     if (result.product) mergeWarehouseProduct(result.product);
     applyWarehouseFilters();
@@ -1500,6 +1525,7 @@ async function reviewAiImageFromMain(action) {
       : "Черновик отменен. Карточка не изменена.";
     if (action === "approve") elements.warehouseStatus.textContent = finalStatus;
   } catch (error) {
+    if (handleProductConflict(error, "AI-фото")) return;
     finalStatus = error.message;
   } finally {
     setAiImageModalBusy(false);
@@ -1557,7 +1583,7 @@ function renderWarehouseDetail(group) {
         <h2>${escapeHtml(productName)}</h2>
         <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}</p>
       </div>
-      <button class="text-button delete-product" type="button" data-product-id="${escapeHtml(product.id)}">Удалить</button>
+      <button class="text-button delete-product" type="button" data-product-id="${escapeHtml(product.id)}" data-product-updated-at="${escapeHtml(product.updatedAt || "")}">Удалить</button>
       <a class="secondary-link-button compact-button" href="/product.html?group=${encodeURIComponent(group.key || productGroupKey(product))}">Страница</a>
     </div>
 
@@ -1692,7 +1718,7 @@ function renderWarehouseDetail(group) {
                           ${!link.missingInPriceMaster && Number(link.availableCount || 0) === 0 ? " · нет активного остатка" : ""}
                         </span>
                       </div>
-                      <button class="text-button delete-link" type="button" data-product-id="${escapeHtml(link.productId || product.id)}" data-link-id="${escapeHtml(link.id)}">Удалить</button>
+                      <button class="text-button delete-link" type="button" data-product-id="${escapeHtml(link.productId || product.id)}" data-product-updated-at="${escapeHtml(product.updatedAt || "")}" data-link-id="${escapeHtml(link.id)}">Удалить</button>
                     </div>
                   `,
                 )
@@ -1734,14 +1760,14 @@ function renderWarehouseDetail(group) {
         <div class="export-tile">
           <strong>Ozon</strong>
           <span>${escapeHtml(exportText(product, "ozon"))}</span>
-          <button class="primary-button compact-button export-product" type="button" data-product-id="${escapeHtml(product.id)}" data-target="${escapeHtml(product.marketplace === "ozon" ? product.target : "ozon")}">Выгрузить в Ozon</button>
+          <button class="primary-button compact-button export-product" type="button" data-product-id="${escapeHtml(product.id)}" data-product-updated-at="${escapeHtml(product.updatedAt || "")}" data-target="${escapeHtml(product.marketplace === "ozon" ? product.target : "ozon")}">Выгрузить в Ozon</button>
           ${ozonLink ? `<a class="text-link" href="${escapeHtml(ozonLink)}" target="_blank" rel="noopener">Открыть в Ozon</a>` : '<small>Публичная ссылка появится после синхронизации с SKU Ozon.</small>'}
           <a class="text-link" href="/ozon-product.html?productId=${encodeURIComponent(ozonVariant?.id || product.id)}&offerId=${encodeURIComponent(product.offerId)}&name=${encodeURIComponent(productName)}">Заполнить поля Ozon</a>
         </div>
         <div class="export-tile">
           <strong>Yandex Market</strong>
           <span>${escapeHtml(exportText(product, "yandex"))}</span>
-          <button class="secondary-button compact-button export-product" type="button" data-product-id="${escapeHtml(product.id)}" data-target="yandex" ${hasConfiguredYandexTarget() ? "" : "disabled"}>Выгрузить в Яндекс</button>
+          <button class="secondary-button compact-button export-product" type="button" data-product-id="${escapeHtml(product.id)}" data-product-updated-at="${escapeHtml(product.updatedAt || "")}" data-target="yandex" ${hasConfiguredYandexTarget() ? "" : "disabled"}>Выгрузить в Яндекс</button>
           ${yandexLink ? `<a class="text-link" href="${escapeHtml(yandexLink)}" target="_blank" rel="noopener">Открыть в ЯМ</a>` : ""}
           <a class="text-link" href="/yandex-product.html?offerId=${encodeURIComponent(product.offerId)}&name=${encodeURIComponent(productName)}&target=${encodeURIComponent(product.marketplace === "yandex" ? product.target : "yandex")}">Заполнить поля ЯМ</a>
           <small>${hasConfiguredYandexTarget() ? "Карточка уйдёт в первый настроенный кабинет ЯМ." : "Добавьте YANDEX_SHOPS_JSON в .env."}</small>
@@ -1851,6 +1877,7 @@ function renderSuppliers() {
                   ${supplier.source === "pricemaster" ? "из PriceMaster" : "локальный"}
                 </span>
                 <span class="supplier-source-badge">${supplier.priceCurrency === "RUB" ? "PriceMaster: RUB" : "PriceMaster: USD"}</span>
+                <span class="supplier-source-badge">товаров: ${formatNumber(supplier.impactProductCount || 0)}</span>
               </h3>
               <p>${supplier.note ? escapeHtml(supplier.note) : "Без заметки"}</p>
               ${supplier.stopReason ? `<small class="stop-note">Причина стопа: ${escapeHtml(supplier.stopReason)}</small>` : ""}
@@ -2682,7 +2709,7 @@ elements.manualProductToggle.addEventListener("click", () => {
 elements.warehouseForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
-    await api("/api/warehouse/products", {
+    const result = await api("/api/warehouse/products", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -2695,7 +2722,7 @@ elements.warehouseForm.addEventListener("submit", async (event) => {
     });
     elements.warehouseForm.reset();
     elements.warehouseForm.classList.add("hidden");
-    queueWarehouseRefresh();
+    if (!mergeWarehouseProducts([result.product].filter(Boolean))) queueWarehouseRefresh();
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }
@@ -2718,18 +2745,9 @@ elements.bulkMarkupForm?.addEventListener("submit", async (event) => {
     });
     elements.warehouseStatus.textContent = `Наценка ${markup.toFixed(2)} применена: ${formatNumber(result.changed)} товаров Ozon/ЯМ.`;
     elements.bulkMarkupForm.reset();
-    queueWarehouseRefresh();
+    if (!mergeWarehouseProducts(result.products)) queueWarehouseRefresh();
   } catch (error) {
-    if (error?.status === 409) {
-      const conflictItems = Array.isArray(error?.payload?.conflicts) ? error.payload.conflicts : [];
-      const conflicts = conflictItems.length;
-      const offerPreview = conflictOfferPreview(conflictItems);
-      const suffix = offerPreview ? ` Примеры: ${offerPreview}.` : "";
-      elements.warehouseStatus.textContent = `Конфликт bulk-наценки (${formatNumber(conflicts)}).${suffix} Обновляю данные...`;
-      showToast(`Часть карточек уже изменена другим менеджером.${suffix}`, "warn");
-      queueWarehouseRefresh();
-      return;
-    }
+    if (handleProductConflict(error, "bulk-наценки")) return;
     elements.warehouseStatus.textContent = error.message;
   }
 });
@@ -2744,11 +2762,12 @@ elements.mergeProductsButton?.addEventListener("click", async () => {
     const result = await api("/api/warehouse/products/group", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productIds }),
+      body: JSON.stringify({ productIds, optimisticLocks: selectedWarehouseLocks() }),
     });
     elements.warehouseStatus.textContent = `Объединено товаров: ${formatNumber(result.changed)}.`;
-    queueWarehouseRefresh();
+    if (!mergeWarehouseProducts(result.products)) queueWarehouseRefresh();
   } catch (error) {
+    if (handleProductConflict(error, "объединения")) return;
     elements.warehouseStatus.textContent = error.message;
   }
 });
@@ -2763,11 +2782,12 @@ elements.unmergeProductsButton?.addEventListener("click", async () => {
     const result = await api("/api/warehouse/products/ungroup", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productIds }),
+      body: JSON.stringify({ productIds, optimisticLocks: selectedWarehouseLocks() }),
     });
     elements.warehouseStatus.textContent = `Разъединено товаров: ${formatNumber(result.changed)}.`;
-    queueWarehouseRefresh();
+    if (!mergeWarehouseProducts(result.products)) queueWarehouseRefresh();
   } catch (error) {
+    if (handleProductConflict(error, "разъединения")) return;
     elements.warehouseStatus.textContent = error.message;
   }
 });
@@ -2786,18 +2806,9 @@ async function setAutoPriceForSelected(enabled) {
       body: JSON.stringify({ productIds, enabled, optimisticLocks }),
     });
     elements.warehouseStatus.textContent = `AUTO ${enabled ? "включен" : "выключен"}: ${formatNumber(result.changed)} товаров.`;
-    queueWarehouseRefresh();
+    if (!mergeWarehouseProducts(result.products)) queueWarehouseRefresh();
   } catch (error) {
-    if (error?.status === 409) {
-      const conflictItems = Array.isArray(error?.payload?.conflicts) ? error.payload.conflicts : [];
-      const conflicts = conflictItems.length;
-      const offerPreview = conflictOfferPreview(conflictItems);
-      const suffix = offerPreview ? ` Примеры: ${offerPreview}.` : "";
-      elements.warehouseStatus.textContent = `Конфликт bulk-AUTO (${formatNumber(conflicts)}).${suffix} Обновляю данные...`;
-      showToast(`Часть карточек уже изменена другим менеджером.${suffix}`, "warn");
-      queueWarehouseRefresh();
-      return;
-    }
+    if (handleProductConflict(error, "bulk-AUTO")) return;
     throw error;
   }
 }
@@ -2947,7 +2958,7 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     event.preventDefault();
     const formData = new FormData(markupForm);
     try {
-      await api(`/api/warehouse/products/${markupForm.dataset.productId}`, {
+      const result = await api(`/api/warehouse/products/${markupForm.dataset.productId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2956,14 +2967,9 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
         }),
       });
       elements.warehouseStatus.textContent = "Наценка сохранена. Автоотправка цены поставлена в очередь.";
-      queueWarehouseRefresh();
+      if (!mergeWarehouseProducts([result.product].filter(Boolean))) queueWarehouseRefresh();
     } catch (error) {
-      if (error?.status === 409) {
-        elements.warehouseStatus.textContent = "Конфликт изменений: товар уже обновлен другим пользователем. Обновляю данные...";
-        showToast("Карточка была изменена другим менеджером. Данные перезагружены.", "warn");
-        queueWarehouseRefresh();
-        return;
-      }
+      if (handleProductConflict(error, "наценки")) return;
       elements.warehouseStatus.textContent = error.message;
     }
     return;
@@ -2979,17 +2985,21 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
       .split(",")
       .map((id) => id.trim())
       .filter(Boolean);
+    const byId = new Map((state.warehouse || []).map((item) => [String(item.id), item]));
+    const optimisticLocks = productIds.map((id) => ({
+      id,
+      expectedUpdatedAt: String(byId.get(id)?.updatedAt || ""),
+    }));
     const result = await api("/api/warehouse/products/links/bulk", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...Object.fromEntries(data.entries()), productIds }),
+      body: JSON.stringify({ ...Object.fromEntries(data.entries()), productIds, optimisticLocks }),
     });
-    if (Array.isArray(result.products)) result.products.forEach((product) => mergeWarehouseProduct(product));
-    applyWarehouseFilters();
-    renderWarehouseCards();
-    renderDetailForProductIds(productIds);
+    mergeWarehouseProducts(result.products);
+    form.reset();
     elements.warehouseStatus.textContent = `Привязка сохранена: ${formatNumber(result.changed || productIds.length)} товар(ов). Цена отправится автоматически.`;
   } catch (error) {
+    if (handleProductConflict(error, "привязки")) return;
     elements.warehouseStatus.textContent = error.message;
   } finally {
     if (submitButton) submitButton.disabled = false;
@@ -3025,17 +3035,9 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       body: JSON.stringify({ productIds, enabled: enable, optimisticLocks }),
     });
     elements.warehouseStatus.textContent = `AUTO ${enable ? "включен" : "выключен"} для карточки: ${formatNumber(result.changed)} вариантов.`;
-    queueWarehouseRefresh();
+    if (!mergeWarehouseProducts(result.products)) queueWarehouseRefresh();
   } catch (error) {
-    if (error?.status === 409) {
-      const conflictItems = Array.isArray(error?.payload?.conflicts) ? error.payload.conflicts : [];
-      const offerPreview = conflictOfferPreview(conflictItems);
-      const suffix = offerPreview ? ` Примеры: ${offerPreview}.` : "";
-      elements.warehouseStatus.textContent = `Конфликт AUTO для карточки.${suffix} Обновляю данные...`;
-      showToast(`Часть вариантов уже изменена другим менеджером.${suffix}`, "warn");
-      queueWarehouseRefresh();
-      return;
-    }
+    if (handleProductConflict(error, "AUTO для карточки")) return;
     elements.warehouseStatus.textContent = error.message;
   } finally {
     toggleButton.disabled = false;
@@ -3057,14 +3059,15 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       const result = await api(`/api/warehouse/products/${exportButton.dataset.productId}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirmed: true, target }),
+        body: JSON.stringify({ confirmed: true, target, expectedUpdatedAt: exportButton.dataset.productUpdatedAt || "" }),
       });
       elements.warehouseStatus.textContent = `Готово: карточка выгружена в ${label}. Отправлено: ${formatNumber(result.sent || 1)}.`;
-      queueWarehouseRefresh();
+      if (!mergeWarehouseProducts([result.product].filter(Boolean))) queueWarehouseRefresh();
       return;
     }
     if (linkButton) {
-      const result = await api(`/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}`, { method: "DELETE" });
+      const expectedUpdatedAt = encodeURIComponent(linkButton.dataset.productUpdatedAt || "");
+      const result = await api(`/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}?expectedUpdatedAt=${expectedUpdatedAt}`, { method: "DELETE" });
       if (result.product) {
         mergeWarehouseProduct(result.product);
         applyWarehouseFilters();
@@ -3074,10 +3077,15 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       elements.warehouseStatus.textContent = "Привязка удалена. Автоцена пересчитается по оставшимся привязкам.";
     }
     if (productButton && await confirmAction({ title: "Удалить товар?", text: "Удалить товар из личного склада?", okText: "Удалить" })) {
-      await api(`/api/warehouse/products/${productButton.dataset.productId}`, { method: "DELETE" });
-      queueWarehouseRefresh();
+      const expectedUpdatedAt = encodeURIComponent(productButton.dataset.productUpdatedAt || "");
+      const result = await api(`/api/warehouse/products/${productButton.dataset.productId}?expectedUpdatedAt=${expectedUpdatedAt}`, { method: "DELETE" });
+      state.warehouse = state.warehouse.filter((item) => item.id !== (result.deletedId || productButton.dataset.productId));
+      applyWarehouseFilters();
+      renderWarehouseCards();
+      elements.warehouseDetail.innerHTML = "";
     }
   } catch (error) {
+    if (handleProductConflict(error, "удаления")) return;
     elements.warehouseStatus.textContent = error.message;
   }
 });
@@ -3300,6 +3308,16 @@ elements.supplierBoard.addEventListener("change", async (event) => {
   const supplier = state.suppliers.find((item) => item.id === panel.dataset.supplierId);
 
   if (stopped) {
+    const impacted = Number(supplier?.impactProductCount || 0);
+    if (impacted > 0 && !(await confirmAction({
+      title: "Поставить поставщика на стоп?",
+      text: `${name}: выключение повлияет примерно на ${formatNumber(impacted)} товар(ов). Их привязки останутся, но поставщик не будет участвовать в выборе цены и остатков.`,
+      okText: "Продолжить",
+      danger: true,
+    }))) {
+      toggle.checked = false;
+      return;
+    }
     const modalResult = await openSupplierInactiveModal(supplier || { id: panel.dataset.supplierId });
     if (!modalResult) {
       toggle.checked = false;
