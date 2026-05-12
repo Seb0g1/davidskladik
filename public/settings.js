@@ -109,17 +109,17 @@ function sleep(ms) {
 }
 
 function manualWarehouseSyncText(status) {
-  if (!status) return "РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ Р·Р°РїСѓС‰РµРЅР° РІ С„РѕРЅРµ...";
+  if (!status) return "Синхронизация запущена в фоне...";
   if (status.status === "running") {
-    return `РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РёРґС‘С‚ РІ С„РѕРЅРµ${status.startedAt ? ` СЃ ${new Date(status.startedAt).toLocaleTimeString("ru-RU")}` : ""}. РЎС‚СЂР°РЅРёС†Сѓ РјРѕР¶РЅРѕ РЅРµ РґРµСЂР¶Р°С‚СЊ РѕС‚РєСЂС‹С‚РѕР№.`;
+    return `Синхронизация идёт в фоне${status.startedAt ? ` с ${new Date(status.startedAt).toLocaleTimeString("ru-RU")}` : ""}. Страницу можно не держать открытой.`;
   }
   if (status.status === "ok") {
     const total = status.result?.warehouse?.total ?? 0;
     const changed = status.result?.warehouse?.changed ?? 0;
-    return `РЎРєР»Р°Рґ СЃРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅ. РўРѕРІР°СЂРѕРІ: ${total}, РёР·РјРµРЅРµРЅРёР№ С†РµРЅС‹: ${changed}.`;
+    return `Склад синхронизирован. Товаров: ${total}, изменений цены: ${changed}.`;
   }
-  if (status.status === "failed") return `РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РЅРµ СѓРґР°Р»Р°СЃСЊ: ${status.error || "РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°"}`;
-  return "Р СѓС‡РЅРѕР№ Р·Р°РїСѓСЃРє РЅРµ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ.";
+  if (status.status === "failed") return `Синхронизация не удалась: ${status.error || "неизвестная ошибка"}`;
+  return "Ручной запуск не выполняется.";
 }
 
 async function pollManualWarehouseSync() {
@@ -132,17 +132,17 @@ async function pollManualWarehouseSync() {
 }
 
 function dailySyncText(status) {
-  if (!status) return "РћР±РЅРѕРІР»РµРЅРёРµ С†РµРЅ Р·Р°РїСѓС‰РµРЅРѕ РІ С„РѕРЅРµ...";
+  if (!status) return "Обновление цен запущено в фоне...";
   if (status.status === "running") {
-    return `Р¦РµРЅС‹ Рё СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ РѕР±РЅРѕРІР»СЏСЋС‚СЃСЏ РІ С„РѕРЅРµ${status.startedAt ? ` СЃ ${new Date(status.startedAt).toLocaleTimeString("ru-RU")}` : ""}.`;
+    return `Цены и синхронизация обновляются в фоне${status.startedAt ? ` с ${new Date(status.startedAt).toLocaleTimeString("ru-RU")}` : ""}.`;
   }
   if (status.status === "ok") {
     const sent = status.warehouse?.pricePush?.sent ?? status.logs?.[0]?.pricePushSent ?? 0;
     const failed = status.warehouse?.pricePush?.failed ?? status.logs?.[0]?.pricePushFailed ?? 0;
-    return `Р¦РµРЅС‹ РѕР±РЅРѕРІР»РµРЅС‹. РћС‚РїСЂР°РІР»РµРЅРѕ: ${sent}, РѕС€РёР±РѕРє: ${failed}.`;
+    return `Цены обновлены. Отправлено: ${sent}, ошибок: ${failed}.`;
   }
-  if (status.status === "failed") return `РћР±РЅРѕРІР»РµРЅРёРµ РЅРµ СѓРґР°Р»РѕСЃСЊ: ${status.error || "РЅРµРёР·РІРµСЃС‚РЅР°СЏ РѕС€РёР±РєР°"}`;
-  return "Р СѓС‡РЅРѕР№ Р·Р°РїСѓСЃРє РЅРµ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ.";
+  if (status.status === "failed") return `Обновление не удалось: ${status.error || "неизвестная ошибка"}`;
+  return "Ручной запуск не выполняется.";
 }
 
 async function pollDailySync() {
