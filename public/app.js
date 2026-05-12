@@ -425,6 +425,38 @@ async function api(path, options) {
   return response.json();
 }
 
+function warehouseProductById(productId) {
+  return (state.warehouse || []).find((product) => String(product.id) === String(productId)) || null;
+}
+
+async function fetchWarehouseProductSnapshot(productId) {
+  const result = await api(`/api/warehouse/products/${encodeURIComponent(productId)}`);
+  return result.product || null;
+}
+
+async function deleteWarehouseLinkWithFreshLock(productId, linkId, expectedUpdatedAt = "") {
+  const remove = (lock) => api(
+    `/api/warehouse/products/${encodeURIComponent(productId)}/links/${encodeURIComponent(linkId)}?expectedUpdatedAt=${encodeURIComponent(lock || "")}`,
+    { method: "DELETE" },
+  );
+  const localProduct = warehouseProductById(productId);
+  const firstLock = localProduct?.updatedAt || expectedUpdatedAt || "";
+  try {
+    return await remove(firstLock);
+  } catch (error) {
+    if (error.status !== 409) throw error;
+    const latest = await fetchWarehouseProductSnapshot(productId);
+    const links = Array.isArray(latest?.links) ? latest.links : [];
+    const stillExists = links.some((link) => String(link.id) === String(linkId));
+    if (!stillExists) {
+      return { ok: true, alreadyDeleted: true, product: latest };
+    }
+    const freshLock = latest?.updatedAt || error.payload?.conflicts?.[0]?.currentUpdatedAt || "";
+    if (!freshLock || freshLock === firstLock) throw error;
+    return remove(freshLock);
+  }
+}
+
 const pmSuggestControllers = new WeakMap();
 
 function closeAllPmSuggestPanels(exceptWrap) {
@@ -3191,13 +3223,25 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       return;
     }
     if (linkButton) {
-      const expectedUpdatedAt = encodeURIComponent(linkButton.dataset.productUpdatedAt || "");
-      const result = await api(`/api/warehouse/products/${linkButton.dataset.productId}/links/${linkButton.dataset.linkId}?expectedUpdatedAt=${expectedUpdatedAt}`, { method: "DELETE" });
+      linkButton.disabled = true;
+      const productId = linkButton.dataset.productId || "";
+      const linkId = linkButton.dataset.linkId || "";
+      const result = await deleteWarehouseLinkWithFreshLock(productId, linkId, linkButton.dataset.productUpdatedAt || "");
       if (result.product) {
-        mergeWarehouseProduct(result.product);
+        const localProduct = warehouseProductById(productId);
+        const productForState = result.alreadyDeleted && localProduct
+          ? {
+              ...localProduct,
+              links: (localProduct.links || []).filter((link) => String(link.id) !== String(linkId)),
+              updatedAt: result.product.updatedAt || localProduct.updatedAt,
+            }
+          : result.product;
+        mergeWarehouseProduct(productForState);
         applyWarehouseFilters();
         renderWarehouseCards();
-        renderDetailForProductIds([result.product.id || linkButton.dataset.productId]);
+        renderDetailForProductIds([productForState.id || productId]);
+      } else {
+        queueWarehouseRefresh();
       }
       elements.warehouseStatus.textContent = "Привязка удалена. Автоцена пересчитается по оставшимся привязкам.";
     }
@@ -3210,6 +3254,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       elements.warehouseDetail.innerHTML = "";
     }
   } catch (error) {
+    if (linkButton) linkButton.disabled = false;
     if (handleProductConflict(error, "удаления")) return;
     elements.warehouseStatus.textContent = error.message;
   }
