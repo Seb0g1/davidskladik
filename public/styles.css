@@ -1706,6 +1706,14 @@ td {
   gap: 10px;
 }
 
+.supplier-line-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .detail-actions {
   display: grid;
   gap: 8px;

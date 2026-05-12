@@ -494,6 +494,21 @@ function dedupeOfferRows(rows) {
   return out;
 }
 
+function setPmSelectedRow(input, row = null) {
+  if (!input) return;
+  if (row) input.dataset.pmSelectedRow = JSON.stringify(row);
+  else delete input.dataset.pmSelectedRow;
+}
+
+function getPmSelectedRow(input) {
+  if (!input?.dataset.pmSelectedRow) return null;
+  try {
+    return JSON.parse(input.dataset.pmSelectedRow);
+  } catch (_error) {
+    return null;
+  }
+}
+
 function renderPmPartnerPanel(panel, items, input) {
   const form = input.closest("form");
   panel.replaceChildren();
@@ -510,16 +525,19 @@ function renderPmPartnerPanel(panel, items, input) {
     btn.type = "button";
     btn.className = "pm-suggest-option";
     btn.setAttribute("role", "option");
-    btn.addEventListener("mousedown", (e) => e.preventDefault());
-    btn.addEventListener("click", () => {
+    const selectRow = (event) => {
+      event.preventDefault();
       input.value = row.name || "";
       input.dataset.pmSelectedValue = input.value;
+      setPmSelectedRow(input, row);
       delete input.dataset.pmAutofilled;
       closeAllPmSuggestPanels(null);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
       const partnerIdInput = form?.querySelector('[name="partnerId"]');
       if (partnerIdInput) partnerIdInput.value = row.id || "";
-    });
+    };
+    btn.addEventListener("pointerdown", selectRow);
+    btn.addEventListener("click", selectRow);
     const title = document.createElement("span");
     title.className = "pm-suggest-title";
     title.textContent = row.name || "";
@@ -548,21 +566,25 @@ function renderPmOfferPanel(panel, rows, input) {
     btn.type = "button";
     btn.className = "pm-suggest-option";
     btn.setAttribute("role", "option");
-    btn.addEventListener("mousedown", (e) => e.preventDefault());
-    btn.addEventListener("click", () => {
+    const selectRow = (event) => {
+      event.preventDefault();
       input.value = row.article || "";
       input.dataset.pmSelectedValue = input.value;
+      setPmSelectedRow(input, row);
       const supplierInput = form?.querySelector('[name="supplierName"]');
       if (supplierInput && row.partnerName) {
         supplierInput.value = row.partnerName;
         supplierInput.dataset.pmSelectedValue = row.partnerName;
         supplierInput.dataset.pmAutofilled = "1";
+        setPmSelectedRow(supplierInput, { id: row.partnerId, name: row.partnerName });
       }
       const partnerIdInput = form?.querySelector('[name="partnerId"]');
       if (partnerIdInput) partnerIdInput.value = row.partnerId || "";
       closeAllPmSuggestPanels(null);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    btn.addEventListener("pointerdown", selectRow);
+    btn.addEventListener("click", selectRow);
     const title = document.createElement("span");
     title.className = "pm-suggest-title";
     title.textContent = row.article || "";
@@ -655,8 +677,10 @@ document.addEventListener("input", (event) => {
       supplierInput.value = "";
       delete supplierInput.dataset.pmAutofilled;
       delete supplierInput.dataset.pmSelectedValue;
+      setPmSelectedRow(supplierInput, null);
     }
     delete el.dataset.pmSelectedValue;
+    setPmSelectedRow(el, null);
   }
   if (form && el.name === "supplierName") {
     const partnerIdInput = form.querySelector('[name="partnerId"]');
@@ -666,6 +690,7 @@ document.addEventListener("input", (event) => {
       if (partnerIdInput) partnerIdInput.value = "";
       delete el.dataset.pmAutofilled;
       delete el.dataset.pmSelectedValue;
+      setPmSelectedRow(el, null);
     }
   }
   schedulePmSuggest(el);
@@ -684,6 +709,14 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeAllPmSuggestPanels(null);
+  if (event.key !== "Enter") return;
+  const el = event.target.closest("[data-pm-suggest]");
+  if (!el) return;
+  const wrap = el.closest(".pm-autocomplete-wrap");
+  const firstOption = wrap?.querySelector(".pm-suggest-option");
+  if (!firstOption || firstOption.closest(".pm-suggest-panel")?.hidden) return;
+  event.preventDefault();
+  firstOption.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 });
 
 function marketLabel(product) {
@@ -1855,7 +1888,10 @@ function renderWarehouseDetail(group) {
                         <span>${escapeHtml(item.article)} · ${escapeHtml(item.name || "")}</span>
                         ${item.stopped ? `<span class="stop-note">На стопе${item.stopReason ? `: ${escapeHtml(item.stopReason)}` : ""}</span>` : ""}
                       </div>
-                      <div class="money">${formatUsd(item.price)}</div>
+                      <div class="supplier-line-actions">
+                        <div class="money">${formatUsd(item.price)}</div>
+                        <button class="secondary-button compact-button add-supplier-draft" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" data-article="${escapeHtml(item.article || "")}" data-supplier-name="${escapeHtml(item.partnerName || item.supplierName || "")}" data-partner-id="${escapeHtml(item.partnerId || "")}" data-price-currency="${escapeHtml(item.priceCurrency || item.sourceCurrency || "USD")}">Р’ С‡РµСЂРЅРѕРІРёРє</button>
+                      </div>
                     </div>
                   `,
                 )
@@ -3093,18 +3129,32 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
   const data = new FormData(form);
-  const article = String(data.get("article") || "").trim();
+  const articleInput = form.elements.article;
+  const supplierInput = form.elements.supplierName;
+  const selectedOffer = getPmSelectedRow(articleInput);
+  const selectedArticleValue = String(articleInput?.dataset.pmSelectedValue || "").trim();
+  const rawArticle = String(data.get("article") || "").trim();
+  const article = selectedOffer && selectedArticleValue && rawArticle === selectedArticleValue
+    ? String(selectedOffer.article || rawArticle).trim()
+    : rawArticle;
   if (!article) {
     elements.warehouseStatus.textContent = "Укажите артикул PriceMaster для черновика привязки.";
     return;
   }
+  const selectedSupplier = getPmSelectedRow(supplierInput);
+  const supplierName = selectedOffer?.partnerName
+    || selectedSupplier?.name
+    || String(data.get("supplierName") || "").trim();
+  const partnerId = selectedOffer?.partnerId
+    || selectedSupplier?.id
+    || String(data.get("partnerId") || "").trim();
   const draftKey = form.dataset.draftKey || productIdsDraftKey(String(form.dataset.productIds || form.dataset.productId || "").split(","));
   const draft = {
     id: createClientDraftId(),
     article,
     keyword: String(data.get("keyword") || "").trim(),
-    supplierName: String(data.get("supplierName") || "").trim(),
-    partnerId: String(data.get("partnerId") || "").trim(),
+    supplierName: String(supplierName || "").trim(),
+    partnerId: String(partnerId || "").trim(),
     priceCurrency: String(data.get("priceCurrency") || "USD").toUpperCase() === "RUB" ? "RUB" : "USD",
   };
   const existing = getPendingLinkDrafts(draftKey);
@@ -3164,9 +3214,40 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
 });
 
 elements.warehouseDetail.addEventListener("click", async (event) => {
+  const addSupplierDraftButton = event.target.closest(".add-supplier-draft");
   const removeDraftButton = event.target.closest(".remove-link-draft");
   const clearDraftButton = event.target.closest(".clear-link-drafts");
   const saveDraftsButton = event.target.closest(".save-link-drafts");
+  if (addSupplierDraftButton) {
+    const key = addSupplierDraftButton.dataset.draftKey || "";
+    const draft = {
+      id: createClientDraftId(),
+      article: String(addSupplierDraftButton.dataset.article || "").trim(),
+      keyword: "",
+      supplierName: String(addSupplierDraftButton.dataset.supplierName || "").trim(),
+      partnerId: String(addSupplierDraftButton.dataset.partnerId || "").trim(),
+      priceCurrency: String(addSupplierDraftButton.dataset.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD",
+    };
+    if (!draft.article) {
+      elements.warehouseStatus.textContent = "РЈ РїРѕСЃС‚Р°РІС‰РёРєР° РЅРµС‚ Р°СЂС‚РёРєСѓР»Р° PriceMaster.";
+      return;
+    }
+    const existing = getPendingLinkDrafts(key);
+    const duplicateIndex = existing.findIndex((item) =>
+      String(item.article || "").trim().toLowerCase() === draft.article.toLowerCase()
+      && String(item.partnerId || "").trim() === draft.partnerId
+      && String(item.supplierName || "").trim().toLowerCase() === draft.supplierName.toLowerCase()
+      && String(item.keyword || "").trim().toLowerCase() === draft.keyword.toLowerCase()
+      && String(item.priceCurrency || "USD") === draft.priceCurrency
+    );
+    const nextDrafts = duplicateIndex >= 0
+      ? existing.map((item, index) => (index === duplicateIndex ? { ...draft, id: item.id } : item))
+      : [...existing, draft];
+    setPendingLinkDrafts(key, nextDrafts);
+    renderWarehouseDetail(state.selectedWarehouseDetailGroup);
+    elements.warehouseStatus.textContent = `Р’ С‡РµСЂРЅРѕРІРёРєРµ ${formatNumber(nextDrafts.length)} РїСЂРёРІСЏР·РѕРє. РЎРѕС…СЂР°РЅРёС‚Рµ РёС… РѕРґРЅРёРј РїР°РєРµС‚РѕРј.`;
+    return;
+  }
   if (removeDraftButton) {
     const key = removeDraftButton.dataset.draftKey || "";
     setPendingLinkDrafts(key, getPendingLinkDrafts(key).filter((link) => String(link.id) !== String(removeDraftButton.dataset.draftId || "")));
