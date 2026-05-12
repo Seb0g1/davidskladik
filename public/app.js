@@ -50,6 +50,7 @@ const state = {
   aiImageProductId: null,
   aiImageDraft: null,
   aiImageBusy: false,
+  pendingLinkDrafts: {},
 };
 
 const elements = {
@@ -731,6 +732,30 @@ function productGroupKey(product) {
   return `name:${displayProductName(product).trim().toLowerCase()}`;
 }
 
+function productIdsDraftKey(productIds = []) {
+  return (productIds || [])
+    .map((id) => String(id || "").trim())
+    .filter(Boolean)
+    .sort()
+    .join("|");
+}
+
+function createClientDraftId() {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  return `draft-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getPendingLinkDrafts(key) {
+  return Array.isArray(state.pendingLinkDrafts?.[key]) ? state.pendingLinkDrafts[key] : [];
+}
+
+function setPendingLinkDrafts(key, links = []) {
+  state.pendingLinkDrafts = state.pendingLinkDrafts || {};
+  const normalized = (Array.isArray(links) ? links : []).filter((link) => String(link?.article || "").trim());
+  if (normalized.length) state.pendingLinkDrafts[key] = normalized;
+  else delete state.pendingLinkDrafts[key];
+}
+
 function buildWarehouseGroups(products) {
   const map = new Map();
   for (const product of products) {
@@ -754,7 +779,7 @@ function buildWarehouseGroups(products) {
     const primary = variants[0];
     const brandLabel =
       variants.map((p) => String(p.brand || p.ozon?.vendor || p.yandex?.vendor || "").trim()).find(Boolean) || "";
-    const links = variants.flatMap((product) => (product.links || []).map((link) => ({ ...link, productId: product.id })));
+    const links = variants.flatMap((product) => (product.links || []).map((link) => ({ ...link, productId: product.id, productUpdatedAt: product.updatedAt || "" })));
     const suppliers = variants.flatMap((product) => product.suppliers || []);
     return {
       ...group,
@@ -1573,6 +1598,8 @@ function renderWarehouseDetail(group) {
   const image = group.image || productImage(product);
   const productName = group.name || displayProductName(product);
   const groupProductIds = variants.map((item) => item.id);
+  const linkDraftKeyValue = productIdsDraftKey(groupProductIds);
+  const pendingLinks = getPendingLinkDrafts(linkDraftKeyValue);
   const ozonForAi = ozonVariant || (product.marketplace === "ozon" ? product : null);
 
   elements.warehouseDetail.innerHTML = `
@@ -1718,7 +1745,7 @@ function renderWarehouseDetail(group) {
                           ${!link.missingInPriceMaster && Number(link.availableCount || 0) === 0 ? " · нет активного остатка" : ""}
                         </span>
                       </div>
-                      <button class="text-button delete-link" type="button" data-product-id="${escapeHtml(link.productId || product.id)}" data-product-updated-at="${escapeHtml(product.updatedAt || "")}" data-link-id="${escapeHtml(link.id)}">Удалить</button>
+                      <button class="text-button delete-link" type="button" data-product-id="${escapeHtml(link.productId || product.id)}" data-product-updated-at="${escapeHtml(link.productUpdatedAt || product.updatedAt || "")}" data-link-id="${escapeHtml(link.id)}">Удалить</button>
                     </div>
                   `,
                 )
@@ -1726,7 +1753,36 @@ function renderWarehouseDetail(group) {
             : '<div class="empty-mini">Связей пока нет.</div>'
         }
       </div>
-      ${elements.linkFormTemplate.innerHTML.replace("<form", `<form data-product-id="${escapeHtml(product.id)}" data-product-ids="${escapeHtml(groupProductIds.join(","))}"`)}
+      <div class="pending-link-box ${pendingLinks.length ? "" : "is-empty"}">
+        <div class="pending-link-head">
+          <div>
+            <strong>Черновик привязок: ${formatNumber(pendingLinks.length)}</strong>
+            <span>Добавляйте несколько поставщиков, затем сохраните их одним пакетом.</span>
+          </div>
+          <div class="pending-link-actions">
+            <button class="secondary-button compact-button save-link-drafts" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" data-product-ids="${escapeHtml(groupProductIds.join(","))}" ${pendingLinks.length ? "" : "disabled"}>Сохранить привязки</button>
+            <button class="text-button clear-link-drafts" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" ${pendingLinks.length ? "" : "disabled"}>Очистить</button>
+          </div>
+        </div>
+        ${
+          pendingLinks.length
+            ? `<div class="pending-link-list">
+                ${pendingLinks
+                  .map((link) => `
+                    <div class="pending-link-item">
+                      <div>
+                        <strong>${escapeHtml(link.article)}</strong>
+                        <span>${escapeHtml(link.supplierName || "Любой поставщик")}${link.keyword ? ` · ${escapeHtml(link.keyword)}` : ""} · ${escapeHtml(link.priceCurrency || "USD")}</span>
+                      </div>
+                      <button class="text-button remove-link-draft" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" data-draft-id="${escapeHtml(link.id)}">Убрать</button>
+                    </div>
+                  `)
+                  .join("")}
+              </div>`
+            : '<div class="empty-mini">Новые привязки появятся здесь до сохранения.</div>'
+        }
+      </div>
+      ${elements.linkFormTemplate.innerHTML.replace("<form", `<form data-product-id="${escapeHtml(product.id)}" data-product-ids="${escapeHtml(groupProductIds.join(","))}" data-draft-key="${escapeHtml(linkDraftKeyValue)}"`)}
     </section>
 
     <section class="detail-section">
@@ -2978,32 +3034,36 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.target;
   const data = new FormData(form);
-  const submitButton = form.querySelector('button[type="submit"]');
-  if (submitButton) submitButton.disabled = true;
-  try {
-    const productIds = String(form.dataset.productIds || form.dataset.productId || "")
-      .split(",")
-      .map((id) => id.trim())
-      .filter(Boolean);
-    const byId = new Map((state.warehouse || []).map((item) => [String(item.id), item]));
-    const optimisticLocks = productIds.map((id) => ({
-      id,
-      expectedUpdatedAt: String(byId.get(id)?.updatedAt || ""),
-    }));
-    const result = await api("/api/warehouse/products/links/bulk", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...Object.fromEntries(data.entries()), productIds, optimisticLocks }),
-    });
-    mergeWarehouseProducts(result.products);
-    form.reset();
-    elements.warehouseStatus.textContent = `Привязка сохранена: ${formatNumber(result.changed || productIds.length)} товар(ов). Цена отправится автоматически.`;
-  } catch (error) {
-    if (handleProductConflict(error, "привязки")) return;
-    elements.warehouseStatus.textContent = error.message;
-  } finally {
-    if (submitButton) submitButton.disabled = false;
+  const article = String(data.get("article") || "").trim();
+  if (!article) {
+    elements.warehouseStatus.textContent = "Укажите артикул PriceMaster для черновика привязки.";
+    return;
   }
+  const draftKey = form.dataset.draftKey || productIdsDraftKey(String(form.dataset.productIds || form.dataset.productId || "").split(","));
+  const draft = {
+    id: createClientDraftId(),
+    article,
+    keyword: String(data.get("keyword") || "").trim(),
+    supplierName: String(data.get("supplierName") || "").trim(),
+    partnerId: String(data.get("partnerId") || "").trim(),
+    priceCurrency: String(data.get("priceCurrency") || "USD").toUpperCase() === "RUB" ? "RUB" : "USD",
+  };
+  const existing = getPendingLinkDrafts(draftKey);
+  const duplicateIndex = existing.findIndex((item) =>
+    String(item.article || "").trim().toLowerCase() === draft.article.toLowerCase()
+    && String(item.partnerId || "").trim() === draft.partnerId
+    && String(item.supplierName || "").trim().toLowerCase() === draft.supplierName.toLowerCase()
+    && String(item.keyword || "").trim().toLowerCase() === draft.keyword.toLowerCase()
+    && String(item.priceCurrency || "USD") === draft.priceCurrency
+  );
+  const nextDrafts = duplicateIndex >= 0
+    ? existing.map((item, index) => (index === duplicateIndex ? { ...draft, id: item.id } : item))
+    : [...existing, draft];
+  setPendingLinkDrafts(draftKey, nextDrafts);
+  form.reset();
+  renderWarehouseDetail(state.selectedWarehouseDetailGroup);
+  elements.warehouseStatus.textContent = `В черновике ${formatNumber(nextDrafts.length)} привязок. Сохраните их одним пакетом, чтобы пересчитать цену.`;
+  return;
 });
 
 elements.warehouseDetail.addEventListener("click", async (event) => {
@@ -3045,6 +3105,58 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
 });
 
 elements.warehouseDetail.addEventListener("click", async (event) => {
+  const removeDraftButton = event.target.closest(".remove-link-draft");
+  const clearDraftButton = event.target.closest(".clear-link-drafts");
+  const saveDraftsButton = event.target.closest(".save-link-drafts");
+  if (removeDraftButton) {
+    const key = removeDraftButton.dataset.draftKey || "";
+    setPendingLinkDrafts(key, getPendingLinkDrafts(key).filter((link) => String(link.id) !== String(removeDraftButton.dataset.draftId || "")));
+    renderWarehouseDetail(state.selectedWarehouseDetailGroup);
+    elements.warehouseStatus.textContent = "Черновик привязки убран. Сохраненные привязки не изменились.";
+    return;
+  }
+  if (clearDraftButton) {
+    const key = clearDraftButton.dataset.draftKey || "";
+    setPendingLinkDrafts(key, []);
+    renderWarehouseDetail(state.selectedWarehouseDetailGroup);
+    elements.warehouseStatus.textContent = "Черновик привязок очищен.";
+    return;
+  }
+  if (saveDraftsButton) {
+    const key = saveDraftsButton.dataset.draftKey || "";
+    const links = getPendingLinkDrafts(key);
+    if (!links.length) {
+      elements.warehouseStatus.textContent = "Добавьте хотя бы одну привязку в черновик.";
+      return;
+    }
+    const productIds = String(saveDraftsButton.dataset.productIds || "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+    const byId = new Map((state.warehouse || []).map((item) => [String(item.id), item]));
+    const optimisticLocks = productIds.map((id) => ({
+      id,
+      expectedUpdatedAt: String(byId.get(id)?.updatedAt || ""),
+    }));
+    saveDraftsButton.disabled = true;
+    elements.warehouseStatus.textContent = `Сохраняю ${formatNumber(links.length)} привязок и пересчитываю цену...`;
+    try {
+      const result = await api("/api/warehouse/products/links/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds, optimisticLocks, links }),
+      });
+      setPendingLinkDrafts(key, []);
+      mergeWarehouseProducts(result.products);
+      elements.warehouseStatus.textContent = `Привязки сохранены: ${formatNumber(links.length)}. Цена и поставщик пересчитаны по всем связям.`;
+    } catch (error) {
+      if (handleProductConflict(error, "привязок")) return;
+      elements.warehouseStatus.textContent = error.message;
+      saveDraftsButton.disabled = false;
+    }
+    return;
+  }
+
   const linkButton = event.target.closest(".delete-link");
   const productButton = event.target.closest(".delete-product");
   const exportButton = event.target.closest(".export-product");

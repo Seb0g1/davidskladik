@@ -1648,6 +1648,56 @@ td {
   gap: 8px;
 }
 
+.pending-link-box {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+}
+
+.pending-link-box.is-empty {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--tile-soft) 86%, transparent);
+}
+
+.pending-link-head,
+.pending-link-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.pending-link-head span,
+.pending-link-item span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pending-link-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.pending-link-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pending-link-item {
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--panel-strong) 78%, transparent);
+}
+
 .link-item,
 .supplier-line {
   display: flex;

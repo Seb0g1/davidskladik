@@ -145,6 +145,7 @@ const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
 let ozonRequestChain = Promise.resolve();
 let ozonLastRequestAt = 0;
+const ozonWarehouseCache = new Map();
 let immediateAutoPushTimer = null;
 let immediateAutoPushAll = false;
 const immediateAutoPushIds = new Set();
@@ -1203,6 +1204,17 @@ function normalizeMarketplaceState(input = {}) {
   if (!input || typeof input !== "object") {
     return { code: "unknown", label: "Статус не загружен" };
   }
+  const warehouses = Array.isArray(input.warehouses)
+    ? input.warehouses
+        .map((warehouse) => ({
+          warehouseId: cleanText(warehouse.warehouseId || warehouse.warehouse_id || warehouse.id),
+          warehouseName: cleanText(warehouse.warehouseName || warehouse.warehouse_name || warehouse.name),
+          present: Number.isFinite(Number(warehouse.present)) ? Number(warehouse.present) : 0,
+          reserved: Number.isFinite(Number(warehouse.reserved)) ? Number(warehouse.reserved) : 0,
+          stock: Number.isFinite(Number(warehouse.stock)) ? Number(warehouse.stock) : undefined,
+        }))
+        .filter((warehouse) => warehouse.warehouseId || warehouse.warehouseName)
+    : [];
   return compactObject({
     code: cleanText(input.code || "unknown"),
     label: cleanText(input.label || "Статус не загружен"),
@@ -1213,6 +1225,7 @@ function normalizeMarketplaceState(input = {}) {
     stock: Number.isFinite(Number(input.stock)) ? Number(input.stock) : undefined,
     present: Number.isFinite(Number(input.present)) ? Number(input.present) : undefined,
     reserved: Number.isFinite(Number(input.reserved)) ? Number(input.reserved) : undefined,
+    warehouses,
     archived: input.archived !== undefined ? Boolean(input.archived) : undefined,
     hasStocks: input.hasStocks !== undefined ? Boolean(input.hasStocks) : undefined,
   });
@@ -1300,6 +1313,17 @@ function normalizeWarehouseLink(input = {}) {
     priority: Number.isFinite(Number(input.priority)) ? Number(input.priority) : 100,
     createdAt: input.createdAt || new Date().toISOString(),
   };
+}
+
+function warehouseLinkIdentityKey(input = {}) {
+  const link = normalizeWarehouseLink(input);
+  return [
+    link.article.toLowerCase(),
+    link.partnerId,
+    normalizeSupplierName(link.supplierName),
+    link.keyword.toLowerCase(),
+    link.priceCurrency,
+  ].join("|");
 }
 
 function normalizeSupplierArticle(input = {}) {
@@ -1556,6 +1580,118 @@ async function ozonRequest(pathname, body, account = null) {
   });
 }
 
+function normalizeOzonWarehouse(input = {}) {
+  const warehouseId = cleanText(input.warehouseId || input.warehouse_id || input.id);
+  const warehouseName = cleanText(input.warehouseName || input.warehouse_name || input.name);
+  return warehouseId || warehouseName ? { warehouseId, warehouseName } : null;
+}
+
+function normalizeOzonStockWarehouse(input = {}) {
+  const normalized = normalizeOzonWarehouse(input);
+  if (!normalized) return null;
+  const present = Number(input.present || 0);
+  const reserved = Number(input.reserved || 0);
+  const stock = Number.isFinite(Number(input.stock))
+    ? Number(input.stock)
+    : Math.max(0, present - reserved);
+  return {
+    ...normalized,
+    present: Number.isFinite(present) ? present : 0,
+    reserved: Number.isFinite(reserved) ? reserved : 0,
+    stock,
+  };
+}
+
+function parseOzonStockWarehouseIds(account = {}) {
+  const accountKey = cleanText(account.id || account.name || "ozon")
+    .replace(/[^a-z0-9]/gi, "_")
+    .toUpperCase();
+  return splitList(
+    process.env[`OZON_STOCK_WAREHOUSE_IDS_${accountKey}`]
+      || process.env.OZON_STOCK_WAREHOUSE_IDS
+      || process.env.OZON_STOCK_WAREHOUSE_ID
+      || "",
+  );
+}
+
+function parseOzonStockWarehouseNames(account = {}) {
+  const accountKey = cleanText(account.id || account.name || "ozon")
+    .replace(/[^a-z0-9]/gi, "_")
+    .toUpperCase();
+  return splitList(
+    process.env[`OZON_STOCK_WAREHOUSE_NAMES_${accountKey}`]
+      || process.env.OZON_STOCK_WAREHOUSE_NAMES
+      || "",
+  ).map((name) => normalizeSupplierName(name));
+}
+
+async function getOzonWarehouses(account = null, { refresh = false } = {}) {
+  const selectedAccount = account || getOzonAccountByTarget("ozon");
+  const cacheKey = cleanText(selectedAccount?.id || selectedAccount?.clientId || "ozon");
+  const cached = ozonWarehouseCache.get(cacheKey);
+  if (!refresh && cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.items;
+  const data = await ozonRequest("/v1/warehouse/list", {}, selectedAccount);
+  const raw = data.result || data.warehouses || data.items || [];
+  const items = (Array.isArray(raw) ? raw : raw.warehouses || raw.items || [])
+    .map(normalizeOzonWarehouse)
+    .filter(Boolean);
+  ozonWarehouseCache.set(cacheKey, { at: Date.now(), items });
+  return items;
+}
+
+async function resolveOzonStockWarehouses(account = null, product = null) {
+  const configuredIds = parseOzonStockWarehouseIds(account);
+  if (configuredIds.length) {
+    return configuredIds.map((warehouseId) => ({ warehouseId, warehouseName: "" }));
+  }
+
+  const configuredNames = parseOzonStockWarehouseNames(account);
+  try {
+    const warehouses = await getOzonWarehouses(account);
+    if (configuredNames.length) {
+      return warehouses.filter((warehouse) =>
+        configuredNames.some((name) => normalizeSupplierName(warehouse.warehouseName).includes(name)),
+      );
+    }
+    if (warehouses.length) return warehouses;
+  } catch (error) {
+    logger.warn("ozon warehouse list failed", {
+      account: account?.id || account?.name || "ozon",
+      detail: error?.message || String(error),
+    });
+  }
+
+  const storedWarehouses = Array.isArray(product?.marketplaceState?.warehouses)
+    ? product.marketplaceState.warehouses
+    : [];
+  return storedWarehouses
+    .map(normalizeOzonWarehouse)
+    .filter(Boolean);
+}
+
+async function buildOzonStockPayloadItems(items = [], account = null, stockResolver = () => 0, { allWarehouses = false } = {}) {
+  const payloadItems = [];
+  for (const item of items) {
+    const offerId = cleanText(item.offerId || item.offer_id);
+    if (!offerId) continue;
+    const stock = Math.max(0, Math.round(Number(stockResolver(item) || 0)));
+    const warehouses = await resolveOzonStockWarehouses(account, item);
+    if (!warehouses.length) {
+      payloadItems.push({ offer_id: offerId, stock });
+      continue;
+    }
+    const targetWarehouses = allWarehouses ? warehouses : warehouses.slice(0, 1);
+    for (const warehouse of targetWarehouses) {
+      payloadItems.push({
+        offer_id: offerId,
+        warehouse_id: Number(warehouse.warehouseId),
+        stock,
+      });
+    }
+  }
+  return payloadItems.filter((item) => item.offer_id && (item.warehouse_id || item.warehouse_id === undefined));
+}
+
 async function yandexRequest(shop, method, pathname, body) {
   if (!shop?.apiKey || !shop?.businessId) {
     const error = new Error("Yandex shop apiKey and businessId must be set in .env");
@@ -1662,10 +1798,11 @@ async function getOzonStockMap(offerIds, account = null) {
       const offerId = item.offer_id || item.offerId;
       if (!offerId) continue;
       const stocks = Array.isArray(item.stocks) ? item.stocks : [];
-      const present = stocks.reduce((sum, stock) => sum + Number(stock.present || 0), 0);
-      const reserved = stocks.reduce((sum, stock) => sum + Number(stock.reserved || 0), 0);
+      const warehouses = stocks.map(normalizeOzonStockWarehouse).filter(Boolean);
+      const present = warehouses.reduce((sum, stock) => sum + Number(stock.present || 0), 0);
+      const reserved = warehouses.reduce((sum, stock) => sum + Number(stock.reserved || 0), 0);
       const total = Number.isFinite(Number(item.stock)) ? Number(item.stock) : Math.max(0, present - reserved);
-      map.set(offerId, { ...item, present, reserved, stock: total });
+      map.set(offerId, { ...item, present, reserved, stock: total, warehouses });
     }
   }
 
@@ -1680,23 +1817,24 @@ function pickOzonState(product = {}, info = {}, stockInfo = {}) {
   const archived = Boolean(product.archived || info.archived || visibility === "ARCHIVED" || state === "ARCHIVED");
   const present = Number(stockInfo.present || 0);
   const reserved = Number(stockInfo.reserved || 0);
+  const warehouses = Array.isArray(stockInfo.warehouses) ? stockInfo.warehouses : [];
   const stock = Number.isFinite(Number(stockInfo.stock)) ? Number(stockInfo.stock) : Math.max(0, present - reserved);
   const hasStocks = Boolean(product.has_fbs_stocks || product.hasFbsStocks || stock > 0);
 
   if (archived) {
-    return normalizeMarketplaceState({ code: "archived", label: "В архиве Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, archived, hasStocks });
+    return normalizeMarketplaceState({ code: "archived", label: "В архиве Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
   }
   if (visibility === "EMPTY_STOCK" || (!hasStocks && stock <= 0)) {
-    return normalizeMarketplaceState({ code: "out_of_stock", label: "Нет в наличии Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, archived, hasStocks });
+    return normalizeMarketplaceState({ code: "out_of_stock", label: "Нет в наличии Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
   }
   if (["INVISIBLE", "DISABLED", "REMOVED_FROM_SALE", "BANNED", "NOT_MODERATED", "STATE_FAILED", "MODERATION_BLOCK"].includes(visibility)
     || ["INVISIBLE", "DISABLED", "REMOVED_FROM_SALE", "BANNED", "NOT_MODERATED", "STATE_FAILED", "MODERATION_BLOCK"].includes(state)) {
-    return normalizeMarketplaceState({ code: "inactive", label: "Неактивен Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, archived, hasStocks });
+    return normalizeMarketplaceState({ code: "inactive", label: "Неактивен Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
   }
   if (visibility || state || hasStocks) {
-    return normalizeMarketplaceState({ code: "active", label: "Активен Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, archived, hasStocks });
+    return normalizeMarketplaceState({ code: "active", label: "Активен Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
   }
-  return normalizeMarketplaceState({ code: "unknown", label: "Статус Ozon не загружен", visibility, state, stateName, stateDescription, stock, present, reserved, archived, hasStocks });
+  return normalizeMarketplaceState({ code: "unknown", label: "Статус Ozon не загружен", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
 }
 
 async function getOzonPriceMap(offerIds, account = null) {
@@ -2858,6 +2996,7 @@ async function writeSnapshot(snapshot) {
   await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2), "utf8");
   priceMasterSnapshotMemoryCache = snapshot;
   priceMasterArticleIndexCache = null;
+  invalidateWarehouseViewCache();
 }
 
 async function getPriceMasterSnapshotMeta() {
@@ -3431,6 +3570,40 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
     });
 }
 
+async function getLivePriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate) {
+  const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article);
+  if (!normalizedLinks.length) return new Map();
+  const stoppedMap = stoppedSupplierMap(managedSuppliers);
+  const map = new Map();
+  for (const link of normalizedLinks) {
+    const rows = await findPriceMasterRowsForLink(link, usdRate, managedSuppliers);
+    map.set(link.id, rows.map((row) => {
+      const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
+      const price = stoppedSupplier ? 0 : row.price;
+      const active = stoppedSupplier ? false : Boolean(row.active);
+      return {
+        ...link,
+        rowId: row.rowId,
+        article: row.article,
+        name: row.name,
+        partnerId: row.partnerId,
+        partnerName: row.partnerName,
+        price,
+        priceCurrency: row.priceCurrency,
+        originalPrice: row.originalPrice,
+        sourceCurrency: row.sourceCurrency,
+        convertedFromRub: row.convertedFromRub,
+        active,
+        stopped: Boolean(stoppedSupplier),
+        stopReason: stoppedSupplier?.note || null,
+        available: active && price > 0,
+        docDate: row.docDate,
+      };
+    }));
+  }
+  return map;
+}
+
 async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers = []) {
   const link = normalizeWarehouseLink(linkInput);
   const matches = await findPriceMasterRowsForLink(link, usdRate, managedSuppliers);
@@ -3839,7 +4012,7 @@ async function buildFreshWarehouseProducts(productIds = []) {
   const productsToBuild = (warehouse.products || []).filter((product) => wanted.has(String(product.id)));
   if (!productsToBuild.length) return [];
   const links = productsToBuild.flatMap((product) => product.links || []);
-  const matchMap = await getPriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
+  const matchMap = await getLivePriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
   const [priceMapResult, minPriceResult] = await Promise.all([
     getWarehousePriceMaps(productsToBuild, { refresh: false }),
     getWarehouseMinPriceMaps(productsToBuild, { refresh: false }),
@@ -5541,7 +5714,12 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       .filter(Boolean));
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для привязки." });
 
-    const baseLink = normalizeWarehouseLink(request.body);
+    const rawLinks = Array.isArray(request.body.links) && request.body.links.length ? request.body.links : [request.body];
+    const baseLinks = Array.from(new Map(rawLinks
+      .map((link) => normalizeWarehouseLink(link))
+      .filter((link) => link.article)
+      .map((link) => [warehouseLinkIdentityKey(link), link])).values());
+    const baseLink = baseLinks[0] || normalizeWarehouseLink({});
     if (!baseLink.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
@@ -5549,7 +5727,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const productsToChange = warehouse.products.filter((product) => ids.has(String(product.id)));
     const conflicts = collectProductConflicts(productsToChange, productLocksFromRequest(request.body));
     if (conflicts.length) return conflictResponse(response, conflicts);
-    await assertPriceMasterLinkExists(baseLink, usdRate, warehouse.suppliers);
+    for (const linkToValidate of baseLinks) {
+      await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers);
+    }
     const now = new Date().toISOString();
     const updatedIds = [];
     const oldValues = [];
@@ -5557,15 +5737,24 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     for (const product of warehouse.products) {
       if (!ids.has(String(product.id))) continue;
       oldValues.push(cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt }));
-      const link = normalizeWarehouseLink({
-        ...baseLink,
-        id: ids.size > 1 && !request.body.id ? crypto.randomUUID() : baseLink.id,
-        createdAt: baseLink.createdAt || now,
-      });
       product.links = Array.isArray(product.links) ? product.links : [];
-      const index = product.links.findIndex((item) => item.id === link.id);
-      if (index >= 0) product.links[index] = link;
-      else product.links.push(link);
+      for (const linkToSave of baseLinks) {
+        const identityKey = warehouseLinkIdentityKey(linkToSave);
+        const link = normalizeWarehouseLink({
+          ...linkToSave,
+          createdAt: linkToSave.createdAt || now,
+        });
+        const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkIdentityKey(item) === identityKey);
+        if (index >= 0) {
+          product.links[index] = normalizeWarehouseLink({
+            ...product.links[index],
+            ...link,
+            id: product.links[index].id || link.id,
+            createdAt: product.links[index].createdAt || link.createdAt,
+          });
+        }
+        else product.links.push(link);
+      }
       product.autoPriceEnabled = true;
       product.updatedAt = now;
       updatedIds.push(product.id);
@@ -5584,6 +5773,13 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     response.json({ ok: true, changed: savedProducts.length || updatedIds.length, products: savedProducts, persisted: "written" });
     appendAudit(request, "warehouse.links.bulk_save", {
       productIds: updatedIds,
+      links: baseLinks.map((link) => ({
+        article: link.article,
+        keyword: link.keyword,
+        supplierName: link.supplierName,
+        partnerId: link.partnerId,
+        priceCurrency: link.priceCurrency,
+      })),
       article: baseLink.article,
       keyword: baseLink.keyword,
       supplierName: baseLink.supplierName,
@@ -5682,7 +5878,9 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
 async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDiffPct = 0, dryRun = false } = {}) {
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
   const preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
-  const selected = ids ? preview.products.filter((product) => ids.has(product.id)) : preview.products;
+  const selected = ids
+    ? await buildFreshWarehouseProducts(Array.from(ids))
+    : preview.products;
   const skipped = [];
   const items = [];
   const stockItems = [];
@@ -5698,7 +5896,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     }
     const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
     const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
-    if (targetStock > 0 && targetStock !== currentStock) stockItems.push(product);
+    if (targetStock !== currentStock) stockItems.push(product);
     const current = Number(product.currentPrice || 0);
     const nextValue = Number(product.nextPrice || 0);
     const diffRub = Math.abs(nextValue - current);
@@ -5946,8 +6144,8 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
 
 function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_prices_detected") {
   const now = Date.now();
-  const cooldownMs = Math.max(30_000, Number(process.env.AUTO_PRICE_CHANGED_COOLDOWN_MS || 180_000) || 180_000);
-  const batchCooldownMs = Math.max(5_000, Number(process.env.AUTO_PRICE_CHANGED_BATCH_COOLDOWN_MS || 60_000) || 60_000);
+  const cooldownMs = Math.max(1_000, Number(process.env.AUTO_PRICE_CHANGED_COOLDOWN_MS || 15_000) || 15_000);
+  const batchCooldownMs = Math.max(1_000, Number(process.env.AUTO_PRICE_CHANGED_BATCH_COOLDOWN_MS || 5_000) || 5_000);
   if (changedPriceAutoPushLastBatchAt && now - changedPriceAutoPushLastBatchAt < batchCooldownMs) return 0;
   const ids = (Array.isArray(products) ? products : [])
     .filter((product) => {
@@ -5955,7 +6153,7 @@ function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_
       if (product.changed && Number(product.nextPrice || 0) > 0) return true;
       const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
       const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
-      return targetStock > 0 && targetStock !== currentStock;
+      return targetStock !== currentStock;
     })
     .map((product) => product.id)
     .filter(Boolean)
@@ -6309,14 +6507,12 @@ async function sendZeroStocksToMarketplace(products = []) {
       const account = getOzonAccountByTarget(target);
       if (!account) continue;
       for (const chunk of chunkArray(items, 100)) {
-        const payload = {
-          stocks: chunk.map((item) => ({
-            offer_id: String(item.offerId || "").trim(),
-            stock: 0,
-          })),
-        };
+        const payload = { stocks: await buildOzonStockPayloadItems(chunk, account, () => 0, { allWarehouses: true }) };
+        if (!payload.stocks.length) continue;
         try {
-          await ozonRequest("/v2/products/stocks", payload, account);
+          for (const stockChunk of chunkArray(payload.stocks, 100)) {
+            await ozonRequest("/v2/products/stocks", { stocks: stockChunk }, account);
+          }
           actions.push(...chunk.map((item) => ({ id: item.id, type: "zero_stock", ok: true })));
         } catch (error) {
           const detail = error?.message || "stock_zero_failed";
@@ -6355,7 +6551,7 @@ async function sendTargetStocksToMarketplace(products = []) {
   const byTarget = new Map();
   for (const product of products) {
     const stock = Math.max(0, Math.round(Number(product?.targetStock || 0)));
-    if (!product?.id || !product?.offerId || !product?.target || stock <= 0) continue;
+    if (!product?.id || !product?.offerId || !product?.target) continue;
     const key = `${product.marketplace}:${product.target}`;
     if (!byTarget.has(key)) byTarget.set(key, []);
     byTarget.get(key).push({ ...product, targetStock: stock });
@@ -6367,14 +6563,12 @@ async function sendTargetStocksToMarketplace(products = []) {
       const account = getOzonAccountByTarget(target);
       if (!account) continue;
       for (const chunk of chunkArray(items, 100)) {
-        const payload = {
-          stocks: chunk.map((item) => ({
-            offer_id: String(item.offerId || "").trim(),
-            stock: item.targetStock,
-          })),
-        };
+        const payload = { stocks: await buildOzonStockPayloadItems(chunk, account, (item) => item.targetStock) };
+        if (!payload.stocks.length) continue;
         try {
-          await ozonRequest("/v2/products/stocks", payload, account);
+          for (const stockChunk of chunkArray(payload.stocks, 100)) {
+            await ozonRequest("/v2/products/stocks", { stocks: stockChunk }, account);
+          }
           actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", stock: item.targetStock, ok: true })));
         } catch (error) {
           const detail = error?.message || "target_stock_failed";
@@ -6476,13 +6670,17 @@ async function restoreStocksOnMarketplaces(products = []) {
       if (!account) continue;
       for (const chunk of chunkArray(items, 100)) {
         const payload = {
-          stocks: chunk.map((item) => ({
-            offer_id: String(item.offerId || "").trim(),
-            stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
-          })),
+          stocks: await buildOzonStockPayloadItems(
+            chunk,
+            account,
+            (item) => Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
+          ),
         };
+        if (!payload.stocks.length) continue;
         try {
-          await ozonRequest("/v2/products/stocks", payload, account);
+          for (const stockChunk of chunkArray(payload.stocks, 100)) {
+            await ozonRequest("/v2/products/stocks", { stocks: stockChunk }, account);
+          }
           actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: true })));
         } catch (error) {
           const detail = error?.message || "restore_stock_failed";
@@ -6564,12 +6762,19 @@ async function unarchiveProductsOnMarketplaces(products = []) {
   return actions;
 }
 
+function marketplaceHasPositiveStock(product = {}) {
+  const state = product.marketplaceState || {};
+  if (Number(state.stock || 0) > 0 || Number(state.present || 0) > 0) return true;
+  return (Array.isArray(state.warehouses) ? state.warehouses : [])
+    .some((warehouse) => Number(warehouse.stock || warehouse.present || 0) > 0);
+}
+
 function pickNoSupplierAutomationCandidates(products = []) {
   const list = Array.isArray(products) ? products : [];
   const linkedNoSupplier = list.filter((product) => product.hasLinks && !product.selectedSupplier);
   return {
     toZeroStock: autoZeroStockOnNoSupplier
-      ? linkedNoSupplier.filter((product) => !product.noSupplierAutomation?.stockZeroAt)
+      ? linkedNoSupplier.filter((product) => !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product))
       : [],
     toArchive: autoArchiveOnNoLinks
       ? linkedNoSupplier.filter(
@@ -7261,6 +7466,9 @@ module.exports = {
   resolveWarehouseBrand,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
+  buildOzonStockPayloadItems,
+  marketplaceHasPositiveStock,
+  warehouseLinkIdentityKey,
 };
 
 if (require.main === module) {

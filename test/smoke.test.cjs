@@ -21,6 +21,9 @@ const {
   pickWarehouseSupplier,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
+  buildOzonStockPayloadItems,
+  marketplaceHasPositiveStock,
+  warehouseLinkIdentityKey,
 } = require("../server.js");
 
 test("GET /health", async () => {
@@ -509,6 +512,53 @@ test("automation queues archive for linked product without supplier", () => {
   ]);
   assert.equal(toArchive.length, 2);
   assert.equal(toArchive[0].id, "candidate");
+});
+
+test("automation re-queues stock=0 when marketplace stock returned after prior zero", () => {
+  const product = {
+    id: "stock-returned",
+    hasLinks: true,
+    selectedSupplier: null,
+    noSupplierAutomation: { stockZeroAt: "2026-01-01T00:00:00.000Z" },
+    marketplaceState: { stock: 2 },
+  };
+  assert.equal(marketplaceHasPositiveStock(product), true);
+  const { toZeroStock } = pickNoSupplierAutomationCandidates([product]);
+  assert.equal(toZeroStock.length, 1);
+  assert.equal(toZeroStock[0].id, "stock-returned");
+});
+
+test("Ozon stock payload targets configured warehouses and zeros all of them", async () => {
+  const previous = process.env.OZON_STOCK_WAREHOUSE_IDS;
+  process.env.OZON_STOCK_WAREHOUSE_IDS = "111,222";
+  try {
+    const targetPayload = await buildOzonStockPayloadItems(
+      [{ offerId: "sku-1", targetStock: 10 }],
+      { id: "ozon" },
+      (item) => item.targetStock,
+    );
+    assert.deepEqual(targetPayload, [{ offer_id: "sku-1", warehouse_id: 111, stock: 10 }]);
+
+    const zeroPayload = await buildOzonStockPayloadItems(
+      [{ offerId: "sku-1" }],
+      { id: "ozon" },
+      () => 0,
+      { allWarehouses: true },
+    );
+    assert.deepEqual(zeroPayload, [
+      { offer_id: "sku-1", warehouse_id: 111, stock: 0 },
+      { offer_id: "sku-1", warehouse_id: 222, stock: 0 },
+    ]);
+  } finally {
+    if (previous === undefined) delete process.env.OZON_STOCK_WAREHOUSE_IDS;
+    else process.env.OZON_STOCK_WAREHOUSE_IDS = previous;
+  }
+});
+
+test("warehouse link identity ignores client draft id duplicates", () => {
+  const a = warehouseLinkIdentityKey({ id: "draft-1", article: "A-1", partnerId: "88", supplierName: " Supplier ", keyword: "Blue", priceCurrency: "rub" });
+  const b = warehouseLinkIdentityKey({ id: "draft-2", article: "A-1", partnerId: "88", supplierName: "supplier", keyword: "blue", priceCurrency: "RUB" });
+  assert.equal(a, b);
 });
 
 test("recovery queues archived linked product when supplier is available", () => {
