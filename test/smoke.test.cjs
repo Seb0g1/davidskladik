@@ -24,6 +24,8 @@ const {
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
+  pickOzonCabinetListedPrice,
+  buildOzonPricePayload,
 } = require("../server.js");
 
 test("GET /health", async () => {
@@ -123,6 +125,33 @@ test("resolveMarkupCoefficient applies threshold >= 20 USD", () => {
     },
   });
   assert.equal(value, 2.8);
+});
+
+test("Ozon current cabinet price prefers seller price visible in cabinet", () => {
+  const value = pickOzonCabinetListedPrice({
+    currentPrice: 29315,
+    marketingSellerPrice: 23500,
+    marketingPrice: 28993,
+    retailPrice: 29315,
+  });
+  assert.equal(value, 23500);
+});
+
+test("Ozon price payload disables auto price controls by default", () => {
+  const previous = process.env.OZON_PRICE_PUSH_DISABLE_AUTO_ACTIONS;
+  delete process.env.OZON_PRICE_PUSH_DISABLE_AUTO_ACTIONS;
+  try {
+    assert.deepEqual(buildOzonPricePayload({ offerId: "56989", price: 29315 }), {
+      offer_id: "56989",
+      price: "29315",
+      currency_code: "RUB",
+      auto_action_enabled: "DISABLED",
+      price_strategy_enabled: "DISABLED",
+    });
+  } finally {
+    if (previous === undefined) delete process.env.OZON_PRICE_PUSH_DISABLE_AUTO_ACTIONS;
+    else process.env.OZON_PRICE_PUSH_DISABLE_AUTO_ACTIONS = previous;
+  }
 });
 
 test("resolveMarkupCoefficient uses product markup override", () => {

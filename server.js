@@ -647,8 +647,8 @@ function parseMoneyValue(value) {
 function pickOzonCabinetListedPrice(details = {}) {
   if (!details || typeof details !== "object") return null;
   return (
-    details.currentPrice ||
     details.marketingSellerPrice ||
+    details.currentPrice ||
     details.marketingPrice ||
     details.retailPrice ||
     null
@@ -668,6 +668,23 @@ function parseBooleanSetting(value, fallback = true) {
   if (["false", "0", "off", "no", "нет"].includes(text)) return false;
   if (["true", "1", "on", "yes", "да"].includes(text)) return true;
   return fallback;
+}
+
+function buildOzonPricePayload(item = {}) {
+  const price = roundPrice(item.price);
+  const payload = {
+    offer_id: String(item.offerId || item.offer_id || "").trim(),
+    price: String(price),
+    currency_code: "RUB",
+  };
+  if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_DISABLE_AUTO_ACTIONS, true)) {
+    payload.auto_action_enabled = "DISABLED";
+    payload.price_strategy_enabled = "DISABLED";
+  }
+  if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_SET_MIN_PRICE, false)) {
+    payload.min_price = String(price);
+  }
+  return payload;
 }
 
 function normalizeMarketplaceAccount(input = {}, current = {}) {
@@ -4003,7 +4020,7 @@ async function buildWarehouseViewCached(params = {}) {
   return build;
 }
 
-async function buildFreshWarehouseProducts(productIds = []) {
+async function buildFreshWarehouseProducts(productIds = [], { refreshPrices = false } = {}) {
   const wanted = new Set((productIds || []).map((id) => String(id)));
   if (!wanted.size) return [];
   const appSettings = await readAppSettings();
@@ -4014,8 +4031,8 @@ async function buildFreshWarehouseProducts(productIds = []) {
   const links = productsToBuild.flatMap((product) => product.links || []);
   const matchMap = await getLivePriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
   const [priceMapResult, minPriceResult] = await Promise.all([
-    getWarehousePriceMaps(productsToBuild, { refresh: false }),
-    getWarehouseMinPriceMaps(productsToBuild, { refresh: false }),
+    getWarehousePriceMaps(productsToBuild, { refresh: refreshPrices }),
+    getWarehouseMinPriceMaps(productsToBuild, { refresh: refreshPrices }),
   ]);
   if (priceMapResult.mutated || minPriceResult.mutated) await writeWarehouse(warehouse);
   const priceMap = priceMapResult.map;
@@ -4574,11 +4591,7 @@ app.post("/api/ozon/prices/send", async (request, response, next) => {
 
     const items = Array.isArray(request.body.items) ? request.body.items : [];
     const prices = items
-      .map((item) => ({
-        offer_id: String(item.offerId || "").trim(),
-        price: String(roundPrice(item.price)),
-        currency_code: "RUB",
-      }))
+      .map((item) => buildOzonPricePayload(item))
       .filter((item) => item.offer_id && Number(item.price) > 0);
 
     if (!prices.length) {
@@ -5879,7 +5892,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
   const preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
   const selected = ids
-    ? await buildFreshWarehouseProducts(Array.from(ids))
+    ? await buildFreshWarehouseProducts(Array.from(ids), { refreshPrices: true })
     : preview.products;
   const skipped = [];
   const items = [];
@@ -5933,11 +5946,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   for (const account of getOzonAccounts()) {
     const targetItems = items.filter((item) => item.marketplace === "ozon" && matchesOzonTarget(item.target, account.id));
     const ozonItems = targetItems
-      .map((item) => ({
-        offer_id: String(item.offerId || "").trim(),
-        price: String(roundPrice(item.price)),
-        currency_code: "RUB",
-      }))
+      .map((item) => buildOzonPricePayload(item))
       .filter((item) => item.offer_id && Number(item.price) > 0);
     if (!ozonItems.length) continue;
     try {
@@ -6073,16 +6082,18 @@ async function processMarketplaceJob(name, data = {}) {
 }
 
 function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
-  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return;
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return Promise.resolve(null);
   if (marketplaceQueue) {
-    marketplaceQueue.add(name, data, {
+    return marketplaceQueue.add(name, data, {
       priority,
       removeOnComplete: 2000,
       removeOnFail: 2000,
     }).catch((error) => logger.warn("queue add failed", { name, detail: error?.message || String(error) }));
-    return;
   }
-  processMarketplaceJob(name, data).catch((error) => logger.warn("inline marketplace job failed", { name, detail: error?.message || String(error) }));
+  return processMarketplaceJob(name, data).catch((error) => {
+    logger.warn("inline marketplace job failed", { name, detail: error?.message || String(error) });
+    throw error;
+  });
 }
 
 function initMarketplaceQueue() {
@@ -6124,7 +6135,8 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
     immediateAutoPushTimer = null;
     immediateAutoPushChain = immediateAutoPushChain
       .then(async () => {
-        queueMarketplaceJob(
+        logger.info("immediate auto price push queued", { reason, scope: ids ? ids.length : "all" });
+        const result = await queueMarketplaceJob(
           "auto-price-push",
           {
             productIds: ids,
@@ -6134,7 +6146,17 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
           },
           { priority: 1 },
         );
-        logger.info("immediate auto price push queued", { reason, scope: ids ? ids.length : "all" });
+        if (result && typeof result === "object" && "sent" in result) {
+          logger.info("immediate auto price push complete", {
+            reason,
+            scope: ids ? ids.length : "all",
+            sent: result.sent,
+            failed: result.failed,
+            stockSent: result.stockSent,
+            stockFailed: result.stockFailed,
+            skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
+          });
+        }
       })
       .catch((error) => {
         logger.warn("immediate auto price push failed", { reason, detail: error?.message || String(error) });
@@ -6203,7 +6225,7 @@ app.post("/api/warehouse/prices/retry", async (request, response, next) => {
 
     for (const account of getOzonAccounts()) {
       const targetItems = items.filter((item) => item.marketplace === "ozon" && matchesOzonTarget(item.target, account.id));
-      const ozonItems = targetItems.map((item) => ({ offer_id: String(item.offerId || "").trim(), price: String(roundPrice(item.price)), currency_code: "RUB" }))
+      const ozonItems = targetItems.map((item) => buildOzonPricePayload(item))
         .filter((item) => item.offer_id && Number(item.price) > 0);
       if (!ozonItems.length) continue;
       try {
@@ -7469,6 +7491,8 @@ module.exports = {
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
+  pickOzonCabinetListedPrice,
+  buildOzonPricePayload,
 };
 
 if (require.main === module) {
