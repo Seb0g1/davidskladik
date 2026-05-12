@@ -1667,7 +1667,7 @@ function isOzonResourceExhaustedError(error) {
 }
 
 function getOzonPriceBatchSize() {
-  return Math.max(1, Math.min(100, Number(process.env.OZON_PRICE_BATCH_SIZE || 20) || 20));
+  return Math.max(1, Math.min(100, Number(process.env.OZON_PRICE_BATCH_SIZE || 10) || 10));
 }
 
 function getOzonPriceBatchDelayMs() {
@@ -1772,6 +1772,34 @@ async function sendOzonPriceBatch(account, prices) {
     }
   }
   throw lastError || new Error("Ozon price batch failed");
+}
+
+async function sendOzonPricePayloadChunks(account, prices) {
+  const results = [];
+  const failed = [];
+  for (const chunk of chunkArray(prices, getOzonPriceBatchSize())) {
+    try {
+      results.push({ response: await sendOzonPriceBatch(account, chunk), count: chunk.length });
+    } catch (error) {
+      if (!isOzonResourceExhaustedError(error) || chunk.length <= 1) {
+        failed.push(...chunk.map((payload) => ({ payload, error })));
+        continue;
+      }
+      logger.warn("ozon price batch limit exceeded, falling back to single-item sends", {
+        account: account?.id || account?.name || "ozon",
+        items: chunk.length,
+        detail: error?.message || String(error),
+      });
+      for (const payload of chunk) {
+        try {
+          results.push({ response: await sendOzonPriceBatch(account, [payload]), count: 1 });
+        } catch (singleError) {
+          failed.push({ payload, error: singleError });
+        }
+      }
+    }
+  }
+  return { results, failed };
 }
 
 function normalizeOzonWarehouse(input = {}) {
@@ -3240,13 +3268,19 @@ async function getPriceMasterArticleIndex() {
 
 async function readPriceRetryQueue() {
   try {
-    const parsed = JSON.parse(await fs.readFile(priceRetryQueuePath, "utf8"));
+    const text = await fs.readFile(priceRetryQueuePath, "utf8");
+    if (!text.trim()) return { updatedAt: null, items: [] };
+    const parsed = JSON.parse(text);
     return {
       updatedAt: parsed.updatedAt || null,
       items: Array.isArray(parsed.items) ? parsed.items : [],
     };
   } catch (error) {
     if (error.code === "ENOENT") return { updatedAt: null, items: [] };
+    if (error instanceof SyntaxError) {
+      logger.warn("price retry queue is invalid, resetting in memory", { detail: error.message });
+      return { updatedAt: null, items: [] };
+    }
     throw error;
   }
 }
@@ -3257,7 +3291,9 @@ async function writePriceRetryQueue(queue) {
     updatedAt: new Date().toISOString(),
     items: Array.isArray(queue.items) ? queue.items : [],
   };
-  await fs.writeFile(priceRetryQueuePath, JSON.stringify(payload, null, 2), "utf8");
+  const tmpPath = `${priceRetryQueuePath}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+  await fs.rename(tmpPath, priceRetryQueuePath);
   return payload;
 }
 
@@ -4788,16 +4824,21 @@ app.post("/api/ozon/prices/send", async (request, response, next) => {
     const account = getOzonAccountByTarget(cleanText(request.body.target || "ozon"));
     if (!account) return response.status(400).json({ error: "Кабинет Ozon не найден. Добавьте его в настройках." });
 
-    const results = [];
-    for (const chunk of chunkArray(prices, getOzonPriceBatchSize())) {
-      const data = await sendOzonPriceBatch(account, chunk);
-      results.push(data);
+    const sent = await sendOzonPricePayloadChunks(account, prices);
+    if (sent.failed.length) {
+      return response.status(502).json({
+        ok: false,
+        sent: prices.length - sent.failed.length,
+        failed: sent.failed.length,
+        detail: sent.failed[0]?.error?.message || "Ozon price send failed",
+        results: sent.results,
+      });
     }
 
     response.json({
       ok: true,
       sent: prices.length,
-      results,
+      results: sent.results,
     });
   } catch (error) {
     next(error);
@@ -6219,15 +6260,16 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       .map((item) => ({ item, payload: buildOzonPricePayload(item) }))
       .filter((entry) => entry.payload.offer_id && Number(entry.payload.price) > 0);
     if (!ozonItems.length) continue;
-    for (const chunk of chunkArray(ozonItems, getOzonPriceBatchSize())) {
-      try {
-        const prices = chunk.map((entry) => entry.payload);
-        results.push({ target: account.id, response: await sendOzonPriceBatch(account, prices), count: prices.length });
-      } catch (error) {
-        const detail = error?.message || "send_failed";
-        failed.push(...chunk.map((entry) => ({ ...entry.item, error: detail, marketplace: "ozon" })));
-      }
-    }
+    const sent = await sendOzonPricePayloadChunks(account, ozonItems.map((entry) => entry.payload));
+    results.push(...sent.results.map((entry) => ({ target: account.id, response: entry.response, count: entry.count })));
+    const failedOfferIds = new Map(sent.failed.map((entry) => [String(entry.payload.offer_id), entry.error]));
+    failed.push(...ozonItems
+      .filter((entry) => failedOfferIds.has(String(entry.payload.offer_id)))
+      .map((entry) => ({
+        ...entry.item,
+        error: failedOfferIds.get(String(entry.payload.offer_id))?.message || "send_failed",
+        marketplace: "ozon",
+      })));
   }
 
   for (const shop of getYandexShops()) {
@@ -6499,20 +6541,18 @@ app.post("/api/warehouse/prices/retry", async (request, response, next) => {
       const ozonItems = targetItems.map((item) => ({ item, payload: buildOzonPricePayload(item) }))
         .filter((entry) => entry.payload.offer_id && Number(entry.payload.price) > 0);
       if (!ozonItems.length) continue;
-      for (const chunk of chunkArray(ozonItems, getOzonPriceBatchSize())) {
-        try {
-          const prices = chunk.map((entry) => entry.payload);
-          results.push({ target: account.id, response: await sendOzonPriceBatch(account, prices), count: prices.length });
-        } catch (error) {
-          failed.push(...chunk.map((entry) => ({
-            ...entry.item,
-            error: error?.message || "retry_failed",
-            queueKey: entry.item.queueKey || `${entry.item.id}:${entry.item.target}`,
-            queuedAt: entry.item.queuedAt || new Date().toISOString(),
-            attempts: Number(entry.item.attempts || 0) + 1,
-          })));
-        }
-      }
+      const sent = await sendOzonPricePayloadChunks(account, ozonItems.map((entry) => entry.payload));
+      results.push(...sent.results.map((entry) => ({ target: account.id, response: entry.response, count: entry.count })));
+      const failedOfferIds = new Map(sent.failed.map((entry) => [String(entry.payload.offer_id), entry.error]));
+      failed.push(...ozonItems
+        .filter((entry) => failedOfferIds.has(String(entry.payload.offer_id)))
+        .map((entry) => ({
+          ...entry.item,
+          error: failedOfferIds.get(String(entry.payload.offer_id))?.message || "retry_failed",
+          queueKey: entry.item.queueKey || `${entry.item.id}:${entry.item.target}`,
+          queuedAt: entry.item.queuedAt || new Date().toISOString(),
+          attempts: Number(entry.item.attempts || 0) + 1,
+        })));
     }
 
     for (const shop of getYandexShops()) {
@@ -7847,6 +7887,9 @@ module.exports = {
   pickOzonCabinetListedPrice,
   buildOzonPricePayload,
   isOzonResourceExhaustedError,
+  readPriceRetryQueue,
+  writePriceRetryQueue,
+  priceRetryQueuePath,
 };
 
 if (require.main === module) {

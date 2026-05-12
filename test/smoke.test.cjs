@@ -51,6 +51,9 @@ const {
   pickOzonCabinetListedPrice,
   buildOzonPricePayload,
   isOzonResourceExhaustedError,
+  readPriceRetryQueue,
+  writePriceRetryQueue,
+  priceRetryQueuePath,
 } = require("../server.js");
 
 test("GET /health", async () => {
@@ -62,6 +65,21 @@ test("GET /health", async () => {
 test("detects Ozon per-item rate limit errors", () => {
   const error = new Error("price-batch-set for seller api: rpc error: code = ResourceExhausted desc = error limiting: acquire limit per item: items limit: limit exceeded");
   assert.equal(isOzonResourceExhaustedError(error), true);
+});
+
+test("price retry queue recovers from an empty file", async () => {
+  const backup = await backupFile(priceRetryQueuePath);
+  try {
+    await fs.mkdir(path.dirname(priceRetryQueuePath), { recursive: true });
+    await fs.writeFile(priceRetryQueuePath, "", "utf8");
+    const queue = await readPriceRetryQueue();
+    assert.deepEqual(queue.items, []);
+    await writePriceRetryQueue({ items: [{ id: "p1", target: "ozon" }] });
+    const restored = await readPriceRetryQueue();
+    assert.equal(restored.items.length, 1);
+  } finally {
+    await restoreFile(priceRetryQueuePath, backup);
+  }
 });
 
 test("POST /api/login неверный пароль", async () => {
