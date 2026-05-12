@@ -50,12 +50,18 @@ const {
   warehouseLinkIdentityKey,
   pickOzonCabinetListedPrice,
   buildOzonPricePayload,
+  isOzonResourceExhaustedError,
 } = require("../server.js");
 
 test("GET /health", async () => {
   const res = await request(app).get("/health").expect(200);
   assert.equal(res.body.ok, true);
   assert.ok(res.body.service);
+});
+
+test("detects Ozon per-item rate limit errors", () => {
+  const error = new Error("price-batch-set for seller api: rpc error: code = ResourceExhausted desc = error limiting: acquire limit per item: items limit: limit exceeded");
+  assert.equal(isOzonResourceExhaustedError(error), true);
 });
 
 test("POST /api/login неверный пароль", async () => {

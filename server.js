@@ -1641,7 +1641,12 @@ async function getUsdRate({ force = false } = {}) {
 function isOzonRateLimitError(error) {
   const message = String(error?.message || "").toLowerCase();
   const status = Number(error?.statusCode || error?.status || 0);
-  return status === 429 || message.includes("rate limit") || message.includes("too many request");
+  return status === 429
+    || message.includes("rate limit")
+    || message.includes("too many request")
+    || message.includes("resourceexhausted")
+    || message.includes("items limit")
+    || message.includes("limit exceeded");
 }
 
 function ozonRetryDelayMs(attempt, response = null) {
@@ -1649,6 +1654,32 @@ function ozonRetryDelayMs(attempt, response = null) {
   if (Number.isFinite(retryAfter) && retryAfter > 0) return Math.min(30_000, retryAfter * 1000);
   const base = Math.max(500, Number(process.env.OZON_RATE_LIMIT_RETRY_MS || 1200) || 1200);
   return Math.min(30_000, base * attempt * attempt);
+}
+
+function isOzonResourceExhaustedError(error) {
+  const message = String(error?.message || error?.detail || "").toLowerCase();
+  const ozonMessage = String(error?.ozon?.message || error?.ozon?.error || "").toLowerCase();
+  const combined = `${message} ${ozonMessage}`;
+  return combined.includes("resourceexhausted")
+    || combined.includes("items limit")
+    || combined.includes("limit exceeded")
+    || combined.includes("acquire limit");
+}
+
+function getOzonPriceBatchSize() {
+  return Math.max(1, Math.min(100, Number(process.env.OZON_PRICE_BATCH_SIZE || 20) || 20));
+}
+
+function getOzonPriceBatchDelayMs() {
+  return Math.max(0, Number(process.env.OZON_PRICE_BATCH_DELAY_MS || 1200) || 1200);
+}
+
+function getOzonPriceBatchMaxAttempts() {
+  return Math.max(1, Number(process.env.OZON_PRICE_BATCH_MAX_ATTEMPTS || 6) || 6);
+}
+
+function getOzonPriceBatchBackoffMs() {
+  return Math.max(500, Number(process.env.OZON_PRICE_BATCH_BACKOFF_MS || 2500) || 2500);
 }
 
 function enqueueOzonRequest(task) {
@@ -1713,6 +1744,34 @@ async function ozonRequest(pathname, body, account = null) {
     }
     throw lastError || new Error("Ozon API request failed");
   });
+}
+
+async function sendOzonPriceBatch(account, prices) {
+  const maxAttempts = getOzonPriceBatchMaxAttempts();
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const result = await ozonRequest("/v1/product/import/prices", { prices }, account);
+      const delayMs = getOzonPriceBatchDelayMs();
+      if (delayMs > 0) await sleep(delayMs);
+      return result;
+    } catch (error) {
+      lastError = error;
+      if (!isOzonRateLimitError(error) && !isOzonResourceExhaustedError(error)) throw error;
+      if (attempt >= maxAttempts) throw error;
+      const delayMs = Math.min(60_000, getOzonPriceBatchBackoffMs() * attempt * attempt);
+      logger.warn("ozon price batch rate limited, retrying", {
+        account: account?.id || account?.name || "ozon",
+        items: prices.length,
+        attempt,
+        maxAttempts,
+        delayMs,
+        detail: error?.message || String(error),
+      });
+      await sleep(delayMs);
+    }
+  }
+  throw lastError || new Error("Ozon price batch failed");
 }
 
 function normalizeOzonWarehouse(input = {}) {
@@ -4730,8 +4789,8 @@ app.post("/api/ozon/prices/send", async (request, response, next) => {
     if (!account) return response.status(400).json({ error: "Кабинет Ozon не найден. Добавьте его в настройках." });
 
     const results = [];
-    for (const chunk of chunkArray(prices, 1000)) {
-      const data = await ozonRequest("/v1/product/import/prices", { prices: chunk }, account);
+    for (const chunk of chunkArray(prices, getOzonPriceBatchSize())) {
+      const data = await sendOzonPriceBatch(account, chunk);
       results.push(data);
     }
 
@@ -6157,16 +6216,17 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   for (const account of getOzonAccounts()) {
     const targetItems = items.filter((item) => item.marketplace === "ozon" && matchesOzonTarget(item.target, account.id));
     const ozonItems = targetItems
-      .map((item) => buildOzonPricePayload(item))
-      .filter((item) => item.offer_id && Number(item.price) > 0);
+      .map((item) => ({ item, payload: buildOzonPricePayload(item) }))
+      .filter((entry) => entry.payload.offer_id && Number(entry.payload.price) > 0);
     if (!ozonItems.length) continue;
-    try {
-      for (const chunk of chunkArray(ozonItems, 1000)) {
-        results.push({ target: account.id, response: await ozonRequest("/v1/product/import/prices", { prices: chunk }, account) });
+    for (const chunk of chunkArray(ozonItems, getOzonPriceBatchSize())) {
+      try {
+        const prices = chunk.map((entry) => entry.payload);
+        results.push({ target: account.id, response: await sendOzonPriceBatch(account, prices), count: prices.length });
+      } catch (error) {
+        const detail = error?.message || "send_failed";
+        failed.push(...chunk.map((entry) => ({ ...entry.item, error: detail, marketplace: "ozon" })));
       }
-    } catch (error) {
-      const detail = error?.message || "send_failed";
-      failed.push(...targetItems.map((item) => ({ ...item, error: detail, marketplace: "ozon" })));
     }
   }
 
@@ -6436,21 +6496,22 @@ app.post("/api/warehouse/prices/retry", async (request, response, next) => {
 
     for (const account of getOzonAccounts()) {
       const targetItems = items.filter((item) => item.marketplace === "ozon" && matchesOzonTarget(item.target, account.id));
-      const ozonItems = targetItems.map((item) => buildOzonPricePayload(item))
-        .filter((item) => item.offer_id && Number(item.price) > 0);
+      const ozonItems = targetItems.map((item) => ({ item, payload: buildOzonPricePayload(item) }))
+        .filter((entry) => entry.payload.offer_id && Number(entry.payload.price) > 0);
       if (!ozonItems.length) continue;
-      try {
-        for (const chunk of chunkArray(ozonItems, 1000)) {
-          results.push({ target: account.id, response: await ozonRequest("/v1/product/import/prices", { prices: chunk }, account) });
+      for (const chunk of chunkArray(ozonItems, getOzonPriceBatchSize())) {
+        try {
+          const prices = chunk.map((entry) => entry.payload);
+          results.push({ target: account.id, response: await sendOzonPriceBatch(account, prices), count: prices.length });
+        } catch (error) {
+          failed.push(...chunk.map((entry) => ({
+            ...entry.item,
+            error: error?.message || "retry_failed",
+            queueKey: entry.item.queueKey || `${entry.item.id}:${entry.item.target}`,
+            queuedAt: entry.item.queuedAt || new Date().toISOString(),
+            attempts: Number(entry.item.attempts || 0) + 1,
+          })));
         }
-      } catch (error) {
-        failed.push(...targetItems.map((item) => ({
-          ...item,
-          error: error?.message || "retry_failed",
-          queueKey: item.queueKey || `${item.id}:${item.target}`,
-          queuedAt: item.queuedAt || new Date().toISOString(),
-          attempts: Number(item.attempts || 0) + 1,
-        })));
       }
     }
 
@@ -7785,6 +7846,7 @@ module.exports = {
   warehouseLinkIdentityKey,
   pickOzonCabinetListedPrice,
   buildOzonPricePayload,
+  isOzonResourceExhaustedError,
 };
 
 if (require.main === module) {
