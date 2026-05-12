@@ -3756,8 +3756,8 @@ async function buildFreshWarehouseProducts(productIds = []) {
   const links = productsToBuild.flatMap((product) => product.links || []);
   const matchMap = await getPriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
   const [priceMapResult, minPriceResult] = await Promise.all([
-    getWarehousePriceMaps(productsToBuild, { refresh: true }),
-    getWarehouseMinPriceMaps(productsToBuild, { refresh: true }),
+    getWarehousePriceMaps(productsToBuild, { refresh: false }),
+    getWarehouseMinPriceMaps(productsToBuild, { refresh: false }),
   ]);
   if (priceMapResult.mutated || minPriceResult.mutated) await writeWarehouse(warehouse);
   const priceMap = priceMapResult.map;

@@ -460,6 +460,7 @@ function dedupeOfferRows(rows) {
 }
 
 function renderPmPartnerPanel(panel, items, input) {
+  const form = input.closest("form");
   panel.replaceChildren();
   if (!items.length) {
     const empty = document.createElement("div");
@@ -477,8 +478,12 @@ function renderPmPartnerPanel(panel, items, input) {
     btn.addEventListener("mousedown", (e) => e.preventDefault());
     btn.addEventListener("click", () => {
       input.value = row.name || "";
+      input.dataset.pmSelectedValue = input.value;
+      delete input.dataset.pmAutofilled;
       closeAllPmSuggestPanels(null);
       input.dispatchEvent(new Event("input", { bubbles: true }));
+      const partnerIdInput = form?.querySelector('[name="partnerId"]');
+      if (partnerIdInput) partnerIdInput.value = row.id || "";
     });
     const title = document.createElement("span");
     title.className = "pm-suggest-title";
@@ -511,10 +516,15 @@ function renderPmOfferPanel(panel, rows, input) {
     btn.addEventListener("mousedown", (e) => e.preventDefault());
     btn.addEventListener("click", () => {
       input.value = row.article || "";
+      input.dataset.pmSelectedValue = input.value;
       const supplierInput = form?.querySelector('[name="supplierName"]');
-      if (supplierInput && !String(supplierInput.value || "").trim() && row.partnerName) {
+      if (supplierInput && row.partnerName) {
         supplierInput.value = row.partnerName;
+        supplierInput.dataset.pmSelectedValue = row.partnerName;
+        supplierInput.dataset.pmAutofilled = "1";
       }
+      const partnerIdInput = form?.querySelector('[name="partnerId"]');
+      if (partnerIdInput) partnerIdInput.value = row.partnerId || "";
       closeAllPmSuggestPanels(null);
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
@@ -599,6 +609,30 @@ function schedulePmSuggest(input) {
 document.addEventListener("input", (event) => {
   const el = event.target.closest("[data-pm-suggest]");
   if (!el) return;
+  const form = el.closest("form");
+  const currentValue = String(el.value || "").trim();
+  const selectedValue = String(el.dataset.pmSelectedValue || "").trim();
+  if (form && el.name === "article" && selectedValue && currentValue !== selectedValue) {
+    const partnerIdInput = form.querySelector('[name="partnerId"]');
+    if (partnerIdInput) partnerIdInput.value = "";
+    const supplierInput = form.querySelector('[name="supplierName"]');
+    if (supplierInput?.dataset.pmAutofilled === "1") {
+      supplierInput.value = "";
+      delete supplierInput.dataset.pmAutofilled;
+      delete supplierInput.dataset.pmSelectedValue;
+    }
+    delete el.dataset.pmSelectedValue;
+  }
+  if (form && el.name === "supplierName") {
+    const partnerIdInput = form.querySelector('[name="partnerId"]');
+    if (selectedValue && currentValue === selectedValue) {
+      // keep the partnerId filled by a clicked suggestion
+    } else {
+      if (partnerIdInput) partnerIdInput.value = "";
+      delete el.dataset.pmAutofilled;
+      delete el.dataset.pmSelectedValue;
+    }
+  }
   schedulePmSuggest(el);
 });
 
