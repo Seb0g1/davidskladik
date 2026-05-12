@@ -3,6 +3,7 @@ const VALID_MAIN_TABS = new Set(["warehouse", "suppliers", "accounts"]);
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 
 const state = {
+  session: null,
   targets: [],
   warehouse: [],
   filteredWarehouse: [],
@@ -937,6 +938,18 @@ function syncTargetNames() {
   if (hasOzon) names.push("Ozon");
   if (hasYandex) names.push("Yandex Market");
   return names.length ? names : ["Ozon", "Yandex Market"];
+}
+
+async function loadSession() {
+  const response = await fetch("/api/session").catch(() => null);
+  if (!response?.ok) return null;
+  const session = await response.json().catch(() => null);
+  state.session = session;
+  const isAdmin = Boolean(session?.permissions?.admin || session?.role === "admin");
+  document.querySelectorAll("[data-admin-only]").forEach((element) => {
+    element.hidden = !isAdmin;
+  });
+  return session;
 }
 
 function updateSyncButtonLabel() {
@@ -2646,6 +2659,7 @@ async function loadRate(fixedRate) {
 }
 
 async function loadSettings() {
+  await loadSession();
   const data = await api("/api/marketplaces");
   const fixedRate = data.settings?.fixedUsdRate || data.defaults?.usdRate;
   state.targets = data.targets || [];

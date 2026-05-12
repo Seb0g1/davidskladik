@@ -1,5 +1,7 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs/promises");
+const path = require("node:path");
 const request = require("supertest");
 
 process.env.APP_PASSWORD = process.env.APP_PASSWORD || "smoke-test-password";
@@ -8,6 +10,28 @@ process.env.APP_USER = process.env.APP_USER || "admin";
 process.env.AUTO_ARCHIVE_ON_NO_LINKS = "true";
 process.env.PUBLIC_BASE_URL = "http://localhost";
 process.env.DISABLE_BACKGROUND_JOBS = "true";
+
+const appUsersPath = path.join(__dirname, "..", "data", "app-users.json");
+
+async function backupFile(filePath) {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function restoreFile(filePath, content) {
+  if (content === null) {
+    await fs.unlink(filePath).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
+    return;
+  }
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, content, "utf8");
+}
 
 const {
   app,
@@ -67,6 +91,42 @@ test("POST /api/login supports APP_USERS_JSON roles", async () => {
   } finally {
     if (previousUsers === undefined) delete process.env.APP_USERS_JSON;
     else process.env.APP_USERS_JSON = previousUsers;
+  }
+});
+
+test("admin can add employees and managers cannot open admin areas", async () => {
+  const backup = await backupFile(appUsersPath);
+  const admin = request.agent(app);
+  const manager = request.agent(app);
+  const username = `manager-${Date.now()}`;
+  const password = "manager-pass";
+
+  try {
+    await restoreFile(appUsersPath, JSON.stringify({ users: [] }, null, 2));
+    await admin
+      .post("/api/login")
+      .send({ username: "admin", password: process.env.APP_PASSWORD })
+      .expect(200);
+
+    const created = await admin
+      .post("/api/users")
+      .send({ username, password, role: "manager" })
+      .expect(200);
+    assert.ok(created.body.users.some((user) => user.username === username && user.role === "manager"));
+
+    const login = await manager
+      .post("/api/login")
+      .send({ username, password })
+      .expect(200);
+    assert.equal(login.body.role, "manager");
+
+    await manager.get("/api/settings").expect(403);
+    await manager.get("/api/history").expect(403);
+    await manager.get("/settings.html").expect(302).expect("Location", "/");
+
+    await admin.delete(`/api/users/${encodeURIComponent(username)}`).expect(200);
+  } finally {
+    await restoreFile(appUsersPath, backup);
   }
 });
 

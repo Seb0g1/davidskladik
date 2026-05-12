@@ -5159,6 +5159,50 @@ select.is-invalid {
   min-height: 44px;
 }
 
+.settings-users-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.settings-user-row,
+.settings-user-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid var(--ios-border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--tile-soft) 90%, transparent);
+  backdrop-filter: blur(16px) saturate(1.25);
+  -webkit-backdrop-filter: blur(16px) saturate(1.25);
+}
+
+.settings-user-row span {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-user-form {
+  grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(150px, 0.7fr) auto;
+  align-items: end;
+}
+
+.settings-user-form label {
+  display: grid;
+  gap: 6px;
+}
+
+@media (max-width: 900px) {
+  .settings-user-row,
+  .settings-user-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 .markup-live-preview {
   display: block;
   margin-top: 4px;

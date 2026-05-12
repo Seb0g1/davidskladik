@@ -14,7 +14,21 @@ const manualSyncStatus = document.querySelector("#manualSyncStatus");
 const telegramTestButton = document.querySelector("#telegramTestButton");
 const telegramReportButton = document.querySelector("#telegramReportButton");
 const telegramStatus = document.querySelector("#telegramStatus");
+const employeeList = document.querySelector("#employeeList");
+const employeeStatus = document.querySelector("#employeeStatus");
+const employeeUsernameInput = document.querySelector("#employeeUsernameInput");
+const employeePasswordInput = document.querySelector("#employeePasswordInput");
+const employeeRoleInput = document.querySelector("#employeeRoleInput");
+const employeeAddButton = document.querySelector("#employeeAddButton");
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
+
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
 
 function ruleRow(rule = {}) {
   const row = document.createElement("div");
@@ -90,6 +104,41 @@ async function api(path, options) {
   return payload;
 }
 
+function sourceLabel(source) {
+  if (source === "env") return ".env";
+  if (source === "env-json") return "APP_USERS_JSON";
+  return "локально";
+}
+
+function renderUsers(users = []) {
+  if (!employeeList) return;
+  if (!users.length) {
+    employeeList.innerHTML = '<div class="empty-mini">Пока есть только основной пользователь из .env.</div>';
+    return;
+  }
+  employeeList.innerHTML = users
+    .map((user) => `
+      <div class="settings-user-row" data-username="${escapeHtml(user.username)}">
+        <div>
+          <strong>${escapeHtml(user.username)}</strong>
+          <span>${user.role === "admin" ? "Администратор" : "Менеджер"} · ${sourceLabel(user.source)}${user.protected ? " · защищён" : ""}</span>
+        </div>
+        <div class="form-inline-actions">
+          <button class="secondary-button compact-button reset-user-password" type="button" ${user.protected ? "disabled" : ""}>Новый пароль</button>
+          <button class="secondary-button compact-button delete-user" type="button" ${user.protected ? "disabled" : ""}>Удалить</button>
+        </div>
+      </div>
+    `)
+    .join("");
+}
+
+async function loadUsers() {
+  if (!employeeList) return;
+  const data = await api("/api/users");
+  renderUsers(data.users || []);
+  if (employeeStatus) employeeStatus.textContent = "Сотрудники загружены.";
+}
+
 function renderRules(rules = []) {
   rulesList.innerHTML = "";
   for (const rule of rules) rulesList.appendChild(ruleRow(rule));
@@ -158,6 +207,7 @@ async function loadSettings() {
   if (settingsAnimateAutoFocusInput) {
     settingsAnimateAutoFocusInput.checked = localStorage.getItem(WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY) !== "0";
   }
+  await loadUsers();
   statusBox.textContent = "Настройки загружены.";
 }
 
@@ -218,6 +268,65 @@ availabilityRulesList?.addEventListener("click", (event) => {
   if (row) row.remove();
   if (!availabilityRulesList.querySelector(".settings-rule-row")) {
     renderAvailabilityRules([]);
+  }
+});
+
+employeeAddButton?.addEventListener("click", async () => {
+  const username = String(employeeUsernameInput?.value || "").trim();
+  const password = String(employeePasswordInput?.value || "");
+  const role = String(employeeRoleInput?.value || "manager");
+  if (!username || !password) {
+    if (employeeStatus) employeeStatus.textContent = "Укажите логин и пароль сотрудника.";
+    return;
+  }
+  employeeAddButton.disabled = true;
+  if (employeeStatus) employeeStatus.textContent = "Добавляю сотрудника...";
+  try {
+    const data = await api("/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, role }),
+    });
+    renderUsers(data.users || []);
+    if (employeeUsernameInput) employeeUsernameInput.value = "";
+    if (employeePasswordInput) employeePasswordInput.value = "";
+    if (employeeRoleInput) employeeRoleInput.value = "manager";
+    if (employeeStatus) employeeStatus.textContent = "Сотрудник добавлен.";
+  } catch (error) {
+    if (employeeStatus) employeeStatus.textContent = error.message;
+  } finally {
+    employeeAddButton.disabled = false;
+  }
+});
+
+employeeList?.addEventListener("click", async (event) => {
+  const row = event.target.closest(".settings-user-row");
+  if (!row) return;
+  const username = row.dataset.username || "";
+  const deleteButton = event.target.closest(".delete-user");
+  const resetButton = event.target.closest(".reset-user-password");
+  try {
+    if (deleteButton) {
+      deleteButton.disabled = true;
+      const data = await api(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" });
+      renderUsers(data.users || []);
+      if (employeeStatus) employeeStatus.textContent = `Сотрудник ${username} удалён.`;
+    }
+    if (resetButton) {
+      const password = window.prompt(`Новый пароль для ${username} (минимум 6 символов)`);
+      if (!password) return;
+      resetButton.disabled = true;
+      const data = await api(`/api/users/${encodeURIComponent(username)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      renderUsers(data.users || []);
+      if (employeeStatus) employeeStatus.textContent = `Пароль сотрудника ${username} обновлён.`;
+    }
+  } catch (error) {
+    if (employeeStatus) employeeStatus.textContent = error.message;
+    loadUsers().catch(() => {});
   }
 });
 

@@ -15,7 +15,7 @@
         </div>
         <div class="header-actions">
           <a class="secondary-link-button" href="/">Личный склад</a>
-          <a class="secondary-link-button" href="/pricemaster.html">PriceMaster + аудит</a>
+          <a class="secondary-link-button" data-admin-only href="/pricemaster.html">PriceMaster + аудит</a>
           <button id="logoutButton" class="secondary-button" type="button">Выйти</button>
         </div>
       </header>
@@ -59,6 +59,31 @@
               <input id="settingsAnimateAutoFocusInput" type="checkbox" />
               <span class="toggle-ui" aria-hidden="true"></span>
             </label>
+          </section>
+
+          <section class="detail-section">
+            <h3>Сотрудники</h3>
+            <p>Администратор из .env может добавлять менеджеров. Менеджеры работают со складом и привязками, но не видят настройки и PriceMaster-аудит.</p>
+            <div id="employeeList" class="settings-users-list"></div>
+            <div class="settings-user-form">
+              <label>
+                Логин
+                <input id="employeeUsernameInput" type="text" autocomplete="off" placeholder="manager" />
+              </label>
+              <label>
+                Пароль
+                <input id="employeePasswordInput" type="password" autocomplete="new-password" placeholder="Минимум 6 символов" />
+              </label>
+              <label>
+                Роль
+                <select id="employeeRoleInput">
+                  <option value="manager" selected>Менеджер</option>
+                  <option value="admin">Администратор</option>
+                </select>
+              </label>
+              <button id="employeeAddButton" class="secondary-button" type="button">Добавить сотрудника</button>
+            </div>
+            <div id="employeeStatus" class="rate-info">Сотрудники загружаются...</div>
           </section>
 
           <section class="detail-section">

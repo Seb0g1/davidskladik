@@ -61,6 +61,7 @@ const dailySyncPath = path.join(dataDir, "daily-sync.json");
 const marketplaceAccountsPath = path.join(dataDir, "marketplace-accounts.json");
 const auditLogPath = path.join(dataDir, "audit-log.jsonl");
 const appSettingsPath = path.join(dataDir, "app-settings.json");
+const appUsersPath = path.join(dataDir, "app-users.json");
 const priceRetryQueuePath = path.join(dataDir, "price-retry-queue.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
@@ -376,28 +377,110 @@ function parseCookies(header = "") {
 }
 
 function configuredUsers() {
-  const rawUsers = cleanText(process.env.APP_USERS_JSON || "");
-  if (rawUsers) {
-    try {
-      const parsed = JSON.parse(rawUsers);
-      if (Array.isArray(parsed)) {
-        return parsed
-          .map((item) => ({
-            username: cleanText(item.username || item.user || item.login),
-            password: cleanText(item.password),
-            role: cleanText(item.role || "manager") || "manager",
-          }))
-          .filter((item) => item.username && item.password);
-      }
-    } catch (error) {
-      logger.warn("APP_USERS_JSON parse failed", { detail: error?.message || String(error) });
-    }
-  }
-  return [{
+  const users = [];
+  const primary = normalizeAppUser({
     username: process.env.APP_USER || "admin",
     password: process.env.APP_PASSWORD || "",
     role: process.env.APP_ROLE || "admin",
-  }];
+  }, { source: "env", protectedUser: true, defaultRole: "admin" });
+  if (primary.username && primary.password) users.push(primary);
+
+  users.push(...readEnvJsonUsers());
+  users.push(...readStoredAppUsersSync());
+  return dedupeAppUsers(users).filter((user) => !user.disabled);
+}
+
+function normalizeAppRole(value, fallback = "manager") {
+  return cleanText(value).toLowerCase() === "admin" ? "admin" : fallback;
+}
+
+function normalizeAppUser(input = {}, { source = "local", protectedUser = false, defaultRole = "manager" } = {}) {
+  const username = cleanText(input.username || input.user || input.login);
+  const role = normalizeAppRole(input.role, defaultRole);
+  return {
+    username,
+    password: cleanText(input.password),
+    role,
+    source: input.source || source,
+    protected: Boolean(input.protected ?? protectedUser),
+    disabled: Boolean(input.disabled),
+    createdAt: input.createdAt || new Date().toISOString(),
+    updatedAt: input.updatedAt || new Date().toISOString(),
+  };
+}
+
+function readEnvJsonUsers() {
+  const rawUsers = cleanText(process.env.APP_USERS_JSON || "");
+  if (!rawUsers) return [];
+  try {
+    const parsed = JSON.parse(rawUsers);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => normalizeAppUser(item, { source: "env-json", protectedUser: true, defaultRole: "manager" }))
+      .filter((item) => item.username && item.password);
+  } catch (error) {
+    logger.warn("APP_USERS_JSON parse failed", { detail: error?.message || String(error) });
+    return [];
+  }
+}
+
+function readStoredAppUsersSync() {
+  try {
+    const parsed = JSON.parse(fsSync.readFileSync(appUsersPath, "utf8"));
+    const users = Array.isArray(parsed.users) ? parsed.users : [];
+    return users
+      .map((item) => normalizeAppUser(item, { source: "local", defaultRole: "manager" }))
+      .filter((item) => item.username && item.password);
+  } catch (_error) {
+    return [];
+  }
+}
+
+async function readStoredAppUsers() {
+  return readStoredAppUsersSync();
+}
+
+function dedupeAppUsers(users = []) {
+  const result = new Map();
+  for (const user of users) {
+    if (!user?.username) continue;
+    const key = user.username.toLowerCase();
+    if (result.has(key) && result.get(key).protected) continue;
+    result.set(key, user);
+  }
+  return Array.from(result.values());
+}
+
+function publicAppUser(user = {}) {
+  return {
+    username: user.username,
+    role: user.role || "manager",
+    source: user.source || "local",
+    protected: Boolean(user.protected),
+    disabled: Boolean(user.disabled),
+    createdAt: user.createdAt || null,
+    updatedAt: user.updatedAt || null,
+  };
+}
+
+async function writeStoredAppUsers(users = []) {
+  const normalized = dedupeAppUsers(users.map((item) => normalizeAppUser(item, { source: "local", defaultRole: "manager" })))
+    .filter((item) => item.username && item.password)
+    .map((item) => ({ ...item, source: "local", protected: false }));
+  await fs.mkdir(dataDir, { recursive: true });
+  const payload = { updatedAt: new Date().toISOString(), users: normalized };
+  const temporaryPath = `${appUsersPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(payload, null, 2), "utf8");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rename(temporaryPath, appUsersPath);
+      break;
+    } catch (error) {
+      if (attempt === 4 || !["EPERM", "EBUSY", "EACCES"].includes(error.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
+    }
+  }
+  return normalized;
 }
 
 function createSessionToken(user) {
@@ -458,6 +541,14 @@ function consumeUploadQuota(request, fileCount) {
   }
   entry.count += fileCount;
   uploadSessionStats.set(key, entry);
+}
+
+function isAdminSession(session) {
+  return cleanText(session?.role).toLowerCase() === "admin";
+}
+
+function isAdminPagePath(pathname = "") {
+  return ["/settings", "/settings.html", "/pricemaster", "/pricemaster.html"].includes(pathname);
 }
 
 async function pruneUploadDirectory() {
@@ -522,6 +613,9 @@ function requireAuth(request, response, next) {
   const session = readSession(request);
   if (session) {
     request.session = session;
+    if (isAdminPagePath(request.path) && !isAdminSession(session)) {
+      return response.redirect("/");
+    }
     return next();
   }
 
@@ -530,6 +624,11 @@ function requireAuth(request, response, next) {
   }
 
   return response.redirect("/login.html");
+}
+
+function requireAdmin(request, response, next) {
+  if (isAdminSession(request.session)) return next();
+  return response.status(403).json({ error: "Доступ только для администратора.", code: "admin_required" });
 }
 
 app.get("/health", (_request, response) => {
@@ -570,7 +669,16 @@ app.post("/api/logout", (_request, response) => {
 
 app.get("/api/session", (request, response) => {
   const session = readSession(request);
-  response.json({ authenticated: Boolean(session), username: session?.username || null, role: session?.role || null });
+  response.json({
+    authenticated: Boolean(session),
+    username: session?.username || null,
+    role: session?.role || null,
+    permissions: {
+      admin: isAdminSession(session),
+      settings: isAdminSession(session),
+      priceMasterAudit: isAdminSession(session),
+    },
+  });
 });
 
 app.use(requireAuth);
@@ -4553,7 +4661,7 @@ app.get("/api/changes", async (request, response, next) => {
   }
 });
 
-app.get("/api/history", async (request, response, next) => {
+app.get("/api/history", requireAdmin, async (request, response, next) => {
   try {
     const limit = cleanLimit(request.query.limit, 300, 2000);
     response.json({ history: await readHistory(limit) });
@@ -4562,7 +4670,7 @@ app.get("/api/history", async (request, response, next) => {
   }
 });
 
-app.get("/api/audit-log", async (request, response, next) => {
+app.get("/api/audit-log", requireAdmin, async (request, response, next) => {
   try {
     response.json({ audit: await readAudit(cleanLimit(request.query.limit, 200, 1000)) });
   } catch (error) {
@@ -4680,7 +4788,87 @@ app.get("/api/marketplaces", (_request, response) => {
     });
 });
 
-app.get("/api/settings", async (_request, response, next) => {
+app.get("/api/users", requireAdmin, async (_request, response, next) => {
+  try {
+    response.json({ users: configuredUsers().map(publicAppUser) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/users", requireAdmin, async (request, response, next) => {
+  try {
+    const user = normalizeAppUser(request.body || {}, { source: "local", defaultRole: "manager" });
+    if (!user.username) return response.status(400).json({ error: "Укажите логин сотрудника." });
+    if (!user.password || user.password.length < 6) return response.status(400).json({ error: "Укажите пароль сотрудника минимум 6 символов." });
+    const exists = configuredUsers().some((item) => item.username.toLowerCase() === user.username.toLowerCase());
+    if (exists) return response.status(409).json({ error: "Пользователь с таким логином уже существует." });
+    const users = await readStoredAppUsers();
+    users.push({ ...user, source: "local", protected: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+    await writeStoredAppUsers(users);
+    appendAudit(request, "users.create", {
+      username: user.username,
+      role: user.role,
+      oldValue: null,
+      newValue: publicAppUser(user),
+    }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
+    response.json({ ok: true, users: configuredUsers().map(publicAppUser) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/users/:username", requireAdmin, async (request, response, next) => {
+  try {
+    const username = cleanText(request.params.username);
+    const users = await readStoredAppUsers();
+    const index = users.findIndex((item) => item.username.toLowerCase() === username.toLowerCase());
+    if (index < 0) return response.status(404).json({ error: "Локальный сотрудник не найден. Пользователей из .env можно менять только в .env." });
+    const before = publicAppUser(users[index]);
+    const nextUser = {
+      ...users[index],
+      role: normalizeAppRole(request.body.role, users[index].role || "manager"),
+      updatedAt: new Date().toISOString(),
+    };
+    if (request.body.password) {
+      const password = cleanText(request.body.password);
+      if (password.length < 6) return response.status(400).json({ error: "Пароль должен быть минимум 6 символов." });
+      nextUser.password = password;
+    }
+    users[index] = nextUser;
+    await writeStoredAppUsers(users);
+    appendAudit(request, "users.update", {
+      username,
+      role: nextUser.role,
+      oldValue: before,
+      newValue: publicAppUser(nextUser),
+    }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
+    response.json({ ok: true, users: configuredUsers().map(publicAppUser) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/users/:username", requireAdmin, async (request, response, next) => {
+  try {
+    const username = cleanText(request.params.username);
+    const users = await readStoredAppUsers();
+    const target = users.find((item) => item.username.toLowerCase() === username.toLowerCase());
+    if (!target) return response.status(404).json({ error: "Локальный сотрудник не найден. Пользователей из .env удалить нельзя." });
+    const remaining = users.filter((item) => item.username.toLowerCase() !== username.toLowerCase());
+    await writeStoredAppUsers(remaining);
+    appendAudit(request, "users.delete", {
+      username,
+      oldValue: publicAppUser(target),
+      newValue: null,
+    }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
+    response.json({ ok: true, users: configuredUsers().map(publicAppUser) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/settings", requireAdmin, async (_request, response, next) => {
   try {
     response.json({
       settings: await readAppSettings(),
@@ -4700,7 +4888,7 @@ app.get("/api/settings", async (_request, response, next) => {
   }
 });
 
-app.post("/api/telegram/test", async (_request, response, next) => {
+app.post("/api/telegram/test", requireAdmin, async (_request, response, next) => {
   try {
     if (!telegramReady()) {
       return response.status(400).json({
@@ -4722,7 +4910,7 @@ app.post("/api/telegram/test", async (_request, response, next) => {
   }
 });
 
-app.post("/api/telegram/daily-report/run", async (_request, response, next) => {
+app.post("/api/telegram/daily-report/run", requireAdmin, async (_request, response, next) => {
   try {
     if (!telegramReady()) {
       return response.status(400).json({
@@ -4775,8 +4963,8 @@ async function saveSettingsHandler(request, response, next) {
   }
 }
 
-app.put("/api/settings", saveSettingsHandler);
-app.post("/api/settings", saveSettingsHandler);
+app.put("/api/settings", requireAdmin, saveSettingsHandler);
+app.post("/api/settings", requireAdmin, saveSettingsHandler);
 
 app.get("/api/marketplace-accounts", (_request, response) => {
   response.json({
@@ -5737,9 +5925,6 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const warehouse = await readWarehouse();
-    const productsToChange = warehouse.products.filter((product) => ids.has(String(product.id)));
-    const conflicts = collectProductConflicts(productsToChange, productLocksFromRequest(request.body));
-    if (conflicts.length) return conflictResponse(response, conflicts);
     for (const linkToValidate of baseLinks) {
       await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers);
     }
@@ -5812,8 +5997,6 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
-    const conflict = productConflict(product, request.body.expectedUpdatedAt);
-    if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
 
     const link = normalizeWarehouseLink(request.body);
@@ -5822,8 +6005,16 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     await assertPriceMasterLinkExists(link, usdRate, warehouse.suppliers);
     product.links = Array.isArray(product.links) ? product.links : [];
-    const index = product.links.findIndex((item) => item.id === link.id);
-    if (index >= 0) product.links[index] = link;
+    const identityKey = warehouseLinkIdentityKey(link);
+    const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkIdentityKey(item) === identityKey);
+    if (index >= 0) {
+      product.links[index] = normalizeWarehouseLink({
+        ...product.links[index],
+        ...link,
+        id: product.links[index].id || link.id,
+        createdAt: product.links[index].createdAt || link.createdAt,
+      });
+    }
     else product.links.push(link);
     if (product.links.length > 0) product.autoPriceEnabled = true;
     product.updatedAt = new Date().toISOString();
@@ -7399,7 +7590,7 @@ app.get("/api/daily-sync", async (_request, response, next) => {
   }
 });
 
-app.post("/api/daily-sync/run", async (_request, response, next) => {
+app.post("/api/daily-sync/run", requireAdmin, async (_request, response, next) => {
   try {
     response.json(await runDailyRefresh("manual"));
   } catch (error) {
@@ -7407,7 +7598,7 @@ app.post("/api/daily-sync/run", async (_request, response, next) => {
   }
 });
 
-app.post("/api/warehouse/sync/run", async (_request, response, next) => {
+app.post("/api/warehouse/sync/run", requireAdmin, async (_request, response, next) => {
   try {
     response.json(await runManualWarehouseSync("manual"));
   } catch (error) {
