@@ -6201,6 +6201,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
 
 async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDiffPct = 0, dryRun = false } = {}) {
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
+  const forceSelectedPrices = Boolean(ids?.size);
   const preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
   const selected = ids
     ? await buildFreshWarehouseProducts(Array.from(ids), { refreshPrices: true })
@@ -6224,7 +6225,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     const current = Number(product.currentPrice || 0);
     const nextValue = Number(product.nextPrice || 0);
     const diffRub = Math.abs(nextValue - current);
-    if (diffRub <= 0) {
+    if (!forceSelectedPrices && diffRub <= 0) {
       skipped.push({ id: product.id, offerId: product.offerId, reason: "unchanged" });
       continue;
     }
