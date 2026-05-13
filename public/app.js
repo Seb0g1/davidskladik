@@ -47,8 +47,10 @@ const state = {
   retryQueueSelectedKeys: new Set(),
   retryQueueSort: "newest",
   retryQueueMarketplace: "all",
+  retryQueueStatus: "all",
   retryQueueSearch: "",
   retryQueueLastRun: null,
+  priceHistoryRequestToken: 0,
   aiImageProductId: null,
   aiImageDraft: null,
   aiImageBusy: false,
@@ -110,6 +112,7 @@ const elements = {
   retryQueueList: document.querySelector("#retryQueueList"),
   retryQueueSearchInput: document.querySelector("#retryQueueSearchInput"),
   retryQueueMarketplaceFilterInput: document.querySelector("#retryQueueMarketplaceFilterInput"),
+  retryQueueStatusFilterInput: document.querySelector("#retryQueueStatusFilterInput"),
   retryQueueSortInput: document.querySelector("#retryQueueSortInput"),
   retryQueueRefreshButton: document.querySelector("#retryQueueRefreshButton"),
   retryQueueRetrySelectedButton: document.querySelector("#retryQueueRetrySelectedButton"),
@@ -1717,6 +1720,81 @@ async function ensureWarehouseGroupDetailed(groupKey) {
   return getSortedWarehouseGroups().find((item) => item.key === groupKey) || null;
 }
 
+function priceHistoryStatusLabel(status) {
+  const text = String(status || "").toLowerCase();
+  if (text === "success") return "отправлено";
+  if (text === "delayed") return "отложено";
+  if (text === "failed" || text === "error") return "ошибка";
+  if (text === "processing") return "отправляется";
+  if (text === "pending") return "ожидает";
+  return text || "—";
+}
+
+function priceHistoryStatusClass(status) {
+  const text = String(status || "").toLowerCase();
+  if (text === "success") return "retry-state--retried";
+  if (text === "delayed") return "retry-state--delayed";
+  if (text === "pending" || text === "processing") return "retry-state--pending";
+  return "retry-state--error";
+}
+
+function normalizeDetailPriceHistoryEntries(variants = []) {
+  return variants
+    .flatMap((item) => (item.priceHistory || []).map((entry) => ({
+      ...entry,
+      productId: item.id,
+      marketplace: entry.marketplace || item.marketplace,
+      market: marketLabel(item),
+    })))
+    .sort((a, b) => new Date(b.at || b.createdAt || 0) - new Date(a.at || a.createdAt || 0));
+}
+
+function renderPriceHistoryRows(entries = [], { emptyText = "История появится после первой отправки цен." } = {}) {
+  const list = Array.isArray(entries) ? entries : [];
+  if (!list.length) return `<div class="empty-mini">${escapeHtml(emptyText)}</div>`;
+  return list.slice(0, 10).map((entry) => {
+    const status = entry.status || (entry.error ? "failed" : "success");
+    const at = entry.at || entry.createdAt;
+    const market = entry.market || (String(entry.marketplace || "").toLowerCase() === "yandex" ? "Yandex Market" : "Ozon");
+    const meta = [
+      entry.supplierName || "",
+      entry.supplierArticle || "",
+      entry.reason || "",
+      entry.error || "",
+    ].filter(Boolean).join(" · ");
+    return `
+      <div class="history-row">
+        <div>
+          <strong>${escapeHtml(market)}: ${formatMoney(entry.oldPrice)} → ${formatMoney(entry.newPrice)}</strong>
+          <span>${meta ? `${escapeHtml(meta)} · ` : ""}<b class="retry-state ${priceHistoryStatusClass(status)}">${escapeHtml(priceHistoryStatusLabel(status))}</b></span>
+        </div>
+        <small>${at ? formatDate(at) : "—"}</small>
+      </div>
+    `;
+  }).join("");
+}
+
+async function loadDetailPriceHistory(group) {
+  const variants = group?.variants || (group?.primary ? [group.primary] : []);
+  const productIds = variants.map((item) => item.id).filter(Boolean);
+  const container = document.querySelector(".price-history-live");
+  if (!container || !productIds.length) return;
+  const token = ++state.priceHistoryRequestToken;
+  try {
+    const params = new URLSearchParams();
+    params.set("productId", productIds.join(","));
+    params.set("limit", "10");
+    const data = await api(`/api/warehouse/prices/history?${params}`);
+    if (token !== state.priceHistoryRequestToken) return;
+    if (!document.body.contains(container)) return;
+    container.innerHTML = renderPriceHistoryRows(data.items || [], { emptyText: "История появится после первой отправки цен." });
+  } catch (_error) {
+    if (token !== state.priceHistoryRequestToken || !document.body.contains(container)) return;
+    const localRows = normalizeDetailPriceHistoryEntries(variants);
+    container.innerHTML = renderPriceHistoryRows(localRows, { emptyText: "История пока недоступна." });
+  }
+}
+
 function renderWarehouseDetail(group) {
   if (!group) {
     elements.warehouseDetail.innerHTML = `
@@ -1746,6 +1824,7 @@ function renderWarehouseDetail(group) {
   const linkDraftKeyValue = productIdsDraftKey(groupProductIds);
   const pendingLinks = getPendingLinkDrafts(linkDraftKeyValue);
   const ozonForAi = ozonVariant || (product.marketplace === "ozon" ? product : null);
+  const localPriceHistoryRows = normalizeDetailPriceHistoryEntries(variants);
 
   elements.warehouseDetail.innerHTML = `
     <div class="detail-head">
@@ -1842,26 +1921,14 @@ function renderWarehouseDetail(group) {
     </section>
 
     <section class="detail-section">
-      <h3>История цен</h3>
-      <div class="history-list">
-        ${
-          variants.flatMap((item) => (item.priceHistory || []).map((entry) => ({ ...entry, market: marketLabel(item) }))).length
-            ? variants
-                .flatMap((item) => (item.priceHistory || []).map((entry) => ({ ...entry, market: marketLabel(item) })))
-                .sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0))
-                .slice(0, 8)
-                .map((entry) => `
-                  <div class="history-row">
-                    <div>
-                      <strong>${escapeHtml(entry.market)}: ${formatMoney(entry.oldPrice)} → ${formatMoney(entry.newPrice)}</strong>
-                      <span>${escapeHtml(entry.supplierName || "Поставщик не указан")}${entry.supplierArticle ? ` · ${escapeHtml(entry.supplierArticle)}` : ""}${entry.reason ? ` · ${escapeHtml(entry.reason)}` : ""}${entry.status ? ` · ${escapeHtml(entry.status)}` : ""}${entry.error ? ` · ${escapeHtml(entry.error)}` : ""}</span>
-                    </div>
-                    <small>${formatDate(entry.at)}</small>
-                  </div>
-                `)
-                .join("")
-            : '<div class="empty-mini">История появится после первой отправки цен.</div>'
-        }
+      <div class="section-heading compact-heading">
+        <div>
+          <h3>История отправки цен</h3>
+          <p>Последние события из PostgreSQL price_history. Если база недоступна, показывается локальная история карточки.</p>
+        </div>
+      </div>
+      <div class="history-list price-history-live" data-product-ids="${escapeHtml(groupProductIds.join(","))}">
+        ${renderPriceHistoryRows(localPriceHistoryRows)}
       </div>
     </section>
 
@@ -1985,6 +2052,7 @@ function renderWarehouseDetail(group) {
       </div>
     </section>
   `;
+  loadDetailPriceHistory(group);
 }
 
 function formatSupplierSyncStatus() {
@@ -2419,8 +2487,12 @@ function renderRetryQueue(data = {}) {
   const items = Array.isArray(data.items) ? data.items : [];
   const filtered = items.filter((item) => {
     const marketOk = state.retryQueueMarketplace === "all" || String(item.marketplace || "").toLowerCase() === state.retryQueueMarketplace;
+    const itemStatus = String(item.status || (item.nextRetryAt ? "delayed" : "failed")).toLowerCase();
+    const statusOk = state.retryQueueStatus === "all"
+      || itemStatus === state.retryQueueStatus
+      || (state.retryQueueStatus === "failed" && itemStatus === "error");
     const q = String(state.retryQueueSearch || "").trim().toLowerCase();
-    if (!q) return marketOk;
+    if (!q) return marketOk && statusOk;
     const haystack = [
       item.offerId,
       item.target,
@@ -2428,7 +2500,7 @@ function renderRetryQueue(data = {}) {
       item.marketplace,
       item.queueKey,
     ].join(" ").toLowerCase();
-    return marketOk && haystack.includes(q);
+    return marketOk && statusOk && haystack.includes(q);
   });
   const errorCounts = new Map();
   for (const item of filtered) {
@@ -3577,6 +3649,11 @@ elements.retryQueueSortInput?.addEventListener("change", () => {
 
 elements.retryQueueMarketplaceFilterInput?.addEventListener("change", () => {
   state.retryQueueMarketplace = elements.retryQueueMarketplaceFilterInput.value || "all";
+  renderRetryQueue({ items: state.retryQueue });
+});
+
+elements.retryQueueStatusFilterInput?.addEventListener("change", () => {
+  state.retryQueueStatus = elements.retryQueueStatusFilterInput.value || "all";
   renderRetryQueue({ items: state.retryQueue });
 });
 

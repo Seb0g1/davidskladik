@@ -3787,6 +3787,109 @@ async function appendPriceHistoryRows(rows = []) {
   }
 }
 
+function priceHistoryRowFromPostgres(row = {}) {
+  return {
+    id: row.id || null,
+    productId: row.productId || null,
+    marketplace: row.marketplace || "ozon",
+    target: row.target || null,
+    offerId: row.offerId || null,
+    oldPrice: row.oldPrice ?? null,
+    newPrice: row.newPrice ?? null,
+    status: row.status || "pending",
+    response: row.response || null,
+    error: row.error || "",
+    at: row.createdAt ? row.createdAt.toISOString() : null,
+    createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+  };
+}
+
+async function readPriceHistory({ productId, offerId, marketplace, status, dateFrom, dateTo, limit = 100, offset = 0 } = {}) {
+  const productIds = splitList(productId);
+  const offerIds = splitList(offerId);
+  const statuses = splitList(status)
+    .map((item) => item.toLowerCase() === "error" ? "failed" : item.toLowerCase())
+    .filter((item) => item !== "all");
+  const marketplaceFilter = cleanText(marketplace).toLowerCase();
+  const from = toDateOrNull(dateFrom);
+  const to = toDateOrNull(dateTo);
+  const safeLimit = Math.max(1, Math.min(500, Number(limit || 100) || 100));
+  const safeOffset = Math.max(0, Number(offset || 0) || 0);
+
+  if (shouldUsePostgresStorage()) {
+    try {
+      const where = {};
+      if (productIds.length) where.productId = { in: productIds };
+      if (offerIds.length) where.offerId = { in: offerIds };
+      if (marketplaceFilter && marketplaceFilter !== "all") where.marketplace = normalizeMarketplaceEnum(marketplaceFilter);
+      if (statuses.length) where.status = { in: statuses.map((item) => normalizeQueueStatusEnum(item)) };
+      if (from || to) {
+        where.createdAt = {};
+        if (from) where.createdAt.gte = from;
+        if (to) where.createdAt.lte = to;
+      }
+      const [total, rows] = await Promise.all([
+        getPrisma().priceHistory.count({ where }),
+        getPrisma().priceHistory.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          skip: safeOffset,
+          take: safeLimit,
+        }),
+      ]);
+      return {
+        source: "postgres",
+        total,
+        limit: safeLimit,
+        offset: safeOffset,
+        items: rows.map(priceHistoryRowFromPostgres),
+      };
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("read price history postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+
+  const warehouse = await readWarehouse();
+  const rows = [];
+  for (const product of warehouse.products || []) {
+    if (productIds.length && !productIds.includes(String(product.id))) continue;
+    if (offerIds.length && !offerIds.includes(String(product.offerId))) continue;
+    if (marketplaceFilter && marketplaceFilter !== "all" && cleanText(product.marketplace) !== marketplaceFilter) continue;
+    for (const entry of product.priceHistory || []) {
+      const at = toDateOrNull(entry.at || entry.createdAt);
+      const normalizedStatus = normalizeQueueStatusEnum(entry.status === "error" ? "failed" : entry.status);
+      if (statuses.length && !statuses.includes(normalizedStatus)) continue;
+      if (from && (!at || at < from)) continue;
+      if (to && (!at || at > to)) continue;
+      rows.push({
+        productId: product.id,
+        marketplace: product.marketplace,
+        target: entry.target || product.target || product.marketplace,
+        offerId: entry.offerId || product.offerId,
+        oldPrice: entry.oldPrice ?? null,
+        newPrice: entry.newPrice ?? null,
+        status: normalizedStatus,
+        response: null,
+        error: entry.error || "",
+        supplierName: entry.supplierName || "",
+        supplierArticle: entry.supplierArticle || "",
+        reason: entry.reason || "",
+        at: at ? at.toISOString() : null,
+        createdAt: at ? at.toISOString() : null,
+      });
+    }
+  }
+  rows.sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
+  return {
+    source: "json",
+    total: rows.length,
+    limit: safeLimit,
+    offset: safeOffset,
+    items: rows.slice(safeOffset, safeOffset + safeLimit),
+  };
+}
+
 function schedulePriceRetryProcessing(delayMs = null) {
   if (process.env.DISABLE_BACKGROUND_JOBS === "true") return;
   if (priceRetryTimer) return;
@@ -7811,6 +7914,28 @@ app.get("/api/warehouse/prices/retry-queue", async (_request, response, next) =>
   }
 });
 
+app.get("/api/warehouse/prices/history", async (request, response, next) => {
+  try {
+    const limit = cleanLimit(request.query.limit, 100, 500);
+    const offset = Math.max(0, Number.parseInt(request.query.offset || "0", 10) || 0);
+    response.json({
+      ok: true,
+      ...await readPriceHistory({
+        productId: request.query.productId,
+        offerId: request.query.offerId,
+        marketplace: request.query.marketplace,
+        status: request.query.status,
+        dateFrom: request.query.dateFrom,
+        dateTo: request.query.dateTo,
+        limit,
+        offset,
+      }),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete("/api/warehouse/prices/retry-queue", async (_request, response, next) => {
   try {
     await writePriceRetryQueue({ items: [] });
@@ -9105,6 +9230,8 @@ module.exports = {
   priceRetryQueueKey,
   findActiveDelayedPriceRetry,
   appendPriceHistoryRows,
+  readPriceHistory,
+  priceHistoryRowFromPostgres,
   readPriceRetryQueue,
   writePriceRetryQueue,
   priceRetryQueuePath,

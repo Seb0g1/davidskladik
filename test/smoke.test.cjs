@@ -61,6 +61,7 @@ const {
   priceRetryQueueKey,
   findActiveDelayedPriceRetry,
   appendPriceHistoryRows,
+  readPriceHistory,
   readPriceRetryQueue,
   writePriceRetryQueue,
   priceRetryQueuePath,
@@ -147,6 +148,25 @@ test("price history append is a no-op without PostgreSQL", async () => {
     },
   ]);
   assert.equal(count, 0);
+});
+
+test("price history API is available with JSON fallback", async () => {
+  const history = await readPriceHistory({ limit: 5 });
+  assert.equal(Array.isArray(history.items), true);
+  assert.equal(history.source, "json");
+
+  const agent = request.agent(app);
+  const login = await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+  const cookie = (login.headers["set-cookie"] || []).map((item) => item.split(";")[0]).join("; ");
+  const res = await agent
+    .get("/api/warehouse/prices/history?limit=5")
+    .set("Cookie", cookie)
+    .expect(200);
+  assert.equal(res.body.ok, true);
+  assert.equal(Array.isArray(res.body.items), true);
 });
 
 test("price retry queue recovers from an empty file", async () => {
