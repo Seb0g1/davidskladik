@@ -1738,6 +1738,11 @@ td {
   font-size: 12px;
 }
 
+.link-item .link-meta-line {
+  color: color-mix(in srgb, var(--muted) 85%, var(--accent));
+  font-size: 11px;
+}
+
 .supplier-card p {
   margin-bottom: 0;
 }

@@ -1848,6 +1848,9 @@ function normalizeWarehouseLink(input = {}) {
     priceCurrency: priceCurrency === "RUB" || priceCurrency === "RUR" ? "RUB" : "USD",
     priority: Number.isFinite(Number(input.priority)) ? Number(input.priority) : 100,
     createdAt: input.createdAt || new Date().toISOString(),
+    updatedAt: input.updatedAt || input.createdAt || new Date().toISOString(),
+    createdBy: cleanText(input.createdBy || input.created_by),
+    updatedBy: cleanText(input.updatedBy || input.updated_by || input.createdBy || input.created_by),
   };
 }
 
@@ -1910,6 +1913,10 @@ function supplierImpactCount(warehouse = {}, supplier = {}) {
 
 function cloneAuditValue(value) {
   return value == null ? null : JSON.parse(JSON.stringify(value));
+}
+
+function requestUsername(request) {
+  return cleanText(request?.session?.username || "system") || "system";
 }
 
 function productConflict(product, expectedUpdatedAt) {
@@ -4453,16 +4460,22 @@ function productFromPostgres(row = {}) {
     : rowName;
   const effectiveImageUrl = firstImageUrl(raw.imageUrl || raw.ozon?.primaryImage || raw.ozon?.images || raw.yandex?.pictures || imageState.imageUrl || imageState.images);
   const postgresLinksLoaded = Array.isArray(row.links);
-  const postgresLinks = (postgresLinksLoaded ? row.links : []).map((link) => normalizeWarehouseLink({
-    ...(link.raw && typeof link.raw === "object" ? link.raw : {}),
-    id: link.id,
-    article: link.supplierArticle,
-    supplierName: link.supplierName,
-    partnerId: link.partnerId,
-    priceCurrency: link.priceCurrency,
-    keyword: link.keyword,
-    createdAt: link.createdAt ? link.createdAt.toISOString() : undefined,
-  }));
+  const postgresLinks = (postgresLinksLoaded ? row.links : []).map((link) => {
+    const linkRaw = link.raw && typeof link.raw === "object" && !Array.isArray(link.raw) ? link.raw : {};
+    return normalizeWarehouseLink({
+      ...linkRaw,
+      id: link.id,
+      article: link.supplierArticle,
+      supplierName: link.supplierName,
+      partnerId: link.partnerId,
+      priceCurrency: link.priceCurrency,
+      keyword: link.keyword,
+      createdAt: link.createdAt ? link.createdAt.toISOString() : undefined,
+      updatedAt: link.updatedAt ? link.updatedAt.toISOString() : undefined,
+      createdBy: linkRaw.createdBy,
+      updatedBy: linkRaw.updatedBy,
+    });
+  });
   const rawLinks = Array.isArray(raw.links) ? raw.links.map(normalizeWarehouseLink) : [];
   const links = postgresLinksLoaded ? postgresLinks : rawLinks;
   return normalizeWarehouseProduct({
@@ -8363,6 +8376,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers);
     }
     const now = new Date().toISOString();
+    const username = requestUsername(request);
     const updatedIds = [];
     const oldValues = [];
 
@@ -8375,6 +8389,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         const link = normalizeWarehouseLink({
           ...linkToSave,
           createdAt: linkToSave.createdAt || now,
+          updatedAt: now,
+          createdBy: linkToSave.createdBy || username,
+          updatedBy: username,
         });
         const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkIdentityKey(item) === identityKey);
         if (index >= 0) {
@@ -8383,6 +8400,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
             ...link,
             id: product.links[index].id || link.id,
             createdAt: product.links[index].createdAt || link.createdAt,
+            createdBy: product.links[index].createdBy || link.createdBy,
+            updatedAt: now,
+            updatedBy: username,
           });
         }
         else product.links.push(link);
@@ -8443,6 +8463,8 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     await assertPriceMasterLinkExists(link, usdRate, warehouse.suppliers);
+    const now = new Date().toISOString();
+    const username = requestUsername(request);
     product.links = Array.isArray(product.links) ? product.links : [];
     const identityKey = warehouseLinkIdentityKey(link);
     const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkIdentityKey(item) === identityKey);
@@ -8452,11 +8474,20 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
         ...link,
         id: product.links[index].id || link.id,
         createdAt: product.links[index].createdAt || link.createdAt,
+        createdBy: product.links[index].createdBy || link.createdBy || username,
+        updatedAt: now,
+        updatedBy: username,
       });
     }
-    else product.links.push(link);
+    else product.links.push(normalizeWarehouseLink({
+      ...link,
+      createdAt: link.createdAt || now,
+      updatedAt: now,
+      createdBy: link.createdBy || username,
+      updatedBy: username,
+    }));
     if (product.links.length > 0) product.autoPriceEnabled = true;
-    product.updatedAt = new Date().toISOString();
+    product.updatedAt = now;
     warehouseMemoryCache = {
       createdAt: warehouse.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),

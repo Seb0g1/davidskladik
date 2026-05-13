@@ -2054,6 +2054,15 @@ function renderLinkAuditRows(rows = []) {
   }).join("");
 }
 
+function linkMetaText(link = {}) {
+  const updatedBy = String(link.updatedBy || link.createdBy || "").trim();
+  const updatedAt = link.updatedAt || link.createdAt || "";
+  const parts = [];
+  if (updatedBy) parts.push(`изменил: ${updatedBy}`);
+  if (updatedAt) parts.push(formatDate(updatedAt));
+  return parts.join(" · ");
+}
+
 async function loadDetailLinkAudit(group) {
   const variants = group?.variants || (group?.primary ? [group.primary] : []);
   const productIds = variants.map((item) => item.id).filter(Boolean);
@@ -2267,6 +2276,7 @@ function renderWarehouseDetail(group) {
                           ${link.missingInPriceMaster ? " · нет в PriceMaster" : ""}
                           ${!link.missingInPriceMaster && Number(link.availableCount || 0) === 0 ? " · нет активного остатка" : ""}
                         </span>
+                        ${linkMetaText(link) ? `<span class="link-meta-line">${escapeHtml(linkMetaText(link))}</span>` : ""}
                       </div>
                       <button class="text-button delete-link" type="button" data-product-id="${escapeHtml(link.productId || product.id)}" data-product-updated-at="${escapeHtml(link.productUpdatedAt || product.updatedAt || "")}" data-link-id="${escapeHtml(link.id)}">Удалить</button>
                     </div>

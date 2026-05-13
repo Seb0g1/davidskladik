@@ -263,6 +263,35 @@ test("postgres warehouse product keeps empty relation links empty", () => {
   assert.equal(product.links.length, 0);
 });
 
+test("postgres warehouse product exposes link audit metadata", () => {
+  const product = productFromPostgres({
+    id: "pg-link-meta",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-LINK-META",
+    name: "Link meta product",
+    raw: {},
+    links: [
+      {
+        id: "link-meta-1",
+        supplierArticle: "PM-META",
+        supplierName: "Supplier Meta",
+        partnerId: "88",
+        priceCurrency: "USD",
+        keyword: null,
+        raw: { createdBy: "anna", updatedBy: "david" },
+        createdAt: new Date("2026-05-13T01:00:00.000Z"),
+        updatedAt: new Date("2026-05-13T02:00:00.000Z"),
+      },
+    ],
+    createdAt: new Date("2026-05-13T00:00:00.000Z"),
+    updatedAt: new Date("2026-05-13T03:00:00.000Z"),
+  });
+  assert.equal(product.links[0].createdBy, "anna");
+  assert.equal(product.links[0].updatedBy, "david");
+  assert.equal(product.links[0].updatedAt, "2026-05-13T02:00:00.000Z");
+});
+
 test("postgres warehouse product prefers rich raw Ozon details over weak row fields", () => {
   const product = productFromPostgres({
     id: "pg-rich-raw",
