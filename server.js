@@ -4441,58 +4441,76 @@ function productFromPostgres(row = {}) {
   });
 }
 
+function warehouseProductPostgresUpdateData(data = {}) {
+  return {
+    marketplace: data.marketplace,
+    target: data.target,
+    offerId: data.offerId,
+    productId: data.productId,
+    name: data.name,
+    brand: data.brand,
+    images: data.images,
+    marketplaceState: data.marketplaceState,
+    currentPrice: data.currentPrice,
+    targetPrice: data.targetPrice,
+    targetStock: data.targetStock,
+    status: data.status,
+    archived: data.archived,
+    raw: data.raw,
+    updatedAt: data.updatedAt,
+  };
+}
+
+async function upsertWarehouseProductPostgres(client, product) {
+  const data = productToPostgresData(product);
+  await client.warehouseProduct.upsert({
+    where: { id: data.id },
+    create: data,
+    update: warehouseProductPostgresUpdateData(data),
+  });
+}
+
+async function runWithLimitedConcurrency(items = [], concurrency = 1, worker) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return [];
+  const limit = Math.max(1, Math.min(list.length, Number(concurrency) || 1));
+  const results = new Array(list.length);
+  let nextIndex = 0;
+  await Promise.all(Array.from({ length: limit }, async () => {
+    while (nextIndex < list.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(list[currentIndex], currentIndex);
+    }
+  }));
+  return results;
+}
+
+function warehousePostgresWriteConcurrency() {
+  return Math.max(1, Math.min(4, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CONCURRENCY || 2) || 2));
+}
+
 async function replaceProductLinksInPostgres(prisma, products = []) {
   const normalizedProducts = (Array.isArray(products) ? products : [products])
     .filter((product) => product && product.id)
     .map(normalizeWarehouseProduct);
   if (!normalizedProducts.length) return { products: 0, links: 0 };
   let linksWritten = 0;
-  for (const productChunk of chunkArray(normalizedProducts, 50)) {
-    await prisma.$transaction(async (tx) => {
-      for (const product of productChunk) {
-        const data = productToPostgresData(product);
-        await tx.warehouseProduct.upsert({
-          where: { id: data.id },
-          create: data,
-          update: {
-            marketplace: data.marketplace,
-            target: data.target,
-            offerId: data.offerId,
-            productId: data.productId,
-            name: data.name,
-            brand: data.brand,
-            images: data.images,
-            marketplaceState: data.marketplaceState,
-            currentPrice: data.currentPrice,
-            targetPrice: data.targetPrice,
-            targetStock: data.targetStock,
-            status: data.status,
-            archived: data.archived,
-            raw: data.raw,
-            updatedAt: data.updatedAt,
-          },
-        });
+  const chunkSize = Math.max(1, Math.min(25, Number(process.env.WAREHOUSE_POSTGRES_LINK_WRITE_CHUNK_SIZE || 10) || 10));
+  for (const productChunk of chunkArray(normalizedProducts, chunkSize)) {
+    for (const product of productChunk) {
+      const linkRows = (product.links || [])
+        .map((link) => linkToPostgresData(product, link))
+        .filter((linkData) => linkData.supplierArticle);
+      await prisma.$transaction(async (tx) => {
+        await upsertWarehouseProductPostgres(tx, product);
         await tx.productLink.deleteMany({ where: { productId: product.id } });
-        for (const link of product.links || []) {
-          const linkData = linkToPostgresData(product, link);
-          if (!linkData.supplierArticle) continue;
-          await tx.productLink.upsert({
-            where: { id: linkData.id },
-            create: linkData,
-            update: {
-              supplierArticle: linkData.supplierArticle,
-              supplierName: linkData.supplierName,
-              partnerId: linkData.partnerId,
-              priceCurrency: linkData.priceCurrency,
-              keyword: linkData.keyword,
-              raw: linkData.raw,
-              updatedAt: linkData.updatedAt,
-            },
-          });
-          linksWritten += 1;
+        if (linkRows.length) {
+          const result = await tx.productLink.createMany({ data: linkRows, skipDuplicates: true });
+          linksWritten += result.count || 0;
         }
-      }
-    }, { timeout: 30_000 });
+      }, { timeout: 15_000 });
+    }
     markWarehousePostgresProductsWritten(productChunk);
   }
   return { products: normalizedProducts.length, links: linksWritten };
@@ -4635,50 +4653,27 @@ async function writeWarehouseToPostgres(prisma, payload) {
   if (changedProducts.length) {
     logger.info("warehouse postgres write delta", { products: changedProducts.length, suppliers: suppliers.length, chunkSize });
   }
-  if (suppliers.length) await prisma.$transaction(async (tx) => {
-    for (const supplier of suppliers) {
-      const data = supplierToPostgresData(supplier);
-      await tx.managedSupplier.upsert({
-        where: { partnerId: data.partnerId || data.name },
-        create: data,
-        update: {
-          name: data.name,
-          active: data.active,
-          defaultCurrency: data.defaultCurrency,
-          stopReason: data.stopReason,
-          note: data.note,
-          raw: data.raw,
-        },
-      });
-    }
-  }, { timeout: 30_000 });
+  const writeConcurrency = warehousePostgresWriteConcurrency();
+  const supplierRows = suppliers.map(supplierToPostgresData);
+  await runWithLimitedConcurrency(supplierRows, writeConcurrency, async (data) => {
+    await prisma.managedSupplier.upsert({
+      where: { partnerId: data.partnerId || data.name },
+      create: data,
+      update: {
+        name: data.name,
+        active: data.active,
+        defaultCurrency: data.defaultCurrency,
+        stopReason: data.stopReason,
+        note: data.note,
+        raw: data.raw,
+        updatedAt: data.updatedAt,
+      },
+    });
+  });
   for (const productChunk of chunkArray(changedProducts, chunkSize)) {
-    await prisma.$transaction(async (tx) => {
-      for (const product of productChunk) {
-        const data = productToPostgresData(product);
-        await tx.warehouseProduct.upsert({
-          where: { id: data.id },
-          create: data,
-          update: {
-            marketplace: data.marketplace,
-            target: data.target,
-            offerId: data.offerId,
-            productId: data.productId,
-            name: data.name,
-            brand: data.brand,
-            images: data.images,
-            marketplaceState: data.marketplaceState,
-            currentPrice: data.currentPrice,
-            targetPrice: data.targetPrice,
-            targetStock: data.targetStock,
-            status: data.status,
-            archived: data.archived,
-            raw: data.raw,
-            updatedAt: data.updatedAt,
-          },
-        });
-      }
-    }, { timeout: 30_000 });
+    await runWithLimitedConcurrency(productChunk, writeConcurrency, async (product) => {
+      await upsertWarehouseProductPostgres(prisma, product);
+    });
     markWarehousePostgresProductsWritten(productChunk);
   }
 }
