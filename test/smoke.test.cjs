@@ -49,6 +49,7 @@ const {
   pickWarehouseSupplier,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
+  mergeProducts,
   productFromPostgres,
   marketplaceStateCodeFromPostgresRow,
   buildOzonStockPayloadItems,
@@ -216,6 +217,46 @@ test("postgres Ozon state helpers prefer marketplaceState over internal target s
     }),
     "out_of_stock",
   );
+});
+
+test("marketplace sync merge preserves links when Ozon target changes to account id", () => {
+  const merged = mergeProducts(
+    [
+      {
+        id: "local-linked-product",
+        marketplace: "ozon",
+        target: "ozon",
+        offerId: "OZ-LINKED",
+        productId: "12345",
+        name: "Linked product",
+        links: [
+          {
+            id: "link-1",
+            article: "PM-LINKED",
+            supplierName: "Supplier A",
+          },
+        ],
+      },
+    ],
+    [
+      {
+        id: "imported-product",
+        marketplace: "ozon",
+        target: "account-1",
+        offerId: "OZ-LINKED",
+        productId: "12345",
+        name: "Linked product from Ozon",
+        marketplaceState: { code: "active", stock: 3 },
+      },
+    ],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, "local-linked-product");
+  assert.equal(merged[0].target, "account-1");
+  assert.equal(merged[0].links.length, 1);
+  assert.equal(merged[0].links[0].article, "PM-LINKED");
+  assert.equal(merged[0].marketplaceState.code, "active");
 });
 
 test("price retry queue recovers from an empty file", async () => {

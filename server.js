@@ -1595,7 +1595,9 @@ function normalizeOzonPriceDetails(input = {}) {
 
 function normalizeWarehouseProduct(input = {}) {
   const target = cleanText(input.target || input.marketplace || "ozon");
-  const targetMeta = targetById(target) || { id: target, marketplace: target === "ozon" ? "ozon" : "yandex", name: target };
+  const inputMarketplace = cleanText(input.marketplace || input.marketplace_id || "").toLowerCase();
+  const fallbackMarketplace = inputMarketplace === "yandex" || target === "yandex" ? "yandex" : "ozon";
+  const targetMeta = targetById(target) || { id: target, marketplace: fallbackMarketplace, name: target };
   const ozonDraft = normalizeOzonDraft(input.ozon || input.ozonDraft || {});
   const yandexDraft = normalizeYandexDraft(input.yandex || input.yandexDraft || {});
   const imageUrl = firstImageUrl(input.imageUrl || input.image || input.primaryImage || ozonDraft.primaryImage || ozonDraft.images || yandexDraft.pictures);
@@ -4320,31 +4322,73 @@ async function getDailySyncStatus() {
   };
 }
 
+function warehouseProductExactMergeKey(product = {}) {
+  return [
+    cleanText(product.target || product.marketplace || "default").toLowerCase(),
+    cleanText(product.offerId || product.offer_id || "").toLowerCase(),
+  ].join(":");
+}
+
+function warehouseProductLooseMergeKeys(product = {}) {
+  const marketplace = cleanText(product.marketplace || "ozon").toLowerCase();
+  const offerId = cleanText(product.offerId || product.offer_id || "").toLowerCase();
+  const productId = cleanText(product.productId || product.product_id || "").toLowerCase();
+  const sku = cleanText(product.sku || "").toLowerCase();
+  return [
+    productId ? `${marketplace}:product:${productId}` : "",
+    sku ? `${marketplace}:sku:${sku}` : "",
+    offerId ? `${marketplace}:offer:${offerId}` : "",
+  ].filter(Boolean);
+}
+
 function mergeProducts(existingProducts, importedProducts) {
   const map = new Map();
+  const looseIndex = new Map();
+  const rememberLooseKeys = (product, exactKey) => {
+    for (const key of warehouseProductLooseMergeKeys(product)) {
+      if (!looseIndex.has(key)) looseIndex.set(key, new Set());
+      looseIndex.get(key).add(exactKey);
+    }
+  };
+
   for (const product of existingProducts) {
-    map.set(`${product.target}:${product.offerId}`, normalizeWarehouseProduct(product));
+    const normalized = normalizeWarehouseProduct(product);
+    const exactKey = warehouseProductExactMergeKey(normalized);
+    map.set(exactKey, normalized);
+    rememberLooseKeys(normalized, exactKey);
   }
 
   for (const imported of importedProducts) {
     if (!imported.offerId) continue;
-    const key = `${imported.target}:${imported.offerId}`;
-    const current = map.get(key);
-    map.set(
-      key,
-      normalizeWarehouseProduct({
-        ...current,
-        ...imported,
-        id: current?.id || imported.id,
-        keyword: current?.keyword || imported.keyword,
-        markup: current?.markup || imported.markup,
-        autoPriceEnabled: current?.autoPriceEnabled !== undefined ? current.autoPriceEnabled : imported.autoPriceEnabled,
-        autoPriceMin: current?.autoPriceMin ?? imported.autoPriceMin,
-        autoPriceMax: current?.autoPriceMax ?? imported.autoPriceMax,
-        links: current?.links || [],
-        createdAt: current?.createdAt || imported.createdAt,
-      }),
-    );
+    const importedNormalized = normalizeWarehouseProduct(imported);
+    const exactKey = warehouseProductExactMergeKey(importedNormalized);
+    let matchedKey = map.has(exactKey) ? exactKey : "";
+    if (!matchedKey) {
+      for (const looseKey of warehouseProductLooseMergeKeys(importedNormalized)) {
+        const candidates = Array.from(looseIndex.get(looseKey) || []);
+        if (candidates.length === 1) {
+          matchedKey = candidates[0];
+          break;
+        }
+      }
+    }
+    const current = matchedKey ? map.get(matchedKey) : null;
+    if (matchedKey && matchedKey !== exactKey) map.delete(matchedKey);
+    const merged = normalizeWarehouseProduct({
+      ...current,
+      ...importedNormalized,
+      id: current?.id || importedNormalized.id,
+      keyword: current?.keyword || importedNormalized.keyword,
+      markup: current?.markup || importedNormalized.markup,
+      autoPriceEnabled: current?.autoPriceEnabled !== undefined ? current.autoPriceEnabled : importedNormalized.autoPriceEnabled,
+      autoPriceMin: current?.autoPriceMin ?? importedNormalized.autoPriceMin,
+      autoPriceMax: current?.autoPriceMax ?? importedNormalized.autoPriceMax,
+      links: Array.isArray(current?.links) ? current.links : [],
+      createdAt: current?.createdAt || importedNormalized.createdAt,
+    });
+    const mergedKey = warehouseProductExactMergeKey(merged);
+    map.set(mergedKey, merged);
+    rememberLooseKeys(merged, mergedKey);
   }
 
   return Array.from(map.values()).sort((a, b) => a.targetName.localeCompare(b.targetName) || a.name.localeCompare(b.name));
@@ -9290,6 +9334,7 @@ module.exports = {
   resolveWarehouseBrand,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
+  mergeProducts,
   productFromPostgres,
   marketplaceStateCodeFromPostgresRow,
   buildOzonStockPayloadItems,
