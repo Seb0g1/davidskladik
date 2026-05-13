@@ -377,6 +377,29 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+function latinSearchText(value) {
+  return (String(value || "").normalize("NFKD").match(/[A-Za-z0-9]+/g) || []).join(" ").trim();
+}
+
+async function copyTextToClipboard(text) {
+  const value = String(text || "").trim();
+  if (!value) return false;
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return true;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  return copied;
+}
+
 function normalizeSupplierName(value) {
   return String(value || "")
     .toLowerCase()
@@ -1405,7 +1428,7 @@ function mergeWarehouseProducts(products = []) {
     if (product?.id) mergeWarehouseProduct(product);
   });
   applyWarehouseFilters();
-  renderDetailForProductIds(products.map((product) => product.id).filter(Boolean));
+  refreshSelectedDetailForProductIds(products.map((product) => product.id).filter(Boolean));
   return true;
 }
 
@@ -1422,13 +1445,25 @@ function handleProductConflict(error, context = "операции") {
   return true;
 }
 
-function renderDetailForProductIds(productIds = []) {
+function renderDetailForProductIds(productIds = [], options = {}) {
   const ids = new Set((productIds || []).map(String));
   if (!ids.size) return false;
   const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
     .find((item) => (item.productIds || []).some((id) => ids.has(String(id))));
   if (!group) return false;
-  state.selectedWarehouseGroupKey = group.key;
+  if (options.select !== false) state.selectedWarehouseGroupKey = group.key;
+  if (options.select === false && state.selectedWarehouseGroupKey !== group.key) return false;
+  state.selectedWarehouseDetailGroup = group;
+  renderWarehouseDetail(group);
+  return true;
+}
+
+function refreshSelectedDetailForProductIds(productIds = []) {
+  const ids = new Set((productIds || []).map(String));
+  if (!ids.size || !state.selectedWarehouseGroupKey) return false;
+  const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
+    .find((item) => item.key === state.selectedWarehouseGroupKey);
+  if (!group || !(group.productIds || []).some((id) => ids.has(String(id)))) return false;
   state.selectedWarehouseDetailGroup = group;
   renderWarehouseDetail(group);
   return true;
@@ -1706,6 +1741,7 @@ function renderWarehouseDetail(group) {
   const yandexLink = yandexVariant ? marketplaceUrl(yandexVariant) : "";
   const image = group.image || productImage(product);
   const productName = group.name || displayProductName(product);
+  const productSearchName = latinSearchText(productName);
   const groupProductIds = variants.map((item) => item.id);
   const linkDraftKeyValue = productIdsDraftKey(groupProductIds);
   const pendingLinks = getPendingLinkDrafts(linkDraftKeyValue);
@@ -1716,7 +1752,13 @@ function renderWarehouseDetail(group) {
       <div>
         <span class="market-stack">${Array.from(new Set(variants.map((item) => marketLabel(item)))).map((label) => `<span class="market-badge ${label === "Ozon" ? "ozon" : "yandex"}">${escapeHtml(label)}</span>`).join("")}</span>
         <span class="state-stack">${variants.map((item) => `<span class="badge ${marketplaceStateClass(item)}">${escapeHtml(marketplaceStateLabel(item))}</span>`).join("")}</span>
-        <h2>${escapeHtml(productName)}</h2>
+        <div class="detail-title-row">
+          <h2>${escapeHtml(productName)}</h2>
+          <div class="detail-copy-actions" aria-label="quick copy">
+            <button class="icon-button copy-detail-value" type="button" data-copy-label="name" data-copy-text="${escapeHtml(productSearchName || productName)}" title="Скопировать английское название для PriceMaster" aria-label="Скопировать название">ABC</button>
+            <button class="icon-button copy-detail-value" type="button" data-copy-label="article" data-copy-text="${escapeHtml(product.offerId || "")}" title="Скопировать артикул" aria-label="Скопировать артикул">#</button>
+          </div>
+        </div>
         <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}</p>
       </div>
       <button class="text-button delete-product" type="button" data-product-id="${escapeHtml(product.id)}" data-product-updated-at="${escapeHtml(product.updatedAt || "")}">Удалить</button>
@@ -3199,6 +3241,23 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
 });
 
 elements.warehouseDetail.addEventListener("click", async (event) => {
+  const copyButton = event.target.closest(".copy-detail-value");
+  if (copyButton) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    try {
+      const copied = await copyTextToClipboard(copyButton.dataset.copyText || "");
+      if (copied) {
+        const label = copyButton.dataset.copyLabel === "article" ? "Артикул" : "Название";
+        elements.warehouseStatus.textContent = `${label} скопировано.`;
+        showToast(`${label} скопировано.`, "success");
+      }
+    } catch (error) {
+      elements.warehouseStatus.textContent = `Не удалось скопировать: ${error.message}`;
+    }
+    return;
+  }
+
   const aiPhotoButton = event.target.closest(".ai-photo-open");
   if (aiPhotoButton) {
     await openAiImageModal(aiPhotoButton.dataset.productId);
