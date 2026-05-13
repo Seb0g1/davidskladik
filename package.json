@@ -12,6 +12,7 @@
     "db:seed-from-json": "node scripts/seed-postgres-from-json.cjs",
     "db:export": "node scripts/export-postgres-data.cjs",
     "db:import": "node scripts/import-postgres-data.cjs",
+    "db:repair-warehouse": "node scripts/repair-warehouse-products.cjs",
     "inspect:db": "node scripts/inspect-db.js",
     "inspect:app-db": "node scripts/inspect-app-db.cjs",
     "test": "node --test test/smoke.test.cjs",
