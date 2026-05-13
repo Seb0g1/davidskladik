@@ -154,6 +154,8 @@ let telegramDailyReportTimer = null;
 let telegramDailyReportNextRunAt = null;
 let warehouseWritePromise = Promise.resolve();
 let warehouseMemoryCache = null;
+let warehousePostgresHashCache = new Map();
+let warehousePostgresUpdatedAtCache = new Map();
 let priceMasterSnapshotMemoryCache = null;
 let priceMasterArticleIndexCache = null;
 const warehouseViewCache = new Map();
@@ -1618,7 +1620,7 @@ function normalizeWarehouseProduct(input = {}) {
       lastError: input.noSupplierAutomation?.lastError || null,
     },
     createdAt: input.createdAt || new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    updatedAt: input.updatedAt || new Date().toISOString(),
     links: Array.isArray(input.links) ? input.links.map(normalizeWarehouseLink) : [],
   };
 }
@@ -3696,8 +3698,228 @@ function schedulePriceRetryProcessing(delayMs = null) {
   }, waitMs);
 }
 
+function productToPostgresData(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const images = compactObject({
+    imageUrl: normalized.imageUrl || null,
+    images: normalized.ozon?.images || normalized.yandex?.pictures || [],
+  });
+  return {
+    id: normalized.id,
+    marketplace: normalizeMarketplaceEnum(normalized.marketplace),
+    target: normalized.target || normalized.marketplace || null,
+    offerId: normalized.offerId || normalized.sku || normalized.id,
+    productId: normalized.productId || null,
+    name: normalized.name || normalized.offerId || normalized.id,
+    brand: resolveWarehouseBrand(normalized) || null,
+    images: cloneAuditValue(images) || {},
+    marketplaceState: cloneAuditValue(normalized.marketplaceState) || {},
+    currentPrice: roundPrice(normalized.marketplacePrice || 0) || null,
+    targetPrice: roundPrice(normalized.nextPrice || normalized.targetPrice || normalized.calculatedPrice || 0) || null,
+    targetStock: Number.isFinite(Number(normalized.targetStock)) ? Number(normalized.targetStock) : null,
+    status: normalized.marketplaceState?.code || normalized.marketplaceState?.state || normalized.status || null,
+    archived: Boolean(normalized.marketplaceState?.archived || normalized.archived),
+    raw: cloneAuditValue(normalized) || {},
+    createdAt: toDateOrNull(normalized.createdAt) || new Date(),
+    updatedAt: toDateOrNull(normalized.updatedAt) || new Date(),
+  };
+}
+
+function supplierToPostgresData(supplier = {}) {
+  const normalized = normalizeManagedSupplier(supplier);
+  return {
+    partnerId: normalized.partnerId || normalized.id || normalizeSupplierName(normalized.name),
+    name: normalized.name || normalized.partnerId || normalized.id,
+    active: !normalized.stopped,
+    defaultCurrency: normalized.priceCurrency === "RUB" ? "RUB" : "USD",
+    stopReason: normalized.stopReason || null,
+    note: normalized.note || normalized.inactiveComment || null,
+    raw: cloneAuditValue(normalized) || {},
+    createdAt: toDateOrNull(normalized.createdAt) || new Date(),
+    updatedAt: toDateOrNull(normalized.updatedAt) || new Date(),
+  };
+}
+
+function linkToPostgresData(product, link = {}) {
+  const normalized = normalizeWarehouseLink(link);
+  const identity = warehouseLinkIdentityKey(normalized);
+  return {
+    id: normalized.id || crypto.createHash("sha1").update(`${product.id}:${identity}`).digest("hex"),
+    productId: product.id,
+    supplierArticle: normalized.article,
+    supplierName: normalized.supplierName || null,
+    partnerId: normalized.partnerId || null,
+    priceCurrency: normalized.priceCurrency === "RUB" ? "RUB" : "USD",
+    keyword: normalized.keyword || null,
+    raw: cloneAuditValue(normalized) || {},
+    createdAt: toDateOrNull(normalized.createdAt) || new Date(),
+    updatedAt: toDateOrNull(normalized.updatedAt) || new Date(),
+  };
+}
+
+function productFromPostgres(row = {}) {
+  const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  const links = (row.links || []).map((link) => normalizeWarehouseLink({
+    ...(link.raw && typeof link.raw === "object" ? link.raw : {}),
+    id: link.id,
+    article: link.supplierArticle,
+    supplierName: link.supplierName,
+    partnerId: link.partnerId,
+    priceCurrency: link.priceCurrency,
+    keyword: link.keyword,
+    createdAt: link.createdAt ? link.createdAt.toISOString() : undefined,
+  }));
+  return normalizeWarehouseProduct({
+    ...raw,
+    id: row.id,
+    marketplace: row.marketplace,
+    target: row.target || row.marketplace,
+    offerId: row.offerId,
+    productId: row.productId,
+    name: row.name,
+    brand: row.brand || raw.brand,
+    marketplacePrice: row.currentPrice ?? raw.marketplacePrice,
+    marketplaceState: row.marketplaceState || raw.marketplaceState,
+    links,
+    createdAt: row.createdAt ? row.createdAt.toISOString() : raw.createdAt,
+    updatedAt: row.updatedAt ? row.updatedAt.toISOString() : raw.updatedAt,
+  });
+}
+
+function supplierFromPostgres(row = {}) {
+  const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  return normalizeManagedSupplier({
+    ...raw,
+    id: raw.id || row.partnerId || row.id,
+    partnerId: row.partnerId,
+    name: row.name,
+    stopped: row.active === false,
+    priceCurrency: row.defaultCurrency,
+    stopReason: row.stopReason,
+    note: row.note,
+    createdAt: row.createdAt ? row.createdAt.toISOString() : raw.createdAt,
+    updatedAt: row.updatedAt ? row.updatedAt.toISOString() : raw.updatedAt,
+  });
+}
+
+function refreshWarehouseHashCache(warehouse = {}) {
+  warehousePostgresHashCache = new Map();
+  warehousePostgresUpdatedAtCache = new Map();
+  for (const product of warehouse.products || []) {
+    warehousePostgresHashCache.set(product.id, true);
+    warehousePostgresUpdatedAtCache.set(product.id, cleanText(product.updatedAt));
+  }
+}
+
+async function readWarehouseFromPostgres(prisma) {
+  const [products, suppliers] = await Promise.all([
+    prisma.warehouseProduct.findMany({
+      include: { links: true },
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.managedSupplier.findMany({ orderBy: { name: "asc" } }),
+  ]);
+  if (!products.length && !suppliers.length) return null;
+  const updatedAtMs = Math.max(
+    ...products.map((item) => item.updatedAt?.getTime() || 0),
+    ...suppliers.map((item) => item.updatedAt?.getTime() || 0),
+    0,
+  );
+  const warehouse = {
+    createdAt: products[0]?.createdAt?.toISOString() || new Date().toISOString(),
+    updatedAt: updatedAtMs ? new Date(updatedAtMs).toISOString() : null,
+    products: products.map(productFromPostgres),
+    suppliers: suppliers.map(supplierFromPostgres),
+  };
+  refreshWarehouseHashCache(warehouse);
+  return warehouse;
+}
+
+async function writeWarehouseToPostgres(prisma, payload) {
+  const products = Array.isArray(payload.products) ? payload.products : [];
+  const suppliers = Array.isArray(payload.suppliers) ? payload.suppliers : [];
+  const changedProducts = products.filter((product) =>
+    !warehousePostgresHashCache.has(product.id)
+    || cleanText(product.updatedAt) !== warehousePostgresUpdatedAtCache.get(product.id)
+  );
+  if (changedProducts.length) {
+    logger.info("warehouse postgres write delta", { products: changedProducts.length, suppliers: suppliers.length });
+  }
+  await prisma.$transaction(async (tx) => {
+    for (const supplier of suppliers) {
+      const data = supplierToPostgresData(supplier);
+      await tx.managedSupplier.upsert({
+        where: { partnerId: data.partnerId || data.name },
+        create: data,
+        update: {
+          name: data.name,
+          active: data.active,
+          defaultCurrency: data.defaultCurrency,
+          stopReason: data.stopReason,
+          note: data.note,
+          raw: data.raw,
+        },
+      });
+    }
+    for (const product of changedProducts) {
+      const data = productToPostgresData(product);
+      await tx.warehouseProduct.upsert({
+        where: { id: data.id },
+        create: data,
+        update: {
+          marketplace: data.marketplace,
+          target: data.target,
+          offerId: data.offerId,
+          productId: data.productId,
+          name: data.name,
+          brand: data.brand,
+          images: data.images,
+          marketplaceState: data.marketplaceState,
+          currentPrice: data.currentPrice,
+          targetPrice: data.targetPrice,
+          targetStock: data.targetStock,
+          status: data.status,
+          archived: data.archived,
+          raw: data.raw,
+          updatedAt: data.updatedAt,
+        },
+      });
+      await tx.productLink.deleteMany({ where: { productId: product.id } });
+      for (const link of product.links || []) {
+        const linkData = linkToPostgresData(product, link);
+        if (!linkData.supplierArticle) continue;
+        await tx.productLink.upsert({
+          where: { id: linkData.id },
+          create: linkData,
+          update: {
+            supplierArticle: linkData.supplierArticle,
+            supplierName: linkData.supplierName,
+            partnerId: linkData.partnerId,
+            priceCurrency: linkData.priceCurrency,
+            keyword: linkData.keyword,
+            raw: linkData.raw,
+          },
+        });
+      }
+    }
+  }, { timeout: 60_000 });
+  refreshWarehouseHashCache(payload);
+}
+
 async function readWarehouse() {
   if (warehouseMemoryCache) return warehouseMemoryCache;
+  if (shouldUsePostgresStorage()) {
+    try {
+      const warehouse = await readWarehouseFromPostgres(getPrisma());
+      if (warehouse) {
+        warehouseMemoryCache = warehouse;
+        return warehouseMemoryCache;
+      }
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("read warehouse postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   try {
     const warehouse = JSON.parse(await fs.readFile(warehousePath, "utf8"));
     warehouseMemoryCache = {
@@ -3706,10 +3928,12 @@ async function readWarehouse() {
       products: Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [],
       suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
     };
+    refreshWarehouseHashCache(warehouseMemoryCache);
     return warehouseMemoryCache;
   } catch (error) {
     if (error.code === "ENOENT") {
       warehouseMemoryCache = { createdAt: new Date().toISOString(), updatedAt: null, products: [], suppliers: [] };
+      refreshWarehouseHashCache(warehouseMemoryCache);
       return warehouseMemoryCache;
     }
     throw error;
@@ -3727,6 +3951,13 @@ async function writeWarehouse(warehouse) {
       suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
     };
     warehouseMemoryCache = payload;
+    if (shouldUsePostgresStorage()) {
+      writeWarehouseToPostgres(getPrisma(), payload).catch((error) => {
+        logger.warn("write warehouse postgres failed, keeping JSON fallback", { detail: error?.message || String(error) });
+      });
+    } else {
+      refreshWarehouseHashCache(payload);
+    }
     const temporaryPath = `${warehousePath}.${process.pid}.${Date.now()}.tmp`;
     await fs.writeFile(temporaryPath, JSON.stringify(payload), "utf8");
     for (let attempt = 0; attempt < 5; attempt += 1) {
