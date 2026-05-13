@@ -1668,6 +1668,18 @@ function isOzonResourceExhaustedError(error) {
     || combined.includes("acquire limit");
 }
 
+function isOzonPerItemPriceLimitError(error) {
+  const message = String(error?.message || error?.detail || "").toLowerCase();
+  const ozonMessage = String(error?.ozon?.message || error?.ozon?.error || "").toLowerCase();
+  const combined = `${message} ${ozonMessage}`;
+  return combined.includes("price-batch-set")
+    && (
+      combined.includes("per item")
+      || combined.includes("items limit")
+      || combined.includes("acquire limit per item")
+    );
+}
+
 function getOzonPriceBatchSize() {
   return Math.max(1, Math.min(100, Number(process.env.OZON_PRICE_BATCH_SIZE || 10) || 10));
 }
@@ -1760,6 +1772,7 @@ async function sendOzonPriceBatch(account, prices) {
     } catch (error) {
       lastError = error;
       if (!isOzonRateLimitError(error) && !isOzonResourceExhaustedError(error)) throw error;
+      if (isOzonPerItemPriceLimitError(error)) throw error;
       if (attempt >= maxAttempts) throw error;
       const delayMs = Math.min(60_000, getOzonPriceBatchBackoffMs() * attempt * attempt);
       logger.warn("ozon price batch rate limited, retrying", {
@@ -3303,7 +3316,10 @@ function priceRetryQueueKey(item = {}) {
   return cleanText(item.queueKey || `${item.id || item.offerId}:${item.target || item.marketplace || "ozon"}`);
 }
 
-function priceRetryDelayMs(attempts = 1) {
+function priceRetryDelayMs(attempts = 1, error = null) {
+  if (isOzonPerItemPriceLimitError(error)) {
+    return Math.max(3_600_000, Number(process.env.OZON_PRICE_ITEM_LIMIT_RETRY_MS || 3_900_000) || 3_900_000);
+  }
   const base = Math.max(30_000, Number(process.env.OZON_PRICE_RETRY_BASE_DELAY_MS || 180_000) || 180_000);
   const max = Math.max(base, Number(process.env.OZON_PRICE_RETRY_MAX_DELAY_MS || 1_800_000) || 1_800_000);
   const attempt = Math.max(1, Number(attempts || 1) || 1);
@@ -3319,7 +3335,7 @@ function buildPriceRetryItem(item = {}, error = null, now = new Date()) {
     queuedAt: item.queuedAt || now.toISOString(),
     lastAttemptAt: now.toISOString(),
     attempts,
-    nextRetryAt: new Date(now.getTime() + priceRetryDelayMs(attempts)).toISOString(),
+    nextRetryAt: new Date(now.getTime() + priceRetryDelayMs(attempts, error)).toISOString(),
   };
 }
 
