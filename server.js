@@ -3709,7 +3709,25 @@ function priceRetryQueueItemFromPostgres(row = {}) {
 }
 
 function priceRetryQueueKey(item = {}) {
-  return cleanText(item.queueKey || `${item.id || item.offerId}:${item.target || item.marketplace || "ozon"}`);
+  return cleanText(item.queueKey || `${item.id || item.productId || item.offerId}:${item.target || item.marketplace || "ozon"}`);
+}
+
+function isActiveDelayedPriceRetry(item = {}, now = new Date()) {
+  const nextRetryAt = item.nextRetryAt ? new Date(item.nextRetryAt).getTime() : 0;
+  if (!nextRetryAt || !Number.isFinite(nextRetryAt) || nextRetryAt <= now.getTime()) return false;
+  const status = cleanText(item.status).toLowerCase();
+  return status === "delayed" || item.retryReason === "ozon_per_item_price_limit" || isOzonPerItemPriceLimitError({ message: item.error });
+}
+
+function findActiveDelayedPriceRetry(queueItems = [], item = {}, now = new Date()) {
+  const keys = new Set([
+    priceRetryQueueKey(item),
+    priceRetryQueueKey({ ...item, id: item.productId }),
+    priceRetryQueueKey({ ...item, id: item.offerId }),
+  ].filter(Boolean));
+  return (Array.isArray(queueItems) ? queueItems : []).find((queueItem) =>
+    keys.has(priceRetryQueueKey(queueItem)) && isActiveDelayedPriceRetry(queueItem, now)
+  ) || null;
 }
 
 function priceRetryDelayMs(attempts = 1, error = null) {
@@ -7257,6 +7275,12 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const skipped = [];
   const items = [];
   const stockItems = [];
+  const sentAt = new Date().toISOString();
+  const queueState = dryRun ? { items: [] } : await readPriceRetryQueue().catch((error) => {
+    logger.warn("price retry queue read failed before price send", { detail: error?.message || String(error) });
+    return { items: [] };
+  });
+  const delayedQueueUpdates = [];
 
   for (const product of selected) {
     if (!product.hasLinks) {
@@ -7277,8 +7301,9 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       skipped.push({ id: product.id, offerId: product.offerId, reason: "unchanged" });
       continue;
     }
-    items.push({
+    const priceItem = {
       id: product.id,
+      productId: product.id,
       target: product.target,
       offerId: product.offerId,
       price: product.nextPrice,
@@ -7286,7 +7311,33 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       markup: product.markupCoefficient,
       supplier: product.selectedSupplier,
       marketplace: product.marketplace,
-    });
+    };
+    const delayedRetry = product.marketplace === "ozon"
+      ? findActiveDelayedPriceRetry(queueState.items, priceItem, new Date(sentAt))
+      : null;
+    if (delayedRetry) {
+      skipped.push({
+        id: product.id,
+        offerId: product.offerId,
+        reason: "ozon_price_delayed",
+        nextRetryAt: delayedRetry.nextRetryAt,
+        error: delayedRetry.error || "ozon_per_item_price_limit",
+      });
+      delayedQueueUpdates.push({
+        ...delayedRetry,
+        id: product.id,
+        productId: product.id,
+        target: product.target,
+        offerId: product.offerId,
+        price: product.nextPrice,
+        oldPrice: product.currentPrice,
+        status: "delayed",
+        retryReason: delayedRetry.retryReason || "ozon_per_item_price_limit",
+        updatedAt: sentAt,
+      });
+      continue;
+    }
+    items.push(priceItem);
   }
 
   if (dryRun) {
@@ -7346,7 +7397,6 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const stockActions = await sendTargetStocksToMarketplace(stockItems);
 
   const warehouse = await readWarehouse();
-  const sentAt = new Date().toISOString();
   const successIds = new Set(items.map((item) => item.id));
   for (const failedItem of failed) successIds.delete(failedItem.id);
   for (const item of items) {
@@ -7402,15 +7452,14 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   }
   await writeWarehouse(warehouse);
 
-  const queueState = await readPriceRetryQueue();
   const failedQueued = failed.map((item) => buildPriceRetryItem({
     ...item,
     queueKey: `${item.id}:${item.target}`,
     queuedAt: sentAt,
   }, { message: item.error }, new Date(sentAt)));
-  const merged = [...(queueState.items || []), ...failedQueued];
+  const merged = [...(queueState.items || []), ...delayedQueueUpdates, ...failedQueued];
   const deduped = Array.from(new Map(merged.map((item) => [priceRetryQueueKey(item), item])).values()).slice(0, 5000);
-  await writePriceRetryQueue({ items: deduped });
+  if (failedQueued.length || delayedQueueUpdates.length) await writePriceRetryQueue({ items: deduped });
   if (failedQueued.length) schedulePriceRetryProcessing(priceRetryDelayMs(1));
 
   return {
@@ -7420,6 +7469,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     stockSent: stockActions.filter((item) => item.ok).length,
     stockFailed: stockActions.filter((item) => !item.ok).length,
     queued: deduped.length,
+    delayed: delayedQueueUpdates.length,
     skipped,
     results,
     stockActions,
@@ -8968,6 +9018,8 @@ module.exports = {
   isOzonPerItemPriceLimitError,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,
+  priceRetryQueueKey,
+  findActiveDelayedPriceRetry,
   readPriceRetryQueue,
   writePriceRetryQueue,
   priceRetryQueuePath,

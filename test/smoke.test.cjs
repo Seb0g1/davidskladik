@@ -58,6 +58,8 @@ const {
   isOzonPerItemPriceLimitError,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,
+  priceRetryQueueKey,
+  findActiveDelayedPriceRetry,
   readPriceRetryQueue,
   writePriceRetryQueue,
   priceRetryQueuePath,
@@ -100,6 +102,33 @@ test("Ozon price response item errors are queued as delayed retry items", () => 
   assert.equal(retry.status, "delayed");
   assert.equal(retry.retryReason, "ozon_per_item_price_limit");
   assert.ok(new Date(retry.nextRetryAt).getTime() >= new Date("2026-05-13T01:00:00.000Z").getTime());
+});
+
+test("active delayed Ozon price retry blocks duplicate auto send", () => {
+  const delayed = {
+    productId: "p1",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OZ-1",
+    status: "delayed",
+    retryReason: "ozon_per_item_price_limit",
+    nextRetryAt: "2026-05-13T01:05:00.000Z",
+  };
+  assert.equal(priceRetryQueueKey(delayed), "p1:ozon");
+  const found = findActiveDelayedPriceRetry([delayed], {
+    id: "p1",
+    productId: "p1",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OZ-1",
+  }, new Date("2026-05-13T00:10:00.000Z"));
+  assert.equal(found, delayed);
+  const expired = findActiveDelayedPriceRetry([delayed], {
+    id: "p1",
+    target: "ozon",
+    marketplace: "ozon",
+  }, new Date("2026-05-13T02:10:00.000Z"));
+  assert.equal(expired, null);
 });
 
 test("price retry queue recovers from an empty file", async () => {
