@@ -1927,7 +1927,7 @@ function isOzonPerItemPriceLimitError(error) {
 }
 
 function getOzonPriceBatchSize() {
-  return Math.max(1, Math.min(100, Number(process.env.OZON_PRICE_BATCH_SIZE || 10) || 10));
+  return Math.max(1, Math.min(100, Number(process.env.OZON_PRICE_BATCH_SIZE || 1) || 1));
 }
 
 function getOzonPriceBatchDelayMs() {
