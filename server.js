@@ -2337,9 +2337,21 @@ async function getOzonProductInfoMap(offerIds, account = null, options = {}) {
 
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
-    const data = await ozonRequest("/v3/product/info/list", {
-      offer_id: chunk,
-    }, account);
+    let data;
+    try {
+      data = await ozonRequest("/v3/product/info/list", {
+        offer_id: chunk,
+      }, account);
+    } catch (error) {
+      logger.warn("ozon product info chunk failed", {
+        account: account?.id,
+        chunk: index + 1,
+        totalChunks: chunks.length,
+        detail: error?.message || String(error),
+      });
+      if (options.continueOnError) continue;
+      throw error;
+    }
 
     for (const item of data.items || data.result?.items || []) {
       const offerId = item.offer_id || item.offerId;
@@ -2364,9 +2376,21 @@ async function getOzonProductInfoMapByProductIds(productIds, account = null, opt
 
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
-    const data = await ozonRequest("/v3/product/info/list", {
-      product_id: chunk.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
-    }, account);
+    let data;
+    try {
+      data = await ozonRequest("/v3/product/info/list", {
+        product_id: chunk.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
+      }, account);
+    } catch (error) {
+      logger.warn("ozon product info by product id chunk failed", {
+        account: account?.id,
+        chunk: index + 1,
+        totalChunks: chunks.length,
+        detail: error?.message || String(error),
+      });
+      if (options.continueOnError) continue;
+      throw error;
+    }
 
     for (const item of data.items || data.result?.items || []) {
       const productId = cleanText(item.product_id || item.productId || item.id);
@@ -2391,10 +2415,22 @@ async function getOzonStockMap(offerIds, account = null, options = {}) {
 
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
-    const data = await ozonRequest("/v4/product/info/stocks", {
-      filter: { offer_id: chunk, visibility: "ALL" },
-      limit: chunk.length,
-    }, account);
+    let data;
+    try {
+      data = await ozonRequest("/v4/product/info/stocks", {
+        filter: { offer_id: chunk, visibility: "ALL" },
+        limit: chunk.length,
+      }, account);
+    } catch (error) {
+      logger.warn("ozon stock chunk failed", {
+        account: account?.id,
+        chunk: index + 1,
+        totalChunks: chunks.length,
+        detail: error?.message || String(error),
+      });
+      if (options.continueOnError) continue;
+      throw error;
+    }
 
     for (const item of data.items || data.result?.items || []) {
       const offerId = item.offer_id || item.offerId;
@@ -2450,10 +2486,22 @@ async function getOzonPriceMap(offerIds, account = null, options = {}) {
 
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
-    const data = await ozonRequest("/v5/product/info/prices", {
-      filter: { offer_id: chunk, visibility: "ALL" },
-      limit: chunk.length,
-    }, account);
+    let data;
+    try {
+      data = await ozonRequest("/v5/product/info/prices", {
+        filter: { offer_id: chunk, visibility: "ALL" },
+        limit: chunk.length,
+      }, account);
+    } catch (error) {
+      logger.warn("ozon price info chunk failed", {
+        account: account?.id,
+        chunk: index + 1,
+        totalChunks: chunks.length,
+        detail: error?.message || String(error),
+      });
+      if (options.continueOnError) continue;
+      throw error;
+    }
 
     for (const item of data.items || []) {
       setOzonOfferMapValue(map, item.offer_id, item);
@@ -4792,6 +4840,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
         });
         if (infoOfferIds.length) {
           infoMap = await getOzonProductInfoMap(infoOfferIds, account, {
+            continueOnError: true,
             onProgress: (progress) => options.onProgress?.({
               percent: 32 + Math.round((progress.processed / Math.max(1, progress.total)) * 16),
               stage: progress.stage,
@@ -4801,6 +4850,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
             }),
           });
           stockMap = await getOzonStockMap(infoOfferIds, account, {
+            continueOnError: true,
             onProgress: (progress) => options.onProgress?.({
               percent: 48 + Math.round((progress.processed / Math.max(1, progress.total)) * 12),
               stage: progress.stage,
@@ -4810,6 +4860,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
             }),
           });
           priceMap = await getOzonPriceMap(infoOfferIds, account, {
+            continueOnError: true,
             onProgress: (progress) => options.onProgress?.({
               percent: 60 + Math.round((progress.processed / Math.max(1, progress.total)) * 10),
               stage: progress.stage,
@@ -4826,6 +4877,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
             .filter(Boolean);
           if (missingProductIds.length) {
             const infoByProductId = await getOzonProductInfoMapByProductIds(missingProductIds, account, {
+              continueOnError: true,
               onProgress: (progress) => options.onProgress?.({
                 percent: 70 + Math.round((progress.processed / Math.max(1, progress.total)) * 4),
                 stage: progress.stage,
@@ -4845,6 +4897,13 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
               recovered: infoByProductId.size,
             });
           }
+          logger.info("ozon product detail maps loaded", {
+            account: account.id,
+            requested: infoOfferIds.length,
+            info: infoMap.size,
+            stock: stockMap.size,
+            price: priceMap.size,
+          });
         }
       } catch (error) {
         infoMap = new Map();
