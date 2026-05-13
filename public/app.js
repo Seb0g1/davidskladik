@@ -1650,7 +1650,7 @@ function warehouseDetailSignature(group) {
       item.status || "",
       item.lastOzonPriceSend?.status || "",
       item.lastOzonPriceSend?.at || "",
-      (item.links || []).map((link) => [link.id, link.article, link.partnerId, link.supplierName, link.priceCurrency].join(":")).sort().join("|"),
+      (item.links || []).map((link) => [link.id, link.article, link.partnerId, link.supplierName, link.priceCurrency, link.updatedBy, link.updatedAt].join(":")).sort().join("|"),
       item.selectedSupplier?.article || "",
       item.selectedSupplier?.partnerId || "",
       item.selectedSupplier?.price || "",
