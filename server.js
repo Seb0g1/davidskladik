@@ -4278,7 +4278,8 @@ function linkToPostgresData(product, link = {}) {
 
 function productFromPostgres(row = {}) {
   const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
-  const postgresLinks = (row.links || []).map((link) => normalizeWarehouseLink({
+  const postgresLinksLoaded = Array.isArray(row.links);
+  const postgresLinks = (postgresLinksLoaded ? row.links : []).map((link) => normalizeWarehouseLink({
     ...(link.raw && typeof link.raw === "object" ? link.raw : {}),
     id: link.id,
     article: link.supplierArticle,
@@ -4289,7 +4290,7 @@ function productFromPostgres(row = {}) {
     createdAt: link.createdAt ? link.createdAt.toISOString() : undefined,
   }));
   const rawLinks = Array.isArray(raw.links) ? raw.links.map(normalizeWarehouseLink) : [];
-  const links = postgresLinks.length ? postgresLinks : rawLinks;
+  const links = postgresLinksLoaded ? postgresLinks : rawLinks;
   return normalizeWarehouseProduct({
     ...raw,
     id: row.id,
@@ -4305,6 +4306,63 @@ function productFromPostgres(row = {}) {
     createdAt: row.createdAt ? row.createdAt.toISOString() : raw.createdAt,
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : raw.updatedAt,
   });
+}
+
+async function replaceProductLinksInPostgres(prisma, products = []) {
+  const normalizedProducts = (Array.isArray(products) ? products : [products])
+    .filter((product) => product && product.id)
+    .map(normalizeWarehouseProduct);
+  if (!normalizedProducts.length) return { products: 0, links: 0 };
+  let linksWritten = 0;
+  for (const productChunk of chunkArray(normalizedProducts, 50)) {
+    await prisma.$transaction(async (tx) => {
+      for (const product of productChunk) {
+        const data = productToPostgresData(product);
+        await tx.warehouseProduct.upsert({
+          where: { id: data.id },
+          create: data,
+          update: {
+            marketplace: data.marketplace,
+            target: data.target,
+            offerId: data.offerId,
+            productId: data.productId,
+            name: data.name,
+            brand: data.brand,
+            images: data.images,
+            marketplaceState: data.marketplaceState,
+            currentPrice: data.currentPrice,
+            targetPrice: data.targetPrice,
+            targetStock: data.targetStock,
+            status: data.status,
+            archived: data.archived,
+            raw: data.raw,
+            updatedAt: data.updatedAt,
+          },
+        });
+        await tx.productLink.deleteMany({ where: { productId: product.id } });
+        for (const link of product.links || []) {
+          const linkData = linkToPostgresData(product, link);
+          if (!linkData.supplierArticle) continue;
+          await tx.productLink.upsert({
+            where: { id: linkData.id },
+            create: linkData,
+            update: {
+              supplierArticle: linkData.supplierArticle,
+              supplierName: linkData.supplierName,
+              partnerId: linkData.partnerId,
+              priceCurrency: linkData.priceCurrency,
+              keyword: linkData.keyword,
+              raw: linkData.raw,
+              updatedAt: linkData.updatedAt,
+            },
+          });
+          linksWritten += 1;
+        }
+      }
+    }, { timeout: 30_000 });
+    markWarehousePostgresProductsWritten(productChunk);
+  }
+  return { products: normalizedProducts.length, links: linksWritten };
 }
 
 async function ensureWarehousePostgresLinksBackfilled(prisma) {
@@ -4486,23 +4544,6 @@ async function writeWarehouseToPostgres(prisma, payload) {
             updatedAt: data.updatedAt,
           },
         });
-        await tx.productLink.deleteMany({ where: { productId: product.id } });
-        for (const link of product.links || []) {
-          const linkData = linkToPostgresData(product, link);
-          if (!linkData.supplierArticle) continue;
-          await tx.productLink.upsert({
-            where: { id: linkData.id },
-            create: linkData,
-            update: {
-              supplierArticle: linkData.supplierArticle,
-              supplierName: linkData.supplierName,
-              partnerId: linkData.partnerId,
-              priceCurrency: linkData.priceCurrency,
-              keyword: linkData.keyword,
-              raw: linkData.raw,
-            },
-          });
-        }
       }
     }, { timeout: 30_000 });
     markWarehousePostgresProductsWritten(productChunk);
@@ -7935,6 +7976,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       suppliers: warehouse.suppliers,
     };
     await writeWarehouse(warehouse);
+    if (shouldUsePostgresStorage()) {
+      await replaceProductLinksInPostgres(getPrisma(), warehouse.products.filter((product) => updatedIds.includes(product.id)));
+    }
     const savedProducts = await buildFreshWarehouseProducts(updatedIds);
     response.json({ ok: true, changed: savedProducts.length || updatedIds.length, products: savedProducts, persisted: "written" });
     appendAudit(request, "warehouse.links.bulk_save", {
@@ -7995,6 +8039,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       suppliers: warehouse.suppliers,
     };
     await writeWarehouse(warehouse);
+    if (shouldUsePostgresStorage()) {
+      await replaceProductLinksInPostgres(getPrisma(), [product]);
+    }
     const [savedProduct] = await buildFreshWarehouseProducts([product.id]);
     response.json({ ok: true, product: savedProduct || normalizeWarehouseProduct(product), links: (savedProduct || product).links || [], persisted: "written" });
     appendAudit(request, "warehouse.link.save", {
@@ -8037,6 +8084,9 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
       suppliers: warehouse.suppliers,
     };
     await writeWarehouse(warehouse);
+    if (shouldUsePostgresStorage()) {
+      await replaceProductLinksInPostgres(getPrisma(), [product]);
+    }
     const [savedProduct] = await buildFreshWarehouseProducts([product.id]);
     const responseProduct = savedProduct || normalizeWarehouseProduct(product);
     response.json({ ok: true, product: responseProduct, links: responseProduct.links || [], persisted: "written" });

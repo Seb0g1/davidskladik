@@ -197,7 +197,7 @@ test("price history API is available with JSON fallback", async () => {
   assert.equal(Array.isArray(res.body.items), true);
 });
 
-test("postgres warehouse product falls back to raw links when relation links are empty", () => {
+test("postgres warehouse product falls back to raw links only when relation links are not loaded", () => {
   const product = productFromPostgres({
     id: "pg-link-fallback",
     marketplace: "ozon",
@@ -215,7 +215,6 @@ test("postgres warehouse product falls back to raw links when relation links are
         },
       ],
     },
-    links: [],
     createdAt: new Date("2026-05-13T00:00:00.000Z"),
     updatedAt: new Date("2026-05-13T00:00:00.000Z"),
   });
@@ -223,6 +222,23 @@ test("postgres warehouse product falls back to raw links when relation links are
   assert.equal(product.links[0].article, "PM-123");
   assert.equal(product.links[0].supplierName, "Supplier A");
   assert.equal(product.links[0].priceCurrency, "RUB");
+});
+
+test("postgres warehouse product keeps empty relation links empty", () => {
+  const product = productFromPostgres({
+    id: "pg-link-empty-relation",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-DELETED-LINK",
+    name: "Deleted link product",
+    raw: {
+      links: [{ id: "stale-raw-link", article: "PM-OLD", supplierName: "Old Supplier" }],
+    },
+    links: [],
+    createdAt: new Date("2026-05-13T00:00:00.000Z"),
+    updatedAt: new Date("2026-05-13T00:00:00.000Z"),
+  });
+  assert.equal(product.links.length, 0);
 });
 
 test("postgres Ozon state helpers prefer marketplaceState over internal target stock/status", () => {
