@@ -161,6 +161,8 @@ let warehouseWritePromise = Promise.resolve();
 let warehouseMemoryCache = null;
 let warehousePostgresHashCache = new Map();
 let warehousePostgresUpdatedAtCache = new Map();
+let warehousePostgresWriteRunning = false;
+let warehousePostgresWriteQueuedPayload = null;
 let warehousePostgresLinkBackfillPromise = null;
 let warehousePostgresLinkBackfillDone = false;
 let priceMasterSnapshotMemoryCache = null;
@@ -4264,6 +4266,14 @@ function refreshWarehouseHashCache(warehouse = {}) {
   }
 }
 
+function markWarehousePostgresProductsWritten(products = []) {
+  for (const product of products || []) {
+    if (!product?.id) continue;
+    warehousePostgresHashCache.set(product.id, true);
+    warehousePostgresUpdatedAtCache.set(product.id, cleanText(product.updatedAt));
+  }
+}
+
 async function readWarehouseFromPostgres(prisma) {
   await ensureWarehousePostgresLinksBackfilled(prisma);
   const [products, suppliers] = await Promise.all([
@@ -4292,14 +4302,15 @@ async function readWarehouseFromPostgres(prisma) {
 async function writeWarehouseToPostgres(prisma, payload) {
   const products = Array.isArray(payload.products) ? payload.products : [];
   const suppliers = Array.isArray(payload.suppliers) ? payload.suppliers : [];
+  const chunkSize = Math.max(25, Math.min(500, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 250) || 250));
   const changedProducts = products.filter((product) =>
     !warehousePostgresHashCache.has(product.id)
     || cleanText(product.updatedAt) !== warehousePostgresUpdatedAtCache.get(product.id)
   );
   if (changedProducts.length) {
-    logger.info("warehouse postgres write delta", { products: changedProducts.length, suppliers: suppliers.length });
+    logger.info("warehouse postgres write delta", { products: changedProducts.length, suppliers: suppliers.length, chunkSize });
   }
-  await prisma.$transaction(async (tx) => {
+  if (suppliers.length) await prisma.$transaction(async (tx) => {
     for (const supplier of suppliers) {
       const data = supplierToPostgresData(supplier);
       await tx.managedSupplier.upsert({
@@ -4315,49 +4326,73 @@ async function writeWarehouseToPostgres(prisma, payload) {
         },
       });
     }
-    for (const product of changedProducts) {
-      const data = productToPostgresData(product);
-      await tx.warehouseProduct.upsert({
-        where: { id: data.id },
-        create: data,
-        update: {
-          marketplace: data.marketplace,
-          target: data.target,
-          offerId: data.offerId,
-          productId: data.productId,
-          name: data.name,
-          brand: data.brand,
-          images: data.images,
-          marketplaceState: data.marketplaceState,
-          currentPrice: data.currentPrice,
-          targetPrice: data.targetPrice,
-          targetStock: data.targetStock,
-          status: data.status,
-          archived: data.archived,
-          raw: data.raw,
-          updatedAt: data.updatedAt,
-        },
-      });
-      await tx.productLink.deleteMany({ where: { productId: product.id } });
-      for (const link of product.links || []) {
-        const linkData = linkToPostgresData(product, link);
-        if (!linkData.supplierArticle) continue;
-        await tx.productLink.upsert({
-          where: { id: linkData.id },
-          create: linkData,
+  }, { timeout: 30_000 });
+  for (const productChunk of chunkArray(changedProducts, chunkSize)) {
+    await prisma.$transaction(async (tx) => {
+      for (const product of productChunk) {
+        const data = productToPostgresData(product);
+        await tx.warehouseProduct.upsert({
+          where: { id: data.id },
+          create: data,
           update: {
-            supplierArticle: linkData.supplierArticle,
-            supplierName: linkData.supplierName,
-            partnerId: linkData.partnerId,
-            priceCurrency: linkData.priceCurrency,
-            keyword: linkData.keyword,
-            raw: linkData.raw,
+            marketplace: data.marketplace,
+            target: data.target,
+            offerId: data.offerId,
+            productId: data.productId,
+            name: data.name,
+            brand: data.brand,
+            images: data.images,
+            marketplaceState: data.marketplaceState,
+            currentPrice: data.currentPrice,
+            targetPrice: data.targetPrice,
+            targetStock: data.targetStock,
+            status: data.status,
+            archived: data.archived,
+            raw: data.raw,
+            updatedAt: data.updatedAt,
           },
         });
+        await tx.productLink.deleteMany({ where: { productId: product.id } });
+        for (const link of product.links || []) {
+          const linkData = linkToPostgresData(product, link);
+          if (!linkData.supplierArticle) continue;
+          await tx.productLink.upsert({
+            where: { id: linkData.id },
+            create: linkData,
+            update: {
+              supplierArticle: linkData.supplierArticle,
+              supplierName: linkData.supplierName,
+              partnerId: linkData.partnerId,
+              priceCurrency: linkData.priceCurrency,
+              keyword: linkData.keyword,
+              raw: linkData.raw,
+            },
+          });
+        }
       }
+    }, { timeout: 30_000 });
+    markWarehousePostgresProductsWritten(productChunk);
+  }
+}
+
+function scheduleWarehousePostgresWrite(prisma, payload) {
+  warehousePostgresWriteQueuedPayload = payload;
+  if (warehousePostgresWriteRunning) return;
+  warehousePostgresWriteRunning = true;
+  setImmediate(async () => {
+    try {
+      while (warehousePostgresWriteQueuedPayload) {
+        const nextPayload = warehousePostgresWriteQueuedPayload;
+        warehousePostgresWriteQueuedPayload = null;
+        await writeWarehouseToPostgres(prisma, nextPayload);
+      }
+    } catch (error) {
+      logger.warn("write warehouse postgres failed, keeping JSON fallback", { detail: error?.message || String(error) });
+    } finally {
+      warehousePostgresWriteRunning = false;
+      if (warehousePostgresWriteQueuedPayload) scheduleWarehousePostgresWrite(prisma, warehousePostgresWriteQueuedPayload);
     }
-  }, { timeout: 60_000 });
-  refreshWarehouseHashCache(payload);
+  });
 }
 
 async function readWarehouse() {
@@ -4406,9 +4441,7 @@ async function writeWarehouse(warehouse) {
     };
     warehouseMemoryCache = payload;
     if (shouldUsePostgresStorage()) {
-      writeWarehouseToPostgres(getPrisma(), payload).catch((error) => {
-        logger.warn("write warehouse postgres failed, keeping JSON fallback", { detail: error?.message || String(error) });
-      });
+      scheduleWarehousePostgresWrite(getPrisma(), payload);
     } else {
       refreshWarehouseHashCache(payload);
     }
