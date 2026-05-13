@@ -1875,6 +1875,8 @@ function isOzonPerItemPriceLimitError(error) {
       combined.includes("per item")
       || combined.includes("items limit")
       || combined.includes("acquire limit per item")
+      || combined.includes("10")
+      || combined.includes("раз в час")
     );
 }
 
@@ -1987,12 +1989,45 @@ async function sendOzonPriceBatch(account, prices) {
   throw lastError || new Error("Ozon price batch failed");
 }
 
+function ozonPriceResultErrorMessage(result = {}) {
+  const errors = Array.isArray(result.errors) ? result.errors : [];
+  if (!errors.length) return "";
+  return errors
+    .map((error) => cleanText(error.message || error.error || error.code || JSON.stringify(error)))
+    .filter(Boolean)
+    .join("; ");
+}
+
+function extractOzonPriceResponseFailures(response = {}, payloads = []) {
+  const results = Array.isArray(response?.result) ? response.result : [];
+  if (!results.length) return [];
+  const payloadByOffer = new Map(payloads.map((payload) => [String(payload.offer_id || ""), payload]));
+  const payloadByProduct = new Map(payloads.map((payload) => [String(payload.product_id || ""), payload]));
+  const failed = [];
+  for (const result of results) {
+    const offerId = String(result.offer_id || "");
+    const productId = String(result.product_id || "");
+    const payload = payloadByOffer.get(offerId) || payloadByProduct.get(productId);
+    if (!payload) continue;
+    const detail = ozonPriceResultErrorMessage(result);
+    if (result.updated === false || detail) {
+      const error = new Error(detail || "Ozon price update was not applied");
+      error.ozon = result;
+      failed.push({ payload, error });
+    }
+  }
+  return failed;
+}
+
 async function sendOzonPricePayloadChunks(account, prices) {
   const results = [];
   const failed = [];
   for (const chunk of chunkArray(prices, getOzonPriceBatchSize())) {
     try {
-      results.push({ response: await sendOzonPriceBatch(account, chunk), count: chunk.length });
+      const response = await sendOzonPriceBatch(account, chunk);
+      const responseFailures = extractOzonPriceResponseFailures(response, chunk);
+      if (responseFailures.length) failed.push(...responseFailures);
+      results.push({ response, count: chunk.length - responseFailures.length });
     } catch (error) {
       if (!isOzonResourceExhaustedError(error) || chunk.length <= 1) {
         failed.push(...chunk.map((payload) => ({ payload, error })));
@@ -3636,7 +3671,7 @@ function priceRetryQueueItemToPostgres(item = {}) {
     queueKey,
     marketplace: normalizeMarketplaceEnum(item.marketplace || item.target || "ozon"),
     target: cleanText(item.target || item.account || item.marketplace) || null,
-    productId: null,
+    productId: cleanText(item.productId || item.id) || null,
     offerId,
     price,
     oldPrice: item.oldPrice === undefined && item.old_price === undefined ? null : (roundPrice(item.oldPrice ?? item.old_price) || 0),
@@ -3689,14 +3724,19 @@ function priceRetryDelayMs(attempts = 1, error = null) {
 
 function buildPriceRetryItem(item = {}, error = null, now = new Date()) {
   const attempts = Number(item.attempts || 0) + 1;
+  const delayMs = priceRetryDelayMs(attempts, error);
+  const nextRetryAt = new Date(now.getTime() + delayMs).toISOString();
+  const delayedByLimit = isOzonPerItemPriceLimitError(error);
   return {
     ...item,
     error: error?.message || item.error || "retry_failed",
     queueKey: priceRetryQueueKey(item),
+    status: delayedByLimit ? "delayed" : "failed",
     queuedAt: item.queuedAt || now.toISOString(),
     lastAttemptAt: now.toISOString(),
     attempts,
-    nextRetryAt: new Date(now.getTime() + priceRetryDelayMs(attempts, error)).toISOString(),
+    nextRetryAt,
+    retryReason: delayedByLimit ? "ozon_per_item_price_limit" : "send_failed",
   };
 }
 
@@ -7334,18 +7374,20 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       usdPrice: item.supplier?.price || null,
       usdRate: Number(preview.usdRate || 0) || null,
       reason: reasons.join(", "),
-      status: success ? "success" : "error",
+      status: success ? "success" : (isOzonPerItemPriceLimitError({ message: failed.find((entry) => entry.id === item.id)?.error }) ? "delayed" : "error"),
       error: success ? null : (failed.find((entry) => entry.id === item.id)?.error || "send_failed"),
     });
     product.priceHistory = product.priceHistory.slice(-100);
     if (item.marketplace === "ozon") {
       const failedEntry = failed.find((entry) => entry.id === item.id);
+      const delayedByLimit = failedEntry ? isOzonPerItemPriceLimitError({ message: failedEntry.error }) : false;
       product.lastOzonPriceSend = {
-        status: failedEntry ? "error" : "success",
+        status: failedEntry ? (delayedByLimit ? "delayed" : "error") : "success",
         at: sentAt,
         requestedPrice: roundPrice(item.price),
         cabinetPriceAtSend: Number(item.oldPrice || 0) || null,
         detail: failedEntry ? failedEntry.error : "ok",
+        nextRetryAt: delayedByLimit ? new Date(new Date(sentAt).getTime() + priceRetryDelayMs(Number(failedEntry.attempts || 1), { message: failedEntry.error })).toISOString() : null,
       };
     }
   }
@@ -8923,6 +8965,9 @@ module.exports = {
   pickOzonCabinetListedPrice,
   buildOzonPricePayload,
   isOzonResourceExhaustedError,
+  isOzonPerItemPriceLimitError,
+  extractOzonPriceResponseFailures,
+  buildPriceRetryItem,
   readPriceRetryQueue,
   writePriceRetryQueue,
   priceRetryQueuePath,

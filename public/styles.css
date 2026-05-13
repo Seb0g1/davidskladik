@@ -3131,6 +3131,15 @@ td {
   color: var(--ok-ink);
 }
 
+.retry-state--delayed {
+  color: var(--warn);
+}
+
+.retry-state--pending,
+.retry-state--processing {
+  color: var(--accent);
+}
+
 .hidden-account-row div,
 .sync-log-row div,
 .history-row div {

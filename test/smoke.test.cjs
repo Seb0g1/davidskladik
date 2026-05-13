@@ -55,6 +55,9 @@ const {
   pickOzonCabinetListedPrice,
   buildOzonPricePayload,
   isOzonResourceExhaustedError,
+  isOzonPerItemPriceLimitError,
+  extractOzonPriceResponseFailures,
+  buildPriceRetryItem,
   readPriceRetryQueue,
   writePriceRetryQueue,
   priceRetryQueuePath,
@@ -71,6 +74,32 @@ test("GET /health", async () => {
 test("detects Ozon per-item rate limit errors", () => {
   const error = new Error("price-batch-set for seller api: rpc error: code = ResourceExhausted desc = error limiting: acquire limit per item: items limit: limit exceeded");
   assert.equal(isOzonResourceExhaustedError(error), true);
+  assert.equal(isOzonPerItemPriceLimitError(error), true);
+});
+
+test("Ozon price response item errors are queued as delayed retry items", () => {
+  const payload = { offer_id: "OZ-1", price: "195586", currency_code: "RUB" };
+  const failures = extractOzonPriceResponseFailures({
+    result: [
+      {
+        offer_id: "OZ-1",
+        updated: false,
+        errors: [{ message: "price-batch-set for seller api: rpc error: code = ResourceExhausted desc = error limiting: acquire limit per item: items limit: limit exceeded" }],
+      },
+    ],
+  }, [payload]);
+  assert.equal(failures.length, 1);
+  assert.equal(failures[0].payload.offer_id, "OZ-1");
+  const retry = buildPriceRetryItem({
+    id: "p1",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OZ-1",
+    price: 195586,
+  }, failures[0].error, new Date("2026-05-13T00:00:00.000Z"));
+  assert.equal(retry.status, "delayed");
+  assert.equal(retry.retryReason, "ozon_per_item_price_limit");
+  assert.ok(new Date(retry.nextRetryAt).getTime() >= new Date("2026-05-13T01:00:00.000Z").getTime());
 });
 
 test("price retry queue recovers from an empty file", async () => {

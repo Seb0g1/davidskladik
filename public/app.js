@@ -2456,25 +2456,49 @@ function renderRetryQueue(data = {}) {
   if (elements.retryQueueStats) {
     const retried = Number(state.retryQueueLastRun?.retried || 0);
     const failed = Number(state.retryQueueLastRun?.failed || 0);
+    const delayed = sorted.filter((item) => {
+      const status = String(item.status || "").toLowerCase();
+      const nextAt = item.nextRetryAt ? new Date(item.nextRetryAt).getTime() : 0;
+      return status === "delayed" || (nextAt && nextAt > Date.now());
+    }).length;
     elements.retryQueueStats.innerHTML = [
       `<span class="badge ok">success ${formatNumber(retried > 0 ? retried : 0)}</span>`,
-      `<span class="badge warn">error ${formatNumber(sorted.length)}</span>`,
+      `<span class="badge warn">delayed ${formatNumber(delayed)}</span>`,
+      `<span class="badge warn">error ${formatNumber(Math.max(0, sorted.length - delayed))}</span>`,
       `<span class="badge neutral">retried ${formatNumber(retried)}</span>`,
       failed ? `<small>fail ${formatNumber(failed)}</small>` : "",
     ].join(" ");
   }
   elements.retryQueueRetrySelectedButton.disabled = !state.retryQueueSelectedKeys.size;
+  const retryStatusMeta = (item) => {
+    const status = String(item.status || "").toLowerCase();
+    const nextAt = item.nextRetryAt ? new Date(item.nextRetryAt).getTime() : 0;
+    if (status === "delayed" || (nextAt && nextAt > Date.now())) {
+      return {
+        className: "retry-state--delayed",
+        label: "отложено",
+        detail: item.nextRetryAt ? ` · повтор ${formatDate(item.nextRetryAt)}` : "",
+      };
+    }
+    if (status === "processing") return { className: "retry-state--processing", label: "отправляется", detail: "" };
+    if (status === "pending") return { className: "retry-state--pending", label: "ожидает", detail: "" };
+    if (Number(item.attempts || 0) > 1) return { className: "retry-state--retried", label: "retry", detail: "" };
+    return { className: "retry-state--error", label: "ошибка", detail: "" };
+  };
   elements.retryQueueList.innerHTML = hasItems
-    ? sorted.slice(0, 150).map((item) => `
+    ? sorted.slice(0, 150).map((item) => {
+      const status = retryStatusMeta(item);
+      return `
         <label class="history-row">
           <input class="retry-queue-check" type="checkbox" data-queue-key="${escapeHtml(item.queueKey)}" ${state.retryQueueSelectedKeys.has(String(item.queueKey)) ? "checked" : ""} />
           <div>
             <strong>${escapeHtml(item.offerId || item.id || "offer")}</strong>
-            <span>${escapeHtml(item.marketplace || "")} · ${escapeHtml(item.target || "")} · ${formatMoney(item.price)} · попыток ${formatNumber(item.attempts || 1)} · ${escapeHtml(item.error || "ошибка отправки")} · <b class="retry-state ${Number(item.attempts || 1) > 1 ? "retry-state--retried" : "retry-state--error"}">${Number(item.attempts || 1) > 1 ? "retried" : "error"}</b></span>
+            <span>${escapeHtml(item.marketplace || "")} · ${escapeHtml(item.target || "")} · ${formatMoney(item.price)} · попыток ${formatNumber(item.attempts || 1)} · ${escapeHtml(item.error || "ошибка отправки")}${escapeHtml(status.detail)} · <b class="retry-state ${status.className}">${escapeHtml(status.label)}</b></span>
           </div>
           <small>${item.queuedAt ? formatDate(item.queuedAt) : "—"}</small>
         </label>
-      `).join("")
+      `;
+    }).join("")
     : '<div class="empty-mini">Очередь пуста.</div>';
 }
 
