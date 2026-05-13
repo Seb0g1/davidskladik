@@ -16,6 +16,11 @@ const { toFile } = require("openai/uploads");
 require("dotenv").config();
 
 const logger = require("./lib/logger");
+const {
+  postgresModeEnabled,
+  jsonFallbackEnabled,
+  getPrisma,
+} = require("./lib/postgres");
 
 if (process.env.NODE_ENV === "production") {
   const secret = process.env.APP_SESSION_SECRET;
@@ -388,6 +393,29 @@ function parseCookies(header = "") {
   );
 }
 
+function shouldUsePostgresStorage() {
+  return postgresModeEnabled();
+}
+
+async function runWithPostgresFallback(label, postgresAction, fallbackAction) {
+  if (!shouldUsePostgresStorage()) return fallbackAction();
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return fallbackAction();
+    return await postgresAction(prisma);
+  } catch (error) {
+    if (!jsonFallbackEnabled()) throw error;
+    logger.warn(`${label} postgres failed, using JSON fallback`, { detail: error?.message || String(error) });
+    return fallbackAction();
+  }
+}
+
+function toDateOrNull(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function configuredUsers() {
   const users = [];
   const primary = normalizeAppUser({
@@ -399,6 +427,20 @@ function configuredUsers() {
 
   users.push(...readEnvJsonUsers());
   users.push(...readStoredAppUsersSync());
+  return dedupeAppUsers(users).filter((user) => !user.disabled);
+}
+
+async function configuredUsersAsync() {
+  const users = [];
+  const primary = normalizeAppUser({
+    username: process.env.APP_USER || "admin",
+    password: process.env.APP_PASSWORD || "",
+    role: process.env.APP_ROLE || "admin",
+  }, { source: "env", protectedUser: true, defaultRole: "admin" });
+  if (primary.username && primary.password) users.push(primary);
+
+  users.push(...readEnvJsonUsers());
+  users.push(...await readStoredAppUsers());
   return dedupeAppUsers(users).filter((user) => !user.disabled);
 }
 
@@ -448,8 +490,39 @@ function readStoredAppUsersSync() {
   }
 }
 
+function appUserFromPostgres(row = {}) {
+  return normalizeAppUser({
+    username: row.username,
+    password: row.passwordHash,
+    role: row.role,
+    source: row.source || "postgres",
+    protected: row.protected,
+    disabled: row.active === false,
+    createdAt: row.createdAt ? row.createdAt.toISOString() : null,
+    updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
+  }, { source: row.source || "postgres", defaultRole: "manager" });
+}
+
+async function readStoredAppUsersFromPostgres(prisma) {
+  const rows = await prisma.appUser.findMany({
+    where: {
+      active: true,
+      protected: false,
+    },
+    orderBy: [
+      { role: "asc" },
+      { username: "asc" },
+    ],
+  });
+  return rows.map(appUserFromPostgres).filter((item) => item.username && item.password);
+}
+
 async function readStoredAppUsers() {
-  return readStoredAppUsersSync();
+  return runWithPostgresFallback(
+    "read app users",
+    readStoredAppUsersFromPostgres,
+    async () => readStoredAppUsersSync(),
+  );
 }
 
 function dedupeAppUsers(users = []) {
@@ -479,6 +552,47 @@ async function writeStoredAppUsers(users = []) {
   const normalized = dedupeAppUsers(users.map((item) => normalizeAppUser(item, { source: "local", defaultRole: "manager" })))
     .filter((item) => item.username && item.password)
     .map((item) => ({ ...item, source: "local", protected: false }));
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      const desiredUsernames = normalized.map((item) => item.username);
+      await prisma.$transaction(async (tx) => {
+        await tx.appUser.updateMany({
+          where: {
+            protected: false,
+            ...(desiredUsernames.length ? { username: { notIn: desiredUsernames } } : {}),
+          },
+          data: { active: false },
+        });
+        for (const user of normalized) {
+          await tx.appUser.upsert({
+            where: { username: user.username },
+            create: {
+              username: user.username,
+              passwordHash: user.password,
+              role: user.role === "admin" ? "admin" : "manager",
+              active: !user.disabled,
+              source: "postgres",
+              protected: false,
+              createdAt: toDateOrNull(user.createdAt) || new Date(),
+              updatedAt: toDateOrNull(user.updatedAt) || new Date(),
+            },
+            update: {
+              passwordHash: user.password,
+              role: user.role === "admin" ? "admin" : "manager",
+              active: !user.disabled,
+              source: "postgres",
+              protected: false,
+            },
+          });
+        }
+      });
+      if (!jsonFallbackEnabled()) return normalized;
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("write app users postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   await fs.mkdir(dataDir, { recursive: true });
   const payload = { updatedAt: new Date().toISOString(), users: normalized };
   const temporaryPath = `${appUsersPath}.${process.pid}.${Date.now()}.tmp`;
@@ -647,10 +761,15 @@ app.get("/health", (_request, response) => {
   response.json({ ok: true, service: "magic-vibes-warehouse", time: new Date().toISOString() });
 });
 
-app.post("/api/login", loginLimiter, (request, response) => {
+app.post("/api/login", loginLimiter, async (request, response, next) => {
   const username = String(request.body.username || "");
   const password = String(request.body.password || "");
-  const users = configuredUsers();
+  let users;
+  try {
+    users = await configuredUsersAsync();
+  } catch (error) {
+    return next(error);
+  }
 
   if (!users.length || users.every((item) => !item.password)) {
     return response.status(500).json({ error: "APP_PASSWORD или APP_USERS_JSON не задан в .env" });
@@ -946,7 +1065,6 @@ function accountPayloadWithSecretFallback(body = {}, current = {}) {
 }
 
 async function appendAudit(request, action, details = {}) {
-  await fs.mkdir(dataDir, { recursive: true });
   const entry = {
     at: new Date().toISOString(),
     user: request.session?.username || "system",
@@ -957,10 +1075,56 @@ async function appendAudit(request, action, details = {}) {
     newValue: details.newValue ?? details.after ?? null,
     details,
   };
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      const user = entry.user && entry.user !== "system"
+        ? await prisma.appUser.findUnique({ where: { username: entry.user } }).catch(() => null)
+        : null;
+      await prisma.auditLog.create({
+        data: {
+          username: entry.user,
+          userId: user?.id || null,
+          action: entry.action,
+          entityType: cleanText(details.entityType || action.split(".")[0]) || null,
+          entityId: cleanText(details.entityId || details.productId || details.id || "") || null,
+          oldValue: cloneAuditValue(entry.oldValue),
+          newValue: cloneAuditValue(entry.newValue),
+          details: cloneAuditValue(details) || {},
+          createdAt: toDateOrNull(entry.at) || new Date(),
+        },
+      });
+      if (!jsonFallbackEnabled()) return;
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("append audit postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+  await fs.mkdir(dataDir, { recursive: true });
   await fs.appendFile(auditLogPath, `${JSON.stringify(entry)}\n`, "utf8");
 }
 
 async function readAudit(limit = 200) {
+  if (shouldUsePostgresStorage()) {
+    try {
+      const rows = await getPrisma().auditLog.findMany({
+        take: limit,
+        orderBy: { createdAt: "desc" },
+      });
+      return rows.map((row) => ({
+        at: row.createdAt ? row.createdAt.toISOString() : null,
+        user: row.username,
+        action: row.action,
+        productId: row.entityId || row.details?.productId || null,
+        oldValue: row.oldValue,
+        newValue: row.newValue,
+        details: row.details || {},
+      }));
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("read audit postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   try {
     const content = await fs.readFile(auditLogPath, "utf8");
     return content.trim().split("\n").filter(Boolean).slice(-limit).reverse().map((line) => JSON.parse(line));
@@ -971,6 +1135,27 @@ async function readAudit(limit = 200) {
 }
 
 async function readAuditSince(since) {
+  if (shouldUsePostgresStorage()) {
+    try {
+      const sinceDate = toDateOrNull(since) || new Date(0);
+      const rows = await getPrisma().auditLog.findMany({
+        where: { createdAt: { gte: sinceDate } },
+        orderBy: { createdAt: "asc" },
+      });
+      return rows.map((row) => ({
+        at: row.createdAt ? row.createdAt.toISOString() : null,
+        user: row.username,
+        action: row.action,
+        productId: row.entityId || row.details?.productId || null,
+        oldValue: row.oldValue,
+        newValue: row.newValue,
+        details: row.details || {},
+      }));
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("read audit since postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   try {
     const sinceMs = new Date(since).getTime();
     const content = await fs.readFile(auditLogPath, "utf8");
@@ -2577,6 +2762,16 @@ function normalizeAppSettings(input = {}) {
 }
 
 async function readAppSettings() {
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      const row = await prisma.appSetting.findUnique({ where: { key: "app" } });
+      if (row?.value) return normalizeAppSettings(row.value);
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("read app settings postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   try {
     const parsed = JSON.parse(await fs.readFile(appSettingsPath, "utf8"));
     return normalizeAppSettings(parsed);
@@ -2589,6 +2784,20 @@ async function readAppSettings() {
 async function writeAppSettings(settings) {
   const normalized = normalizeAppSettings(settings);
   invalidateWarehouseViewCache();
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      await prisma.appSetting.upsert({
+        where: { key: "app" },
+        create: { key: "app", value: normalized },
+        update: { value: normalized },
+      });
+      if (!jsonFallbackEnabled()) return normalized;
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("write app settings postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   await fs.mkdir(dataDir, { recursive: true });
   const temporaryPath = `${appSettingsPath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(temporaryPath, JSON.stringify(normalized, null, 2), "utf8");
@@ -3282,6 +3491,26 @@ async function getPriceMasterArticleIndex() {
 }
 
 async function readPriceRetryQueue() {
+  if (shouldUsePostgresStorage()) {
+    try {
+      const rows = await getPrisma().priceRetryQueueItem.findMany({
+        where: { status: { in: ["pending", "processing", "failed", "delayed"] } },
+        orderBy: { createdAt: "desc" },
+        take: 5000,
+      });
+      const updatedAt = rows.reduce((latest, row) => {
+        const time = row.updatedAt ? row.updatedAt.getTime() : 0;
+        return time > latest ? time : latest;
+      }, 0);
+      return {
+        updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
+        items: rows.map(priceRetryQueueItemFromPostgres),
+      };
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("read price retry queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   try {
     const text = await fs.readFile(priceRetryQueuePath, "utf8");
     if (!text.trim()) return { updatedAt: null, items: [] };
@@ -3301,15 +3530,110 @@ async function readPriceRetryQueue() {
 }
 
 async function writePriceRetryQueue(queue) {
-  await fs.mkdir(dataDir, { recursive: true });
   const payload = {
     updatedAt: new Date().toISOString(),
     items: Array.isArray(queue.items) ? queue.items : [],
   };
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      const queueKeys = payload.items.map((item) => priceRetryQueueKey(item)).filter(Boolean);
+      await prisma.$transaction(async (tx) => {
+        if (queueKeys.length) {
+          await tx.priceRetryQueueItem.deleteMany({ where: { queueKey: { notIn: queueKeys } } });
+        } else {
+          await tx.priceRetryQueueItem.deleteMany({});
+        }
+        for (const item of payload.items) {
+          const data = priceRetryQueueItemToPostgres(item);
+          await tx.priceRetryQueueItem.upsert({
+            where: { queueKey: data.queueKey },
+            create: data,
+            update: {
+              marketplace: data.marketplace,
+              target: data.target,
+              productId: data.productId,
+              offerId: data.offerId,
+              price: data.price,
+              oldPrice: data.oldPrice,
+              status: data.status,
+              attempts: data.attempts,
+              error: data.error,
+              payload: data.payload,
+              nextRetryAt: data.nextRetryAt,
+              lastAttemptAt: data.lastAttemptAt,
+            },
+          });
+        }
+      });
+      if (!jsonFallbackEnabled()) return payload;
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("write price retry queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+  await fs.mkdir(dataDir, { recursive: true });
   const tmpPath = `${priceRetryQueuePath}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
   await fs.rename(tmpPath, priceRetryQueuePath);
   return payload;
+}
+
+function normalizeMarketplaceEnum(value) {
+  const text = cleanText(value).toLowerCase();
+  return text === "yandex" ? "yandex" : "ozon";
+}
+
+function normalizeQueueStatusEnum(value, item = {}) {
+  const text = cleanText(value).toLowerCase();
+  if (["pending", "processing", "success", "failed", "delayed"].includes(text)) return text;
+  if (item.nextRetryAt && new Date(item.nextRetryAt).getTime() > Date.now()) return "delayed";
+  return item.error ? "failed" : "pending";
+}
+
+function priceRetryQueueItemToPostgres(item = {}) {
+  const queueKey = priceRetryQueueKey(item) || crypto.randomUUID();
+  const offerId = cleanText(item.offerId || item.offer_id || item.sku || item.id || item.productId || queueKey);
+  const price = roundPrice(item.price ?? item.newPrice ?? item.targetPrice ?? 0) || 0;
+  return {
+    queueKey,
+    marketplace: normalizeMarketplaceEnum(item.marketplace || item.target || "ozon"),
+    target: cleanText(item.target || item.account || item.marketplace) || null,
+    productId: null,
+    offerId,
+    price,
+    oldPrice: item.oldPrice === undefined && item.old_price === undefined ? null : (roundPrice(item.oldPrice ?? item.old_price) || 0),
+    status: normalizeQueueStatusEnum(item.status, item),
+    attempts: Math.max(0, Number(item.attempts || 0) || 0),
+    error: cleanText(item.error || item.detail || ""),
+    payload: cloneAuditValue(item) || {},
+    nextRetryAt: toDateOrNull(item.nextRetryAt),
+    lastAttemptAt: toDateOrNull(item.lastAttemptAt),
+    createdAt: toDateOrNull(item.queuedAt || item.createdAt) || new Date(),
+    updatedAt: toDateOrNull(item.updatedAt) || new Date(),
+  };
+}
+
+function priceRetryQueueItemFromPostgres(row = {}) {
+  const payload = row.payload && typeof row.payload === "object" && !Array.isArray(row.payload) ? row.payload : {};
+  return {
+    ...payload,
+    id: payload.id || row.productId || row.offerId,
+    productId: row.productId || payload.productId || payload.id || null,
+    offerId: row.offerId || payload.offerId || null,
+    marketplace: row.marketplace || payload.marketplace || "ozon",
+    target: row.target || payload.target || row.marketplace || "ozon",
+    price: row.price ?? payload.price ?? null,
+    oldPrice: row.oldPrice ?? payload.oldPrice ?? null,
+    status: row.status || payload.status || "pending",
+    attempts: row.attempts || 0,
+    error: row.error || payload.error || "",
+    queueKey: row.queueKey || payload.queueKey || null,
+    queuedAt: payload.queuedAt || (row.createdAt ? row.createdAt.toISOString() : null),
+    lastAttemptAt: row.lastAttemptAt ? row.lastAttemptAt.toISOString() : (payload.lastAttemptAt || null),
+    nextRetryAt: row.nextRetryAt ? row.nextRetryAt.toISOString() : (payload.nextRetryAt || null),
+    updatedAt: row.updatedAt ? row.updatedAt.toISOString() : (payload.updatedAt || null),
+  };
 }
 
 function priceRetryQueueKey(item = {}) {
@@ -4985,7 +5309,7 @@ app.get("/api/marketplaces", (_request, response) => {
 
 app.get("/api/users", requireAdmin, async (_request, response, next) => {
   try {
-    response.json({ users: configuredUsers().map(publicAppUser) });
+    response.json({ users: (await configuredUsersAsync()).map(publicAppUser) });
   } catch (error) {
     next(error);
   }
@@ -4996,7 +5320,7 @@ app.post("/api/users", requireAdmin, async (request, response, next) => {
     const user = normalizeAppUser(request.body || {}, { source: "local", defaultRole: "manager" });
     if (!user.username) return response.status(400).json({ error: "Укажите логин сотрудника." });
     if (!user.password || user.password.length < 6) return response.status(400).json({ error: "Укажите пароль сотрудника минимум 6 символов." });
-    const exists = configuredUsers().some((item) => item.username.toLowerCase() === user.username.toLowerCase());
+    const exists = (await configuredUsersAsync()).some((item) => item.username.toLowerCase() === user.username.toLowerCase());
     if (exists) return response.status(409).json({ error: "Пользователь с таким логином уже существует." });
     const users = await readStoredAppUsers();
     users.push({ ...user, source: "local", protected: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
@@ -5007,7 +5331,7 @@ app.post("/api/users", requireAdmin, async (request, response, next) => {
       oldValue: null,
       newValue: publicAppUser(user),
     }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
-    response.json({ ok: true, users: configuredUsers().map(publicAppUser) });
+    response.json({ ok: true, users: (await configuredUsersAsync()).map(publicAppUser) });
   } catch (error) {
     next(error);
   }
@@ -5038,7 +5362,7 @@ app.put("/api/users/:username", requireAdmin, async (request, response, next) =>
       oldValue: before,
       newValue: publicAppUser(nextUser),
     }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
-    response.json({ ok: true, users: configuredUsers().map(publicAppUser) });
+    response.json({ ok: true, users: (await configuredUsersAsync()).map(publicAppUser) });
   } catch (error) {
     next(error);
   }
@@ -5057,7 +5381,7 @@ app.delete("/api/users/:username", requireAdmin, async (request, response, next)
       oldValue: publicAppUser(target),
       newValue: null,
     }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
-    response.json({ ok: true, users: configuredUsers().map(publicAppUser) });
+    response.json({ ok: true, users: (await configuredUsersAsync()).map(publicAppUser) });
   } catch (error) {
     next(error);
   }

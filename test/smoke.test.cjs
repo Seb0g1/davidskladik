@@ -10,6 +10,10 @@ process.env.APP_USER = process.env.APP_USER || "admin";
 process.env.AUTO_ARCHIVE_ON_NO_LINKS = "true";
 process.env.PUBLIC_BASE_URL = "http://localhost";
 process.env.DISABLE_BACKGROUND_JOBS = "true";
+process.env.BULLMQ_ENABLED = "false";
+process.env.DB_MODE = "json";
+process.env.DATABASE_URL = "";
+process.env.JSON_FALLBACK_ENABLED = "true";
 
 const appUsersPath = path.join(__dirname, "..", "data", "app-users.json");
 
