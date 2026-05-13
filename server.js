@@ -6891,6 +6891,15 @@ function publicLinkAuditEntry(entry = {}) {
   const details = entry.details || {};
   const action = cleanText(entry.action || "");
   const productIds = auditEntryProductIds(entry);
+  const links = Array.isArray(details.links)
+    ? details.links.map((link) => ({
+        article: cleanText(link.article || ""),
+        supplierName: cleanText(link.supplierName || ""),
+        partnerId: cleanText(link.partnerId || ""),
+        priceCurrency: cleanText(link.priceCurrency || ""),
+        keyword: cleanText(link.keyword || ""),
+      })).filter((link) => link.article || link.supplierName || link.partnerId)
+    : [];
   return {
     at: entry.at || null,
     user: entry.user || "system",
@@ -6898,10 +6907,11 @@ function publicLinkAuditEntry(entry = {}) {
     productIds,
     offerId: details.offerId || "",
     name: details.name || "",
-    article: details.article || details.links?.[0]?.article || "",
-    supplierName: details.supplierName || details.links?.[0]?.supplierName || "",
+    article: details.article || links[0]?.article || "",
+    supplierName: details.supplierName || links[0]?.supplierName || "",
     linkId: details.linkId || "",
-    linksCount: Array.isArray(details.links) ? details.links.length : null,
+    links,
+    linksCount: links.length || null,
   };
 }
 

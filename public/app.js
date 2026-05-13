@@ -2028,10 +2028,17 @@ function linkAuditActionLabel(action) {
 function renderLinkAuditRows(rows = []) {
   if (!rows.length) return '<div class="empty-mini">История привязок появится после первого изменения.</div>';
   return rows.map((entry) => {
+    const linkList = Array.isArray(entry.links) && entry.links.length
+      ? entry.links
+      : [{ article: entry.article || "", supplierName: entry.supplierName || "" }];
+    const linkPreview = linkList
+      .filter((link) => link.article || link.supplierName)
+      .slice(0, 3)
+      .map((link) => [link.article || "", link.supplierName || ""].filter(Boolean).join(" / "));
+    const moreCount = Math.max(0, linkList.length - linkPreview.length);
     const meta = [
-      entry.article || "",
-      entry.supplierName || "",
-      entry.linksCount ? `${formatNumber(entry.linksCount)} шт.` : "",
+      ...linkPreview,
+      moreCount ? `ещё ${formatNumber(moreCount)}` : "",
     ].filter(Boolean).join(" · ");
     return `
       <div class="history-row">
