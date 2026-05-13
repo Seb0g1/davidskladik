@@ -1132,6 +1132,21 @@ test("automation ignores products without links", () => {
   assert.equal(toArchive.length, 0);
 });
 
+test("targeted automation can process a product after its last link is removed", () => {
+  const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates([
+    {
+      id: "nolinks-targeted",
+      hasLinks: false,
+      selectedSupplier: null,
+      noSupplierAutomation: {},
+      marketplaceState: { code: "active", stock: 3 },
+    },
+  ], { includeNoLinks: true });
+  assert.equal(toZeroStock.length, 1);
+  assert.equal(toArchive.length, 1);
+  assert.equal(toZeroStock[0].id, "nolinks-targeted");
+});
+
 test("automation queues linked product for stock=0 when supplier disappeared", () => {
   const { toZeroStock } = pickNoSupplierAutomationCandidates([
     { id: "linked-no-supplier", hasLinks: true, selectedSupplier: null, noSupplierAutomation: {}, marketplaceState: { code: "active" } },

@@ -8404,8 +8404,19 @@ async function processMarketplaceJob(name, data = {}) {
     });
   }
   if (name === "no-supplier-automation") {
+    const productIds = Array.isArray(data.productIds)
+      ? data.productIds.map((id) => String(id || "").trim()).filter(Boolean)
+      : [];
+    if (productIds.length) {
+      const products = await buildFreshWarehouseProducts(productIds);
+      return runNoSupplierMarketplaceAutomation({ products }, {
+        productIds,
+        includeNoLinks: true,
+        source: "targeted",
+      });
+    }
     const preview = await buildWarehouseView({ sync: true });
-    return runNoSupplierMarketplaceAutomation(preview);
+    return runNoSupplierMarketplaceAutomation(preview, { source: "full_sync" });
   }
   if (name === "supplier-recovery-automation") {
     const preview = await buildWarehouseView({ sync: false });
@@ -9264,15 +9275,19 @@ function marketplaceHasPositiveStock(product = {}) {
     .some((warehouse) => Number(warehouse.stock || warehouse.present || 0) > 0);
 }
 
-function pickNoSupplierAutomationCandidates(products = []) {
+function pickNoSupplierAutomationCandidates(products = [], options = {}) {
   const list = Array.isArray(products) ? products : [];
   const linkedNoSupplier = list.filter((product) => product.hasLinks && !product.selectedSupplier);
+  const noLinkProducts = options.includeNoLinks
+    ? list.filter((product) => !product.hasLinks)
+    : [];
+  const noSupplierProducts = [...linkedNoSupplier, ...noLinkProducts];
   return {
     toZeroStock: autoZeroStockOnNoSupplier
-      ? linkedNoSupplier.filter((product) => !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product))
+      ? noSupplierProducts.filter((product) => !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product))
       : [],
     toArchive: autoArchiveOnNoLinks
-      ? linkedNoSupplier.filter(
+      ? noSupplierProducts.filter(
           (product) =>
             !product.noSupplierAutomation?.archivedAt
             && product.marketplaceState?.code !== "archived",
@@ -9296,13 +9311,46 @@ function pickSupplierRecoveryCandidates(products = [], { productIds } = {}) {
   });
 }
 
-async function runNoSupplierMarketplaceAutomation(preview) {
+function summarizeNoSupplierAutomationProducts(products = [], actions = []) {
+  const actionsByProduct = new Map();
+  for (const action of actions) {
+    if (!action?.id) continue;
+    if (!actionsByProduct.has(action.id)) actionsByProduct.set(action.id, []);
+    actionsByProduct.get(action.id).push(action);
+  }
+  return products.map((product) => {
+    const productActions = actionsByProduct.get(product.id) || [];
+    const failed = productActions.find((action) => !action.ok);
+    return {
+      id: product.id,
+      offerId: product.offerId || "",
+      hasLinks: Boolean(product.hasLinks),
+      status: failed ? "error" : (productActions.length ? "processed" : "no_action"),
+      actions: productActions.map((action) => action.type),
+      error: failed?.error || null,
+    };
+  });
+}
+
+async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
   const products = Array.isArray(preview?.products) ? preview.products : [];
   const now = new Date().toISOString();
-  const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates(products);
+  const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates(products, {
+    includeNoLinks: Boolean(options.includeNoLinks),
+  });
+  const source = options.source || (Array.isArray(options.productIds) && options.productIds.length ? "targeted" : "full");
 
   if (!toZeroStock.length && !toArchive.length) {
-    return { zeroStockSent: 0, archived: 0, errors: [] };
+    const productStatuses = summarizeNoSupplierAutomationProducts(products, []);
+    logger.info("no-supplier automation complete", {
+      source,
+      products: products.length,
+      zeroStockSent: 0,
+      archived: 0,
+      errors: 0,
+      statuses: productStatuses.slice(0, 10),
+    });
+    return { zeroStockSent: 0, archived: 0, errors: [], productStatuses };
   }
 
   const stockActions = await sendZeroStocksToMarketplace(toZeroStock);
@@ -9314,7 +9362,10 @@ async function runNoSupplierMarketplaceAutomation(preview) {
   }
   const archiveActions = await archiveProductsOnMarketplaces(Array.from(archiveMap.values()));
   const allActions = [...stockActions, ...archiveActions];
-  if (!allActions.length) return { zeroStockSent: 0, archived: 0, errors: [] };
+  if (!allActions.length) {
+    const productStatuses = summarizeNoSupplierAutomationProducts(products, []);
+    return { zeroStockSent: 0, archived: 0, errors: [], productStatuses };
+  }
 
   const warehouse = await readWarehouse();
   for (const action of allActions) {
@@ -9327,10 +9378,22 @@ async function runNoSupplierMarketplaceAutomation(preview) {
   }
   await writeWarehouse(warehouse);
 
+  const errors = allActions.filter((item) => !item.ok).map((item) => ({ id: item.id, type: item.type, error: item.error }));
+  const productStatuses = summarizeNoSupplierAutomationProducts(products, allActions);
+  logger.info("no-supplier automation complete", {
+    source,
+    products: products.length,
+    zeroStockSent: stockActions.filter((item) => item.ok).length,
+    archived: archiveActions.filter((item) => item.ok).length,
+    errors: errors.length,
+    statuses: productStatuses.slice(0, 10),
+  });
+
   return {
     zeroStockSent: stockActions.filter((item) => item.ok).length,
     archived: archiveActions.filter((item) => item.ok).length,
-    errors: allActions.filter((item) => !item.ok).map((item) => ({ id: item.id, type: item.type, error: item.error })),
+    errors,
+    productStatuses,
   };
 }
 
