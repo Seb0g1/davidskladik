@@ -4732,36 +4732,73 @@ async function readWarehouse() {
   }
 }
 
-async function writeWarehouse(warehouse) {
+async function writeWarehouseJsonPayload(payload) {
+  await fs.mkdir(dataDir, { recursive: true });
+  const temporaryPath = `${warehousePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(payload), "utf8");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      await fs.rename(temporaryPath, warehousePath);
+      break;
+    } catch (error) {
+      if (attempt === 4 || !["EPERM", "EBUSY", "EACCES"].includes(error.code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
+    }
+  }
+}
+
+function normalizeWarehousePayload(warehouse) {
+  return {
+    createdAt: warehouse.createdAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    products: Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [],
+    suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
+  };
+}
+
+async function writeWarehouse(warehouse, { writePostgres = true } = {}) {
   invalidateWarehouseViewCache();
   warehouseWritePromise = warehouseWritePromise.then(async () => {
-    await fs.mkdir(dataDir, { recursive: true });
-    const payload = {
-      createdAt: warehouse.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      products: Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [],
-      suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
-    };
+    const payload = normalizeWarehousePayload(warehouse);
     warehouseMemoryCache = payload;
-    if (shouldUsePostgresStorage()) {
+    if (writePostgres && shouldUsePostgresStorage()) {
       scheduleWarehousePostgresWrite(getPrisma(), payload);
-    } else {
+    } else if (!shouldUsePostgresStorage()) {
       refreshWarehouseHashCache(payload);
     }
-    const temporaryPath = `${warehousePath}.${process.pid}.${Date.now()}.tmp`;
-    await fs.writeFile(temporaryPath, JSON.stringify(payload), "utf8");
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      try {
-        await fs.rename(temporaryPath, warehousePath);
-        break;
-      } catch (error) {
-        if (attempt === 4 || !["EPERM", "EBUSY", "EACCES"].includes(error.code)) throw error;
-        await new Promise((resolve) => setTimeout(resolve, 80 * (attempt + 1)));
-      }
-    }
+    await writeWarehouseJsonPayload(payload);
     return payload;
   });
   return warehouseWritePromise;
+}
+
+async function writeWarehouseProductPatch(products = [], { reason = "warehouse_product_patch" } = {}) {
+  const normalizedProducts = (Array.isArray(products) ? products : [products])
+    .filter((product) => product && product.id)
+    .map(normalizeWarehouseProduct);
+  if (!normalizedProducts.length) return null;
+  invalidateWarehouseViewCache();
+  const warehouse = await readWarehouse();
+  const byId = new Map(normalizedProducts.map((product) => [String(product.id), product]));
+  let changed = 0;
+  warehouse.products = (warehouse.products || []).map((product) => {
+    const replacement = byId.get(String(product.id));
+    if (!replacement) return product;
+    changed += 1;
+    return replacement;
+  });
+  if (!changed) return warehouseMemoryCache || warehouse;
+  const payload = normalizeWarehousePayload(warehouse);
+  warehouseMemoryCache = payload;
+  if (shouldUsePostgresStorage()) {
+    await replaceProductLinksInPostgres(getPrisma(), normalizedProducts);
+  } else {
+    refreshWarehouseHashCache(payload);
+  }
+  writeWarehouse(payload, { writePostgres: false }).catch((error) => {
+    logger.warn("warehouse product patch JSON fallback write failed", { reason, detail: error?.message || String(error) });
+  });
+  return payload;
 }
 
 function writeWarehouseInBackground(warehouse, reason = "warehouse_background_write") {
@@ -9503,6 +9540,7 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
   }
 
   const warehouse = await readWarehouse();
+  const changedProducts = [];
   for (const action of allActions) {
     const product = warehouse.products.find((item) => item.id === action.id);
     if (!product) continue;
@@ -9510,8 +9548,14 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     if (action.ok && action.type === "zero_stock") product.noSupplierAutomation.stockZeroAt = now;
     if (action.ok && action.type === "archive") product.noSupplierAutomation.archivedAt = now;
     product.noSupplierAutomation.lastError = action.ok ? null : action.error;
+    product.updatedAt = now;
+    changedProducts.push(product);
   }
-  await writeWarehouse(warehouse);
+  if (source === "targeted" && changedProducts.length) {
+    await writeWarehouseProductPatch(changedProducts, { reason: "no_supplier_automation" });
+  } else {
+    await writeWarehouse(warehouse);
+  }
 
   const errors = allActions.filter((item) => !item.ok).map((item) => ({ id: item.id, type: item.type, error: item.error }));
   const productStatuses = summarizeNoSupplierAutomationProducts(products, allActions);
