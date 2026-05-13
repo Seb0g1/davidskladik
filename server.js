@@ -156,6 +156,8 @@ let warehouseWritePromise = Promise.resolve();
 let warehouseMemoryCache = null;
 let warehousePostgresHashCache = new Map();
 let warehousePostgresUpdatedAtCache = new Map();
+let warehousePostgresLinkBackfillPromise = null;
+let warehousePostgresLinkBackfillDone = false;
 let priceMasterSnapshotMemoryCache = null;
 let priceMasterArticleIndexCache = null;
 const warehouseViewCache = new Map();
@@ -3984,7 +3986,7 @@ function linkToPostgresData(product, link = {}) {
 
 function productFromPostgres(row = {}) {
   const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
-  const links = (row.links || []).map((link) => normalizeWarehouseLink({
+  const postgresLinks = (row.links || []).map((link) => normalizeWarehouseLink({
     ...(link.raw && typeof link.raw === "object" ? link.raw : {}),
     id: link.id,
     article: link.supplierArticle,
@@ -3994,6 +3996,8 @@ function productFromPostgres(row = {}) {
     keyword: link.keyword,
     createdAt: link.createdAt ? link.createdAt.toISOString() : undefined,
   }));
+  const rawLinks = Array.isArray(raw.links) ? raw.links.map(normalizeWarehouseLink) : [];
+  const links = postgresLinks.length ? postgresLinks : rawLinks;
   return normalizeWarehouseProduct({
     ...raw,
     id: row.id,
@@ -4009,6 +4013,44 @@ function productFromPostgres(row = {}) {
     createdAt: row.createdAt ? row.createdAt.toISOString() : raw.createdAt,
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : raw.updatedAt,
   });
+}
+
+async function ensureWarehousePostgresLinksBackfilled(prisma) {
+  if (warehousePostgresLinkBackfillDone) return { created: 0, skipped: true };
+  if (warehousePostgresLinkBackfillPromise) return warehousePostgresLinkBackfillPromise;
+  warehousePostgresLinkBackfillPromise = (async () => {
+    const [products, existingLinks] = await Promise.all([
+      prisma.warehouseProduct.findMany({ select: { id: true, raw: true } }),
+      prisma.productLink.findMany({ select: { productId: true } }),
+    ]);
+    const productsWithLinks = new Set(existingLinks.map((link) => link.productId).filter(Boolean));
+    const rows = [];
+    for (const product of products) {
+      if (productsWithLinks.has(product.id)) continue;
+      const raw = product.raw && typeof product.raw === "object" && !Array.isArray(product.raw) ? product.raw : {};
+      const rawLinks = Array.isArray(raw.links) ? raw.links : [];
+      for (const rawLink of rawLinks) {
+        const row = linkToPostgresData({ id: product.id }, rawLink);
+        if (row.supplierArticle) rows.push(row);
+      }
+    }
+    let created = 0;
+    const chunkSize = 1000;
+    for (let index = 0; index < rows.length; index += chunkSize) {
+      const batch = rows.slice(index, index + chunkSize);
+      if (!batch.length) continue;
+      const result = await prisma.productLink.createMany({ data: batch, skipDuplicates: true });
+      created += result.count || 0;
+    }
+    warehousePostgresLinkBackfillDone = true;
+    if (created) logger.info("warehouse postgres links backfilled from raw", { created });
+    return { created, skipped: false };
+  })().catch((error) => {
+    warehousePostgresLinkBackfillPromise = null;
+    logger.warn("warehouse postgres links backfill failed", { detail: error?.message || String(error) });
+    return { created: 0, skipped: false, error: error?.message || String(error) };
+  });
+  return warehousePostgresLinkBackfillPromise;
 }
 
 function supplierFromPostgres(row = {}) {
@@ -4037,6 +4079,7 @@ function refreshWarehouseHashCache(warehouse = {}) {
 }
 
 async function readWarehouseFromPostgres(prisma) {
+  await ensureWarehousePostgresLinksBackfilled(prisma);
   const [products, suppliers] = await Promise.all([
     prisma.warehouseProduct.findMany({
       include: { links: true },
@@ -5401,6 +5444,7 @@ async function buildFastWarehousePageFromPostgres({
   const prisma = getPrisma();
   if (!prisma) return null;
   pageTrace("postgres:start", traceStartedAt);
+  await ensureWarehousePostgresLinksBackfilled(prisma);
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
   const where = warehousePagePostgresWhere(filters);
@@ -9218,6 +9262,7 @@ module.exports = {
   resolveWarehouseBrand,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
+  productFromPostgres,
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,

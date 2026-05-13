@@ -49,6 +49,7 @@ const {
   pickWarehouseSupplier,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
+  productFromPostgres,
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
@@ -167,6 +168,34 @@ test("price history API is available with JSON fallback", async () => {
     .expect(200);
   assert.equal(res.body.ok, true);
   assert.equal(Array.isArray(res.body.items), true);
+});
+
+test("postgres warehouse product falls back to raw links when relation links are empty", () => {
+  const product = productFromPostgres({
+    id: "pg-link-fallback",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-RAW-LINK",
+    name: "Raw link product",
+    raw: {
+      links: [
+        {
+          id: "raw-link-1",
+          article: "PM-123",
+          supplierName: "Supplier A",
+          partnerId: "77",
+          priceCurrency: "RUB",
+        },
+      ],
+    },
+    links: [],
+    createdAt: new Date("2026-05-13T00:00:00.000Z"),
+    updatedAt: new Date("2026-05-13T00:00:00.000Z"),
+  });
+  assert.equal(product.links.length, 1);
+  assert.equal(product.links[0].article, "PM-123");
+  assert.equal(product.links[0].supplierName, "Supplier A");
+  assert.equal(product.links[0].priceCurrency, "RUB");
 });
 
 test("price retry queue recovers from an empty file", async () => {
