@@ -4097,17 +4097,47 @@ async function ensureWarehousePostgresLinksBackfilled(prisma) {
   warehousePostgresLinkBackfillPromise = (async () => {
     const [products, existingLinks] = await Promise.all([
       prisma.warehouseProduct.findMany({ select: { id: true, raw: true } }),
-      prisma.productLink.findMany({ select: { productId: true } }),
+      prisma.productLink.findMany({
+        select: {
+          productId: true,
+          supplierArticle: true,
+          supplierName: true,
+          partnerId: true,
+          keyword: true,
+          priceCurrency: true,
+        },
+      }),
     ]);
-    const productsWithLinks = new Set(existingLinks.map((link) => link.productId).filter(Boolean));
+    const existingByProduct = new Map();
+    for (const link of existingLinks) {
+      if (!link.productId) continue;
+      if (!existingByProduct.has(link.productId)) existingByProduct.set(link.productId, new Set());
+      existingByProduct.get(link.productId).add(warehouseLinkIdentityKey({
+        article: link.supplierArticle,
+        supplierName: link.supplierName,
+        partnerId: link.partnerId,
+        keyword: link.keyword,
+        priceCurrency: link.priceCurrency,
+      }));
+    }
     const rows = [];
     for (const product of products) {
-      if (productsWithLinks.has(product.id)) continue;
       const raw = product.raw && typeof product.raw === "object" && !Array.isArray(product.raw) ? product.raw : {};
       const rawLinks = Array.isArray(raw.links) ? raw.links : [];
+      const existingKeys = existingByProduct.get(product.id) || new Set();
       for (const rawLink of rawLinks) {
         const row = linkToPostgresData({ id: product.id }, rawLink);
-        if (row.supplierArticle) rows.push(row);
+        if (!row.supplierArticle) continue;
+        const identity = warehouseLinkIdentityKey({
+          article: row.supplierArticle,
+          supplierName: row.supplierName,
+          partnerId: row.partnerId,
+          keyword: row.keyword,
+          priceCurrency: row.priceCurrency,
+        });
+        if (existingKeys.has(identity)) continue;
+        existingKeys.add(identity);
+        rows.push(row);
       }
     }
     let created = 0;
