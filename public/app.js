@@ -17,6 +17,7 @@ const state = {
   selectedWarehouseGroupKey: null,
   selectedWarehouseDetailGroup: null,
   selectedWarehouseDetailSignature: "",
+  selectedWarehouseUpdateNotice: null,
   warehouseMarketplace: "all",
   ozonStateFilter: "all",
   warehouseAutoOnly: false,
@@ -280,6 +281,7 @@ function setSelectedWarehouseGroupKey(groupKey, { manual = false } = {}) {
   const nextKey = groupKey ? String(groupKey) : null;
   if (manual && state.selectedWarehouseGroupKey !== nextKey) {
     state.warehouseSelectionVersion += 1;
+    state.selectedWarehouseUpdateNotice = null;
   }
   state.selectedWarehouseGroupKey = nextKey;
 }
@@ -2103,6 +2105,9 @@ function renderWarehouseDetail(group) {
   const pendingLinks = getPendingLinkDrafts(linkDraftKeyValue);
   const ozonForAi = ozonVariant || (product.marketplace === "ozon" ? product : null);
   const localPriceHistoryRows = normalizeDetailPriceHistoryEntries(variants);
+  const updateNotice = state.selectedWarehouseUpdateNotice?.groupKey === group.key
+    ? state.selectedWarehouseUpdateNotice
+    : null;
 
   elements.warehouseDetail.innerHTML = `
     <div class="detail-head">
@@ -2122,6 +2127,15 @@ function renderWarehouseDetail(group) {
       <button class="secondary-button compact-button send-product-price" type="button" data-product-ids="${escapeHtml(groupProductIds.join(","))}">Отправить цену</button>
       <a class="secondary-link-button compact-button" href="/product.html?group=${encodeURIComponent(group.key || productGroupKey(product))}">Страница</a>
     </div>
+
+    ${
+      updateNotice
+        ? `<div class="detail-update-notice">
+            <strong>${escapeHtml(updateNotice.title || "Карточка обновлена")}</strong>
+            <span>${escapeHtml(updateNotice.text || "Данные обновились в фоне. Выбранная карточка сохранена.")}</span>
+          </div>`
+        : ""
+    }
 
     <div class="detail-media-wrap">
       <div class="detail-media">
@@ -3010,6 +3024,7 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
     const restorePage = Math.max(1, Number(state.warehousePage || 1));
     const selectedKey = state.selectedWarehouseGroupKey;
     const selectionVersion = state.warehouseSelectionVersion;
+    const selectedSignature = state.selectedWarehouseDetailSignature;
     state.warehouseRestorePage = restorePage;
     await Promise.all([
       loadWarehouse(false, false, { silent: true }),
@@ -3022,8 +3037,27 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
       if (group) {
         setSelectedWarehouseGroupKey(selectedKey);
         state.selectedWarehouseDetailGroup = group;
-        renderWarehouseDetailIfChanged(group);
+        const nextSignature = warehouseDetailSignature(group);
+        if (selectedSignature && nextSignature && selectedSignature !== nextSignature) {
+          state.selectedWarehouseUpdateNotice = {
+            groupKey: selectedKey,
+            title: "Карточка обновлена",
+            text: "Данные изменились в фоне. Выбранная карточка оставлена на месте.",
+            at: new Date().toISOString(),
+          };
+          renderWarehouseDetail(group);
+        } else {
+          renderWarehouseDetailIfChanged(group);
+        }
         renderWarehouseCards();
+      } else if (state.selectedWarehouseDetailGroup?.key === selectedKey) {
+        state.selectedWarehouseUpdateNotice = {
+          groupKey: selectedKey,
+          title: "Карточка вне текущего фильтра",
+          text: "Она могла измениться или уйти из фильтра. Выбранная карточка не переключена.",
+          at: new Date().toISOString(),
+        };
+        renderWarehouseDetail(state.selectedWarehouseDetailGroup);
       }
     }
     restoreWindowScroll(scrollTop, { startedAt: refreshStartedAt });

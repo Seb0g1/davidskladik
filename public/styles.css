@@ -1471,6 +1471,27 @@ td {
   line-height: 1.2;
 }
 
+.detail-update-notice {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(59, 130, 246, 0.28);
+  border-radius: 8px;
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--ink);
+}
+
+.detail-update-notice strong {
+  font-size: 13px;
+}
+
+.detail-update-notice span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .detail-title-row {
   display: flex;
   flex-direction: column;
