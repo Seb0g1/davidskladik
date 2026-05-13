@@ -259,6 +259,47 @@ test("marketplace sync merge preserves links when Ozon target changes to account
   assert.equal(merged[0].marketplaceState.code, "active");
 });
 
+test("marketplace sync merge keeps known Ozon state and price on partial import", () => {
+  const merged = mergeProducts(
+    [
+      {
+        id: "local-active-product",
+        marketplace: "ozon",
+        target: "ozon",
+        offerId: "OZ-PARTIAL",
+        productId: "777",
+        name: "Active product",
+        marketplacePrice: 12345,
+        marketplaceMinPrice: 10000,
+        marketplaceState: { code: "active", label: "Активен Ozon", stock: 3, present: 3 },
+        links: [{ id: "link-1", article: "PM-PARTIAL", supplierName: "Supplier A" }],
+      },
+    ],
+    [
+      {
+        id: "imported-partial-product",
+        marketplace: "ozon",
+        target: "account-1",
+        offerId: "OZ-PARTIAL",
+        productId: "777",
+        name: "Active product from Ozon",
+        marketplacePrice: null,
+        marketplaceMinPrice: null,
+        marketplaceState: { code: "out_of_stock", label: "Нет в наличии Ozon", stock: 0, partial: true },
+      },
+    ],
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].id, "local-active-product");
+  assert.equal(merged[0].target, "account-1");
+  assert.equal(merged[0].marketplaceState.code, "active");
+  assert.equal(merged[0].marketplaceState.stock, 3);
+  assert.equal(merged[0].marketplacePrice, 12345);
+  assert.equal(merged[0].marketplaceMinPrice, 10000);
+  assert.equal(merged[0].links.length, 1);
+});
+
 test("price retry queue recovers from an empty file", async () => {
   const backup = await backupFile(priceRetryQueuePath);
   try {

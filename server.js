@@ -1565,6 +1565,7 @@ function normalizeMarketplaceState(input = {}) {
     warehouses,
     archived: input.archived !== undefined ? Boolean(input.archived) : undefined,
     hasStocks: input.hasStocks !== undefined ? Boolean(input.hasStocks) : undefined,
+    partial: input.partial || input.partialSync || input.isPartial ? true : undefined,
   });
 }
 
@@ -4374,10 +4375,22 @@ function mergeProducts(existingProducts, importedProducts) {
     }
     const current = matchedKey ? map.get(matchedKey) : null;
     if (matchedKey && matchedKey !== exactKey) map.delete(matchedKey);
+    const currentState = current?.marketplaceState || {};
+    const importedState = importedNormalized.marketplaceState || {};
+    const preserveCurrentState = Boolean(
+      currentState.code
+        && currentState.code !== "unknown"
+        && (importedState.partial || importedState.code === "unknown"),
+    );
+    const preserveCurrentPrice = Boolean(current?.marketplacePrice && !importedNormalized.marketplacePrice);
+    const preserveCurrentMinPrice = Boolean(current?.marketplaceMinPrice && !importedNormalized.marketplaceMinPrice);
     const merged = normalizeWarehouseProduct({
       ...current,
       ...importedNormalized,
       id: current?.id || importedNormalized.id,
+      marketplacePrice: preserveCurrentPrice ? current.marketplacePrice : importedNormalized.marketplacePrice,
+      marketplaceMinPrice: preserveCurrentMinPrice ? current.marketplaceMinPrice : importedNormalized.marketplaceMinPrice,
+      marketplaceState: preserveCurrentState ? currentState : importedState,
       keyword: current?.keyword || importedNormalized.keyword,
       markup: current?.markup || importedNormalized.markup,
       autoPriceEnabled: current?.autoPriceEnabled !== undefined ? current.autoPriceEnabled : importedNormalized.autoPriceEnabled,
@@ -4430,6 +4443,9 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
       }
 
       imported.push(...products.map((product) => {
+        const hasInfo = infoMap.has(product.offer_id);
+        const hasStock = stockMap.has(product.offer_id);
+        const hasPrice = priceMap.has(product.offer_id);
         const info = infoMap.get(product.offer_id) || {};
         const stockInfo = stockMap.get(product.offer_id) || {};
         const priceInfo = priceMap.get(product.offer_id) || {};
@@ -4440,6 +4456,8 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
         const sku = product.sku || info.sku || sourceSku || info.fbo_sku || info.fbs_sku;
         const primaryImage = firstImageUrl(info.primary_image || info.primaryImage || info.images || info.images360 || info.color_image);
         const productUrl = info.product_url || info.url || (sku ? `https://www.ozon.ru/product/${encodeURIComponent(String(sku))}/` : "");
+        const marketplaceState = pickOzonState(product, info, stockInfo);
+        if (!hasInfo && !hasStock) marketplaceState.partial = true;
         return normalizeWarehouseProduct({
           target: account.id,
           marketplace: "ozon",
@@ -4452,7 +4470,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
           marketplacePrice: cabinetPrice,
           marketplaceMinPrice: priceDetails.minPrice || null,
           name: info.name || product.name || product.offer_id || `Ozon ${product.product_id}`,
-          marketplaceState: pickOzonState(product, info, stockInfo),
+          marketplaceState,
           ozon: {
             offerId: product.offer_id,
             vendor: cleanText(info.brand || info.vendor || ""),
@@ -4460,12 +4478,12 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
             description: info.description || "",
             categoryId: info.description_category_id || info.category_id,
             typeId: info.type_id || info.description_type_id,
-            price: cabinetPrice || undefined,
-            minPrice: priceDetails.minPrice || undefined,
-            oldPrice: priceDetails.oldPrice || parseMoneyValue(info.old_price) || undefined,
-            marketingSellerPrice: priceDetails.marketingSellerPrice || undefined,
-            marketingPrice: priceDetails.marketingPrice || undefined,
-            retailPrice: priceDetails.retailPrice || undefined,
+            price: hasPrice ? cabinetPrice || undefined : undefined,
+            minPrice: hasPrice ? priceDetails.minPrice || undefined : undefined,
+            oldPrice: hasPrice ? priceDetails.oldPrice || parseMoneyValue(info.old_price) || undefined : undefined,
+            marketingSellerPrice: hasPrice ? priceDetails.marketingSellerPrice || undefined : undefined,
+            marketingPrice: hasPrice ? priceDetails.marketingPrice || undefined : undefined,
+            retailPrice: hasPrice ? priceDetails.retailPrice || undefined : undefined,
             barcode: (info.barcodes || [])[0] || "",
             barcodes: info.barcodes || [],
             primaryImage,
@@ -5636,7 +5654,7 @@ async function buildFastWarehousePage({
     withoutSupplier: enabledProducts.filter((product) => !(product.links || []).length).length,
     ozonArchived: enabledProducts.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.archived).length,
     ozonInactive: enabledProducts.filter((product) => product.marketplace === "ozon" && /inactive/i.test(cleanText(product.marketplaceState?.code))).length,
-    ozonOutOfStock: enabledProducts.filter((product) => product.marketplace === "ozon" && Number(product.marketplaceState?.stock ?? product.targetStock ?? 0) <= 0).length,
+    ozonOutOfStock: enabledProducts.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "out_of_stock").length,
     usdRate: rate,
     priceMaster: await getPriceMasterSnapshotMetaFast(),
     sourceError: "",
