@@ -16,6 +16,7 @@ const state = {
   selectedWarehouseProductId: null,
   selectedWarehouseGroupKey: null,
   selectedWarehouseDetailGroup: null,
+  selectedWarehouseDetailSignature: "",
   warehouseMarketplace: "all",
   ozonStateFilter: "all",
   warehouseAutoOnly: false,
@@ -1356,10 +1357,9 @@ function applyWarehouseFilters() {
   }
 
   renderWarehouseCards();
-  renderWarehouseDetail(
-    groups.find((group) => group.key === state.selectedWarehouseGroupKey)
-      || (state.selectedWarehouseDetailGroup?.key === state.selectedWarehouseGroupKey ? state.selectedWarehouseDetailGroup : null),
-  );
+  const detailGroup = groups.find((group) => group.key === state.selectedWarehouseGroupKey)
+    || (state.selectedWarehouseDetailGroup?.key === state.selectedWarehouseGroupKey ? state.selectedWarehouseDetailGroup : null);
+  renderWarehouseDetailIfChanged(detailGroup);
   syncWarehouseStateToUrl();
 }
 
@@ -1628,6 +1628,39 @@ function refreshSelectedDetailForProductIds(productIds = []) {
     .find((item) => item.key === state.selectedWarehouseGroupKey);
   if (!group || !(group.productIds || []).some((id) => ids.has(String(id)))) return false;
   state.selectedWarehouseDetailGroup = group;
+  renderWarehouseDetail(group);
+  return true;
+}
+
+function warehouseDetailSignature(group) {
+  if (!group) return "";
+  const variants = group.variants || (group.primary ? [group.primary] : [group]);
+  return JSON.stringify({
+    key: group.key || "",
+    ids: (group.productIds || variants.map((item) => item.id)).map(String).sort(),
+    updated: variants.map((item) => [
+      item.id,
+      item.updatedAt || "",
+      item.currentPrice ?? "",
+      item.nextPrice ?? "",
+      item.targetStock ?? "",
+      item.status || "",
+      item.lastOzonPriceSend?.status || "",
+      item.lastOzonPriceSend?.at || "",
+      (item.links || []).map((link) => [link.id, link.article, link.partnerId, link.supplierName, link.priceCurrency].join(":")).sort().join("|"),
+      item.selectedSupplier?.article || "",
+      item.selectedSupplier?.partnerId || "",
+      item.selectedSupplier?.price || "",
+    ]),
+  });
+}
+
+function renderWarehouseDetailIfChanged(group) {
+  const signature = warehouseDetailSignature(group);
+  if (signature && signature === state.selectedWarehouseDetailSignature) {
+    state.selectedWarehouseDetailGroup = group;
+    return false;
+  }
   renderWarehouseDetail(group);
   return true;
 }
@@ -1986,6 +2019,7 @@ async function loadDetailPriceHistory(group) {
 
 function renderWarehouseDetail(group) {
   if (!group) {
+    state.selectedWarehouseDetailSignature = "";
     elements.warehouseDetail.innerHTML = `
       <div class="detail-empty">
         <strong>Выберите товар</strong>
@@ -1995,6 +2029,7 @@ function renderWarehouseDetail(group) {
     return;
   }
   state.selectedWarehouseDetailGroup = group;
+  state.selectedWarehouseDetailSignature = warehouseDetailSignature(group);
 
   const product = group.primary || group;
   const variants = group.variants || [product];
@@ -2920,7 +2955,7 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
       if (group) {
         setSelectedWarehouseGroupKey(selectedKey);
         state.selectedWarehouseDetailGroup = group;
-        renderWarehouseDetail(group);
+        renderWarehouseDetailIfChanged(group);
         renderWarehouseCards();
       }
     }
