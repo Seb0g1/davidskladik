@@ -2330,11 +2330,13 @@ function getOzonOfferMapValue(map, offerId) {
   return map.get(exact) || map.get(ozonOfferMapKey(exact));
 }
 
-async function getOzonProductInfoMap(offerIds, account = null) {
+async function getOzonProductInfoMap(offerIds, account = null, options = {}) {
   const map = new Map();
   const ids = offerIds.map((offerId) => String(offerId || "").trim()).filter(Boolean);
+  const chunks = chunkArray(ids, 100);
 
-  for (const chunk of chunkArray(ids, 100)) {
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
     const data = await ozonRequest("/v3/product/info/list", {
       offer_id: chunk,
     }, account);
@@ -2343,18 +2345,25 @@ async function getOzonProductInfoMap(offerIds, account = null) {
       const offerId = item.offer_id || item.offerId;
       if (offerId) setOzonOfferMapValue(map, offerId, item);
     }
+    options.onProgress?.({
+      stage: "Детали Ozon",
+      processed: Math.min(ids.length, (index + 1) * 100),
+      total: ids.length,
+    });
   }
 
   return map;
 }
 
-async function getOzonProductInfoMapByProductIds(productIds, account = null) {
+async function getOzonProductInfoMapByProductIds(productIds, account = null, options = {}) {
   const map = new Map();
   const ids = productIds
     .map((productId) => String(productId || "").trim())
     .filter(Boolean);
+  const chunks = chunkArray(ids, 100);
 
-  for (const chunk of chunkArray(ids, 100)) {
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
     const data = await ozonRequest("/v3/product/info/list", {
       product_id: chunk.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
     }, account);
@@ -2365,16 +2374,23 @@ async function getOzonProductInfoMapByProductIds(productIds, account = null) {
       const offerId = item.offer_id || item.offerId;
       if (offerId) setOzonOfferMapValue(map, offerId, item);
     }
+    options.onProgress?.({
+      stage: "Восстановление Ozon по product_id",
+      processed: Math.min(ids.length, (index + 1) * 100),
+      total: ids.length,
+    });
   }
 
   return map;
 }
 
-async function getOzonStockMap(offerIds, account = null) {
+async function getOzonStockMap(offerIds, account = null, options = {}) {
   const map = new Map();
   const ids = offerIds.map((offerId) => String(offerId || "").trim()).filter(Boolean);
+  const chunks = chunkArray(ids, 100);
 
-  for (const chunk of chunkArray(ids, 100)) {
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
     const data = await ozonRequest("/v4/product/info/stocks", {
       filter: { offer_id: chunk, visibility: "ALL" },
       limit: chunk.length,
@@ -2390,6 +2406,11 @@ async function getOzonStockMap(offerIds, account = null) {
       const total = Number.isFinite(Number(item.stock)) ? Number(item.stock) : Math.max(0, present - reserved);
       setOzonOfferMapValue(map, offerId, { ...item, present, reserved, stock: total, warehouses });
     }
+    options.onProgress?.({
+      stage: "Остатки Ozon",
+      processed: Math.min(ids.length, (index + 1) * 100),
+      total: ids.length,
+    });
   }
 
   return map;
@@ -2423,10 +2444,12 @@ function pickOzonState(product = {}, info = {}, stockInfo = {}) {
   return normalizeMarketplaceState({ code: "unknown", label: "Статус Ozon не загружен", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
 }
 
-async function getOzonPriceMap(offerIds, account = null) {
+async function getOzonPriceMap(offerIds, account = null, options = {}) {
   const map = new Map();
+  const chunks = chunkArray(offerIds, 100);
 
-  for (const chunk of chunkArray(offerIds, 100)) {
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
     const data = await ozonRequest("/v5/product/info/prices", {
       filter: { offer_id: chunk, visibility: "ALL" },
       limit: chunk.length,
@@ -2435,6 +2458,11 @@ async function getOzonPriceMap(offerIds, account = null) {
     for (const item of data.items || []) {
       setOzonOfferMapValue(map, item.offer_id, item);
     }
+    options.onProgress?.({
+      stage: "Цены Ozon",
+      processed: Math.min(offerIds.length, (index + 1) * 100),
+      total: offerIds.length,
+    });
   }
 
   return map;
@@ -4726,7 +4754,7 @@ function mergeProducts(existingProducts, importedProducts) {
   return Array.from(map.values()).sort((a, b) => a.targetName.localeCompare(b.targetName) || a.name.localeCompare(b.name));
 }
 
-async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, existingProducts = []) {
+async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, existingProducts = [], options = {}) {
   const accounts = getOzonAccounts().filter((account) => account.clientId && account.apiKey);
   const imported = [];
   const warnings = [];
@@ -4755,12 +4783,41 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
           detailRefresh: infoOfferIds.length,
           detailLimit: infoLimit,
         });
+        options.onProgress?.({
+          percent: 32,
+          stage: "Ozon список",
+          meta: `Ozon вернул ${formatTelegramNumber(products.length)} карточек. Детально обновить: ${formatTelegramNumber(infoOfferIds.length)}.`,
+          processed: products.length,
+          total: products.length,
+        });
         if (infoOfferIds.length) {
-          [infoMap, stockMap, priceMap] = await Promise.all([
-            getOzonProductInfoMap(infoOfferIds, account),
-            getOzonStockMap(infoOfferIds, account),
-            getOzonPriceMap(infoOfferIds, account),
-          ]);
+          infoMap = await getOzonProductInfoMap(infoOfferIds, account, {
+            onProgress: (progress) => options.onProgress?.({
+              percent: 32 + Math.round((progress.processed / Math.max(1, progress.total)) * 16),
+              stage: progress.stage,
+              meta: `Загружаю названия и фото Ozon: ${formatTelegramNumber(progress.processed)} из ${formatTelegramNumber(progress.total)}.`,
+              processed: progress.processed,
+              total: progress.total,
+            }),
+          });
+          stockMap = await getOzonStockMap(infoOfferIds, account, {
+            onProgress: (progress) => options.onProgress?.({
+              percent: 48 + Math.round((progress.processed / Math.max(1, progress.total)) * 12),
+              stage: progress.stage,
+              meta: `Загружаю остатки Ozon: ${formatTelegramNumber(progress.processed)} из ${formatTelegramNumber(progress.total)}.`,
+              processed: progress.processed,
+              total: progress.total,
+            }),
+          });
+          priceMap = await getOzonPriceMap(infoOfferIds, account, {
+            onProgress: (progress) => options.onProgress?.({
+              percent: 60 + Math.round((progress.processed / Math.max(1, progress.total)) * 10),
+              stage: progress.stage,
+              meta: `Загружаю цены Ozon: ${formatTelegramNumber(progress.processed)} из ${formatTelegramNumber(progress.total)}.`,
+              processed: progress.processed,
+              total: progress.total,
+            }),
+          });
           const detailOfferSet = new Set(infoOfferIds.map(ozonOfferMapKey));
           const missingProductIds = products
             .filter((product) => detailOfferSet.has(ozonOfferMapKey(product.offer_id || product.offerId)))
@@ -4768,7 +4825,15 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
             .map((product) => cleanText(product.product_id || product.productId))
             .filter(Boolean);
           if (missingProductIds.length) {
-            const infoByProductId = await getOzonProductInfoMapByProductIds(missingProductIds, account);
+            const infoByProductId = await getOzonProductInfoMapByProductIds(missingProductIds, account, {
+              onProgress: (progress) => options.onProgress?.({
+                percent: 70 + Math.round((progress.processed / Math.max(1, progress.total)) * 4),
+                stage: progress.stage,
+                meta: `Добираю детали Ozon по product_id: ${formatTelegramNumber(progress.processed)} из ${formatTelegramNumber(progress.total)}.`,
+                processed: progress.processed,
+                total: progress.total,
+              }),
+            });
             for (const product of products) {
               const productId = cleanText(product.product_id || product.productId);
               const info = infoByProductId.get(productId);
@@ -4880,11 +4945,11 @@ async function importYandexWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
   return { imported, warnings };
 }
 
-async function syncWarehouseProductsFromMarketplaces(warehouse, limit = Number.POSITIVE_INFINITY) {
+async function syncWarehouseProductsFromMarketplaces(warehouse, limit = Number.POSITIVE_INFINITY, options = {}) {
   const warnings = [];
   let imported = [];
   try {
-    const oz = await importOzonWarehouseProducts(limit, warehouse.products || []);
+    const oz = await importOzonWarehouseProducts(limit, warehouse.products || [], options);
     imported = imported.concat(oz.imported);
     warnings.push(...oz.warnings);
   } catch (error) {
@@ -5431,7 +5496,7 @@ async function getWarehouseMinPriceMaps(products, { refresh = false } = {}) {
   return { map: result, mutated };
 }
 
-async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, limit = Number.POSITIVE_INFINITY, refreshPrices = false } = {}) {
+async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, limit = Number.POSITIVE_INFINITY, refreshPrices = false, onProgress = null } = {}) {
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || (await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);
   let warehouse = await readWarehouse();
@@ -5458,9 +5523,16 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
   }
   let syncWarnings = [];
   if (sync) {
-    const synced = await syncWarehouseProductsFromMarketplaces(warehouse, limit);
+    const synced = await syncWarehouseProductsFromMarketplaces(warehouse, limit, { onProgress });
     warehouse = synced.warehouse;
     syncWarnings = synced.warnings || [];
+    onProgress?.({
+      percent: 76,
+      stage: "Запись склада",
+      meta: `Сохраняю ${formatTelegramNumber(warehouse.products?.length || 0)} карточек склада.`,
+      processed: Number(warehouse.products?.length || 0),
+      total: Number(warehouse.products?.length || 0),
+    });
     await writeWarehouse(warehouse);
     syncWarnings.forEach((detail) => logger.warn("warehouse sync warning", { detail }));
   }
@@ -9513,6 +9585,10 @@ function scheduleTelegramDailyReport() {
 }
 
 async function runAutoSyncCycle(trigger = "auto") {
+  if (manualWarehouseSyncPromise) {
+    logger.info("auto sync skipped: manual warehouse sync running");
+    return { status: "manual_sync_running" };
+  }
   if (autoSyncRunning) return { status: "already_running" };
   autoSyncRunning = true;
   try {
@@ -9572,7 +9648,10 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
     processed: Number(priceMaster?.items || 0),
     total: Number(priceMaster?.items || 0),
   });
-  const warehouse = await buildWarehouseView({ sync: true });
+  const warehouse = await buildWarehouseView({
+    sync: true,
+    onProgress: (progress) => setManualWarehouseSyncProgress(progress),
+  });
   setManualWarehouseSyncProgress({
     percent: 74,
     stage: "Склад",
