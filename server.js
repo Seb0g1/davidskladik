@@ -5190,6 +5190,60 @@ async function enrichWarehouseProducts(productIds = []) {
   return updated;
 }
 
+async function enrichWeakOzonProductsForPage(products = []) {
+  if (process.env.WAREHOUSE_PAGE_AUTO_ENRICH_ENABLED === "false") return products;
+  const limit = Math.max(0, Number(process.env.WAREHOUSE_PAGE_AUTO_ENRICH_LIMIT || 60) || 60);
+  if (!limit) return products;
+  const candidates = (products || [])
+    .filter((product) => product?.marketplace === "ozon" && product.offerId && ozonProductNeedsDetailRefresh(product))
+    .slice(0, limit);
+  if (!candidates.length) return products;
+
+  const updatedById = new Map();
+  for (const account of getOzonAccounts()) {
+    const accountProducts = candidates.filter((product) => matchesOzonTarget(product.target, account.id));
+    if (!accountProducts.length) continue;
+    const offerIds = accountProducts.map((product) => product.offerId);
+    try {
+      const [infoMap, stockMap, priceMap] = await Promise.all([
+        getOzonProductInfoMap(offerIds, account, { continueOnError: true }),
+        getOzonStockMap(offerIds, account, { continueOnError: true }),
+        getOzonPriceMap(offerIds, account, { continueOnError: true }),
+      ]);
+      const missingProductIds = accountProducts
+        .filter((product) => !getOzonOfferMapValue(infoMap, product.offerId))
+        .map((product) => cleanText(product.productId || product.ozon?.productId))
+        .filter(Boolean);
+      if (missingProductIds.length) {
+        const infoByProductId = await getOzonProductInfoMapByProductIds(missingProductIds, account, { continueOnError: true });
+        for (const product of accountProducts) {
+          const info = infoByProductId.get(cleanText(product.productId || product.ozon?.productId));
+          if (info) setOzonOfferMapValue(infoMap, product.offerId || info.offer_id || info.offerId, info);
+        }
+      }
+      for (const product of accountProducts) {
+        const info = getOzonOfferMapValue(infoMap, product.offerId) || {};
+        const stockInfo = getOzonOfferMapValue(stockMap, product.offerId) || {};
+        const priceInfo = getOzonOfferMapValue(priceMap, product.offerId) || {};
+        if (!Object.keys(info).length && !Object.keys(stockInfo).length && !Object.keys(priceInfo).length) continue;
+        updatedById.set(product.id, applyOzonInfoToWarehouseProduct(product, info, account, stockInfo, priceInfo));
+      }
+    } catch (error) {
+      logger.warn("warehouse page Ozon detail auto-enrich failed", { account: account.id, detail: error?.message || String(error) });
+    }
+  }
+
+  if (!updatedById.size) return products;
+  if (shouldUsePostgresStorage()) {
+    try {
+      await writeWarehouseToPostgres(getPrisma(), { products: Array.from(updatedById.values()), suppliers: [] });
+    } catch (error) {
+      logger.warn("warehouse page Ozon detail auto-enrich persist failed", { detail: error?.message || String(error) });
+    }
+  }
+  return products.map((product) => updatedById.get(product.id) || product);
+}
+
 function stoppedSupplierMap(suppliers = []) {
   return new Map(
     suppliers
@@ -6119,7 +6173,7 @@ async function buildFastWarehousePageFromPostgres({
     ? dbRows.map(productFromPostgres).filter((product) => warehousePageProductMatches(product, filters))
     : dbRows.map(productFromPostgres);
   const total = needsDeepBrandFilter ? allProducts.length : dbTotal;
-  const pageProducts = needsDeepBrandFilter ? allProducts.slice(offset, offset + pageSize) : allProducts;
+  const pageProducts = await enrichWeakOzonProductsForPage(needsDeepBrandFilter ? allProducts.slice(offset, offset + pageSize) : allProducts);
   const pageWarehouse = {
     createdAt: dbRows[0]?.createdAt?.toISOString() || null,
     updatedAt: dbRows[0]?.updatedAt?.toISOString() || null,
@@ -6186,7 +6240,7 @@ async function buildFastWarehousePage({
   const filtered = enabledProducts.filter((product) => warehousePageProductMatches(product, filters));
   const total = filtered.length;
   const offset = (page - 1) * pageSize;
-  const pageProducts = filtered.slice(offset, offset + pageSize);
+  const pageProducts = await enrichWeakOzonProductsForPage(filtered.slice(offset, offset + pageSize));
   const built = await buildFreshWarehouseProductsForWarehouse(
     { ...warehouse, products: pageProducts },
     pageProducts.map((product) => product.id),

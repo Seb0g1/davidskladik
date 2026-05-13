@@ -465,6 +465,16 @@ test("Ozon sync refreshes details only for new or incomplete products", () => {
     marketplacePrice: 1000,
     marketplaceState: { code: "active" },
   })), true);
+  assert.equal(ozonProductNeedsDetailRefresh(normalizeWarehouseProduct({
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "real-generic",
+    productId: "4",
+    name: "Товар Ozon",
+    imageUrl: "https://cdn.example.com/generic.jpg",
+    marketplacePrice: 1000,
+    marketplaceState: { code: "active" },
+  })), true);
   assert.deepEqual(pickOzonDetailOfferIds(list, existingByOffer, 10), ["WEAK", "new"]);
 });
 
