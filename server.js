@@ -2295,6 +2295,23 @@ async function getOzonProducts(limit = Number.POSITIVE_INFINITY, account = null)
   return Array.from(byKey.values());
 }
 
+function ozonOfferMapKey(value) {
+  return cleanText(value).toLowerCase();
+}
+
+function setOzonOfferMapValue(map, offerId, value) {
+  const exact = cleanText(offerId);
+  if (!exact) return;
+  map.set(exact, value);
+  map.set(ozonOfferMapKey(exact), value);
+}
+
+function getOzonOfferMapValue(map, offerId) {
+  const exact = cleanText(offerId);
+  if (!exact) return undefined;
+  return map.get(exact) || map.get(ozonOfferMapKey(exact));
+}
+
 async function getOzonProductInfoMap(offerIds, account = null) {
   const map = new Map();
   const ids = offerIds.map((offerId) => String(offerId || "").trim()).filter(Boolean);
@@ -2306,7 +2323,29 @@ async function getOzonProductInfoMap(offerIds, account = null) {
 
     for (const item of data.items || data.result?.items || []) {
       const offerId = item.offer_id || item.offerId;
-      if (offerId) map.set(offerId, item);
+      if (offerId) setOzonOfferMapValue(map, offerId, item);
+    }
+  }
+
+  return map;
+}
+
+async function getOzonProductInfoMapByProductIds(productIds, account = null) {
+  const map = new Map();
+  const ids = productIds
+    .map((productId) => String(productId || "").trim())
+    .filter(Boolean);
+
+  for (const chunk of chunkArray(ids, 100)) {
+    const data = await ozonRequest("/v3/product/info/list", {
+      product_id: chunk.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0),
+    }, account);
+
+    for (const item of data.items || data.result?.items || []) {
+      const productId = cleanText(item.product_id || item.productId || item.id);
+      if (productId) map.set(productId, item);
+      const offerId = item.offer_id || item.offerId;
+      if (offerId) setOzonOfferMapValue(map, offerId, item);
     }
   }
 
@@ -2331,7 +2370,7 @@ async function getOzonStockMap(offerIds, account = null) {
       const present = warehouses.reduce((sum, stock) => sum + Number(stock.present || 0), 0);
       const reserved = warehouses.reduce((sum, stock) => sum + Number(stock.reserved || 0), 0);
       const total = Number.isFinite(Number(item.stock)) ? Number(item.stock) : Math.max(0, present - reserved);
-      map.set(offerId, { ...item, present, reserved, stock: total, warehouses });
+      setOzonOfferMapValue(map, offerId, { ...item, present, reserved, stock: total, warehouses });
     }
   }
 
@@ -2376,7 +2415,7 @@ async function getOzonPriceMap(offerIds, account = null) {
     }, account);
 
     for (const item of data.items || []) {
-      map.set(item.offer_id, item);
+      setOzonOfferMapValue(map, item.offer_id, item);
     }
   }
 
@@ -2392,7 +2431,7 @@ function ozonExistingProductMap(products = [], account = {}) {
     if (!offerId) continue;
     const target = cleanText(product.target || "ozon");
     if (target !== accountId && target !== "ozon") continue;
-    map.set(offerId, product);
+    setOzonOfferMapValue(map, offerId, product);
   }
   return map;
 }
@@ -2415,11 +2454,12 @@ function pickOzonDetailOfferIds(products = [], existingByOffer = new Map(), maxI
   const seen = new Set();
   for (const product of products || []) {
     const offerId = cleanText(product.offer_id || product.offerId);
-    if (!offerId || seen.has(offerId)) continue;
-    const existing = existingByOffer.get(offerId);
+    const seenKey = ozonOfferMapKey(offerId);
+    if (!offerId || seen.has(seenKey)) continue;
+    const existing = getOzonOfferMapValue(existingByOffer, offerId);
     if (!existing || ozonProductNeedsDetailRefresh(existing)) {
       prioritized.push(offerId);
-      seen.add(offerId);
+      seen.add(seenKey);
       if (prioritized.length >= limit) break;
     }
   }
@@ -4703,6 +4743,25 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
             getOzonStockMap(infoOfferIds, account),
             getOzonPriceMap(infoOfferIds, account),
           ]);
+          const detailOfferSet = new Set(infoOfferIds.map(ozonOfferMapKey));
+          const missingProductIds = products
+            .filter((product) => detailOfferSet.has(ozonOfferMapKey(product.offer_id || product.offerId)))
+            .filter((product) => !getOzonOfferMapValue(infoMap, product.offer_id || product.offerId))
+            .map((product) => cleanText(product.product_id || product.productId))
+            .filter(Boolean);
+          if (missingProductIds.length) {
+            const infoByProductId = await getOzonProductInfoMapByProductIds(missingProductIds, account);
+            for (const product of products) {
+              const productId = cleanText(product.product_id || product.productId);
+              const info = infoByProductId.get(productId);
+              if (info) setOzonOfferMapValue(infoMap, product.offer_id || product.offerId || info.offer_id || info.offerId, info);
+            }
+            logger.info("ozon product details recovered by product id", {
+              account: account.id,
+              requested: missingProductIds.length,
+              recovered: infoByProductId.size,
+            });
+          }
         }
       } catch (error) {
         infoMap = new Map();
@@ -4714,12 +4773,12 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
       }
 
       imported.push(...products.map((product) => {
-        const hasInfo = infoMap.has(product.offer_id);
-        const hasStock = stockMap.has(product.offer_id);
-        const hasPrice = priceMap.has(product.offer_id);
-        const info = infoMap.get(product.offer_id) || {};
-        const stockInfo = stockMap.get(product.offer_id) || {};
-        const priceInfo = priceMap.get(product.offer_id) || {};
+        const info = getOzonOfferMapValue(infoMap, product.offer_id) || {};
+        const stockInfo = getOzonOfferMapValue(stockMap, product.offer_id) || {};
+        const priceInfo = getOzonOfferMapValue(priceMap, product.offer_id) || {};
+        const hasInfo = Boolean(Object.keys(info).length);
+        const hasStock = Boolean(Object.keys(stockInfo).length);
+        const hasPrice = Boolean(Object.keys(priceInfo).length);
         const priceDetails = normalizeOzonPriceDetails(priceInfo);
         const cabinetPrice =
           pickOzonCabinetListedPrice(priceDetails) || parseMoneyValue(info.price) || parseMoneyValue(product.price) || null;

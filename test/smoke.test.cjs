@@ -393,8 +393,8 @@ test("Ozon sync refreshes details only for new or incomplete products", () => {
     ["weak", existingWeak],
   ]);
   const list = [
-    { offer_id: "complete" },
-    { offer_id: "weak" },
+    { offer_id: "COMPLETE" },
+    { offer_id: "WEAK" },
     { offer_id: "new" },
   ];
 
@@ -409,7 +409,7 @@ test("Ozon sync refreshes details only for new or incomplete products", () => {
     marketplacePrice: 1000,
     marketplaceState: { code: "active" },
   })), true);
-  assert.deepEqual(pickOzonDetailOfferIds(list, existingByOffer, 10), ["weak", "new"]);
+  assert.deepEqual(pickOzonDetailOfferIds(list, existingByOffer, 10), ["WEAK", "new"]);
 });
 
 test("price retry queue recovers from an empty file", async () => {
