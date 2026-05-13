@@ -1755,8 +1755,8 @@ function renderWarehouseDetail(group) {
         <div class="detail-title-row">
           <h2>${escapeHtml(productName)}</h2>
           <div class="detail-copy-actions" aria-label="quick copy">
-            <button class="icon-button copy-detail-value" type="button" data-copy-label="name" data-copy-text="${escapeHtml(productSearchName || productName)}" title="Скопировать английское название для PriceMaster" aria-label="Скопировать название">ABC</button>
-            <button class="icon-button copy-detail-value" type="button" data-copy-label="article" data-copy-text="${escapeHtml(product.offerId || "")}" title="Скопировать артикул" aria-label="Скопировать артикул">#</button>
+            <button class="copy-detail-value" type="button" data-copy-label="name" data-copy-text="${escapeHtml(productSearchName || productName)}" title="Скопировать английское название для PriceMaster" aria-label="Скопировать название"><span class="copy-detail-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2"></rect><path d="M5 15V6a1 1 0 0 1 1-1h9"></path></svg></span><span>Название</span></button>
+            <button class="copy-detail-value" type="button" data-copy-label="article" data-copy-text="${escapeHtml(product.offerId || "")}" title="Скопировать артикул" aria-label="Скопировать артикул"><span class="copy-detail-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 9h16"></path><path d="M4 15h16"></path><path d="M10 3 8 21"></path><path d="m16 3-2 18"></path></svg></span><span>Артикул</span></button>
           </div>
         </div>
         <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}</p>
