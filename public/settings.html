@@ -87,6 +87,43 @@
           </section>
 
           <section class="detail-section">
+            <h3>Аудит действий</h3>
+            <p>Быстрый поиск по сотруднику, товару, действию и периоду. Удобно проверять, кто добавил или удалил привязку.</p>
+            <div class="settings-user-form">
+              <label>
+                Сотрудник
+                <input id="auditUserInput" type="text" autocomplete="off" placeholder="manager" />
+              </label>
+              <label>
+                Товар / артикул
+                <input id="auditProductInput" type="text" autocomplete="off" placeholder="offerId, article, название" />
+              </label>
+              <label>
+                Действие
+                <select id="auditActionInput">
+                  <option value="all">Все действия</option>
+                  <option value="warehouse.link.save">Добавление привязки</option>
+                  <option value="warehouse.links.bulk_save">Сохранение привязок</option>
+                  <option value="warehouse.link.delete">Удаление привязки</option>
+                  <option value="warehouse.product.update">Изменение товара</option>
+                  <option value="settings.update">Настройки</option>
+                </select>
+              </label>
+              <label>
+                С даты
+                <input id="auditDateFromInput" type="date" />
+              </label>
+              <label>
+                По дату
+                <input id="auditDateToInput" type="date" />
+              </label>
+              <button id="auditLoadButton" class="secondary-button" type="button">Показать аудит</button>
+            </div>
+            <div id="auditStatus" class="rate-info">Аудит ещё не загружен.</div>
+            <div id="auditList" class="settings-users-list"></div>
+          </section>
+
+          <section class="detail-section">
             <h3>Фоновое обновление</h3>
             <p>Склад, PriceMaster, статусы маркетплейсов и отправка цен обновляются автоматически без кнопок на главной.</p>
             <label class="search-control auto-toggle-control" for="autoSyncEnabledInput">

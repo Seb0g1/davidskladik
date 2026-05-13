@@ -20,6 +20,14 @@ const employeeUsernameInput = document.querySelector("#employeeUsernameInput");
 const employeePasswordInput = document.querySelector("#employeePasswordInput");
 const employeeRoleInput = document.querySelector("#employeeRoleInput");
 const employeeAddButton = document.querySelector("#employeeAddButton");
+const auditUserInput = document.querySelector("#auditUserInput");
+const auditProductInput = document.querySelector("#auditProductInput");
+const auditActionInput = document.querySelector("#auditActionInput");
+const auditDateFromInput = document.querySelector("#auditDateFromInput");
+const auditDateToInput = document.querySelector("#auditDateToInput");
+const auditLoadButton = document.querySelector("#auditLoadButton");
+const auditList = document.querySelector("#auditList");
+const auditStatus = document.querySelector("#auditStatus");
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 
 function escapeHtml(value) {
@@ -180,6 +188,78 @@ function renderUsers(users = []) {
       </div>
     `)
     .join("");
+}
+
+function auditActionLabel(action) {
+  const labels = {
+    "warehouse.link.save": "Добавление привязки",
+    "warehouse.links.bulk_save": "Сохранение привязок",
+    "warehouse.link.delete": "Удаление привязки",
+    "warehouse.product.update": "Изменение товара",
+    "settings.update": "Настройки",
+    "users.create": "Создание сотрудника",
+    "users.update": "Изменение сотрудника",
+    "users.delete": "Удаление сотрудника",
+  };
+  return labels[action] || action || "Действие";
+}
+
+function auditDetailsText(entry = {}) {
+  const details = entry.details || {};
+  const links = Array.isArray(details.links) ? details.links : [];
+  const linkText = links
+    .slice(0, 3)
+    .map((link) => [link.article, link.supplierName].filter(Boolean).join(" / "))
+    .filter(Boolean)
+    .join(" · ");
+  const parts = [
+    details.offerId || "",
+    details.name || "",
+    details.article || "",
+    details.supplierName || "",
+    linkText,
+    Array.isArray(details.productIds) ? `${details.productIds.length} товаров` : "",
+  ].filter(Boolean);
+  return parts.join(" · ") || "Без деталей";
+}
+
+function renderAudit(audit = []) {
+  if (!auditList) return;
+  if (!audit.length) {
+    auditList.innerHTML = '<div class="empty-mini">По фильтрам ничего не найдено.</div>';
+    return;
+  }
+  auditList.innerHTML = audit.map((entry) => `
+    <div class="settings-user-row">
+      <div>
+        <strong>${escapeHtml(entry.user || "system")} · ${escapeHtml(auditActionLabel(entry.action))}</strong>
+        <span>${escapeHtml(auditDetailsText(entry))}</span>
+      </div>
+      <small>${entry.at ? new Date(entry.at).toLocaleString("ru-RU") : "—"}</small>
+    </div>
+  `).join("");
+}
+
+async function loadAudit() {
+  if (!auditList) return;
+  if (auditLoadButton) auditLoadButton.disabled = true;
+  if (auditStatus) auditStatus.textContent = "Загружаю аудит...";
+  try {
+    const params = new URLSearchParams();
+    params.set("limit", "100");
+    if (auditUserInput?.value.trim()) params.set("user", auditUserInput.value.trim());
+    if (auditProductInput?.value.trim()) params.set("q", auditProductInput.value.trim());
+    if (auditActionInput?.value && auditActionInput.value !== "all") params.set("action", auditActionInput.value);
+    if (auditDateFromInput?.value) params.set("dateFrom", auditDateFromInput.value);
+    if (auditDateToInput?.value) params.set("dateTo", auditDateToInput.value);
+    const data = await api(`/api/audit-log?${params}`);
+    renderAudit(data.audit || []);
+    if (auditStatus) auditStatus.textContent = `Найдено событий: ${data.audit?.length || 0}.`;
+  } catch (error) {
+    if (auditStatus) auditStatus.textContent = error.message;
+  } finally {
+    if (auditLoadButton) auditLoadButton.disabled = false;
+  }
 }
 
 async function loadUsers() {
@@ -378,6 +458,22 @@ employeeList?.addEventListener("click", async (event) => {
     if (employeeStatus) employeeStatus.textContent = error.message;
     loadUsers().catch(() => {});
   }
+});
+
+auditLoadButton?.addEventListener("click", () => {
+  loadAudit();
+});
+
+[auditUserInput, auditProductInput, auditActionInput, auditDateFromInput, auditDateToInput].forEach((input) => {
+  input?.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      loadAudit();
+    }
+  });
+  input?.addEventListener("change", () => {
+    if (input === auditActionInput || input === auditDateFromInput || input === auditDateToInput) loadAudit();
+  });
 });
 
 manualSyncButton?.addEventListener("click", async () => {

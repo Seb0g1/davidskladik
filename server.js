@@ -6864,14 +6864,6 @@ app.get("/api/history", requireAdmin, async (request, response, next) => {
   }
 });
 
-app.get("/api/audit-log", requireAdmin, async (request, response, next) => {
-  try {
-    response.json({ audit: await readAudit(cleanLimit(request.query.limit, 200, 1000)) });
-  } catch (error) {
-    next(error);
-  }
-});
-
 function auditEntryProductIds(entry = {}) {
   const details = entry.details || {};
   const values = [
@@ -6886,6 +6878,64 @@ function auditEntryProductIds(entry = {}) {
     .map((value) => cleanText(value || ""))
     .filter(Boolean);
 }
+
+function auditEntrySearchText(entry = {}) {
+  const details = entry.details || {};
+  const links = Array.isArray(details.links) ? details.links : [];
+  return [
+    entry.user,
+    entry.action,
+    entry.productId,
+    details.productId,
+    details.productIds,
+    details.offerId,
+    details.name,
+    details.article,
+    details.supplierName,
+    details.linkId,
+    ...links.flatMap((link) => [link.article, link.supplierName, link.partnerId, link.keyword]),
+  ]
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .map((value) => cleanText(value || "").toLowerCase())
+    .filter(Boolean)
+    .join(" ");
+}
+
+function auditEntryMatchesFilters(entry = {}, filters = {}) {
+  const username = cleanText(filters.user || "").toLowerCase();
+  if (username && cleanText(entry.user || "").toLowerCase() !== username) return false;
+  const action = cleanText(filters.action || "");
+  if (action && action !== "all" && cleanText(entry.action || "") !== action) return false;
+  const query = cleanText(filters.q || "").toLowerCase();
+  if (query && !auditEntrySearchText(entry).includes(query)) return false;
+  const fromMs = filters.dateFrom ? new Date(filters.dateFrom).getTime() : 0;
+  const toMs = filters.dateTo ? new Date(filters.dateTo).getTime() : 0;
+  const atMs = new Date(entry.at || 0).getTime();
+  if (Number.isFinite(fromMs) && fromMs > 0 && atMs < fromMs) return false;
+  if (Number.isFinite(toMs) && toMs > 0 && atMs > toMs + 24 * 60 * 60 * 1000 - 1) return false;
+  return true;
+}
+
+app.get("/api/audit-log", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = cleanLimit(request.query.limit, 200, 1000);
+    const filters = {
+      user: request.query.user,
+      action: request.query.action,
+      q: request.query.q || request.query.product,
+      dateFrom: request.query.dateFrom,
+      dateTo: request.query.dateTo,
+    };
+    const needsFilter = Object.values(filters).some((value) => cleanText(value || ""));
+    const audit = await readAudit(needsFilter ? Math.max(limit * 5, 1000) : limit);
+    const filtered = needsFilter
+      ? audit.filter((entry) => auditEntryMatchesFilters(entry, filters)).slice(0, limit)
+      : audit;
+    response.json({ audit: filtered, total: filtered.length, filters });
+  } catch (error) {
+    next(error);
+  }
+});
 
 function publicLinkAuditEntry(entry = {}) {
   const details = entry.details || {};
