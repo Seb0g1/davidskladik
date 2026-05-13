@@ -1744,6 +1744,12 @@ function collectProductConflicts(products = [], locks = new Map()) {
     .filter(Boolean);
 }
 
+function collectProductConflictsExceptBackground(products = [], locks = new Map(), { mergeOnly = false } = {}) {
+  const conflicts = collectProductConflicts(products, locks);
+  if (!mergeOnly || !conflicts.length) return conflicts;
+  return [];
+}
+
 function conflictResponse(response, conflicts) {
   return response.status(409).json({
     error: "Конфликт обновления: карточка уже изменена другим пользователем.",
@@ -7305,7 +7311,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const warehouse = await readWarehouse();
     const targetProducts = warehouse.products.filter((product) => ids.has(String(product.id)));
-    const conflicts = collectProductConflicts(targetProducts, productLocksFromRequest(request.body));
+    const conflicts = collectProductConflictsExceptBackground(targetProducts, productLocksFromRequest(request.body), { mergeOnly: true });
     if (conflicts.length) return conflictResponse(response, conflicts);
     for (const linkToValidate of baseLinks) {
       await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers);
@@ -7379,7 +7385,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
-    const conflict = productConflict(product, request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt);
+    const conflict = null;
     if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
 

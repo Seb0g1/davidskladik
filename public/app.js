@@ -1213,15 +1213,18 @@ function renderTargets() {
 function applyWarehouseFilters() {
   const previousOrder = Array.isArray(state.warehouseLastGroupOrder) ? state.warehouseLastGroupOrder : [];
   const previousSelectedKey = state.selectedWarehouseGroupKey;
+  const previousSelectedProductId = state.selectedWarehouseProductId;
   const previousIndex = previousSelectedKey ? previousOrder.indexOf(previousSelectedKey) : -1;
   state.filteredWarehouse = Array.isArray(state.warehouse) ? state.warehouse.slice() : [];
 
   const groups = getSortedWarehouseGroups();
   const selectedInFiltered = groups.find((group) => group.key === state.selectedWarehouseGroupKey) || null;
-  if (state.selectedWarehouseGroupKey && !selectedInFiltered && state.selectedWarehouseDetailGroup?.key !== state.selectedWarehouseGroupKey) {
+  const selectedDetailStillOpen = state.selectedWarehouseGroupKey
+    && state.selectedWarehouseDetailGroup?.key === state.selectedWarehouseGroupKey;
+  if (state.selectedWarehouseGroupKey && !selectedInFiltered && !selectedDetailStillOpen) {
     state.selectedWarehouseGroupKey = null;
   }
-  if (!state.selectedWarehouseGroupKey && groups.length) {
+  if (!state.selectedWarehouseGroupKey && groups.length && !previousSelectedKey) {
     if (previousIndex >= 0) {
       const nearestIndex = Math.min(previousIndex, groups.length - 1);
       state.selectedWarehouseGroupKey = groups[nearestIndex]?.key || groups[0].key;
@@ -1231,8 +1234,13 @@ function applyWarehouseFilters() {
   }
   state.warehouseLastGroupOrder = groups.map((group) => group.key);
 
-  if (!state.filteredWarehouse.some((product) => product.id === state.selectedWarehouseProductId)) {
+  const selectedProductLoaded = state.filteredWarehouse.some((product) => product.id === state.selectedWarehouseProductId);
+  const selectedProductInOpenDetail = previousSelectedProductId
+    && state.selectedWarehouseDetailGroup?.productIds?.some((id) => String(id) === String(previousSelectedProductId));
+  if (!selectedProductLoaded && !selectedProductInOpenDetail && !previousSelectedKey) {
     state.selectedWarehouseProductId = state.filteredWarehouse[0]?.id || null;
+  } else if (selectedProductInOpenDetail) {
+    state.selectedWarehouseProductId = previousSelectedProductId;
   }
 
   renderWarehouseCards();
