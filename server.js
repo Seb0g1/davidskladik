@@ -8106,6 +8106,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
       oldValue: before,
       newValue: { id: responseProduct.id, links: responseProduct.links || [], updatedAt: responseProduct.updatedAt },
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
+    queueMarketplaceJob("no-supplier-automation", { productIds: [request.params.productId] }, { priority: 1 });
     if ((responseProduct.links || []).length) queueImmediateAutoPricePush([request.params.productId], "link_delete");
   } catch (error) {
     next(error);
