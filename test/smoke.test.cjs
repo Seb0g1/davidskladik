@@ -140,6 +140,27 @@ test("active delayed Ozon price retry blocks duplicate auto send", () => {
   assert.equal(expired, null);
 });
 
+test("non-limit delayed Ozon price retry does not block auto send", () => {
+  const delayed = {
+    productId: "p1",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OZ-1",
+    status: "delayed",
+    retryReason: "send_failed",
+    error: "old price is less than price",
+    nextRetryAt: "2026-05-13T01:05:00.000Z",
+  };
+  const found = findActiveDelayedPriceRetry([delayed], {
+    id: "p1",
+    productId: "p1",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OZ-1",
+  }, new Date("2026-05-13T00:10:00.000Z"));
+  assert.equal(found, null);
+});
+
 test("price history append is a no-op without PostgreSQL", async () => {
   const count = await appendPriceHistoryRows([
     {

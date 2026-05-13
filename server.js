@@ -3872,7 +3872,8 @@ function isActiveDelayedPriceRetry(item = {}, now = new Date()) {
   const nextRetryAt = item.nextRetryAt ? new Date(item.nextRetryAt).getTime() : 0;
   if (!nextRetryAt || !Number.isFinite(nextRetryAt) || nextRetryAt <= now.getTime()) return false;
   const status = cleanText(item.status).toLowerCase();
-  return status === "delayed" || item.retryReason === "ozon_per_item_price_limit" || isOzonPerItemPriceLimitError({ message: item.error });
+  return (status === "delayed" || status === "pending")
+    && (item.retryReason === "ozon_per_item_price_limit" || isOzonPerItemPriceLimitError({ message: item.error }));
 }
 
 function findActiveDelayedPriceRetry(queueItems = [], item = {}, now = new Date()) {
