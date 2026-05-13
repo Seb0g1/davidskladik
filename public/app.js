@@ -3884,6 +3884,23 @@ elements.retryQueueList?.addEventListener("change", (event) => {
 
 elements.retryQueueRetrySelectedButton?.addEventListener("click", async () => {
   if (!state.retryQueueSelectedKeys.size) return;
+  const selectedItems = state.retryQueue.filter((item) => state.retryQueueSelectedKeys.has(String(item.queueKey)));
+  const delayedBeforeTime = selectedItems.filter((item) => {
+    const nextAt = item.nextRetryAt ? new Date(item.nextRetryAt).getTime() : 0;
+    return nextAt && nextAt > Date.now();
+  });
+  if (delayedBeforeTime.length) {
+    const soonest = delayedBeforeTime
+      .map((item) => new Date(item.nextRetryAt || 0).getTime())
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b)[0];
+    if (!(await confirmAction({
+      title: "Повторить раньше срока?",
+      text: `Выбрано ${formatNumber(delayedBeforeTime.length)} отложенных задач. Ozon может снова отказать до ${soonest ? formatDate(soonest) : "назначенного времени"}.`,
+      okText: "Повторить сейчас",
+      danger: false,
+    }))) return;
+  }
   elements.warehouseStatus.textContent = "Повторяю выбранные элементы из очереди...";
   try {
     const result = await api("/api/warehouse/prices/retry", {
@@ -3901,12 +3918,24 @@ elements.retryQueueRetrySelectedButton?.addEventListener("click", async () => {
 });
 
 elements.retryQueueClearButton?.addEventListener("click", async () => {
-  if (!(await confirmAction({ title: "Очистить очередь?", text: "Удалить все элементы retry-очереди?", okText: "Очистить" }))) return;
+  const selectedKeys = Array.from(state.retryQueueSelectedKeys);
+  const clearSelected = selectedKeys.length > 0;
+  if (!(await confirmAction({
+    title: clearSelected ? "Удалить выбранные?" : "Очистить очередь?",
+    text: clearSelected
+      ? `Удалить выбранные задачи из очереди: ${formatNumber(selectedKeys.length)}?`
+      : "Удалить все элементы retry-очереди?",
+    okText: clearSelected ? "Удалить выбранные" : "Очистить",
+  }))) return;
   try {
-    await api("/api/warehouse/prices/retry-queue", { method: "DELETE" });
+    await api("/api/warehouse/prices/retry-queue", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(clearSelected ? { queueKeys: selectedKeys } : {}),
+    });
     state.retryQueueSelectedKeys.clear();
     await loadRetryQueue();
-    elements.warehouseStatus.textContent = "Очередь retry очищена.";
+    elements.warehouseStatus.textContent = clearSelected ? "Выбранные задачи удалены из retry-очереди." : "Очередь retry очищена.";
   } catch (error) {
     elements.warehouseStatus.textContent = error.message;
   }

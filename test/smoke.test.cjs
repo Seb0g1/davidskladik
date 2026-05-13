@@ -512,6 +512,32 @@ test("price retry queue recovers from an empty file", async () => {
   }
 });
 
+test("retry queue API can delete selected items only", async () => {
+  const backup = await backupFile(priceRetryQueuePath);
+  try {
+    await writePriceRetryQueue({
+      items: [
+        { id: "p1", target: "ozon", marketplace: "ozon", offerId: "OZ-1", price: 1000 },
+        { id: "p2", target: "ozon", marketplace: "ozon", offerId: "OZ-2", price: 2000 },
+      ],
+    });
+    const agent = request.agent(app);
+    await agent
+      .post("/api/login")
+      .send({ username: "admin", password: process.env.APP_PASSWORD })
+      .expect(200);
+    await agent
+      .delete("/api/warehouse/prices/retry-queue")
+      .send({ queueKeys: ["p1:ozon"] })
+      .expect(200);
+    const queue = await readPriceRetryQueue();
+    assert.equal(queue.items.length, 1);
+    assert.equal(queue.items[0].id, "p2");
+  } finally {
+    await restoreFile(priceRetryQueuePath, backup);
+  }
+});
+
 test("PostgreSQL layer stays disabled without DATABASE_URL", () => {
   const previousUrl = process.env.DATABASE_URL;
   const previousMode = process.env.DB_MODE;

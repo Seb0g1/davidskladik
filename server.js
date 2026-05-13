@@ -8815,10 +8815,19 @@ app.get("/api/warehouse/prices/history", async (request, response, next) => {
   }
 });
 
-app.delete("/api/warehouse/prices/retry-queue", async (_request, response, next) => {
+app.delete("/api/warehouse/prices/retry-queue", async (request, response, next) => {
   try {
-    await writePriceRetryQueue({ items: [] });
-    response.json({ ok: true });
+    const queueKeys = new Set((Array.isArray(request.body?.queueKeys) ? request.body.queueKeys : [])
+      .map((key) => String(key || "").trim())
+      .filter(Boolean));
+    if (!queueKeys.size) {
+      await writePriceRetryQueue({ items: [] });
+      return response.json({ ok: true, removed: "all" });
+    }
+    const queue = await readPriceRetryQueue();
+    const items = (queue.items || []).filter((item) => !queueKeys.has(String(priceRetryQueueKey(item))));
+    await writePriceRetryQueue({ items });
+    response.json({ ok: true, removed: queueKeys.size, remaining: items.length });
   } catch (error) {
     next(error);
   }
