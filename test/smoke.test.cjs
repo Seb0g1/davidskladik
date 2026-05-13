@@ -723,6 +723,19 @@ test("warehouse brand filter scans non-standard marketplace fields", () => {
   assert.equal(warehouseBrandMatches(product, "Amouage"), true);
 });
 
+test("warehouse brand filter does not match arbitrary raw text", () => {
+  const product = {
+    name: "Shampoo for hair 250 ml",
+    ozon: {
+      rawPayload: {
+        description: "Compatible search phrase Amouage from an old audit note",
+      },
+    },
+  };
+
+  assert.equal(warehouseBrandMatches(product, "Amouage"), false);
+});
+
 test("normalizeWarehouseProduct preserves AI image draft review state", () => {
   const product = normalizeWarehouseProduct({
     target: "ozon",

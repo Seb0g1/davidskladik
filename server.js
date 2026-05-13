@@ -1357,7 +1357,31 @@ function warehouseBrandSearchHaystack(product = {}) {
 }
 
 function warehouseBrandDeepHaystack(product = {}) {
-  return normalizeSearchText(JSON.stringify(product));
+  const parts = [];
+  const visit = (value, key = "", depth = 0) => {
+    if (depth > 6 || value === null || value === undefined) return;
+    const normalizedKey = normalizeSearchText(key);
+    const keyLooksLikeBrand =
+      normalizedKey.includes("brand")
+      || normalizedKey.includes("vendor")
+      || normalizedKey.includes("manufacturer")
+      || normalizedKey.includes("trademark")
+      || normalizedKey.includes("бренд")
+      || normalizedKey.includes("производитель");
+    if (keyLooksLikeBrand && (typeof value === "string" || typeof value === "number")) {
+      parts.push(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => visit(item, key, depth + 1));
+      return;
+    }
+    if (typeof value === "object") {
+      Object.entries(value).forEach(([childKey, childValue]) => visit(childValue, childKey, depth + 1));
+    }
+  };
+  visit(product);
+  return parts.map((value) => normalizeSearchText(value)).filter(Boolean).join(" ");
 }
 
 function warehouseBrandMatches(product = {}, brandFilter = "") {
@@ -5617,6 +5641,18 @@ function warehousePagePostgresWhere(filters = {}) {
   return { AND: and.filter((item) => Object.keys(item || {}).length) };
 }
 
+function warehousePagePostgresOrderBy() {
+  return [
+    { archived: "asc" },
+    { status: "asc" },
+    { marketplace: "asc" },
+    { target: "asc" },
+    { name: "asc" },
+    { offerId: "asc" },
+    { id: "asc" },
+  ];
+}
+
 function marketplaceStateCodeFromPostgresRow(row = {}) {
   const state = row.marketplaceState && typeof row.marketplaceState === "object" && !Array.isArray(row.marketplaceState)
     ? row.marketplaceState
@@ -5655,28 +5691,34 @@ async function buildFastWarehousePageFromPostgres({
   await ensureWarehousePostgresLinksBackfilled(prisma);
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
-  const where = warehousePagePostgresWhere(filters);
+  const needsDeepBrandFilter = Boolean(cleanText(filters.brand || ""));
+  const where = warehousePagePostgresWhere(needsDeepBrandFilter ? { ...filters, brand: "" } : filters);
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
-  const [totalAll, total, withoutSupplier, ozonStateCounts, rows, suppliers] = await Promise.all([
+  const [totalAll, dbTotal, withoutSupplier, ozonStateCounts, dbRows, suppliers] = await Promise.all([
     prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
-    prisma.warehouseProduct.count({ where }),
+    needsDeepBrandFilter ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
     prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { links: { none: {} } }] } }),
     getOzonStateCountsFromPostgres(prisma),
     prisma.warehouseProduct.findMany({
       where,
       include: { links: true },
-      orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
-      skip: offset,
-      take: pageSize,
+      orderBy: warehousePagePostgresOrderBy(),
+      skip: needsDeepBrandFilter ? 0 : offset,
+      take: needsDeepBrandFilter ? undefined : pageSize,
     }),
     prisma.managedSupplier.findMany({ orderBy: { name: "asc" } }),
   ]);
   pageTrace("postgres:after-query", traceStartedAt);
+  const allProducts = needsDeepBrandFilter
+    ? dbRows.map(productFromPostgres).filter((product) => warehousePageProductMatches(product, filters))
+    : dbRows.map(productFromPostgres);
+  const total = needsDeepBrandFilter ? allProducts.length : dbTotal;
+  const pageProducts = needsDeepBrandFilter ? allProducts.slice(offset, offset + pageSize) : allProducts;
   const pageWarehouse = {
-    createdAt: rows[0]?.createdAt?.toISOString() || null,
-    updatedAt: rows[0]?.updatedAt?.toISOString() || null,
-    products: rows.map(productFromPostgres),
+    createdAt: dbRows[0]?.createdAt?.toISOString() || null,
+    updatedAt: dbRows[0]?.updatedAt?.toISOString() || null,
+    products: pageProducts,
     suppliers: suppliers.map(supplierFromPostgres),
   };
   const built = await buildFreshWarehouseProductsForWarehouse(
