@@ -35,6 +35,7 @@ const state = {
   warehouseLivePollTimer: null,
   warehouseLiveRefreshRunning: false,
   warehouseLiveRefreshQueued: false,
+  warehouseSelectionVersion: 0,
   warehouseLastUpdatedAt: "",
   priceMasterLastUpdatedAt: "",
   dailySyncLastUpdatedAt: "",
@@ -269,6 +270,14 @@ function resolveWarehouseRestoreScroll() {
   } catch (_error) {
     return 0;
   }
+}
+
+function setSelectedWarehouseGroupKey(groupKey, { manual = false } = {}) {
+  const nextKey = groupKey ? String(groupKey) : null;
+  if (manual && state.selectedWarehouseGroupKey !== nextKey) {
+    state.warehouseSelectionVersion += 1;
+  }
+  state.selectedWarehouseGroupKey = nextKey;
 }
 
 function markProgrammaticScroll() {
@@ -2742,17 +2751,18 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
     const scrollTop = window.scrollY || window.pageYOffset || 0;
     const restorePage = Math.max(1, Number(state.warehousePage || 1));
     const selectedKey = state.selectedWarehouseGroupKey;
+    const selectionVersion = state.warehouseSelectionVersion;
     state.warehouseRestorePage = restorePage;
     await Promise.all([
       loadWarehouse(false, false, { silent: true }),
       loadDailySync().catch(() => null),
       loadRetryQueue().catch(() => null),
     ]);
-    if (selectedKey) {
+    if (selectedKey && selectionVersion === state.warehouseSelectionVersion && state.selectedWarehouseGroupKey === selectedKey) {
       const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
         .find((item) => item.key === selectedKey);
       if (group) {
-        state.selectedWarehouseGroupKey = selectedKey;
+        setSelectedWarehouseGroupKey(selectedKey);
         state.selectedWarehouseDetailGroup = group;
         renderWarehouseDetail(group);
         renderWarehouseCards();
@@ -3254,7 +3264,7 @@ elements.warehouseCards.addEventListener("click", async (event) => {
   const button = event.target.closest(".select-product");
   const groupKey = button?.dataset.groupKey || card?.dataset.groupKey;
   if (!groupKey) return;
-  state.selectedWarehouseGroupKey = groupKey;
+  setSelectedWarehouseGroupKey(groupKey, { manual: true });
   state.warehouseAutoFocusGroupKey = null;
   syncWarehouseStateToUrl();
   renderWarehouseCards();
@@ -3525,6 +3535,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       linkButton.disabled = true;
       const productId = linkButton.dataset.productId || "";
       const linkId = linkButton.dataset.linkId || "";
+      const selectionVersion = state.warehouseSelectionVersion;
       const result = await deleteWarehouseLinkWithFreshLock(productId, linkId, linkButton.dataset.productUpdatedAt || "");
       if (result.product) {
         const localProduct = warehouseProductById(productId);
@@ -3536,9 +3547,13 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
             }
           : result.product;
         mergeWarehouseProduct(productForState);
-        applyWarehouseFilters();
-        renderWarehouseCards();
-        renderDetailForProductIds([productForState.id || productId]);
+        if (selectionVersion === state.warehouseSelectionVersion) {
+          applyWarehouseFilters();
+          renderWarehouseCards();
+          renderDetailForProductIds([productForState.id || productId], { select: false });
+        } else {
+          renderWarehouseCards();
+        }
       } else {
         queueWarehouseRefresh();
       }
