@@ -4552,6 +4552,40 @@ function warehouseProductLooseMergeKeys(product = {}) {
   ].filter(Boolean);
 }
 
+function mergeOzonDraftForWarehouseProduct(currentProduct = {}, importedProduct = {}, preserveRichFields = false) {
+  const current = currentProduct?.ozon || {};
+  const imported = importedProduct?.ozon || {};
+  const merged = { ...current, ...imported };
+  if (!preserveRichFields) return merged;
+
+  const offerId = cleanText(importedProduct.offerId || currentProduct.offerId || imported.offerId || current.offerId);
+  const importedNameWeak = isWeakProductName(imported.name || importedProduct.name, offerId);
+  if (importedNameWeak && cleanText(current.name)) merged.name = current.name;
+
+  for (const field of [
+    "vendor",
+    "description",
+    "categoryId",
+    "typeId",
+    "barcode",
+    "primaryImage",
+    "colorImage",
+  ]) {
+    if (!cleanText(imported[field]) && cleanText(current[field])) merged[field] = current[field];
+  }
+
+  for (const field of ["barcodes", "images", "images360", "attributes", "complexAttributes"]) {
+    const importedValue = Array.isArray(imported[field]) ? imported[field] : [];
+    const currentValue = Array.isArray(current[field]) ? current[field] : [];
+    if (!importedValue.length && currentValue.length) merged[field] = currentValue;
+  }
+
+  if (current.extra && typeof current.extra === "object" && (!imported.extra || !Object.keys(imported.extra).length)) {
+    merged.extra = current.extra;
+  }
+  return merged;
+}
+
 function mergeProducts(existingProducts, importedProducts) {
   const map = new Map();
   const looseIndex = new Map();
@@ -4592,15 +4626,32 @@ function mergeProducts(existingProducts, importedProducts) {
         && currentState.code !== "unknown"
         && (importedState.partial || importedState.code === "unknown"),
     );
+    const offerId = cleanText(importedNormalized.offerId || current?.offerId);
+    const importedNameWeak = importedNormalized.marketplace === "ozon" && isWeakProductName(importedNormalized.name, offerId);
+    const currentNameWeak = current?.marketplace === "ozon" && isWeakProductName(current?.name, offerId);
+    const preserveCurrentRichOzonFields = Boolean(
+      current
+        && importedNormalized.marketplace === "ozon"
+        && (importedState.partial || importedNameWeak || !importedNormalized.imageUrl),
+    );
+    const preserveCurrentName = Boolean(current?.name && !currentNameWeak && importedNameWeak);
+    const preserveCurrentImage = Boolean(current?.imageUrl && !importedNormalized.imageUrl);
+    const preserveCurrentProductUrl = Boolean(current?.productUrl && !importedNormalized.productUrl);
+    const preserveCurrentSku = Boolean(current?.sku && !importedNormalized.sku);
     const preserveCurrentPrice = Boolean(current?.marketplacePrice && !importedNormalized.marketplacePrice);
     const preserveCurrentMinPrice = Boolean(current?.marketplaceMinPrice && !importedNormalized.marketplaceMinPrice);
     const merged = normalizeWarehouseProduct({
       ...current,
       ...importedNormalized,
       id: current?.id || importedNormalized.id,
+      name: preserveCurrentName ? current.name : importedNormalized.name,
+      imageUrl: preserveCurrentImage ? current.imageUrl : importedNormalized.imageUrl,
+      productUrl: preserveCurrentProductUrl ? current.productUrl : importedNormalized.productUrl,
+      sku: preserveCurrentSku ? current.sku : importedNormalized.sku,
       marketplacePrice: preserveCurrentPrice ? current.marketplacePrice : importedNormalized.marketplacePrice,
       marketplaceMinPrice: preserveCurrentMinPrice ? current.marketplaceMinPrice : importedNormalized.marketplaceMinPrice,
       marketplaceState: preserveCurrentState ? currentState : importedState,
+      ozon: mergeOzonDraftForWarehouseProduct(current, importedNormalized, preserveCurrentRichOzonFields),
       keyword: current?.keyword || importedNormalized.keyword,
       markup: current?.markup || importedNormalized.markup,
       autoPriceEnabled: current?.autoPriceEnabled !== undefined ? current.autoPriceEnabled : importedNormalized.autoPriceEnabled,
@@ -4783,6 +4834,8 @@ function isWeakProductName(name, offerId) {
   const current = cleanText(name);
   const article = cleanText(offerId);
   if (!current) return true;
+  if (/^товар\s+ozon$/i.test(current)) return true;
+  if (/^ozon\s+\d+$/i.test(current)) return true;
   if (article && current.toLowerCase() === article.toLowerCase()) return true;
   return /^[A-ZА-Я0-9._-]{4,}$/i.test(current) && !/\s/.test(current);
 }

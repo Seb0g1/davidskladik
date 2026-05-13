@@ -293,7 +293,18 @@ test("marketplace sync merge keeps known Ozon state and price on partial import"
         target: "ozon",
         offerId: "OZ-PARTIAL",
         productId: "777",
-        name: "Active product",
+        name: "Amouage Reflection Man Eau De Parfum 100ml",
+        imageUrl: "https://example.test/amouage.jpg",
+        productUrl: "https://www.ozon.ru/product/777/",
+        sku: "123456",
+        ozon: {
+          offerId: "OZ-PARTIAL",
+          name: "Amouage Reflection Man Eau De Parfum 100ml",
+          vendor: "Amouage",
+          primaryImage: "https://example.test/amouage.jpg",
+          images: ["https://example.test/amouage.jpg"],
+          barcode: "4600000000001",
+        },
         marketplacePrice: 12345,
         marketplaceMinPrice: 10000,
         marketplaceState: { code: "active", label: "Активен Ozon", stock: 3, present: 3 },
@@ -307,7 +318,7 @@ test("marketplace sync merge keeps known Ozon state and price on partial import"
         target: "account-1",
         offerId: "OZ-PARTIAL",
         productId: "777",
-        name: "Active product from Ozon",
+        name: "Товар Ozon",
         marketplacePrice: null,
         marketplaceMinPrice: null,
         marketplaceState: { code: "out_of_stock", label: "Нет в наличии Ozon", stock: 0, partial: true },
@@ -322,6 +333,14 @@ test("marketplace sync merge keeps known Ozon state and price on partial import"
   assert.equal(merged[0].marketplaceState.stock, 3);
   assert.equal(merged[0].marketplacePrice, 12345);
   assert.equal(merged[0].marketplaceMinPrice, 10000);
+  assert.equal(merged[0].name, "Amouage Reflection Man Eau De Parfum 100ml");
+  assert.equal(merged[0].imageUrl, "https://example.test/amouage.jpg");
+  assert.equal(merged[0].productUrl, "https://www.ozon.ru/product/777/");
+  assert.equal(merged[0].sku, "123456");
+  assert.equal(merged[0].ozon.name, "Amouage Reflection Man Eau De Parfum 100ml");
+  assert.equal(merged[0].ozon.vendor, "Amouage");
+  assert.equal(merged[0].ozon.primaryImage, "https://example.test/amouage.jpg");
+  assert.deepEqual(merged[0].ozon.images, ["https://example.test/amouage.jpg"]);
   assert.equal(merged[0].links.length, 1);
 });
 
@@ -381,6 +400,15 @@ test("Ozon sync refreshes details only for new or incomplete products", () => {
 
   assert.equal(ozonProductNeedsDetailRefresh(existingComplete), false);
   assert.equal(ozonProductNeedsDetailRefresh(existingWeak), true);
+  assert.equal(ozonProductNeedsDetailRefresh(normalizeWarehouseProduct({
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "generic",
+    productId: "3",
+    name: "Товар Ozon",
+    marketplacePrice: 1000,
+    marketplaceState: { code: "active" },
+  })), true);
   assert.deepEqual(pickOzonDetailOfferIds(list, existingByOffer, 10), ["weak", "new"]);
 });
 
