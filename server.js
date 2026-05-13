@@ -935,7 +935,11 @@ function buildOzonPricePayload(item = {}) {
     price: String(price),
     currency_code: "RUB",
   };
-  if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_RESET_OLD_PRICE, true)) {
+  if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_SET_OLD_PRICE, true)) {
+    const markupPct = Math.max(0, Number(process.env.OZON_OLD_PRICE_MARKUP_PCT || 20) || 20);
+    const oldPrice = Math.max(price + 1, roundPrice(price * (1 + markupPct / 100)));
+    payload.old_price = String(oldPrice);
+  } else if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_RESET_OLD_PRICE, false)) {
     payload.old_price = "0";
   }
   if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_DISABLE_AUTO_ACTIONS, true)) {
