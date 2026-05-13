@@ -7785,7 +7785,10 @@ function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
       priority,
       removeOnComplete: 2000,
       removeOnFail: 2000,
-    }).catch((error) => logger.warn("queue add failed", { name, detail: error?.message || String(error) }));
+    }).catch((error) => {
+      logger.warn("queue add failed, falling back to inline mode", { name, detail: error?.message || String(error) });
+      return processMarketplaceJob(name, data);
+    });
   }
   return processMarketplaceJob(name, data).catch((error) => {
     logger.warn("inline marketplace job failed", { name, detail: error?.message || String(error) });
@@ -7808,6 +7811,27 @@ function initMarketplaceQueue() {
     );
     marketplaceWorker.on("failed", (job, error) => {
       logger.warn("marketplace job failed", { job: job?.name, detail: error?.message || String(error) });
+    });
+    marketplaceWorker.on("completed", (job, result) => {
+      if (job?.name === "auto-price-push" && result && typeof result === "object") {
+        logger.info("immediate auto price push complete", {
+          reason: job.data?.reason || "bullmq",
+          scope: Array.isArray(job.data?.productIds) ? job.data.productIds.length : "all",
+          sent: result.sent || 0,
+          failed: result.failed || 0,
+          stockSent: result.stockSent || 0,
+          stockFailed: result.stockFailed || 0,
+          skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
+        });
+        return;
+      }
+      logger.info("marketplace job complete", { job: job?.name || "unknown" });
+    });
+    marketplaceWorker.on("error", (error) => {
+      logger.warn("marketplace worker error", { detail: error?.message || String(error) });
+    });
+    marketplaceQueue.on("error", (error) => {
+      logger.warn("marketplace queue error", { detail: error?.message || String(error) });
     });
     logger.info("marketplace queue enabled", { mode: "bullmq" });
   } catch (error) {
@@ -7840,6 +7864,7 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
             usdRate: undefined,
             minDiffRub: 0,
             minDiffPct: 0,
+            reason,
           },
           { priority: 1 },
         );
