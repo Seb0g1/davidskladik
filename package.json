@@ -10,6 +10,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
     "db:seed-from-json": "node scripts/seed-postgres-from-json.cjs",
+    "db:export": "node scripts/export-postgres-data.cjs",
+    "db:import": "node scripts/import-postgres-data.cjs",
     "inspect:db": "node scripts/inspect-db.js",
     "test": "node --test test/smoke.test.cjs",
     "relay:openai": "node scripts/openai-relay-server.cjs",
