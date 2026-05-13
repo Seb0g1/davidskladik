@@ -3511,7 +3511,74 @@ async function writeSnapshot(snapshot) {
   await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2), "utf8");
   priceMasterSnapshotMemoryCache = snapshot;
   priceMasterArticleIndexCache = null;
+  await writePriceMasterSnapshotToPostgres(snapshot).catch((error) => {
+    logger.warn("PriceMaster postgres snapshot write failed", { detail: error?.message || String(error) });
+  });
   invalidateWarehouseViewCache();
+}
+
+function stablePriceMasterSnapshotId(row = {}) {
+  return crypto
+    .createHash("sha1")
+    .update([
+      cleanText(row.article || row.NativeID || row.nativeId),
+      cleanText(row.partnerId || row.PartnerID),
+      cleanText(row.rowId || row.RowID),
+      cleanText(row.name || row.nativeName || row.NativeName),
+      cleanText(row.docDate || row.DocDate),
+    ].join("|"))
+    .digest("hex");
+}
+
+function normalizePriceMasterSnapshotItemForPostgres(row = {}, updatedAt = new Date()) {
+  const article = cleanText(row.article || row.NativeID || row.nativeId);
+  if (!article) return null;
+  const rawPrice = row.price ?? row.NativePrice;
+  const price = rawPrice === undefined || rawPrice === null || rawPrice === "" ? null : String(rawPrice);
+  const currency = cleanText(row.currency || row.priceCurrency).toUpperCase();
+  return {
+    id: stablePriceMasterSnapshotId(row),
+    rowId: cleanText(row.rowId || row.RowID) || null,
+    article,
+    partnerId: cleanText(row.partnerId || row.PartnerID) || null,
+    partnerName: cleanText(row.partnerName || row.PartnerName) || null,
+    nativeName: cleanText(row.name || row.nativeName || row.NativeName) || null,
+    price,
+    currency: currency === "RUB" || currency === "RUR" ? "RUB" : "USD",
+    docDate: toDateOrNull(row.docDate || row.DocDate),
+    active: row.active !== false && row.Active !== false && row.Active !== 0,
+    raw: row,
+    updatedAt,
+  };
+}
+
+async function writePriceMasterSnapshotToPostgres(snapshot = {}) {
+  if (!shouldUsePostgresStorage()) return { skipped: true, reason: "postgres_disabled" };
+  const prisma = getPrisma();
+  if (!prisma) return { skipped: true, reason: "no_prisma" };
+  const rows = Object.values(snapshot.items || {});
+  if (!rows.length) return { skipped: true, reason: "empty_snapshot" };
+
+  const existingCount = await prisma.priceMasterSnapshotItem.count();
+  const changes = Array.isArray(snapshot.changes) ? snapshot.changes.length : 0;
+  if (existingCount === rows.length && changes === 0) {
+    return { skipped: true, reason: "unchanged", items: rows.length };
+  }
+
+  const updatedAt = toDateOrNull(snapshot.createdAt) || new Date();
+  const normalizedRows = rows
+    .map((row) => normalizePriceMasterSnapshotItemForPostgres(row, updatedAt))
+    .filter(Boolean);
+  await prisma.priceMasterSnapshotItem.deleteMany({});
+  for (const chunk of chunkArray(normalizedRows, 2000)) {
+    await prisma.priceMasterSnapshotItem.createMany({ data: chunk, skipDuplicates: true });
+  }
+  logger.info("PriceMaster postgres snapshot written", {
+    items: normalizedRows.length,
+    changes,
+    previousItems: existingCount,
+  });
+  return { items: normalizedRows.length, changes };
 }
 
 async function getPriceMasterSnapshotMeta() {
@@ -9369,6 +9436,7 @@ module.exports = {
   resolveMarkupCoefficient,
   resolveAvailabilityPolicy,
   normalizeManagedSupplier,
+  normalizePriceMasterSnapshotItemForPostgres,
   resolvePriceMasterRowCurrency,
   normalizePriceMasterPrice,
   pickNoSupplierAutomationCandidates,

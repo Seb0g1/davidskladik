@@ -42,6 +42,7 @@ const {
   resolveMarkupCoefficient,
   resolveAvailabilityPolicy,
   normalizeManagedSupplier,
+  normalizePriceMasterSnapshotItemForPostgres,
   resolvePriceMasterRowCurrency,
   normalizePriceMasterPrice,
   pickNoSupplierAutomationCandidates,
@@ -606,6 +607,31 @@ test("normalizePriceMasterPrice keeps dollar-like values in USD", () => {
 test("normalizeManagedSupplier defaults PriceMaster currency to USD", () => {
   const supplier = normalizeManagedSupplier({ name: "Supplier" });
   assert.equal(supplier.priceCurrency, "USD");
+});
+
+test("normalizePriceMasterSnapshotItemForPostgres prepares rows for PostgreSQL", () => {
+  const updatedAt = new Date("2026-05-13T03:00:00.000Z");
+  const row = normalizePriceMasterSnapshotItemForPostgres({
+    rowId: 123,
+    article: " PM-123 ",
+    partnerId: 88,
+    partnerName: "Supplier",
+    name: "Native Name",
+    price: 42.5,
+    currency: "RUR",
+    docDate: "2026-05-12T10:00:00.000Z",
+    active: 1,
+  }, updatedAt);
+
+  assert.equal(row.article, "PM-123");
+  assert.equal(row.partnerId, "88");
+  assert.equal(row.partnerName, "Supplier");
+  assert.equal(row.nativeName, "Native Name");
+  assert.equal(row.price, "42.5");
+  assert.equal(row.currency, "RUB");
+  assert.equal(row.docDate.toISOString(), "2026-05-12T10:00:00.000Z");
+  assert.equal(row.updatedAt, updatedAt);
+  assert.ok(row.id);
 });
 
 test("resolvePriceMasterRowCurrency prefers supplier fixed currency", () => {
