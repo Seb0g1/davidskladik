@@ -63,6 +63,7 @@ const {
   buildOzonPricePayload,
   isOzonResourceExhaustedError,
   isOzonPerItemPriceLimitError,
+  isOzonOldPriceLessError,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,
   priceRetryQueueKey,
@@ -159,6 +160,24 @@ test("non-limit delayed Ozon price retry does not block auto send", () => {
     offerId: "OZ-1",
   }, new Date("2026-05-13T00:10:00.000Z"));
   assert.equal(found, null);
+});
+
+test("Ozon old price errors are healed with a higher old_price retry", () => {
+  const error = new Error("old price is less than price");
+  assert.equal(isOzonOldPriceLessError(error), true);
+  const retry = buildPriceRetryItem({
+    id: "p1",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OZ-1",
+    price: 4500,
+    oldPrice: 4000,
+  }, error, new Date("2026-05-13T00:00:00.000Z"));
+  assert.equal(retry.status, "pending");
+  assert.equal(retry.retryReason, "ozon_old_price_adjusted");
+  assert.equal(retry.forceOldPrice, true);
+  assert.equal(retry.oldPrice, 5400);
+  assert.equal(buildOzonPricePayload(retry).old_price, "5400");
 });
 
 test("price history append is a no-op without PostgreSQL", async () => {

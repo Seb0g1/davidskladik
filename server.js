@@ -956,9 +956,9 @@ function buildOzonPricePayload(item = {}) {
     price: String(price),
     currency_code: "RUB",
   };
-  if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_SET_OLD_PRICE, true)) {
-    const markupPct = Math.max(0, Number(process.env.OZON_OLD_PRICE_MARKUP_PCT || 20) || 20);
-    const oldPrice = Math.max(price + 1, roundPrice(price * (1 + markupPct / 100)));
+  const forceOldPrice = item.forceOldPrice === true || item.retryReason === "ozon_old_price_adjusted";
+  if (forceOldPrice || parseBooleanSetting(process.env.OZON_PRICE_PUSH_SET_OLD_PRICE, true)) {
+    const oldPrice = resolveOzonOldPrice(price, item);
     payload.old_price = String(oldPrice);
   } else if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_RESET_OLD_PRICE, false)) {
     payload.old_price = "0";
@@ -971,6 +971,15 @@ function buildOzonPricePayload(item = {}) {
     payload.min_price = String(price);
   }
   return payload;
+}
+
+function resolveOzonOldPrice(price, item = {}) {
+  const currentPrice = roundPrice(price);
+  if (!currentPrice) return 0;
+  const markupPct = Math.max(0, Number(process.env.OZON_OLD_PRICE_MARKUP_PCT || 20) || 20);
+  const markupOldPrice = roundPrice(currentPrice * (1 + markupPct / 100));
+  const requestedOldPrice = roundPrice(item.oldPrice ?? item.old_price ?? item.oldPriceRub ?? 0);
+  return Math.max(currentPrice + 1, markupOldPrice, requestedOldPrice);
 }
 
 function normalizeMarketplaceAccount(input = {}, current = {}) {
@@ -1945,6 +1954,15 @@ function isOzonPerItemPriceLimitError(error) {
       || combined.includes("10")
       || combined.includes("раз в час")
     );
+}
+
+function isOzonOldPriceLessError(error) {
+  const message = String(error?.message || error?.detail || "").toLowerCase();
+  const ozonMessage = String(error?.ozon?.message || error?.ozon?.error || "").toLowerCase();
+  const combined = `${message} ${ozonMessage}`;
+  return combined.includes("old price is less than price")
+    || (combined.includes("old_price") && combined.includes("less") && combined.includes("price"))
+    || (combined.includes("old price") && combined.includes("less") && combined.includes("price"));
 }
 
 function getOzonPriceBatchSize() {
@@ -4028,6 +4046,9 @@ function priceRetryDelayMs(attempts = 1, error = null) {
   if (isOzonPerItemPriceLimitError(error)) {
     return Math.max(3_600_000, Number(process.env.OZON_PRICE_ITEM_LIMIT_RETRY_MS || 3_900_000) || 3_900_000);
   }
+  if (isOzonOldPriceLessError(error)) {
+    return Math.max(5_000, Number(process.env.OZON_OLD_PRICE_RETRY_MS || 15_000) || 15_000);
+  }
   const base = Math.max(30_000, Number(process.env.OZON_PRICE_RETRY_BASE_DELAY_MS || 180_000) || 180_000);
   const max = Math.max(base, Number(process.env.OZON_PRICE_RETRY_MAX_DELAY_MS || 1_800_000) || 1_800_000);
   const attempt = Math.max(1, Number(attempts || 1) || 1);
@@ -4039,16 +4060,20 @@ function buildPriceRetryItem(item = {}, error = null, now = new Date()) {
   const delayMs = priceRetryDelayMs(attempts, error);
   const nextRetryAt = new Date(now.getTime() + delayMs).toISOString();
   const delayedByLimit = isOzonPerItemPriceLimitError(error);
+  const oldPriceAdjusted = isOzonOldPriceLessError(error);
+  const price = roundPrice(item.price);
   return {
     ...item,
     error: error?.message || item.error || "retry_failed",
+    oldPrice: oldPriceAdjusted ? resolveOzonOldPrice(price, item) : item.oldPrice,
+    forceOldPrice: oldPriceAdjusted ? true : item.forceOldPrice,
     queueKey: priceRetryQueueKey(item),
-    status: delayedByLimit ? "delayed" : "failed",
+    status: delayedByLimit ? "delayed" : (oldPriceAdjusted ? "pending" : "failed"),
     queuedAt: item.queuedAt || now.toISOString(),
     lastAttemptAt: now.toISOString(),
     attempts,
     nextRetryAt,
-    retryReason: delayedByLimit ? "ozon_per_item_price_limit" : "send_failed",
+    retryReason: delayedByLimit ? "ozon_per_item_price_limit" : (oldPriceAdjusted ? "ozon_old_price_adjusted" : "send_failed"),
   };
 }
 
@@ -4215,6 +4240,16 @@ function schedulePriceRetryProcessing(delayMs = null) {
       }
     }
   }, waitMs);
+}
+
+function schedulePriceRetryItems(items = []) {
+  const retryItems = Array.isArray(items) ? items : [];
+  if (!retryItems.length) return;
+  const nextAt = Math.min(...retryItems
+    .map((item) => new Date(item.nextRetryAt || 0).getTime())
+    .filter(Number.isFinite));
+  const delayMs = Number.isFinite(nextAt) ? Math.max(5_000, nextAt - Date.now()) : null;
+  schedulePriceRetryProcessing(delayMs);
 }
 
 function productToPostgresData(product = {}) {
@@ -8308,7 +8343,11 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     const success = successIds.has(item.id);
     const failedEntryForItem = failed.find((entry) => entry.id === item.id);
     const delayedByLimitForItem = failedEntryForItem ? isOzonPerItemPriceLimitError({ message: failedEntryForItem.error }) : false;
-    const sendStatus = success ? "success" : (delayedByLimitForItem ? "delayed" : "failed");
+    const oldPriceAdjustedForItem = failedEntryForItem ? isOzonOldPriceLessError({ message: failedEntryForItem.error }) : false;
+    const sendStatus = success ? "success" : (delayedByLimitForItem ? "delayed" : (oldPriceAdjustedForItem ? "pending" : "failed"));
+    const retryNextAt = failedEntryForItem
+      ? new Date(new Date(sentAt).getTime() + priceRetryDelayMs(Number(failedEntryForItem.attempts || 1), { message: failedEntryForItem.error })).toISOString()
+      : null;
     if (success && item.marketplace !== "ozon") product.marketplacePrice = roundPrice(item.price);
     product.priceHistory = Array.isArray(product.priceHistory) ? product.priceHistory : [];
     const previous = product.priceHistory[product.priceHistory.length - 1] || null;
@@ -8330,7 +8369,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       usdPrice: item.supplier?.price || null,
       usdRate: Number(preview.usdRate || 0) || null,
       reason: reasons.join(", "),
-      status: success ? "success" : (delayedByLimitForItem ? "delayed" : "error"),
+      status: sendStatus === "pending" ? "pending" : (success ? "success" : (delayedByLimitForItem ? "delayed" : "error")),
       error: success ? null : (failedEntryForItem?.error || "send_failed"),
     };
     product.priceHistory.push(historyEntry);
@@ -8348,12 +8387,15 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     });
     if (item.marketplace === "ozon") {
       product.lastOzonPriceSend = {
-        status: failedEntryForItem ? (delayedByLimitForItem ? "delayed" : "error") : "success",
+        status: sendStatus === "failed" ? "error" : sendStatus,
         at: sentAt,
         requestedPrice: roundPrice(item.price),
         cabinetPriceAtSend: Number(item.oldPrice || 0) || null,
-        detail: failedEntryForItem ? failedEntryForItem.error : "ok",
-        nextRetryAt: delayedByLimitForItem ? new Date(new Date(sentAt).getTime() + priceRetryDelayMs(Number(failedEntryForItem.attempts || 1), { message: failedEntryForItem.error })).toISOString() : null,
+        oldPriceForRetry: oldPriceAdjustedForItem ? resolveOzonOldPrice(roundPrice(item.price), item) : null,
+        detail: oldPriceAdjustedForItem
+          ? "Ozon rejected old_price; old_price adjusted to 120% and retry queued."
+          : (failedEntryForItem ? failedEntryForItem.error : "ok"),
+        nextRetryAt: failedEntryForItem ? retryNextAt : null,
       };
     }
   }
@@ -8377,7 +8419,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const merged = [...(queueState.items || []), ...delayedQueueUpdates, ...failedQueued];
   const deduped = Array.from(new Map(merged.map((item) => [priceRetryQueueKey(item), item])).values()).slice(0, 5000);
   if (failedQueued.length || delayedQueueUpdates.length) await writePriceRetryQueue({ items: deduped });
-  if (failedQueued.length) schedulePriceRetryProcessing(priceRetryDelayMs(1));
+  schedulePriceRetryItems([...failedQueued, ...delayedQueueUpdates]);
 
   return {
     ok: true,
@@ -8628,6 +8670,7 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
       for (const entry of ozonItems) {
         const error = failedOfferIds.get(String(entry.payload.offer_id));
         const delayed = error ? isOzonPerItemPriceLimitError(error) : false;
+        const oldPriceAdjusted = error ? isOzonOldPriceLessError(error) : false;
         historyRows.push({
           productId: entry.item.productId || entry.item.id,
           marketplace: "ozon",
@@ -8635,7 +8678,7 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
           offerId: entry.item.offerId,
           oldPrice: entry.item.oldPrice,
           newPrice: entry.item.price,
-          status: error ? (delayed ? "delayed" : "failed") : "success",
+          status: error ? (delayed ? "delayed" : (oldPriceAdjusted ? "pending" : "failed")) : "success",
           error: error?.message || "",
           at: now.toISOString(),
         });
@@ -8686,7 +8729,7 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
     const remaining = [...failed, ...untouched];
     await writePriceRetryQueue({ items: remaining.slice(0, 5000) });
     appendPriceHistoryRows(historyRows).catch((error) => logger.warn("retry price history append failed", { detail: error?.message || String(error) }));
-    if (remaining.length) schedulePriceRetryProcessing();
+    schedulePriceRetryItems(remaining);
     return {
       ok: true,
       trigger,
@@ -10186,6 +10229,7 @@ module.exports = {
   buildOzonPricePayload,
   isOzonResourceExhaustedError,
   isOzonPerItemPriceLimitError,
+  isOzonOldPriceLessError,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,
   priceRetryQueueKey,

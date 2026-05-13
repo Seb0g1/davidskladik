@@ -1876,6 +1876,35 @@ function priceHistoryStatusClass(status) {
   return "retry-state--error";
 }
 
+function lastOzonSendStatusLabel(status) {
+  const text = String(status || "").toLowerCase();
+  if (text === "success") return "отправлено";
+  if (text === "delayed") return "отложено";
+  if (text === "pending") return "ожидает";
+  if (text === "processing") return "отправляется";
+  if (text === "error" || text === "failed") return "ошибка";
+  return text || "—";
+}
+
+function renderLastOzonSendMetric(product = {}) {
+  const send = product.lastOzonPriceSend || {};
+  const status = String(send.status || "").toLowerCase();
+  const detailParts = [];
+  if (send.at) detailParts.push(formatDate(send.at));
+  if (send.nextRetryAt) detailParts.push(`повтор ${formatDate(send.nextRetryAt)}`);
+  if (send.requestedPrice) detailParts.push(`цена ${formatMoney(send.requestedPrice)}`);
+  if (send.oldPriceForRetry) detailParts.push(`old ${formatMoney(send.oldPriceForRetry)}`);
+  const detail = send.detail && status !== "success" ? String(send.detail) : "";
+  const statusClass = priceHistoryStatusClass(status || "pending");
+  return `
+    <div class="last-price-send ${status ? `last-price-send--${escapeHtml(status)}` : ""}">
+      <span>Ozon send</span>
+      <strong><b class="retry-state ${statusClass}">${escapeHtml(lastOzonSendStatusLabel(status))}</b></strong>
+      <small>${escapeHtml(detailParts.join(" · "))}${detail ? ` · ${escapeHtml(detail)}` : ""}</small>
+    </div>
+  `;
+}
+
 function normalizeDetailPriceHistoryEntries(variants = []) {
   return variants
     .flatMap((item) => (item.priceHistory || []).map((entry) => ({
@@ -1979,6 +2008,7 @@ function renderWarehouseDetail(group) {
         <p>${escapeHtml(product.offerId)}${variants.length > 1 ? " · объединённая карточка Ozon + ЯМ" : product.productId ? ` · ID ${escapeHtml(product.productId)}` : ""}</p>
       </div>
       <button class="text-button delete-product" type="button" data-product-id="${escapeHtml(product.id)}" data-product-updated-at="${escapeHtml(product.updatedAt || "")}">Удалить</button>
+      <button class="secondary-button compact-button send-product-price" type="button" data-product-ids="${escapeHtml(groupProductIds.join(","))}">Отправить цену</button>
       <a class="secondary-link-button compact-button" href="/product.html?group=${encodeURIComponent(group.key || productGroupKey(product))}">Страница</a>
     </div>
 
@@ -2006,7 +2036,7 @@ function renderWarehouseDetail(group) {
       <div><span>Новая</span><strong>${formatMoney(product.nextPrice)}</strong></div>
       <div><span>Наценка</span><strong>${Number(product.markupCoefficient || 0).toFixed(2)}</strong></div>
       <div><span>Целевой остаток</span><strong>${Number(product.targetStock || 0) || "—"}</strong></div>
-      <div><span>Ozon send</span><strong>${escapeHtml(product.lastOzonPriceSend?.status || "—")}</strong><small>${escapeHtml(product.lastOzonPriceSend?.at ? formatDate(product.lastOzonPriceSend.at) : "")}${product.lastOzonPriceSend?.detail ? ` · ${escapeHtml(product.lastOzonPriceSend.detail)}` : ""}</small></div>
+      ${renderLastOzonSendMetric(product)}
     </div>
 
     <section class="detail-section">
@@ -3500,6 +3530,38 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
   const aiPhotoButton = event.target.closest(".ai-photo-open");
   if (aiPhotoButton) {
     await openAiImageModal(aiPhotoButton.dataset.productId);
+    return;
+  }
+
+  const sendPriceButton = event.target.closest(".send-product-price");
+  if (sendPriceButton) {
+    event.preventDefault();
+    const productIds = String(sendPriceButton.dataset.productIds || "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+    if (!productIds.length) return;
+    sendPriceButton.disabled = true;
+    elements.warehouseStatus.textContent = "Отправляю цену по выбранной карточке...";
+    try {
+      const result = await api("/api/warehouse/prices/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirmed: true,
+          productIds,
+          usdRate: Number(elements.warehouseUsdRateInput?.value || 0) || undefined,
+          minDiffRub: 0,
+          minDiffPct: 0,
+        }),
+      });
+      elements.warehouseStatus.textContent = `Цена отправлена: ${formatNumber(result.sent || 0)}, ошибок: ${formatNumber(result.failed || 0)}, отложено: ${formatNumber(result.delayed || 0)}.`;
+      queueWarehouseRefresh();
+    } catch (error) {
+      elements.warehouseStatus.textContent = error.message;
+    } finally {
+      sendPriceButton.disabled = false;
+    }
     return;
   }
 
