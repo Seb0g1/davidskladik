@@ -50,6 +50,7 @@ const {
   warehouseBrandMatches,
   normalizeWarehouseProduct,
   productFromPostgres,
+  marketplaceStateCodeFromPostgresRow,
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
@@ -196,6 +197,25 @@ test("postgres warehouse product falls back to raw links when relation links are
   assert.equal(product.links[0].article, "PM-123");
   assert.equal(product.links[0].supplierName, "Supplier A");
   assert.equal(product.links[0].priceCurrency, "RUB");
+});
+
+test("postgres Ozon state helpers prefer marketplaceState over internal target stock/status", () => {
+  assert.equal(
+    marketplaceStateCodeFromPostgresRow({
+      status: "no_supplier",
+      targetStock: 0,
+      marketplaceState: { code: "active", stock: 3 },
+    }),
+    "active",
+  );
+  assert.equal(
+    marketplaceStateCodeFromPostgresRow({
+      status: "ok",
+      targetStock: 0,
+      marketplaceState: { code: "out_of_stock", stock: 0 },
+    }),
+    "out_of_stock",
+  );
 });
 
 test("price retry queue recovers from an empty file", async () => {

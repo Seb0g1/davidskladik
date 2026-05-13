@@ -129,6 +129,8 @@ function normalizeProductForPostgres(product = {}) {
   const id = cleanText(product.id);
   if (!id) return null;
   const name = cleanText(product.name || product.title || product.productName || product.offerName || product.offerId);
+  const marketplaceState = product.marketplaceState || product.state || null;
+  const marketplaceStatus = cleanText(marketplaceState?.code || marketplaceState?.status || product.marketplaceStatus);
   return {
     id,
     marketplace: marketplace(product.marketplace),
@@ -138,12 +140,12 @@ function normalizeProductForPostgres(product = {}) {
     name: name || id,
     brand: cleanText(product.brand || product.brandName || product.ozon?.brand) || null,
     images: jsonOrNull(product.images || product.image ? { images: product.images || [], image: product.image || null } : null),
-    marketplaceState: jsonOrNull(product.marketplaceState || product.state || null),
+    marketplaceState: jsonOrNull(marketplaceState),
     currentPrice: toInt(product.currentPrice || product.marketplacePrice || product.price),
     targetPrice: toInt(product.nextPrice || product.targetPrice),
     targetStock: toInt(product.targetStock),
-    status: cleanText(product.status || product.marketplaceStatus || product.state?.status) || null,
-    archived: Boolean(product.archived || product.isArchived),
+    status: marketplaceStatus || null,
+    archived: Boolean(product.archived || product.isArchived || marketplaceState?.archived || marketplaceStatus === "archived"),
     raw: jsonOrNull(product),
     createdAt: toDate(product.createdAt) || new Date(),
     updatedAt: toDate(product.updatedAt) || new Date(),

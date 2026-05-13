@@ -5433,6 +5433,30 @@ function warehousePagePostgresWhere(filters = {}) {
   return { AND: and.filter((item) => Object.keys(item || {}).length) };
 }
 
+function marketplaceStateCodeFromPostgresRow(row = {}) {
+  const state = row.marketplaceState && typeof row.marketplaceState === "object" && !Array.isArray(row.marketplaceState)
+    ? row.marketplaceState
+    : {};
+  return cleanText(state.code || row.status || state.state).toLowerCase();
+}
+
+async function getOzonStateCountsFromPostgres(prisma) {
+  const rows = await prisma.warehouseProduct.findMany({
+    where: { AND: [enabledWarehouseTargetWhere(), { marketplace: "ozon" }] },
+    select: { marketplaceState: true, status: true, archived: true },
+  });
+  let archived = 0;
+  let inactive = 0;
+  let outOfStock = 0;
+  for (const row of rows) {
+    const code = marketplaceStateCodeFromPostgresRow(row);
+    if (row.archived || code === "archived") archived += 1;
+    if (code === "inactive") inactive += 1;
+    if (code === "out_of_stock") outOfStock += 1;
+  }
+  return { archived, inactive, outOfStock };
+}
+
 async function buildFastWarehousePageFromPostgres({
   page = 1,
   pageSize = 60,
@@ -5450,13 +5474,11 @@ async function buildFastWarehousePageFromPostgres({
   const where = warehousePagePostgresWhere(filters);
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
-  const [totalAll, total, withoutSupplier, ozonArchived, ozonInactive, ozonOutOfStock, rows, suppliers] = await Promise.all([
+  const [totalAll, total, withoutSupplier, ozonStateCounts, rows, suppliers] = await Promise.all([
     prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
     prisma.warehouseProduct.count({ where }),
     prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { links: { none: {} } }] } }),
-    prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { marketplace: "ozon", archived: true }] } }),
-    prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { marketplace: "ozon", status: "inactive" }] } }),
-    prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { marketplace: "ozon", targetStock: { lte: 0 } }] } }),
+    getOzonStateCountsFromPostgres(prisma),
     prisma.warehouseProduct.findMany({
       where,
       include: { links: true },
@@ -5500,9 +5522,9 @@ async function buildFastWarehousePageFromPostgres({
     ready: lastWarehouseViewSnapshot?.ready ?? items.filter((item) => item.ready).length,
     changed: lastWarehouseViewSnapshot?.changed ?? items.filter((item) => item.changed).length,
     withoutSupplier,
-    ozonArchived,
-    ozonInactive,
-    ozonOutOfStock,
+    ozonArchived: ozonStateCounts.archived,
+    ozonInactive: ozonStateCounts.inactive,
+    ozonOutOfStock: ozonStateCounts.outOfStock,
     usdRate: rate,
     priceMaster: await getPriceMasterSnapshotMetaFast(),
     sourceError: "",
@@ -9263,6 +9285,7 @@ module.exports = {
   warehouseBrandMatches,
   normalizeWarehouseProduct,
   productFromPostgres,
+  marketplaceStateCodeFromPostgresRow,
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
