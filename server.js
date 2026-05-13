@@ -79,6 +79,10 @@ const autoArchiveOnNoLinks = process.env.AUTO_ARCHIVE_ON_NO_LINKS === "true";
 const autoRestoreOnSupplierReturn = process.env.AUTO_RESTORE_ON_SUPPLIER_RETURN !== "false";
 const bullmqEnabled = process.env.BULLMQ_ENABLED === "true";
 const redisUrl = cleanText(process.env.REDIS_URL);
+const bullmqWorkerConcurrency = Math.max(1, Math.min(4, Number(process.env.BULLMQ_WORKER_CONCURRENCY || 1) || 1));
+const bullmqLockDurationMs = Math.max(60000, Number(process.env.BULLMQ_LOCK_DURATION_MS || 300000) || 300000);
+const bullmqStalledIntervalMs = Math.max(30000, Number(process.env.BULLMQ_STALLED_INTERVAL_MS || 60000) || 60000);
+const bullmqMaxStalledCount = Math.max(1, Number(process.env.BULLMQ_MAX_STALLED_COUNT || 1) || 1);
 const dailySyncTime = process.env.DAILY_SYNC_TIME || "11:00";
 const dailySyncEnabled = process.env.DAILY_SYNC_ENABLED !== "false";
 const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
@@ -7899,10 +7903,22 @@ async function processMarketplaceJob(name, data = {}) {
   return null;
 }
 
+function marketplaceJobId(name, data = {}) {
+  const productIds = Array.isArray(data?.productIds)
+    ? data.productIds.map((id) => String(id)).filter(Boolean).sort()
+    : [];
+  const scope = productIds.length ? productIds.join("|") : "all";
+  return crypto
+    .createHash("sha1")
+    .update(`${name}|${scope}`)
+    .digest("hex");
+}
+
 function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
   if (process.env.DISABLE_BACKGROUND_JOBS === "true") return Promise.resolve(null);
   if (marketplaceQueue) {
     return marketplaceQueue.add(name, data, {
+      jobId: marketplaceJobId(name, data),
       priority,
       removeOnComplete: 2000,
       removeOnFail: 2000,
@@ -7928,7 +7944,14 @@ function initMarketplaceQueue() {
     marketplaceWorker = new Worker(
       "marketplace-tasks",
       async (job) => processMarketplaceJob(job.name, job.data || {}),
-      { connection, concurrency: 4 },
+      {
+        connection,
+        concurrency: bullmqWorkerConcurrency,
+        lockDuration: bullmqLockDurationMs,
+        lockRenewTime: Math.floor(bullmqLockDurationMs / 2),
+        stalledInterval: bullmqStalledIntervalMs,
+        maxStalledCount: bullmqMaxStalledCount,
+      },
     );
     marketplaceWorker.on("failed", (job, error) => {
       logger.warn("marketplace job failed", { job: job?.name, detail: error?.message || String(error) });
@@ -7954,7 +7977,12 @@ function initMarketplaceQueue() {
     marketplaceQueue.on("error", (error) => {
       logger.warn("marketplace queue error", { detail: error?.message || String(error) });
     });
-    logger.info("marketplace queue enabled", { mode: "bullmq" });
+    logger.info("marketplace queue enabled", {
+      mode: "bullmq",
+      concurrency: bullmqWorkerConcurrency,
+      lockDurationMs: bullmqLockDurationMs,
+      stalledIntervalMs: bullmqStalledIntervalMs,
+    });
   } catch (error) {
     marketplaceQueue = null;
     marketplaceWorker = null;
