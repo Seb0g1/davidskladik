@@ -6045,6 +6045,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const warehouse = await readWarehouse();
+    const targetProducts = warehouse.products.filter((product) => ids.has(String(product.id)));
+    const conflicts = collectProductConflicts(targetProducts, productLocksFromRequest(request.body));
+    if (conflicts.length) return conflictResponse(response, conflicts);
     for (const linkToValidate of baseLinks) {
       await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers);
     }
@@ -6215,13 +6218,13 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       skipped.push({ id: product.id, offerId: product.offerId, reason: "no_pricemaster_link" });
       continue;
     }
+    const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
+    const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
+    if (targetStock !== currentStock) stockItems.push(product);
     if (!product.ready) {
       skipped.push({ id: product.id, offerId: product.offerId, reason: "not_ready" });
       continue;
     }
-    const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
-    const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
-    if (targetStock !== currentStock) stockItems.push(product);
     const current = Number(product.currentPrice || 0);
     const nextValue = Number(product.nextPrice || 0);
     const diffRub = Math.abs(nextValue - current);
@@ -6305,7 +6308,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     const product = warehouse.products.find((entry) => entry.id === item.id);
     if (!product) continue;
     const success = successIds.has(item.id);
-    if (success) product.marketplacePrice = roundPrice(item.price);
+    if (success && item.marketplace !== "ozon") product.marketplacePrice = roundPrice(item.price);
     product.priceHistory = Array.isArray(product.priceHistory) ? product.priceHistory : [];
     const previous = product.priceHistory[product.priceHistory.length - 1] || null;
     const reasons = [];
@@ -6335,6 +6338,8 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       product.lastOzonPriceSend = {
         status: failedEntry ? "error" : "success",
         at: sentAt,
+        requestedPrice: roundPrice(item.price),
+        cabinetPriceAtSend: Number(item.oldPrice || 0) || null,
         detail: failedEntry ? failedEntry.error : "ok",
       };
     }
@@ -6493,7 +6498,7 @@ function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_
   if (changedPriceAutoPushLastBatchAt && now - changedPriceAutoPushLastBatchAt < batchCooldownMs) return 0;
   const ids = (Array.isArray(products) ? products : [])
     .filter((product) => {
-      if (!product?.hasLinks || !product.ready) return false;
+      if (!product?.hasLinks) return false;
       if (product.changed && Number(product.nextPrice || 0) > 0) return true;
       const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
       const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
