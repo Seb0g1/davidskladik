@@ -9568,7 +9568,7 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
   setManualWarehouseSyncProgress({
     percent: 24,
     stage: "Маркетплейсы",
-    meta: `PriceMaster готов: ${formatNumber(priceMaster?.items || 0)} строк. Загружаю карточки Ozon/Yandex.`,
+    meta: `PriceMaster готов: ${formatTelegramNumber(priceMaster?.items || 0)} строк. Загружаю карточки Ozon/Yandex.`,
     processed: Number(priceMaster?.items || 0),
     total: Number(priceMaster?.items || 0),
   });
@@ -9576,7 +9576,7 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
   setManualWarehouseSyncProgress({
     percent: 74,
     stage: "Склад",
-    meta: `Карточки загружены: ${formatNumber(warehouse.total || 0)}. Сверяю поставщиков и правила остатков.`,
+    meta: `Карточки загружены: ${formatTelegramNumber(warehouse.total || 0)}. Сверяю поставщиков и правила остатков.`,
     processed: Number(warehouse.total || 0),
     total: Number(warehouse.total || 0),
   });
@@ -9584,7 +9584,7 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
   setManualWarehouseSyncProgress({
     percent: 84,
     stage: "Автоматизация",
-    meta: `Проверены пропавшие поставщики. Нулевые остатки: ${formatNumber(automation.zeroStockSent || 0)}, архив: ${formatNumber(automation.archived || 0)}.`,
+    meta: `Проверены пропавшие поставщики. Нулевые остатки: ${formatTelegramNumber(automation.zeroStockSent || 0)}, архив: ${formatTelegramNumber(automation.archived || 0)}.`,
     processed: Number(warehouse.total || 0),
     total: Number(warehouse.total || 0),
   });
@@ -9592,7 +9592,7 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
   setManualWarehouseSyncProgress({
     percent: 94,
     stage: "Финал",
-    meta: `Восстановлено товаров: ${formatNumber(recovery.recovered || 0)}. Сохраняю результат и обновляю интерфейс.`,
+    meta: `Восстановлено товаров: ${formatTelegramNumber(recovery.recovered || 0)}. Сохраняю результат и обновляю интерфейс.`,
     processed: Number(warehouse.total || 0),
     total: Number(warehouse.total || 0),
   });
@@ -9660,7 +9660,7 @@ function startManualWarehouseSync(trigger = "manual") {
           ...(manualWarehouseSyncState.progress || {}),
           percent: 100,
           stage: "Готово",
-          meta: `Синхронизация завершена. Карточек: ${formatNumber(result?.warehouse?.total || 0)}.`,
+          meta: `Синхронизация завершена. Карточек: ${formatTelegramNumber(result?.warehouse?.total || 0)}.`,
           processed: Number(result?.warehouse?.total || manualWarehouseSyncState.progress?.processed || 0),
           total: Number(result?.warehouse?.total || manualWarehouseSyncState.progress?.total || 0),
           updatedAt: new Date().toISOString(),
