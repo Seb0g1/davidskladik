@@ -488,6 +488,35 @@ function normalizeAppRole(value, fallback = "manager") {
   return cleanText(value).toLowerCase() === "admin" ? "admin" : fallback;
 }
 
+const passwordHashPrefix = "scrypt";
+
+function isPasswordHash(value) {
+  return cleanText(value).startsWith(`${passwordHashPrefix}$`);
+}
+
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString("base64url");
+  const hash = crypto.scryptSync(String(password || ""), salt, 64).toString("base64url");
+  return `${passwordHashPrefix}$${salt}$${hash}`;
+}
+
+function verifyStoredPassword(password, storedPassword) {
+  const stored = cleanText(storedPassword);
+  if (!isPasswordHash(stored)) return timingSafeEqual(password, stored);
+  const [, salt, expectedHash] = stored.split("$");
+  if (!salt || !expectedHash) return false;
+  const actual = crypto.scryptSync(String(password || ""), salt, 64);
+  const expected = Buffer.from(expectedHash, "base64url");
+  if (actual.length !== expected.length) return false;
+  return crypto.timingSafeEqual(actual, expected);
+}
+
+function passwordForStorage(password) {
+  const value = cleanText(password);
+  if (!value || isPasswordHash(value)) return value;
+  return hashPassword(value);
+}
+
 function normalizeAppUser(input = {}, { source = "local", protectedUser = false, defaultRole = "manager" } = {}) {
   const username = cleanText(input.username || input.user || input.login);
   const role = normalizeAppRole(input.role, defaultRole);
@@ -609,7 +638,7 @@ async function writeStoredAppUsers(users = []) {
             where: { username: user.username },
             create: {
               username: user.username,
-              passwordHash: user.password,
+              passwordHash: passwordForStorage(user.password),
               role: user.role === "admin" ? "admin" : "manager",
               active: !user.disabled,
               source: "postgres",
@@ -618,7 +647,7 @@ async function writeStoredAppUsers(users = []) {
               updatedAt: toDateOrNull(user.updatedAt) || new Date(),
             },
             update: {
-              passwordHash: user.password,
+              passwordHash: passwordForStorage(user.password),
               role: user.role === "admin" ? "admin" : "manager",
               active: !user.disabled,
               source: "postgres",
@@ -634,7 +663,10 @@ async function writeStoredAppUsers(users = []) {
     }
   }
   await fs.mkdir(dataDir, { recursive: true });
-  const payload = { updatedAt: new Date().toISOString(), users: normalized };
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    users: normalized.map((user) => ({ ...user, password: passwordForStorage(user.password) })),
+  };
   const temporaryPath = `${appUsersPath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(temporaryPath, JSON.stringify(payload, null, 2), "utf8");
   for (let attempt = 0; attempt < 5; attempt += 1) {
@@ -904,7 +936,7 @@ app.post("/api/login", loginLimiter, async (request, response, next) => {
     return response.status(500).json({ error: "APP_PASSWORD или APP_USERS_JSON не задан в .env" });
   }
 
-  const user = users.find((item) => timingSafeEqual(username, item.username) && timingSafeEqual(password, item.password));
+  const user = users.find((item) => timingSafeEqual(username, item.username) && verifyStoredPassword(password, item.password));
 
   if (!user) {
     return response.status(401).json({ error: "Неверный логин или пароль" });

@@ -657,6 +657,10 @@ test("admin can add employees and managers cannot open admin areas", async () =>
       .send({ username, password, role: "manager" })
       .expect(200);
     assert.ok(created.body.users.some((user) => user.username === username && user.role === "manager"));
+    const storedUsers = JSON.parse(await fs.readFile(appUsersPath, "utf8")).users || [];
+    const storedUser = storedUsers.find((user) => user.username === username);
+    assert.match(storedUser.password, /^scrypt\$/);
+    assert.notEqual(storedUser.password, password);
 
     const login = await manager
       .post("/api/login")
