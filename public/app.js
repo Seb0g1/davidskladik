@@ -35,6 +35,8 @@ const state = {
   warehouseLivePollTimer: null,
   warehouseLiveRefreshRunning: false,
   warehouseLiveRefreshQueued: false,
+  warehouseSyncPollTimer: null,
+  warehouseSyncStartedFromUi: false,
   warehouseSelectionVersion: 0,
   warehouseLastUpdatedAt: "",
   priceMasterLastUpdatedAt: "",
@@ -1053,6 +1055,107 @@ function setProgress(percent, stage, meta) {
   if (stage) elements.syncProgressStage.textContent = stage;
   if (stage && elements.syncMiniStage) elements.syncMiniStage.textContent = stage;
   if (meta) elements.syncProgressMeta.textContent = meta;
+}
+
+function showSyncProgressPanel(mode = "sync") {
+  if (!elements.warehouseSyncProgress) return;
+  const targets = syncTargetNames();
+  elements.warehouseSyncProgress.classList.remove("hidden");
+  elements.warehouseSyncProgress.classList.add("running");
+  elements.syncMiniProgress?.classList.add("hidden");
+  if (elements.syncProgressTargets) elements.syncProgressTargets.textContent = targets.join(" + ");
+  if (elements.syncProgressTitle) {
+    elements.syncProgressTitle.textContent = mode === "prices"
+      ? "Обновление цен маркетплейсов"
+      : "Синхронизация склада";
+  }
+}
+
+function formatSyncElapsed(startedAt) {
+  const start = Date.parse(startedAt || "");
+  if (!Number.isFinite(start)) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - start) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes ? `${minutes}м ${String(rest).padStart(2, "0")}с` : `${rest}с`;
+}
+
+function renderWarehouseSyncStatus(status = {}) {
+  const running = Boolean(status.running || status.status === "running");
+  if (!running && (!status.status || status.status === "idle")) {
+    elements.warehouseSyncButton.disabled = false;
+    elements.warehouseRefreshPricesButton.disabled = false;
+    return;
+  }
+  const progress = status.progress || {};
+  const percent = Number(progress.percent || (running ? 5 : status.status === "ok" ? 100 : 0));
+  const processed = Number(progress.processed || 0);
+  const total = Number(progress.total || 0);
+  const counts = total > 0
+    ? ` Обработано: ${formatNumber(processed)} из ${formatNumber(total)}.`
+    : processed > 0
+      ? ` Обработано: ${formatNumber(processed)}.`
+      : "";
+  const elapsed = running ? formatSyncElapsed(status.startedAt) : "";
+  const meta = `${progress.meta || (running ? "Синхронизация идёт в фоне." : "Синхронизация не запущена.")}${counts}${elapsed ? ` Время: ${elapsed}.` : ""}`;
+  showSyncProgressPanel("sync");
+  setProgress(percent, progress.stage || (running ? "В работе" : status.status === "ok" ? "Готово" : "Ожидание"), meta);
+  elements.warehouseSyncButton.disabled = running;
+  elements.warehouseRefreshPricesButton.disabled = running;
+  if (elements.warehouseStatus && running) {
+    elements.warehouseStatus.textContent = `Синхронизация идёт в фоне.${counts}${elapsed ? ` Время: ${elapsed}.` : ""}`;
+  }
+  if (!running) {
+    elements.warehouseSyncProgress?.classList.toggle("running", false);
+  }
+}
+
+function stopWarehouseSyncPolling() {
+  if (state.warehouseSyncPollTimer) {
+    window.clearTimeout(state.warehouseSyncPollTimer);
+    state.warehouseSyncPollTimer = null;
+  }
+}
+
+async function pollWarehouseSyncStatus({ refreshOnDone = false } = {}) {
+  stopWarehouseSyncPolling();
+  try {
+    const status = await api("/api/warehouse/sync/status");
+    renderWarehouseSyncStatus(status);
+    if (status.running) {
+      state.warehouseSyncPollTimer = window.setTimeout(() => {
+        pollWarehouseSyncStatus({ refreshOnDone }).catch(() => {});
+      }, 2000);
+      return status;
+    }
+    elements.warehouseSyncButton.disabled = false;
+    elements.warehouseRefreshPricesButton.disabled = false;
+    if (status.status === "ok" && refreshOnDone) {
+      elements.warehouseStatus.textContent = "Синхронизация завершена. Обновляю карточки на экране...";
+      state.enrichedProductIds = new Set();
+      await loadWarehouse(false, false, { silent: true });
+      elements.warehouseStatus.textContent = "Склад обновлён.";
+    } else if (status.status === "failed") {
+      elements.warehouseStatus.textContent = status.error || "Синхронизация завершилась ошибкой.";
+    }
+    return status;
+  } catch (error) {
+    elements.warehouseStatus.textContent = error.message;
+    elements.warehouseSyncButton.disabled = false;
+    elements.warehouseRefreshPricesButton.disabled = false;
+    return null;
+  }
+}
+
+async function startWarehouseSyncFromUi() {
+  showSyncProgressPanel("sync");
+  setProgress(2, "Старт", "Отправляю задачу синхронизации на сервер.");
+  elements.warehouseSyncButton.disabled = true;
+  elements.warehouseRefreshPricesButton.disabled = true;
+  elements.warehouseStatus.textContent = "Запускаю синхронизацию склада в фоне...";
+  const result = await api("/api/warehouse/sync/run", { method: "POST" });
+  renderWarehouseSyncStatus(result.status || result);
+  await pollWarehouseSyncStatus({ refreshOnDone: true });
 }
 
 function startSyncProgress(mode = "sync") {
@@ -2722,6 +2825,7 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
 
 function warehouseLiveRefreshShouldWait() {
   if (document.hidden) return true;
+  if (state.warehouseSyncPollTimer) return true;
   if (state.warehouseLoadingPage || state.warehouseLiveRefreshRunning) return true;
   const active = document.activeElement;
   if (!active) return false;
@@ -2904,6 +3008,7 @@ async function loadSettings() {
   updateAccountFormMode();
   await loadRate(fixedRate);
   await Promise.all([loadWarehouse(false, false, { silent: true }), loadSuppliers({ silent: true }), loadDailySync()]);
+  pollWarehouseSyncStatus({ refreshOnDone: false }).catch(() => {});
   await refreshWarehouseBrandSelect();
   startWarehouseLiveRefresh();
 }
@@ -3200,8 +3305,10 @@ elements.autoPriceDisableAllButton?.addEventListener("click", async () => {
 });
 
 elements.warehouseSyncButton.addEventListener("click", () => {
-  loadWarehouse(true).catch((error) => {
+  startWarehouseSyncFromUi().catch((error) => {
     elements.warehouseStatus.textContent = error.message;
+    elements.warehouseSyncButton.disabled = false;
+    elements.warehouseRefreshPricesButton.disabled = false;
   });
 });
 

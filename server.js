@@ -151,6 +151,13 @@ let manualWarehouseSyncState = {
   finishedAt: null,
   result: null,
   error: null,
+  progress: {
+    percent: 0,
+    stage: "Ожидание",
+    meta: "Синхронизация ещё не запускалась.",
+    processed: 0,
+    total: 0,
+  },
 };
 let autoSyncTimer = null;
 let autoSyncRunning = false;
@@ -163,6 +170,17 @@ let warehousePostgresHashCache = new Map();
 let warehousePostgresUpdatedAtCache = new Map();
 let warehousePostgresWriteRunning = false;
 let warehousePostgresWriteQueuedPayload = null;
+
+function setManualWarehouseSyncProgress(patch = {}) {
+  manualWarehouseSyncState = {
+    ...manualWarehouseSyncState,
+    progress: {
+      ...(manualWarehouseSyncState.progress || {}),
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    },
+  };
+}
 let warehousePostgresLinkBackfillPromise = null;
 let warehousePostgresLinkBackfillDone = false;
 let priceMasterSnapshotMemoryCache = null;
@@ -9539,10 +9557,45 @@ async function runAutoSyncCycle(trigger = "auto") {
 }
 
 async function runManualWarehouseSync(trigger = "manual_sync") {
+  setManualWarehouseSyncProgress({
+    percent: 8,
+    stage: "PriceMaster",
+    meta: "Обновляю прайс, поставщиков и snapshot PriceMaster.",
+    processed: 0,
+    total: 0,
+  });
   const priceMaster = await runSync();
+  setManualWarehouseSyncProgress({
+    percent: 24,
+    stage: "Маркетплейсы",
+    meta: `PriceMaster готов: ${formatNumber(priceMaster?.items || 0)} строк. Загружаю карточки Ozon/Yandex.`,
+    processed: Number(priceMaster?.items || 0),
+    total: Number(priceMaster?.items || 0),
+  });
   const warehouse = await buildWarehouseView({ sync: true });
+  setManualWarehouseSyncProgress({
+    percent: 74,
+    stage: "Склад",
+    meta: `Карточки загружены: ${formatNumber(warehouse.total || 0)}. Сверяю поставщиков и правила остатков.`,
+    processed: Number(warehouse.total || 0),
+    total: Number(warehouse.total || 0),
+  });
   const automation = await runNoSupplierMarketplaceAutomation(warehouse);
+  setManualWarehouseSyncProgress({
+    percent: 84,
+    stage: "Автоматизация",
+    meta: `Проверены пропавшие поставщики. Нулевые остатки: ${formatNumber(automation.zeroStockSent || 0)}, архив: ${formatNumber(automation.archived || 0)}.`,
+    processed: Number(warehouse.total || 0),
+    total: Number(warehouse.total || 0),
+  });
   const recovery = await runSupplierRecoveryAutomation(warehouse);
+  setManualWarehouseSyncProgress({
+    percent: 94,
+    stage: "Финал",
+    meta: `Восстановлено товаров: ${formatNumber(recovery.recovered || 0)}. Сохраняю результат и обновляю интерфейс.`,
+    processed: Number(warehouse.total || 0),
+    total: Number(warehouse.total || 0),
+  });
   notifyTelegram(formatSyncNotification({
     title: "Склад синхронизирован вручную",
     trigger,
@@ -9585,6 +9638,14 @@ function startManualWarehouseSync(trigger = "manual") {
     finishedAt: null,
     result: null,
     error: null,
+    progress: {
+      percent: 3,
+      stage: "Старт",
+      meta: "Запуск фоновой синхронизации склада.",
+      processed: 0,
+      total: 0,
+      updatedAt: startedAt,
+    },
   };
   manualWarehouseSyncPromise = runManualWarehouseSync(trigger)
     .then((result) => {
@@ -9595,6 +9656,15 @@ function startManualWarehouseSync(trigger = "manual") {
         finishedAt: new Date().toISOString(),
         result,
         error: null,
+        progress: {
+          ...(manualWarehouseSyncState.progress || {}),
+          percent: 100,
+          stage: "Готово",
+          meta: `Синхронизация завершена. Карточек: ${formatNumber(result?.warehouse?.total || 0)}.`,
+          processed: Number(result?.warehouse?.total || manualWarehouseSyncState.progress?.processed || 0),
+          total: Number(result?.warehouse?.total || manualWarehouseSyncState.progress?.total || 0),
+          updatedAt: new Date().toISOString(),
+        },
       };
       return result;
     })
@@ -9607,6 +9677,13 @@ function startManualWarehouseSync(trigger = "manual") {
         finishedAt: new Date().toISOString(),
         result: null,
         error: detail,
+        progress: {
+          ...(manualWarehouseSyncState.progress || {}),
+          percent: 100,
+          stage: "Ошибка",
+          meta: detail,
+          updatedAt: new Date().toISOString(),
+        },
       };
       notifyTelegram(formatSyncNotification({
         title: "Р СѓС‡РЅР°СЏ СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ СЃРєР»Р°РґР° Р·Р°РІРµСЂС€РёР»Р°СЃСЊ РѕС€РёР±РєРѕР№",
