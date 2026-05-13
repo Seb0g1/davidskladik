@@ -86,6 +86,13 @@ async function createManyInBatches(model, rows, batchSize = 1000) {
   return count;
 }
 
+async function deleteLinksForProductsInBatches(prisma, productIds, batchSize = 1000) {
+  for (let index = 0; index < productIds.length; index += batchSize) {
+    const batch = productIds.slice(index, index + batchSize);
+    if (batch.length) await prisma.productLink.deleteMany({ where: { productId: { in: batch } } });
+  }
+}
+
 function normalizeUserForPostgres(user = {}) {
   const username = cleanText(user.username);
   if (!username) return null;
@@ -316,7 +323,7 @@ async function seedWarehouse(prisma) {
   }
 
   if (options.replaceLinks && links.length) {
-    await prisma.productLink.deleteMany({ where: { productId: { in: products.map((product) => product.id) } } });
+    await deleteLinksForProductsInBatches(prisma, products.map((product) => product.id));
   }
   const linkCount = await createManyInBatches(prisma.productLink, links, 1000);
   return { products: productCount, links: linkCount, suppliers: suppliers.length };
