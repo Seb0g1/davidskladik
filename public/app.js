@@ -1580,6 +1580,28 @@ function handleProductConflict(error, context = "операции") {
     : (error?.payload?.currentUpdatedAt ? [error.payload] : []);
   const offerPreview = conflictOfferPreview(conflictItems);
   const suffix = offerPreview ? ` Примеры: ${offerPreview}.` : "";
+  const freshProducts = conflictItems
+    .map((item) => item?.freshProduct)
+    .filter((product) => product?.id);
+  if (freshProducts.length) {
+    const selectedKey = state.selectedWarehouseGroupKey;
+    freshProducts.forEach((product) => mergeWarehouseProduct(product));
+    applyWarehouseFilters();
+    renderWarehouseCards();
+    const freshIds = freshProducts.map((product) => product.id);
+    const refreshedSelected = refreshSelectedDetailForProductIds(freshIds);
+    if (!refreshedSelected && selectedKey) {
+      const selectedGroup = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
+        .find((group) => group.key === selectedKey);
+      if (selectedGroup) {
+        state.selectedWarehouseDetailGroup = selectedGroup;
+        renderWarehouseDetail(selectedGroup);
+      }
+    }
+    elements.warehouseStatus.textContent = `Конфликт ${context}: карточка уже изменена другим менеджером.${suffix} Свежая версия подставлена без переключения.`;
+    showToast(`Карточка была обновлена другим менеджером.${suffix}`, "warn");
+    return true;
+  }
   elements.warehouseStatus.textContent = `Конфликт ${context}: карточка уже изменена другим пользователем.${suffix} Обновляю данные...`;
   showToast(`Карточка была изменена другим менеджером.${suffix}`, "warn");
   queueWarehouseRefresh();
