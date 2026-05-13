@@ -300,8 +300,17 @@ h1 {
 }
 
 .warehouse-control-panel.control-panel {
+  position: relative;
+  z-index: 20;
   padding: 0;
   overflow: hidden;
+}
+
+#retryQueuePanel {
+  position: relative;
+  z-index: 1;
+  max-height: 420px;
+  overflow: auto;
 }
 
 .warehouse-panel-head {

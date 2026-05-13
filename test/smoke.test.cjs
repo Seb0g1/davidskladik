@@ -597,6 +597,7 @@ test("Ozon price payload disables auto price controls by default", () => {
       offer_id: "56989",
       price: "29315",
       currency_code: "RUB",
+      old_price: "0",
       auto_action_enabled: "DISABLED",
       price_strategy_enabled: "DISABLED",
     });

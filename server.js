@@ -935,6 +935,9 @@ function buildOzonPricePayload(item = {}) {
     price: String(price),
     currency_code: "RUB",
   };
+  if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_RESET_OLD_PRICE, true)) {
+    payload.old_price = "0";
+  }
   if (parseBooleanSetting(process.env.OZON_PRICE_PUSH_DISABLE_AUTO_ACTIONS, true)) {
     payload.auto_action_enabled = "DISABLED";
     payload.price_strategy_enabled = "DISABLED";
