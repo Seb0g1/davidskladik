@@ -6,6 +6,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:migrate:dev": "prisma migrate dev",
+    "db:seed-from-json": "node scripts/seed-postgres-from-json.cjs",
     "inspect:db": "node scripts/inspect-db.js",
     "test": "node --test test/smoke.test.cjs",
     "relay:openai": "node scripts/openai-relay-server.cjs",
@@ -16,6 +20,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@prisma/client": "^6.19.3",
     "bullmq": "^5.76.6",
     "compression": "^1.8.1",
     "dotenv": "^17.4.2",
@@ -31,6 +36,7 @@
   },
   "devDependencies": {
     "playwright": "^1.59.1",
+    "prisma": "^6.19.3",
     "supertest": "^7.2.2"
   }
 }

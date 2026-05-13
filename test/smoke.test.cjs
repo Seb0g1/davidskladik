@@ -55,6 +55,8 @@ const {
   writePriceRetryQueue,
   priceRetryQueuePath,
 } = require("../server.js");
+const postgres = require("../lib/postgres.js");
+const seedPostgres = require("../scripts/seed-postgres-from-json.cjs");
 
 test("GET /health", async () => {
   const res = await request(app).get("/health").expect(200);
@@ -80,6 +82,67 @@ test("price retry queue recovers from an empty file", async () => {
   } finally {
     await restoreFile(priceRetryQueuePath, backup);
   }
+});
+
+test("PostgreSQL layer stays disabled without DATABASE_URL", () => {
+  const previousUrl = process.env.DATABASE_URL;
+  const previousMode = process.env.DB_MODE;
+  const previousFallback = process.env.JSON_FALLBACK_ENABLED;
+  try {
+    delete process.env.DATABASE_URL;
+    process.env.DB_MODE = "postgres";
+    delete process.env.JSON_FALLBACK_ENABLED;
+    assert.equal(postgres.hasDatabaseUrl(), false);
+    assert.equal(postgres.postgresModeEnabled(), false);
+    assert.equal(postgres.jsonFallbackEnabled(), true);
+  } finally {
+    if (previousUrl === undefined) delete process.env.DATABASE_URL;
+    else process.env.DATABASE_URL = previousUrl;
+    if (previousMode === undefined) delete process.env.DB_MODE;
+    else process.env.DB_MODE = previousMode;
+    if (previousFallback === undefined) delete process.env.JSON_FALLBACK_ENABLED;
+    else process.env.JSON_FALLBACK_ENABLED = previousFallback;
+  }
+});
+
+test("JSON seed normalizers prepare products, links, and retry items for PostgreSQL", () => {
+  const product = seedPostgres.normalizeProductForPostgres({
+    id: "p1",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-1",
+    name: "Demo",
+    brand: "Brand",
+    currentPrice: 170000,
+    nextPrice: 195586,
+    targetStock: 3,
+    updatedAt: "2026-05-13T00:00:00.000Z",
+  });
+  assert.equal(product.id, "p1");
+  assert.equal(product.marketplace, "ozon");
+  assert.equal(product.offerId, "OZ-1");
+  assert.equal(product.targetPrice, 195586);
+
+  const link = seedPostgres.normalizeLinkForPostgres({ id: "p1" }, {
+    article: "81319",
+    supplierName: "Сорин",
+    partnerId: "88",
+    priceCurrency: "RUB",
+  });
+  assert.equal(link.productId, "p1");
+  assert.equal(link.supplierArticle, "81319");
+  assert.equal(link.priceCurrency, "RUB");
+
+  const retry = seedPostgres.normalizeRetryItemForPostgres({
+    id: "p1",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-1",
+    price: 195586,
+    nextRetryAt: "2026-05-13T01:05:00.000Z",
+  });
+  assert.equal(retry.status, "delayed");
+  assert.equal(retry.queueKey, "p1:ozon");
 });
 
 test("POST /api/login неверный пароль", async () => {

@@ -1,0 +1,241 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  manager
+}
+
+enum Marketplace {
+  ozon
+  yandex
+}
+
+enum PriceCurrency {
+  USD
+  RUB
+}
+
+enum QueueStatus {
+  pending
+  processing
+  success
+  failed
+  delayed
+}
+
+enum SyncStatus {
+  running
+  success
+  failed
+  skipped
+}
+
+model AppUser {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(manager)
+  active       Boolean  @default(true)
+  source       String   @default("postgres")
+  protected    Boolean  @default(false)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  linksCreated ProductLink[] @relation("ProductLinkCreatedBy")
+  linksUpdated ProductLink[] @relation("ProductLinkUpdatedBy")
+  auditLogs    AuditLog[]
+
+  @@map("app_users")
+}
+
+model WarehouseProduct {
+  id               String      @id
+  marketplace      Marketplace
+  target           String?
+  offerId          String      @map("offer_id")
+  productId        String?     @map("product_id")
+  name             String
+  brand            String?
+  images           Json?
+  marketplaceState Json?       @map("marketplace_state")
+  currentPrice     Int?        @map("current_price")
+  targetPrice      Int?        @map("target_price")
+  targetStock      Int?        @map("target_stock")
+  status           String?
+  archived         Boolean     @default(false)
+  raw              Json?
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
+
+  links        ProductLink[]
+  priceHistory PriceHistory[]
+  retryItems   PriceRetryQueueItem[]
+
+  @@index([marketplace, target])
+  @@index([offerId])
+  @@index([productId])
+  @@index([brand])
+  @@map("warehouse_products")
+}
+
+model ProductLink {
+  id              String         @id @default(cuid())
+  productId       String         @map("product_id")
+  supplierArticle String         @map("supplier_article")
+  supplierName    String?        @map("supplier_name")
+  partnerId       String?        @map("partner_id")
+  priceCurrency   PriceCurrency  @default(USD) @map("price_currency")
+  keyword         String?
+  raw             Json?
+  createdById     String?        @map("created_by_id")
+  updatedById     String?        @map("updated_by_id")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  product   WarehouseProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdBy AppUser?         @relation("ProductLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy AppUser?         @relation("ProductLinkUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([supplierArticle])
+  @@index([partnerId])
+  @@unique([productId, supplierArticle, partnerId, supplierName, keyword, priceCurrency])
+  @@map("product_links")
+}
+
+model ManagedSupplier {
+  id              String        @id @default(cuid())
+  partnerId       String?       @unique @map("partner_id")
+  name            String
+  active          Boolean       @default(true)
+  defaultCurrency PriceCurrency @default(USD) @map("default_currency")
+  stopReason      String?       @map("stop_reason")
+  note            String?
+  raw             Json?
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  @@index([name])
+  @@map("managed_suppliers")
+}
+
+model AppSetting {
+  key       String   @id
+  value     Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  username   String
+  userId     String?  @map("user_id")
+  action     String
+  entityType String?  @map("entity_type")
+  entityId   String?  @map("entity_id")
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  details    Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user AppUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([username])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model PriceRetryQueueItem {
+  id            String       @id @default(cuid())
+  queueKey      String       @unique @map("queue_key")
+  marketplace   Marketplace
+  target        String?
+  productId     String?      @map("product_id")
+  offerId       String       @map("offer_id")
+  price         Int
+  oldPrice      Int?         @map("old_price")
+  status        QueueStatus  @default(pending)
+  attempts      Int          @default(0)
+  error         String?
+  payload       Json?
+  nextRetryAt   DateTime?    @map("next_retry_at")
+  lastAttemptAt DateTime?    @map("last_attempt_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  product WarehouseProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextRetryAt])
+  @@index([marketplace, target])
+  @@index([offerId])
+  @@map("price_retry_queue")
+}
+
+model PriceHistory {
+  id          String      @id @default(cuid())
+  productId   String?     @map("product_id")
+  marketplace Marketplace
+  target      String?
+  offerId     String      @map("offer_id")
+  oldPrice    Int?        @map("old_price")
+  newPrice    Int         @map("new_price")
+  status      QueueStatus
+  response    Json?
+  error       String?
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  product WarehouseProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([marketplace, target])
+  @@index([createdAt])
+  @@map("price_history")
+}
+
+model SyncRun {
+  id         String     @id @default(cuid())
+  trigger    String
+  status     SyncStatus
+  startedAt  DateTime   @default(now()) @map("started_at")
+  finishedAt DateTime?  @map("finished_at")
+  stats      Json?
+  error      String?
+
+  @@index([trigger])
+  @@index([status])
+  @@index([startedAt])
+  @@map("sync_runs")
+}
+
+model PriceMasterSnapshotItem {
+  id          String        @id @default(cuid())
+  rowId       String?       @map("row_id")
+  article     String
+  partnerId   String?       @map("partner_id")
+  partnerName String?       @map("partner_name")
+  nativeName  String?       @map("native_name")
+  price       Decimal?      @db.Decimal(14, 4)
+  currency    PriceCurrency @default(USD)
+  docDate     DateTime?     @map("doc_date")
+  active      Boolean       @default(true)
+  raw         Json?
+  updatedAt   DateTime      @default(now()) @map("updated_at")
+
+  @@index([article])
+  @@index([partnerId])
+  @@index([partnerName])
+  @@index([nativeName])
+  @@unique([article, partnerId, rowId])
+  @@map("pm_snapshot_items")
+}
