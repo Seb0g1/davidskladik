@@ -3459,17 +3459,20 @@ elements.warehouseCards.addEventListener("click", async (event) => {
   const groupKey = button?.dataset.groupKey || card?.dataset.groupKey;
   if (!groupKey) return;
   setSelectedWarehouseGroupKey(groupKey, { manual: true });
+  const selectionVersion = state.warehouseSelectionVersion;
   state.warehouseAutoFocusGroupKey = null;
   syncWarehouseStateToUrl();
   renderWarehouseCards();
   renderWarehouseDetail(getSortedWarehouseGroups().find((group) => group.key === groupKey));
   try {
     const detailed = await ensureWarehouseGroupDetailed(groupKey);
-    if (state.selectedWarehouseGroupKey === groupKey) renderWarehouseDetail(detailed);
+    if (selectionVersion === state.warehouseSelectionVersion && state.selectedWarehouseGroupKey === groupKey) {
+      renderWarehouseDetail(detailed);
+      focusWarehouseDetailOnSmallScreen();
+    }
   } catch (error) {
     elements.warehouseStatus.textContent = `Не удалось загрузить детали товара: ${error.message}`;
   }
-  focusWarehouseDetailOnSmallScreen();
 });
 
 elements.warehouseCards.addEventListener("change", (event) => {
