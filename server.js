@@ -163,6 +163,8 @@ const immediateAutoPushIds = new Set();
 let immediateAutoPushChain = Promise.resolve();
 const changedPriceAutoPushAt = new Map();
 let changedPriceAutoPushLastBatchAt = 0;
+let priceRetryTimer = null;
+let priceRetryRunning = false;
 let marketplaceQueue = null;
 let marketplaceWorker = null;
 let telegramProxyDispatcher = null;
@@ -3297,6 +3299,63 @@ async function writePriceRetryQueue(queue) {
   return payload;
 }
 
+function priceRetryQueueKey(item = {}) {
+  return cleanText(item.queueKey || `${item.id || item.offerId}:${item.target || item.marketplace || "ozon"}`);
+}
+
+function priceRetryDelayMs(attempts = 1) {
+  const base = Math.max(30_000, Number(process.env.OZON_PRICE_RETRY_BASE_DELAY_MS || 180_000) || 180_000);
+  const max = Math.max(base, Number(process.env.OZON_PRICE_RETRY_MAX_DELAY_MS || 1_800_000) || 1_800_000);
+  const attempt = Math.max(1, Number(attempts || 1) || 1);
+  return Math.min(max, base * attempt * attempt);
+}
+
+function buildPriceRetryItem(item = {}, error = null, now = new Date()) {
+  const attempts = Number(item.attempts || 0) + 1;
+  return {
+    ...item,
+    error: error?.message || item.error || "retry_failed",
+    queueKey: priceRetryQueueKey(item),
+    queuedAt: item.queuedAt || now.toISOString(),
+    lastAttemptAt: now.toISOString(),
+    attempts,
+    nextRetryAt: new Date(now.getTime() + priceRetryDelayMs(attempts)).toISOString(),
+  };
+}
+
+function schedulePriceRetryProcessing(delayMs = null) {
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return;
+  if (priceRetryTimer) return;
+  const waitMs = Math.max(5_000, Number(delayMs ?? process.env.OZON_PRICE_RETRY_POLL_MS ?? 60_000) || 60_000);
+  priceRetryTimer = setTimeout(async () => {
+    priceRetryTimer = null;
+    try {
+      const result = await processPriceRetryQueue({
+        limit: Math.max(1, Number(process.env.OZON_PRICE_RETRY_AUTO_LIMIT || 25) || 25),
+        respectNextRetryAt: true,
+        trigger: "auto",
+      });
+      if (result.processed || result.failed) {
+        logger.info("price retry auto run complete", {
+          processed: result.processed,
+          retried: result.retried,
+          failed: result.failed,
+          remaining: result.remaining,
+        });
+      }
+    } catch (error) {
+      logger.warn("price retry auto run failed", { detail: error?.message || String(error) });
+    } finally {
+      const queue = await readPriceRetryQueue().catch(() => ({ items: [] }));
+      if ((queue.items || []).length) {
+        const nextAt = Math.min(...queue.items.map((item) => new Date(item.nextRetryAt || 0).getTime()).filter(Number.isFinite));
+        const nextDelay = Number.isFinite(nextAt) ? Math.max(5_000, nextAt - Date.now()) : null;
+        schedulePriceRetryProcessing(nextDelay);
+      }
+    }
+  }, waitMs);
+}
+
 async function readWarehouse() {
   if (warehouseMemoryCache) return warehouseMemoryCache;
   try {
@@ -6358,15 +6417,15 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   await writeWarehouse(warehouse);
 
   const queueState = await readPriceRetryQueue();
-  const failedQueued = failed.map((item) => ({
+  const failedQueued = failed.map((item) => buildPriceRetryItem({
     ...item,
     queueKey: `${item.id}:${item.target}`,
     queuedAt: sentAt,
-    attempts: Number(item.attempts || 0) + 1,
-  }));
+  }, { message: item.error }, new Date(sentAt)));
   const merged = [...(queueState.items || []), ...failedQueued];
-  const deduped = Array.from(new Map(merged.map((item) => [item.queueKey || `${item.id}:${item.target}`, item])).values()).slice(0, 5000);
+  const deduped = Array.from(new Map(merged.map((item) => [priceRetryQueueKey(item), item])).values()).slice(0, 5000);
   await writePriceRetryQueue({ items: deduped });
+  if (failedQueued.length) schedulePriceRetryProcessing(priceRetryDelayMs(1));
 
   return {
     ok: true,
@@ -6520,6 +6579,69 @@ function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_
   return ids.length;
 }
 
+async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNextRetryAt = false, trigger = "manual" } = {}) {
+  if (priceRetryRunning) return { ok: true, skipped: true, reason: "already_running", processed: 0, retried: 0, failed: 0, remaining: 0 };
+  priceRetryRunning = true;
+  try {
+    const queue = await readPriceRetryQueue();
+    if (!queue.items.length) return { ok: true, processed: 0, retried: 0, failed: 0, remaining: 0, results: [] };
+    const requestedKeys = new Set((Array.isArray(queueKeys) ? queueKeys : []).map(String));
+    const now = new Date();
+    const selected = (requestedKeys.size
+      ? queue.items.filter((item) => requestedKeys.has(String(priceRetryQueueKey(item))))
+      : queue.items.filter((item) => !respectNextRetryAt || !item.nextRetryAt || new Date(item.nextRetryAt).getTime() <= now.getTime()))
+      .slice(0, Math.max(1, Number(limit || 1000) || 1000));
+    if (!selected.length) return { ok: true, processed: 0, retried: 0, failed: 0, remaining: queue.items.length, results: [] };
+
+    const results = [];
+    const failed = [];
+
+    for (const account of getOzonAccounts()) {
+      const targetItems = selected.filter((item) => item.marketplace === "ozon" && matchesOzonTarget(item.target, account.id));
+      const ozonItems = targetItems.map((item) => ({ item, payload: buildOzonPricePayload(item) }))
+        .filter((entry) => entry.payload.offer_id && Number(entry.payload.price) > 0);
+      if (!ozonItems.length) continue;
+      const sent = await sendOzonPricePayloadChunks(account, ozonItems.map((entry) => entry.payload));
+      results.push(...sent.results.map((entry) => ({ target: account.id, response: entry.response, count: entry.count })));
+      const failedOfferIds = new Map(sent.failed.map((entry) => [String(entry.payload.offer_id), entry.error]));
+      failed.push(...ozonItems
+        .filter((entry) => failedOfferIds.has(String(entry.payload.offer_id)))
+        .map((entry) => buildPriceRetryItem(entry.item, failedOfferIds.get(String(entry.payload.offer_id)), now)));
+    }
+
+    for (const shop of getYandexShops()) {
+      const targetItems = selected.filter((item) => item.marketplace === "yandex" && matchesYandexTarget(item.target, shop.id));
+      const yandexItems = targetItems.map((item) => ({ offerId: String(item.offerId || "").trim(), price: { value: roundPrice(item.price), currencyId: "RUR" } }))
+        .filter((item) => item.offerId && item.price.value > 0);
+      if (!yandexItems.length) continue;
+      try {
+        for (const chunk of chunkArray(yandexItems, 500)) {
+          results.push({ target: shop.id, response: await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-prices/updates`, { offers: chunk }) });
+        }
+      } catch (error) {
+        failed.push(...targetItems.map((item) => buildPriceRetryItem(item, error, now)));
+      }
+    }
+
+    const processedKeys = new Set(selected.map((item) => String(priceRetryQueueKey(item))));
+    const untouched = queue.items.filter((item) => !processedKeys.has(String(priceRetryQueueKey(item))));
+    const remaining = [...failed, ...untouched];
+    await writePriceRetryQueue({ items: remaining.slice(0, 5000) });
+    if (remaining.length) schedulePriceRetryProcessing();
+    return {
+      ok: true,
+      trigger,
+      processed: selected.length,
+      retried: selected.length - failed.length,
+      failed: failed.length,
+      remaining: remaining.length,
+      results,
+    };
+  } finally {
+    priceRetryRunning = false;
+  }
+}
+
 app.post("/api/warehouse/prices/send", async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
@@ -6542,60 +6664,13 @@ app.post("/api/warehouse/prices/retry", async (request, response, next) => {
     if (request.body.confirmed !== true) {
       return response.status(400).json({ error: "Retry was not sent because manual confirmation is required." });
     }
-    const queue = await readPriceRetryQueue();
-    if (!queue.items.length) return response.json({ ok: true, retried: 0, failed: 0, remaining: 0 });
-    const requestedKeys = new Set((Array.isArray(request.body.queueKeys) ? request.body.queueKeys : []).map(String));
-    const selected = requestedKeys.size
-      ? queue.items.filter((item) => requestedKeys.has(String(item.queueKey || `${item.id}:${item.target}`)))
-      : queue.items;
-    const items = selected.slice(0, 1000);
-    const results = [];
-    const failed = [];
-
-    for (const account of getOzonAccounts()) {
-      const targetItems = items.filter((item) => item.marketplace === "ozon" && matchesOzonTarget(item.target, account.id));
-      const ozonItems = targetItems.map((item) => ({ item, payload: buildOzonPricePayload(item) }))
-        .filter((entry) => entry.payload.offer_id && Number(entry.payload.price) > 0);
-      if (!ozonItems.length) continue;
-      const sent = await sendOzonPricePayloadChunks(account, ozonItems.map((entry) => entry.payload));
-      results.push(...sent.results.map((entry) => ({ target: account.id, response: entry.response, count: entry.count })));
-      const failedOfferIds = new Map(sent.failed.map((entry) => [String(entry.payload.offer_id), entry.error]));
-      failed.push(...ozonItems
-        .filter((entry) => failedOfferIds.has(String(entry.payload.offer_id)))
-        .map((entry) => ({
-          ...entry.item,
-          error: failedOfferIds.get(String(entry.payload.offer_id))?.message || "retry_failed",
-          queueKey: entry.item.queueKey || `${entry.item.id}:${entry.item.target}`,
-          queuedAt: entry.item.queuedAt || new Date().toISOString(),
-          attempts: Number(entry.item.attempts || 0) + 1,
-        })));
-    }
-
-    for (const shop of getYandexShops()) {
-      const targetItems = items.filter((item) => item.marketplace === "yandex" && matchesYandexTarget(item.target, shop.id));
-      const yandexItems = targetItems.map((item) => ({ offerId: String(item.offerId || "").trim(), price: { value: roundPrice(item.price), currencyId: "RUR" } }))
-        .filter((item) => item.offerId && item.price.value > 0);
-      if (!yandexItems.length) continue;
-      try {
-        for (const chunk of chunkArray(yandexItems, 500)) {
-          results.push({ target: shop.id, response: await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-prices/updates`, { offers: chunk }) });
-        }
-      } catch (error) {
-        failed.push(...targetItems.map((item) => ({
-          ...item,
-          error: error?.message || "retry_failed",
-          queueKey: item.queueKey || `${item.id}:${item.target}`,
-          queuedAt: item.queuedAt || new Date().toISOString(),
-          attempts: Number(item.attempts || 0) + 1,
-        })));
-      }
-    }
-
-    const processedKeys = new Set(items.map((item) => String(item.queueKey || `${item.id}:${item.target}`)));
-    const untouched = queue.items.filter((item) => !processedKeys.has(String(item.queueKey || `${item.id}:${item.target}`)));
-    const remaining = [...failed, ...untouched];
-    await writePriceRetryQueue({ items: remaining.slice(0, 5000) });
-    response.json({ ok: true, retried: items.length - failed.length, failed: failed.length, remaining: remaining.length, results });
+    const result = await processPriceRetryQueue({
+      queueKeys: Array.isArray(request.body.queueKeys) ? request.body.queueKeys : [],
+      limit: 1000,
+      respectNextRetryAt: false,
+      trigger: "manual",
+    });
+    response.json(result);
   } catch (error) {
     next(error);
   }
@@ -6607,7 +6682,7 @@ app.get("/api/warehouse/prices/retry-queue", async (_request, response, next) =>
     const items = (queue.items || [])
       .map((item) => ({
         ...item,
-        queueKey: item.queueKey || `${item.id}:${item.target}`,
+        queueKey: priceRetryQueueKey(item),
       }))
       .sort((a, b) => new Date(b.queuedAt || 0) - new Date(a.queuedAt || 0));
     response.json({ ok: true, updatedAt: queue.updatedAt, total: items.length, items });
@@ -7880,6 +7955,7 @@ function startServer() {
 
   scheduleDailySync();
   scheduleTelegramDailyReport();
+  schedulePriceRetryProcessing(30_000);
   scheduleAutoSync(autoSyncInitialDelaySeconds * 1000);
 }
 
