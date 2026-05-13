@@ -56,6 +56,8 @@ const {
   marketplaceStateCodeFromPostgresRow,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,
+  isWeakOzonWarehouseProduct,
+  pickWeakOzonProductIds,
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
@@ -527,6 +529,54 @@ test("Ozon sync refreshes details only for new or incomplete products", () => {
     marketplaceState: { code: "active" },
   })), true);
   assert.deepEqual(pickOzonDetailOfferIds(list, existingByOffer, 10), ["WEAK", "new"]);
+});
+
+test("weak Ozon repair picker selects only incomplete warehouse cards", () => {
+  const complete = normalizeWarehouseProduct({
+    id: "complete",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "complete-offer",
+    productId: "1",
+    name: "Complete perfume",
+    imageUrl: "https://example.test/image.jpg",
+    marketplacePrice: 1234,
+    marketplaceState: { code: "active" },
+  });
+  const weakName = normalizeWarehouseProduct({
+    id: "weak-name",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OZ-WEAK",
+    productId: "2",
+    name: "Товар Ozon",
+    imageUrl: "https://example.test/image.jpg",
+    marketplacePrice: 999,
+    marketplaceState: { code: "active" },
+  });
+  const weakImage = normalizeWarehouseProduct({
+    id: "weak-image",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OZ-NO-IMAGE",
+    productId: "3",
+    name: "Real Ozon product",
+    marketplacePrice: 999,
+    marketplaceState: { code: "active" },
+  });
+  const yandex = normalizeWarehouseProduct({
+    id: "yandex-weak",
+    target: "yandex",
+    marketplace: "yandex",
+    offerId: "YA-1",
+    name: "Товар Ozon",
+  });
+
+  assert.equal(isWeakOzonWarehouseProduct(complete), false);
+  assert.equal(isWeakOzonWarehouseProduct(weakName), true);
+  assert.equal(isWeakOzonWarehouseProduct(weakImage), true);
+  assert.deepEqual(pickWeakOzonProductIds([complete, weakName, yandex, weakImage], 10), ["weak-name", "weak-image"]);
+  assert.deepEqual(pickWeakOzonProductIds([weakName, weakImage], 1), ["weak-name"]);
 });
 
 test("price retry queue recovers from an empty file", async () => {

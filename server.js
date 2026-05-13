@@ -2698,6 +2698,28 @@ function ozonProductNeedsDetailRefresh(product = {}) {
   return false;
 }
 
+function isWeakOzonWarehouseProduct(product = {}) {
+  if (!product || cleanText(product.marketplace) !== "ozon") return false;
+  const offerId = cleanText(product.offerId || product.ozon?.offerId);
+  if (!offerId) return false;
+  return ozonProductNeedsDetailRefresh(product);
+}
+
+function pickWeakOzonProductIds(products = [], maxItems = 400) {
+  const limit = Math.max(0, Math.min(1000, Number(maxItems || 0) || 0));
+  if (!limit) return [];
+  const ids = [];
+  const seen = new Set();
+  for (const product of products || []) {
+    const id = cleanText(product?.id);
+    if (!id || seen.has(id) || !isWeakOzonWarehouseProduct(product)) continue;
+    ids.push(id);
+    seen.add(id);
+    if (ids.length >= limit) break;
+  }
+  return ids;
+}
+
 function pickOzonDetailOfferIds(products = [], existingByOffer = new Map(), maxItems = 800) {
   const limit = Math.max(0, Number(maxItems || 0) || 0);
   if (!limit) return [];
@@ -8116,6 +8138,31 @@ app.post("/api/warehouse/products/enrich", async (request, response, next) => {
   }
 });
 
+app.post("/api/warehouse/products/repair-weak-ozon", async (request, response, next) => {
+  try {
+    const limit = Math.max(1, Math.min(1000, Number(request.body?.limit || 400) || 400));
+    const warehouse = await readWarehouse();
+    const totalWeak = (warehouse.products || []).filter(isWeakOzonWarehouseProduct).length;
+    const productIds = pickWeakOzonProductIds(warehouse.products || [], limit);
+    if (!productIds.length) {
+      return response.json({ ok: true, totalWeak: 0, processed: 0, updated: 0, remainingWeak: 0, products: [] });
+    }
+    const products = await enrichWarehouseProducts(productIds);
+    const nextWarehouse = await readWarehouse();
+    const remainingWeak = (nextWarehouse.products || []).filter(isWeakOzonWarehouseProduct).length;
+    response.json({
+      ok: true,
+      totalWeak,
+      processed: productIds.length,
+      updated: products.length,
+      remainingWeak,
+      products,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch("/api/warehouse/products/:id", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
@@ -10599,6 +10646,8 @@ module.exports = {
   marketplaceStateCodeFromPostgresRow,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,
+  isWeakOzonWarehouseProduct,
+  pickWeakOzonProductIds,
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,

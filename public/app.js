@@ -83,6 +83,7 @@ const elements = {
   autoPriceDisableAllButton: document.querySelector("#autoPriceDisableAllButton"),
   manualProductToggle: document.querySelector("#manualProductToggle"),
   warehouseSyncButton: document.querySelector("#warehouseSyncButton"),
+  warehouseRepairWeakOzonButton: document.querySelector("#warehouseRepairWeakOzonButton"),
   warehouseRefreshPricesButton: document.querySelector("#warehouseRefreshPricesButton"),
   warehouseDryRunButton: document.querySelector("#warehouseDryRunButton"),
   warehouseRetryQueueButton: document.querySelector("#warehouseRetryQueueButton"),
@@ -1046,6 +1047,9 @@ function updateSyncButtonLabel() {
   const names = syncTargetNames();
   elements.warehouseSyncButton.textContent = `Синхронизировать ${names.map((name) => (name === "Yandex Market" ? "ЯМ" : name)).join(" + ")}`;
   elements.warehouseSyncButton.title = `Синхронизация загрузит товары, цены, статусы, остатки и фото: ${names.join(" + ")}.`;
+  if (elements.warehouseRepairWeakOzonButton) {
+    elements.warehouseRepairWeakOzonButton.title = "Точечно обновляет слабые Ozon-карточки без полного пересчета склада.";
+  }
   if (elements.syncProgressTargets) elements.syncProgressTargets.textContent = names.join(" + ");
 }
 
@@ -3508,6 +3512,39 @@ elements.warehouseSyncButton.addEventListener("click", () => {
     elements.warehouseSyncButton.disabled = false;
     elements.warehouseRefreshPricesButton.disabled = false;
   });
+});
+
+elements.warehouseRepairWeakOzonButton?.addEventListener("click", async () => {
+  const finishProgress = startSyncProgress("sync");
+  const button = elements.warehouseRepairWeakOzonButton;
+  if (button) button.disabled = true;
+  elements.warehouseStatus.textContent = "Ищу слабые карточки Ozon и точечно подтягиваю название, фото, цену и остаток...";
+  try {
+    const result = await api("/api/warehouse/products/repair-weak-ozon", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit: 400 }),
+    });
+    if (Array.isArray(result.products) && result.products.length) {
+      mergeWarehouseProducts(result.products);
+      state.enrichedProductIds = new Set();
+      renderWarehouseCards();
+      refreshSelectedDetailForProductIds(result.products.map((product) => product.id).filter(Boolean));
+    } else {
+      await loadWarehouse(false, false, { silent: true });
+    }
+    const remaining = Number(result.remainingWeak || 0);
+    elements.warehouseStatus.textContent = remaining
+      ? `Ozon: обновлено ${formatNumber(result.updated || 0)} из ${formatNumber(result.processed || 0)} слабых карточек. Осталось: ${formatNumber(remaining)}.`
+      : `Ozon: слабые карточки на текущем складе не найдены или уже исправлены. Обновлено: ${formatNumber(result.updated || 0)}.`;
+    showToast(remaining ? "Часть слабых карточек Ozon обновлена." : "Слабые карточки Ozon исправлены.", remaining ? "warn" : "success");
+    finishProgress(true);
+  } catch (error) {
+    elements.warehouseStatus.textContent = error.message;
+    finishProgress(false);
+  } finally {
+    if (button) button.disabled = false;
+  }
 });
 
 elements.warehouseRefreshPricesButton.addEventListener("click", async () => {
