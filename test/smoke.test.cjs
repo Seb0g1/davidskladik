@@ -60,6 +60,7 @@ const {
   buildPriceRetryItem,
   priceRetryQueueKey,
   findActiveDelayedPriceRetry,
+  appendPriceHistoryRows,
   readPriceRetryQueue,
   writePriceRetryQueue,
   priceRetryQueuePath,
@@ -129,6 +130,23 @@ test("active delayed Ozon price retry blocks duplicate auto send", () => {
     marketplace: "ozon",
   }, new Date("2026-05-13T02:10:00.000Z"));
   assert.equal(expired, null);
+});
+
+test("price history append is a no-op without PostgreSQL", async () => {
+  const count = await appendPriceHistoryRows([
+    {
+      productId: "p1",
+      marketplace: "ozon",
+      target: "ozon",
+      offerId: "OZ-1",
+      oldPrice: 170000,
+      newPrice: 195586,
+      status: "delayed",
+      error: "limit",
+      at: "2026-05-13T00:00:00.000Z",
+    },
+  ]);
+  assert.equal(count, 0);
 });
 
 test("price retry queue recovers from an empty file", async () => {

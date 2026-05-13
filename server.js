@@ -3758,6 +3758,35 @@ function buildPriceRetryItem(item = {}, error = null, now = new Date()) {
   };
 }
 
+async function appendPriceHistoryRows(rows = []) {
+  if (!shouldUsePostgresStorage()) return 0;
+  const normalizedRows = (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      productId: cleanText(row.productId || row.id) || null,
+      marketplace: normalizeMarketplaceEnum(row.marketplace || "ozon"),
+      target: cleanText(row.target || row.marketplace) || null,
+      offerId: cleanText(row.offerId || row.offer_id),
+      oldPrice: row.oldPrice === undefined || row.oldPrice === null ? null : (roundPrice(row.oldPrice) || 0),
+      newPrice: roundPrice(row.newPrice ?? row.price ?? 0) || 0,
+      status: normalizeQueueStatusEnum(row.status || (row.error ? "failed" : "success")),
+      response: cloneAuditValue(row.response || row.result || null),
+      error: cleanText(row.error || ""),
+      createdAt: toDateOrNull(row.createdAt || row.at) || new Date(),
+    }))
+    .filter((row) => row.offerId && row.newPrice > 0);
+  if (!normalizedRows.length) return 0;
+  try {
+    const result = await getPrisma().priceHistory.createMany({
+      data: normalizedRows,
+      skipDuplicates: true,
+    });
+    return result.count || 0;
+  } catch (error) {
+    logger.warn("postgres price history append failed", { detail: error?.message || String(error), rows: normalizedRows.length });
+    return 0;
+  }
+}
+
 function schedulePriceRetryProcessing(delayMs = null) {
   if (process.env.DISABLE_BACKGROUND_JOBS === "true") return;
   if (priceRetryTimer) return;
@@ -7399,10 +7428,14 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const warehouse = await readWarehouse();
   const successIds = new Set(items.map((item) => item.id));
   for (const failedItem of failed) successIds.delete(failedItem.id);
+  const postgresPriceHistoryRows = [];
   for (const item of items) {
     const product = warehouse.products.find((entry) => entry.id === item.id);
     if (!product) continue;
     const success = successIds.has(item.id);
+    const failedEntryForItem = failed.find((entry) => entry.id === item.id);
+    const delayedByLimitForItem = failedEntryForItem ? isOzonPerItemPriceLimitError({ message: failedEntryForItem.error }) : false;
+    const sendStatus = success ? "success" : (delayedByLimitForItem ? "delayed" : "failed");
     if (success && item.marketplace !== "ozon") product.marketplacePrice = roundPrice(item.price);
     product.priceHistory = Array.isArray(product.priceHistory) ? product.priceHistory : [];
     const previous = product.priceHistory[product.priceHistory.length - 1] || null;
@@ -7411,7 +7444,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     if (Number(previous?.usdRate || 0) !== Number(preview.usdRate || 0)) reasons.push("изменение курса");
     if (Number(previous?.usdPrice || 0) !== Number(item.supplier?.price || 0)) reasons.push("изменение прайса поставщика");
     if (!reasons.length) reasons.push("регулярный пересчет");
-    product.priceHistory.push({
+    const historyEntry = {
       at: sentAt,
       marketplace: item.marketplace,
       target: item.target,
@@ -7424,20 +7457,30 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       usdPrice: item.supplier?.price || null,
       usdRate: Number(preview.usdRate || 0) || null,
       reason: reasons.join(", "),
-      status: success ? "success" : (isOzonPerItemPriceLimitError({ message: failed.find((entry) => entry.id === item.id)?.error }) ? "delayed" : "error"),
-      error: success ? null : (failed.find((entry) => entry.id === item.id)?.error || "send_failed"),
-    });
+      status: success ? "success" : (delayedByLimitForItem ? "delayed" : "error"),
+      error: success ? null : (failedEntryForItem?.error || "send_failed"),
+    };
+    product.priceHistory.push(historyEntry);
     product.priceHistory = product.priceHistory.slice(-100);
+    postgresPriceHistoryRows.push({
+      productId: item.id,
+      marketplace: item.marketplace,
+      target: item.target,
+      offerId: item.offerId,
+      oldPrice: item.oldPrice || null,
+      newPrice: roundPrice(item.price),
+      status: sendStatus,
+      error: historyEntry.error || "",
+      at: sentAt,
+    });
     if (item.marketplace === "ozon") {
-      const failedEntry = failed.find((entry) => entry.id === item.id);
-      const delayedByLimit = failedEntry ? isOzonPerItemPriceLimitError({ message: failedEntry.error }) : false;
       product.lastOzonPriceSend = {
-        status: failedEntry ? (delayedByLimit ? "delayed" : "error") : "success",
+        status: failedEntryForItem ? (delayedByLimitForItem ? "delayed" : "error") : "success",
         at: sentAt,
         requestedPrice: roundPrice(item.price),
         cabinetPriceAtSend: Number(item.oldPrice || 0) || null,
-        detail: failedEntry ? failedEntry.error : "ok",
-        nextRetryAt: delayedByLimit ? new Date(new Date(sentAt).getTime() + priceRetryDelayMs(Number(failedEntry.attempts || 1), { message: failedEntry.error })).toISOString() : null,
+        detail: failedEntryForItem ? failedEntryForItem.error : "ok",
+        nextRetryAt: delayedByLimitForItem ? new Date(new Date(sentAt).getTime() + priceRetryDelayMs(Number(failedEntryForItem.attempts || 1), { message: failedEntryForItem.error })).toISOString() : null,
       };
     }
   }
@@ -7451,6 +7494,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     };
   }
   await writeWarehouse(warehouse);
+  appendPriceHistoryRows(postgresPriceHistoryRows).catch((error) => logger.warn("price history background append failed", { detail: error?.message || String(error) }));
 
   const failedQueued = failed.map((item) => buildPriceRetryItem({
     ...item,
@@ -7630,9 +7674,10 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
     if (!selected.length) return { ok: true, processed: 0, retried: 0, failed: 0, remaining: queue.items.length, results: [] };
 
     const results = [];
-    const failed = [];
+  const failed = [];
+  const historyRows = [];
 
-    for (const account of getOzonAccounts()) {
+  for (const account of getOzonAccounts()) {
       const targetItems = selected.filter((item) => item.marketplace === "ozon" && matchesOzonTarget(item.target, account.id));
       const ozonItems = targetItems.map((item) => ({ item, payload: buildOzonPricePayload(item) }))
         .filter((entry) => entry.payload.offer_id && Number(entry.payload.price) > 0);
@@ -7640,8 +7685,24 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
       const sent = await sendOzonPricePayloadChunks(account, ozonItems.map((entry) => entry.payload));
       results.push(...sent.results.map((entry) => ({ target: account.id, response: entry.response, count: entry.count })));
       const failedOfferIds = new Map(sent.failed.map((entry) => [String(entry.payload.offer_id), entry.error]));
+      const failedOfferIdSet = new Set(failedOfferIds.keys());
+      for (const entry of ozonItems) {
+        const error = failedOfferIds.get(String(entry.payload.offer_id));
+        const delayed = error ? isOzonPerItemPriceLimitError(error) : false;
+        historyRows.push({
+          productId: entry.item.productId || entry.item.id,
+          marketplace: "ozon",
+          target: entry.item.target,
+          offerId: entry.item.offerId,
+          oldPrice: entry.item.oldPrice,
+          newPrice: entry.item.price,
+          status: error ? (delayed ? "delayed" : "failed") : "success",
+          error: error?.message || "",
+          at: now.toISOString(),
+        });
+      }
       failed.push(...ozonItems
-        .filter((entry) => failedOfferIds.has(String(entry.payload.offer_id)))
+        .filter((entry) => failedOfferIdSet.has(String(entry.payload.offer_id)))
         .map((entry) => buildPriceRetryItem(entry.item, failedOfferIds.get(String(entry.payload.offer_id)), now)));
     }
 
@@ -7654,7 +7715,29 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
         for (const chunk of chunkArray(yandexItems, 500)) {
           results.push({ target: shop.id, response: await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-prices/updates`, { offers: chunk }) });
         }
+        historyRows.push(...targetItems.map((item) => ({
+          productId: item.productId || item.id,
+          marketplace: "yandex",
+          target: item.target,
+          offerId: item.offerId,
+          oldPrice: item.oldPrice,
+          newPrice: item.price,
+          status: "success",
+          error: "",
+          at: now.toISOString(),
+        })));
       } catch (error) {
+        historyRows.push(...targetItems.map((item) => ({
+          productId: item.productId || item.id,
+          marketplace: "yandex",
+          target: item.target,
+          offerId: item.offerId,
+          oldPrice: item.oldPrice,
+          newPrice: item.price,
+          status: "failed",
+          error: error?.message || "send_failed",
+          at: now.toISOString(),
+        })));
         failed.push(...targetItems.map((item) => buildPriceRetryItem(item, error, now)));
       }
     }
@@ -7663,6 +7746,7 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
     const untouched = queue.items.filter((item) => !processedKeys.has(String(priceRetryQueueKey(item))));
     const remaining = [...failed, ...untouched];
     await writePriceRetryQueue({ items: remaining.slice(0, 5000) });
+    appendPriceHistoryRows(historyRows).catch((error) => logger.warn("retry price history append failed", { detail: error?.message || String(error) }));
     if (remaining.length) schedulePriceRetryProcessing();
     return {
       ok: true,
@@ -9020,6 +9104,7 @@ module.exports = {
   buildPriceRetryItem,
   priceRetryQueueKey,
   findActiveDelayedPriceRetry,
+  appendPriceHistoryRows,
   readPriceRetryQueue,
   writePriceRetryQueue,
   priceRetryQueuePath,
