@@ -672,6 +672,23 @@ test("admin can add employees and managers cannot open admin areas", async () =>
     await manager.get("/api/history").expect(403);
     await manager.get("/settings.html").expect(302).expect("Location", "/");
 
+    const disabled = await admin
+      .put(`/api/users/${encodeURIComponent(username)}`)
+      .send({ active: false })
+      .expect(200);
+    assert.ok(disabled.body.users.some((user) => user.username === username && user.disabled === true));
+
+    await request(app)
+      .post("/api/login")
+      .send({ username, password })
+      .expect(401);
+
+    const enabled = await admin
+      .put(`/api/users/${encodeURIComponent(username)}`)
+      .send({ active: true })
+      .expect(200);
+    assert.ok(enabled.body.users.some((user) => user.username === username && user.disabled === false));
+
     await admin.delete(`/api/users/${encodeURIComponent(username)}`).expect(200);
   } finally {
     await restoreFile(appUsersPath, backup);

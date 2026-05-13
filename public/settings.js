@@ -176,12 +176,13 @@ function renderUsers(users = []) {
   }
   employeeList.innerHTML = users
     .map((user) => `
-      <div class="settings-user-row" data-username="${escapeHtml(user.username)}">
+      <div class="settings-user-row ${user.disabled ? "is-disabled" : ""}" data-username="${escapeHtml(user.username)}" data-active="${user.disabled ? "0" : "1"}">
         <div>
           <strong>${escapeHtml(user.username)}</strong>
-          <span>${user.role === "admin" ? "Администратор" : "Менеджер"} · ${sourceLabel(user.source)}${user.protected ? " · защищён" : ""}</span>
+          <span>${user.role === "admin" ? "Администратор" : "Менеджер"} · ${sourceLabel(user.source)}${user.protected ? " · защищён" : ""}${user.disabled ? " · выключен" : ""}</span>
         </div>
         <div class="form-inline-actions">
+          <button class="secondary-button compact-button toggle-user-active" type="button" ${user.protected ? "disabled" : ""}>${user.disabled ? "Включить" : "Выключить"}</button>
           <button class="secondary-button compact-button reset-user-password" type="button" ${user.protected ? "disabled" : ""}>Новый пароль</button>
           <button class="secondary-button compact-button delete-user" type="button" ${user.protected ? "disabled" : ""}>Удалить</button>
         </div>
@@ -435,7 +436,19 @@ employeeList?.addEventListener("click", async (event) => {
   const username = row.dataset.username || "";
   const deleteButton = event.target.closest(".delete-user");
   const resetButton = event.target.closest(".reset-user-password");
+  const toggleActiveButton = event.target.closest(".toggle-user-active");
   try {
+    if (toggleActiveButton) {
+      const nextActive = row.dataset.active !== "1";
+      toggleActiveButton.disabled = true;
+      const data = await api(`/api/users/${encodeURIComponent(username)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: nextActive }),
+      });
+      renderUsers(data.users || []);
+      if (employeeStatus) employeeStatus.textContent = `Сотрудник ${username} ${nextActive ? "включён" : "выключен"}.`;
+    }
     if (deleteButton) {
       deleteButton.disabled = true;
       const data = await api(`/api/users/${encodeURIComponent(username)}`, { method: "DELETE" });

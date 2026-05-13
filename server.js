@@ -484,6 +484,20 @@ async function configuredUsersAsync() {
   return dedupeAppUsers(users).filter((user) => !user.disabled);
 }
 
+async function configuredUsersForAdminAsync() {
+  const users = [];
+  const primary = normalizeAppUser({
+    username: process.env.APP_USER || "admin",
+    password: process.env.APP_PASSWORD || "",
+    role: process.env.APP_ROLE || "admin",
+  }, { source: "env", protectedUser: true, defaultRole: "admin" });
+  if (primary.username && primary.password) users.push(primary);
+
+  users.push(...readEnvJsonUsers());
+  users.push(...await readStoredAppUsers({ includeDisabled: true }));
+  return dedupeAppUsers(users);
+}
+
 function normalizeAppRole(value, fallback = "manager") {
   return cleanText(value).toLowerCase() === "admin" ? "admin" : fallback;
 }
@@ -572,11 +586,11 @@ function appUserFromPostgres(row = {}) {
   }, { source: row.source || "postgres", defaultRole: "manager" });
 }
 
-async function readStoredAppUsersFromPostgres(prisma) {
+async function readStoredAppUsersFromPostgres(prisma, { includeDisabled = false } = {}) {
   const rows = await prisma.appUser.findMany({
     where: {
-      active: true,
       protected: false,
+      ...(includeDisabled ? {} : { active: true }),
     },
     orderBy: [
       { role: "asc" },
@@ -586,10 +600,10 @@ async function readStoredAppUsersFromPostgres(prisma) {
   return rows.map(appUserFromPostgres).filter((item) => item.username && item.password);
 }
 
-async function readStoredAppUsers() {
+async function readStoredAppUsers({ includeDisabled = false } = {}) {
   return runWithPostgresFallback(
     "read app users",
-    readStoredAppUsersFromPostgres,
+    (prisma) => readStoredAppUsersFromPostgres(prisma, { includeDisabled }),
     async () => readStoredAppUsersSync(),
   );
 }
@@ -7179,7 +7193,7 @@ app.get("/api/marketplaces", (_request, response) => {
 
 app.get("/api/users", requireAdmin, async (_request, response, next) => {
   try {
-    response.json({ users: (await configuredUsersAsync()).map(publicAppUser) });
+    response.json({ users: (await configuredUsersForAdminAsync()).map(publicAppUser) });
   } catch (error) {
     next(error);
   }
@@ -7190,7 +7204,7 @@ app.post("/api/users", requireAdmin, async (request, response, next) => {
     const user = normalizeAppUser(request.body || {}, { source: "local", defaultRole: "manager" });
     if (!user.username) return response.status(400).json({ error: "Укажите логин сотрудника." });
     if (!user.password || user.password.length < 6) return response.status(400).json({ error: "Укажите пароль сотрудника минимум 6 символов." });
-    const exists = (await configuredUsersAsync()).some((item) => item.username.toLowerCase() === user.username.toLowerCase());
+    const exists = (await configuredUsersForAdminAsync()).some((item) => item.username.toLowerCase() === user.username.toLowerCase());
     if (exists) return response.status(409).json({ error: "Пользователь с таким логином уже существует." });
     const users = await readStoredAppUsers();
     users.push({ ...user, source: "local", protected: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
@@ -7201,7 +7215,7 @@ app.post("/api/users", requireAdmin, async (request, response, next) => {
       oldValue: null,
       newValue: publicAppUser(user),
     }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
-    response.json({ ok: true, users: (await configuredUsersAsync()).map(publicAppUser) });
+    response.json({ ok: true, users: (await configuredUsersForAdminAsync()).map(publicAppUser) });
   } catch (error) {
     next(error);
   }
@@ -7210,7 +7224,7 @@ app.post("/api/users", requireAdmin, async (request, response, next) => {
 app.put("/api/users/:username", requireAdmin, async (request, response, next) => {
   try {
     const username = cleanText(request.params.username);
-    const users = await readStoredAppUsers();
+    const users = await readStoredAppUsers({ includeDisabled: true });
     const index = users.findIndex((item) => item.username.toLowerCase() === username.toLowerCase());
     if (index < 0) return response.status(404).json({ error: "Локальный сотрудник не найден. Пользователей из .env можно менять только в .env." });
     const before = publicAppUser(users[index]);
@@ -7219,6 +7233,12 @@ app.put("/api/users/:username", requireAdmin, async (request, response, next) =>
       role: normalizeAppRole(request.body.role, users[index].role || "manager"),
       updatedAt: new Date().toISOString(),
     };
+    if (request.body.active !== undefined || request.body.disabled !== undefined) {
+      const active = request.body.active !== undefined
+        ? Boolean(request.body.active)
+        : !Boolean(request.body.disabled);
+      nextUser.disabled = !active;
+    }
     if (request.body.password) {
       const password = cleanText(request.body.password);
       if (password.length < 6) return response.status(400).json({ error: "Пароль должен быть минимум 6 символов." });
@@ -7232,7 +7252,7 @@ app.put("/api/users/:username", requireAdmin, async (request, response, next) =>
       oldValue: before,
       newValue: publicAppUser(nextUser),
     }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
-    response.json({ ok: true, users: (await configuredUsersAsync()).map(publicAppUser) });
+    response.json({ ok: true, users: (await configuredUsersForAdminAsync()).map(publicAppUser) });
   } catch (error) {
     next(error);
   }
@@ -7241,7 +7261,7 @@ app.put("/api/users/:username", requireAdmin, async (request, response, next) =>
 app.delete("/api/users/:username", requireAdmin, async (request, response, next) => {
   try {
     const username = cleanText(request.params.username);
-    const users = await readStoredAppUsers();
+    const users = await readStoredAppUsers({ includeDisabled: true });
     const target = users.find((item) => item.username.toLowerCase() === username.toLowerCase());
     if (!target) return response.status(404).json({ error: "Локальный сотрудник не найден. Пользователей из .env удалить нельзя." });
     const remaining = users.filter((item) => item.username.toLowerCase() !== username.toLowerCase());
@@ -7251,7 +7271,7 @@ app.delete("/api/users/:username", requireAdmin, async (request, response, next)
       oldValue: publicAppUser(target),
       newValue: null,
     }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
-    response.json({ ok: true, users: (await configuredUsersAsync()).map(publicAppUser) });
+    response.json({ ok: true, users: (await configuredUsersForAdminAsync()).map(publicAppUser) });
   } catch (error) {
     next(error);
   }

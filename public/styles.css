@@ -5303,6 +5303,11 @@ select.is-invalid {
   font-size: 12px;
 }
 
+.settings-user-row.is-disabled {
+  opacity: 0.72;
+  border-style: dashed;
+}
+
 .settings-user-form {
   grid-template-columns: minmax(160px, 1fr) minmax(160px, 1fr) minmax(150px, 0.7fr) auto;
   align-items: end;
