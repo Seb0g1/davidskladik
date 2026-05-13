@@ -83,6 +83,7 @@ const bullmqWorkerConcurrency = Math.max(1, Math.min(4, Number(process.env.BULLM
 const bullmqLockDurationMs = Math.max(60000, Number(process.env.BULLMQ_LOCK_DURATION_MS || 300000) || 300000);
 const bullmqStalledIntervalMs = Math.max(30000, Number(process.env.BULLMQ_STALLED_INTERVAL_MS || 60000) || 60000);
 const bullmqMaxStalledCount = Math.max(1, Number(process.env.BULLMQ_MAX_STALLED_COUNT || 1) || 1);
+const marketplaceQueueAutoPricePushEnabled = process.env.MARKETPLACE_QUEUE_AUTO_PRICE_PUSH_ENABLED === "true";
 const dailySyncTime = process.env.DAILY_SYNC_TIME || "11:00";
 const dailySyncEnabled = process.env.DAILY_SYNC_ENABLED !== "false";
 const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
@@ -8019,6 +8020,12 @@ function marketplaceJobId(name, data = {}) {
 
 function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
   if (process.env.DISABLE_BACKGROUND_JOBS === "true") return Promise.resolve(null);
+  if (name === "auto-price-push" && !marketplaceQueueAutoPricePushEnabled) {
+    return processMarketplaceJob(name, data).catch((error) => {
+      logger.warn("inline auto price push failed", { detail: error?.message || String(error) });
+      throw error;
+    });
+  }
   if (marketplaceQueue) {
     return marketplaceQueue.add(name, data, {
       jobId: marketplaceJobId(name, data),
