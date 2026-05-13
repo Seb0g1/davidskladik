@@ -45,6 +45,7 @@ const {
   normalizePriceMasterSnapshotItemForPostgres,
   resolvePriceMasterRowCurrency,
   normalizePriceMasterPrice,
+  supplierImpactProductIds,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
   pickWarehouseSupplier,
@@ -1370,6 +1371,21 @@ test("targeted automation can process a product after its last link is removed",
   assert.equal(toZeroStock.length, 1);
   assert.equal(toArchive.length, 1);
   assert.equal(toZeroStock[0].id, "nolinks-targeted");
+});
+
+test("supplier updates target only impacted warehouse products", () => {
+  const warehouse = {
+    products: [
+      { id: "p1", links: [{ supplierName: "Иванна", partnerId: "101" }] },
+      { id: "p2", links: [{ supplierName: "Сорин", partnerId: "202" }] },
+      { id: "p3", links: [{ supplierName: "Иванна" }] },
+      { id: "p4", links: [] },
+    ],
+  };
+
+  assert.deepEqual(supplierImpactProductIds(warehouse, { name: "Иванна", partnerId: "101" }), ["p1", "p3"]);
+  assert.deepEqual(supplierImpactProductIds(warehouse, { name: "old", partnerId: "202" }, { name: "Сорин" }), ["p2"]);
+  assert.deepEqual(supplierImpactProductIds(warehouse, { name: "missing", partnerId: "999" }), []);
 });
 
 test("automation queues linked product for stock=0 when supplier disappeared", () => {

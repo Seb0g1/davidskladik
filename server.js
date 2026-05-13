@@ -1898,17 +1898,33 @@ function normalizeManagedSupplier(input = {}) {
 }
 
 function supplierImpactCount(warehouse = {}, supplier = {}) {
-  const supplierName = normalizeSupplierName(supplier.name);
-  const partnerId = cleanText(supplier.partnerId);
+  return supplierImpactProductIds(warehouse, supplier).length;
+}
+
+function supplierImpactProductIds(warehouse = {}, ...suppliers) {
+  const matchers = suppliers
+    .filter(Boolean)
+    .map((supplier) => ({
+      name: normalizeSupplierName(supplier.name),
+      partnerId: cleanText(supplier.partnerId),
+    }))
+    .filter((supplier) => supplier.name || supplier.partnerId);
+  if (!matchers.length) return [];
   const productIds = new Set();
   for (const product of warehouse.products || []) {
     for (const link of product.links || []) {
-      const nameMatches = supplierName && normalizeSupplierName(link.supplierName) === supplierName;
-      const idMatches = partnerId && String(link.partnerId || "") === partnerId;
-      if (nameMatches || idMatches) productIds.add(product.id);
+      const normalizedLinkSupplier = normalizeSupplierName(link.supplierName);
+      const linkPartnerId = cleanText(link.partnerId);
+      if (matchers.some((supplier) =>
+        (supplier.name && normalizedLinkSupplier === supplier.name)
+        || (supplier.partnerId && linkPartnerId === supplier.partnerId),
+      )) {
+        productIds.add(product.id);
+        break;
+      }
     }
   }
-  return productIds.size;
+  return Array.from(productIds);
 }
 
 function cloneAuditValue(value) {
@@ -7878,8 +7894,11 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
       newValue: supplier,
     });
     response.json({ ok: true, warehouse: saved });
-    queueMarketplaceJob("no-supplier-automation", {}, { priority: 1 });
-    queueMarketplaceJob("supplier-recovery-automation", {}, { priority: 2 });
+    const affectedProductIds = supplierImpactProductIds(warehouse, before, supplier);
+    if (affectedProductIds.length) {
+      queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds }, { priority: 1 });
+      queueMarketplaceJob("supplier-recovery-automation", { productIds: affectedProductIds }, { priority: 2 });
+    }
     queueImmediateAutoPricePush([], "supplier_update");
   } catch (error) {
     next(error);
@@ -7890,11 +7909,14 @@ app.delete("/api/suppliers/:id", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
     const before = warehouse.suppliers.find((supplier) => supplier.id === request.params.id) || null;
+    const affectedProductIds = supplierImpactProductIds(warehouse, before);
     warehouse.suppliers = warehouse.suppliers.filter((supplier) => supplier.id !== request.params.id);
     const saved = await writeWarehouse(warehouse);
     await appendAudit(request, "supplier.delete", { id: request.params.id, oldValue: before });
     response.json({ ok: true, warehouse: saved });
-    queueMarketplaceJob("no-supplier-automation", {}, { priority: 1 });
+    if (affectedProductIds.length) {
+      queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds }, { priority: 1 });
+    }
   } catch (error) {
     next(error);
   }
@@ -10634,6 +10656,7 @@ module.exports = {
   normalizePriceMasterSnapshotItemForPostgres,
   resolvePriceMasterRowCurrency,
   normalizePriceMasterPrice,
+  supplierImpactProductIds,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
   pickWarehouseSupplier,
