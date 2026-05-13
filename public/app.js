@@ -993,9 +993,9 @@ async function enrichVisibleProducts(products) {
       body: JSON.stringify({ productIds }),
     });
     if (!result.products?.length) return;
-    const byId = new Map(result.products.map((product) => [product.id, product]));
-    state.warehouse = state.warehouse.map((product) => byId.get(product.id) || product);
-    applyWarehouseFilters();
+    result.products.forEach((product) => mergeWarehouseProduct(product, { preserveComputed: true }));
+    renderWarehouseCards();
+    refreshSelectedDetailForProductIds(result.products.map((product) => product.id).filter(Boolean));
   } catch (_error) {
     // Media enrichment is a progressive enhancement; the main warehouse stays usable.
   }
@@ -1427,9 +1427,27 @@ function renderWarehouseCards() {
   }
 }
 
-function mergeWarehouseProduct(product) {
+function mergeWarehouseProduct(product, options = {}) {
   const index = state.warehouse.findIndex((item) => item.id === product.id);
-  if (index >= 0) state.warehouse[index] = product;
+  if (index >= 0 && options.preserveComputed) {
+    const current = state.warehouse[index];
+    state.warehouse[index] = {
+      ...current,
+      ...product,
+      suppliers: Array.isArray(product.suppliers) && product.suppliers.length ? product.suppliers : current.suppliers,
+      selectedSupplier: product.selectedSupplier || current.selectedSupplier,
+      currentPrice: product.currentPrice ?? current.currentPrice,
+      newPrice: product.newPrice ?? current.newPrice,
+      targetPrice: product.targetPrice ?? current.targetPrice,
+      targetStock: product.targetStock ?? current.targetStock,
+      ready: product.ready ?? current.ready,
+      changed: product.changed ?? current.changed,
+      status: product.status || current.status,
+      missingInPriceMaster: product.missingInPriceMaster ?? current.missingInPriceMaster,
+      lastOzonPriceSend: product.lastOzonPriceSend || current.lastOzonPriceSend,
+      noSupplierAutomation: product.noSupplierAutomation || current.noSupplierAutomation,
+    };
+  } else if (index >= 0) state.warehouse[index] = product;
   else state.warehouse.push(product);
 }
 

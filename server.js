@@ -4643,6 +4643,10 @@ function applyOzonInfoToWarehouseProduct(product, info = {}, account = {}, stock
   const priceDetails = normalizeOzonPriceDetails(priceInfo);
   const cabinetPrice =
     pickOzonCabinetListedPrice(priceDetails) || parseMoneyValue(info.price) || product.marketplacePrice || null;
+  const hasStockInfo = Boolean(stockInfo && Object.keys(stockInfo).length);
+  const marketplaceState = hasStockInfo || info.visibility || info.status || info.state
+    ? pickOzonState(product, info, stockInfo)
+    : product.marketplaceState;
   return normalizeWarehouseProduct({
     ...product,
     target: product.target || account.id,
@@ -4655,7 +4659,7 @@ function applyOzonInfoToWarehouseProduct(product, info = {}, account = {}, stock
     imageUrl: primaryImage || product.imageUrl,
     marketplacePrice: cabinetPrice,
     marketplaceMinPrice: priceDetails.minPrice || product.marketplaceMinPrice || null,
-    marketplaceState: pickOzonState(product, info, stockInfo),
+    marketplaceState,
     ozon: {
       ...(product.ozon || {}),
       offerId: product.offerId,
@@ -4689,27 +4693,38 @@ async function enrichWarehouseProducts(productIds = []) {
 
   for (const account of getOzonAccounts()) {
     const products = warehouse.products.filter(
-      (product) => ids.has(product.id) && product.marketplace === "ozon" && product.target === account.id && product.offerId,
+      (product) => ids.has(product.id) && product.marketplace === "ozon" && matchesOzonTarget(product.target, account.id) && product.offerId,
     );
     if (!products.length) continue;
 
     const offerIds = products.map((product) => product.offerId);
     const [infoMap, stockMap, priceMap] = await Promise.all([
-      getOzonProductInfoMap(offerIds, account),
-      getOzonStockMap(offerIds, account).catch(() => new Map()),
-      getOzonPriceMap(offerIds, account).catch(() => new Map()),
+      getOzonProductInfoMap(offerIds, account).catch((error) => {
+        logger.warn("warehouse enrich Ozon info skipped", { account: account.id, detail: error?.message || String(error) });
+        return new Map();
+      }),
+      getOzonStockMap(offerIds, account).catch((error) => {
+        logger.warn("warehouse enrich Ozon stock skipped", { account: account.id, detail: error?.message || String(error) });
+        return new Map();
+      }),
+      getOzonPriceMap(offerIds, account).catch((error) => {
+        logger.warn("warehouse enrich Ozon price skipped", { account: account.id, detail: error?.message || String(error) });
+        return new Map();
+      }),
     ]);
     for (const product of products) {
-      const info = infoMap.get(product.offerId);
-      if (!info) continue;
+      const info = infoMap.get(product.offerId) || {};
+      const stockInfo = stockMap.get(product.offerId) || {};
+      const priceInfo = priceMap.get(product.offerId) || {};
+      if (!Object.keys(info).length && !Object.keys(stockInfo).length && !Object.keys(priceInfo).length) continue;
       const index = warehouse.products.findIndex((item) => item.id === product.id);
       if (index < 0) continue;
       warehouse.products[index] = applyOzonInfoToWarehouseProduct(
         warehouse.products[index],
         info,
         account,
-        stockMap.get(product.offerId) || {},
-        priceMap.get(product.offerId) || {},
+        stockInfo,
+        priceInfo,
       );
       updated.push(warehouse.products[index]);
     }
@@ -6820,9 +6835,13 @@ app.get("/api/suppliers", async (_request, response, next) => {
 
 app.get("/api/live-status", async (_request, response, next) => {
   try {
-    const [warehouse, dailySync] = await Promise.all([
+    const [warehouse, dailySync, priceMaster] = await Promise.all([
       readWarehouse(),
       getDailySyncStatus().catch((error) => ({ error: error?.message || String(error) })),
+      getPriceMasterSnapshotMetaFast().catch((error) => {
+        logger.warn("live status PriceMaster meta failed", { detail: error?.message || String(error) });
+        return { syncId: null, updatedAt: null, items: 0, changes: 0, error: error?.message || String(error) };
+      }),
     ]);
     response.json({
       ok: true,
@@ -6833,7 +6852,7 @@ app.get("/api/live-status", async (_request, response, next) => {
         products: Array.isArray(warehouse.products) ? warehouse.products.length : 0,
         suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.length : 0,
       },
-      priceMaster: await getPriceMasterSnapshotMeta(),
+      priceMaster,
       dailySync: {
         updatedAt: dailySync.updatedAt || dailySync.lastRunAt || null,
         status: dailySync.status || "idle",
@@ -9446,6 +9465,7 @@ module.exports = {
   warehouseBrandMatches,
   normalizeWarehouseProduct,
   mergeProducts,
+  applyOzonInfoToWarehouseProduct,
   productFromPostgres,
   marketplaceStateCodeFromPostgresRow,
   buildOzonStockPayloadItems,

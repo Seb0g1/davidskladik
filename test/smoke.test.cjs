@@ -51,6 +51,7 @@ const {
   warehouseBrandMatches,
   normalizeWarehouseProduct,
   mergeProducts,
+  applyOzonInfoToWarehouseProduct,
   productFromPostgres,
   marketplaceStateCodeFromPostgresRow,
   buildOzonStockPayloadItems,
@@ -299,6 +300,31 @@ test("marketplace sync merge keeps known Ozon state and price on partial import"
   assert.equal(merged[0].marketplacePrice, 12345);
   assert.equal(merged[0].marketplaceMinPrice, 10000);
   assert.equal(merged[0].links.length, 1);
+});
+
+test("Ozon enrichment keeps existing state when stock and status are missing", () => {
+  const product = normalizeWarehouseProduct({
+    id: "enrich-active-product",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-ENRICH",
+    productId: "555",
+    name: "Existing product",
+    marketplacePrice: 1000,
+    marketplaceState: { code: "active", label: "Активен Ozon", stock: 3 },
+  });
+  const enriched = applyOzonInfoToWarehouseProduct(
+    product,
+    { name: "Better Ozon name", primary_image: "https://example.test/image.jpg" },
+    { id: "ozon", name: "Ozon" },
+    {},
+    {},
+  );
+
+  assert.equal(enriched.marketplaceState.code, "active");
+  assert.equal(enriched.marketplaceState.stock, 3);
+  assert.equal(enriched.marketplacePrice, 1000);
+  assert.equal(enriched.imageUrl, "https://example.test/image.jpg");
 });
 
 test("price retry queue recovers from an empty file", async () => {
