@@ -268,12 +268,28 @@ function resolveWarehouseRestoreScroll() {
   }
 }
 
-function restoreWarehouseScroll() {
+function markProgrammaticScroll() {
+  state.warehouseProgrammaticScrollUntil = Date.now() + 250;
+}
+
+function userScrolledSince(startedAt) {
+  return Number(state.warehouseLastUserScrollAt || 0) > Number(startedAt || 0);
+}
+
+function restoreWarehouseScroll({ startedAt = 0 } = {}) {
+  if (userScrolledSince(startedAt)) {
+    captureWarehouseScroll();
+    return;
+  }
   const target = resolveWarehouseRestoreScroll();
   if (!target) return;
   window.requestAnimationFrame(() => {
+    markProgrammaticScroll();
     window.scrollTo({ top: target, behavior: "auto" });
-    window.requestAnimationFrame(() => window.scrollTo({ top: target, behavior: "auto" }));
+    window.requestAnimationFrame(() => {
+      markProgrammaticScroll();
+      window.scrollTo({ top: target, behavior: "auto" });
+    });
   });
 }
 
@@ -1056,9 +1072,14 @@ function focusWarehouseDetailOnSmallScreen() {
   }
 }
 
-function restoreWindowScroll(top) {
+function restoreWindowScroll(top, { startedAt = 0 } = {}) {
   if (!Number.isFinite(Number(top))) return;
+  if (userScrolledSince(startedAt)) {
+    captureWarehouseScroll();
+    return;
+  }
   window.requestAnimationFrame(() => {
+    markProgrammaticScroll();
     window.scrollTo({ top: Math.max(0, Number(top) || 0), behavior: "auto" });
   });
 }
@@ -2482,6 +2503,7 @@ async function loadWarehousePage({ reset = false, sync = false, refreshPrices = 
 
 async function loadWarehouse(sync = false, refreshPrices = false, options = {}) {
   const silent = Boolean(options.silent);
+  const refreshStartedAt = Date.now();
   captureWarehouseScroll();
   const stopProgress = sync || refreshPrices ? startSyncProgress(sync ? "sync" : "prices") : null;
   elements.warehouseSyncButton.disabled = sync;
@@ -2513,7 +2535,7 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
       renderWarehouseCards();
     }
     state.warehouseRestorePage = 1;
-    restoreWarehouseScroll();
+    restoreWarehouseScroll({ startedAt: refreshStartedAt });
     await loadRetryQueue().catch(() => {});
     if (stopProgress) stopProgress(true);
   } catch (error) {
@@ -2551,6 +2573,7 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
 
   state.warehouseLiveRefreshRunning = true;
   state.warehouseLiveRefreshQueued = false;
+  const refreshStartedAt = Date.now();
   try {
     const scrollTop = window.scrollY || window.pageYOffset || 0;
     const restorePage = Math.max(1, Number(state.warehousePage || 1));
@@ -2571,7 +2594,7 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
         renderWarehouseCards();
       }
     }
-    restoreWindowScroll(scrollTop);
+    restoreWindowScroll(scrollTop, { startedAt: refreshStartedAt });
   } finally {
     state.warehouseLiveRefreshRunning = false;
   }
@@ -2603,7 +2626,7 @@ let warehouseRefreshTimer = null;
 function queueWarehouseRefresh(delayMs = 160) {
   if (warehouseRefreshTimer) window.clearTimeout(warehouseRefreshTimer);
   warehouseRefreshTimer = window.setTimeout(() => {
-    loadWarehouse(false).catch((error) => {
+    loadWarehouse(false, false, { silent: true }).catch((error) => {
       elements.warehouseStatus.textContent = error.message;
     });
   }, delayMs);
@@ -2613,7 +2636,7 @@ let warehouseFilterReloadTimer = null;
 function queueWarehouseFilterReload(delayMs = 260) {
   if (warehouseFilterReloadTimer) window.clearTimeout(warehouseFilterReloadTimer);
   warehouseFilterReloadTimer = window.setTimeout(() => {
-    loadWarehouse(false).catch((error) => {
+    loadWarehouse(false, false, { silent: true }).catch((error) => {
       elements.warehouseStatus.textContent = error.message;
       applyWarehouseFilters();
     });
@@ -3939,6 +3962,9 @@ function initWarehouseInfiniteScroll() {
 function initWarehouseScrollTracking() {
   let timer = null;
   window.addEventListener("scroll", () => {
+    if (Date.now() > Number(state.warehouseProgrammaticScrollUntil || 0)) {
+      state.warehouseLastUserScrollAt = Date.now();
+    }
     if (timer) window.clearTimeout(timer);
     timer = window.setTimeout(() => {
       captureWarehouseScroll();
