@@ -13,6 +13,7 @@
     "db:export": "node scripts/export-postgres-data.cjs",
     "db:import": "node scripts/import-postgres-data.cjs",
     "inspect:db": "node scripts/inspect-db.js",
+    "inspect:app-db": "node scripts/inspect-app-db.cjs",
     "test": "node --test test/smoke.test.cjs",
     "relay:openai": "node scripts/openai-relay-server.cjs",
     "audit": "npm audit"
