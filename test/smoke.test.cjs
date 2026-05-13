@@ -81,6 +81,9 @@ test("GET /health", async () => {
   const res = await request(app).get("/health").expect(200);
   assert.equal(res.body.ok, true);
   assert.ok(res.body.service);
+  assert.ok(res.body.components);
+  assert.equal(res.body.components.storage.mode, "json");
+  assert.equal(res.body.components.redis.queueMode, "inline");
 });
 
 test("detects Ozon per-item rate limit errors", () => {

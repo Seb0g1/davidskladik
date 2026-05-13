@@ -797,8 +797,97 @@ function requireAdmin(request, response, next) {
   return response.status(403).json({ error: "Доступ только для администратора.", code: "admin_required" });
 }
 
-app.get("/health", (_request, response) => {
-  response.json({ ok: true, service: "magic-vibes-warehouse", time: new Date().toISOString() });
+function healthTimeout(promise, timeoutMs = 2500) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("health check timeout")), timeoutMs)),
+  ]);
+}
+
+async function collectHealthDetails({ deep = false } = {}) {
+  const components = {
+    storage: {
+      mode: shouldUsePostgresStorage() ? "postgres" : "json",
+      postgresMode: postgresModeEnabled(),
+      jsonFallback: jsonFallbackEnabled(),
+    },
+    postgres: {
+      configured: Boolean(cleanText(process.env.DATABASE_URL)),
+      enabled: shouldUsePostgresStorage(),
+      ok: !shouldUsePostgresStorage(),
+    },
+    pricemaster: {
+      configured: Boolean(cleanText(process.env.PM_DB_HOST) && cleanText(process.env.PM_DB_NAME)),
+      ok: null,
+    },
+    redis: {
+      configured: Boolean(redisUrl),
+      enabled: bullmqEnabled,
+      queueMode: bullmqEnabled && redisUrl && marketplaceQueue ? "bullmq" : "inline",
+      ok: !bullmqEnabled,
+    },
+    ozon: {
+      configured: getOzonAccounts().length > 0,
+      accounts: getOzonAccounts().length,
+      warehouseListEnabled: ozonWarehouseListEnabled,
+    },
+    yandex: {
+      configured: getYandexShops().length > 0,
+      shops: getYandexShops().length,
+    },
+    telegram: {
+      enabled: telegramNotificationsEnabled,
+      configured: Boolean(telegramBotToken && telegramChatId),
+      proxyEnabled: Boolean(telegramProxyUrl),
+    },
+  };
+
+  if (components.postgres.enabled && deep) {
+    try {
+      await healthTimeout(getPrisma().$queryRaw`SELECT 1 AS ok`);
+      components.postgres.ok = true;
+    } catch (error) {
+      components.postgres.ok = false;
+      components.postgres.error = error?.message || String(error);
+    }
+  }
+
+  if (components.pricemaster.configured && deep) {
+    try {
+      const [rows] = await healthTimeout(pool.query("SELECT VERSION() AS version, NOW() AS serverTime"));
+      components.pricemaster.ok = true;
+      components.pricemaster.version = rows?.[0]?.version || null;
+      components.pricemaster.serverTime = rows?.[0]?.serverTime || null;
+    } catch (error) {
+      components.pricemaster.ok = false;
+      components.pricemaster.error = error?.message || String(error);
+    }
+  } else if (!components.pricemaster.configured) {
+    components.pricemaster.ok = false;
+  }
+
+  if (bullmqEnabled && redisUrl && deep) {
+    try {
+      if (!marketplaceQueue) throw new Error("BullMQ is enabled but queue is not initialized");
+      components.redis.counts = await healthTimeout(marketplaceQueue.getJobCounts("waiting", "active", "delayed", "failed"));
+      components.redis.ok = true;
+    } catch (error) {
+      components.redis.ok = false;
+      components.redis.error = error?.message || String(error);
+    }
+  }
+
+  const required = [
+    components.postgres.enabled ? components.postgres : null,
+    components.pricemaster.configured ? components.pricemaster : null,
+    components.redis.enabled ? components.redis : null,
+  ].filter(Boolean);
+  const ok = required.every((component) => component.ok !== false);
+  return { ok, service: "magic-vibes-warehouse", time: new Date().toISOString(), components };
+}
+
+app.get("/health", async (_request, response) => {
+  response.json(await collectHealthDetails({ deep: false }));
 });
 
 app.post("/api/login", loginLimiter, async (request, response, next) => {
@@ -6463,13 +6552,9 @@ function compareSnapshots(previousItems, currentOffers) {
   return { currentItems, changes };
 }
 
-app.get("/api/health", async (_request, response, next) => {
-  try {
-    const [rows] = await pool.query("SELECT VERSION() AS version, NOW() AS serverTime");
-    response.json({ ok: true, database: rows[0] });
-  } catch (error) {
-    next(error);
-  }
+app.get("/api/health", async (_request, response) => {
+  const health = await collectHealthDetails({ deep: true });
+  response.status(health.ok ? 200 : 503).json(health);
 });
 
 app.get("/api/summary", async (_request, response, next) => {
