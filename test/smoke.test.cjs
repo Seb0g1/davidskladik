@@ -1044,6 +1044,83 @@ test("warehouse product patch rejects stale expectedUpdatedAt", async () => {
   }
 });
 
+test("warehouse link writes reject stale expectedUpdatedAt before validation", async () => {
+  const agent = request.agent(app);
+  const smokeId = `smoke-link-lock-${Date.now()}`;
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    const created = await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: smokeId,
+        target: "ozon",
+        offerId: smokeId,
+        name: "Smoke Link Lock Product",
+      })
+      .expect(200);
+    const staleUpdatedAt = created.body.product.updatedAt;
+    await agent
+      .patch(`/api/warehouse/products/${encodeURIComponent(smokeId)}`)
+      .send({ markup: 1.81, expectedUpdatedAt: staleUpdatedAt })
+      .expect(200);
+
+    const add = await agent
+      .post(`/api/warehouse/products/${encodeURIComponent(smokeId)}/links`)
+      .send({ article: "PM-DOES-NOT-MATTER", expectedUpdatedAt: staleUpdatedAt })
+      .expect(409);
+    assert.equal(add.body.code, "warehouse_product_conflict");
+    assert.equal(add.body.conflicts[0].id, smokeId);
+    assert.equal(add.body.conflicts[0].freshProduct.id, smokeId);
+
+    const remove = await agent
+      .delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}/links/no-link?expectedUpdatedAt=${encodeURIComponent(staleUpdatedAt)}`)
+      .expect(409);
+    assert.equal(remove.body.code, "warehouse_product_conflict");
+    assert.equal(remove.body.conflicts[0].freshProduct.id, smokeId);
+  } finally {
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}`).expect(200);
+  }
+});
+
+test("two different warehouse products can be updated with independent locks", async () => {
+  const agent = request.agent(app);
+  const firstId = `smoke-lock-a-${Date.now()}`;
+  const secondId = `smoke-lock-b-${Date.now()}`;
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    const first = await agent
+      .post("/api/warehouse/products")
+      .send({ id: firstId, target: "ozon", offerId: firstId, name: "Smoke Lock A" })
+      .expect(200);
+    const second = await agent
+      .post("/api/warehouse/products")
+      .send({ id: secondId, target: "ozon", offerId: secondId, name: "Smoke Lock B" })
+      .expect(200);
+
+    await agent
+      .patch(`/api/warehouse/products/${encodeURIComponent(firstId)}`)
+      .send({ markup: 1.91, expectedUpdatedAt: first.body.product.updatedAt })
+      .expect(200);
+
+    const secondUpdate = await agent
+      .patch(`/api/warehouse/products/${encodeURIComponent(secondId)}`)
+      .send({ markup: 1.92, expectedUpdatedAt: second.body.product.updatedAt })
+      .expect(200);
+    assert.equal(secondUpdate.body.product.markup, 1.92);
+  } finally {
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(firstId)}`).expect(200);
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(secondId)}`).expect(200);
+  }
+});
+
 test("AI image draft approval updates local Ozon image fields only", async () => {
   const agent = request.agent(app);
   const smokeId = `smoke-ai-approve-${Date.now()}`;

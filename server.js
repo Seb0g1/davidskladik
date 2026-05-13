@@ -1790,6 +1790,7 @@ function productConflict(product, expectedUpdatedAt) {
     offerId: product.offerId || product.ozon?.offerId || product.yandex?.offerId || "",
     expectedUpdatedAt: expected,
     currentUpdatedAt: product.updatedAt || null,
+    freshProduct: normalizeWarehouseProduct(product),
   };
 }
 
@@ -8106,7 +8107,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
-    const conflict = null;
+    const conflict = productConflict(product, request.body?.expectedUpdatedAt);
     if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
 
@@ -8165,6 +8166,8 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     const product = warehouse.products.find((item) => item.id === request.params.productId);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
+    const conflict = productConflict(product, request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt);
+    if (conflict) return conflictResponse(response, [conflict]);
     const previousLinks = Array.isArray(product.links) ? product.links : [];
     const removed = previousLinks.some((link) => String(link.id) === String(request.params.linkId));
     if (!removed) {
