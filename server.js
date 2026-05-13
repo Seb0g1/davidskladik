@@ -4278,6 +4278,13 @@ function linkToPostgresData(product, link = {}) {
 
 function productFromPostgres(row = {}) {
   const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  const imageState = row.images && typeof row.images === "object" && !Array.isArray(row.images) ? row.images : {};
+  const rowName = cleanText(row.name);
+  const rawName = cleanText(raw.name || raw.ozon?.name || raw.yandex?.name);
+  const effectiveName = isWeakProductName(rowName, row.offerId) && rawName && !isWeakProductName(rawName, row.offerId)
+    ? rawName
+    : rowName;
+  const effectiveImageUrl = firstImageUrl(raw.imageUrl || raw.ozon?.primaryImage || raw.ozon?.images || raw.yandex?.pictures || imageState.imageUrl || imageState.images);
   const postgresLinksLoaded = Array.isArray(row.links);
   const postgresLinks = (postgresLinksLoaded ? row.links : []).map((link) => normalizeWarehouseLink({
     ...(link.raw && typeof link.raw === "object" ? link.raw : {}),
@@ -4298,8 +4305,9 @@ function productFromPostgres(row = {}) {
     target: row.target || row.marketplace,
     offerId: row.offerId,
     productId: row.productId,
-    name: row.name,
+    name: effectiveName,
     brand: row.brand || raw.brand,
+    imageUrl: effectiveImageUrl,
     marketplacePrice: row.currentPrice ?? raw.marketplacePrice,
     marketplaceState: row.marketplaceState || raw.marketplaceState,
     links,

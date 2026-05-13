@@ -241,6 +241,46 @@ test("postgres warehouse product keeps empty relation links empty", () => {
   assert.equal(product.links.length, 0);
 });
 
+test("postgres warehouse product prefers rich raw Ozon details over weak row fields", () => {
+  const product = productFromPostgres({
+    id: "pg-rich-raw",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-RICH-RAW",
+    name: "Товар Ozon",
+    images: { imageUrl: "https://cdn.example.com/row.jpg" },
+    raw: {
+      name: "Calvin Klein CK IN2U Туалетная вода для мужчин 50 мл",
+      imageUrl: "https://cdn.example.com/raw.jpg",
+      ozon: {
+        name: "Calvin Klein CK IN2U",
+        images: ["https://cdn.example.com/ozon.jpg"],
+      },
+    },
+    links: [],
+    createdAt: new Date("2026-05-13T00:00:00.000Z"),
+    updatedAt: new Date("2026-05-13T00:00:00.000Z"),
+  });
+  assert.equal(product.name, "Calvin Klein CK IN2U Туалетная вода для мужчин 50 мл");
+  assert.equal(product.imageUrl, "https://cdn.example.com/raw.jpg");
+});
+
+test("postgres warehouse product uses stored image column when raw has no image", () => {
+  const product = productFromPostgres({
+    id: "pg-image-column",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-IMAGE-COLUMN",
+    name: "Stored image product",
+    images: { imageUrl: "https://cdn.example.com/row.jpg" },
+    raw: {},
+    links: [],
+    createdAt: new Date("2026-05-13T00:00:00.000Z"),
+    updatedAt: new Date("2026-05-13T00:00:00.000Z"),
+  });
+  assert.equal(product.imageUrl, "https://cdn.example.com/row.jpg");
+});
+
 test("postgres Ozon state helpers prefer marketplaceState over internal target stock/status", () => {
   assert.equal(
     marketplaceStateCodeFromPostgresRow({
