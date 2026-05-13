@@ -3721,6 +3721,8 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       id,
       expectedUpdatedAt: String(byId.get(id)?.updatedAt || ""),
     }));
+    const selectionVersion = state.warehouseSelectionVersion;
+    const selectedGroupKey = state.selectedWarehouseGroupKey;
     saveDraftsButton.disabled = true;
     elements.warehouseStatus.textContent = `Сохраняю ${formatNumber(links.length)} привязок и пересчитываю цену...`;
     try {
@@ -3730,8 +3732,16 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
         body: JSON.stringify({ productIds, optimisticLocks, links }),
       });
       setPendingLinkDrafts(key, []);
-      mergeWarehouseProducts(result.products);
-      elements.warehouseStatus.textContent = `Привязки сохранены: ${formatNumber(links.length)}. Цена и поставщик пересчитаны по всем связям.`;
+      if (selectionVersion === state.warehouseSelectionVersion && selectedGroupKey === state.selectedWarehouseGroupKey) {
+        mergeWarehouseProducts(result.products);
+        elements.warehouseStatus.textContent = `Привязки сохранены: ${formatNumber(links.length)}. Цена и поставщик пересчитаны по всем связям.`;
+      } else {
+        (Array.isArray(result.products) ? result.products : []).forEach((product) => {
+          if (product?.id) mergeWarehouseProduct(product);
+        });
+        renderWarehouseCards();
+        showToast("Привязки сохранены для предыдущей карточки. Текущий выбор не переключался.", "warn");
+      }
     } catch (error) {
       if (handleProductConflict(error, "привязок")) return;
       elements.warehouseStatus.textContent = error.message;
@@ -3750,14 +3760,22 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       const label = targetMeta?.name || (target === "yandex" ? "Yandex Market" : "Ozon");
       if (!(await confirmAction({ title: "Выгрузить товар?", text: `Выгрузить карточку товара в ${label}?`, okText: "Выгрузить", danger: false }))) return;
       exportButton.disabled = true;
+      const selectionVersion = state.warehouseSelectionVersion;
+      const selectedGroupKey = state.selectedWarehouseGroupKey;
       elements.warehouseStatus.textContent = `Выгружаю товар в ${label}...`;
       const result = await api(`/api/warehouse/products/${exportButton.dataset.productId}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ confirmed: true, target, expectedUpdatedAt: exportButton.dataset.productUpdatedAt || "" }),
       });
-      elements.warehouseStatus.textContent = `Готово: карточка выгружена в ${label}. Отправлено: ${formatNumber(result.sent || 1)}.`;
-      if (!mergeWarehouseProducts([result.product].filter(Boolean))) queueWarehouseRefresh();
+      if (selectionVersion === state.warehouseSelectionVersion && selectedGroupKey === state.selectedWarehouseGroupKey) {
+        elements.warehouseStatus.textContent = `Готово: карточка выгружена в ${label}. Отправлено: ${formatNumber(result.sent || 1)}.`;
+        if (!mergeWarehouseProducts([result.product].filter(Boolean))) queueWarehouseRefresh();
+      } else if (result.product) {
+        mergeWarehouseProduct(result.product);
+        renderWarehouseCards();
+        showToast(`Карточка выгружена в ${label}. Текущий выбор не переключался.`, "warn");
+      }
       return;
     }
     if (linkButton) {
@@ -3765,6 +3783,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       const productId = linkButton.dataset.productId || "";
       const linkId = linkButton.dataset.linkId || "";
       const selectionVersion = state.warehouseSelectionVersion;
+      const selectedGroupKey = state.selectedWarehouseGroupKey;
       const result = await deleteWarehouseLinkWithFreshLock(productId, linkId, linkButton.dataset.productUpdatedAt || "");
       if (result.product) {
         const localProduct = warehouseProductById(productId);
@@ -3776,7 +3795,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
             }
           : result.product;
         mergeWarehouseProduct(productForState);
-        if (selectionVersion === state.warehouseSelectionVersion) {
+        if (selectionVersion === state.warehouseSelectionVersion && selectedGroupKey === state.selectedWarehouseGroupKey) {
           applyWarehouseFilters();
           renderWarehouseCards();
           renderDetailForProductIds([productForState.id || productId], { select: false });
@@ -3786,7 +3805,11 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       } else {
         queueWarehouseRefresh();
       }
-      elements.warehouseStatus.textContent = "Привязка удалена. Автоцена пересчитается по оставшимся привязкам.";
+      if (selectionVersion === state.warehouseSelectionVersion && selectedGroupKey === state.selectedWarehouseGroupKey) {
+        elements.warehouseStatus.textContent = "Привязка удалена. Автоцена пересчитается по оставшимся привязкам.";
+      } else {
+        showToast("Привязка удалена у предыдущей карточки. Текущий выбор не переключался.", "warn");
+      }
     }
     if (productButton && await confirmAction({ title: "Удалить товар?", text: "Удалить товар из личного склада?", okText: "Удалить" })) {
       const expectedUpdatedAt = encodeURIComponent(productButton.dataset.productUpdatedAt || "");
