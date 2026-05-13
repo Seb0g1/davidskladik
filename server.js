@@ -1249,6 +1249,18 @@ async function appendAudit(request, action, details = {}) {
   await fs.appendFile(auditLogPath, `${JSON.stringify(entry)}\n`, "utf8");
 }
 
+function auditRowToEntry(row = {}) {
+  return {
+    at: row.createdAt ? row.createdAt.toISOString() : null,
+    user: row.username,
+    action: row.action,
+    productId: row.entityId || row.details?.productId || null,
+    oldValue: row.oldValue,
+    newValue: row.newValue,
+    details: row.details || {},
+  };
+}
+
 async function readAudit(limit = 200) {
   if (shouldUsePostgresStorage()) {
     try {
@@ -1256,15 +1268,7 @@ async function readAudit(limit = 200) {
         take: limit,
         orderBy: { createdAt: "desc" },
       });
-      return rows.map((row) => ({
-        at: row.createdAt ? row.createdAt.toISOString() : null,
-        user: row.username,
-        action: row.action,
-        productId: row.entityId || row.details?.productId || null,
-        oldValue: row.oldValue,
-        newValue: row.newValue,
-        details: row.details || {},
-      }));
+      return rows.map(auditRowToEntry);
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
       logger.warn("read audit postgres failed, using JSON fallback", { detail: error?.message || String(error) });
@@ -1287,15 +1291,7 @@ async function readAuditSince(since) {
         where: { createdAt: { gte: sinceDate } },
         orderBy: { createdAt: "asc" },
       });
-      return rows.map((row) => ({
-        at: row.createdAt ? row.createdAt.toISOString() : null,
-        user: row.username,
-        action: row.action,
-        productId: row.entityId || row.details?.productId || null,
-        oldValue: row.oldValue,
-        newValue: row.newValue,
-        details: row.details || {},
-      }));
+      return rows.map(auditRowToEntry);
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
       logger.warn("read audit since postgres failed, using JSON fallback", { detail: error?.message || String(error) });
@@ -6916,6 +6912,57 @@ function auditEntryMatchesFilters(entry = {}, filters = {}) {
   return true;
 }
 
+function auditPostgresWhereFromFilters(filters = {}) {
+  const where = {};
+  const username = cleanText(filters.user || "");
+  if (username) {
+    where.username = { equals: username, mode: "insensitive" };
+  }
+  const action = cleanText(filters.action || "");
+  if (action && action !== "all") {
+    where.action = action;
+  }
+  const createdAt = {};
+  const dateFrom = toDateOrNull(filters.dateFrom);
+  if (dateFrom) createdAt.gte = dateFrom;
+  const dateTo = toDateOrNull(filters.dateTo);
+  if (dateTo) {
+    dateTo.setHours(23, 59, 59, 999);
+    createdAt.lte = dateTo;
+  }
+  if (Object.keys(createdAt).length) where.createdAt = createdAt;
+  return where;
+}
+
+async function readAuditFiltered(filters = {}, limit = 200) {
+  const normalizedLimit = cleanLimit(limit, 200, 1000);
+  const hasFilters = Object.values(filters).some((value) => cleanText(value || ""));
+  const query = cleanText(filters.q || "");
+
+  if (shouldUsePostgresStorage()) {
+    try {
+      const take = query ? Math.min(5000, Math.max(normalizedLimit * 10, 1000)) : normalizedLimit;
+      const rows = await getPrisma().auditLog.findMany({
+        where: auditPostgresWhereFromFilters(filters),
+        take,
+        orderBy: { createdAt: "desc" },
+      });
+      const entries = rows.map(auditRowToEntry);
+      return query
+        ? entries.filter((entry) => auditEntryMatchesFilters(entry, filters)).slice(0, normalizedLimit)
+        : entries;
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("read filtered audit postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+
+  const audit = await readAudit(hasFilters ? Math.max(normalizedLimit * 5, 1000) : normalizedLimit);
+  return hasFilters
+    ? audit.filter((entry) => auditEntryMatchesFilters(entry, filters)).slice(0, normalizedLimit)
+    : audit;
+}
+
 app.get("/api/audit-log", requireAdmin, async (request, response, next) => {
   try {
     const limit = cleanLimit(request.query.limit, 200, 1000);
@@ -6926,12 +6973,8 @@ app.get("/api/audit-log", requireAdmin, async (request, response, next) => {
       dateFrom: request.query.dateFrom,
       dateTo: request.query.dateTo,
     };
-    const needsFilter = Object.values(filters).some((value) => cleanText(value || ""));
-    const audit = await readAudit(needsFilter ? Math.max(limit * 5, 1000) : limit);
-    const filtered = needsFilter
-      ? audit.filter((entry) => auditEntryMatchesFilters(entry, filters)).slice(0, limit)
-      : audit;
-    response.json({ audit: filtered, total: filtered.length, filters });
+    const audit = await readAuditFiltered(filters, limit);
+    response.json({ audit, total: audit.length, filters });
   } catch (error) {
     next(error);
   }
