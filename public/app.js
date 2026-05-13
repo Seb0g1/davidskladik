@@ -55,6 +55,7 @@ const state = {
   retryQueueSearch: "",
   retryQueueLastRun: null,
   priceHistoryRequestToken: 0,
+  linkAuditRequestToken: 0,
   aiImageProductId: null,
   aiImageDraft: null,
   aiImageBusy: false,
@@ -2017,6 +2018,52 @@ async function loadDetailPriceHistory(group) {
   }
 }
 
+function linkAuditActionLabel(action) {
+  if (action === "warehouse.link.delete") return "Удалил привязку";
+  if (action === "warehouse.links.bulk_save") return "Сохранил привязки";
+  if (action === "warehouse.link.save") return "Добавил привязку";
+  return "Изменил привязки";
+}
+
+function renderLinkAuditRows(rows = []) {
+  if (!rows.length) return '<div class="empty-mini">История привязок появится после первого изменения.</div>';
+  return rows.map((entry) => {
+    const meta = [
+      entry.article || "",
+      entry.supplierName || "",
+      entry.linksCount ? `${formatNumber(entry.linksCount)} шт.` : "",
+    ].filter(Boolean).join(" · ");
+    return `
+      <div class="history-row">
+        <div>
+          <strong>${escapeHtml(entry.user || "system")} · ${escapeHtml(linkAuditActionLabel(entry.action))}</strong>
+          <span>${meta ? escapeHtml(meta) : "Без деталей"}</span>
+        </div>
+        <small>${entry.at ? formatDate(entry.at) : "—"}</small>
+      </div>
+    `;
+  }).join("");
+}
+
+async function loadDetailLinkAudit(group) {
+  const variants = group?.variants || (group?.primary ? [group.primary] : []);
+  const productIds = variants.map((item) => item.id).filter(Boolean);
+  const container = document.querySelector(".link-audit-live");
+  if (!container || !productIds.length) return;
+  const token = ++state.linkAuditRequestToken;
+  try {
+    const params = new URLSearchParams();
+    params.set("productId", productIds.join(","));
+    params.set("limit", "8");
+    const data = await api(`/api/warehouse/products/audit?${params}`);
+    if (token !== state.linkAuditRequestToken || !document.body.contains(container)) return;
+    container.innerHTML = renderLinkAuditRows(data.items || []);
+  } catch (_error) {
+    if (token !== state.linkAuditRequestToken || !document.body.contains(container)) return;
+    container.innerHTML = '<div class="empty-mini">История привязок сейчас недоступна.</div>';
+  }
+}
+
 function renderWarehouseDetail(group) {
   if (!group) {
     state.selectedWarehouseDetailSignature = "";
@@ -2171,6 +2218,18 @@ function renderWarehouseDetail(group) {
     </section>
 
     <section class="detail-section">
+      <div class="section-heading compact-heading">
+        <div>
+          <h3>История привязок</h3>
+          <p>Последние изменения поставщиков по этой карточке.</p>
+        </div>
+      </div>
+      <div class="history-list link-audit-live" data-product-ids="${escapeHtml(groupProductIds.join(","))}">
+        <div class="empty-mini">Загружаю историю привязок...</div>
+      </div>
+    </section>
+
+    <section class="detail-section">
       <h3>Привязки PriceMaster</h3>
       <div class="link-list">
         ${
@@ -2278,6 +2337,7 @@ function renderWarehouseDetail(group) {
     </section>
   `;
   loadDetailPriceHistory(group);
+  loadDetailLinkAudit(group);
 }
 
 function formatSupplierSyncStatus() {

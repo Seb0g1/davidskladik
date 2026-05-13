@@ -6872,6 +6872,61 @@ app.get("/api/audit-log", requireAdmin, async (request, response, next) => {
   }
 });
 
+function auditEntryProductIds(entry = {}) {
+  const details = entry.details || {};
+  const values = [
+    entry.productId,
+    details.productId,
+    details.id,
+    details.entityId,
+    details.productIds,
+  ];
+  return values
+    .flatMap((value) => (Array.isArray(value) ? value : [value]))
+    .map((value) => cleanText(value || ""))
+    .filter(Boolean);
+}
+
+function publicLinkAuditEntry(entry = {}) {
+  const details = entry.details || {};
+  const action = cleanText(entry.action || "");
+  const productIds = auditEntryProductIds(entry);
+  return {
+    at: entry.at || null,
+    user: entry.user || "system",
+    action,
+    productIds,
+    offerId: details.offerId || "",
+    name: details.name || "",
+    article: details.article || details.links?.[0]?.article || "",
+    supplierName: details.supplierName || details.links?.[0]?.supplierName || "",
+    linkId: details.linkId || "",
+    linksCount: Array.isArray(details.links) ? details.links.length : null,
+  };
+}
+
+app.get("/api/warehouse/products/audit", async (request, response, next) => {
+  try {
+    const productIds = cleanText(request.query.productId || request.query.productIds || "")
+      .split(",")
+      .map((id) => cleanText(id))
+      .filter(Boolean);
+    if (!productIds.length) return response.json({ items: [] });
+    const idSet = new Set(productIds.map(String));
+    const limit = cleanLimit(request.query.limit, 10, 50);
+    const actions = new Set(["warehouse.link.save", "warehouse.links.bulk_save", "warehouse.link.delete"]);
+    const audit = await readAudit(Math.max(200, limit * 20));
+    const items = audit
+      .filter((entry) => actions.has(entry.action))
+      .filter((entry) => auditEntryProductIds(entry).some((id) => idSet.has(String(id))))
+      .slice(0, limit)
+      .map(publicLinkAuditEntry);
+    response.json({ items });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/ozon/prices/preview", async (request, response, next) => {
   try {
     const limit = cleanLimit(request.query.limit, 500, 5000);
