@@ -54,6 +54,8 @@ const {
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
   marketplaceStateCodeFromPostgresRow,
+  pickOzonDetailOfferIds,
+  ozonProductNeedsDetailRefresh,
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
@@ -325,6 +327,40 @@ test("Ozon enrichment keeps existing state when stock and status are missing", (
   assert.equal(enriched.marketplaceState.stock, 3);
   assert.equal(enriched.marketplacePrice, 1000);
   assert.equal(enriched.imageUrl, "https://example.test/image.jpg");
+});
+
+test("Ozon sync refreshes details only for new or incomplete products", () => {
+  const existingComplete = normalizeWarehouseProduct({
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "complete",
+    productId: "1",
+    name: "Complete perfume",
+    imageUrl: "https://example.test/image.jpg",
+    marketplacePrice: 1234,
+    marketplaceState: { code: "active" },
+  });
+  const existingWeak = normalizeWarehouseProduct({
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "weak",
+    productId: "2",
+    name: "weak",
+    marketplaceState: { code: "unknown", partial: true },
+  });
+  const existingByOffer = new Map([
+    ["complete", existingComplete],
+    ["weak", existingWeak],
+  ]);
+  const list = [
+    { offer_id: "complete" },
+    { offer_id: "weak" },
+    { offer_id: "new" },
+  ];
+
+  assert.equal(ozonProductNeedsDetailRefresh(existingComplete), false);
+  assert.equal(ozonProductNeedsDetailRefresh(existingWeak), true);
+  assert.deepEqual(pickOzonDetailOfferIds(list, existingByOffer, 10), ["weak", "new"]);
 });
 
 test("price retry queue recovers from an empty file", async () => {

@@ -2373,6 +2373,49 @@ async function getOzonPriceMap(offerIds, account = null) {
   return map;
 }
 
+function ozonExistingProductMap(products = [], account = {}) {
+  const map = new Map();
+  const accountId = cleanText(account.id || "ozon");
+  for (const product of products || []) {
+    if (cleanText(product.marketplace) !== "ozon") continue;
+    const offerId = cleanText(product.offerId || product.ozon?.offerId);
+    if (!offerId) continue;
+    const target = cleanText(product.target || "ozon");
+    if (target !== accountId && target !== "ozon") continue;
+    map.set(offerId, product);
+  }
+  return map;
+}
+
+function ozonProductNeedsDetailRefresh(product = {}) {
+  if (!product || !product.id) return true;
+  const offerId = cleanText(product.offerId || product.ozon?.offerId);
+  if (isWeakProductName(product.name, offerId)) return true;
+  if (!cleanText(product.imageUrl || product.ozon?.primaryImage)) return true;
+  if (!cleanText(product.productId || product.ozon?.productId)) return true;
+  if (!cleanText(product.marketplaceState?.code) || product.marketplaceState?.partial) return true;
+  if (!Number(product.marketplacePrice || product.ozon?.price || 0)) return true;
+  return false;
+}
+
+function pickOzonDetailOfferIds(products = [], existingByOffer = new Map(), maxItems = 800) {
+  const limit = Math.max(0, Number(maxItems || 0) || 0);
+  if (!limit) return [];
+  const prioritized = [];
+  const seen = new Set();
+  for (const product of products || []) {
+    const offerId = cleanText(product.offer_id || product.offerId);
+    if (!offerId || seen.has(offerId)) continue;
+    const existing = existingByOffer.get(offerId);
+    if (!existing || ozonProductNeedsDetailRefresh(existing)) {
+      prioritized.push(offerId);
+      seen.add(offerId);
+      if (prioritized.length >= limit) break;
+    }
+  }
+  return prioritized;
+}
+
 async function getYandexPriceMap(shop, offerIds) {
   const map = new Map();
 
@@ -4532,7 +4575,7 @@ function mergeProducts(existingProducts, importedProducts) {
   return Array.from(map.values()).sort((a, b) => a.targetName.localeCompare(b.targetName) || a.name.localeCompare(b.name));
 }
 
-async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
+async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, existingProducts = []) {
   const accounts = getOzonAccounts().filter((account) => account.clientId && account.apiKey);
   const imported = [];
   const warnings = [];
@@ -4545,19 +4588,29 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY) {
   for (const account of accounts) {
     try {
       const products = await getOzonProducts(perAccountLimit, account);
+      const existingByOffer = ozonExistingProductMap(existingProducts, account);
       let infoMap = new Map();
       let stockMap = new Map();
       let priceMap = new Map();
       try {
-        const infoLimit = Number(process.env.OZON_SYNC_INFO_LIMIT || products.length || 300);
-        const infoOfferIds = products
-          .slice(0, Number.isFinite(infoLimit) && infoLimit > 0 ? infoLimit : 300)
-          .map((product) => product.offer_id);
-        [infoMap, stockMap, priceMap] = await Promise.all([
-          getOzonProductInfoMap(infoOfferIds, account),
-          getOzonStockMap(infoOfferIds, account),
-          getOzonPriceMap(infoOfferIds, account),
-        ]);
+        const configuredDetailLimit = process.env.OZON_SYNC_DETAIL_LIMIT !== undefined
+          ? Number(process.env.OZON_SYNC_DETAIL_LIMIT)
+          : Number(process.env.OZON_SYNC_INFO_LIMIT || 800);
+        const infoLimit = Math.max(0, Number.isFinite(configuredDetailLimit) ? configuredDetailLimit : 800);
+        const infoOfferIds = pickOzonDetailOfferIds(products, existingByOffer, infoLimit);
+        logger.info("ozon product list loaded", {
+          account: account.id,
+          listed: products.length,
+          detailRefresh: infoOfferIds.length,
+          detailLimit: infoLimit,
+        });
+        if (infoOfferIds.length) {
+          [infoMap, stockMap, priceMap] = await Promise.all([
+            getOzonProductInfoMap(infoOfferIds, account),
+            getOzonStockMap(infoOfferIds, account),
+            getOzonPriceMap(infoOfferIds, account),
+          ]);
+        }
       } catch (error) {
         infoMap = new Map();
         stockMap = new Map();
@@ -4661,7 +4714,7 @@ async function syncWarehouseProductsFromMarketplaces(warehouse, limit = Number.P
   const warnings = [];
   let imported = [];
   try {
-    const oz = await importOzonWarehouseProducts(limit);
+    const oz = await importOzonWarehouseProducts(limit, warehouse.products || []);
     imported = imported.concat(oz.imported);
     warnings.push(...oz.warnings);
   } catch (error) {
@@ -9573,6 +9626,8 @@ module.exports = {
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
   marketplaceStateCodeFromPostgresRow,
+  pickOzonDetailOfferIds,
+  ozonProductNeedsDetailRefresh,
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
