@@ -11136,13 +11136,15 @@ async function sendZeroStocksToMarketplace(products = []) {
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
-      for (const chunk of chunkArray(items, 500)) {
-        try {
-          await sendYandexStockChunk(shop, chunk.map((item) => ({ offerId: item.offerId, stock: 0 })));
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "zero_stock", ok: true })));
-        } catch (error) {
-          const detail = error?.message || "stock_zero_failed";
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "zero_stock", ok: false, error: detail })));
+      for (const stockShop of yandexStockShops([shop])) {
+        for (const chunk of chunkArray(items, 500)) {
+          try {
+            await sendYandexStockChunk(stockShop, chunk.map((item) => ({ offerId: item.offerId, stock: 0 })));
+            actions.push(...chunk.map((item) => ({ id: item.id, type: "zero_stock", target: stockShop.id, ok: true })));
+          } catch (error) {
+            const detail = error?.message || "stock_zero_failed";
+            actions.push(...chunk.map((item) => ({ id: item.id, type: "zero_stock", target: stockShop.id, ok: false, error: detail })));
+          }
         }
       }
     }
@@ -11186,13 +11188,15 @@ async function sendTargetStocksToMarketplace(products = []) {
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
-      for (const chunk of chunkArray(items, 500)) {
-        try {
-          await sendYandexStockChunk(shop, chunk.map((item) => ({ offerId: item.offerId, stock: item.targetStock })));
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", stock: item.targetStock, ok: true })));
-        } catch (error) {
-          const detail = error?.message || "target_stock_failed";
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", stock: item.targetStock, ok: false, error: detail })));
+      for (const stockShop of yandexStockShops([shop])) {
+        for (const chunk of chunkArray(items, 500)) {
+          try {
+            await sendYandexStockChunk(stockShop, chunk.map((item) => ({ offerId: item.offerId, stock: item.targetStock })));
+            actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", target: stockShop.id, stock: item.targetStock, ok: true })));
+          } catch (error) {
+            const detail = error?.message || "target_stock_failed";
+            actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", target: stockShop.id, stock: item.targetStock, ok: false, error: detail })));
+          }
         }
       }
     }
@@ -11291,16 +11295,18 @@ async function restoreStocksOnMarketplaces(products = []) {
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
-      for (const chunk of chunkArray(items, 500)) {
-        try {
-          await sendYandexStockChunk(shop, chunk.map((item) => ({
-            offerId: item.offerId,
-            stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
-          })));
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: true })));
-        } catch (error) {
-          const detail = error?.message || "restore_stock_failed";
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: false, error: detail })));
+      for (const stockShop of yandexStockShops([shop])) {
+        for (const chunk of chunkArray(items, 500)) {
+          try {
+            await sendYandexStockChunk(stockShop, chunk.map((item) => ({
+              offerId: item.offerId,
+              stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
+            })));
+            actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", target: stockShop.id, ok: true })));
+          } catch (error) {
+            const detail = error?.message || "restore_stock_failed";
+            actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", target: stockShop.id, ok: false, error: detail })));
+          }
         }
       }
     }
