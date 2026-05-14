@@ -33,6 +33,7 @@ const state = {
   warehouseHasMore: true,
   warehouseLoadingPage: false,
   warehouseTotalFiltered: 0,
+  warehouseCounters: {},
   warehouseRequestToken: 0,
   warehouseLivePollTimer: null,
   warehouseLiveRefreshRunning: false,
@@ -231,7 +232,7 @@ function applyWarehouseStateFromUrl() {
   if (q !== null && elements.warehouseSearchInput) elements.warehouseSearchInput.value = q;
   if (marketplace && ["all", "ozon", "yandex"].includes(marketplace)) state.warehouseMarketplace = marketplace;
   if (stateCode && elements.ozonStateFilter?.querySelector(`option[value="${stateCode}"]`)) state.ozonStateFilter = stateCode;
-  if (linked && ["all", "linked", "unlinked"].includes(linked)) state.warehouseLinkFilter = linked;
+  if (linked && ["all", "linked", "ready", "unlinked", "changed", "linked_archived"].includes(linked)) state.warehouseLinkFilter = linked;
   const brand = params.get("brand");
   if (brand !== null) state.warehouseBrandFilter = String(brand);
   state.warehouseAutoOnly = false;
@@ -1333,6 +1334,74 @@ function ozonStateFilterLabel(code) {
   return map[code] || code;
 }
 
+function warehouseLinkFilterLabel(code) {
+  const map = {
+    all: "все привязки",
+    linked: "с привязкой",
+    ready: "готово к цене",
+    unlinked: "без привязки",
+    changed: "нужно обновить",
+    linked_archived: "привязка + архив Ozon",
+  };
+  return map[code] || code;
+}
+
+function resetWarehouseListingState({ clearSelection = true } = {}) {
+  state.warehouseVisibleLimit = 80;
+  state.warehousePage = 0;
+  state.warehouseRestorePage = 1;
+  if (clearSelection) state.selectedWarehouseGroupKey = null;
+  state.warehouseAutoFocusGroupKey = null;
+  state.warehouseScrollTop = 0;
+}
+
+function refreshWarehouseFilterLabels() {
+  const counters = state.warehouseCounters || {};
+  const linkSelect = elements.warehouseLinkFilterInput;
+  if (linkSelect) {
+    const labels = {
+      all: "Все",
+      linked: `Подвязанные · ${formatNumber(counters.linkedProducts || 0)}`,
+      ready: `Готово к цене · ${formatNumber(counters.ready || 0)}`,
+      unlinked: `Не подвязанные · ${formatNumber(counters.withoutSupplier || 0)}`,
+      changed: `Нужно обновить · ${formatNumber(counters.changed || 0)}`,
+      linked_archived: `Привязка + архив Ozon · ${formatNumber(counters.linkedArchived || 0)}`,
+    };
+    Array.from(linkSelect.options).forEach((option) => {
+      if (labels[option.value]) option.textContent = labels[option.value];
+    });
+    const value = document.querySelector("#warehouseLinkFilterValue");
+    if (value) value.textContent = linkSelect.options[linkSelect.selectedIndex]?.textContent?.trim() || "";
+  }
+  const stateSelect = elements.ozonStateFilter;
+  if (stateSelect) {
+    const labels = {
+      all: "Все статусы",
+      archived: `Архив · ${formatNumber(counters.ozonArchived || 0)}`,
+      inactive: `Неактивные · ${formatNumber(counters.ozonInactive || 0)}`,
+      out_of_stock: `Нет в наличии · ${formatNumber(counters.ozonOutOfStock || 0)}`,
+    };
+    Array.from(stateSelect.options).forEach((option) => {
+      if (labels[option.value]) option.textContent = labels[option.value];
+    });
+    const value = document.querySelector("#ozonStateFilterValue");
+    if (value) value.textContent = stateSelect.options[stateSelect.selectedIndex]?.textContent?.trim() || "";
+  }
+}
+
+function refreshWarehouseQuickFilterState() {
+  document.querySelectorAll("[data-warehouse-quick-filter]").forEach((tile) => {
+    const filter = String(tile.dataset.warehouseQuickFilter || "all");
+    const active = filter === "all"
+      ? state.warehouseLinkFilter === "all" && state.ozonStateFilter === "all"
+      : ["archived", "inactive", "out_of_stock"].includes(filter)
+        ? state.ozonStateFilter === filter
+        : state.warehouseLinkFilter === filter;
+    tile.classList.toggle("is-active", active);
+    tile.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
 function refreshWarehouseToolbarHints() {
   const hint = elements.warehouseToolbarHint;
   if (!hint) return;
@@ -1352,11 +1421,7 @@ function refreshWarehouseToolbarHints() {
   const q = elements.warehouseSearchInput?.value?.trim();
   const searchPart = q ? ` · поиск «${q}»` : "";
   const autoPart = "";
-  const linkPart = state.warehouseLinkFilter === "all"
-    ? ""
-    : state.warehouseLinkFilter === "linked"
-      ? " · только подвязанные"
-      : " · только не подвязанные";
+  const linkPart = state.warehouseLinkFilter === "all" ? "" : ` - ${warehouseLinkFilterLabel(state.warehouseLinkFilter)}`;
   const brandPart = state.warehouseBrandFilter ? ` · бренд «${state.warehouseBrandFilter}»` : "";
 
   if (!total) {
@@ -1459,6 +1524,17 @@ function renderWarehouse(data) {
   state.warehouseHasMore = Boolean(data.hasMore);
   state.warehousePage = Number(data.page || state.warehousePage || 1);
   state.warehouseTotalFiltered = Number(data.total || state.warehouseTotalFiltered || state.warehouse.length);
+  state.warehouseCounters = {
+    totalAll: Number(data.totalAll ?? data.total ?? state.warehouse.length),
+    ready: Number(data.ready || 0),
+    changed: Number(data.changed || 0),
+    withoutSupplier: Number(data.withoutSupplier || 0),
+    linkedProducts: Number(data.linkedProducts || 0),
+    linkedArchived: Number(data.linkedArchived || 0),
+    ozonArchived: Number(data.ozonArchived || 0),
+    ozonInactive: Number(data.ozonInactive || 0),
+    ozonOutOfStock: Number(data.ozonOutOfStock || 0),
+  };
   if (Array.isArray(data.suppliers)) state.suppliers = data.suppliers;
   if (data.supplierSync) state.supplierSync = data.supplierSync;
   elements.warehouseTotal.textContent = formatNumber(data.totalAll ?? data.total ?? state.warehouse.length);
@@ -1468,6 +1544,8 @@ function renderWarehouse(data) {
   elements.warehouseOzonArchived.textContent = formatNumber(data.ozonArchived || 0);
   elements.warehouseOzonInactive.textContent = formatNumber(data.ozonInactive || 0);
   elements.warehouseOzonOutOfStock.textContent = formatNumber(data.ozonOutOfStock || 0);
+  refreshWarehouseFilterLabels();
+  refreshWarehouseQuickFilterState();
   if (data.usdRate) {
     elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(data.usdRate)} RUB/USD`;
   }
@@ -3395,6 +3473,8 @@ if (elements.warehouseAutoPriceOnlyInput) elements.warehouseAutoPriceOnlyInput.c
 if (elements.warehouseLinkFilterInput) elements.warehouseLinkFilterInput.value = state.warehouseLinkFilter;
 if (elements.warehouseBrandFilterInput) elements.warehouseBrandFilterInput.value = state.warehouseBrandFilter;
 if (elements.warehouseAnimateAutoFocusInput) elements.warehouseAnimateAutoFocusInput.checked = state.warehouseAnimateAutoFocus;
+refreshWarehouseFilterLabels();
+refreshWarehouseQuickFilterState();
 
 document.querySelectorAll("[data-marketplace]").forEach((button) => {
   button.addEventListener("click", () => {
@@ -3409,6 +3489,38 @@ document.querySelectorAll("[data-marketplace]").forEach((button) => {
     syncWarehouseStateToUrl();
     window.scrollTo({ top: 0, behavior: "auto" });
     queueWarehouseFilterReload();
+  });
+});
+
+function applyWarehouseQuickFilter(filter) {
+  const value = String(filter || "all");
+  if (value === "all") {
+    state.warehouseLinkFilter = "all";
+    state.ozonStateFilter = "all";
+  } else if (["archived", "inactive", "out_of_stock"].includes(value)) {
+    state.ozonStateFilter = value;
+    state.warehouseLinkFilter = "all";
+  } else {
+    state.warehouseLinkFilter = value;
+    state.ozonStateFilter = "all";
+  }
+  if (elements.warehouseLinkFilterInput) elements.warehouseLinkFilterInput.value = state.warehouseLinkFilter;
+  if (elements.ozonStateFilter) elements.ozonStateFilter.value = state.ozonStateFilter;
+  refreshWarehouseFilterLabels();
+  refreshWarehouseQuickFilterState();
+  resetWarehouseListingState();
+  syncWarehouseStateToUrl();
+  window.scrollTo({ top: 0, behavior: "auto" });
+  queueWarehouseFilterReload();
+}
+
+document.querySelectorAll("[data-warehouse-quick-filter]").forEach((tile) => {
+  const run = () => applyWarehouseQuickFilter(tile.dataset.warehouseQuickFilter);
+  tile.addEventListener("click", run);
+  tile.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    run();
   });
 });
 
@@ -3437,13 +3549,9 @@ elements.warehouseAutoPriceOnlyInput?.addEventListener("change", () => {
 
 elements.warehouseLinkFilterInput?.addEventListener("change", () => {
   state.warehouseLinkFilter = String(elements.warehouseLinkFilterInput.value || "all");
-  state.warehouseVisibleLimit = 80;
-  state.warehousePage = 0;
-  state.warehouseRestorePage = 1;
-  state.selectedWarehouseGroupKey = null;
-  state.warehouseAutoFocusGroupKey = null;
-  state.warehouseScrollTop = 0;
+  resetWarehouseListingState();
   syncWarehouseStateToUrl();
+  refreshWarehouseQuickFilterState();
   queueWarehouseFilterReload();
 });
 
@@ -3502,13 +3610,9 @@ elements.warehouseUsdRateInput?.addEventListener("input", () => {
 
 elements.ozonStateFilter?.addEventListener("change", () => {
   state.ozonStateFilter = elements.ozonStateFilter.value;
-  state.warehouseVisibleLimit = 80;
-  state.warehousePage = 0;
-  state.warehouseRestorePage = 1;
-  state.selectedWarehouseGroupKey = null;
-  state.warehouseAutoFocusGroupKey = null;
-  state.warehouseScrollTop = 0;
+  resetWarehouseListingState();
   syncWarehouseStateToUrl();
+  refreshWarehouseQuickFilterState();
   if (state.ozonStateFilter !== "all" && !state.warehouse.some((product) => product.marketplaceState?.code && product.marketplaceState.code !== "unknown")) {
     elements.warehouseStatus.textContent = "Статусы Ozon + ЯМ обновляются автоматически по расписанию.";
   }

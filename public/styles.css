@@ -510,6 +510,26 @@ h1 {
   background: var(--panel);
   box-shadow: var(--small-shadow);
   overflow: hidden;
+  cursor: pointer;
+  transition: transform 160ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.summary-strip--warehouse .summary-tile:hover,
+.summary-strip--warehouse .summary-tile:focus-visible {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  box-shadow: var(--small-shadow), 0 0 0 4px var(--accent-soft);
+  outline: none;
+}
+
+.summary-strip--warehouse .summary-tile.is-active {
+  border-color: color-mix(in srgb, var(--accent) 64%, var(--line));
+  background: linear-gradient(180deg, var(--accent-soft), var(--panel));
+}
+
+.summary-strip--warehouse .summary-tile.is-active .summary-tile-label,
+.summary-strip--warehouse .summary-tile.is-active .summary-tile-value {
+  color: var(--accent-ink);
 }
 
 .summary-strip--warehouse .summary-tile::before {

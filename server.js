@@ -6325,6 +6325,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     ready: products.filter((product) => product.ready).length,
     changed: products.filter((product) => product.changed).length,
     withoutSupplier: products.filter((product) => !product.selectedSupplier && Number(product.supplierCount || 0) > 0).length,
+    linkedArchived: products.filter((product) => product.hasLinks && product.marketplace === "ozon" && product.marketplaceState?.code === "archived").length,
     ozonArchived: products.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "archived").length,
     ozonInactive: products.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "inactive").length,
     ozonOutOfStock: products.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "out_of_stock").length,
@@ -6544,7 +6545,10 @@ function warehousePageProductMatches(product = {}, filters = {}) {
   const linked = cleanText(filters.linked || "all");
   const hasLinks = Array.isArray(product.links) && product.links.length > 0;
   if (linked === "linked" && !hasLinks) return false;
+  if (linked === "ready" && (!hasLinks || !product.ready)) return false;
   if (linked === "unlinked" && hasLinks) return false;
+  if (linked === "changed" && (!hasLinks || !product.changed)) return false;
+  if (linked === "linked_archived" && (!hasLinks || cleanText(product.marketplace) !== "ozon" || cleanText(product.marketplaceState?.code) !== "archived")) return false;
   const marketplace = cleanText(filters.marketplace || "all");
   if (marketplace !== "all" && cleanText(product.marketplace) !== marketplace) return false;
   const stateCode = cleanText(filters.state || "all");
@@ -6589,7 +6593,10 @@ function warehousePagePostgresWhere(filters = {}) {
   if (marketplace !== "all" && ["ozon", "yandex"].includes(marketplace)) and.push({ marketplace });
   const linked = cleanText(filters.linked || "all");
   if (linked === "linked") and.push({ links: { some: {} } });
+  if (linked === "ready") and.push({ links: { some: {} } });
   if (linked === "unlinked") and.push({ links: { none: {} } });
+  if (linked === "changed") and.push({ links: { some: {} } });
+  if (linked === "linked_archived") and.push({ links: { some: {} } }, { marketplace: "ozon" });
   const stateCode = cleanText(filters.state || "all");
   if (stateCode !== "all") and.push({ status: stateCode });
   const brandFilter = cleanText(filters.brand || "");
@@ -6659,20 +6666,22 @@ async function buildFastWarehousePageFromPostgres({
   await ensureWarehousePostgresLinksBackfilled(prisma);
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
+  const linkedFilter = cleanText(filters.linked || "all");
+  const needsComputedLinkFilter = linkedFilter === "ready" || linkedFilter === "changed" || linkedFilter === "linked_archived";
   const needsDeepBrandFilter = Boolean(cleanText(filters.brand || ""));
-  const where = warehousePagePostgresWhere(needsDeepBrandFilter ? { ...filters, brand: "" } : filters);
+  const where = warehousePagePostgresWhere(needsDeepBrandFilter || needsComputedLinkFilter ? { ...filters, brand: "", state: "all" } : filters);
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
   const [totalAll, dbTotal, ozonStateCounts, dbRows, linkedRows, suppliers] = await Promise.all([
     prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
-    needsDeepBrandFilter ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
+    needsDeepBrandFilter || needsComputedLinkFilter ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
     getOzonStateCountsFromPostgres(prisma),
     prisma.warehouseProduct.findMany({
       where,
       include: { links: true },
       orderBy: warehousePagePostgresOrderBy(),
-      skip: needsDeepBrandFilter ? 0 : offset,
-      take: needsDeepBrandFilter ? undefined : pageSize,
+      skip: needsDeepBrandFilter || needsComputedLinkFilter ? 0 : offset,
+      take: needsDeepBrandFilter || needsComputedLinkFilter ? undefined : pageSize,
     }),
     prisma.warehouseProduct.findMany({
       where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] },
@@ -6688,11 +6697,19 @@ async function buildFastWarehousePageFromPostgres({
     normalizedSuppliers,
     { totalProducts: totalAll, usdRate: rate },
   );
-  const allProducts = needsDeepBrandFilter
-    ? dbRows.map(productFromPostgres).filter((product) => warehousePageProductMatches(product, filters))
-    : dbRows.map(productFromPostgres);
-  const total = needsDeepBrandFilter ? allProducts.length : dbTotal;
-  const pageProducts = await enrichWeakOzonProductsForPage(needsDeepBrandFilter ? allProducts.slice(offset, offset + pageSize) : allProducts);
+  let allProducts = dbRows.map(productFromPostgres);
+  if (needsComputedLinkFilter) {
+    allProducts = await buildFreshWarehouseProductsForWarehouse(
+      { products: allProducts, suppliers: normalizedSuppliers },
+      allProducts.map((product) => product.id),
+      { livePriceMaster: true, batchPriceMaster: true, usdRate: rate },
+    );
+  }
+  if (needsDeepBrandFilter || needsComputedLinkFilter) {
+    allProducts = allProducts.filter((product) => warehousePageProductMatches(product, filters));
+  }
+  const total = needsDeepBrandFilter || needsComputedLinkFilter ? allProducts.length : dbTotal;
+  const pageProducts = await enrichWeakOzonProductsForPage(needsDeepBrandFilter || needsComputedLinkFilter ? allProducts.slice(offset, offset + pageSize) : allProducts);
   const pageWarehouse = {
     createdAt: dbRows[0]?.createdAt?.toISOString() || null,
     updatedAt: dbRows[0]?.updatedAt?.toISOString() || null,
@@ -6728,6 +6745,9 @@ async function buildFastWarehousePageFromPostgres({
     withoutSupplier: counterStats.withoutSupplier,
     linkedProducts: counterStats.linkedProducts,
     linkedNotReady: counterStats.linkedNotReady,
+    linkedArchived: linkedRows
+      .map(productFromPostgres)
+      .filter((product) => product.marketplace === "ozon" && Array.isArray(product.links) && product.links.length && product.marketplaceState?.code === "archived").length,
     ozonArchived: ozonStateCounts.archived,
     ozonInactive: ozonStateCounts.inactive,
     ozonOutOfStock: ozonStateCounts.outOfStock,
@@ -6795,6 +6815,7 @@ async function buildFastWarehousePage({
     withoutSupplier: counterStats.withoutSupplier,
     linkedProducts: counterStats.linkedProducts,
     linkedNotReady: counterStats.linkedNotReady,
+    linkedArchived: enabledProducts.filter((product) => product.marketplace === "ozon" && Array.isArray(product.links) && product.links.length && product.marketplaceState?.code === "archived").length,
     ozonArchived: enabledProducts.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.archived).length,
     ozonInactive: enabledProducts.filter((product) => product.marketplace === "ozon" && /inactive/i.test(cleanText(product.marketplaceState?.code))).length,
     ozonOutOfStock: enabledProducts.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "out_of_stock").length,
@@ -7960,7 +7981,10 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     }
     if (autoOnly) rows = rows.filter((item) => item.autoPriceEnabled !== false);
     if (linked === "linked") rows = rows.filter((item) => item.hasLinks);
+    if (linked === "ready") rows = rows.filter((item) => item.hasLinks && item.ready);
     if (linked === "unlinked") rows = rows.filter((item) => !item.hasLinks);
+    if (linked === "changed") rows = rows.filter((item) => item.hasLinks && item.changed);
+    if (linked === "linked_archived") rows = rows.filter((item) => item.hasLinks && cleanText(item.marketplace) === "ozon" && cleanText(item.marketplaceState?.code) === "archived");
     if (marketplace !== "all") rows = rows.filter((item) => cleanText(item.marketplace) === marketplace);
     if (stateCode !== "all") rows = rows.filter((item) => cleanText(item.marketplaceState?.code) === stateCode);
     if (brandFilter) rows = rows.filter((item) => warehouseBrandMatches(item, brandFilter));
@@ -7985,6 +8009,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
       ready: data.ready,
       changed: data.changed,
       withoutSupplier: data.withoutSupplier,
+      linkedArchived: data.linkedArchived || 0,
       ozonArchived: data.ozonArchived || 0,
       ozonInactive: data.ozonInactive || 0,
       ozonOutOfStock: data.ozonOutOfStock || 0,

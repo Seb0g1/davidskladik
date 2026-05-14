@@ -82,7 +82,10 @@
                     <select id="warehouseLinkFilterInput" class="ios-select-native" aria-hidden="true" tabindex="-1">
                       <option value="all">Все</option>
                       <option value="linked">Подвязанные</option>
+                      <option value="ready">Готово к цене</option>
                       <option value="unlinked">Не подвязанные</option>
+                      <option value="changed">Нужно обновить</option>
+                      <option value="linked_archived">Привязка + архив Ozon</option>
                     </select>
                     <button type="button" class="ios-select-trigger" id="warehouseLinkFilterButton" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="warehouseLinkFilterCaption warehouseLinkFilterValue">
                       <span class="ios-select-value" id="warehouseLinkFilterValue">Все</span>
@@ -177,31 +180,31 @@
         </section>
 
         <section class="summary-strip summary-strip--warehouse" aria-label="Итоги склада">
-          <article class="summary-tile" data-tone="neutral">
+          <article class="summary-tile" data-tone="neutral" data-warehouse-quick-filter="all" role="button" tabindex="0">
             <span class="summary-tile-label">Товаров</span>
             <strong id="warehouseTotal" class="summary-tile-value">0</strong>
           </article>
-          <article class="summary-tile" data-tone="ok">
+          <article class="summary-tile" data-tone="ok" data-warehouse-quick-filter="ready" role="button" tabindex="0">
             <span class="summary-tile-label">Готово к цене</span>
             <strong id="warehouseReady" class="summary-tile-value">0</strong>
           </article>
-          <article class="summary-tile" data-tone="warn">
+          <article class="summary-tile" data-tone="warn" data-warehouse-quick-filter="changed" role="button" tabindex="0">
             <span class="summary-tile-label">Нужно обновить</span>
             <strong id="warehouseChanged" class="summary-tile-value">0</strong>
           </article>
-          <article class="summary-tile" data-tone="muted">
+          <article class="summary-tile" data-tone="muted" data-warehouse-quick-filter="unlinked" role="button" tabindex="0">
             <span class="summary-tile-label">Без поставщика</span>
             <strong id="warehouseNoSupplier" class="summary-tile-value">0</strong>
           </article>
-          <article class="summary-tile summary-tile--compact" data-tone="ozon">
+          <article class="summary-tile summary-tile--compact" data-tone="ozon" data-warehouse-quick-filter="archived" role="button" tabindex="0">
             <span class="summary-tile-label">Архив Ozon</span>
             <strong id="warehouseOzonArchived" class="summary-tile-value">0</strong>
           </article>
-          <article class="summary-tile summary-tile--compact" data-tone="ozon">
+          <article class="summary-tile summary-tile--compact" data-tone="ozon" data-warehouse-quick-filter="inactive" role="button" tabindex="0">
             <span class="summary-tile-label">Неактивные</span>
             <strong id="warehouseOzonInactive" class="summary-tile-value">0</strong>
           </article>
-          <article class="summary-tile summary-tile--compact" data-tone="ozon">
+          <article class="summary-tile summary-tile--compact" data-tone="ozon" data-warehouse-quick-filter="out_of_stock" role="button" tabindex="0">
             <span class="summary-tile-label">Нет наличия</span>
             <strong id="warehouseOzonOutOfStock" class="summary-tile-value">0</strong>
           </article>
