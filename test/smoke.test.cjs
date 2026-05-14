@@ -233,6 +233,8 @@ test("Ozon to Yandex stock sync uses Ozon stock from state and warehouses", () =
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { stock: 7, warehouses: [{ stock: 1 }] } }), 7);
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { warehouses: [{ stock: 2 }, { present: 3 }] } }), 5);
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { stock: 0 } }), 0);
+  assert.equal(pickOzonProductStockForYandex({ marketplaceState: { code: "archived", stock: 9, warehouses: [{ stock: 9 }] } }), 0);
+  assert.equal(pickOzonProductStockForYandex({ marketplaceState: { visibility: "ARCHIVED", stock: 4 } }), 0);
 });
 
 test("Yandex stock update payload uses campaign stock format", () => {
