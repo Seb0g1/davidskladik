@@ -7554,7 +7554,7 @@ async function buildWarehouseCounterStatsFromLinkedProducts(products = [], suppl
   const builtLinkedProducts = await buildFreshWarehouseProductsForWarehouse(
     { products: linkedProducts, suppliers: Array.isArray(suppliers) ? suppliers : [] },
     linkedProducts.map((product) => product.id),
-    { refreshPrices: false, persistMutations: false, livePriceMaster: true, batchPriceMaster: true, usdRate },
+    { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate },
   );
   return summarizeWarehouseCounterStats({ totalProducts, linkedProducts, builtLinkedProducts });
 }
@@ -7772,7 +7772,7 @@ async function buildFastWarehousePageFromPostgres({
     allProducts = await buildFreshWarehouseProductsForWarehouse(
       { products: allProducts, suppliers: normalizedSuppliers },
       allProducts.map((product) => product.id),
-      { livePriceMaster: true, batchPriceMaster: true, usdRate: rate },
+      { livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
     );
   }
   if (needsDeepBrandFilter || needsComputedLinkFilter) {
@@ -7789,7 +7789,7 @@ async function buildFastWarehousePageFromPostgres({
   const built = await buildFreshWarehouseProductsForWarehouse(
     pageWarehouse,
     pageWarehouse.products.map((product) => product.id),
-    { refreshPrices: false, persistMutations: false, livePriceMaster: true, batchPriceMaster: true, usdRate: rate },
+    { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
   );
   pageTrace("postgres:after-build", traceStartedAt);
   const builtMap = new Map(built.map((product) => [product.id, product]));
@@ -7836,6 +7836,46 @@ async function buildFastWarehousePageFromPostgres({
   };
 }
 
+async function buildWarehouseProductDetailFromPostgres(productId, { usdRate } = {}) {
+  const prisma = getPrisma();
+  if (!prisma) return null;
+  await ensureWarehousePostgresLinksBackfilled(prisma);
+  const appSettings = await readAppSettings();
+  const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
+  const row = await prisma.warehouseProduct.findFirst({
+    where: { AND: [enabledWarehouseTargetWhere(), { id: productId }] },
+    include: { links: true },
+  });
+  if (!row) return null;
+  const suppliers = await prisma.managedSupplier.findMany({ orderBy: { name: "asc" } });
+  const normalizedSuppliers = suppliers.map(supplierFromPostgres);
+  const warehouse = {
+    createdAt: row.createdAt?.toISOString?.() || null,
+    updatedAt: row.updatedAt?.toISOString?.() || null,
+    products: [productFromPostgres(row)],
+    suppliers: normalizedSuppliers,
+  };
+  const built = await buildFreshWarehouseProductsForWarehouse(
+    warehouse,
+    [row.id],
+    { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+  );
+  const product = built[0] || warehouse.products[0];
+  return {
+    createdAt: warehouse.createdAt,
+    product: {
+      ...product,
+      autoPriceEnabled: product.autoPriceEnabled !== false,
+      links: Array.isArray(product.links) ? product.links : [],
+      suppliers: Array.isArray(product.suppliers) ? product.suppliers : [],
+      selectedSupplier: product.selectedSupplier || null,
+      noSupplierAutomation: product.noSupplierAutomation || {},
+      marketplaceState: product.marketplaceState || {},
+      partial: false,
+    },
+  };
+}
+
 async function buildFastWarehousePage({
   page = 1,
   pageSize = 60,
@@ -7858,7 +7898,7 @@ async function buildFastWarehousePage({
   const built = await buildFreshWarehouseProductsForWarehouse(
     { ...warehouse, products: pageProducts },
     pageProducts.map((product) => product.id),
-    { livePriceMaster: true, batchPriceMaster: true, usdRate: rate },
+    { livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
   );
   const builtMap = new Map(built.map((product) => [product.id, product]));
   const items = pageProducts.map((product) => {
@@ -9138,6 +9178,11 @@ app.get("/api/warehouse/products/:id/detail", async (request, response, next) =>
     const sync = request.query.sync === "true";
     const refreshPrices = request.query.refreshPrices === "true";
     const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
+    if (shouldUsePostgresStorage() && !sync && !refreshPrices) {
+      const detail = await buildWarehouseProductDetailFromPostgres(request.params.id, { usdRate });
+      if (!detail) return response.status(404).json({ error: "Товар не найден." });
+      return response.json(detail);
+    }
     const data = await buildWarehouseViewCached({ sync, usdRate, refreshPrices });
     const product = (data.products || []).find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар не найден." });
