@@ -294,6 +294,12 @@ function warehouseRecentlyManuallySelected(windowMs = 2500) {
   return selectedAt > 0 && Date.now() - selectedAt < windowMs;
 }
 
+function warehouseDetailHasUserFocus() {
+  const active = document.activeElement;
+  if (!active || !elements.warehouseDetail?.contains(active)) return false;
+  return Boolean(active.matches?.("input, textarea, select, button, [contenteditable='true']"));
+}
+
 function markProgrammaticScroll() {
   state.warehouseProgrammaticScrollUntil = Date.now() + 250;
 }
@@ -1369,6 +1375,13 @@ function applyWarehouseFilters() {
     && state.selectedWarehouseDetailGroup?.key === state.selectedWarehouseGroupKey;
   if (state.selectedWarehouseGroupKey && !selectedInFiltered && !selectedDetailStillOpen) {
     state.selectedWarehouseGroupKey = null;
+  } else if (state.selectedWarehouseGroupKey && !selectedInFiltered && selectedDetailStillOpen) {
+    state.selectedWarehouseUpdateNotice = {
+      groupKey: state.selectedWarehouseGroupKey,
+      title: "Карточка вне текущего фильтра",
+      text: "Она осталась открытой справа, но скрыта в списке из-за фильтра. Сбросьте фильтр, чтобы снова увидеть её в каталоге.",
+      at: new Date().toISOString(),
+    };
   }
   if (!state.selectedWarehouseGroupKey && groups.length && !previousSelectedKey) {
     if (previousIndex >= 0) {
@@ -1692,6 +1705,16 @@ function renderWarehouseDetailIfChanged(group) {
   const signature = warehouseDetailSignature(group);
   if (signature && signature === state.selectedWarehouseDetailSignature) {
     state.selectedWarehouseDetailGroup = group;
+    return false;
+  }
+  if (group?.key && group.key === state.selectedWarehouseGroupKey && warehouseDetailHasUserFocus()) {
+    state.selectedWarehouseDetailGroup = group;
+    state.selectedWarehouseUpdateNotice = {
+      groupKey: group.key,
+      title: "Карточка обновилась в фоне",
+      text: "Данные уже получены, но правая панель не перерисована, пока вы работаете с полем или кнопкой.",
+      at: new Date().toISOString(),
+    };
     return false;
   }
   renderWarehouseDetail(group);
@@ -3016,6 +3039,12 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
   elements.warehouseSyncButton.disabled = sync;
   elements.warehouseRefreshPricesButton.disabled = refreshPrices;
   const previousWarehouseStatus = elements.warehouseStatus?.textContent || "";
+  const previousWarehouseStatusClasses = elements.warehouseStatus
+    ? {
+        ok: elements.warehouseStatus.classList.contains("is-ok"),
+        warn: elements.warehouseStatus.classList.contains("is-warn"),
+      }
+    : { ok: false, warn: false };
   elements.warehouseStatus.textContent = sync
     ? `Синхронизирую ${syncTargetNames().join(" + ")}: товары, цены, статусы, остатки и изображения...`
     : refreshPrices
@@ -3029,10 +3058,20 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
     // Do not clear selectedWarehouseGroupKey / selectedWarehouseProductId here:
     // after link save or refresh, applyWarehouseFilters() would fall back to the first card.
     await loadWarehousePage({ reset: true, sync, refreshPrices });
+    if (silent && elements.warehouseStatus) {
+      elements.warehouseStatus.textContent = previousWarehouseStatus;
+      elements.warehouseStatus.classList.toggle("is-ok", previousWarehouseStatusClasses.ok);
+      elements.warehouseStatus.classList.toggle("is-warn", previousWarehouseStatusClasses.warn);
+    }
     const requestedPage = Math.max(1, Number(state.warehouseRestorePage || 1));
     for (let page = 2; page <= requestedPage && state.warehouseHasMore; page += 1) {
       // Restore long-list context after refresh by preloading previously opened pages.
       await loadWarehousePage({ reset: false, sync: false, refreshPrices: false });
+      if (silent && elements.warehouseStatus) {
+        elements.warehouseStatus.textContent = previousWarehouseStatus;
+        elements.warehouseStatus.classList.toggle("is-ok", previousWarehouseStatusClasses.ok);
+        elements.warehouseStatus.classList.toggle("is-warn", previousWarehouseStatusClasses.warn);
+      }
     }
     if (state.warehouseBrandFilter) {
       for (let page = state.warehousePage + 1; page <= 80 && state.warehouseHasMore; page += 1) {
@@ -3044,6 +3083,11 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
     state.warehouseRestorePage = 1;
     restoreWarehouseScroll({ startedAt: refreshStartedAt });
     await loadRetryQueue().catch(() => {});
+    if (silent && elements.warehouseStatus) {
+      elements.warehouseStatus.textContent = previousWarehouseStatus;
+      elements.warehouseStatus.classList.toggle("is-ok", previousWarehouseStatusClasses.ok);
+      elements.warehouseStatus.classList.toggle("is-warn", previousWarehouseStatusClasses.warn);
+    }
     if (stopProgress) stopProgress(true);
   } catch (error) {
     if (stopProgress) stopProgress(false);
