@@ -64,6 +64,7 @@ const {
   productFromPostgres,
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
+  addWarehousePageGroupSiblings,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,
@@ -1148,6 +1149,15 @@ test("JSON seed normalizers prepare products, links, and retry items for Postgre
   });
   assert.equal(retry.status, "delayed");
   assert.equal(retry.queueKey, "p1:ozon");
+});
+
+test("warehouse page includes marketplace siblings for visible offer groups", () => {
+  const ozon = normalizeWarehouseProduct({ id: "ozon-a", marketplace: "ozon", target: "ozon", offerId: "SKU-1", name: "Ozon row" });
+  const unrelated = normalizeWarehouseProduct({ id: "ozon-b", marketplace: "ozon", target: "ozon", offerId: "SKU-2", name: "Other row" });
+  const yandex = normalizeWarehouseProduct({ id: "yandex-a", marketplace: "yandex", target: "yandex-shop", offerId: "SKU-1", name: "Yandex row" });
+  const page = addWarehousePageGroupSiblings([ozon, unrelated, yandex], [ozon, unrelated]);
+
+  assert.deepEqual(page.map((product) => product.id), ["ozon-a", "ozon-b", "yandex-a"]);
 });
 
 test("warehouse summary counters use linked product stats, not page-sized snapshots", () => {

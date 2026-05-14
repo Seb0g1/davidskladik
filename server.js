@@ -1565,12 +1565,17 @@ function targetById(targetId) {
 function isWarehouseProductTargetEnabled(product = {}) {
   const marketplace = cleanText(product.marketplace || "").toLowerCase();
   if (!marketplace) return true;
-  const accounts = marketplace === "yandex" ? getYandexShops() : getOzonAccounts();
+  if (marketplace === "yandex") {
+    const target = cleanText(product.target).toLowerCase();
+    const accounts = getYandexShops({ includeSyncDisabled: true });
+    if (!accounts.length) return true;
+    if (target === "yandex" || target.startsWith("yandex")) return true;
+    return accounts.some((account) => matchesYandexTarget(product.target, account.id));
+  }
+  const accounts = getOzonAccounts();
   if (!accounts.length) return marketplace !== "yandex";
   return accounts.some((account) => (
-    marketplace === "yandex"
-      ? matchesYandexTarget(product.target, account.id)
-      : matchesOzonTarget(product.target, account.id)
+    matchesOzonTarget(product.target, account.id)
   ));
 }
 
@@ -7614,13 +7619,17 @@ function enabledWarehouseTargetWhere() {
   } else {
     or.push({ marketplace: "ozon" });
   }
-  for (const shop of getYandexShops()) {
+  const yandexTargetFilters = [
+    { target: "yandex" },
+    { target: { startsWith: "yandex" } },
+  ];
+  for (const shop of getYandexShops({ includeSyncDisabled: true })) {
+    yandexTargetFilters.push({ target: shop.id });
+  }
+  if (yandexTargetFilters.length) {
     or.push({
       marketplace: "yandex",
-      OR: [
-        { target: shop.id },
-        { target: "yandex" },
-      ],
+      OR: yandexTargetFilters,
     });
   }
   return or.length ? { OR: or } : {};
@@ -7693,6 +7702,59 @@ function warehousePagePostgresOrderBy() {
   ];
 }
 
+function warehouseProductPageGroupKey(product = {}) {
+  const raw = product.raw && typeof product.raw === "object" && !Array.isArray(product.raw) ? product.raw : {};
+  const manualGroupId = cleanText(product.manualGroupId || product.manual_group_id || raw.manualGroupId || raw.manual_group_id).toLowerCase();
+  if (manualGroupId) return `manual:${manualGroupId}`;
+  const offerId = cleanText(product.offerId || product.offer_id).toLowerCase();
+  if (offerId) return `offer:${offerId}`;
+  return "";
+}
+
+function addWarehousePageGroupSiblings(sourceProducts = [], pageProducts = []) {
+  const groupKeys = new Set((pageProducts || []).map(warehouseProductPageGroupKey).filter(Boolean));
+  if (!groupKeys.size) return pageProducts || [];
+  const byId = new Map();
+  for (const product of pageProducts || []) {
+    if (product?.id) byId.set(String(product.id), product);
+  }
+  for (const product of sourceProducts || []) {
+    if (!product?.id) continue;
+    if (groupKeys.has(warehouseProductPageGroupKey(product))) byId.set(String(product.id), product);
+  }
+  return Array.from(byId.values());
+}
+
+function mergeWarehousePostgresRows(...rowLists) {
+  const byId = new Map();
+  for (const rows of rowLists) {
+    for (const row of rows || []) {
+      if (row?.id) byId.set(String(row.id), row);
+    }
+  }
+  return Array.from(byId.values());
+}
+
+async function addWarehousePostgresPageGroupSiblings(prisma, baseWhere, pageRows = []) {
+  const offerIds = Array.from(new Set((pageRows || []).map((row) => cleanText(row.offerId)).filter(Boolean)));
+  if (!offerIds.length) return pageRows || [];
+  const siblings = await prisma.warehouseProduct.findMany({
+    where: {
+      AND: [
+        baseWhere,
+        {
+          OR: offerIds.map((offerId) => ({
+            offerId: { equals: offerId, mode: "insensitive" },
+          })),
+        },
+      ],
+    },
+    include: { links: true },
+    orderBy: warehousePagePostgresOrderBy(),
+  });
+  return mergeWarehousePostgresRows(pageRows, siblings);
+}
+
 function marketplaceStateCodeFromPostgresRow(row = {}) {
   const state = row.marketplaceState && typeof row.marketplaceState === "object" && !Array.isArray(row.marketplaceState)
     ? row.marketplaceState
@@ -7741,7 +7803,7 @@ async function buildFastWarehousePageFromPostgres({
   const where = warehousePagePostgresWhere(needsDeepBrandFilter || needsComputedLinkFilter ? { ...filters, brand: "", state: "all" } : filters);
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
-  const [totalAll, dbTotal, ozonStateCounts, yandexStateCounts, dbRows, linkedRows, suppliers] = await Promise.all([
+  const [totalAll, dbTotal, ozonStateCounts, yandexStateCounts, initialDbRows, linkedRows, suppliers] = await Promise.all([
     prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
     needsDeepBrandFilter || needsComputedLinkFilter ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
     getOzonStateCountsFromPostgres(prisma),
@@ -7761,6 +7823,11 @@ async function buildFastWarehousePageFromPostgres({
     prisma.managedSupplier.findMany({ orderBy: { name: "asc" } }),
   ]);
   pageTrace("postgres:after-query", traceStartedAt);
+  let dbRows = initialDbRows;
+  let pageBaseCount = dbRows.length;
+  if (!needsDeepBrandFilter && !needsComputedLinkFilter) {
+    dbRows = await addWarehousePostgresPageGroupSiblings(prisma, where, dbRows);
+  }
   const normalizedSuppliers = suppliers.map(supplierFromPostgres);
   const counterStats = await buildWarehouseCounterStatsFromLinkedProducts(
     linkedRows.map(productFromPostgres),
@@ -7779,7 +7846,13 @@ async function buildFastWarehousePageFromPostgres({
     allProducts = allProducts.filter((product) => warehousePageProductMatches(product, filters));
   }
   const total = needsDeepBrandFilter || needsComputedLinkFilter ? allProducts.length : dbTotal;
-  const pageProducts = await enrichWeakOzonProductsForPage(needsDeepBrandFilter || needsComputedLinkFilter ? allProducts.slice(offset, offset + pageSize) : allProducts);
+  let visibleProducts = allProducts;
+  if (needsDeepBrandFilter || needsComputedLinkFilter) {
+    const pageSlice = allProducts.slice(offset, offset + pageSize);
+    pageBaseCount = pageSlice.length;
+    visibleProducts = addWarehousePageGroupSiblings(allProducts, pageSlice);
+  }
+  const pageProducts = await enrichWeakOzonProductsForPage(visibleProducts);
   const pageWarehouse = {
     createdAt: dbRows[0]?.createdAt?.toISOString() || null,
     updatedAt: dbRows[0]?.updatedAt?.toISOString() || null,
@@ -7831,7 +7904,7 @@ async function buildFastWarehousePageFromPostgres({
     page,
     pageSize,
     total,
-    hasMore: offset + items.length < total,
+    hasMore: offset + pageBaseCount < total,
     items,
   };
 }
@@ -7894,7 +7967,8 @@ async function buildFastWarehousePage({
   const filtered = enabledProducts.filter((product) => warehousePageProductMatches(product, filters));
   const total = filtered.length;
   const offset = (page - 1) * pageSize;
-  const pageProducts = await enrichWeakOzonProductsForPage(filtered.slice(offset, offset + pageSize));
+  const pageSlice = filtered.slice(offset, offset + pageSize);
+  const pageProducts = await enrichWeakOzonProductsForPage(addWarehousePageGroupSiblings(filtered, pageSlice));
   const built = await buildFreshWarehouseProductsForWarehouse(
     { ...warehouse, products: pageProducts },
     pageProducts.map((product) => product.id),
@@ -7944,7 +8018,7 @@ async function buildFastWarehousePage({
     page,
     pageSize,
     total,
-    hasMore: offset + items.length < total,
+    hasMore: offset + pageSlice.length < total,
     items,
   };
 }
@@ -12641,6 +12715,7 @@ module.exports = {
   writeWarehouse,
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
+  addWarehousePageGroupSiblings,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,
