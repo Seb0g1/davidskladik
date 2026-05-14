@@ -92,6 +92,7 @@ const {
   buildYandexStockUpdatePayload,
   parseYandexCampaignIds,
   yandexStockShops,
+  summarizeApiErrorPayload,
   sendYandexStocksForExportedOzonProducts,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,
@@ -270,6 +271,16 @@ test("Yandex stock shops expand comma-separated campaign ids", () => {
   assert.equal(shops[0].campaignId, "128820967");
   assert.equal(shops[1].campaignId, "149026853");
   assert.equal(shops[1].id, "yandex-main-149026853");
+});
+
+test("Yandex API error summary includes nested response details", () => {
+  assert.equal(summarizeApiErrorPayload({
+    code: "BAD_REQUEST",
+    errors: [
+      { message: "offerMappings[0].offer.name is invalid" },
+      { code: "INVALID_CATEGORY" },
+    ],
+  }, "fallback"), "BAD_REQUEST; offerMappings[0].offer.name is invalid; INVALID_CATEGORY");
 });
 
 test("Yandex exported stock stage fails loudly without campaign id", async () => {

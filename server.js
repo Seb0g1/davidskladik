@@ -2233,6 +2233,24 @@ function parseApiResponse(text) {
   }
 }
 
+function summarizeApiErrorPayload(data = {}, fallback = "API error") {
+  const parts = [];
+  const push = (value) => {
+    const text = cleanText(value);
+    if (text && !parts.includes(text)) parts.push(text);
+  };
+  push(data.message);
+  push(data.error);
+  push(data.code);
+  for (const item of Array.isArray(data.errors) ? data.errors : []) {
+    push(item.message || item.error || item.code || item.field || JSON.stringify(item));
+  }
+  for (const item of Array.isArray(data.details) ? data.details : []) {
+    push(item.message || item.error || item.code || item.field || JSON.stringify(item));
+  }
+  return parts.slice(0, 6).join("; ").slice(0, 1000) || fallback;
+}
+
 async function getUsdRate({ force = false } = {}) {
   const cached = await readCachedExchangeRate();
   if (!force && cached?.rate && Date.now() - new Date(cached.fetchedAt).getTime() < exchangeRateTtlMs) {
@@ -2630,7 +2648,7 @@ async function yandexRequest(shop, method, pathname, body) {
   const data = parseApiResponse(text);
 
   if (!response.ok) {
-    const error = new Error(data.message || data.error || `Yandex Market API error ${response.status}`);
+    const error = new Error(summarizeApiErrorPayload(data, `Yandex Market API error ${response.status}`));
     error.statusCode = response.status;
     error.yandex = data;
     throw error;
@@ -12321,6 +12339,7 @@ module.exports = {
   buildYandexStockUpdatePayload,
   parseYandexCampaignIds,
   yandexStockShops,
+  summarizeApiErrorPayload,
   sendYandexStocksForExportedOzonProducts,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,
