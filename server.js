@@ -1964,6 +1964,19 @@ function warehouseLinkIdentityKey(input = {}) {
   ].join("|");
 }
 
+function warehouseProductLinksSignature(product = {}) {
+  return (Array.isArray(product.links) ? product.links : [])
+    .map(normalizeWarehouseLink)
+    .map((link) => [
+      warehouseLinkIdentityKey(link),
+      link.id,
+      link.updatedAt || "",
+      link.updatedBy || "",
+    ].join("~"))
+    .sort()
+    .join("||");
+}
+
 function normalizeSupplierArticle(input = {}) {
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
@@ -2035,13 +2048,22 @@ function requestUsername(request) {
 }
 
 function productConflict(product, expectedUpdatedAt) {
-  const expected = cleanText(expectedUpdatedAt || "");
+  const expected = typeof expectedUpdatedAt === "object" && expectedUpdatedAt !== null
+    ? cleanText(expectedUpdatedAt.expectedUpdatedAt || expectedUpdatedAt.updatedAt || "")
+    : cleanText(expectedUpdatedAt || "");
+  const expectedLinksSignature = typeof expectedUpdatedAt === "object" && expectedUpdatedAt !== null
+    ? cleanText(expectedUpdatedAt.expectedLinksSignature || expectedUpdatedAt.linksSignature || "")
+    : "";
   if (!expected) return null;
   if (cleanText(product?.updatedAt || "") === expected) return null;
+  const currentLinksSignature = warehouseProductLinksSignature(product);
+  if (expectedLinksSignature && expectedLinksSignature === currentLinksSignature) return null;
   return {
     id: product.id,
     offerId: product.offerId || product.ozon?.offerId || product.yandex?.offerId || "",
     expectedUpdatedAt: expected,
+    expectedLinksSignature: expectedLinksSignature || undefined,
+    currentLinksSignature: expectedLinksSignature ? currentLinksSignature : undefined,
     currentUpdatedAt: product.updatedAt || null,
     freshProduct: normalizeWarehouseProduct(product),
   };
@@ -2049,13 +2071,26 @@ function productConflict(product, expectedUpdatedAt) {
 
 function productLocksFromRequest(body = {}) {
   const locks = new Map();
-  if (body.expectedUpdatedAt && body.productId) locks.set(String(body.productId), cleanText(body.expectedUpdatedAt));
+  if (body.expectedUpdatedAt && body.productId) {
+    locks.set(String(body.productId), {
+      expectedUpdatedAt: cleanText(body.expectedUpdatedAt),
+      expectedLinksSignature: cleanText(body.expectedLinksSignature || body.linksSignature || ""),
+    });
+  }
   if (body.expectedUpdatedAt && Array.isArray(body.productIds) && body.productIds.length === 1) {
-    locks.set(String(body.productIds[0]), cleanText(body.expectedUpdatedAt));
+    locks.set(String(body.productIds[0]), {
+      expectedUpdatedAt: cleanText(body.expectedUpdatedAt),
+      expectedLinksSignature: cleanText(body.expectedLinksSignature || body.linksSignature || ""),
+    });
   }
   for (const item of Array.isArray(body.optimisticLocks) ? body.optimisticLocks : []) {
     const id = cleanText(item?.id);
-    if (id) locks.set(id, cleanText(item?.expectedUpdatedAt || ""));
+    if (id) {
+      locks.set(id, {
+        expectedUpdatedAt: cleanText(item?.expectedUpdatedAt || ""),
+        expectedLinksSignature: cleanText(item?.expectedLinksSignature || item?.linksSignature || ""),
+      });
+    }
   }
   return locks;
 }
@@ -2068,8 +2103,7 @@ function collectProductConflicts(products = [], locks = new Map()) {
 
 function collectProductConflictsExceptBackground(products = [], locks = new Map(), { mergeOnly = false } = {}) {
   const conflicts = collectProductConflicts(products, locks);
-  if (!mergeOnly || !conflicts.length) return conflicts;
-  return [];
+  return conflicts;
 }
 
 function conflictResponse(response, conflicts) {
@@ -11012,6 +11046,8 @@ module.exports = {
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
+  warehouseProductLinksSignature,
+  productConflict,
   warehouseLinkHasMatchTarget,
   pickOzonCabinetListedPrice,
   shouldSkipWarehousePriceSend,

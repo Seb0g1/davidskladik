@@ -1283,7 +1283,33 @@ function selectedWarehouseLocks() {
   return uniqueIds.map((id) => ({
     id,
     expectedUpdatedAt: String(byId.get(id)?.updatedAt || ""),
+    expectedLinksSignature: warehouseProductLinksSignature(byId.get(id)),
   }));
+}
+
+function warehouseProductLinksSignature(product = {}) {
+  return (Array.isArray(product?.links) ? product.links : [])
+    .map((link) => {
+      const priceCurrency = String(link.priceCurrency || "USD").trim().toUpperCase();
+      const identity = [
+        String(link.matchType || "article"),
+        String(link.article || "").trim().toLowerCase(),
+        String(link.sourceRowId || "").trim(),
+        String(link.exactName || "").trim().toLowerCase(),
+        String(link.partnerId || "").trim(),
+        String(link.supplierName || "").trim().toLowerCase().replace(/\s+/g, " "),
+        String(link.keyword || "").trim().toLowerCase(),
+        priceCurrency === "RUB" || priceCurrency === "RUR" ? "RUB" : "USD",
+      ].join("|");
+      return [
+        identity,
+        String(link.id || ""),
+        String(link.updatedAt || ""),
+        String(link.updatedBy || link.createdBy || ""),
+      ].join("~");
+    })
+    .sort()
+    .join("||");
 }
 
 function conflictOfferPreview(conflicts = []) {
@@ -3999,6 +4025,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
     const optimisticLocks = productIds.map((id) => ({
       id,
       expectedUpdatedAt: String(byId.get(id)?.updatedAt || ""),
+      expectedLinksSignature: warehouseProductLinksSignature(byId.get(id)),
     }));
     const selectionVersion = state.warehouseSelectionVersion;
     const selectedGroupKey = state.selectedWarehouseGroupKey;

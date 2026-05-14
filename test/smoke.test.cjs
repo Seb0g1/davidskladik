@@ -69,6 +69,8 @@ const {
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
+  warehouseProductLinksSignature,
+  productConflict,
   warehouseLinkHasMatchTarget,
   pickOzonCabinetListedPrice,
   shouldSkipWarehousePriceSend,
@@ -1652,6 +1654,29 @@ test("warehouse link identity ignores client draft id duplicates", () => {
   const a = warehouseLinkIdentityKey({ id: "draft-1", article: "A-1", partnerId: "88", supplierName: " Supplier ", keyword: "Blue", priceCurrency: "rub" });
   const b = warehouseLinkIdentityKey({ id: "draft-2", article: "A-1", partnerId: "88", supplierName: "supplier", keyword: "blue", priceCurrency: "RUB" });
   assert.equal(a, b);
+});
+
+test("warehouse link locks ignore background-only product updates", () => {
+  const product = normalizeWarehouseProduct({
+    id: "link-lock-product",
+    offerId: "LOCK-1",
+    updatedAt: "2026-05-14T10:05:00.000Z",
+    links: [{ id: "link-1", article: "PM-1", supplierName: "Supplier A", updatedAt: "2026-05-14T10:00:00.000Z" }],
+  });
+  const expectedLinksSignature = warehouseProductLinksSignature(product);
+  assert.equal(productConflict(product, {
+    expectedUpdatedAt: "2026-05-14T10:00:00.000Z",
+    expectedLinksSignature,
+  }), null);
+  const conflict = productConflict({
+    ...product,
+    links: [...product.links, { id: "link-2", article: "PM-2", supplierName: "Supplier B" }],
+  }, {
+    expectedUpdatedAt: "2026-05-14T10:00:00.000Z",
+    expectedLinksSignature,
+  });
+  assert.equal(conflict.code, undefined);
+  assert.equal(conflict.id, "link-lock-product");
 });
 
 test("warehouse link target detection keeps selected rows without supplier article", () => {
