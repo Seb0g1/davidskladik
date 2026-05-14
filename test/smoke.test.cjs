@@ -90,6 +90,7 @@ const {
   buildYandexPriceUpdateFromOzonProduct,
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
+  sendYandexStocksForExportedOzonProducts,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,
   summarizeYandexCleanupPreview,
@@ -248,6 +249,25 @@ test("Yandex stock update payload uses campaign stock format", () => {
       { sku: "SKU-2", items: [{ type: "FIT", count: 0, updatedAt: "2026-05-14T10:00:00.000Z" }] },
     ],
   });
+});
+
+test("Yandex exported stock stage fails loudly without campaign id", async () => {
+  const result = await sendYandexStocksForExportedOzonProducts([
+    normalizeWarehouseProduct({
+      id: "p1",
+      offerId: "SKU-1",
+      marketplaceState: { code: "active", stock: 4 },
+    }),
+  ], {
+    stockShops: [{ id: "shop-1", name: "Shop 1", apiKey: "token", businessId: 123 }],
+    existingOfferIds: new Set(["sku-1"]),
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.sent, 0);
+  assert.equal(result.failed, 1);
+  assert.equal(result.results[0].stage, "stock");
+  assert.match(result.results[0].error, /campaignId/);
 });
 
 test("Ozon to Yandex price update uses exported offer price", () => {

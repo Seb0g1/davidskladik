@@ -617,7 +617,7 @@ async function sendYandexImport() {
     });
     renderImportFailures(payload.results || []);
     if (payload.warnings?.length) renderWarnings(payload.warnings);
-    setBusy(false, `Yandex: карточки ${payload.sent || 0}, ошибки карточек ${payload.failed || 0}. Цены ${payload.priceSent || 0}/${payload.priceFailed || 0}. Остатки ${payload.stockSent || 0}/${payload.stockFailed || 0}. Уже были ${payload.skippedExisting || 0}. Отложено лимитом ${payload.skippedByLimit || 0}.`);
+    setBusy(false, `Yandex: карточки ${payload.sent || 0}, ошибки карточек ${payload.failed || 0}. Цены ${payload.priceSent || 0}/${payload.priceFailed || 0}. Остатки ${payload.stockSent || 0}/${payload.stockFailed || 0}. Уже были ${payload.skippedExisting || 0}. Осталось на следующий запуск ${payload.skippedByLimit || 0}.`);
     await loadYandexImportHistory();
   } catch (error) {
     setBusy(false, `Ошибка выгрузки в Яндекс: ${error.message || error}`);

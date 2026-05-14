@@ -3085,10 +3085,16 @@ async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
 
   let existingOfferIds = options.existingOfferIds instanceof Set ? options.existingOfferIds : null;
   if (!existingOfferIds) {
+    const existingCheckTimeoutMs = Math.max(1000, Number(process.env.OZON_YANDEX_EXISTING_CHECK_TIMEOUT_MS || 8000) || 8000);
     try {
-      existingOfferIds = await getExistingYandexOfferIdSet(rows.map((row) => row.offerId));
+      existingOfferIds = await Promise.race([
+        getExistingYandexOfferIdSet(rows.map((row) => row.offerId)),
+        promiseTimeout(existingCheckTimeoutMs, "yandex_existing_check_timeout"),
+      ]);
     } catch (error) {
-      const label = error?.message || error?.code || "ошибка API";
+      const label = error?.message === "yandex_existing_check_timeout"
+        ? `таймаут ${Math.round(existingCheckTimeoutMs / 1000)} с`
+        : error?.message || error?.code || "ошибка API";
       warnings.push(`Yandex: не удалось проверить существующие артикулы перед отправкой цен (${label})`);
       existingOfferIds = new Set();
     }
@@ -4555,6 +4561,10 @@ function yandexStockShops(shops = null) {
   return source.filter((shop) => shop.apiKey && shop.businessId && shop.campaignId);
 }
 
+function yandexMissingStockCampaignWarning(count) {
+  return `Yandex: ${count} магазин(ов) без campaignId пропущены для остатков. Добавьте Campaign ID в кабинетах маркетплейсов.`;
+}
+
 async function sendYandexStockChunk(shop, rows = []) {
   if (!shop?.campaignId) {
     const error = new Error("Yandex campaignId is required for stock updates");
@@ -4573,7 +4583,7 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
   const shops = yandexStockShops(allShops);
   const missingCampaignShops = allShops.filter((shop) => !shop.campaignId);
   if (missingCampaignShops.length) {
-    warnings.push(`Yandex: ${missingCampaignShops.length} магазин(ов) без campaignId пропущены для остатков.`);
+    warnings.push(yandexMissingStockCampaignWarning(missingCampaignShops.length));
   }
   const rows = (Array.isArray(products) ? products : [])
     .map((product) => ({
@@ -4583,8 +4593,27 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
       stock: pickOzonProductStockForYandex(product),
     }))
     .filter((row) => row.offerId);
-  if (!rows.length || !shops.length) {
-    return { ok: true, dryRun, sent: 0, skipped: rows.length, warnings: shops.length ? warnings : ["Yandex Market не настроен."], results: [] };
+  if (!rows.length) {
+    return { ok: true, dryRun, sent: 0, failed: 0, skipped: 0, warnings, results: [] };
+  }
+  if (!shops.length) {
+    const detail = warnings.length ? warnings.join(" ") : "Yandex Market не настроен для остатков.";
+    return {
+      ok: false,
+      dryRun,
+      sent: 0,
+      failed: rows.length,
+      skipped: 0,
+      planned: rows.length,
+      warnings: warnings.length ? warnings : [detail],
+      results: rows.map((row) => ({
+        stage: "stock",
+        offerId: row.offerId,
+        stock: row.stock,
+        ok: false,
+        error: detail,
+      })),
+    };
   }
 
   let existingOfferIds = new Set();
@@ -4633,7 +4662,7 @@ async function sendYandexStocksForExportedOzonProducts(products = [], options = 
   const shops = yandexStockShops(allShops);
   const missingCampaignShops = allShops.filter((shop) => shop.apiKey && shop.businessId && !shop.campaignId);
   if (missingCampaignShops.length) {
-    warnings.push(`Yandex: ${missingCampaignShops.length} магазин(ов) без campaignId пропущены для остатков.`);
+    warnings.push(yandexMissingStockCampaignWarning(missingCampaignShops.length));
   }
   const existingOfferIds = options.existingOfferIds instanceof Set ? options.existingOfferIds : new Set();
   const rows = (Array.isArray(products) ? products : [])
@@ -4643,8 +4672,26 @@ async function sendYandexStocksForExportedOzonProducts(products = [], options = 
     }))
     .filter((row) => row.offerId && existingOfferIds.has(row.offerId.toLowerCase()));
   const results = [];
-  if (!rows.length || !shops.length) {
-    return { ok: true, sent: 0, failed: 0, skipped: rows.length, warnings: shops.length ? warnings : ["Yandex Market не настроен."], results };
+  if (!rows.length) {
+    return { ok: true, sent: 0, failed: 0, skipped: Math.max(0, (products || []).length - rows.length), warnings, results };
+  }
+  if (!shops.length) {
+    const detail = warnings.length ? warnings.join(" ") : "Yandex Market не настроен для остатков.";
+    return {
+      ok: false,
+      sent: 0,
+      failed: rows.length,
+      skipped: Math.max(0, (products || []).length - rows.length),
+      planned: rows.length,
+      warnings: warnings.length ? warnings : [detail],
+      results: rows.map((row) => ({
+        stage: "stock",
+        offerId: row.offerId,
+        stock: row.stock,
+        ok: false,
+        error: detail,
+      })),
+    };
   }
 
   for (const shop of shops) {
@@ -10427,10 +10474,16 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
       .filter(Boolean);
     const warnings = [];
     let yandexExistingOfferIds = new Set();
+    const existingCheckTimeoutMs = Math.max(1000, Number(process.env.OZON_YANDEX_EXISTING_CHECK_TIMEOUT_MS || 8000) || 8000);
     try {
-      yandexExistingOfferIds = await getExistingYandexOfferIdSet(candidateOfferIds);
+      yandexExistingOfferIds = await Promise.race([
+        getExistingYandexOfferIdSet(candidateOfferIds),
+        promiseTimeout(existingCheckTimeoutMs, "yandex_existing_check_timeout"),
+      ]);
     } catch (error) {
-      const label = error?.message || error?.code || "ошибка API";
+      const label = error?.message === "yandex_existing_check_timeout"
+        ? `таймаут ${Math.round(existingCheckTimeoutMs / 1000)} с`
+        : error?.message || error?.code || "ошибка API";
       warnings.push(`Yandex: не удалось проверить существующие SKU перед выгрузкой (${label}). Сервер продолжит только по текущей пачке, ошибки дублей Яндекс вернёт по строкам.`);
       logger.warn("yandex existing offers check failed before import send", { detail: label });
     }
