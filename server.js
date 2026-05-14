@@ -10425,7 +10425,15 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
       .filter((row) => !row.blockReasons?.length && row.yandexReady)
       .map((row) => cleanText(row.offerId))
       .filter(Boolean);
-    const yandexExistingOfferIds = await getExistingYandexOfferIdSet(candidateOfferIds);
+    const warnings = [];
+    let yandexExistingOfferIds = new Set();
+    try {
+      yandexExistingOfferIds = await getExistingYandexOfferIdSet(candidateOfferIds);
+    } catch (error) {
+      const label = error?.message || error?.code || "ошибка API";
+      warnings.push(`Yandex: не удалось проверить существующие SKU перед выгрузкой (${label}). Сервер продолжит только по текущей пачке, ошибки дублей Яндекс вернёт по строкам.`);
+      logger.warn("yandex existing offers check failed before import send", { detail: label });
+    }
     const rows = products.map((product) => buildOzonYandexImportCandidate(product, { yandexExistingOfferIds }));
     const eligibleRows = rows.filter((row) => row.eligible);
     const selectedRows = eligibleRows.slice(0, sendLimit);
@@ -10464,6 +10472,7 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
       ? await sendYandexStocksForExportedOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds })
       : { ok: true, sent: 0, failed: 0, skipped: 0, warnings: [], results: [] };
     const stageWarnings = [
+      ...warnings,
       ...(Array.isArray(priceStage.warnings) ? priceStage.warnings : []),
       ...(Array.isArray(stockStage.warnings) ? stockStage.warnings : []),
     ];
