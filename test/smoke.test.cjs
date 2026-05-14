@@ -91,6 +91,27 @@ test("GET /health", async () => {
   assert.equal(res.body.components.redis.queueMode, "inline");
 });
 
+test("GET /health deep exposes operational component details", async () => {
+  const previousHost = process.env.PM_DB_HOST;
+  const previousName = process.env.PM_DB_NAME;
+  try {
+    delete process.env.PM_DB_HOST;
+    delete process.env.PM_DB_NAME;
+    const res = await request(app).get("/health?deep=1").expect(200);
+    assert.equal(typeof res.body.ok, "boolean");
+    assert.equal(res.body.components.storage.mode, "json");
+    assert.equal(res.body.components.postgres.enabled, false);
+    assert.equal(res.body.components.pricemaster.configured, false);
+    assert.equal(res.body.components.redis.queueMode, "inline");
+    assert.equal(typeof res.body.components.ozon.accounts, "number");
+  } finally {
+    if (previousHost === undefined) delete process.env.PM_DB_HOST;
+    else process.env.PM_DB_HOST = previousHost;
+    if (previousName === undefined) delete process.env.PM_DB_NAME;
+    else process.env.PM_DB_NAME = previousName;
+  }
+});
+
 test("detects Ozon per-item rate limit errors", () => {
   const error = new Error("price-batch-set for seller api: rpc error: code = ResourceExhausted desc = error limiting: acquire limit per item: items limit: limit exceeded");
   assert.equal(isOzonResourceExhaustedError(error), true);

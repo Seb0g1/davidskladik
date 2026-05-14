@@ -932,8 +932,9 @@ async function collectHealthDetails({ deep = false } = {}) {
   return { ok, service: "magic-vibes-warehouse", time: new Date().toISOString(), components };
 }
 
-app.get("/health", async (_request, response) => {
-  response.json(await collectHealthDetails({ deep: false }));
+app.get("/health", async (request, response) => {
+  const deep = ["1", "true", "yes"].includes(String(request.query.deep || "").toLowerCase());
+  response.json(await collectHealthDetails({ deep }));
 });
 
 app.post("/api/login", loginLimiter, async (request, response, next) => {
