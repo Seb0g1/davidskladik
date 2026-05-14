@@ -9942,12 +9942,28 @@ app.get("/api/ozon-yandex-import/preview", async (request, response, next) => {
     }
 
     let yandexExistingOfferIds = new Set();
-    const offerIds = products.map((product) => product.offerId || product.offer_id).map(cleanText).filter(Boolean);
+    const initialRows = products.map((product) => buildOzonYandexImportCandidate(product));
+    const checkableOfferIds = initialRows
+      .filter((row) => !row.blockReasons?.length && row.yandexReady)
+      .map((row) => row.offerId)
+      .map(cleanText)
+      .filter(Boolean);
+    const existingCheckLimit = Math.max(0, Number(process.env.OZON_YANDEX_EXISTING_CHECK_LIMIT || 5000) || 5000);
+    const existingCheckTimeoutMs = Math.max(1000, Number(process.env.OZON_YANDEX_EXISTING_CHECK_TIMEOUT_MS || 8000) || 8000);
+    const offerIds = existingCheckLimit > 0 ? checkableOfferIds.slice(0, existingCheckLimit) : [];
+    if (checkableOfferIds.length > offerIds.length) {
+      warnings.push(`Yandex: проверка существующих артикулов ограничена ${offerIds.length} из ${checkableOfferIds.length}, чтобы страница не зависала.`);
+    }
     try {
-      yandexExistingOfferIds = await getExistingYandexOfferIdSet(offerIds);
+      yandexExistingOfferIds = await Promise.race([
+        getExistingYandexOfferIdSet(offerIds),
+        promiseTimeout(existingCheckTimeoutMs, "yandex_existing_check_timeout"),
+      ]);
     } catch (error) {
-      const label = error?.message || error?.code || "ошибка API";
-      warnings.push(`Yandex: не удалось проверить существующие артикулы (${label})`);
+      const label = error?.message === "yandex_existing_check_timeout"
+        ? `таймаут ${Math.round(existingCheckTimeoutMs / 1000)} с`
+        : error?.message || error?.code || "ошибка API";
+      warnings.push(`Yandex: не удалось быстро проверить существующие артикулы (${label}). Карточки показаны без этой проверки.`);
       logger.warn("yandex existing offers check failed", { detail: label });
     }
 
