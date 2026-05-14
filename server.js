@@ -2636,26 +2636,48 @@ async function yandexRequest(shop, method, pathname, body) {
     throw error;
   }
 
-  const response = await fetch(`${yandexBaseUrl}${pathname}`, {
-    method,
-    headers: {
-      "Api-Key": shop.apiKey,
-      "Content-Type": "application/json",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  const attempts = Math.max(1, Number(process.env.YANDEX_REQUEST_MAX_ATTEMPTS || 3) || 3);
+  const timeoutMs = Math.max(1000, Number(process.env.YANDEX_REQUEST_TIMEOUT_MS || 20000) || 20000);
+  let lastError = null;
 
-  const text = await response.text();
-  const data = parseApiResponse(text);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(`${yandexBaseUrl}${pathname}`, {
+        method,
+        headers: {
+          "Api-Key": shop.apiKey,
+          "Content-Type": "application/json",
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
 
-  if (!response.ok) {
-    const error = new Error(summarizeApiErrorPayload(data, `Yandex Market API error ${response.status}`));
-    error.statusCode = response.status;
-    error.yandex = data;
-    throw error;
+      const text = await response.text();
+      const data = parseApiResponse(text);
+
+      if (!response.ok) {
+        const error = new Error(summarizeApiErrorPayload(data, `Yandex Market API error ${response.status}`));
+        error.statusCode = response.status;
+        error.yandex = data;
+        if (![420, 423, 429, 500, 502, 503, 504].includes(response.status) || attempt >= attempts) throw error;
+        lastError = error;
+      } else {
+        return data;
+      }
+    } catch (error) {
+      clearTimeout(timer);
+      lastError = error?.name === "AbortError" ? new Error(`Yandex Market API timeout ${Math.round(timeoutMs / 1000)}s`) : error;
+      if (attempt >= attempts) throw lastError;
+    }
+
+    const delayMs = Math.min(5000, 500 * attempt * attempt);
+    await sleep(delayMs);
   }
 
-  return data;
+  throw lastError || new Error("Yandex Market API request failed");
 }
 
 async function getOzonProducts(limit = Number.POSITIVE_INFINITY, account = null) {
@@ -7617,6 +7639,32 @@ function warehousePagePostgresWhere(filters = {}) {
   return { AND: and.filter((item) => Object.keys(item || {}).length) };
 }
 
+function warehouseStateCounter(products = [], marketplace = "") {
+  const rows = Array.isArray(products) ? products : [];
+  const market = cleanText(marketplace).toLowerCase();
+  const filtered = market ? rows.filter((product) => cleanText(product.marketplace).toLowerCase() === market) : rows;
+  return {
+    archived: filtered.filter((product) => cleanText(product.marketplaceState?.code).toLowerCase() === "archived" || product.marketplaceState?.archived).length,
+    inactive: filtered.filter((product) => /inactive/i.test(cleanText(product.marketplaceState?.code))).length,
+    outOfStock: filtered.filter((product) => cleanText(product.marketplaceState?.code).toLowerCase() === "out_of_stock").length,
+  };
+}
+
+async function warehouseStateCounterFromPostgres(prisma, marketplace) {
+  const rows = await prisma.warehouseProduct.findMany({
+    where: { AND: [enabledWarehouseTargetWhere(), { marketplace }] },
+    select: { marketplaceState: true, status: true, archived: true },
+  });
+  const counts = { archived: 0, inactive: 0, outOfStock: 0 };
+  for (const row of rows) {
+    const code = marketplaceStateCodeFromPostgresRow(row);
+    if (code === "archived") counts.archived += 1;
+    if (/inactive/i.test(code)) counts.inactive += 1;
+    if (code === "out_of_stock") counts.outOfStock += 1;
+  }
+  return counts;
+}
+
 function warehousePagePostgresOrderBy() {
   return [
     { archived: "asc" },
@@ -7636,9 +7684,9 @@ function marketplaceStateCodeFromPostgresRow(row = {}) {
   return cleanText(state.code || row.status || state.state).toLowerCase();
 }
 
-async function getOzonStateCountsFromPostgres(prisma) {
+async function getMarketplaceStateCountsFromPostgres(prisma, marketplace = "ozon") {
   const rows = await prisma.warehouseProduct.findMany({
-    where: { AND: [enabledWarehouseTargetWhere(), { marketplace: "ozon" }] },
+    where: { AND: [enabledWarehouseTargetWhere(), { marketplace }] },
     select: { marketplaceState: true, status: true, archived: true },
   });
   let archived = 0;
@@ -7651,6 +7699,10 @@ async function getOzonStateCountsFromPostgres(prisma) {
     if (code === "out_of_stock") outOfStock += 1;
   }
   return { archived, inactive, outOfStock };
+}
+
+async function getOzonStateCountsFromPostgres(prisma) {
+  return getMarketplaceStateCountsFromPostgres(prisma, "ozon");
 }
 
 async function buildFastWarehousePageFromPostgres({
@@ -7673,10 +7725,11 @@ async function buildFastWarehousePageFromPostgres({
   const where = warehousePagePostgresWhere(needsDeepBrandFilter || needsComputedLinkFilter ? { ...filters, brand: "", state: "all" } : filters);
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
-  const [totalAll, dbTotal, ozonStateCounts, dbRows, linkedRows, suppliers] = await Promise.all([
+  const [totalAll, dbTotal, ozonStateCounts, yandexStateCounts, dbRows, linkedRows, suppliers] = await Promise.all([
     prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
     needsDeepBrandFilter || needsComputedLinkFilter ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
     getOzonStateCountsFromPostgres(prisma),
+    getMarketplaceStateCountsFromPostgres(prisma, "yandex"),
     prisma.warehouseProduct.findMany({
       where,
       include: { links: true },
@@ -7752,6 +7805,9 @@ async function buildFastWarehousePageFromPostgres({
     ozonArchived: ozonStateCounts.archived,
     ozonInactive: ozonStateCounts.inactive,
     ozonOutOfStock: ozonStateCounts.outOfStock,
+    yandexArchived: yandexStateCounts.archived,
+    yandexInactive: yandexStateCounts.inactive,
+    yandexOutOfStock: yandexStateCounts.outOfStock,
     usdRate: rate,
     priceMaster: await getPriceMasterSnapshotMetaFast(),
     sourceError: "",
@@ -7807,6 +7863,8 @@ async function buildFastWarehousePage({
     warehouse.suppliers,
     { totalProducts: enabledProducts.length, usdRate: rate },
   );
+  const ozonStateCounts = warehouseStateCounter(enabledProducts, "ozon");
+  const yandexStateCounts = warehouseStateCounter(enabledProducts, "yandex");
   return {
     createdAt: warehouse.createdAt || null,
     updatedAt: warehouse.updatedAt || null,
@@ -7817,9 +7875,12 @@ async function buildFastWarehousePage({
     linkedProducts: counterStats.linkedProducts,
     linkedNotReady: counterStats.linkedNotReady,
     linkedArchived: enabledProducts.filter((product) => product.marketplace === "ozon" && Array.isArray(product.links) && product.links.length && product.marketplaceState?.code === "archived").length,
-    ozonArchived: enabledProducts.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.archived).length,
-    ozonInactive: enabledProducts.filter((product) => product.marketplace === "ozon" && /inactive/i.test(cleanText(product.marketplaceState?.code))).length,
-    ozonOutOfStock: enabledProducts.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "out_of_stock").length,
+    ozonArchived: ozonStateCounts.archived,
+    ozonInactive: ozonStateCounts.inactive,
+    ozonOutOfStock: ozonStateCounts.outOfStock,
+    yandexArchived: yandexStateCounts.archived,
+    yandexInactive: yandexStateCounts.inactive,
+    yandexOutOfStock: yandexStateCounts.outOfStock,
     usdRate: rate,
     priceMaster: await getPriceMasterSnapshotMetaFast(),
     sourceError: "",

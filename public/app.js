@@ -1400,12 +1400,26 @@ function refreshWarehouseFilterLabels() {
   }
   const stateSelect = elements.ozonStateFilter;
   if (stateSelect) {
+    const stateCounters = state.warehouseMarketplace === "yandex"
+      ? {
+          archived: counters.yandexArchived || 0,
+          inactive: counters.yandexInactive || 0,
+          outOfStock: counters.yandexOutOfStock || 0,
+        }
+      : {
+          archived: counters.ozonArchived || 0,
+          inactive: counters.ozonInactive || 0,
+          outOfStock: counters.ozonOutOfStock || 0,
+        };
     const labels = {
       all: ["Все статусы", null],
       archived: ["Архив", counters.ozonArchived || 0],
       inactive: ["Неактивные", counters.ozonInactive || 0],
       out_of_stock: ["Нет в наличии", counters.ozonOutOfStock || 0],
     };
+    labels.archived[1] = stateCounters.archived;
+    labels.inactive[1] = stateCounters.inactive;
+    labels.out_of_stock[1] = stateCounters.outOfStock;
     Array.from(stateSelect.options).forEach((option) => {
       if (labels[option.value]) setOptionLabel(option, labels[option.value][0], labels[option.value][1]);
     });
@@ -1564,6 +1578,9 @@ function renderWarehouse(data) {
     ozonArchived: Number(data.ozonArchived || 0),
     ozonInactive: Number(data.ozonInactive || 0),
     ozonOutOfStock: Number(data.ozonOutOfStock || 0),
+    yandexArchived: Number(data.yandexArchived || 0),
+    yandexInactive: Number(data.yandexInactive || 0),
+    yandexOutOfStock: Number(data.yandexOutOfStock || 0),
   };
   if (Array.isArray(data.suppliers)) state.suppliers = data.suppliers;
   if (data.supplierSync) state.supplierSync = data.supplierSync;
@@ -1571,12 +1588,15 @@ function renderWarehouse(data) {
   elements.warehouseReady.textContent = formatNumber(data.ready || 0);
   elements.warehouseChanged.textContent = formatNumber(data.changed || 0);
   elements.warehouseNoSupplier.textContent = formatNumber(data.withoutSupplier || 0);
-  elements.warehouseOzonArchived.textContent = formatNumber(data.ozonArchived || 0);
+  const archivedCount = state.warehouseMarketplace === "yandex" ? data.yandexArchived || 0 : data.ozonArchived || 0;
+  const inactiveCount = state.warehouseMarketplace === "yandex" ? data.yandexInactive || 0 : data.ozonInactive || 0;
+  const outOfStockCount = state.warehouseMarketplace === "yandex" ? data.yandexOutOfStock || 0 : data.ozonOutOfStock || 0;
+  elements.warehouseOzonArchived.textContent = formatNumber(archivedCount);
   if (elements.warehouseLinkedArchived) {
     elements.warehouseLinkedArchived.textContent = formatNumber(data.linkedArchived || 0);
   }
-  elements.warehouseOzonInactive.textContent = formatNumber(data.ozonInactive || 0);
-  elements.warehouseOzonOutOfStock.textContent = formatNumber(data.ozonOutOfStock || 0);
+  elements.warehouseOzonInactive.textContent = formatNumber(inactiveCount);
+  elements.warehouseOzonOutOfStock.textContent = formatNumber(outOfStockCount);
   refreshWarehouseFilterLabels();
   refreshWarehouseQuickFilterState();
   if (data.usdRate) {
