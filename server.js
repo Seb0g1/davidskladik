@@ -3104,7 +3104,7 @@ function normalizeYandexWarehouseProduct(item = {}, shop) {
   });
 }
 
-async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY) {
+async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY, options = {}) {
   const maxItems = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : Number.MAX_SAFE_INTEGER;
   const items = [];
   let pageToken = "";
@@ -3113,11 +3113,15 @@ async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY) {
     const pageLimit = Math.min(100, maxItems - items.length);
     const params = new URLSearchParams({ limit: String(pageLimit) });
     if (pageToken) params.set("pageToken", pageToken);
+    const body = options.archived === true || options.archived === false
+      ? { archived: options.archived }
+      : undefined;
 
     const data = await yandexRequest(
       shop,
       "POST",
       `/v2/businesses/${shop.businessId}/offer-mappings?${params.toString()}`,
+      body,
     );
     const pageItems = data.result?.offerMappings || data.result?.offers || data.offerMappings || [];
     items.push(...pageItems);
@@ -4191,6 +4195,171 @@ function summarizeOzonYandexImportPreview(rows = []) {
     existingInYandex: rows.filter((row) => row.existingInYandex).length,
     missingRequired: rows.filter((row) => !row.yandexReady).length,
   };
+}
+
+function parseProtectedBrandList(input) {
+  const values = Array.isArray(input)
+    ? input
+    : String(input || "").split(/[\n,;]+/u);
+  return Array.from(new Set(values
+    .map((item) => cleanText(item))
+    .filter((item) => item.length >= 2)));
+}
+
+function normalizeBrandSearchText(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replaceAll("ё", "е")
+    .replace(/[^0-9a-zа-я]+/giu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function collectYandexOfferTextParts(value, parts = [], depth = 0) {
+  if (value == null || depth > 6) return parts;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    const text = cleanText(value);
+    if (text) parts.push(text);
+    return parts;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectYandexOfferTextParts(item, parts, depth + 1);
+    return parts;
+  }
+  if (typeof value === "object") {
+    for (const item of Object.values(value)) collectYandexOfferTextParts(item, parts, depth + 1);
+  }
+  return parts;
+}
+
+function buildYandexCleanupCandidate(item = {}, shop = {}, protectedBrandsInput = []) {
+  const offer = pickYandexOfferFromMapping(item);
+  const offerId = cleanText(offer.offerId || item.offerId || item.mapping?.offerId);
+  const name = cleanText(offer.name || item.offer?.name || offerId);
+  const vendor = cleanText(offer.vendor || item.offer?.vendor || item.mapping?.vendor);
+  const state = pickYandexState(item, offer);
+  const archived = state.code === "archived" || Boolean(offer.archived || item.archived || item.offer?.archived);
+  const brands = parseProtectedBrandList(protectedBrandsInput);
+  const searchText = normalizeBrandSearchText(collectYandexOfferTextParts(item).join(" "));
+  const matchedBrands = brands.filter((brand) => {
+    const normalizedBrand = normalizeBrandSearchText(brand);
+    return normalizedBrand && searchText.includes(normalizedBrand);
+  });
+  const protectedByBrand = matchedBrands.length > 0;
+  return {
+    id: `${shop.id || "yandex"}:${offerId}`,
+    shopId: shop.id || "yandex",
+    shopName: shop.name || "Yandex Market",
+    offerId,
+    name,
+    vendor,
+    archived,
+    state: state.code,
+    stateLabel: state.label,
+    stateName: state.stateName || "",
+    matchedBrands,
+    protected: protectedByBrand,
+    action: protectedByBrand ? "keep" : archived ? "already_archived" : "archive",
+  };
+}
+
+function summarizeYandexCleanupPreview(rows = []) {
+  return {
+    total: rows.length,
+    protected: rows.filter((row) => row.protected).length,
+    toArchive: rows.filter((row) => row.action === "archive").length,
+    alreadyArchived: rows.filter((row) => row.action === "already_archived").length,
+  };
+}
+
+async function buildYandexCleanupPreview({ protectedBrands = [], limit = 50000 } = {}) {
+  const shops = getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+  const maxItems = Math.max(1, Math.min(50000, Number(limit || 50000) || 50000));
+  const warnings = [];
+  const rows = [];
+  if (!shops.length) {
+    return { ok: true, warnings: ["Yandex Market не настроен."], rows, summary: summarizeYandexCleanupPreview(rows) };
+  }
+
+  for (const shop of shops) {
+    const remaining = Math.max(0, maxItems - rows.length);
+    if (!remaining) break;
+    try {
+      const active = await getYandexOfferMappings(shop, remaining, { archived: false });
+      const archivedRemaining = Math.max(0, maxItems - rows.length - active.length);
+      const archived = archivedRemaining > 0
+        ? await getYandexOfferMappings(shop, archivedRemaining, { archived: true })
+        : [];
+      const byOfferId = new Map();
+      for (const item of [...active, ...archived]) {
+        const offer = pickYandexOfferFromMapping(item);
+        const offerId = cleanText(offer.offerId || item.offerId || item.mapping?.offerId);
+        if (offerId) byOfferId.set(`${shop.id}:${offerId}`, item);
+      }
+      for (const item of byOfferId.values()) {
+        rows.push(buildYandexCleanupCandidate(item, shop, protectedBrands));
+        if (rows.length >= maxItems) break;
+      }
+    } catch (error) {
+      const label = error?.message || error?.code || "ошибка API";
+      warnings.push(`Yandex «${shop.name || shop.id}»: не удалось загрузить товары (${label})`);
+      logger.warn("yandex cleanup preview failed", { shop: shop.id, detail: label });
+    }
+  }
+
+  return {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    protectedBrands: parseProtectedBrandList(protectedBrands),
+    warnings,
+    summary: summarizeYandexCleanupPreview(rows),
+    rows,
+  };
+}
+
+async function archiveYandexOfferIds(shop, offerIds = []) {
+  const results = [];
+  for (const chunk of chunkArray(offerIds.map(cleanText).filter(Boolean), 500)) {
+    if (!chunk.length) continue;
+    try {
+      await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-mappings/archive`, { offerIds: chunk });
+      results.push(...chunk.map((offerId) => ({ offerId, ok: true, method: "archive" })));
+    } catch (error) {
+      try {
+        await yandexRequest(
+          shop,
+          "POST",
+          `/v2/businesses/${shop.businessId}/offer-mappings/update`,
+          { offers: chunk.map((offerId) => ({ offerId, archived: true })) },
+        );
+        results.push(...chunk.map((offerId) => ({ offerId, ok: true, method: "update_archived" })));
+      } catch (fallbackError) {
+        const detail = fallbackError?.message || error?.message || "archive_failed";
+        results.push(...chunk.map((offerId) => ({ offerId, ok: false, error: detail })));
+      }
+    }
+  }
+  return results;
+}
+
+async function archiveYandexCleanupRows(rows = []) {
+  const byShop = new Map();
+  for (const row of rows) {
+    if (row.action !== "archive" || !row.offerId || !row.shopId) continue;
+    if (!byShop.has(row.shopId)) byShop.set(row.shopId, []);
+    byShop.get(row.shopId).push(row.offerId);
+  }
+  const results = [];
+  for (const [shopId, offerIds] of byShop.entries()) {
+    const shop = getYandexShopByTarget(shopId);
+    if (!shop) {
+      results.push(...offerIds.map((offerId) => ({ offerId, shopId, ok: false, error: "shop_not_found" })));
+      continue;
+    }
+    const archived = await archiveYandexOfferIds(shop, offerIds);
+    results.push(...archived.map((item) => ({ ...item, shopId })));
+  }
+  return results;
 }
 
 function pickOzonProductStockForYandex(product = {}) {
@@ -10027,6 +10196,47 @@ app.post("/api/ozon-yandex-import/sync-stocks", async (request, response, next) 
   }
 });
 
+app.post("/api/yandex-cleanup/preview", async (request, response, next) => {
+  try {
+    const protectedBrands = parseProtectedBrandList(request.body?.protectedBrands || request.body?.brands || "");
+    const requestedLimit = Number(request.body?.limit || 50000);
+    const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 50000));
+    response.json(await buildYandexCleanupPreview({ protectedBrands, limit }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/yandex-cleanup/archive", async (request, response, next) => {
+  try {
+    if (request.body?.confirmed !== true || cleanText(request.body?.confirmationText) !== "АРХИВИРОВАТЬ ЯНДЕКС") {
+      return response.status(400).json({ error: "Для очистки Яндекса нужно подтверждение: АРХИВИРОВАТЬ ЯНДЕКС." });
+    }
+    const protectedBrands = parseProtectedBrandList(request.body?.protectedBrands || request.body?.brands || "");
+    if (!protectedBrands.length) {
+      return response.status(400).json({ error: "Укажите хотя бы один бренд, который нельзя архивировать." });
+    }
+    const requestedLimit = Number(request.body?.limit || 50000);
+    const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 50000));
+    const preview = await buildYandexCleanupPreview({ protectedBrands, limit });
+    const toArchive = (preview.rows || []).filter((row) => row.action === "archive");
+    const results = await archiveYandexCleanupRows(toArchive);
+    response.json({
+      ok: results.every((item) => item.ok),
+      generatedAt: new Date().toISOString(),
+      protectedBrands,
+      summary: preview.summary,
+      planned: toArchive.length,
+      archived: results.filter((item) => item.ok).length,
+      failed: results.filter((item) => !item.ok).length,
+      warnings: preview.warnings || [],
+      results,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/warehouse/products/:id/export", async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
@@ -11490,6 +11700,9 @@ module.exports = {
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
   pickOzonProductStockForYandex,
+  parseProtectedBrandList,
+  buildYandexCleanupCandidate,
+  summarizeYandexCleanupPreview,
   sendYandexStocksFromOzonProducts,
   priceRetryQueueKey,
   findActiveDelayedPriceRetry,

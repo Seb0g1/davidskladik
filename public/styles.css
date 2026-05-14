@@ -308,6 +308,49 @@ h1 {
   flex-direction: column;
 }
 
+.yandex-cleanup-panel {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.yandex-cleanup-panel h2 {
+  margin: 4px 0 8px;
+}
+
+.cleanup-controls,
+.cleanup-actions {
+  display: grid;
+  gap: 12px;
+}
+
+.cleanup-brands-field textarea {
+  width: 100%;
+  min-height: 110px;
+  resize: vertical;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.35);
+  color: var(--ink);
+  padding: 12px;
+  font: inherit;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.cleanup-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.cleanup-summary-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.cleanup-list-panel {
+  min-height: 180px;
+}
+
 .import-list-head {
   display: flex;
   align-items: center;
@@ -421,13 +464,19 @@ h1 {
 
 @media (max-width: 860px) {
   .import-hero-panel,
-  .import-toolbar-panel {
+  .import-toolbar-panel,
+  .yandex-cleanup-panel {
     align-items: stretch;
     flex-direction: column;
+    display: flex;
   }
 
   .import-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cleanup-actions {
+    grid-template-columns: 1fr;
   }
 }
 

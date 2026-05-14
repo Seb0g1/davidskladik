@@ -55,6 +55,53 @@
         </article>
       </section>
 
+      <section class="panel yandex-cleanup-panel">
+        <div class="cleanup-copy">
+          <p class="eyebrow">Yandex Market</p>
+          <h2>Очистка Яндекса по брендам</h2>
+          <p class="muted-text">Сначала сделайте предпросмотр. Сайт просмотрит товары Яндекса во всех статусах, найдёт защищённые бренды в названии, описании и характеристиках, а остальные подготовит к архивированию.</p>
+        </div>
+        <div class="cleanup-controls">
+          <label class="search-control cleanup-brands-field">
+            Бренды, которые нельзя архивировать
+            <textarea id="yandexProtectedBrandsInput" rows="4" placeholder="Giorgio Armani&#10;Creed&#10;Ex Nihilo"></textarea>
+          </label>
+          <div class="cleanup-actions">
+            <button id="previewYandexCleanupButton" class="secondary-button" type="button">Предпросмотр очистки</button>
+            <button id="archiveYandexCleanupButton" class="danger-button" type="button" disabled>Архивировать незащищённые</button>
+          </div>
+          <div id="yandexCleanupStatus" class="sync-status-pill">Укажите бренды-защиту и запустите предпросмотр.</div>
+        </div>
+      </section>
+
+      <section class="import-summary-grid cleanup-summary-grid" aria-live="polite">
+        <article class="stat-card">
+          <span>Яндекс всего</span>
+          <strong id="yandexCleanupTotalCount">0</strong>
+        </article>
+        <article class="stat-card good">
+          <span>Оставить</span>
+          <strong id="yandexCleanupProtectedCount">0</strong>
+        </article>
+        <article class="stat-card warn">
+          <span>Архивировать</span>
+          <strong id="yandexCleanupArchiveCount">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Уже в архиве</span>
+          <strong id="yandexCleanupAlreadyArchivedCount">0</strong>
+        </article>
+      </section>
+
+      <section class="panel import-list-panel cleanup-list-panel">
+        <div class="import-list-head">
+          <h2>Предпросмотр очистки Яндекса</h2>
+          <span id="yandexCleanupRowsMeta" class="sync-status-pill">Нет данных</span>
+        </div>
+        <div id="yandexCleanupWarnings" class="import-warnings" hidden></div>
+        <div id="yandexCleanupRows" class="import-rows"></div>
+      </section>
+
       <section class="panel import-list-panel">
         <div class="import-list-head">
           <h2>Карточки</h2>

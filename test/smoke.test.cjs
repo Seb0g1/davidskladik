@@ -88,6 +88,9 @@ const {
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
   pickOzonProductStockForYandex,
+  parseProtectedBrandList,
+  buildYandexCleanupCandidate,
+  summarizeYandexCleanupPreview,
   priceRetryQueueKey,
   findActiveDelayedPriceRetry,
   appendPriceHistoryRows,
@@ -228,6 +231,40 @@ test("Ozon to Yandex stock sync uses Ozon stock from state and warehouses", () =
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { stock: 7, warehouses: [{ stock: 1 }] } }), 7);
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { warehouses: [{ stock: 2 }, { present: 3 }] } }), 5);
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { stock: 0 } }), 0);
+});
+
+test("Yandex cleanup protects brands found in name, description, and characteristics", () => {
+  const brands = parseProtectedBrandList("Giorgio Armani\nCreed; Ex Nihilo");
+  assert.deepEqual(brands, ["Giorgio Armani", "Creed", "Ex Nihilo"]);
+
+  const protectedByName = buildYandexCleanupCandidate({
+    offer: { offerId: "ya-1", name: "Giorgio Armani Si Passione 90 мл" },
+  }, { id: "shop", name: "Shop" }, brands);
+  const protectedByDescription = buildYandexCleanupCandidate({
+    offer: { offerId: "ya-2", name: "Парфюмерная вода 90 мл", description: "Аромат Creed Aventus" },
+  }, { id: "shop", name: "Shop" }, brands);
+  const protectedByCharacteristics = buildYandexCleanupCandidate({
+    offer: { offerId: "ya-3", name: "Парфюмерная вода 90 мл", params: [{ name: "Бренд", value: "Ex Nihilo" }] },
+  }, { id: "shop", name: "Shop" }, brands);
+  const unprotected = buildYandexCleanupCandidate({
+    offer: { offerId: "ya-4", name: "Unknown Brand 90 мл" },
+  }, { id: "shop", name: "Shop" }, brands);
+  const alreadyArchived = buildYandexCleanupCandidate({
+    offer: { offerId: "ya-5", name: "Unknown Brand 100 мл", archived: true },
+  }, { id: "shop", name: "Shop" }, brands);
+
+  assert.equal(protectedByName.action, "keep");
+  assert.equal(protectedByDescription.action, "keep");
+  assert.equal(protectedByCharacteristics.action, "keep");
+  assert.equal(unprotected.action, "archive");
+  assert.equal(alreadyArchived.action, "already_archived");
+  assert.deepEqual(summarizeYandexCleanupPreview([
+    protectedByName,
+    protectedByDescription,
+    protectedByCharacteristics,
+    unprotected,
+    alreadyArchived,
+  ]), { total: 5, protected: 3, toArchive: 1, alreadyArchived: 1 });
 });
 
 test("ops diagnostics command emits machine-readable report", async () => {

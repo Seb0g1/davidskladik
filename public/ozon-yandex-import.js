@@ -1,6 +1,8 @@
 const state = {
   rows: [],
   summary: { total: 0, eligible: 0, blocked: 0, existingInYandex: 0, missingRequired: 0 },
+  cleanupRows: [],
+  cleanupSummary: { total: 0, protected: 0, toArchive: 0, alreadyArchived: 0 },
 };
 
 const els = {
@@ -19,6 +21,17 @@ const els = {
   filter: document.getElementById("importFilterSelect"),
   warnings: document.getElementById("importWarnings"),
   rows: document.getElementById("importRows"),
+  cleanupBrands: document.getElementById("yandexProtectedBrandsInput"),
+  cleanupPreview: document.getElementById("previewYandexCleanupButton"),
+  cleanupArchive: document.getElementById("archiveYandexCleanupButton"),
+  cleanupStatus: document.getElementById("yandexCleanupStatus"),
+  cleanupTotal: document.getElementById("yandexCleanupTotalCount"),
+  cleanupProtected: document.getElementById("yandexCleanupProtectedCount"),
+  cleanupToArchive: document.getElementById("yandexCleanupArchiveCount"),
+  cleanupAlreadyArchived: document.getElementById("yandexCleanupAlreadyArchivedCount"),
+  cleanupWarnings: document.getElementById("yandexCleanupWarnings"),
+  cleanupRows: document.getElementById("yandexCleanupRows"),
+  cleanupRowsMeta: document.getElementById("yandexCleanupRowsMeta"),
 };
 
 function escapeHtml(value) {
@@ -88,6 +101,12 @@ function renderWarnings(warnings) {
   els.warnings.innerHTML = list.map((item) => `<div>${escapeHtml(item)}</div>`).join("");
 }
 
+function renderCleanupWarnings(warnings) {
+  const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
+  els.cleanupWarnings.hidden = list.length === 0;
+  els.cleanupWarnings.innerHTML = list.map((item) => `<div>${escapeHtml(item)}</div>`).join("");
+}
+
 function renderRows() {
   const rows = visibleRows();
   if (!rows.length) {
@@ -128,12 +147,128 @@ function renderRows() {
   }).join("");
 }
 
+function parseCleanupBrands() {
+  return String(els.cleanupBrands?.value || "")
+    .split(/[\n,;]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function cleanupStatus(row) {
+  if (row.protected) return { className: "good", label: "Оставить" };
+  if (row.action === "already_archived") return { className: "warn", label: "Уже архив" };
+  return { className: "danger", label: "Архивировать" };
+}
+
+function renderCleanup(payload = {}) {
+  state.cleanupRows = Array.isArray(payload.rows) ? payload.rows : [];
+  state.cleanupSummary = payload.summary || {};
+  els.cleanupTotal.textContent = state.cleanupSummary.total || 0;
+  els.cleanupProtected.textContent = state.cleanupSummary.protected || 0;
+  els.cleanupToArchive.textContent = state.cleanupSummary.toArchive || 0;
+  els.cleanupAlreadyArchived.textContent = state.cleanupSummary.alreadyArchived || 0;
+  els.cleanupArchive.disabled = !(state.cleanupSummary.toArchive > 0 && parseCleanupBrands().length);
+  renderCleanupWarnings(payload.warnings);
+
+  const rows = state.cleanupRows.slice(0, 1000);
+  els.cleanupRowsMeta.textContent = state.cleanupRows.length
+    ? `Показано ${rows.length} из ${state.cleanupRows.length}`
+    : "Нет данных";
+  if (!rows.length) {
+    els.cleanupRows.innerHTML = `<div class="empty-state">Запустите предпросмотр, чтобы увидеть товары Яндекса.</div>`;
+    return;
+  }
+  els.cleanupRows.innerHTML = rows.map((row) => {
+    const status = cleanupStatus(row);
+    const reasons = row.protected
+      ? [`Защищено: ${(row.matchedBrands || []).join(", ")}`]
+      : row.action === "already_archived"
+        ? ["Уже находится в архиве Яндекса"]
+        : ["Бренд не найден в названии, описании или характеристиках"];
+    return `
+      <article class="import-row">
+        <div class="import-row-image"><div class="import-row-placeholder">ЯМ</div></div>
+        <div class="import-row-main">
+          <div class="import-row-title">
+            <strong>${escapeHtml(row.name || row.offerId || "Без названия")}</strong>
+            <span class="import-status ${status.className}">${escapeHtml(status.label)}</span>
+          </div>
+          <div class="import-row-meta">
+            <span>${escapeHtml(row.offerId || "-")}</span>
+            <span>${escapeHtml(row.shopName || "Yandex Market")}</span>
+            <span>${escapeHtml(row.vendor || "Без бренда")}</span>
+            <span>${escapeHtml(row.stateLabel || row.state || "-")}</span>
+          </div>
+          <div class="import-row-reasons">${reasons.map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}</div>
+        </div>
+      </article>
+    `;
+  }).join("");
+}
+
 function render(payload) {
   state.rows = Array.isArray(payload.rows) ? payload.rows : [];
   state.summary = payload.summary || {};
   renderSummary();
   renderWarnings(payload.warnings);
   renderRows();
+}
+
+async function previewYandexCleanup() {
+  const protectedBrands = parseCleanupBrands();
+  if (!protectedBrands.length) {
+    els.cleanupStatus.textContent = "Укажите хотя бы один бренд, который нельзя архивировать.";
+    return;
+  }
+  const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
+  els.cleanupPreview.disabled = true;
+  els.cleanupArchive.disabled = true;
+  els.cleanupStatus.textContent = "Читаю все статусы Яндекс Маркета и ищу защищённые бренды...";
+  try {
+    const payload = await api("/api/yandex-cleanup/preview", {
+      method: "POST",
+      body: { protectedBrands, limit },
+    });
+    renderCleanup(payload);
+    els.cleanupStatus.textContent = `Проверено: ${payload.summary?.total || 0}. Оставить: ${payload.summary?.protected || 0}. Архивировать: ${payload.summary?.toArchive || 0}.`;
+  } catch (error) {
+    els.cleanupStatus.textContent = `Ошибка предпросмотра: ${error.message || error}`;
+  } finally {
+    els.cleanupPreview.disabled = false;
+  }
+}
+
+async function archiveYandexCleanup() {
+  const protectedBrands = parseCleanupBrands();
+  const toArchive = Number(state.cleanupSummary.toArchive || 0);
+  if (!protectedBrands.length || !toArchive) {
+    els.cleanupStatus.textContent = "Сначала сделайте предпросмотр очистки.";
+    return;
+  }
+  const confirmed = window.confirm(`Архивировать ${toArchive} товаров Яндекс, кроме защищённых брендов: ${protectedBrands.join(", ")}?`);
+  if (!confirmed) return;
+  const confirmationText = window.prompt("Для подтверждения введите: АРХИВИРОВАТЬ ЯНДЕКС", "");
+  if (confirmationText !== "АРХИВИРОВАТЬ ЯНДЕКС") {
+    els.cleanupStatus.textContent = "Очистка отменена: подтверждение не совпало.";
+    return;
+  }
+  const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
+  els.cleanupPreview.disabled = true;
+  els.cleanupArchive.disabled = true;
+  els.cleanupStatus.textContent = "Архивирую незащищённые товары в Яндексе...";
+  try {
+    const payload = await api("/api/yandex-cleanup/archive", {
+      method: "POST",
+      body: { protectedBrands, limit, confirmed: true, confirmationText },
+    });
+    els.cleanupStatus.textContent = `Архивировано: ${payload.archived || 0}. Ошибок: ${payload.failed || 0}.`;
+    await previewYandexCleanup();
+  } catch (error) {
+    els.cleanupStatus.textContent = `Ошибка очистки: ${error.message || error}`;
+  } finally {
+    els.cleanupPreview.disabled = false;
+    els.cleanupArchive.disabled = !(state.cleanupSummary.toArchive > 0 && parseCleanupBrands().length);
+  }
 }
 
 async function loadPreview(refresh) {
@@ -191,5 +326,10 @@ els.loadOzon.addEventListener("click", () => loadPreview(true));
 els.syncStocks.addEventListener("click", syncYandexStocks);
 els.archiveBlocked.addEventListener("click", archiveBlocked);
 els.filter.addEventListener("change", renderRows);
+els.cleanupPreview?.addEventListener("click", previewYandexCleanup);
+els.cleanupArchive?.addEventListener("click", archiveYandexCleanup);
+els.cleanupBrands?.addEventListener("input", () => {
+  els.cleanupArchive.disabled = !(state.cleanupSummary.toArchive > 0 && parseCleanupBrands().length);
+});
 
 loadPreview(false).catch(() => {});
