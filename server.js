@@ -1605,6 +1605,30 @@ function includesKeyword(value, keyword) {
   return search.split(" ").every((token) => source.includes(token));
 }
 
+function exactPriceMasterNameMatches(value, expected) {
+  const left = normalizeSearchText(value);
+  const right = normalizeSearchText(expected);
+  return Boolean(left && right && left === right);
+}
+
+function priceMasterRowMatchesLink(row = {}, link = {}) {
+  const supplierOk =
+    !link.supplierName ||
+    normalizeSupplierName(row.partnerName) === normalizeSupplierName(link.supplierName);
+  const partnerOk = !link.partnerId || String(row.partnerId || "") === String(link.partnerId);
+  const keywordOk = includesKeyword(row.name, link.keyword);
+  if (!supplierOk || !partnerOk || !keywordOk) return false;
+  if (link.matchType === "selected_row") {
+    if (link.sourceRowId && String(row.rowId || "") === String(link.sourceRowId)) return true;
+    if (link.exactName) return exactPriceMasterNameMatches(row.name, link.exactName);
+    return false;
+  }
+  if (link.matchType === "exact_name") {
+    return exactPriceMasterNameMatches(row.name, link.exactName || link.article);
+  }
+  return true;
+}
+
 function hasObjectData(value) {
   if (!value || typeof value !== "object") return false;
   return Object.values(value).some((item) => {
@@ -1839,9 +1863,16 @@ function normalizeWarehouseProduct(input = {}) {
 
 function normalizeWarehouseLink(input = {}) {
   const priceCurrency = cleanText(input.priceCurrency || input.price_currency || input.currency).toUpperCase();
+  const matchTypeRaw = cleanText(input.matchType || input.match_type);
+  const matchType = ["article", "selected_row", "exact_name"].includes(matchTypeRaw) ? matchTypeRaw : "article";
+  const exactName = cleanText(input.exactName || input.exact_name || input.nativeName || input.name);
+  const sourceRowId = cleanText(input.sourceRowId || input.source_row_id || input.rowId);
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
     article: cleanText(input.article || input.offerId || input.nativeId),
+    matchType,
+    exactName,
+    sourceRowId,
     keyword: cleanText(input.keyword),
     supplierName: cleanText(input.supplierName || input.partnerName),
     partnerId: cleanText(input.partnerId),
@@ -1857,7 +1888,10 @@ function normalizeWarehouseLink(input = {}) {
 function warehouseLinkIdentityKey(input = {}) {
   const link = normalizeWarehouseLink(input);
   return [
+    link.matchType,
     link.article.toLowerCase(),
+    link.sourceRowId,
+    link.exactName.toLowerCase(),
     link.partnerId,
     normalizeSupplierName(link.supplierName),
     link.keyword.toLowerCase(),
@@ -4474,10 +4508,11 @@ function supplierToPostgresData(supplier = {}) {
 function linkToPostgresData(product, link = {}) {
   const normalized = normalizeWarehouseLink(link);
   const identity = warehouseLinkIdentityKey(normalized);
+  const supplierArticle = normalized.article || normalized.sourceRowId || normalized.exactName;
   return {
     id: normalized.id || crypto.createHash("sha1").update(`${product.id}:${identity}`).digest("hex"),
     productId: product.id,
-    supplierArticle: normalized.article,
+    supplierArticle,
     supplierName: normalized.supplierName || null,
     partnerId: normalized.partnerId || null,
     priceCurrency: normalized.priceCurrency === "RUB" ? "RUB" : "USD",
@@ -4503,7 +4538,7 @@ function productFromPostgres(row = {}) {
     return normalizeWarehouseLink({
       ...linkRaw,
       id: link.id,
-      article: link.supplierArticle,
+      article: linkRaw.article || (linkRaw.matchType ? "" : link.supplierArticle),
       supplierName: link.supplierName,
       partnerId: link.partnerId,
       priceCurrency: link.priceCurrency,
@@ -5523,24 +5558,22 @@ function resolvePriceMasterRowCurrency(row = {}, link = {}, maps = managedSuppli
 }
 
 async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate) {
-  const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article);
+  const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article || link.exactName || link.sourceRowId);
   if (!normalizedLinks.length) return new Map();
 
   const stoppedMap = stoppedSupplierMap(managedSuppliers);
   const supplierMaps = managedSupplierMaps(managedSuppliers);
   const rowsByArticle = await getPriceMasterArticleIndex();
+  const snapshot = await readSnapshot();
+  const snapshotRows = Object.values(snapshot.items || {});
 
   const map = new Map();
   for (const link of normalizedLinks) {
-    const matches = (rowsByArticle.get(link.article) || [])
-      .filter((row) => {
-        const supplierOk =
-          !link.supplierName ||
-          normalizeSupplierName(row.partnerName) === normalizeSupplierName(link.supplierName);
-        const partnerOk = !link.partnerId || String(row.partnerId) === String(link.partnerId);
-        const keywordOk = includesKeyword(row.name, link.keyword);
-        return supplierOk && partnerOk && keywordOk;
-      })
+    const candidateRows = link.matchType === "article"
+      ? (rowsByArticle.get(link.article) || [])
+      : snapshotRows;
+    const matches = candidateRows
+      .filter((row) => priceMasterRowMatchesLink(row, link))
       .map((row) => {
         const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
         const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
@@ -5574,8 +5607,27 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
 
 async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers = []) {
   const link = normalizeWarehouseLink(linkInput);
-  if (!link.article) return [];
+  if (!link.article && !link.exactName && !link.sourceRowId) return [];
   const supplierMaps = managedSupplierMaps(managedSuppliers);
+  const conditions = ["r.Ignored = 0"];
+  const params = [];
+  if (link.matchType === "selected_row" && link.sourceRowId) {
+    conditions.push("r.RowID = ?");
+    params.push(Number(link.sourceRowId));
+  } else if (link.matchType === "selected_row" || link.matchType === "exact_name") {
+    conditions.push("r.NativeName IS NOT NULL AND TRIM(r.NativeName) <> ''");
+    if (link.exactName || link.article) {
+      conditions.push("LOWER(TRIM(r.NativeName)) = LOWER(TRIM(?))");
+      params.push(link.exactName || link.article);
+    }
+  } else {
+    conditions.push("BINARY TRIM(r.NativeID) = BINARY ?");
+    params.push(link.article);
+  }
+  if (link.partnerId) {
+    conditions.push("d.PartnerID = ?");
+    params.push(Number(link.partnerId));
+  }
   const [rows] = await pool.query(
     `
     SELECT
@@ -5591,21 +5643,14 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
     FROM OfferRows r
     JOIN OfferDocs d ON d.DocID = r.DocID
     LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
-    WHERE BINARY TRIM(r.NativeID) = BINARY ? AND r.Ignored = 0
+    WHERE ${conditions.join(" AND ")}
     ORDER BY d.DocDate DESC, r.RowID DESC
     LIMIT 200
     `,
-    [link.article],
+    params,
   );
   return rows
-    .filter((row) => {
-      const supplierOk =
-        !link.supplierName ||
-        normalizeSupplierName(row.partnerName) === normalizeSupplierName(link.supplierName);
-      const partnerOk = !link.partnerId || String(row.partnerId) === String(link.partnerId);
-      const keywordOk = includesKeyword(row.name, link.keyword);
-      return supplierOk && partnerOk && keywordOk;
-    })
+    .filter((row) => priceMasterRowMatchesLink(row, link))
     .map((row) => {
       const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
       return {
@@ -5619,7 +5664,7 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
 }
 
 async function getLivePriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate) {
-  const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article);
+  const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article || link.exactName || link.sourceRowId);
   if (!normalizedLinks.length) return new Map();
   const stoppedMap = stoppedSupplierMap(managedSuppliers);
   const map = new Map();
@@ -5653,9 +5698,18 @@ async function getLivePriceMasterMatchesForLinks(links, managedSuppliers = [], u
 }
 
 async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate, { timeoutMs } = {}) {
-  const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article);
+  const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article || link.exactName || link.sourceRowId);
   if (!normalizedLinks.length) return new Map();
-  const articles = Array.from(new Set(normalizedLinks.map((link) => link.article))).slice(0, 500);
+  const specialLinks = normalizedLinks.filter((link) => link.matchType !== "article");
+  const articleLinks = normalizedLinks.filter((link) => link.matchType === "article" && link.article);
+  const map = new Map();
+  if (specialLinks.length) {
+    for (const link of specialLinks) {
+      map.set(link.id, await findPriceMasterRowsForLink(link, usdRate, managedSuppliers));
+    }
+  }
+  if (!articleLinks.length) return map;
+  const articles = Array.from(new Set(articleLinks.map((link) => link.article))).slice(0, 500);
   const placeholders = articles.map(() => "?").join(",");
   const stoppedMap = stoppedSupplierMap(managedSuppliers);
   const supplierMaps = managedSupplierMaps(managedSuppliers);
@@ -5687,17 +5741,9 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
     if (!rowsByArticle.has(article)) rowsByArticle.set(article, []);
     rowsByArticle.get(article).push(row);
   }
-  const map = new Map();
-  for (const link of normalizedLinks) {
+  for (const link of articleLinks) {
     const matches = (rowsByArticle.get(link.article) || [])
-      .filter((row) => {
-        const supplierOk =
-          !link.supplierName ||
-          normalizeSupplierName(row.partnerName) === normalizeSupplierName(link.supplierName);
-        const partnerOk = !link.partnerId || String(row.partnerId) === String(link.partnerId);
-        const keywordOk = includesKeyword(row.name, link.keyword);
-        return supplierOk && partnerOk && keywordOk;
-      })
+      .filter((row) => priceMasterRowMatchesLink(row, link))
       .map((row) => {
         const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
         const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
@@ -5733,9 +5779,12 @@ async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers 
   const matches = await findPriceMasterRowsForLink(link, usdRate, managedSuppliers);
   if (matches.length) return matches;
   const articleRows = await findPriceMasterRowsForLink({ ...link, supplierName: "", partnerId: "", keyword: "" }, usdRate, managedSuppliers);
-  const detailParts = [`артикул "${link.article}" должен совпадать с PriceMaster точно`];
+  const label = link.matchType === "article"
+    ? `артикул "${link.article}" должен совпадать с PriceMaster точно`
+    : `выбранная строка "${link.exactName || link.article || link.sourceRowId}" должна существовать в PriceMaster`;
+  const detailParts = [label];
   if (!articleRows.length) {
-    detailParts.push("в PriceMaster нет строки с таким точным артикулом");
+    detailParts.push(link.matchType === "article" ? "в PriceMaster нет строки с таким точным артикулом" : "строка PriceMaster не найдена");
   } else {
     if (link.supplierName) detailParts.push(`поставщик должен быть "${link.supplierName}"`);
     if (link.keyword) detailParts.push(`название должно содержать ключ "${link.keyword}"`);
@@ -8434,7 +8483,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       .filter((link) => link.article)
       .map((link) => [warehouseLinkIdentityKey(link), link])).values());
     const baseLink = baseLinks[0] || normalizeWarehouseLink({});
-    if (!baseLink.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
+    if (!baseLink.article && !baseLink.exactName && !baseLink.sourceRowId) {
+      return response.status(400).json({ error: "Укажите артикул PriceMaster или выберите строку PriceMaster по названию." });
+    }
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const warehouse = await readWarehouse();
@@ -8528,7 +8579,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
 
     const link = normalizeWarehouseLink(request.body);
-    if (!link.article) return response.status(400).json({ error: "Укажите артикул PriceMaster." });
+    if (!link.article && !link.exactName && !link.sourceRowId) {
+      return response.status(400).json({ error: "Укажите артикул PriceMaster или выберите строку PriceMaster по названию." });
+    }
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     await assertPriceMasterLinkExists(link, usdRate, warehouse.suppliers);

@@ -626,9 +626,9 @@ function renderPmOfferPanel(panel, rows, input) {
     btn.setAttribute("role", "option");
     const selectRow = (event) => {
       event.preventDefault();
-      input.value = row.article || "";
+      input.value = row.article || row.name || "";
       input.dataset.pmSelectedValue = input.value;
-      setPmSelectedRow(input, row);
+      setPmSelectedRow(input, { ...row, matchType: row.article ? "article" : "selected_row", exactName: row.name || "", sourceRowId: row.rowId || "" });
       const supplierInput = form?.querySelector('[name="supplierName"]');
       if (supplierInput && row.partnerName) {
         supplierInput.value = row.partnerName;
@@ -645,7 +645,7 @@ function renderPmOfferPanel(panel, rows, input) {
     btn.addEventListener("click", selectRow);
     const title = document.createElement("span");
     title.className = "pm-suggest-title";
-    title.textContent = row.article || "";
+    title.textContent = row.article || "Без артикула";
     const line = document.createElement("span");
     line.className = "pm-suggest-line";
     line.textContent = row.name || "";
@@ -2273,9 +2273,10 @@ function renderWarehouseDetail(group) {
                   (link) => `
                     <div class="link-item">
                       <div>
-                        <strong>${escapeHtml(link.article)}</strong>
+                        <strong>${escapeHtml(link.article || link.exactName || "Строка PriceMaster")}</strong>
                         <span>
                           ${escapeHtml(link.supplierName || "Любой поставщик")}
+                          ${link.matchType && link.matchType !== "article" ? " · по названию" : ""}
                           ${link.keyword ? ` · ${escapeHtml(link.keyword)}` : ""}
                           ${link.missingInPriceMaster ? " · нет в PriceMaster" : ""}
                           ${!link.missingInPriceMaster && Number(link.availableCount || 0) === 0 ? " · нет активного остатка" : ""}
@@ -2308,8 +2309,8 @@ function renderWarehouseDetail(group) {
                   .map((link) => `
                     <div class="pending-link-item">
                       <div>
-                        <strong>${escapeHtml(link.article)}</strong>
-                        <span>${escapeHtml(link.supplierName || "Любой поставщик")}${link.keyword ? ` · ${escapeHtml(link.keyword)}` : ""} · ${escapeHtml(link.priceCurrency || "USD")}</span>
+                        <strong>${escapeHtml(link.article || link.exactName || "Строка PriceMaster")}</strong>
+                        <span>${escapeHtml(link.supplierName || "Любой поставщик")}${link.matchType && link.matchType !== "article" ? " · по названию" : ""}${link.keyword ? ` · ${escapeHtml(link.keyword)}` : ""} · ${escapeHtml(link.priceCurrency || "USD")}</span>
                       </div>
                       <button class="text-button remove-link-draft" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" data-draft-id="${escapeHtml(link.id)}">Убрать</button>
                     </div>
@@ -2334,12 +2335,12 @@ function renderWarehouseDetail(group) {
                     <div class="supplier-line ${item.stopped ? "stopped" : ""}">
                       <div>
                         <strong>${escapeHtml(item.partnerName || item.supplierName || "Поставщик")}</strong>
-                        <span>${escapeHtml(item.article)} · ${escapeHtml(item.name || "")}</span>
+                        <span>${escapeHtml(item.article || "Без артикула")} · ${escapeHtml(item.name || "")}</span>
                         ${item.stopped ? `<span class="stop-note">На стопе${item.stopReason ? `: ${escapeHtml(item.stopReason)}` : ""}</span>` : ""}
                       </div>
                       <div class="supplier-line-actions">
                         <div class="money">${formatUsd(item.price)}</div>
-                        <button class="secondary-button compact-button add-supplier-draft" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" data-article="${escapeHtml(item.article || "")}" data-supplier-name="${escapeHtml(item.partnerName || item.supplierName || "")}" data-partner-id="${escapeHtml(item.partnerId || "")}" data-price-currency="${escapeHtml(item.priceCurrency || item.sourceCurrency || "USD")}">&#1042; &#1095;&#1077;&#1088;&#1085;&#1086;&#1074;&#1080;&#1082;</button>
+                        <button class="secondary-button compact-button add-supplier-draft" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" data-article="${escapeHtml(item.article || "")}" data-match-type="${escapeHtml(item.article ? "article" : "selected_row")}" data-exact-name="${escapeHtml(item.name || "")}" data-source-row-id="${escapeHtml(item.rowId || "")}" data-supplier-name="${escapeHtml(item.partnerName || item.supplierName || "")}" data-partner-id="${escapeHtml(item.partnerId || "")}" data-price-currency="${escapeHtml(item.priceCurrency || item.sourceCurrency || "USD")}">&#1042; &#1095;&#1077;&#1088;&#1085;&#1086;&#1074;&#1080;&#1082;</button>
                       </div>
                     </div>
                   `,
@@ -3679,8 +3680,11 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   const article = selectedOffer && selectedArticleValue && rawArticle === selectedArticleValue
     ? String(selectedOffer.article || rawArticle).trim()
     : rawArticle;
-  if (!article) {
-    elements.warehouseStatus.textContent = "Укажите артикул PriceMaster для черновика привязки.";
+  const matchType = selectedOffer?.matchType || (selectedOffer && !selectedOffer.article ? "selected_row" : "article");
+  const exactName = String(selectedOffer?.exactName || selectedOffer?.name || "").trim();
+  const sourceRowId = String(selectedOffer?.sourceRowId || selectedOffer?.rowId || "").trim();
+  if (!article && !exactName && !sourceRowId) {
+    elements.warehouseStatus.textContent = "Укажите артикул PriceMaster или выберите строку PriceMaster по названию.";
     return;
   }
   const selectedSupplier = getPmSelectedRow(supplierInput);
@@ -3694,6 +3698,9 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   const draft = {
     id: createClientDraftId(),
     article,
+    matchType,
+    exactName,
+    sourceRowId,
     keyword: String(data.get("keyword") || "").trim(),
     supplierName: String(supplierName || "").trim(),
     partnerId: String(partnerId || "").trim(),
@@ -3702,6 +3709,9 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   const existing = getPendingLinkDrafts(draftKey);
   const duplicateIndex = existing.findIndex((item) =>
     String(item.article || "").trim().toLowerCase() === draft.article.toLowerCase()
+    && String(item.matchType || "article") === draft.matchType
+    && String(item.sourceRowId || "").trim() === draft.sourceRowId
+    && String(item.exactName || "").trim().toLowerCase() === draft.exactName.toLowerCase()
     && String(item.partnerId || "").trim() === draft.partnerId
     && String(item.supplierName || "").trim().toLowerCase() === draft.supplierName.toLowerCase()
     && String(item.keyword || "").trim().toLowerCase() === draft.keyword.toLowerCase()
@@ -3814,18 +3824,24 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
     const draft = {
       id: createClientDraftId(),
       article: String(addSupplierDraftButton.dataset.article || "").trim(),
+      matchType: String(addSupplierDraftButton.dataset.matchType || "article").trim() || "article",
+      exactName: String(addSupplierDraftButton.dataset.exactName || "").trim(),
+      sourceRowId: String(addSupplierDraftButton.dataset.sourceRowId || "").trim(),
       keyword: "",
       supplierName: String(addSupplierDraftButton.dataset.supplierName || "").trim(),
       partnerId: String(addSupplierDraftButton.dataset.partnerId || "").trim(),
       priceCurrency: String(addSupplierDraftButton.dataset.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD",
     };
-    if (!draft.article) {
-      elements.warehouseStatus.textContent = "\u0423 \u043f\u043e\u0441\u0442\u0430\u0432\u0449\u0438\u043a\u0430 \u043d\u0435\u0442 \u0430\u0440\u0442\u0438\u043a\u0443\u043b\u0430 PriceMaster.";
+    if (!draft.article && !draft.exactName && !draft.sourceRowId) {
+      elements.warehouseStatus.textContent = "У поставщика нет артикула и названия PriceMaster для привязки.";
       return;
     }
     const existing = getPendingLinkDrafts(key);
     const duplicateIndex = existing.findIndex((item) =>
       String(item.article || "").trim().toLowerCase() === draft.article.toLowerCase()
+      && String(item.matchType || "article") === draft.matchType
+      && String(item.sourceRowId || "").trim() === draft.sourceRowId
+      && String(item.exactName || "").trim().toLowerCase() === draft.exactName.toLowerCase()
       && String(item.partnerId || "").trim() === draft.partnerId
       && String(item.supplierName || "").trim().toLowerCase() === draft.supplierName.toLowerCase()
       && String(item.keyword || "").trim().toLowerCase() === draft.keyword.toLowerCase()

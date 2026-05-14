@@ -1480,6 +1480,29 @@ test("warehouse link identity ignores client draft id duplicates", () => {
   assert.equal(a, b);
 });
 
+test("warehouse links can store selected PriceMaster row without supplier article", () => {
+  const product = normalizeWarehouseProduct({
+    id: "name-link-product",
+    links: [{
+      id: "draft-row",
+      article: "EX NIHILO BLUE TALISMAN 7.5ml",
+      matchType: "selected_row",
+      exactName: "EX NIHILO BLUE TALISMAN 7.5ml Extrait De Parfum в коробке",
+      sourceRowId: "991",
+      supplierName: "Иванна",
+      partnerId: "32277",
+      priceCurrency: "USD",
+    }],
+  });
+  assert.equal(product.links[0].matchType, "selected_row");
+  assert.equal(product.links[0].exactName, "EX NIHILO BLUE TALISMAN 7.5ml Extrait De Parfum в коробке");
+  assert.equal(product.links[0].sourceRowId, "991");
+  assert.notEqual(
+    warehouseLinkIdentityKey(product.links[0]),
+    warehouseLinkIdentityKey({ ...product.links[0], sourceRowId: "992" }),
+  );
+});
+
 test("recovery queues archived linked product when supplier is available", () => {
   const recovered = pickSupplierRecoveryCandidates([
     {
