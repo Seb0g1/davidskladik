@@ -139,6 +139,7 @@ const elements = {
   warehouseChanged: document.querySelector("#warehouseChanged"),
   warehouseNoSupplier: document.querySelector("#warehouseNoSupplier"),
   warehouseOzonArchived: document.querySelector("#warehouseOzonArchived"),
+  warehouseLinkedArchived: document.querySelector("#warehouseLinkedArchived"),
   warehouseOzonInactive: document.querySelector("#warehouseOzonInactive"),
   warehouseOzonOutOfStock: document.querySelector("#warehouseOzonOutOfStock"),
   warehouseSelectChangedButton: document.querySelector("#warehouseSelectChangedButton"),
@@ -1357,35 +1358,56 @@ function resetWarehouseListingState({ clearSelection = true } = {}) {
 
 function refreshWarehouseFilterLabels() {
   const counters = state.warehouseCounters || {};
+  const setOptionLabel = (option, label, count = null) => {
+    if (!option) return;
+    option.dataset.label = label;
+    if (count === null || count === undefined || count === "") {
+      delete option.dataset.count;
+      option.textContent = label;
+      return;
+    }
+    option.dataset.count = formatNumber(count);
+    option.textContent = `${label} · ${formatNumber(count)}`;
+  };
   const linkSelect = elements.warehouseLinkFilterInput;
   if (linkSelect) {
     const labels = {
-      all: "Все",
-      linked: `Подвязанные · ${formatNumber(counters.linkedProducts || 0)}`,
-      ready: `Готово к цене · ${formatNumber(counters.ready || 0)}`,
-      unlinked: `Не подвязанные · ${formatNumber(counters.withoutSupplier || 0)}`,
-      changed: `Нужно обновить · ${formatNumber(counters.changed || 0)}`,
-      linked_archived: `Привязка + архив Ozon · ${formatNumber(counters.linkedArchived || 0)}`,
+      all: ["Все", null],
+      linked: ["Подвязанные", counters.linkedProducts || 0],
+      ready: ["Готово к цене", counters.ready || 0],
+      unlinked: ["Не подвязанные", counters.withoutSupplier || 0],
+      changed: ["Нужно обновить", counters.changed || 0],
+      linked_archived: ["Привязка + архив Ozon", counters.linkedArchived || 0],
     };
     Array.from(linkSelect.options).forEach((option) => {
-      if (labels[option.value]) option.textContent = labels[option.value];
+      if (labels[option.value]) setOptionLabel(option, labels[option.value][0], labels[option.value][1]);
     });
     const value = document.querySelector("#warehouseLinkFilterValue");
-    if (value) value.textContent = linkSelect.options[linkSelect.selectedIndex]?.textContent?.trim() || "";
+    if (value) {
+      const opt = linkSelect.options[linkSelect.selectedIndex];
+      value.textContent = opt?.dataset?.label || opt?.textContent?.trim() || "";
+      if (opt?.dataset?.count) value.dataset.count = opt.dataset.count;
+      else delete value.dataset.count;
+    }
   }
   const stateSelect = elements.ozonStateFilter;
   if (stateSelect) {
     const labels = {
-      all: "Все статусы",
-      archived: `Архив · ${formatNumber(counters.ozonArchived || 0)}`,
-      inactive: `Неактивные · ${formatNumber(counters.ozonInactive || 0)}`,
-      out_of_stock: `Нет в наличии · ${formatNumber(counters.ozonOutOfStock || 0)}`,
+      all: ["Все статусы", null],
+      archived: ["Архив", counters.ozonArchived || 0],
+      inactive: ["Неактивные", counters.ozonInactive || 0],
+      out_of_stock: ["Нет в наличии", counters.ozonOutOfStock || 0],
     };
     Array.from(stateSelect.options).forEach((option) => {
-      if (labels[option.value]) option.textContent = labels[option.value];
+      if (labels[option.value]) setOptionLabel(option, labels[option.value][0], labels[option.value][1]);
     });
     const value = document.querySelector("#ozonStateFilterValue");
-    if (value) value.textContent = stateSelect.options[stateSelect.selectedIndex]?.textContent?.trim() || "";
+    if (value) {
+      const opt = stateSelect.options[stateSelect.selectedIndex];
+      value.textContent = opt?.dataset?.label || opt?.textContent?.trim() || "";
+      if (opt?.dataset?.count) value.dataset.count = opt.dataset.count;
+      else delete value.dataset.count;
+    }
   }
 }
 
@@ -1542,6 +1564,9 @@ function renderWarehouse(data) {
   elements.warehouseChanged.textContent = formatNumber(data.changed || 0);
   elements.warehouseNoSupplier.textContent = formatNumber(data.withoutSupplier || 0);
   elements.warehouseOzonArchived.textContent = formatNumber(data.ozonArchived || 0);
+  if (elements.warehouseLinkedArchived) {
+    elements.warehouseLinkedArchived.textContent = formatNumber(data.linkedArchived || 0);
+  }
   elements.warehouseOzonInactive.textContent = formatNumber(data.ozonInactive || 0);
   elements.warehouseOzonOutOfStock.textContent = formatNumber(data.ozonOutOfStock || 0);
   refreshWarehouseFilterLabels();
@@ -4784,7 +4809,9 @@ function setupIosSelectRoot(root) {
 
   function syncFromSelect() {
     const opt = select.options[select.selectedIndex];
-    valueEl.textContent = opt?.textContent?.trim() || "";
+    valueEl.textContent = opt?.dataset?.label || opt?.textContent?.trim() || "";
+    if (opt?.dataset?.count) valueEl.dataset.count = opt.dataset.count;
+    else delete valueEl.dataset.count;
   }
 
   function close() {
@@ -4802,7 +4829,16 @@ function setupIosSelectRoot(root) {
       btn.className = "ios-select-option";
       if (opt.selected) btn.classList.add("ios-select-option--active");
       btn.dataset.value = opt.value;
-      btn.textContent = opt.textContent;
+      const label = document.createElement("span");
+      label.className = "ios-select-option-label";
+      label.textContent = opt.dataset.label || opt.textContent;
+      btn.appendChild(label);
+      if (opt.dataset.count) {
+        const count = document.createElement("span");
+        count.className = "ios-select-option-count";
+        count.textContent = opt.dataset.count;
+        btn.appendChild(count);
+      }
       btn.addEventListener("mousedown", (e) => e.preventDefault());
       btn.addEventListener("click", () => {
         if (select.selectedIndex !== index) {

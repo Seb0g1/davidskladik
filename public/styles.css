@@ -5087,6 +5087,23 @@ td {
   text-overflow: ellipsis;
 }
 
+.ios-select-value[data-count]::after {
+  content: attr(data-count);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 20px;
+  margin-left: 8px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--ios-fill-tertiary);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+  vertical-align: 1px;
+}
+
 .ios-select-chevron {
   flex-shrink: 0;
   width: 9px;
@@ -5123,7 +5140,10 @@ td {
 }
 
 .ios-select-option {
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   width: 100%;
   text-align: left;
   padding: 11px 14px;
@@ -5139,6 +5159,25 @@ td {
   transition: background 0.12s ease;
 }
 
+.ios-select-option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ios-select-option-count {
+  flex-shrink: 0;
+  min-width: 30px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--muted);
+  text-align: center;
+  font-size: 12px;
+  font-weight: 760;
+}
+
 .ios-select-option:last-child {
   margin-bottom: 0;
 }
@@ -5152,6 +5191,11 @@ td {
 .ios-select-option--active {
   background: var(--ios-fill-active);
   font-weight: 650;
+}
+
+.ios-select-option--active .ios-select-option-count {
+  background: rgba(96, 165, 250, 0.18);
+  color: var(--accent);
 }
 
 @media (prefers-color-scheme: dark) {
