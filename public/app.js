@@ -2058,6 +2058,8 @@ function closeAiImageModal() {
 async function generateAiImageFromMain() {
   const product = selectedAiImageProduct();
   if (!product?.id) return;
+  const selectionVersion = state.warehouseSelectionVersion;
+  const selectedGroupKey = state.selectedWarehouseGroupKey;
   const sourceImageUrl = String(elements.aiImageSourceInput?.value || aiImageSourceForProduct(product) || "").trim();
   const prompt = String(elements.aiImagePromptInput?.value || "").trim();
   const count = Math.max(1, Math.min(4, Number(elements.aiImageCountInput?.value || 3) || 3));
@@ -2078,10 +2080,7 @@ async function generateAiImageFromMain() {
     });
     const drafts = Array.isArray(result.drafts) ? result.drafts : [result.draft].filter(Boolean);
     state.aiImageDraft = drafts[0] || null;
-    if (result.product) mergeWarehouseProduct(result.product);
-    applyWarehouseFilters();
-    renderWarehouseCards();
-    renderDetailForProductIds([product.id]);
+    mergeWarehouseProductsForCurrentSelection([result.product].filter(Boolean), { selectionVersion, selectedGroupKey });
     renderAiImageModal(result.product || selectedAiImageProduct());
     setAiImageProgress(true, 100, `Готово: ${drafts.length || count} фото`);
     finalStatus = drafts.length > 1
@@ -2102,6 +2101,8 @@ async function reviewAiImageFromMain(action) {
   const product = selectedAiImageProduct();
   const draft = state.aiImageDraft || latestAiImageDraft(product);
   if (!product?.id || !draft?.id) return;
+  const selectionVersion = state.warehouseSelectionVersion;
+  const selectedGroupKey = state.selectedWarehouseGroupKey;
   let finalStatus = "";
   setAiImageModalBusy(true, action === "approve" ? "Одобряю фото и ставлю его главным..." : "Отменяю черновик...");
   try {
@@ -2110,10 +2111,7 @@ async function reviewAiImageFromMain(action) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ expectedUpdatedAt: product.updatedAt || "" }),
     });
-    if (result.product) mergeWarehouseProduct(result.product);
-    applyWarehouseFilters();
-    renderWarehouseCards();
-    renderDetailForProductIds([product.id]);
+    mergeWarehouseProductsForCurrentSelection([result.product].filter(Boolean), { selectionVersion, selectedGroupKey });
     renderAiImageModal(result.product || selectedAiImageProduct());
     finalStatus = action === "approve"
       ? "Фото поставлено главным в карточке."
@@ -4212,13 +4210,10 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       });
       setPendingLinkDrafts(key, []);
       if (selectionVersion === state.warehouseSelectionVersion && selectedGroupKey === state.selectedWarehouseGroupKey) {
-        mergeWarehouseProducts(result.products);
+        mergeWarehouseProductsForCurrentSelection(result.products, { selectionVersion, selectedGroupKey });
         elements.warehouseStatus.textContent = `Привязки сохранены: ${formatNumber(links.length)}. Цена и поставщик пересчитаны по всем связям.`;
       } else {
-        (Array.isArray(result.products) ? result.products : []).forEach((product) => {
-          if (product?.id) mergeWarehouseProduct(product);
-        });
-        renderWarehouseCards();
+        mergeWarehouseProductsForCurrentSelection(result.products, { selectionVersion, selectedGroupKey });
         showToast("Привязки сохранены для предыдущей карточки. Текущий выбор не переключался.", "warn");
       }
     } catch (error) {
@@ -4249,10 +4244,9 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       });
       if (selectionVersion === state.warehouseSelectionVersion && selectedGroupKey === state.selectedWarehouseGroupKey) {
         elements.warehouseStatus.textContent = `Готово: карточка выгружена в ${label}. Отправлено: ${formatNumber(result.sent || 1)}.`;
-        if (!mergeWarehouseProducts([result.product].filter(Boolean))) queueWarehouseRefresh();
+        if (!mergeWarehouseProductsForCurrentSelection([result.product].filter(Boolean), { selectionVersion, selectedGroupKey })) queueWarehouseRefresh();
       } else if (result.product) {
-        mergeWarehouseProduct(result.product);
-        renderWarehouseCards();
+        mergeWarehouseProductsForCurrentSelection([result.product], { selectionVersion, selectedGroupKey });
         showToast(`Карточка выгружена в ${label}. Текущий выбор не переключался.`, "warn");
       }
       return;
@@ -4273,14 +4267,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
               updatedAt: result.product.updatedAt || localProduct.updatedAt,
             }
           : result.product;
-        mergeWarehouseProduct(productForState);
-        if (selectionVersion === state.warehouseSelectionVersion && selectedGroupKey === state.selectedWarehouseGroupKey) {
-          applyWarehouseFilters();
-          renderWarehouseCards();
-          renderDetailForProductIds([productForState.id || productId], { select: false });
-        } else {
-          renderWarehouseCards();
-        }
+        mergeWarehouseProductsForCurrentSelection([productForState], { selectionVersion, selectedGroupKey });
       } else {
         queueWarehouseRefresh();
       }
