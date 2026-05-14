@@ -4036,9 +4036,6 @@ function ozonYandexImportBlockReasons(product = {}) {
   const stateCode = cleanText(marketplaceState.code).toLowerCase();
   const stateVisibility = cleanText(marketplaceState.visibility).toUpperCase();
   const rawState = cleanText(marketplaceState.state).toUpperCase();
-  if (marketplaceState.archived || stateCode === "archived" || stateVisibility === "ARCHIVED" || rawState === "ARCHIVED") {
-    reasons.push("Товар в архиве Ozon");
-  }
   if (["inactive", "unknown"].includes(stateCode) || ["REMOVED_FROM_SALE", "DISABLED", "BANNED"].includes(stateVisibility) || ["REMOVED_FROM_SALE", "DISABLED", "BANNED"].includes(rawState)) {
     reasons.push("Товар неактивен или статус Ozon не подтвержден");
   }
@@ -4046,11 +4043,12 @@ function ozonYandexImportBlockReasons(product = {}) {
   if (/без\s+коробк/iu.test(lower)) reasons.push("Название содержит «без коробки»");
   const smallVolumes = extractOzonYandexImportVolumesMl(name).filter((value) => value < 20);
   if (smallVolumes.length) reasons.push(`Объем меньше 20 мл: ${smallVolumes.join(", ")} мл`);
+  const volumes = extractOzonYandexImportVolumesMl(name);
+  if (!volumes.length) reasons.push("В названии нет объема в мл");
   const hugeVolumes = extractOzonYandexImportVolumesMl(name).filter((value) => value > 500);
   if (hugeVolumes.length || /\d+\s+\d{3}\s*(?:мл|ml)(?![a-zа-я])/iu.test(name)) {
     reasons.push(`Подозрительный объем${hugeVolumes.length ? `: ${hugeVolumes.join(", ")} мл` : ""}`);
   }
-  if (!vendor || vendorLower.includes("без бренда")) reasons.push("Не указан бренд");
   const blockedCategories = [
     "свеч",
     "помад",

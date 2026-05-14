@@ -143,10 +143,11 @@ test("Ozon to Yandex import blocks unsafe non-perfume and low quality cards", ()
   assert.ok(ozonYandexImportBlockReasons({ name: "Краска", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Категория")));
   assert.ok(ozonYandexImportBlockReasons({ name: "щзхщц", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Подозрительное")));
   assert.ok(ozonYandexImportBlockReasons({ name: "-0-", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Подозрительное")));
-  assert.ok(ozonYandexImportBlockReasons({ name: "Creed Aventus 100 мл" }).some((reason) => reason.includes("бренд")));
+  assert.deepEqual(ozonYandexImportBlockReasons({ name: "Giorgio Armani Si Passione Eclat Парфюмерная вода 90 мл" }), []);
+  assert.ok(ozonYandexImportBlockReasons({ name: "Creed Aventus" }).some((reason) => reason.includes("нет объема")));
   assert.ok(ozonYandexImportBlockReasons({ name: "парфюмерная вода для мужчин" }).some((reason) => reason.includes("общее название")));
   assert.ok(ozonYandexImportBlockReasons({ name: "Сильной фиксации 15 350 мл", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Подозрительный объем")));
-  assert.ok(ozonYandexImportBlockReasons({ name: "Creed Aventus 100 мл", ozon: { vendor: "Creed" }, marketplaceState: { code: "archived", archived: true } }).some((reason) => reason.includes("архиве")));
+  assert.deepEqual(ozonYandexImportBlockReasons({ name: "Creed Aventus 100 мл", ozon: { vendor: "Creed" }, marketplaceState: { code: "archived", archived: true } }), []);
 });
 
 test("Ozon to Yandex import candidate exposes eligibility summary", () => {
