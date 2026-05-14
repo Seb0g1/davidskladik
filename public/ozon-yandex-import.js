@@ -42,6 +42,12 @@ const els = {
   cleanupHistory: document.getElementById("yandexCleanupHistory"),
   cleanupHistoryStatus: document.getElementById("yandexCleanupHistoryStatus"),
   cleanupHistoryRefresh: document.getElementById("refreshYandexCleanupHistoryButton"),
+  cleanupConfirmModal: document.getElementById("yandexCleanupConfirmModal"),
+  cleanupConfirmSummary: document.getElementById("yandexCleanupConfirmSummary"),
+  cleanupConfirmInput: document.getElementById("yandexCleanupConfirmInput"),
+  cleanupConfirmSubmit: document.getElementById("yandexCleanupConfirmSubmit"),
+  cleanupConfirmCancel: document.getElementById("yandexCleanupConfirmCancel"),
+  cleanupConfirmClose: document.getElementById("yandexCleanupConfirmClose"),
   importHistory: document.getElementById("yandexImportHistory"),
   importHistoryStatus: document.getElementById("yandexImportHistoryStatus"),
   importHistoryRefresh: document.getElementById("refreshYandexImportHistoryButton"),
@@ -405,6 +411,77 @@ async function loadYandexCleanupHistory() {
   }
 }
 
+function openYandexCleanupConfirmModal({ summary = {}, protectedBrands = [] } = {}) {
+  if (!els.cleanupConfirmModal) return Promise.resolve(false);
+  const finalToDelete = Number(summary.toDelete ?? summary.toArchive ?? 0);
+  const finalToDeleteNow = Number(summary.deletePlannedNow ?? summary.plannedNow ?? Math.min(finalToDelete, 10000));
+  const skippedByLimit = Number(summary.deleteSkippedByLimit ?? 0);
+  const deleteLimit = Number(summary.deleteLimit || 10000);
+  const finalProtected = Number(summary.protected || 0);
+  const finalArchived = Number(summary.alreadyArchived || 0);
+  const brands = protectedBrands.length ? protectedBrands.join(", ") : "не указаны";
+
+  els.cleanupConfirmSummary.innerHTML = [
+    ["Будет удалено сейчас", finalToDeleteNow],
+    ["Всего подходит под удаление", finalToDelete],
+    ["Лимит за запуск", deleteLimit],
+    ["Останется из-за лимита", skippedByLimit],
+    ["Оставлено защитой", finalProtected],
+    ["Архивных среди удаления", finalArchived],
+  ].map(([label, value]) => `
+    <div class="cleanup-confirm-stat">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+    </div>
+  `).join("") + `
+    <div class="cleanup-confirm-brands">
+      <span>Бренды-защита</span>
+      <strong>${escapeHtml(brands)}</strong>
+    </div>
+  `;
+
+  els.cleanupConfirmInput.value = "";
+  els.cleanupConfirmSubmit.disabled = true;
+  els.cleanupConfirmModal.hidden = false;
+  document.body.classList.add("modal-open");
+  window.setTimeout(() => els.cleanupConfirmInput.focus(), 0);
+
+  return new Promise((resolve) => {
+    let done = false;
+    const cleanup = (result) => {
+      if (done) return;
+      done = true;
+      els.cleanupConfirmModal.hidden = true;
+      document.body.classList.remove("modal-open");
+      els.cleanupConfirmInput.removeEventListener("input", onInput);
+      els.cleanupConfirmSubmit.removeEventListener("click", onSubmit);
+      els.cleanupConfirmCancel.removeEventListener("click", onCancel);
+      els.cleanupConfirmClose.removeEventListener("click", onCancel);
+      els.cleanupConfirmModal.removeEventListener("click", onBackdrop);
+      document.removeEventListener("keydown", onKeydown);
+      resolve(result);
+    };
+    const onInput = () => {
+      els.cleanupConfirmSubmit.disabled = els.cleanupConfirmInput.value.trim() !== "УДАЛИТЬ ЯНДЕКС";
+    };
+    const onSubmit = () => cleanup(els.cleanupConfirmInput.value.trim() === "УДАЛИТЬ ЯНДЕКС");
+    const onCancel = () => cleanup(false);
+    const onBackdrop = (event) => {
+      if (event.target === els.cleanupConfirmModal) cleanup(false);
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Escape") cleanup(false);
+      if (event.key === "Enter" && els.cleanupConfirmInput.value.trim() === "УДАЛИТЬ ЯНДЕКС") cleanup(true);
+    };
+    els.cleanupConfirmInput.addEventListener("input", onInput);
+    els.cleanupConfirmSubmit.addEventListener("click", onSubmit);
+    els.cleanupConfirmCancel.addEventListener("click", onCancel);
+    els.cleanupConfirmClose.addEventListener("click", onCancel);
+    els.cleanupConfirmModal.addEventListener("click", onBackdrop);
+    document.addEventListener("keydown", onKeydown);
+  });
+}
+
 async function previewYandexCleanup() {
   const protectedBrands = parseCleanupBrands();
   if (!protectedBrands.length) {
@@ -460,36 +537,29 @@ async function archiveYandexCleanup() {
   }
   const finalSummary = dryRunPayload.summary || {};
   const finalToDelete = Number(finalSummary.toDelete ?? finalSummary.toArchive ?? 0);
-  const finalToDeleteNow = Number(finalSummary.deletePlannedNow ?? finalSummary.plannedNow ?? Math.min(finalToDelete, 5000));
+  const finalToDeleteNow = Number(finalSummary.deletePlannedNow ?? finalSummary.plannedNow ?? Math.min(finalToDelete, 10000));
   const finalProtected = Number(finalSummary.protected || 0);
   const finalArchived = Number(finalSummary.alreadyArchived || 0);
   const skippedByLimit = Number(finalSummary.deleteSkippedByLimit ?? dryRunPayload.skippedByLimit ?? 0);
-  const deleteLimit = Number(finalSummary.deleteLimit || 5000);
-  const confirmed = window.confirm([
-    "Финальная проверка перед удалением:",
-    `Будет удалено сейчас: ${finalToDeleteNow}`,
-    `Всего подходит под удаление: ${finalToDelete}`,
-    `Лимит за запуск: ${deleteLimit}`,
-    `Останется на следующий запуск из-за лимита: ${skippedByLimit}`,
-    `Оставлено: ${finalProtected}`,
-    `Архивных среди удаления: ${finalArchived}`,
-    `Бренды-защита: ${protectedBrands.join(", ")}`,
-    "",
-    "Продолжить удаление из каталога Яндекса?",
-  ].join("\n"));
+  const deleteLimit = Number(finalSummary.deleteLimit || 10000);
+  const confirmed = await openYandexCleanupConfirmModal({
+    summary: {
+      ...finalSummary,
+      deletePlannedNow: finalToDeleteNow,
+      deleteSkippedByLimit: skippedByLimit,
+      deleteLimit,
+      protected: finalProtected,
+      alreadyArchived: finalArchived,
+    },
+    protectedBrands,
+  });
   if (!confirmed) {
     els.cleanupStatus.textContent = "Удаление отменено после финальной проверки.";
     els.cleanupPreview.disabled = false;
     els.cleanupArchive.disabled = !(finalToDelete > 0 && parseCleanupBrands().length);
     return;
   }
-  const confirmationText = window.prompt("Для подтверждения введите: УДАЛИТЬ ЯНДЕКС", "");
-  if (confirmationText !== "УДАЛИТЬ ЯНДЕКС") {
-    els.cleanupStatus.textContent = "Очистка отменена: подтверждение не совпало.";
-    els.cleanupPreview.disabled = false;
-    els.cleanupArchive.disabled = !(finalToDelete > 0 && parseCleanupBrands().length);
-    return;
-  }
+  const confirmationText = "\u0423\u0414\u0410\u041b\u0418\u0422\u042c \u042f\u041d\u0414\u0415\u041a\u0421";
   els.cleanupStatus.textContent = "Удаляю незащищённые товары из каталога Яндекса...";
   try {
     const payload = await api("/api/yandex-cleanup/delete", {

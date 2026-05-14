@@ -148,6 +148,29 @@
         <div id="yandexImportHistory" class="history-list"></div>
       </section>
     </main>
+    <div id="yandexCleanupConfirmModal" class="cleanup-modal-backdrop" hidden>
+      <section class="cleanup-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="yandexCleanupConfirmTitle">
+        <div class="cleanup-confirm-head">
+          <div>
+            <p class="eyebrow">Yandex Market</p>
+            <h2 id="yandexCleanupConfirmTitle">Подтвердите удаление</h2>
+          </div>
+          <button id="yandexCleanupConfirmClose" class="modal-icon-button" type="button" aria-label="Закрыть">×</button>
+        </div>
+        <div id="yandexCleanupConfirmSummary" class="cleanup-confirm-summary"></div>
+        <div class="cleanup-confirm-warning">
+          Удаление из каталога Яндекса необратимо. Защищённые бренды останутся, но товары меньше 20 мл всё равно попадут в удаление.
+        </div>
+        <label class="cleanup-confirm-input">
+          Для подтверждения введите <strong>УДАЛИТЬ ЯНДЕКС</strong>
+          <input id="yandexCleanupConfirmInput" type="text" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="cleanup-confirm-actions">
+          <button id="yandexCleanupConfirmCancel" class="secondary-button" type="button">Отмена</button>
+          <button id="yandexCleanupConfirmSubmit" class="danger-button" type="button" disabled>Удалить из Яндекса</button>
+        </div>
+      </section>
+    </div>
     <script src="/ozon-yandex-import.js"></script>
   </body>
 </html>
