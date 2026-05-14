@@ -3478,6 +3478,30 @@ td {
   line-height: 1.5;
 }
 
+.accounts-tools-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+}
+
+.accounts-tools-panel h3 {
+  margin: 4px 0 6px;
+  font-size: 22px;
+}
+
+.accounts-tools-panel p:last-child {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 820px;
+}
+
+.accounts-tool-link {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
 .accounts-layout {
   display: grid;
   grid-template-columns: 380px minmax(0, 1fr);
@@ -4851,9 +4875,18 @@ td {
   .card-actions,
   .supplier-panel-head,
   .accounts-hero,
+  .accounts-tools-panel,
   .account-card-head {
     display: grid;
     width: 100%;
+  }
+
+  .accounts-tool-link {
+    width: 100%;
+  }
+
+  .accounts-tools-panel {
+    grid-template-columns: 1fr;
   }
 
   .supplier-panel-head {
