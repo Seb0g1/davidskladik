@@ -64,6 +64,7 @@ const {
   warehouseLinkIdentityKey,
   pickOzonCabinetListedPrice,
   shouldSkipWarehousePriceSend,
+  isDuplicatePriceHistoryEntry,
   buildOzonPricePayload,
   isOzonResourceExhaustedError,
   isOzonPerItemPriceLimitError,
@@ -215,6 +216,39 @@ test("price send skip helper respects ruble and percent thresholds", () => {
   assert.equal(pct.reason, "min_diff_pct");
   assert.equal(Math.round(pct.diffPct * 10) / 10, 0.3);
   assert.equal(shouldSkipWarehousePriceSend({ currentPrice: 0, nextPrice: 1574 }).skip, false);
+});
+
+test("price history duplicate detection suppresses identical recent sends", () => {
+  const now = new Date("2026-05-14T07:06:00.000Z");
+  const previous = {
+    productId: "p1",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-1",
+    oldPrice: 1574,
+    newPrice: 1574,
+    status: "success",
+    error: "",
+    at: "2026-05-14T07:05:00.000Z",
+  };
+  assert.equal(isDuplicatePriceHistoryEntry(previous, {
+    productId: "p1",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-1",
+    oldPrice: 1574,
+    newPrice: 1574,
+    status: "success",
+    error: "",
+  }, { now, windowMs: 15 * 60 * 1000 }), true);
+  assert.equal(isDuplicatePriceHistoryEntry(previous, {
+    ...previous,
+    newPrice: 1600,
+  }, { now, windowMs: 15 * 60 * 1000 }), false);
+  assert.equal(isDuplicatePriceHistoryEntry(previous, previous, {
+    now: new Date("2026-05-14T08:00:00.000Z"),
+    windowMs: 15 * 60 * 1000,
+  }), false);
 });
 
 test("price history append is a no-op without PostgreSQL", async () => {

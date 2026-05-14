@@ -1100,6 +1100,40 @@ function shouldSkipWarehousePriceSend({
   return { skip: false, reason: null };
 }
 
+function priceHistoryDedupeWindowMs() {
+  return Math.max(60_000, Number(process.env.PRICE_HISTORY_DEDUPE_WINDOW_MS || 15 * 60_000) || 15 * 60_000);
+}
+
+function normalizePriceHistoryComparable(entry = {}) {
+  return {
+    productId: cleanText(entry.productId || entry.id) || "",
+    marketplace: cleanText(entry.marketplace || "ozon").toLowerCase() || "ozon",
+    target: cleanText(entry.target || entry.marketplace) || "",
+    offerId: cleanText(entry.offerId || entry.offer_id),
+    oldPrice: entry.oldPrice === undefined || entry.oldPrice === null ? null : roundPrice(entry.oldPrice),
+    newPrice: roundPrice(entry.newPrice ?? entry.price ?? 0),
+    status: cleanText(entry.status || (entry.error ? "failed" : "success")).toLowerCase(),
+    error: cleanText(entry.error || ""),
+    at: toDateOrNull(entry.createdAt || entry.at) || null,
+  };
+}
+
+function isDuplicatePriceHistoryEntry(previous = {}, next = {}, { now = new Date(), windowMs = priceHistoryDedupeWindowMs() } = {}) {
+  const left = normalizePriceHistoryComparable(previous);
+  const right = normalizePriceHistoryComparable(next);
+  if (!right.offerId || !right.newPrice) return false;
+  if (left.productId && right.productId && left.productId !== right.productId) return false;
+  if (left.marketplace !== right.marketplace) return false;
+  if (left.target !== right.target) return false;
+  if (left.offerId !== right.offerId) return false;
+  if (left.oldPrice !== right.oldPrice) return false;
+  if (left.newPrice !== right.newPrice) return false;
+  if (left.status !== right.status) return false;
+  if (left.error !== right.error) return false;
+  if (!left.at) return false;
+  return Math.abs(now.getTime() - left.at.getTime()) <= windowMs;
+}
+
 function parseBooleanSetting(value, fallback = true) {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -4338,8 +4372,47 @@ async function appendPriceHistoryRows(rows = []) {
     .filter((row) => row.offerId && row.newPrice > 0);
   if (!normalizedRows.length) return 0;
   try {
+    const windowMs = priceHistoryDedupeWindowMs();
+    const dedupedRows = [];
+    const seenRows = new Set();
+    for (const row of normalizedRows) {
+      const createdAt = row.createdAt || new Date();
+      const recentSince = new Date(createdAt.getTime() - windowMs);
+      const rowKey = [
+        row.productId || "",
+        row.marketplace,
+        row.target || "",
+        row.offerId,
+        row.oldPrice ?? "",
+        row.newPrice,
+        row.status,
+        row.error || "",
+        Math.floor(createdAt.getTime() / windowMs),
+      ].join("|");
+      if (seenRows.has(rowKey)) continue;
+      seenRows.add(rowKey);
+      const existing = await getPrisma().priceHistory.findFirst({
+        where: {
+          productId: row.productId || null,
+          marketplace: row.marketplace,
+          target: row.target || null,
+          offerId: row.offerId,
+          oldPrice: row.oldPrice === undefined ? null : row.oldPrice,
+          newPrice: row.newPrice,
+          status: row.status,
+          OR: [{ error: row.error || "" }, { error: null }],
+          createdAt: {
+            gte: recentSince,
+            lte: new Date(createdAt.getTime() + windowMs),
+          },
+        },
+        select: { id: true },
+      });
+      if (!existing) dedupedRows.push(row);
+    }
+    if (!dedupedRows.length) return 0;
     const result = await getPrisma().priceHistory.createMany({
-      data: normalizedRows,
+      data: dedupedRows,
       skipDuplicates: true,
     });
     return result.count || 0;
@@ -8907,7 +8980,10 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       status: sendStatus === "pending" ? "pending" : (success ? "success" : (delayedByLimitForItem ? "delayed" : "error")),
       error: success ? null : (failedEntryForItem?.error || "send_failed"),
     };
-    product.priceHistory.push(historyEntry);
+    const duplicateLocalHistory = product.priceHistory
+      .slice(-20)
+      .some((entry) => isDuplicatePriceHistoryEntry(entry, historyEntry, { now: new Date(sentAt) }));
+    if (!duplicateLocalHistory) product.priceHistory.push(historyEntry);
     product.priceHistory = product.priceHistory.slice(-100);
     postgresPriceHistoryRows.push({
       productId: item.id,
@@ -10782,6 +10858,8 @@ module.exports = {
   warehouseLinkIdentityKey,
   pickOzonCabinetListedPrice,
   shouldSkipWarehousePriceSend,
+  priceHistoryDedupeWindowMs,
+  isDuplicatePriceHistoryEntry,
   buildOzonPricePayload,
   isOzonResourceExhaustedError,
   isOzonPerItemPriceLimitError,
