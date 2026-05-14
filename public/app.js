@@ -40,6 +40,7 @@ const state = {
   warehouseSyncPollTimer: null,
   warehouseSyncStartedFromUi: false,
   warehouseSelectionVersion: 0,
+  warehouseManualSelectionAt: 0,
   warehouseLastUpdatedAt: "",
   priceMasterLastUpdatedAt: "",
   dailySyncLastUpdatedAt: "",
@@ -282,9 +283,15 @@ function setSelectedWarehouseGroupKey(groupKey, { manual = false } = {}) {
   const nextKey = groupKey ? String(groupKey) : null;
   if (manual && state.selectedWarehouseGroupKey !== nextKey) {
     state.warehouseSelectionVersion += 1;
+    state.warehouseManualSelectionAt = Date.now();
     state.selectedWarehouseUpdateNotice = null;
   }
   state.selectedWarehouseGroupKey = nextKey;
+}
+
+function warehouseRecentlyManuallySelected(windowMs = 2500) {
+  const selectedAt = Number(state.warehouseManualSelectionAt || 0);
+  return selectedAt > 0 && Date.now() - selectedAt < windowMs;
 }
 
 function markProgrammaticScroll() {
@@ -3047,6 +3054,7 @@ function warehouseLiveRefreshShouldWait() {
   if (document.hidden) return true;
   if (state.warehouseSyncPollTimer) return true;
   if (state.warehouseLoadingPage || state.warehouseLiveRefreshRunning) return true;
+  if (warehouseRecentlyManuallySelected()) return true;
   const active = document.activeElement;
   if (!active) return false;
   if (active.matches?.("input, textarea, select, [contenteditable='true']")) {
@@ -3144,7 +3152,19 @@ let warehouseRefreshTimer = null;
 function queueWarehouseRefresh(delayMs = 160) {
   if (warehouseRefreshTimer) window.clearTimeout(warehouseRefreshTimer);
   warehouseRefreshTimer = window.setTimeout(() => {
-    loadWarehouse(false, false, { silent: true }).catch((error) => {
+    const selectedKey = state.selectedWarehouseGroupKey;
+    const selectionVersion = state.warehouseSelectionVersion;
+    loadWarehouse(false, false, { silent: true }).then(() => {
+      if (selectedKey && selectionVersion === state.warehouseSelectionVersion && state.selectedWarehouseGroupKey === selectedKey) {
+        const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
+          .find((item) => item.key === selectedKey);
+        if (group) {
+          state.selectedWarehouseDetailGroup = group;
+          renderWarehouseDetailIfChanged(group);
+          renderWarehouseCards();
+        }
+      }
+    }).catch((error) => {
       elements.warehouseStatus.textContent = error.message;
     });
   }, delayMs);
