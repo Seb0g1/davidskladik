@@ -32,6 +32,7 @@ const state = {
   warehouseRestorePage: 1,
   warehouseHasMore: true,
   warehouseLoadingPage: false,
+  warehouseLoadedRows: 0,
   warehouseTotalFiltered: 0,
   warehouseCounters: {},
   warehouseRequestToken: 0,
@@ -1450,7 +1451,6 @@ function refreshWarehouseToolbarHints() {
   const hint = elements.warehouseToolbarHint;
   if (!hint) return;
   const total = Number(state.warehouseTotalFiltered || 0);
-  const loaded = state.filteredWarehouse.length;
   const groupCount = getSortedWarehouseGroups().length;
   const market =
     state.warehouseMarketplace === "all"
@@ -1471,7 +1471,7 @@ function refreshWarehouseToolbarHints() {
   if (!total) {
     hint.textContent = "Склад пуст — добавьте товары вручную или синхронизируйте кабинеты.";
   } else {
-    hint.textContent = `На экране ${formatNumber(groupCount)} карточек (${formatNumber(loaded)} загружено из ${formatNumber(total)}) · ${market}${ozonPart}${searchPart}${autoPart}${linkPart}${brandPart} · сверху активные на Ozon/ЯМ`;
+    hint.textContent = `На экране ${formatNumber(groupCount)} карточек · всего в текущем фильтре ${formatNumber(total)} · ${market}${ozonPart}${searchPart}${autoPart}${linkPart}${brandPart} · сверху активные на Ozon/ЯМ`;
   }
 
   if (elements.warehouseSelectionLine) {
@@ -1560,8 +1560,10 @@ function renderWarehouse(data) {
     const byId = new Map(state.warehouse.map((product) => [product.id, product]));
     products.forEach((product) => byId.set(product.id, product));
     state.warehouse = Array.from(byId.values());
+    state.warehouseLoadedRows = state.warehouse.length;
   } else {
     state.warehouse = products;
+    state.warehouseLoadedRows = products.length;
     state.enrichedProductIds = new Set();
     state.warehouseVisibleLimit = 80;
   }
@@ -1721,7 +1723,7 @@ function renderWarehouseCards() {
     .join("");
   const visibleCount = Math.min(state.warehouseVisibleLimit, groups.length);
   const hasMoreClient = visibleCount < groups.length;
-  elements.warehouseVisibleInfo.textContent = `Показано ${formatNumber(visibleCount)} из ${formatNumber(state.warehouseTotalFiltered || groups.length)} строк (загружено ${formatNumber(state.warehouse.length)})`;
+  elements.warehouseVisibleInfo.textContent = `Показано ${formatNumber(visibleCount)} карточек на экране · всего ${formatNumber(state.warehouseTotalFiltered || groups.length)} в текущем фильтре`;
   elements.warehouseLoadMoreButton.classList.toggle("hidden", !hasMoreClient && !state.warehouseHasMore);
   elements.warehouseLoadMoreButton.disabled = state.warehouseLoadingPage;
   elements.warehouseLoadMoreButton.textContent = state.warehouseLoadingPage ? "Загрузка..." : "Показать ещё";
