@@ -289,6 +289,12 @@ function setSelectedWarehouseGroupKey(groupKey, { manual = false } = {}) {
   state.selectedWarehouseGroupKey = nextKey;
 }
 
+function warehouseGroupBelongsToCurrentSelection(group) {
+  if (!group?.key) return true;
+  if (!state.selectedWarehouseGroupKey) return true;
+  return String(group.key) === String(state.selectedWarehouseGroupKey);
+}
+
 function warehouseRecentlyManuallySelected(windowMs = 2500) {
   const selectedAt = Number(state.warehouseManualSelectionAt || 0);
   return selectedAt > 0 && Date.now() - selectedAt < windowMs;
@@ -2157,7 +2163,7 @@ async function loadDetailLinkAudit(group) {
   }
 }
 
-function renderWarehouseDetail(group) {
+function renderWarehouseDetail(group, { force = false } = {}) {
   if (!group) {
     state.selectedWarehouseDetailSignature = "";
     elements.warehouseDetail.innerHTML = `
@@ -2166,8 +2172,9 @@ function renderWarehouseDetail(group) {
         <span>Здесь будут привязки PriceMaster, доступные поставщики и действия по карточке.</span>
       </div>
     `;
-    return;
+    return true;
   }
+  if (!force && !warehouseGroupBelongsToCurrentSelection(group)) return false;
   state.selectedWarehouseDetailGroup = group;
   state.selectedWarehouseDetailSignature = warehouseDetailSignature(group);
 
@@ -2445,6 +2452,7 @@ function renderWarehouseDetail(group) {
   `;
   loadDetailPriceHistory(group);
   loadDetailLinkAudit(group);
+  return true;
 }
 
 function formatSupplierSyncStatus() {
@@ -3713,11 +3721,13 @@ elements.warehouseCards.addEventListener("click", async (event) => {
   const groupKey = button?.dataset.groupKey || card?.dataset.groupKey;
   if (!groupKey) return;
   setSelectedWarehouseGroupKey(groupKey, { manual: true });
+  const clickedGroup = getSortedWarehouseGroups().find((group) => group.key === groupKey);
+  state.selectedWarehouseProductId = clickedGroup?.primary?.id || clickedGroup?.productIds?.[0] || null;
   const selectionVersion = state.warehouseSelectionVersion;
   state.warehouseAutoFocusGroupKey = null;
   syncWarehouseStateToUrl();
   renderWarehouseCards();
-  renderWarehouseDetail(getSortedWarehouseGroups().find((group) => group.key === groupKey));
+  renderWarehouseDetail(clickedGroup);
   try {
     const detailed = await ensureWarehouseGroupDetailed(groupKey);
     if (selectionVersion === state.warehouseSelectionVersion && state.selectedWarehouseGroupKey === groupKey) {
