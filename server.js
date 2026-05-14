@@ -3044,7 +3044,7 @@ async function sendYandexOfferMappings(shop, offers = []) {
   const prepared = (Array.isArray(offers) ? offers : [])
     .map((offer) => ({ ...offer, offerId: cleanText(offer.offerId) }))
     .filter((offer) => offer.offerId);
-  for (const chunk of chunkArray(prepared, 200)) {
+  for (const chunk of chunkArray(prepared, 100)) {
     if (!chunk.length) continue;
     try {
       await yandexRequest(
