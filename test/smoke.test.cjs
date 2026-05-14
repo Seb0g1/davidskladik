@@ -66,6 +66,7 @@ const {
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
+  warehouseLinkHasMatchTarget,
   pickOzonCabinetListedPrice,
   shouldSkipWarehousePriceSend,
   isDuplicatePriceHistoryEntry,
@@ -1614,6 +1615,13 @@ test("warehouse link identity ignores client draft id duplicates", () => {
   const a = warehouseLinkIdentityKey({ id: "draft-1", article: "A-1", partnerId: "88", supplierName: " Supplier ", keyword: "Blue", priceCurrency: "rub" });
   const b = warehouseLinkIdentityKey({ id: "draft-2", article: "A-1", partnerId: "88", supplierName: "supplier", keyword: "blue", priceCurrency: "RUB" });
   assert.equal(a, b);
+});
+
+test("warehouse link target detection keeps selected rows without supplier article", () => {
+  assert.equal(warehouseLinkHasMatchTarget({ article: "A-1" }), true);
+  assert.equal(warehouseLinkHasMatchTarget({ matchType: "selected_row", sourceRowId: "991", exactName: "Exact PM row" }), true);
+  assert.equal(warehouseLinkHasMatchTarget({ matchType: "exact_name", exactName: "Exact PM row" }), true);
+  assert.equal(warehouseLinkHasMatchTarget({ supplierName: "Supplier only" }), false);
 });
 
 test("warehouse links can store selected PriceMaster row without supplier article", () => {

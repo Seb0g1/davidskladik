@@ -898,7 +898,11 @@ function getPendingLinkDrafts(key) {
 
 function setPendingLinkDrafts(key, links = []) {
   state.pendingLinkDrafts = state.pendingLinkDrafts || {};
-  const normalized = (Array.isArray(links) ? links : []).filter((link) => String(link?.article || "").trim());
+  const normalized = (Array.isArray(links) ? links : []).filter((link) =>
+    String(link?.article || "").trim()
+    || String(link?.exactName || "").trim()
+    || String(link?.sourceRowId || "").trim()
+  );
   if (normalized.length) state.pendingLinkDrafts[key] = normalized;
   else delete state.pendingLinkDrafts[key];
 }

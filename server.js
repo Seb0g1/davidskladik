@@ -1945,6 +1945,11 @@ function normalizeWarehouseLink(input = {}) {
   };
 }
 
+function warehouseLinkHasMatchTarget(input = {}) {
+  const link = normalizeWarehouseLink(input);
+  return Boolean(link.article || link.exactName || link.sourceRowId);
+}
+
 function warehouseLinkIdentityKey(input = {}) {
   const link = normalizeWarehouseLink(input);
   return [
@@ -8597,7 +8602,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const rawLinks = Array.isArray(request.body.links) && request.body.links.length ? request.body.links : [request.body];
     const baseLinks = Array.from(new Map(rawLinks
       .map((link) => normalizeWarehouseLink(link))
-      .filter((link) => link.article)
+      .filter(warehouseLinkHasMatchTarget)
       .map((link) => [warehouseLinkIdentityKey(link), link])).values());
     const baseLink = baseLinks[0] || normalizeWarehouseLink({});
     if (!baseLink.article && !baseLink.exactName && !baseLink.sourceRowId) {
@@ -8763,10 +8768,10 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     const product = warehouse.products.find((item) => item.id === request.params.productId);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
-    const conflict = productConflict(product, request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt);
-    if (conflict) return conflictResponse(response, [conflict]);
     const previousLinks = Array.isArray(product.links) ? product.links : [];
     const removed = previousLinks.some((link) => String(link.id) === String(request.params.linkId));
+    const conflict = productConflict(product, request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt);
+    if (conflict && !removed) return conflictResponse(response, [conflict]);
     if (!removed) {
       const [freshProduct] = await buildFreshWarehouseProducts([product.id]);
       const responseProduct = freshProduct || normalizeWarehouseProduct(product);
@@ -10870,6 +10875,7 @@ module.exports = {
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
+  warehouseLinkHasMatchTarget,
   pickOzonCabinetListedPrice,
   shouldSkipWarehousePriceSend,
   priceHistoryDedupeWindowMs,
