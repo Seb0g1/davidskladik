@@ -89,6 +89,7 @@ const {
   summarizeOzonYandexImportPreview,
   buildYandexPriceUpdateFromOzonProduct,
   pickOzonProductStockForYandex,
+  buildYandexStockUpdatePayload,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,
   summarizeYandexCleanupPreview,
@@ -232,6 +233,19 @@ test("Ozon to Yandex stock sync uses Ozon stock from state and warehouses", () =
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { stock: 7, warehouses: [{ stock: 1 }] } }), 7);
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { warehouses: [{ stock: 2 }, { present: 3 }] } }), 5);
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { stock: 0 } }), 0);
+});
+
+test("Yandex stock update payload uses campaign stock format", () => {
+  assert.deepEqual(buildYandexStockUpdatePayload([
+    { offerId: "SKU-1", stock: 3 },
+    { offer_id: "SKU-2", stock: 0 },
+    { offerId: "  ", stock: 10 },
+  ], "2026-05-14T10:00:00.000Z"), {
+    skus: [
+      { sku: "SKU-1", items: [{ type: "FIT", count: 3, updatedAt: "2026-05-14T10:00:00.000Z" }] },
+      { sku: "SKU-2", items: [{ type: "FIT", count: 0, updatedAt: "2026-05-14T10:00:00.000Z" }] },
+    ],
+  });
 });
 
 test("Ozon to Yandex price update uses exported offer price", () => {

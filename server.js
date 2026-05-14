@@ -4533,10 +4533,45 @@ function pickOzonProductStockForYandex(product = {}) {
   return Math.max(0, Math.round(sum));
 }
 
+function buildYandexStockUpdatePayload(rows = [], updatedAt = new Date().toISOString()) {
+  const skus = (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      sku: cleanText(row.sku || row.offerId || row.offer_id),
+      count: Math.max(0, Math.round(Number(row.count ?? row.stock ?? 0) || 0)),
+    }))
+    .filter((row) => row.sku)
+    .map((row) => ({
+      sku: row.sku,
+      items: [{ type: "FIT", count: row.count, updatedAt }],
+    }));
+  return { skus };
+}
+
+function yandexStockShops(shops = null) {
+  const source = Array.isArray(shops) && shops.length ? shops : getYandexShops();
+  return source.filter((shop) => shop.apiKey && shop.businessId && shop.campaignId);
+}
+
+async function sendYandexStockChunk(shop, rows = []) {
+  if (!shop?.campaignId) {
+    const error = new Error("Yandex campaignId is required for stock updates");
+    error.statusCode = 400;
+    throw error;
+  }
+  const payload = buildYandexStockUpdatePayload(rows);
+  if (!payload.skus.length) return null;
+  return yandexRequest(shop, "PUT", `/v2/campaigns/${shop.campaignId}/offers/stocks`, payload);
+}
+
 async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
   const dryRun = options.dryRun === true;
   const warnings = [];
-  const shops = getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+  const allShops = getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+  const shops = yandexStockShops(allShops);
+  const missingCampaignShops = allShops.filter((shop) => !shop.campaignId);
+  if (missingCampaignShops.length) {
+    warnings.push(`Yandex: ${missingCampaignShops.length} магазин(ов) без campaignId пропущены для остатков.`);
+  }
   const rows = (Array.isArray(products) ? products : [])
     .map((product) => ({
       id: product.id,
@@ -4566,14 +4601,8 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
   for (const shop of shops) {
     for (const chunk of chunkArray(selected, 500)) {
       if (!chunk.length) continue;
-      const payload = {
-        offers: chunk.map((item) => ({
-          offerId: item.offerId,
-          stock: item.stock,
-        })),
-      };
       try {
-        await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offers/stocks`, payload);
+        await sendYandexStockChunk(shop, chunk);
         results.push({ target: shop.id, sent: chunk.length });
       } catch (error) {
         const label = error?.message || error?.code || "ошибка API";
@@ -4595,9 +4624,14 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
 
 async function sendYandexStocksForExportedOzonProducts(products = [], options = {}) {
   const warnings = [];
-  const shops = Array.isArray(options.shops) && options.shops.length
-    ? options.shops
-    : uniqueYandexShopsByBusiness();
+  const allShops = Array.isArray(options.stockShops) && options.stockShops.length
+    ? options.stockShops
+    : getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+  const shops = yandexStockShops(allShops);
+  const missingCampaignShops = allShops.filter((shop) => shop.apiKey && shop.businessId && !shop.campaignId);
+  if (missingCampaignShops.length) {
+    warnings.push(`Yandex: ${missingCampaignShops.length} магазин(ов) без campaignId пропущены для остатков.`);
+  }
   const existingOfferIds = options.existingOfferIds instanceof Set ? options.existingOfferIds : new Set();
   const rows = (Array.isArray(products) ? products : [])
     .map((product) => ({
@@ -4614,9 +4648,7 @@ async function sendYandexStocksForExportedOzonProducts(products = [], options = 
     for (const chunk of chunkArray(rows, 500)) {
       if (!chunk.length) continue;
       try {
-        await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offers/stocks`, {
-          offers: chunk.map((item) => ({ offerId: item.offerId, stock: item.stock })),
-        });
+        await sendYandexStockChunk(shop, chunk);
         results.push(...chunk.map((item) => ({
           stage: "stock",
           offerId: item.offerId,
@@ -10983,14 +11015,8 @@ async function sendZeroStocksToMarketplace(products = []) {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
       for (const chunk of chunkArray(items, 500)) {
-        const payload = {
-          offers: chunk.map((item) => ({
-            offerId: String(item.offerId || "").trim(),
-            stock: 0,
-          })),
-        };
         try {
-          await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offers/stocks`, payload);
+          await sendYandexStockChunk(shop, chunk.map((item) => ({ offerId: item.offerId, stock: 0 })));
           actions.push(...chunk.map((item) => ({ id: item.id, type: "zero_stock", ok: true })));
         } catch (error) {
           const detail = error?.message || "stock_zero_failed";
@@ -11039,14 +11065,8 @@ async function sendTargetStocksToMarketplace(products = []) {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
       for (const chunk of chunkArray(items, 500)) {
-        const payload = {
-          offers: chunk.map((item) => ({
-            offerId: String(item.offerId || "").trim(),
-            stock: item.targetStock,
-          })),
-        };
         try {
-          await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offers/stocks`, payload);
+          await sendYandexStockChunk(shop, chunk.map((item) => ({ offerId: item.offerId, stock: item.targetStock })));
           actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", stock: item.targetStock, ok: true })));
         } catch (error) {
           const detail = error?.message || "target_stock_failed";
@@ -11150,14 +11170,11 @@ async function restoreStocksOnMarketplaces(products = []) {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
       for (const chunk of chunkArray(items, 500)) {
-        const payload = {
-          offers: chunk.map((item) => ({
-            offerId: String(item.offerId || "").trim(),
-            stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
-          })),
-        };
         try {
-          await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offers/stocks`, payload);
+          await sendYandexStockChunk(shop, chunk.map((item) => ({
+            offerId: item.offerId,
+            stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
+          })));
           actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: true })));
         } catch (error) {
           const detail = error?.message || "restore_stock_failed";
@@ -12197,6 +12214,7 @@ module.exports = {
   buildYandexPriceUpdateFromOzonProduct,
   sendYandexPricesFromOzonProducts,
   pickOzonProductStockForYandex,
+  buildYandexStockUpdatePayload,
   sendYandexStocksForExportedOzonProducts,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,
