@@ -2,7 +2,7 @@ const state = {
   rows: [],
   summary: { total: 0, eligible: 0, blocked: 0, existingInYandex: 0, missingRequired: 0 },
   cleanupRows: [],
-  cleanupSummary: { total: 0, protected: 0, toArchive: 0, alreadyArchived: 0 },
+  cleanupSummary: { total: 0, protected: 0, toDelete: 0, toArchive: 0, alreadyArchived: 0 },
 };
 
 const els = {
@@ -156,8 +156,8 @@ function parseCleanupBrands() {
 
 function cleanupStatus(row) {
   if (row.protected) return { className: "good", label: "Оставить" };
-  if (row.action === "already_archived") return { className: "warn", label: "Уже архив" };
-  return { className: "danger", label: "Архивировать" };
+  if (row.archived) return { className: "danger", label: "Удалить (архив)" };
+  return { className: "danger", label: "Удалить" };
 }
 
 function renderCleanup(payload = {}) {
@@ -165,9 +165,10 @@ function renderCleanup(payload = {}) {
   state.cleanupSummary = payload.summary || {};
   els.cleanupTotal.textContent = state.cleanupSummary.total || 0;
   els.cleanupProtected.textContent = state.cleanupSummary.protected || 0;
-  els.cleanupToArchive.textContent = state.cleanupSummary.toArchive || 0;
+  const toDelete = Number(state.cleanupSummary.toDelete ?? state.cleanupSummary.toArchive ?? 0);
+  els.cleanupToArchive.textContent = toDelete;
   els.cleanupAlreadyArchived.textContent = state.cleanupSummary.alreadyArchived || 0;
-  els.cleanupArchive.disabled = !(state.cleanupSummary.toArchive > 0 && parseCleanupBrands().length);
+  els.cleanupArchive.disabled = !(toDelete > 0 && parseCleanupBrands().length);
   renderCleanupWarnings(payload.warnings);
 
   const rows = state.cleanupRows.slice(0, 1000);
@@ -182,10 +183,10 @@ function renderCleanup(payload = {}) {
     const status = cleanupStatus(row);
     const reasons = row.protected
       ? [`Защищено: ${(row.matchedBrands || []).join(", ")}`]
-      : row.action === "already_archived"
-        ? ["Уже находится в архиве Яндекса"]
-        : row.smallVolume
-          ? [`Объем меньше 20 мл${row.minVolumeMl ? `: ${row.minVolumeMl} мл` : ""}. Архивируем даже при защищённом бренде.`]
+      : row.smallVolume
+        ? [`Объем меньше 20 мл${row.minVolumeMl ? `: ${row.minVolumeMl} мл` : ""}. Удаляем даже при защищённом бренде.`]
+        : row.archived
+          ? ["Товар уже в архиве Яндекса, но всё равно будет удалён из каталога."]
           : ["Бренд не найден в названии, описании или характеристиках"];
     return `
       <article class="import-row">
@@ -219,7 +220,7 @@ function render(payload) {
 async function previewYandexCleanup() {
   const protectedBrands = parseCleanupBrands();
   if (!protectedBrands.length) {
-    els.cleanupStatus.textContent = "Укажите хотя бы один бренд, который нельзя архивировать.";
+    els.cleanupStatus.textContent = "Укажите хотя бы один бренд, который нельзя удалять.";
     return;
   }
   const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
@@ -232,7 +233,7 @@ async function previewYandexCleanup() {
       body: { protectedBrands, limit },
     });
     renderCleanup(payload);
-    els.cleanupStatus.textContent = `Проверено: ${payload.summary?.total || 0}. Оставить: ${payload.summary?.protected || 0}. Архивировать: ${payload.summary?.toArchive || 0}.`;
+    els.cleanupStatus.textContent = `Проверено: ${payload.summary?.total || 0}. Оставить: ${payload.summary?.protected || 0}. Удалить: ${payload.summary?.toDelete ?? payload.summary?.toArchive ?? 0}.`;
   } catch (error) {
     els.cleanupStatus.textContent = `Ошибка предпросмотра: ${error.message || error}`;
   } finally {
@@ -242,34 +243,35 @@ async function previewYandexCleanup() {
 
 async function archiveYandexCleanup() {
   const protectedBrands = parseCleanupBrands();
-  const toArchive = Number(state.cleanupSummary.toArchive || 0);
-  if (!protectedBrands.length || !toArchive) {
+  const toDelete = Number(state.cleanupSummary.toDelete ?? state.cleanupSummary.toArchive ?? 0);
+  if (!protectedBrands.length || !toDelete) {
     els.cleanupStatus.textContent = "Сначала сделайте предпросмотр очистки.";
     return;
   }
-  const confirmed = window.confirm(`Архивировать ${toArchive} товаров Яндекс, кроме защищённых брендов: ${protectedBrands.join(", ")}?`);
+  const confirmed = window.confirm(`Удалить ${toDelete} товаров из каталога Яндекс, кроме защищённых брендов: ${protectedBrands.join(", ")}? Это действие нельзя откатить.`);
   if (!confirmed) return;
-  const confirmationText = window.prompt("Для подтверждения введите: АРХИВИРОВАТЬ ЯНДЕКС", "");
-  if (confirmationText !== "АРХИВИРОВАТЬ ЯНДЕКС") {
+  const confirmationText = window.prompt("Для подтверждения введите: УДАЛИТЬ ЯНДЕКС", "");
+  if (confirmationText !== "УДАЛИТЬ ЯНДЕКС") {
     els.cleanupStatus.textContent = "Очистка отменена: подтверждение не совпало.";
     return;
   }
   const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
   els.cleanupPreview.disabled = true;
   els.cleanupArchive.disabled = true;
-  els.cleanupStatus.textContent = "Архивирую незащищённые товары в Яндексе...";
+  els.cleanupStatus.textContent = "Удаляю незащищённые товары из каталога Яндекса...";
   try {
-    const payload = await api("/api/yandex-cleanup/archive", {
+    const payload = await api("/api/yandex-cleanup/delete", {
       method: "POST",
       body: { protectedBrands, limit, confirmed: true, confirmationText },
     });
-    els.cleanupStatus.textContent = `Архивировано: ${payload.archived || 0}. Ошибок: ${payload.failed || 0}.`;
+    els.cleanupStatus.textContent = `Удалено: ${payload.deleted || 0}. Не удалено: ${payload.failed || 0}.`;
     await previewYandexCleanup();
   } catch (error) {
     els.cleanupStatus.textContent = `Ошибка очистки: ${error.message || error}`;
   } finally {
     els.cleanupPreview.disabled = false;
-    els.cleanupArchive.disabled = !(state.cleanupSummary.toArchive > 0 && parseCleanupBrands().length);
+    const remainingToDelete = Number(state.cleanupSummary.toDelete ?? state.cleanupSummary.toArchive ?? 0);
+    els.cleanupArchive.disabled = !(remainingToDelete > 0 && parseCleanupBrands().length);
   }
 }
 
@@ -331,7 +333,8 @@ els.filter.addEventListener("change", renderRows);
 els.cleanupPreview?.addEventListener("click", previewYandexCleanup);
 els.cleanupArchive?.addEventListener("click", archiveYandexCleanup);
 els.cleanupBrands?.addEventListener("input", () => {
-  els.cleanupArchive.disabled = !(state.cleanupSummary.toArchive > 0 && parseCleanupBrands().length);
+  const toDelete = Number(state.cleanupSummary.toDelete ?? state.cleanupSummary.toArchive ?? 0);
+  els.cleanupArchive.disabled = !(toDelete > 0 && parseCleanupBrands().length);
 });
 
 loadPreview(false).catch(() => {});

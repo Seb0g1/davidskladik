@@ -59,16 +59,16 @@
         <div class="cleanup-copy">
           <p class="eyebrow">Yandex Market</p>
           <h2>Очистка Яндекса по брендам</h2>
-          <p class="muted-text">Сначала сделайте предпросмотр. Сайт просмотрит товары Яндекса во всех статусах, найдёт защищённые бренды в названии, описании и характеристиках, а остальные подготовит к архивированию.</p>
+          <p class="muted-text">Сначала сделайте предпросмотр. Сайт просмотрит товары Яндекса во всех статусах, найдёт защищённые бренды в названии, описании и характеристиках, а остальные подготовит к удалению из каталога.</p>
         </div>
         <div class="cleanup-controls">
           <label class="search-control cleanup-brands-field">
-            Бренды, которые нельзя архивировать
+            Бренды, которые нельзя удалять
             <textarea id="yandexProtectedBrandsInput" rows="4" placeholder="Giorgio Armani&#10;Creed&#10;Ex Nihilo"></textarea>
           </label>
           <div class="cleanup-actions">
             <button id="previewYandexCleanupButton" class="secondary-button" type="button">Предпросмотр очистки</button>
-            <button id="archiveYandexCleanupButton" class="danger-button" type="button" disabled>Архивировать незащищённые</button>
+            <button id="archiveYandexCleanupButton" class="danger-button" type="button" disabled>Удалить незащищённые</button>
           </div>
           <div id="yandexCleanupStatus" class="sync-status-pill">Укажите бренды-защиту и запустите предпросмотр.</div>
         </div>
@@ -84,11 +84,11 @@
           <strong id="yandexCleanupProtectedCount">0</strong>
         </article>
         <article class="stat-card warn">
-          <span>Архивировать</span>
+          <span>Удалить</span>
           <strong id="yandexCleanupArchiveCount">0</strong>
         </article>
         <article class="stat-card">
-          <span>Уже в архиве</span>
+          <span>Из них в архиве</span>
           <strong id="yandexCleanupAlreadyArchivedCount">0</strong>
         </article>
       </section>

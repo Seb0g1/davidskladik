@@ -259,11 +259,11 @@ test("Yandex cleanup protects brands found in name, description, and characteris
   assert.equal(protectedByName.action, "keep");
   assert.equal(protectedByDescription.action, "keep");
   assert.equal(protectedByCharacteristics.action, "keep");
-  assert.equal(protectedBrandSmallVolume.action, "archive");
+  assert.equal(protectedBrandSmallVolume.action, "delete");
   assert.equal(protectedBrandSmallVolume.smallVolume, true);
   assert.equal(protectedBrandSmallVolume.protected, false);
-  assert.equal(unprotected.action, "archive");
-  assert.equal(alreadyArchived.action, "already_archived");
+  assert.equal(unprotected.action, "delete");
+  assert.equal(alreadyArchived.action, "delete");
   assert.deepEqual(summarizeYandexCleanupPreview([
     protectedByName,
     protectedByDescription,
@@ -271,7 +271,7 @@ test("Yandex cleanup protects brands found in name, description, and characteris
     protectedBrandSmallVolume,
     unprotected,
     alreadyArchived,
-  ]), { total: 6, protected: 3, toArchive: 2, alreadyArchived: 1 });
+  ]), { total: 6, protected: 3, toDelete: 3, toArchive: 3, alreadyArchived: 1 });
 });
 
 test("ops diagnostics command emits machine-readable report", async () => {
