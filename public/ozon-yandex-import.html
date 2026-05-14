@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Импорт Ozon в Яндекс</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell import-page-shell">
+      <section class="panel import-hero-panel">
+        <div>
+          <p class="eyebrow">Ozon → Яндекс</p>
+          <h1>Импорт товаров</h1>
+          <p class="muted-text">Предпросмотр показывает только безопасные карточки. Отливант, “без коробки” и объем меньше 20 мл блокируются до выгрузки.</p>
+        </div>
+        <a class="secondary-link-button compact-button" href="/">Склад</a>
+      </section>
+
+      <section class="panel import-toolbar-panel">
+        <div class="import-toolbar">
+          <label class="search-control">
+            Лимит
+            <input id="importLimitInput" type="number" min="1" max="5000" step="1" value="500" />
+          </label>
+          <button id="loadWarehouseImportButton" class="secondary-button" type="button">Показать из склада</button>
+          <button id="loadOzonImportButton" class="primary-button" type="button">Загрузить из Ozon</button>
+          <button id="sendYandexImportButton" class="secondary-button" type="button" disabled>Загрузить в Яндекс</button>
+        </div>
+        <div id="importStatus" class="sync-status-pill">Готово к проверке.</div>
+      </section>
+
+      <section class="import-summary-grid" aria-live="polite">
+        <article class="stat-card">
+          <span>Всего</span>
+          <strong id="importTotalCount">0</strong>
+        </article>
+        <article class="stat-card good">
+          <span>Можно выгружать</span>
+          <strong id="importEligibleCount">0</strong>
+        </article>
+        <article class="stat-card warn">
+          <span>Заблокировано</span>
+          <strong id="importBlockedCount">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Не хватает полей</span>
+          <strong id="importMissingCount">0</strong>
+        </article>
+      </section>
+
+      <section class="panel import-list-panel">
+        <div class="import-list-head">
+          <h2>Карточки</h2>
+          <select id="importFilterSelect" class="compact-select" aria-label="Фильтр карточек">
+            <option value="all">Все</option>
+            <option value="eligible">Можно выгружать</option>
+            <option value="blocked">Заблокировано</option>
+            <option value="missing">Не хватает полей</option>
+          </select>
+        </div>
+        <div id="importWarnings" class="import-warnings" hidden></div>
+        <div id="importRows" class="import-rows"></div>
+      </section>
+    </main>
+    <script src="/ozon-yandex-import.js"></script>
+  </body>
+</html>

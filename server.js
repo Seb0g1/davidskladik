@@ -816,7 +816,20 @@ async function pruneUploadDirectory() {
 }
 
 function requireAuth(request, response, next) {
-  const publicPaths = ["/login", "/login.html", "/styles.css", "/login.js", "/app.js", "/product.js", "/product-builder-ui.js", "/ozon-product.js", "/yandex-product.js", "/health"];
+  const publicPaths = [
+    "/login",
+    "/login.html",
+    "/styles.css",
+    "/login.js",
+    "/app.js",
+    "/product.js",
+    "/product-builder-ui.js",
+    "/ozon-product.js",
+    "/yandex-product.js",
+    "/ozon-yandex-import.html",
+    "/ozon-yandex-import.js",
+    "/health",
+  ];
   if (publicPaths.includes(request.path)) return next();
   if (request.path.startsWith("/uploads/images/")) return next();
   if (request.path.startsWith("/uploads/ai-images/")) return next();
@@ -3999,6 +4012,67 @@ function buildYandexOfferMapping(product, overrides = {}) {
   if (!offer.description) missing.push("description");
 
   return { offer, missing, ready: missing.length === 0 };
+}
+
+function extractOzonYandexImportVolumesMl(name = "") {
+  const text = cleanText(name).replace(",", ".");
+  const volumes = [];
+  const pattern = /(\d+(?:\.\d+)?)\s*(?:мл|ml)(?![a-zа-я])/giu;
+  let match;
+  while ((match = pattern.exec(text))) {
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) volumes.push(value);
+  }
+  return volumes;
+}
+
+function ozonYandexImportBlockReasons(product = {}) {
+  const name = cleanText(product.name || product.ozon?.name || product.offerId);
+  const lower = name.toLowerCase();
+  const reasons = [];
+  if (lower.includes("отливант")) reasons.push("Название содержит «Отливант»");
+  if (/без\s+коробк/iu.test(lower)) reasons.push("Название содержит «без коробки»");
+  const smallVolumes = extractOzonYandexImportVolumesMl(name).filter((value) => value < 20);
+  if (smallVolumes.length) reasons.push(`Объем меньше 20 мл: ${smallVolumes.join(", ")} мл`);
+  return reasons;
+}
+
+function buildOzonYandexImportCandidate(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const ozon = normalized.ozon || {};
+  const built = buildYandexOfferMapping(normalized);
+  const blockReasons = ozonYandexImportBlockReasons(normalized);
+  const missing = Array.isArray(built.missing) ? built.missing : [];
+  const imageUrl = normalized.imageUrl || firstImageUrl(ozon.primaryImage || ozon.images || normalized.images);
+  return {
+    id: normalized.id,
+    marketplace: normalized.marketplace,
+    target: normalized.target,
+    offerId: normalized.offerId,
+    productId: normalized.productId,
+    sku: normalized.sku || ozon.sku || "",
+    name: normalized.name || ozon.name || normalized.offerId || "",
+    vendor: built.offer?.vendor || ozon.vendor || "",
+    imageUrl,
+    price: Number(built.offer?.basicPrice?.value || normalized.marketplacePrice || ozon.price || 0) || null,
+    categoryId: built.offer?.marketCategoryId || null,
+    picturesCount: Array.isArray(built.offer?.pictures) ? built.offer.pictures.length : 0,
+    hasDescription: Boolean(built.offer?.description),
+    blockReasons,
+    missing,
+    yandexReady: Boolean(built.ready),
+    eligible: !blockReasons.length && Boolean(built.ready),
+    offerPreview: built.offer,
+  };
+}
+
+function summarizeOzonYandexImportPreview(rows = []) {
+  return {
+    total: rows.length,
+    eligible: rows.filter((row) => row.eligible).length,
+    blocked: rows.filter((row) => row.blockReasons?.length).length,
+    missingRequired: rows.filter((row) => !row.yandexReady).length,
+  };
 }
 
 async function buildOzonProductPreview({ limit = 200, search = "" } = {}) {
@@ -9630,6 +9704,41 @@ app.delete("/api/warehouse/prices/retry-queue", async (request, response, next) 
   }
 });
 
+app.get("/api/ozon-yandex-import/preview", async (request, response, next) => {
+  try {
+    const requestedLimit = Number(request.query.limit || 500);
+    const limit = Math.max(1, Math.min(5000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 500));
+    const refresh = String(request.query.refresh || "") === "true";
+    const warehouse = await readWarehouse();
+    let products = (warehouse.products || []).filter((product) => product.marketplace === "ozon");
+    const warnings = [];
+
+    if (refresh) {
+      const requestedDetailLimit = Number(process.env.OZON_YANDEX_IMPORT_DETAIL_LIMIT || 1000);
+      const imported = await importOzonWarehouseProducts(limit, warehouse.products || [], {
+        detailRefreshLimit: Math.min(limit, Number.isFinite(requestedDetailLimit) ? requestedDetailLimit : 1000),
+      });
+      products = imported.imported || [];
+      warnings.push(...(imported.warnings || []));
+    } else {
+      products = products.slice(0, limit);
+    }
+
+    const rows = products.map(buildOzonYandexImportCandidate);
+    response.json({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      source: refresh ? "ozon_api" : "warehouse",
+      limit,
+      summary: summarizeOzonYandexImportPreview(rows),
+      warnings,
+      rows,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/warehouse/products/:id/export", async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
@@ -11088,6 +11197,10 @@ module.exports = {
   isOzonOldPriceLessError,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,
+  extractOzonYandexImportVolumesMl,
+  ozonYandexImportBlockReasons,
+  buildOzonYandexImportCandidate,
+  summarizeOzonYandexImportPreview,
   priceRetryQueueKey,
   findActiveDelayedPriceRetry,
   appendPriceHistoryRows,

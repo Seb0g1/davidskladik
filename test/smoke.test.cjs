@@ -82,6 +82,10 @@ const {
   isOzonOldPriceLessError,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,
+  extractOzonYandexImportVolumesMl,
+  ozonYandexImportBlockReasons,
+  buildOzonYandexImportCandidate,
+  summarizeOzonYandexImportPreview,
   priceRetryQueueKey,
   findActiveDelayedPriceRetry,
   appendPriceHistoryRows,
@@ -121,6 +125,60 @@ test("GET /health deep exposes operational component details", async () => {
     if (previousName === undefined) delete process.env.PM_DB_NAME;
     else process.env.PM_DB_NAME = previousName;
   }
+});
+
+test("Ozon to Yandex import blocks forbidden names and small volumes", () => {
+  assert.deepEqual(extractOzonYandexImportVolumesMl("Ex Nihilo Blue 7,5 мл"), [7.5]);
+  assert.deepEqual(extractOzonYandexImportVolumesMl("Парфюмерная вода 20 ml"), [20]);
+
+  assert.ok(ozonYandexImportBlockReasons({ name: "Ex Nihilo 15 мл" }).some((reason) => reason.includes("20 мл")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "Отливант Creed Aventus 50 мл" }).some((reason) => reason.includes("Отливант")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "Creed Aventus без коробки 100 мл" }).some((reason) => reason.includes("без коробки")));
+  assert.deepEqual(ozonYandexImportBlockReasons({ name: "Creed Aventus 20 мл" }), []);
+});
+
+test("Ozon to Yandex import candidate exposes eligibility summary", () => {
+  const ready = buildOzonYandexImportCandidate(normalizeWarehouseProduct({
+    id: "ozon-ready",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-100",
+    productId: "100",
+    name: "Creed Aventus 100 мл",
+    imageUrl: "https://example.test/image.jpg",
+    marketplacePrice: 4500,
+    ozon: {
+      name: "Creed Aventus 100 мл",
+      vendor: "Creed",
+      description: "Описание",
+      categoryId: 123,
+      images: ["https://example.test/image.jpg"],
+      price: 4500,
+    },
+  }));
+  const blocked = buildOzonYandexImportCandidate(normalizeWarehouseProduct({
+    id: "ozon-blocked",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-7",
+    productId: "7",
+    name: "Creed Aventus 7.5 ml",
+    imageUrl: "https://example.test/image.jpg",
+    marketplacePrice: 1500,
+    ozon: {
+      name: "Creed Aventus 7.5 ml",
+      vendor: "Creed",
+      description: "Описание",
+      categoryId: 123,
+      images: ["https://example.test/image.jpg"],
+      price: 1500,
+    },
+  }));
+
+  assert.equal(ready.eligible, true);
+  assert.equal(blocked.eligible, false);
+  assert.equal(summarizeOzonYandexImportPreview([ready, blocked]).eligible, 1);
+  assert.equal(summarizeOzonYandexImportPreview([ready, blocked]).blocked, 1);
 });
 
 test("ops diagnostics command emits machine-readable report", async () => {
