@@ -4030,10 +4030,37 @@ function ozonYandexImportBlockReasons(product = {}) {
   const name = cleanText(product.name || product.ozon?.name || product.offerId);
   const lower = name.toLowerCase();
   const reasons = [];
+  const vendor = cleanText(product.ozon?.vendor || product.yandex?.vendor || product.brand || "");
+  const vendorLower = vendor.toLowerCase();
   if (lower.includes("отливант")) reasons.push("Название содержит «Отливант»");
   if (/без\s+коробк/iu.test(lower)) reasons.push("Название содержит «без коробки»");
   const smallVolumes = extractOzonYandexImportVolumesMl(name).filter((value) => value < 20);
   if (smallVolumes.length) reasons.push(`Объем меньше 20 мл: ${smallVolumes.join(", ")} мл`);
+  const hugeVolumes = extractOzonYandexImportVolumesMl(name).filter((value) => value > 500);
+  if (hugeVolumes.length || /\d+\s+\d{3}\s*(?:мл|ml)(?![a-zа-я])/iu.test(name)) {
+    reasons.push(`Подозрительный объем${hugeVolumes.length ? `: ${hugeVolumes.join(", ")} мл` : ""}`);
+  }
+  if (!vendor || vendorLower.includes("без бренда")) reasons.push("Не указан бренд");
+  const blockedCategories = [
+    "свеч",
+    "помад",
+    "шампун",
+    "бальзам",
+    "крем",
+    "маск",
+    "гель",
+    "лак",
+    "стик",
+    "stick",
+    "дезодорант",
+  ];
+  const matchedCategory = blockedCategories.find((word) => lower.includes(word));
+  if (matchedCategory) reasons.push("Категория не подходит для импорта парфюмерии");
+  const meaningfulWords = name.match(/[a-zа-яё]{3,}/giu) || [];
+  const wordsWithVowels = meaningfulWords.filter((word) => /[aeiouyаеёиоуыэюя]/iu.test(word));
+  if (name.length < 10 || (meaningfulWords.length > 0 && wordsWithVowels.length === 0)) {
+    reasons.push("Подозрительное название товара");
+  }
   return reasons;
 }
 

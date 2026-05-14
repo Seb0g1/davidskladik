@@ -131,10 +131,18 @@ test("Ozon to Yandex import blocks forbidden names and small volumes", () => {
   assert.deepEqual(extractOzonYandexImportVolumesMl("Ex Nihilo Blue 7,5 мл"), [7.5]);
   assert.deepEqual(extractOzonYandexImportVolumesMl("Парфюмерная вода 20 ml"), [20]);
 
-  assert.ok(ozonYandexImportBlockReasons({ name: "Ex Nihilo 15 мл" }).some((reason) => reason.includes("20 мл")));
-  assert.ok(ozonYandexImportBlockReasons({ name: "Отливант Creed Aventus 50 мл" }).some((reason) => reason.includes("Отливант")));
-  assert.ok(ozonYandexImportBlockReasons({ name: "Creed Aventus без коробки 100 мл" }).some((reason) => reason.includes("без коробки")));
-  assert.deepEqual(ozonYandexImportBlockReasons({ name: "Creed Aventus 20 мл" }), []);
+  assert.ok(ozonYandexImportBlockReasons({ name: "Ex Nihilo 15 мл", ozon: { vendor: "Ex Nihilo" } }).some((reason) => reason.includes("20 мл")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "Отливант Creed Aventus 50 мл", ozon: { vendor: "Creed" } }).some((reason) => reason.includes("Отливант")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "Creed Aventus без коробки 100 мл", ozon: { vendor: "Creed" } }).some((reason) => reason.includes("без коробки")));
+  assert.deepEqual(ozonYandexImportBlockReasons({ name: "Creed Aventus 20 мл", ozon: { vendor: "Creed" } }), []);
+});
+
+test("Ozon to Yandex import blocks unsafe non-perfume and low quality cards", () => {
+  assert.ok(ozonYandexImportBlockReasons({ name: "помада", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Категория")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "свеча ароматическая", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Категория")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "щзхщц", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Подозрительное")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "Creed Aventus 100 мл" }).some((reason) => reason.includes("бренд")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "Сильной фиксации 15 350 мл", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Подозрительный объем")));
 });
 
 test("Ozon to Yandex import candidate exposes eligibility summary", () => {
