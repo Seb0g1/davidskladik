@@ -68,6 +68,7 @@ const auditLogPath = path.join(dataDir, "audit-log.jsonl");
 const appSettingsPath = path.join(dataDir, "app-settings.json");
 const appUsersPath = path.join(dataDir, "app-users.json");
 const priceRetryQueuePath = path.join(dataDir, "price-retry-queue.json");
+const yandexExistingOffersCachePath = path.join(dataDir, "yandex-existing-offers.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
 const sessionCookieName = "pm_session";
@@ -3330,6 +3331,114 @@ async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY, op
   }
 
   return items.slice(0, maxItems);
+}
+
+function yandexOfferIdFromMapping(item = {}) {
+  const offer = pickYandexOfferFromMapping(item);
+  return cleanText(offer.offerId || item.offerId || item.mapping?.offerId || item.offer?.offerId);
+}
+
+function getLocalYandexExportedOfferIdSet(products = []) {
+  const set = new Set();
+  for (const product of Array.isArray(products) ? products : []) {
+    const offerId = cleanText(product.offerId || product.offer_id).toLowerCase();
+    if (!offerId) continue;
+    const exports = product.exports || {};
+    if (exports.yandex?.status === "sent") set.add(offerId);
+    if (Object.values(exports).some((entry) => entry?.status === "sent" && /yandex/i.test(cleanText(entry.targetName || entry.marketplace || entry.target)))) {
+      set.add(offerId);
+    }
+  }
+  return set;
+}
+
+async function readYandexExistingOfferIdCache({ maxAgeMs = 24 * 60 * 60 * 1000 } = {}) {
+  try {
+    const data = JSON.parse(await fs.readFile(yandexExistingOffersCachePath, "utf8"));
+    const ageMs = Date.now() - new Date(data.updatedAt || 0).getTime();
+    if (maxAgeMs > 0 && (!Number.isFinite(ageMs) || ageMs > maxAgeMs)) return new Set();
+    return new Set((Array.isArray(data.offerIds) ? data.offerIds : [])
+      .map((id) => cleanText(id).toLowerCase())
+      .filter(Boolean));
+  } catch (error) {
+    if (error.code === "ENOENT") return new Set();
+    logger.warn("read Yandex existing offer cache failed", { detail: error?.message || String(error) });
+    return new Set();
+  }
+}
+
+async function writeYandexExistingOfferIdCache(offerIds = []) {
+  const normalized = Array.from(new Set(Array.from(offerIds)
+    .map((id) => cleanText(id).toLowerCase())
+    .filter(Boolean)))
+    .sort();
+  await fs.mkdir(dataDir, { recursive: true });
+  await fs.writeFile(
+    yandexExistingOffersCachePath,
+    JSON.stringify({ updatedAt: new Date().toISOString(), offerIds: normalized }, null, 2),
+    "utf8",
+  );
+  return new Set(normalized);
+}
+
+async function refreshYandexExistingOfferIdCache({ limit = Number(process.env.YANDEX_EXISTING_CATALOG_LIMIT || 50000) || 50000 } = {}) {
+  const maxItems = Math.max(1, Math.min(100000, Number(limit) || 50000));
+  const set = new Set();
+  for (const shop of uniqueYandexShopsByBusiness()) {
+    for (const archived of [false, true]) {
+      const remaining = Math.max(0, maxItems - set.size);
+      if (!remaining) break;
+      const mappings = await getYandexOfferMappings(shop, remaining, { archived });
+      for (const item of mappings) {
+        const offerId = yandexOfferIdFromMapping(item).toLowerCase();
+        if (offerId) set.add(offerId);
+      }
+    }
+  }
+  return writeYandexExistingOfferIdCache(set);
+}
+
+async function getKnownYandexExistingOfferIds(offerIds = [], { products = [], warnings = [], allowCatalogRefresh = false } = {}) {
+  const set = new Set([
+    ...await readYandexExistingOfferIdCache(),
+    ...getLocalYandexExportedOfferIdSet(products),
+  ]);
+  if (allowCatalogRefresh) {
+    const refreshTimeoutMs = Math.max(1000, Number(process.env.YANDEX_EXISTING_CATALOG_TIMEOUT_MS || 20000) || 20000);
+    try {
+      const refreshed = await Promise.race([
+        refreshYandexExistingOfferIdCache(),
+        promiseTimeout(refreshTimeoutMs, "yandex_existing_catalog_timeout"),
+      ]);
+      for (const id of refreshed) set.add(id);
+    } catch (error) {
+      const label = error?.message === "yandex_existing_catalog_timeout"
+        ? `таймаут ${Math.round(refreshTimeoutMs / 1000)} с`
+        : error?.message || error?.code || "ошибка API";
+      warnings.push(`Yandex: не удалось обновить полный список SKU (${label}), использую локальный кэш.`);
+      logger.warn("yandex existing catalog refresh failed", { detail: label });
+    }
+  }
+  const normalizedOfferIds = Array.from(new Set((offerIds || []).map(cleanText).filter(Boolean)));
+  if (normalizedOfferIds.length) {
+    const checkTimeoutMs = Math.max(1000, Number(process.env.OZON_YANDEX_EXISTING_CHECK_TIMEOUT_MS || 8000) || 8000);
+    try {
+      const direct = await Promise.race([
+        getExistingYandexOfferIdSet(normalizedOfferIds),
+        promiseTimeout(checkTimeoutMs, "yandex_existing_check_timeout"),
+      ]);
+      for (const id of direct) set.add(id);
+      if (direct.size) writeYandexExistingOfferIdCache(new Set([...set, ...direct]))
+        .catch((error) => logger.warn("write Yandex existing offer cache failed", { detail: error?.message || String(error) }));
+    } catch (error) {
+      const label = error?.message === "yandex_existing_check_timeout"
+        ? `таймаут ${Math.round(checkTimeoutMs / 1000)} с`
+        : error?.message || error?.code || "ошибка API";
+      warnings.push(`Yandex: не удалось проверить существующие SKU (${label}), использую локальный кэш.`);
+      logger.warn("yandex existing offers check failed", { detail: label });
+    }
+  }
+  return set;
 }
 
 async function getPriceMasterOffersByArticle(offerIds, usdRate) {
@@ -10468,31 +10577,17 @@ app.get("/api/ozon-yandex-import/preview", async (request, response, next) => {
       products = products.slice(0, limit);
     }
 
-    let yandexExistingOfferIds = new Set();
     const initialRows = products.map((product) => buildOzonYandexImportCandidate(product));
     const checkableOfferIds = initialRows
       .filter((row) => !row.blockReasons?.length && row.yandexReady)
       .map((row) => row.offerId)
       .map(cleanText)
       .filter(Boolean);
-    const existingCheckLimit = Math.max(0, Number(process.env.OZON_YANDEX_EXISTING_CHECK_LIMIT || 5000) || 5000);
-    const existingCheckTimeoutMs = Math.max(1000, Number(process.env.OZON_YANDEX_EXISTING_CHECK_TIMEOUT_MS || 8000) || 8000);
-    const offerIds = existingCheckLimit > 0 ? checkableOfferIds.slice(0, existingCheckLimit) : [];
-    if (checkableOfferIds.length > offerIds.length) {
-      warnings.push(`Yandex: проверка существующих артикулов ограничена ${offerIds.length} из ${checkableOfferIds.length}, чтобы страница не зависала.`);
-    }
-    try {
-      yandexExistingOfferIds = await Promise.race([
-        getExistingYandexOfferIdSet(offerIds),
-        promiseTimeout(existingCheckTimeoutMs, "yandex_existing_check_timeout"),
-      ]);
-    } catch (error) {
-      const label = error?.message === "yandex_existing_check_timeout"
-        ? `таймаут ${Math.round(existingCheckTimeoutMs / 1000)} с`
-        : error?.message || error?.code || "ошибка API";
-      warnings.push(`Yandex: не удалось быстро проверить существующие артикулы (${label}). Карточки показаны без этой проверки.`);
-      logger.warn("yandex existing offers check failed", { detail: label });
-    }
+    const yandexExistingOfferIds = await getKnownYandexExistingOfferIds(checkableOfferIds, {
+      products: warehouse.products || [],
+      warnings,
+      allowCatalogRefresh: true,
+    });
 
     const rows = products.map((product) => buildOzonYandexImportCandidate(product, { yandexExistingOfferIds }));
     response.json({
@@ -10530,20 +10625,11 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
       .map((row) => cleanText(row.offerId))
       .filter(Boolean);
     const warnings = [];
-    let yandexExistingOfferIds = new Set();
-    const existingCheckTimeoutMs = Math.max(1000, Number(process.env.OZON_YANDEX_EXISTING_CHECK_TIMEOUT_MS || 8000) || 8000);
-    try {
-      yandexExistingOfferIds = await Promise.race([
-        getExistingYandexOfferIdSet(candidateOfferIds),
-        promiseTimeout(existingCheckTimeoutMs, "yandex_existing_check_timeout"),
-      ]);
-    } catch (error) {
-      const label = error?.message === "yandex_existing_check_timeout"
-        ? `таймаут ${Math.round(existingCheckTimeoutMs / 1000)} с`
-        : error?.message || error?.code || "ошибка API";
-      warnings.push(`Yandex: не удалось проверить существующие SKU перед выгрузкой (${label}). Сервер продолжит только по текущей пачке, ошибки дублей Яндекс вернёт по строкам.`);
-      logger.warn("yandex existing offers check failed before import send", { detail: label });
-    }
+    const yandexExistingOfferIds = await getKnownYandexExistingOfferIds(candidateOfferIds, {
+      products: warehouse.products || [],
+      warnings,
+      allowCatalogRefresh: true,
+    });
     const rows = products.map((product) => buildOzonYandexImportCandidate(product, { yandexExistingOfferIds }));
     const eligibleRows = rows.filter((row) => row.eligible);
     const selectedRows = eligibleRows.slice(0, sendLimit);
@@ -10573,6 +10659,10 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
       .filter((item) => item.ok)
       .map((item) => cleanText(item.offerId).toLowerCase())
       .filter(Boolean));
+    if (sentOfferIds.size) {
+      writeYandexExistingOfferIdCache(new Set([...yandexExistingOfferIds, ...sentOfferIds]))
+        .catch((error) => logger.warn("write Yandex existing offer cache failed", { detail: error?.message || String(error) }));
+    }
     const exportedProducts = selectedProducts
       .filter((product) => sentOfferIds.has(cleanText(product.offerId).toLowerCase()));
     const priceStage = exportedProducts.length
@@ -12339,6 +12429,7 @@ module.exports = {
   ozonYandexImportBlockReasons,
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
+  getLocalYandexExportedOfferIdSet,
   buildYandexPriceUpdateFromOzonProduct,
   sendYandexPricesFromOzonProducts,
   pickOzonProductStockForYandex,

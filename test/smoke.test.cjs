@@ -87,6 +87,7 @@ const {
   ozonYandexImportBlockReasons,
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
+  getLocalYandexExportedOfferIdSet,
   buildYandexPriceUpdateFromOzonProduct,
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
@@ -231,6 +232,20 @@ test("Ozon to Yandex import blocks offers that already exist in Yandex", () => {
   assert.equal(existing.existingInYandex, true);
   assert.equal(existing.eligible, false);
   assert.equal(summarizeOzonYandexImportPreview([existing]).existingInYandex, 1);
+});
+
+test("Ozon to Yandex import treats locally exported Yandex products as existing", () => {
+  const set = getLocalYandexExportedOfferIdSet([
+    { offerId: "SKU-1", exports: { yandex: { status: "sent" } } },
+    { offerId: "SKU-2", exports: { yandexShop: { status: "sent", targetName: "Yandex Market" } } },
+    { offerId: "SKU-3", exports: { yandex: { status: "failed" } } },
+    { offerId: "", exports: { yandex: { status: "sent" } } },
+  ]);
+
+  assert.equal(set.has("sku-1"), true);
+  assert.equal(set.has("sku-2"), true);
+  assert.equal(set.has("sku-3"), false);
+  assert.equal(set.size, 2);
 });
 
 test("Ozon to Yandex stock sync uses Ozon stock from state and warehouses", () => {
