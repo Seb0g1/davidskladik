@@ -11066,6 +11066,7 @@ module.exports = {
   productFromPostgres,
   readWarehouse,
   marketplaceStateCodeFromPostgresRow,
+  warehousePageProductMatches,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,

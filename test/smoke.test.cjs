@@ -61,6 +61,7 @@ const {
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
   marketplaceStateCodeFromPostgresRow,
+  warehousePageProductMatches,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,
@@ -818,6 +819,65 @@ test("warehouse summary counters use linked product stats, not page-sized snapsh
   assert.equal(stats.changed, 1);
   assert.equal(stats.withoutSupplier, 2);
   assert.equal(stats.linkedNotReady, 1);
+});
+
+test("warehouse page link filters support ready, changed, and linked Ozon archive", () => {
+  const ready = {
+    ...normalizeWarehouseProduct({
+      id: "ready",
+      target: "ozon",
+      marketplace: "ozon",
+      offerId: "READY",
+      ready: true,
+      changed: false,
+      links: [{ id: "l1", article: "A1", supplierName: "Supplier" }],
+      marketplaceState: { code: "active" },
+    }),
+    ready: true,
+    changed: false,
+  };
+  const changed = {
+    ...normalizeWarehouseProduct({
+      id: "changed",
+      target: "ozon",
+      marketplace: "ozon",
+      offerId: "CHANGED",
+      ready: true,
+      changed: true,
+      links: [{ id: "l2", article: "A2", supplierName: "Supplier" }],
+      marketplaceState: { code: "active" },
+    }),
+    ready: true,
+    changed: true,
+  };
+  const archived = {
+    ...normalizeWarehouseProduct({
+      id: "archived",
+      target: "ozon",
+      marketplace: "ozon",
+      offerId: "ARCH",
+      ready: false,
+      changed: false,
+      links: [{ id: "l3", article: "A3", supplierName: "Supplier" }],
+      marketplaceState: { code: "archived" },
+    }),
+    ready: false,
+    changed: false,
+  };
+  const unlinkedArchived = normalizeWarehouseProduct({
+    id: "unlinked-archived",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "NO-LINK-ARCH",
+    marketplaceState: { code: "archived" },
+  });
+
+  assert.equal(warehousePageProductMatches(ready, { linked: "ready" }), true);
+  assert.equal(warehousePageProductMatches(archived, { linked: "ready" }), false);
+  assert.equal(warehousePageProductMatches(changed, { linked: "changed" }), true);
+  assert.equal(warehousePageProductMatches(ready, { linked: "changed" }), false);
+  assert.equal(warehousePageProductMatches(archived, { linked: "linked_archived" }), true);
+  assert.equal(warehousePageProductMatches(unlinkedArchived, { linked: "linked_archived" }), false);
 });
 
 test("POST /api/login неверный пароль", async () => {
