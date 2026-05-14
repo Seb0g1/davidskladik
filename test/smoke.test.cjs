@@ -196,6 +196,32 @@ test("Ozon to Yandex import candidate exposes eligibility summary", () => {
   assert.equal(summarizeOzonYandexImportPreview([ready, blocked]).blocked, 1);
 });
 
+test("Ozon to Yandex import blocks offers that already exist in Yandex", () => {
+  const existing = buildOzonYandexImportCandidate(normalizeWarehouseProduct({
+    id: "ozon-existing",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "OZ-EXISTS",
+    productId: "101",
+    name: "Giorgio Armani Si Passione Eclat Парфюмерная вода 90 мл",
+    imageUrl: "https://example.test/image.jpg",
+    marketplacePrice: 6500,
+    marketplaceState: { code: "active", visibility: "VISIBLE" },
+    ozon: {
+      name: "Giorgio Armani Si Passione Eclat Парфюмерная вода 90 мл",
+      vendor: "Giorgio Armani",
+      description: "Описание",
+      categoryId: 123,
+      images: ["https://example.test/image.jpg"],
+      price: 6500,
+    },
+  }), { yandexExistingOfferIds: new Set(["oz-exists"]) });
+
+  assert.equal(existing.existingInYandex, true);
+  assert.equal(existing.eligible, false);
+  assert.equal(summarizeOzonYandexImportPreview([existing]).existingInYandex, 1);
+});
+
 test("ops diagnostics command emits machine-readable report", async () => {
   const scriptPath = path.join(__dirname, "..", "scripts", "ops-diagnose.cjs");
   const { stdout } = await execFileAsync(process.execPath, [scriptPath, "--json", "--weak-limit=2", "--log-lines=0"], {

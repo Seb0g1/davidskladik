@@ -21,7 +21,7 @@
         <div class="import-toolbar">
           <label class="search-control">
             Лимит
-            <input id="importLimitInput" type="number" min="1" max="5000" step="1" value="500" />
+            <input id="importLimitInput" type="number" min="1" max="50000" step="1" value="30000" />
           </label>
           <button id="loadWarehouseImportButton" class="secondary-button" type="button">Показать из склада</button>
           <button id="loadOzonImportButton" class="primary-button" type="button">Загрузить из Ozon</button>
@@ -44,6 +44,10 @@
           <strong id="importBlockedCount">0</strong>
         </article>
         <article class="stat-card">
+          <span>Уже есть в Яндексе</span>
+          <strong id="importExistingCount">0</strong>
+        </article>
+        <article class="stat-card">
           <span>Не хватает полей</span>
           <strong id="importMissingCount">0</strong>
         </article>
@@ -55,6 +59,7 @@
           <select id="importFilterSelect" class="compact-select" aria-label="Фильтр карточек">
             <option value="all">Все</option>
             <option value="eligible">Можно выгружать</option>
+            <option value="existing">Уже есть в Яндексе</option>
             <option value="blocked">Заблокировано</option>
             <option value="missing">Не хватает полей</option>
           </select>

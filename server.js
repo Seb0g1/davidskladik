@@ -2941,6 +2941,23 @@ async function getYandexOfferIdSet(shop, offerIds) {
   return set;
 }
 
+async function getExistingYandexOfferIdSet(offerIds = []) {
+  const normalizedOfferIds = Array.from(new Set((offerIds || []).map(cleanText).filter(Boolean)));
+  const existing = new Set();
+  const shops = getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+  if (!normalizedOfferIds.length || !shops.length) return existing;
+
+  for (const shop of shops) {
+    const shopExisting = await getYandexOfferIdSet(shop, normalizedOfferIds);
+    for (const offerId of shopExisting) {
+      const normalized = cleanText(offerId).toLowerCase();
+      if (normalized) existing.add(normalized);
+    }
+  }
+
+  return existing;
+}
+
 function pickYandexOfferFromMapping(item = {}) {
   return item.offer || item.mapping?.offer || item.mapping || item;
 }
@@ -4083,12 +4100,15 @@ function ozonYandexImportBlockReasons(product = {}) {
   return reasons;
 }
 
-function buildOzonYandexImportCandidate(product = {}) {
+function buildOzonYandexImportCandidate(product = {}, options = {}) {
   const normalized = normalizeWarehouseProduct(product);
   const ozon = normalized.ozon || {};
   const built = buildYandexOfferMapping(normalized);
   const blockReasons = ozonYandexImportBlockReasons(normalized);
   const missing = Array.isArray(built.missing) ? built.missing : [];
+  const yandexExistingOfferIds = options.yandexExistingOfferIds instanceof Set ? options.yandexExistingOfferIds : new Set();
+  const offerIdKey = cleanText(normalized.offerId).toLowerCase();
+  const existingInYandex = Boolean(offerIdKey && yandexExistingOfferIds.has(offerIdKey));
   const imageUrl = normalized.imageUrl || firstImageUrl(ozon.primaryImage || ozon.images || normalized.images);
   return {
     id: normalized.id,
@@ -4106,8 +4126,9 @@ function buildOzonYandexImportCandidate(product = {}) {
     hasDescription: Boolean(built.offer?.description),
     blockReasons,
     missing,
+    existingInYandex,
     yandexReady: Boolean(built.ready),
-    eligible: !blockReasons.length && Boolean(built.ready),
+    eligible: !existingInYandex && !blockReasons.length && Boolean(built.ready),
     offerPreview: built.offer,
   };
 }
@@ -4117,6 +4138,7 @@ function summarizeOzonYandexImportPreview(rows = []) {
     total: rows.length,
     eligible: rows.filter((row) => row.eligible).length,
     blocked: rows.filter((row) => row.blockReasons?.length).length,
+    existingInYandex: rows.filter((row) => row.existingInYandex).length,
     missingRequired: rows.filter((row) => !row.yandexReady).length,
   };
 }
@@ -9752,8 +9774,8 @@ app.delete("/api/warehouse/prices/retry-queue", async (request, response, next) 
 
 app.get("/api/ozon-yandex-import/preview", async (request, response, next) => {
   try {
-    const requestedLimit = Number(request.query.limit || 500);
-    const limit = Math.max(1, Math.min(5000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 500));
+    const requestedLimit = Number(request.query.limit || 30000);
+    const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
     const refresh = String(request.query.refresh || "") === "true";
     const warehouse = await readWarehouse();
     let products = (warehouse.products || []).filter((product) => product.marketplace === "ozon");
@@ -9770,7 +9792,17 @@ app.get("/api/ozon-yandex-import/preview", async (request, response, next) => {
       products = products.slice(0, limit);
     }
 
-    const rows = products.map(buildOzonYandexImportCandidate);
+    let yandexExistingOfferIds = new Set();
+    const offerIds = products.map((product) => product.offerId || product.offer_id).map(cleanText).filter(Boolean);
+    try {
+      yandexExistingOfferIds = await getExistingYandexOfferIdSet(offerIds);
+    } catch (error) {
+      const label = error?.message || error?.code || "ошибка API";
+      warnings.push(`Yandex: не удалось проверить существующие артикулы (${label})`);
+      logger.warn("yandex existing offers check failed", { detail: label });
+    }
+
+    const rows = products.map((product) => buildOzonYandexImportCandidate(product, { yandexExistingOfferIds }));
     response.json({
       ok: true,
       generatedAt: new Date().toISOString(),

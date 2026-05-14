@@ -1,6 +1,6 @@
 const state = {
   rows: [],
-  summary: { total: 0, eligible: 0, blocked: 0, missingRequired: 0 },
+  summary: { total: 0, eligible: 0, blocked: 0, existingInYandex: 0, missingRequired: 0 },
 };
 
 const els = {
@@ -12,6 +12,7 @@ const els = {
   total: document.getElementById("importTotalCount"),
   eligible: document.getElementById("importEligibleCount"),
   blocked: document.getElementById("importBlockedCount"),
+  existing: document.getElementById("importExistingCount"),
   missing: document.getElementById("importMissingCount"),
   filter: document.getElementById("importFilterSelect"),
   warnings: document.getElementById("importWarnings"),
@@ -48,6 +49,7 @@ async function api(path) {
 
 function rowStatus(row) {
   if (row.eligible) return { className: "good", label: "Можно" };
+  if (row.existingInYandex) return { className: "warn", label: "Есть в ЯМ" };
   if (row.blockReasons?.length) return { className: "danger", label: "Блок" };
   return { className: "warn", label: "Поля" };
 }
@@ -55,6 +57,7 @@ function rowStatus(row) {
 function visibleRows() {
   const filter = els.filter.value;
   if (filter === "eligible") return state.rows.filter((row) => row.eligible);
+  if (filter === "existing") return state.rows.filter((row) => row.existingInYandex);
   if (filter === "blocked") return state.rows.filter((row) => row.blockReasons?.length);
   if (filter === "missing") return state.rows.filter((row) => !row.yandexReady);
   return state.rows;
@@ -64,6 +67,7 @@ function renderSummary() {
   els.total.textContent = state.summary.total || 0;
   els.eligible.textContent = state.summary.eligible || 0;
   els.blocked.textContent = state.summary.blocked || 0;
+  els.existing.textContent = state.summary.existingInYandex || 0;
   els.missing.textContent = state.summary.missingRequired || 0;
   els.sendYandex.disabled = true;
   els.sendYandex.title = "Выгрузку в Яндекс подключим вторым безопасным этапом после проверки предпросмотра.";
@@ -84,6 +88,7 @@ function renderRows() {
   els.rows.innerHTML = rows.map((row) => {
     const status = rowStatus(row);
     const reasons = [
+      ...(row.existingInYandex ? ["Артикул уже есть в Яндекс Маркете"] : []),
       ...(row.blockReasons || []),
       ...((row.missing || []).map((field) => `Не хватает ${field}`)),
     ];
@@ -123,7 +128,7 @@ function render(payload) {
 }
 
 async function loadPreview(refresh) {
-  const limit = Math.max(1, Math.min(5000, Number(els.limit.value || 500)));
+  const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
   setBusy(true, refresh ? "Загружаю карточки из Ozon..." : "Читаю карточки из склада...");
   try {
     const payload = await api(`/api/ozon-yandex-import/preview?limit=${encodeURIComponent(limit)}&refresh=${refresh ? "true" : "false"}`);
