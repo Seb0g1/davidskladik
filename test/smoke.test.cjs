@@ -52,6 +52,8 @@ const {
   supplierImpactProductIds,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
+  runNoSupplierMarketplaceAutomation,
+  runSupplierRecoveryAutomation,
   pickWarehouseSupplier,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
@@ -1510,6 +1512,22 @@ test("targeted automation can process a product after its last link is removed",
   assert.equal(toZeroStock[0].id, "nolinks-targeted");
 });
 
+test("targeted no-supplier automation reports only supplied product scope when no action is needed", async () => {
+  const result = await runNoSupplierMarketplaceAutomation({
+    products: [{
+      id: "targeted-no-action",
+      hasLinks: false,
+      selectedSupplier: null,
+      noSupplierAutomation: { stockZeroAt: "2026-01-01T00:00:00.000Z", archivedAt: "2026-01-01T00:00:00.000Z" },
+      marketplaceState: { code: "archived", stock: 0 },
+    }],
+  }, { productIds: ["targeted-no-action"], includeNoLinks: true, source: "targeted" });
+  assert.equal(result.zeroStockSent, 0);
+  assert.equal(result.archived, 0);
+  assert.equal(result.productStatuses.length, 1);
+  assert.equal(result.productStatuses[0].id, "targeted-no-action");
+});
+
 test("supplier updates target only impacted warehouse products", () => {
   const warehouse = {
     products: [
@@ -1666,4 +1684,21 @@ test("recovery queues archived linked product when supplier is available", () =>
   ]);
   assert.equal(recovered.length, 1);
   assert.equal(recovered[0].id, "archived-with-supplier");
+});
+
+test("targeted supplier recovery reports no-op without full warehouse side effects", async () => {
+  const result = await runSupplierRecoveryAutomation({
+    products: [{
+      id: "targeted-recovery-no-action",
+      hasLinks: true,
+      selectedSupplier: { price: 10, available: true },
+      noSupplierAutomation: { recoveredAt: "2026-01-01T00:00:00.000Z", stockZeroAt: null, archivedAt: null },
+      marketplaceState: { code: "active" },
+    }],
+  }, { productIds: ["targeted-recovery-no-action"], source: "targeted" });
+  assert.equal(result.source, "targeted");
+  assert.equal(result.recovered, 0);
+  assert.equal(result.restoredStocks, 0);
+  assert.equal(result.unarchived, 0);
+  assert.deepEqual(result.errors, []);
 });
