@@ -88,6 +88,8 @@ const {
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
   getLocalYandexExportedOfferIdSet,
+  buildYandexWarehouseProductFromOzonExport,
+  materializeYandexExportedProductsForWarehouse,
   buildYandexPriceUpdateFromOzonProduct,
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
@@ -246,6 +248,42 @@ test("Ozon to Yandex import treats locally exported Yandex products as existing"
   assert.equal(set.has("sku-2"), true);
   assert.equal(set.has("sku-3"), false);
   assert.equal(set.size, 2);
+});
+
+test("Ozon to Yandex import creates a Yandex warehouse variant after export", () => {
+  const ozonProduct = normalizeWarehouseProduct({
+    id: "ozon-source",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "SKU-YA-1",
+    productId: "12345",
+    name: "Creed Aventus 100 ml",
+    imageUrl: "https://example.test/creed.jpg",
+    marketplacePrice: 12000,
+    targetPrice: 11990,
+    marketplaceState: { code: "active", stock: 4 },
+    ozon: {
+      vendor: "Creed",
+      description: "Perfume",
+      images: ["https://example.test/creed-2.jpg"],
+    },
+    links: [{ article: "PM-1", partnerId: "10", supplierName: "Supplier" }],
+  });
+  const yandexProduct = buildYandexWarehouseProductFromOzonExport(
+    ozonProduct,
+    { id: "yandex-main", name: "Yandex Main" },
+    { status: "sent", sentAt: "2026-05-14T10:00:00.000Z" },
+  );
+  const merged = mergeProducts([ozonProduct], [yandexProduct]);
+
+  assert.equal(yandexProduct.marketplace, "yandex");
+  assert.equal(yandexProduct.target, "yandex-main");
+  assert.equal(yandexProduct.offerId, "SKU-YA-1");
+  assert.equal(yandexProduct.marketplacePrice, 12000);
+  assert.equal(yandexProduct.marketplaceState.stock, 4);
+  assert.equal(yandexProduct.yandex.vendor, "Creed");
+  assert.equal(yandexProduct.links.length, 1);
+  assert.deepEqual(new Set(merged.map((item) => item.marketplace)), new Set(["ozon", "yandex"]));
 });
 
 test("Ozon to Yandex stock sync uses Ozon stock from state and warehouses", () => {

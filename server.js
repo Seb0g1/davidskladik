@@ -3299,6 +3299,107 @@ function normalizeYandexWarehouseProduct(item = {}, shop) {
   });
 }
 
+function yandexWarehouseProductId(shop = {}, offerId = "") {
+  const key = `${cleanText(shop.id || shop.businessId || "yandex")}:${cleanText(offerId).toLowerCase()}`;
+  return `yandex-${crypto.createHash("sha1").update(key).digest("hex").slice(0, 24)}`;
+}
+
+function buildYandexWarehouseProductFromOzonExport(product = {}, shop = {}, exportState = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const offerId = cleanText(normalized.offerId);
+  const price = Number(product.targetPrice || product.newPrice || normalized.marketplacePrice || normalized.ozon?.price || 0) || null;
+  const stock = pickOzonProductStockForYandex(normalized);
+  const pictures = [
+    ...new Set([
+      ...([normalized.imageUrl].filter(Boolean)),
+      ...(Array.isArray(normalized.ozon?.images) ? normalized.ozon.images : []),
+      ...(Array.isArray(normalized.yandex?.pictures) ? normalized.yandex.pictures : []),
+    ].map(cleanText).filter(Boolean)),
+  ];
+  return normalizeWarehouseProduct({
+    id: yandexWarehouseProductId(shop, offerId),
+    target: shop.id || "yandex",
+    marketplace: "yandex",
+    targetName: shop.name || "Yandex Market",
+    offerId,
+    productId: normalized.productId,
+    sku: normalized.sku,
+    manualGroupId: normalized.manualGroupId,
+    name: normalized.name || normalized.ozon?.name || normalized.yandex?.name || offerId,
+    keyword: normalized.keyword,
+    imageUrl: normalized.imageUrl || firstImageUrl(pictures),
+    productUrl: normalized.yandex?.url || "",
+    marketplacePrice: price,
+    markup: normalized.markup,
+    autoPriceEnabled: normalized.autoPriceEnabled,
+    autoPriceMin: normalized.autoPriceMin,
+    autoPriceMax: normalized.autoPriceMax,
+    source: "marketplace",
+    yandex: {
+      ...(normalized.yandex || {}),
+      offerId,
+      name: normalized.name || normalized.ozon?.name || normalized.yandex?.name || offerId,
+      description: normalized.ozon?.description || normalized.yandex?.description || "",
+      vendor: normalized.ozon?.vendor || normalized.yandex?.vendor || normalized.brand || "",
+      pictures,
+      price: price || undefined,
+      extra: {
+        ...(normalized.yandex?.extra || {}),
+        exportedFrom: "ozon",
+        sourceProductId: normalized.id,
+        exportedAt: exportState.sentAt || new Date().toISOString(),
+      },
+    },
+    marketplaceState: {
+      code: stock > 0 ? "active" : "out_of_stock",
+      label: stock > 0 ? "Активен ЯМ" : "Нет наличия ЯМ",
+      stock,
+      stateName: exportState.status === "sent" ? "Выгружено из Ozon" : "Создано из Ozon",
+    },
+    exports: {
+      ...(normalized.exports || {}),
+      yandex: exportState,
+      [shop.id || "yandex"]: exportState,
+    },
+    links: Array.isArray(normalized.links) ? normalized.links : [],
+    createdAt: normalized.createdAt,
+    updatedAt: exportState.sentAt || new Date().toISOString(),
+  });
+}
+
+function materializeYandexExportedProductsForWarehouse(warehouse = {}) {
+  const products = Array.isArray(warehouse.products) ? warehouse.products : [];
+  const shops = uniqueYandexShopsByBusiness();
+  if (!shops.length) return { warehouse: { ...warehouse, products }, added: 0 };
+
+  const existingKeys = new Set(products.map((product) => warehouseProductExactMergeKey(normalizeWarehouseProduct(product))));
+  const additions = [];
+
+  for (const product of products) {
+    const normalized = normalizeWarehouseProduct(product);
+    if (normalized.marketplace !== "ozon") continue;
+    if (!normalized.offerId) continue;
+    const exports = normalized.exports || {};
+    const yandexSent = exports.yandex?.status === "sent";
+    const matchingShops = shops.filter((shop) => exports[shop.id]?.status === "sent");
+    const targetShops = matchingShops.length ? matchingShops : (yandexSent ? shops.slice(0, 1) : []);
+    for (const shop of targetShops) {
+      const exactKey = warehouseProductExactMergeKey({ target: shop.id, marketplace: "yandex", offerId: normalized.offerId });
+      if (existingKeys.has(exactKey)) continue;
+      const exportState = exports[shop.id] || exports.yandex || { status: "sent", targetName: shop.name || "Yandex Market" };
+      const yandexProduct = buildYandexWarehouseProductFromOzonExport(normalized, shop, exportState);
+      additions.push(yandexProduct);
+      existingKeys.add(exactKey);
+    }
+  }
+
+  if (!additions.length) return { warehouse: { ...warehouse, products }, added: 0 };
+  return {
+    warehouse: { ...warehouse, products: mergeProducts(products, additions) },
+    added: additions.length,
+  };
+}
+
 async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY, options = {}) {
   const maxItems = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : Number.MAX_SAFE_INTEGER;
   const items = [];
@@ -10684,6 +10785,7 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
 
     if (sentCount > 0) {
       const now = new Date().toISOString();
+      const yandexProducts = [];
       for (const product of warehouse.products || []) {
         if (!selectedIds.has(product.id) || !sentOfferIds.has(cleanText(product.offerId).toLowerCase())) continue;
         product.exports = product.exports || {};
@@ -10697,6 +10799,12 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
         for (const shop of shops) product.exports[shop.id] = exportState;
         product.exports.yandex = exportState;
         product.updatedAt = now;
+        for (const shop of shops) {
+          yandexProducts.push(buildYandexWarehouseProductFromOzonExport(product, shop, exportState));
+        }
+      }
+      if (yandexProducts.length) {
+        warehouse.products = mergeProducts(warehouse.products || [], yandexProducts);
       }
       await writeWarehouse(warehouse);
     }
@@ -11046,6 +11154,9 @@ app.post("/api/warehouse/products/:id/export", async (request, response, next) =
       product.exports[shop.id] = exportState;
       product.exports.yandex = exportState;
       product.updatedAt = new Date().toISOString();
+      warehouse.products = mergeProducts(warehouse.products || [], [
+        buildYandexWarehouseProductFromOzonExport(product, shop, exportState),
+      ]);
       await writeWarehouse(warehouse);
       const [freshProduct] = await buildFreshWarehouseProducts([product.id]);
       await appendAudit(request, "warehouse.product.export", {
@@ -12402,6 +12513,7 @@ module.exports = {
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
   readWarehouse,
+  writeWarehouse,
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
   summarizeWarehouseCounterStats,
@@ -12430,6 +12542,8 @@ module.exports = {
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
   getLocalYandexExportedOfferIdSet,
+  buildYandexWarehouseProductFromOzonExport,
+  materializeYandexExportedProductsForWarehouse,
   buildYandexPriceUpdateFromOzonProduct,
   sendYandexPricesFromOzonProducts,
   pickOzonProductStockForYandex,

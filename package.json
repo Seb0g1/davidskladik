@@ -13,6 +13,7 @@
     "db:export": "node scripts/export-postgres-data.cjs",
     "db:import": "node scripts/import-postgres-data.cjs",
     "db:repair-warehouse": "node scripts/repair-warehouse-products.cjs",
+    "db:materialize-yandex": "node scripts/materialize-yandex-exported-products.cjs",
     "repair:ozon-details": "node scripts/repair-ozon-product-details.cjs",
     "inspect:db": "node scripts/ops-diagnose.cjs",
     "inspect:app-db": "node scripts/ops-diagnose.cjs",
