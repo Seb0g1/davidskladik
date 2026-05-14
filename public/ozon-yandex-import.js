@@ -184,7 +184,9 @@ function renderCleanup(payload = {}) {
       ? [`Защищено: ${(row.matchedBrands || []).join(", ")}`]
       : row.action === "already_archived"
         ? ["Уже находится в архиве Яндекса"]
-        : ["Бренд не найден в названии, описании или характеристиках"];
+        : row.smallVolume
+          ? [`Объем меньше 20 мл${row.minVolumeMl ? `: ${row.minVolumeMl} мл` : ""}. Архивируем даже при защищённом бренде.`]
+          : ["Бренд не найден в названии, описании или характеристиках"];
     return `
       <article class="import-row">
         <div class="import-row-image"><div class="import-row-placeholder">ЯМ</div></div>

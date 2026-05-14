@@ -246,6 +246,9 @@ test("Yandex cleanup protects brands found in name, description, and characteris
   const protectedByCharacteristics = buildYandexCleanupCandidate({
     offer: { offerId: "ya-3", name: "Парфюмерная вода 90 мл", params: [{ name: "Бренд", value: "Ex Nihilo" }] },
   }, { id: "shop", name: "Shop" }, brands);
+  const protectedBrandSmallVolume = buildYandexCleanupCandidate({
+    offer: { offerId: "ya-small", name: "Creed Aventus 15 мл", description: "Оригинальный Creed" },
+  }, { id: "shop", name: "Shop" }, brands);
   const unprotected = buildYandexCleanupCandidate({
     offer: { offerId: "ya-4", name: "Unknown Brand 90 мл" },
   }, { id: "shop", name: "Shop" }, brands);
@@ -256,15 +259,19 @@ test("Yandex cleanup protects brands found in name, description, and characteris
   assert.equal(protectedByName.action, "keep");
   assert.equal(protectedByDescription.action, "keep");
   assert.equal(protectedByCharacteristics.action, "keep");
+  assert.equal(protectedBrandSmallVolume.action, "archive");
+  assert.equal(protectedBrandSmallVolume.smallVolume, true);
+  assert.equal(protectedBrandSmallVolume.protected, false);
   assert.equal(unprotected.action, "archive");
   assert.equal(alreadyArchived.action, "already_archived");
   assert.deepEqual(summarizeYandexCleanupPreview([
     protectedByName,
     protectedByDescription,
     protectedByCharacteristics,
+    protectedBrandSmallVolume,
     unprotected,
     alreadyArchived,
-  ]), { total: 5, protected: 3, toArchive: 1, alreadyArchived: 1 });
+  ]), { total: 6, protected: 3, toArchive: 2, alreadyArchived: 1 });
 });
 
 test("ops diagnostics command emits machine-readable report", async () => {

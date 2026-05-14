@@ -4240,12 +4240,16 @@ function buildYandexCleanupCandidate(item = {}, shop = {}, protectedBrandsInput 
   const state = pickYandexState(item, offer);
   const archived = state.code === "archived" || Boolean(offer.archived || item.archived || item.offer?.archived);
   const brands = parseProtectedBrandList(protectedBrandsInput);
-  const searchText = normalizeBrandSearchText(collectYandexOfferTextParts(item).join(" "));
+  const searchableTextRaw = collectYandexOfferTextParts(item).join(" ");
+  const searchText = normalizeBrandSearchText(searchableTextRaw);
   const matchedBrands = brands.filter((brand) => {
     const normalizedBrand = normalizeBrandSearchText(brand);
     return normalizedBrand && searchText.includes(normalizedBrand);
   });
-  const protectedByBrand = matchedBrands.length > 0;
+  const volumesMl = extractOzonYandexImportVolumesMl(searchableTextRaw);
+  const minVolumeMl = volumesMl.length ? Math.min(...volumesMl) : null;
+  const smallVolume = minVolumeMl !== null && minVolumeMl < 20;
+  const protectedByBrand = matchedBrands.length > 0 && !smallVolume;
   return {
     id: `${shop.id || "yandex"}:${offerId}`,
     shopId: shop.id || "yandex",
@@ -4258,6 +4262,8 @@ function buildYandexCleanupCandidate(item = {}, shop = {}, protectedBrandsInput 
     stateLabel: state.label,
     stateName: state.stateName || "",
     matchedBrands,
+    minVolumeMl,
+    smallVolume,
     protected: protectedByBrand,
     action: protectedByBrand ? "keep" : archived ? "already_archived" : "archive",
   };
