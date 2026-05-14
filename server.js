@@ -94,7 +94,7 @@ const ozonWarehouseListEnabled = process.env.OZON_WAREHOUSE_LIST_ENABLED === "tr
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 10000) || 10000));
-const yandexImportSendLimit = Math.max(1, Math.min(1000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 500) || 500));
+const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 2000) || 2000));
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const telegramBotToken = cleanText(process.env.TELEGRAM_BOT_TOKEN);
 const telegramChatId = cleanText(process.env.TELEGRAM_CHAT_ID);
