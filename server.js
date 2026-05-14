@@ -4558,7 +4558,19 @@ function buildYandexStockUpdatePayload(rows = [], updatedAt = new Date().toISOSt
 
 function yandexStockShops(shops = null) {
   const source = Array.isArray(shops) && shops.length ? shops : getYandexShops();
-  return source.filter((shop) => shop.apiKey && shop.businessId && shop.campaignId);
+  return source.flatMap((shop) => parseYandexCampaignIds(shop.campaignId || shop.campaign_id).map((campaignId, index) => ({
+    ...shop,
+    id: index === 0 ? shop.id : `${shop.id}-${campaignId}`,
+    name: index === 0 ? shop.name : `${shop.name || shop.id} #${campaignId}`,
+    campaignId,
+  }))).filter((shop) => shop.apiKey && shop.businessId && shop.campaignId);
+}
+
+function parseYandexCampaignIds(value) {
+  return [...new Set(cleanText(value)
+    .split(/[\s,;]+/)
+    .map(cleanText)
+    .filter(Boolean))];
 }
 
 function yandexMissingStockCampaignWarning(count) {
@@ -12280,6 +12292,8 @@ module.exports = {
   sendYandexPricesFromOzonProducts,
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
+  parseYandexCampaignIds,
+  yandexStockShops,
   sendYandexStocksForExportedOzonProducts,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,

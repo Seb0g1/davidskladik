@@ -90,6 +90,8 @@ const {
   buildYandexPriceUpdateFromOzonProduct,
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
+  parseYandexCampaignIds,
+  yandexStockShops,
   sendYandexStocksForExportedOzonProducts,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,
@@ -249,6 +251,25 @@ test("Yandex stock update payload uses campaign stock format", () => {
       { sku: "SKU-2", items: [{ type: "FIT", count: 0, updatedAt: "2026-05-14T10:00:00.000Z" }] },
     ],
   });
+});
+
+test("Yandex stock shops expand comma-separated campaign ids", () => {
+  assert.deepEqual(parseYandexCampaignIds("128820967,149026853; 149079105 149079105"), [
+    "128820967",
+    "149026853",
+    "149079105",
+  ]);
+  const shops = yandexStockShops([{
+    id: "yandex-main",
+    name: "Yandex",
+    apiKey: "token",
+    businessId: "171782339",
+    campaignId: "128820967,149026853",
+  }]);
+  assert.equal(shops.length, 2);
+  assert.equal(shops[0].campaignId, "128820967");
+  assert.equal(shops[1].campaignId, "149026853");
+  assert.equal(shops[1].id, "yandex-main-149026853");
 });
 
 test("Yandex exported stock stage fails loudly without campaign id", async () => {
