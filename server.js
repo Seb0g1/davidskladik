@@ -3974,9 +3974,16 @@ function stablePriceMasterSnapshotId(row = {}) {
     .digest("hex");
 }
 
-function normalizePriceMasterSnapshotItemForPostgres(row = {}, updatedAt = new Date()) {
+function priceMasterSnapshotArticleKey(row = {}) {
   const article = cleanText(row.article || row.NativeID || row.nativeId);
-  if (!article) return null;
+  if (article) return article;
+  const rowId = cleanText(row.rowId || row.RowID);
+  if (rowId) return `__no_article__:${rowId}`;
+  return `__no_article__:${stablePriceMasterSnapshotId(row)}`;
+}
+
+function normalizePriceMasterSnapshotItemForPostgres(row = {}, updatedAt = new Date()) {
+  const article = priceMasterSnapshotArticleKey(row);
   const rawPrice = row.price ?? row.NativePrice;
   const price = rawPrice === undefined || rawPrice === null || rawPrice === "" ? null : String(rawPrice);
   const currency = cleanText(row.currency || row.priceCurrency).toUpperCase();

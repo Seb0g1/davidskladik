@@ -200,8 +200,15 @@ function normalizeRetryItemForPostgres(item = {}) {
 }
 
 function normalizeSnapshotItemForPostgres(row = {}) {
-  const article = cleanText(row.article || row.NativeID || row.nativeId);
-  if (!article) return null;
+  const rawArticle = cleanText(row.article || row.NativeID || row.nativeId);
+  const rowId = cleanText(row.rowId || row.RowID);
+  const article = rawArticle || (rowId ? `__no_article__:${rowId}` : `__no_article__:${stableId("pm", [
+    rawArticle,
+    cleanText(row.partnerId || row.PartnerID),
+    rowId,
+    cleanText(row.name || row.nativeName || row.NativeName),
+    cleanText(row.docDate || row.DocDate),
+  ].join("|"))}`);
   return {
     id: stableId("pm", [
       article,

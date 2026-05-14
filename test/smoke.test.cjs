@@ -961,6 +961,22 @@ test("normalizePriceMasterSnapshotItemForPostgres prepares rows for PostgreSQL",
   assert.ok(row.id);
 });
 
+test("normalizePriceMasterSnapshotItemForPostgres keeps rows without supplier article", () => {
+  const row = normalizePriceMasterSnapshotItemForPostgres({
+    rowId: 991,
+    article: "",
+    partnerId: 32277,
+    partnerName: "Иванна",
+    name: "EX NIHILO BLUE TALISMAN 7.5ml Extrait De Parfum в коробке",
+    price: 36,
+  }, new Date("2026-05-13T03:00:00.000Z"));
+
+  assert.equal(row.article, "__no_article__:991");
+  assert.equal(row.rowId, "991");
+  assert.equal(row.nativeName, "EX NIHILO BLUE TALISMAN 7.5ml Extrait De Parfum в коробке");
+  assert.equal(row.partnerId, "32277");
+});
+
 test("resolvePriceMasterRowCurrency prefers supplier fixed currency", () => {
   const currency = resolvePriceMasterRowCurrency(
     { partnerId: "88", partnerName: "Supplier" },
