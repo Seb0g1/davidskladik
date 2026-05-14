@@ -140,9 +140,13 @@ test("Ozon to Yandex import blocks forbidden names and small volumes", () => {
 test("Ozon to Yandex import blocks unsafe non-perfume and low quality cards", () => {
   assert.ok(ozonYandexImportBlockReasons({ name: "помада", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Категория")));
   assert.ok(ozonYandexImportBlockReasons({ name: "свеча ароматическая", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Категория")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "Краска", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Категория")));
   assert.ok(ozonYandexImportBlockReasons({ name: "щзхщц", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Подозрительное")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "-0-", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Подозрительное")));
   assert.ok(ozonYandexImportBlockReasons({ name: "Creed Aventus 100 мл" }).some((reason) => reason.includes("бренд")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "парфюмерная вода для мужчин" }).some((reason) => reason.includes("общее название")));
   assert.ok(ozonYandexImportBlockReasons({ name: "Сильной фиксации 15 350 мл", ozon: { vendor: "Magic" } }).some((reason) => reason.includes("Подозрительный объем")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "Creed Aventus 100 мл", ozon: { vendor: "Creed" }, marketplaceState: { code: "archived", archived: true } }).some((reason) => reason.includes("архиве")));
 });
 
 test("Ozon to Yandex import candidate exposes eligibility summary", () => {
@@ -155,6 +159,7 @@ test("Ozon to Yandex import candidate exposes eligibility summary", () => {
     name: "Creed Aventus 100 мл",
     imageUrl: "https://example.test/image.jpg",
     marketplacePrice: 4500,
+    marketplaceState: { code: "active", visibility: "VISIBLE" },
     ozon: {
       name: "Creed Aventus 100 мл",
       vendor: "Creed",
@@ -173,6 +178,7 @@ test("Ozon to Yandex import candidate exposes eligibility summary", () => {
     name: "Creed Aventus 7.5 ml",
     imageUrl: "https://example.test/image.jpg",
     marketplacePrice: 1500,
+    marketplaceState: { code: "active", visibility: "VISIBLE" },
     ozon: {
       name: "Creed Aventus 7.5 ml",
       vendor: "Creed",

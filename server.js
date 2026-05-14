@@ -4032,6 +4032,16 @@ function ozonYandexImportBlockReasons(product = {}) {
   const reasons = [];
   const vendor = cleanText(product.ozon?.vendor || product.yandex?.vendor || product.brand || "");
   const vendorLower = vendor.toLowerCase();
+  const marketplaceState = product.marketplaceState || {};
+  const stateCode = cleanText(marketplaceState.code).toLowerCase();
+  const stateVisibility = cleanText(marketplaceState.visibility).toUpperCase();
+  const rawState = cleanText(marketplaceState.state).toUpperCase();
+  if (marketplaceState.archived || stateCode === "archived" || stateVisibility === "ARCHIVED" || rawState === "ARCHIVED") {
+    reasons.push("Товар в архиве Ozon");
+  }
+  if (["inactive", "unknown"].includes(stateCode) || ["REMOVED_FROM_SALE", "DISABLED", "BANNED"].includes(stateVisibility) || ["REMOVED_FROM_SALE", "DISABLED", "BANNED"].includes(rawState)) {
+    reasons.push("Товар неактивен или статус Ozon не подтвержден");
+  }
   if (lower.includes("отливант")) reasons.push("Название содержит «Отливант»");
   if (/без\s+коробк/iu.test(lower)) reasons.push("Название содержит «без коробки»");
   const smallVolumes = extractOzonYandexImportVolumesMl(name).filter((value) => value < 20);
@@ -4050,15 +4060,26 @@ function ozonYandexImportBlockReasons(product = {}) {
     "маск",
     "гель",
     "лак",
+    "краск",
     "стик",
     "stick",
     "дезодорант",
   ];
   const matchedCategory = blockedCategories.find((word) => lower.includes(word));
   if (matchedCategory) reasons.push("Категория не подходит для импорта парфюмерии");
+  const genericNames = [
+    "парфюмерная вода",
+    "парфюмерная вода для мужчин",
+    "туалетная вода",
+    "духи",
+  ];
+  if ((!vendor || vendorLower.includes("без бренда")) && genericNames.some((genericName) => lower === genericName || lower.startsWith(`${genericName} `))) {
+    reasons.push("Слишком общее название без бренда");
+  }
   const meaningfulWords = name.match(/[a-zа-яё]{3,}/giu) || [];
   const wordsWithVowels = meaningfulWords.filter((word) => /[aeiouyаеёиоуыэюя]/iu.test(word));
-  if (name.length < 10 || (meaningfulWords.length > 0 && wordsWithVowels.length === 0)) {
+  const alphaCount = (name.match(/[a-zа-яё]/giu) || []).length;
+  if (name.length < 10 || alphaCount < 3 || (meaningfulWords.length > 0 && wordsWithVowels.length === 0)) {
     reasons.push("Подозрительное название товара");
   }
   return reasons;
