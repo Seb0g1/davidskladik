@@ -63,6 +63,7 @@ const {
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
   pickOzonCabinetListedPrice,
+  shouldSkipWarehousePriceSend,
   buildOzonPricePayload,
   isOzonResourceExhaustedError,
   isOzonPerItemPriceLimitError,
@@ -184,6 +185,36 @@ test("Ozon old price errors are healed with a higher old_price retry", () => {
   assert.equal(retry.forceOldPrice, true);
   assert.equal(retry.oldPrice, 5400);
   assert.equal(buildOzonPricePayload(retry).old_price, "5400");
+});
+
+test("selected auto price jobs still skip unchanged prices", () => {
+  const unchanged = shouldSkipWarehousePriceSend({
+    currentPrice: 1574,
+    nextPrice: 1574,
+    minDiffRub: 0,
+    minDiffPct: 0,
+  });
+  assert.equal(unchanged.skip, true);
+  assert.equal(unchanged.reason, "unchanged");
+
+  const forced = shouldSkipWarehousePriceSend({
+    currentPrice: 1574,
+    nextPrice: 1574,
+    force: true,
+  });
+  assert.equal(forced.skip, false);
+});
+
+test("price send skip helper respects ruble and percent thresholds", () => {
+  assert.deepEqual(
+    shouldSkipWarehousePriceSend({ currentPrice: 1000, nextPrice: 1010, minDiffRub: 20 }),
+    { skip: true, reason: "min_diff_rub", diffRub: 10, minDiffRub: 20 },
+  );
+  const pct = shouldSkipWarehousePriceSend({ currentPrice: 1000, nextPrice: 1003, minDiffPct: 0.5 });
+  assert.equal(pct.skip, true);
+  assert.equal(pct.reason, "min_diff_pct");
+  assert.equal(Math.round(pct.diffPct * 10) / 10, 0.3);
+  assert.equal(shouldSkipWarehousePriceSend({ currentPrice: 0, nextPrice: 1574 }).skip, false);
 });
 
 test("price history append is a no-op without PostgreSQL", async () => {

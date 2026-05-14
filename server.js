@@ -1075,6 +1075,31 @@ function roundPrice(value) {
   return Math.round(number);
 }
 
+function shouldSkipWarehousePriceSend({
+  currentPrice,
+  nextPrice,
+  minDiffRub = 0,
+  minDiffPct = 0,
+  force = false,
+} = {}) {
+  const current = roundPrice(currentPrice);
+  const next = roundPrice(nextPrice);
+  if (!next) return { skip: true, reason: "not_ready" };
+  if (force) return { skip: false, reason: null };
+  const diffRub = Math.abs(next - current);
+  if (current > 0 && diffRub <= 0) return { skip: true, reason: "unchanged" };
+  const minRub = Math.max(0, Number(minDiffRub || 0) || 0);
+  if (current > 0 && minRub > 0 && diffRub < minRub) {
+    return { skip: true, reason: "min_diff_rub", diffRub, minDiffRub: minRub };
+  }
+  const minPct = Math.max(0, Number(minDiffPct || 0) || 0);
+  const diffPct = current > 0 ? (diffRub / current) * 100 : 100;
+  if (current > 0 && minPct > 0 && diffPct < minPct) {
+    return { skip: true, reason: "min_diff_pct", diffPct, minDiffPct: minPct };
+  }
+  return { skip: false, reason: null };
+}
+
 function parseBooleanSetting(value, fallback = true) {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value === "boolean") return value;
@@ -8692,9 +8717,8 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
   }
 });
 
-async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDiffPct = 0, dryRun = false } = {}) {
+async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDiffPct = 0, dryRun = false, force = false } = {}) {
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
-  const forceSelectedPrices = Boolean(ids?.size);
   const preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
   const selected = ids
     ? await buildFreshWarehouseProducts(Array.from(ids), { refreshPrices: true })
@@ -8723,9 +8747,21 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     }
     const current = Number(product.currentPrice || 0);
     const nextValue = Number(product.nextPrice || 0);
-    const diffRub = Math.abs(nextValue - current);
-    if (!forceSelectedPrices && diffRub <= 0) {
-      skipped.push({ id: product.id, offerId: product.offerId, reason: "unchanged" });
+    const skipDecision = shouldSkipWarehousePriceSend({
+      currentPrice: current,
+      nextPrice: nextValue,
+      minDiffRub,
+      minDiffPct,
+      force,
+    });
+    if (skipDecision.skip) {
+      skipped.push({
+        id: product.id,
+        offerId: product.offerId,
+        reason: skipDecision.reason,
+        diffRub: skipDecision.diffRub,
+        diffPct: skipDecision.diffPct,
+      });
       continue;
     }
     const priceItem = {
@@ -8838,7 +8874,16 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     const retryNextAt = failedEntryForItem
       ? new Date(new Date(sentAt).getTime() + priceRetryDelayMs(Number(failedEntryForItem.attempts || 1), { message: failedEntryForItem.error })).toISOString()
       : null;
-    if (success && item.marketplace !== "ozon") product.marketplacePrice = roundPrice(item.price);
+    if (success) {
+      const sentPrice = roundPrice(item.price);
+      product.marketplacePrice = sentPrice;
+      if (item.marketplace === "ozon") {
+        product.ozon = {
+          ...(product.ozon || {}),
+          price: sentPrice,
+        };
+      }
+    }
     product.priceHistory = Array.isArray(product.priceHistory) ? product.priceHistory : [];
     const previous = product.priceHistory[product.priceHistory.length - 1] || null;
     const reasons = [];
@@ -9245,6 +9290,7 @@ app.post("/api/warehouse/prices/send", async (request, response, next) => {
       minDiffRub: Number(request.body.minDiffRub || 0),
       minDiffPct: Number(request.body.minDiffPct || 0),
       dryRun: request.body.dryRun === true,
+      force: request.body.force === true,
     }));
   } catch (error) {
     next(error);
@@ -10735,6 +10781,7 @@ module.exports = {
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
   pickOzonCabinetListedPrice,
+  shouldSkipWarehousePriceSend,
   buildOzonPricePayload,
   isOzonResourceExhaustedError,
   isOzonPerItemPriceLimitError,
