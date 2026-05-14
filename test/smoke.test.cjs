@@ -1666,7 +1666,7 @@ test("warehouse links can store selected PriceMaster row without supplier articl
     id: "name-link-product",
     links: [{
       id: "draft-row",
-      article: "EX NIHILO BLUE TALISMAN 7.5ml",
+      article: "",
       matchType: "selected_row",
       exactName: "EX NIHILO BLUE TALISMAN 7.5ml Extrait De Parfum в коробке",
       sourceRowId: "991",
@@ -1676,6 +1676,7 @@ test("warehouse links can store selected PriceMaster row without supplier articl
     }],
   });
   assert.equal(product.links[0].matchType, "selected_row");
+  assert.equal(product.links[0].article, "");
   assert.equal(product.links[0].exactName, "EX NIHILO BLUE TALISMAN 7.5ml Extrait De Parfum в коробке");
   assert.equal(product.links[0].sourceRowId, "991");
   assert.notEqual(

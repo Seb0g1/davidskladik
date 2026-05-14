@@ -3783,7 +3783,7 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   const selectedArticleValue = String(articleInput?.dataset.pmSelectedValue || "").trim();
   const rawArticle = String(data.get("article") || "").trim();
   const article = selectedOffer && selectedArticleValue && rawArticle === selectedArticleValue
-    ? String(selectedOffer.article || rawArticle).trim()
+    ? String(selectedOffer.article || "").trim()
     : rawArticle;
   const matchType = selectedOffer?.matchType || (selectedOffer && !selectedOffer.article ? "selected_row" : "article");
   const exactName = String(selectedOffer?.exactName || selectedOffer?.name || "").trim();

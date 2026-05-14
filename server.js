@@ -5913,6 +5913,42 @@ async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers 
   throw error;
 }
 
+async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSuppliers = []) {
+  const link = normalizeWarehouseLink(linkInput);
+  if (!warehouseLinkHasMatchTarget(link)) return link;
+  const matches = await findPriceMasterRowsForLink(link, usdRate, managedSuppliers);
+  if (matches.length) {
+    const best = matches[0];
+    return normalizeWarehouseLink({
+      ...link,
+      exactName: link.exactName || (link.matchType !== "article" ? best.name : ""),
+      sourceRowId: link.sourceRowId || (link.matchType === "selected_row" ? best.rowId : ""),
+      supplierName: link.supplierName || best.partnerName,
+      partnerId: link.partnerId || best.partnerId,
+    });
+  }
+
+  if (link.matchType === "article" && link.article) {
+    const nameLink = normalizeWarehouseLink({
+      ...link,
+      article: "",
+      matchType: "exact_name",
+      exactName: link.exactName || link.article,
+    });
+    const nameMatches = await findPriceMasterRowsForLink(nameLink, usdRate, managedSuppliers);
+    if (nameMatches.length) {
+      const best = nameMatches[0];
+      return normalizeWarehouseLink({
+        ...nameLink,
+        supplierName: nameLink.supplierName || best.partnerName,
+        partnerId: nameLink.partnerId || best.partnerId,
+      });
+    }
+  }
+
+  return link;
+}
+
 function pickWarehouseSupplier(matches) {
   return [...matches]
     .filter((match) => match.available)
@@ -8645,18 +8681,25 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       .filter(Boolean));
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для привязки." });
 
+    const settings = await readAppSettings();
+    const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+    const warehouse = await readWarehouse();
     const rawLinks = Array.isArray(request.body.links) && request.body.links.length ? request.body.links : [request.body];
-    const baseLinks = Array.from(new Map(rawLinks
+    const submittedLinks = Array.from(new Map(rawLinks
       .map((link) => normalizeWarehouseLink(link))
       .filter(warehouseLinkHasMatchTarget)
+      .map((link) => [warehouseLinkIdentityKey(link), link])).values());
+    const resolvedLinks = [];
+    for (const submittedLink of submittedLinks) {
+      const resolvedLink = await resolvePriceMasterLinkForSave(submittedLink, usdRate, warehouse.suppliers);
+      if (warehouseLinkHasMatchTarget(resolvedLink)) resolvedLinks.push(resolvedLink);
+    }
+    const baseLinks = Array.from(new Map(resolvedLinks
       .map((link) => [warehouseLinkIdentityKey(link), link])).values());
     const baseLink = baseLinks[0] || normalizeWarehouseLink({});
     if (!baseLink.article && !baseLink.exactName && !baseLink.sourceRowId) {
       return response.status(400).json({ error: "Укажите артикул PriceMaster или выберите строку PriceMaster по названию." });
     }
-    const settings = await readAppSettings();
-    const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
-    const warehouse = await readWarehouse();
     const targetProducts = warehouse.products.filter((product) => ids.has(String(product.id)));
     const conflicts = collectProductConflictsExceptBackground(targetProducts, productLocksFromRequest(request.body), { mergeOnly: true });
     if (conflicts.length) return conflictResponse(response, conflicts);
@@ -8718,12 +8761,18 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       productIds: updatedIds,
       links: baseLinks.map((link) => ({
         article: link.article,
+        matchType: link.matchType,
+        exactName: link.exactName,
+        sourceRowId: link.sourceRowId,
         keyword: link.keyword,
         supplierName: link.supplierName,
         partnerId: link.partnerId,
         priceCurrency: link.priceCurrency,
       })),
       article: baseLink.article,
+      matchType: baseLink.matchType,
+      exactName: baseLink.exactName,
+      sourceRowId: baseLink.sourceRowId,
       keyword: baseLink.keyword,
       supplierName: baseLink.supplierName,
       priceCurrency: baseLink.priceCurrency,
@@ -8746,12 +8795,13 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
 
-    const link = normalizeWarehouseLink(request.body);
+    let link = normalizeWarehouseLink(request.body);
     if (!link.article && !link.exactName && !link.sourceRowId) {
       return response.status(400).json({ error: "Укажите артикул PriceMaster или выберите строку PriceMaster по названию." });
     }
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+    link = await resolvePriceMasterLinkForSave(link, usdRate, warehouse.suppliers);
     await assertPriceMasterLinkExists(link, usdRate, warehouse.suppliers);
     const now = new Date().toISOString();
     const username = requestUsername(request);
@@ -8795,6 +8845,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       offerId: product.offerId,
       name: product.name,
       article: link.article,
+      matchType: link.matchType,
+      exactName: link.exactName,
+      sourceRowId: link.sourceRowId,
       keyword: link.keyword,
       supplierName: link.supplierName,
       priceCurrency: link.priceCurrency,
