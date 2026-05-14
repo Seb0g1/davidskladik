@@ -1963,8 +1963,24 @@ function lastOzonSendStatusLabel(status) {
   return text || "—";
 }
 
-function renderLastOzonSendMetric(product = {}) {
-  const send = product.lastOzonPriceSend || {};
+function priceHistoryEntryToLastOzonSend(entry = {}) {
+  if (!entry || String(entry.marketplace || "").toLowerCase() !== "ozon") return null;
+  const status = String(entry.status || (entry.error ? "error" : "success")).toLowerCase();
+  return {
+    status: status === "failed" ? "error" : status,
+    at: entry.at || entry.createdAt || "",
+    requestedPrice: entry.newPrice || entry.price || null,
+    cabinetPriceAtSend: entry.oldPrice || null,
+    detail: entry.error || "",
+    nextRetryAt: entry.nextRetryAt || "",
+  };
+}
+
+function renderLastOzonSendMetric(product = {}, overrideSend = null) {
+  const localHistorySend = normalizeDetailPriceHistoryEntries([product])
+    .map(priceHistoryEntryToLastOzonSend)
+    .find(Boolean);
+  const send = overrideSend || product.lastOzonPriceSend || localHistorySend || {};
   const status = String(send.status || "").toLowerCase();
   const detailParts = [];
   if (send.at) detailParts.push(formatDate(send.at));
@@ -1974,7 +1990,7 @@ function renderLastOzonSendMetric(product = {}) {
   const detail = send.detail && status !== "success" ? String(send.detail) : "";
   const statusClass = priceHistoryStatusClass(status || "pending");
   return `
-    <div class="last-price-send ${status ? `last-price-send--${escapeHtml(status)}` : ""}">
+    <div class="last-price-send last-price-send-live ${status ? `last-price-send--${escapeHtml(status)}` : ""}">
       <span>Ozon send</span>
       <strong><b class="retry-state ${statusClass}">${escapeHtml(lastOzonSendStatusLabel(status))}</b></strong>
       <small>${escapeHtml(detailParts.join(" · "))}${detail ? ` · ${escapeHtml(detail)}` : ""}</small>
@@ -2031,7 +2047,13 @@ async function loadDetailPriceHistory(group) {
     const data = await api(`/api/warehouse/prices/history?${params}`);
     if (token !== state.priceHistoryRequestToken) return;
     if (!document.body.contains(container)) return;
-    container.innerHTML = renderPriceHistoryRows(data.items || [], { emptyText: "История появится после первой отправки цен." });
+    const rows = data.items || [];
+    container.innerHTML = renderPriceHistoryRows(rows, { emptyText: "История появится после первой отправки цен." });
+    const latestOzonSend = rows.map(priceHistoryEntryToLastOzonSend).find(Boolean);
+    const sendMetric = document.querySelector(".last-price-send-live");
+    if (latestOzonSend && sendMetric) {
+      sendMetric.outerHTML = renderLastOzonSendMetric({}, latestOzonSend);
+    }
   } catch (_error) {
     if (token !== state.priceHistoryRequestToken || !document.body.contains(container)) return;
     const localRows = normalizeDetailPriceHistoryEntries(variants);
