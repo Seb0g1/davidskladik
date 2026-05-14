@@ -14,8 +14,10 @@
     "db:import": "node scripts/import-postgres-data.cjs",
     "db:repair-warehouse": "node scripts/repair-warehouse-products.cjs",
     "repair:ozon-details": "node scripts/repair-ozon-product-details.cjs",
-    "inspect:db": "node scripts/inspect-db.js",
-    "inspect:app-db": "node scripts/inspect-app-db.cjs",
+    "inspect:db": "node scripts/ops-diagnose.cjs",
+    "inspect:app-db": "node scripts/ops-diagnose.cjs",
+    "ops:diagnose": "node scripts/ops-diagnose.cjs",
+    "inspect:pm-db": "node scripts/inspect-db.js",
     "test": "node --test test/smoke.test.cjs",
     "relay:openai": "node scripts/openai-relay-server.cjs",
     "audit": "npm audit"

@@ -10844,6 +10844,7 @@ function startServer() {
 module.exports = {
   app,
   startServer,
+  collectHealthDetails,
   resolveMarkupCoefficient,
   resolveAvailabilityPolicy,
   normalizeManagedSupplier,
@@ -10860,6 +10861,7 @@ module.exports = {
   mergeProducts,
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
+  readWarehouse,
   marketplaceStateCodeFromPostgresRow,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,
@@ -10882,6 +10884,7 @@ module.exports = {
   findActiveDelayedPriceRetry,
   appendPriceHistoryRows,
   readPriceHistory,
+  readAuditFiltered,
   priceHistoryRowFromPostgres,
   readPriceRetryQueue,
   writePriceRetryQueue,

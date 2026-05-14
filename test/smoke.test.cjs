@@ -1,8 +1,12 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
+const { execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { promisify } = require("node:util");
 const request = require("supertest");
+
+const execFileAsync = promisify(execFile);
 
 process.env.APP_PASSWORD = process.env.APP_PASSWORD || "smoke-test-password";
 process.env.APP_SESSION_SECRET = process.env.APP_SESSION_SECRET || "smoke-test-session-secret-min-32-chars!";
@@ -110,6 +114,30 @@ test("GET /health deep exposes operational component details", async () => {
     if (previousName === undefined) delete process.env.PM_DB_NAME;
     else process.env.PM_DB_NAME = previousName;
   }
+});
+
+test("ops diagnostics command emits machine-readable report", async () => {
+  const scriptPath = path.join(__dirname, "..", "scripts", "ops-diagnose.cjs");
+  const { stdout } = await execFileAsync(process.execPath, [scriptPath, "--json", "--weak-limit=2", "--log-lines=0"], {
+    cwd: path.join(__dirname, ".."),
+    env: {
+      ...process.env,
+      DB_MODE: "json",
+      DATABASE_URL: "",
+      JSON_FALLBACK_ENABLED: "true",
+      BULLMQ_ENABLED: "false",
+      DISABLE_BACKGROUND_JOBS: "true",
+    },
+    timeout: 30_000,
+  });
+  const report = JSON.parse(stdout);
+  assert.equal(typeof report.ok, "boolean");
+  assert.equal(typeof report.generatedAt, "string");
+  assert.equal(typeof report.warehouse.products, "number");
+  assert.equal(typeof report.links.total, "number");
+  assert.equal(typeof report.ozon.weakCards.total, "number");
+  assert.ok(report.priceRetryQueue.byStatus);
+  assert.ok(Array.isArray(report.recommendations));
 });
 
 test("detects Ozon per-item rate limit errors", () => {
