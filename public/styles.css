@@ -1482,6 +1482,12 @@ td {
   color: var(--ink);
 }
 
+.detail-update-notice.is-conflict {
+  border-color: rgba(255, 159, 10, 0.36);
+  background: linear-gradient(180deg, rgba(255, 159, 10, 0.16), rgba(255, 159, 10, 0.08));
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+
 .detail-update-notice strong {
   font-size: 13px;
 }

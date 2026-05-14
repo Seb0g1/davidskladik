@@ -8903,7 +8903,10 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
     const previousLinks = Array.isArray(product.links) ? product.links : [];
     const removed = previousLinks.some((link) => String(link.id) === String(request.params.linkId));
-    const conflict = productConflict(product, request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt);
+    const conflict = productConflict(product, {
+      expectedUpdatedAt: request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt,
+      expectedLinksSignature: request.body?.expectedLinksSignature || request.query?.expectedLinksSignature,
+    });
     if (conflict && !removed) return conflictResponse(response, [conflict]);
     if (!removed) {
       const [freshProduct] = await buildFreshWarehouseProducts([product.id]);

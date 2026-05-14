@@ -513,11 +513,11 @@ async function fetchWarehouseProductSnapshot(productId) {
 }
 
 async function deleteWarehouseLinkWithFreshLock(productId, linkId, expectedUpdatedAt = "") {
+  const localProduct = warehouseProductById(productId);
   const remove = (lock) => api(
-    `/api/warehouse/products/${encodeURIComponent(productId)}/links/${encodeURIComponent(linkId)}?expectedUpdatedAt=${encodeURIComponent(lock || "")}`,
+    `/api/warehouse/products/${encodeURIComponent(productId)}/links/${encodeURIComponent(linkId)}?expectedUpdatedAt=${encodeURIComponent(lock || "")}&expectedLinksSignature=${encodeURIComponent(warehouseProductLinksSignature(localProduct))}`,
     { method: "DELETE" },
   );
-  const localProduct = warehouseProductById(productId);
   const firstLock = localProduct?.updatedAt || expectedUpdatedAt || "";
   try {
     return await remove(firstLock);
@@ -529,9 +529,10 @@ async function deleteWarehouseLinkWithFreshLock(productId, linkId, expectedUpdat
     if (!stillExists) {
       return { ok: true, alreadyDeleted: true, product: latest };
     }
-    const freshLock = latest?.updatedAt || error.payload?.conflicts?.[0]?.currentUpdatedAt || "";
-    if (!freshLock || freshLock === firstLock) throw error;
-    return remove(freshLock);
+    if (latest?.id && Array.isArray(error.payload?.conflicts) && error.payload.conflicts[0]) {
+      error.payload.conflicts[0].freshProduct = error.payload.conflicts[0].freshProduct || latest;
+    }
+    throw error;
   }
 }
 
@@ -1663,21 +1664,38 @@ function handleProductConflict(error, context = "операции") {
     .filter((product) => product?.id);
   if (freshProducts.length) {
     const selectedKey = state.selectedWarehouseGroupKey;
+    const selectedProductId = state.selectedWarehouseProductId;
+    const scrollTop = window.scrollY || document.documentElement.scrollTop || 0;
     freshProducts.forEach((product) => mergeWarehouseProduct(product));
     applyWarehouseFilters();
-    renderWarehouseCards();
     const freshIds = freshProducts.map((product) => product.id);
-    const refreshedSelected = refreshSelectedDetailForProductIds(freshIds);
-    if (!refreshedSelected && selectedKey) {
-      const selectedGroup = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
-        .find((group) => group.key === selectedKey);
-      if (selectedGroup) {
-        state.selectedWarehouseDetailGroup = selectedGroup;
-        renderWarehouseDetail(selectedGroup);
-      }
+    const groups = sortWarehouseGroups(buildWarehouseGroups(state.warehouse));
+    const selectedGroup = selectedKey
+      ? groups.find((group) => group.key === selectedKey)
+      : null;
+    const conflictGroup = groups.find((group) => (group.productIds || []).some((id) => freshIds.includes(id)));
+    const noticeGroup = selectedGroup || conflictGroup;
+    if (noticeGroup?.key) {
+      state.selectedWarehouseUpdateNotice = {
+        groupKey: noticeGroup.key,
+        kind: "conflict",
+        title: "\u041a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0438\u043b\u0438",
+        text: "\u042f \u043f\u043e\u0434\u0442\u044f\u043d\u0443\u043b \u0441\u0432\u0435\u0436\u0438\u0435 \u0434\u0430\u043d\u043d\u044b\u0435 \u0438 \u043e\u0441\u0442\u0430\u0432\u0438\u043b \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u0443\u044e \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u043d\u0430 \u043c\u0435\u0441\u0442\u0435. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u043f\u0440\u0438\u0432\u044f\u0437\u043a\u0438 \u0438 \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u0435 \u0435\u0449\u0451 \u0440\u0430\u0437, \u0435\u0441\u043b\u0438 \u0432\u0430\u0448\u0435 \u0438\u0437\u043c\u0435\u043d\u0435\u043d\u0438\u0435 \u0432\u0441\u0451 \u0435\u0449\u0451 \u043d\u0443\u0436\u043d\u043e.",
+        at: new Date().toISOString(),
+      };
     }
-    elements.warehouseStatus.textContent = `Конфликт ${context}: карточка уже изменена другим менеджером.${suffix} Свежая версия подставлена без переключения.`;
-    showToast(`Карточка была обновлена другим менеджером.${suffix}`, "warn");
+    if (selectedKey && selectedGroup) {
+      state.selectedWarehouseProductId = selectedProductId;
+      state.selectedWarehouseDetailGroup = selectedGroup;
+      renderWarehouseDetail(selectedGroup);
+    } else if (!selectedKey && conflictGroup) {
+      state.selectedWarehouseDetailGroup = conflictGroup;
+      renderWarehouseDetail(conflictGroup);
+    }
+    renderWarehouseCards();
+    restoreWindowScroll(scrollTop, { startedAt: Date.now() });
+    elements.warehouseStatus.textContent = `\u041a\u043e\u043d\u0444\u043b\u0438\u043a\u0442 ${context}: \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0438\u043b \u0434\u0440\u0443\u0433\u043e\u0439 \u0441\u043e\u0442\u0440\u0443\u0434\u043d\u0438\u043a.${suffix} \u0421\u0432\u0435\u0436\u0430\u044f \u0432\u0435\u0440\u0441\u0438\u044f \u043f\u043e\u0434\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u0430 \u0431\u0435\u0437 \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f.`;
+    showToast(`\u041a\u0430\u0440\u0442\u043e\u0447\u043a\u0443 \u0443\u0436\u0435 \u0438\u0437\u043c\u0435\u043d\u0438\u043b \u0434\u0440\u0443\u0433\u043e\u0439 \u0441\u043e\u0442\u0440\u0443\u0434\u043d\u0438\u043a.${suffix}`, "warn");
     return true;
   }
   elements.warehouseStatus.textContent = `Конфликт ${context}: карточка уже изменена другим пользователем.${suffix} Обновляю данные...`;
@@ -2247,7 +2265,7 @@ function renderWarehouseDetail(group, { force = false } = {}) {
 
     ${
       updateNotice
-        ? `<div class="detail-update-notice">
+        ? `<div class="detail-update-notice ${updateNotice.kind === "conflict" ? "is-conflict" : ""}">
             <strong>${escapeHtml(updateNotice.title || "Карточка обновлена")}</strong>
             <span>${escapeHtml(updateNotice.text || "Данные обновились в фоне. Выбранная карточка сохранена.")}</span>
           </div>`
