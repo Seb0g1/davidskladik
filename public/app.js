@@ -653,11 +653,23 @@ function renderPmOfferPanel(panel, rows, input) {
     meta.className = "pm-suggest-meta";
     const partner = row.partnerName || "—";
     const usd = Number(row.price || 0).toFixed(2);
-    meta.textContent = `${partner} · $${usd}`;
+    const date = row.docDate ? ` · ${formatDate(row.docDate)}` : "";
+    meta.textContent = `${partner} · $${usd}${date}`;
     btn.append(title, line, meta);
     panel.appendChild(btn);
   }
   panel.hidden = false;
+}
+
+function selectedPartnerIdForOfferSuggest(input) {
+  const form = input?.closest("form");
+  if (!form) return "";
+  const partnerIdInput = form.querySelector('[name="partnerId"]');
+  const partnerId = String(partnerIdInput?.value || "").trim();
+  if (partnerId) return partnerId;
+  const supplierInput = form.querySelector('[name="supplierName"]');
+  const selectedSupplier = getPmSelectedRow(supplierInput);
+  return String(selectedSupplier?.id || selectedSupplier?.partnerId || "").trim();
 }
 
 async function runPmSuggestFetch(input) {
@@ -693,7 +705,10 @@ async function runPmSuggestFetch(input) {
       const data = await response.json();
       renderPmPartnerPanel(panel, data.items || [], input);
     } else if (kind === "offer") {
-      const response = await fetch(`/api/offers?search=${encodeURIComponent(q)}&limit=80`, { signal: controller.signal });
+      const params = new URLSearchParams({ search: q, limit: "80" });
+      const partnerId = selectedPartnerIdForOfferSuggest(input);
+      if (partnerId) params.set("partner", partnerId);
+      const response = await fetch(`/api/offers?${params}`, { signal: controller.signal });
       if (response.status === 401) {
         window.location.href = "/login.html";
         return;
@@ -728,10 +743,10 @@ document.addEventListener("input", (event) => {
   const currentValue = String(el.value || "").trim();
   const selectedValue = String(el.dataset.pmSelectedValue || "").trim();
   if (form && el.name === "article" && selectedValue && currentValue !== selectedValue) {
-    const partnerIdInput = form.querySelector('[name="partnerId"]');
-    if (partnerIdInput) partnerIdInput.value = "";
     const supplierInput = form.querySelector('[name="supplierName"]');
     if (supplierInput?.dataset.pmAutofilled === "1") {
+      const partnerIdInput = form.querySelector('[name="partnerId"]');
+      if (partnerIdInput) partnerIdInput.value = "";
       supplierInput.value = "";
       delete supplierInput.dataset.pmAutofilled;
       delete supplierInput.dataset.pmSelectedValue;
