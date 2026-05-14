@@ -21,6 +21,7 @@ process.env.JSON_FALLBACK_ENABLED = "true";
 
 const appUsersPath = path.join(__dirname, "..", "data", "app-users.json");
 const marketplaceAccountsPath = path.join(__dirname, "..", "data", "marketplace-accounts.json");
+const warehousePath = path.join(__dirname, "..", "data", "warehouse.json");
 
 async function backupFile(filePath) {
   try {
@@ -105,6 +106,7 @@ const {
   appendPriceHistoryRows,
   readPriceHistory,
   readPriceRetryQueue,
+  writeWarehouse,
   writePriceRetryQueue,
   priceRetryQueuePath,
 } = require("../server.js");
@@ -284,6 +286,59 @@ test("Ozon to Yandex import creates a Yandex warehouse variant after export", ()
   assert.equal(yandexProduct.yandex.vendor, "Creed");
   assert.equal(yandexProduct.links.length, 1);
   assert.deepEqual(new Set(merged.map((item) => item.marketplace)), new Set(["ozon", "yandex"]));
+});
+
+test("warehouse write materializes Yandex rows and keeps the real shop target", async () => {
+  const previousWarehouse = await backupFile(warehousePath);
+  const previousAccounts = await backupFile(marketplaceAccountsPath);
+  const sourceWarehouse = {
+    createdAt: "2026-05-14T10:00:00.000Z",
+    updatedAt: "2026-05-14T10:00:00.000Z",
+    products: [
+      normalizeWarehouseProduct({
+        id: "ozon-source",
+        marketplace: "ozon",
+        target: "ozon",
+        offerId: "SKU-YA-2",
+        productId: "54321",
+        name: "Creed Aventus 100 ml",
+        imageUrl: "https://example.test/creed.jpg",
+        marketplacePrice: 12000,
+        marketplaceState: { code: "active", stock: 4 },
+        exports: {
+          yandex: { status: "sent", sentAt: "2026-05-14T10:00:00.000Z" },
+        },
+      }),
+    ],
+    suppliers: [],
+  };
+
+  try {
+    await restoreFile(marketplaceAccountsPath, JSON.stringify({
+      accounts: [
+        {
+          id: "yandex-main",
+          marketplace: "yandex",
+          name: "Yandex Main",
+          apiKey: "token",
+          businessId: "171782339",
+          campaignId: "128820967",
+          syncEnabled: true,
+        },
+      ],
+    }, null, 2));
+    const warehouse = await writeWarehouse(sourceWarehouse, { writePostgres: false });
+    const yandexProduct = warehouse.products.find((product) => product.marketplace === "yandex" && product.offerId === "SKU-YA-2");
+
+    assert.ok(yandexProduct, "expected a materialized Yandex product");
+    assert.equal(yandexProduct.target, "yandex-main");
+    assert.equal(yandexProduct.yandex.extra.shopId, "yandex-main");
+    assert.equal(yandexProduct.yandex.extra.businessId, "171782339");
+    assert.equal(yandexProduct.yandex.extra.campaignId, "128820967");
+  } finally {
+    await restoreFile(warehousePath, previousWarehouse);
+    await restoreFile(marketplaceAccountsPath, previousAccounts);
+  }
 });
 
 test("Ozon to Yandex stock sync uses Ozon stock from state and warehouses", () => {

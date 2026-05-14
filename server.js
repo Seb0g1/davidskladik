@@ -3369,6 +3369,9 @@ function buildYandexWarehouseProductFromOzonExport(product = {}, shop = {}, expo
         ...(normalized.yandex?.extra || {}),
         exportedFrom: "ozon",
         sourceProductId: normalized.id,
+        shopId: shop.id || "",
+        businessId: shop.businessId || "",
+        campaignId: shop.campaignId || "",
         exportedAt: exportState.sentAt || new Date().toISOString(),
       },
     },
@@ -6000,7 +6003,11 @@ async function readWarehouse() {
     try {
       const warehouse = await readWarehouseFromPostgres(getPrisma());
       if (warehouse) {
-        warehouseMemoryCache = warehouse;
+        const materialized = materializeYandexExportedProductsForWarehouse(warehouse);
+        warehouseMemoryCache = materialized.warehouse;
+        if (materialized.added > 0) {
+          await writeWarehouse(materialized.warehouse);
+        }
         return warehouseMemoryCache;
       }
     } catch (error) {
@@ -6010,12 +6017,17 @@ async function readWarehouse() {
   }
   try {
     const warehouse = JSON.parse(await fs.readFile(warehousePath, "utf8"));
-    warehouseMemoryCache = {
+    const normalized = {
       createdAt: warehouse.createdAt || new Date().toISOString(),
       updatedAt: warehouse.updatedAt || null,
       products: Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [],
       suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
     };
+    const materialized = materializeYandexExportedProductsForWarehouse(normalized);
+    warehouseMemoryCache = materialized.warehouse;
+    if (materialized.added > 0) {
+      await writeWarehouse(materialized.warehouse, { writePostgres: false });
+    }
     refreshWarehouseHashCache(warehouseMemoryCache);
     return warehouseMemoryCache;
   } catch (error) {
@@ -6055,7 +6067,11 @@ function normalizeWarehousePayload(warehouse) {
 async function writeWarehouse(warehouse, { writePostgres = true } = {}) {
   invalidateWarehouseViewCache();
   warehouseWritePromise = warehouseWritePromise.then(async () => {
-    const payload = normalizeWarehousePayload(warehouse);
+    const materialized = materializeYandexExportedProductsForWarehouse(warehouse);
+    const payload = normalizeWarehousePayload(materialized.warehouse);
+    if (materialized.added > 0) {
+      logger.info("materialized yandex exported products into warehouse", { added: materialized.added });
+    }
     warehouseMemoryCache = payload;
     if (writePostgres && shouldUsePostgresStorage()) {
       scheduleWarehousePostgresWrite(getPrisma(), payload);
@@ -12515,8 +12531,15 @@ app.use((error, request, response, _next) => {
   });
 });
 
-function startServer() {
+async function startServer() {
   initMarketplaceQueue();
+  pruneUploadDirectory().catch((err) => logger.warn("initial upload prune failed", { detail: err?.message || String(err) }));
+  try {
+    const warehouse = await readWarehouse();
+    logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length });
+  } catch (err) {
+    logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) });
+  }
   app.listen(port, () => {
     logger.info("server started", {
       port,
@@ -12539,10 +12562,6 @@ function startServer() {
         apiBaseUrl: telegramApiBaseUrl,
       });
     }
-    pruneUploadDirectory().catch((err) => logger.warn("initial upload prune failed", { detail: err?.message || String(err) }));
-    readWarehouse()
-      .then((warehouse) => logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length }))
-      .catch((err) => logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) }));
   });
 
   scheduleDailySync();
@@ -12629,5 +12648,5 @@ module.exports = {
 };
 
 if (require.main === module) {
-  startServer();
+  void startServer();
 }
