@@ -3038,7 +3038,34 @@ async function sendYandexOfferMappings(shop, offers = []) {
       results.push(...chunk.map((offer) => ({ offerId: offer.offerId, ok: true })));
     } catch (error) {
       const detail = error?.message || "yandex_import_failed";
-      results.push(...chunk.map((offer) => ({ offerId: offer.offerId, ok: false, error: detail })));
+      if (chunk.length === 1) {
+        results.push(...chunk.map((offer) => ({ offerId: offer.offerId, ok: false, error: detail })));
+        continue;
+      }
+      logger.warn("yandex offer mappings chunk failed, retrying one by one", {
+        shop: shop.id,
+        businessId: shop.businessId,
+        items: chunk.length,
+        detail,
+      });
+      for (const offer of chunk) {
+        try {
+          await yandexRequest(
+            shop,
+            "POST",
+            `/v2/businesses/${shop.businessId}/offer-mappings/update`,
+            { offerMappings: [{ offer }] },
+          );
+          results.push({ offerId: offer.offerId, ok: true, recoveredFromChunkError: true });
+        } catch (singleError) {
+          results.push({
+            offerId: offer.offerId,
+            ok: false,
+            error: singleError?.message || detail,
+            chunkError: detail,
+          });
+        }
+      }
     }
   }
   return results;
