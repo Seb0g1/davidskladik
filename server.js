@@ -3044,6 +3044,113 @@ async function sendYandexOfferMappings(shop, offers = []) {
   return results;
 }
 
+function buildYandexPriceUpdateFromOzonProduct(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const built = buildYandexOfferMapping(normalized);
+  const offerId = cleanText(built.offer?.offerId || normalized.offerId || normalized.offer_id);
+  const price = Number(
+    built.offer?.basicPrice?.value ||
+      normalized.marketplacePrice ||
+      normalized.targetPrice ||
+      normalized.ozon?.price ||
+      normalized.price ||
+      0,
+  );
+  const rounded = roundPrice(price);
+  if (!offerId || !Number.isFinite(rounded) || rounded <= 0) return null;
+  return { id: normalized.id, offerId, price: { value: rounded, currencyId: "RUR" } };
+}
+
+async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
+  const dryRun = options.dryRun === true;
+  const warnings = [];
+  const shops = Array.isArray(options.shops) && options.shops.length
+    ? options.shops
+    : uniqueYandexShopsByBusiness();
+  const rows = (Array.isArray(products) ? products : [])
+    .map(buildYandexPriceUpdateFromOzonProduct)
+    .filter(Boolean);
+
+  if (!rows.length || !shops.length) {
+    return {
+      ok: true,
+      dryRun,
+      sent: 0,
+      failed: 0,
+      skipped: rows.length,
+      warnings: shops.length ? warnings : ["Yandex Market не настроен."],
+      results: [],
+    };
+  }
+
+  let existingOfferIds = options.existingOfferIds instanceof Set ? options.existingOfferIds : null;
+  if (!existingOfferIds) {
+    try {
+      existingOfferIds = await getExistingYandexOfferIdSet(rows.map((row) => row.offerId));
+    } catch (error) {
+      const label = error?.message || error?.code || "ошибка API";
+      warnings.push(`Yandex: не удалось проверить существующие артикулы перед отправкой цен (${label})`);
+      existingOfferIds = new Set();
+    }
+  }
+
+  const selected = rows.filter((row) => existingOfferIds.has(row.offerId.toLowerCase()));
+  const results = [];
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun,
+      sent: 0,
+      failed: 0,
+      skipped: rows.length - selected.length,
+      planned: selected.length,
+      warnings,
+      results: selected.map((row) => ({ ...row, ok: true, stage: "price", dryRun: true })),
+    };
+  }
+
+  for (const shop of shops) {
+    for (const chunk of chunkArray(selected, 500)) {
+      if (!chunk.length) continue;
+      try {
+        await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-prices/updates`, {
+          offers: chunk.map((item) => ({ offerId: item.offerId, price: item.price })),
+        });
+        results.push(...chunk.map((item) => ({
+          stage: "price",
+          offerId: item.offerId,
+          target: shop.id,
+          targetName: shop.name || "Yandex Market",
+          ok: true,
+        })));
+      } catch (error) {
+        const label = error?.message || error?.code || "ошибка API";
+        warnings.push(`Yandex «${shop.name || shop.id}»: цены не отправлены (${label})`);
+        results.push(...chunk.map((item) => ({
+          stage: "price",
+          offerId: item.offerId,
+          target: shop.id,
+          targetName: shop.name || "Yandex Market",
+          ok: false,
+          error: label,
+        })));
+      }
+    }
+  }
+
+  const failed = results.filter((item) => !item.ok).length;
+  return {
+    ok: warnings.length === 0 && failed === 0,
+    dryRun,
+    sent: results.filter((item) => item.ok).length,
+    failed,
+    skipped: rows.length - selected.length,
+    planned: selected.length,
+    warnings,
+    results,
+  };
+}
+
 function pickYandexOfferFromMapping(item = {}) {
   return item.offer || item.mapping?.offer || item.mapping || item;
 }
@@ -4481,6 +4588,66 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
     sent: results.reduce((total, item) => total + Number(item.sent || 0), 0),
     skipped: rows.length - selected.length,
     planned: selected.length,
+    warnings,
+    results,
+  };
+}
+
+async function sendYandexStocksForExportedOzonProducts(products = [], options = {}) {
+  const warnings = [];
+  const shops = Array.isArray(options.shops) && options.shops.length
+    ? options.shops
+    : uniqueYandexShopsByBusiness();
+  const existingOfferIds = options.existingOfferIds instanceof Set ? options.existingOfferIds : new Set();
+  const rows = (Array.isArray(products) ? products : [])
+    .map((product) => ({
+      offerId: cleanText(product.offerId || product.offer_id),
+      stock: pickOzonProductStockForYandex(product),
+    }))
+    .filter((row) => row.offerId && existingOfferIds.has(row.offerId.toLowerCase()));
+  const results = [];
+  if (!rows.length || !shops.length) {
+    return { ok: true, sent: 0, failed: 0, skipped: rows.length, warnings: shops.length ? warnings : ["Yandex Market не настроен."], results };
+  }
+
+  for (const shop of shops) {
+    for (const chunk of chunkArray(rows, 500)) {
+      if (!chunk.length) continue;
+      try {
+        await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offers/stocks`, {
+          offers: chunk.map((item) => ({ offerId: item.offerId, stock: item.stock })),
+        });
+        results.push(...chunk.map((item) => ({
+          stage: "stock",
+          offerId: item.offerId,
+          target: shop.id,
+          targetName: shop.name || "Yandex Market",
+          stock: item.stock,
+          ok: true,
+        })));
+      } catch (error) {
+        const label = error?.message || error?.code || "ошибка API";
+        warnings.push(`Yandex «${shop.name || shop.id}»: остатки не отправлены (${label})`);
+        results.push(...chunk.map((item) => ({
+          stage: "stock",
+          offerId: item.offerId,
+          target: shop.id,
+          targetName: shop.name || "Yandex Market",
+          stock: item.stock,
+          ok: false,
+          error: label,
+        })));
+      }
+    }
+  }
+
+  const failed = results.filter((item) => !item.ok).length;
+  return {
+    ok: warnings.length === 0 && failed === 0,
+    sent: results.filter((item) => item.ok).length,
+    failed,
+    skipped: Math.max(0, (products || []).length - rows.length),
+    planned: rows.length,
     warnings,
     results,
   };
@@ -10234,27 +10401,54 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
       .map((product) => buildYandexOfferMapping(normalizeWarehouseProduct(product)).offer)
       .filter((offer) => offer?.offerId);
 
-    const results = [];
+    const cardResults = [];
     for (const shop of shops) {
       const sent = await sendYandexOfferMappings(shop, offers);
-      results.push(...sent.map((item) => ({ ...item, target: shop.id, targetName: shop.name || "Yandex Market" })));
+      cardResults.push(...sent.map((item) => ({
+        ...item,
+        stage: "card",
+        target: shop.id,
+        targetName: shop.name || "Yandex Market",
+      })));
     }
-    const failedRows = results.filter((item) => !item.ok);
-    const sentCount = results.filter((item) => item.ok).length;
+    const failedRows = cardResults.filter((item) => !item.ok);
+    const sentCount = cardResults.filter((item) => item.ok).length;
     const skippedExisting = rows.filter((row) => row.existingInYandex).length;
     const skippedBlocked = rows.filter((row) => row.blockReasons?.length).length;
     const skippedMissing = rows.filter((row) => !row.yandexReady).length;
+    const sentOfferIds = new Set(cardResults
+      .filter((item) => item.ok)
+      .map((item) => cleanText(item.offerId).toLowerCase())
+      .filter(Boolean));
+    const exportedProducts = selectedProducts
+      .filter((product) => sentOfferIds.has(cleanText(product.offerId).toLowerCase()));
+    const priceStage = exportedProducts.length
+      ? await sendYandexPricesFromOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds })
+      : { ok: true, sent: 0, failed: 0, skipped: 0, warnings: [], results: [] };
+    const stockStage = exportedProducts.length
+      ? await sendYandexStocksForExportedOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds })
+      : { ok: true, sent: 0, failed: 0, skipped: 0, warnings: [], results: [] };
+    const stageWarnings = [
+      ...(Array.isArray(priceStage.warnings) ? priceStage.warnings : []),
+      ...(Array.isArray(stockStage.warnings) ? stockStage.warnings : []),
+    ];
+    const results = [
+      ...cardResults,
+      ...(Array.isArray(priceStage.results) ? priceStage.results : []),
+      ...(Array.isArray(stockStage.results) ? stockStage.results : []),
+    ];
 
     if (sentCount > 0) {
-      const sentOfferIds = new Set(results.filter((item) => item.ok).map((item) => cleanText(item.offerId)).filter(Boolean));
       const now = new Date().toISOString();
       for (const product of warehouse.products || []) {
-        if (!selectedIds.has(product.id) || !sentOfferIds.has(cleanText(product.offerId))) continue;
+        if (!selectedIds.has(product.id) || !sentOfferIds.has(cleanText(product.offerId).toLowerCase())) continue;
         product.exports = product.exports || {};
         const exportState = {
           status: "sent",
           targetName: shops.map((shop) => shop.name || shop.id).join(", "),
           sentAt: now,
+          priceSent: Number(priceStage.sent || 0),
+          stockSent: Number(stockStage.sent || 0),
         };
         for (const shop of shops) product.exports[shop.id] = exportState;
         product.exports.yandex = exportState;
@@ -10273,20 +10467,29 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
       plannedNow: selectedRows.length,
       sent: sentCount,
       failed: failedRows.length,
+      priceSent: Number(priceStage.sent || 0),
+      priceFailed: Number(priceStage.failed || 0),
+      stockSent: Number(stockStage.sent || 0),
+      stockFailed: Number(stockStage.failed || 0),
       skippedExisting,
       skippedBlocked,
       skippedMissing,
-      failedOfferIds: failedRows.map((item) => item.offerId).filter(Boolean).slice(0, 500),
+      warnings: stageWarnings.slice(0, 100),
+      failedOfferIds: results.filter((item) => !item.ok).map((item) => item.offerId).filter(Boolean).slice(0, 500),
       newValue: {
         planned: eligibleRows.length,
         plannedNow: selectedRows.length,
         sent: sentCount,
         failed: failedRows.length,
+        priceSent: Number(priceStage.sent || 0),
+        priceFailed: Number(priceStage.failed || 0),
+        stockSent: Number(stockStage.sent || 0),
+        stockFailed: Number(stockStage.failed || 0),
       },
     });
 
     response.json({
-      ok: failedRows.length === 0,
+      ok: failedRows.length === 0 && Number(priceStage.failed || 0) === 0 && Number(stockStage.failed || 0) === 0,
       generatedAt: new Date().toISOString(),
       limit,
       sendLimit,
@@ -10295,10 +10498,17 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
       plannedNow: selectedRows.length,
       sent: sentCount,
       failed: failedRows.length,
+      priceSent: Number(priceStage.sent || 0),
+      priceFailed: Number(priceStage.failed || 0),
+      priceSkipped: Number(priceStage.skipped || 0),
+      stockSent: Number(stockStage.sent || 0),
+      stockFailed: Number(stockStage.failed || 0),
+      stockSkipped: Number(stockStage.skipped || 0),
       skippedExisting,
       skippedBlocked,
       skippedMissing,
       skippedByLimit: Math.max(0, eligibleRows.length - selectedRows.length),
+      warnings: stageWarnings,
       results,
       summary: summarizeOzonYandexImportPreview(rows),
     });
@@ -10398,9 +10608,14 @@ function publicYandexImportAuditEntry(entry = {}) {
     planned: Number(details.planned || 0),
     sent: Number(details.sent || 0),
     failed: Number(details.failed || 0),
+    priceSent: Number(details.priceSent || 0),
+    priceFailed: Number(details.priceFailed || 0),
+    stockSent: Number(details.stockSent || 0),
+    stockFailed: Number(details.stockFailed || 0),
     skippedExisting: Number(details.skippedExisting || 0),
     skippedBlocked: Number(details.skippedBlocked || 0),
     skippedMissing: Number(details.skippedMissing || 0),
+    warnings: Array.isArray(details.warnings) ? details.warnings : [],
     failedOfferIds: Array.isArray(details.failedOfferIds) ? details.failedOfferIds : [],
     targets: Array.isArray(details.targets) ? details.targets : [],
   };
@@ -11979,7 +12194,10 @@ module.exports = {
   ozonYandexImportBlockReasons,
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
+  buildYandexPriceUpdateFromOzonProduct,
+  sendYandexPricesFromOzonProducts,
   pickOzonProductStockForYandex,
+  sendYandexStocksForExportedOzonProducts,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,
   summarizeYandexCleanupPreview,

@@ -87,6 +87,7 @@ const {
   ozonYandexImportBlockReasons,
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
+  buildYandexPriceUpdateFromOzonProduct,
   pickOzonProductStockForYandex,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,
@@ -231,6 +232,25 @@ test("Ozon to Yandex stock sync uses Ozon stock from state and warehouses", () =
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { stock: 7, warehouses: [{ stock: 1 }] } }), 7);
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { warehouses: [{ stock: 2 }, { present: 3 }] } }), 5);
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { stock: 0 } }), 0);
+});
+
+test("Ozon to Yandex price update uses exported offer price", () => {
+  const item = buildYandexPriceUpdateFromOzonProduct(normalizeWarehouseProduct({
+    id: "ozon-yandex-price",
+    marketplace: "ozon",
+    offerId: "SKU-PRICE-1",
+    name: "Giorgio Armani Si Passione Eclat Парфюмерная вода 90 мл",
+    ozon: {
+      name: "Giorgio Armani Si Passione Eclat Парфюмерная вода 90 мл",
+      price: 4510.4,
+      vendor: "Giorgio Armani",
+      marketCategoryId: 123,
+      images: ["https://example.test/image.jpg"],
+      description: "Описание",
+    },
+  }));
+  assert.equal(item.offerId, "SKU-PRICE-1");
+  assert.deepEqual(item.price, { value: 4510, currencyId: "RUR" });
 });
 
 test("Yandex cleanup protects brands found in name, description, and characteristics", () => {

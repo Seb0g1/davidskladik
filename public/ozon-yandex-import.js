@@ -121,12 +121,17 @@ function renderImportFailures(results = []) {
   const failed = (Array.isArray(results) ? results : []).filter((item) => !item.ok);
   state.importFailedByOffer = new Map(failed.map((item) => [String(item.offerId || ""), item.error || "unknown_error"]));
   if (!els.importFailures) return;
+  const stageLabel = (stage) => ({
+    card: "карточка",
+    price: "цена",
+    stock: "остаток",
+  })[stage] || "этап";
   els.importFailures.hidden = failed.length === 0;
   els.importFailures.innerHTML = failed.length
     ? [
         `<strong>Не выгрузились SKU: ${failed.length}</strong>`,
-        ...failed.slice(0, 100).map((item) => `<div>${escapeHtml(item.offerId || "-")} · ${escapeHtml(item.targetName || item.target || "Yandex")} · ${escapeHtml(item.error || "unknown_error")}</div>`),
-        failed.length > 100 ? `<div>Показано первые 100 из ${failed.length}. Полный список есть в журнале операции.</div>` : "",
+        ...failed.slice(0, 100).map((item) => `<div>${escapeHtml(item.offerId || "-")} - ${escapeHtml(stageLabel(item.stage))} - ${escapeHtml(item.targetName || item.target || "Yandex")} - ${escapeHtml(item.error || "unknown_error")}</div>`),
+        failed.length > 100 ? `<div>Показаны первые 100 из ${failed.length}. Полный список есть в журнале операции.</div>` : "",
       ].filter(Boolean).join("")
     : "";
 }
@@ -360,7 +365,8 @@ function renderYandexImportHistory(items = []) {
       <div class="history-row">
         <div>
           <strong>${escapeHtml(item.user || "system")} · отправлено ${escapeHtml(item.sent || 0)} из ${escapeHtml(item.planned || 0)}</strong>
-          <span>${escapeHtml(targets)} · ошибок ${escapeHtml(item.failed || 0)} · уже были ${escapeHtml(item.skippedExisting || 0)} · блок ${escapeHtml(item.skippedBlocked || 0)}</span>
+          <span>${escapeHtml(targets)} - ошибки карточек ${escapeHtml(item.failed || 0)} - цены ${escapeHtml(item.priceSent || 0)}/${escapeHtml(item.priceFailed || 0)} - остатки ${escapeHtml(item.stockSent || 0)}/${escapeHtml(item.stockFailed || 0)}</span>
+          <span>Уже были ${escapeHtml(item.skippedExisting || 0)} - блок ${escapeHtml(item.skippedBlocked || 0)}</span>
           ${failed}
         </div>
         <small>${escapeHtml(item.at ? new Date(item.at).toLocaleString("ru-RU") : "-")}</small>
@@ -540,7 +546,8 @@ async function sendYandexImport() {
       body: { limit, confirmed: true },
     });
     renderImportFailures(payload.results || []);
-    setBusy(false, `Яндекс: отправлено ${payload.sent || 0}. Ошибок ${payload.failed || 0}. Уже были в Яндексе ${payload.skippedExisting || 0}. Отложено лимитом ${payload.skippedByLimit || 0}.`);
+    if (payload.warnings?.length) renderWarnings(payload.warnings);
+    setBusy(false, `Yandex: карточки ${payload.sent || 0}, ошибки карточек ${payload.failed || 0}. Цены ${payload.priceSent || 0}/${payload.priceFailed || 0}. Остатки ${payload.stockSent || 0}/${payload.stockFailed || 0}. Уже были ${payload.skippedExisting || 0}. Отложено лимитом ${payload.skippedByLimit || 0}.`);
     await loadYandexImportHistory();
   } catch (error) {
     setBusy(false, `Ошибка выгрузки в Яндекс: ${error.message || error}`);
