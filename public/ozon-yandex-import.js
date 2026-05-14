@@ -3,6 +3,7 @@ const state = {
   summary: { total: 0, eligible: 0, blocked: 0, existingInYandex: 0, missingRequired: 0 },
   cleanupRows: [],
   cleanupSummary: { total: 0, protected: 0, toDelete: 0, toArchive: 0, alreadyArchived: 0 },
+  cleanupFailedByOffer: new Map(),
 };
 
 const els = {
@@ -30,7 +31,10 @@ const els = {
   cleanupProtected: document.getElementById("yandexCleanupProtectedCount"),
   cleanupToArchive: document.getElementById("yandexCleanupArchiveCount"),
   cleanupAlreadyArchived: document.getElementById("yandexCleanupAlreadyArchivedCount"),
+  cleanupSearch: document.getElementById("yandexCleanupSearchInput"),
+  cleanupFilter: document.getElementById("yandexCleanupFilterSelect"),
   cleanupWarnings: document.getElementById("yandexCleanupWarnings"),
+  cleanupFailures: document.getElementById("yandexCleanupFailures"),
   cleanupRows: document.getElementById("yandexCleanupRows"),
   cleanupRowsMeta: document.getElementById("yandexCleanupRowsMeta"),
   cleanupHistory: document.getElementById("yandexCleanupHistory"),
@@ -171,6 +175,36 @@ function cleanupStatus(row) {
   return { className: "danger", label: "Удалить" };
 }
 
+function visibleCleanupRows() {
+  const filter = els.cleanupFilter?.value || "all";
+  const query = String(els.cleanupSearch?.value || "").trim().toLowerCase();
+  return state.cleanupRows.filter((row) => {
+    if (filter === "delete" && row.action !== "delete") return false;
+    if (filter === "keep" && !row.protected) return false;
+    if (filter === "errors" && !state.cleanupFailedByOffer.has(String(row.offerId || ""))) return false;
+    if (filter === "archived" && !row.archived) return false;
+    if (!query) return true;
+    const text = [row.offerId, row.name, row.shopName, row.vendor, row.stateLabel, row.state, cleanupReason(row)]
+      .map((item) => String(item || "").toLowerCase())
+      .join(" ");
+    return text.includes(query);
+  });
+}
+
+function renderCleanupFailures(results = []) {
+  const failed = (Array.isArray(results) ? results : []).filter((item) => !item.ok);
+  state.cleanupFailedByOffer = new Map(failed.map((item) => [String(item.offerId || ""), item.error || "unknown_error"]));
+  if (!els.cleanupFailures) return;
+  els.cleanupFailures.hidden = failed.length === 0;
+  els.cleanupFailures.innerHTML = failed.length
+    ? [
+        `<strong>Не удалились SKU: ${failed.length}</strong>`,
+        ...failed.slice(0, 100).map((item) => `<div>${escapeHtml(item.offerId || "-")} · ${escapeHtml(item.error || "unknown_error")}</div>`),
+        failed.length > 100 ? `<div>Показано первые 100 из ${failed.length}. Полный список есть в журнале и ответе операции.</div>` : "",
+      ].filter(Boolean).join("")
+    : "";
+}
+
 function renderCleanup(payload = {}) {
   state.cleanupRows = Array.isArray(payload.rows) ? payload.rows : [];
   state.cleanupSummary = payload.summary || {};
@@ -183,9 +217,10 @@ function renderCleanup(payload = {}) {
   if (els.cleanupCsv) els.cleanupCsv.disabled = state.cleanupRows.length === 0;
   renderCleanupWarnings(payload.warnings);
 
-  const rows = state.cleanupRows.slice(0, 1000);
+  const filtered = visibleCleanupRows();
+  const rows = filtered.slice(0, 1000);
   els.cleanupRowsMeta.textContent = state.cleanupRows.length
-    ? `Показано ${rows.length} из ${state.cleanupRows.length}`
+    ? `Показано ${rows.length} из ${filtered.length}. Всего: ${state.cleanupRows.length}`
     : "Нет данных";
   if (!rows.length) {
     els.cleanupRows.innerHTML = `<div class="empty-state">Запустите предпросмотр, чтобы увидеть товары Яндекса.</div>`;
@@ -193,7 +228,8 @@ function renderCleanup(payload = {}) {
   }
   els.cleanupRows.innerHTML = rows.map((row) => {
     const status = cleanupStatus(row);
-    const reasons = [cleanupReason(row)];
+    const failedReason = state.cleanupFailedByOffer.get(String(row.offerId || ""));
+    const reasons = [cleanupReason(row), failedReason ? `Ошибка удаления: ${failedReason}` : ""].filter(Boolean);
     return `
       <article class="import-row">
         <div class="import-row-image"><div class="import-row-placeholder">ЯМ</div></div>
@@ -232,10 +268,11 @@ function downloadYandexCleanupCsv() {
     els.cleanupStatus.textContent = "Сначала сделайте предпросмотр очистки.";
     return;
   }
+  const rows = visibleCleanupRows();
   const header = ["offerId", "название", "магазин", "статус", "причина", "действие"];
   const lines = [
     header.map(csvCell).join(","),
-    ...state.cleanupRows.map((row) => {
+    ...rows.map((row) => {
       const status = cleanupStatus(row);
       return [
         row.offerId || "",
@@ -256,7 +293,7 @@ function downloadYandexCleanupCsv() {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
-  els.cleanupStatus.textContent = `CSV сформирован: ${state.cleanupRows.length} строк.`;
+  els.cleanupStatus.textContent = `CSV сформирован: ${rows.length} строк.`;
 }
 
 function renderYandexCleanupHistory(items = []) {
@@ -307,6 +344,8 @@ async function previewYandexCleanup() {
   const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
   els.cleanupPreview.disabled = true;
   els.cleanupArchive.disabled = true;
+  state.cleanupFailedByOffer = new Map();
+  renderCleanupFailures([]);
   els.cleanupStatus.textContent = "Читаю все статусы Яндекс Маркета и ищу защищённые бренды...";
   try {
     const payload = await api("/api/yandex-cleanup/preview", {
@@ -314,7 +353,9 @@ async function previewYandexCleanup() {
       body: { protectedBrands, limit },
     });
     renderCleanup(payload);
-    els.cleanupStatus.textContent = `Проверено: ${payload.summary?.total || 0}. Оставить: ${payload.summary?.protected || 0}. Удалить: ${payload.summary?.toDelete ?? payload.summary?.toArchive ?? 0}.`;
+    const deleteCount = Number(payload.summary?.toDelete ?? payload.summary?.toArchive ?? 0);
+    const skippedByLimit = Number(payload.summary?.deleteSkippedByLimit || 0);
+    els.cleanupStatus.textContent = `Проверено: ${payload.summary?.total || 0}. Оставить: ${payload.summary?.protected || 0}. Удалить: ${deleteCount}.${skippedByLimit ? ` За один запуск уйдёт ${payload.summary?.deletePlannedNow || 0}, ещё ${skippedByLimit} останется из-за лимита.` : ""}`;
   } catch (error) {
     els.cleanupStatus.textContent = `Ошибка предпросмотра: ${error.message || error}`;
   } finally {
@@ -349,11 +390,17 @@ async function archiveYandexCleanup() {
   }
   const finalSummary = dryRunPayload.summary || {};
   const finalToDelete = Number(finalSummary.toDelete ?? finalSummary.toArchive ?? 0);
+  const finalToDeleteNow = Number(finalSummary.deletePlannedNow ?? finalSummary.plannedNow ?? Math.min(finalToDelete, 5000));
   const finalProtected = Number(finalSummary.protected || 0);
   const finalArchived = Number(finalSummary.alreadyArchived || 0);
+  const skippedByLimit = Number(finalSummary.deleteSkippedByLimit ?? dryRunPayload.skippedByLimit ?? 0);
+  const deleteLimit = Number(finalSummary.deleteLimit || 5000);
   const confirmed = window.confirm([
     "Финальная проверка перед удалением:",
-    `Будет удалено: ${finalToDelete}`,
+    `Будет удалено сейчас: ${finalToDeleteNow}`,
+    `Всего подходит под удаление: ${finalToDelete}`,
+    `Лимит за запуск: ${deleteLimit}`,
+    `Останется на следующий запуск из-за лимита: ${skippedByLimit}`,
     `Оставлено: ${finalProtected}`,
     `Архивных среди удаления: ${finalArchived}`,
     `Бренды-защита: ${protectedBrands.join(", ")}`,
@@ -379,9 +426,10 @@ async function archiveYandexCleanup() {
       method: "POST",
       body: { protectedBrands, limit, confirmed: true, confirmationText },
     });
-    els.cleanupStatus.textContent = `Удалено: ${payload.deleted || 0}. Не удалено: ${payload.failed || 0}.`;
+    renderCleanupFailures(payload.results || []);
+    els.cleanupStatus.textContent = `Удалено: ${payload.deleted || 0}. Не удалено: ${payload.failed || 0}. Отложено лимитом: ${payload.skippedByLimit || 0}.`;
     await loadYandexCleanupHistory();
-    await previewYandexCleanup();
+    renderCleanup({ rows: state.cleanupRows, summary: state.cleanupSummary });
   } catch (error) {
     els.cleanupStatus.textContent = `Ошибка очистки: ${error.message || error}`;
   } finally {
@@ -450,6 +498,8 @@ els.cleanupPreview?.addEventListener("click", previewYandexCleanup);
 els.cleanupCsv?.addEventListener("click", downloadYandexCleanupCsv);
 els.cleanupArchive?.addEventListener("click", archiveYandexCleanup);
 els.cleanupHistoryRefresh?.addEventListener("click", loadYandexCleanupHistory);
+els.cleanupFilter?.addEventListener("change", () => renderCleanup({ rows: state.cleanupRows, summary: state.cleanupSummary }));
+els.cleanupSearch?.addEventListener("input", () => renderCleanup({ rows: state.cleanupRows, summary: state.cleanupSummary }));
 els.cleanupBrands?.addEventListener("input", () => {
   const toDelete = Number(state.cleanupSummary.toDelete ?? state.cleanupSummary.toArchive ?? 0);
   els.cleanupArchive.disabled = !(toDelete > 0 && parseCleanupBrands().length);

@@ -99,7 +99,18 @@
           <h2>Предпросмотр очистки Яндекса</h2>
           <span id="yandexCleanupRowsMeta" class="sync-status-pill">Нет данных</span>
         </div>
+        <div class="cleanup-preview-controls">
+          <input id="yandexCleanupSearchInput" class="compact-input" type="search" placeholder="Поиск SKU или название" autocomplete="off" />
+          <select id="yandexCleanupFilterSelect" class="compact-select" aria-label="Фильтр предпросмотра очистки">
+            <option value="all">Все</option>
+            <option value="delete">Удалить</option>
+            <option value="keep">Оставить</option>
+            <option value="errors">Ошибки</option>
+            <option value="archived">Архивные</option>
+          </select>
+        </div>
         <div id="yandexCleanupWarnings" class="import-warnings" hidden></div>
+        <div id="yandexCleanupFailures" class="import-warnings" hidden></div>
         <div id="yandexCleanupRows" class="import-rows"></div>
       </section>
 

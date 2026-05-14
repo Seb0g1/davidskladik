@@ -340,7 +340,7 @@ h1 {
 }
 
 .cleanup-actions {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .cleanup-summary-grid {
@@ -349,6 +349,12 @@ h1 {
 
 .cleanup-list-panel {
   min-height: 180px;
+}
+
+.cleanup-preview-controls {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 260px);
+  gap: 10px;
 }
 
 .import-list-head {
@@ -369,6 +375,17 @@ h1 {
   background: rgba(15, 23, 42, 0.35);
   color: var(--ink);
   padding: 0 12px;
+}
+
+.compact-input {
+  min-height: 42px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.35);
+  color: var(--ink);
+  padding: 0 12px;
+  font: inherit;
+  font-weight: 700;
 }
 
 .import-warnings {
@@ -475,7 +492,8 @@ h1 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .cleanup-actions {
+  .cleanup-actions,
+  .cleanup-preview-controls {
     grid-template-columns: 1fr;
   }
 }

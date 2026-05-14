@@ -93,6 +93,7 @@ const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CA
 const ozonWarehouseListEnabled = process.env.OZON_WAREHOUSE_LIST_ENABLED === "true";
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
+const yandexCleanupDeleteLimit = Math.max(1, Math.min(5000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 5000) || 5000));
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const telegramBotToken = cleanText(process.env.TELEGRAM_BOT_TOKEN);
 const telegramChatId = cleanText(process.env.TELEGRAM_CHAT_ID);
@@ -10217,7 +10218,17 @@ app.post("/api/yandex-cleanup/preview", async (request, response, next) => {
     const protectedBrands = parseProtectedBrandList(request.body?.protectedBrands || request.body?.brands || "");
     const requestedLimit = Number(request.body?.limit || 50000);
     const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 50000));
-    response.json(await buildYandexCleanupPreview({ protectedBrands, limit }));
+    const preview = await buildYandexCleanupPreview({ protectedBrands, limit });
+    const toDelete = (preview.rows || []).filter((row) => row.action === "delete").length;
+    response.json({
+      ...preview,
+      summary: {
+        ...(preview.summary || {}),
+        deleteLimit: yandexCleanupDeleteLimit,
+        deletePlannedNow: Math.min(toDelete, yandexCleanupDeleteLimit),
+        deleteSkippedByLimit: Math.max(0, toDelete - yandexCleanupDeleteLimit),
+      },
+    });
   } catch (error) {
     next(error);
   }
@@ -10229,6 +10240,8 @@ function publicYandexCleanupAuditEntry(entry = {}) {
     at: entry.at || null,
     user: entry.user || "system",
     planned: Number(details.planned || 0),
+    plannedNow: Number(details.plannedNow || 0),
+    skippedByLimit: Number(details.skippedByLimit || 0),
     deleted: Number(details.deleted || 0),
     failed: Number(details.failed || 0),
     notDeleted: Number(details.notDeleted || 0),
@@ -10270,14 +10283,25 @@ app.post("/api/yandex-cleanup/delete", async (request, response, next) => {
     const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 50000));
     const preview = await buildYandexCleanupPreview({ protectedBrands, limit });
     const toDelete = (preview.rows || []).filter((row) => row.action === "delete");
+    const limitedToDelete = toDelete.slice(0, yandexCleanupDeleteLimit);
+    const deleteSummary = {
+      ...(preview.summary || {}),
+      toDelete: toDelete.length,
+      toArchive: toDelete.length,
+      deleteLimit: yandexCleanupDeleteLimit,
+      deletePlannedNow: limitedToDelete.length,
+      deleteSkippedByLimit: Math.max(0, toDelete.length - limitedToDelete.length),
+    };
     if (dryRun) {
       return response.json({
         ok: true,
         dryRun: true,
         generatedAt: new Date().toISOString(),
         protectedBrands,
-        summary: preview.summary,
+        summary: deleteSummary,
         planned: toDelete.length,
+        plannedNow: limitedToDelete.length,
+        skippedByLimit: Math.max(0, toDelete.length - limitedToDelete.length),
         deleted: 0,
         failed: 0,
         notDeleted: 0,
@@ -10285,7 +10309,7 @@ app.post("/api/yandex-cleanup/delete", async (request, response, next) => {
         rows: preview.rows || [],
       });
     }
-    const results = await deleteYandexCleanupRows(toDelete);
+    const results = await deleteYandexCleanupRows(limitedToDelete);
     const deleted = results.filter((item) => item.ok).length;
     const failedRows = results.filter((item) => !item.ok);
     await appendAudit(request, "yandex.cleanup.delete", {
@@ -10293,14 +10317,17 @@ app.post("/api/yandex-cleanup/delete", async (request, response, next) => {
       entityId: "business_catalog",
       protectedBrands,
       limit,
-      summary: preview.summary,
+      summary: deleteSummary,
       planned: toDelete.length,
+      plannedNow: limitedToDelete.length,
+      skippedByLimit: Math.max(0, toDelete.length - limitedToDelete.length),
       deleted,
       failed: failedRows.length,
       notDeleted: failedRows.filter((item) => item.error === "not_deleted_by_yandex").length,
       failedOfferIds: failedRows.map((item) => item.offerId).filter(Boolean).slice(0, 500),
       newValue: {
         planned: toDelete.length,
+        plannedNow: limitedToDelete.length,
         deleted,
         failed: failedRows.length,
         protectedBrands,
@@ -10310,8 +10337,10 @@ app.post("/api/yandex-cleanup/delete", async (request, response, next) => {
       ok: failedRows.length === 0,
       generatedAt: new Date().toISOString(),
       protectedBrands,
-      summary: preview.summary,
+      summary: deleteSummary,
       planned: toDelete.length,
+      plannedNow: limitedToDelete.length,
+      skippedByLimit: Math.max(0, toDelete.length - limitedToDelete.length),
       deleted,
       failed: failedRows.length,
       notDeleted: failedRows.filter((item) => item.error === "not_deleted_by_yandex").length,
