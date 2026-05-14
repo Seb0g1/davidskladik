@@ -855,6 +855,12 @@ test("admin can add employees and managers cannot open admin areas", async () =>
       .expect(200);
     assert.ok(enabled.body.users.some((user) => user.username === username && user.disabled === false));
 
+    const promoted = await admin
+      .put(`/api/users/${encodeURIComponent(username)}`)
+      .send({ role: "admin" })
+      .expect(200);
+    assert.ok(promoted.body.users.some((user) => user.username === username && user.role === "admin"));
+
     await admin.delete(`/api/users/${encodeURIComponent(username)}`).expect(200);
   } finally {
     await restoreFile(appUsersPath, backup);

@@ -5308,6 +5308,14 @@ select.is-invalid {
   font-size: 12px;
 }
 
+.settings-user-row .compact-select {
+  min-width: 136px;
+  min-height: 36px;
+  padding: 7px 34px 7px 12px;
+  border-radius: 14px;
+  font-size: 12px;
+}
+
 .settings-user-row.is-disabled {
   opacity: 0.72;
   border-style: dashed;

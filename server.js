@@ -7430,6 +7430,7 @@ app.post("/api/users", requireAdmin, async (request, response, next) => {
 app.put("/api/users/:username", requireAdmin, async (request, response, next) => {
   try {
     const username = cleanText(request.params.username);
+    const currentUsername = requestUsername(request);
     const users = await readStoredAppUsers({ includeDisabled: true });
     const index = users.findIndex((item) => item.username.toLowerCase() === username.toLowerCase());
     if (index < 0) return response.status(404).json({ error: "Локальный сотрудник не найден. Пользователей из .env можно менять только в .env." });
@@ -7443,7 +7444,13 @@ app.put("/api/users/:username", requireAdmin, async (request, response, next) =>
       const active = request.body.active !== undefined
         ? Boolean(request.body.active)
         : !Boolean(request.body.disabled);
+      if (!active && username.toLowerCase() === currentUsername.toLowerCase()) {
+        return response.status(400).json({ error: "Нельзя выключить текущего пользователя. Сначала войдите под другим администратором." });
+      }
       nextUser.disabled = !active;
+    }
+    if (nextUser.role !== "admin" && username.toLowerCase() === currentUsername.toLowerCase()) {
+      return response.status(400).json({ error: "Нельзя снять роль администратора с текущего пользователя. Сначала войдите под другим администратором." });
     }
     if (request.body.password) {
       const password = cleanText(request.body.password);
@@ -7467,6 +7474,10 @@ app.put("/api/users/:username", requireAdmin, async (request, response, next) =>
 app.delete("/api/users/:username", requireAdmin, async (request, response, next) => {
   try {
     const username = cleanText(request.params.username);
+    const currentUsername = requestUsername(request);
+    if (username.toLowerCase() === currentUsername.toLowerCase()) {
+      return response.status(400).json({ error: "Нельзя удалить текущего пользователя. Сначала войдите под другим администратором." });
+    }
     const users = await readStoredAppUsers({ includeDisabled: true });
     const target = users.find((item) => item.username.toLowerCase() === username.toLowerCase());
     if (!target) return response.status(404).json({ error: "Локальный сотрудник не найден. Пользователей из .env удалить нельзя." });

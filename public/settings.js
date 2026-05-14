@@ -182,6 +182,10 @@ function renderUsers(users = []) {
           <span>${user.role === "admin" ? "Администратор" : "Менеджер"} · ${sourceLabel(user.source)}${user.protected ? " · защищён" : ""}${user.disabled ? " · выключен" : ""}</span>
         </div>
         <div class="form-inline-actions">
+          <select class="compact-select user-role-select" ${user.protected ? "disabled" : ""} aria-label="Роль сотрудника">
+            <option value="manager" ${user.role === "admin" ? "" : "selected"}>Менеджер</option>
+            <option value="admin" ${user.role === "admin" ? "selected" : ""}>Администратор</option>
+          </select>
           <button class="secondary-button compact-button toggle-user-active" type="button" ${user.protected ? "disabled" : ""}>${user.disabled ? "Включить" : "Выключить"}</button>
           <button class="secondary-button compact-button reset-user-password" type="button" ${user.protected ? "disabled" : ""}>Новый пароль</button>
           <button class="secondary-button compact-button delete-user" type="button" ${user.protected ? "disabled" : ""}>Удалить</button>
@@ -467,6 +471,28 @@ employeeList?.addEventListener("click", async (event) => {
       renderUsers(data.users || []);
       if (employeeStatus) employeeStatus.textContent = `Пароль сотрудника ${username} обновлён.`;
     }
+  } catch (error) {
+    if (employeeStatus) employeeStatus.textContent = error.message;
+    loadUsers().catch(() => {});
+  }
+});
+
+employeeList?.addEventListener("change", async (event) => {
+  const roleSelect = event.target.closest(".user-role-select");
+  if (!roleSelect) return;
+  const row = event.target.closest(".settings-user-row");
+  const username = row?.dataset.username || "";
+  if (!username) return;
+  roleSelect.disabled = true;
+  try {
+    const role = String(roleSelect.value || "manager");
+    const data = await api(`/api/users/${encodeURIComponent(username)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role }),
+    });
+    renderUsers(data.users || []);
+    if (employeeStatus) employeeStatus.textContent = `Роль сотрудника ${username} обновлена.`;
   } catch (error) {
     if (employeeStatus) employeeStatus.textContent = error.message;
     loadUsers().catch(() => {});
