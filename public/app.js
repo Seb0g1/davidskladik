@@ -1763,6 +1763,21 @@ function mergeWarehouseProducts(products = []) {
   return true;
 }
 
+function mergeWarehouseProductsForCurrentSelection(products = [], { selectionVersion = null, selectedGroupKey = null } = {}) {
+  const list = (Array.isArray(products) ? products : []).filter((product) => product?.id);
+  if (!list.length) return false;
+  list.forEach((product) => mergeWarehouseProduct(product));
+  const sameSelection = (selectionVersion === null || Number(selectionVersion) === Number(state.warehouseSelectionVersion || 0))
+    && (!selectedGroupKey || String(selectedGroupKey) === String(state.selectedWarehouseGroupKey || ""));
+  if (sameSelection) {
+    applyWarehouseFilters();
+    refreshSelectedDetailForProductIds(list.map((product) => product.id));
+  } else {
+    renderWarehouseCards();
+  }
+  return true;
+}
+
 function handleProductConflict(error, context = "операции") {
   if (error?.status !== 409) return false;
   const conflictItems = Array.isArray(error?.payload?.conflicts)
@@ -3946,6 +3961,8 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   if (markupForm) {
     event.preventDefault();
     const formData = new FormData(markupForm);
+    const selectionVersion = state.warehouseSelectionVersion;
+    const selectedGroupKey = state.selectedWarehouseGroupKey;
     try {
       const result = await api(`/api/warehouse/products/${markupForm.dataset.productId}`, {
         method: "PATCH",
@@ -3956,7 +3973,7 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
         }),
       });
       elements.warehouseStatus.textContent = "Наценка сохранена. Автоотправка цены поставлена в очередь.";
-      if (!mergeWarehouseProducts([result.product].filter(Boolean))) queueWarehouseRefresh();
+      if (!mergeWarehouseProductsForCurrentSelection([result.product].filter(Boolean), { selectionVersion, selectedGroupKey })) queueWarehouseRefresh();
     } catch (error) {
       if (handleProductConflict(error, "наценки")) return;
       elements.warehouseStatus.textContent = error.message;
@@ -4091,6 +4108,8 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
     id,
     expectedUpdatedAt: String(byId.get(id)?.updatedAt || ""),
   }));
+  const selectionVersion = state.warehouseSelectionVersion;
+  const selectedGroupKey = state.selectedWarehouseGroupKey;
 
   toggleButton.disabled = true;
   try {
@@ -4100,7 +4119,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       body: JSON.stringify({ productIds, enabled: enable, optimisticLocks }),
     });
     elements.warehouseStatus.textContent = `AUTO ${enable ? "включен" : "выключен"} для карточки: ${formatNumber(result.changed)} вариантов.`;
-    if (!mergeWarehouseProducts(result.products)) queueWarehouseRefresh();
+    if (!mergeWarehouseProductsForCurrentSelection(result.products, { selectionVersion, selectedGroupKey })) queueWarehouseRefresh();
   } catch (error) {
     if (handleProductConflict(error, "AUTO для карточки")) return;
     elements.warehouseStatus.textContent = error.message;
