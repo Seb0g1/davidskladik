@@ -61,6 +61,7 @@ const {
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
   marketplaceStateCodeFromPostgresRow,
+  summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,
   isWeakOzonWarehouseProduct,
@@ -797,6 +798,24 @@ test("JSON seed normalizers prepare products, links, and retry items for Postgre
   });
   assert.equal(retry.status, "delayed");
   assert.equal(retry.queueKey, "p1:ozon");
+});
+
+test("warehouse summary counters use linked product stats, not page-sized snapshots", () => {
+  const stats = summarizeWarehouseCounterStats({
+    totalProducts: 5,
+    linkedProducts: [{ id: "p1" }, { id: "p2" }, { id: "p3" }],
+    builtLinkedProducts: [
+      { id: "p1", ready: true, changed: true },
+      { id: "p2", ready: true, changed: false },
+      { id: "p3", ready: false, changed: false },
+    ],
+  });
+
+  assert.equal(stats.linkedProducts, 3);
+  assert.equal(stats.ready, 2);
+  assert.equal(stats.changed, 1);
+  assert.equal(stats.withoutSupplier, 2);
+  assert.equal(stats.linkedNotReady, 1);
 });
 
 test("POST /api/login неверный пароль", async () => {

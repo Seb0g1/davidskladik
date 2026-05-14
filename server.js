@@ -6420,6 +6420,35 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
   });
 }
 
+function summarizeWarehouseCounterStats({ totalProducts = 0, linkedProducts = [], builtLinkedProducts = [] } = {}) {
+  const linkedCount = Array.isArray(linkedProducts) ? linkedProducts.length : 0;
+  const built = Array.isArray(builtLinkedProducts) ? builtLinkedProducts : [];
+  const ready = built.filter((product) => product.ready).length;
+  const changed = built.filter((product) => product.changed).length;
+  return {
+    linkedProducts: linkedCount,
+    ready,
+    changed,
+    withoutSupplier: Math.max(0, Number(totalProducts || 0) - linkedCount),
+    linkedNotReady: Math.max(0, linkedCount - ready),
+  };
+}
+
+async function buildWarehouseCounterStatsFromLinkedProducts(products = [], suppliers = [], { totalProducts = 0, usdRate } = {}) {
+  const linkedProducts = (Array.isArray(products) ? products : [])
+    .map(normalizeWarehouseProduct)
+    .filter((product) => Array.isArray(product.links) && product.links.length > 0);
+  if (!linkedProducts.length) {
+    return summarizeWarehouseCounterStats({ totalProducts, linkedProducts, builtLinkedProducts: [] });
+  }
+  const builtLinkedProducts = await buildFreshWarehouseProductsForWarehouse(
+    { products: linkedProducts, suppliers: Array.isArray(suppliers) ? suppliers : [] },
+    linkedProducts.map((product) => product.id),
+    { refreshPrices: false, persistMutations: false, livePriceMaster: true, batchPriceMaster: true, usdRate },
+  );
+  return summarizeWarehouseCounterStats({ totalProducts, linkedProducts, builtLinkedProducts });
+}
+
 async function buildFreshWarehouseProducts(productIds = [], { refreshPrices = false } = {}) {
   const warehouse = await readWarehouse();
   return buildFreshWarehouseProductsForWarehouse(warehouse, productIds, { refreshPrices, persistMutations: true });
@@ -6564,10 +6593,9 @@ async function buildFastWarehousePageFromPostgres({
   const where = warehousePagePostgresWhere(needsDeepBrandFilter ? { ...filters, brand: "" } : filters);
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
-  const [totalAll, dbTotal, withoutSupplier, ozonStateCounts, dbRows, suppliers] = await Promise.all([
+  const [totalAll, dbTotal, ozonStateCounts, dbRows, linkedRows, suppliers] = await Promise.all([
     prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
     needsDeepBrandFilter ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
-    prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { links: { none: {} } }] } }),
     getOzonStateCountsFromPostgres(prisma),
     prisma.warehouseProduct.findMany({
       where,
@@ -6576,9 +6604,20 @@ async function buildFastWarehousePageFromPostgres({
       skip: needsDeepBrandFilter ? 0 : offset,
       take: needsDeepBrandFilter ? undefined : pageSize,
     }),
+    prisma.warehouseProduct.findMany({
+      where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] },
+      include: { links: true },
+      orderBy: { updatedAt: "desc" },
+    }),
     prisma.managedSupplier.findMany({ orderBy: { name: "asc" } }),
   ]);
   pageTrace("postgres:after-query", traceStartedAt);
+  const normalizedSuppliers = suppliers.map(supplierFromPostgres);
+  const counterStats = await buildWarehouseCounterStatsFromLinkedProducts(
+    linkedRows.map(productFromPostgres),
+    normalizedSuppliers,
+    { totalProducts: totalAll, usdRate: rate },
+  );
   const allProducts = needsDeepBrandFilter
     ? dbRows.map(productFromPostgres).filter((product) => warehousePageProductMatches(product, filters))
     : dbRows.map(productFromPostgres);
@@ -6588,7 +6627,7 @@ async function buildFastWarehousePageFromPostgres({
     createdAt: dbRows[0]?.createdAt?.toISOString() || null,
     updatedAt: dbRows[0]?.updatedAt?.toISOString() || null,
     products: pageProducts,
-    suppliers: suppliers.map(supplierFromPostgres),
+    suppliers: normalizedSuppliers,
   };
   const built = await buildFreshWarehouseProductsForWarehouse(
     pageWarehouse,
@@ -6614,9 +6653,11 @@ async function buildFastWarehousePageFromPostgres({
     createdAt: pageWarehouse.createdAt,
     updatedAt: pageWarehouse.updatedAt,
     totalAll,
-    ready: lastWarehouseViewSnapshot?.ready ?? items.filter((item) => item.ready).length,
-    changed: lastWarehouseViewSnapshot?.changed ?? items.filter((item) => item.changed).length,
-    withoutSupplier,
+    ready: counterStats.ready,
+    changed: counterStats.changed,
+    withoutSupplier: counterStats.withoutSupplier,
+    linkedProducts: counterStats.linkedProducts,
+    linkedNotReady: counterStats.linkedNotReady,
     ozonArchived: ozonStateCounts.archived,
     ozonInactive: ozonStateCounts.inactive,
     ozonOutOfStock: ozonStateCounts.outOfStock,
@@ -6670,15 +6711,20 @@ async function buildFastWarehousePage({
       partial: false,
     };
   });
-  const pageReady = items.filter((item) => item.ready).length;
-  const pageChanged = items.filter((item) => item.changed).length;
+  const counterStats = await buildWarehouseCounterStatsFromLinkedProducts(
+    enabledProducts,
+    warehouse.suppliers,
+    { totalProducts: enabledProducts.length, usdRate: rate },
+  );
   return {
     createdAt: warehouse.createdAt || null,
     updatedAt: warehouse.updatedAt || null,
     totalAll: enabledProducts.length,
-    ready: lastWarehouseViewSnapshot?.ready ?? pageReady,
-    changed: lastWarehouseViewSnapshot?.changed ?? pageChanged,
-    withoutSupplier: enabledProducts.filter((product) => !(product.links || []).length).length,
+    ready: counterStats.ready,
+    changed: counterStats.changed,
+    withoutSupplier: counterStats.withoutSupplier,
+    linkedProducts: counterStats.linkedProducts,
+    linkedNotReady: counterStats.linkedNotReady,
     ozonArchived: enabledProducts.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.archived).length,
     ozonInactive: enabledProducts.filter((product) => product.marketplace === "ozon" && /inactive/i.test(cleanText(product.marketplaceState?.code))).length,
     ozonOutOfStock: enabledProducts.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "out_of_stock").length,
@@ -10905,6 +10951,7 @@ module.exports = {
   productFromPostgres,
   readWarehouse,
   marketplaceStateCodeFromPostgresRow,
+  summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,
   isWeakOzonWarehouseProduct,
