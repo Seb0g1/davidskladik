@@ -1844,8 +1844,6 @@ function warehouseDetailSignature(group) {
       item.nextPrice ?? "",
       item.targetStock ?? "",
       item.status || "",
-      item.lastOzonPriceSend?.status || "",
-      item.lastOzonPriceSend?.at || "",
       (item.links || []).map((link) => [link.id, link.article, link.partnerId, link.supplierName, link.priceCurrency, link.updatedBy, link.updatedAt].join(":")).sort().join("|"),
       item.selectedSupplier?.article || "",
       item.selectedSupplier?.partnerId || "",
@@ -3308,7 +3306,7 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
             text: "Данные изменились в фоне. Выбранная карточка оставлена на месте.",
             at: new Date().toISOString(),
           };
-          renderWarehouseDetail(group);
+          renderWarehouseDetailIfChanged(group);
         } else {
           renderWarehouseDetailIfChanged(group);
         }
