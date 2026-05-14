@@ -94,6 +94,7 @@ const ozonWarehouseListEnabled = process.env.OZON_WAREHOUSE_LIST_ENABLED === "tr
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(5000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 5000) || 5000));
+const yandexImportSendLimit = Math.max(1, Math.min(1000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 500) || 500));
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const telegramBotToken = cleanText(process.env.TELEGRAM_BOT_TOKEN);
 const telegramChatId = cleanText(process.env.TELEGRAM_CHAT_ID);
@@ -3007,6 +3008,40 @@ async function getExistingYandexOfferIdSet(offerIds = []) {
   }
 
   return existing;
+}
+
+function uniqueYandexShopsByBusiness() {
+  const seenBusinesses = new Set();
+  return getYandexShops().filter((shop) => {
+    if (!shop.apiKey || !shop.businessId) return false;
+    const key = String(shop.businessId);
+    if (seenBusinesses.has(key)) return false;
+    seenBusinesses.add(key);
+    return true;
+  });
+}
+
+async function sendYandexOfferMappings(shop, offers = []) {
+  const results = [];
+  const prepared = (Array.isArray(offers) ? offers : [])
+    .map((offer) => ({ ...offer, offerId: cleanText(offer.offerId) }))
+    .filter((offer) => offer.offerId);
+  for (const chunk of chunkArray(prepared, 200)) {
+    if (!chunk.length) continue;
+    try {
+      await yandexRequest(
+        shop,
+        "POST",
+        `/v2/businesses/${shop.businessId}/offer-mappings/update`,
+        { offerMappings: chunk.map((offer) => ({ offer })) },
+      );
+      results.push(...chunk.map((offer) => ({ offerId: offer.offerId, ok: true })));
+    } catch (error) {
+      const detail = error?.message || "yandex_import_failed";
+      results.push(...chunk.map((offer) => ({ offerId: offer.offerId, ok: false, error: detail })));
+    }
+  }
+  return results;
 }
 
 function pickYandexOfferFromMapping(item = {}) {
@@ -10168,6 +10203,110 @@ app.get("/api/ozon-yandex-import/preview", async (request, response, next) => {
   }
 });
 
+app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
+  try {
+    if (request.body?.confirmed !== true) {
+      return response.status(400).json({ error: "Для выгрузки в Яндекс нужно подтверждение confirmed=true." });
+    }
+    const requestedLimit = Number(request.body?.limit || 30000);
+    const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
+    const sendLimit = Math.max(1, Math.min(yandexImportSendLimit, Number(request.body?.sendLimit || yandexImportSendLimit) || yandexImportSendLimit));
+    const shops = uniqueYandexShopsByBusiness();
+    if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен. Добавьте кабинет в настройках." });
+
+    const warehouse = await readWarehouse();
+    const products = (warehouse.products || [])
+      .filter((product) => product.marketplace === "ozon")
+      .slice(0, limit);
+    const initialRows = products.map((product) => buildOzonYandexImportCandidate(product));
+    const candidateOfferIds = initialRows
+      .filter((row) => !row.blockReasons?.length && row.yandexReady)
+      .map((row) => cleanText(row.offerId))
+      .filter(Boolean);
+    const yandexExistingOfferIds = await getExistingYandexOfferIdSet(candidateOfferIds);
+    const rows = products.map((product) => buildOzonYandexImportCandidate(product, { yandexExistingOfferIds }));
+    const eligibleRows = rows.filter((row) => row.eligible);
+    const selectedRows = eligibleRows.slice(0, sendLimit);
+    const selectedIds = new Set(selectedRows.map((row) => row.id));
+    const productsById = new Map(products.map((product) => [product.id, product]));
+    const selectedProducts = selectedRows.map((row) => productsById.get(row.id)).filter(Boolean);
+    const offers = selectedProducts
+      .map((product) => buildYandexOfferMapping(normalizeWarehouseProduct(product)).offer)
+      .filter((offer) => offer?.offerId);
+
+    const results = [];
+    for (const shop of shops) {
+      const sent = await sendYandexOfferMappings(shop, offers);
+      results.push(...sent.map((item) => ({ ...item, target: shop.id, targetName: shop.name || "Yandex Market" })));
+    }
+    const failedRows = results.filter((item) => !item.ok);
+    const sentCount = results.filter((item) => item.ok).length;
+    const skippedExisting = rows.filter((row) => row.existingInYandex).length;
+    const skippedBlocked = rows.filter((row) => row.blockReasons?.length).length;
+    const skippedMissing = rows.filter((row) => !row.yandexReady).length;
+
+    if (sentCount > 0) {
+      const sentOfferIds = new Set(results.filter((item) => item.ok).map((item) => cleanText(item.offerId)).filter(Boolean));
+      const now = new Date().toISOString();
+      for (const product of warehouse.products || []) {
+        if (!selectedIds.has(product.id) || !sentOfferIds.has(cleanText(product.offerId))) continue;
+        product.exports = product.exports || {};
+        const exportState = {
+          status: "sent",
+          targetName: shops.map((shop) => shop.name || shop.id).join(", "),
+          sentAt: now,
+        };
+        for (const shop of shops) product.exports[shop.id] = exportState;
+        product.exports.yandex = exportState;
+        product.updatedAt = now;
+      }
+      await writeWarehouse(warehouse);
+    }
+
+    await appendAudit(request, "yandex.import.send", {
+      entityType: "yandex_import",
+      entityId: "ozon_to_yandex",
+      limit,
+      sendLimit,
+      targets: shops.map((shop) => ({ id: shop.id, name: shop.name, businessId: shop.businessId })),
+      planned: eligibleRows.length,
+      plannedNow: selectedRows.length,
+      sent: sentCount,
+      failed: failedRows.length,
+      skippedExisting,
+      skippedBlocked,
+      skippedMissing,
+      failedOfferIds: failedRows.map((item) => item.offerId).filter(Boolean).slice(0, 500),
+      newValue: {
+        planned: eligibleRows.length,
+        plannedNow: selectedRows.length,
+        sent: sentCount,
+        failed: failedRows.length,
+      },
+    });
+
+    response.json({
+      ok: failedRows.length === 0,
+      generatedAt: new Date().toISOString(),
+      limit,
+      sendLimit,
+      targets: shops.map((shop) => ({ id: shop.id, name: shop.name, businessId: shop.businessId })),
+      planned: eligibleRows.length,
+      plannedNow: selectedRows.length,
+      sent: sentCount,
+      failed: failedRows.length,
+      skippedExisting,
+      skippedBlocked,
+      skippedMissing,
+      skippedByLimit: Math.max(0, eligibleRows.length - selectedRows.length),
+      results,
+      summary: summarizeOzonYandexImportPreview(rows),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/ozon-yandex-import/archive-blocked", async (request, response, next) => {
   try {
     if (request.body?.confirmed !== true) {
@@ -10250,6 +10389,32 @@ function publicYandexCleanupAuditEntry(entry = {}) {
     summary: details.summary || {},
   };
 }
+
+function publicYandexImportAuditEntry(entry = {}) {
+  const details = entry.details || {};
+  return {
+    at: entry.at || null,
+    user: entry.user || "system",
+    planned: Number(details.planned || 0),
+    sent: Number(details.sent || 0),
+    failed: Number(details.failed || 0),
+    skippedExisting: Number(details.skippedExisting || 0),
+    skippedBlocked: Number(details.skippedBlocked || 0),
+    skippedMissing: Number(details.skippedMissing || 0),
+    failedOfferIds: Array.isArray(details.failedOfferIds) ? details.failedOfferIds : [],
+    targets: Array.isArray(details.targets) ? details.targets : [],
+  };
+}
+
+app.get("/api/ozon-yandex-import/history", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = cleanLimit(request.query.limit, 20, 100);
+    const audit = await readAuditFiltered({ action: "yandex.import.send" }, limit);
+    response.json({ ok: true, history: audit.map(publicYandexImportAuditEntry), total: audit.length });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get("/api/yandex-cleanup/history", requireAdmin, async (request, response, next) => {
   try {

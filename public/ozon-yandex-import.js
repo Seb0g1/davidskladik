@@ -1,6 +1,7 @@
 const state = {
   rows: [],
   summary: { total: 0, eligible: 0, blocked: 0, existingInYandex: 0, missingRequired: 0 },
+  importFailedByOffer: new Map(),
   cleanupRows: [],
   cleanupSummary: { total: 0, protected: 0, toDelete: 0, toArchive: 0, alreadyArchived: 0 },
   cleanupFailedByOffer: new Map(),
@@ -21,6 +22,7 @@ const els = {
   missing: document.getElementById("importMissingCount"),
   filter: document.getElementById("importFilterSelect"),
   warnings: document.getElementById("importWarnings"),
+  importFailures: document.getElementById("importFailures"),
   rows: document.getElementById("importRows"),
   cleanupBrands: document.getElementById("yandexProtectedBrandsInput"),
   cleanupPreview: document.getElementById("previewYandexCleanupButton"),
@@ -40,6 +42,9 @@ const els = {
   cleanupHistory: document.getElementById("yandexCleanupHistory"),
   cleanupHistoryStatus: document.getElementById("yandexCleanupHistoryStatus"),
   cleanupHistoryRefresh: document.getElementById("refreshYandexCleanupHistoryButton"),
+  importHistory: document.getElementById("yandexImportHistory"),
+  importHistoryStatus: document.getElementById("yandexImportHistoryStatus"),
+  importHistoryRefresh: document.getElementById("refreshYandexImportHistoryButton"),
 };
 
 function escapeHtml(value) {
@@ -78,6 +83,7 @@ async function api(path, options = {}) {
 }
 
 function rowStatus(row) {
+  if (state.importFailedByOffer.has(String(row.offerId || ""))) return { className: "danger", label: "Ошибка Яндекс" };
   if (row.eligible) return { className: "good", label: "Можно" };
   if (row.existingInYandex) return { className: "warn", label: "Есть в ЯМ" };
   if (row.blockReasons?.length) return { className: "danger", label: "Блок" };
@@ -99,14 +105,30 @@ function renderSummary() {
   els.blocked.textContent = state.summary.blocked || 0;
   els.existing.textContent = state.summary.existingInYandex || 0;
   els.missing.textContent = state.summary.missingRequired || 0;
-  els.sendYandex.disabled = true;
-  els.sendYandex.title = "Выгрузку в Яндекс подключим вторым безопасным этапом после проверки предпросмотра.";
+  els.sendYandex.disabled = !(Number(state.summary.eligible || 0) > 0);
+  els.sendYandex.title = els.sendYandex.disabled
+    ? "Нет карточек, которые можно безопасно выгрузить в Яндекс."
+    : "Отправить в Яндекс только карточки со статусом «Можно», без дублей по SKU.";
 }
 
 function renderWarnings(warnings) {
   const list = Array.isArray(warnings) ? warnings.filter(Boolean) : [];
   els.warnings.hidden = list.length === 0;
   els.warnings.innerHTML = list.map((item) => `<div>${escapeHtml(item)}</div>`).join("");
+}
+
+function renderImportFailures(results = []) {
+  const failed = (Array.isArray(results) ? results : []).filter((item) => !item.ok);
+  state.importFailedByOffer = new Map(failed.map((item) => [String(item.offerId || ""), item.error || "unknown_error"]));
+  if (!els.importFailures) return;
+  els.importFailures.hidden = failed.length === 0;
+  els.importFailures.innerHTML = failed.length
+    ? [
+        `<strong>Не выгрузились SKU: ${failed.length}</strong>`,
+        ...failed.slice(0, 100).map((item) => `<div>${escapeHtml(item.offerId || "-")} · ${escapeHtml(item.targetName || item.target || "Yandex")} · ${escapeHtml(item.error || "unknown_error")}</div>`),
+        failed.length > 100 ? `<div>Показано первые 100 из ${failed.length}. Полный список есть в журнале операции.</div>` : "",
+      ].filter(Boolean).join("")
+    : "";
 }
 
 function renderCleanupWarnings(warnings) {
@@ -124,6 +146,7 @@ function renderRows() {
   els.rows.innerHTML = rows.map((row) => {
     const status = rowStatus(row);
     const reasons = [
+      ...(state.importFailedByOffer.has(String(row.offerId || "")) ? [`Ошибка выгрузки: ${state.importFailedByOffer.get(String(row.offerId || ""))}`] : []),
       ...(row.existingInYandex ? ["Артикул уже есть в Яндекс Маркете"] : []),
       ...(row.blockReasons || []),
       ...((row.missing || []).map((field) => `Не хватает ${field}`)),
@@ -320,6 +343,47 @@ function renderYandexCleanupHistory(items = []) {
   }).join("");
 }
 
+function renderYandexImportHistory(items = []) {
+  if (!els.importHistory) return;
+  if (!items.length) {
+    els.importHistory.innerHTML = `<div class="empty-state">Выгрузок в Яндекс пока не было.</div>`;
+    return;
+  }
+  els.importHistory.innerHTML = items.map((item) => {
+    const targets = Array.isArray(item.targets) && item.targets.length
+      ? item.targets.map((target) => target.name || target.id || target.businessId).filter(Boolean).join(", ")
+      : "Yandex Market";
+    const failed = Array.isArray(item.failedOfferIds) && item.failedOfferIds.length
+      ? `<span>Ошибки SKU: ${escapeHtml(item.failedOfferIds.slice(0, 10).join(", "))}${item.failedOfferIds.length > 10 ? " ..." : ""}</span>`
+      : "";
+    return `
+      <div class="history-row">
+        <div>
+          <strong>${escapeHtml(item.user || "system")} · отправлено ${escapeHtml(item.sent || 0)} из ${escapeHtml(item.planned || 0)}</strong>
+          <span>${escapeHtml(targets)} · ошибок ${escapeHtml(item.failed || 0)} · уже были ${escapeHtml(item.skippedExisting || 0)} · блок ${escapeHtml(item.skippedBlocked || 0)}</span>
+          ${failed}
+        </div>
+        <small>${escapeHtml(item.at ? new Date(item.at).toLocaleString("ru-RU") : "-")}</small>
+      </div>
+    `;
+  }).join("");
+}
+
+async function loadYandexImportHistory() {
+  if (!els.importHistory) return;
+  if (els.importHistoryStatus) els.importHistoryStatus.textContent = "Загружаю журнал...";
+  if (els.importHistoryRefresh) els.importHistoryRefresh.disabled = true;
+  try {
+    const payload = await api("/api/ozon-yandex-import/history?limit=20");
+    renderYandexImportHistory(payload.history || []);
+    if (els.importHistoryStatus) els.importHistoryStatus.textContent = `Событий: ${payload.history?.length || 0}.`;
+  } catch (error) {
+    if (els.importHistoryStatus) els.importHistoryStatus.textContent = `Ошибка журнала: ${error.message || error}`;
+  } finally {
+    if (els.importHistoryRefresh) els.importHistoryRefresh.disabled = false;
+  }
+}
+
 async function loadYandexCleanupHistory() {
   if (!els.cleanupHistory) return;
   if (els.cleanupHistoryStatus) els.cleanupHistoryStatus.textContent = "Загружаю журнал...";
@@ -441,6 +505,8 @@ async function archiveYandexCleanup() {
 
 async function loadPreview(refresh) {
   const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
+  state.importFailedByOffer = new Map();
+  renderImportFailures([]);
   setBusy(true, refresh ? "Загружаю карточки из Ozon..." : "Читаю карточки из склада...");
   try {
     const payload = await api(`/api/ozon-yandex-import/preview?limit=${encodeURIComponent(limit)}&refresh=${refresh ? "true" : "false"}`);
@@ -449,6 +515,38 @@ async function loadPreview(refresh) {
     setBusy(false, `Загружено из ${source}: ${payload.summary?.total || 0}. Можно выгружать: ${payload.summary?.eligible || 0}.`);
   } catch (error) {
     setBusy(false, `Ошибка: ${error.message || error}`);
+  }
+}
+
+async function sendYandexImport() {
+  const eligible = Number(state.summary.eligible || 0);
+  if (!eligible) {
+    els.status.textContent = "Нет карточек, которые можно безопасно выгрузить в Яндекс.";
+    return;
+  }
+  const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
+  const confirmed = window.confirm([
+    "Выгрузить карточки Ozon в Яндекс?",
+    `Можно выгружать: ${eligible}`,
+    "Сервер ещё раз проверит SKU в Яндексе и пропустит уже существующие.",
+    "Выгрузка пойдёт только по карточкам без блокировок и без недостающих полей.",
+  ].join("\n"));
+  if (!confirmed) return;
+  setBusy(true, "Выгружаю карточки Ozon в Яндекс...");
+  els.sendYandex.disabled = true;
+  try {
+    const payload = await api("/api/ozon-yandex-import/send", {
+      method: "POST",
+      body: { limit, confirmed: true },
+    });
+    renderImportFailures(payload.results || []);
+    setBusy(false, `Яндекс: отправлено ${payload.sent || 0}. Ошибок ${payload.failed || 0}. Уже были в Яндексе ${payload.skippedExisting || 0}. Отложено лимитом ${payload.skippedByLimit || 0}.`);
+    await loadYandexImportHistory();
+  } catch (error) {
+    setBusy(false, `Ошибка выгрузки в Яндекс: ${error.message || error}`);
+  } finally {
+    renderSummary();
+    renderRows();
   }
 }
 
@@ -493,11 +591,13 @@ els.loadWarehouse.addEventListener("click", () => loadPreview(false));
 els.loadOzon.addEventListener("click", () => loadPreview(true));
 els.syncStocks.addEventListener("click", syncYandexStocks);
 els.archiveBlocked.addEventListener("click", archiveBlocked);
+els.sendYandex.addEventListener("click", sendYandexImport);
 els.filter.addEventListener("change", renderRows);
 els.cleanupPreview?.addEventListener("click", previewYandexCleanup);
 els.cleanupCsv?.addEventListener("click", downloadYandexCleanupCsv);
 els.cleanupArchive?.addEventListener("click", archiveYandexCleanup);
 els.cleanupHistoryRefresh?.addEventListener("click", loadYandexCleanupHistory);
+els.importHistoryRefresh?.addEventListener("click", loadYandexImportHistory);
 els.cleanupFilter?.addEventListener("change", () => renderCleanup({ rows: state.cleanupRows, summary: state.cleanupSummary }));
 els.cleanupSearch?.addEventListener("input", () => renderCleanup({ rows: state.cleanupRows, summary: state.cleanupSummary }));
 els.cleanupBrands?.addEventListener("input", () => {
@@ -507,3 +607,4 @@ els.cleanupBrands?.addEventListener("input", () => {
 
 loadPreview(false).catch(() => {});
 loadYandexCleanupHistory().catch(() => {});
+loadYandexImportHistory().catch(() => {});

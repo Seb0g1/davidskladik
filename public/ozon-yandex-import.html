@@ -135,7 +135,17 @@
           </select>
         </div>
         <div id="importWarnings" class="import-warnings" hidden></div>
+        <div id="importFailures" class="import-warnings" hidden></div>
         <div id="importRows" class="import-rows"></div>
+      </section>
+
+      <section class="panel import-list-panel">
+        <div class="import-list-head">
+          <h2>Журнал выгрузки в Яндекс</h2>
+          <button id="refreshYandexImportHistoryButton" class="secondary-button compact-button" type="button">Обновить</button>
+        </div>
+        <div id="yandexImportHistoryStatus" class="sync-status-pill">Журнал ещё не загружен.</div>
+        <div id="yandexImportHistory" class="history-list"></div>
       </section>
     </main>
     <script src="/ozon-yandex-import.js"></script>
