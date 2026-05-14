@@ -86,6 +86,7 @@ const {
   ozonYandexImportBlockReasons,
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
+  pickOzonProductStockForYandex,
   priceRetryQueueKey,
   findActiveDelayedPriceRetry,
   appendPriceHistoryRows,
@@ -220,6 +221,12 @@ test("Ozon to Yandex import blocks offers that already exist in Yandex", () => {
   assert.equal(existing.existingInYandex, true);
   assert.equal(existing.eligible, false);
   assert.equal(summarizeOzonYandexImportPreview([existing]).existingInYandex, 1);
+});
+
+test("Ozon to Yandex stock sync uses Ozon stock from state and warehouses", () => {
+  assert.equal(pickOzonProductStockForYandex({ marketplaceState: { stock: 7, warehouses: [{ stock: 1 }] } }), 7);
+  assert.equal(pickOzonProductStockForYandex({ marketplaceState: { warehouses: [{ stock: 2 }, { present: 3 }] } }), 5);
+  assert.equal(pickOzonProductStockForYandex({ marketplaceState: { stock: 0 } }), 0);
 });
 
 test("ops diagnostics command emits machine-readable report", async () => {

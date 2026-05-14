@@ -7,6 +7,8 @@ const els = {
   limit: document.getElementById("importLimitInput"),
   loadWarehouse: document.getElementById("loadWarehouseImportButton"),
   loadOzon: document.getElementById("loadOzonImportButton"),
+  syncStocks: document.getElementById("syncYandexStocksButton"),
+  archiveBlocked: document.getElementById("archiveBlockedButton"),
   sendYandex: document.getElementById("sendYandexImportButton"),
   status: document.getElementById("importStatus"),
   total: document.getElementById("importTotalCount"),
@@ -37,11 +39,18 @@ function formatMoney(value) {
 function setBusy(isBusy, message) {
   els.loadWarehouse.disabled = isBusy;
   els.loadOzon.disabled = isBusy;
+  els.syncStocks.disabled = isBusy;
+  els.archiveBlocked.disabled = isBusy;
   els.status.textContent = message || (isBusy ? "Загрузка..." : "Готово.");
 }
 
-async function api(path) {
-  const response = await fetch(path, { credentials: "same-origin" });
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    credentials: "same-origin",
+    headers: options.body ? { "content-type": "application/json" } : undefined,
+    ...options,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.error || `HTTP ${response.status}`);
   return payload;
@@ -140,8 +149,47 @@ async function loadPreview(refresh) {
   }
 }
 
+async function syncYandexStocks() {
+  const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
+  setBusy(true, "Синхронизирую остатки Ozon → Яндекс...");
+  try {
+    const payload = await api("/api/ozon-yandex-import/sync-stocks", {
+      method: "POST",
+      body: { limit },
+    });
+    setBusy(false, `Остатки отправлены: ${payload.sent || 0}. Пропущено без совпадения в Яндексе: ${payload.skipped || 0}.`);
+    if (payload.warnings?.length) renderWarnings(payload.warnings);
+  } catch (error) {
+    setBusy(false, `Ошибка остатков: ${error.message || error}`);
+  }
+}
+
+async function archiveBlocked() {
+  const blockedCount = Number(state.summary.blocked || 0);
+  if (!blockedCount) {
+    els.status.textContent = "Заблокированных карточек нет.";
+    return;
+  }
+  const confirmed = window.confirm(`Архивировать заблокированные Ozon-карточки из текущего лимита? Количество: ${blockedCount}.`);
+  if (!confirmed) return;
+  const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
+  setBusy(true, "Архивирую заблокированные карточки в Ozon...");
+  try {
+    const payload = await api("/api/ozon-yandex-import/archive-blocked", {
+      method: "POST",
+      body: { confirmed: true, limit },
+    });
+    setBusy(false, `Архивировано: ${payload.archived || 0}. Ошибок: ${payload.failed || 0}.`);
+    await loadPreview(false);
+  } catch (error) {
+    setBusy(false, `Ошибка архивации: ${error.message || error}`);
+  }
+}
+
 els.loadWarehouse.addEventListener("click", () => loadPreview(false));
 els.loadOzon.addEventListener("click", () => loadPreview(true));
+els.syncStocks.addEventListener("click", syncYandexStocks);
+els.archiveBlocked.addEventListener("click", archiveBlocked);
 els.filter.addEventListener("change", renderRows);
 
 loadPreview(false).catch(() => {});

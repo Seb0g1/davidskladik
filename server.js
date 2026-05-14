@@ -4143,6 +4143,78 @@ function summarizeOzonYandexImportPreview(rows = []) {
   };
 }
 
+function pickOzonProductStockForYandex(product = {}) {
+  const state = product.marketplaceState || {};
+  const direct = Number(state.stock ?? state.present ?? product.targetStock ?? 0);
+  if (Number.isFinite(direct) && direct > 0) return Math.max(0, Math.round(direct));
+  const warehouses = Array.isArray(state.warehouses) ? state.warehouses : [];
+  const sum = warehouses.reduce((total, warehouse) => {
+    const value = Number(warehouse.stock ?? warehouse.present ?? 0);
+    return total + (Number.isFinite(value) ? Math.max(0, value) : 0);
+  }, 0);
+  return Math.max(0, Math.round(sum));
+}
+
+async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
+  const dryRun = options.dryRun === true;
+  const warnings = [];
+  const shops = getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+  const rows = (Array.isArray(products) ? products : [])
+    .map((product) => ({
+      id: product.id,
+      offerId: cleanText(product.offerId || product.offer_id),
+      productId: cleanText(product.productId || product.product_id),
+      stock: pickOzonProductStockForYandex(product),
+    }))
+    .filter((row) => row.offerId);
+  if (!rows.length || !shops.length) {
+    return { ok: true, dryRun, sent: 0, skipped: rows.length, warnings: shops.length ? warnings : ["Yandex Market не настроен."], results: [] };
+  }
+
+  let existingOfferIds = new Set();
+  try {
+    existingOfferIds = await getExistingYandexOfferIdSet(rows.map((row) => row.offerId));
+  } catch (error) {
+    const label = error?.message || error?.code || "ошибка API";
+    warnings.push(`Yandex: не удалось проверить существующие артикулы (${label})`);
+  }
+
+  const selected = rows.filter((row) => existingOfferIds.has(row.offerId.toLowerCase()));
+  const results = [];
+  if (dryRun) {
+    return { ok: true, dryRun, sent: 0, skipped: rows.length - selected.length, planned: selected.length, warnings, results: selected };
+  }
+
+  for (const shop of shops) {
+    for (const chunk of chunkArray(selected, 500)) {
+      if (!chunk.length) continue;
+      const payload = {
+        offers: chunk.map((item) => ({
+          offerId: item.offerId,
+          stock: item.stock,
+        })),
+      };
+      try {
+        await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offers/stocks`, payload);
+        results.push({ target: shop.id, sent: chunk.length });
+      } catch (error) {
+        const label = error?.message || error?.code || "ошибка API";
+        warnings.push(`Yandex «${shop.name || shop.id}»: остатки не отправлены (${label})`);
+      }
+    }
+  }
+
+  return {
+    ok: warnings.length === 0,
+    dryRun,
+    sent: results.reduce((total, item) => total + Number(item.sent || 0), 0),
+    skipped: rows.length - selected.length,
+    planned: selected.length,
+    warnings,
+    results,
+  };
+}
+
 async function buildOzonProductPreview({ limit = 200, search = "" } = {}) {
   const [rules, existingOfferIds, candidates] = await Promise.all([
     readOzonProductRules(),
@@ -9817,6 +9889,51 @@ app.get("/api/ozon-yandex-import/preview", async (request, response, next) => {
   }
 });
 
+app.post("/api/ozon-yandex-import/archive-blocked", async (request, response, next) => {
+  try {
+    if (request.body?.confirmed !== true) {
+      return response.status(400).json({ error: "Нужно подтверждение archived-blocked confirmed=true." });
+    }
+    const requestedLimit = Number(request.body?.limit || 30000);
+    const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
+    const warehouse = await readWarehouse();
+    const products = (warehouse.products || [])
+      .filter((product) => product.marketplace === "ozon")
+      .slice(0, limit);
+    const candidates = products.map(buildOzonYandexImportCandidate);
+    const blockedIds = new Set(candidates
+      .filter((row) => row.blockReasons?.length)
+      .map((row) => row.id)
+      .filter(Boolean));
+    const blockedProducts = products.filter((product) => blockedIds.has(product.id));
+    const actions = await archiveProductsOnMarketplaces(blockedProducts);
+    response.json({
+      ok: true,
+      requested: blockedProducts.length,
+      archived: actions.filter((item) => item.ok).length,
+      failed: actions.filter((item) => !item.ok).length,
+      actions,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/ozon-yandex-import/sync-stocks", async (request, response, next) => {
+  try {
+    const requestedLimit = Number(request.body?.limit || request.query.limit || 30000);
+    const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
+    const warehouse = await readWarehouse();
+    const products = (warehouse.products || [])
+      .filter((product) => product.marketplace === "ozon")
+      .slice(0, limit);
+    const result = await sendYandexStocksFromOzonProducts(products, { dryRun: request.body?.dryRun === true });
+    response.json({ ok: result.ok, limit, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/warehouse/products/:id/export", async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
@@ -11279,6 +11396,8 @@ module.exports = {
   ozonYandexImportBlockReasons,
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
+  pickOzonProductStockForYandex,
+  sendYandexStocksFromOzonProducts,
   priceRetryQueueKey,
   findActiveDelayedPriceRetry,
   appendPriceHistoryRows,
