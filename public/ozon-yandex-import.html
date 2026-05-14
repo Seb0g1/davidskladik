@@ -68,6 +68,7 @@
           </label>
           <div class="cleanup-actions">
             <button id="previewYandexCleanupButton" class="secondary-button" type="button">Предпросмотр очистки</button>
+            <button id="downloadYandexCleanupCsvButton" class="secondary-button" type="button" disabled>Скачать CSV</button>
             <button id="archiveYandexCleanupButton" class="danger-button" type="button" disabled>Удалить незащищённые</button>
           </div>
           <div id="yandexCleanupStatus" class="sync-status-pill">Укажите бренды-защиту и запустите предпросмотр.</div>
@@ -100,6 +101,15 @@
         </div>
         <div id="yandexCleanupWarnings" class="import-warnings" hidden></div>
         <div id="yandexCleanupRows" class="import-rows"></div>
+      </section>
+
+      <section class="panel import-list-panel cleanup-history-panel">
+        <div class="import-list-head">
+          <h2>Журнал удаления Яндекса</h2>
+          <button id="refreshYandexCleanupHistoryButton" class="secondary-button compact-button" type="button">Обновить</button>
+        </div>
+        <div id="yandexCleanupHistoryStatus" class="sync-status-pill">Журнал ещё не загружен.</div>
+        <div id="yandexCleanupHistory" class="history-list"></div>
       </section>
 
       <section class="panel import-list-panel">

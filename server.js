@@ -10223,6 +10223,31 @@ app.post("/api/yandex-cleanup/preview", async (request, response, next) => {
   }
 });
 
+function publicYandexCleanupAuditEntry(entry = {}) {
+  const details = entry.details || {};
+  return {
+    at: entry.at || null,
+    user: entry.user || "system",
+    planned: Number(details.planned || 0),
+    deleted: Number(details.deleted || 0),
+    failed: Number(details.failed || 0),
+    notDeleted: Number(details.notDeleted || 0),
+    protectedBrands: Array.isArray(details.protectedBrands) ? details.protectedBrands : [],
+    failedOfferIds: Array.isArray(details.failedOfferIds) ? details.failedOfferIds : [],
+    summary: details.summary || {},
+  };
+}
+
+app.get("/api/yandex-cleanup/history", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = cleanLimit(request.query.limit, 20, 100);
+    const audit = await readAuditFiltered({ action: "yandex.cleanup.delete" }, limit);
+    response.json({ ok: true, history: audit.map(publicYandexCleanupAuditEntry), total: audit.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/yandex-cleanup/archive", async (request, response, next) => {
   try {
     response.status(410).json({ error: "Архивация отключена. Используйте удаление: /api/yandex-cleanup/delete." });
@@ -10233,7 +10258,8 @@ app.post("/api/yandex-cleanup/archive", async (request, response, next) => {
 
 app.post("/api/yandex-cleanup/delete", async (request, response, next) => {
   try {
-    if (request.body?.confirmed !== true || cleanText(request.body?.confirmationText) !== "УДАЛИТЬ ЯНДЕКС") {
+    const dryRun = request.body?.dryRun === true;
+    if (!dryRun && (request.body?.confirmed !== true || cleanText(request.body?.confirmationText) !== "УДАЛИТЬ ЯНДЕКС")) {
       return response.status(400).json({ error: "Для удаления товаров Яндекса нужно подтверждение: УДАЛИТЬ ЯНДЕКС." });
     }
     const protectedBrands = parseProtectedBrandList(request.body?.protectedBrands || request.body?.brands || "");
@@ -10244,9 +10270,42 @@ app.post("/api/yandex-cleanup/delete", async (request, response, next) => {
     const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 50000));
     const preview = await buildYandexCleanupPreview({ protectedBrands, limit });
     const toDelete = (preview.rows || []).filter((row) => row.action === "delete");
+    if (dryRun) {
+      return response.json({
+        ok: true,
+        dryRun: true,
+        generatedAt: new Date().toISOString(),
+        protectedBrands,
+        summary: preview.summary,
+        planned: toDelete.length,
+        deleted: 0,
+        failed: 0,
+        notDeleted: 0,
+        warnings: preview.warnings || [],
+        rows: preview.rows || [],
+      });
+    }
     const results = await deleteYandexCleanupRows(toDelete);
     const deleted = results.filter((item) => item.ok).length;
     const failedRows = results.filter((item) => !item.ok);
+    await appendAudit(request, "yandex.cleanup.delete", {
+      entityType: "yandex_cleanup",
+      entityId: "business_catalog",
+      protectedBrands,
+      limit,
+      summary: preview.summary,
+      planned: toDelete.length,
+      deleted,
+      failed: failedRows.length,
+      notDeleted: failedRows.filter((item) => item.error === "not_deleted_by_yandex").length,
+      failedOfferIds: failedRows.map((item) => item.offerId).filter(Boolean).slice(0, 500),
+      newValue: {
+        planned: toDelete.length,
+        deleted,
+        failed: failedRows.length,
+        protectedBrands,
+      },
+    });
     response.json({
       ok: failedRows.length === 0,
       generatedAt: new Date().toISOString(),
