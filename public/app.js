@@ -316,7 +316,11 @@ function userScrolledSince(startedAt) {
   return Number(state.warehouseLastUserScrollAt || 0) > Number(startedAt || 0);
 }
 
-function restoreWarehouseScroll({ startedAt = 0 } = {}) {
+function restoreWarehouseScroll({ startedAt = 0, selectionVersion = null } = {}) {
+  if (selectionVersion !== null && Number(selectionVersion) !== Number(state.warehouseSelectionVersion || 0)) {
+    captureWarehouseScroll();
+    return;
+  }
   if (userScrolledSince(startedAt)) {
     captureWarehouseScroll();
     return;
@@ -1259,8 +1263,12 @@ function focusWarehouseDetailOnSmallScreen() {
   }
 }
 
-function restoreWindowScroll(top, { startedAt = 0 } = {}) {
+function restoreWindowScroll(top, { startedAt = 0, selectionVersion = null } = {}) {
   if (!Number.isFinite(Number(top))) return;
+  if (selectionVersion !== null && Number(selectionVersion) !== Number(state.warehouseSelectionVersion || 0)) {
+    captureWarehouseScroll();
+    return;
+  }
   if (userScrolledSince(startedAt)) {
     captureWarehouseScroll();
     return;
@@ -3187,6 +3195,7 @@ async function loadWarehousePage({ reset = false, sync = false, refreshPrices = 
 async function loadWarehouse(sync = false, refreshPrices = false, options = {}) {
   const silent = Boolean(options.silent);
   const refreshStartedAt = Date.now();
+  const selectionVersionAtStart = state.warehouseSelectionVersion;
   captureWarehouseScroll();
   const stopProgress = sync || refreshPrices ? startSyncProgress(sync ? "sync" : "prices") : null;
   elements.warehouseSyncButton.disabled = sync;
@@ -3234,7 +3243,7 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
       renderWarehouseCards();
     }
     state.warehouseRestorePage = 1;
-    restoreWarehouseScroll({ startedAt: refreshStartedAt });
+    restoreWarehouseScroll({ startedAt: refreshStartedAt, selectionVersion: selectionVersionAtStart });
     await loadRetryQueue().catch(() => {});
     if (silent && elements.warehouseStatus) {
       elements.warehouseStatus.textContent = previousWarehouseStatus;
@@ -3321,7 +3330,7 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
         renderWarehouseDetail(state.selectedWarehouseDetailGroup);
       }
     }
-    restoreWindowScroll(scrollTop, { startedAt: refreshStartedAt });
+    restoreWindowScroll(scrollTop, { startedAt: refreshStartedAt, selectionVersion });
   } finally {
     state.warehouseLiveRefreshRunning = false;
   }
