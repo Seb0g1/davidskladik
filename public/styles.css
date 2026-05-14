@@ -3303,6 +3303,14 @@ td {
   top: 12px;
 }
 
+.form-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
 .accounts-board {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
@@ -3323,6 +3331,37 @@ td {
 .account-sync-note {
   color: var(--muted);
   font-weight: 800;
+}
+
+.account-test-status {
+  min-height: 20px;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.58);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.account-test-status.is-pending {
+  color: var(--accent);
+  border-color: rgba(49,126,255,0.34);
+  background: rgba(49,126,255,0.08);
+}
+
+.account-test-status.is-ok {
+  color: var(--ok-ink);
+  border-color: rgba(47,181,120,0.34);
+  background: rgba(47,181,120,0.1);
+}
+
+.account-test-status.is-error {
+  color: var(--danger-ink);
+  border-color: rgba(236,91,91,0.36);
+  background: rgba(236,91,91,0.09);
 }
 
 .account-card.not-configured {

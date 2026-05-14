@@ -2914,6 +2914,7 @@ function renderAccounts() {
               <p>${account.readOnly ? "Задан в .env" : account.inheritedFromEnv ? "Переопределён из интерфейса" : "Локальная настройка"} · ${account.configured ? "ключи подключены" : "не настроен"}</p>
             </div>
             <div class="account-actions">
+              <button class="secondary-button compact-button test-account" type="button">Проверить</button>
               ${account.readOnly ? `<span class="readonly-note">Из .env</span>` : ""}
               <button class="secondary-button compact-button toggle-account-sync" type="button">${syncEnabled ? "Отключить загрузку" : "Включить загрузку"}</button>
               <button class="secondary-button compact-button edit-account" type="button">Изменить</button>
@@ -2929,6 +2930,7 @@ function renderAccounts() {
             <div><dt>API Key</dt><dd>${escapeHtml(account.apiKey || "-")}</dd></div>
             ${account.campaignId ? `<div><dt>Campaign</dt><dd>${escapeHtml(account.campaignId)}</dd></div>` : ""}
           </dl>
+          <p class="account-test-status" data-account-test-status>Проверка подключения еще не запускалась.</p>
         </article>
       `;
     })
@@ -4710,10 +4712,43 @@ elements.accountForm?.addEventListener("submit", async (event) => {
 
 elements.accountsBoard?.addEventListener("click", async (event) => {
   const editButton = event.target.closest(".edit-account");
+  const testButton = event.target.closest(".test-account");
   const toggleSyncButton = event.target.closest(".toggle-account-sync");
   const deleteButton = event.target.closest(".delete-account");
   const card = event.target.closest(".account-card");
   if (!card) return;
+
+  if (testButton) {
+    const statusEl = card.querySelector("[data-account-test-status]");
+    testButton.disabled = true;
+    if (statusEl) {
+      statusEl.textContent = "Проверяю подключение...";
+      statusEl.classList.remove("is-ok", "is-error");
+      statusEl.classList.add("is-pending");
+    }
+    elements.accountStatus.textContent = "Проверяю ключи маркетплейса...";
+    try {
+      const result = await api(`/api/marketplace-accounts/${encodeURIComponent(card.dataset.accountId)}/test`, { method: "POST" });
+      const message = result.message || "Подключение работает.";
+      if (statusEl) {
+        statusEl.textContent = `${message} Проверено: ${formatDate(result.checkedAt || new Date().toISOString())}.`;
+        statusEl.classList.remove("is-pending", "is-error");
+        statusEl.classList.add("is-ok");
+      }
+      elements.accountStatus.textContent = message;
+    } catch (error) {
+      const message = error.message || "Не удалось проверить подключение.";
+      if (statusEl) {
+        statusEl.textContent = message;
+        statusEl.classList.remove("is-pending", "is-ok");
+        statusEl.classList.add("is-error");
+      }
+      elements.accountStatus.textContent = message;
+    } finally {
+      testButton.disabled = false;
+    }
+    return;
+  }
 
   if (toggleSyncButton) {
     const account = state.accounts.find((item) => item.id === card.dataset.accountId);

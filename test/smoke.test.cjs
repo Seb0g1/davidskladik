@@ -20,6 +20,7 @@ process.env.DATABASE_URL = "";
 process.env.JSON_FALLBACK_ENABLED = "true";
 
 const appUsersPath = path.join(__dirname, "..", "data", "app-users.json");
+const marketplaceAccountsPath = path.join(__dirname, "..", "data", "marketplace-accounts.json");
 
 async function backupFile(filePath) {
   try {
@@ -1000,6 +1001,48 @@ test("POST /api/login успех", async () => {
     .expect(200);
   assert.equal(res.body.ok, true);
   assert.ok(res.headers["set-cookie"]);
+});
+
+test("marketplace accounts can be saved from UI storage without editing env", async () => {
+  const backup = await backupFile(marketplaceAccountsPath);
+  const agent = request.agent(app);
+  const accountName = `Smoke Yandex ${Date.now()}`;
+
+  try {
+    await restoreFile(marketplaceAccountsPath, JSON.stringify({ updatedAt: new Date().toISOString(), accounts: [] }, null, 2));
+    await agent
+      .post("/api/login")
+      .send({ username: "admin", password: process.env.APP_PASSWORD })
+      .expect(200);
+
+    const created = await agent
+      .post("/api/marketplace-accounts")
+      .send({
+        marketplace: "yandex",
+        name: accountName,
+        businessId: "123456",
+        campaignId: "654321",
+        apiKey: "test-yandex-api-key",
+        syncEnabled: "true",
+      })
+      .expect(200);
+
+    const account = created.body.accounts.find((item) => item.name === accountName);
+    assert.ok(account);
+    assert.equal(account.marketplace, "yandex");
+    assert.equal(account.configured, true);
+    assert.equal(account.businessId, "123456");
+    assert.notEqual(account.apiKey, "test-yandex-api-key");
+
+    const stored = JSON.parse(await fs.readFile(marketplaceAccountsPath, "utf8"));
+    assert.ok(stored.accounts.some((item) => item.name === accountName && item.apiKey === "test-yandex-api-key"));
+
+    await agent
+      .post("/api/marketplace-accounts/not-found/test")
+      .expect(404);
+  } finally {
+    await restoreFile(marketplaceAccountsPath, backup);
+  }
 });
 
 test("POST /api/login supports APP_USERS_JSON roles", async () => {

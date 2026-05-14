@@ -1319,6 +1319,56 @@ function sanitizeMarketplaceAccount(account = {}) {
   };
 }
 
+function findMarketplaceAccount(id) {
+  const accountId = cleanText(id);
+  if (!accountId) return null;
+  return getMarketplaceAccounts().find((account) => account.id === accountId) || null;
+}
+
+async function testMarketplaceAccountConnection(account = {}) {
+  const marketplace = cleanText(account.marketplace).toLowerCase();
+  if (marketplace === "ozon") {
+    if (!account.clientId || !account.apiKey) {
+      const error = new Error("Для проверки Ozon нужны Client-Id и Api-Key.");
+      error.statusCode = 400;
+      throw error;
+    }
+    const data = await ozonRequest(
+      "/v3/product/list",
+      { filter: { visibility: "ALL" }, limit: 1, last_id: "" },
+      account,
+    );
+    const sampleCount = Array.isArray(data?.result?.items) ? data.result.items.length : 0;
+    return {
+      ok: true,
+      marketplace: "ozon",
+      sampleCount,
+      message: "Ozon подключен. Ключи работают, список товаров доступен.",
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  if (marketplace === "yandex") {
+    if (!account.businessId || !account.apiKey) {
+      const error = new Error("Для проверки Yandex Market нужны Business ID и Api-Key.");
+      error.statusCode = 400;
+      throw error;
+    }
+    const mappings = await getYandexOfferMappings(account, 1);
+    return {
+      ok: true,
+      marketplace: "yandex",
+      sampleCount: Array.isArray(mappings) ? mappings.length : 0,
+      message: "Yandex Market подключен. Ключи работают, каталог доступен.",
+      checkedAt: new Date().toISOString(),
+    };
+  }
+
+  const error = new Error("Неизвестный маркетплейс.");
+  error.statusCode = 400;
+  throw error;
+}
+
 function accountPayloadWithSecretFallback(body = {}, current = {}) {
   const payload = { ...body };
   if (!cleanText(payload.clientId ?? payload.client_id) && current.clientId) payload.clientId = current.clientId;
@@ -7954,6 +8004,33 @@ app.get("/api/marketplace-accounts", (_request, response) => {
     hiddenAccounts: getHiddenMarketplaceAccounts().map(sanitizeMarketplaceAccount),
     targets: marketplaceTargets(),
   });
+});
+
+app.post("/api/marketplace-accounts/:id/test", async (request, response) => {
+  const account = findMarketplaceAccount(request.params.id);
+  if (!account) return response.status(404).json({ ok: false, error: "Кабинет не найден." });
+  try {
+    const result = await testMarketplaceAccountConnection(account);
+    return response.json({
+      ...result,
+      id: account.id,
+      name: account.name,
+    });
+  } catch (error) {
+    logger.warn("marketplace account test failed", {
+      id: account.id,
+      marketplace: account.marketplace,
+      detail: error?.message || String(error),
+    });
+    return response.status(error.statusCode || 400).json({
+      ok: false,
+      id: account.id,
+      name: account.name,
+      marketplace: account.marketplace,
+      error: error?.message || "Не удалось проверить подключение.",
+      checkedAt: new Date().toISOString(),
+    });
+  }
 });
 
 app.post("/api/marketplace-accounts", async (request, response, next) => {
