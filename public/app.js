@@ -1203,7 +1203,7 @@ async function pollWarehouseSyncStatus({ refreshOnDone = false } = {}) {
     if (status.status === "ok" && refreshOnDone) {
       elements.warehouseStatus.textContent = "Синхронизация завершена. Обновляю карточки на экране...";
       state.enrichedProductIds = new Set();
-      await loadWarehouse(false, false, { silent: true });
+      await loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false });
       elements.warehouseStatus.textContent = "Склад обновлён.";
     } else if (status.status === "failed") {
       elements.warehouseStatus.textContent = status.error || "Синхронизация завершилась ошибкой.";
@@ -3585,7 +3585,10 @@ async function loadSettings() {
   renderHiddenAccounts();
   updateAccountFormMode();
   await loadRate(fixedRate);
-  await Promise.all([loadWarehouse(false, false, { silent: true }), loadSuppliers({ silent: true }), loadDailySync()]);
+  await Promise.all([loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false }), loadSuppliers({ silent: true }), loadDailySync()]);
+  window.setTimeout(() => {
+    loadRetryQueue().catch(() => {});
+  }, 1200);
   pollWarehouseSyncStatus({ refreshOnDone: false }).catch(() => {});
   await refreshWarehouseBrandSelect();
   startWarehouseLiveRefresh();
@@ -3933,7 +3936,7 @@ elements.warehouseRepairWeakOzonButton?.addEventListener("click", async () => {
       renderWarehouseCards();
       refreshSelectedDetailForProductIds(result.products.map((product) => product.id).filter(Boolean));
     } else {
-      await loadWarehouse(false, false, { silent: true });
+      await loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false });
     }
     const remaining = Number(result.remainingWeak || 0);
     elements.warehouseStatus.textContent = remaining
@@ -4863,7 +4866,7 @@ elements.accountsBoard?.addEventListener("click", async (event) => {
         state.warehouseMarketplace = "all";
         setWarehouseMarketplaceUI(state.warehouseMarketplace);
       }
-      loadWarehouse(false).catch(() => {});
+      loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false }).catch(() => {});
       elements.accountStatus.textContent = nextEnabled
         ? "Загрузка кабинета включена. Он снова появится в складе после фонового обновления."
         : "Загрузка кабинета выключена. API этого кабинета не будет участвовать в фоне и фильтрах.";
@@ -5073,7 +5076,7 @@ window.addEventListener("popstate", () => {
     const params = new URLSearchParams(window.location.search);
     elements.warehouseSearchInput.value = params.get("q") || "";
   }
-  loadWarehouse(false).catch((error) => {
+  loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false }).catch((error) => {
     elements.warehouseStatus.textContent = error.message;
   });
 });

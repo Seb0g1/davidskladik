@@ -6550,7 +6550,7 @@ async function writeWarehouse(warehouse, { writePostgres = true } = {}) {
   return warehouseWritePromise;
 }
 
-async function writeWarehouseProductPatch(products = [], { reason = "warehouse_product_patch" } = {}) {
+async function writeWarehouseProductPatch(products = [], { reason = "warehouse_product_patch", writeLinks = true } = {}) {
   const normalizedProducts = (Array.isArray(products) ? products : [products])
     .filter((product) => product && product.id)
     .map(normalizeWarehouseProduct);
@@ -6569,7 +6569,18 @@ async function writeWarehouseProductPatch(products = [], { reason = "warehouse_p
   const payload = normalizeWarehousePayload(warehouse);
   warehouseMemoryCache = payload;
   if (shouldUsePostgresStorage()) {
-    await replaceProductLinksInPostgres(getPrisma(), normalizedProducts);
+    if (writeLinks) {
+      await replaceProductLinksInPostgres(getPrisma(), normalizedProducts);
+    } else {
+      const chunkSize = Math.max(25, Math.min(250, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 100) || 100));
+      const writeConcurrency = warehousePostgresWriteConcurrency();
+      for (const productChunk of chunkArray(normalizedProducts, chunkSize)) {
+        await runWithLimitedConcurrency(productChunk, writeConcurrency, async (product) => {
+          await upsertWarehouseProductPostgres(getPrisma(), product);
+        });
+        markWarehousePostgresProductsWritten(productChunk);
+      }
+    }
   } else {
     refreshWarehouseHashCache(payload);
   }
@@ -7183,7 +7194,9 @@ async function enrichWarehouseProducts(productIds = []) {
     }
   }
 
-  if (updated.length) await writeWarehouse(warehouse);
+  if (updated.length) {
+    await writeWarehouseProductPatch(updated, { reason: "warehouse_ozon_enrich", writeLinks: false });
+  }
   return updated;
 }
 
@@ -7231,12 +7244,10 @@ async function enrichWeakOzonProductsForPage(products = []) {
   }
 
   if (!updatedById.size) return products;
-  if (shouldUsePostgresStorage()) {
-    try {
-      await writeWarehouseToPostgres(getPrisma(), { products: Array.from(updatedById.values()), suppliers: [] });
-    } catch (error) {
-      logger.warn("warehouse page Ozon detail auto-enrich persist failed", { detail: error?.message || String(error) });
-    }
+  try {
+    await writeWarehouseProductPatch(Array.from(updatedById.values()), { reason: "warehouse_page_ozon_auto_enrich", writeLinks: false });
+  } catch (error) {
+    logger.warn("warehouse page Ozon detail auto-enrich persist failed", { detail: error?.message || String(error) });
   }
   return products.map((product) => updatedById.get(product.id) || product);
 }
@@ -10219,7 +10230,7 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
     product.aiImages = normalizeAiImageDrafts([...(product.aiImages || []), ...drafts]);
     product.updatedAt = new Date().toISOString();
 
-    const saved = await writeWarehouse(warehouse);
+    const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_generate", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
     response.json({ ok: true, draft, drafts, batchId, product: savedProduct });
     appendAudit(request, "warehouse.ai_image.generate", {
@@ -10272,7 +10283,7 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
     product.imageUrl = draft.resultUrl;
     product.updatedAt = new Date().toISOString();
 
-    const saved = await writeWarehouse(warehouse);
+    const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_approve", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
     response.json({ ok: true, draft, product: savedProduct });
     appendAudit(request, "warehouse.ai_image.approve", {
@@ -10312,7 +10323,7 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/reject", async (request
     }
     product.updatedAt = new Date().toISOString();
 
-    const saved = await writeWarehouse(warehouse);
+    const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_reject", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
     response.json({ ok: true, draft, product: savedProduct });
     appendAudit(request, "warehouse.ai_image.reject", {
@@ -10392,7 +10403,7 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
     if (request.body.keyword !== undefined) product.keyword = cleanText(request.body.keyword);
     product.updatedAt = new Date().toISOString();
 
-    await writeWarehouse(warehouse);
+    await writeWarehouseProductPatch([product], { reason: "warehouse_product_update", writeLinks: false });
     const [freshProduct] = await buildFreshWarehouseProducts([product.id]);
     await appendAudit(request, "warehouse.product.update", {
       productId: product.id,
@@ -10452,7 +10463,10 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
       changedIds.push(product.id);
     }
 
-    await writeWarehouse(warehouse);
+    await writeWarehouseProductPatch(
+      warehouse.products.filter((product) => changedIds.includes(product.id)),
+      { reason: "warehouse_markup_bulk_update", writeLinks: false },
+    );
     const products = await buildFreshWarehouseProducts(changedIds);
     await appendAudit(request, "warehouse.markups.bulk_update", {
       productIds: changedIds,
@@ -10488,7 +10502,10 @@ app.patch("/api/warehouse/products/auto-price/bulk", async (request, response, n
       changedIds.push(product.id);
     }
 
-    await writeWarehouse(warehouse);
+    await writeWarehouseProductPatch(
+      warehouse.products.filter((product) => changedIds.includes(product.id)),
+      { reason: "warehouse_auto_price_bulk_update", writeLinks: false },
+    );
     const products = await buildFreshWarehouseProducts(changedIds);
     await appendAudit(request, "warehouse.auto_price.bulk_update", {
       productIds: changedIds,
@@ -10544,7 +10561,10 @@ app.patch("/api/warehouse/products/group", async (request, response, next) => {
       changed += 1;
       changedIds.push(product.id);
     }
-    await writeWarehouse(warehouse);
+    await writeWarehouseProductPatch(
+      warehouse.products.filter((product) => changedIds.includes(product.id)),
+      { reason: "warehouse_group", writeLinks: false },
+    );
     const products = await buildFreshWarehouseProducts(changedIds);
     await appendAudit(request, "warehouse.group", { productIds: changedIds, oldValue: oldValues, newValue: { groupId } });
     response.json({ ok: true, groupId, changed, products });
@@ -10572,7 +10592,10 @@ app.patch("/api/warehouse/products/ungroup", async (request, response, next) => 
       changed += 1;
       changedIds.push(product.id);
     }
-    await writeWarehouse(warehouse);
+    await writeWarehouseProductPatch(
+      warehouse.products.filter((product) => changedIds.includes(product.id)),
+      { reason: "warehouse_ungroup", writeLinks: false },
+    );
     const products = await buildFreshWarehouseProducts(changedIds);
     await appendAudit(request, "warehouse.ungroup", { productIds: changedIds, oldValue: oldValues, newValue: { groupId: "" } });
     response.json({ ok: true, changed, products });
@@ -10961,9 +10984,11 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   const successIds = new Set(items.map((item) => item.id));
   for (const failedItem of failed) successIds.delete(failedItem.id);
   const postgresPriceHistoryRows = [];
+  const touchedProductIds = new Set();
   for (const item of items) {
     const product = warehouse.products.find((entry) => entry.id === item.id);
     if (!product) continue;
+    touchedProductIds.add(product.id);
     const success = successIds.has(item.id);
     const failedEntryForItem = failed.find((entry) => entry.id === item.id);
     const delayedByLimitForItem = failedEntryForItem ? isOzonPerItemPriceLimitError({ message: failedEntryForItem.error }) : false;
@@ -11053,12 +11078,18 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     if (!action.ok) continue;
     const product = warehouse.products.find((entry) => entry.id === action.id);
     if (!product) continue;
+    touchedProductIds.add(product.id);
     product.marketplaceState = {
       ...(product.marketplaceState || {}),
       stock: Math.max(0, Math.round(Number(action.stock || 0))),
     };
   }
-  await writeWarehouse(warehouse);
+  if (touchedProductIds.size) {
+    await writeWarehouseProductPatch(
+      warehouse.products.filter((product) => touchedProductIds.has(product.id)),
+      { reason: "warehouse_price_stock_send", writeLinks: false },
+    );
+  }
   appendPriceHistoryRows(postgresPriceHistoryRows).catch((error) => logger.warn("price history background append failed", { detail: error?.message || String(error) }));
 
   const failedQueued = failed.map((item) => buildPriceRetryItem({
