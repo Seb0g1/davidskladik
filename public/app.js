@@ -3472,7 +3472,7 @@ function queueWarehouseRefresh(delayMs = 160) {
   warehouseRefreshTimer = window.setTimeout(() => {
     const selectedKey = state.selectedWarehouseGroupKey;
     const selectionVersion = state.warehouseSelectionVersion;
-    loadWarehouse(false, false, { silent: true }).then(() => {
+    loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false }).then(() => {
       if (selectedKey && selectionVersion === state.warehouseSelectionVersion && state.selectedWarehouseGroupKey === selectedKey) {
         const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
           .find((item) => item.key === selectedKey);
@@ -3492,7 +3492,7 @@ let warehouseFilterReloadTimer = null;
 function queueWarehouseFilterReload(delayMs = 260) {
   if (warehouseFilterReloadTimer) window.clearTimeout(warehouseFilterReloadTimer);
   warehouseFilterReloadTimer = window.setTimeout(() => {
-    loadWarehouse(false, false, { silent: true }).catch((error) => {
+    loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false }).catch((error) => {
       elements.warehouseStatus.textContent = error.message;
       applyWarehouseFilters();
     });

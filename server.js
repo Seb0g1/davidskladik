@@ -10668,16 +10668,10 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 
     if (!updatedIds.length) return response.status(404).json({ error: "Товары склада не найдены." });
 
-    warehouseMemoryCache = {
-      createdAt: warehouse.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      products: warehouse.products,
-      suppliers: warehouse.suppliers,
-    };
-    await writeWarehouse(warehouse);
-    if (shouldUsePostgresStorage()) {
-      await replaceProductLinksInPostgres(getPrisma(), warehouse.products.filter((product) => updatedIds.includes(product.id)));
-    }
+    await writeWarehouseProductPatch(
+      warehouse.products.filter((product) => updatedIds.includes(product.id)),
+      { reason: "warehouse_links_bulk_save" },
+    );
     const savedProducts = await buildFreshWarehouseProducts(updatedIds);
     response.json({ ok: true, changed: savedProducts.length || updatedIds.length, products: savedProducts, persisted: "written" });
     appendAudit(request, "warehouse.links.bulk_save", {
@@ -10751,16 +10745,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     }));
     if (product.links.length > 0) product.autoPriceEnabled = true;
     product.updatedAt = now;
-    warehouseMemoryCache = {
-      createdAt: warehouse.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      products: warehouse.products,
-      suppliers: warehouse.suppliers,
-    };
-    await writeWarehouse(warehouse);
-    if (shouldUsePostgresStorage()) {
-      await replaceProductLinksInPostgres(getPrisma(), [product]);
-    }
+    await writeWarehouseProductPatch([product], { reason: "warehouse_link_save" });
     const [savedProduct] = await buildFreshWarehouseProducts([product.id]);
     response.json({ ok: true, product: savedProduct || normalizeWarehouseProduct(product), links: (savedProduct || product).links || [], persisted: "written" });
     appendAudit(request, "warehouse.link.save", {
@@ -10804,16 +10789,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     }
     product.links = previousLinks.filter((link) => String(link.id) !== String(request.params.linkId));
     product.updatedAt = new Date().toISOString();
-    warehouseMemoryCache = {
-      createdAt: warehouse.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      products: warehouse.products,
-      suppliers: warehouse.suppliers,
-    };
-    await writeWarehouse(warehouse);
-    if (shouldUsePostgresStorage()) {
-      await replaceProductLinksInPostgres(getPrisma(), [product]);
-    }
+    await writeWarehouseProductPatch([product], { reason: "warehouse_link_delete" });
     const [savedProduct] = await buildFreshWarehouseProducts([product.id]);
     const responseProduct = savedProduct || normalizeWarehouseProduct(product);
     response.json({ ok: true, product: responseProduct, links: responseProduct.links || [], persisted: "written" });
@@ -10834,10 +10810,17 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
 
 async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDiffPct = 0, dryRun = false, force = false } = {}) {
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
-  const preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
-  const selected = ids
-    ? await buildFreshWarehouseProducts(Array.from(ids), { refreshPrices: true })
-    : preview.products;
+  let preview = null;
+  let selected = [];
+  if (ids) {
+    const settings = await readAppSettings();
+    const rate = Number(settings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+    preview = { usdRate: rate };
+    selected = await buildFreshWarehouseProducts(Array.from(ids), { refreshPrices: true, usdRate: rate });
+  } else {
+    preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
+    selected = preview.products;
+  }
   const skipped = [];
   const items = [];
   const stockItems = [];
