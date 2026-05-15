@@ -204,6 +204,7 @@ let priceRetryTimer = null;
 let priceRetryRunning = false;
 let marketplaceQueue = null;
 let marketplaceWorker = null;
+const warehouseProductMutationLocks = new Map();
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -230,6 +231,27 @@ function formatRuNumber(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "0";
   return new Intl.NumberFormat("ru-RU").format(number);
+}
+
+async function withWarehouseProductMutationLock(productIds = [], worker) {
+  const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : [productIds])
+    .map((id) => cleanText(id))
+    .filter(Boolean)))
+    .sort();
+  const lockIds = ids.length ? ids : ["__warehouse_products__"];
+  const previousLocks = lockIds.map((id) => warehouseProductMutationLocks.get(id)).filter(Boolean);
+  const run = (async () => {
+    if (previousLocks.length) await Promise.allSettled(previousLocks);
+    return worker();
+  })();
+  for (const id of lockIds) warehouseProductMutationLocks.set(id, run);
+  try {
+    return await run;
+  } finally {
+    for (const id of lockIds) {
+      if (warehouseProductMutationLocks.get(id) === run) warehouseProductMutationLocks.delete(id);
+    }
+  }
 }
 function warehouseViewCacheKey({ sync = false, limit = Number.POSITIVE_INFINITY, usdRate, refreshPrices = false } = {}) {
   const limitKey = Number.isFinite(Number(limit)) ? Number(limit) : "all";
@@ -1898,7 +1920,7 @@ function normalizeWarehouseProduct(input = {}) {
     },
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: input.updatedAt || new Date().toISOString(),
-    links: Array.isArray(input.links) ? input.links.map(normalizeWarehouseLink) : [],
+    links: compactWarehouseLinks(input.links || []),
   };
 }
 
@@ -1945,11 +1967,60 @@ function warehouseLinkIdentityKey(input = {}) {
   ].join("|");
 }
 
+function warehouseLinkTargetKey(input = {}) {
+  const link = normalizeWarehouseLink(input);
+  const primary = link.sourceRowId
+    ? `row:${link.sourceRowId}`
+    : (link.article ? `article:${link.article.toLowerCase()}` : `name:${link.exactName.toLowerCase()}`);
+  return [
+    link.matchType,
+    primary,
+    link.partnerId || normalizeSupplierName(link.supplierName),
+    link.keyword.toLowerCase(),
+    link.priceCurrency,
+  ].join("|");
+}
+
+function compactWarehouseLinks(links = []) {
+  const map = new Map();
+  for (const input of Array.isArray(links) ? links : []) {
+    const link = normalizeWarehouseLink(input);
+    if (!warehouseLinkHasMatchTarget(link)) continue;
+    const key = warehouseLinkTargetKey(link);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, link);
+      continue;
+    }
+    map.set(key, normalizeWarehouseLink({
+      ...existing,
+      ...link,
+      id: existing.id || link.id,
+      article: existing.article || link.article,
+      exactName: existing.exactName || link.exactName,
+      sourceRowId: existing.sourceRowId || link.sourceRowId,
+      supplierName: existing.supplierName || link.supplierName,
+      partnerId: existing.partnerId || link.partnerId,
+      keyword: existing.keyword || link.keyword,
+      priceCurrency: existing.priceCurrency || link.priceCurrency,
+      createdAt: existing.createdAt || link.createdAt,
+      createdBy: existing.createdBy || link.createdBy,
+      updatedAt: link.updatedAt || existing.updatedAt,
+      updatedBy: link.updatedBy || existing.updatedBy,
+    }));
+  }
+  return Array.from(map.values());
+}
+
+function warehouseProductHasLinks(product = {}, links = []) {
+  const existing = new Set(compactWarehouseLinks(product.links || []).map(warehouseLinkTargetKey));
+  return compactWarehouseLinks(links).every((link) => existing.has(warehouseLinkTargetKey(link)));
+}
+
 function warehouseProductLinksSignature(product = {}) {
-  return (Array.isArray(product.links) ? product.links : [])
-    .map(normalizeWarehouseLink)
+  return compactWarehouseLinks(product.links || [])
     .map((link) => [
-      warehouseLinkIdentityKey(link),
+      warehouseLinkTargetKey(link),
       link.id,
       link.updatedAt || "",
       link.updatedBy || "",
@@ -10712,6 +10783,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       .filter(Boolean));
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для привязки." });
 
+    return await withWarehouseProductMutationLock(Array.from(ids), async () => {
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const warehouse = await readWarehouse();
@@ -10720,21 +10792,26 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const submittedLinks = Array.from(new Map(rawLinks
       .map((link) => normalizeWarehouseLink(link))
       .filter(warehouseLinkHasMatchTarget)
-      .map((link) => [warehouseLinkIdentityKey(link), link])).values());
+      .map((link) => [warehouseLinkTargetKey(link), link])).values());
     const resolvedLinks = [];
     for (const submittedLink of submittedLinks) {
       const resolvedLink = await resolvePriceMasterLinkForSave(submittedLink, usdRate, warehouse.suppliers, linkSaveLookupOptions);
       if (warehouseLinkHasMatchTarget(resolvedLink)) resolvedLinks.push(resolvedLink);
     }
     const baseLinks = Array.from(new Map(resolvedLinks
-      .map((link) => [warehouseLinkIdentityKey(link), link])).values());
+      .map((link) => [warehouseLinkTargetKey(link), link])).values());
     const baseLink = baseLinks[0] || normalizeWarehouseLink({});
     if (!baseLink.article && !baseLink.exactName && !baseLink.sourceRowId) {
       return response.status(400).json({ error: "Укажите артикул PriceMaster или выберите строку PriceMaster по названию." });
     }
     const targetProducts = warehouse.products.filter((product) => ids.has(String(product.id)));
     const conflicts = collectProductConflictsExceptBackground(targetProducts, productLocksFromRequest(request.body), { mergeOnly: true });
-    if (conflicts.length) return conflictResponse(response, conflicts);
+    if (conflicts.length) {
+      const alreadyApplied = targetProducts.length > 0 && targetProducts.every((product) => warehouseProductHasLinks(product, baseLinks));
+      if (!alreadyApplied) return conflictResponse(response, conflicts);
+      const savedProducts = await buildFreshWarehouseProducts(Array.from(ids), { usdRate, livePriceMaster: false });
+      return response.json({ ok: true, changed: savedProducts.length || targetProducts.length, products: savedProducts, persisted: "already_written", alreadyWritten: true });
+    }
     for (const linkToValidate of baseLinks) {
       await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers, linkSaveLookupOptions);
     }
@@ -10748,7 +10825,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       oldValues.push(cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt }));
       product.links = Array.isArray(product.links) ? product.links : [];
       for (const linkToSave of baseLinks) {
-        const identityKey = warehouseLinkIdentityKey(linkToSave);
+        const identityKey = warehouseLinkTargetKey(linkToSave);
         const link = normalizeWarehouseLink({
           ...linkToSave,
           createdAt: linkToSave.createdAt || now,
@@ -10756,7 +10833,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
           createdBy: linkToSave.createdBy || username,
           updatedBy: username,
         });
-        const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkIdentityKey(item) === identityKey);
+        const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkTargetKey(item) === identityKey);
         if (index >= 0) {
           product.links[index] = normalizeWarehouseLink({
             ...product.links[index],
@@ -10770,6 +10847,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         }
         else product.links.push(link);
       }
+      product.links = compactWarehouseLinks(product.links);
       product.autoPriceEnabled = true;
       product.updatedAt = now;
       updatedIds.push(product.id);
@@ -10807,6 +10885,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     queueMarketplaceJob("supplier-recovery-automation", { productIds: updatedIds }, { priority: 1 });
     queueImmediateAutoPricePush(updatedIds, "link_bulk_add_or_update");
+    });
   } catch (error) {
     next(error);
   }
@@ -10814,6 +10893,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 
 app.post("/api/warehouse/products/:id/links", async (request, response, next) => {
   try {
+    return await withWarehouseProductMutationLock([request.params.id], async () => {
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
@@ -10833,8 +10913,8 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const now = new Date().toISOString();
     const username = requestUsername(request);
     product.links = Array.isArray(product.links) ? product.links : [];
-    const identityKey = warehouseLinkIdentityKey(link);
-    const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkIdentityKey(item) === identityKey);
+    const identityKey = warehouseLinkTargetKey(link);
+    const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkTargetKey(item) === identityKey);
     if (index >= 0) {
       product.links[index] = normalizeWarehouseLink({
         ...product.links[index],
@@ -10853,6 +10933,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       createdBy: link.createdBy || username,
       updatedBy: username,
     }));
+    product.links = compactWarehouseLinks(product.links);
     if (product.links.length > 0) product.autoPriceEnabled = true;
     product.updatedAt = now;
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_save" });
@@ -10874,6 +10955,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     queueMarketplaceJob("supplier-recovery-automation", { productIds: [product.id] }, { priority: 1 });
     queueImmediateAutoPricePush([product.id], "link_add_or_update");
+    });
   } catch (error) {
     next(error);
   }
@@ -10881,6 +10963,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
 
 app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, response, next) => {
   try {
+    return await withWarehouseProductMutationLock([request.params.productId], async () => {
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.productId);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
@@ -10898,10 +10981,21 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
       return response.json({ ok: true, product: responseProduct, links: responseProduct.links || [], persisted: "already_deleted", alreadyDeleted: true });
     }
     product.links = previousLinks.filter((link) => String(link.id) !== String(request.params.linkId));
+    product.links = compactWarehouseLinks(product.links);
     product.updatedAt = new Date().toISOString();
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_delete" });
-    const [savedProduct] = await buildFreshWarehouseProducts([product.id]);
-    const responseProduct = savedProduct || normalizeWarehouseProduct(product);
+    const [savedProduct] = product.links.length ? await buildFreshWarehouseProducts([product.id]) : [];
+    const responseProduct = savedProduct || {
+      ...normalizeWarehouseProduct(product),
+      links: [],
+      suppliers: [],
+      selectedSupplier: null,
+      selectedSupplierReason: "Нет сохранённых привязок.",
+      ready: false,
+      changed: false,
+      hasLinks: false,
+      status: "no_links",
+    };
     response.json({ ok: true, product: responseProduct, links: responseProduct.links || [], persisted: "written" });
     appendAudit(request, "warehouse.link.delete", {
       productId: product.id,
@@ -10913,6 +11007,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     queueMarketplaceJob("no-supplier-automation", { productIds: [request.params.productId] }, { priority: 1 });
     if ((responseProduct.links || []).length) queueImmediateAutoPricePush([request.params.productId], "link_delete");
+    });
   } catch (error) {
     next(error);
   }

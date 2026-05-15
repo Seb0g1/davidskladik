@@ -43,6 +43,7 @@ const state = {
   warehouseLiveRefreshQueued: false,
   warehouseMutationDepth: 0,
   warehouseMutationProductIds: new Set(),
+  warehouseLinkMutationKeys: new Set(),
   warehouseSyncPollTimer: null,
   warehouseSyncStartedFromUi: false,
   warehouseSelectionVersion: 0,
@@ -920,13 +921,33 @@ function getPendingLinkDrafts(key) {
   return Array.isArray(state.pendingLinkDrafts?.[key]) ? state.pendingLinkDrafts[key] : [];
 }
 
+function warehouseLinkDraftIdentity(link = {}) {
+  const matchType = String(link.matchType || "article").trim() || "article";
+  const article = String(link.article || "").trim().toLowerCase();
+  const exactName = String(link.exactName || "").trim().toLowerCase();
+  const sourceRowId = String(link.sourceRowId || "").trim();
+  const supplierName = String(link.supplierName || "").trim().toLowerCase();
+  const partnerId = String(link.partnerId || "").trim();
+  const keyword = String(link.keyword || "").trim().toLowerCase();
+  const priceCurrency = String(link.priceCurrency || "USD").trim().toUpperCase() === "RUB" ? "RUB" : "USD";
+  const target = sourceRowId ? `row:${sourceRowId}` : (article ? `article:${article}` : `name:${exactName}`);
+  return [matchType, target, partnerId || supplierName, keyword, priceCurrency].join("|");
+}
+
+function dedupeLinkDrafts(links = []) {
+  const map = new Map();
+  for (const link of Array.isArray(links) ? links : []) {
+    if (!String(link?.article || "").trim() && !String(link?.exactName || "").trim() && !String(link?.sourceRowId || "").trim()) continue;
+    const key = warehouseLinkDraftIdentity(link);
+    const existing = map.get(key);
+    map.set(key, existing ? { ...existing, ...link, id: existing.id || link.id } : link);
+  }
+  return Array.from(map.values());
+}
+
 function setPendingLinkDrafts(key, links = []) {
   state.pendingLinkDrafts = state.pendingLinkDrafts || {};
-  const normalized = (Array.isArray(links) ? links : []).filter((link) =>
-    String(link?.article || "").trim()
-    || String(link?.exactName || "").trim()
-    || String(link?.sourceRowId || "").trim()
-  );
+  const normalized = dedupeLinkDrafts(links);
   if (normalized.length) state.pendingLinkDrafts[key] = normalized;
   else delete state.pendingLinkDrafts[key];
 }
@@ -1110,6 +1131,19 @@ function endWarehouseMutation(productIds = []) {
       if (state.warehouseMutationDepth === 0) checkWarehouseLiveStatus({ force: true }).catch(() => {});
     }, 300);
   }
+}
+
+function beginWarehouseLinkAction(key) {
+  const actionKey = String(key || "").trim();
+  if (!actionKey) return false;
+  if (state.warehouseLinkMutationKeys.has(actionKey)) return false;
+  state.warehouseLinkMutationKeys.add(actionKey);
+  return true;
+}
+
+function endWarehouseLinkAction(key) {
+  const actionKey = String(key || "").trim();
+  if (actionKey) state.warehouseLinkMutationKeys.delete(actionKey);
 }
 
 function ensureOperationsLink() {
@@ -4179,16 +4213,7 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     priceCurrency: String(data.get("priceCurrency") || "USD").toUpperCase() === "RUB" ? "RUB" : "USD",
   };
   const existing = getPendingLinkDrafts(draftKey);
-  const duplicateIndex = existing.findIndex((item) =>
-    String(item.article || "").trim().toLowerCase() === draft.article.toLowerCase()
-    && String(item.matchType || "article") === draft.matchType
-    && String(item.sourceRowId || "").trim() === draft.sourceRowId
-    && String(item.exactName || "").trim().toLowerCase() === draft.exactName.toLowerCase()
-    && String(item.partnerId || "").trim() === draft.partnerId
-    && String(item.supplierName || "").trim().toLowerCase() === draft.supplierName.toLowerCase()
-    && String(item.keyword || "").trim().toLowerCase() === draft.keyword.toLowerCase()
-    && String(item.priceCurrency || "USD") === draft.priceCurrency
-  );
+  const duplicateIndex = existing.findIndex((item) => warehouseLinkDraftIdentity(item) === warehouseLinkDraftIdentity(draft));
   const nextDrafts = duplicateIndex >= 0
     ? existing.map((item, index) => (index === duplicateIndex ? { ...draft, id: item.id } : item))
     : [...existing, draft];
@@ -4313,16 +4338,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       return;
     }
     const existing = getPendingLinkDrafts(key);
-    const duplicateIndex = existing.findIndex((item) =>
-      String(item.article || "").trim().toLowerCase() === draft.article.toLowerCase()
-      && String(item.matchType || "article") === draft.matchType
-      && String(item.sourceRowId || "").trim() === draft.sourceRowId
-      && String(item.exactName || "").trim().toLowerCase() === draft.exactName.toLowerCase()
-      && String(item.partnerId || "").trim() === draft.partnerId
-      && String(item.supplierName || "").trim().toLowerCase() === draft.supplierName.toLowerCase()
-      && String(item.keyword || "").trim().toLowerCase() === draft.keyword.toLowerCase()
-      && String(item.priceCurrency || "USD") === draft.priceCurrency
-    );
+    const duplicateIndex = existing.findIndex((item) => warehouseLinkDraftIdentity(item) === warehouseLinkDraftIdentity(draft));
     const nextDrafts = duplicateIndex >= 0
       ? existing.map((item, index) => (index === duplicateIndex ? { ...draft, id: item.id } : item))
       : [...existing, draft];
@@ -4364,6 +4380,12 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
     }));
     const selectionVersion = state.warehouseSelectionVersion;
     const selectedGroupKey = state.selectedWarehouseGroupKey;
+    const actionKey = `save-links:${productIds.slice().sort().join("|")}:${links.map(warehouseLinkDraftIdentity).sort().join("|")}`;
+    if (!beginWarehouseLinkAction(actionKey)) {
+      elements.warehouseStatus.textContent = "Привязки уже сохраняются. Дождитесь завершения операции.";
+      return;
+    }
+    saveDraftsButton.dataset.busyKey = actionKey;
     saveDraftsButton.disabled = true;
     beginWarehouseMutation(productIds);
     elements.warehouseStatus.textContent = `Сохраняю ${formatNumber(links.length)} привязок и пересчитываю цену...`;
@@ -4386,6 +4408,9 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       elements.warehouseStatus.textContent = error.message;
       saveDraftsButton.disabled = false;
     } finally {
+      endWarehouseLinkAction(actionKey);
+      delete saveDraftsButton.dataset.busyKey;
+      saveDraftsButton.disabled = false;
       endWarehouseMutation(productIds);
     }
     return;
@@ -4419,9 +4444,15 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       return;
     }
     if (linkButton) {
-      linkButton.disabled = true;
       const productId = linkButton.dataset.productId || "";
       const linkId = linkButton.dataset.linkId || "";
+      const actionKey = `delete-link:${productId}:${linkId}`;
+      if (!beginWarehouseLinkAction(actionKey)) {
+        elements.warehouseStatus.textContent = "Привязка уже удаляется. Дождитесь завершения операции.";
+        return;
+      }
+      linkButton.dataset.busyKey = actionKey;
+      linkButton.disabled = true;
       const selectionVersion = state.warehouseSelectionVersion;
       const selectedGroupKey = state.selectedWarehouseGroupKey;
       beginWarehouseMutation([productId]);
@@ -4445,6 +4476,8 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
         showToast("Привязка удалена у предыдущей карточки. Текущий выбор не переключался.", "warn");
       }
       endWarehouseMutation([productId]);
+      endWarehouseLinkAction(actionKey);
+      delete linkButton.dataset.busyKey;
     }
     if (productButton && await confirmAction({ title: "Удалить товар?", text: "Удалить товар из личного склада?", okText: "Удалить" })) {
       const expectedUpdatedAt = encodeURIComponent(productButton.dataset.productUpdatedAt || "");
@@ -4456,6 +4489,10 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
     }
   } catch (error) {
     if (linkButton) linkButton.disabled = false;
+    if (linkButton?.dataset.busyKey) {
+      endWarehouseLinkAction(linkButton.dataset.busyKey);
+      delete linkButton.dataset.busyKey;
+    }
     if (linkButton?.dataset.productId) endWarehouseMutation([linkButton.dataset.productId]);
     if (handleProductConflict(error, "удаления")) return;
     elements.warehouseStatus.textContent = error.message;

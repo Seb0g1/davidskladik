@@ -2640,6 +2640,35 @@ test("warehouse link identity ignores client draft id duplicates", () => {
   assert.equal(a, b);
 });
 
+test("warehouse product normalization collapses duplicate supplier links by target", () => {
+  const product = normalizeWarehouseProduct({
+    id: "dup-link-product",
+    offerId: "DUP-1",
+    links: [
+      {
+        id: "link-original",
+        article: " PM-1 ",
+        supplierName: "Supplier A",
+        priceCurrency: "usd",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "link-repeat",
+        article: "pm-1",
+        supplierName: " supplier a ",
+        priceCurrency: "USD",
+        updatedBy: "manager",
+      },
+    ],
+  });
+
+  assert.equal(product.links.length, 1);
+  assert.equal(product.links[0].id, "link-original");
+  assert.equal(product.links[0].article, "PM-1");
+  assert.equal(product.links[0].supplierName, "Supplier A");
+  assert.equal(product.links[0].updatedBy, "manager");
+});
+
 test("warehouse link locks ignore background-only product updates", () => {
   const product = normalizeWarehouseProduct({
     id: "link-lock-product",
