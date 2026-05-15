@@ -54,6 +54,8 @@ const {
   normalizePriceMasterPrice,
   supplierImpactProductIds,
   priceMasterChangeImpactProductIds,
+  changedWarehouseProductIdsByAutomationFingerprint,
+  backgroundAutomationProductIds,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
   runNoSupplierMarketplaceAutomation,
@@ -2501,6 +2503,43 @@ test("PriceMaster delta price push refuses oversized change sets", () => {
   assert.equal(result.skipped, true);
   assert.equal(result.reason, "too_many_pricemaster_changes");
   assert.deepEqual(result.productIds, []);
+});
+
+test("marketplace sync change fingerprint ignores timestamp-only churn", () => {
+  const before = [{
+    id: "p1",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "A-1",
+    marketplacePrice: 100,
+    targetStock: 3,
+    marketplaceState: { code: "active", active: true },
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  }];
+  const afterTimestampOnly = [{ ...before[0], updatedAt: "2026-01-02T00:00:00.000Z" }];
+  const afterStockChanged = [{ ...afterTimestampOnly[0], targetStock: 0 }];
+
+  assert.deepEqual(changedWarehouseProductIdsByAutomationFingerprint(before, afterTimestampOnly), []);
+  assert.deepEqual(changedWarehouseProductIdsByAutomationFingerprint(before, afterStockChanged), ["p1"]);
+});
+
+test("background automation scope combines marketplace changes and PriceMaster delta", () => {
+  const warehouse = {
+    marketplaceSyncChangedProductIds: ["marketplace-change"],
+    products: [
+      { id: "marketplace-change", links: [] },
+      { id: "pm-change", links: [{ article: "A-1" }] },
+      { id: "unrelated", links: [{ article: "B-2" }] },
+    ],
+  };
+  const result = backgroundAutomationProductIds({}, warehouse);
+  assert.deepEqual(result.productIds, ["marketplace-change"]);
+
+  const withPriceMaster = backgroundAutomationProductIds(
+    { changedRows: [{ type: "price_changed", current: { article: "A-1", partnerId: "1" } }] },
+    warehouse,
+  );
+  assert.deepEqual(withPriceMaster.productIds, ["marketplace-change", "pm-change"]);
 });
 
 test("automation queues linked product for stock=0 when supplier disappeared", () => {

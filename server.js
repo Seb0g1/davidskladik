@@ -2257,6 +2257,80 @@ function priceMasterChangeImpactProductIds(warehouse = {}, changes = [], options
   };
 }
 
+function warehouseProductAutomationFingerprint(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const state = normalized.marketplaceState || {};
+  const links = (Array.isArray(normalized.links) ? normalized.links : [])
+    .map((link) => ({
+      article: cleanText(link.article).toLowerCase(),
+      matchType: cleanText(link.matchType || "article"),
+      exactName: cleanText(link.exactName).toLowerCase(),
+      sourceRowId: cleanText(link.sourceRowId),
+      partnerId: cleanText(link.partnerId),
+    }))
+    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+
+  return JSON.stringify({
+    id: normalized.id,
+    target: normalized.target,
+    marketplace: normalized.marketplace,
+    offerId: cleanText(normalized.offerId).toLowerCase(),
+    marketplacePrice: Number(normalized.marketplacePrice || 0) || 0,
+    currentPrice: Number(normalized.currentPrice || 0) || 0,
+    targetStock: normalized.targetStock === null || normalized.targetStock === undefined ? null : Number(normalized.targetStock),
+    state: {
+      code: cleanText(state.code),
+      active: Boolean(state.active),
+      archived: Boolean(state.archived),
+      outOfStock: Boolean(state.outOfStock),
+      partial: Boolean(state.partial),
+    },
+    noSupplierAutomation: {
+      stockZeroAt: cleanText(normalized.noSupplierAutomation?.stockZeroAt || ""),
+      archivedAt: cleanText(normalized.noSupplierAutomation?.archivedAt || ""),
+      recoveredAt: cleanText(normalized.noSupplierAutomation?.recoveredAt || ""),
+    },
+    links,
+  });
+}
+
+function changedWarehouseProductIdsByAutomationFingerprint(beforeProducts = [], afterProducts = []) {
+  const before = new Map();
+  for (const product of Array.isArray(beforeProducts) ? beforeProducts : []) {
+    if (!product?.id) continue;
+    before.set(String(product.id), warehouseProductAutomationFingerprint(product));
+  }
+  const changed = [];
+  for (const product of Array.isArray(afterProducts) ? afterProducts : []) {
+    if (!product?.id) continue;
+    const id = String(product.id);
+    const fingerprint = warehouseProductAutomationFingerprint(product);
+    if (!before.has(id) || before.get(id) !== fingerprint) changed.push(product.id);
+  }
+  return changed;
+}
+
+function backgroundAutomationProductIds(priceMaster = {}, warehouse = {}, options = {}) {
+  const productIds = new Set(
+    (Array.isArray(warehouse.marketplaceSyncChangedProductIds) ? warehouse.marketplaceSyncChangedProductIds : [])
+      .map((id) => cleanText(id))
+      .filter(Boolean),
+  );
+  const priceMasterDelta = priceMasterChangeImpactProductIds(warehouse, priceMaster.changedRows || [], {
+    maxChanges: options.maxChanges || priceMasterDeltaMaxChanges,
+    maxProducts: options.maxProducts || priceMasterDeltaMaxProducts,
+  });
+  for (const id of priceMasterDelta.productIds || []) {
+    const normalizedId = cleanText(id);
+    if (normalizedId) productIds.add(normalizedId);
+  }
+  return {
+    productIds: Array.from(productIds),
+    marketplaceChanged: Array.isArray(warehouse.marketplaceSyncChangedProductIds) ? warehouse.marketplaceSyncChangedProductIds.length : 0,
+    priceMasterDelta,
+  };
+}
+
 function cloneAuditValue(value) {
   return value == null ? null : JSON.parse(JSON.stringify(value));
 }
@@ -7894,9 +7968,15 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     logger.info("supplier auto-reactivated by date", { count: autoReactivated.length, suppliers: autoReactivated });
   }
   let syncWarnings = [];
+  let marketplaceSyncChangedProductIds = [];
   if (sync) {
+    const beforeSyncProducts = Array.isArray(warehouse.products) ? warehouse.products : [];
     const synced = await syncWarehouseProductsFromMarketplaces(warehouse, limit, { onProgress });
     warehouse = synced.warehouse;
+    marketplaceSyncChangedProductIds = changedWarehouseProductIdsByAutomationFingerprint(
+      beforeSyncProducts,
+      warehouse.products || [],
+    );
     syncWarnings = synced.warnings || [];
     onProgress?.({
       percent: 76,
@@ -8079,6 +8159,8 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
         action: "Автоархив кандидат",
       })),
     syncWarnings,
+    marketplaceSyncChangedProductIds,
+    marketplaceSyncChanged: marketplaceSyncChangedProductIds.length,
   };
 }
 
@@ -11301,6 +11383,63 @@ async function sendPriceMasterDeltaWarehousePrices(priceMaster = {}, warehouse =
   };
 }
 
+function emptyNoSupplierAutomationResult(reason = "no_changed_products") {
+  return {
+    zeroStockSent: 0,
+    archived: 0,
+    errors: [],
+    productStatuses: [],
+    skipped: true,
+    reason,
+    source: "targeted",
+  };
+}
+
+function emptySupplierRecoveryResult(reason = "no_changed_products") {
+  return {
+    recovered: 0,
+    restoredStocks: 0,
+    unarchived: 0,
+    errors: [],
+    productStatuses: [],
+    skipped: true,
+    reason,
+    source: "targeted",
+  };
+}
+
+async function runTargetedBackgroundSupplierAutomations(priceMaster = {}, warehouse = {}, options = {}) {
+  const scope = backgroundAutomationProductIds(priceMaster, warehouse, options);
+  if (!scope.productIds.length) {
+    return {
+      automation: emptyNoSupplierAutomationResult("no_changed_products"),
+      recovery: emptySupplierRecoveryResult("no_changed_products"),
+      scope,
+    };
+  }
+
+  const ids = new Set(scope.productIds.map(String));
+  const products = (Array.isArray(warehouse.products) ? warehouse.products : [])
+    .filter((product) => ids.has(String(product.id)));
+  if (!products.length) {
+    return {
+      automation: emptyNoSupplierAutomationResult("changed_products_not_in_view"),
+      recovery: emptySupplierRecoveryResult("changed_products_not_in_view"),
+      scope,
+    };
+  }
+
+  const automation = await runNoSupplierMarketplaceAutomation(
+    { products },
+    { productIds: scope.productIds, includeNoLinks: true, source: "targeted" },
+  );
+  const recovery = await runSupplierRecoveryAutomation(
+    { products },
+    { productIds: scope.productIds, source: "targeted" },
+  );
+  return { automation, recovery, scope };
+}
+
 function marketplaceJobId(name, data = {}) {
   const productIds = Array.isArray(data?.productIds)
     ? data.productIds.map((id) => String(id)).filter(Boolean).sort()
@@ -13520,8 +13659,15 @@ async function runDailyRefresh(trigger = "manual") {
     try {
       const priceMaster = await runSync();
       const warehouse = await buildWarehouseView({ sync: true });
-      const automation = await runNoSupplierMarketplaceAutomation(warehouse);
-      const recovery = await runSupplierRecoveryAutomation(warehouse);
+      const backgroundAutomation = trigger === "manual"
+        ? {
+            automation: await runNoSupplierMarketplaceAutomation(warehouse),
+            recovery: await runSupplierRecoveryAutomation(warehouse),
+            scope: { mode: "full", productIds: null, marketplaceChanged: warehouse.marketplaceSyncChanged || 0 },
+          }
+        : await runTargetedBackgroundSupplierAutomations(priceMaster, warehouse);
+      const automation = backgroundAutomation.automation;
+      const recovery = backgroundAutomation.recovery;
       let pricePush = null;
       const shouldSendPrices = trigger === "manual" || (trigger === "schedule" && dailySyncSendPrices);
       if (shouldSendPrices) {
@@ -13556,6 +13702,8 @@ async function runDailyRefresh(trigger = "manual") {
           zeroStockSent: automation.zeroStockSent,
           autoArchived: automation.archived,
           recovered: recovery.recovered,
+          automationScope: backgroundAutomation.scope?.productIds?.length ?? null,
+          automationSkippedReason: automation.reason || recovery.reason || null,
           pricePush: pricePush
             ? {
                 sent: Number(pricePush.sent || 0),
@@ -13642,8 +13790,9 @@ async function runAutoSyncCycle(trigger = "auto") {
   try {
     const result = await runSync();
     const warehouse = await buildWarehouseView({ sync: true });
-    const automation = await runNoSupplierMarketplaceAutomation(warehouse);
-    const recovery = await runSupplierRecoveryAutomation(warehouse);
+    const backgroundAutomation = await runTargetedBackgroundSupplierAutomations(result, warehouse);
+    const automation = backgroundAutomation.automation;
+    const recovery = backgroundAutomation.recovery;
     const autoPricePush = await sendPriceMasterDeltaWarehousePrices(result, warehouse);
     logger.info("auto sync complete", {
       trigger,
@@ -13654,6 +13803,9 @@ async function runAutoSyncCycle(trigger = "auto") {
       zeroStockSent: automation.zeroStockSent,
       autoArchived: automation.archived,
       recovered: recovery.recovered,
+      marketplaceSyncChanged: warehouse.marketplaceSyncChanged || 0,
+      automationScope: backgroundAutomation.scope?.productIds?.length || 0,
+      automationSkippedReason: automation.reason || recovery.reason || null,
       priceMasterDeltaProducts: autoPricePush.delta?.productIds?.length || 0,
       priceMasterDeltaSkippedReason: autoPricePush.delta?.reason || null,
       autoPriceSent: autoPricePush.sent || 0,
@@ -13672,7 +13824,7 @@ async function runAutoSyncCycle(trigger = "auto") {
       recovery,
       pricePush: autoPricePush,
     }));
-    return { status: "ok", result, warehouse, automation, recovery, autoPricePush };
+    return { status: "ok", result, warehouse, automation, recovery, autoPricePush, automationScope: backgroundAutomation.scope };
   } finally {
     autoSyncRunning = false;
   }
@@ -13984,6 +14136,9 @@ module.exports = {
   normalizePriceMasterPrice,
   supplierImpactProductIds,
   priceMasterChangeImpactProductIds,
+  warehouseProductAutomationFingerprint,
+  changedWarehouseProductIdsByAutomationFingerprint,
+  backgroundAutomationProductIds,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
   runNoSupplierMarketplaceAutomation,
