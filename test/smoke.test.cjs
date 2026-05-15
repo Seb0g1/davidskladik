@@ -87,6 +87,7 @@ const {
   isOzonResourceExhaustedError,
   isOzonPerItemPriceLimitError,
   isOzonOldPriceLessError,
+  isExpectedMarketplaceArchiveBlock,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,
   extractOzonYandexImportVolumesMl,
@@ -788,6 +789,11 @@ test("detects Ozon per-item rate limit errors", () => {
   const error = new Error("price-batch-set for seller api: rpc error: code = ResourceExhausted desc = error limiting: acquire limit per item: items limit: limit exceeded");
   assert.equal(isOzonResourceExhaustedError(error), true);
   assert.equal(isOzonPerItemPriceLimitError(error), true);
+});
+
+test("Ozon FBO archive refusal is treated as an expected marketplace block", () => {
+  assert.equal(isExpectedMarketplaceArchiveBlock("item has fbo stock"), true);
+  assert.equal(isExpectedMarketplaceArchiveBlock("Yandex Market API error 500"), false);
 });
 
 test("Ozon price response item errors are queued as delayed retry items", () => {

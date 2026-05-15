@@ -5460,6 +5460,17 @@ async function sendYandexOfferArchiveState(shop, offerIds = [], archived = false
   return results;
 }
 
+function isExpectedMarketplaceArchiveBlock(detail = "") {
+  const value = cleanText(detail).toLowerCase();
+  return Boolean(
+    value.includes("item has fbo stock")
+      || value.includes("fbo stock")
+      || value.includes("has stock")
+      || value.includes("нельзя архив")
+      || value.includes("остат"),
+  );
+}
+
 async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
   const dryRun = options.dryRun === true;
   const warnings = [];
@@ -12998,6 +13009,7 @@ async function archiveProductsOnMarketplaces(products = []) {
   const byTarget = new Map();
   for (const product of products) {
     if (!product?.id || !product?.target) continue;
+    if (product.marketplace === "yandex" && !cleanText(product.offerId)) continue;
     const key = `${product.marketplace}:${product.target}`;
     if (!byTarget.has(key)) byTarget.set(key, []);
     byTarget.get(key).push(product);
@@ -13016,7 +13028,15 @@ async function archiveProductsOnMarketplaces(products = []) {
           actions.push(...chunk.map((item) => ({ id: item.id, type: "archive", ok: true })));
         } catch (error) {
           const detail = error?.message || "archive_failed";
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "archive", ok: false, error: detail })));
+          const expected = isExpectedMarketplaceArchiveBlock(detail);
+          actions.push(...chunk.map((item) => ({
+            id: item.id,
+            type: "archive",
+            ok: false,
+            skipped: expected,
+            reason: expected ? "marketplace_has_stock" : undefined,
+            error: detail,
+          })));
         }
       }
       continue;
@@ -13119,6 +13139,7 @@ async function unarchiveProductsOnMarketplaces(products = []) {
   const byTarget = new Map();
   for (const product of products) {
     if (!product?.id || !product?.target) continue;
+    if (product.marketplace === "yandex" && !cleanText(product.offerId)) continue;
     const key = `${product.marketplace}:${product.target}`;
     if (!byTarget.has(key)) byTarget.set(key, []);
     byTarget.get(key).push(product);
@@ -13217,14 +13238,16 @@ function summarizeNoSupplierAutomationProducts(products = [], actions = []) {
   }
   return products.map((product) => {
     const productActions = actionsByProduct.get(product.id) || [];
-    const failed = productActions.find((action) => !action.ok);
+    const failed = productActions.find((action) => !action.ok && !action.skipped);
+    const skipped = productActions.find((action) => action.skipped);
     return {
       id: product.id,
       offerId: product.offerId || "",
       hasLinks: Boolean(product.hasLinks),
-      status: failed ? "error" : (productActions.length ? "processed" : "no_action"),
+      status: failed ? "error" : (skipped ? "skipped" : (productActions.length ? "processed" : "no_action")),
       actions: productActions.map((action) => action.type),
       error: failed?.error || null,
+      skippedReason: skipped?.reason || null,
     };
   });
 }
@@ -13272,7 +13295,7 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     product.noSupplierAutomation = product.noSupplierAutomation || { stockZeroAt: null, archivedAt: null, lastError: null };
     if (action.ok && action.type === "zero_stock") product.noSupplierAutomation.stockZeroAt = now;
     if (action.ok && action.type === "archive") product.noSupplierAutomation.archivedAt = now;
-    product.noSupplierAutomation.lastError = action.ok ? null : action.error;
+    product.noSupplierAutomation.lastError = action.ok || action.skipped ? null : action.error;
     product.updatedAt = now;
     changedProducts.push(product);
   }
@@ -13282,13 +13305,19 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     await writeWarehouse(warehouse);
   }
 
-  const errors = allActions.filter((item) => !item.ok).map((item) => ({ id: item.id, type: item.type, error: item.error }));
+  const errors = allActions
+    .filter((item) => !item.ok && !item.skipped)
+    .map((item) => ({ id: item.id, type: item.type, error: item.error }));
+  const skipped = allActions
+    .filter((item) => item.skipped)
+    .map((item) => ({ id: item.id, type: item.type, reason: item.reason, error: item.error }));
   const productStatuses = summarizeNoSupplierAutomationProducts(products, allActions);
   logger.info("no-supplier automation complete", {
     source,
     products: products.length,
     zeroStockSent: stockActions.filter((item) => item.ok).length,
     archived: archiveActions.filter((item) => item.ok).length,
+    skipped: skipped.length,
     errors: errors.length,
     statuses: productStatuses.slice(0, 10),
   });
@@ -13297,6 +13326,7 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     zeroStockSent: stockActions.filter((item) => item.ok).length,
     archived: archiveActions.filter((item) => item.ok).length,
     errors,
+    skipped,
     productStatuses,
   };
 }
@@ -14172,6 +14202,7 @@ module.exports = {
   isOzonResourceExhaustedError,
   isOzonPerItemPriceLimitError,
   isOzonOldPriceLessError,
+  isExpectedMarketplaceArchiveBlock,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,
   extractOzonYandexImportVolumesMl,
