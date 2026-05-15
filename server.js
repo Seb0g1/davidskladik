@@ -2284,16 +2284,40 @@ function summarizeApiErrorPayload(data = {}, fallback = "API error") {
     const text = cleanText(value);
     if (text && !parts.includes(text)) parts.push(text);
   };
-  push(data.message);
-  push(data.error);
-  push(data.code);
-  for (const item of Array.isArray(data.errors) ? data.errors : []) {
-    push(item.message || item.error || item.code || item.field || JSON.stringify(item));
-  }
-  for (const item of Array.isArray(data.details) ? data.details : []) {
-    push(item.message || item.error || item.code || item.field || JSON.stringify(item));
-  }
+  const visit = (value, depth = 0) => {
+    if (!value || parts.length >= 12 || depth > 5) return;
+    if (typeof value !== "object") {
+      push(value);
+      return;
+    }
+    push(value.message);
+    push(value.error);
+    push(value.code);
+    push(value.field);
+    push(value.sku || value.offerId || value.offer_id);
+    for (const key of ["errors", "details", "result", "results", "warnings", "params", "raw"]) {
+      const nested = value[key];
+      if (Array.isArray(nested)) {
+        for (const item of nested) visit(item, depth + 1);
+      } else if (nested && typeof nested === "object") {
+        visit(nested, depth + 1);
+      } else {
+        push(nested);
+      }
+    }
+  };
+  visit(data);
   return parts.slice(0, 6).join("; ").slice(0, 1000) || fallback;
+}
+
+function apiPayloadHasErrors(data = {}) {
+  if (!data || typeof data !== "object") return false;
+  const status = cleanText(data.status || data.result?.status).toUpperCase();
+  if (status === "ERROR" || status === "FAILED") return true;
+  if (Array.isArray(data.errors) && data.errors.length) return true;
+  if (Array.isArray(data.result?.errors) && data.result.errors.length) return true;
+  if (Array.isArray(data.results) && data.results.some(apiPayloadHasErrors)) return true;
+  return false;
 }
 
 async function getUsdRate({ force = false } = {}) {
@@ -5214,7 +5238,14 @@ async function sendYandexStockChunk(shop, rows = []) {
   }
   const payload = buildYandexStockUpdatePayload(rows);
   if (!payload.skus.length) return null;
-  return yandexRequest(shop, "PUT", `/v2/campaigns/${shop.campaignId}/offers/stocks`, payload);
+  const result = await yandexRequest(shop, "PUT", `/v2/campaigns/${shop.campaignId}/offers/stocks`, payload);
+  if (apiPayloadHasErrors(result)) {
+    const error = new Error(summarizeApiErrorPayload(result, "Yandex stock update failed"));
+    error.statusCode = 400;
+    error.yandex = result;
+    throw error;
+  }
+  return result;
 }
 
 async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
@@ -5277,7 +5308,8 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
   }
 
   for (const shop of shops) {
-    for (const chunk of chunkArray(selected, 500)) {
+    const stockChunkSize = Math.max(1, Math.min(500, Number(process.env.YANDEX_STOCK_CHUNK_SIZE || 100) || 100));
+    for (const chunk of chunkArray(selected, stockChunkSize)) {
       if (!chunk.length) continue;
       try {
         await sendYandexStockChunk(shop, chunk);
@@ -5341,7 +5373,8 @@ async function sendYandexStocksForExportedOzonProducts(products = [], options = 
   }
 
   for (const shop of shops) {
-    for (const chunk of chunkArray(rows, 500)) {
+    const stockChunkSize = Math.max(1, Math.min(500, Number(process.env.YANDEX_STOCK_CHUNK_SIZE || 100) || 100));
+    for (const chunk of chunkArray(rows, stockChunkSize)) {
       if (!chunk.length) continue;
       try {
         await sendYandexStockChunk(shop, chunk);
@@ -13623,6 +13656,7 @@ module.exports = {
   parseYandexCampaignIds,
   yandexStockShops,
   summarizeApiErrorPayload,
+  apiPayloadHasErrors,
   sendYandexStocksForExportedOzonProducts,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,

@@ -102,6 +102,7 @@ const {
   parseYandexCampaignIds,
   yandexStockShops,
   summarizeApiErrorPayload,
+  apiPayloadHasErrors,
   sendYandexStocksForExportedOzonProducts,
   parseProtectedBrandList,
   buildYandexCleanupCandidate,
@@ -563,6 +564,25 @@ test("Yandex API error summary includes nested response details", () => {
       { code: "INVALID_CATEGORY" },
     ],
   }, "fallback"), "BAD_REQUEST; offerMappings[0].offer.name is invalid; INVALID_CATEGORY");
+});
+
+test("Yandex API error summary unwraps operation-level stock errors", () => {
+  const payload = {
+    status: "ERROR",
+    result: {
+      status: "ERROR",
+      errors: [
+        { code: "VALIDATION_ERROR", message: "operation failed with errors" },
+        { sku: "SKU-1", message: "Offer is archived" },
+      ],
+    },
+  };
+
+  assert.equal(apiPayloadHasErrors(payload), true);
+  assert.equal(
+    summarizeApiErrorPayload(payload, "fallback"),
+    "operation failed with errors; VALIDATION_ERROR; Offer is archived; SKU-1",
+  );
 });
 
 test("Yandex exported stock stage fails loudly without campaign id", async () => {
