@@ -8183,7 +8183,7 @@ async function buildWarehouseViewCached(params = {}) {
   return build;
 }
 
-async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [], { refreshPrices = false, persistMutations = false, livePriceMaster = true, batchPriceMaster = false, usdRate } = {}) {
+async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [], { refreshPrices = false, persistMutations = false, livePriceMaster = false, batchPriceMaster = false, usdRate } = {}) {
   const wanted = new Set((productIds || []).map((id) => String(id)));
   if (!wanted.size) return [];
   const appSettings = await readAppSettings();
