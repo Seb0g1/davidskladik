@@ -1551,7 +1551,12 @@ function applyWarehouseFilters() {
   const selectedDetailStillOpen = state.selectedWarehouseGroupKey
     && state.selectedWarehouseDetailGroup?.key === state.selectedWarehouseGroupKey;
   if (state.selectedWarehouseGroupKey && !selectedInFiltered && !selectedDetailStillOpen) {
-    state.selectedWarehouseGroupKey = null;
+    state.selectedWarehouseUpdateNotice = {
+      groupKey: state.selectedWarehouseGroupKey,
+      title: "Карточка загружается",
+      text: "Выбранная карточка не попала в текущую страницу списка. Я держу выбор и догружаю её отдельно.",
+      at: new Date().toISOString(),
+    };
   } else if (state.selectedWarehouseGroupKey && !selectedInFiltered && selectedDetailStillOpen) {
     state.selectedWarehouseUpdateNotice = {
       groupKey: state.selectedWarehouseGroupKey,
@@ -2200,7 +2205,16 @@ async function reviewAiImageFromMain(action) {
 
 async function ensureWarehouseGroupDetailed(groupKey) {
   const group = getSortedWarehouseGroups().find((item) => item.key === groupKey);
-  if (!group) return null;
+  if (!group) {
+    const params = currentWarehousePageParams();
+    params.set("group", groupKey);
+    const data = await api(`/api/warehouse/products/group-detail?${params}`);
+    const products = Array.isArray(data.products) ? data.products : [];
+    products.filter(Boolean).forEach((product) => mergeWarehouseProduct(product));
+    applyWarehouseFilters();
+    return getSortedWarehouseGroups().find((item) => item.key === groupKey)
+      || (state.selectedWarehouseDetailGroup?.key === groupKey ? state.selectedWarehouseDetailGroup : null);
+  }
   const partialIds = (group.variants || []).filter((item) => item.partial).map((item) => item.id);
   if (!partialIds.length) return group;
   const details = await Promise.all(
@@ -3379,6 +3393,11 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
       }
       state.warehouseVisibleLimit = Math.max(state.warehouseVisibleLimit, state.warehouse.length);
       renderWarehouseCards();
+    }
+    if (state.selectedWarehouseGroupKey) {
+      const selectedLoaded = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
+        .some((group) => group.key === state.selectedWarehouseGroupKey);
+      if (!selectedLoaded) await ensureWarehouseGroupDetailed(state.selectedWarehouseGroupKey).catch(() => null);
     }
     state.warehouseRestorePage = 1;
     restoreWarehouseScroll({ startedAt: refreshStartedAt, selectionVersion: selectionVersionAtStart });

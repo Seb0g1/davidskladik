@@ -8780,6 +8780,90 @@ async function buildWarehouseProductDetailFromPostgres(productId, { usdRate } = 
   };
 }
 
+function normalizeWarehouseDetailProduct(product = {}) {
+  return {
+    ...product,
+    autoPriceEnabled: product.autoPriceEnabled !== false,
+    links: Array.isArray(product.links) ? product.links : [],
+    suppliers: Array.isArray(product.suppliers) ? product.suppliers : [],
+    selectedSupplier: product.selectedSupplier || null,
+    noSupplierAutomation: product.noSupplierAutomation || {},
+    marketplaceState: product.marketplaceState || {},
+    partial: false,
+  };
+}
+
+function warehouseGroupKeyParts(groupKey = "") {
+  const text = cleanText(groupKey);
+  const [kind, ...rest] = text.split(":");
+  return { kind: cleanText(kind).toLowerCase(), value: cleanText(rest.join(":")).toLowerCase() };
+}
+
+async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filters = {} } = {}) {
+  const prisma = getPrisma();
+  if (!prisma) return null;
+  const { kind, value } = warehouseGroupKeyParts(groupKey);
+  if (!value) return null;
+  await ensureWarehousePostgresLinksBackfilled(prisma);
+  const appSettings = await readAppSettings();
+  const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
+  const baseWhere = warehousePagePostgresWhere({ ...filters, q: "", linked: "all", brand: "" });
+  let rows = [];
+  if (kind === "offer") {
+    rows = await prisma.warehouseProduct.findMany({
+      where: { AND: [baseWhere, { offerId: { equals: value, mode: "insensitive" } }] },
+      include: { links: true },
+      orderBy: warehousePagePostgresOrderBy(),
+    });
+  } else if (kind === "manual") {
+    const candidates = await prisma.warehouseProduct.findMany({
+      where: baseWhere,
+      include: { links: true },
+      orderBy: warehousePagePostgresOrderBy(),
+    });
+    rows = candidates.filter((row) => warehouseProductPageGroupKey(productFromPostgres(row)) === groupKey);
+  }
+  if (!rows.length) return null;
+  const suppliers = await prisma.managedSupplier.findMany({ orderBy: { name: "asc" } });
+  const normalizedSuppliers = suppliers.map(supplierFromPostgres);
+  const products = rows.map(productFromPostgres);
+  const pageProducts = await enrichWeakOzonProductsForPage(products);
+  const built = await buildFreshWarehouseProductsForWarehouse(
+    { products: pageProducts, suppliers: normalizedSuppliers },
+    pageProducts.map((product) => product.id),
+    { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+  );
+  const builtMap = new Map(built.map((product) => [product.id, product]));
+  return {
+    products: pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product))),
+    suppliers: normalizedSuppliers,
+  };
+}
+
+async function buildWarehouseGroupDetail(groupKey, { usdRate, filters = {} } = {}) {
+  if (shouldUsePostgresStorage()) {
+    const postgresDetail = await buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filters });
+    if (postgresDetail) return postgresDetail;
+  }
+  const warehouse = await readWarehouse();
+  const appSettings = await readAppSettings();
+  const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
+  const enabledProducts = (Array.isArray(warehouse.products) ? warehouse.products : []).filter(isWarehouseProductTargetEnabled);
+  const products = enabledProducts.filter((product) => warehouseProductPageGroupKey(product) === groupKey);
+  if (!products.length) return null;
+  const pageProducts = await enrichWeakOzonProductsForPage(products);
+  const built = await buildFreshWarehouseProductsForWarehouse(
+    { ...warehouse, products: pageProducts },
+    pageProducts.map((product) => product.id),
+    { livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+  );
+  const builtMap = new Map(built.map((product) => [product.id, product]));
+  return {
+    products: pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product))),
+    suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers : [],
+  };
+}
+
 async function buildFastWarehousePage({
   page = 1,
   pageSize = 60,
@@ -10073,6 +10157,25 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
       hasMore: offset + items.length < total,
       items,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/warehouse/products/group-detail", async (request, response, next) => {
+  try {
+    const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
+    const group = cleanText(request.query.group || "");
+    if (!group) return response.status(400).json({ error: "Укажите group." });
+    const detail = await buildWarehouseGroupDetail(group, {
+      usdRate,
+      filters: {
+        marketplace: cleanText(request.query.marketplace || "all"),
+        state: cleanText(request.query.state || "all"),
+      },
+    });
+    if (!detail) return response.status(404).json({ error: "Карточка не найдена." });
+    response.json(detail);
   } catch (error) {
     next(error);
   }
