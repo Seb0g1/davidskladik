@@ -41,6 +41,8 @@ const state = {
   warehouseLivePollTimer: null,
   warehouseLiveRefreshRunning: false,
   warehouseLiveRefreshQueued: false,
+  warehouseMutationDepth: 0,
+  warehouseMutationProductIds: new Set(),
   warehouseSyncPollTimer: null,
   warehouseSyncStartedFromUi: false,
   warehouseSelectionVersion: 0,
@@ -1093,6 +1095,23 @@ async function loadSession() {
   return session;
 }
 
+function beginWarehouseMutation(productIds = []) {
+  state.warehouseMutationDepth = Math.max(0, Number(state.warehouseMutationDepth || 0)) + 1;
+  const ids = Array.isArray(productIds) ? productIds : [productIds];
+  ids.map(String).filter(Boolean).forEach((id) => state.warehouseMutationProductIds.add(id));
+}
+
+function endWarehouseMutation(productIds = []) {
+  state.warehouseMutationDepth = Math.max(0, Number(state.warehouseMutationDepth || 0) - 1);
+  const ids = Array.isArray(productIds) ? productIds : [productIds];
+  ids.map(String).filter(Boolean).forEach((id) => state.warehouseMutationProductIds.delete(id));
+  if (state.warehouseMutationDepth === 0 && state.warehouseLiveRefreshQueued) {
+    window.setTimeout(() => {
+      if (state.warehouseMutationDepth === 0) checkWarehouseLiveStatus({ force: true }).catch(() => {});
+    }, 300);
+  }
+}
+
 function ensureOperationsLink() {
   const header = document.querySelector(".header-actions");
   if (!header || header.querySelector('a[href="/operations.html"]')) return;
@@ -1203,7 +1222,7 @@ async function pollWarehouseSyncStatus({ refreshOnDone = false } = {}) {
     if (status.status === "ok" && refreshOnDone) {
       elements.warehouseStatus.textContent = "Синхронизация завершена. Обновляю карточки на экране...";
       state.enrichedProductIds = new Set();
-      await loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false });
+      await loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false, preserveExisting: false });
       elements.warehouseStatus.textContent = "Склад обновлён.";
     } else if (status.status === "failed") {
       elements.warehouseStatus.textContent = status.error || "Синхронизация завершилась ошибкой.";
@@ -1572,11 +1591,13 @@ function renderWarehouse(data) {
   const products = Array.isArray(data.products) ? data.products : [];
   if (data.updatedAt) state.warehouseLastUpdatedAt = String(data.updatedAt);
   if (data.priceMaster?.updatedAt) state.priceMasterLastUpdatedAt = String(data.priceMaster.updatedAt);
-  if (mode === "append") {
+  if (mode === "append" || mode === "merge") {
     const byId = new Map(state.warehouse.map((product) => [product.id, product]));
     products.forEach((product) => byId.set(product.id, product));
     state.warehouse = Array.from(byId.values());
-    state.warehouseLoadedRows = state.warehouse.length;
+    state.warehouseLoadedRows = mode === "merge"
+      ? Math.max(Number(state.warehouseLoadedRows || 0), state.warehouse.length)
+      : state.warehouse.length;
   } else {
     state.warehouse = products;
     state.warehouseLoadedRows = products.length;
@@ -1891,6 +1912,16 @@ function refreshSelectedDetailForProductIds(productIds = []) {
   state.selectedWarehouseDetailGroup = group;
   renderWarehouseDetail(group);
   return true;
+}
+
+function preferredWarehouseDetailProduct(group) {
+  const variants = group?.variants || (group?.primary ? [group.primary] : [group].filter(Boolean));
+  if (!variants.length) return group?.primary || group || {};
+  const selectedId = String(state.selectedWarehouseProductId || "");
+  return variants.find((item) => selectedId && String(item.id) === selectedId)
+    || group.primary
+    || variants[0]
+    || {};
 }
 
 function warehouseDetailSignature(group) {
@@ -2426,8 +2457,11 @@ function renderWarehouseDetail(group, { force = false } = {}) {
   state.selectedWarehouseDetailGroup = group;
   state.selectedWarehouseDetailSignature = warehouseDetailSignature(group);
 
-  const product = group.primary || group;
+  const product = preferredWarehouseDetailProduct(group);
   const variants = group.variants || [product];
+  if (!variants.some((item) => String(item.id) === String(state.selectedWarehouseProductId || ""))) {
+    state.selectedWarehouseProductId = product?.id || variants[0]?.id || null;
+  }
   const supplier = group.selectedSupplier || product.selectedSupplier;
   const suppliers = group.suppliers || product.suppliers || [];
   const links = group.links || product.links || [];
@@ -3263,7 +3297,7 @@ function currentWarehousePageParams() {
   return params;
 }
 
-async function loadWarehousePage({ reset = false, sync = false, refreshPrices = false } = {}) {
+async function loadWarehousePage({ reset = false, sync = false, refreshPrices = false, preserveExisting = false } = {}) {
   if (!reset && !state.warehouseHasMore) return;
   if (!reset && state.warehouseLoadingPage) return;
 
@@ -3279,7 +3313,7 @@ async function loadWarehousePage({ reset = false, sync = false, refreshPrices = 
     if (token !== state.warehouseRequestToken) return;
     renderWarehouse({
       ...data,
-      mode: reset ? "replace" : "append",
+      mode: reset ? (preserveExisting ? "merge" : "replace") : "append",
       products: data.items || [],
     });
     syncWarehouseStateToUrl();
@@ -3295,6 +3329,7 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
   const silent = Boolean(options.silent);
   const restorePages = options.restorePages !== false;
   const loadRetry = options.loadRetry !== false;
+  const preserveExisting = Boolean(options.preserveExisting || (silent && !sync && !refreshPrices));
   const maxRestorePages = Math.max(1, Number(options.maxRestorePages || Number.POSITIVE_INFINITY));
   const refreshStartedAt = Date.now();
   const selectionVersionAtStart = state.warehouseSelectionVersion;
@@ -3321,7 +3356,7 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
     state.warehouseTotalFiltered = 0;
     // Do not clear selectedWarehouseGroupKey / selectedWarehouseProductId here:
     // after link save or refresh, applyWarehouseFilters() would fall back to the first card.
-    await loadWarehousePage({ reset: true, sync, refreshPrices });
+    await loadWarehousePage({ reset: true, sync, refreshPrices, preserveExisting });
     if (silent && elements.warehouseStatus) {
       elements.warehouseStatus.textContent = previousWarehouseStatus;
       elements.warehouseStatus.classList.toggle("is-ok", previousWarehouseStatusClasses.ok);
@@ -3366,6 +3401,8 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
 function warehouseLiveRefreshShouldWait() {
   if (document.hidden) return true;
   if (state.warehouseSyncPollTimer) return true;
+  if (Number(state.warehouseMutationDepth || 0) > 0) return true;
+  if (Object.keys(state.pendingLinkDrafts || {}).length > 0) return true;
   if (state.warehouseLoadingPage || state.warehouseLiveRefreshRunning) return true;
   if (warehouseRecentlyManuallySelected()) return true;
   const active = document.activeElement;
@@ -3468,11 +3505,15 @@ function startWarehouseLiveRefresh() {
 
 let warehouseRefreshTimer = null;
 function queueWarehouseRefresh(delayMs = 160) {
+  if (Number(state.warehouseMutationDepth || 0) > 0) {
+    state.warehouseLiveRefreshQueued = true;
+    return;
+  }
   if (warehouseRefreshTimer) window.clearTimeout(warehouseRefreshTimer);
   warehouseRefreshTimer = window.setTimeout(() => {
     const selectedKey = state.selectedWarehouseGroupKey;
     const selectionVersion = state.warehouseSelectionVersion;
-    loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false }).then(() => {
+    loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false, preserveExisting: true }).then(() => {
       if (selectedKey && selectionVersion === state.warehouseSelectionVersion && state.selectedWarehouseGroupKey === selectedKey) {
         const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
           .find((item) => item.key === selectedKey);
@@ -3492,7 +3533,7 @@ let warehouseFilterReloadTimer = null;
 function queueWarehouseFilterReload(delayMs = 260) {
   if (warehouseFilterReloadTimer) window.clearTimeout(warehouseFilterReloadTimer);
   warehouseFilterReloadTimer = window.setTimeout(() => {
-    loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false }).catch((error) => {
+    loadWarehouse(false, false, { silent: true, maxRestorePages: 1, loadRetry: false, preserveExisting: false }).catch((error) => {
       elements.warehouseStatus.textContent = error.message;
       applyWarehouseFilters();
     });
@@ -4059,8 +4100,10 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     const formData = new FormData(markupForm);
     const selectionVersion = state.warehouseSelectionVersion;
     const selectedGroupKey = state.selectedWarehouseGroupKey;
+    const productId = markupForm.dataset.productId;
+    beginWarehouseMutation([productId]);
     try {
-      const result = await api(`/api/warehouse/products/${markupForm.dataset.productId}`, {
+      const result = await api(`/api/warehouse/products/${productId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4073,6 +4116,8 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     } catch (error) {
       if (handleProductConflict(error, "наценки")) return;
       elements.warehouseStatus.textContent = error.message;
+    } finally {
+      endWarehouseMutation([productId]);
     }
     return;
   }
@@ -4208,6 +4253,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
   const selectedGroupKey = state.selectedWarehouseGroupKey;
 
   toggleButton.disabled = true;
+  beginWarehouseMutation(productIds);
   try {
     const result = await api("/api/warehouse/products/auto-price/bulk", {
       method: "PATCH",
@@ -4220,6 +4266,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
     if (handleProductConflict(error, "AUTO для карточки")) return;
     elements.warehouseStatus.textContent = error.message;
   } finally {
+    endWarehouseMutation(productIds);
     toggleButton.disabled = false;
   }
 });
@@ -4299,6 +4346,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
     const selectionVersion = state.warehouseSelectionVersion;
     const selectedGroupKey = state.selectedWarehouseGroupKey;
     saveDraftsButton.disabled = true;
+    beginWarehouseMutation(productIds);
     elements.warehouseStatus.textContent = `Сохраняю ${formatNumber(links.length)} привязок и пересчитываю цену...`;
     try {
       const result = await api("/api/warehouse/products/links/bulk", {
@@ -4318,6 +4366,8 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       if (handleProductConflict(error, "привязок")) return;
       elements.warehouseStatus.textContent = error.message;
       saveDraftsButton.disabled = false;
+    } finally {
+      endWarehouseMutation(productIds);
     }
     return;
   }
@@ -4355,6 +4405,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       const linkId = linkButton.dataset.linkId || "";
       const selectionVersion = state.warehouseSelectionVersion;
       const selectedGroupKey = state.selectedWarehouseGroupKey;
+      beginWarehouseMutation([productId]);
       const result = await deleteWarehouseLinkWithFreshLock(productId, linkId, linkButton.dataset.productUpdatedAt || "");
       if (result.product) {
         const localProduct = warehouseProductById(productId);
@@ -4374,6 +4425,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       } else {
         showToast("Привязка удалена у предыдущей карточки. Текущий выбор не переключался.", "warn");
       }
+      endWarehouseMutation([productId]);
     }
     if (productButton && await confirmAction({ title: "Удалить товар?", text: "Удалить товар из личного склада?", okText: "Удалить" })) {
       const expectedUpdatedAt = encodeURIComponent(productButton.dataset.productUpdatedAt || "");
@@ -4385,6 +4437,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
     }
   } catch (error) {
     if (linkButton) linkButton.disabled = false;
+    if (linkButton?.dataset.productId) endWarehouseMutation([linkButton.dataset.productId]);
     if (handleProductConflict(error, "удаления")) return;
     elements.warehouseStatus.textContent = error.message;
   }

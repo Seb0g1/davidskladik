@@ -2024,6 +2024,7 @@ td {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-bottom: 16px;
+  min-height: 128px;
 }
 
 .detail-metrics div,
@@ -2202,6 +2203,7 @@ td {
 .supplier-list {
   display: grid;
   gap: 8px;
+  min-height: 46px;
 }
 
 .pending-link-box {
@@ -2212,6 +2214,7 @@ td {
   border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
   border-radius: 16px;
   background: color-mix(in srgb, var(--accent) 10%, var(--panel));
+  min-height: 46px;
 }
 
 .pending-link-box.is-empty {
@@ -3073,6 +3076,7 @@ td {
 .variant-mini-list {
   display: grid;
   gap: 8px;
+  min-height: 124px;
 }
 
 .variant-mini {
@@ -3158,6 +3162,7 @@ td {
   gap: 10px;
   color: var(--muted);
   font-size: 13px;
+  min-height: 54px;
 }
 
 .supplier-mini span {
