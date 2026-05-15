@@ -201,6 +201,8 @@ const immediateAutoPushIds = new Set();
 let immediateAutoPushChain = Promise.resolve();
 const changedPriceAutoPushAt = new Map();
 let changedPriceAutoPushLastBatchAt = 0;
+const detectedPriceAutoPushDefaultCooldownMs = 15 * 60_000;
+const detectedPriceAutoPushDefaultBatchCooldownMs = 30_000;
 let priceRetryTimer = null;
 let priceRetryRunning = false;
 let marketplaceQueue = null;
@@ -11069,9 +11071,22 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
 
 function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_prices_detected") {
   const now = Date.now();
-  const cooldownMs = Math.max(1_000, Number(process.env.AUTO_PRICE_CHANGED_COOLDOWN_MS || 15_000) || 15_000);
-  const batchCooldownMs = Math.max(1_000, Number(process.env.AUTO_PRICE_CHANGED_BATCH_COOLDOWN_MS || 5_000) || 5_000);
+  const cooldownMs = Math.max(
+    10_000,
+    Number(process.env.AUTO_PRICE_CHANGED_COOLDOWN_MS || detectedPriceAutoPushDefaultCooldownMs)
+      || detectedPriceAutoPushDefaultCooldownMs,
+  );
+  const batchCooldownMs = Math.max(
+    1_000,
+    Number(process.env.AUTO_PRICE_CHANGED_BATCH_COOLDOWN_MS || detectedPriceAutoPushDefaultBatchCooldownMs)
+      || detectedPriceAutoPushDefaultBatchCooldownMs,
+  );
   if (changedPriceAutoPushLastBatchAt && now - changedPriceAutoPushLastBatchAt < batchCooldownMs) return 0;
+  if (changedPriceAutoPushAt.size > 20_000) {
+    for (const [id, last] of changedPriceAutoPushAt.entries()) {
+      if (!last || now - Number(last) > cooldownMs * 2) changedPriceAutoPushAt.delete(id);
+    }
+  }
   const ids = (Array.isArray(products) ? products : [])
     .filter((product) => {
       if (!product?.hasLinks) return false;
