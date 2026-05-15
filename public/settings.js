@@ -11,9 +11,6 @@ const autoSyncMinutesInput = document.querySelector("#autoSyncMinutesInput");
 const manualSyncButton = document.querySelector("#manualSyncButton");
 const manualPriceUpdateButton = document.querySelector("#manualPriceUpdateButton");
 const manualSyncStatus = document.querySelector("#manualSyncStatus");
-const telegramTestButton = document.querySelector("#telegramTestButton");
-const telegramReportButton = document.querySelector("#telegramReportButton");
-const telegramStatus = document.querySelector("#telegramStatus");
 const employeeList = document.querySelector("#employeeList");
 const employeeStatus = document.querySelector("#employeeStatus");
 const employeeUsernameInput = document.querySelector("#employeeUsernameInput");
@@ -103,7 +100,6 @@ async function api(path, options) {
     const message = [
       payload.error || payload.detail || payload.description || "Ошибка запроса",
       payload.hint,
-      payload.telegram?.description,
     ]
       .filter(Boolean)
       .join(" ");
@@ -332,11 +328,6 @@ async function loadSettings() {
   settingsForm.elements.defaultYandexMarkup.value = settings.defaultMarkups?.yandex || 1.6;
   if (autoSyncEnabledInput) autoSyncEnabledInput.checked = settings.automation?.autoSyncEnabled !== false;
   if (autoSyncMinutesInput) autoSyncMinutesInput.value = settings.automation?.autoSyncMinutes || 30;
-  if (telegramStatus) {
-    telegramStatus.textContent = data.telegram?.configured
-      ? `Telegram подключен. Чат: ${data.telegram.chatId || "задан"}. Ежедневный отчёт: ${data.telegram.dailyReportTime || "22:00"}.`
-      : "Telegram не настроен: задайте TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в .env.";
-  }
   renderRules(settings.markupRules || []);
   renderAvailabilityRules(settings.availabilityRules || []);
   if (settingsAnimateAutoFocusInput) {
@@ -544,37 +535,6 @@ manualPriceUpdateButton?.addEventListener("click", async () => {
   } finally {
     if (manualSyncButton) manualSyncButton.disabled = false;
     manualPriceUpdateButton.disabled = false;
-  }
-});
-
-telegramTestButton?.addEventListener("click", async () => {
-  telegramTestButton.disabled = true;
-  if (telegramStatus) telegramStatus.textContent = "Отправляю тестовое уведомление...";
-  try {
-    await api("/api/telegram/test", { method: "POST" });
-    if (telegramStatus) telegramStatus.textContent = "Тестовое уведомление отправлено в Telegram.";
-  } catch (error) {
-    if (telegramStatus) telegramStatus.textContent = error.message;
-  } finally {
-    telegramTestButton.disabled = false;
-  }
-});
-
-telegramReportButton?.addEventListener("click", async () => {
-  telegramReportButton.disabled = true;
-  if (telegramTestButton) telegramTestButton.disabled = true;
-  if (telegramStatus) telegramStatus.textContent = "Формирую Excel-отчёт и отправляю в Telegram...";
-  try {
-    const result = await api("/api/telegram/daily-report/run", { method: "POST" });
-    const totals = result.totals || {};
-    if (telegramStatus) {
-      telegramStatus.textContent = `Отчёт отправлен: цен ${totals.priceUpdated || 0}, привязок ${totals.linkedEvents || 0}, пропавших поставщиков ${totals.suppliersLost || 0}.`;
-    }
-  } catch (error) {
-    if (telegramStatus) telegramStatus.textContent = error.message;
-  } finally {
-    telegramReportButton.disabled = false;
-    if (telegramTestButton) telegramTestButton.disabled = false;
   }
 });
 

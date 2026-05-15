@@ -8,8 +8,6 @@ const rateLimit = require("express-rate-limit");
 const multer = require("multer");
 const mysql = require("mysql2/promise");
 const { Queue, Worker } = require("bullmq");
-const ExcelJS = require("exceljs");
-const { ProxyAgent: UndiciProxyAgent } = require("undici");
 const OpenAI = require("openai");
 const sharp = require("sharp");
 const { toFile } = require("openai/uploads");
@@ -101,13 +99,6 @@ const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 10000) || 10000));
 const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
-const telegramBotToken = cleanText(process.env.TELEGRAM_BOT_TOKEN);
-const telegramChatId = cleanText(process.env.TELEGRAM_CHAT_ID);
-const telegramNotificationsEnabled = process.env.TELEGRAM_NOTIFICATIONS_ENABLED !== "false";
-const telegramDailyReportEnabled = process.env.TELEGRAM_DAILY_REPORT_ENABLED !== "false";
-const telegramDailyReportTime = process.env.TELEGRAM_DAILY_REPORT_TIME || "22:00";
-const telegramProxyUrl = cleanText(process.env.TELEGRAM_PROXY_URL);
-const telegramApiBaseUrl = cleanText(process.env.TELEGRAM_API_BASE_URL || "https://api.telegram.org");
 const openaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
 const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1024x1024");
 const ozonAiImageTargetPx = (() => {
@@ -169,8 +160,6 @@ let manualWarehouseSyncState = {
 let autoSyncTimer = null;
 let autoSyncRunning = false;
 let autoSyncNextRunAt = null;
-let telegramDailyReportTimer = null;
-let telegramDailyReportNextRunAt = null;
 let warehouseWritePromise = Promise.resolve();
 let warehouseMemoryCache = null;
 let warehousePostgresHashCache = new Map();
@@ -215,7 +204,6 @@ let priceRetryTimer = null;
 let priceRetryRunning = false;
 let marketplaceQueue = null;
 let marketplaceWorker = null;
-let telegramProxyDispatcher = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -238,132 +226,11 @@ function describeFetchError(error) {
   return parts.join("; ");
 }
 
-function telegramReady() {
-  return telegramNotificationsEnabled && Boolean(telegramBotToken && telegramChatId);
-}
-
-function telegramApiUrl(method) {
-  return `${telegramApiBaseUrl.replace(/\/+$/, "")}/bot${telegramBotToken}/${method}`;
-}
-
-function telegramFetchOptions(options = {}) {
-  if (!telegramProxyUrl) return options;
-  const url = new URL(telegramProxyUrl);
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("TELEGRAM_PROXY_URL supports only HTTP/HTTPS proxy for Bot API. MTProto proxy is for Telegram clients, not api.telegram.org Bot API. Use HTTP proxy or TELEGRAM_API_BASE_URL gateway.");
-  }
-  if (!telegramProxyDispatcher) telegramProxyDispatcher = new UndiciProxyAgent(telegramProxyUrl);
-  return { ...options, dispatcher: telegramProxyDispatcher };
-}
-
-function compactTelegramText(value, maxLength = 3500) {
-  const text = cleanText(value);
-  if (text.length <= maxLength) return text;
-  return `${text.slice(0, maxLength - 20)}\n...`;
-}
-
-async function sendTelegramNotification(text, extra = {}) {
-  if (!telegramReady()) return { ok: false, skipped: true };
-  try {
-    const response = await fetch(telegramApiUrl("sendMessage"), telegramFetchOptions({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        chat_id: telegramChatId,
-        text: compactTelegramText(text),
-        disable_web_page_preview: true,
-        ...extra,
-      }),
-    }));
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || payload.ok === false) {
-      throw new Error(payload.description || `Telegram API error ${response.status}`);
-    }
-    return { ok: true };
-  } catch (error) {
-    const detail = describeFetchError(error);
-    logger.warn("telegram notification failed", {
-      detail,
-      proxyEnabled: Boolean(telegramProxyUrl),
-      apiBaseUrl: telegramApiBaseUrl,
-    });
-    return { ok: false, error: detail };
-  }
-}
-
-async function sendTelegramDocument({ buffer, filename, caption }) {
-  if (!telegramReady()) return { ok: false, skipped: true };
-  try {
-    const form = new FormData();
-    form.append("chat_id", telegramChatId);
-    if (caption) form.append("caption", compactTelegramText(caption, 1000));
-    form.append(
-      "document",
-      new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }),
-      filename,
-    );
-    const response = await fetch(telegramApiUrl("sendDocument"), telegramFetchOptions({
-      method: "POST",
-      body: form,
-    }));
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || payload.ok === false) {
-      const error = new Error(payload.description || `Telegram API error ${response.status}`);
-      error.statusCode = response.status;
-      error.telegram = payload;
-      throw error;
-    }
-    return { ok: true };
-  } catch (error) {
-    const detail = describeFetchError(error);
-    logger.warn("telegram document failed", {
-      detail,
-      statusCode: error?.statusCode,
-      telegram: error?.telegram,
-      proxyEnabled: Boolean(telegramProxyUrl),
-      apiBaseUrl: telegramApiBaseUrl,
-    });
-    return {
-      ok: false,
-      error: detail,
-      statusCode: error?.statusCode || null,
-      telegram: error?.telegram || null,
-    };
-  }
-}
-
-function notifyTelegram(text, extra = {}) {
-  sendTelegramNotification(text, extra).catch((error) => {
-    logger.warn("telegram notification failed", { detail: describeFetchError(error) });
-  });
-}
-
-function formatTelegramNumber(value) {
+function formatRuNumber(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "0";
   return new Intl.NumberFormat("ru-RU").format(number);
 }
-
-function formatSyncNotification({ title, trigger, priceMaster, warehouse, automation, recovery, pricePush, error }) {
-  const lines = [`${title}`];
-  if (trigger) lines.push(`Запуск: ${trigger}`);
-  if (priceMaster) lines.push(`PriceMaster: ${formatTelegramNumber(priceMaster.items || 0)} позиций, изменений ${formatTelegramNumber(priceMaster.changes || 0)}`);
-  if (warehouse) {
-    lines.push(`Склад: ${formatTelegramNumber(warehouse.total || 0)} товаров, готовы к цене ${formatTelegramNumber(warehouse.ready || 0)}, изменились ${formatTelegramNumber(warehouse.changed || 0)}`);
-  }
-  if (automation) {
-    lines.push(`Автоматизация: stock=0 ${formatTelegramNumber(automation.zeroStockSent || 0)}, архив ${formatTelegramNumber(automation.archived || 0)}`);
-  }
-  if (recovery) lines.push(`Восстановлено: ${formatTelegramNumber(recovery.recovered || 0)}, разархивировано ${formatTelegramNumber(recovery.unarchived || 0)}`);
-  if (pricePush) {
-    const skippedCount = Array.isArray(pricePush.skipped) ? pricePush.skipped.length : Number(pricePush.skipped || 0);
-    lines.push(`Цены: отправлено ${formatTelegramNumber(pricePush.sent || 0)}, ошибок ${formatTelegramNumber(pricePush.failed || 0)}, пропущено ${formatTelegramNumber(skippedCount || 0)}`);
-    if (pricePush.error) lines.push(`Ошибка цен: ${pricePush.error}`);
-  }
-  if (error) lines.push(`Ошибка: ${error}`);
-  return lines.join("\n");
-}
-
 function warehouseViewCacheKey({ sync = false, limit = Number.POSITIVE_INFINITY, usdRate, refreshPrices = false } = {}) {
   const limitKey = Number.isFinite(Number(limit)) ? Number(limit) : "all";
   const rateKey = Number.isFinite(Number(usdRate)) && Number(usdRate) > 0 ? Number(usdRate) : "default";
@@ -910,11 +777,6 @@ async function collectHealthDetails({ deep = false } = {}) {
     yandex: {
       configured: getYandexShops().length > 0,
       shops: getYandexShops().length,
-    },
-    telegram: {
-      enabled: telegramNotificationsEnabled,
-      configured: Boolean(telegramBotToken && telegramChatId),
-      proxyEnabled: Boolean(telegramProxyUrl),
     },
   };
 
@@ -7066,7 +6928,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
         options.onProgress?.({
           percent: 32,
           stage: "Ozon список",
-          meta: `Ozon вернул ${formatTelegramNumber(products.length)} карточек. Детально обновить: ${formatTelegramNumber(infoOfferIds.length)}.`,
+          meta: `Ozon вернул ${formatRuNumber(products.length)} карточек. Детально обновить: ${formatRuNumber(infoOfferIds.length)}.`,
           processed: products.length,
           total: products.length,
         });
@@ -7076,7 +6938,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
             onProgress: (progress) => options.onProgress?.({
               percent: 32 + Math.round((progress.processed / Math.max(1, progress.total)) * 16),
               stage: progress.stage,
-              meta: `Загружаю названия и фото Ozon: ${formatTelegramNumber(progress.processed)} из ${formatTelegramNumber(progress.total)}.`,
+              meta: `Загружаю названия и фото Ozon: ${formatRuNumber(progress.processed)} из ${formatRuNumber(progress.total)}.`,
               processed: progress.processed,
               total: progress.total,
             }),
@@ -7086,7 +6948,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
             onProgress: (progress) => options.onProgress?.({
               percent: 48 + Math.round((progress.processed / Math.max(1, progress.total)) * 12),
               stage: progress.stage,
-              meta: `Загружаю остатки Ozon: ${formatTelegramNumber(progress.processed)} из ${formatTelegramNumber(progress.total)}.`,
+              meta: `Загружаю остатки Ozon: ${formatRuNumber(progress.processed)} из ${formatRuNumber(progress.total)}.`,
               processed: progress.processed,
               total: progress.total,
             }),
@@ -7096,7 +6958,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
             onProgress: (progress) => options.onProgress?.({
               percent: 60 + Math.round((progress.processed / Math.max(1, progress.total)) * 10),
               stage: progress.stage,
-              meta: `Загружаю цены Ozon: ${formatTelegramNumber(progress.processed)} из ${formatTelegramNumber(progress.total)}.`,
+              meta: `Загружаю цены Ozon: ${formatRuNumber(progress.processed)} из ${formatRuNumber(progress.total)}.`,
               processed: progress.processed,
               total: progress.total,
             }),
@@ -7113,7 +6975,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
               onProgress: (progress) => options.onProgress?.({
                 percent: 70 + Math.round((progress.processed / Math.max(1, progress.total)) * 4),
                 stage: progress.stage,
-                meta: `Добираю детали Ozon по product_id: ${formatTelegramNumber(progress.processed)} из ${formatTelegramNumber(progress.total)}.`,
+                meta: `Добираю детали Ozon по product_id: ${formatRuNumber(progress.processed)} из ${formatRuNumber(progress.total)}.`,
                 processed: progress.processed,
                 total: progress.total,
               }),
@@ -7990,7 +7852,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     onProgress?.({
       percent: 76,
       stage: "Запись склада",
-      meta: `Сохраняю ${formatTelegramNumber(warehouse.products?.length || 0)} карточек склада.`,
+      meta: `Сохраняю ${formatRuNumber(warehouse.products?.length || 0)} карточек склада.`,
       processed: Number(warehouse.products?.length || 0),
       total: Number(warehouse.products?.length || 0),
     });
@@ -9747,70 +9609,7 @@ app.get("/api/settings", requireAdmin, async (_request, response, next) => {
   try {
     response.json({
       settings: await readAppSettings(),
-      telegram: {
-        configured: telegramReady(),
-        enabled: telegramNotificationsEnabled,
-        chatId: telegramChatId ? maskSecret(telegramChatId) : "",
-        dailyReportEnabled: telegramDailyReportEnabled,
-        dailyReportTime: telegramDailyReportTime,
-        dailyReportNextRunAt: telegramDailyReportNextRunAt,
-        proxyEnabled: Boolean(telegramProxyUrl),
-        apiBaseUrl: telegramApiBaseUrl.replace(/bot.+$/i, "bot***"),
-      },
     });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/telegram/test", requireAdmin, async (_request, response, next) => {
-  try {
-    if (!telegramReady()) {
-      return response.status(400).json({
-        ok: false,
-        error: "TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы или уведомления выключены.",
-      });
-    }
-    const result = await sendTelegramNotification("Тестовое уведомление Magic Vibes: Telegram подключен.");
-    if (!result.ok) {
-      return response.status(400).json({
-        ok: false,
-        error: result.error || "Telegram notification failed",
-        hint: "Проверьте, что бот добавлен в чат, в чате отправлено любое сообщение после добавления бота, а TELEGRAM_CHAT_ID взят из getUpdates. Для ссылки вида web.telegram.org/k/#-3960374694 часто нужен chat_id -1003960374694.",
-      });
-    }
-    response.json({ ok: true });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/telegram/daily-report/run", requireAdmin, async (_request, response, next) => {
-  try {
-    if (!telegramReady()) {
-      return response.status(400).json({
-        ok: false,
-        error: "TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID не заданы или уведомления выключены.",
-        hint: "Проверьте .env, путь запуска PM2 и выполните pm2 restart davidsklad --update-env.",
-      });
-    }
-    if (!telegramDailyReportEnabled) {
-      return response.status(400).json({
-        ok: false,
-        skipped: true,
-        error: "Ежедневные Telegram-отчёты выключены.",
-        hint: "Установите TELEGRAM_DAILY_REPORT_ENABLED=true в .env и перезапустите PM2 с --update-env.",
-      });
-    }
-    const result = await sendDailyTelegramReport("manual");
-    if (result && result.ok === false) {
-      return response.status(400).json({
-        ...result,
-        error: result.error || "Telegram daily report failed",
-        hint: "Проверьте TELEGRAM_CHAT_ID, что бот добавлен в чат и имеет право отправлять файлы. Для супергрупп chat_id часто начинается с -100.",
-      });
-    }
-    response.json(result);
   } catch (error) {
     next(error);
   }
@@ -13532,249 +13331,6 @@ function msUntilNextDailyRun(timeString, now = new Date()) {
   return next.getTime() - now.getTime();
 }
 
-function isWithinDateRange(value, since, until = new Date()) {
-  const time = new Date(value || 0).getTime();
-  return Number.isFinite(time) && time >= since.getTime() && time <= until.getTime();
-}
-
-function dateStamp(date = new Date()) {
-  return date.toISOString().slice(0, 10);
-}
-
-function reportProductRow(product = {}) {
-  return {
-    marketplace: product.marketplace || "",
-    target: product.targetName || product.target || "",
-    offerId: product.offerId || "",
-    productId: product.productId || "",
-    name: product.name || "",
-    status: product.marketplaceState?.label || product.marketplaceState?.code || "",
-    currentPrice: product.marketplacePrice || product.currentPrice || "",
-    links: (product.links || []).map((link) => [link.article, link.keyword, link.supplierName].filter(Boolean).join(" / ")).join("; "),
-  };
-}
-
-async function collectDailyReportData({ since = new Date(Date.now() - 24 * 60 * 60 * 1000), until = new Date() } = {}) {
-  const warehouse = await readWarehouse();
-  const audit = await readAuditSince(since);
-  const products = warehouse.products || [];
-  const productById = new Map(products.map((product) => [product.id, product]));
-
-  const linkEvents = audit
-    .filter((entry) => ["warehouse.link.save", "warehouse.links.bulk_save", "warehouse.link.delete"].includes(entry.action))
-    .map((entry) => {
-      const details = entry.details || {};
-      return {
-        at: entry.at,
-        action: entry.action,
-        user: entry.user || "",
-        count: Array.isArray(details.productIds) ? details.productIds.length : 1,
-        productId: details.productId || (Array.isArray(details.productIds) ? details.productIds.join(", ") : ""),
-        offerId: details.offerId || "",
-        name: details.name || "",
-        article: details.article || "",
-        keyword: details.keyword || "",
-        supplierName: details.supplierName || "",
-        priceCurrency: details.priceCurrency || "",
-      };
-    });
-
-  const priceEvents = [];
-  const supplierLost = [];
-  const archiveEvents = [];
-  const recoveryEvents = [];
-  const errors = [];
-
-  for (const product of products) {
-    const base = reportProductRow(product);
-    for (const history of product.priceHistory || []) {
-      if (!isWithinDateRange(history.at, since, until)) continue;
-      priceEvents.push({
-        at: history.at,
-        ...base,
-        oldPrice: history.oldPrice || "",
-        newPrice: history.newPrice || "",
-        markup: history.markup || "",
-        supplierName: history.supplierName || "",
-        supplierArticle: history.supplierArticle || "",
-        usdPrice: history.usdPrice || "",
-        usdRate: history.usdRate || "",
-        reason: history.reason || "",
-        result: history.status || "",
-        error: history.error || "",
-      });
-      if (history.status === "error") errors.push({ at: history.at, type: "price", ...base, error: history.error || "send_failed" });
-    }
-
-    const auto = product.noSupplierAutomation || {};
-    if (isWithinDateRange(auto.stockZeroAt, since, until)) {
-      supplierLost.push({
-        at: auto.stockZeroAt,
-        ...base,
-        event: "stock_zero",
-        selectedSupplier: product.selectedSupplier?.partnerName || product.selectedSupplier?.supplierName || "",
-        lastError: auto.lastError || "",
-      });
-    }
-    if (isWithinDateRange(auto.archivedAt, since, until)) {
-      archiveEvents.push({ at: auto.archivedAt, ...base, event: "archived", lastError: auto.lastError || "" });
-    }
-    if (isWithinDateRange(auto.recoveredAt, since, until)) {
-      recoveryEvents.push({
-        at: auto.recoveredAt,
-        ...base,
-        event: "recovered",
-        selectedSupplier: product.selectedSupplier?.partnerName || product.selectedSupplier?.supplierName || "",
-      });
-    }
-  }
-
-  return {
-    since,
-    until,
-    totals: {
-      products: products.length,
-      linkedEvents: linkEvents.reduce((sum, item) => sum + Number(item.count || 1), 0),
-      priceUpdated: priceEvents.filter((item) => item.result === "success").length,
-      priceFailed: priceEvents.filter((item) => item.result === "error").length,
-      suppliersLost: supplierLost.length,
-      archived: archiveEvents.length,
-      recovered: recoveryEvents.length,
-      errors: errors.length,
-    },
-    linkEvents,
-    priceEvents,
-    supplierLost,
-    archiveEvents,
-    recoveryEvents,
-    errors,
-    productById,
-  };
-}
-
-function addReportSheet(workbook, name, rows, columns) {
-  const sheet = workbook.addWorksheet(name);
-  sheet.columns = columns.map((column) => ({
-    header: column.header,
-    key: column.key,
-    width: column.width || 18,
-  }));
-  sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
-  sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF172033" } };
-  sheet.addRows(rows);
-  sheet.views = [{ state: "frozen", ySplit: 1 }];
-  sheet.autoFilter = {
-    from: { row: 1, column: 1 },
-    to: { row: Math.max(1, rows.length + 1), column: columns.length },
-  };
-  sheet.eachRow((row) => {
-    row.alignment = { vertical: "top", wrapText: true };
-  });
-  return sheet;
-}
-
-async function buildDailyReportWorkbook(report) {
-  const workbook = new ExcelJS.Workbook();
-  workbook.creator = "Magic Vibes";
-  workbook.created = new Date();
-  workbook.modified = new Date();
-
-  addReportSheet(
-    workbook,
-    "Сводка",
-    [
-      { metric: "Период с", value: report.since.toISOString() },
-      { metric: "Период по", value: report.until.toISOString() },
-      { metric: "Товаров в складе", value: report.totals.products },
-      { metric: "Привязано/изменено привязок", value: report.totals.linkedEvents },
-      { metric: "Цен успешно обновлено", value: report.totals.priceUpdated },
-      { metric: "Ошибок обновления цен", value: report.totals.priceFailed },
-      { metric: "Поставщиков пропало", value: report.totals.suppliersLost },
-      { metric: "Товаров архивировано", value: report.totals.archived },
-      { metric: "Товаров восстановлено", value: report.totals.recovered },
-      { metric: "Ошибок", value: report.totals.errors },
-    ],
-    [
-      { header: "Показатель", key: "metric", width: 34 },
-      { header: "Значение", key: "value", width: 28 },
-    ],
-  );
-
-  const productColumns = [
-    { header: "Дата", key: "at", width: 22 },
-    { header: "Маркетплейс", key: "marketplace", width: 14 },
-    { header: "Кабинет", key: "target", width: 18 },
-    { header: "Артикул", key: "offerId", width: 22 },
-    { header: "Название", key: "name", width: 50 },
-    { header: "Статус", key: "status", width: 22 },
-  ];
-
-  addReportSheet(workbook, "Привязки", report.linkEvents, [
-    { header: "Дата", key: "at", width: 22 },
-    { header: "Действие", key: "action", width: 24 },
-    { header: "Пользователь", key: "user", width: 16 },
-    { header: "Кол-во", key: "count", width: 10 },
-    { header: "ID товара", key: "productId", width: 28 },
-    { header: "Артикул MP", key: "offerId", width: 22 },
-    { header: "Название", key: "name", width: 46 },
-    { header: "Артикул PM", key: "article", width: 22 },
-    { header: "Ключ", key: "keyword", width: 18 },
-    { header: "Поставщик", key: "supplierName", width: 26 },
-    { header: "Валюта", key: "priceCurrency", width: 10 },
-  ]);
-
-  addReportSheet(workbook, "Цены", report.priceEvents, [
-    ...productColumns,
-    { header: "Старая цена", key: "oldPrice", width: 14 },
-    { header: "Новая цена", key: "newPrice", width: 14 },
-    { header: "Наценка", key: "markup", width: 12 },
-    { header: "Поставщик", key: "supplierName", width: 26 },
-    { header: "Артикул поставщика", key: "supplierArticle", width: 24 },
-    { header: "USD цена", key: "usdPrice", width: 12 },
-    { header: "Курс", key: "usdRate", width: 12 },
-    { header: "Причина", key: "reason", width: 34 },
-    { header: "Результат", key: "result", width: 14 },
-    { header: "Ошибка", key: "error", width: 34 },
-  ]);
-
-  addReportSheet(workbook, "Пропал поставщик", report.supplierLost, [
-    ...productColumns,
-    { header: "Событие", key: "event", width: 14 },
-    { header: "Привязки", key: "links", width: 44 },
-    { header: "Ошибка", key: "lastError", width: 34 },
-  ]);
-  addReportSheet(workbook, "Архив", report.archiveEvents, [...productColumns, { header: "Событие", key: "event", width: 14 }, { header: "Ошибка", key: "lastError", width: 34 }]);
-  addReportSheet(workbook, "Восстановлено", report.recoveryEvents, [...productColumns, { header: "Событие", key: "event", width: 14 }, { header: "Поставщик", key: "selectedSupplier", width: 26 }]);
-  addReportSheet(workbook, "Ошибки", report.errors, [...productColumns, { header: "Тип", key: "type", width: 14 }, { header: "Ошибка", key: "error", width: 40 }]);
-
-  return workbook.xlsx.writeBuffer();
-}
-
-function dailyReportCaption(report) {
-  return [
-    `Ежедневный отчёт Magic Vibes за ${dateStamp(report.since)} - ${dateStamp(report.until)}`,
-    `Привязок: ${formatTelegramNumber(report.totals.linkedEvents)}`,
-    `Цен обновлено: ${formatTelegramNumber(report.totals.priceUpdated)}`,
-    `Поставщиков пропало: ${formatTelegramNumber(report.totals.suppliersLost)}`,
-    `Архивировано: ${formatTelegramNumber(report.totals.archived)}`,
-    `Восстановлено: ${formatTelegramNumber(report.totals.recovered)}`,
-    `Ошибок: ${formatTelegramNumber(report.totals.errors + report.totals.priceFailed)}`,
-  ].join("\n");
-}
-
-async function sendDailyTelegramReport(trigger = "schedule") {
-  if (!telegramDailyReportEnabled || !telegramReady()) return { ok: false, skipped: true };
-  const until = new Date();
-  const since = new Date(until.getTime() - 24 * 60 * 60 * 1000);
-  const report = await collectDailyReportData({ since, until });
-  const buffer = await buildDailyReportWorkbook(report);
-  const filename = `magic-vibes-report-${dateStamp(until)}.xlsx`;
-  const caption = dailyReportCaption(report);
-  const result = await sendTelegramDocument({ buffer, filename, caption });
-  logger.info("telegram daily report sent", { trigger, ok: result.ok, filename });
-  return { ...result, filename, totals: report.totals };
-}
-
 async function runDailyRefresh(trigger = "manual") {
   if (dailySyncPromise) return dailySyncPromise;
 
@@ -13845,15 +13401,6 @@ async function runDailyRefresh(trigger = "manual") {
             : null,
         },
       }));
-      notifyTelegram(formatSyncNotification({
-        title: trigger === "manual" ? "Ручной цикл завершён" : "Ежедневная синхронизация завершена",
-        trigger,
-        priceMaster,
-        warehouse,
-        automation,
-        recovery,
-        pricePush,
-      }));
       return state;
     } catch (error) {
       const state = await writeDailySyncState(withDailySyncLog({
@@ -13861,11 +13408,6 @@ async function runDailyRefresh(trigger = "manual") {
         trigger,
         startedAt,
         lastRunAt: new Date().toISOString(),
-        error: error.code || error.message,
-      }));
-      notifyTelegram(formatSyncNotification({
-        title: trigger === "manual" ? "Ручной цикл завершился ошибкой" : "Ежедневная синхронизация завершилась ошибкой",
-        trigger,
         error: error.code || error.message,
       }));
       return state;
@@ -13890,23 +13432,6 @@ function scheduleDailySync() {
       logger.error("daily sync failed", { detail: error.code || error.message, err: error });
     } finally {
       scheduleDailySync();
-    }
-  }, delay);
-}
-
-function scheduleTelegramDailyReport() {
-  if (!telegramDailyReportEnabled || !telegramReady()) return;
-  if (telegramDailyReportTimer) clearTimeout(telegramDailyReportTimer);
-  const delay = msUntilNextDailyRun(telegramDailyReportTime);
-  telegramDailyReportNextRunAt = new Date(Date.now() + delay).toISOString();
-  telegramDailyReportTimer = setTimeout(async () => {
-    try {
-      await sendDailyTelegramReport("schedule");
-    } catch (error) {
-      logger.warn("telegram daily report failed", { detail: error?.message || String(error) });
-      notifyTelegram(`Ежедневный Telegram-отчёт не сформировался\nОшибка: ${error?.message || String(error)}`);
-    } finally {
-      scheduleTelegramDailyReport();
     }
   }, delay);
 }
@@ -13946,15 +13471,6 @@ async function runAutoSyncCycle(trigger = "auto") {
     if (automation.errors.length) {
       logger.warn("no-supplier automation errors", { count: automation.errors.length, sample: automation.errors.slice(0, 10) });
     }
-    notifyTelegram(formatSyncNotification({
-      title: "Фоновая синхронизация завершена",
-      trigger,
-      priceMaster: result,
-      warehouse,
-      automation,
-      recovery,
-      pricePush: autoPricePush,
-    }));
     return { status: "ok", result, warehouse, automation, recovery, autoPricePush, automationScope: backgroundAutomation.scope };
   } finally {
     autoSyncRunning = false;
@@ -13973,7 +13489,7 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
   setManualWarehouseSyncProgress({
     percent: 24,
     stage: "Маркетплейсы",
-    meta: `PriceMaster готов: ${formatTelegramNumber(priceMaster?.items || 0)} строк. Загружаю карточки Ozon/Yandex.`,
+    meta: `PriceMaster готов: ${formatRuNumber(priceMaster?.items || 0)} строк. Загружаю карточки Ozon/Yandex.`,
     processed: Number(priceMaster?.items || 0),
     total: Number(priceMaster?.items || 0),
   });
@@ -13984,7 +13500,7 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
   setManualWarehouseSyncProgress({
     percent: 74,
     stage: "Склад",
-    meta: `Карточки загружены: ${formatTelegramNumber(warehouse.total || 0)}. Сверяю поставщиков и правила остатков.`,
+    meta: `Карточки загружены: ${formatRuNumber(warehouse.total || 0)}. Сверяю поставщиков и правила остатков.`,
     processed: Number(warehouse.total || 0),
     total: Number(warehouse.total || 0),
   });
@@ -13992,7 +13508,7 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
   setManualWarehouseSyncProgress({
     percent: 84,
     stage: "Автоматизация",
-    meta: `Проверены пропавшие поставщики. Нулевые остатки: ${formatTelegramNumber(automation.zeroStockSent || 0)}, архив: ${formatTelegramNumber(automation.archived || 0)}.`,
+    meta: `Проверены пропавшие поставщики. Нулевые остатки: ${formatRuNumber(automation.zeroStockSent || 0)}, архив: ${formatRuNumber(automation.archived || 0)}.`,
     processed: Number(warehouse.total || 0),
     total: Number(warehouse.total || 0),
   });
@@ -14000,18 +13516,10 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
   setManualWarehouseSyncProgress({
     percent: 94,
     stage: "Финал",
-    meta: `Восстановлено товаров: ${formatTelegramNumber(recovery.recovered || 0)}. Сохраняю результат и обновляю интерфейс.`,
+    meta: `Восстановлено товаров: ${formatRuNumber(recovery.recovered || 0)}. Сохраняю результат и обновляю интерфейс.`,
     processed: Number(warehouse.total || 0),
     total: Number(warehouse.total || 0),
   });
-  notifyTelegram(formatSyncNotification({
-    title: "Склад синхронизирован вручную",
-    trigger,
-    priceMaster,
-    warehouse,
-    automation,
-    recovery,
-  }));
   return {
     ok: true,
     trigger,
@@ -14068,7 +13576,7 @@ function startManualWarehouseSync(trigger = "manual") {
           ...(manualWarehouseSyncState.progress || {}),
           percent: 100,
           stage: "Готово",
-          meta: `Синхронизация завершена. Карточек: ${formatTelegramNumber(result?.warehouse?.total || 0)}.`,
+          meta: `Синхронизация завершена. Карточек: ${formatRuNumber(result?.warehouse?.total || 0)}.`,
           processed: Number(result?.warehouse?.total || manualWarehouseSyncState.progress?.processed || 0),
           total: Number(result?.warehouse?.total || manualWarehouseSyncState.progress?.total || 0),
           updatedAt: new Date().toISOString(),
@@ -14093,11 +13601,6 @@ function startManualWarehouseSync(trigger = "manual") {
           updatedAt: new Date().toISOString(),
         },
       };
-      notifyTelegram(formatSyncNotification({
-        title: "Р СѓС‡РЅР°СЏ СЃРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ СЃРєР»Р°РґР° Р·Р°РІРµСЂС€РёР»Р°СЃСЊ РѕС€РёР±РєРѕР№",
-        trigger,
-        error: detail,
-      }));
       logger.error("manual warehouse sync failed", { detail, err: error });
       throw error;
     })
@@ -14124,11 +13627,6 @@ function scheduleAutoSync(delayMs = 10_000) {
       scheduleAutoSync(nextMinutes * 60 * 1000);
     } catch (error) {
       logger.error("auto sync failed", { detail: error.code || error.message, err: error });
-      notifyTelegram(formatSyncNotification({
-        title: "Фоновая синхронизация завершилась ошибкой",
-        trigger: "interval",
-        error: error.code || error.message,
-      }));
       scheduleAutoSync(Math.max(5, Number(autoSyncMinutes || 30) || 30) * 60 * 1000);
     }
   }, delayMs);
@@ -14188,11 +13686,6 @@ app.post("/api/warehouse/sync/run", requireAdmin, async (_request, response, nex
       status: result.status,
     });
   } catch (error) {
-    notifyTelegram(formatSyncNotification({
-      title: "Ручная синхронизация склада завершилась ошибкой",
-      trigger: "manual",
-      error: error.code || error.message,
-    }));
     next(error);
   }
 });
@@ -14239,18 +13732,9 @@ async function startServer() {
     if (dailySyncEnabled) {
       logger.info("daily sync enabled", { time: dailySyncTime, sendPrices: dailySyncSendPrices });
     }
-    if (telegramReady()) {
-      logger.info("telegram notifications enabled", {
-        dailyReportEnabled: telegramDailyReportEnabled,
-        dailyReportTime: telegramDailyReportTime,
-        proxyEnabled: Boolean(telegramProxyUrl),
-        apiBaseUrl: telegramApiBaseUrl,
-      });
-    }
   });
 
   scheduleDailySync();
-  scheduleTelegramDailyReport();
   schedulePriceRetryProcessing(30_000);
   scheduleAutoSync(autoSyncInitialDelaySeconds * 1000);
 }
