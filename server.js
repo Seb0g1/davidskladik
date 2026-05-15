@@ -189,6 +189,9 @@ let warehousePostgresLinkBackfillPromise = null;
 let warehousePostgresLinkBackfillDone = false;
 let priceMasterSnapshotMemoryCache = null;
 let priceMasterArticleIndexCache = null;
+const priceMasterLinkLookupCache = new Map();
+const priceMasterLinkLookupCacheTtlMs = Math.max(1000, Number(process.env.LINK_SAVE_PM_CACHE_MS || 120000));
+const priceMasterLinkLookupCacheMax = Math.max(100, Number(process.env.LINK_SAVE_PM_CACHE_MAX || 2000));
 const warehouseViewCache = new Map();
 const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
@@ -7144,7 +7147,7 @@ async function enrichWarehouseProducts(productIds = []) {
 }
 
 async function enrichWeakOzonProductsForPage(products = []) {
-  if (process.env.WAREHOUSE_PAGE_AUTO_ENRICH_ENABLED === "false") return products;
+  if (process.env.WAREHOUSE_PAGE_AUTO_ENRICH_ENABLED !== "true") return products;
   const limit = Math.max(0, Number(process.env.WAREHOUSE_PAGE_AUTO_ENRICH_LIMIT || 60) || 60);
   if (!limit) return products;
   const candidates = (products || [])
@@ -7365,6 +7368,66 @@ async function getLivePriceMasterMatchesForLinks(links, managedSuppliers = [], u
   return map;
 }
 
+function priceMasterLinkLookupCacheKey(linkInput, usdRate) {
+  const link = normalizeWarehouseLink(linkInput);
+  return [
+    String(link.matchType || "article"),
+    cleanText(link.article).toLowerCase(),
+    cleanText(link.exactName).toLowerCase(),
+    cleanText(link.sourceRowId),
+    cleanText(link.partnerId),
+    normalizeSupplierName(link.supplierName),
+    cleanText(link.keyword).toLowerCase(),
+    cleanText(link.priceCurrency || "USD").toUpperCase(),
+    Number(usdRate || 0).toFixed(4),
+  ].join("|");
+}
+
+function setPriceMasterLinkLookupCache(key, rows) {
+  if (!key) return;
+  if (priceMasterLinkLookupCache.size >= priceMasterLinkLookupCacheMax) {
+    const oldest = priceMasterLinkLookupCache.keys().next().value;
+    if (oldest) priceMasterLinkLookupCache.delete(oldest);
+  }
+  priceMasterLinkLookupCache.set(key, { at: Date.now(), rows: Array.isArray(rows) ? rows : [] });
+}
+
+async function findPriceMasterRowsForLinkFast(linkInput, usdRate, managedSuppliers = [], options = {}) {
+  const link = normalizeWarehouseLink(linkInput);
+  if (!warehouseLinkHasMatchTarget(link)) return [];
+  const key = priceMasterLinkLookupCacheKey(link, usdRate);
+  const cached = priceMasterLinkLookupCache.get(key);
+  if (cached && Date.now() - cached.at < priceMasterLinkLookupCacheTtlMs) return cached.rows;
+
+  const snapshotMap = await getPriceMasterMatchesForLinks([link], managedSuppliers, usdRate).catch((error) => {
+    logger.warn("PriceMaster snapshot link lookup skipped", { detail: error?.message || String(error) });
+    return new Map();
+  });
+  const snapshotRows = snapshotMap.get(link.id) || [];
+  if (snapshotRows.length || options.live === false) {
+    setPriceMasterLinkLookupCache(key, snapshotRows);
+    return snapshotRows;
+  }
+
+  const timeoutMs = Math.max(250, Number(options.timeoutMs || process.env.LINK_SAVE_PM_TIMEOUT_MS || 1200));
+  try {
+    const liveRows = await Promise.race([
+      findPriceMasterRowsForLink(link, usdRate, managedSuppliers),
+      promiseTimeout(timeoutMs, "link_save_pm_timeout"),
+    ]);
+    setPriceMasterLinkLookupCache(key, liveRows);
+    return liveRows;
+  } catch (error) {
+    logger.warn("PriceMaster link lookup skipped", {
+      article: link.article,
+      matchType: link.matchType,
+      detail: error?.message || String(error),
+    });
+    setPriceMasterLinkLookupCache(key, []);
+    return [];
+  }
+}
+
 async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate, { timeoutMs } = {}) {
   const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article || link.exactName || link.sourceRowId);
   if (!normalizedLinks.length) return new Map();
@@ -7444,9 +7507,9 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
 
 async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers = []) {
   const link = normalizeWarehouseLink(linkInput);
-  const matches = await findPriceMasterRowsForLink(link, usdRate, managedSuppliers);
+  const matches = await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers);
   if (matches.length) return matches;
-  const articleRows = await findPriceMasterRowsForLink({ ...link, supplierName: "", partnerId: "", keyword: "" }, usdRate, managedSuppliers);
+  const articleRows = await findPriceMasterRowsForLinkFast({ ...link, supplierName: "", partnerId: "", keyword: "" }, usdRate, managedSuppliers);
   const label = link.matchType === "article"
     ? `артикул "${link.article}" должен совпадать с PriceMaster точно`
     : `выбранная строка "${link.exactName || link.article || link.sourceRowId}" должна существовать в PriceMaster`;
@@ -7473,7 +7536,7 @@ async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers 
 async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSuppliers = []) {
   const link = normalizeWarehouseLink(linkInput);
   if (!warehouseLinkHasMatchTarget(link)) return link;
-  const matches = await findPriceMasterRowsForLink(link, usdRate, managedSuppliers);
+  const matches = await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers);
   if (matches.length) {
     const best = matches[0];
     return normalizeWarehouseLink({
@@ -7492,7 +7555,7 @@ async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSupplier
       matchType: "exact_name",
       exactName: link.exactName || link.article,
     });
-    const nameMatches = await findPriceMasterRowsForLink(nameLink, usdRate, managedSuppliers);
+    const nameMatches = await findPriceMasterRowsForLinkFast(nameLink, usdRate, managedSuppliers);
     if (nameMatches.length) {
       const best = nameMatches[0];
       return normalizeWarehouseLink({
@@ -8059,9 +8122,21 @@ async function buildWarehouseCounterStatsFromLinkedProducts(products = [], suppl
   return summarizeWarehouseCounterStats({ totalProducts, linkedProducts, builtLinkedProducts });
 }
 
-async function buildFreshWarehouseProducts(productIds = [], { refreshPrices = false } = {}) {
+async function buildFreshWarehouseProducts(productIds = [], {
+  refreshPrices = false,
+  persistMutations = true,
+  livePriceMaster = false,
+  batchPriceMaster = false,
+  usdRate,
+} = {}) {
   const warehouse = await readWarehouse();
-  return buildFreshWarehouseProductsForWarehouse(warehouse, productIds, { refreshPrices, persistMutations: true });
+  return buildFreshWarehouseProductsForWarehouse(warehouse, productIds, {
+    refreshPrices,
+    persistMutations,
+    livePriceMaster,
+    batchPriceMaster,
+    usdRate,
+  });
 }
 
 function warehousePageProductMatches(product = {}, filters = {}) {
