@@ -5294,6 +5294,31 @@ async function sendYandexStockChunk(shop, rows = []) {
   return result;
 }
 
+async function sendYandexOfferArchiveState(shop, offerIds = [], archived = false) {
+  const ids = [...new Set((Array.isArray(offerIds) ? offerIds : [])
+    .map(cleanText)
+    .filter(Boolean))];
+  if (!ids.length) return [];
+  const endpoint = `/v2/businesses/${shop.businessId}/offer-mappings/${archived ? "archive" : "unarchive"}`;
+  const type = archived ? "archive" : "unarchive";
+  const results = [];
+  for (const chunk of chunkArray(ids, 200)) {
+    try {
+      const result = await yandexRequest(shop, "POST", endpoint, { offerIds: chunk });
+      if (apiPayloadHasErrors(result)) {
+        const error = new Error(summarizeApiErrorPayload(result, `Yandex ${type} failed`));
+        error.statusCode = 400;
+        throw error;
+      }
+      results.push(...chunk.map((offerId) => ({ offerId, ok: true })));
+    } catch (error) {
+      const detail = error?.message || `${type}_failed`;
+      results.push(...chunk.map((offerId) => ({ offerId, ok: false, error: detail })));
+    }
+  }
+  return results;
+}
+
 async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
   const dryRun = options.dryRun === true;
   const warnings = [];
@@ -11079,9 +11104,20 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     const product = warehouse.products.find((entry) => entry.id === action.id);
     if (!product) continue;
     touchedProductIds.add(product.id);
-    product.marketplaceState = {
+    const stock = Math.max(0, Math.round(Number(action.stock || 0)));
+    const marketplaceState = {
       ...(product.marketplaceState || {}),
-      stock: Math.max(0, Math.round(Number(action.stock || 0))),
+      stock,
+    };
+    if (product.marketplace === "yandex" && stock > 0) {
+      marketplaceState.code = "active";
+      marketplaceState.status = "active";
+      marketplaceState.archived = false;
+      product.status = "active";
+      product.archived = false;
+    }
+    product.marketplaceState = {
+      ...marketplaceState,
     };
   }
   if (touchedProductIds.size) {
@@ -12736,19 +12772,20 @@ async function archiveProductsOnMarketplaces(products = []) {
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
-      for (const chunk of chunkArray(items, 100)) {
-        try {
-          await yandexRequest(
-            shop,
-            "POST",
-            `/v2/businesses/${shop.businessId}/offer-mappings/update`,
-            { offers: chunk.map((item) => ({ offerId: String(item.offerId || "").trim(), archived: true })) },
-          );
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "archive", ok: true })));
-        } catch (error) {
-          const detail = error?.message || "archive_failed";
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "archive", ok: false, error: detail })));
-        }
+      for (const chunk of chunkArray(items, 200)) {
+        const archiveResults = await sendYandexOfferArchiveState(shop, chunk.map((item) => item.offerId), true);
+        const byOfferId = new Map(archiveResults.map((item) => [cleanText(item.offerId).toLowerCase(), item]));
+        actions.push(...chunk.map((item) => {
+          const result = byOfferId.get(cleanText(item.offerId).toLowerCase());
+          return {
+            id: item.id,
+            type: "archive",
+            target: shop.id,
+            offerId: item.offerId,
+            ok: Boolean(result?.ok),
+            error: result?.ok ? undefined : (result?.error || "archive_failed"),
+          };
+        }));
       }
     }
   }
@@ -12783,7 +12820,12 @@ async function restoreStocksOnMarketplaces(products = []) {
           for (const stockChunk of chunkArray(payload.stocks, 100)) {
             await ozonRequest("/v2/products/stocks", { stocks: stockChunk }, account);
           }
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: true })));
+          actions.push(...chunk.map((item) => ({
+            id: item.id,
+            type: "restore_stock",
+            stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
+            ok: true,
+          })));
         } catch (error) {
           const detail = error?.message || "restore_stock_failed";
           actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: false, error: detail })));
@@ -12801,7 +12843,13 @@ async function restoreStocksOnMarketplaces(products = []) {
               offerId: item.offerId,
               stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
             })));
-            actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", target: stockShop.id, ok: true })));
+            actions.push(...chunk.map((item) => ({
+              id: item.id,
+              type: "restore_stock",
+              target: stockShop.id,
+              stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
+              ok: true,
+            })));
           } catch (error) {
             const detail = error?.message || "restore_stock_failed";
             actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", target: stockShop.id, ok: false, error: detail })));
@@ -12844,19 +12892,20 @@ async function unarchiveProductsOnMarketplaces(products = []) {
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
-      for (const chunk of chunkArray(items, 100)) {
-        try {
-          await yandexRequest(
-            shop,
-            "POST",
-            `/v2/businesses/${shop.businessId}/offer-mappings/update`,
-            { offers: chunk.map((item) => ({ offerId: String(item.offerId || "").trim(), archived: false })) },
-          );
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "unarchive", ok: true })));
-        } catch (error) {
-          const detail = error?.message || "unarchive_failed";
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "unarchive", ok: false, error: detail })));
-        }
+      for (const chunk of chunkArray(items, 200)) {
+        const unarchiveResults = await sendYandexOfferArchiveState(shop, chunk.map((item) => item.offerId), false);
+        const byOfferId = new Map(unarchiveResults.map((item) => [cleanText(item.offerId).toLowerCase(), item]));
+        actions.push(...chunk.map((item) => {
+          const result = byOfferId.get(cleanText(item.offerId).toLowerCase());
+          return {
+            id: item.id,
+            type: "unarchive",
+            target: shop.id,
+            offerId: item.offerId,
+            ok: Boolean(result?.ok),
+            error: result?.ok ? undefined : (result?.error || "unarchive_failed"),
+          };
+        }));
       }
     }
   }
@@ -13024,14 +13073,30 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   const warehouse = await readWarehouse();
   const now = new Date().toISOString();
   const recoveredIds = new Set(recovered.map((item) => String(item.id)));
+  const restoredStockById = new Map(stockActions
+    .filter((item) => item.ok)
+    .map((item) => [String(item.id), Math.max(1, Math.round(Number(item.stock || 1)))]));
+  const unarchivedIds = new Set(unarchiveActions.filter((item) => item.ok).map((item) => String(item.id)));
   const changedProducts = [];
   for (const product of warehouse.products) {
-    if (!recoveredIds.has(String(product.id))) continue;
+    const productId = String(product.id);
+    if (!recoveredIds.has(productId)) continue;
     product.noSupplierAutomation = product.noSupplierAutomation || {};
     product.noSupplierAutomation.recoveredAt = now;
     product.noSupplierAutomation.stockZeroAt = null;
     product.noSupplierAutomation.archivedAt = null;
     product.noSupplierAutomation.lastError = null;
+    if (restoredStockById.has(productId) || unarchivedIds.has(productId)) {
+      product.marketplaceState = {
+        ...(product.marketplaceState || {}),
+        code: "active",
+        status: "active",
+        archived: false,
+        stock: restoredStockById.get(productId) || Math.max(1, Math.round(Number(product.marketplaceState?.stock || 1))),
+      };
+      product.status = "active";
+      product.archived = false;
+    }
     product.updatedAt = now;
     changedProducts.push(product);
   }
