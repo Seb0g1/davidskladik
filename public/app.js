@@ -1086,7 +1086,20 @@ async function loadSession() {
   document.querySelectorAll("[data-admin-only]").forEach((element) => {
     element.hidden = !isAdmin;
   });
+  if (isAdmin) ensureOperationsLink();
   return session;
+}
+
+function ensureOperationsLink() {
+  const header = document.querySelector(".header-actions");
+  if (!header || header.querySelector('a[href="/operations.html"]')) return;
+  const link = document.createElement("a");
+  link.className = "secondary-link-button";
+  link.href = "/operations.html";
+  link.textContent = "Operations";
+  const settingsLink = header.querySelector('a[href="/settings.html"]');
+  if (settingsLink?.nextSibling) header.insertBefore(link, settingsLink.nextSibling);
+  else header.prepend(link);
 }
 
 function updateSyncButtonLabel() {

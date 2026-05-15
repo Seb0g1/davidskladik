@@ -22,6 +22,7 @@ process.env.JSON_FALLBACK_ENABLED = "true";
 const appUsersPath = path.join(__dirname, "..", "data", "app-users.json");
 const marketplaceAccountsPath = path.join(__dirname, "..", "data", "marketplace-accounts.json");
 const warehousePath = path.join(__dirname, "..", "data", "warehouse.json");
+const operationJobsPath = path.join(__dirname, "..", "data", "operation-jobs.json");
 
 async function backupFile(filePath) {
   try {
@@ -1652,6 +1653,31 @@ test("admin can read manual warehouse sync status without starting long request"
   const res = await agent.get("/api/warehouse/sync/status").expect(200);
   assert.ok(["idle", "running", "ok", "failed"].includes(res.body.status));
   assert.equal(typeof res.body.running, "boolean");
+});
+
+test("admin can read operation jobs and invalid operation types are rejected", async () => {
+  const backup = await backupFile(operationJobsPath);
+  const agent = request.agent(app);
+  try {
+    await restoreFile(operationJobsPath, JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      jobs: [{ id: "job-smoke", type: "health-deep", title: "Deep health check", status: "completed", progress: 100, createdAt: new Date().toISOString() }],
+    }, null, 2));
+    await agent
+      .post("/api/login")
+      .send({ username: "admin", password: process.env.APP_PASSWORD })
+      .expect(200);
+
+    const list = await agent.get("/api/operations").expect(200);
+    assert.ok(list.body.jobs.some((job) => job.id === "job-smoke"));
+
+    await agent
+      .post("/api/operations")
+      .send({ type: "unknown-operation", payload: {} })
+      .expect(400);
+  } finally {
+    await restoreFile(operationJobsPath, backup);
+  }
 });
 
 test("PUT /api/settings saves markup settings", async () => {

@@ -69,6 +69,7 @@ const appSettingsPath = path.join(dataDir, "app-settings.json");
 const appUsersPath = path.join(dataDir, "app-users.json");
 const priceRetryQueuePath = path.join(dataDir, "price-retry-queue.json");
 const yandexExistingOffersCachePath = path.join(dataDir, "yandex-existing-offers.json");
+const operationJobsPath = path.join(dataDir, "operation-jobs.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
 const sessionCookieName = "pm_session";
@@ -831,6 +832,8 @@ function requireAuth(request, response, next) {
     "/yandex-product.js",
     "/ozon-yandex-import.html",
     "/ozon-yandex-import.js",
+    "/operations.html",
+    "/operations.js",
     "/health",
   ];
   if (publicPaths.includes(request.path)) return next();
@@ -11328,6 +11331,387 @@ app.get("/api/ozon-yandex-import/preview", async (request, response, next) => {
       warnings,
       rows,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function runOzonYandexImportSend(payload = {}, auditRequest = { session: { username: "system", role: "admin" } }) {
+  if (payload?.confirmed !== true) {
+    const error = new Error("Yandex import requires confirmed=true.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const requestedLimit = Number(payload?.limit || 30000);
+  const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
+  const sendLimit = Math.max(1, Math.min(yandexImportSendLimit, Number(payload?.sendLimit || yandexImportSendLimit) || yandexImportSendLimit));
+  const shops = uniqueYandexShopsByBusiness();
+  if (!shops.length) {
+    const error = new Error("Yandex Market is not configured.");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const warehouse = await readWarehouse();
+  const products = (warehouse.products || [])
+    .filter((product) => product.marketplace === "ozon")
+    .slice(0, limit);
+  const initialRows = products.map((product) => buildOzonYandexImportCandidate(product));
+  const candidateOfferIds = initialRows
+    .filter((row) => !row.blockReasons?.length && row.yandexReady)
+    .map((row) => cleanText(row.offerId))
+    .filter(Boolean);
+  const warnings = [];
+  const yandexExistingOfferIds = await getKnownYandexExistingOfferIds(candidateOfferIds, {
+    products: warehouse.products || [],
+    warnings,
+    allowCatalogRefresh: false,
+    allowDirectCheck: false,
+  });
+  const rows = products.map((product) => buildOzonYandexImportCandidate(product, { yandexExistingOfferIds }));
+  const eligibleRows = rows.filter((row) => row.eligible);
+  const selectedRows = eligibleRows.slice(0, sendLimit);
+  const selectedIds = new Set(selectedRows.map((row) => row.id));
+  const productsById = new Map(products.map((product) => [product.id, product]));
+  const selectedProducts = selectedRows.map((row) => productsById.get(row.id)).filter(Boolean);
+  const offers = selectedProducts
+    .map((product) => buildYandexOfferMapping(normalizeWarehouseProduct(product)).offer)
+    .filter((offer) => offer?.offerId);
+
+  const cardResults = [];
+  for (const shop of shops) {
+    const sent = await sendYandexOfferMappings(shop, offers);
+    cardResults.push(...sent.map((item) => ({
+      ...item,
+      stage: "card",
+      target: shop.id,
+      targetName: shop.name || "Yandex Market",
+    })));
+  }
+
+  const failedRows = cardResults.filter((item) => !item.ok);
+  const sentCount = cardResults.filter((item) => item.ok).length;
+  const skippedExisting = rows.filter((row) => row.existingInYandex).length;
+  const skippedBlocked = rows.filter((row) => row.blockReasons?.length).length;
+  const skippedMissing = rows.filter((row) => !row.yandexReady).length;
+  const sentOfferIds = new Set(cardResults
+    .filter((item) => item.ok)
+    .map((item) => cleanText(item.offerId).toLowerCase())
+    .filter(Boolean));
+  if (sentOfferIds.size) {
+    writeYandexExistingOfferIdCache(new Set([...yandexExistingOfferIds, ...sentOfferIds]))
+      .catch((error) => logger.warn("write Yandex existing offer cache failed", { detail: error?.message || String(error) }));
+  }
+
+  const exportedProducts = selectedProducts
+    .filter((product) => sentOfferIds.has(cleanText(product.offerId).toLowerCase()));
+  const priceStage = exportedProducts.length
+    ? await sendYandexPricesFromOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds, warehouse })
+    : { ok: true, sent: 0, failed: 0, skipped: 0, warnings: [], results: [] };
+  const stockStage = exportedProducts.length
+    ? await sendYandexStocksForExportedOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds })
+    : { ok: true, sent: 0, failed: 0, skipped: 0, warnings: [], results: [] };
+  const stageWarnings = [
+    ...warnings,
+    ...(Array.isArray(priceStage.warnings) ? priceStage.warnings : []),
+    ...(Array.isArray(stockStage.warnings) ? stockStage.warnings : []),
+  ];
+  const results = [
+    ...cardResults,
+    ...(Array.isArray(priceStage.results) ? priceStage.results : []),
+    ...(Array.isArray(stockStage.results) ? stockStage.results : []),
+  ];
+
+  if (sentCount > 0) {
+    const now = new Date().toISOString();
+    const yandexProducts = [];
+    const priceResultByTargetOffer = new Map((Array.isArray(priceStage.results) ? priceStage.results : [])
+      .filter((item) => item.ok && item.target && item.offerId)
+      .map((item) => [yandexPriceUpdateResultKey(item), item]));
+    for (const product of warehouse.products || []) {
+      if (!selectedIds.has(product.id) || !sentOfferIds.has(cleanText(product.offerId).toLowerCase())) continue;
+      product.exports = product.exports || {};
+      const baseExportState = {
+        status: "sent",
+        targetName: shops.map((shop) => shop.name || shop.id).join(", "),
+        sentAt: now,
+        priceSent: Number(priceStage.sent || 0),
+        stockSent: Number(stockStage.sent || 0),
+      };
+      for (const shop of shops) {
+        const key = yandexTargetOfferKey(shop.id, product.offerId);
+        const priceResult = priceResultByTargetOffer.get(key) || null;
+        const exportState = {
+          ...baseExportState,
+          targetName: shop.name || shop.id,
+          price: Number(priceResult?.price || 0) || undefined,
+          stock: pickOzonProductStockForYandex(product),
+          markupCoefficient: Number(priceResult?.markupCoefficient || 0) || undefined,
+          priceSource: priceResult?.priceSource || undefined,
+        };
+        product.exports[shop.id] = exportState;
+        yandexProducts.push(buildYandexWarehouseProductFromOzonExport(product, shop, exportState));
+      }
+      product.exports.yandex = baseExportState;
+      product.updatedAt = now;
+    }
+    if (yandexProducts.length) {
+      warehouse.products = mergeProducts(warehouse.products || [], yandexProducts);
+    }
+    await writeWarehouse(warehouse);
+  }
+
+  const responsePayload = {
+    ok: failedRows.length === 0 && Number(priceStage.failed || 0) === 0 && Number(stockStage.failed || 0) === 0,
+    generatedAt: new Date().toISOString(),
+    limit,
+    sendLimit,
+    targets: shops.map((shop) => ({ id: shop.id, name: shop.name, businessId: shop.businessId })),
+    planned: eligibleRows.length,
+    plannedNow: selectedRows.length,
+    sent: sentCount,
+    failed: failedRows.length,
+    priceSent: Number(priceStage.sent || 0),
+    priceFailed: Number(priceStage.failed || 0),
+    priceSkipped: Number(priceStage.skipped || 0),
+    priceSkippedNoPrice: Number(priceStage.skippedNoPrice || 0),
+    stockSent: Number(stockStage.sent || 0),
+    stockFailed: Number(stockStage.failed || 0),
+    stockSkipped: Number(stockStage.skipped || 0),
+    skippedExisting,
+    skippedBlocked,
+    skippedMissing,
+    skippedByLimit: Math.max(0, eligibleRows.length - selectedRows.length),
+    warnings: stageWarnings,
+    results,
+    summary: summarizeOzonYandexImportPreview(rows),
+  };
+
+  await appendAudit(auditRequest, "yandex.import.send", {
+    entityType: "yandex_import",
+    entityId: "ozon_to_yandex",
+    limit,
+    sendLimit,
+    targets: responsePayload.targets,
+    planned: eligibleRows.length,
+    plannedNow: selectedRows.length,
+    sent: sentCount,
+    failed: failedRows.length,
+    priceSent: responsePayload.priceSent,
+    priceFailed: responsePayload.priceFailed,
+    priceSkippedNoPrice: responsePayload.priceSkippedNoPrice,
+    stockSent: responsePayload.stockSent,
+    stockFailed: responsePayload.stockFailed,
+    skippedExisting,
+    skippedBlocked,
+    skippedMissing,
+    warnings: stageWarnings.slice(0, 100),
+    failedOfferIds: results.filter((item) => !item.ok).map((item) => item.offerId).filter(Boolean).slice(0, 500),
+    newValue: {
+      planned: eligibleRows.length,
+      plannedNow: selectedRows.length,
+      sent: sentCount,
+      failed: failedRows.length,
+      priceSent: responsePayload.priceSent,
+      priceFailed: responsePayload.priceFailed,
+      priceSkippedNoPrice: responsePayload.priceSkippedNoPrice,
+      stockSent: responsePayload.stockSent,
+      stockFailed: responsePayload.stockFailed,
+    },
+  });
+
+  return responsePayload;
+}
+
+const activeOperationJobs = new Map();
+
+function normalizeOperationJob(input = {}) {
+  const id = cleanText(input.id) || crypto.randomUUID();
+  const status = ["queued", "running", "completed", "failed"].includes(input.status) ? input.status : "queued";
+  return {
+    id,
+    type: cleanText(input.type || "unknown"),
+    title: cleanText(input.title || input.type || "Operation"),
+    status,
+    user: cleanText(input.user || "system"),
+    role: cleanText(input.role || "admin"),
+    createdAt: input.createdAt || new Date().toISOString(),
+    startedAt: input.startedAt || null,
+    finishedAt: input.finishedAt || null,
+    progress: Math.max(0, Math.min(100, Number(input.progress || 0) || 0)),
+    payload: input.payload && typeof input.payload === "object" ? input.payload : {},
+    result: input.result && typeof input.result === "object" ? input.result : null,
+    error: cleanText(input.error || ""),
+  };
+}
+
+async function readOperationJobs(limit = 100) {
+  try {
+    const parsed = JSON.parse(await fs.readFile(operationJobsPath, "utf8"));
+    const jobs = Array.isArray(parsed.jobs) ? parsed.jobs.map(normalizeOperationJob) : [];
+    return jobs
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .slice(0, Math.max(1, Math.min(500, Number(limit || 100) || 100)));
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
+  }
+}
+
+async function writeOperationJobs(jobs = []) {
+  await fs.mkdir(dataDir, { recursive: true });
+  const normalized = (Array.isArray(jobs) ? jobs : [])
+    .map(normalizeOperationJob)
+    .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+    .slice(0, 300);
+  const temporaryPath = `${operationJobsPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify({ updatedAt: new Date().toISOString(), jobs: normalized }, null, 2), "utf8");
+  await fs.rename(temporaryPath, operationJobsPath);
+  return normalized;
+}
+
+async function upsertOperationJob(job) {
+  const normalized = normalizeOperationJob(job);
+  activeOperationJobs.set(normalized.id, normalized);
+  const existing = await readOperationJobs(300);
+  const next = [normalized, ...existing.filter((item) => item.id !== normalized.id)];
+  await writeOperationJobs(next);
+  return normalized;
+}
+
+function operationJobPublic(job = {}) {
+  const normalized = normalizeOperationJob(job);
+  const result = normalized.result || {};
+  return {
+    id: normalized.id,
+    type: normalized.type,
+    title: normalized.title,
+    status: normalized.status,
+    user: normalized.user,
+    createdAt: normalized.createdAt,
+    startedAt: normalized.startedAt,
+    finishedAt: normalized.finishedAt,
+    progress: normalized.progress,
+    error: normalized.error,
+    summary: result.summary || null,
+    result: normalized.status === "completed" || normalized.status === "failed" ? result : null,
+  };
+}
+
+function operationTitle(type = "") {
+  const titles = {
+    "yandex-import-send": "Ozon -> Yandex import",
+    "yandex-stock-sync": "Ozon -> Yandex stock sync",
+    "health-deep": "Deep health check",
+  };
+  return titles[type] || type || "Operation";
+}
+
+async function runOperationPayload(job) {
+  const auditRequest = { session: { username: job.user || "system", role: job.role || "admin" } };
+  if (job.type === "yandex-import-send") {
+    return runOzonYandexImportSend({ ...(job.payload || {}), confirmed: true }, auditRequest);
+  }
+  if (job.type === "yandex-stock-sync") {
+    const requestedLimit = Number(job.payload?.limit || 30000);
+    const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
+    const warehouse = await readWarehouse();
+    const products = (warehouse.products || [])
+      .filter((product) => product.marketplace === "ozon")
+      .slice(0, limit);
+    const result = await sendYandexStocksFromOzonProducts(products, { dryRun: job.payload?.dryRun === true });
+    await appendAudit(auditRequest, "yandex.stock.sync", {
+      entityType: "yandex_stock_sync",
+      entityId: "ozon_to_yandex",
+      limit,
+      sent: Number(result.sent || 0),
+      failed: Number(result.failed || 0),
+      skipped: Number(result.skipped || 0),
+      newValue: result,
+    });
+    return { ok: result.ok, limit, ...result };
+  }
+  if (job.type === "health-deep") {
+    return collectHealthDetails({ deep: true });
+  }
+  const error = new Error(`Unsupported operation type: ${job.type}`);
+  error.statusCode = 400;
+  throw error;
+}
+
+function startOperationJob(job) {
+  setTimeout(async () => {
+    let current = normalizeOperationJob({
+      ...job,
+      status: "running",
+      startedAt: new Date().toISOString(),
+      progress: 5,
+    });
+    await upsertOperationJob(current).catch((error) => logger.warn("operation job start write failed", { detail: error?.message || String(error) }));
+    try {
+      const result = await runOperationPayload(current);
+      current = normalizeOperationJob({
+        ...current,
+        status: result?.ok === false ? "failed" : "completed",
+        finishedAt: new Date().toISOString(),
+        progress: 100,
+        result,
+        error: result?.ok === false ? "operation finished with errors" : "",
+      });
+    } catch (error) {
+      current = normalizeOperationJob({
+        ...current,
+        status: "failed",
+        finishedAt: new Date().toISOString(),
+        progress: 100,
+        error: error?.message || String(error),
+      });
+      logger.warn("operation job failed", { id: current.id, type: current.type, detail: current.error });
+    }
+    await upsertOperationJob(current).catch((error) => logger.warn("operation job finish write failed", { detail: error?.message || String(error) }));
+  }, 10);
+}
+
+app.get("/api/operations", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = cleanLimit(request.query.limit, 50, 300);
+    const jobs = await readOperationJobs(limit);
+    response.json({ ok: true, jobs: jobs.map(operationJobPublic), total: jobs.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/operations/:id", requireAdmin, async (request, response, next) => {
+  try {
+    const id = cleanText(request.params.id);
+    const jobs = await readOperationJobs(300);
+    const job = jobs.find((item) => item.id === id) || activeOperationJobs.get(id);
+    if (!job) return response.status(404).json({ error: "Operation not found." });
+    response.json({ ok: true, job: operationJobPublic(job) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/operations", requireAdmin, async (request, response, next) => {
+  try {
+    const type = cleanText(request.body?.type);
+    if (!["yandex-import-send", "yandex-stock-sync", "health-deep"].includes(type)) {
+      return response.status(400).json({ error: "Unsupported operation type." });
+    }
+    const job = await upsertOperationJob({
+      id: crypto.randomUUID(),
+      type,
+      title: operationTitle(type),
+      status: "queued",
+      user: request.session?.username || "system",
+      role: request.session?.role || "admin",
+      payload: request.body?.payload && typeof request.body.payload === "object" ? request.body.payload : {},
+      progress: 0,
+    });
+    startOperationJob(job);
+    response.status(202).json({ ok: true, job: operationJobPublic(job) });
   } catch (error) {
     next(error);
   }

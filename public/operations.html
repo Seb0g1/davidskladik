@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Operations | Magic Vibes</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell import-page-shell">
+      <section class="panel import-hero-panel">
+        <div>
+          <p class="eyebrow">Marketplace operations</p>
+          <h1>Операции</h1>
+          <p class="muted-text">Фоновые задачи для тяжёлых действий: импорт Ozon в Yandex, синхронизация остатков и диагностика.</p>
+        </div>
+        <div class="header-actions">
+          <a class="secondary-link-button compact-button" href="/ozon-yandex-import.html">Импорт / удаление</a>
+          <a class="secondary-link-button compact-button" href="/">Склад</a>
+        </div>
+      </section>
+
+      <section class="panel import-toolbar-panel">
+        <div class="import-toolbar">
+          <label class="search-control">
+            Лимит
+            <input id="operationLimitInput" type="number" min="1" max="50000" step="1" value="30000" />
+          </label>
+          <label class="search-control">
+            За запуск
+            <input id="operationSendLimitInput" type="number" min="1" max="10000" step="1" value="5000" />
+          </label>
+          <button id="startYandexImportJobButton" class="primary-button" type="button">Импорт Ozon → Yandex</button>
+          <button id="startYandexStockJobButton" class="secondary-button" type="button">Остатки Ozon → Yandex</button>
+          <button id="startHealthJobButton" class="secondary-button" type="button">Диагностика</button>
+        </div>
+        <div id="operationStatus" class="sync-status-pill">Готово к запуску.</div>
+      </section>
+
+      <section class="panel import-list-panel">
+        <div class="import-list-head">
+          <h2>Журнал задач</h2>
+          <button id="refreshOperationsButton" class="secondary-button compact-button" type="button">Обновить</button>
+        </div>
+        <div id="operationsList" class="history-list"></div>
+      </section>
+    </main>
+    <script src="/operations.js"></script>
+  </body>
+</html>
