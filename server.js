@@ -3425,6 +3425,7 @@ async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
 
   const selected = rows.filter((row) => existingOfferIds.has(row.offerId.toLowerCase()));
   const results = [];
+  let sourceWarehouseMutated = false;
   if (dryRun) {
     return {
       ok: true,
@@ -3468,7 +3469,9 @@ async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
         await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-prices/updates`, {
           offers: chunk.map((item) => ({ offerId: item.offerId, price: item.price })),
         });
-        for (const item of chunk) applyYandexPriceSendToWarehouse(sourceWarehouse, shop, item, sentAt);
+        for (const item of chunk) {
+          if (applyYandexPriceSendToWarehouse(sourceWarehouse, shop, item, sentAt)) sourceWarehouseMutated = true;
+        }
         results.push(...chunk.map((item) => ({
           stage: "price",
           sourceId: item.sourceId,
@@ -3499,6 +3502,10 @@ async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
         })));
       }
     }
+  }
+
+  if (sourceWarehouseMutated) {
+    await writeWarehouse(sourceWarehouse);
   }
 
   const failed = results.filter((item) => !item.ok).length;
@@ -10785,6 +10792,12 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
           ...(product.ozon || {}),
           price: sentPrice,
         };
+      } else if (item.marketplace === "yandex") {
+        product.yandex = {
+          ...(product.yandex || {}),
+          offerId: product.yandex?.offerId || item.offerId,
+          price: sentPrice,
+        };
       }
     }
     product.priceHistory = Array.isArray(product.priceHistory) ? product.priceHistory : [];
@@ -13601,6 +13614,7 @@ module.exports = {
   buildYandexWarehouseProductFromOzonExport,
   materializeYandexExportedProductsForWarehouse,
   marketplaceProductMarkupOverride,
+  applyYandexPriceSendToWarehouse,
   buildYandexPriceUpdateFromOzonProduct,
   sendYandexPricesFromOzonProducts,
   pickOzonProductStockForYandex,

@@ -94,6 +94,7 @@ const {
   buildYandexWarehouseProductFromOzonExport,
   materializeYandexExportedProductsForWarehouse,
   marketplaceProductMarkupOverride,
+  applyYandexPriceSendToWarehouse,
   buildYandexPriceUpdateFromOzonProduct,
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
@@ -660,6 +661,37 @@ test("Yandex price update prefers the Yandex variant price when it exists", () =
   );
   assert.equal(item.offerId, "SKU-PRICE-2");
   assert.deepEqual(item.price, { value: 7125, currencyId: "RUR" });
+});
+
+test("successful Yandex price send updates the local warehouse variant price", () => {
+  const warehouse = {
+    products: [
+      normalizeWarehouseProduct({
+        id: "ya-local-price",
+        marketplace: "yandex",
+        target: "yandex-shop",
+        offerId: "SKU-YA-LOCAL",
+        name: "Yandex local row",
+        marketplacePrice: 5000,
+        currentPrice: 5000,
+        yandex: { offerId: "SKU-YA-LOCAL", price: 5000 },
+      }),
+    ],
+  };
+  const changed = applyYandexPriceSendToWarehouse(
+    warehouse,
+    { id: "yandex-shop", name: "Yandex Shop" },
+    { offerId: "SKU-YA-LOCAL", price: { value: 7125, currencyId: "RUR" } },
+    "2026-05-15T06:40:00.000Z",
+  );
+
+  assert.equal(changed, true);
+  assert.equal(warehouse.products[0].marketplacePrice, 7125);
+  assert.equal(warehouse.products[0].currentPrice, 7125);
+  assert.equal(warehouse.products[0].targetPrice, 7125);
+  assert.equal(warehouse.products[0].yandex.price, 7125);
+  assert.equal(warehouse.products[0].lastYandexPriceSend.status, "success");
+  assert.equal(warehouse.products[0].lastYandexPriceSend.requestedPrice, 7125);
 });
 
 test("Yandex cleanup protects brands found in name, description, and characteristics", () => {
