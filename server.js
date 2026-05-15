@@ -6433,14 +6433,12 @@ async function replaceProductLinksInPostgres(prisma, products = []) {
       const linkRows = (product.links || [])
         .map((link) => linkToPostgresData(product, link))
         .filter((linkData) => linkData.supplierArticle);
-      await prisma.$transaction(async (tx) => {
-        await upsertWarehouseProductPostgres(tx, product);
-        await tx.productLink.deleteMany({ where: { productId: product.id } });
-        if (linkRows.length) {
-          const result = await tx.productLink.createMany({ data: linkRows, skipDuplicates: true });
-          linksWritten += result.count || 0;
-        }
-      }, { timeout: 15_000 });
+      await upsertWarehouseProductPostgres(prisma, product);
+      await prisma.productLink.deleteMany({ where: { productId: product.id } });
+      if (linkRows.length) {
+        const result = await prisma.productLink.createMany({ data: linkRows, skipDuplicates: true });
+        linksWritten += result.count || 0;
+      }
     }
     markWarehousePostgresProductsWritten(productChunk);
   }
