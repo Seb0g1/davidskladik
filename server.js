@@ -2435,7 +2435,10 @@ async function getUsdRate({ force = false } = {}) {
   }
 
   try {
-    const response = await fetch("https://www.cbr-xml-daily.ru/daily_json.js");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), Math.max(1000, Number(process.env.USD_RATE_TIMEOUT_MS || 3000) || 3000));
+    const response = await fetch("https://www.cbr-xml-daily.ru/daily_json.js", { signal: controller.signal })
+      .finally(() => clearTimeout(timeout));
     if (!response.ok) throw new Error(`CBR rate request failed: ${response.status}`);
     const data = await response.json();
     const rate = Number(data.Valute?.USD?.Value);
@@ -7646,11 +7649,11 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
   return map;
 }
 
-async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers = []) {
+async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers = [], options = {}) {
   const link = normalizeWarehouseLink(linkInput);
-  const matches = await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers);
+  const matches = await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers, options);
   if (matches.length) return matches;
-  const articleRows = await findPriceMasterRowsForLinkFast({ ...link, supplierName: "", partnerId: "", keyword: "" }, usdRate, managedSuppliers);
+  const articleRows = await findPriceMasterRowsForLinkFast({ ...link, supplierName: "", partnerId: "", keyword: "" }, usdRate, managedSuppliers, options);
   const label = link.matchType === "article"
     ? `артикул "${link.article}" должен совпадать с PriceMaster точно`
     : `выбранная строка "${link.exactName || link.article || link.sourceRowId}" должна существовать в PriceMaster`;
@@ -7674,10 +7677,10 @@ async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers 
   throw error;
 }
 
-async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSuppliers = []) {
+async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSuppliers = [], options = {}) {
   const link = normalizeWarehouseLink(linkInput);
   if (!warehouseLinkHasMatchTarget(link)) return link;
-  const matches = await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers);
+  const matches = await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers, options);
   if (matches.length) {
     const best = matches[0];
     return normalizeWarehouseLink({
@@ -7696,7 +7699,7 @@ async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSupplier
       matchType: "exact_name",
       exactName: link.exactName || link.article,
     });
-    const nameMatches = await findPriceMasterRowsForLinkFast(nameLink, usdRate, managedSuppliers);
+    const nameMatches = await findPriceMasterRowsForLinkFast(nameLink, usdRate, managedSuppliers, options);
     if (nameMatches.length) {
       const best = nameMatches[0];
       return normalizeWarehouseLink({
@@ -10719,6 +10722,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const warehouse = await readWarehouse();
+    const linkSaveLookupOptions = { live: false, timeoutMs: 500 };
     const rawLinks = Array.isArray(request.body.links) && request.body.links.length ? request.body.links : [request.body];
     const submittedLinks = Array.from(new Map(rawLinks
       .map((link) => normalizeWarehouseLink(link))
@@ -10726,7 +10730,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       .map((link) => [warehouseLinkIdentityKey(link), link])).values());
     const resolvedLinks = [];
     for (const submittedLink of submittedLinks) {
-      const resolvedLink = await resolvePriceMasterLinkForSave(submittedLink, usdRate, warehouse.suppliers);
+      const resolvedLink = await resolvePriceMasterLinkForSave(submittedLink, usdRate, warehouse.suppliers, linkSaveLookupOptions);
       if (warehouseLinkHasMatchTarget(resolvedLink)) resolvedLinks.push(resolvedLink);
     }
     const baseLinks = Array.from(new Map(resolvedLinks
@@ -10739,7 +10743,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const conflicts = collectProductConflictsExceptBackground(targetProducts, productLocksFromRequest(request.body), { mergeOnly: true });
     if (conflicts.length) return conflictResponse(response, conflicts);
     for (const linkToValidate of baseLinks) {
-      await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers);
+      await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers, linkSaveLookupOptions);
     }
     const now = new Date().toISOString();
     const username = requestUsername(request);
@@ -10784,7 +10788,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       warehouse.products.filter((product) => updatedIds.includes(product.id)),
       { reason: "warehouse_links_bulk_save" },
     );
-    const savedProducts = await buildFreshWarehouseProducts(updatedIds);
+    const savedProducts = await buildFreshWarehouseProducts(updatedIds, { usdRate, livePriceMaster: false });
     response.json({ ok: true, changed: savedProducts.length || updatedIds.length, products: savedProducts, persisted: "written" });
     appendAudit(request, "warehouse.links.bulk_save", {
       productIds: updatedIds,
@@ -10830,8 +10834,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     }
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
-    link = await resolvePriceMasterLinkForSave(link, usdRate, warehouse.suppliers);
-    await assertPriceMasterLinkExists(link, usdRate, warehouse.suppliers);
+    const linkSaveLookupOptions = { live: false, timeoutMs: 500 };
+    link = await resolvePriceMasterLinkForSave(link, usdRate, warehouse.suppliers, linkSaveLookupOptions);
+    await assertPriceMasterLinkExists(link, usdRate, warehouse.suppliers, linkSaveLookupOptions);
     const now = new Date().toISOString();
     const username = requestUsername(request);
     product.links = Array.isArray(product.links) ? product.links : [];
@@ -10858,7 +10863,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     if (product.links.length > 0) product.autoPriceEnabled = true;
     product.updatedAt = now;
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_save" });
-    const [savedProduct] = await buildFreshWarehouseProducts([product.id]);
+    const [savedProduct] = await buildFreshWarehouseProducts([product.id], { usdRate, livePriceMaster: false });
     response.json({ ok: true, product: savedProduct || normalizeWarehouseProduct(product), links: (savedProduct || product).links || [], persisted: "written" });
     appendAudit(request, "warehouse.link.save", {
       productId: product.id,
