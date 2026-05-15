@@ -1,6 +1,8 @@
 const MAIN_TAB_STORAGE_KEY = "magicVibesActiveTab";
 const VALID_MAIN_TABS = new Set(["warehouse", "suppliers", "accounts"]);
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
+const WAREHOUSE_LIVE_POLL_MS = 45000;
+const WAREHOUSE_LIVE_MAX_RESTORE_PAGES = 2;
 
 const state = {
   session: null,
@@ -2719,13 +2721,13 @@ function formatSupplierSyncStatus() {
   return "";
 }
 
-async function loadSuppliers({ silent = false } = {}) {
+async function loadSuppliers({ silent = false, refresh = false } = {}) {
   if (!silent) {
-    elements.supplierStatus.textContent = "Загружаю поставщиков из PriceMaster...";
+    elements.supplierStatus.textContent = refresh ? "Синхронизирую поставщиков из PriceMaster..." : "Загружаю локальный список поставщиков...";
     elements.supplierLoadButton?.setAttribute("disabled", "disabled");
   }
   try {
-    const data = await api("/api/suppliers");
+    const data = await api(refresh ? "/api/suppliers?refresh=true" : "/api/suppliers");
     state.suppliers = Array.isArray(data.suppliers) ? data.suppliers : [];
     state.supplierSync = data.supplierSync || null;
     renderSuppliers();
@@ -3291,6 +3293,9 @@ async function loadWarehousePage({ reset = false, sync = false, refreshPrices = 
 
 async function loadWarehouse(sync = false, refreshPrices = false, options = {}) {
   const silent = Boolean(options.silent);
+  const restorePages = options.restorePages !== false;
+  const loadRetry = options.loadRetry !== false;
+  const maxRestorePages = Math.max(1, Number(options.maxRestorePages || Number.POSITIVE_INFINITY));
   const refreshStartedAt = Date.now();
   const selectionVersionAtStart = state.warehouseSelectionVersion;
   captureWarehouseScroll();
@@ -3322,8 +3327,9 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
       elements.warehouseStatus.classList.toggle("is-ok", previousWarehouseStatusClasses.ok);
       elements.warehouseStatus.classList.toggle("is-warn", previousWarehouseStatusClasses.warn);
     }
-    const requestedPage = Math.max(1, Number(state.warehouseRestorePage || 1));
-    for (let page = 2; page <= requestedPage && state.warehouseHasMore; page += 1) {
+    const requestedPage = restorePages ? Math.max(1, Number(state.warehouseRestorePage || 1)) : 1;
+    const restoreUntilPage = Math.min(requestedPage, maxRestorePages);
+    for (let page = 2; page <= restoreUntilPage && state.warehouseHasMore; page += 1) {
       // Restore long-list context after refresh by preloading previously opened pages.
       await loadWarehousePage({ reset: false, sync: false, refreshPrices: false });
       if (silent && elements.warehouseStatus) {
@@ -3341,7 +3347,7 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
     }
     state.warehouseRestorePage = 1;
     restoreWarehouseScroll({ startedAt: refreshStartedAt, selectionVersion: selectionVersionAtStart });
-    await loadRetryQueue().catch(() => {});
+    if (loadRetry) await loadRetryQueue().catch(() => {});
     if (silent && elements.warehouseStatus) {
       elements.warehouseStatus.textContent = previousWarehouseStatus;
       elements.warehouseStatus.classList.toggle("is-ok", previousWarehouseStatusClasses.ok);
@@ -3378,6 +3384,11 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
   const priceMasterChanged = priceMasterUpdatedAt && priceMasterUpdatedAt !== state.priceMasterLastUpdatedAt;
   const dailyChanged = dailyUpdatedAt && dailyUpdatedAt !== state.dailySyncLastUpdatedAt;
   if (!force && !warehouseChanged && !priceMasterChanged && !dailyChanged) return;
+  if (!warehouseChanged && !force) {
+    if (priceMasterChanged) state.priceMasterLastUpdatedAt = priceMasterUpdatedAt;
+    if (dailyChanged) await loadDailySync().catch(() => null);
+    return;
+  }
   if (warehouseLiveRefreshShouldWait()) {
     state.warehouseLiveRefreshQueued = true;
     return;
@@ -3393,10 +3404,10 @@ async function refreshWarehouseFromLiveStatus(status, { force = false } = {}) {
     const selectionVersion = state.warehouseSelectionVersion;
     const selectedSignature = state.selectedWarehouseDetailSignature;
     state.warehouseRestorePage = restorePage;
+    const liveMaxPages = force ? Math.max(WAREHOUSE_LIVE_MAX_RESTORE_PAGES, Math.min(3, restorePage)) : WAREHOUSE_LIVE_MAX_RESTORE_PAGES;
     await Promise.all([
-      loadWarehouse(false, false, { silent: true }),
+      loadWarehouse(false, false, { silent: true, maxRestorePages: liveMaxPages, loadRetry: false }),
       loadDailySync().catch(() => null),
-      loadRetryQueue().catch(() => null),
     ]);
     if (selectedKey && selectionVersion === state.warehouseSelectionVersion && state.selectedWarehouseGroupKey === selectedKey) {
       const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
@@ -3446,7 +3457,7 @@ function startWarehouseLiveRefresh() {
   if (state.warehouseLivePollTimer) window.clearInterval(state.warehouseLivePollTimer);
   state.warehouseLivePollTimer = window.setInterval(() => {
     checkWarehouseLiveStatus().catch(() => {});
-  }, 15000);
+  }, WAREHOUSE_LIVE_POLL_MS);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) checkWarehouseLiveStatus({ force: state.warehouseLiveRefreshQueued }).catch(() => {});
   });
@@ -4604,7 +4615,7 @@ elements.supplierCancelEditButton?.addEventListener("click", () => {
 elements.supplierLoadButton?.addEventListener("click", () => {
   state.supplierSearch = "";
   if (elements.supplierSearchInput) elements.supplierSearchInput.value = "";
-  loadSuppliers();
+  loadSuppliers({ refresh: true });
 });
 
 elements.supplierViewButtons?.forEach((button) => {

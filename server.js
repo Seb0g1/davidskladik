@@ -2129,6 +2129,44 @@ function supplierImpactCount(warehouse = {}, supplier = {}) {
   return supplierImpactProductIds(warehouse, supplier).length;
 }
 
+function supplierImpactCountMap(warehouse = {}, suppliers = []) {
+  const counts = new Map();
+  const supplierKeys = new Map();
+  for (const supplier of suppliers || []) {
+    const keys = [
+      normalizeSupplierName(supplier.name),
+      cleanText(supplier.partnerId) ? `partner:${cleanText(supplier.partnerId)}` : "",
+    ].filter(Boolean);
+    for (const key of keys) {
+      if (!supplierKeys.has(key)) supplierKeys.set(key, new Set());
+      supplierKeys.get(key).add(supplier.id);
+    }
+    counts.set(supplier.id, 0);
+  }
+  if (!supplierKeys.size) return counts;
+  const productHitsBySupplier = new Map();
+  for (const product of warehouse.products || []) {
+    const productSupplierIds = new Set();
+    for (const link of product.links || []) {
+      const keys = [
+        normalizeSupplierName(link.supplierName),
+        cleanText(link.partnerId) ? `partner:${cleanText(link.partnerId)}` : "",
+      ].filter(Boolean);
+      for (const key of keys) {
+        const ids = supplierKeys.get(key);
+        if (!ids) continue;
+        ids.forEach((id) => productSupplierIds.add(id));
+      }
+    }
+    productSupplierIds.forEach((id) => {
+      if (!productHitsBySupplier.has(id)) productHitsBySupplier.set(id, new Set());
+      productHitsBySupplier.get(id).add(product.id);
+    });
+  }
+  for (const [id, productIds] of productHitsBySupplier.entries()) counts.set(id, productIds.size);
+  return counts;
+}
+
 function supplierImpactProductIds(warehouse = {}, ...suppliers) {
   const matchers = suppliers
     .filter(Boolean)
@@ -9881,34 +9919,37 @@ app.get("/api/warehouse/no-supplier", async (request, response, next) => {
   }
 });
 
-app.get("/api/suppliers", async (_request, response, next) => {
+app.get("/api/suppliers", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
     const supplierSync = { ok: false, partners: 0, imported: 0, changed: false, error: null };
-    try {
-      const partners = await listPriceMasterPartners();
-      const syncedSuppliers = syncWarehouseSuppliersFromPriceMaster(warehouse, partners);
-      supplierSync.ok = true;
-      supplierSync.partners = partners.length;
-      supplierSync.imported = syncedSuppliers.imported;
-      supplierSync.changed = syncedSuppliers.changed;
-      if (syncedSuppliers.changed) {
-        await writeWarehouse(warehouse);
-        logger.info("imported suppliers from PriceMaster via suppliers api", { imported: syncedSuppliers.imported });
+    if (request.query.refresh === "true") {
+      try {
+        const partners = await listPriceMasterPartners();
+        const syncedSuppliers = syncWarehouseSuppliersFromPriceMaster(warehouse, partners);
+        supplierSync.ok = true;
+        supplierSync.partners = partners.length;
+        supplierSync.imported = syncedSuppliers.imported;
+        supplierSync.changed = syncedSuppliers.changed;
+        if (syncedSuppliers.changed) {
+          await writeWarehouse(warehouse);
+          logger.info("imported suppliers from PriceMaster via suppliers api", { imported: syncedSuppliers.imported });
+        }
+      } catch (error) {
+        supplierSync.error = error.message;
+        logger.warn("supplier import from PriceMaster in /api/suppliers failed", { detail: error.message });
       }
-    } catch (error) {
-      supplierSync.error = error.message;
-      logger.warn("supplier import from PriceMaster in /api/suppliers failed", { detail: error.message });
     }
     const autoReactivated = applySupplierAutoReactivate(warehouse);
     if (autoReactivated.length) {
       await writeWarehouse(warehouse);
       logger.info("supplier auto-reactivated from suppliers api", { count: autoReactivated.length, suppliers: autoReactivated });
     }
+    const impactCounts = supplierImpactCountMap(warehouse, warehouse.suppliers || []);
     response.json({
       suppliers: (warehouse.suppliers || []).map((supplier) => ({
         ...supplier,
-        impactProductCount: supplierImpactCount(warehouse, supplier),
+        impactProductCount: impactCounts.get(supplier.id) || 0,
       })),
       supplierSync,
     });
@@ -11247,6 +11288,9 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
 }
 
 function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_prices_detected") {
+  const isPassiveWarehouseView = String(reason || "").startsWith("warehouse_page_")
+    || String(reason || "").startsWith("warehouse_view_");
+  if (isPassiveWarehouseView && process.env.AUTO_PRICE_FROM_WAREHOUSE_PAGE_ENABLED !== "true") return 0;
   const now = Date.now();
   const cooldownMs = Math.max(
     10_000,
