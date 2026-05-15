@@ -5315,6 +5315,7 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
     warnings.push(`Yandex: не удалось разархивировать ${restoreFailed.length} карточек перед отправкой остатков`);
   }
 
+  const failedStockWarningKeys = new Set();
   for (const shop of shops) {
     const stockChunkSize = Math.max(1, Math.min(500, Number(process.env.YANDEX_STOCK_CHUNK_SIZE || 100) || 100));
     for (const chunk of chunkArray(selected, stockChunkSize)) {
@@ -5324,7 +5325,11 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
         results.push({ target: shop.id, sent: chunk.length, ok: true });
       } catch (error) {
         const label = error?.message || error?.code || "ошибка API";
-        warnings.push(`Yandex «${shop.name || shop.id}»: остатки не отправлены (${label})`);
+        const warningKey = `${shop.id || shop.name}:${label}`;
+        if (!failedStockWarningKeys.has(warningKey)) {
+          failedStockWarningKeys.add(warningKey);
+          warnings.push(`Yandex «${shop.name || shop.id}»: остатки не отправлены (${label})`);
+        }
         results.push(...chunk.map((item) => ({
           stage: "stock",
           offerId: item.offerId,
@@ -5339,10 +5344,13 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
   }
 
   const failed = results.filter((item) => item.ok === false).length;
+  const sent = results.reduce((total, item) => total + Number(item.sent || 0), 0);
+  const partial = failed > 0 && sent > 0;
   return {
     ok: failed === 0,
+    partial,
     dryRun,
-    sent: results.reduce((total, item) => total + Number(item.sent || 0), 0),
+    sent,
     failed,
     skipped: rows.length - selected.length,
     planned: selected.length,
@@ -11735,13 +11743,14 @@ function startOperationJob(job) {
     await upsertOperationJob(current).catch((error) => logger.warn("operation job start write failed", { detail: error?.message || String(error) }));
     try {
       const result = await runOperationPayload(current);
+      const partial = result?.partial === true;
       current = normalizeOperationJob({
         ...current,
-        status: result?.ok === false ? "failed" : "completed",
+        status: result?.ok === false && !partial ? "failed" : "completed",
         finishedAt: new Date().toISOString(),
         progress: 100,
         result,
-        error: result?.ok === false ? "operation finished with errors" : "",
+        error: result?.ok === false ? (partial ? "operation finished partially" : "operation finished with errors") : "",
       });
     } catch (error) {
       current = normalizeOperationJob({

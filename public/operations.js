@@ -51,6 +51,7 @@ function statusLabel(status) {
 function jobSummary(job = {}) {
   const result = job.result || {};
   const parts = [];
+  if (result.partial) parts.push("частично");
   if (Number.isFinite(Number(result.sent))) parts.push(`карточки ${result.sent}/${result.failed || 0}`);
   if (Number.isFinite(Number(result.priceSent))) parts.push(`цены ${result.priceSent}/${result.priceFailed || 0}`);
   if (Number.isFinite(Number(result.stockSent))) parts.push(`остатки ${result.stockSent}/${result.stockFailed || 0}`);
