@@ -1769,6 +1769,7 @@ function mergeWarehouseProduct(product, options = {}) {
       status: product.status || current.status,
       missingInPriceMaster: product.missingInPriceMaster ?? current.missingInPriceMaster,
       lastOzonPriceSend: product.lastOzonPriceSend || current.lastOzonPriceSend,
+      lastYandexPriceSend: product.lastYandexPriceSend || current.lastYandexPriceSend,
       noSupplierAutomation: product.noSupplierAutomation || current.noSupplierAutomation,
     };
   } else if (index >= 0) state.warehouse[index] = product;
@@ -2191,8 +2192,25 @@ function lastOzonSendStatusLabel(status) {
   return text || "—";
 }
 
+function lastYandexSendStatusLabel(status) {
+  return lastOzonSendStatusLabel(status);
+}
+
 function priceHistoryEntryToLastOzonSend(entry = {}) {
   if (!entry || String(entry.marketplace || "").toLowerCase() !== "ozon") return null;
+  const status = String(entry.status || (entry.error ? "error" : "success")).toLowerCase();
+  return {
+    status: status === "failed" ? "error" : status,
+    at: entry.at || entry.createdAt || "",
+    requestedPrice: entry.newPrice || entry.price || null,
+    cabinetPriceAtSend: entry.oldPrice || null,
+    detail: entry.error || "",
+    nextRetryAt: entry.nextRetryAt || "",
+  };
+}
+
+function priceHistoryEntryToLastYandexSend(entry = {}) {
+  if (!entry || String(entry.marketplace || "").toLowerCase() !== "yandex") return null;
   const status = String(entry.status || (entry.error ? "error" : "success")).toLowerCase();
   return {
     status: status === "failed" ? "error" : status,
@@ -2221,6 +2239,27 @@ function renderLastOzonSendMetric(product = {}, overrideSend = null) {
     <div class="last-price-send last-price-send-live ${status ? `last-price-send--${escapeHtml(status)}` : ""}">
       <span>Ozon send</span>
       <strong><b class="retry-state ${statusClass}">${escapeHtml(lastOzonSendStatusLabel(status))}</b></strong>
+      <small>${escapeHtml(detailParts.join(" · "))}${detail ? ` · ${escapeHtml(detail)}` : ""}</small>
+    </div>
+  `;
+}
+
+function renderLastYandexSendMetric(product = {}, overrideSend = null) {
+  const localHistorySend = normalizeDetailPriceHistoryEntries([product])
+    .map(priceHistoryEntryToLastYandexSend)
+    .find(Boolean);
+  const send = overrideSend || product.lastYandexPriceSend || localHistorySend || {};
+  const status = String(send.status || "").toLowerCase();
+  const detailParts = [];
+  if (send.at) detailParts.push(formatDate(send.at));
+  if (send.nextRetryAt) detailParts.push(`повтор ${formatDate(send.nextRetryAt)}`);
+  if (send.requestedPrice) detailParts.push(`цена ${formatMoney(send.requestedPrice)}`);
+  const detail = send.detail && status !== "success" ? String(send.detail) : "";
+  const statusClass = priceHistoryStatusClass(status || "pending");
+  return `
+    <div class="last-price-send last-yandex-price-send-live ${status ? `last-price-send--${escapeHtml(status)}` : ""}">
+      <span>Yandex send</span>
+      <strong><b class="retry-state ${statusClass}">${escapeHtml(lastYandexSendStatusLabel(status))}</b></strong>
       <small>${escapeHtml(detailParts.join(" · "))}${detail ? ` · ${escapeHtml(detail)}` : ""}</small>
     </div>
   `;
@@ -2278,9 +2317,14 @@ async function loadDetailPriceHistory(group) {
     const rows = data.items || [];
     container.innerHTML = renderPriceHistoryRows(rows, { emptyText: "История появится после первой отправки цен." });
     const latestOzonSend = rows.map(priceHistoryEntryToLastOzonSend).find(Boolean);
+    const latestYandexSend = rows.map(priceHistoryEntryToLastYandexSend).find(Boolean);
     const sendMetric = document.querySelector(".last-price-send-live");
+    const yandexSendMetric = document.querySelector(".last-yandex-price-send-live");
     if (latestOzonSend && sendMetric) {
       sendMetric.outerHTML = renderLastOzonSendMetric({}, latestOzonSend);
+    }
+    if (latestYandexSend && yandexSendMetric) {
+      yandexSendMetric.outerHTML = renderLastYandexSendMetric({}, latestYandexSend);
     }
   } catch (_error) {
     if (token !== state.priceHistoryRequestToken || !document.body.contains(container)) return;
@@ -2383,6 +2427,7 @@ function renderWarehouseDetail(group, { force = false } = {}) {
   const linkDraftKeyValue = productIdsDraftKey(groupProductIds);
   const pendingLinks = getPendingLinkDrafts(linkDraftKeyValue);
   const ozonForAi = ozonVariant || (product.marketplace === "ozon" ? product : null);
+  const hasYandexSendMetric = Boolean(yandexVariant || product.lastYandexPriceSend);
   const localPriceHistoryRows = normalizeDetailPriceHistoryEntries(variants);
   const updateNotice = state.selectedWarehouseUpdateNotice?.groupKey === group.key
     ? state.selectedWarehouseUpdateNotice
@@ -2441,6 +2486,7 @@ function renderWarehouseDetail(group, { force = false } = {}) {
       <div><span>Наценка</span><strong>${Number(product.markupCoefficient || 0).toFixed(2)}</strong></div>
       <div><span>Целевой остаток</span><strong>${Number(product.targetStock || 0) || "—"}</strong></div>
       ${renderLastOzonSendMetric(product)}
+      ${hasYandexSendMetric ? renderLastYandexSendMetric(product) : ""}
     </div>
 
     <section class="detail-section">

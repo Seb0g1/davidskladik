@@ -95,7 +95,7 @@ const ozonWarehouseListEnabled = process.env.OZON_WAREHOUSE_LIST_ENABLED === "tr
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 10000) || 10000));
-const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 2000) || 2000));
+const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const telegramBotToken = cleanText(process.env.TELEGRAM_BOT_TOKEN);
 const telegramChatId = cleanText(process.env.TELEGRAM_CHAT_ID);
@@ -1945,15 +1945,44 @@ function normalizeOzonPriceDetails(input = {}) {
   });
 }
 
+function normalizeLastPriceSend(input = {}) {
+  if (!input || typeof input !== "object") return null;
+  if (!Object.keys(input).length) return null;
+  const status = cleanText(input.status || "").toLowerCase();
+  const at = cleanText(input.at || input.sentAt || input.updatedAt);
+  const requestedPrice = Number(input.requestedPrice ?? input.price ?? input.newPrice ?? 0);
+  const cabinetPriceAtSend = Number(input.cabinetPriceAtSend ?? input.oldPrice ?? 0);
+  const oldPriceForRetry = Number(input.oldPriceForRetry ?? 0);
+  const detail = cleanText(input.detail || input.error);
+  const nextRetryAt = cleanText(input.nextRetryAt || input.retryAt);
+  if (!status && !at && !detail && !nextRetryAt && !Number.isFinite(requestedPrice) && !Number.isFinite(cabinetPriceAtSend)) return null;
+  return {
+    status: status || null,
+    at: at || null,
+    requestedPrice: Number.isFinite(requestedPrice) && requestedPrice > 0 ? roundPrice(requestedPrice) : null,
+    cabinetPriceAtSend: Number.isFinite(cabinetPriceAtSend) && cabinetPriceAtSend > 0 ? roundPrice(cabinetPriceAtSend) : null,
+    oldPriceForRetry: Number.isFinite(oldPriceForRetry) && oldPriceForRetry > 0 ? roundPrice(oldPriceForRetry) : null,
+    detail: detail || "",
+    nextRetryAt: nextRetryAt || null,
+  };
+}
+
 function normalizeWarehouseProduct(input = {}) {
   const target = cleanText(input.target || input.marketplace || "ozon");
   const inputMarketplace = cleanText(input.marketplace || input.marketplace_id || "").toLowerCase();
-  const fallbackMarketplace = inputMarketplace === "yandex" || target === "yandex" ? "yandex" : "ozon";
-  const targetMeta = targetById(target) || { id: target, marketplace: fallbackMarketplace, name: target };
+  const normalizedTarget = target.toLowerCase();
+  const fallbackMarketplace = inputMarketplace === "yandex" || normalizedTarget === "yandex" || normalizedTarget.startsWith("yandex-") ? "yandex" : "ozon";
+  const targetMeta = targetById(target) || {
+    id: target,
+    marketplace: fallbackMarketplace,
+    name: fallbackMarketplace === "yandex" ? "Yandex Market" : target,
+  };
   const ozonDraft = normalizeOzonDraft(input.ozon || input.ozonDraft || {});
   const yandexDraft = normalizeYandexDraft(input.yandex || input.yandexDraft || {});
   const imageUrl = firstImageUrl(input.imageUrl || input.image || input.primaryImage || ozonDraft.primaryImage || ozonDraft.images || yandexDraft.pictures);
   const name = cleanText(input.name || ozonDraft.name || yandexDraft.name || input.offerId || input.offer_id);
+  const rawMarkup = Number(input.markup || 0);
+  const keepYandexMarkup = Boolean(input.markupSource === "manual" || input.yandex?.extra?.manualMarkup === true);
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
     target: targetMeta.id,
@@ -1967,15 +1996,20 @@ function normalizeWarehouseProduct(input = {}) {
     imageUrl,
     marketplacePrice: Number(input.marketplacePrice ?? input.currentPrice ?? input.current_price ?? 0) || null,
     marketplaceMinPrice: Number(input.marketplaceMinPrice ?? input.minPrice ?? input.min_price ?? input.ozonMinPrice ?? 0) || null,
+    currentPrice: Number(input.currentPrice ?? input.marketplacePrice ?? input.current_price ?? 0) || null,
+    targetPrice: Number(input.targetPrice ?? input.nextPrice ?? input.calculatedPrice ?? 0) || null,
+    targetStock: Number.isFinite(Number(input.targetStock)) ? Number(input.targetStock) : null,
     name,
     keyword: cleanText(input.keyword),
-    markup: Number(input.markup || 0),
+    markup: targetMeta.marketplace === "yandex" && !keepYandexMarkup ? 0 : rawMarkup,
     autoPriceEnabled: input.autoPriceEnabled !== undefined ? Boolean(input.autoPriceEnabled) : true,
     autoPriceMin: Number.isFinite(Number(input.autoPriceMin)) && Number(input.autoPriceMin) > 0 ? roundPrice(Number(input.autoPriceMin)) : null,
     autoPriceMax: Number.isFinite(Number(input.autoPriceMax)) && Number(input.autoPriceMax) > 0 ? roundPrice(Number(input.autoPriceMax)) : null,
     source: cleanText(input.source || (input.productId || input.product_id ? "marketplace" : "manual")),
     ozon: ozonDraft,
     yandex: yandexDraft,
+    lastOzonPriceSend: normalizeLastPriceSend(input.lastOzonPriceSend || input.last_ozon_price_send),
+    lastYandexPriceSend: normalizeLastPriceSend(input.lastYandexPriceSend || input.last_yandex_price_send),
     marketplaceState: normalizeMarketplaceState(input.marketplaceState || input.marketplace_state || input.ozonState),
     exports: normalizeProductExports(input.exports),
     aiImages: normalizeAiImageDrafts(input.aiImages || input.ai_images || input.imageDrafts),
@@ -3056,9 +3090,10 @@ async function getExistingYandexOfferIdSet(offerIds = []) {
   return existing;
 }
 
-function uniqueYandexShopsByBusiness() {
+function uniqueYandexShopsByBusiness(shops = null) {
   const seenBusinesses = new Set();
-  return getYandexShops().filter((shop) => {
+  const source = Array.isArray(shops) && shops.length ? shops : getYandexShops();
+  return source.filter((shop) => {
     if (!shop.apiKey || !shop.businessId) return false;
     const key = String(shop.businessId);
     if (seenBusinesses.has(key)) return false;
@@ -3069,9 +3104,13 @@ function uniqueYandexShopsByBusiness() {
 
 async function sendYandexOfferMappings(shop, offers = []) {
   const results = [];
-  const prepared = (Array.isArray(offers) ? offers : [])
-    .map((offer) => ({ ...offer, offerId: cleanText(offer.offerId) }))
-    .filter((offer) => offer.offerId);
+  const deduped = new Map();
+  for (const offer of Array.isArray(offers) ? offers : []) {
+    const normalizedOfferId = cleanText(offer.offerId).toLowerCase();
+    if (!normalizedOfferId) continue;
+    deduped.set(normalizedOfferId, { ...offer, offerId: cleanText(offer.offerId) });
+  }
+  const prepared = Array.from(deduped.values());
   for (const chunk of chunkArray(prepared, 100)) {
     if (!chunk.length) continue;
     try {
@@ -3117,18 +3156,196 @@ async function sendYandexOfferMappings(shop, offers = []) {
   return results;
 }
 
-function buildYandexPriceUpdateFromOzonProduct(product = {}) {
-  const normalized = normalizeWarehouseProduct(product);
-  const built = buildYandexOfferMapping(normalized);
-  const offerId = cleanText(built.offer?.offerId || normalized.offerId || normalized.offer_id);
-  const price = Number(
-    built.offer?.basicPrice?.value ||
-      normalized.marketplacePrice ||
-      normalized.targetPrice ||
-      normalized.ozon?.price ||
-      normalized.price ||
+function yandexTargetOfferKey(target = "", offerId = "") {
+  return `${cleanText(target).toLowerCase()}::${cleanText(offerId).toLowerCase()}`;
+}
+
+function marketplaceProductMarkupOverride(product = {}) {
+  const markup = Number(product?.markup || 0);
+  if (!Number.isFinite(markup) || markup <= 0) return 0;
+  const marketplace = cleanText(product?.marketplace || product?.target || "").toLowerCase();
+  if (marketplace === "yandex") {
+    const manual = product?.markupSource === "manual" || product?.yandex?.extra?.manualMarkup === true;
+    return manual ? markup : 0;
+  }
+  return markup;
+}
+
+function yandexExportProductMarkup(sourceProduct = {}, yandexProduct = null) {
+  const yandexMarkup = marketplaceProductMarkupOverride(yandexProduct);
+  const sourceMarkup = marketplaceProductMarkupOverride(sourceProduct);
+  if (!Number.isFinite(yandexMarkup) || yandexMarkup <= 0) return 0;
+  if (sourceMarkup > 0 && Math.abs(yandexMarkup - sourceMarkup) < 0.0001) return 0;
+  return yandexMarkup;
+}
+
+function yandexPriceUpdateResultKey(result = {}) {
+  return yandexTargetOfferKey(result.target || result.shopId || "", result.offerId || result.offer_id || "");
+}
+
+function applyYandexPriceSendToWarehouse(warehouse = {}, shop = {}, row = {}, sentAt = new Date().toISOString()) {
+  const products = Array.isArray(warehouse.products) ? warehouse.products : [];
+  const offerId = cleanText(row.offerId || row.offer_id);
+  const price = Number(row.price?.value || row.price || 0);
+  if (!offerId || !shop?.id || !Number.isFinite(price) || price <= 0) return false;
+  const product = products.find((item) => {
+    const normalized = normalizeWarehouseProduct(item);
+    return normalized.marketplace === "yandex"
+      && normalized.target === shop.id
+      && cleanText(normalized.offerId).toLowerCase() === offerId.toLowerCase();
+  });
+  if (!product) return false;
+  const cabinetPriceAtSend = Number(product.marketplacePrice || product.currentPrice || 0) || null;
+  product.marketplacePrice = roundPrice(price);
+  product.currentPrice = roundPrice(price);
+  product.targetPrice = roundPrice(price);
+  if (Number.isFinite(Number(row.targetStock))) product.targetStock = Math.max(0, Math.round(Number(row.targetStock)));
+  product.yandex = { ...(product.yandex || {}), offerId, price: roundPrice(price) };
+  product.lastYandexPriceSend = {
+    status: "success",
+    at: sentAt,
+    requestedPrice: roundPrice(price),
+    cabinetPriceAtSend: cabinetPriceAtSend ? roundPrice(cabinetPriceAtSend) : null,
+    detail: "",
+    nextRetryAt: null,
+  };
+  product.updatedAt = sentAt;
+  return true;
+}
+
+async function buildYandexPriceOverrideLookup(products = [], shops = [], warehouse = {}, yandexPriceLookup = new Map()) {
+  const overrides = new Map();
+  const sourceProducts = Array.isArray(products) ? products.map(normalizeWarehouseProduct) : [];
+  if (!sourceProducts.length || !shops.length) return overrides;
+
+  let appSettings = { defaultMarkups: { yandex: Number(process.env.DEFAULT_YANDEX_MARKUP || 1.6) }, markupRules: [] };
+  try {
+    appSettings = await readAppSettings();
+  } catch (_error) {
+    // Default markup is enough for this fallback path.
+  }
+  const rateSource = appSettings.fixedUsdRate || (await getUsdRate().catch(() => ({ rate: process.env.DEFAULT_USD_RATE || 95 }))).rate;
+  const rate = Number(rateSource || process.env.DEFAULT_USD_RATE || 95);
+  const allLinks = [];
+  for (const product of sourceProducts) {
+    allLinks.push(...(Array.isArray(product.links) ? product.links : []));
+    for (const shop of shops) {
+      const yandexProduct = yandexPriceLookup.get(yandexTargetOfferKey(shop.id, product.offerId));
+      allLinks.push(...(Array.isArray(yandexProduct?.links) ? yandexProduct.links : []));
+    }
+  }
+  let matchMap = new Map();
+  if (allLinks.length) {
+    try {
+      matchMap = await getPriceMasterMatchesForLinks(allLinks, warehouse.suppliers || [], rate);
+    } catch (error) {
+      logger.warn("yandex import PriceMaster price calculation skipped", { detail: error?.message || String(error) });
+    }
+  }
+
+  for (const product of sourceProducts) {
+    if (!product.offerId) continue;
+    for (const shop of shops) {
+      const lookupKey = yandexTargetOfferKey(shop.id, product.offerId);
+      const yandexProduct = yandexPriceLookup.get(lookupKey) || null;
+      const yandexLinks = Array.isArray(yandexProduct?.links) && yandexProduct.links.length ? yandexProduct.links : product.links;
+      const markupOverride = yandexExportProductMarkup(product, yandexProduct);
+      const suppliers = (Array.isArray(yandexLinks) ? yandexLinks.map(normalizeWarehouseLink) : [])
+        .flatMap((link) => (matchMap.get(link.id) || []).map((match) => {
+          const markupCoefficient = resolveMarkupCoefficient({
+            productMarkup: markupOverride,
+            marketplace: "yandex",
+            supplierUsdPrice: match.price,
+            appSettings,
+          });
+          return {
+            ...match,
+            markupCoefficient,
+            calculatedPrice: calculateRubPrice(match.price, rate, markupCoefficient),
+          };
+        }));
+      const availableSupplierCount = suppliers.filter((supplier) => supplier.available).length;
+      const selectedSupplier = pickWarehouseSupplier(suppliers);
+      if (selectedSupplier) {
+        const availabilityPolicy = resolveAvailabilityPolicy({
+          marketplace: "yandex",
+          availableSupplierCount,
+          baseMarkup: Number(selectedSupplier.markupCoefficient || 0),
+          appSettings,
+        });
+        const markupCoefficient = Number(availabilityPolicy.markupCoefficient || selectedSupplier.markupCoefficient || 0);
+        const price = calculateRubPrice(selectedSupplier.price, rate, markupCoefficient);
+        if (price > 0) {
+          overrides.set(lookupKey, {
+            price,
+            markupCoefficient,
+            targetStock: Number.isFinite(Number(availabilityPolicy.targetStock)) ? availabilityPolicy.targetStock : null,
+            source: "pricemaster",
+          });
+          continue;
+        }
+      }
+
+      const persistedPrice = Number(
+        yandexProduct?.targetPrice ||
+          yandexProduct?.nextPrice ||
+          yandexProduct?.marketplacePrice ||
+          yandexProduct?.currentPrice ||
+          0,
+      ) || 0;
+      if (persistedPrice > 0) {
+        overrides.set(lookupKey, {
+          price: persistedPrice,
+          markupCoefficient: Number(yandexProduct?.markupCoefficient || yandexProduct?.markup || 0) || null,
+          targetStock: Number.isFinite(Number(yandexProduct?.targetStock)) ? yandexProduct.targetStock : null,
+          source: "yandex_row",
+        });
+      }
+    }
+  }
+
+  return overrides;
+}
+
+function buildYandexPriceUpdateFromOzonProduct(product = {}, {
+  yandexProduct = null,
+  priceOverride = null,
+  allowSourceFallback = true,
+} = {}) {
+  const normalized = normalizeWarehouseProduct(yandexProduct || product);
+  const hasYandexProduct = Boolean(yandexProduct && Object.keys(yandexProduct).length);
+  const forcedPrice = Number(priceOverride || 0) || 0;
+  const overridePrice = Number(
+    forcedPrice ||
+      yandexProduct?.nextPrice ||
+      yandexProduct?.targetPrice ||
+      yandexProduct?.marketplacePrice ||
+      yandexProduct?.currentPrice ||
       0,
-  );
+  ) || 0;
+  const built = buildYandexOfferMapping(normalized, overridePrice > 0 ? { price: overridePrice } : {});
+  const offerId = cleanText(built.offer?.offerId || normalized.offerId || normalized.offer_id);
+  const priceCandidates = [
+    forcedPrice,
+    yandexProduct?.nextPrice,
+    yandexProduct?.targetPrice,
+    yandexProduct?.marketplacePrice,
+    yandexProduct?.currentPrice,
+  ];
+  if (allowSourceFallback || hasYandexProduct) {
+    priceCandidates.push(
+      built.offer?.basicPrice?.value,
+      normalized.nextPrice,
+      normalized.targetPrice,
+      normalized.marketplacePrice,
+      normalized.currentPrice,
+      normalized.ozon?.price,
+      normalized.price,
+    );
+  }
+  const price = priceCandidates
+    .map((value) => Number(value))
+    .find((value) => Number.isFinite(value) && value > 0) || 0;
   const rounded = roundPrice(price);
   if (!offerId || !Number.isFinite(rounded) || rounded <= 0) return null;
   return { id: normalized.id, offerId, price: { value: rounded, currencyId: "RUR" } };
@@ -3140,17 +3357,45 @@ async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
   const shops = Array.isArray(options.shops) && options.shops.length
     ? options.shops
     : uniqueYandexShopsByBusiness();
-  const rows = (Array.isArray(products) ? products : [])
-    .map(buildYandexPriceUpdateFromOzonProduct)
+  const sourceProducts = Array.isArray(products) ? products : [];
+  const sourceWarehouse = options.warehouse || (await readWarehouse().catch((error) => {
+    logger.warn("read warehouse before yandex price send failed", { detail: error?.message || String(error) });
+    return { products: [] };
+  }));
+  const yandexPriceLookup = new Map();
+  for (const item of Array.isArray(sourceWarehouse.products) ? sourceWarehouse.products : []) {
+    const normalized = normalizeWarehouseProduct(item);
+    if (normalized.marketplace !== "yandex" || !normalized.offerId || !normalized.target) continue;
+    yandexPriceLookup.set(yandexTargetOfferKey(normalized.target, normalized.offerId), normalized);
+  }
+  const priceOverrides = shops.length
+    ? await buildYandexPriceOverrideLookup(sourceProducts, shops, sourceWarehouse, yandexPriceLookup)
+    : new Map();
+  const requestedPriceRows = sourceProducts.length;
+  const rows = sourceProducts
+    .map((product) => {
+      const normalized = normalizeWarehouseProduct(product);
+      const primaryShop = shops[0] || {};
+      const lookupKey = yandexTargetOfferKey(primaryShop.id, normalized.offerId);
+      const override = priceOverrides.get(lookupKey) || null;
+      return buildYandexPriceUpdateFromOzonProduct(product, {
+        yandexProduct: yandexPriceLookup.get(lookupKey) || null,
+        priceOverride: override?.price || null,
+        allowSourceFallback: false,
+      });
+    })
     .filter(Boolean);
 
   if (!rows.length || !shops.length) {
+    if (shops.length && requestedPriceRows && !rows.length) {
+      warnings.push("Yandex: price send skipped, no calculated Yandex price was available.");
+    }
     return {
       ok: true,
       dryRun,
       sent: 0,
       failed: 0,
-      skipped: rows.length,
+      skipped: shops.length ? requestedPriceRows : rows.length,
       warnings: shops.length ? warnings : ["Yandex Market не настроен."],
       results: [],
     };
@@ -3181,7 +3426,8 @@ async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
       dryRun,
       sent: 0,
       failed: 0,
-      skipped: rows.length - selected.length,
+      skipped: Math.max(0, requestedPriceRows - selected.length),
+      skippedNoPrice: Math.max(0, requestedPriceRows - rows.length),
       planned: selected.length,
       warnings,
       results: selected.map((row) => ({ ...row, ok: true, stage: "price", dryRun: true })),
@@ -3189,17 +3435,45 @@ async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
   }
 
   for (const shop of shops) {
-    for (const chunk of chunkArray(selected, 500)) {
+    const shopRows = sourceProducts
+      .map((product) => {
+        const normalized = normalizeWarehouseProduct(product);
+        const lookupKey = yandexTargetOfferKey(shop.id, normalized.offerId);
+        const override = priceOverrides.get(lookupKey) || null;
+        const row = buildYandexPriceUpdateFromOzonProduct(product, {
+          yandexProduct: yandexPriceLookup.get(lookupKey) || null,
+          priceOverride: override?.price || null,
+          allowSourceFallback: false,
+        });
+        return row ? {
+          ...row,
+          sourceId: normalized.id,
+          targetStock: override?.targetStock ?? null,
+          markupCoefficient: override?.markupCoefficient ?? null,
+          priceSource: override?.source || "",
+        } : null;
+      })
+      .filter(Boolean)
+      .filter((row) => existingOfferIds.has(row.offerId.toLowerCase()));
+
+    for (const chunk of chunkArray(shopRows, 500)) {
       if (!chunk.length) continue;
       try {
+        const sentAt = new Date().toISOString();
         await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-prices/updates`, {
           offers: chunk.map((item) => ({ offerId: item.offerId, price: item.price })),
         });
+        for (const item of chunk) applyYandexPriceSendToWarehouse(sourceWarehouse, shop, item, sentAt);
         results.push(...chunk.map((item) => ({
           stage: "price",
+          sourceId: item.sourceId,
           offerId: item.offerId,
           target: shop.id,
           targetName: shop.name || "Yandex Market",
+          price: item.price?.value || null,
+          targetStock: item.targetStock,
+          markupCoefficient: item.markupCoefficient,
+          priceSource: item.priceSource,
           ok: true,
         })));
       } catch (error) {
@@ -3207,9 +3481,14 @@ async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
         warnings.push(`Yandex «${shop.name || shop.id}»: цены не отправлены (${label})`);
         results.push(...chunk.map((item) => ({
           stage: "price",
+          sourceId: item.sourceId,
           offerId: item.offerId,
           target: shop.id,
           targetName: shop.name || "Yandex Market",
+          price: item.price?.value || null,
+          targetStock: item.targetStock,
+          markupCoefficient: item.markupCoefficient,
+          priceSource: item.priceSource,
           ok: false,
           error: label,
         })));
@@ -3223,7 +3502,8 @@ async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
     dryRun,
     sent: results.filter((item) => item.ok).length,
     failed,
-    skipped: rows.length - selected.length,
+    skipped: Math.max(0, requestedPriceRows - selected.length),
+    skippedNoPrice: Math.max(0, requestedPriceRows - rows.length),
     planned: selected.length,
     warnings,
     results,
@@ -3334,8 +3614,21 @@ function yandexWarehouseProductId(shop = {}, offerId = "") {
 function buildYandexWarehouseProductFromOzonExport(product = {}, shop = {}, exportState = {}) {
   const normalized = normalizeWarehouseProduct(product);
   const offerId = cleanText(normalized.offerId);
-  const price = Number(product.targetPrice || product.newPrice || normalized.marketplacePrice || normalized.ozon?.price || 0) || null;
-  const stock = pickOzonProductStockForYandex(normalized);
+  const price = Number(exportState.price || exportState.targetPrice || 0) || null;
+  const sentAt = exportState.sentAt || new Date().toISOString();
+  const lastYandexPriceSend = price > 0
+    ? {
+        status: "success",
+        at: sentAt,
+        requestedPrice: price,
+        cabinetPriceAtSend: null,
+        detail: "",
+        nextRetryAt: null,
+      }
+    : null;
+  const stock = Number.isFinite(Number(exportState.stock))
+    ? Math.max(0, Math.round(Number(exportState.stock)))
+    : pickOzonProductStockForYandex(normalized);
   const pictures = [
     ...new Set([
       ...([normalized.imageUrl].filter(Boolean)),
@@ -3357,10 +3650,14 @@ function buildYandexWarehouseProductFromOzonExport(product = {}, shop = {}, expo
     imageUrl: normalized.imageUrl || firstImageUrl(pictures),
     productUrl: normalized.yandex?.url || "",
     marketplacePrice: price,
-    markup: normalized.markup,
+    currentPrice: price,
+    targetPrice: price,
+    targetStock: stock,
+    markup: Number(exportState.productMarkup || 0) || 0,
     autoPriceEnabled: normalized.autoPriceEnabled,
     autoPriceMin: normalized.autoPriceMin,
     autoPriceMax: normalized.autoPriceMax,
+    lastYandexPriceSend,
     source: "marketplace",
     yandex: {
       ...(normalized.yandex || {}),
@@ -3377,7 +3674,7 @@ function buildYandexWarehouseProductFromOzonExport(product = {}, shop = {}, expo
         shopId: shop.id || "",
         businessId: shop.businessId || "",
         campaignId: shop.campaignId || "",
-        exportedAt: exportState.sentAt || new Date().toISOString(),
+        exportedAt: sentAt,
       },
     },
     marketplaceState: {
@@ -3393,7 +3690,7 @@ function buildYandexWarehouseProductFromOzonExport(product = {}, shop = {}, expo
     },
     links: Array.isArray(normalized.links) ? normalized.links : [],
     createdAt: normalized.createdAt,
-    updatedAt: exportState.sentAt || new Date().toISOString(),
+    updatedAt: sentAt,
   });
 }
 
@@ -3529,7 +3826,12 @@ async function refreshYandexExistingOfferIdCache({ limit = Number(process.env.YA
   return writeYandexExistingOfferIdCache(set);
 }
 
-async function getKnownYandexExistingOfferIds(offerIds = [], { products = [], warnings = [], allowCatalogRefresh = false } = {}) {
+async function getKnownYandexExistingOfferIds(offerIds = [], {
+  products = [],
+  warnings = [],
+  allowCatalogRefresh = false,
+  allowDirectCheck = true,
+} = {}) {
   const set = new Set([
     ...await readYandexExistingOfferIdCache(),
     ...getLocalYandexExportedOfferIdSet(products),
@@ -3551,7 +3853,7 @@ async function getKnownYandexExistingOfferIds(offerIds = [], { products = [], wa
     }
   }
   const normalizedOfferIds = Array.from(new Set((offerIds || []).map(cleanText).filter(Boolean)));
-  if (normalizedOfferIds.length) {
+  if (allowDirectCheck && normalizedOfferIds.length) {
     const checkTimeoutMs = Math.max(1000, Number(process.env.OZON_YANDEX_EXISTING_CHECK_TIMEOUT_MS || 8000) || 8000);
     try {
       const direct = await Promise.race([
@@ -4494,7 +4796,15 @@ function buildYandexOfferMapping(product, overrides = {}) {
     ]),
   );
   const barcodes = Array.from(new Set([...splitList(yandex.barcodes), ...splitList(ozon.barcode), ...splitList(ozon.barcodes)]));
-  const price = Number(yandex.price || ozon.price || overrides.price || 0);
+  const price = Number(
+    overrides.price ||
+      yandex.price ||
+      product.targetPrice ||
+      product.nextPrice ||
+      product.marketplacePrice ||
+      ozon.price ||
+      0,
+  );
   const extra = parseJsonField(yandex.extra, {});
   const offer = compactObject({
     offerId: cleanText(overrides.offerId || yandex.offerId || product.offerId),
@@ -4841,6 +5151,28 @@ function buildYandexStockUpdatePayload(rows = [], updatedAt = new Date().toISOSt
   return { skus };
 }
 
+function buildYandexStockRestoreProducts(rows = [], shops = null) {
+  const positiveRows = (Array.isArray(rows) ? rows : [])
+    .map((row) => ({
+      offerId: cleanText(row.offerId || row.offer_id),
+      stock: Math.max(0, Math.round(Number(row.stock ?? row.targetStock ?? 0) || 0)),
+    }))
+    .filter((row) => row.offerId && row.stock > 0);
+  const restoreShops = uniqueYandexShopsByBusiness(shops);
+  return restoreShops.flatMap((shop) => positiveRows.map((row) => ({
+    id: yandexWarehouseProductId(shop, row.offerId),
+    marketplace: "yandex",
+    target: shop.id || "yandex",
+    offerId: row.offerId,
+  })));
+}
+
+async function restoreYandexArchivedStocks(rows = [], shops = null) {
+  const restoreProducts = buildYandexStockRestoreProducts(rows, shops);
+  if (!restoreProducts.length) return [];
+  return unarchiveProductsOnMarketplaces(restoreProducts);
+}
+
 function yandexStockShops(shops = null) {
   const source = Array.isArray(shops) && shops.length ? shops : getYandexShops();
   return source.flatMap((shop) => parseYandexCampaignIds(shop.campaignId || shop.campaign_id).map((campaignId, index) => ({
@@ -4925,6 +5257,11 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
   const results = [];
   if (dryRun) {
     return { ok: true, dryRun, sent: 0, skipped: rows.length - selected.length, planned: selected.length, warnings, results: selected };
+  }
+  const restoreActions = await restoreYandexArchivedStocks(selected, allShops);
+  const restoreFailed = restoreActions.filter((item) => !item.ok);
+  if (restoreFailed.length) {
+    warnings.push(`Yandex: не удалось разархивировать ${restoreFailed.length} карточек перед отправкой остатков`);
   }
 
   for (const shop of shops) {
@@ -5704,6 +6041,7 @@ function productFromPostgres(row = {}) {
   const imageState = row.images && typeof row.images === "object" && !Array.isArray(row.images) ? row.images : {};
   const rowName = cleanText(row.name);
   const rawName = cleanText(raw.name || raw.ozon?.name || raw.yandex?.name);
+  const rowMarketplace = cleanText(row.marketplace || raw.marketplace || row.target || raw.target).toLowerCase();
   const effectiveName = isWeakProductName(rowName, row.offerId) && rawName && !isWeakProductName(rawName, row.offerId)
     ? rawName
     : rowName;
@@ -5726,7 +6064,9 @@ function productFromPostgres(row = {}) {
     });
   });
   const rawLinks = Array.isArray(raw.links) ? raw.links.map(normalizeWarehouseLink) : [];
-  const links = postgresLinksLoaded ? postgresLinks : rawLinks;
+  const links = postgresLinksLoaded
+    ? (postgresLinks.length > 0 || rowMarketplace !== "yandex" ? postgresLinks : rawLinks)
+    : rawLinks;
   return normalizeWarehouseProduct({
     ...raw,
     id: row.id,
@@ -5738,7 +6078,12 @@ function productFromPostgres(row = {}) {
     brand: row.brand || raw.brand,
     imageUrl: effectiveImageUrl,
     marketplacePrice: row.currentPrice ?? raw.marketplacePrice,
+    currentPrice: row.currentPrice ?? raw.currentPrice ?? raw.marketplacePrice,
+    targetPrice: row.targetPrice ?? raw.targetPrice ?? raw.nextPrice,
+    targetStock: row.targetStock ?? raw.targetStock,
     marketplaceState: row.marketplaceState || raw.marketplaceState,
+    status: row.status || raw.status,
+    archived: row.archived ?? raw.archived,
     links,
     createdAt: row.createdAt ? row.createdAt.toISOString() : raw.createdAt,
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : raw.updatedAt,
@@ -5791,7 +6136,7 @@ async function runWithLimitedConcurrency(items = [], concurrency = 1, worker) {
 }
 
 function warehousePostgresWriteConcurrency() {
-  return Math.max(1, Math.min(4, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CONCURRENCY || 2) || 2));
+  return Math.max(1, Math.min(2, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CONCURRENCY || 1) || 1));
 }
 
 async function replaceProductLinksInPostgres(prisma, products = []) {
@@ -5949,7 +6294,7 @@ async function readWarehouseFromPostgres(prisma) {
 async function writeWarehouseToPostgres(prisma, payload) {
   const products = Array.isArray(payload.products) ? payload.products : [];
   const suppliers = Array.isArray(payload.suppliers) ? payload.suppliers : [];
-  const chunkSize = Math.max(25, Math.min(500, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 250) || 250));
+  const chunkSize = Math.max(25, Math.min(250, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 100) || 100));
   const changedProducts = products.filter((product) =>
     !warehousePostgresHashCache.has(product.id)
     || cleanText(product.updatedAt) !== warehousePostgresUpdatedAtCache.get(product.id)
@@ -6243,6 +6588,32 @@ function mergeOzonDraftForWarehouseProduct(currentProduct = {}, importedProduct 
   return merged;
 }
 
+function mergeYandexDraftForWarehouseProduct(currentProduct = {}, importedProduct = {}) {
+  const current = currentProduct?.yandex || {};
+  const imported = importedProduct?.yandex || {};
+  const merged = { ...current, ...imported };
+  const currentHasLivePrice = Boolean(currentProduct?.lastYandexPriceSend?.status || currentProduct?.lastYandexPriceSend?.at);
+  if ((Number(imported.price || 0) <= 0 && Number(current.price || 0) > 0) || (currentHasLivePrice && Number(current.price || 0) > 0)) {
+    merged.price = current.price;
+  }
+  if (!cleanText(imported.name) && cleanText(current.name)) merged.name = current.name;
+  if (!cleanText(imported.description) && cleanText(current.description)) merged.description = current.description;
+  if (!cleanText(imported.vendor) && cleanText(current.vendor)) merged.vendor = current.vendor;
+  const importedPictures = Array.isArray(imported.pictures) ? imported.pictures : [];
+  const currentPictures = Array.isArray(current.pictures) ? current.pictures : [];
+  if (!importedPictures.length && currentPictures.length) merged.pictures = currentPictures;
+  const importedBarcodes = Array.isArray(imported.barcodes) ? imported.barcodes : [];
+  const currentBarcodes = Array.isArray(current.barcodes) ? current.barcodes : [];
+  if (!importedBarcodes.length && currentBarcodes.length) merged.barcodes = currentBarcodes;
+  if (current.extra && typeof current.extra === "object") {
+    merged.extra = {
+      ...current.extra,
+      ...(imported.extra && typeof imported.extra === "object" ? imported.extra : {}),
+    };
+  }
+  return merged;
+}
+
 function mergeProducts(existingProducts, importedProducts) {
   const map = new Map();
   const looseIndex = new Map();
@@ -6295,7 +6666,37 @@ function mergeProducts(existingProducts, importedProducts) {
     const preserveCurrentImage = Boolean(current?.imageUrl && !importedNormalized.imageUrl);
     const preserveCurrentProductUrl = Boolean(current?.productUrl && !importedNormalized.productUrl);
     const preserveCurrentSku = Boolean(current?.sku && !importedNormalized.sku);
-    const preserveCurrentPrice = Boolean(current?.marketplacePrice && !importedNormalized.marketplacePrice);
+    const currentHasLiveYandexPrice = Boolean(
+      current?.marketplace === "yandex"
+        && importedNormalized.marketplace === "yandex"
+        && (current?.lastYandexPriceSend?.status || current?.lastYandexPriceSend?.at),
+    );
+    const preserveCurrentYandexMarkup = Boolean(
+      current?.marketplace === "yandex"
+        && Number(current.markup || 0) > 0
+        && (
+          current?.markupSource === "manual"
+          || current?.yandex?.extra?.manualMarkup === true
+          || currentHasLiveYandexPrice
+        ),
+    );
+    const preserveCurrentPrice = Boolean(
+      currentHasLiveYandexPrice
+        || (current?.marketplacePrice && !importedNormalized.marketplacePrice),
+    );
+    const preserveCurrentCurrentPrice = Boolean(
+      currentHasLiveYandexPrice
+        || (current?.currentPrice && !importedNormalized.currentPrice),
+    );
+    const preserveCurrentTargetPrice = Boolean(
+      currentHasLiveYandexPrice
+        || (current?.targetPrice && !importedNormalized.targetPrice),
+    );
+    const preserveCurrentTargetStock = Boolean(
+      current?.targetStock !== null
+        && current?.targetStock !== undefined
+        && (importedNormalized.targetStock === null || importedNormalized.targetStock === undefined),
+    );
     const preserveCurrentMinPrice = Boolean(current?.marketplaceMinPrice && !importedNormalized.marketplaceMinPrice);
     const merged = normalizeWarehouseProduct({
       ...current,
@@ -6306,15 +6707,21 @@ function mergeProducts(existingProducts, importedProducts) {
       productUrl: preserveCurrentProductUrl ? current.productUrl : importedNormalized.productUrl,
       sku: preserveCurrentSku ? current.sku : importedNormalized.sku,
       marketplacePrice: preserveCurrentPrice ? current.marketplacePrice : importedNormalized.marketplacePrice,
+      currentPrice: preserveCurrentCurrentPrice ? current.currentPrice : importedNormalized.currentPrice,
+      targetPrice: preserveCurrentTargetPrice ? current.targetPrice : importedNormalized.targetPrice,
+      targetStock: preserveCurrentTargetStock ? current.targetStock : importedNormalized.targetStock,
       marketplaceMinPrice: preserveCurrentMinPrice ? current.marketplaceMinPrice : importedNormalized.marketplaceMinPrice,
       marketplaceState: preserveCurrentState ? currentState : importedState,
       ozon: mergeOzonDraftForWarehouseProduct(current, importedNormalized, preserveCurrentRichOzonFields),
+      yandex: mergeYandexDraftForWarehouseProduct(current, importedNormalized),
       keyword: current?.keyword || importedNormalized.keyword,
-      markup: current?.markup || importedNormalized.markup,
+      markup: preserveCurrentYandexMarkup ? current.markup : (current?.markup || importedNormalized.markup),
       autoPriceEnabled: current?.autoPriceEnabled !== undefined ? current.autoPriceEnabled : importedNormalized.autoPriceEnabled,
       autoPriceMin: current?.autoPriceMin ?? importedNormalized.autoPriceMin,
       autoPriceMax: current?.autoPriceMax ?? importedNormalized.autoPriceMax,
-      links: Array.isArray(current?.links) ? current.links : [],
+      lastOzonPriceSend: importedNormalized.lastOzonPriceSend || current?.lastOzonPriceSend,
+      lastYandexPriceSend: importedNormalized.lastYandexPriceSend || current?.lastYandexPriceSend,
+      links: Array.isArray(current?.links) ? current.links : (Array.isArray(importedNormalized.links) ? importedNormalized.links : []),
       createdAt: current?.createdAt || importedNormalized.createdAt,
     });
     const mergedKey = warehouseProductExactMergeKey(merged);
@@ -7242,12 +7649,13 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     await writeWarehouse(warehouse);
   }
   const products = warehouse.products.filter(isWarehouseProductTargetEnabled).map((product) => {
+    const productMarkupOverride = marketplaceProductMarkupOverride(product);
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
     const suppliers = normalizedLinks.flatMap((link) =>
       (matchMap.get(link.id) || []).map((match) => ({
         ...match,
         markupCoefficient: resolveMarkupCoefficient({
-          productMarkup: product.markup,
+          productMarkup: productMarkupOverride,
           marketplace: product.marketplace,
           supplierUsdPrice: match.price,
           appSettings: {
@@ -7262,7 +7670,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
           match.price,
           rate,
           resolveMarkupCoefficient({
-            productMarkup: product.markup,
+            productMarkup: productMarkupOverride,
             marketplace: product.marketplace,
             supplierUsdPrice: match.price,
             appSettings: {
@@ -7290,7 +7698,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     const fallbackMarkup = product.marketplace === "ozon"
       ? Number(targetMarkups.ozon || appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
       : Number(targetMarkups.yandex || appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
-    const baseMarkupCoefficient = Number(product.markup || selectedSupplier?.markupCoefficient || fallbackMarkup);
+    const baseMarkupCoefficient = Number(productMarkupOverride || selectedSupplier?.markupCoefficient || fallbackMarkup);
     const availabilityPolicy = resolveAvailabilityPolicy({
       marketplace: product.marketplace,
       availableSupplierCount,
@@ -7312,10 +7720,15 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       : 0;
     const minAuto = Number(product.autoPriceMin || 0);
     const maxAuto = Number(product.autoPriceMax || 0);
+    const persistedCurrentPrice = Number(product.currentPrice || product.marketplacePrice || 0) || null;
+    const persistedNextPrice = Number(product.targetPrice || product.nextPrice || 0) || 0;
     let nextPrice = rawNextPrice;
+    if ((!Number.isFinite(nextPrice) || nextPrice <= 0) && product.marketplace === "yandex" && persistedNextPrice > 0) {
+      nextPrice = persistedNextPrice;
+    }
     if (nextPrice > 0 && minAuto > 0 && nextPrice < minAuto) nextPrice = minAuto;
     if (nextPrice > 0 && maxAuto > 0 && nextPrice > maxAuto) nextPrice = maxAuto;
-    const currentPrice = priceMap.get(product.id) || null;
+    const currentPrice = priceMap.get(product.id) || persistedCurrentPrice;
     const ozonMinPrice = product.marketplace === "ozon" ? minPriceMap.get(product.id) || null : null;
 
     return {
@@ -7348,7 +7761,9 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       supplierCount: suppliers.length,
       availableSupplierCount,
       availabilityRule: availabilityPolicy.rule,
-      targetStock: selectedSupplierWithPolicy ? availabilityPolicy.targetStock : null,
+      targetStock: selectedSupplierWithPolicy
+        ? availabilityPolicy.targetStock
+        : (product.marketplace === "yandex" ? Number(product.targetStock || 0) || null : null),
       hasLinks: links.length > 0,
       autoArchiveCandidate: links.length === 0,
       status: selectedSupplier ? (nextPrice !== currentPrice ? "price_changed" : "ok") : "no_supplier",
@@ -7439,11 +7854,12 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
   const minPriceMap = minPriceResult.map;
 
   return productsToBuild.map((product) => {
+    const productMarkupOverride = marketplaceProductMarkupOverride(product);
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
     const suppliers = normalizedLinks.flatMap((link) =>
       (matchMap.get(link.id) || []).map((match) => {
         const markupCoefficient = resolveMarkupCoefficient({
-          productMarkup: product.markup,
+          productMarkup: productMarkupOverride,
           marketplace: product.marketplace,
           supplierUsdPrice: match.price,
           appSettings,
@@ -7469,7 +7885,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
     const fallbackMarkup = product.marketplace === "ozon"
       ? Number(appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
       : Number(appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
-    const baseMarkupCoefficient = Number(product.markup || selectedSupplier?.markupCoefficient || fallbackMarkup);
+    const baseMarkupCoefficient = Number(productMarkupOverride || selectedSupplier?.markupCoefficient || fallbackMarkup);
     const availabilityPolicy = resolveAvailabilityPolicy({
       marketplace: product.marketplace,
       availableSupplierCount,
@@ -7491,10 +7907,15 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       : 0;
     const minAuto = Number(product.autoPriceMin || 0);
     const maxAuto = Number(product.autoPriceMax || 0);
+    const persistedCurrentPrice = Number(product.currentPrice || product.marketplacePrice || 0) || null;
+    const persistedNextPrice = Number(product.targetPrice || product.nextPrice || 0) || 0;
     let nextPrice = rawNextPrice;
+    if ((!Number.isFinite(nextPrice) || nextPrice <= 0) && product.marketplace === "yandex" && persistedNextPrice > 0) {
+      nextPrice = persistedNextPrice;
+    }
     if (nextPrice > 0 && minAuto > 0 && nextPrice < minAuto) nextPrice = minAuto;
     if (nextPrice > 0 && maxAuto > 0 && nextPrice > maxAuto) nextPrice = maxAuto;
-    const currentPrice = priceMap.get(product.id) || null;
+    const currentPrice = priceMap.get(product.id) || persistedCurrentPrice;
     const ozonMinPrice = product.marketplace === "ozon" ? minPriceMap.get(product.id) || null : null;
 
     return {
@@ -7527,7 +7948,9 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       supplierCount: suppliers.length,
       availableSupplierCount,
       availabilityRule: availabilityPolicy.rule,
-      targetStock: selectedSupplierWithPolicy ? availabilityPolicy.targetStock : null,
+      targetStock: selectedSupplierWithPolicy
+        ? availabilityPolicy.targetStock
+        : (product.marketplace === "yandex" ? Number(product.targetStock || 0) || null : null),
       hasLinks: links.length > 0,
       autoArchiveCandidate: links.length === 0,
       status: selectedSupplier ? (nextPrice !== currentPrice ? "price_changed" : "ok") : "no_supplier",
@@ -10398,17 +10821,25 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       error: historyEntry.error || "",
       at: sentAt,
     });
+    const lastPriceSendBase = {
+      status: sendStatus === "failed" ? "error" : sendStatus,
+      at: sentAt,
+      requestedPrice: roundPrice(item.price),
+      cabinetPriceAtSend: Number(item.oldPrice || 0) || null,
+      detail: failedEntryForItem ? failedEntryForItem.error : "ok",
+      nextRetryAt: failedEntryForItem ? retryNextAt : null,
+    };
     if (item.marketplace === "ozon") {
       product.lastOzonPriceSend = {
-        status: sendStatus === "failed" ? "error" : sendStatus,
-        at: sentAt,
-        requestedPrice: roundPrice(item.price),
-        cabinetPriceAtSend: Number(item.oldPrice || 0) || null,
+        ...lastPriceSendBase,
         oldPriceForRetry: oldPriceAdjustedForItem ? resolveOzonOldPrice(roundPrice(item.price), item) : null,
         detail: oldPriceAdjustedForItem
           ? "Ozon rejected old_price; old_price adjusted to 120% and retry queued."
-          : (failedEntryForItem ? failedEntryForItem.error : "ok"),
-        nextRetryAt: failedEntryForItem ? retryNextAt : null,
+          : lastPriceSendBase.detail,
+      };
+    } else if (item.marketplace === "yandex") {
+      product.lastYandexPriceSend = {
+        ...lastPriceSendBase,
       };
     }
   }
@@ -10883,7 +11314,8 @@ app.get("/api/ozon-yandex-import/preview", async (request, response, next) => {
     const yandexExistingOfferIds = await getKnownYandexExistingOfferIds(checkableOfferIds, {
       products: warehouse.products || [],
       warnings,
-      allowCatalogRefresh: true,
+      allowCatalogRefresh: refresh,
+      allowDirectCheck: false,
     });
 
     const rows = products.map((product) => buildOzonYandexImportCandidate(product, { yandexExistingOfferIds }));
@@ -10925,7 +11357,8 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
     const yandexExistingOfferIds = await getKnownYandexExistingOfferIds(candidateOfferIds, {
       products: warehouse.products || [],
       warnings,
-      allowCatalogRefresh: true,
+      allowCatalogRefresh: false,
+      allowDirectCheck: false,
     });
     const rows = products.map((product) => buildOzonYandexImportCandidate(product, { yandexExistingOfferIds }));
     const eligibleRows = rows.filter((row) => row.eligible);
@@ -10963,7 +11396,7 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
     const exportedProducts = selectedProducts
       .filter((product) => sentOfferIds.has(cleanText(product.offerId).toLowerCase()));
     const priceStage = exportedProducts.length
-      ? await sendYandexPricesFromOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds })
+      ? await sendYandexPricesFromOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds, warehouse })
       : { ok: true, sent: 0, failed: 0, skipped: 0, warnings: [], results: [] };
     const stockStage = exportedProducts.length
       ? await sendYandexStocksForExportedOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds })
@@ -10982,22 +11415,35 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
     if (sentCount > 0) {
       const now = new Date().toISOString();
       const yandexProducts = [];
+      const priceResultByTargetOffer = new Map((Array.isArray(priceStage.results) ? priceStage.results : [])
+        .filter((item) => item.ok && item.target && item.offerId)
+        .map((item) => [yandexPriceUpdateResultKey(item), item]));
       for (const product of warehouse.products || []) {
         if (!selectedIds.has(product.id) || !sentOfferIds.has(cleanText(product.offerId).toLowerCase())) continue;
         product.exports = product.exports || {};
-        const exportState = {
+        const baseExportState = {
           status: "sent",
           targetName: shops.map((shop) => shop.name || shop.id).join(", "),
           sentAt: now,
           priceSent: Number(priceStage.sent || 0),
           stockSent: Number(stockStage.sent || 0),
         };
-        for (const shop of shops) product.exports[shop.id] = exportState;
-        product.exports.yandex = exportState;
-        product.updatedAt = now;
         for (const shop of shops) {
+          const key = yandexTargetOfferKey(shop.id, product.offerId);
+          const priceResult = priceResultByTargetOffer.get(key) || null;
+          const exportState = {
+            ...baseExportState,
+            targetName: shop.name || shop.id,
+            price: Number(priceResult?.price || 0) || undefined,
+            stock: pickOzonProductStockForYandex(product),
+            markupCoefficient: Number(priceResult?.markupCoefficient || 0) || undefined,
+            priceSource: priceResult?.priceSource || undefined,
+          };
+          product.exports[shop.id] = exportState;
           yandexProducts.push(buildYandexWarehouseProductFromOzonExport(product, shop, exportState));
         }
+        product.exports.yandex = baseExportState;
+        product.updatedAt = now;
       }
       if (yandexProducts.length) {
         warehouse.products = mergeProducts(warehouse.products || [], yandexProducts);
@@ -11017,6 +11463,7 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
       failed: failedRows.length,
       priceSent: Number(priceStage.sent || 0),
       priceFailed: Number(priceStage.failed || 0),
+      priceSkippedNoPrice: Number(priceStage.skippedNoPrice || 0),
       stockSent: Number(stockStage.sent || 0),
       stockFailed: Number(stockStage.failed || 0),
       skippedExisting,
@@ -11031,6 +11478,7 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
         failed: failedRows.length,
         priceSent: Number(priceStage.sent || 0),
         priceFailed: Number(priceStage.failed || 0),
+        priceSkippedNoPrice: Number(priceStage.skippedNoPrice || 0),
         stockSent: Number(stockStage.sent || 0),
         stockFailed: Number(stockStage.failed || 0),
       },
@@ -11049,6 +11497,7 @@ app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
       priceSent: Number(priceStage.sent || 0),
       priceFailed: Number(priceStage.failed || 0),
       priceSkipped: Number(priceStage.skipped || 0),
+      priceSkippedNoPrice: Number(priceStage.skippedNoPrice || 0),
       stockSent: Number(stockStage.sent || 0),
       stockFailed: Number(stockStage.failed || 0),
       stockSkipped: Number(stockStage.skipped || 0),
@@ -11534,7 +11983,7 @@ async function sendZeroStocksToMarketplace(products = []) {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
       for (const stockShop of yandexStockShops([shop])) {
-        for (const chunk of chunkArray(items, 500)) {
+        for (const chunk of chunkArray(items, 100)) {
           try {
             await sendYandexStockChunk(stockShop, chunk.map((item) => ({ offerId: item.offerId, stock: 0 })));
             actions.push(...chunk.map((item) => ({ id: item.id, type: "zero_stock", target: stockShop.id, ok: true })));
@@ -11585,8 +12034,16 @@ async function sendTargetStocksToMarketplace(products = []) {
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
+      const restoreActions = await restoreYandexArchivedStocks(items, [shop]);
+      const restoreFailed = restoreActions.filter((item) => !item.ok);
+      if (restoreFailed.length) {
+        logger.warn("yandex stock restore before target send failed", {
+          target: shop.id,
+          items: restoreFailed.length,
+        });
+      }
       for (const stockShop of yandexStockShops([shop])) {
-        for (const chunk of chunkArray(items, 500)) {
+        for (const chunk of chunkArray(items, 100)) {
           try {
             await sendYandexStockChunk(stockShop, chunk.map((item) => ({ offerId: item.offerId, stock: item.targetStock })));
             actions.push(...chunk.map((item) => ({ id: item.id, type: "target_stock", target: stockShop.id, stock: item.targetStock, ok: true })));
@@ -11634,7 +12091,7 @@ async function archiveProductsOnMarketplaces(products = []) {
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
-      for (const chunk of chunkArray(items, 500)) {
+      for (const chunk of chunkArray(items, 100)) {
         try {
           await yandexRequest(
             shop,
@@ -11693,7 +12150,7 @@ async function restoreStocksOnMarketplaces(products = []) {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
       for (const stockShop of yandexStockShops([shop])) {
-        for (const chunk of chunkArray(items, 500)) {
+        for (const chunk of chunkArray(items, 100)) {
           try {
             await sendYandexStockChunk(stockShop, chunk.map((item) => ({
               offerId: item.offerId,
@@ -11742,7 +12199,7 @@ async function unarchiveProductsOnMarketplaces(products = []) {
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
-      for (const chunk of chunkArray(items, 500)) {
+      for (const chunk of chunkArray(items, 100)) {
         try {
           await yandexRequest(
             shop,
@@ -12744,10 +13201,12 @@ module.exports = {
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
   materializeYandexExportedProductsForWarehouse,
+  marketplaceProductMarkupOverride,
   buildYandexPriceUpdateFromOzonProduct,
   sendYandexPricesFromOzonProducts,
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
+  buildYandexStockRestoreProducts,
   parseYandexCampaignIds,
   yandexStockShops,
   summarizeApiErrorPayload,

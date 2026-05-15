@@ -92,9 +92,11 @@ const {
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
   materializeYandexExportedProductsForWarehouse,
+  marketplaceProductMarkupOverride,
   buildYandexPriceUpdateFromOzonProduct,
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
+  buildYandexStockRestoreProducts,
   parseYandexCampaignIds,
   yandexStockShops,
   summarizeApiErrorPayload,
@@ -275,18 +277,160 @@ test("Ozon to Yandex import creates a Yandex warehouse variant after export", ()
   const yandexProduct = buildYandexWarehouseProductFromOzonExport(
     ozonProduct,
     { id: "yandex-main", name: "Yandex Main" },
-    { status: "sent", sentAt: "2026-05-14T10:00:00.000Z" },
+    { status: "sent", sentAt: "2026-05-14T10:00:00.000Z", price: 11990, stock: 4 },
   );
   const merged = mergeProducts([ozonProduct], [yandexProduct]);
 
   assert.equal(yandexProduct.marketplace, "yandex");
   assert.equal(yandexProduct.target, "yandex-main");
   assert.equal(yandexProduct.offerId, "SKU-YA-1");
-  assert.equal(yandexProduct.marketplacePrice, 12000);
+  assert.equal(yandexProduct.marketplacePrice, 11990);
+  assert.equal(yandexProduct.currentPrice, 11990);
+  assert.equal(yandexProduct.targetPrice, 11990);
   assert.equal(yandexProduct.marketplaceState.stock, 4);
+  assert.equal(yandexProduct.lastYandexPriceSend.status, "success");
+  assert.equal(yandexProduct.lastYandexPriceSend.requestedPrice, 11990);
   assert.equal(yandexProduct.yandex.vendor, "Creed");
   assert.equal(yandexProduct.links.length, 1);
   assert.deepEqual(new Set(merged.map((item) => item.marketplace)), new Set(["ozon", "yandex"]));
+});
+
+test("mergeProducts keeps the live Yandex price when the imported row is missing it", () => {
+  const currentYandex = normalizeWarehouseProduct({
+    id: "yandex-live",
+    marketplace: "yandex",
+    target: "yandex-main",
+    offerId: "SKU-YA-LIVE",
+    name: "Live Yandex product",
+    currentPrice: 14500,
+    targetPrice: 14500,
+    marketplacePrice: 14500,
+    yandex: {
+      offerId: "SKU-YA-LIVE",
+      name: "Live Yandex product",
+      price: 14500,
+      extra: { exportedFrom: "ozon" },
+    },
+    lastYandexPriceSend: {
+      status: "success",
+      at: "2026-05-14T10:00:00.000Z",
+      requestedPrice: 14500,
+      cabinetPriceAtSend: 14100,
+    },
+  });
+  const importedYandex = normalizeWarehouseProduct({
+    id: "yandex-live-import",
+    marketplace: "yandex",
+    target: "yandex-main",
+    offerId: "SKU-YA-LIVE",
+    name: "Live Yandex product",
+    yandex: {
+      offerId: "SKU-YA-LIVE",
+      name: "Live Yandex product",
+      extra: { exportedFrom: "ozon" },
+    },
+  });
+
+  const merged = mergeProducts([currentYandex], [importedYandex]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].marketplace, "yandex");
+  assert.equal(merged[0].currentPrice, 14500);
+  assert.equal(merged[0].targetPrice, 14500);
+  assert.equal(merged[0].marketplacePrice, 14500);
+  assert.equal(merged[0].lastYandexPriceSend.status, "success");
+});
+
+test("mergeProducts keeps the live Yandex price when an Ozon-derived clone brings stale values", () => {
+  const currentYandex = normalizeWarehouseProduct({
+    id: "yandex-live-locked",
+    marketplace: "yandex",
+    target: "yandex-main",
+    offerId: "SKU-YA-LOCKED",
+    name: "Locked Yandex product",
+    currentPrice: 18100,
+    targetPrice: 18100,
+    marketplacePrice: 18100,
+    yandex: {
+      offerId: "SKU-YA-LOCKED",
+      name: "Locked Yandex product",
+      price: 18100,
+      extra: { exportedFrom: "ozon" },
+    },
+    lastYandexPriceSend: {
+      status: "success",
+      at: "2026-05-14T11:00:00.000Z",
+      requestedPrice: 18100,
+      cabinetPriceAtSend: 17500,
+    },
+  });
+  const importedClone = normalizeWarehouseProduct({
+    id: "yandex-live-locked-import",
+    marketplace: "yandex",
+    target: "yandex-main",
+    offerId: "SKU-YA-LOCKED",
+    name: "Locked Yandex product",
+    currentPrice: 14200,
+    targetPrice: 14200,
+    marketplacePrice: 14200,
+    targetStock: 7,
+    yandex: {
+      offerId: "SKU-YA-LOCKED",
+      name: "Locked Yandex product",
+      price: 14200,
+      extra: { exportedFrom: "ozon" },
+    },
+  });
+
+  const merged = mergeProducts([currentYandex], [importedClone]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].currentPrice, 18100);
+  assert.equal(merged[0].targetPrice, 18100);
+  assert.equal(merged[0].marketplacePrice, 18100);
+  assert.equal(merged[0].yandex.price, 18100);
+  assert.equal(merged[0].targetStock, 7);
+  assert.equal(merged[0].lastYandexPriceSend.status, "success");
+});
+
+test("mergeProducts keeps manual Yandex markup on live rows", () => {
+  const currentYandex = normalizeWarehouseProduct({
+    id: "yandex-markup-live",
+    marketplace: "yandex",
+    target: "yandex-main",
+    offerId: "SKU-YA-MARKUP-LIVE",
+    name: "Markup Yandex product",
+    markup: 1.85,
+    markupSource: "manual",
+    yandex: {
+      offerId: "SKU-YA-MARKUP-LIVE",
+      name: "Markup Yandex product",
+      price: 12900,
+      extra: { exportedFrom: "ozon", manualMarkup: true },
+    },
+    lastYandexPriceSend: {
+      status: "success",
+      at: "2026-05-14T12:00:00.000Z",
+      requestedPrice: 12900,
+      cabinetPriceAtSend: 12500,
+    },
+  });
+  const importedClone = normalizeWarehouseProduct({
+    id: "yandex-markup-live-import",
+    marketplace: "yandex",
+    target: "yandex-main",
+    offerId: "SKU-YA-MARKUP-LIVE",
+    name: "Markup Yandex product",
+    markup: 0,
+    yandex: {
+      offerId: "SKU-YA-MARKUP-LIVE",
+      name: "Markup Yandex product",
+      extra: { exportedFrom: "ozon" },
+    },
+  });
+
+  const merged = mergeProducts([currentYandex], [importedClone]);
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].markup, 1.85);
+  assert.equal(merged[0].lastYandexPriceSend.status, "success");
 });
 
 test("warehouse write materializes Yandex rows and keeps the real shop target", async () => {
@@ -363,6 +507,33 @@ test("Yandex stock update payload uses campaign stock format", () => {
   });
 });
 
+test("Yandex stock restore candidates ignore zero stock rows and dedupe by business", () => {
+  const restoreProducts = buildYandexStockRestoreProducts([
+    { offerId: "SKU-1", stock: 4 },
+    { offer_id: "SKU-2", targetStock: 0 },
+    { offerId: "SKU-3", stock: 2 },
+  ], [
+    { id: "yandex-main", apiKey: "token-1", businessId: "171782339", campaignId: "128820967" },
+    { id: "yandex-second", apiKey: "token-2", businessId: "171782339", campaignId: "149026853" },
+    { id: "yandex-third", apiKey: "token-3", businessId: "222222222", campaignId: "149079105" },
+  ]);
+
+  assert.equal(restoreProducts.length, 4);
+  assert.deepEqual(restoreProducts.map((item) => item.target), [
+    "yandex-main",
+    "yandex-main",
+    "yandex-third",
+    "yandex-third",
+  ]);
+  assert.deepEqual(restoreProducts.map((item) => item.offerId), [
+    "SKU-1",
+    "SKU-3",
+    "SKU-1",
+    "SKU-3",
+  ]);
+  assert.ok(restoreProducts.every((item) => String(item.id || "").startsWith("yandex-")));
+});
+
 test("Yandex stock shops expand comma-separated campaign ids", () => {
   assert.deepEqual(parseYandexCampaignIds("128820967,149026853; 149079105 149079105"), [
     "128820967",
@@ -428,6 +599,66 @@ test("Ozon to Yandex price update uses exported offer price", () => {
   }));
   assert.equal(item.offerId, "SKU-PRICE-1");
   assert.deepEqual(item.price, { value: 4510, currencyId: "RUR" });
+});
+
+test("Ozon to Yandex price update does not reuse Ozon price when Yandex calculation is required", () => {
+  const item = buildYandexPriceUpdateFromOzonProduct(
+    normalizeWarehouseProduct({
+      id: "ozon-yandex-no-fallback",
+      marketplace: "ozon",
+      offerId: "SKU-PRICE-NO-FALLBACK",
+      name: "Source product",
+      ozon: {
+        name: "Source product",
+        price: 4510.4,
+        vendor: "Source Brand",
+      },
+    }),
+    { allowSourceFallback: false },
+  );
+
+  assert.equal(item, null);
+});
+
+test("Yandex price update prefers the Yandex variant price when it exists", () => {
+  const item = buildYandexPriceUpdateFromOzonProduct(
+    normalizeWarehouseProduct({
+      id: "ozon-yandex-price-source",
+      marketplace: "ozon",
+      offerId: "SKU-PRICE-2",
+      name: "Source product",
+      ozon: {
+        name: "Source product",
+        price: 4510.4,
+        vendor: "Source Brand",
+        marketCategoryId: 123,
+        images: ["https://example.test/source.jpg"],
+        description: "Source description",
+      },
+    }),
+    {
+      yandexProduct: normalizeWarehouseProduct({
+        id: "yandex-price-row",
+        marketplace: "yandex",
+        target: "yandex-01",
+        offerId: "SKU-PRICE-2",
+        name: "Yandex product",
+        currentPrice: 8600,
+        targetPrice: 7125,
+        targetStock: 3,
+        yandex: {
+          name: "Yandex product",
+          vendor: "Yandex Brand",
+          marketCategoryId: 123,
+          pictures: ["https://example.test/yandex.jpg"],
+          description: "Yandex description",
+          price: 7125,
+        },
+      }),
+    },
+  );
+  assert.equal(item.offerId, "SKU-PRICE-2");
+  assert.deepEqual(item.price, { value: 7125, currencyId: "RUR" });
 });
 
 test("Yandex cleanup protects brands found in name, description, and characteristics", () => {
@@ -733,6 +964,40 @@ test("postgres warehouse product keeps empty relation links empty", () => {
     updatedAt: new Date("2026-05-13T00:00:00.000Z"),
   });
   assert.equal(product.links.length, 0);
+});
+
+test("postgres Yandex warehouse product falls back to raw links when relation links are empty", () => {
+  const product = productFromPostgres({
+    id: "pg-yandex-link-fallback",
+    marketplace: "yandex",
+    target: "yandex-01",
+    offerId: "YA-RAW-LINK",
+    name: "Yandex raw link product",
+    currentPrice: 1280,
+    targetPrice: 1340,
+    targetStock: 3,
+    raw: {
+      links: [
+        {
+          id: "raw-yandex-link-1",
+          article: "PM-YA-123",
+          supplierName: "Supplier Y",
+          partnerId: "77",
+          priceCurrency: "RUB",
+        },
+      ],
+    },
+    links: [],
+    createdAt: new Date("2026-05-13T00:00:00.000Z"),
+    updatedAt: new Date("2026-05-13T00:00:00.000Z"),
+  });
+  assert.equal(product.links.length, 1);
+  assert.equal(product.links[0].article, "PM-YA-123");
+  assert.equal(product.links[0].supplierName, "Supplier Y");
+  assert.equal(product.links[0].priceCurrency, "RUB");
+  assert.equal(product.currentPrice, 1280);
+  assert.equal(product.targetPrice, 1340);
+  assert.equal(product.targetStock, 3);
 });
 
 test("postgres warehouse product exposes link audit metadata", () => {
@@ -1446,6 +1711,22 @@ test("resolveMarkupCoefficient applies threshold >= 20 USD", () => {
   assert.equal(value, 2.8);
 });
 
+test("resolveMarkupCoefficient uses Yandex defaults and Yandex-scoped rules", () => {
+  const value = resolveMarkupCoefficient({
+    productMarkup: 0,
+    marketplace: "yandex",
+    supplierUsdPrice: 14,
+    appSettings: {
+      defaultMarkups: { ozon: 1.7, yandex: 1.6 },
+      markupRules: [
+        { marketplace: "ozon", minUsd: 10, coefficient: 3 },
+        { marketplace: "yandex", minUsd: 10, coefficient: 2.4 },
+      ],
+    },
+  });
+  assert.equal(value, 2.4);
+});
+
 test("Ozon current cabinet price prefers seller price visible in cabinet", () => {
   const value = pickOzonCabinetListedPrice({
     currentPrice: 29315,
@@ -1485,6 +1766,78 @@ test("resolveMarkupCoefficient uses product markup override", () => {
     },
   });
   assert.equal(value, 2.2);
+});
+
+test("normalizeWarehouseProduct clears copied Yandex markup unless it is manual", () => {
+  const cloned = normalizeWarehouseProduct({
+    id: "yandex-clone",
+    marketplace: "yandex",
+    target: "yandex-main",
+    offerId: "SKU-YA-MARKUP",
+    markup: 2.75,
+    yandex: {
+      offerId: "SKU-YA-MARKUP",
+      price: 12345,
+      extra: { exportedFrom: "ozon" },
+    },
+  });
+  const manual = normalizeWarehouseProduct({
+    id: "yandex-manual",
+    marketplace: "yandex",
+    target: "yandex-main",
+    offerId: "SKU-YA-MARKUP-MANUAL",
+    markup: 2.75,
+    markupSource: "manual",
+    yandex: {
+      offerId: "SKU-YA-MARKUP-MANUAL",
+      price: 12345,
+      extra: { manualMarkup: true },
+    },
+  });
+
+  assert.equal(cloned.markup, 0);
+  assert.equal(manual.markup, 2.75);
+});
+
+test("Yandex pricing ignores copied Ozon markup unless the override is manual", () => {
+  const staleYandex = {
+    marketplace: "yandex",
+    target: "yandex-main",
+    offerId: "SKU-YA-STALE-MARKUP",
+    markup: 2.75,
+    yandex: { extra: { exportedFrom: "ozon" } },
+  };
+  const manualYandex = {
+    marketplace: "yandex",
+    target: "yandex-main",
+    offerId: "SKU-YA-MANUAL-MARKUP",
+    markup: 2.15,
+    markupSource: "manual",
+    yandex: { extra: { manualMarkup: true } },
+  };
+  const ozon = {
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "SKU-OZON-MARKUP",
+    markup: 2.75,
+  };
+
+  assert.equal(marketplaceProductMarkupOverride(staleYandex), 0);
+  assert.equal(marketplaceProductMarkupOverride(manualYandex), 2.15);
+  assert.equal(marketplaceProductMarkupOverride(ozon), 2.75);
+});
+
+test("normalizeWarehouseProduct treats yandex shop targets as Yandex even without account metadata", () => {
+  const product = normalizeWarehouseProduct({
+    id: "target-yandex-unknown",
+    target: "yandex-06c2112c",
+    offerId: "SKU-YA-TARGET",
+    name: "Yandex target product",
+  });
+
+  assert.equal(product.marketplace, "yandex");
+  assert.equal(product.target, "yandex-06c2112c");
+  assert.equal(product.targetName, "Yandex Market");
 });
 
 test("resolveAvailabilityPolicy lowers markup and raises stock for many suppliers", () => {
