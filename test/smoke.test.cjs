@@ -53,6 +53,7 @@ const {
   resolvePriceMasterRowCurrency,
   normalizePriceMasterPrice,
   supplierImpactProductIds,
+  priceMasterChangeImpactProductIds,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
   runNoSupplierMarketplaceAutomation,
@@ -2454,6 +2455,52 @@ test("supplier updates target only impacted warehouse products", () => {
   assert.deepEqual(supplierImpactProductIds(warehouse, { name: "Иванна", partnerId: "101" }), ["p1", "p3"]);
   assert.deepEqual(supplierImpactProductIds(warehouse, { name: "old", partnerId: "202" }, { name: "Сорин" }), ["p2"]);
   assert.deepEqual(supplierImpactProductIds(warehouse, { name: "missing", partnerId: "999" }), []);
+});
+
+test("PriceMaster delta price push targets only linked changed rows", () => {
+  const warehouse = {
+    products: [
+      { id: "article-match", links: [{ article: "A-1", supplierName: "Supplier", partnerId: "101" }] },
+      { id: "name-match", links: [{ matchType: "exact_name", exactName: "No Article Perfume 100 ml", partnerId: "202" }] },
+      { id: "same-supplier-different-article", links: [{ article: "A-2", supplierName: "Supplier", partnerId: "101" }] },
+      { id: "selected-row-match", links: [{ matchType: "selected_row", sourceRowId: "77", partnerId: "303" }] },
+    ],
+  };
+  const changes = [
+    {
+      type: "price_changed",
+      current: { article: "A-1", name: "Alpha", partnerId: "101", partnerName: "Supplier", rowId: 10, price: 20 },
+      previous: { article: "A-1", name: "Alpha", partnerId: "101", partnerName: "Supplier", rowId: 10, price: 18 },
+    },
+    {
+      type: "returned",
+      current: { article: "", name: "No Article Perfume 100 ml", partnerId: "202", partnerName: "Other", rowId: 66, active: true },
+    },
+    {
+      type: "price_changed",
+      current: { article: "Z-9", name: "Selected", partnerId: "303", partnerName: "Third", rowId: 77, price: 25 },
+      previous: { article: "Z-9", name: "Selected", partnerId: "303", partnerName: "Third", rowId: 77, price: 21 },
+    },
+  ];
+
+  assert.deepEqual(
+    priceMasterChangeImpactProductIds(warehouse, changes).productIds,
+    ["article-match", "name-match", "selected-row-match"],
+  );
+});
+
+test("PriceMaster delta price push refuses oversized change sets", () => {
+  const result = priceMasterChangeImpactProductIds(
+    { products: [{ id: "p1", links: [{ article: "A-1" }] }] },
+    [
+      { type: "price_changed", current: { article: "A-1", partnerId: "1" } },
+      { type: "price_changed", current: { article: "A-2", partnerId: "1" } },
+    ],
+    { maxChanges: 1 },
+  );
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, "too_many_pricemaster_changes");
+  assert.deepEqual(result.productIds, []);
 });
 
 test("automation queues linked product for stock=0 when supplier disappeared", () => {

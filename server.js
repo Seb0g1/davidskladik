@@ -86,6 +86,9 @@ const bullmqLockDurationMs = Math.max(60000, Number(process.env.BULLMQ_LOCK_DURA
 const bullmqStalledIntervalMs = Math.max(30000, Number(process.env.BULLMQ_STALLED_INTERVAL_MS || 60000) || 60000);
 const bullmqMaxStalledCount = Math.max(1, Number(process.env.BULLMQ_MAX_STALLED_COUNT || 1) || 1);
 const marketplaceQueueAutoPricePushEnabled = process.env.MARKETPLACE_QUEUE_AUTO_PRICE_PUSH_ENABLED === "true";
+const priceMasterDeltaPricePushEnabled = process.env.PRICEMASTER_DELTA_PRICE_PUSH_ENABLED !== "false";
+const priceMasterDeltaMaxChanges = Math.max(1, Number(process.env.PRICEMASTER_DELTA_MAX_CHANGES || 5000) || 5000);
+const priceMasterDeltaMaxProducts = Math.max(1, Number(process.env.PRICEMASTER_DELTA_MAX_PRODUCTS || 2000) || 2000);
 const dailySyncTime = process.env.DAILY_SYNC_TIME || "11:00";
 const dailySyncEnabled = process.env.DAILY_SYNC_ENABLED !== "false";
 const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
@@ -2191,6 +2194,67 @@ function supplierImpactProductIds(warehouse = {}, ...suppliers) {
     }
   }
   return Array.from(productIds);
+}
+
+function priceMasterChangedRowMatchesWarehouseLink(row = {}, link = {}) {
+  if (!row || !link) return false;
+  const supplierOk =
+    !link.supplierName
+    || normalizeSupplierName(row.partnerName) === normalizeSupplierName(link.supplierName);
+  const partnerOk = !link.partnerId || String(row.partnerId || "") === String(link.partnerId);
+  const keywordOk = includesKeyword(row.name, link.keyword);
+  if (!supplierOk || !partnerOk || !keywordOk) return false;
+  if (link.matchType === "selected_row") {
+    if (link.sourceRowId && String(row.rowId || "") === String(link.sourceRowId)) return true;
+    if (link.exactName) return exactPriceMasterNameMatches(row.name, link.exactName);
+    return false;
+  }
+  if (link.matchType === "exact_name") {
+    return exactPriceMasterNameMatches(row.name, link.exactName || link.article);
+  }
+  const article = cleanText(link.article).toLowerCase();
+  return Boolean(article && cleanText(row.article).toLowerCase() === article);
+}
+
+function priceMasterChangeImpactProductIds(warehouse = {}, changes = [], options = {}) {
+  const maxChanges = Math.max(1, Number(options.maxChanges || priceMasterDeltaMaxChanges) || priceMasterDeltaMaxChanges);
+  const maxProducts = Math.max(1, Number(options.maxProducts || priceMasterDeltaMaxProducts) || priceMasterDeltaMaxProducts);
+  const relevantTypes = new Set(["price_changed", "inactive", "returned", "missing", "new"]);
+  const relevantChanges = (Array.isArray(changes) ? changes : []).filter((change) => relevantTypes.has(change?.type));
+  if (!relevantChanges.length) return { productIds: [], scannedChanges: 0, skipped: false, reason: null };
+  if (relevantChanges.length > maxChanges) {
+    return {
+      productIds: [],
+      scannedChanges: relevantChanges.length,
+      skipped: true,
+      reason: "too_many_pricemaster_changes",
+    };
+  }
+  const rows = relevantChanges.flatMap((change) => [change.current, change.previous].filter(Boolean));
+  if (!rows.length) return { productIds: [], scannedChanges: relevantChanges.length, skipped: false, reason: null };
+
+  const productIds = new Set();
+  for (const product of warehouse.products || []) {
+    const links = Array.isArray(product.links) ? product.links : [];
+    if (!links.length) continue;
+    const matched = links.some((link) => rows.some((row) => priceMasterChangedRowMatchesWarehouseLink(row, link)));
+    if (!matched) continue;
+    productIds.add(product.id);
+    if (productIds.size >= maxProducts) {
+      return {
+        productIds: Array.from(productIds),
+        scannedChanges: relevantChanges.length,
+        skipped: true,
+        reason: "too_many_impacted_products",
+      };
+    }
+  }
+  return {
+    productIds: Array.from(productIds),
+    scannedChanges: relevantChanges.length,
+    skipped: false,
+    reason: null,
+  };
 }
 
 function cloneAuditValue(value) {
@@ -11191,6 +11255,47 @@ async function processMarketplaceJob(name, data = {}) {
   return null;
 }
 
+async function sendPriceMasterDeltaWarehousePrices(priceMaster = {}, warehouse = {}, options = {}) {
+  const usdRate = options.usdRate;
+  if (!priceMasterDeltaPricePushEnabled) {
+    return {
+      ok: true,
+      sent: 0,
+      failed: 0,
+      skipped: [],
+      delta: { productIds: [], skipped: true, reason: "disabled" },
+    };
+  }
+  const delta = priceMasterChangeImpactProductIds(warehouse, priceMaster.changedRows || [], {
+    maxChanges: options.maxChanges || priceMasterDeltaMaxChanges,
+    maxProducts: options.maxProducts || priceMasterDeltaMaxProducts,
+  });
+  if (delta.skipped) {
+    logger.warn("PriceMaster delta price push limited", {
+      reason: delta.reason,
+      scannedChanges: delta.scannedChanges,
+      impactedProducts: delta.productIds.length,
+    });
+  }
+  if (!delta.productIds.length) {
+    return {
+      ok: true,
+      sent: 0,
+      failed: 0,
+      skipped: [],
+      delta,
+    };
+  }
+  const result = await processMarketplaceJob("auto-price-push", {
+    productIds: delta.productIds,
+    usdRate,
+  });
+  return {
+    ...result,
+    delta,
+  };
+}
+
 function marketplaceJobId(name, data = {}) {
   const productIds = Array.isArray(data?.productIds)
     ? data.productIds.map((id) => String(id)).filter(Boolean).sort()
@@ -12614,7 +12719,7 @@ async function runSync() {
     await writeSnapshot(snapshot);
     await appendHistory(snapshot);
 
-    return {
+    const result = {
       syncId,
       createdAt: snapshot.createdAt,
       items: Object.keys(currentItems).length,
@@ -12624,6 +12729,12 @@ async function runSync() {
         return acc;
       }, {}),
     };
+    Object.defineProperty(result, "changedRows", {
+      value: changes,
+      enumerable: false,
+      configurable: false,
+    });
+    return result;
   } finally {
     if (connection) connection.release();
   }
@@ -13410,12 +13521,14 @@ async function runDailyRefresh(trigger = "manual") {
       const shouldSendPrices = trigger === "manual" || (trigger === "schedule" && dailySyncSendPrices);
       if (shouldSendPrices) {
         try {
-          pricePush = await sendWarehousePrices({
-            usdRate: undefined,
-            minDiffRub: 0,
-            minDiffPct: 0,
-            dryRun: false,
-          });
+          pricePush = trigger === "manual"
+            ? await sendWarehousePrices({
+              usdRate: undefined,
+              minDiffRub: 0,
+              minDiffPct: 0,
+              dryRun: false,
+            })
+            : await sendPriceMasterDeltaWarehousePrices(priceMaster, warehouse);
         } catch (err) {
           const detail = err?.message || String(err);
           pricePush = { sent: 0, failed: 0, skipped: [], error: detail };
@@ -13526,11 +13639,7 @@ async function runAutoSyncCycle(trigger = "auto") {
     const warehouse = await buildWarehouseView({ sync: true });
     const automation = await runNoSupplierMarketplaceAutomation(warehouse);
     const recovery = await runSupplierRecoveryAutomation(warehouse);
-    const autoPricePush = await processMarketplaceJob("auto-price-push", {
-      usdRate: undefined,
-      minDiffRub: 0,
-      minDiffPct: 0,
-    });
+    const autoPricePush = await sendPriceMasterDeltaWarehousePrices(result, warehouse);
     logger.info("auto sync complete", {
       trigger,
       items: result.items,
@@ -13540,6 +13649,8 @@ async function runAutoSyncCycle(trigger = "auto") {
       zeroStockSent: automation.zeroStockSent,
       autoArchived: automation.archived,
       recovered: recovery.recovered,
+      priceMasterDeltaProducts: autoPricePush.delta?.productIds?.length || 0,
+      priceMasterDeltaSkippedReason: autoPricePush.delta?.reason || null,
       autoPriceSent: autoPricePush.sent || 0,
       autoPriceFailed: autoPricePush.failed || 0,
       autoPriceSkipped: Array.isArray(autoPricePush.skipped) ? autoPricePush.skipped.length : 0,
@@ -13867,6 +13978,7 @@ module.exports = {
   resolvePriceMasterRowCurrency,
   normalizePriceMasterPrice,
   supplierImpactProductIds,
+  priceMasterChangeImpactProductIds,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
   runNoSupplierMarketplaceAutomation,
