@@ -5290,14 +5290,18 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
     };
   }
 
-  let existingOfferIds = new Set();
-  try {
-    existingOfferIds = await getExistingYandexOfferIdSet(rows.map((row) => row.offerId));
-  } catch (error) {
-    const label = error?.message || error?.code || "ошибка API";
-    warnings.push(`Yandex: не удалось проверить существующие артикулы (${label})`);
-    existingOfferIds = getLocalYandexExportedOfferIdSet(products);
-    if (existingOfferIds.size) warnings.push(`Yandex: использую локальный каталог для остатков (${existingOfferIds.size} SKU).`);
+  let existingOfferIds = options.existingOfferIds instanceof Set
+    ? new Set(Array.from(options.existingOfferIds).map((id) => cleanText(id).toLowerCase()).filter(Boolean))
+    : null;
+  if (!existingOfferIds) {
+    try {
+      existingOfferIds = await getExistingYandexOfferIdSet(rows.map((row) => row.offerId));
+    } catch (error) {
+      const label = error?.message || error?.code || "ошибка API";
+      warnings.push(`Yandex: не удалось проверить существующие артикулы (${label})`);
+      existingOfferIds = getLocalYandexExportedOfferIdSet(options.warehouseProducts || products);
+      if (existingOfferIds.size) warnings.push(`Yandex: использую локальный каталог для остатков (${existingOfferIds.size} SKU).`);
+    }
   }
 
   const selected = rows.filter((row) => existingOfferIds.has(row.offerId.toLowerCase()));
@@ -11695,7 +11699,12 @@ async function runOperationPayload(job) {
     const products = (warehouse.products || [])
       .filter((product) => product.marketplace === "ozon")
       .slice(0, limit);
-    const result = await sendYandexStocksFromOzonProducts(products, { dryRun: job.payload?.dryRun === true });
+    const existingOfferIds = getLocalYandexExportedOfferIdSet(warehouse.products || []);
+    const result = await sendYandexStocksFromOzonProducts(products, {
+      dryRun: job.payload?.dryRun === true,
+      warehouseProducts: warehouse.products || [],
+      existingOfferIds,
+    });
     await appendAudit(auditRequest, "yandex.stock.sync", {
       entityType: "yandex_stock_sync",
       entityId: "ozon_to_yandex",
@@ -12012,7 +12021,12 @@ app.post("/api/ozon-yandex-import/sync-stocks", async (request, response, next) 
     const products = (warehouse.products || [])
       .filter((product) => product.marketplace === "ozon")
       .slice(0, limit);
-    const result = await sendYandexStocksFromOzonProducts(products, { dryRun: request.body?.dryRun === true });
+    const existingOfferIds = getLocalYandexExportedOfferIdSet(warehouse.products || []);
+    const result = await sendYandexStocksFromOzonProducts(products, {
+      dryRun: request.body?.dryRun === true,
+      warehouseProducts: warehouse.products || [],
+      existingOfferIds,
+    });
     response.json({ ok: result.ok, limit, ...result });
   } catch (error) {
     next(error);
