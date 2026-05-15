@@ -59,6 +59,18 @@ function jobSummary(job = {}) {
   return parts.join(" · ") || job.error || "";
 }
 
+function jobWarnings(job = {}) {
+  const result = job.result || {};
+  return Array.isArray(result.warnings) ? result.warnings.filter(Boolean).slice(0, 5) : [];
+}
+
+function jobFailedRows(job = {}) {
+  const result = job.result || {};
+  return (Array.isArray(result.results) ? result.results : [])
+    .filter((item) => item && item.ok === false)
+    .slice(0, 8);
+}
+
 function renderJobs(jobs = []) {
   if (!jobs.length) {
     els.list.innerHTML = '<div class="empty-state">Задач пока нет.</div>';
@@ -70,6 +82,8 @@ function renderJobs(jobs = []) {
         <strong>${escapeHtml(job.title || job.type)}</strong>
         <span>${escapeHtml(statusLabel(job.status))} · ${escapeHtml(job.user || "system")} · ${escapeHtml(formatDate(job.createdAt))}</span>
         <span>${escapeHtml(jobSummary(job))}</span>
+        ${jobWarnings(job).length ? `<span>${jobWarnings(job).map(escapeHtml).join(" · ")}</span>` : ""}
+        ${jobFailedRows(job).length ? `<span>${jobFailedRows(job).map((item) => `${escapeHtml(item.offerId || item.sku || "-")}: ${escapeHtml(item.error || "error")}`).join(" · ")}</span>` : ""}
       </div>
       <div class="sync-status-pill">${Math.round(Number(job.progress || 0))}%</div>
     </article>

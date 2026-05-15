@@ -3805,9 +3805,11 @@ function yandexOfferIdFromMapping(item = {}) {
 function getLocalYandexExportedOfferIdSet(products = []) {
   const set = new Set();
   for (const product of Array.isArray(products) ? products : []) {
-    const offerId = cleanText(product.offerId || product.offer_id).toLowerCase();
+    const normalized = normalizeWarehouseProduct(product);
+    const offerId = cleanText(normalized.offerId || normalized.offer_id).toLowerCase();
     if (!offerId) continue;
-    const exports = product.exports || {};
+    if (normalized.marketplace === "yandex") set.add(offerId);
+    const exports = normalized.exports || {};
     if (exports.yandex?.status === "sent") set.add(offerId);
     if (Object.values(exports).some((entry) => entry?.status === "sent" && /yandex/i.test(cleanText(entry.targetName || entry.marketplace || entry.target)))) {
       set.add(offerId);
@@ -5294,6 +5296,8 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
   } catch (error) {
     const label = error?.message || error?.code || "ошибка API";
     warnings.push(`Yandex: не удалось проверить существующие артикулы (${label})`);
+    existingOfferIds = getLocalYandexExportedOfferIdSet(products);
+    if (existingOfferIds.size) warnings.push(`Yandex: использую локальный каталог для остатков (${existingOfferIds.size} SKU).`);
   }
 
   const selected = rows.filter((row) => existingOfferIds.has(row.offerId.toLowerCase()));
@@ -5313,18 +5317,29 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
       if (!chunk.length) continue;
       try {
         await sendYandexStockChunk(shop, chunk);
-        results.push({ target: shop.id, sent: chunk.length });
+        results.push({ target: shop.id, sent: chunk.length, ok: true });
       } catch (error) {
         const label = error?.message || error?.code || "ошибка API";
         warnings.push(`Yandex «${shop.name || shop.id}»: остатки не отправлены (${label})`);
+        results.push(...chunk.map((item) => ({
+          stage: "stock",
+          offerId: item.offerId,
+          target: shop.id,
+          targetName: shop.name || "Yandex Market",
+          stock: item.stock,
+          ok: false,
+          error: label,
+        })));
       }
     }
   }
 
+  const failed = results.filter((item) => item.ok === false).length;
   return {
-    ok: warnings.length === 0,
+    ok: failed === 0,
     dryRun,
     sent: results.reduce((total, item) => total + Number(item.sent || 0), 0),
+    failed,
     skipped: rows.length - selected.length,
     planned: selected.length,
     warnings,

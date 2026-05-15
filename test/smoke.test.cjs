@@ -249,13 +249,15 @@ test("Ozon to Yandex import treats locally exported Yandex products as existing"
     { offerId: "SKU-1", exports: { yandex: { status: "sent" } } },
     { offerId: "SKU-2", exports: { yandexShop: { status: "sent", targetName: "Yandex Market" } } },
     { offerId: "SKU-3", exports: { yandex: { status: "failed" } } },
+    { offerId: "SKU-4", marketplace: "yandex" },
     { offerId: "", exports: { yandex: { status: "sent" } } },
   ]);
 
   assert.equal(set.has("sku-1"), true);
   assert.equal(set.has("sku-2"), true);
   assert.equal(set.has("sku-3"), false);
-  assert.equal(set.size, 2);
+  assert.equal(set.has("sku-4"), true);
+  assert.equal(set.size, 3);
 });
 
 test("Ozon to Yandex import creates a Yandex warehouse variant after export", () => {
