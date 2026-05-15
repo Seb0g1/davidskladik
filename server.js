@@ -192,6 +192,8 @@ let priceMasterArticleIndexCache = null;
 const priceMasterLinkLookupCache = new Map();
 const priceMasterLinkLookupCacheTtlMs = Math.max(1000, Number(process.env.LINK_SAVE_PM_CACHE_MS || 120000));
 const priceMasterLinkLookupCacheMax = Math.max(100, Number(process.env.LINK_SAVE_PM_CACHE_MAX || 2000));
+let warehousePostgresSummaryCache = null;
+const warehousePostgresSummaryCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_PAGE_SUMMARY_CACHE_MS || 15000));
 const warehouseViewCache = new Map();
 const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
@@ -368,6 +370,7 @@ function warehouseViewCacheKey({ sync = false, limit = Number.POSITIVE_INFINITY,
 function invalidateWarehouseViewCache() {
   warehouseViewCache.clear();
   warehouseViewBuilds.clear();
+  warehousePostgresSummaryCache = null;
 }
 
 app.use(express.json({ limit: "1mb" }));
@@ -8353,6 +8356,46 @@ async function getOzonStateCountsFromPostgres(prisma) {
   return getMarketplaceStateCountsFromPostgres(prisma, "ozon");
 }
 
+async function getWarehousePostgresSummary(prisma, rate) {
+  const cacheKey = Number(rate || 0).toFixed(4);
+  if (
+    warehousePostgresSummaryCache
+    && warehousePostgresSummaryCache.key === cacheKey
+    && Date.now() - warehousePostgresSummaryCache.at < warehousePostgresSummaryCacheTtlMs
+  ) {
+    return warehousePostgresSummaryCache.value;
+  }
+  const [totalAll, ozonStateCounts, yandexStateCounts, linkedRows, suppliers] = await Promise.all([
+    prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
+    getOzonStateCountsFromPostgres(prisma),
+    getMarketplaceStateCountsFromPostgres(prisma, "yandex"),
+    prisma.warehouseProduct.findMany({
+      where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] },
+      include: { links: true },
+      orderBy: { updatedAt: "desc" },
+    }),
+    prisma.managedSupplier.findMany({ orderBy: { name: "asc" } }),
+  ]);
+  const normalizedSuppliers = suppliers.map(supplierFromPostgres);
+  const linkedProducts = linkedRows.map(productFromPostgres);
+  const counterStats = await buildWarehouseCounterStatsFromLinkedProducts(
+    linkedProducts,
+    normalizedSuppliers,
+    { totalProducts: totalAll, usdRate: rate },
+  );
+  const value = {
+    totalAll,
+    ozonStateCounts,
+    yandexStateCounts,
+    normalizedSuppliers,
+    counterStats,
+    linkedArchived: linkedProducts
+      .filter((product) => product.marketplace === "ozon" && Array.isArray(product.links) && product.links.length && product.marketplaceState?.code === "archived").length,
+  };
+  warehousePostgresSummaryCache = { key: cacheKey, at: Date.now(), value };
+  return value;
+}
+
 async function buildFastWarehousePageFromPostgres({
   page = 1,
   pageSize = 60,
@@ -8373,11 +8416,9 @@ async function buildFastWarehousePageFromPostgres({
   const where = warehousePagePostgresWhere(needsDeepBrandFilter || needsComputedLinkFilter ? { ...filters, brand: "", state: "all" } : filters);
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
-  const [totalAll, dbTotal, ozonStateCounts, yandexStateCounts, initialDbRows, linkedRows, suppliers] = await Promise.all([
-    prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
+  const [summary, dbTotal, initialDbRows] = await Promise.all([
+    getWarehousePostgresSummary(prisma, rate),
     needsDeepBrandFilter || needsComputedLinkFilter ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
-    getOzonStateCountsFromPostgres(prisma),
-    getMarketplaceStateCountsFromPostgres(prisma, "yandex"),
     prisma.warehouseProduct.findMany({
       where,
       include: { links: true },
@@ -8385,12 +8426,6 @@ async function buildFastWarehousePageFromPostgres({
       skip: needsDeepBrandFilter || needsComputedLinkFilter ? 0 : offset,
       take: needsDeepBrandFilter || needsComputedLinkFilter ? undefined : pageSize,
     }),
-    prisma.warehouseProduct.findMany({
-      where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] },
-      include: { links: true },
-      orderBy: { updatedAt: "desc" },
-    }),
-    prisma.managedSupplier.findMany({ orderBy: { name: "asc" } }),
   ]);
   pageTrace("postgres:after-query", traceStartedAt);
   let dbRows = initialDbRows;
@@ -8398,12 +8433,8 @@ async function buildFastWarehousePageFromPostgres({
   if (!needsDeepBrandFilter && !needsComputedLinkFilter) {
     dbRows = await addWarehousePostgresPageGroupSiblings(prisma, where, dbRows);
   }
-  const normalizedSuppliers = suppliers.map(supplierFromPostgres);
-  const counterStats = await buildWarehouseCounterStatsFromLinkedProducts(
-    linkedRows.map(productFromPostgres),
-    normalizedSuppliers,
-    { totalProducts: totalAll, usdRate: rate },
-  );
+  const normalizedSuppliers = summary.normalizedSuppliers;
+  const counterStats = summary.counterStats;
   let allProducts = dbRows.map(productFromPostgres);
   if (needsComputedLinkFilter) {
     allProducts = await buildFreshWarehouseProductsForWarehouse(
@@ -8452,21 +8483,19 @@ async function buildFastWarehousePageFromPostgres({
   return {
     createdAt: pageWarehouse.createdAt,
     updatedAt: pageWarehouse.updatedAt,
-    totalAll,
+    totalAll: summary.totalAll,
     ready: counterStats.ready,
     changed: counterStats.changed,
     withoutSupplier: counterStats.withoutSupplier,
     linkedProducts: counterStats.linkedProducts,
     linkedNotReady: counterStats.linkedNotReady,
-    linkedArchived: linkedRows
-      .map(productFromPostgres)
-      .filter((product) => product.marketplace === "ozon" && Array.isArray(product.links) && product.links.length && product.marketplaceState?.code === "archived").length,
-    ozonArchived: ozonStateCounts.archived,
-    ozonInactive: ozonStateCounts.inactive,
-    ozonOutOfStock: ozonStateCounts.outOfStock,
-    yandexArchived: yandexStateCounts.archived,
-    yandexInactive: yandexStateCounts.inactive,
-    yandexOutOfStock: yandexStateCounts.outOfStock,
+    linkedArchived: summary.linkedArchived,
+    ozonArchived: summary.ozonStateCounts.archived,
+    ozonInactive: summary.ozonStateCounts.inactive,
+    ozonOutOfStock: summary.ozonStateCounts.outOfStock,
+    yandexArchived: summary.yandexStateCounts.archived,
+    yandexInactive: summary.yandexStateCounts.inactive,
+    yandexOutOfStock: summary.yandexStateCounts.outOfStock,
     usdRate: rate,
     priceMaster: await getPriceMasterSnapshotMetaFast(),
     sourceError: "",

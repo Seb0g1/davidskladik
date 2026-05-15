@@ -1040,6 +1040,7 @@ function needsMediaEnrichment(product) {
 }
 
 async function enrichVisibleProducts(products) {
+  if (localStorage.getItem("warehouseAutoEnrichMedia") !== "true") return;
   const productIds = products
     .filter((product) => needsMediaEnrichment(product) && !state.enrichedProductIds.has(product.id))
     .slice(0, 80)
