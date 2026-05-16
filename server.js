@@ -6382,18 +6382,26 @@ async function replaceProductLinksInPostgres(prisma, products = []) {
     .map(normalizeWarehouseProduct);
   if (!normalizedProducts.length) return { products: 0, links: 0 };
   let linksWritten = 0;
-  const chunkSize = Math.max(1, Math.min(25, Number(process.env.WAREHOUSE_POSTGRES_LINK_WRITE_CHUNK_SIZE || 10) || 10));
+  const chunkSize = Math.max(1, Math.min(100, Number(process.env.WAREHOUSE_POSTGRES_LINK_WRITE_CHUNK_SIZE || 50) || 50));
+  const writeConcurrency = warehousePostgresWriteConcurrency();
   for (const productChunk of chunkArray(normalizedProducts, chunkSize)) {
-    for (const product of productChunk) {
-      const linkRows = (product.links || [])
-        .map((link) => linkToPostgresData(product, link))
-        .filter((linkData) => linkData.supplierArticle);
+    await runWithLimitedConcurrency(productChunk, writeConcurrency, async (product) => {
       await upsertWarehouseProductPostgres(prisma, product);
-      await prisma.productLink.deleteMany({ where: { productId: product.id } });
-      if (linkRows.length) {
-        const result = await prisma.productLink.createMany({ data: linkRows, skipDuplicates: true });
-        linksWritten += result.count || 0;
-      }
+    });
+    const productIds = productChunk.map((product) => product.id).filter(Boolean);
+    const linkRows = [];
+    for (const product of productChunk) {
+      linkRows.push(...(product.links || [])
+        .map((link) => linkToPostgresData(product, link))
+        .filter((linkData) => linkData.supplierArticle));
+    }
+    if (productIds.length) {
+      await prisma.productLink.deleteMany({ where: { productId: { in: productIds } } });
+    }
+    for (const linkChunk of chunkArray(linkRows, 1000)) {
+      if (!linkChunk.length) continue;
+      const result = await prisma.productLink.createMany({ data: linkChunk, skipDuplicates: true });
+      linksWritten += result.count || 0;
     }
     markWarehousePostgresProductsWritten(productChunk);
   }
