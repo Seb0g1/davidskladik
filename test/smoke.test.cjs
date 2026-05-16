@@ -2708,6 +2708,24 @@ test("warehouse link identity ignores client draft id duplicates", () => {
   assert.equal(a, b);
 });
 
+test("warehouse link identity prefers supplier article over PriceMaster row id", () => {
+  const a = warehouseLinkIdentityKey({
+    id: "draft-1",
+    matchType: "selected_row",
+    article: "PM-77",
+    sourceRowId: "row-a",
+    supplierName: "Supplier A",
+  });
+  const b = warehouseLinkIdentityKey({
+    id: "draft-2",
+    matchType: "article",
+    article: "pm-77",
+    sourceRowId: "row-b",
+    supplierName: " supplier a ",
+  });
+  assert.equal(a, b);
+});
+
 test("warehouse product normalization collapses duplicate supplier links by target", () => {
   const product = normalizeWarehouseProduct({
     id: "dup-link-product",
@@ -2723,6 +2741,7 @@ test("warehouse product normalization collapses duplicate supplier links by targ
       {
         id: "link-repeat",
         article: "pm-1",
+        sourceRowId: "price-master-row-2",
         supplierName: " supplier a ",
         priceCurrency: "USD",
         updatedBy: "manager",

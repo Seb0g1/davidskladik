@@ -1930,10 +1930,11 @@ function normalizeWarehouseLink(input = {}) {
   const matchType = ["article", "selected_row", "exact_name"].includes(matchTypeRaw) ? matchTypeRaw : "article";
   const exactName = cleanText(input.exactName || input.exact_name || input.nativeName || input.name);
   const sourceRowId = cleanText(input.sourceRowId || input.source_row_id || input.rowId);
+  const article = cleanText(input.article || input.offerId || input.nativeId);
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
-    article: cleanText(input.article || input.offerId || input.nativeId),
-    matchType,
+    article,
+    matchType: article ? "article" : matchType,
     exactName,
     sourceRowId,
     keyword: cleanText(input.keyword),
@@ -1955,11 +1956,12 @@ function warehouseLinkHasMatchTarget(input = {}) {
 
 function warehouseLinkIdentityKey(input = {}) {
   const link = normalizeWarehouseLink(input);
+  const primary = link.article
+    ? `article:${link.article.toLowerCase()}`
+    : (link.sourceRowId ? `row:${link.sourceRowId}` : `name:${link.exactName.toLowerCase()}`);
   return [
     link.matchType,
-    link.article.toLowerCase(),
-    link.sourceRowId,
-    link.exactName.toLowerCase(),
+    primary,
     link.partnerId,
     normalizeSupplierName(link.supplierName),
     link.keyword.toLowerCase(),
@@ -1969,9 +1971,9 @@ function warehouseLinkIdentityKey(input = {}) {
 
 function warehouseLinkTargetKey(input = {}) {
   const link = normalizeWarehouseLink(input);
-  const primary = link.sourceRowId
-    ? `row:${link.sourceRowId}`
-    : (link.article ? `article:${link.article.toLowerCase()}` : `name:${link.exactName.toLowerCase()}`);
+  const primary = link.article
+    ? `article:${link.article.toLowerCase()}`
+    : (link.sourceRowId ? `row:${link.sourceRowId}` : `name:${link.exactName.toLowerCase()}`);
   return [
     link.matchType,
     primary,

@@ -936,15 +936,15 @@ function getPendingLinkDrafts(key) {
 }
 
 function warehouseLinkDraftIdentity(link = {}) {
-  const matchType = String(link.matchType || "article").trim() || "article";
   const article = String(link.article || "").trim().toLowerCase();
+  const matchType = article ? "article" : (String(link.matchType || "article").trim() || "article");
   const exactName = String(link.exactName || "").trim().toLowerCase();
   const sourceRowId = String(link.sourceRowId || "").trim();
   const supplierName = String(link.supplierName || "").trim().toLowerCase();
   const partnerId = String(link.partnerId || "").trim();
   const keyword = String(link.keyword || "").trim().toLowerCase();
   const priceCurrency = String(link.priceCurrency || "USD").trim().toUpperCase() === "RUB" ? "RUB" : "USD";
-  const target = sourceRowId ? `row:${sourceRowId}` : (article ? `article:${article}` : `name:${exactName}`);
+  const target = article ? `article:${article}` : (sourceRowId ? `row:${sourceRowId}` : `name:${exactName}`);
   return [matchType, target, partnerId || supplierName, keyword, priceCurrency].join("|");
 }
 
