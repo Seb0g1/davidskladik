@@ -519,33 +519,24 @@ function warehouseProductById(productId) {
   return (state.warehouse || []).find((product) => String(product.id) === String(productId)) || null;
 }
 
-async function fetchWarehouseProductSnapshot(productId) {
-  const result = await api(`/api/warehouse/products/${encodeURIComponent(productId)}`);
-  return result.product || null;
-}
-
-async function deleteWarehouseLinkWithFreshLock(productId, linkId, expectedUpdatedAt = "") {
-  const localProduct = warehouseProductById(productId);
-  const remove = (lock) => api(
-    `/api/warehouse/products/${encodeURIComponent(productId)}/links/${encodeURIComponent(linkId)}?expectedUpdatedAt=${encodeURIComponent(lock || "")}&expectedLinksSignature=${encodeURIComponent(warehouseProductLinksSignature(localProduct))}`,
-    { method: "DELETE" },
-  );
-  const firstLock = localProduct?.updatedAt || expectedUpdatedAt || "";
-  try {
-    return await remove(firstLock);
-  } catch (error) {
-    if (error.status !== 409) throw error;
-    const latest = await fetchWarehouseProductSnapshot(productId);
-    const links = Array.isArray(latest?.links) ? latest.links : [];
-    const stillExists = links.some((link) => String(link.id) === String(linkId));
-    if (!stillExists) {
-      return { ok: true, alreadyDeleted: true, product: latest };
-    }
-    if (latest?.id && Array.isArray(error.payload?.conflicts) && error.payload.conflicts[0]) {
-      error.payload.conflicts[0].freshProduct = error.payload.conflicts[0].freshProduct || latest;
-    }
-    throw error;
-  }
+async function deleteWarehouseLinksBulkWithFreshLocks(refs = []) {
+  const normalizedRefs = (Array.isArray(refs) ? refs : [])
+    .map((ref) => {
+      const localProduct = warehouseProductById(ref.productId);
+      return {
+        productId: String(ref.productId || ""),
+        linkId: String(ref.linkId || ""),
+        expectedUpdatedAt: String(localProduct?.updatedAt || ref.productUpdatedAt || ""),
+        expectedLinksSignature: warehouseProductLinksSignature(localProduct),
+      };
+    })
+    .filter((ref) => ref.productId && ref.linkId);
+  if (!normalizedRefs.length) return { ok: true, products: [], alreadyDeleted: true };
+  return api("/api/warehouse/products/links/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refs: normalizedRefs }),
+  });
 }
 
 function parseWarehouseLinkRefs(button) {
@@ -4524,18 +4515,17 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       const selectionVersion = state.warehouseSelectionVersion;
       const selectedGroupKey = state.selectedWarehouseGroupKey;
       beginWarehouseMutation(productIds);
-      const productsForState = [];
+      const result = await deleteWarehouseLinksBulkWithFreshLocks(linkRefs);
+      const alreadyDeletedIds = new Set((result.alreadyDeletedRefs || []).map((ref) => `${ref.productId}:${ref.linkId}`));
+      const productsForState = Array.isArray(result.products) ? result.products : [];
       for (const ref of linkRefs) {
-        const result = await deleteWarehouseLinkWithFreshLock(ref.productId, ref.linkId, ref.productUpdatedAt || "");
-        if (!result.product) continue;
+        if (!alreadyDeletedIds.has(`${ref.productId}:${ref.linkId}`)) continue;
         const localProduct = warehouseProductById(ref.productId);
-        productsForState.push(result.alreadyDeleted && localProduct
-          ? {
-              ...localProduct,
-              links: (localProduct.links || []).filter((link) => String(link.id) !== String(ref.linkId)),
-              updatedAt: result.product.updatedAt || localProduct.updatedAt,
-            }
-          : result.product);
+        if (!localProduct) continue;
+        productsForState.push({
+          ...localProduct,
+          links: (localProduct.links || []).filter((link) => String(link.id) !== String(ref.linkId)),
+        });
       }
       if (productsForState.length) {
         mergeWarehouseProductsForCurrentSelection(productsForState, { selectionVersion, selectedGroupKey });

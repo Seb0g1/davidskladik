@@ -2251,6 +2251,74 @@ test("warehouse link writes reject stale expectedUpdatedAt before validation", a
   }
 });
 
+test("bulk warehouse link delete removes grouped marketplace refs together", async () => {
+  const agent = request.agent(app);
+  const suffix = Date.now();
+  const firstId = `smoke-bulk-link-a-${suffix}`;
+  const secondId = `smoke-bulk-link-b-${suffix}`;
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    const first = await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: firstId,
+        target: "ozon",
+        marketplace: "ozon",
+        offerId: "BULK-LINK-1",
+        name: "Bulk link Ozon",
+        links: [{ id: "link-a", article: "PM-BULK-1", supplierName: "Supplier A" }],
+      })
+      .expect(200);
+    const second = await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: secondId,
+        target: "yandex-01",
+        marketplace: "yandex",
+        offerId: "BULK-LINK-1",
+        name: "Bulk link Yandex",
+        links: [{ id: "link-b", article: "PM-BULK-1", supplierName: "Supplier A" }],
+      })
+      .expect(200);
+
+    const refs = [
+      {
+        productId: firstId,
+        linkId: "link-a",
+        expectedUpdatedAt: first.body.product.updatedAt,
+        expectedLinksSignature: warehouseProductLinksSignature(first.body.product),
+      },
+      {
+        productId: secondId,
+        linkId: "link-b",
+        expectedUpdatedAt: second.body.product.updatedAt,
+        expectedLinksSignature: warehouseProductLinksSignature(second.body.product),
+      },
+    ];
+    const removed = await agent
+      .post("/api/warehouse/products/links/delete")
+      .send({ refs })
+      .expect(200);
+    assert.equal(removed.body.changed, 2);
+    assert.equal(removed.body.products.length, 2);
+    assert.equal(removed.body.products.every((product) => product.links.length === 0), true);
+
+    const repeated = await agent
+      .post("/api/warehouse/products/links/delete")
+      .send({ refs })
+      .expect(200);
+    assert.equal(repeated.body.alreadyDeleted, true);
+    assert.equal(repeated.body.changed, 0);
+  } finally {
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(firstId)}`).catch(() => {});
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(secondId)}`).catch(() => {});
+  }
+});
+
 test("two different warehouse products can be updated with independent locks", async () => {
   const agent = request.agent(app);
   const firstId = `smoke-lock-a-${Date.now()}`;

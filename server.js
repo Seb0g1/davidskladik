@@ -10982,6 +10982,98 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
   }
 });
 
+app.post("/api/warehouse/products/links/delete", async (request, response, next) => {
+  try {
+    const refs = (Array.isArray(request.body?.refs) ? request.body.refs : [])
+      .map((ref) => ({
+        productId: cleanText(ref.productId),
+        linkId: cleanText(ref.linkId),
+        expectedUpdatedAt: cleanText(ref.expectedUpdatedAt),
+        expectedLinksSignature: cleanText(ref.expectedLinksSignature),
+      }))
+      .filter((ref) => ref.productId && ref.linkId);
+    if (!refs.length) return response.status(400).json({ error: "Не выбраны привязки для удаления." });
+    const refsByProduct = new Map();
+    for (const ref of refs) {
+      if (!refsByProduct.has(ref.productId)) refsByProduct.set(ref.productId, []);
+      refsByProduct.get(ref.productId).push(ref);
+    }
+
+    return await withWarehouseProductMutationLock(Array.from(refsByProduct.keys()), async () => {
+      const warehouse = await readWarehouse();
+      const changedProducts = [];
+      const changedIds = [];
+      const oldValues = [];
+      const deletedRefs = [];
+      const alreadyDeletedRefs = [];
+      const conflicts = [];
+
+      for (const [productId, productRefs] of refsByProduct.entries()) {
+        const product = warehouse.products.find((item) => String(item.id) === productId);
+        if (!product) continue;
+        const previousLinks = Array.isArray(product.links) ? product.links : [];
+        const linkIds = new Set(productRefs.map((ref) => String(ref.linkId)));
+        const removed = previousLinks.some((link) => linkIds.has(String(link.id)));
+        if (!removed) {
+          alreadyDeletedRefs.push(...productRefs);
+          continue;
+        }
+        const lockRef = productRefs.find((ref) => ref.expectedUpdatedAt || ref.expectedLinksSignature) || productRefs[0] || {};
+        const conflict = productConflict(product, {
+          expectedUpdatedAt: lockRef.expectedUpdatedAt,
+          expectedLinksSignature: lockRef.expectedLinksSignature,
+        });
+        if (conflict) {
+          conflicts.push(conflict);
+          continue;
+        }
+        oldValues.push(cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt }));
+        product.links = compactWarehouseLinks(previousLinks.filter((link) => !linkIds.has(String(link.id))));
+        product.updatedAt = new Date().toISOString();
+        changedProducts.push(product);
+        changedIds.push(product.id);
+        deletedRefs.push(...productRefs);
+      }
+
+      if (conflicts.length) return conflictResponse(response, conflicts);
+      if (!changedProducts.length) {
+        return response.json({ ok: true, changed: 0, products: [], persisted: "already_deleted", alreadyDeleted: true, deletedRefs, alreadyDeletedRefs });
+      }
+
+      await writeWarehouseProductPatch(changedProducts, { reason: "warehouse_links_bulk_delete" });
+      const idsWithRemainingLinks = changedProducts.filter((product) => (product.links || []).length).map((product) => product.id);
+      const builtProducts = idsWithRemainingLinks.length ? await buildFreshWarehouseProducts(idsWithRemainingLinks) : [];
+      const builtById = new Map(builtProducts.map((product) => [String(product.id), product]));
+      const responseProducts = changedProducts.map((product) => {
+        const built = builtById.get(String(product.id));
+        if (built) return built;
+        return {
+          ...normalizeWarehouseProduct(product),
+          links: [],
+          suppliers: [],
+          selectedSupplier: null,
+          selectedSupplierReason: "Нет сохранённых привязок.",
+          ready: false,
+          changed: false,
+          hasLinks: false,
+          status: "no_links",
+        };
+      });
+
+      response.json({ ok: true, changed: changedProducts.length, products: responseProducts, persisted: "written", deletedRefs, alreadyDeletedRefs });
+      appendAudit(request, "warehouse.links.bulk_delete", {
+        productIds: changedIds,
+        oldValue: oldValues,
+        newValue: responseProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
+      }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
+      queueMarketplaceJob("no-supplier-automation", { productIds: changedIds }, { priority: 1 });
+      if (idsWithRemainingLinks.length) queueImmediateAutoPricePush(idsWithRemainingLinks, "link_delete");
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, response, next) => {
   try {
     return await withWarehouseProductMutationLock([request.params.productId], async () => {
