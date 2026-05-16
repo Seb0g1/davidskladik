@@ -9129,12 +9129,130 @@ app.get("/api/products", async (request, response, next) => {
   }
 });
 
+function priceMasterSnapshotRaw(row = {}) {
+  const raw = row.raw;
+  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+}
+
+function priceMasterSnapshotPartner(row = {}) {
+  const raw = priceMasterSnapshotRaw(row);
+  const id = cleanText(row.partnerId || raw.partnerId || raw.PartnerID || "");
+  const name = cleanText(row.partnerName || raw.partnerName || raw.PartnerName || raw.name || "");
+  if (!id && !name) return null;
+  return { id, partnerId: id, name, partnerName: name };
+}
+
+function priceMasterSnapshotOffer(row = {}, usdRate) {
+  const raw = priceMasterSnapshotRaw(row);
+  const currency = cleanText(row.currency || raw.priceCurrency || raw.currency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
+  const price = row.price ?? raw.price ?? raw.NativePrice ?? 0;
+  const normalized = normalizePriceMasterPrice(price, usdRate, currency);
+  const rowId = cleanText(row.rowId || raw.rowId || raw.RowID || row.id);
+  const article = cleanText(row.article || raw.article || raw.NativeID || raw.offerId || "");
+  const name = cleanText(row.nativeName || raw.name || raw.NativeName || "");
+  const partner = priceMasterSnapshotPartner(row) || {};
+  const docDate = row.docDate instanceof Date
+    ? row.docDate.toISOString()
+    : cleanText(row.docDate || raw.docDate || raw.DocDate || "");
+
+  return {
+    rowId,
+    article,
+    offerId: article,
+    barcode: cleanText(raw.barcode || raw.BarCode || ""),
+    name,
+    productId: cleanText(raw.productId || raw.ProductID || ""),
+    active: row.active !== false,
+    isNew: Boolean(raw.isNew || raw.IsNew),
+    ignored: Boolean(raw.ignored || raw.Ignored),
+    docDate,
+    partnerId: partner.partnerId || "",
+    partnerName: partner.partnerName || "",
+    priceCurrency: normalized.sourceCurrency,
+    source: "postgres_snapshot",
+    ...normalized,
+  };
+}
+
+async function searchPriceMasterSnapshotPartners(query, limit = 25) {
+  if (!shouldUsePostgresStorage()) return null;
+  const prisma = getPrisma();
+  if (!prisma) return null;
+  const q = cleanText(query);
+  if (!q) return [];
+  const take = Math.min(Math.max(Number(limit) * 4, 40), 320);
+  try {
+    const rows = await prisma.priceMasterSnapshotItem.findMany({
+      where: {
+        active: true,
+        partnerName: { contains: q, mode: "insensitive" },
+      },
+      select: { partnerId: true, partnerName: true, raw: true },
+      orderBy: [{ partnerName: "asc" }],
+      take,
+    });
+    const unique = new Map();
+    for (const row of rows) {
+      const partner = priceMasterSnapshotPartner(row);
+      if (!partner?.name) continue;
+      const key = partner.partnerId || normalizeSupplierName(partner.name);
+      if (!unique.has(key)) unique.set(key, partner);
+      if (unique.size >= limit) break;
+    }
+    return Array.from(unique.values());
+  } catch (error) {
+    logger.warn("PriceMaster snapshot partner search failed, trying live", { detail: error?.message || String(error) });
+    return null;
+  }
+}
+
+async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limit = 150, usdRate } = {}) {
+  if (!shouldUsePostgresStorage()) return null;
+  const prisma = getPrisma();
+  if (!prisma) return null;
+  const q = cleanText(search);
+  const partnerId = cleanText(partner);
+  const take = cleanLimit(limit, 150, 500);
+  const and = [{ active: true }];
+
+  if (q) {
+    and.push({
+      OR: [
+        { article: { contains: q, mode: "insensitive" } },
+        { nativeName: { contains: q, mode: "insensitive" } },
+        { partnerName: { contains: q, mode: "insensitive" } },
+      ],
+    });
+  }
+
+  if (partnerId) {
+    and.push({ partnerId });
+  }
+
+  try {
+    const rows = await prisma.priceMasterSnapshotItem.findMany({
+      where: { AND: and },
+      orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
+      take,
+    });
+    return rows.map((row) => priceMasterSnapshotOffer(row, usdRate));
+  } catch (error) {
+    logger.warn("PriceMaster snapshot offer search failed, trying live", { detail: error?.message || String(error) });
+    return null;
+  }
+}
+
 app.get("/api/partners/search", async (request, response, next) => {
   try {
     const q = String(request.query.q || "").trim();
     const limit = cleanLimit(request.query.limit, 25, 80);
     if (!q) {
       return response.json({ items: [] });
+    }
+
+    const snapshotRows = await searchPriceMasterSnapshotPartners(q, limit);
+    if (snapshotRows?.length) {
+      return response.json({ items: snapshotRows, source: "postgres_snapshot" });
     }
 
     const [rows] = await pool.query(
@@ -9260,6 +9378,17 @@ app.get("/api/offers", async (request, response, next) => {
     const partner = String(request.query.partner || "").trim();
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+
+    const snapshotRows = await searchPriceMasterSnapshotOffers({
+      search,
+      partner,
+      limit,
+      usdRate,
+    });
+    if (snapshotRows?.length) {
+      return response.json(snapshotRows);
+    }
+
     const params = [];
     const conditions = ["r.Ignored = 0"];
 

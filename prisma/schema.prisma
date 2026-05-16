@@ -79,6 +79,9 @@ model WarehouseProduct {
   retryItems   PriceRetryQueueItem[]
 
   @@index([marketplace, target])
+  @@index([marketplace, status, updatedAt])
+  @@index([marketplace, archived, updatedAt])
+  @@index([target, status])
   @@index([offerId])
   @@index([productId])
   @@index([brand])
@@ -105,7 +108,10 @@ model ProductLink {
 
   @@index([productId])
   @@index([supplierArticle])
+  @@index([supplierArticle, partnerId])
   @@index([partnerId])
+  @@index([supplierName])
+  @@index([updatedAt])
   @@unique([productId, supplierArticle, partnerId, supplierName, keyword, priceCurrency])
   @@map("product_links")
 }
@@ -233,9 +239,12 @@ model PriceMasterSnapshotItem {
   updatedAt   DateTime      @default(now()) @map("updated_at")
 
   @@index([article])
+  @@index([article, partnerId])
+  @@index([active, article])
   @@index([partnerId])
   @@index([partnerName])
   @@index([nativeName])
+  @@index([updatedAt])
   @@unique([article, partnerId, rowId])
   @@map("pm_snapshot_items")
 }
