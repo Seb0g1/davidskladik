@@ -4456,6 +4456,14 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
         body: JSON.stringify({ productIds, optimisticLocks, links }),
       });
       setPendingLinkDrafts(key, []);
+      if (result.unchanged || result.alreadyWritten) {
+        if (selectionVersion === state.warehouseSelectionVersion && selectedGroupKey === state.selectedWarehouseGroupKey) {
+          elements.warehouseStatus.textContent = "Такая привязка уже сохранена. Повторная запись не запускалась.";
+        } else {
+          showToast("Такая привязка уже была сохранена. Текущий выбор не переключался.", "warn");
+        }
+        return;
+      }
       if (selectionVersion === state.warehouseSelectionVersion && selectedGroupKey === state.selectedWarehouseGroupKey) {
         mergeWarehouseProductsForCurrentSelection(result.products, { selectionVersion, selectedGroupKey });
         elements.warehouseStatus.textContent = `Привязки сохранены: ${formatNumber(links.length)}. Цена и поставщик пересчитаны по всем связям.`;
