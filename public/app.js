@@ -548,6 +548,29 @@ async function deleteWarehouseLinkWithFreshLock(productId, linkId, expectedUpdat
   }
 }
 
+function parseWarehouseLinkRefs(button) {
+  const fallback = [{
+    productId: String(button?.dataset.productId || ""),
+    linkId: String(button?.dataset.linkId || ""),
+    productUpdatedAt: String(button?.dataset.productUpdatedAt || ""),
+  }].filter((ref) => ref.productId && ref.linkId);
+  const raw = String(button?.dataset.linkRefs || "");
+  if (!raw) return fallback;
+  try {
+    const refs = JSON.parse(decodeURIComponent(raw));
+    const normalized = (Array.isArray(refs) ? refs : [])
+      .map((ref) => ({
+        productId: String(ref.productId || ""),
+        linkId: String(ref.linkId || ""),
+        productUpdatedAt: String(ref.productUpdatedAt || ""),
+      }))
+      .filter((ref) => ref.productId && ref.linkId);
+    return normalized.length ? normalized : fallback;
+  } catch (error) {
+    return fallback;
+  }
+}
+
 const pmSuggestControllers = new WeakMap();
 
 function closeAllPmSuggestPanels(exceptWrap) {
@@ -975,7 +998,9 @@ function buildWarehouseGroups(products) {
     const primary = variants[0];
     const brandLabel =
       variants.map((p) => String(p.brand || p.ozon?.vendor || p.yandex?.vendor || "").trim()).find(Boolean) || "";
-    const links = variants.flatMap((product) => (product.links || []).map((link) => ({ ...link, productId: product.id, productUpdatedAt: product.updatedAt || "" })));
+    const links = dedupeWarehouseDisplayLinks(variants.flatMap((product) =>
+      (product.links || []).map((link) => ({ ...link, productId: product.id, productUpdatedAt: product.updatedAt || "" })),
+    ));
     const suppliers = variants.flatMap((product) => product.suppliers || []);
     return {
       ...group,
@@ -1371,19 +1396,8 @@ function selectedWarehouseLocks() {
 function warehouseProductLinksSignature(product = {}) {
   return (Array.isArray(product?.links) ? product.links : [])
     .map((link) => {
-      const priceCurrency = String(link.priceCurrency || "USD").trim().toUpperCase();
-      const identity = [
-        String(link.matchType || "article"),
-        String(link.article || "").trim().toLowerCase(),
-        String(link.sourceRowId || "").trim(),
-        String(link.exactName || "").trim().toLowerCase(),
-        String(link.partnerId || "").trim(),
-        String(link.supplierName || "").trim().toLowerCase().replace(/\s+/g, " "),
-        String(link.keyword || "").trim().toLowerCase(),
-        priceCurrency === "RUB" || priceCurrency === "RUR" ? "RUB" : "USD",
-      ].join("|");
       return [
-        identity,
+        warehouseLinkDraftIdentity(link),
         String(link.id || ""),
         String(link.updatedAt || ""),
         String(link.updatedBy || link.createdBy || ""),
@@ -1391,6 +1405,52 @@ function warehouseProductLinksSignature(product = {}) {
     })
     .sort()
     .join("||");
+}
+
+function dedupeWarehouseDisplayLinks(links = []) {
+  const map = new Map();
+  for (const link of Array.isArray(links) ? links : []) {
+    const key = warehouseLinkDraftIdentity(link);
+    if (!key || key.includes("name:|")) continue;
+    const refs = Array.isArray(link.refs) && link.refs.length
+      ? link.refs
+      : [{
+          productId: String(link.productId || ""),
+          linkId: String(link.id || ""),
+          productUpdatedAt: String(link.productUpdatedAt || ""),
+        }].filter((ref) => ref.productId && ref.linkId);
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...link, refs });
+      continue;
+    }
+    const refKeySet = new Set((existing.refs || []).map((ref) => `${ref.productId}:${ref.linkId}`));
+    const mergedRefs = [...(existing.refs || [])];
+    for (const ref of refs) {
+      const refKey = `${ref.productId}:${ref.linkId}`;
+      if (!refKeySet.has(refKey)) {
+        refKeySet.add(refKey);
+        mergedRefs.push(ref);
+      }
+    }
+    map.set(key, {
+      ...existing,
+      ...link,
+      id: existing.id || link.id,
+      article: existing.article || link.article,
+      exactName: existing.exactName || link.exactName,
+      sourceRowId: existing.sourceRowId || link.sourceRowId,
+      supplierName: existing.supplierName || link.supplierName,
+      partnerId: existing.partnerId || link.partnerId,
+      refs: mergedRefs,
+      productId: existing.productId || link.productId,
+      productUpdatedAt: existing.productUpdatedAt || link.productUpdatedAt,
+      matchedCount: Math.max(Number(existing.matchedCount || 0), Number(link.matchedCount || 0)),
+      availableCount: Math.max(Number(existing.availableCount || 0), Number(link.availableCount || 0)),
+      missingInPriceMaster: Boolean(existing.missingInPriceMaster && link.missingInPriceMaster),
+    });
+  }
+  return Array.from(map.values());
 }
 
 function conflictOfferPreview(conflicts = []) {
@@ -2693,7 +2753,7 @@ function renderWarehouseDetail(group, { force = false } = {}) {
                         </span>
                         ${linkMetaText(link) ? `<span class="link-meta-line">${escapeHtml(linkMetaText(link))}</span>` : ""}
                       </div>
-                      <button class="text-button delete-link" type="button" data-product-id="${escapeHtml(link.productId || product.id)}" data-product-updated-at="${escapeHtml(link.productUpdatedAt || product.updatedAt || "")}" data-link-id="${escapeHtml(link.id)}">Удалить</button>
+                      <button class="text-button delete-link" type="button" data-product-id="${escapeHtml(link.productId || product.id)}" data-product-updated-at="${escapeHtml(link.productUpdatedAt || product.updatedAt || "")}" data-link-id="${escapeHtml(link.id)}" data-link-refs="${escapeHtml(encodeURIComponent(JSON.stringify(link.refs || [{ productId: link.productId || product.id, linkId: link.id, productUpdatedAt: link.productUpdatedAt || product.updatedAt || "" }])))}">Удалить</button>
                     </div>
                   `,
                 )
@@ -4444,9 +4504,9 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       return;
     }
     if (linkButton) {
-      const productId = linkButton.dataset.productId || "";
-      const linkId = linkButton.dataset.linkId || "";
-      const actionKey = `delete-link:${productId}:${linkId}`;
+      const linkRefs = parseWarehouseLinkRefs(linkButton);
+      const productIds = Array.from(new Set(linkRefs.map((ref) => ref.productId).filter(Boolean)));
+      const actionKey = `delete-link:${linkRefs.map((ref) => `${ref.productId}:${ref.linkId}`).sort().join("|")}`;
       if (!beginWarehouseLinkAction(actionKey)) {
         elements.warehouseStatus.textContent = "Привязка уже удаляется. Дождитесь завершения операции.";
         return;
@@ -4455,18 +4515,22 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       linkButton.disabled = true;
       const selectionVersion = state.warehouseSelectionVersion;
       const selectedGroupKey = state.selectedWarehouseGroupKey;
-      beginWarehouseMutation([productId]);
-      const result = await deleteWarehouseLinkWithFreshLock(productId, linkId, linkButton.dataset.productUpdatedAt || "");
-      if (result.product) {
-        const localProduct = warehouseProductById(productId);
-        const productForState = result.alreadyDeleted && localProduct
+      beginWarehouseMutation(productIds);
+      const productsForState = [];
+      for (const ref of linkRefs) {
+        const result = await deleteWarehouseLinkWithFreshLock(ref.productId, ref.linkId, ref.productUpdatedAt || "");
+        if (!result.product) continue;
+        const localProduct = warehouseProductById(ref.productId);
+        productsForState.push(result.alreadyDeleted && localProduct
           ? {
               ...localProduct,
-              links: (localProduct.links || []).filter((link) => String(link.id) !== String(linkId)),
+              links: (localProduct.links || []).filter((link) => String(link.id) !== String(ref.linkId)),
               updatedAt: result.product.updatedAt || localProduct.updatedAt,
             }
-          : result.product;
-        mergeWarehouseProductsForCurrentSelection([productForState], { selectionVersion, selectedGroupKey });
+          : result.product);
+      }
+      if (productsForState.length) {
+        mergeWarehouseProductsForCurrentSelection(productsForState, { selectionVersion, selectedGroupKey });
       } else {
         queueWarehouseRefresh();
       }
@@ -4475,7 +4539,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       } else {
         showToast("Привязка удалена у предыдущей карточки. Текущий выбор не переключался.", "warn");
       }
-      endWarehouseMutation([productId]);
+      endWarehouseMutation(productIds);
       endWarehouseLinkAction(actionKey);
       delete linkButton.dataset.busyKey;
     }
@@ -4493,7 +4557,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       endWarehouseLinkAction(linkButton.dataset.busyKey);
       delete linkButton.dataset.busyKey;
     }
-    if (linkButton?.dataset.productId) endWarehouseMutation([linkButton.dataset.productId]);
+    if (linkButton) endWarehouseMutation(Array.from(new Set(parseWarehouseLinkRefs(linkButton).map((ref) => ref.productId).filter(Boolean))));
     if (handleProductConflict(error, "удаления")) return;
     elements.warehouseStatus.textContent = error.message;
   }

@@ -2017,6 +2017,10 @@ function warehouseProductHasLinks(product = {}, links = []) {
   return compactWarehouseLinks(links).every((link) => existing.has(warehouseLinkTargetKey(link)));
 }
 
+function warehouseLinksEqualForSave(a = {}, b = {}) {
+  return warehouseLinkTargetKey(a) === warehouseLinkTargetKey(b);
+}
+
 function warehouseProductLinksSignature(product = {}) {
   return compactWarehouseLinks(product.links || [])
     .map((link) => [
@@ -10822,7 +10826,8 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 
     for (const product of warehouse.products) {
       if (!ids.has(String(product.id))) continue;
-      oldValues.push(cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt }));
+      const beforeSignature = warehouseProductLinksSignature(product);
+      const beforeValue = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
       product.links = Array.isArray(product.links) ? product.links : [];
       for (const linkToSave of baseLinks) {
         const identityKey = warehouseLinkTargetKey(linkToSave);
@@ -10835,25 +10840,33 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         });
         const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkTargetKey(item) === identityKey);
         if (index >= 0) {
-          product.links[index] = normalizeWarehouseLink({
-            ...product.links[index],
-            ...link,
-            id: product.links[index].id || link.id,
-            createdAt: product.links[index].createdAt || link.createdAt,
-            createdBy: product.links[index].createdBy || link.createdBy,
-            updatedAt: now,
-            updatedBy: username,
-          });
+          const existing = normalizeWarehouseLink(product.links[index]);
+          if (!warehouseLinksEqualForSave(existing, link)) {
+            product.links[index] = normalizeWarehouseLink({
+              ...existing,
+              ...link,
+              id: existing.id || link.id,
+              createdAt: existing.createdAt || link.createdAt,
+              createdBy: existing.createdBy || link.createdBy,
+              updatedAt: now,
+              updatedBy: username,
+            });
+          }
         }
         else product.links.push(link);
       }
       product.links = compactWarehouseLinks(product.links);
+      if (warehouseProductLinksSignature(product) === beforeSignature) continue;
+      oldValues.push(beforeValue);
       product.autoPriceEnabled = true;
       product.updatedAt = now;
       updatedIds.push(product.id);
     }
 
-    if (!updatedIds.length) return response.status(404).json({ error: "Товары склада не найдены." });
+    if (!targetProducts.length) return response.status(404).json({ error: "Товары склада не найдены." });
+    if (!updatedIds.length) {
+      return response.json({ ok: true, changed: 0, products: targetProducts.map(normalizeWarehouseProduct), persisted: "unchanged", unchanged: true });
+    }
 
     await writeWarehouseProductPatch(
       warehouse.products.filter((product) => updatedIds.includes(product.id)),
@@ -10900,6 +10913,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const conflict = productConflict(product, request.body?.expectedUpdatedAt);
     if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
+    const beforeSignature = warehouseProductLinksSignature(product);
 
     let link = normalizeWarehouseLink(request.body);
     if (!link.article && !link.exactName && !link.sourceRowId) {
@@ -10916,15 +10930,18 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const identityKey = warehouseLinkTargetKey(link);
     const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkTargetKey(item) === identityKey);
     if (index >= 0) {
-      product.links[index] = normalizeWarehouseLink({
-        ...product.links[index],
-        ...link,
-        id: product.links[index].id || link.id,
-        createdAt: product.links[index].createdAt || link.createdAt,
-        createdBy: product.links[index].createdBy || link.createdBy || username,
-        updatedAt: now,
-        updatedBy: username,
-      });
+      const existing = normalizeWarehouseLink(product.links[index]);
+      if (!warehouseLinksEqualForSave(existing, link)) {
+        product.links[index] = normalizeWarehouseLink({
+          ...existing,
+          ...link,
+          id: existing.id || link.id,
+          createdAt: existing.createdAt || link.createdAt,
+          createdBy: existing.createdBy || link.createdBy || username,
+          updatedAt: now,
+          updatedBy: username,
+        });
+      }
     }
     else product.links.push(normalizeWarehouseLink({
       ...link,
@@ -10934,6 +10951,10 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       updatedBy: username,
     }));
     product.links = compactWarehouseLinks(product.links);
+    if (warehouseProductLinksSignature(product) === beforeSignature) {
+      const normalized = normalizeWarehouseProduct(product);
+      return response.json({ ok: true, product: normalized, links: normalized.links || [], persisted: "unchanged", unchanged: true });
+    }
     if (product.links.length > 0) product.autoPriceEnabled = true;
     product.updatedAt = now;
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_save" });
