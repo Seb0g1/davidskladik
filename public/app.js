@@ -37,6 +37,8 @@ const state = {
   warehouseLoadedRows: 0,
   warehouseTotalFiltered: 0,
   warehouseCounters: {},
+  warehouseGroupsCacheSource: null,
+  warehouseGroupsCache: [],
   warehouseRequestToken: 0,
   warehouseLivePollTimer: null,
   warehouseLiveRefreshRunning: false,
@@ -1045,8 +1047,19 @@ function sortWarehouseGroups(groups) {
   });
 }
 
+function invalidateWarehouseGroupsCache() {
+  state.warehouseGroupsCacheSource = null;
+  state.warehouseGroupsCache = [];
+}
+
 function getSortedWarehouseGroups() {
-  return sortWarehouseGroups(buildWarehouseGroups(state.filteredWarehouse));
+  if (state.warehouseGroupsCacheSource === state.filteredWarehouse && Array.isArray(state.warehouseGroupsCache)) {
+    return state.warehouseGroupsCache;
+  }
+  const groups = sortWarehouseGroups(buildWarehouseGroups(state.filteredWarehouse));
+  state.warehouseGroupsCacheSource = state.filteredWarehouse;
+  state.warehouseGroupsCache = groups;
+  return groups;
 }
 
 function ozonUrl(product) {
@@ -1630,6 +1643,7 @@ function applyWarehouseFilters() {
   const previousSelectedProductId = state.selectedWarehouseProductId;
   const previousIndex = previousSelectedKey ? previousOrder.indexOf(previousSelectedKey) : -1;
   state.filteredWarehouse = Array.isArray(state.warehouse) ? state.warehouse.slice() : [];
+  invalidateWarehouseGroupsCache();
 
   const groups = getSortedWarehouseGroups();
   const selectedInFiltered = groups.find((group) => group.key === state.selectedWarehouseGroupKey) || null;
@@ -1694,6 +1708,7 @@ function renderWarehouse(data) {
     state.enrichedProductIds = new Set();
     state.warehouseVisibleLimit = 80;
   }
+  invalidateWarehouseGroupsCache();
   state.warehouseHasMore = Boolean(data.hasMore);
   state.warehousePage = Number(data.page || state.warehousePage || 1);
   state.warehouseTotalFiltered = Number(data.total || state.warehouseTotalFiltered || state.warehouse.length);
@@ -1879,10 +1894,9 @@ function renderWarehouseCards() {
 }
 
 function mergeWarehouseProduct(product, options = {}) {
-  const index = state.warehouse.findIndex((item) => item.id === product.id);
-  if (index >= 0 && options.preserveComputed) {
-    const current = state.warehouse[index];
-    state.warehouse[index] = {
+  const mergeValue = (current) => {
+    if (!current || !options.preserveComputed) return product;
+    return {
       ...current,
       ...product,
       suppliers: Array.isArray(product.suppliers) && product.suppliers.length ? product.suppliers : current.suppliers,
@@ -1899,8 +1913,19 @@ function mergeWarehouseProduct(product, options = {}) {
       lastYandexPriceSend: product.lastYandexPriceSend || current.lastYandexPriceSend,
       noSupplierAutomation: product.noSupplierAutomation || current.noSupplierAutomation,
     };
-  } else if (index >= 0) state.warehouse[index] = product;
-  else state.warehouse.push(product);
+  };
+  const index = state.warehouse.findIndex((item) => item.id === product.id);
+  const nextWarehouseProduct = index >= 0 ? mergeValue(state.warehouse[index]) : product;
+  if (index >= 0) state.warehouse[index] = nextWarehouseProduct;
+  else state.warehouse.push(nextWarehouseProduct);
+
+  const filteredIndex = state.filteredWarehouse.findIndex((item) => item.id === product.id);
+  if (filteredIndex >= 0) {
+    state.filteredWarehouse[filteredIndex] = filteredIndex >= 0 && options.preserveComputed
+      ? mergeValue(state.filteredWarehouse[filteredIndex])
+      : nextWarehouseProduct;
+  }
+  invalidateWarehouseGroupsCache();
 }
 
 function mergeWarehouseProducts(products = []) {
@@ -1983,8 +2008,8 @@ function handleProductConflict(error, context = "операции") {
 function renderDetailForProductIds(productIds = [], options = {}) {
   const ids = new Set((productIds || []).map(String));
   if (!ids.size) return false;
-  const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
-    .find((item) => (item.productIds || []).some((id) => ids.has(String(id))));
+  const group = getSortedWarehouseGroups().find((item) => (item.productIds || []).some((id) => ids.has(String(id))))
+    || sortWarehouseGroups(buildWarehouseGroups(state.warehouse)).find((item) => (item.productIds || []).some((id) => ids.has(String(id))));
   if (!group) return false;
   if (options.select !== false) state.selectedWarehouseGroupKey = group.key;
   if (options.select === false && state.selectedWarehouseGroupKey !== group.key) return false;
@@ -1996,8 +2021,8 @@ function renderDetailForProductIds(productIds = [], options = {}) {
 function refreshSelectedDetailForProductIds(productIds = []) {
   const ids = new Set((productIds || []).map(String));
   if (!ids.size || !state.selectedWarehouseGroupKey) return false;
-  const group = sortWarehouseGroups(buildWarehouseGroups(state.warehouse))
-    .find((item) => item.key === state.selectedWarehouseGroupKey);
+  const group = getSortedWarehouseGroups().find((item) => item.key === state.selectedWarehouseGroupKey)
+    || sortWarehouseGroups(buildWarehouseGroups(state.warehouse)).find((item) => item.key === state.selectedWarehouseGroupKey);
   if (!group || !(group.productIds || []).some((id) => ids.has(String(id)))) return false;
   state.selectedWarehouseDetailGroup = group;
   renderWarehouseDetail(group);
