@@ -186,6 +186,9 @@ const priceMasterLinkLookupCacheTtlMs = Math.max(1000, Number(process.env.LINK_S
 const priceMasterLinkLookupCacheMax = Math.max(100, Number(process.env.LINK_SAVE_PM_CACHE_MAX || 2000));
 let warehousePostgresSummaryCache = null;
 const warehousePostgresSummaryCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_PAGE_SUMMARY_CACHE_MS || 15000));
+let warehousePostgresSuppliersCache = null;
+let warehousePostgresDetailCache = new Map();
+const warehousePostgresDetailCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_DETAIL_CACHE_MS || 15000));
 const warehouseViewCache = new Map();
 const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
@@ -263,6 +266,8 @@ function invalidateWarehouseViewCache() {
   warehouseViewCache.clear();
   warehouseViewBuilds.clear();
   warehousePostgresSummaryCache = null;
+  warehousePostgresSuppliersCache = null;
+  warehousePostgresDetailCache.clear();
 }
 
 app.use(express.json({ limit: "1mb" }));
@@ -6395,6 +6400,30 @@ async function replaceProductLinksInPostgres(prisma, products = []) {
   return { products: normalizedProducts.length, links: linksWritten };
 }
 
+async function getWarehousePostgresSuppliers(prisma) {
+  if (
+    warehousePostgresSuppliersCache
+    && Date.now() - warehousePostgresSuppliersCache.at < warehousePostgresDetailCacheTtlMs
+  ) {
+    return warehousePostgresSuppliersCache.value;
+  }
+  const suppliers = await prisma.managedSupplier.findMany({ orderBy: { name: "asc" } });
+  const normalized = suppliers.map(supplierFromPostgres);
+  warehousePostgresSuppliersCache = { at: Date.now(), value: normalized };
+  return normalized;
+}
+
+function warehousePostgresCachedDetail(key, build) {
+  const cacheKey = cleanText(key);
+  if (!cacheKey) return build();
+  const cached = warehousePostgresDetailCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < warehousePostgresDetailCacheTtlMs) return cloneAuditValue(cached.value);
+  return Promise.resolve(build()).then((value) => {
+    if (value) warehousePostgresDetailCache.set(cacheKey, { at: Date.now(), value: cloneAuditValue(value) });
+    return value;
+  });
+}
+
 async function ensureWarehousePostgresLinksBackfilled(prisma) {
   if (warehousePostgresLinkBackfillDone) return { created: 0, skipped: true };
   if (warehousePostgresLinkBackfillPromise) return warehousePostgresLinkBackfillPromise;
@@ -8545,9 +8574,9 @@ async function getWarehousePostgresSummary(prisma, rate) {
       include: { links: true },
       orderBy: { updatedAt: "desc" },
     }),
-    prisma.managedSupplier.findMany({ orderBy: { name: "asc" } }),
+    getWarehousePostgresSuppliers(prisma),
   ]);
-  const normalizedSuppliers = suppliers.map(supplierFromPostgres);
+  const normalizedSuppliers = suppliers;
   const linkedProducts = linkedRows.map(productFromPostgres);
   const counterStats = await buildWarehouseCounterStatsFromLinkedProducts(
     linkedProducts,
@@ -8685,38 +8714,39 @@ async function buildWarehouseProductDetailFromPostgres(productId, { usdRate } = 
   await ensureWarehousePostgresLinksBackfilled(prisma);
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
-  const row = await prisma.warehouseProduct.findFirst({
-    where: { AND: [enabledWarehouseTargetWhere(), { id: productId }] },
-    include: { links: true },
+  return warehousePostgresCachedDetail(`product:${productId}:${rate}`, async () => {
+    const row = await prisma.warehouseProduct.findFirst({
+      where: { AND: [enabledWarehouseTargetWhere(), { id: productId }] },
+      include: { links: true },
+    });
+    if (!row) return null;
+    const normalizedSuppliers = await getWarehousePostgresSuppliers(prisma);
+    const warehouse = {
+      createdAt: row.createdAt?.toISOString?.() || null,
+      updatedAt: row.updatedAt?.toISOString?.() || null,
+      products: [productFromPostgres(row)],
+      suppliers: normalizedSuppliers,
+    };
+    const built = await buildFreshWarehouseProductsForWarehouse(
+      warehouse,
+      [row.id],
+      { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+    );
+    const product = built[0] || warehouse.products[0];
+    return {
+      createdAt: warehouse.createdAt,
+      product: {
+        ...product,
+        autoPriceEnabled: product.autoPriceEnabled !== false,
+        links: Array.isArray(product.links) ? product.links : [],
+        suppliers: Array.isArray(product.suppliers) ? product.suppliers : [],
+        selectedSupplier: product.selectedSupplier || null,
+        noSupplierAutomation: product.noSupplierAutomation || {},
+        marketplaceState: product.marketplaceState || {},
+        partial: false,
+      },
+    };
   });
-  if (!row) return null;
-  const suppliers = await prisma.managedSupplier.findMany({ orderBy: { name: "asc" } });
-  const normalizedSuppliers = suppliers.map(supplierFromPostgres);
-  const warehouse = {
-    createdAt: row.createdAt?.toISOString?.() || null,
-    updatedAt: row.updatedAt?.toISOString?.() || null,
-    products: [productFromPostgres(row)],
-    suppliers: normalizedSuppliers,
-  };
-  const built = await buildFreshWarehouseProductsForWarehouse(
-    warehouse,
-    [row.id],
-    { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
-  );
-  const product = built[0] || warehouse.products[0];
-  return {
-    createdAt: warehouse.createdAt,
-    product: {
-      ...product,
-      autoPriceEnabled: product.autoPriceEnabled !== false,
-      links: Array.isArray(product.links) ? product.links : [],
-      suppliers: Array.isArray(product.suppliers) ? product.suppliers : [],
-      selectedSupplier: product.selectedSupplier || null,
-      noSupplierAutomation: product.noSupplierAutomation || {},
-      marketplaceState: product.marketplaceState || {},
-      partial: false,
-    },
-  };
 }
 
 function normalizeWarehouseDetailProduct(product = {}) {
@@ -8746,37 +8776,42 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
   await ensureWarehousePostgresLinksBackfilled(prisma);
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
-  const baseWhere = warehousePagePostgresWhere({ ...filters, q: "", linked: "all", brand: "" });
-  let rows = [];
-  if (kind === "offer") {
-    rows = await prisma.warehouseProduct.findMany({
-      where: { AND: [baseWhere, { offerId: { equals: value, mode: "insensitive" } }] },
-      include: { links: true },
-      orderBy: warehousePagePostgresOrderBy(),
-    });
-  } else if (kind === "manual") {
-    const candidates = await prisma.warehouseProduct.findMany({
-      where: baseWhere,
-      include: { links: true },
-      orderBy: warehousePagePostgresOrderBy(),
-    });
-    rows = candidates.filter((row) => warehouseProductPageGroupKey(productFromPostgres(row)) === groupKey);
-  }
-  if (!rows.length) return null;
-  const suppliers = await prisma.managedSupplier.findMany({ orderBy: { name: "asc" } });
-  const normalizedSuppliers = suppliers.map(supplierFromPostgres);
-  const products = rows.map(productFromPostgres);
-  const pageProducts = await enrichWeakOzonProductsForPage(products);
-  const built = await buildFreshWarehouseProductsForWarehouse(
-    { products: pageProducts, suppliers: normalizedSuppliers },
-    pageProducts.map((product) => product.id),
-    { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
-  );
-  const builtMap = new Map(built.map((product) => [product.id, product]));
-  return {
-    products: pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product))),
-    suppliers: normalizedSuppliers,
-  };
+  const cacheKey = `group:${groupKey}:${rate}:${JSON.stringify({
+    marketplace: cleanText(filters.marketplace || "all"),
+    state: cleanText(filters.state || "all"),
+  })}`;
+  return warehousePostgresCachedDetail(cacheKey, async () => {
+    const baseWhere = warehousePagePostgresWhere({ ...filters, q: "", linked: "all", brand: "" });
+    let rows = [];
+    if (kind === "offer") {
+      rows = await prisma.warehouseProduct.findMany({
+        where: { AND: [baseWhere, { offerId: { equals: value, mode: "insensitive" } }] },
+        include: { links: true },
+        orderBy: warehousePagePostgresOrderBy(),
+      });
+    } else if (kind === "manual") {
+      const candidates = await prisma.warehouseProduct.findMany({
+        where: baseWhere,
+        include: { links: true },
+        orderBy: warehousePagePostgresOrderBy(),
+      });
+      rows = candidates.filter((row) => warehouseProductPageGroupKey(productFromPostgres(row)) === groupKey);
+    }
+    if (!rows.length) return null;
+    const normalizedSuppliers = await getWarehousePostgresSuppliers(prisma);
+    const products = rows.map(productFromPostgres);
+    const pageProducts = await enrichWeakOzonProductsForPage(products);
+    const built = await buildFreshWarehouseProductsForWarehouse(
+      { products: pageProducts, suppliers: normalizedSuppliers },
+      pageProducts.map((product) => product.id),
+      { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+    );
+    const builtMap = new Map(built.map((product) => [product.id, product]));
+    return {
+      products: pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product))),
+      suppliers: normalizedSuppliers,
+    };
+  });
 }
 
 async function buildWarehouseGroupDetail(groupKey, { usdRate, filters = {} } = {}) {
