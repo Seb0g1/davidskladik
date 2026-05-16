@@ -7529,6 +7529,57 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
     });
 }
 
+function priceMasterSnapshotLinkRow(row = {}, link = {}, usdRate, supplierMaps = managedSupplierMaps()) {
+  const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  const base = {
+    article: cleanText(row.article || raw.article || raw.NativeID || raw.offerId || ""),
+    name: cleanText(row.nativeName || raw.name || raw.NativeName || ""),
+    price: row.price ?? raw.price ?? raw.NativePrice ?? 0,
+    active: row.active !== false,
+    ignored: Boolean(raw.ignored || raw.Ignored),
+    rowId: cleanText(row.rowId || raw.rowId || raw.RowID || row.id),
+    docDate: row.docDate instanceof Date ? row.docDate.toISOString() : cleanText(row.docDate || raw.docDate || raw.DocDate || ""),
+    partnerId: cleanText(row.partnerId || raw.partnerId || raw.PartnerID || ""),
+    partnerName: cleanText(row.partnerName || raw.partnerName || raw.PartnerName || raw.name || ""),
+  };
+  const priceCurrency = resolvePriceMasterRowCurrency(base, link, supplierMaps);
+  return {
+    ...base,
+    priceCurrency,
+    ...normalizePriceMasterPrice(base.price, usdRate, priceCurrency),
+  };
+}
+
+async function findPriceMasterSnapshotRowsForLink(linkInput, usdRate, managedSuppliers = []) {
+  if (!shouldUsePostgresStorage()) return null;
+  const prisma = getPrisma();
+  if (!prisma) return null;
+  const link = normalizeWarehouseLink(linkInput);
+  if (!warehouseLinkHasMatchTarget(link)) return [];
+
+  const and = [];
+  if (link.matchType === "selected_row" && link.sourceRowId) {
+    and.push({ rowId: cleanText(link.sourceRowId) });
+  } else if (link.matchType === "selected_row" || link.matchType === "exact_name") {
+    const exactName = cleanText(link.exactName || link.article);
+    if (exactName) and.push({ nativeName: { equals: exactName, mode: "insensitive" } });
+  } else {
+    and.push({ article: cleanText(link.article) });
+  }
+  if (link.partnerId) and.push({ partnerId: cleanText(link.partnerId) });
+  if (!and.length) return [];
+
+  const supplierMaps = managedSupplierMaps(managedSuppliers);
+  const rows = await prisma.priceMasterSnapshotItem.findMany({
+    where: { AND: and },
+    orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
+    take: 200,
+  });
+  return rows
+    .map((row) => priceMasterSnapshotLinkRow(row, link, usdRate, supplierMaps))
+    .filter((row) => priceMasterRowMatchesLink(row, link));
+}
+
 async function getLivePriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate) {
   const normalizedLinks = links.map(normalizeWarehouseLink).filter((link) => link.article || link.exactName || link.sourceRowId);
   if (!normalizedLinks.length) return new Map();
@@ -7599,9 +7650,19 @@ async function findPriceMasterRowsForLinkFast(linkInput, usdRate, managedSupplie
     return new Map();
   });
   const snapshotRows = snapshotMap.get(link.id) || [];
-  if (snapshotRows.length || options.live === false) {
+  if (snapshotRows.length) {
     setPriceMasterLinkLookupCache(key, snapshotRows);
     return snapshotRows;
+  }
+
+  const postgresRows = await findPriceMasterSnapshotRowsForLink(link, usdRate, managedSuppliers).catch((error) => {
+    logger.warn("PriceMaster postgres snapshot link lookup skipped", { detail: error?.message || String(error) });
+    return null;
+  });
+  if (postgresRows?.length || options.live === false) {
+    const rows = postgresRows || [];
+    setPriceMasterLinkLookupCache(key, rows);
+    return rows;
   }
 
   const timeoutMs = Math.max(250, Number(options.timeoutMs || process.env.LINK_SAVE_PM_TIMEOUT_MS || 1200));
