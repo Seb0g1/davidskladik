@@ -1979,10 +1979,11 @@ function warehouseLinkTargetKey(input = {}) {
   const primary = link.article
     ? `article:${link.article.toLowerCase()}`
     : (link.sourceRowId ? `row:${link.sourceRowId}` : `name:${link.exactName.toLowerCase()}`);
+  const supplierTarget = normalizeSupplierName(link.supplierName) || link.partnerId;
   return [
     link.matchType,
     primary,
-    link.partnerId || normalizeSupplierName(link.supplierName),
+    supplierTarget,
     link.keyword.toLowerCase(),
     link.priceCurrency,
   ].join("|");

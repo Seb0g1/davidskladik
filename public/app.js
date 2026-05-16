@@ -947,7 +947,7 @@ function warehouseLinkDraftIdentity(link = {}) {
   const keyword = String(link.keyword || "").trim().toLowerCase();
   const priceCurrency = String(link.priceCurrency || "USD").trim().toUpperCase() === "RUB" ? "RUB" : "USD";
   const target = article ? `article:${article}` : (sourceRowId ? `row:${sourceRowId}` : `name:${exactName}`);
-  return [matchType, target, partnerId || supplierName, keyword, priceCurrency].join("|");
+  return [matchType, target, supplierName || partnerId, keyword, priceCurrency].join("|");
 }
 
 function dedupeLinkDrafts(links = []) {

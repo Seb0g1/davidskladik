@@ -2742,6 +2742,7 @@ test("warehouse product normalization collapses duplicate supplier links by targ
         id: "link-repeat",
         article: "pm-1",
         sourceRowId: "price-master-row-2",
+        partnerId: "101",
         supplierName: " supplier a ",
         priceCurrency: "USD",
         updatedBy: "manager",
