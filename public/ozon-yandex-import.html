@@ -171,6 +171,22 @@
         </div>
       </section>
     </div>
+    <div id="importActionConfirmModal" class="cleanup-modal-backdrop" hidden>
+      <section class="cleanup-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="importActionConfirmTitle">
+        <div class="cleanup-confirm-head">
+          <div>
+            <p id="importActionConfirmEyebrow" class="eyebrow">Подтверждение</p>
+            <h2 id="importActionConfirmTitle">Подтвердите действие</h2>
+          </div>
+          <button id="importActionConfirmClose" class="modal-icon-button" type="button" aria-label="Закрыть">×</button>
+        </div>
+        <div id="importActionConfirmBody" class="action-confirm-body"></div>
+        <div class="cleanup-confirm-actions">
+          <button id="importActionConfirmCancel" class="secondary-button" type="button">Отмена</button>
+          <button id="importActionConfirmSubmit" class="primary-button" type="button">Продолжить</button>
+        </div>
+      </section>
+    </div>
     <script src="/ozon-yandex-import.js"></script>
   </body>
 </html>

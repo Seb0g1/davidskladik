@@ -204,7 +204,13 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (!window.confirm(`${editingProductId ? "Обновить" : "Выгрузить"} карточку товара в Yandex Market? Это отправит данные в Partner API.`)) return;
+  const confirmed = await window.openProductActionConfirm({
+    eyebrow: "Yandex Market",
+    title: `${editingProductId ? "Обновить" : "Выгрузить"} карточку в Yandex Market?`,
+    lines: ["Данные будут отправлены в Partner API.", "Перед отправкой карточка сохранится в личном складе."],
+    confirmLabel: editingProductId ? "Обновить в Yandex" : "Выгрузить в Yandex",
+  });
+  if (!confirmed) return;
 
   statusBox.textContent = "Сохраняю draft и отправляю товар в Yandex Market...";
   try {

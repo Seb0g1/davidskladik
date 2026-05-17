@@ -494,6 +494,22 @@ h1 {
   font-size: 13px;
 }
 
+.action-confirm-body {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 18px;
+}
+
+.action-confirm-body p {
+  margin: 0;
+  color: var(--muted-strong);
+  line-height: 1.5;
+}
+
+.action-confirm-body strong {
+  color: var(--ink-strong);
+}
+
 .cleanup-confirm-input {
   display: grid;
   gap: 8px;
@@ -5921,6 +5937,140 @@ select.is-invalid {
 @media (max-width: 900px) {
   .settings-rule-row {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Final UI polish: keep navigation, action links and heavy toolbars stable. */
+.primary-button,
+.secondary-button,
+.success-button,
+.danger-button,
+.primary-link-button,
+.secondary-link-button,
+.compact-button,
+.text-link {
+  text-decoration: none;
+}
+
+.primary-button,
+.secondary-button,
+.success-button,
+.danger-button,
+.primary-link-button,
+.secondary-link-button {
+  white-space: normal;
+  text-align: center;
+}
+
+.app-header {
+  align-items: flex-start;
+}
+
+.app-header > div:first-child {
+  min-width: min(420px, 100%);
+}
+
+.header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  min-width: min(520px, 100%);
+}
+
+.header-actions .primary-link-button,
+.header-actions .secondary-link-button,
+.header-actions .secondary-button {
+  flex: 0 1 auto;
+}
+
+.import-toolbar-panel {
+  align-items: center;
+  flex-direction: column;
+}
+
+.import-toolbar {
+  width: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.import-toolbar .search-control {
+  flex: 0 0 112px;
+}
+
+.import-toolbar .search-control input {
+  min-width: 0;
+}
+
+.import-toolbar .primary-button,
+.import-toolbar .secondary-button,
+.import-toolbar .danger-button {
+  flex: 0 1 auto;
+  min-height: 42px;
+  padding-inline: 14px;
+  font-size: 14px;
+}
+
+.sync-status-pill {
+  align-self: flex-end;
+  max-width: min(360px, 100%);
+  line-height: 1.35;
+}
+
+.accounts-tool-link {
+  min-width: 220px;
+}
+
+.account-card dd,
+.readonly-note,
+.import-row-title strong,
+.import-row-meta,
+.history-row,
+.sync-log-row {
+  overflow-wrap: anywhere;
+}
+
+.warehouse-topbar-v2 > #warehouseRepairWeakOzonButton {
+  align-self: stretch;
+  min-height: 100%;
+  padding-inline: 18px;
+  border-radius: 18px;
+}
+
+@media (max-width: 1120px) {
+  .app-header {
+    align-items: stretch;
+  }
+
+  .app-header > div:first-child,
+  .header-actions {
+    min-width: 0;
+  }
+
+  .header-actions {
+    justify-content: flex-start;
+  }
+
+  .import-toolbar-panel {
+    align-items: stretch;
+  }
+
+  .sync-status-pill {
+    max-width: none;
+  }
+}
+
+@media (max-width: 680px) {
+  .header-actions .primary-link-button,
+  .header-actions .secondary-link-button,
+  .header-actions .secondary-button,
+  .import-toolbar .primary-button,
+  .import-toolbar .secondary-button,
+  .import-toolbar .danger-button,
+  .import-toolbar .search-control {
+    width: 100%;
+    flex-basis: 100%;
   }
 }
 

@@ -239,6 +239,7 @@ model PriceMasterSnapshotItem {
   updatedAt   DateTime      @default(now()) @map("updated_at")
 
   @@index([article])
+  @@index([rowId])
   @@index([article, partnerId])
   @@index([active, article])
   @@index([partnerId])

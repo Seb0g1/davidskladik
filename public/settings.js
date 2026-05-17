@@ -25,6 +25,13 @@ const auditDateToInput = document.querySelector("#auditDateToInput");
 const auditLoadButton = document.querySelector("#auditLoadButton");
 const auditList = document.querySelector("#auditList");
 const auditStatus = document.querySelector("#auditStatus");
+const passwordResetModal = document.querySelector("#passwordResetModal");
+const passwordResetTitle = document.querySelector("#passwordResetTitle");
+const passwordResetHint = document.querySelector("#passwordResetHint");
+const passwordResetInput = document.querySelector("#passwordResetInput");
+const passwordResetSubmit = document.querySelector("#passwordResetSubmit");
+const passwordResetCancel = document.querySelector("#passwordResetCancel");
+const passwordResetClose = document.querySelector("#passwordResetClose");
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 
 function escapeHtml(value) {
@@ -162,6 +169,55 @@ function sourceLabel(source) {
   if (source === "env") return ".env";
   if (source === "env-json") return "APP_USERS_JSON";
   return "локально";
+}
+
+function openPasswordResetModal(username) {
+  if (!passwordResetModal) return Promise.resolve(null);
+  passwordResetTitle.textContent = `Новый пароль для ${username}`;
+  passwordResetHint.textContent = "Пароль сохранится в кабинете сайта. Минимум 6 символов.";
+  passwordResetInput.value = "";
+  passwordResetSubmit.disabled = true;
+  passwordResetModal.hidden = false;
+  document.body.classList.add("modal-open");
+  window.setTimeout(() => passwordResetInput.focus(), 0);
+
+  return new Promise((resolve) => {
+    let done = false;
+    const cleanup = (value) => {
+      if (done) return;
+      done = true;
+      passwordResetModal.hidden = true;
+      document.body.classList.remove("modal-open");
+      passwordResetInput.removeEventListener("input", onInput);
+      passwordResetSubmit.removeEventListener("click", onSubmit);
+      passwordResetCancel.removeEventListener("click", onCancel);
+      passwordResetClose.removeEventListener("click", onCancel);
+      passwordResetModal.removeEventListener("click", onBackdrop);
+      document.removeEventListener("keydown", onKeydown);
+      resolve(value);
+    };
+    const onInput = () => {
+      passwordResetSubmit.disabled = passwordResetInput.value.length < 6;
+    };
+    const onSubmit = () => {
+      const password = passwordResetInput.value;
+      if (password.length >= 6) cleanup(password);
+    };
+    const onCancel = () => cleanup(null);
+    const onBackdrop = (event) => {
+      if (event.target === passwordResetModal) cleanup(null);
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Escape") cleanup(null);
+      if (event.key === "Enter" && passwordResetInput.value.length >= 6) cleanup(passwordResetInput.value);
+    };
+    passwordResetInput.addEventListener("input", onInput);
+    passwordResetSubmit.addEventListener("click", onSubmit);
+    passwordResetCancel.addEventListener("click", onCancel);
+    passwordResetClose.addEventListener("click", onCancel);
+    passwordResetModal.addEventListener("click", onBackdrop);
+    document.addEventListener("keydown", onKeydown);
+  });
 }
 
 function renderUsers(users = []) {
@@ -451,7 +507,7 @@ employeeList?.addEventListener("click", async (event) => {
       if (employeeStatus) employeeStatus.textContent = `Сотрудник ${username} удалён.`;
     }
     if (resetButton) {
-      const password = window.prompt(`Новый пароль для ${username} (минимум 6 символов)`);
+      const password = await openPasswordResetModal(username);
       if (!password) return;
       resetButton.disabled = true;
       const data = await api(`/api/users/${encodeURIComponent(username)}`, {

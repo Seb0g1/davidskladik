@@ -51,6 +51,13 @@ const els = {
   importHistory: document.getElementById("yandexImportHistory"),
   importHistoryStatus: document.getElementById("yandexImportHistoryStatus"),
   importHistoryRefresh: document.getElementById("refreshYandexImportHistoryButton"),
+  actionConfirmModal: document.getElementById("importActionConfirmModal"),
+  actionConfirmEyebrow: document.getElementById("importActionConfirmEyebrow"),
+  actionConfirmTitle: document.getElementById("importActionConfirmTitle"),
+  actionConfirmBody: document.getElementById("importActionConfirmBody"),
+  actionConfirmSubmit: document.getElementById("importActionConfirmSubmit"),
+  actionConfirmCancel: document.getElementById("importActionConfirmCancel"),
+  actionConfirmClose: document.getElementById("importActionConfirmClose"),
 };
 
 function escapeHtml(value) {
@@ -291,6 +298,61 @@ function render(payload) {
   renderSummary();
   renderWarnings(payload.warnings);
   renderRows();
+}
+
+function openActionConfirmModal({
+  eyebrow = "Подтверждение",
+  title = "Подтвердите действие",
+  lines = [],
+  confirmLabel = "Продолжить",
+  variant = "primary",
+} = {}) {
+  if (!els.actionConfirmModal) {
+    setStatus("Диалог подтверждения недоступен. Обновите страницу и попробуйте снова.", true);
+    return Promise.resolve(false);
+  }
+  const modal = els.actionConfirmModal;
+  els.actionConfirmEyebrow.textContent = eyebrow;
+  els.actionConfirmTitle.textContent = title;
+  els.actionConfirmBody.innerHTML = (Array.isArray(lines) ? lines : [lines])
+    .filter(Boolean)
+    .map((line) => `<p>${escapeHtml(line)}</p>`)
+    .join("");
+  els.actionConfirmSubmit.textContent = confirmLabel;
+  els.actionConfirmSubmit.className = variant === "danger" ? "danger-button" : "primary-button";
+  modal.hidden = false;
+  document.body.classList.add("modal-open");
+  window.setTimeout(() => els.actionConfirmSubmit.focus(), 0);
+
+  return new Promise((resolve) => {
+    let done = false;
+    const cleanup = (result) => {
+      if (done) return;
+      done = true;
+      modal.hidden = true;
+      document.body.classList.remove("modal-open");
+      els.actionConfirmSubmit.removeEventListener("click", onSubmit);
+      els.actionConfirmCancel.removeEventListener("click", onCancel);
+      els.actionConfirmClose.removeEventListener("click", onCancel);
+      modal.removeEventListener("click", onBackdrop);
+      document.removeEventListener("keydown", onKeydown);
+      resolve(result);
+    };
+    const onSubmit = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onBackdrop = (event) => {
+      if (event.target === modal) cleanup(false);
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Escape") cleanup(false);
+      if (event.key === "Enter") cleanup(true);
+    };
+    els.actionConfirmSubmit.addEventListener("click", onSubmit);
+    els.actionConfirmCancel.addEventListener("click", onCancel);
+    els.actionConfirmClose.addEventListener("click", onCancel);
+    modal.addEventListener("click", onBackdrop);
+    document.addEventListener("keydown", onKeydown);
+  });
 }
 
 function csvCell(value) {
@@ -601,12 +663,16 @@ async function sendYandexImport() {
     return;
   }
   const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
-  const confirmed = window.confirm([
-    "Выгрузить карточки Ozon в Яндекс?",
-    `Можно выгружать: ${eligible}`,
-    "Сервер ещё раз проверит SKU в Яндексе и пропустит уже существующие.",
-    "Выгрузка пойдёт только по карточкам без блокировок и без недостающих полей.",
-  ].join("\n"));
+  const confirmed = await openActionConfirmModal({
+    eyebrow: "Ozon → Яндекс",
+    title: "Выгрузить карточки в Яндекс?",
+    lines: [
+      `Можно выгружать: ${eligible}`,
+      "Сервер ещё раз проверит SKU в Яндексе и пропустит уже существующие.",
+      "Выгрузка пойдёт только по карточкам без блокировок и без недостающих полей.",
+    ],
+    confirmLabel: "Загрузить в Яндекс",
+  });
   if (!confirmed) return;
   setBusy(true, "Выгружаю карточки Ozon в Яндекс...");
   els.sendYandex.disabled = true;
@@ -648,7 +714,16 @@ async function archiveBlocked() {
     els.status.textContent = "Заблокированных карточек нет.";
     return;
   }
-  const confirmed = window.confirm(`Архивировать заблокированные Ozon-карточки из текущего лимита? Количество: ${blockedCount}.`);
+  const confirmed = await openActionConfirmModal({
+    eyebrow: "Ozon",
+    title: "Архивировать заблокированные карточки?",
+    lines: [
+      `Количество в текущем лимите: ${blockedCount}`,
+      "В архив уйдут только карточки, которые не проходят правила выгрузки.",
+    ],
+    confirmLabel: "Архивировать",
+    variant: "danger",
+  });
   if (!confirmed) return;
   const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000)));
   setBusy(true, "Архивирую заблокированные карточки в Ozon...");

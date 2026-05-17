@@ -349,7 +349,10 @@ if (elements.warehouseSyncProgress) document.body.appendChild(elements.warehouse
 if (elements.syncMiniProgress) document.body.appendChild(elements.syncMiniProgress);
 
 function confirmAction({ title = "Подтвердите действие", text = "Продолжить?", okText = "Подтвердить", danger = true } = {}) {
-  if (!elements.confirmModal) return Promise.resolve(window.confirm(text));
+  if (!elements.confirmModal) {
+    showToast("Диалог подтверждения недоступен. Обновите страницу и попробуйте снова.", "error");
+    return Promise.resolve(false);
+  }
   elements.confirmTitle.textContent = title;
   elements.confirmText.textContent = text;
   elements.confirmOk.textContent = okText;
@@ -950,15 +953,40 @@ function warehouseLinkDraftIdentity(link = {}) {
   return [matchType, target, supplierName || partnerId, keyword, priceCurrency].join("|");
 }
 
+function warehouseLinkDraftPrimaryIdentity(link = {}) {
+  const article = String(link.article || "").trim().toLowerCase();
+  const matchType = article ? "article" : (String(link.matchType || "article").trim() || "article");
+  const exactName = String(link.exactName || "").trim().toLowerCase();
+  const sourceRowId = String(link.sourceRowId || "").trim();
+  const priceCurrency = String(link.priceCurrency || "USD").trim().toUpperCase() === "RUB" ? "RUB" : "USD";
+  const target = article ? `article:${article}` : (sourceRowId ? `row:${sourceRowId}` : `name:${exactName}`);
+  return [matchType, target, priceCurrency].join("|");
+}
+
+function warehouseLinkDraftSupplierKeys(link = {}) {
+  const supplierName = String(link.supplierName || "").trim().toLowerCase();
+  const partnerId = String(link.partnerId || "").trim();
+  return [supplierName, partnerId ? `partner:${partnerId}` : ""].filter(Boolean);
+}
+
+function warehouseLinkDraftsCanMerge(a = {}, b = {}) {
+  if (warehouseLinkDraftPrimaryIdentity(a) !== warehouseLinkDraftPrimaryIdentity(b)) return false;
+  const left = warehouseLinkDraftSupplierKeys(a);
+  const right = warehouseLinkDraftSupplierKeys(b);
+  if (!left.length || !right.length) return true;
+  const rightSet = new Set(right);
+  return left.some((key) => rightSet.has(key));
+}
+
 function dedupeLinkDrafts(links = []) {
-  const map = new Map();
+  const result = [];
   for (const link of Array.isArray(links) ? links : []) {
     if (!String(link?.article || "").trim() && !String(link?.exactName || "").trim() && !String(link?.sourceRowId || "").trim()) continue;
-    const key = warehouseLinkDraftIdentity(link);
-    const existing = map.get(key);
-    map.set(key, existing ? { ...existing, ...link, id: existing.id || link.id } : link);
+    const index = result.findIndex((existing) => warehouseLinkDraftsCanMerge(existing, link));
+    if (index < 0) result.push(link);
+    else result[index] = { ...result[index], ...link, id: result[index].id || link.id };
   }
-  return Array.from(map.values());
+  return result;
 }
 
 function setPendingLinkDrafts(key, links = []) {
@@ -984,7 +1012,7 @@ function buildWarehouseGroups(products) {
   }
 
   return Array.from(map.values()).map((group) => {
-    const variants = group.products.sort((a, b) => {
+    const variants = group.products.slice().sort((a, b) => {
       const rank = { ozon: 0, yandex: 1 };
       return (rank[a.marketplace] ?? 9) - (rank[b.marketplace] ?? 9) || String(a.targetName).localeCompare(String(b.targetName));
     });
@@ -1181,7 +1209,7 @@ function ensureOperationsLink() {
   const link = document.createElement("a");
   link.className = "secondary-link-button";
   link.href = "/operations.html";
-  link.textContent = "Operations";
+  link.textContent = "Операции";
   const settingsLink = header.querySelector('a[href="/settings.html"]');
   if (settingsLink?.nextSibling) header.insertBefore(link, settingsLink.nextSibling);
   else header.prepend(link);
@@ -1399,23 +1427,29 @@ function selectedWarehouseLocks() {
 
 function warehouseProductLinksSignature(product = {}) {
   return (Array.isArray(product?.links) ? product.links : [])
-    .map((link) => {
-      return [
-        warehouseLinkDraftIdentity(link),
-        String(link.id || ""),
-        String(link.updatedAt || ""),
-        String(link.updatedBy || link.createdBy || ""),
-      ].join("~");
-    })
+    .map((link) => warehouseLinkDraftPrimaryIdentity(link))
     .sort()
     .join("||");
 }
 
+function warehouseProductsRenderSignature(products = []) {
+  return (Array.isArray(products) ? products : [])
+    .map((product) => [
+      String(product.id || ""),
+      String(product.updatedAt || ""),
+      String(product.currentPrice ?? product.marketplacePrice ?? ""),
+      String(product.nextPrice ?? ""),
+      String(product.targetStock ?? ""),
+      String(product.marketplaceState?.code || ""),
+      warehouseProductLinksSignature(product),
+    ].join(":"))
+    .join("||");
+}
+
 function dedupeWarehouseDisplayLinks(links = []) {
-  const map = new Map();
+  const result = [];
   for (const link of Array.isArray(links) ? links : []) {
-    const key = warehouseLinkDraftIdentity(link);
-    if (!key || key.includes("name:|")) continue;
+    if (!String(link?.article || "").trim() && !String(link?.exactName || "").trim() && !String(link?.sourceRowId || "").trim()) continue;
     const refs = Array.isArray(link.refs) && link.refs.length
       ? link.refs
       : [{
@@ -1423,9 +1457,10 @@ function dedupeWarehouseDisplayLinks(links = []) {
           linkId: String(link.id || ""),
           productUpdatedAt: String(link.productUpdatedAt || ""),
         }].filter((ref) => ref.productId && ref.linkId);
-    const existing = map.get(key);
+    const index = result.findIndex((existingLink) => warehouseLinkDraftsCanMerge(existingLink, link));
+    const existing = index >= 0 ? result[index] : null;
     if (!existing) {
-      map.set(key, { ...link, refs });
+      result.push({ ...link, refs });
       continue;
     }
     const refKeySet = new Set((existing.refs || []).map((ref) => `${ref.productId}:${ref.linkId}`));
@@ -1437,7 +1472,7 @@ function dedupeWarehouseDisplayLinks(links = []) {
         mergedRefs.push(ref);
       }
     }
-    map.set(key, {
+    result[index] = {
       ...existing,
       ...link,
       id: existing.id || link.id,
@@ -1452,9 +1487,9 @@ function dedupeWarehouseDisplayLinks(links = []) {
       matchedCount: Math.max(Number(existing.matchedCount || 0), Number(link.matchedCount || 0)),
       availableCount: Math.max(Number(existing.availableCount || 0), Number(link.availableCount || 0)),
       missingInPriceMaster: Boolean(existing.missingInPriceMaster && link.missingInPriceMaster),
-    });
+    };
   }
-  return Array.from(map.values());
+  return result;
 }
 
 function conflictOfferPreview(conflicts = []) {
@@ -1692,23 +1727,38 @@ function applyWarehouseFilters() {
 
 function renderWarehouse(data) {
   const mode = data.mode || "replace";
+  const silentRender = Boolean(data.silent);
   const products = Array.isArray(data.products) ? data.products : [];
-  if (data.updatedAt) state.warehouseLastUpdatedAt = String(data.updatedAt);
-  if (data.priceMaster?.updatedAt) state.priceMasterLastUpdatedAt = String(data.priceMaster.updatedAt);
+  const previousProductsSignature = state.warehouseProductsRenderSignature || "";
+  let nextWarehouse = [];
+  let nextLoadedRows = 0;
+  let shouldResetMediaState = false;
   if (mode === "append" || mode === "merge") {
     const byId = new Map(state.warehouse.map((product) => [product.id, product]));
     products.forEach((product) => byId.set(product.id, product));
-    state.warehouse = Array.from(byId.values());
-    state.warehouseLoadedRows = mode === "merge"
-      ? Math.max(Number(state.warehouseLoadedRows || 0), state.warehouse.length)
-      : state.warehouse.length;
+    nextWarehouse = Array.from(byId.values());
+    nextLoadedRows = mode === "merge"
+      ? Math.max(Number(state.warehouseLoadedRows || 0), nextWarehouse.length)
+      : nextWarehouse.length;
   } else {
-    state.warehouse = products;
-    state.warehouseLoadedRows = products.length;
-    state.enrichedProductIds = new Set();
-    state.warehouseVisibleLimit = 80;
+    nextWarehouse = products;
+    nextLoadedRows = products.length;
+    shouldResetMediaState = true;
   }
-  invalidateWarehouseGroupsCache();
+  const nextProductsSignature = warehouseProductsRenderSignature(nextWarehouse);
+  const productsChanged = nextProductsSignature !== previousProductsSignature;
+  if (data.updatedAt) state.warehouseLastUpdatedAt = String(data.updatedAt);
+  if (data.priceMaster?.updatedAt) state.priceMasterLastUpdatedAt = String(data.priceMaster.updatedAt);
+  if (productsChanged || !silentRender) {
+    state.warehouse = nextWarehouse;
+    state.warehouseProductsRenderSignature = nextProductsSignature;
+    if (shouldResetMediaState) {
+      state.enrichedProductIds = new Set();
+      state.warehouseVisibleLimit = 80;
+    }
+    invalidateWarehouseGroupsCache();
+  }
+  state.warehouseLoadedRows = nextLoadedRows;
   state.warehouseHasMore = Boolean(data.hasMore);
   state.warehousePage = Number(data.page || state.warehousePage || 1);
   state.warehouseTotalFiltered = Number(data.total || state.warehouseTotalFiltered || state.warehouse.length);
@@ -1747,7 +1797,9 @@ function renderWarehouse(data) {
     elements.warehouseRateInfo.textContent = `Курс: ${formatNumber(data.usdRate)} RUB/USD`;
   }
   elements.warehouseSelectChangedButton.disabled = !state.warehouse.length;
-  if (data.sourceError) {
+  if (silentRender) {
+    // Keep background refresh invisible: update data and counters without blinking the status line.
+  } else if (data.sourceError) {
     elements.warehouseStatus.textContent = `Склад загружен, но PriceMaster сейчас недоступен: ${data.sourceError}`;
     elements.warehouseStatus.classList.add("is-warn");
     elements.warehouseStatus.classList.remove("is-ok");
@@ -1756,26 +1808,28 @@ function renderWarehouse(data) {
     elements.warehouseStatus.classList.add("is-ok");
     elements.warehouseStatus.classList.remove("is-warn");
   }
-  if (data.priceMaster?.updatedAt && !data.sourceError) {
+  if (!silentRender && data.priceMaster?.updatedAt && !data.sourceError) {
     elements.warehouseStatus.textContent += ` PriceMaster обновлен: ${formatDate(data.priceMaster.updatedAt)}.`;
   }
-  if (Array.isArray(data.noSupplierAlerts) && data.noSupplierAlerts.length) {
+  if (!silentRender && Array.isArray(data.noSupplierAlerts) && data.noSupplierAlerts.length) {
     const preview = data.noSupplierAlerts.slice(0, 4).map((item) => item.offerId || item.name || item.id).join(", ");
     elements.warehouseNoSupplierAlert.innerHTML = `Нет активного поставщика: ${escapeHtml(preview)}. <a href="/no-supplier.html">Открыть страницу ошибок</a>`;
     elements.warehouseNoSupplierAlert.classList.remove("hidden");
     elements.warehouseNoSupplierAlert.classList.add("is-warn");
-  } else {
+  } else if (!silentRender) {
     elements.warehouseNoSupplierAlert.classList.add("hidden");
   }
-  if (Array.isArray(data.autoArchiveAlerts) && data.autoArchiveAlerts.length) {
+  if (!silentRender && Array.isArray(data.autoArchiveAlerts) && data.autoArchiveAlerts.length) {
     const sample = data.autoArchiveAlerts.slice(0, 4).map((item) => item.offerId || item.name || item.id).join(", ");
     showToast(`Автоархив кандидаты (без подвязок): ${sample}`, "warn");
   }
-  if (Array.isArray(data.syncWarnings) && data.syncWarnings.length) {
+  if (!silentRender && Array.isArray(data.syncWarnings) && data.syncWarnings.length) {
     data.syncWarnings.forEach((w) => showToast(w, "warn"));
   }
-  applyWarehouseFilters();
-  renderSuppliers();
+  if (productsChanged || !silentRender) {
+    applyWarehouseFilters();
+    renderSuppliers();
+  }
   updateSelection();
 }
 
@@ -2047,12 +2101,12 @@ function warehouseDetailSignature(group) {
     ids: (group.productIds || variants.map((item) => item.id)).map(String).sort(),
     updated: variants.map((item) => [
       item.id,
-      item.updatedAt || "",
       item.currentPrice ?? "",
       item.nextPrice ?? "",
       item.targetStock ?? "",
       item.status || "",
-      (item.links || []).map((link) => [link.id, link.article, link.partnerId, link.supplierName, link.priceCurrency, link.updatedBy, link.updatedAt].join(":")).sort().join("|"),
+      item.marketplaceState?.code || "",
+      (item.links || []).map((link) => [link.id, warehouseLinkDraftIdentity(link), link.updatedBy || link.createdBy || ""].join(":")).sort().join("|"),
       item.selectedSupplier?.article || "",
       item.selectedSupplier?.partnerId || "",
       item.selectedSupplier?.price || "",
@@ -3421,7 +3475,7 @@ function currentWarehousePageParams() {
   return params;
 }
 
-async function loadWarehousePage({ reset = false, sync = false, refreshPrices = false, preserveExisting = false } = {}) {
+async function loadWarehousePage({ reset = false, sync = false, refreshPrices = false, preserveExisting = false, silent = false } = {}) {
   if (!reset && !state.warehouseHasMore) return;
   if (!reset && state.warehouseLoadingPage) return;
 
@@ -3437,6 +3491,7 @@ async function loadWarehousePage({ reset = false, sync = false, refreshPrices = 
     if (token !== state.warehouseRequestToken) return;
     renderWarehouse({
       ...data,
+      silent,
       mode: reset ? (preserveExisting ? "merge" : "replace") : "append",
       products: data.items || [],
     });
@@ -3480,7 +3535,7 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
     state.warehouseTotalFiltered = 0;
     // Do not clear selectedWarehouseGroupKey / selectedWarehouseProductId here:
     // after link save or refresh, applyWarehouseFilters() would fall back to the first card.
-    await loadWarehousePage({ reset: true, sync, refreshPrices, preserveExisting });
+    await loadWarehousePage({ reset: true, sync, refreshPrices, preserveExisting, silent });
     if (silent && elements.warehouseStatus) {
       elements.warehouseStatus.textContent = previousWarehouseStatus;
       elements.warehouseStatus.classList.toggle("is-ok", previousWarehouseStatusClasses.ok);
@@ -3490,7 +3545,7 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
     const restoreUntilPage = Math.min(requestedPage, maxRestorePages);
     for (let page = 2; page <= restoreUntilPage && state.warehouseHasMore; page += 1) {
       // Restore long-list context after refresh by preloading previously opened pages.
-      await loadWarehousePage({ reset: false, sync: false, refreshPrices: false });
+      await loadWarehousePage({ reset: false, sync: false, refreshPrices: false, silent });
       if (silent && elements.warehouseStatus) {
         elements.warehouseStatus.textContent = previousWarehouseStatus;
         elements.warehouseStatus.classList.toggle("is-ok", previousWarehouseStatusClasses.ok);
@@ -3499,7 +3554,7 @@ async function loadWarehouse(sync = false, refreshPrices = false, options = {}) 
     }
     if (state.warehouseBrandFilter) {
       for (let page = state.warehousePage + 1; page <= 80 && state.warehouseHasMore; page += 1) {
-        await loadWarehousePage({ reset: false, sync: false, refreshPrices: false });
+        await loadWarehousePage({ reset: false, sync: false, refreshPrices: false, silent });
       }
       state.warehouseVisibleLimit = Math.max(state.warehouseVisibleLimit, state.warehouse.length);
       renderWarehouseCards();
@@ -4289,7 +4344,7 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
     priceCurrency: String(data.get("priceCurrency") || "USD").toUpperCase() === "RUB" ? "RUB" : "USD",
   };
   const existing = getPendingLinkDrafts(draftKey);
-  const duplicateIndex = existing.findIndex((item) => warehouseLinkDraftIdentity(item) === warehouseLinkDraftIdentity(draft));
+  const duplicateIndex = existing.findIndex((item) => warehouseLinkDraftsCanMerge(item, draft));
   const nextDrafts = duplicateIndex >= 0
     ? existing.map((item, index) => (index === duplicateIndex ? { ...draft, id: item.id } : item))
     : [...existing, draft];
@@ -4414,7 +4469,7 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
       return;
     }
     const existing = getPendingLinkDrafts(key);
-    const duplicateIndex = existing.findIndex((item) => warehouseLinkDraftIdentity(item) === warehouseLinkDraftIdentity(draft));
+    const duplicateIndex = existing.findIndex((item) => warehouseLinkDraftsCanMerge(item, draft));
     const nextDrafts = duplicateIndex >= 0
       ? existing.map((item, index) => (index === duplicateIndex ? { ...draft, id: item.id } : item))
       : [...existing, draft];

@@ -154,6 +154,28 @@
         <div id="settingsStatus" class="rate-info">Загружаю настройки...</div>
       </section>
     </main>
+    <div id="passwordResetModal" class="cleanup-modal-backdrop" hidden>
+      <section class="cleanup-confirm-modal settings-password-modal" role="dialog" aria-modal="true" aria-labelledby="passwordResetTitle">
+        <div class="cleanup-confirm-head">
+          <div>
+            <p class="eyebrow">Сотрудники</p>
+            <h2 id="passwordResetTitle">Новый пароль</h2>
+          </div>
+          <button id="passwordResetClose" class="modal-icon-button" type="button" aria-label="Закрыть">×</button>
+        </div>
+        <div class="action-confirm-body">
+          <p id="passwordResetHint">Укажите новый пароль. Минимум 6 символов.</p>
+        </div>
+        <label class="cleanup-confirm-input">
+          Пароль
+          <input id="passwordResetInput" type="password" autocomplete="new-password" minlength="6" />
+        </label>
+        <div class="cleanup-confirm-actions">
+          <button id="passwordResetCancel" class="secondary-button" type="button">Отмена</button>
+          <button id="passwordResetSubmit" class="primary-button" type="button" disabled>Сохранить пароль</button>
+        </div>
+      </section>
+    </div>
     <script src="/settings.js"></script>
   </body>
 </html>

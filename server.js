@@ -162,6 +162,7 @@ let autoSyncRunning = false;
 let autoSyncNextRunAt = null;
 let warehouseWritePromise = Promise.resolve();
 let warehouseMemoryCache = null;
+let warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
 let warehousePostgresHashCache = new Map();
 let warehousePostgresUpdatedAtCache = new Map();
 let warehousePostgresWriteRunning = false;
@@ -181,14 +182,23 @@ let warehousePostgresLinkBackfillPromise = null;
 let warehousePostgresLinkBackfillDone = false;
 let priceMasterSnapshotMemoryCache = null;
 let priceMasterArticleIndexCache = null;
+let priceMasterSnapshotIndexCache = null;
 const priceMasterLinkLookupCache = new Map();
 const priceMasterLinkLookupCacheTtlMs = Math.max(1000, Number(process.env.LINK_SAVE_PM_CACHE_MS || 120000));
 const priceMasterLinkLookupCacheMax = Math.max(100, Number(process.env.LINK_SAVE_PM_CACHE_MAX || 2000));
+const priceMasterSearchCache = new Map();
+const priceMasterSearchCacheTtlMs = Math.max(1000, Number(process.env.PRICEMASTER_SEARCH_CACHE_MS || 30000));
+const priceMasterSearchCacheMax = Math.max(100, Number(process.env.PRICEMASTER_SEARCH_CACHE_MAX || 1000));
 let warehousePostgresSummaryCache = null;
 const warehousePostgresSummaryCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_PAGE_SUMMARY_CACHE_MS || 15000));
 let warehousePostgresSuppliersCache = null;
+let warehouseBrandListCache = null;
+const warehouseBrandListCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_BRAND_LIST_CACHE_MS || 120000));
 let warehousePostgresDetailCache = new Map();
 const warehousePostgresDetailCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_DETAIL_CACHE_MS || 15000));
+const warehouseFastPageCache = new Map();
+const warehouseFastPageCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MS || 5000));
+const warehouseFastPageCacheMax = Math.max(20, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MAX || 200));
 const warehouseViewCache = new Map();
 const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
@@ -267,7 +277,20 @@ function invalidateWarehouseViewCache() {
   warehouseViewBuilds.clear();
   warehousePostgresSummaryCache = null;
   warehousePostgresSuppliersCache = null;
+  warehouseBrandListCache = null;
   warehousePostgresDetailCache.clear();
+  warehouseFastPageCache.clear();
+}
+
+function warehouseProductIndexFor(warehouse = {}) {
+  const products = Array.isArray(warehouse.products) ? warehouse.products : [];
+  if (warehouseMemoryProductIndexCache.products === products) return warehouseMemoryProductIndexCache.byId;
+  const byId = new Map();
+  products.forEach((product, index) => {
+    if (product?.id) byId.set(String(product.id), index);
+  });
+  warehouseMemoryProductIndexCache = { products, byId };
+  return byId;
 }
 
 app.use(express.json({ limit: "1mb" }));
@@ -1989,18 +2012,91 @@ function warehouseLinkTargetKey(input = {}) {
   ].join("|");
 }
 
+function warehouseLinkPrimaryTargetKey(input = {}) {
+  const link = normalizeWarehouseLink(input);
+  const primary = link.article
+    ? `article:${link.article.toLowerCase()}`
+    : (link.sourceRowId ? `row:${link.sourceRowId}` : `name:${link.exactName.toLowerCase()}`);
+  return [
+    link.matchType,
+    primary,
+    link.priceCurrency,
+  ].join("|");
+}
+
+function warehouseLinkSupplierKeys(input = {}) {
+  const link = normalizeWarehouseLink(input);
+  return [
+    normalizeSupplierName(link.supplierName),
+    link.partnerId ? `partner:${link.partnerId}` : "",
+  ].filter(Boolean);
+}
+
+function warehouseLinksHaveCompatibleSupplierTarget(a = {}, b = {}) {
+  const left = warehouseLinkSupplierKeys(a);
+  const right = warehouseLinkSupplierKeys(b);
+  if (!left.length || !right.length) return true;
+  const rightSet = new Set(right);
+  return left.some((key) => rightSet.has(key));
+}
+
+function warehouseLinksEqualForSave(a = {}, b = {}) {
+  return warehouseLinkPrimaryTargetKey(a) === warehouseLinkPrimaryTargetKey(b)
+    && warehouseLinksHaveCompatibleSupplierTarget(a, b);
+}
+
+function warehouseLinkMeaningfulSignature(input = {}) {
+  const link = normalizeWarehouseLink(input);
+  return JSON.stringify({
+    primary: warehouseLinkPrimaryTargetKey(link),
+    supplierTarget: warehouseLinkSupplierKeys(link).sort().join("|"),
+    keyword: link.keyword.toLowerCase(),
+    priceCurrency: link.priceCurrency,
+    exactName: link.exactName.toLowerCase(),
+    sourceRowId: link.sourceRowId,
+  });
+}
+
+function warehouseProductLinkDetailsSignature(product = {}) {
+  return compactWarehouseLinks(product.links || [])
+    .map(warehouseLinkMeaningfulSignature)
+    .sort()
+    .join("||");
+}
+
+function mergeWarehouseLinkForSave(existing = {}, incoming = {}, { now = new Date().toISOString(), username = "system" } = {}) {
+  const current = normalizeWarehouseLink(existing);
+  const next = normalizeWarehouseLink(incoming);
+  return normalizeWarehouseLink({
+    ...current,
+    ...next,
+    id: current.id || next.id,
+    article: current.article || next.article,
+    exactName: current.exactName || next.exactName,
+    sourceRowId: current.sourceRowId || next.sourceRowId,
+    supplierName: next.supplierName || current.supplierName,
+    partnerId: next.partnerId || current.partnerId,
+    keyword: next.keyword || current.keyword,
+    priceCurrency: next.priceCurrency || current.priceCurrency,
+    createdAt: current.createdAt || next.createdAt || now,
+    createdBy: current.createdBy || next.createdBy || username,
+    updatedAt: now,
+    updatedBy: username,
+  });
+}
+
 function compactWarehouseLinks(links = []) {
-  const map = new Map();
+  const result = [];
   for (const input of Array.isArray(links) ? links : []) {
     const link = normalizeWarehouseLink(input);
     if (!warehouseLinkHasMatchTarget(link)) continue;
-    const key = warehouseLinkTargetKey(link);
-    const existing = map.get(key);
-    if (!existing) {
-      map.set(key, link);
+    const index = result.findIndex((existing) => warehouseLinksEqualForSave(existing, link));
+    if (index < 0) {
+      result.push(link);
       continue;
     }
-    map.set(key, normalizeWarehouseLink({
+    const existing = result[index];
+    result[index] = normalizeWarehouseLink({
       ...existing,
       ...link,
       id: existing.id || link.id,
@@ -2015,28 +2111,19 @@ function compactWarehouseLinks(links = []) {
       createdBy: existing.createdBy || link.createdBy,
       updatedAt: link.updatedAt || existing.updatedAt,
       updatedBy: link.updatedBy || existing.updatedBy,
-    }));
+    });
   }
-  return Array.from(map.values());
+  return result;
 }
 
 function warehouseProductHasLinks(product = {}, links = []) {
-  const existing = new Set(compactWarehouseLinks(product.links || []).map(warehouseLinkTargetKey));
-  return compactWarehouseLinks(links).every((link) => existing.has(warehouseLinkTargetKey(link)));
-}
-
-function warehouseLinksEqualForSave(a = {}, b = {}) {
-  return warehouseLinkTargetKey(a) === warehouseLinkTargetKey(b);
+  const existing = compactWarehouseLinks(product.links || []);
+  return compactWarehouseLinks(links).every((link) => existing.some((item) => warehouseLinksEqualForSave(item, link)));
 }
 
 function warehouseProductLinksSignature(product = {}) {
   return compactWarehouseLinks(product.links || [])
-    .map((link) => [
-      warehouseLinkTargetKey(link),
-      link.id,
-      link.updatedAt || "",
-      link.updatedBy || "",
-    ].join("~"))
+    .map((link) => warehouseLinkPrimaryTargetKey(link))
     .sort()
     .join("||");
 }
@@ -5380,6 +5467,69 @@ async function sendYandexStockChunk(shop, rows = []) {
   return result;
 }
 
+async function sendYandexStockRowsWithFallback(shop, rows = []) {
+  const chunk = (Array.isArray(rows) ? rows : []).filter((row) => cleanText(row.offerId || row.sku));
+  if (!chunk.length) return { sent: 0, failed: 0, results: [] };
+  const target = shop.id;
+  const targetName = shop.name || "Yandex Market";
+  try {
+    await sendYandexStockChunk(shop, chunk);
+    return {
+      sent: chunk.length,
+      failed: 0,
+      results: [{ target, targetName, sent: chunk.length, ok: true }],
+    };
+  } catch (error) {
+    const chunkError = error?.message || error?.code || "Yandex stock update failed";
+    if (chunk.length === 1) {
+      return {
+        sent: 0,
+        failed: 1,
+        fallbackError: chunkError,
+        results: chunk.map((item) => ({
+          stage: "stock",
+          offerId: item.offerId,
+          target,
+          targetName,
+          stock: item.stock,
+          ok: false,
+          error: chunkError,
+        })),
+      };
+    }
+    const results = [];
+    let sent = 0;
+    let failed = 0;
+    for (const item of chunk) {
+      try {
+        await sendYandexStockChunk(shop, [item]);
+        sent += 1;
+        results.push({
+          stage: "stock",
+          offerId: item.offerId,
+          target,
+          targetName,
+          stock: item.stock,
+          sent: 1,
+          ok: true,
+        });
+      } catch (itemError) {
+        failed += 1;
+        results.push({
+          stage: "stock",
+          offerId: item.offerId,
+          target,
+          targetName,
+          stock: item.stock,
+          ok: false,
+          error: itemError?.message || itemError?.code || chunkError,
+        });
+      }
+    }
+    return { sent, failed, fallbackError: chunkError, results };
+  }
+}
+
 async function sendYandexOfferArchiveState(shop, offerIds = [], archived = false) {
   const ids = [...new Set((Array.isArray(offerIds) ? offerIds : [])
     .map(cleanText)
@@ -5486,25 +5636,15 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
     const stockChunkSize = Math.max(1, Math.min(500, Number(process.env.YANDEX_STOCK_CHUNK_SIZE || 100) || 100));
     for (const chunk of chunkArray(selected, stockChunkSize)) {
       if (!chunk.length) continue;
-      try {
-        await sendYandexStockChunk(shop, chunk);
-        results.push({ target: shop.id, sent: chunk.length, ok: true });
-      } catch (error) {
-        const label = error?.message || error?.code || "ошибка API";
+      const stockResult = await sendYandexStockRowsWithFallback(shop, chunk);
+      results.push(...stockResult.results);
+      if (stockResult.failed > 0) {
+        const label = stockResult.fallbackError || "ошибка API";
         const warningKey = `${shop.id || shop.name}:${label}`;
         if (!failedStockWarningKeys.has(warningKey)) {
           failedStockWarningKeys.add(warningKey);
           warnings.push(`Yandex «${shop.name || shop.id}»: остатки не отправлены (${label})`);
         }
-        results.push(...chunk.map((item) => ({
-          stage: "stock",
-          offerId: item.offerId,
-          target: shop.id,
-          targetName: shop.name || "Yandex Market",
-          stock: item.stock,
-          ok: false,
-          error: label,
-        })));
       }
     }
   }
@@ -5569,36 +5709,20 @@ async function sendYandexStocksForExportedOzonProducts(products = [], options = 
     const stockChunkSize = Math.max(1, Math.min(500, Number(process.env.YANDEX_STOCK_CHUNK_SIZE || 100) || 100));
     for (const chunk of chunkArray(rows, stockChunkSize)) {
       if (!chunk.length) continue;
-      try {
-        await sendYandexStockChunk(shop, chunk);
-        results.push(...chunk.map((item) => ({
-          stage: "stock",
-          offerId: item.offerId,
-          target: shop.id,
-          targetName: shop.name || "Yandex Market",
-          stock: item.stock,
-          ok: true,
-        })));
-      } catch (error) {
-        const label = error?.message || error?.code || "ошибка API";
+      const stockResult = await sendYandexStockRowsWithFallback(shop, chunk);
+      results.push(...stockResult.results);
+      if (stockResult.failed > 0) {
+        const label = stockResult.fallbackError || "ошибка API";
         warnings.push(`Yandex «${shop.name || shop.id}»: остатки не отправлены (${label})`);
-        results.push(...chunk.map((item) => ({
-          stage: "stock",
-          offerId: item.offerId,
-          target: shop.id,
-          targetName: shop.name || "Yandex Market",
-          stock: item.stock,
-          ok: false,
-          error: label,
-        })));
       }
     }
   }
 
   const failed = results.filter((item) => !item.ok).length;
+  const sent = results.reduce((total, item) => total + Number(item.sent || (item.ok && item.stage === "stock" ? 1 : 0)), 0);
   return {
     ok: warnings.length === 0 && failed === 0,
-    sent: results.filter((item) => item.ok).length,
+    sent,
     failed,
     skipped: Math.max(0, (products || []).length - rows.length),
     planned: rows.length,
@@ -5660,6 +5784,9 @@ async function writeSnapshot(snapshot) {
   await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2), "utf8");
   priceMasterSnapshotMemoryCache = snapshot;
   priceMasterArticleIndexCache = null;
+  priceMasterSnapshotIndexCache = null;
+  priceMasterLinkLookupCache.clear();
+  priceMasterSearchCache.clear();
   await writePriceMasterSnapshotToPostgres(snapshot).catch((error) => {
     logger.warn("PriceMaster postgres snapshot write failed", { detail: error?.message || String(error) });
   });
@@ -5773,27 +5900,61 @@ async function getPriceMasterSnapshotMetaFast() {
   return { syncId: null, updatedAt: null, items: 0, changes: 0 };
 }
 
+function sortPriceMasterSnapshotRows(rows = []) {
+  rows.sort((a, b) => new Date(b.docDate || 0) - new Date(a.docDate || 0) || Number(b.rowId || 0) - Number(a.rowId || 0));
+  return rows;
+}
+
+async function getPriceMasterSnapshotIndexes() {
+  const snapshot = await readSnapshot();
+  if (priceMasterSnapshotIndexCache?.syncId === snapshot.syncId && priceMasterSnapshotIndexCache?.createdAt === snapshot.createdAt) {
+    return priceMasterSnapshotIndexCache.indexes;
+  }
+  const indexes = {
+    byArticle: new Map(),
+    byName: new Map(),
+    byRowId: new Map(),
+    rows: Object.values(snapshot.items || {}),
+  };
+  for (const row of indexes.rows) {
+    const article = cleanText(row.article || row.NativeID || row.nativeId);
+    if (article) {
+      if (!indexes.byArticle.has(article)) indexes.byArticle.set(article, []);
+      indexes.byArticle.get(article).push(row);
+    }
+    const name = cleanText(row.name || row.nativeName || row.NativeName).toLowerCase();
+    if (name) {
+      if (!indexes.byName.has(name)) indexes.byName.set(name, []);
+      indexes.byName.get(name).push(row);
+    }
+    const rowId = cleanText(row.rowId || row.RowID);
+    if (rowId) {
+      if (!indexes.byRowId.has(rowId)) indexes.byRowId.set(rowId, []);
+      indexes.byRowId.get(rowId).push(row);
+    }
+  }
+  for (const rows of indexes.byArticle.values()) sortPriceMasterSnapshotRows(rows);
+  for (const rows of indexes.byName.values()) sortPriceMasterSnapshotRows(rows);
+  for (const rows of indexes.byRowId.values()) sortPriceMasterSnapshotRows(rows);
+  priceMasterSnapshotIndexCache = {
+    syncId: snapshot.syncId || null,
+    createdAt: snapshot.createdAt || null,
+    indexes,
+  };
+  priceMasterArticleIndexCache = {
+    syncId: snapshot.syncId || null,
+    createdAt: snapshot.createdAt || null,
+    index: indexes.byArticle,
+  };
+  return indexes;
+}
+
 async function getPriceMasterArticleIndex() {
   const snapshot = await readSnapshot();
   if (priceMasterArticleIndexCache?.syncId === snapshot.syncId && priceMasterArticleIndexCache?.createdAt === snapshot.createdAt) {
     return priceMasterArticleIndexCache.index;
   }
-  const index = new Map();
-  for (const row of Object.values(snapshot.items || {})) {
-    const article = cleanText(row.article);
-    if (!article) continue;
-    if (!index.has(article)) index.set(article, []);
-    index.get(article).push(row);
-  }
-  for (const rows of index.values()) {
-    rows.sort((a, b) => new Date(b.docDate || 0) - new Date(a.docDate || 0) || Number(b.rowId || 0) - Number(a.rowId || 0));
-  }
-  priceMasterArticleIndexCache = {
-    syncId: snapshot.syncId || null,
-    createdAt: snapshot.createdAt || null,
-    index,
-  };
-  return index;
+  return (await getPriceMasterSnapshotIndexes()).byArticle;
 }
 
 async function readPriceRetryQueue() {
@@ -6258,10 +6419,9 @@ function supplierToPostgresData(supplier = {}) {
 
 function linkToPostgresData(product, link = {}) {
   const normalized = normalizeWarehouseLink(link);
-  const identity = warehouseLinkIdentityKey(normalized);
   const supplierArticle = normalized.article || normalized.sourceRowId || normalized.exactName;
-  return {
-    id: normalized.id || crypto.createHash("sha1").update(`${product.id}:${identity}`).digest("hex"),
+  const data = {
+    id: "",
     productId: product.id,
     supplierArticle,
     supplierName: normalized.supplierName || null,
@@ -6272,6 +6432,36 @@ function linkToPostgresData(product, link = {}) {
     createdAt: toDateOrNull(normalized.createdAt) || new Date(),
     updatedAt: toDateOrNull(normalized.updatedAt) || new Date(),
   };
+  data.id = crypto.createHash("sha1").update(productLinkPostgresIdentityKey(data)).digest("hex");
+  return data;
+}
+
+function productLinkPostgresIdentityKey(data = {}) {
+  return [
+    cleanText(data.productId),
+    cleanText(data.supplierArticle).toLowerCase(),
+    cleanText(data.partnerId).toLowerCase(),
+    normalizeSupplierName(data.supplierName),
+    cleanText(data.keyword).toLowerCase(),
+    cleanText(data.priceCurrency || "USD").toUpperCase(),
+  ].join("|");
+}
+
+function dedupeProductLinkRows(rows = []) {
+  const byIdentity = new Map();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || !row.productId || !row.supplierArticle) continue;
+    const key = productLinkPostgresIdentityKey(row);
+    const existing = byIdentity.get(key);
+    if (!existing) {
+      byIdentity.set(key, row);
+      continue;
+    }
+    const existingUpdatedAt = toDateOrNull(existing.updatedAt)?.getTime() || 0;
+    const rowUpdatedAt = toDateOrNull(row.updatedAt)?.getTime() || 0;
+    byIdentity.set(key, rowUpdatedAt >= existingUpdatedAt ? row : existing);
+  }
+  return Array.from(byIdentity.values());
 }
 
 function productFromPostgres(row = {}) {
@@ -6399,7 +6589,7 @@ async function replaceProductLinksInPostgres(prisma, products = []) {
     if (productIds.length) {
       await prisma.productLink.deleteMany({ where: { productId: { in: productIds } } });
     }
-    for (const linkChunk of chunkArray(linkRows, 1000)) {
+    for (const linkChunk of chunkArray(dedupeProductLinkRows(linkRows), 1000)) {
       if (!linkChunk.length) continue;
       const result = await prisma.productLink.createMany({ data: linkChunk, skipDuplicates: true });
       linksWritten += result.count || 0;
@@ -6433,12 +6623,52 @@ function warehousePostgresCachedDetail(key, build) {
   });
 }
 
+async function getWarehouseBrandListFromPostgres(prisma) {
+  if (
+    warehouseBrandListCache
+    && Date.now() - warehouseBrandListCache.at < warehouseBrandListCacheTtlMs
+  ) {
+    return warehouseBrandListCache.value.slice();
+  }
+  const rows = await prisma.warehouseProduct.findMany({
+    where: {
+      AND: [
+        enabledWarehouseTargetWhere(),
+        { brand: { not: null } },
+        { brand: { not: "" } },
+      ],
+    },
+    distinct: ["brand"],
+    select: { brand: true },
+    orderBy: { brand: "asc" },
+  });
+  const unique = new Map();
+  for (const row of rows) {
+    const brand = cleanText(row.brand);
+    if (!brand) continue;
+    const key = brand.toLowerCase();
+    if (!unique.has(key)) unique.set(key, brand);
+  }
+  const brands = Array.from(unique.values()).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
+  warehouseBrandListCache = { at: Date.now(), value: brands };
+  return brands.slice();
+}
+
 async function ensureWarehousePostgresLinksBackfilled(prisma) {
   if (warehousePostgresLinkBackfillDone) return { created: 0, skipped: true };
   if (warehousePostgresLinkBackfillPromise) return warehousePostgresLinkBackfillPromise;
   warehousePostgresLinkBackfillPromise = (async () => {
+    const productsWithRawLinksPromise = prisma.$queryRaw`
+      SELECT id, raw
+      FROM "warehouse_products"
+      WHERE jsonb_typeof(raw->'links') = 'array'
+        AND jsonb_array_length(raw->'links') > 0
+    `.catch((error) => {
+      logger.warn("warehouse postgres raw-link prefilter failed, using full backfill scan", { detail: error?.message || String(error) });
+      return prisma.warehouseProduct.findMany({ select: { id: true, raw: true } });
+    });
     const [products, existingLinks] = await Promise.all([
-      prisma.warehouseProduct.findMany({ select: { id: true, raw: true } }),
+      productsWithRawLinksPromise,
       prisma.productLink.findMany({
         select: {
           productId: true,
@@ -6557,6 +6787,55 @@ async function readWarehouseFromPostgres(prisma) {
   };
   refreshWarehouseHashCache(warehouse);
   return warehouse;
+}
+
+async function getWarehouseMetaFast() {
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      const [productCount, supplierCount, productAgg, supplierAgg] = await Promise.all([
+        prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
+        prisma.managedSupplier.count(),
+        prisma.warehouseProduct.aggregate({
+          where: enabledWarehouseTargetWhere(),
+          _max: { updatedAt: true },
+          _min: { createdAt: true },
+        }),
+        prisma.managedSupplier.aggregate({
+          _max: { updatedAt: true },
+          _min: { createdAt: true },
+        }),
+      ]);
+      const updatedAtMs = Math.max(
+        productAgg._max.updatedAt?.getTime?.() || 0,
+        supplierAgg._max.updatedAt?.getTime?.() || 0,
+      );
+      const createdAtMs = Math.min(
+        ...[
+          productAgg._min.createdAt?.getTime?.() || 0,
+          supplierAgg._min.createdAt?.getTime?.() || 0,
+        ].filter(Boolean),
+      );
+      return {
+        updatedAt: updatedAtMs ? new Date(updatedAtMs).toISOString() : null,
+        createdAt: Number.isFinite(createdAtMs) ? new Date(createdAtMs).toISOString() : null,
+        products: productCount,
+        suppliers: supplierCount,
+        source: "postgres",
+      };
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("warehouse postgres meta failed, using memory/json fallback", { detail: error?.message || String(error) });
+    }
+  }
+  const warehouse = await readWarehouse();
+  return {
+    updatedAt: warehouse.updatedAt || warehouse.createdAt || null,
+    createdAt: warehouse.createdAt || null,
+    products: Array.isArray(warehouse.products) ? warehouse.products.length : 0,
+    suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.length : 0,
+    source: shouldUsePostgresStorage() ? "fallback" : "json",
+  };
 }
 
 async function writeWarehouseToPostgres(prisma, payload) {
@@ -6711,12 +6990,23 @@ async function writeWarehouseProductPatch(products = [], { reason = "warehouse_p
   const warehouse = await readWarehouse();
   const byId = new Map(normalizedProducts.map((product) => [String(product.id), product]));
   let changed = 0;
-  warehouse.products = (warehouse.products || []).map((product) => {
-    const replacement = byId.get(String(product.id));
-    if (!replacement) return product;
-    changed += 1;
-    return replacement;
-  });
+  const productIndex = warehouseProductIndexFor(warehouse);
+  if (normalizedProducts.length <= Math.max(50, Math.floor((warehouse.products || []).length / 10))) {
+    for (const product of normalizedProducts) {
+      const index = productIndex.get(String(product.id));
+      if (index === undefined) continue;
+      warehouse.products[index] = product;
+      changed += 1;
+    }
+  } else {
+    warehouse.products = (warehouse.products || []).map((product) => {
+      const replacement = byId.get(String(product.id));
+      if (!replacement) return product;
+      changed += 1;
+      return replacement;
+    });
+    warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
+  }
   if (!changed) return warehouseMemoryCache || warehouse;
   const payload = normalizeWarehousePayload(warehouse);
   warehouseMemoryCache = payload;
@@ -7438,15 +7728,19 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
 
   const stoppedMap = stoppedSupplierMap(managedSuppliers);
   const supplierMaps = managedSupplierMaps(managedSuppliers);
-  const rowsByArticle = await getPriceMasterArticleIndex();
-  const snapshot = await readSnapshot();
-  const snapshotRows = Object.values(snapshot.items || {});
+  const snapshotIndexes = await getPriceMasterSnapshotIndexes();
 
   const map = new Map();
   for (const link of normalizedLinks) {
-    const candidateRows = link.matchType === "article"
-      ? (rowsByArticle.get(link.article) || [])
-      : snapshotRows;
+    let candidateRows = [];
+    if (link.matchType === "article") {
+      candidateRows = snapshotIndexes.byArticle.get(link.article) || [];
+    } else if (link.matchType === "selected_row" && link.sourceRowId) {
+      candidateRows = snapshotIndexes.byRowId.get(cleanText(link.sourceRowId)) || [];
+    } else {
+      const exactName = cleanText(link.exactName || link.article).toLowerCase();
+      candidateRows = exactName ? (snapshotIndexes.byName.get(exactName) || []) : snapshotIndexes.rows;
+    }
     const matches = candidateRows
       .filter((row) => priceMasterRowMatchesLink(row, link))
       .map((row) => {
@@ -7645,6 +7939,21 @@ function setPriceMasterLinkLookupCache(key, rows) {
     if (oldest) priceMasterLinkLookupCache.delete(oldest);
   }
   priceMasterLinkLookupCache.set(key, { at: Date.now(), rows: Array.isArray(rows) ? rows : [] });
+}
+
+function getPriceMasterSearchCache(key) {
+  const cached = priceMasterSearchCache.get(key);
+  if (!cached || Date.now() - cached.at >= priceMasterSearchCacheTtlMs) return null;
+  return Array.isArray(cached.value) ? cloneAuditValue(cached.value) : cached.value;
+}
+
+function setPriceMasterSearchCache(key, value) {
+  if (!key) return;
+  if (priceMasterSearchCache.size >= priceMasterSearchCacheMax) {
+    const oldest = priceMasterSearchCache.keys().next().value;
+    if (oldest) priceMasterSearchCache.delete(oldest);
+  }
+  priceMasterSearchCache.set(key, { at: Date.now(), value: cloneAuditValue(value) });
 }
 
 async function findPriceMasterRowsForLinkFast(linkInput, usdRate, managedSuppliers = [], options = {}) {
@@ -8412,6 +8721,29 @@ async function buildFreshWarehouseProducts(productIds = [], {
   });
 }
 
+async function buildFreshWarehouseProductsFromKnownProducts(warehouse = {}, products = [], options = {}) {
+  const normalizedProducts = (Array.isArray(products) ? products : [products])
+    .filter((product) => product && product.id)
+    .map(normalizeWarehouseProduct);
+  if (!normalizedProducts.length) return [];
+  return buildFreshWarehouseProductsForWarehouse(
+    {
+      createdAt: warehouse.createdAt || null,
+      updatedAt: warehouse.updatedAt || null,
+      products: normalizedProducts,
+      suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers : [],
+    },
+    normalizedProducts.map((product) => product.id),
+    {
+      refreshPrices: false,
+      persistMutations: false,
+      livePriceMaster: false,
+      batchPriceMaster: false,
+      ...options,
+    },
+  );
+}
+
 function warehousePageProductMatches(product = {}, filters = {}) {
   if (!isWarehouseProductTargetEnabled(product)) return false;
   const q = cleanText(filters.q || "").toLowerCase();
@@ -8424,6 +8756,9 @@ function warehousePageProductMatches(product = {}, filters = {}) {
       product.categoryName,
       product.sku,
       product.barcode,
+      ...(Array.isArray(product.links)
+        ? product.links.flatMap((link) => [link.article, link.supplierName, link.partnerId, link.keyword, link.exactName])
+        : []),
     ]
       .map((value) => cleanText(value || "").toLowerCase())
       .join(" ");
@@ -8501,6 +8836,10 @@ function warehousePagePostgresWhere(filters = {}) {
         { productId: { contains: q, mode: "insensitive" } },
         { name: { contains: q, mode: "insensitive" } },
         { brand: { contains: q, mode: "insensitive" } },
+        { links: { some: { supplierArticle: { contains: q, mode: "insensitive" } } } },
+        { links: { some: { supplierName: { contains: q, mode: "insensitive" } } } },
+        { links: { some: { partnerId: { contains: q, mode: "insensitive" } } } },
+        { links: { some: { keyword: { contains: q, mode: "insensitive" } } } },
       ],
     });
   }
@@ -8519,18 +8858,34 @@ function warehouseStateCounter(products = [], marketplace = "") {
 }
 
 async function warehouseStateCounterFromPostgres(prisma, marketplace) {
-  const rows = await prisma.warehouseProduct.findMany({
-    where: { AND: [enabledWarehouseTargetWhere(), { marketplace }] },
-    select: { marketplaceState: true, status: true, archived: true },
-  });
-  const counts = { archived: 0, inactive: 0, outOfStock: 0 };
-  for (const row of rows) {
-    const code = marketplaceStateCodeFromPostgresRow(row);
-    if (code === "archived") counts.archived += 1;
-    if (/inactive/i.test(code)) counts.inactive += 1;
-    if (code === "out_of_stock") counts.outOfStock += 1;
-  }
-  return counts;
+  const base = { AND: [enabledWarehouseTargetWhere(), { marketplace }] };
+  const [archived, inactive, outOfStock] = await Promise.all([
+    prisma.warehouseProduct.count({
+      where: {
+        AND: [
+          base,
+          { OR: [{ archived: true }, { status: "archived" }] },
+        ],
+      },
+    }),
+    prisma.warehouseProduct.count({
+      where: {
+        AND: [
+          base,
+          { status: { contains: "inactive", mode: "insensitive" } },
+        ],
+      },
+    }),
+    prisma.warehouseProduct.count({
+      where: {
+        AND: [
+          base,
+          { status: "out_of_stock" },
+        ],
+      },
+    }),
+  ]);
+  return { archived, inactive, outOfStock };
 }
 
 function warehousePagePostgresOrderBy() {
@@ -8543,6 +8898,42 @@ function warehousePagePostgresOrderBy() {
     { offerId: "asc" },
     { id: "asc" },
   ];
+}
+
+function warehouseFastPageCacheKey({ page = 1, pageSize = 60, usdRate, filters = {} } = {}) {
+  return JSON.stringify({
+    page: Number(page) || 1,
+    pageSize: Number(pageSize) || 60,
+    usdRate: Number.isFinite(Number(usdRate)) && Number(usdRate) > 0 ? Number(usdRate) : "default",
+    filters: {
+      q: cleanText(filters.q || "").toLowerCase(),
+      autoOnly: Boolean(filters.autoOnly),
+      linked: cleanText(filters.linked || "all"),
+      marketplace: cleanText(filters.marketplace || "all"),
+      state: cleanText(filters.state || "all"),
+      brand: cleanText(filters.brand || "").toLowerCase(),
+    },
+    storage: shouldUsePostgresStorage() ? "postgres" : "json",
+  });
+}
+
+function getWarehouseFastPageCache(params = {}) {
+  const key = warehouseFastPageCacheKey(params);
+  const cached = warehouseFastPageCache.get(key);
+  if (!cached || Date.now() - cached.at > warehouseFastPageCacheTtlMs) {
+    warehouseFastPageCache.delete(key);
+    return { key, value: null };
+  }
+  return { key, value: cloneAuditValue(cached.value) };
+}
+
+function setWarehouseFastPageCache(key, value) {
+  if (!key || !value) return;
+  warehouseFastPageCache.set(key, { at: Date.now(), value: cloneAuditValue(value) });
+  if (warehouseFastPageCache.size > warehouseFastPageCacheMax) {
+    const oldestKey = warehouseFastPageCache.keys().next().value;
+    if (oldestKey) warehouseFastPageCache.delete(oldestKey);
+  }
 }
 
 function warehouseProductPageGroupKey(product = {}) {
@@ -8606,20 +8997,7 @@ function marketplaceStateCodeFromPostgresRow(row = {}) {
 }
 
 async function getMarketplaceStateCountsFromPostgres(prisma, marketplace = "ozon") {
-  const rows = await prisma.warehouseProduct.findMany({
-    where: { AND: [enabledWarehouseTargetWhere(), { marketplace }] },
-    select: { marketplaceState: true, status: true, archived: true },
-  });
-  let archived = 0;
-  let inactive = 0;
-  let outOfStock = 0;
-  for (const row of rows) {
-    const code = marketplaceStateCodeFromPostgresRow(row);
-    if (row.archived || code === "archived") archived += 1;
-    if (code === "inactive") inactive += 1;
-    if (code === "out_of_stock") outOfStock += 1;
-  }
-  return { archived, inactive, outOfStock };
+  return warehouseStateCounterFromPostgres(prisma, marketplace);
 }
 
 async function getOzonStateCountsFromPostgres(prisma) {
@@ -8860,12 +9238,24 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
         orderBy: warehousePagePostgresOrderBy(),
       });
     } else if (kind === "manual") {
-      const candidates = await prisma.warehouseProduct.findMany({
-        where: baseWhere,
+      rows = await prisma.warehouseProduct.findMany({
+        where: {
+          AND: [
+            baseWhere,
+            { raw: { path: ["manualGroupId"], equals: value } },
+          ],
+        },
         include: { links: true },
         orderBy: warehousePagePostgresOrderBy(),
+      }).catch(async (error) => {
+        logger.warn("warehouse manual group postgres direct lookup failed, using fallback scan", { detail: error?.message || String(error) });
+        const candidates = await prisma.warehouseProduct.findMany({
+          where: baseWhere,
+          include: { links: true },
+          orderBy: warehousePagePostgresOrderBy(),
+        });
+        return candidates.filter((row) => warehouseProductPageGroupKey(productFromPostgres(row)) === groupKey);
       });
-      rows = candidates.filter((row) => warehouseProductPageGroupKey(productFromPostgres(row)) === groupKey);
     }
     if (!rows.length) return null;
     const normalizedSuppliers = await getWarehousePostgresSuppliers(prisma);
@@ -8914,9 +9304,16 @@ async function buildFastWarehousePage({
   usdRate,
   filters = {},
 } = {}) {
+  const cacheParams = { page, pageSize, usdRate, filters };
+  const cached = getWarehouseFastPageCache(cacheParams);
+  if (cached.value) return cached.value;
+  let result = null;
   if (shouldUsePostgresStorage()) {
     const postgresPage = await buildFastWarehousePageFromPostgres({ page, pageSize, usdRate, filters });
-    if (postgresPage) return postgresPage;
+    if (postgresPage) {
+      setWarehouseFastPageCache(cached.key, postgresPage);
+      return postgresPage;
+    }
   }
   const warehouse = await readWarehouse();
   const appSettings = await readAppSettings();
@@ -8954,7 +9351,7 @@ async function buildFastWarehousePage({
   );
   const ozonStateCounts = warehouseStateCounter(enabledProducts, "ozon");
   const yandexStateCounts = warehouseStateCounter(enabledProducts, "yandex");
-  return {
+  result = {
     createdAt: warehouse.createdAt || null,
     updatedAt: warehouse.updatedAt || null,
     totalAll: enabledProducts.length,
@@ -8980,6 +9377,8 @@ async function buildFastWarehousePage({
     hasMore: offset + pageSlice.length < total,
     items,
   };
+  setWarehouseFastPageCache(cached.key, result);
+  return result;
 }
 
 async function appendHistory(syncResult) {
@@ -9320,9 +9719,15 @@ app.get("/api/partners/search", async (request, response, next) => {
       return response.json({ items: [] });
     }
 
+    const cacheKey = `partners:${q.toLowerCase()}:${limit}`;
+    const cached = getPriceMasterSearchCache(cacheKey);
+    if (cached) return response.json(cached);
+
     const snapshotRows = await searchPriceMasterSnapshotPartners(q, limit);
-    if (snapshotRows?.length) {
-      return response.json({ items: snapshotRows, source: "postgres_snapshot" });
+    if (snapshotRows) {
+      const payload = { items: snapshotRows, source: "postgres_snapshot" };
+      setPriceMasterSearchCache(cacheKey, payload);
+      return response.json(payload);
     }
 
     const [rows] = await pool.query(
@@ -9336,7 +9741,9 @@ app.get("/api/partners/search", async (request, response, next) => {
       [likeSearch(q), limit],
     );
 
-    response.json({ items: rows });
+    const payload = { items: rows };
+    setPriceMasterSearchCache(cacheKey, payload);
+    response.json(payload);
   } catch (error) {
     next(error);
   }
@@ -9448,6 +9855,9 @@ app.get("/api/offers", async (request, response, next) => {
     const partner = String(request.query.partner || "").trim();
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+    const cacheKey = `offers:${search.toLowerCase()}:${partner}:${limit}:${usdRate.toFixed(4)}`;
+    const cached = getPriceMasterSearchCache(cacheKey);
+    if (cached) return response.json(cached);
 
     const snapshotRows = await searchPriceMasterSnapshotOffers({
       search,
@@ -9455,7 +9865,8 @@ app.get("/api/offers", async (request, response, next) => {
       limit,
       usdRate,
     });
-    if (snapshotRows?.length) {
+    if (snapshotRows) {
+      setPriceMasterSearchCache(cacheKey, snapshotRows);
       return response.json(snapshotRows);
     }
 
@@ -9497,7 +9908,9 @@ app.get("/api/offers", async (request, response, next) => {
       params,
     );
 
-    response.json(rows.map((row) => ({ ...row, ...normalizePriceMasterPrice(row.price, usdRate) })));
+    const payload = rows.map((row) => ({ ...row, ...normalizePriceMasterPrice(row.price, usdRate) }));
+    setPriceMasterSearchCache(cacheKey, payload);
+    response.json(payload);
   } catch (error) {
     next(error);
   }
@@ -10156,6 +10569,10 @@ app.get("/api/warehouse", async (request, response, next) => {
 
 app.get("/api/warehouse/brands", async (request, response, next) => {
   try {
+    if (shouldUsePostgresStorage()) {
+      const brands = await getWarehouseBrandListFromPostgres(getPrisma());
+      return response.json({ brands, source: "postgres" });
+    }
     const warehouse = await readWarehouse();
     const unique = new Map();
     for (const product of warehouse.products || []) {
@@ -10207,31 +10624,14 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     let rows = Array.isArray(data.products) ? data.products.slice() : [];
     if (!sync && !refreshPrices) queueChangedWarehousePrices(rows, "warehouse_page_detected_changed_prices");
 
-    if (q) {
-      rows = rows.filter((item) => {
-        const haystack = [
-          item.id,
-          item.offerId,
-          item.name,
-          item.brand,
-          item.categoryName,
-          item.sku,
-          item.barcode,
-        ]
-          .map((value) => cleanText(value || "").toLowerCase())
-          .join(" ");
-        return haystack.includes(q);
-      });
-    }
-    if (autoOnly) rows = rows.filter((item) => item.autoPriceEnabled !== false);
-    if (linked === "linked") rows = rows.filter((item) => item.hasLinks);
-    if (linked === "ready") rows = rows.filter((item) => item.hasLinks && item.ready);
-    if (linked === "unlinked") rows = rows.filter((item) => !item.hasLinks);
-    if (linked === "changed") rows = rows.filter((item) => item.hasLinks && item.changed);
-    if (linked === "linked_archived") rows = rows.filter((item) => item.hasLinks && cleanText(item.marketplace) === "ozon" && cleanText(item.marketplaceState?.code) === "archived");
-    if (marketplace !== "all") rows = rows.filter((item) => cleanText(item.marketplace) === marketplace);
-    if (stateCode !== "all") rows = rows.filter((item) => cleanText(item.marketplaceState?.code) === stateCode);
-    if (brandFilter) rows = rows.filter((item) => warehouseBrandMatches(item, brandFilter));
+    rows = rows.filter((item) => warehousePageProductMatches(item, {
+      q,
+      autoOnly,
+      linked,
+      marketplace,
+      state: stateCode,
+      brand: brandFilter,
+    }));
 
     const total = rows.length;
     const offset = (page - 1) * pageSize;
@@ -10367,8 +10767,8 @@ app.get("/api/suppliers", async (request, response, next) => {
 
 app.get("/api/live-status", async (_request, response, next) => {
   try {
-    const [warehouse, dailySync, priceMaster] = await Promise.all([
-      readWarehouse(),
+    const [warehouseMeta, dailySync, priceMaster] = await Promise.all([
+      getWarehouseMetaFast(),
       getDailySyncStatus().catch((error) => ({ error: error?.message || String(error) })),
       getPriceMasterSnapshotMetaFast().catch((error) => {
         logger.warn("live status PriceMaster meta failed", { detail: error?.message || String(error) });
@@ -10379,10 +10779,11 @@ app.get("/api/live-status", async (_request, response, next) => {
       ok: true,
       now: new Date().toISOString(),
       warehouse: {
-        updatedAt: warehouse.updatedAt || warehouse.createdAt || null,
-        createdAt: warehouse.createdAt || null,
-        products: Array.isArray(warehouse.products) ? warehouse.products.length : 0,
-        suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.length : 0,
+        updatedAt: warehouseMeta.updatedAt || warehouseMeta.createdAt || null,
+        createdAt: warehouseMeta.createdAt || null,
+        products: Number(warehouseMeta.products || 0),
+        suppliers: Number(warehouseMeta.suppliers || 0),
+        source: warehouseMeta.source || null,
       },
       priceMaster,
       dailySync: {
@@ -10577,7 +10978,7 @@ app.post("/api/warehouse/products", async (request, response, next) => {
 
     await writeWarehouse(warehouse);
     const product = index >= 0 ? warehouse.products[index] : input;
-    const [freshProduct] = await buildFreshWarehouseProducts([product.id]);
+    const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product]);
     await appendAudit(request, index >= 0 ? "warehouse.product.save" : "warehouse.product.create", {
       productId: product.id,
       offerId: product.offerId,
@@ -10800,7 +11201,7 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
     product.updatedAt = new Date().toISOString();
 
     await writeWarehouseProductPatch([product], { reason: "warehouse_product_update", writeLinks: false });
-    const [freshProduct] = await buildFreshWarehouseProducts([product.id]);
+    const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product]);
     await appendAudit(request, "warehouse.product.update", {
       productId: product.id,
       offerId: product.offerId,
@@ -10863,7 +11264,8 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
       warehouse.products.filter((product) => changedIds.includes(product.id)),
       { reason: "warehouse_markup_bulk_update", writeLinks: false },
     );
-    const products = await buildFreshWarehouseProducts(changedIds);
+    const changedProducts = warehouse.products.filter((product) => changedIds.includes(product.id));
+    const products = await buildFreshWarehouseProductsFromKnownProducts(warehouse, changedProducts);
     await appendAudit(request, "warehouse.markups.bulk_update", {
       productIds: changedIds,
       oldValue: oldValues,
@@ -10902,7 +11304,8 @@ app.patch("/api/warehouse/products/auto-price/bulk", async (request, response, n
       warehouse.products.filter((product) => changedIds.includes(product.id)),
       { reason: "warehouse_auto_price_bulk_update", writeLinks: false },
     );
-    const products = await buildFreshWarehouseProducts(changedIds);
+    const changedProducts = warehouse.products.filter((product) => changedIds.includes(product.id));
+    const products = await buildFreshWarehouseProductsFromKnownProducts(warehouse, changedProducts);
     await appendAudit(request, "warehouse.auto_price.bulk_update", {
       productIds: changedIds,
       oldValue: oldValues,
@@ -10961,7 +11364,8 @@ app.patch("/api/warehouse/products/group", async (request, response, next) => {
       warehouse.products.filter((product) => changedIds.includes(product.id)),
       { reason: "warehouse_group", writeLinks: false },
     );
-    const products = await buildFreshWarehouseProducts(changedIds);
+    const changedProducts = warehouse.products.filter((product) => changedIds.includes(product.id));
+    const products = await buildFreshWarehouseProductsFromKnownProducts(warehouse, changedProducts);
     await appendAudit(request, "warehouse.group", { productIds: changedIds, oldValue: oldValues, newValue: { groupId } });
     response.json({ ok: true, groupId, changed, products });
   } catch (error) {
@@ -10992,7 +11396,8 @@ app.patch("/api/warehouse/products/ungroup", async (request, response, next) => 
       warehouse.products.filter((product) => changedIds.includes(product.id)),
       { reason: "warehouse_ungroup", writeLinks: false },
     );
-    const products = await buildFreshWarehouseProducts(changedIds);
+    const changedProducts = warehouse.products.filter((product) => changedIds.includes(product.id));
+    const products = await buildFreshWarehouseProductsFromKnownProducts(warehouse, changedProducts);
     await appendAudit(request, "warehouse.ungroup", { productIds: changedIds, oldValue: oldValues, newValue: { groupId: "" } });
     response.json({ ok: true, changed, products });
   } catch (error) {
@@ -11033,11 +11438,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       .map((link) => normalizeWarehouseLink(link))
       .filter(warehouseLinkHasMatchTarget)
       .map((link) => [warehouseLinkTargetKey(link), link])).values());
-    const resolvedLinks = [];
-    for (const submittedLink of submittedLinks) {
-      const resolvedLink = await resolvePriceMasterLinkForSave(submittedLink, usdRate, warehouse.suppliers, linkSaveLookupOptions);
-      if (warehouseLinkHasMatchTarget(resolvedLink)) resolvedLinks.push(resolvedLink);
-    }
+    const resolvedLinks = (await Promise.all(submittedLinks.map((submittedLink) =>
+      resolvePriceMasterLinkForSave(submittedLink, usdRate, warehouse.suppliers, linkSaveLookupOptions),
+    ))).filter(warehouseLinkHasMatchTarget);
     const baseLinks = Array.from(new Map(resolvedLinks
       .map((link) => [warehouseLinkTargetKey(link), link])).values());
     const baseLink = baseLinks[0] || normalizeWarehouseLink({});
@@ -11049,12 +11452,12 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     if (conflicts.length) {
       const alreadyApplied = targetProducts.length > 0 && targetProducts.every((product) => warehouseProductHasLinks(product, baseLinks));
       if (!alreadyApplied) return conflictResponse(response, conflicts);
-      const savedProducts = await buildFreshWarehouseProducts(Array.from(ids), { usdRate, livePriceMaster: false });
+      const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, targetProducts, { usdRate });
       return response.json({ ok: true, changed: savedProducts.length || targetProducts.length, products: savedProducts, persisted: "already_written", alreadyWritten: true });
     }
-    for (const linkToValidate of baseLinks) {
-      await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers, linkSaveLookupOptions);
-    }
+    await Promise.all(baseLinks.map((linkToValidate) =>
+      assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers, linkSaveLookupOptions),
+    ));
     const now = new Date().toISOString();
     const username = requestUsername(request);
     const updatedIds = [];
@@ -11062,11 +11465,10 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 
     for (const product of warehouse.products) {
       if (!ids.has(String(product.id))) continue;
-      const beforeSignature = warehouseProductLinksSignature(product);
+      const beforeDetailsSignature = warehouseProductLinkDetailsSignature(product);
       const beforeValue = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
       product.links = Array.isArray(product.links) ? product.links : [];
       for (const linkToSave of baseLinks) {
-        const identityKey = warehouseLinkTargetKey(linkToSave);
         const link = normalizeWarehouseLink({
           ...linkToSave,
           createdAt: linkToSave.createdAt || now,
@@ -11074,25 +11476,14 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
           createdBy: linkToSave.createdBy || username,
           updatedBy: username,
         });
-        const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkTargetKey(item) === identityKey);
+        const index = product.links.findIndex((item) => item.id === link.id || warehouseLinksEqualForSave(item, link));
         if (index >= 0) {
-          const existing = normalizeWarehouseLink(product.links[index]);
-          if (!warehouseLinksEqualForSave(existing, link)) {
-            product.links[index] = normalizeWarehouseLink({
-              ...existing,
-              ...link,
-              id: existing.id || link.id,
-              createdAt: existing.createdAt || link.createdAt,
-              createdBy: existing.createdBy || link.createdBy,
-              updatedAt: now,
-              updatedBy: username,
-            });
-          }
+          product.links[index] = mergeWarehouseLinkForSave(product.links[index], link, { now, username });
         }
         else product.links.push(link);
       }
       product.links = compactWarehouseLinks(product.links);
-      if (warehouseProductLinksSignature(product) === beforeSignature) continue;
+      if (warehouseProductLinkDetailsSignature(product) === beforeDetailsSignature) continue;
       oldValues.push(beforeValue);
       product.autoPriceEnabled = true;
       product.updatedAt = now;
@@ -11101,14 +11492,16 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 
     if (!targetProducts.length) return response.status(404).json({ error: "Товары склада не найдены." });
     if (!updatedIds.length) {
-      return response.json({ ok: true, changed: 0, products: targetProducts.map(normalizeWarehouseProduct), persisted: "unchanged", unchanged: true });
+      const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, targetProducts, { usdRate });
+      return response.json({ ok: true, changed: 0, products: savedProducts, persisted: "unchanged", unchanged: true });
     }
 
     await writeWarehouseProductPatch(
       warehouse.products.filter((product) => updatedIds.includes(product.id)),
       { reason: "warehouse_links_bulk_save" },
     );
-    const savedProducts = await buildFreshWarehouseProducts(updatedIds, { usdRate, livePriceMaster: false });
+    const updatedProducts = warehouse.products.filter((product) => updatedIds.includes(product.id));
+    const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, updatedProducts, { usdRate });
     response.json({ ok: true, changed: savedProducts.length || updatedIds.length, products: savedProducts, persisted: "written" });
     appendAudit(request, "warehouse.links.bulk_save", {
       productIds: updatedIds,
@@ -11149,7 +11542,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const conflict = productConflict(product, request.body?.expectedUpdatedAt);
     if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
-    const beforeSignature = warehouseProductLinksSignature(product);
+    const beforeDetailsSignature = warehouseProductLinkDetailsSignature(product);
 
     let link = normalizeWarehouseLink(request.body);
     if (!link.article && !link.exactName && !link.sourceRowId) {
@@ -11163,21 +11556,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const now = new Date().toISOString();
     const username = requestUsername(request);
     product.links = Array.isArray(product.links) ? product.links : [];
-    const identityKey = warehouseLinkTargetKey(link);
-    const index = product.links.findIndex((item) => item.id === link.id || warehouseLinkTargetKey(item) === identityKey);
+    const index = product.links.findIndex((item) => item.id === link.id || warehouseLinksEqualForSave(item, link));
     if (index >= 0) {
-      const existing = normalizeWarehouseLink(product.links[index]);
-      if (!warehouseLinksEqualForSave(existing, link)) {
-        product.links[index] = normalizeWarehouseLink({
-          ...existing,
-          ...link,
-          id: existing.id || link.id,
-          createdAt: existing.createdAt || link.createdAt,
-          createdBy: existing.createdBy || link.createdBy || username,
-          updatedAt: now,
-          updatedBy: username,
-        });
-      }
+      product.links[index] = mergeWarehouseLinkForSave(product.links[index], link, { now, username });
     }
     else product.links.push(normalizeWarehouseLink({
       ...link,
@@ -11187,14 +11568,15 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       updatedBy: username,
     }));
     product.links = compactWarehouseLinks(product.links);
-    if (warehouseProductLinksSignature(product) === beforeSignature) {
-      const normalized = normalizeWarehouseProduct(product);
+    if (warehouseProductLinkDetailsSignature(product) === beforeDetailsSignature) {
+      const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product], { usdRate });
+      const normalized = freshProduct || normalizeWarehouseProduct(product);
       return response.json({ ok: true, product: normalized, links: normalized.links || [], persisted: "unchanged", unchanged: true });
     }
     if (product.links.length > 0) product.autoPriceEnabled = true;
     product.updatedAt = now;
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_save" });
-    const [savedProduct] = await buildFreshWarehouseProducts([product.id], { usdRate, livePriceMaster: false });
+    const [savedProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product], { usdRate });
     response.json({ ok: true, product: savedProduct || normalizeWarehouseProduct(product), links: (savedProduct || product).links || [], persisted: "written" });
     appendAudit(request, "warehouse.link.save", {
       productId: product.id,
@@ -11278,7 +11660,8 @@ app.post("/api/warehouse/products/links/delete", async (request, response, next)
 
       await writeWarehouseProductPatch(changedProducts, { reason: "warehouse_links_bulk_delete" });
       const idsWithRemainingLinks = changedProducts.filter((product) => (product.links || []).length).map((product) => product.id);
-      const builtProducts = idsWithRemainingLinks.length ? await buildFreshWarehouseProducts(idsWithRemainingLinks) : [];
+      const productsWithRemainingLinks = changedProducts.filter((product) => (product.links || []).length);
+      const builtProducts = productsWithRemainingLinks.length ? await buildFreshWarehouseProductsFromKnownProducts(warehouse, productsWithRemainingLinks) : [];
       const builtById = new Map(builtProducts.map((product) => [String(product.id), product]));
       const responseProducts = changedProducts.map((product) => {
         const built = builtById.get(String(product.id));
@@ -11325,7 +11708,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     });
     if (conflict && !removed) return conflictResponse(response, [conflict]);
     if (!removed) {
-      const [freshProduct] = await buildFreshWarehouseProducts([product.id]);
+      const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product]);
       const responseProduct = freshProduct || normalizeWarehouseProduct(product);
       return response.json({ ok: true, product: responseProduct, links: responseProduct.links || [], persisted: "already_deleted", alreadyDeleted: true });
     }
@@ -11333,7 +11716,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     product.links = compactWarehouseLinks(product.links);
     product.updatedAt = new Date().toISOString();
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_delete" });
-    const [savedProduct] = product.links.length ? await buildFreshWarehouseProducts([product.id]) : [];
+    const [savedProduct] = product.links.length ? await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product]) : [];
     const responseProduct = savedProduct || {
       ...normalizeWarehouseProduct(product),
       links: [],
@@ -11362,7 +11745,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
   }
 });
 
-async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDiffPct = 0, dryRun = false, force = false } = {}) {
+async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDiffPct = 0, dryRun = false, force = false, refreshMarketplacePrices = false } = {}) {
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
   let preview = null;
   let selected = [];
@@ -11370,7 +11753,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     const settings = await readAppSettings();
     const rate = Number(settings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     preview = { usdRate: rate };
-    selected = await buildFreshWarehouseProducts(Array.from(ids), { refreshPrices: true, usdRate: rate });
+    selected = await buildFreshWarehouseProducts(Array.from(ids), { refreshPrices: Boolean(refreshMarketplacePrices), usdRate: rate });
   } else {
     preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
     selected = preview.products;
@@ -12100,6 +12483,7 @@ app.post("/api/warehouse/prices/send", async (request, response, next) => {
       minDiffPct: Number(request.body.minDiffPct || 0),
       dryRun: request.body.dryRun === true,
       force: request.body.force === true,
+      refreshMarketplacePrices: request.body.refreshMarketplacePrices === true,
     }));
   } catch (error) {
     next(error);
@@ -13591,7 +13975,7 @@ function summarizeNoSupplierAutomationProducts(products = [], actions = []) {
       offerId: product.offerId || "",
       hasLinks: Boolean(product.hasLinks),
       status: failed ? "error" : (skipped ? "skipped" : (productActions.length ? "processed" : "no_action")),
-      actions: productActions.map((action) => action.type),
+      actions: Array.from(new Set(productActions.map((action) => action.type).filter(Boolean))),
       error: failed?.error || null,
       skippedReason: skipped?.reason || null,
     };
@@ -13634,7 +14018,7 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
   }
 
   const warehouse = await readWarehouse();
-  const changedProducts = [];
+  const changedById = new Map();
   for (const action of allActions) {
     const product = warehouse.products.find((item) => item.id === action.id);
     if (!product) continue;
@@ -13643,8 +14027,9 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     if (action.ok && action.type === "archive") product.noSupplierAutomation.archivedAt = now;
     product.noSupplierAutomation.lastError = action.ok || action.skipped ? null : action.error;
     product.updatedAt = now;
-    changedProducts.push(product);
+    changedById.set(product.id, product);
   }
+  const changedProducts = Array.from(changedById.values());
   if (source === "targeted" && changedProducts.length) {
     await writeWarehouseProductPatch(changedProducts, { reason: "no_supplier_automation" });
   } else {
@@ -14156,12 +14541,6 @@ app.use((error, request, response, _next) => {
 async function startServer() {
   initMarketplaceQueue();
   pruneUploadDirectory().catch((err) => logger.warn("initial upload prune failed", { detail: err?.message || String(err) }));
-  try {
-    const warehouse = await readWarehouse();
-    logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length });
-  } catch (err) {
-    logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) });
-  }
   app.listen(port, () => {
     logger.info("server started", {
       port,
@@ -14177,6 +14556,14 @@ async function startServer() {
       logger.info("daily sync enabled", { time: dailySyncTime, sendPrices: dailySyncSendPrices });
     }
   });
+
+  readWarehouse()
+    .then((warehouse) => {
+      logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length });
+    })
+    .catch((err) => {
+      logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) });
+    });
 
   scheduleDailySync();
   schedulePriceRetryProcessing(30_000);
@@ -14222,6 +14609,10 @@ module.exports = {
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
+  productLinkPostgresIdentityKey,
+  dedupeProductLinkRows,
+  warehouseProductLinkDetailsSignature,
+  mergeWarehouseLinkForSave,
   warehouseProductLinksSignature,
   productConflict,
   warehouseLinkHasMatchTarget,

@@ -786,7 +786,13 @@ form.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (!window.confirm(`${editingProductId ? "Обновить" : "Создать"} карточку товара на Ozon? Это отправит данные в Ozon Seller API.`)) return;
+  const confirmed = await window.openProductActionConfirm({
+    eyebrow: "Ozon Seller",
+    title: `${editingProductId ? "Обновить" : "Создать"} карточку Ozon?`,
+    lines: ["Данные будут отправлены в Ozon Seller API.", "Черновик также сохранится в личном складе."],
+    confirmLabel: editingProductId ? "Обновить в Ozon" : "Создать в Ozon",
+  });
+  if (!confirmed) return;
 
   statusBox.textContent = "Отправляю товар в Ozon...";
   try {

@@ -77,6 +77,10 @@ const {
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
   warehouseLinkIdentityKey,
+  productLinkPostgresIdentityKey,
+  dedupeProductLinkRows,
+  warehouseProductLinkDetailsSignature,
+  mergeWarehouseLinkForSave,
   warehouseProductLinksSignature,
   productConflict,
   warehouseLinkHasMatchTarget,
@@ -1566,6 +1570,28 @@ test("warehouse page link filters support ready, changed, and linked Ozon archiv
   assert.equal(warehousePageProductMatches(unlinkedArchived, { linked: "linked_archived" }), false);
 });
 
+test("warehouse page search matches supplier link fields", () => {
+  const product = normalizeWarehouseProduct({
+    id: "linked-search-product",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OZON-SEARCH",
+    name: "Marketplace name",
+    links: [{
+      id: "linked-search-link",
+      article: "PM-LINK-777",
+      supplierName: "Special Supplier",
+      partnerId: "991",
+      keyword: "amber",
+    }],
+  });
+
+  assert.equal(warehousePageProductMatches(product, { q: "pm-link-777" }), true);
+  assert.equal(warehousePageProductMatches(product, { q: "special supplier" }), true);
+  assert.equal(warehousePageProductMatches(product, { q: "amber" }), true);
+  assert.equal(warehousePageProductMatches(product, { q: "missing-query" }), false);
+});
+
 test("POST /api/login неверный пароль", async () => {
   await request(app)
     .post("/api/login")
@@ -2708,6 +2734,53 @@ test("warehouse link identity ignores client draft id duplicates", () => {
   assert.equal(a, b);
 });
 
+test("postgres product link identity treats null fields as real duplicate keys", () => {
+  const a = productLinkPostgresIdentityKey({
+    productId: "p-1",
+    supplierArticle: " Art-1 ",
+    partnerId: null,
+    supplierName: null,
+    keyword: null,
+    priceCurrency: "usd",
+  });
+  const b = productLinkPostgresIdentityKey({
+    productId: "p-1",
+    supplierArticle: "art-1",
+    partnerId: "",
+    supplierName: "",
+    keyword: "",
+    priceCurrency: "USD",
+  });
+  assert.equal(a, b);
+});
+
+test("postgres product link rows are deduped before createMany", () => {
+  const rows = dedupeProductLinkRows([
+    {
+      id: "old",
+      productId: "p-2",
+      supplierArticle: "A-2",
+      partnerId: null,
+      supplierName: null,
+      keyword: null,
+      priceCurrency: "USD",
+      updatedAt: new Date("2026-01-01T00:00:00.000Z"),
+    },
+    {
+      id: "new",
+      productId: "p-2",
+      supplierArticle: "a-2",
+      partnerId: "",
+      supplierName: "",
+      keyword: "",
+      priceCurrency: "usd",
+      updatedAt: new Date("2026-01-02T00:00:00.000Z"),
+    },
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].id, "new");
+});
+
 test("warehouse link identity prefers supplier article over PriceMaster row id", () => {
   const a = warehouseLinkIdentityKey({
     id: "draft-1",
@@ -2757,6 +2830,71 @@ test("warehouse product normalization collapses duplicate supplier links by targ
   assert.equal(product.links[0].updatedBy, "manager");
 });
 
+test("warehouse product normalization merges supplier-enriched duplicate links", () => {
+  const product = normalizeWarehouseProduct({
+    id: "enriched-dup-link-product",
+    offerId: "DUP-ENRICHED-1",
+    links: [
+      {
+        id: "link-original",
+        article: "PM-2",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        id: "link-enriched",
+        article: "pm-2",
+        supplierName: "Supplier B",
+        partnerId: "202",
+        priceCurrency: "USD",
+        updatedBy: "manager",
+      },
+    ],
+  });
+
+  assert.equal(product.links.length, 1);
+  assert.equal(product.links[0].id, "link-original");
+  assert.equal(product.links[0].article, "PM-2");
+  assert.equal(product.links[0].supplierName, "Supplier B");
+  assert.equal(product.links[0].partnerId, "202");
+});
+
+test("warehouse link save merge enriches an existing matching link", () => {
+  const product = normalizeWarehouseProduct({
+    id: "save-merge-link-product",
+    offerId: "SAVE-MERGE-1",
+    links: [{ id: "link-original", article: "PM-22", createdAt: "2026-01-01T00:00:00.000Z" }],
+  });
+  const beforePrimarySignature = warehouseProductLinksSignature(product);
+  const beforeDetailsSignature = warehouseProductLinkDetailsSignature(product);
+  product.links[0] = mergeWarehouseLinkForSave(product.links[0], {
+    article: "pm-22",
+    supplierName: "Supplier Save",
+    partnerId: "909",
+    updatedBy: "manager",
+  }, { now: "2026-05-16T10:00:00.000Z", username: "manager" });
+  product.links = normalizeWarehouseProduct(product).links;
+
+  assert.equal(product.links.length, 1);
+  assert.equal(product.links[0].id, "link-original");
+  assert.equal(product.links[0].supplierName, "Supplier Save");
+  assert.equal(product.links[0].partnerId, "909");
+  assert.equal(warehouseProductLinksSignature(product), beforePrimarySignature);
+  assert.notEqual(warehouseProductLinkDetailsSignature(product), beforeDetailsSignature);
+});
+
+test("warehouse product normalization keeps same article for different suppliers", () => {
+  const product = normalizeWarehouseProduct({
+    id: "multi-supplier-link-product",
+    offerId: "MULTI-SUPPLIER-1",
+    links: [
+      { id: "link-a", article: "PM-3", supplierName: "Supplier A", partnerId: "101" },
+      { id: "link-b", article: "pm-3", supplierName: "Supplier B", partnerId: "202" },
+    ],
+  });
+
+  assert.equal(product.links.length, 2);
+});
+
 test("warehouse link locks ignore background-only product updates", () => {
   const product = normalizeWarehouseProduct({
     id: "link-lock-product",
@@ -2778,6 +2916,25 @@ test("warehouse link locks ignore background-only product updates", () => {
   });
   assert.equal(conflict.code, undefined);
   assert.equal(conflict.id, "link-lock-product");
+});
+
+test("warehouse link locks ignore supplier enrichment for same PriceMaster target", () => {
+  const product = normalizeWarehouseProduct({
+    id: "link-enrichment-lock-product",
+    offerId: "LOCK-2",
+    updatedAt: "2026-05-14T10:00:00.000Z",
+    links: [{ id: "link-1", article: "PM-1", updatedAt: "2026-05-14T10:00:00.000Z" }],
+  });
+  const expectedLinksSignature = warehouseProductLinksSignature(product);
+  const enriched = normalizeWarehouseProduct({
+    ...product,
+    updatedAt: "2026-05-14T10:05:00.000Z",
+    links: [{ ...product.links[0], supplierName: "Supplier A", partnerId: "101", updatedAt: "2026-05-14T10:05:00.000Z" }],
+  });
+  assert.equal(productConflict(enriched, {
+    expectedUpdatedAt: "2026-05-14T10:00:00.000Z",
+    expectedLinksSignature,
+  }), null);
 });
 
 test("warehouse link target detection keeps selected rows without supplier article", () => {
