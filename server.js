@@ -76,6 +76,7 @@ const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || process.env.DEFA
 const autoSyncInitialDelaySeconds = Math.max(30, Number(process.env.AUTO_SYNC_INITIAL_DELAY_SECONDS || 120) || 120);
 const autoZeroStockOnNoSupplier = process.env.AUTO_ZERO_STOCK_ON_NO_SUPPLIER !== "false";
 const autoArchiveOnNoLinks = process.env.AUTO_ARCHIVE_ON_NO_LINKS === "true";
+const noSupplierFreshLinkGraceMs = Math.max(0, Number(process.env.NO_SUPPLIER_FRESH_LINK_GRACE_MS || 10 * 60 * 1000) || 0);
 const autoRestoreOnSupplierReturn = process.env.AUTO_RESTORE_ON_SUPPLIER_RETURN !== "false";
 const bullmqEnabled = process.env.BULLMQ_ENABLED === "true";
 const redisUrl = cleanText(process.env.REDIS_URL);
@@ -8751,26 +8752,70 @@ async function buildFreshWarehouseProductsFromKnownProducts(warehouse = {}, prod
   );
 }
 
+function normalizeWarehouseSearchToken(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[\s\-_/\\.:;#№]+/g, "");
+}
+
+function isWarehouseArticleLikeQuery(query) {
+  const text = cleanText(query);
+  if (text.length < 2) return false;
+  if (/\s/.test(text)) return false;
+  return /\d/.test(text) || /[\-_/\\#№]/.test(text);
+}
+
+function warehouseProductSearchIdentityTokens(product = {}) {
+  const links = Array.isArray(product.links) ? product.links : [];
+  return [
+    product.id,
+    product.offerId,
+    product.productId,
+    product.sku,
+    product.barcode,
+    product.ozon?.offerId,
+    product.ozon?.productId,
+    product.ozon?.sku,
+    product.ozon?.barcode,
+    product.yandex?.offerId,
+    product.yandex?.productId,
+    product.yandex?.sku,
+    product.yandex?.barcode,
+    ...links.flatMap((link) => [link.article, link.sourceRowId]),
+  ]
+    .map(normalizeWarehouseSearchToken)
+    .filter(Boolean);
+}
+
+function warehouseProductMatchesSearchQuery(product = {}, query = "") {
+  const q = cleanText(query || "");
+  if (!q) return true;
+  if (isWarehouseArticleLikeQuery(q)) {
+    const normalizedQuery = normalizeWarehouseSearchToken(q);
+    return warehouseProductSearchIdentityTokens(product).some((token) => token === normalizedQuery);
+  }
+  const qLower = q.toLowerCase();
+  const haystack = [
+    product.id,
+    product.offerId,
+    product.name,
+    resolveWarehouseBrand(product),
+    product.categoryName,
+    product.sku,
+    product.barcode,
+    ...(Array.isArray(product.links)
+      ? product.links.flatMap((link) => [link.article, link.supplierName, link.partnerId, link.keyword, link.exactName, link.sourceRowId])
+      : []),
+  ]
+    .map((value) => cleanText(value || "").toLowerCase())
+    .join(" ");
+  return haystack.includes(qLower);
+}
+
 function warehousePageProductMatches(product = {}, filters = {}) {
   if (!isWarehouseProductTargetEnabled(product)) return false;
-  const q = cleanText(filters.q || "").toLowerCase();
-  if (q) {
-    const haystack = [
-      product.id,
-      product.offerId,
-      product.name,
-      resolveWarehouseBrand(product),
-      product.categoryName,
-      product.sku,
-      product.barcode,
-      ...(Array.isArray(product.links)
-        ? product.links.flatMap((link) => [link.article, link.supplierName, link.partnerId, link.keyword, link.exactName])
-        : []),
-    ]
-      .map((value) => cleanText(value || "").toLowerCase())
-      .join(" ");
-    if (!haystack.includes(q)) return false;
-  }
+  if (!warehouseProductMatchesSearchQuery(product, filters.q || "")) return false;
   const linked = cleanText(filters.linked || "all");
   const hasLinks = Array.isArray(product.links) && product.links.length > 0;
   if (linked === "linked" && !hasLinks) return false;
@@ -8836,19 +8881,31 @@ function warehousePagePostgresWhere(filters = {}) {
   if (brandFilter) and.push({ brand: { contains: brandFilter, mode: "insensitive" } });
   const q = cleanText(filters.q || "");
   if (q) {
-    and.push({
-      OR: [
-        { id: { contains: q, mode: "insensitive" } },
-        { offerId: { contains: q, mode: "insensitive" } },
-        { productId: { contains: q, mode: "insensitive" } },
-        { name: { contains: q, mode: "insensitive" } },
-        { brand: { contains: q, mode: "insensitive" } },
-        { links: { some: { supplierArticle: { contains: q, mode: "insensitive" } } } },
-        { links: { some: { supplierName: { contains: q, mode: "insensitive" } } } },
-        { links: { some: { partnerId: { contains: q, mode: "insensitive" } } } },
-        { links: { some: { keyword: { contains: q, mode: "insensitive" } } } },
-      ],
-    });
+    if (isWarehouseArticleLikeQuery(q)) {
+      and.push({
+        OR: [
+          { id: { equals: q, mode: "insensitive" } },
+          { offerId: { equals: q, mode: "insensitive" } },
+          { productId: { equals: q, mode: "insensitive" } },
+          { links: { some: { supplierArticle: { equals: q, mode: "insensitive" } } } },
+          { links: { some: { partnerId: { equals: q, mode: "insensitive" } } } },
+        ],
+      });
+    } else {
+      and.push({
+        OR: [
+          { id: { contains: q, mode: "insensitive" } },
+          { offerId: { contains: q, mode: "insensitive" } },
+          { productId: { contains: q, mode: "insensitive" } },
+          { name: { contains: q, mode: "insensitive" } },
+          { brand: { contains: q, mode: "insensitive" } },
+          { links: { some: { supplierArticle: { contains: q, mode: "insensitive" } } } },
+          { links: { some: { supplierName: { contains: q, mode: "insensitive" } } } },
+          { links: { some: { partnerId: { contains: q, mode: "insensitive" } } } },
+          { links: { some: { keyword: { contains: q, mode: "insensitive" } } } },
+        ],
+      });
+    }
   }
   return { AND: and.filter((item) => Object.keys(item || {}).length) };
 }
@@ -13935,9 +13992,24 @@ function marketplaceHasPositiveStock(product = {}) {
     .some((warehouse) => Number(warehouse.stock || warehouse.present || 0) > 0);
 }
 
+function productHasFreshLinkMutation(product = {}, now = new Date()) {
+  if (!noSupplierFreshLinkGraceMs) return false;
+  const nowMs = toDateOrNull(now)?.getTime() || Date.now();
+  const times = (Array.isArray(product.links) ? product.links.flatMap((link) => [link.updatedAt, link.createdAt]) : [])
+    .map((value) => toDateOrNull(value)?.getTime() || 0)
+    .filter(Boolean);
+  if (!times.length) return false;
+  return nowMs - Math.max(...times) <= noSupplierFreshLinkGraceMs;
+}
+
 function pickNoSupplierAutomationCandidates(products = [], options = {}) {
   const list = Array.isArray(products) ? products : [];
-  const linkedNoSupplier = list.filter((product) => product.hasLinks && !product.selectedSupplier);
+  const now = options.now || new Date();
+  const linkedNoSupplier = list.filter((product) => (
+    product.hasLinks
+    && !product.selectedSupplier
+    && !productHasFreshLinkMutation(product, now)
+  ));
   const noLinkProducts = options.includeNoLinks
     ? list.filter((product) => !product.hasLinks)
     : [];
@@ -13947,7 +14019,7 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
       ? noSupplierProducts.filter((product) => !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product))
       : [],
     toArchive: autoArchiveOnNoLinks
-      ? noSupplierProducts.filter(
+      ? noLinkProducts.filter(
           (product) =>
             !product.noSupplierAutomation?.archivedAt
             && product.marketplaceState?.code !== "archived",
@@ -13999,6 +14071,7 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
   const now = new Date().toISOString();
   const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates(products, {
     includeNoLinks: Boolean(options.includeNoLinks),
+    now,
   });
   const source = options.source || (Array.isArray(options.productIds) && options.productIds.length ? "targeted" : "full");
 
@@ -14020,7 +14093,7 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
   const archiveMap = new Map();
   for (const product of toArchive) archiveMap.set(product.id, product);
   for (const product of toZeroStock) {
-    if (stockOkIds.has(product.id)) archiveMap.set(product.id, product);
+    if (stockOkIds.has(product.id) && !product.hasLinks) archiveMap.set(product.id, product);
   }
   const archiveActions = await archiveProductsOnMarketplaces(Array.from(archiveMap.values()));
   const allActions = [...stockActions, ...archiveActions];

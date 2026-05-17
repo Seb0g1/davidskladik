@@ -2651,13 +2651,12 @@ test("automation queues linked product for stock=0 when supplier disappeared", (
   assert.equal(toZeroStock[0].id, "linked-no-supplier");
 });
 
-test("automation queues archive for linked product without supplier", () => {
+test("automation does not archive linked product without supplier", () => {
   const { toArchive } = pickNoSupplierAutomationCandidates([
     { id: "candidate", hasLinks: true, selectedSupplier: null, noSupplierAutomation: { stockZeroAt: "2026-01-01T00:00:00.000Z" }, marketplaceState: { code: "inactive" } },
     { id: "not-ready", hasLinks: true, selectedSupplier: null, noSupplierAutomation: {}, marketplaceState: { code: "inactive" } },
   ]);
-  assert.equal(toArchive.length, 2);
-  assert.equal(toArchive[0].id, "candidate");
+  assert.equal(toArchive.length, 0);
 });
 
 test("automation re-queues stock=0 when marketplace stock returned after prior zero", () => {
@@ -3025,4 +3024,56 @@ test("targeted supplier recovery reports no-op without full warehouse side effec
   assert.equal(result.restoredStocks, 0);
   assert.equal(result.unarchived, 0);
   assert.deepEqual(result.errors, []);
+});
+
+test("warehouse page article search matches exact identifiers only", () => {
+  const exact = normalizeWarehouseProduct({
+    id: "article-search-exact",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "NF-00004538",
+    name: "Correct product",
+    links: [{ id: "article-search-link", article: "PM-LINK-777", supplierName: "Supplier" }],
+  });
+  const partial = normalizeWarehouseProduct({
+    id: "article-search-partial",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "NF-000045380",
+    name: "Wrong product with PM-LINK-777 in text",
+    links: [{ id: "article-search-link-2", article: "PM-LINK-7770", supplierName: "Supplier" }],
+  });
+
+  assert.equal(warehousePageProductMatches(exact, { q: "NF-00004538" }), true);
+  assert.equal(warehousePageProductMatches(partial, { q: "NF-00004538" }), false);
+  assert.equal(warehousePageProductMatches(exact, { q: "pm-link-777" }), true);
+  assert.equal(warehousePageProductMatches(partial, { q: "pm-link-777" }), false);
+  assert.equal(warehousePageProductMatches(partial, { q: "Wrong product" }), true);
+});
+
+test("no-supplier automation does not archive linked products while supplier is recalculating", () => {
+  const now = "2026-05-17T12:00:00.000Z";
+  const fresh = {
+    id: "fresh-linked",
+    hasLinks: true,
+    selectedSupplier: null,
+    links: [{ article: "A-1", updatedAt: now }],
+    updatedAt: now,
+    noSupplierAutomation: {},
+    marketplaceState: { code: "active", stock: 3 },
+  };
+  const old = {
+    ...fresh,
+    id: "old-linked",
+    links: [{ article: "A-2", updatedAt: "2026-05-17T11:00:00.000Z" }],
+    updatedAt: "2026-05-17T11:00:00.000Z",
+  };
+
+  const freshResult = pickNoSupplierAutomationCandidates([fresh], { includeNoLinks: true, now });
+  assert.equal(freshResult.toZeroStock.length, 0);
+  assert.equal(freshResult.toArchive.length, 0);
+
+  const oldResult = pickNoSupplierAutomationCandidates([old], { includeNoLinks: true, now });
+  assert.equal(oldResult.toZeroStock.length, 1);
+  assert.equal(oldResult.toArchive.length, 0);
 });
