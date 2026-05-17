@@ -83,6 +83,7 @@ const {
   mergeWarehouseLinkForSave,
   warehouseProductLinksSignature,
   productConflict,
+  canIgnoreStaleLinkSaveConflict,
   warehouseLinkHasMatchTarget,
   pickOzonCabinetListedPrice,
   shouldSkipWarehousePriceSend,
@@ -2935,6 +2936,26 @@ test("warehouse link locks ignore supplier enrichment for same PriceMaster targe
     expectedUpdatedAt: "2026-05-14T10:00:00.000Z",
     expectedLinksSignature,
   }), null);
+});
+
+test("warehouse link save accepts stale lock after the links were already cleared", () => {
+  const product = normalizeWarehouseProduct({
+    id: "link-readd-after-delete-product",
+    offerId: "LOCK-3",
+    updatedAt: "2026-05-14T10:05:00.000Z",
+    links: [],
+  });
+  assert.equal(canIgnoreStaleLinkSaveConflict(product, [{ article: "PM-NEW", supplierName: "Supplier A" }], {
+    expectedUpdatedAt: "2026-05-14T10:00:00.000Z",
+    expectedLinksSignature: "article:pm-old",
+  }), true);
+  assert.equal(canIgnoreStaleLinkSaveConflict({
+    ...product,
+    links: [{ article: "PM-OTHER", supplierName: "Supplier B" }],
+  }, [{ article: "PM-NEW", supplierName: "Supplier A" }], {
+    expectedUpdatedAt: "2026-05-14T10:00:00.000Z",
+    expectedLinksSignature: "article:pm-old",
+  }), false);
 });
 
 test("warehouse link target detection keeps selected rows without supplier article", () => {

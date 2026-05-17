@@ -2430,6 +2430,13 @@ function collectProductConflictsExceptBackground(products = [], locks = new Map(
   return conflicts;
 }
 
+function canIgnoreStaleLinkSaveConflict(product = {}, links = [], lock = {}) {
+  if (!lock?.expectedUpdatedAt) return false;
+  const existingLinks = compactWarehouseLinks(product.links || []);
+  if (!existingLinks.length) return true;
+  return warehouseProductHasLinks(product, links);
+}
+
 function conflictResponse(response, conflicts) {
   return response.status(409).json({
     error: "Конфликт обновления: карточка уже изменена другим пользователем.",
@@ -11448,10 +11455,15 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       return response.status(400).json({ error: "Укажите артикул PriceMaster или выберите строку PriceMaster по названию." });
     }
     const targetProducts = warehouse.products.filter((product) => ids.has(String(product.id)));
-    const conflicts = collectProductConflictsExceptBackground(targetProducts, productLocksFromRequest(request.body), { mergeOnly: true });
-    if (conflicts.length) {
+    const locks = productLocksFromRequest(request.body);
+    const conflicts = collectProductConflictsExceptBackground(targetProducts, locks, { mergeOnly: true });
+    const blockingConflicts = conflicts.filter((conflict) => {
+      const product = targetProducts.find((item) => String(item.id) === String(conflict.id));
+      return !canIgnoreStaleLinkSaveConflict(product, baseLinks, locks.get(String(conflict.id)));
+    });
+    if (blockingConflicts.length) {
       const alreadyApplied = targetProducts.length > 0 && targetProducts.every((product) => warehouseProductHasLinks(product, baseLinks));
-      if (!alreadyApplied) return conflictResponse(response, conflicts);
+      if (!alreadyApplied) return conflictResponse(response, blockingConflicts);
       const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, targetProducts, { usdRate });
       return response.json({ ok: true, changed: savedProducts.length || targetProducts.length, products: savedProducts, persisted: "already_written", alreadyWritten: true });
     }
@@ -14615,6 +14627,7 @@ module.exports = {
   mergeWarehouseLinkForSave,
   warehouseProductLinksSignature,
   productConflict,
+  canIgnoreStaleLinkSaveConflict,
   warehouseLinkHasMatchTarget,
   pickOzonCabinetListedPrice,
   shouldSkipWarehousePriceSend,
