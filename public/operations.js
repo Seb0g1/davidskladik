@@ -3,6 +3,7 @@ const els = {
   sendLimit: document.querySelector("#operationSendLimitInput"),
   startImport: document.querySelector("#startYandexImportJobButton"),
   startStocks: document.querySelector("#startYandexStockJobButton"),
+  startLinkedRecovery: document.querySelector("#startLinkedRecoveryJobButton"),
   startHealth: document.querySelector("#startHealthJobButton"),
   refresh: document.querySelector("#refreshOperationsButton"),
   status: document.querySelector("#operationStatus"),
@@ -55,6 +56,8 @@ function jobSummary(job = {}) {
   if (Number.isFinite(Number(result.sent))) parts.push(`карточки ${result.sent}/${result.failed || 0}`);
   if (Number.isFinite(Number(result.priceSent))) parts.push(`цены ${result.priceSent}/${result.priceFailed || 0}`);
   if (Number.isFinite(Number(result.stockSent))) parts.push(`остатки ${result.stockSent}/${result.stockFailed || 0}`);
+  if (Number.isFinite(Number(result.recovered))) parts.push(`восстановлено ${result.recovered}`);
+  if (Number.isFinite(Number(result.unarchived))) parts.push(`разархивировано ${result.unarchived}`);
   if (Number.isFinite(Number(result.skippedByLimit))) parts.push(`следующий запуск ${result.skippedByLimit}`);
   if (result.ok === false && job.error) parts.push(job.error);
   return parts.join(" · ") || job.error || "";
@@ -105,7 +108,9 @@ async function startJob(type) {
     ? { limit, sendLimit }
     : type === "yandex-stock-sync"
       ? { limit }
-      : {};
+      : type === "linked-supplier-recovery"
+        ? { limit }
+        : {};
   const result = await api("/api/operations", {
     method: "POST",
     body: { type, payload },
@@ -129,6 +134,12 @@ els.startImport?.addEventListener("click", () => {
 els.startStocks?.addEventListener("click", () => {
   startJob("yandex-stock-sync").catch((error) => {
     els.status.textContent = `Не удалось запустить остатки: ${error.message}`;
+  });
+});
+
+els.startLinkedRecovery?.addEventListener("click", () => {
+  startJob("linked-supplier-recovery").catch((error) => {
+    els.status.textContent = `Не удалось запустить восстановление: ${error.message}`;
   });
 });
 

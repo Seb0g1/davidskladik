@@ -12945,9 +12945,74 @@ function operationTitle(type = "") {
   const titles = {
     "yandex-import-send": "Ozon -> Yandex import",
     "yandex-stock-sync": "Ozon -> Yandex stock sync",
+    "linked-supplier-recovery": "Restore linked marketplace cards",
     "health-deep": "Deep health check",
   };
   return titles[type] || type || "Operation";
+}
+
+async function runLinkedSupplierRecoveryOperation(payload = {}) {
+  const requestedLimit = Number(payload?.limit || 30000);
+  const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
+  const warehouse = await readWarehouse();
+  const candidates = (warehouse.products || [])
+    .filter((product) => {
+      if (!Array.isArray(product.links) || !product.links.length) return false;
+      const stateCode = cleanText(product.marketplaceState?.code || product.status).toLowerCase();
+      return Boolean(product.archived)
+        || Boolean(product.marketplaceState?.archived)
+        || stateCode === "archived"
+        || stateCode === "out_of_stock"
+        || Boolean(product.noSupplierAutomation?.stockZeroAt)
+        || Boolean(product.noSupplierAutomation?.archivedAt);
+    })
+    .slice(0, limit);
+
+  if (!candidates.length) {
+    return {
+      ok: true,
+      scanned: Math.min(limit, (warehouse.products || []).length),
+      candidates: 0,
+      recovered: 0,
+      restoredStocks: 0,
+      unarchived: 0,
+      errors: [],
+      summary: "Нет привязанных карточек, которым нужно восстановление.",
+    };
+  }
+
+  const rebuilt = [];
+  for (const chunk of chunkArray(candidates, 200)) {
+    const products = await buildFreshWarehouseProductsFromKnownProducts(
+      warehouse,
+      chunk,
+      {
+        refreshPrices: false,
+        persistMutations: false,
+        livePriceMaster: false,
+        batchPriceMaster: false,
+      },
+    );
+    rebuilt.push(...products);
+  }
+
+  const ready = rebuilt.filter((product) => product.hasLinks && product.selectedSupplier);
+  const result = await runSupplierRecoveryAutomation(
+    { products: ready },
+    { productIds: ready.map((product) => product.id), source: "targeted" },
+  );
+  return {
+    ok: result.errors?.length ? false : true,
+    partial: Boolean(result.errors?.length && (result.recovered || result.restoredStocks || result.unarchived)),
+    scanned: Math.min(limit, (warehouse.products || []).length),
+    candidates: candidates.length,
+    ready: ready.length,
+    recovered: result.recovered || 0,
+    restoredStocks: result.restoredStocks || 0,
+    unarchived: result.unarchived || 0,
+    errors: result.errors || [],
+    summary: `Проверено ${candidates.length}; готово к восстановлению ${ready.length}; восстановлено ${result.recovered || 0}.`,
+  };
 }
 
 async function runOperationPayload(job) {
@@ -12978,6 +13043,15 @@ async function runOperationPayload(job) {
       newValue: result,
     });
     return { ok: result.ok, limit, ...result };
+  }
+  if (job.type === "linked-supplier-recovery") {
+    const result = await runLinkedSupplierRecoveryOperation(job.payload || {});
+    await appendAudit(auditRequest, "marketplace.linked.recovery", {
+      entityType: "linked_supplier_recovery",
+      entityId: "all",
+      newValue: result,
+    });
+    return result;
   }
   if (job.type === "health-deep") {
     return collectHealthDetails({ deep: true });
@@ -13046,7 +13120,7 @@ app.get("/api/operations/:id", requireAdmin, async (request, response, next) => 
 app.post("/api/operations", requireAdmin, async (request, response, next) => {
   try {
     const type = cleanText(request.body?.type);
-    if (!["yandex-import-send", "yandex-stock-sync", "health-deep"].includes(type)) {
+    if (!["yandex-import-send", "yandex-stock-sync", "linked-supplier-recovery", "health-deep"].includes(type)) {
       return response.status(400).json({ error: "Unsupported operation type." });
     }
     const job = await upsertOperationJob({
