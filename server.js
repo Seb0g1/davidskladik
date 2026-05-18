@@ -1888,6 +1888,28 @@ function normalizeAiImageDrafts(input = []) {
   return drafts.map(normalizeAiImageDraft).filter(Boolean).slice(-50);
 }
 
+function aiRecommendationText(input) {
+  if (input === undefined || input === null) return "";
+  if (typeof input === "string" || typeof input === "number" || typeof input === "boolean") return cleanText(input);
+  if (Array.isArray(input)) return input.map(aiRecommendationText).filter(Boolean).join(": ");
+  if (typeof input === "object") {
+    return cleanText(
+      input.message
+        || input.text
+        || input.name
+        || input.title
+        || input.description
+        || input.comment
+        || input.reason
+        || input.recommendation
+        || input.value
+        || input.details
+        || input.error,
+    );
+  }
+  return "";
+}
+
 function normalizeAiContentDraft(input = {}) {
   if (!input || typeof input !== "object") return null;
   const status = cleanText(input.status || "pending").toLowerCase();
@@ -1908,7 +1930,7 @@ function normalizeAiContentDraft(input = {}) {
       : [],
     qualityBefore: Number.isFinite(Number(input.qualityBefore)) ? Number(input.qualityBefore) : undefined,
     recommendations: Array.isArray(input.recommendations)
-      ? input.recommendations.map((item) => cleanText(item?.message || item?.text || item?.name || item)).filter(Boolean).slice(0, 20)
+      ? input.recommendations.map(aiRecommendationText).filter(Boolean).slice(0, 20)
       : [],
     model: cleanText(input.model),
     createdAt: input.createdAt || input.created_at || new Date().toISOString(),
@@ -5700,6 +5722,11 @@ function buildAiContentMessages(product = {}, marketplace = "yandex") {
       content: [
         "Ты редактор карточек маркетплейса для парфюмерии и косметики.",
         "Улучши карточку так, чтобы текст был пригоден для Yandex Market и не нарушал правила.",
+        "Описание должно быть подробным: 900-1400 знаков, 2-3 связных абзаца без markdown, списков и эмодзи.",
+        "Раскрой характер аромата, звучание верхних/средних/базовых нот, настроение, сезонность, уместные сценарии использования и ощущение от шлейфа, но только если эти данные есть в исходных данных.",
+        "Если данных о нотах мало, расширяй описание за счет нейтральных формулировок о стиле, формате, назначении и впечатлении от композиции, не выдумывая факты.",
+        "bulletPoints верни отдельным массивом из 5-8 коротких преимуществ для карточки.",
+        "seoKeywords верни отдельным массивом из 8-12 поисковых фраз без повторов.",
         "Не выдумывай бренд, объем, концентрацию, страну, пол и ноты, если их нет в исходных данных.",
         "Не добавляй медицинские обещания, слова 'оригинал', '100% гарантия', запрещенные сравнения и агрессивные обещания.",
         "Верни только JSON: name, description, vendor, bulletPoints, seoKeywords.",

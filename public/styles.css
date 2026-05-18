@@ -3879,11 +3879,214 @@ td {
   object-fit: contain;
 }
 
+.ai-draft-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: start;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel-strong) 86%, transparent);
+  box-shadow: var(--small-shadow);
+}
+
+.ai-draft-card-main {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+}
+
+.ai-draft-topline {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.ai-draft-title-block {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.ai-draft-title-block h3 {
+  margin: 0;
+  color: var(--ink-strong);
+  font-size: 18px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.ai-draft-kind {
+  width: fit-content;
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ai-draft-meta,
+.ai-draft-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ai-draft-meta {
+  justify-content: flex-end;
+}
+
+.ai-draft-pill,
+.ai-draft-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--tile) 82%, transparent);
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.ai-draft-pill--danger {
+  border-color: color-mix(in srgb, var(--danger) 34%, var(--line));
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+}
+
+.ai-draft-pill--warn {
+  border-color: color-mix(in srgb, var(--warn) 34%, var(--line));
+  background: var(--warn-soft);
+  color: var(--warn-ink);
+}
+
+.ai-draft-pill--ok {
+  border-color: color-mix(in srgb, var(--ok) 34%, var(--line));
+  background: var(--ok-soft);
+  color: var(--ok-ink);
+}
+
+.ai-draft-media-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.ai-draft-figure {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--tile-soft) 84%, transparent);
+}
+
+.ai-draft-figure--result {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+}
+
+.ai-draft-figure img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: 420px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+
+.ai-draft-figure figcaption {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.ai-draft-name {
+  color: var(--ink-strong);
+  font-size: 17px;
+  font-weight: 900;
+  overflow-wrap: anywhere;
+}
+
+.ai-draft-vendor {
+  width: fit-content;
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.ai-draft-description {
+  padding: 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--detail-bg) 88%, transparent);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.62;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ai-draft-description--prompt {
+  color: var(--muted-strong);
+}
+
+.ai-draft-section {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-draft-section-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.ai-draft-section--recommendations .ai-draft-chip {
+  border-color: color-mix(in srgb, var(--warn) 22%, var(--line));
+  background: color-mix(in srgb, var(--warn-soft) 62%, transparent);
+}
+
+.ai-draft-actions {
+  position: sticky;
+  top: 88px;
+  display: grid;
+  gap: 8px;
+  min-width: 136px;
+}
+
 .history-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   justify-content: flex-end;
+}
+
+@media (max-width: 840px) {
+  .ai-draft-card {
+    grid-template-columns: 1fr;
+  }
+
+  .ai-draft-topline {
+    display: grid;
+  }
+
+  .ai-draft-meta {
+    justify-content: flex-start;
+  }
+
+  .ai-draft-actions {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .ai-inline-thumb {
