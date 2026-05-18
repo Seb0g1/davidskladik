@@ -14983,13 +14983,14 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
   };
 }
 
-function pickSupplierRecoveryCandidates(products = [], { productIds } = {}) {
+function pickSupplierRecoveryCandidates(products = [], { productIds, force = false } = {}) {
   const idSet = Array.isArray(productIds) && productIds.length
     ? new Set(productIds.map((id) => String(id || "").trim()).filter(Boolean))
     : null;
   return (Array.isArray(products) ? products : []).filter((product) => {
     if (idSet && !idSet.has(String(product.id))) return false;
     if (!product.hasLinks || !product.selectedSupplier) return false;
+    if (force) return true;
     const needsRecovery = marketplaceProductNeedsSalesRecovery(product, { includeUnknown: true });
     if (
       product.noSupplierAutomation?.recoveredAt

@@ -3321,6 +3321,19 @@ test("recovery queues archived linked product when supplier is available", () =>
   ]);
 });
 
+test("forced recovery includes already active linked product", () => {
+  const recovered = pickSupplierRecoveryCandidates([
+    {
+      id: "active-linked",
+      hasLinks: true,
+      selectedSupplier: { price: 10, available: true },
+      noSupplierAutomation: {},
+      marketplaceState: { code: "active", stock: 3 },
+    },
+  ], { force: true });
+  assert.deepEqual(recovered.map((product) => product.id), ["active-linked"]);
+});
+
 test("targeted supplier recovery reports no-op without full warehouse side effects", async () => {
   const result = await runSupplierRecoveryAutomation({
     products: [{
