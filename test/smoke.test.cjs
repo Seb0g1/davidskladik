@@ -101,6 +101,9 @@ const {
   ozonYandexImportBlockReasons,
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
+  productContentQuality,
+  applyAiContentDraftToProduct,
+  buildYandexOfferMapping,
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
   materializeYandexExportedProductsForWarehouse,
@@ -241,6 +244,38 @@ test("Ozon to Yandex import candidate exposes eligibility summary", () => {
   assert.equal(blocked.eligible, false);
   assert.equal(summarizeOzonYandexImportPreview([ready, blocked]).eligible, 1);
   assert.equal(summarizeOzonYandexImportPreview([ready, blocked]).blocked, 1);
+});
+
+test("AI content draft improves Yandex readiness without touching stock or price", () => {
+  const source = normalizeWarehouseProduct({
+    id: "ai-content-1",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "AI-SKU-1",
+    name: "Giorgio Armani Si Passione Парфюмерная вода 90 мл",
+    currentPrice: 5000,
+    targetStock: 3,
+    ozon: {
+      offerId: "AI-SKU-1",
+      name: "Giorgio Armani Si Passione Парфюмерная вода 90 мл",
+      vendor: "Giorgio Armani",
+      description: "Парфюмерная вода",
+      marketCategoryId: 12345,
+      primaryImage: "https://example.test/image.jpg",
+    },
+  });
+  assert.equal(productContentQuality(source, "yandex").reasons.includes("short_description"), true);
+  const enhanced = applyAiContentDraftToProduct(source, {
+    name: "Giorgio Armani Si Passione парфюмерная вода женская 90 мл",
+    vendor: "Giorgio Armani",
+    description: "Женская парфюмерная вода Giorgio Armani Si Passione с выразительным цветочно-фруктовым характером. Подходит для ежедневного образа и вечернего выхода, раскрывается ярко и аккуратно, сохраняя узнаваемый стиль бренда.",
+    bulletPoints: ["90 мл", "женский аромат"],
+  }, "yandex");
+  const quality = productContentQuality(enhanced, "yandex");
+  assert.equal(quality.ready, true);
+  assert.equal(buildYandexOfferMapping(enhanced).ready, true);
+  assert.equal(enhanced.currentPrice, 5000);
+  assert.equal(enhanced.targetStock, 3);
 });
 
 test("Ozon to Yandex import blocks offers that already exist in Yandex", () => {

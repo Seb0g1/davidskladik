@@ -2701,6 +2701,7 @@ function renderWarehouseDetail(group, { force = false } = {}) {
   const linkDraftKeyValue = productIdsDraftKey(groupProductIds);
   const pendingLinks = getPendingLinkDrafts(linkDraftKeyValue);
   const ozonForAi = ozonVariant || (product.marketplace === "ozon" ? product : null);
+  const aiContentProduct = yandexVariant || ozonForAi || product;
   const hasYandexSendMetric = Boolean(yandexVariant || product.lastYandexPriceSend);
   const localPriceHistoryRows = normalizeDetailPriceHistoryEntries(variants);
   const updateNotice = state.selectedWarehouseUpdateNotice?.groupKey === group.key
@@ -2723,6 +2724,7 @@ function renderWarehouseDetail(group, { force = false } = {}) {
       </div>
       <button class="text-button delete-product" type="button" data-product-id="${escapeHtml(product.id)}" data-product-updated-at="${escapeHtml(product.updatedAt || "")}">Удалить</button>
       <button class="secondary-button compact-button send-product-price" type="button" data-product-ids="${escapeHtml(groupProductIds.join(","))}">Отправить цену</button>
+      ${aiContentProduct ? `<button class="secondary-button compact-button ai-content-generate" type="button" data-product-id="${escapeHtml(aiContentProduct.id)}" data-product-updated-at="${escapeHtml(aiContentProduct.updatedAt || "")}">AI-описание</button>` : ""}
       <a class="secondary-link-button compact-button" href="/product.html?group=${encodeURIComponent(group.key || productGroupKey(product))}">Страница</a>
     </div>
 
@@ -4422,6 +4424,45 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
   const aiPhotoButton = event.target.closest(".ai-photo-open");
   if (aiPhotoButton) {
     await openAiImageModal(aiPhotoButton.dataset.productId);
+    return;
+  }
+
+  const aiContentButton = event.target.closest(".ai-content-generate");
+  if (aiContentButton) {
+    event.preventDefault();
+    const productId = aiContentButton.dataset.productId;
+    if (!productId) return;
+    const selectionVersion = state.warehouseSelectionVersion;
+    const selectedGroupKey = state.selectedWarehouseGroupKey;
+    aiContentButton.disabled = true;
+    elements.warehouseStatus.textContent = "AI улучшает описание и проверяет готовность карточки...";
+    try {
+      const result = await api(`/api/warehouse/products/${encodeURIComponent(productId)}/ai-content/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          marketplace: "yandex",
+          apply: true,
+          expectedUpdatedAt: aiContentButton.dataset.productUpdatedAt || "",
+        }),
+      });
+      if (!mergeWarehouseProductsForCurrentSelection([result.product].filter(Boolean), { selectionVersion, selectedGroupKey })) {
+        queueWarehouseRefresh();
+      }
+      const missing = Array.isArray(result.validation?.missing) ? result.validation.missing.filter(Boolean) : [];
+      const reasons = Array.isArray(result.validation?.reasons) ? result.validation.reasons.filter(Boolean) : [];
+      const ready = result.validation?.yandexReady && !missing.length && !reasons.includes("no_description");
+      elements.warehouseStatus.textContent = ready
+        ? "AI-описание сохранено. Карточка готова к выгрузке в Yandex Market."
+        : `AI-описание сохранено. До готовности осталось: ${[...missing, ...reasons].slice(0, 4).join(", ") || "проверьте карточку"}.`;
+      showToast(elements.warehouseStatus.textContent, ready ? "success" : "warning");
+    } catch (error) {
+      if (handleProductConflict(error, "AI-описание")) return;
+      elements.warehouseStatus.textContent = error.message;
+      showToast(error.message, "error");
+    } finally {
+      aiContentButton.disabled = false;
+    }
     return;
   }
 

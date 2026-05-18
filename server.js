@@ -104,6 +104,7 @@ const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YAN
 const yandexStockCampaignIds = new Set(parseYandexCampaignIds(process.env.YANDEX_STOCK_CAMPAIGN_IDS || "128820967"));
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const openaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
+const openaiTextModel = cleanText(process.env.OPENAI_TEXT_MODEL || process.env.AI_TEXT_MODEL || "gpt-5.4-mini");
 const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1024x1024");
 const ozonAiImageTargetPx = (() => {
   const raw = process.env.OZON_AI_IMAGE_TARGET_PX;
@@ -1771,6 +1772,7 @@ function normalizeOzonDraft(input = {}) {
     name: cleanText(input.name),
     vendor: cleanText(input.vendor || input.brand),
     description: cleanText(input.description),
+    marketCategoryId: Number(input.marketCategoryId || input.market_category_id || 0) || undefined,
     categoryId: Number(input.categoryId || input.category_id || 0) || undefined,
     typeId: Number(input.typeId || input.type_id || input.descriptionTypeId || input.description_type_id || 0) || undefined,
     price: Number(input.price || 0) || undefined,
@@ -4861,6 +4863,14 @@ function assertImageGenerationConfigured() {
   throw error;
 }
 
+function assertTextGenerationConfigured() {
+  if (isOpenAiDirectConfigured()) return;
+  const error = new Error("AI-описание недоступно: задайте OPENAI_API_KEY и OPENAI_BASE_URL=https://codex.sale/v1 в .env.");
+  error.statusCode = 400;
+  error.code = "openai_text_not_configured";
+  throw error;
+}
+
 function getOpenAiClient() {
   const apiKey = cleanText(process.env.OPENAI_API_KEY);
   if (!apiKey) {
@@ -4872,6 +4882,55 @@ function getOpenAiClient() {
   const options = { apiKey };
   if (openaiBaseUrl) options.baseURL = openaiBaseUrl;
   return new OpenAI(options);
+}
+
+function extractJsonObjectFromText(text = "") {
+  const raw = cleanText(text);
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fenced?.[1]) {
+      try {
+        return JSON.parse(fenced[1]);
+      } catch (_nestedError) {
+        // fall through
+      }
+    }
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      try {
+        return JSON.parse(raw.slice(start, end + 1));
+      } catch (_nestedError) {
+        // fall through
+      }
+    }
+  }
+  return {};
+}
+
+async function createOpenAiJsonChat(messages = []) {
+  assertTextGenerationConfigured();
+  const client = getOpenAiClient();
+  const request = {
+    model: openaiTextModel,
+    messages,
+    temperature: 0.2,
+    response_format: { type: "json_object" },
+  };
+  try {
+    return await client.chat.completions.create(request);
+  } catch (error) {
+    const detail = cleanText(error?.message || error?.error?.message || "");
+    if (/response_format|json_object|temperature/i.test(detail)) {
+      const fallback = { ...request };
+      delete fallback.response_format;
+      return client.chat.completions.create(fallback);
+    }
+    throw normalizeOpenAiImageError(error);
+  }
 }
 
 function imageBase64FromOpenAiImageEditResult(result) {
@@ -5140,6 +5199,126 @@ function buildYandexOfferMapping(product, overrides = {}) {
   if (!offer.description) missing.push("description");
 
   return { offer, missing, ready: missing.length === 0 };
+}
+
+function compactAiText(value = "", maxLength = 6000) {
+  return cleanText(value).replace(/\s+/g, " ").slice(0, maxLength);
+}
+
+function productContentQuality(product = {}, marketplace = "yandex") {
+  const normalized = normalizeWarehouseProduct(product);
+  const ozon = normalized.ozon || {};
+  const yandex = normalized.yandex || {};
+  const name = cleanText(marketplace === "yandex" ? (yandex.name || ozon.name || normalized.name) : (ozon.name || normalized.name));
+  const description = cleanText(marketplace === "yandex" ? (yandex.description || ozon.description || normalized.description) : (ozon.description || normalized.description));
+  const vendor = cleanText(marketplace === "yandex" ? (yandex.vendor || ozon.vendor || normalized.brand) : (ozon.vendor || normalized.brand));
+  const reasons = [];
+  if (!name) reasons.push("no_name");
+  if (!vendor || /без бренда/i.test(vendor)) reasons.push("weak_vendor");
+  if (!description) reasons.push("no_description");
+  if (description && description.length < 140) reasons.push("short_description");
+  if (description && name && description.toLowerCase() === name.toLowerCase()) reasons.push("description_equals_name");
+  if (/^(описание|товар|парфюмерная вода|духи|туалетная вода)$/i.test(description)) reasons.push("generic_description");
+  const built = marketplace === "yandex" ? buildYandexOfferMapping(normalized) : { missing: [], ready: true };
+  return {
+    marketplace,
+    ready: Boolean(built.ready && !reasons.includes("no_description") && !reasons.includes("description_equals_name")),
+    missing: built.missing || [],
+    reasons,
+    nameLength: name.length,
+    descriptionLength: description.length,
+  };
+}
+
+function applyAiContentDraftToProduct(product = {}, draft = {}, marketplace = "yandex") {
+  const normalized = normalizeWarehouseProduct(product);
+  const next = { ...normalized };
+  const cleanDraft = {
+    name: compactAiText(draft.name, 240),
+    description: compactAiText(draft.description, 5000),
+    vendor: compactAiText(draft.vendor, 120),
+    bulletPoints: Array.isArray(draft.bulletPoints || draft.bullets)
+      ? (draft.bulletPoints || draft.bullets).map((item) => compactAiText(item, 180)).filter(Boolean).slice(0, 8)
+      : [],
+    seoKeywords: Array.isArray(draft.seoKeywords || draft.keywords)
+      ? (draft.seoKeywords || draft.keywords).map((item) => compactAiText(item, 80)).filter(Boolean).slice(0, 12)
+      : [],
+  };
+  if (marketplace === "yandex") {
+    const current = next.yandex || {};
+    next.yandex = normalizeYandexDraft({
+      ...current,
+      name: cleanDraft.name || current.name || next.ozon?.name || next.name,
+      description: cleanDraft.description || current.description || next.ozon?.description || next.name,
+      vendor: cleanDraft.vendor || current.vendor || next.ozon?.vendor || next.brand || "Без бренда",
+      extra: {
+        ...parseJsonField(current.extra, {}),
+        aiBulletPoints: cleanDraft.bulletPoints,
+        aiSeoKeywords: cleanDraft.seoKeywords,
+        aiContentUpdatedAt: new Date().toISOString(),
+      },
+    });
+    if (next.marketplace === "yandex") {
+      next.name = next.yandex.name || next.name;
+      next.description = next.yandex.description || next.description;
+      next.brand = next.yandex.vendor || next.brand;
+    }
+  }
+  return normalizeWarehouseProduct(next);
+}
+
+function buildAiContentMessages(product = {}, marketplace = "yandex") {
+  const normalized = normalizeWarehouseProduct(product);
+  const source = {
+    marketplace,
+    offerId: normalized.offerId,
+    name: normalized.yandex?.name || normalized.ozon?.name || normalized.name,
+    description: normalized.yandex?.description || normalized.ozon?.description || normalized.description,
+    vendor: normalized.yandex?.vendor || normalized.ozon?.vendor || normalized.brand,
+    categoryId: normalized.yandex?.marketCategoryId || normalized.ozon?.marketCategoryId || normalized.ozon?.categoryId,
+    price: normalized.nextPrice || normalized.currentPrice,
+    volumeMl: extractOzonYandexImportVolumesMl(normalized.name || normalized.ozon?.name || ""),
+    attributes: normalized.ozon?.attributes || normalized.yandex?.attributes || [],
+  };
+  return [
+    {
+      role: "system",
+      content: [
+        "Ты редактор карточек маркетплейса для парфюмерии и косметики.",
+        "Улучши карточку так, чтобы текст был пригоден для Yandex Market и не нарушал правила.",
+        "Не выдумывай бренд, объем, концентрацию, страну, пол и ноты, если их нет в исходных данных.",
+        "Не добавляй медицинские обещания, слова 'оригинал', '100% гарантия', запрещенные сравнения и агрессивные обещания.",
+        "Верни только JSON: name, description, vendor, bulletPoints, seoKeywords.",
+      ].join(" "),
+    },
+    {
+      role: "user",
+      content: JSON.stringify(source),
+    },
+  ];
+}
+
+async function generateAiProductContentDraft(product = {}, options = {}) {
+  const marketplace = cleanText(options.marketplace || "yandex").toLowerCase() === "ozon" ? "ozon" : "yandex";
+  const response = await createOpenAiJsonChat(buildAiContentMessages(product, marketplace));
+  const content = response?.choices?.[0]?.message?.content || "";
+  const parsed = extractJsonObjectFromText(content);
+  const draft = {
+    name: compactAiText(parsed.name, 240),
+    description: compactAiText(parsed.description, 5000),
+    vendor: compactAiText(parsed.vendor, 120),
+    bulletPoints: Array.isArray(parsed.bulletPoints || parsed.bullets) ? (parsed.bulletPoints || parsed.bullets) : [],
+    seoKeywords: Array.isArray(parsed.seoKeywords || parsed.keywords) ? (parsed.seoKeywords || parsed.keywords) : [],
+    model: openaiTextModel,
+    generatedAt: new Date().toISOString(),
+  };
+  if (!draft.name && !draft.description) {
+    const error = new Error("AI не вернул название или описание. Попробуйте повторить.");
+    error.statusCode = 502;
+    error.code = "openai_text_empty";
+    throw error;
+  }
+  return draft;
 }
 
 function extractOzonYandexImportVolumesMl(name = "") {
@@ -11207,6 +11386,67 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
   }
 });
 
+app.post("/api/warehouse/products/:id/ai-content/generate", async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const apply = request.body.apply !== false;
+    if (apply) {
+      const conflict = productConflict(product, request.body.expectedUpdatedAt);
+      if (conflict) return conflictResponse(response, [conflict]);
+    }
+    const marketplace = cleanText(request.body.marketplace || "yandex").toLowerCase() === "ozon" ? "ozon" : "yandex";
+    const before = cloneAuditValue({
+      id: product.id,
+      marketplace: product.marketplace,
+      offerId: product.offerId,
+      yandex: product.yandex || {},
+      updatedAt: product.updatedAt,
+    });
+    const draft = await generateAiProductContentDraft(product, { marketplace });
+    const enhancedProduct = applyAiContentDraftToProduct(product, draft, marketplace);
+    const validation = productContentQuality(enhancedProduct, marketplace);
+    const built = marketplace === "yandex" ? buildYandexOfferMapping(enhancedProduct) : { ready: true, missing: [] };
+
+    if (!apply) {
+      return response.json({
+        ok: true,
+        applied: false,
+        draft,
+        validation: { ...validation, yandexReady: Boolean(built.ready), missing: built.missing || validation.missing || [] },
+      });
+    }
+
+    Object.assign(product, enhancedProduct, { updatedAt: new Date().toISOString() });
+    const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_content_generate", writeLinks: false });
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    const savedValidation = productContentQuality(savedProduct, marketplace);
+    response.json({
+      ok: true,
+      applied: true,
+      draft,
+      validation: { ...savedValidation, yandexReady: Boolean(buildYandexOfferMapping(savedProduct).ready) },
+      product: savedProduct,
+    });
+    appendAudit(request, "warehouse.ai_content.generate", {
+      productId: product.id,
+      offerId: product.offerId,
+      marketplace,
+      oldValue: before,
+      newValue: cloneAuditValue({
+        id: savedProduct.id,
+        marketplace: savedProduct.marketplace,
+        offerId: savedProduct.offerId,
+        yandex: savedProduct.yandex || {},
+        updatedAt: savedProduct.updatedAt,
+      }),
+    }).catch((auditError) => logger.warn("ai content generate audit failed", { detail: auditError?.message || String(auditError) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
@@ -14962,6 +15202,9 @@ module.exports = {
   ozonYandexImportBlockReasons,
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
+  productContentQuality,
+  applyAiContentDraftToProduct,
+  buildYandexOfferMapping,
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
   materializeYandexExportedProductsForWarehouse,
