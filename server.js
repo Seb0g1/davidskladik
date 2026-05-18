@@ -5145,6 +5145,10 @@ function shouldPreferCompatibleOpenAiChatRequest(aiSettings = {}) {
   return providerId === "codexsale" || baseUrl.includes("codex.sale");
 }
 
+function isCodexSaleAiProvider(aiSettings = {}) {
+  return shouldPreferCompatibleOpenAiChatRequest(aiSettings);
+}
+
 function openAiChatCompletionAttempts(request = {}, options = {}) {
   const cleanAttempt = (item = {}) => Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined));
   const strict = cleanAttempt(request);
@@ -5189,7 +5193,7 @@ async function createOpenAiJsonChat(messages = []) {
   });
 }
 
-function imageBase64FromOpenAiImageEditResult(result) {
+async function imageBase64FromOpenAiImageResult(result) {
   const first = result?.data?.[0];
   if (!first) return "";
   if (typeof first.b64_json === "string" && first.b64_json.length) return first.b64_json;
@@ -5197,7 +5201,81 @@ function imageBase64FromOpenAiImageEditResult(result) {
   if (!url) return "";
   const dataMatch = /^data:[^;]+;base64,([\s\S]+)$/i.exec(url);
   if (dataMatch) return dataMatch[1].replace(/\s+/g, "");
+  if (/^https?:\/\//i.test(url)) {
+    const response = await fetch(url);
+    if (!response.ok) return "";
+    return Buffer.from(await response.arrayBuffer()).toString("base64");
+  }
   return "";
+}
+
+function openAiCompatibleImageBaseUrl(aiSettings = {}) {
+  return (cleanText(aiSettings.baseUrl) || openaiBaseUrl || "https://api.openai.com/v1").replace(/\/+$/u, "");
+}
+
+async function parseOpenAiCompatibleImageResponse(response) {
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = summarizeApiErrorPayload(payload, `OpenAI image HTTP ${response.status}`);
+    const error = new Error(message);
+    error.statusCode = response.status >= 400 && response.status < 600 ? response.status : 502;
+    error.code = cleanText(payload?.error?.code || payload?.code) || "openai_image_request_failed";
+    error.error = payload?.error;
+    throw error;
+  }
+  const imageBase64 = await imageBase64FromOpenAiImageResult(payload);
+  if (!imageBase64) {
+    const error = new Error("OpenAI-compatible image endpoint РЅРµ РІРµСЂРЅСѓР» b64_json РёР»Рё URL РёР·РѕР±СЂР°Р¶РµРЅРёСЏ.");
+    error.statusCode = 502;
+    error.code = "openai_image_empty";
+    throw error;
+  }
+  return imageBase64;
+}
+
+async function fetchOpenAiCompatibleImageEdit(aiSettings, { prompt, sourceBuffer, sourceMimeType, sourceFileName }) {
+  const apiKey = cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY);
+  const form = new FormData();
+  form.append("model", aiSettings.imageModel || openaiImageModel);
+  form.append("image", new Blob([sourceBuffer], { type: cleanText(sourceMimeType) || "image/png" }), sourceFileName || fileNameFromImageMime(sourceMimeType));
+  form.append("prompt", prompt);
+  form.append("size", aiSettings.imageSize || openaiImageSize);
+  const response = await fetch(`${openAiCompatibleImageBaseUrl(aiSettings)}/images/edits`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form,
+  });
+  return parseOpenAiCompatibleImageResponse(response);
+}
+
+async function fetchOpenAiCompatibleImageGeneration(aiSettings, { prompt }) {
+  const apiKey = cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY);
+  const response = await fetch(`${openAiCompatibleImageBaseUrl(aiSettings)}/images/generations`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: aiSettings.imageModel || openaiImageModel,
+      prompt,
+      size: aiSettings.imageSize || openaiImageSize,
+      response_format: "b64_json",
+    }),
+  });
+  return parseOpenAiCompatibleImageResponse(response);
+}
+
+async function fetchCodexSaleImage(aiSettings, imageOptions) {
+  try {
+    return await fetchOpenAiCompatibleImageEdit(aiSettings, imageOptions);
+  } catch (error) {
+    if (!isOpenAiRequestFormatError(error)) throw error;
+    logger.warn("codex sale image edit rejected request format, trying generation endpoint", {
+      detail: error?.message || String(error),
+    });
+    return fetchOpenAiCompatibleImageGeneration(aiSettings, imageOptions);
+  }
 }
 
 async function resizeOzonAiImageOutputBuffer(buffer, format) {
@@ -5356,6 +5434,13 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batch
   try {
     if (isOpenAiRelayConfigured()) {
       imageBase64 = await fetchOpenAiImageViaRelay({ prompt: generatedPrompt, sourceBuffer, sourceMimeType, referenceImages });
+    } else if (isCodexSaleAiProvider(aiSettings)) {
+      imageBase64 = await fetchCodexSaleImage(aiSettings, {
+        prompt: generatedPrompt,
+        sourceBuffer,
+        sourceMimeType,
+        sourceFileName,
+      });
     } else {
       const client = getOpenAiClient(aiSettings);
       const image = [await toFile(sourceBuffer, sourceFileName, { type: sourceMimeType })];
@@ -5375,7 +5460,7 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batch
         editRequest.image_config = JSON.stringify(openaiImageConfig);
       }
       const result = await client.images.edit(editRequest);
-      imageBase64 = imageBase64FromOpenAiImageEditResult(result);
+      imageBase64 = await imageBase64FromOpenAiImageResult(result);
     }
   } catch (error) {
     throw normalizeOpenAiImageError(error);
@@ -16306,6 +16391,7 @@ module.exports = {
   applyAiContentDraftToProduct,
   buildYandexOfferMapping,
   shouldPreferCompatibleOpenAiChatRequest,
+  isCodexSaleAiProvider,
   openAiChatCompletionAttempts,
   isOpenAiRequestFormatError,
   getLocalYandexExportedOfferIdSet,

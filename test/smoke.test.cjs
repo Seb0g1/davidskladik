@@ -107,6 +107,7 @@ const {
   applyAiContentDraftToProduct,
   buildYandexOfferMapping,
   shouldPreferCompatibleOpenAiChatRequest,
+  isCodexSaleAiProvider,
   openAiChatCompletionAttempts,
   isOpenAiRequestFormatError,
   getLocalYandexExportedOfferIdSet,
@@ -2058,6 +2059,10 @@ test("OpenAI request format errors are retryable for compatible providers", () =
 
 test("Codex Sale AI requests prefer compatible chat parameters first", () => {
   assert.equal(shouldPreferCompatibleOpenAiChatRequest({
+    providerId: "codexsale",
+    baseUrl: "https://codex.sale/v1",
+  }), true);
+  assert.equal(isCodexSaleAiProvider({
     providerId: "codexsale",
     baseUrl: "https://codex.sale/v1",
   }), true);
