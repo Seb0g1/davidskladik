@@ -116,6 +116,7 @@ const {
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
   buildYandexStockRestoreProducts,
+  getYandexShopByTarget,
   productLooksArchived,
   pickArchivedStockRestoreCandidates,
   parseYandexCampaignIds,
@@ -3332,6 +3333,27 @@ test("forced recovery includes already active linked product", () => {
     },
   ], { force: true });
   assert.deepEqual(recovered.map((product) => product.id), ["active-linked"]);
+});
+
+test("Yandex target lookup accepts campaign and old generated target", async () => {
+  const previousAccounts = await backupFile(marketplaceAccountsPath);
+  const previousShops = process.env.YANDEX_SHOPS_JSON;
+  try {
+    await restoreFile(marketplaceAccountsPath, JSON.stringify({ updatedAt: new Date().toISOString(), accounts: [] }, null, 2));
+    process.env.YANDEX_SHOPS_JSON = JSON.stringify([{
+      id: "yandex-real",
+      name: "Yandex",
+      businessId: "171782339",
+      campaignId: "128820967",
+      apiKey: "token",
+    }]);
+    assert.equal(getYandexShopByTarget("128820967")?.id, "yandex-real");
+    assert.equal(getYandexShopByTarget("yandex-06c2112c")?.id, "yandex-real");
+  } finally {
+    await restoreFile(marketplaceAccountsPath, previousAccounts);
+    if (previousShops === undefined) delete process.env.YANDEX_SHOPS_JSON;
+    else process.env.YANDEX_SHOPS_JSON = previousShops;
+  }
 });
 
 test("targeted supplier recovery reports no-op without full warehouse side effects", async () => {
