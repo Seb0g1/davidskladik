@@ -849,7 +849,7 @@ async function collectHealthDetails({ deep = false } = {}) {
     postgres: {
       configured: Boolean(cleanText(process.env.DATABASE_URL)),
       enabled: shouldUsePostgresStorage(),
-      ok: !shouldUsePostgresStorage(),
+      ok: shouldUsePostgresStorage() ? null : true,
     },
     pricemaster: {
       configured: Boolean(cleanText(process.env.PM_DB_HOST) && cleanText(process.env.PM_DB_NAME)),
@@ -859,7 +859,7 @@ async function collectHealthDetails({ deep = false } = {}) {
       configured: Boolean(redisUrl),
       enabled: bullmqEnabled,
       queueMode: bullmqEnabled && redisUrl && marketplaceQueue ? "bullmq" : "inline",
-      ok: !bullmqEnabled,
+      ok: bullmqEnabled ? null : true,
     },
     ozon: {
       configured: getOzonAccounts().length > 0,
