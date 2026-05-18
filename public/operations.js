@@ -1,9 +1,11 @@
 const els = {
   limit: document.querySelector("#operationLimitInput"),
   sendLimit: document.querySelector("#operationSendLimitInput"),
+  restoreStock: document.querySelector("#operationRestoreStockInput"),
   startImport: document.querySelector("#startYandexImportJobButton"),
   startStocks: document.querySelector("#startYandexStockJobButton"),
   startLinkedRecovery: document.querySelector("#startLinkedRecoveryJobButton"),
+  startRestoreArchived: document.querySelector("#startRestoreArchivedJobButton"),
   startHealth: document.querySelector("#startHealthJobButton"),
   refresh: document.querySelector("#refreshOperationsButton"),
   status: document.querySelector("#operationStatus"),
@@ -57,6 +59,7 @@ function jobSummary(job = {}) {
   if (Number.isFinite(Number(result.priceSent))) parts.push(`цены ${result.priceSent}/${result.priceFailed || 0}`);
   if (Number.isFinite(Number(result.stockSent))) parts.push(`остатки ${result.stockSent}/${result.stockFailed || 0}`);
   if (Number.isFinite(Number(result.candidates))) parts.push(`привязанных ${result.candidates}`);
+  if (Number.isFinite(Number(result.stock))) parts.push(`остаток ${result.stock}`);
   if (Number.isFinite(Number(result.ready))) parts.push(`с поставщиком ${result.ready}`);
   if (Number.isFinite(Number(result.alreadySellable))) parts.push(`уже продавались ${result.alreadySellable}`);
   if (Number.isFinite(Number(result.needsRecovery))) parts.push(`нужно восстановить ${result.needsRecovery}`);
@@ -113,6 +116,7 @@ async function loadJobs() {
 async function startJob(type) {
   const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000) || 30000));
   const sendLimit = Math.max(1, Math.min(10000, Number(els.sendLimit.value || 5000) || 5000));
+  const restoreStock = Math.max(1, Math.min(9999, Number(els.restoreStock?.value || 3) || 3));
   els.status.textContent = "Ставлю задачу в фон...";
   const payload = type === "yandex-import-send"
     ? { limit, sendLimit }
@@ -120,6 +124,8 @@ async function startJob(type) {
       ? { limit }
       : type === "linked-supplier-recovery"
         ? { limit }
+        : type === "restore-archived-stock"
+          ? { limit, stock: restoreStock, marketplace: "all" }
         : {};
   const result = await api("/api/operations", {
     method: "POST",
@@ -150,6 +156,12 @@ els.startStocks?.addEventListener("click", () => {
 els.startLinkedRecovery?.addEventListener("click", () => {
   startJob("linked-supplier-recovery").catch((error) => {
     els.status.textContent = `Не удалось запустить восстановление: ${error.message}`;
+  });
+});
+
+els.startRestoreArchived?.addEventListener("click", () => {
+  startJob("restore-archived-stock").catch((error) => {
+    els.status.textContent = `Не удалось запустить восстановление архива: ${error.message}`;
   });
 });
 

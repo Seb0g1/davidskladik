@@ -114,6 +114,8 @@ const {
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
   buildYandexStockRestoreProducts,
+  productLooksArchived,
+  pickArchivedStockRestoreCandidates,
   parseYandexCampaignIds,
   yandexStockShops,
   summarizeApiErrorPayload,
@@ -598,6 +600,56 @@ test("Yandex stock restore candidates ignore zero stock rows and dedupe by busin
     "SKU-3",
   ]);
   assert.ok(restoreProducts.every((item) => String(item.id || "").startsWith("yandex-")));
+});
+
+test("archived stock restore candidates include unlinked archived products", () => {
+  const products = [
+    normalizeWarehouseProduct({
+      id: "ozon-archived",
+      target: "ozon",
+      marketplace: "ozon",
+      offerId: "OZ-1",
+      productId: "123",
+      marketplaceState: { code: "archived" },
+      links: [],
+    }),
+    normalizeWarehouseProduct({
+      id: "yandex-archived",
+      target: "yandex-06c2112c",
+      marketplace: "yandex",
+      offerId: "YA-1",
+      marketplaceState: { archived: true },
+      links: [],
+    }),
+    normalizeWarehouseProduct({
+      id: "ozon-active",
+      target: "ozon",
+      marketplace: "ozon",
+      offerId: "OZ-2",
+      productId: "124",
+      marketplaceState: { code: "active" },
+      links: [],
+    }),
+  ];
+  assert.equal(productLooksArchived(products[0]), true);
+  const picked = pickArchivedStockRestoreCandidates(products, { limit: 10 });
+  assert.deepEqual(picked.map((item) => item.id), ["ozon-archived", "yandex-archived"]);
+});
+
+test("manual sellable archived restore prevents no-link auto archive", () => {
+  const product = normalizeWarehouseProduct({
+    id: "manual-sellable",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OZ-3",
+    productId: "125",
+    marketplaceState: { code: "active", stock: 3 },
+    noSupplierAutomation: { manualSellableAt: "2026-01-01T00:00:00.000Z" },
+    links: [],
+  });
+  const result = pickNoSupplierAutomationCandidates([product], { includeNoLinks: true });
+  assert.equal(result.toArchive.length, 0);
+  assert.equal(result.toZeroStock.length, 0);
 });
 
 test("Yandex stock shops use only the configured stock campaign from comma-separated ids", () => {

@@ -1998,6 +1998,7 @@ function normalizeWarehouseProduct(input = {}) {
       stockZeroAt: input.noSupplierAutomation?.stockZeroAt || null,
       archivedAt: input.noSupplierAutomation?.archivedAt || null,
       recoveredAt: input.noSupplierAutomation?.recoveredAt || null,
+      manualSellableAt: input.noSupplierAutomation?.manualSellableAt || null,
       lastError: input.noSupplierAutomation?.lastError || null,
     },
     createdAt: input.createdAt || new Date().toISOString(),
@@ -13440,6 +13441,7 @@ function operationTitle(type = "") {
     "yandex-import-send": "Ozon -> Yandex import",
     "yandex-stock-sync": "Ozon -> Yandex stock sync",
     "linked-supplier-recovery": "Restore linked marketplace cards",
+    "restore-archived-stock": "Restore archived stock",
     "health-deep": "Deep health check",
   };
   return titles[type] || type || "Operation";
@@ -13517,6 +13519,126 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
   };
 }
 
+function productLooksArchived(product = {}) {
+  const state = product.marketplaceState || {};
+  const code = cleanText(state.code || product.status).toLowerCase();
+  const visibility = cleanText(state.visibility || product.visibility).toUpperCase();
+  return Boolean(
+    product.archived
+      || state.archived
+      || code === "archived"
+      || visibility === "ARCHIVED"
+      || product.noSupplierAutomation?.archivedAt
+  );
+}
+
+function pickArchivedStockRestoreCandidates(products = [], { marketplace = "all", limit = 30000 } = {}) {
+  const marketplaceFilter = cleanText(marketplace || "all").toLowerCase();
+  const max = Math.max(1, Math.min(50000, Math.round(Number(limit || 30000) || 30000)));
+  return (Array.isArray(products) ? products : [])
+    .filter((product) => {
+      const productMarketplace = cleanText(product.marketplace).toLowerCase();
+      if (!["ozon", "yandex"].includes(productMarketplace)) return false;
+      if (marketplaceFilter !== "all" && productMarketplace !== marketplaceFilter) return false;
+      if (!cleanText(product.offerId || product.offer_id)) return false;
+      if (productMarketplace === "ozon" && !Number(product.productId || product.product_id || 0)) return false;
+      return productLooksArchived(product);
+    })
+    .slice(0, max);
+}
+
+async function runArchivedStockRestoreOperation(payload = {}) {
+  const requestedLimit = Number(payload?.limit || 30000);
+  const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
+  const stock = Math.max(1, Math.min(9999, Math.round(Number(payload?.stock || 3) || 3)));
+  const marketplace = cleanText(payload?.marketplace || "all").toLowerCase();
+  const warehouse = await readWarehouse();
+  const candidates = pickArchivedStockRestoreCandidates(warehouse.products || [], { marketplace, limit });
+  if (!candidates.length) {
+    return {
+      ok: true,
+      scanned: Math.min(limit, (warehouse.products || []).length),
+      candidates: 0,
+      stock,
+      restoredStocks: 0,
+      unarchived: 0,
+      errors: [],
+      summary: "Архивных товаров для восстановления не найдено.",
+    };
+  }
+
+  const targetProducts = candidates.map((product) => normalizeWarehouseProduct({
+    ...product,
+    targetStock: stock,
+    marketplaceState: {
+      ...(product.marketplaceState || {}),
+      stock,
+    },
+  }));
+  const firstStockActions = await restoreStocksOnMarketplaces(targetProducts);
+  const unarchiveActions = await unarchiveProductsOnMarketplaces(targetProducts);
+  const secondStockActions = await restoreStocksOnMarketplaces(targetProducts);
+  const stockActions = [...firstStockActions, ...secondStockActions];
+  const productStatuses = summarizeSupplierRecoveryProducts(targetProducts, stockActions, unarchiveActions);
+  const restoredStockIds = new Set(stockActions.filter((item) => item.ok).map((item) => String(item.id)));
+  const unarchivedIds = new Set(unarchiveActions.filter((item) => item.ok).map((item) => String(item.id)));
+  const touchedIds = new Set(targetProducts.map((product) => String(product.id)));
+  const now = new Date().toISOString();
+  const changedProducts = [];
+  for (const product of warehouse.products || []) {
+    if (!touchedIds.has(String(product.id))) continue;
+    product.targetStock = stock;
+    product.noSupplierAutomation = product.noSupplierAutomation || {};
+    product.noSupplierAutomation.stockZeroAt = null;
+    product.noSupplierAutomation.archivedAt = null;
+    product.noSupplierAutomation.recoveredAt = now;
+    product.noSupplierAutomation.manualSellableAt = now;
+    product.noSupplierAutomation.lastError = null;
+    if (restoredStockIds.has(String(product.id)) || unarchivedIds.has(String(product.id))) {
+      product.marketplaceState = {
+        ...(product.marketplaceState || {}),
+        code: "active",
+        status: "active",
+        archived: false,
+        stock,
+      };
+      product.status = "active";
+      product.archived = false;
+    }
+    product.updatedAt = now;
+    changedProducts.push(product);
+  }
+  if (changedProducts.length) {
+    await writeWarehouseProductPatch(changedProducts, { reason: "archived_stock_restore", writeLinks: false });
+  }
+
+  const stockOkIds = new Set(stockActions.filter((item) => item.ok).map((item) => String(item.id)));
+  const unarchiveOkIds = new Set(unarchiveActions.filter((item) => item.ok).map((item) => String(item.id)));
+  const sellableRecovered = targetProducts.filter((product) => stockOkIds.has(String(product.id)) && unarchiveOkIds.has(String(product.id))).length;
+  const errors = [...stockActions, ...unarchiveActions]
+    .filter((item) => !item.ok)
+    .map((item) => ({ id: item.id, offerId: item.offerId, type: item.type, target: item.target, error: item.error }));
+  const restoredStocks = stockActions.filter((item) => item.ok).length;
+  const unarchived = unarchiveActions.filter((item) => item.ok).length;
+  const stockFailed = stockActions.filter((item) => !item.ok).length;
+  const unarchiveFailed = unarchiveActions.filter((item) => !item.ok).length;
+  return {
+    ok: errors.length === 0,
+    partial: Boolean(errors.length && (restoredStocks || unarchived)),
+    scanned: Math.min(limit, (warehouse.products || []).length),
+    candidates: candidates.length,
+    stock,
+    restoredStocks,
+    unarchived,
+    sellableRecovered,
+    stockFailed,
+    unarchiveFailed,
+    errors,
+    productStatuses,
+    summary: `Архивных товаров ${candidates.length}; остаток ${stock}; отправок остатка ${restoredStocks}; разархивировано ${unarchived}; готово к продаже ${sellableRecovered}; ошибки остатков ${stockFailed}; ошибки разархива ${unarchiveFailed}.`,
+  };
+}
+
 async function runOperationPayload(job) {
   const auditRequest = { session: { username: job.user || "system", role: job.role || "admin" } };
   if (job.type === "yandex-import-send") {
@@ -13550,6 +13672,15 @@ async function runOperationPayload(job) {
     const result = await runLinkedSupplierRecoveryOperation(job.payload || {});
     await appendAudit(auditRequest, "marketplace.linked.recovery", {
       entityType: "linked_supplier_recovery",
+      entityId: "all",
+      newValue: result,
+    });
+    return result;
+  }
+  if (job.type === "restore-archived-stock") {
+    const result = await runArchivedStockRestoreOperation(job.payload || {});
+    await appendAudit(auditRequest, "marketplace.archived.restore_stock", {
+      entityType: "archived_stock_restore",
       entityId: "all",
       newValue: result,
     });
@@ -13622,7 +13753,7 @@ app.get("/api/operations/:id", requireAdmin, async (request, response, next) => 
 app.post("/api/operations", requireAdmin, async (request, response, next) => {
   try {
     const type = cleanText(request.body?.type);
-    if (!["yandex-import-send", "yandex-stock-sync", "linked-supplier-recovery", "health-deep"].includes(type)) {
+    if (!["yandex-import-send", "yandex-stock-sync", "linked-supplier-recovery", "restore-archived-stock", "health-deep"].includes(type)) {
       return response.status(400).json({ error: "Unsupported operation type." });
     }
     const job = await upsertOperationJob({
@@ -14597,7 +14728,7 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
     && !productHasFreshLinkMutation(product, now)
   ));
   const noLinkProducts = options.includeNoLinks
-    ? list.filter((product) => !product.hasLinks)
+    ? list.filter((product) => !product.hasLinks && !product.noSupplierAutomation?.manualSellableAt)
     : [];
   const noSupplierProducts = [...linkedNoSupplier, ...noLinkProducts];
   return {
@@ -15369,6 +15500,8 @@ module.exports = {
   pickOzonProductStockForYandex,
   buildYandexStockUpdatePayload,
   buildYandexStockRestoreProducts,
+  productLooksArchived,
+  pickArchivedStockRestoreCandidates,
   parseYandexCampaignIds,
   yandexStockShops,
   summarizeApiErrorPayload,
