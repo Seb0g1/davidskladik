@@ -72,6 +72,7 @@ const {
   warehousePagePostgresWhere,
   sortWarehouseProductsForSearch,
   addWarehousePageGroupSiblings,
+  linkedRecoveryCandidateProducts,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,
@@ -1595,6 +1596,31 @@ test("warehouse page includes marketplace siblings for visible offer groups", ()
   const page = addWarehousePageGroupSiblings([ozon, unrelated, yandex], [ozon, unrelated]);
 
   assert.deepEqual(page.map((product) => product.id), ["ozon-a", "ozon-b", "yandex-a"]);
+});
+
+test("linked recovery includes Yandex sibling without direct links", () => {
+  const candidates = linkedRecoveryCandidateProducts([
+    {
+      id: "ozon-linked",
+      marketplace: "ozon",
+      target: "ozon",
+      offerId: "CC-AASH5001",
+      links: [{ article: "41059", supplierName: "Supplier" }],
+      marketplaceState: { code: "active" },
+    },
+    {
+      id: "yandex-archived-sibling",
+      marketplace: "yandex",
+      target: "yandex-06c2112c",
+      offerId: "CC-AASH5001",
+      links: [],
+      marketplaceState: { code: "archived", archived: true },
+    },
+  ]);
+  const yandex = candidates.find((product) => product.id === "yandex-archived-sibling");
+  assert.ok(yandex);
+  assert.equal(yandex.links.length, 1);
+  assert.equal(yandex.links[0].article, "41059");
 });
 
 test("warehouse summary counters use linked product stats, not page-sized snapshots", () => {

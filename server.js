@@ -9435,6 +9435,37 @@ function addWarehousePageGroupSiblings(sourceProducts = [], pageProducts = []) {
   return Array.from(byId.values());
 }
 
+function linkedRecoveryCandidateProducts(products = [], limit = 30000) {
+  const max = Math.max(1, Math.min(50000, Math.round(Number(limit || 30000) || 30000)));
+  const rows = (Array.isArray(products) ? products : [])
+    .filter((product) => product?.id)
+    .map(normalizeWarehouseProduct);
+  const linkedByGroup = new Map();
+  for (const product of rows) {
+    if (!Array.isArray(product.links) || !product.links.length) continue;
+    const groupKey = warehouseProductPageGroupKey(product) || `id:${product.id}`;
+    if (!linkedByGroup.has(groupKey)) linkedByGroup.set(groupKey, product);
+  }
+  if (!linkedByGroup.size) return [];
+
+  const byId = new Map();
+  for (const product of rows) {
+    const groupKey = warehouseProductPageGroupKey(product) || `id:${product.id}`;
+    const donor = linkedByGroup.get(groupKey);
+    if (!donor) continue;
+    const links = Array.isArray(product.links) && product.links.length
+      ? product.links
+      : donor.links;
+    byId.set(String(product.id), normalizeWarehouseProduct({
+      ...product,
+      links,
+    }));
+    if (byId.size >= max) break;
+  }
+
+  return Array.from(byId.values());
+}
+
 function mergeWarehousePostgresRows(...rowLists) {
   const byId = new Map();
   for (const rows of rowLists) {
@@ -13497,9 +13528,7 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
   const requestedLimit = Number(payload?.limit || 30000);
   const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
   const warehouse = await readWarehouse();
-  const candidates = (warehouse.products || [])
-    .filter((product) => Array.isArray(product.links) && product.links.length)
-    .slice(0, limit);
+  const candidates = linkedRecoveryCandidateProducts(warehouse.products || [], limit);
 
   if (!candidates.length) {
     return {
@@ -15688,6 +15717,7 @@ module.exports = {
   warehousePagePostgresWhere,
   sortWarehouseProductsForSearch,
   addWarehousePageGroupSiblings,
+  linkedRecoveryCandidateProducts,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
   ozonProductNeedsDetailRefresh,
