@@ -14130,10 +14130,11 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
         offerId: normalized.offerId,
         target: normalized.target,
         contentRating: quality.contentRating,
-        ok: Boolean(savedDraft) && !imageError,
+        ok: Boolean(savedDraft),
         contentDraft: Boolean(savedDraft),
         imageDraft: imageDraftCreated,
-        error: imageError || undefined,
+        warning: imageError || undefined,
+        error: savedDraft ? undefined : (imageError || "ai_content_draft_empty"),
       });
     } catch (error) {
       draftResults.push({
@@ -14150,6 +14151,9 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
     await writeWarehouseProductPatch(draftProducts, { reason: "yandex_card_quality_ai_drafts", writeLinks: false });
   }
 
+  const warnings = draftResults
+    .filter((item) => item.ok && item.warning)
+    .map((item) => ({ id: item.id, offerId: item.offerId, type: "image", error: item.warning }));
   const failed = [...qualityErrors, ...draftResults.filter((item) => !item.ok)];
   const result = {
     ok: failed.length === 0,
@@ -14160,16 +14164,20 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
     qualityLoaded: qualityByTargetOffer.size,
     lowQuality: lowQualityProducts.length,
     draftsCreated: draftResults.filter((item) => item.ok).length,
+    imageDraftsCreated: draftResults.filter((item) => item.imageDraft).length,
+    warnings,
     failed: failed.length,
     results: draftResults,
     errors: failed,
-    summary: `Yandex quality checked ${yandexProducts.length}; below ${threshold}: ${lowQualityProducts.length}; AI drafts: ${draftResults.filter((item) => item.ok).length}; errors: ${failed.length}.`,
+    summary: `Yandex quality checked ${yandexProducts.length}; below ${threshold}: ${lowQualityProducts.length}; AI drafts: ${draftResults.filter((item) => item.ok).length}; image drafts: ${draftResults.filter((item) => item.imageDraft).length}; warnings: ${warnings.length}; errors: ${failed.length}.`,
   };
   logger.info("yandex card quality ai drafts complete", {
     checked: result.checked,
     qualityLoaded: result.qualityLoaded,
     lowQuality: result.lowQuality,
     draftsCreated: result.draftsCreated,
+    imageDraftsCreated: result.imageDraftsCreated,
+    warnings: warnings.length,
     failed: result.failed,
   });
   return result;
