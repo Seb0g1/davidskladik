@@ -70,7 +70,7 @@ function jobSummary(job = {}) {
   if (Number.isFinite(Number(result.stockFailed)) && Number(result.stockFailed) > 0) parts.push(`ошибки остатков ${result.stockFailed}`);
   if (Number.isFinite(Number(result.skippedByLimit))) parts.push(`следующий запуск ${result.skippedByLimit}`);
   if (result.ok === false && job.error) parts.push(job.error);
-  return parts.join(" · ") || job.error || "";
+  return parts.join(" · ") || job.summary || job.error || "";
 }
 
 function jobWarnings(job = {}) {

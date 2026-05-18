@@ -13578,11 +13578,19 @@ function pickArchivedStockRestoreCandidates(products = [], { marketplace = "all"
     .slice(0, max);
 }
 
-async function runArchivedStockRestoreOperation(payload = {}) {
+async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
   const requestedLimit = Number(payload?.limit || 30000);
   const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
   const stock = Math.max(1, Math.min(9999, Math.round(Number(payload?.stock || 3) || 3)));
   const marketplace = cleanText(payload?.marketplace || "all").toLowerCase();
+  const batchSize = Math.max(20, Math.min(300, Math.round(Number(payload?.batchSize || 100) || 100)));
+  const reportProgress = async (progress, summary) => {
+    if (typeof options.onProgress !== "function") return;
+    await options.onProgress({
+      progress: Math.max(5, Math.min(99, Math.round(Number(progress || 5) || 5))),
+      summary,
+    });
+  };
   const warehouse = await readWarehouse();
   const candidates = pickArchivedStockRestoreCandidates(warehouse.products || [], { marketplace, limit });
   if (!candidates.length) {
@@ -13617,9 +13625,44 @@ async function runArchivedStockRestoreOperation(payload = {}) {
       stock,
     },
   }));
-  const firstStockActions = await restoreStocksOnMarketplaces(targetProducts);
-  const unarchiveActions = await unarchiveProductsOnMarketplaces(targetProducts);
-  const secondStockActions = await restoreStocksOnMarketplaces(targetProducts);
+  await reportProgress(8, `Найдено архивных товаров: ${targetProducts.length}. Запускаю восстановление пачками по ${batchSize}.`);
+  const firstStockActions = [];
+  const unarchiveActions = [];
+  const secondStockActions = [];
+  const batches = chunkArray(targetProducts, batchSize);
+  for (let index = 0; index < batches.length; index += 1) {
+    const batch = batches[index];
+    const processedBefore = index * batchSize;
+    const processedAfter = Math.min(targetProducts.length, processedBefore + batch.length);
+    logger.info("archived stock restore batch started", {
+      batch: index + 1,
+      batches: batches.length,
+      products: batch.length,
+      processed: processedBefore,
+      total: targetProducts.length,
+    });
+    firstStockActions.push(...await restoreStocksOnMarketplaces(batch));
+    await reportProgress(
+      10 + ((processedBefore + Math.floor(batch.length / 3)) / Math.max(1, targetProducts.length)) * 80,
+      `Восстанавливаю остатки: ${processedBefore + Math.floor(batch.length / 3)} из ${targetProducts.length}.`,
+    );
+    unarchiveActions.push(...await unarchiveProductsOnMarketplaces(batch));
+    await reportProgress(
+      10 + ((processedBefore + Math.floor((batch.length * 2) / 3)) / Math.max(1, targetProducts.length)) * 80,
+      `Разархивирую карточки: ${processedBefore + Math.floor((batch.length * 2) / 3)} из ${targetProducts.length}.`,
+    );
+    secondStockActions.push(...await restoreStocksOnMarketplaces(batch));
+    await reportProgress(
+      10 + (processedAfter / Math.max(1, targetProducts.length)) * 80,
+      `Обработано ${processedAfter} из ${targetProducts.length}.`,
+    );
+    logger.info("archived stock restore batch complete", {
+      batch: index + 1,
+      batches: batches.length,
+      processed: processedAfter,
+      total: targetProducts.length,
+    });
+  }
   const stockActions = [...firstStockActions, ...secondStockActions];
   const productStatuses = summarizeSupplierRecoveryProducts(targetProducts, stockActions, unarchiveActions);
   const restoredStockIds = new Set(stockActions.filter((item) => item.ok).map((item) => String(item.id)));
@@ -13692,7 +13735,7 @@ async function runArchivedStockRestoreOperation(payload = {}) {
   return result;
 }
 
-async function runOperationPayload(job) {
+async function runOperationPayload(job, options = {}) {
   const auditRequest = { session: { username: job.user || "system", role: job.role || "admin" } };
   if (job.type === "yandex-import-send") {
     return runOzonYandexImportSend({ ...(job.payload || {}), confirmed: true }, auditRequest);
@@ -13731,7 +13774,7 @@ async function runOperationPayload(job) {
     return result;
   }
   if (job.type === "restore-archived-stock") {
-    const result = await runArchivedStockRestoreOperation(job.payload || {});
+    const result = await runArchivedStockRestoreOperation(job.payload || {}, options);
     await appendAudit(auditRequest, "marketplace.archived.restore_stock", {
       entityType: "archived_stock_restore",
       entityId: "all",
@@ -13757,7 +13800,21 @@ function startOperationJob(job) {
     });
     await upsertOperationJob(current).catch((error) => logger.warn("operation job start write failed", { detail: error?.message || String(error) }));
     try {
-      const result = await runOperationPayload(current);
+      let lastProgressWriteAt = 0;
+      const result = await runOperationPayload(current, {
+        onProgress: async (progress = {}) => {
+          const nextProgress = Math.max(current.progress || 0, Math.min(99, Number(progress.progress || progress.percent || 5) || 5));
+          const nowMs = Date.now();
+          if (nextProgress <= current.progress && nowMs - lastProgressWriteAt < 3000) return;
+          current = normalizeOperationJob({
+            ...current,
+            progress: nextProgress,
+            result: progress.summary ? { summary: cleanText(progress.summary) } : current.result,
+          });
+          lastProgressWriteAt = nowMs;
+          await upsertOperationJob(current).catch((error) => logger.warn("operation job progress write failed", { detail: error?.message || String(error) }));
+        },
+      });
       const partial = result?.partial === true;
       current = normalizeOperationJob({
         ...current,
