@@ -5000,6 +5000,37 @@ function extractJsonObjectFromText(text = "") {
   return {};
 }
 
+function isOpenAiRequestFormatError(error = {}) {
+  const detail = cleanText(error?.message || error?.error?.message || error?.detail);
+  const code = cleanText(error?.code || error?.error?.code).toLowerCase();
+  const type = cleanText(error?.type || error?.error?.type).toLowerCase();
+  const status = Number(error?.status || error?.statusCode || 0);
+  return Boolean(
+    /response_format|json_object|temperature|format|параметр|параметры|формат запроса|отклонил формат/i.test(detail)
+      || code === "invalid_request_error"
+      || type === "invalid_request_error"
+      || status === 400
+  );
+}
+
+async function createOpenAiChatCompletionWithFallback(client, request = {}) {
+  const attempts = [
+    request,
+    { ...request, response_format: undefined },
+    { ...request, response_format: undefined, temperature: undefined },
+  ].map((item) => Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined)));
+  let lastError = null;
+  for (const attempt of attempts) {
+    try {
+      return await client.chat.completions.create(attempt);
+    } catch (error) {
+      lastError = error;
+      if (!isOpenAiRequestFormatError(error)) break;
+    }
+  }
+  throw normalizeOpenAiImageError(lastError);
+}
+
 async function createOpenAiJsonChat(messages = []) {
   const aiSettings = await readEffectiveAiSettings();
   assertTextGenerationConfigured(aiSettings);
@@ -5010,17 +5041,7 @@ async function createOpenAiJsonChat(messages = []) {
     temperature: 0.2,
     response_format: { type: "json_object" },
   };
-  try {
-    return await client.chat.completions.create(request);
-  } catch (error) {
-    const detail = cleanText(error?.message || error?.error?.message || "");
-    if (/response_format|json_object|temperature/i.test(detail)) {
-      const fallback = { ...request };
-      delete fallback.response_format;
-      return client.chat.completions.create(fallback);
-    }
-    throw normalizeOpenAiImageError(error);
-  }
+  return createOpenAiChatCompletionWithFallback(client, request);
 }
 
 function imageBase64FromOpenAiImageEditResult(result) {
@@ -10836,7 +10857,7 @@ app.post("/api/settings/ai/test", requireAdmin, async (request, response, next) 
     assertTextGenerationConfigured(effective);
     const client = getOpenAiClient(effective);
     const startedAt = Date.now();
-    const result = await client.chat.completions.create({
+    const result = await createOpenAiChatCompletionWithFallback(client, {
       model: effective.textModel || openaiTextModel,
       messages: [
         { role: "system", content: "Return JSON only." },
@@ -10844,15 +10865,6 @@ app.post("/api/settings/ai/test", requireAdmin, async (request, response, next) 
       ],
       temperature: 0,
       response_format: { type: "json_object" },
-    }).catch(async (error) => {
-      const detail = cleanText(error?.message || error?.error?.message || "");
-      if (/response_format|json_object|temperature/i.test(detail)) {
-        return client.chat.completions.create({
-          model: effective.textModel || openaiTextModel,
-          messages: [{ role: "user", content: "Return exactly: OK" }],
-        });
-      }
-      throw error;
     });
     response.json({
       ok: true,
@@ -15512,6 +15524,7 @@ module.exports = {
   productContentQuality,
   applyAiContentDraftToProduct,
   buildYandexOfferMapping,
+  isOpenAiRequestFormatError,
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
   materializeYandexExportedProductsForWarehouse,

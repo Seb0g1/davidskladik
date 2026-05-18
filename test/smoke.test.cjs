@@ -105,6 +105,7 @@ const {
   productContentQuality,
   applyAiContentDraftToProduct,
   buildYandexOfferMapping,
+  isOpenAiRequestFormatError,
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
   materializeYandexExportedProductsForWarehouse,
@@ -2011,6 +2012,19 @@ test("AI settings test error does not mention Price Master", async () => {
     else process.env.OPENAI_API_KEY = previousKey;
     await restoreFile(appSettingsPath, backup);
   }
+});
+
+test("OpenAI request format errors are retryable for compatible providers", () => {
+  assert.equal(isOpenAiRequestFormatError({
+    status: 400,
+    code: "invalid_request_error",
+    error: { message: "Апстрим отклонил формат запроса. Проверь модель и параметры запроса." },
+  }), true);
+  assert.equal(isOpenAiRequestFormatError({
+    status: 401,
+    code: "invalid_api_key",
+    error: { message: "invalid key" },
+  }), false);
 });
 
 test("resolveMarkupCoefficient applies threshold >= 10 USD", () => {
