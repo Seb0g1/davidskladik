@@ -69,6 +69,7 @@ const {
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
   warehousePagePostgresWhere,
+  sortWarehouseProductsForSearch,
   addWarehousePageGroupSiblings,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
@@ -1600,6 +1601,25 @@ test("warehouse page article search does not treat supplier partner id as produc
   const serialized = JSON.stringify(where);
   assert.equal(serialized.includes("supplierArticle"), true);
   assert.equal(serialized.includes("partnerId"), false);
+});
+
+test("warehouse page article search ranks product offer ids before supplier links", () => {
+  const supplierMatch = normalizeWarehouseProduct({
+    id: "supplier-match",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OTHER",
+    links: [{ id: "supplier-match-link", article: "NF-00004538", supplierName: "Supplier" }],
+  });
+  const offerMatch = normalizeWarehouseProduct({
+    id: "offer-match",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "NF-00004538",
+    links: [{ id: "offer-match-link", article: "DIFFERENT", supplierName: "Supplier" }],
+  });
+  const sorted = sortWarehouseProductsForSearch([supplierMatch, offerMatch], { q: "NF-00004538" });
+  assert.equal(sorted[0].id, "offer-match");
 });
 
 test("POST /api/login неверный пароль", async () => {

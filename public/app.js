@@ -923,6 +923,47 @@ function productGroupKey(product) {
   return `name:${displayProductName(product).trim().toLowerCase()}`;
 }
 
+function normalizeWarehouseSearchToken(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[\s\-_/\\.:;#№]+/g, "");
+}
+
+function isWarehouseArticleLikeQuery(query) {
+  const text = String(query || "").trim();
+  if (text.length < 2) return false;
+  if (/\s/.test(text)) return false;
+  return /\d/.test(text) || /[\-_/\\#№]/.test(text);
+}
+
+function currentWarehouseStrictSearchQuery() {
+  const query = elements.warehouseSearchInput?.value?.trim() || "";
+  return isWarehouseArticleLikeQuery(query) ? query : "";
+}
+
+function warehouseProductSearchRank(product = {}, query = "") {
+  const normalizedQuery = normalizeWarehouseSearchToken(query);
+  if (!normalizedQuery) return 999;
+  const groups = [
+    [product.offerId, product.id, product.productId],
+    [product.sku, product.barcode, product.ozon?.offerId, product.yandex?.offerId],
+    [product.ozon?.productId, product.yandex?.productId, product.ozon?.sku, product.yandex?.sku, product.ozon?.barcode, product.yandex?.barcode],
+    ...(Array.isArray(product.links) ? product.links.map((link) => [link.article, link.sourceRowId]) : []),
+  ];
+  for (let index = 0; index < groups.length; index += 1) {
+    if (groups[index].some((value) => normalizeWarehouseSearchToken(value) === normalizedQuery)) return index;
+  }
+  return 999;
+}
+
+function warehouseGroupSearchRank(group = {}, query = "") {
+  const products = group.variants || group.products || [];
+  if (!products.length) return 999;
+  return Math.min(...products.map((product) => warehouseProductSearchRank(product, query)));
+}
+
 function productIdsDraftKey(productIds = []) {
   return (productIds || [])
     .map((id) => String(id || "").trim())
@@ -1065,7 +1106,12 @@ function groupListingRank(group) {
 }
 
 function sortWarehouseGroups(groups) {
+  const strictQuery = currentWarehouseStrictSearchQuery();
   return [...groups].sort((a, b) => {
+    if (strictQuery) {
+      const searchRank = warehouseGroupSearchRank(a, strictQuery) - warehouseGroupSearchRank(b, strictQuery);
+      if (searchRank) return searchRank;
+    }
     const ra = groupListingRank(a);
     const rb = groupListingRank(b);
     if (ra !== rb) return ra - rb;

@@ -8792,6 +8792,37 @@ function warehouseProductSearchIdentityTokens(product = {}) {
     .filter(Boolean);
 }
 
+function warehouseProductSearchRank(product = {}, query = "") {
+  const normalizedQuery = normalizeWarehouseSearchToken(query);
+  if (!normalizedQuery) return 999;
+  const groups = [
+    [product.offerId, product.id, product.productId],
+    [product.sku, product.barcode, product.ozon?.offerId, product.yandex?.offerId],
+    [product.ozon?.productId, product.yandex?.productId, product.ozon?.sku, product.yandex?.sku, product.ozon?.barcode, product.yandex?.barcode],
+    ...(Array.isArray(product.links)
+      ? product.links.map((link) => [link.article, link.sourceRowId])
+      : []),
+  ];
+  for (let index = 0; index < groups.length; index += 1) {
+    if (groups[index].some((value) => normalizeWarehouseSearchToken(value) === normalizedQuery)) return index;
+  }
+  return 999;
+}
+
+function sortWarehouseProductsForSearch(products = [], filters = {}) {
+  if (!isWarehouseStrictIdentitySearch(filters)) return products;
+  const query = filters.q || "";
+  return [...products].sort((left, right) => {
+    const rankDiff = warehouseProductSearchRank(left, query) - warehouseProductSearchRank(right, query);
+    if (rankDiff) return rankDiff;
+    return String(left.offerId || left.name || left.id || "").localeCompare(
+      String(right.offerId || right.name || right.id || ""),
+      "ru",
+      { sensitivity: "base" },
+    );
+  });
+}
+
 function warehouseProductMatchesSearchQuery(product = {}, query = "") {
   const q = cleanText(query || "");
   if (!q) return true;
@@ -9151,7 +9182,7 @@ async function buildFastWarehousePageFromPostgres({
   }
   const normalizedSuppliers = summary.normalizedSuppliers;
   const counterStats = summary.counterStats;
-  let allProducts = dbRows.map(productFromPostgres);
+  let allProducts = sortWarehouseProductsForSearch(dbRows.map(productFromPostgres), filters);
   if (needsComputedLinkFilter) {
     allProducts = await buildFreshWarehouseProductsForWarehouse(
       { products: allProducts, suppliers: normalizedSuppliers },
@@ -9160,7 +9191,10 @@ async function buildFastWarehousePageFromPostgres({
     );
   }
   if (needsDeepBrandFilter || needsComputedLinkFilter) {
-    allProducts = allProducts.filter((product) => warehousePageProductMatches(product, filters));
+    allProducts = sortWarehouseProductsForSearch(
+      allProducts.filter((product) => warehousePageProductMatches(product, filters)),
+      filters,
+    );
   }
   const total = needsDeepBrandFilter || needsComputedLinkFilter ? allProducts.length : dbTotal;
   let visibleProducts = allProducts;
@@ -9388,7 +9422,10 @@ async function buildFastWarehousePage({
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
   const sourceProducts = Array.isArray(warehouse.products) ? warehouse.products : [];
   const enabledProducts = sourceProducts.filter(isWarehouseProductTargetEnabled);
-  const filtered = enabledProducts.filter((product) => warehousePageProductMatches(product, filters));
+  const filtered = sortWarehouseProductsForSearch(
+    enabledProducts.filter((product) => warehousePageProductMatches(product, filters)),
+    filters,
+  );
   const total = filtered.length;
   const offset = (page - 1) * pageSize;
   const pageSlice = filtered.slice(offset, offset + pageSize);
@@ -14837,6 +14874,7 @@ module.exports = {
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
   warehousePagePostgresWhere,
+  sortWarehouseProductsForSearch,
   addWarehousePageGroupSiblings,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
