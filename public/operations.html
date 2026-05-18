@@ -42,21 +42,12 @@
               <option value="all">Ozon + Yandex</option>
             </select>
           </label>
-          <label class="search-control">
-            Yandex quality
-            <input id="operationQualityThresholdInput" type="number" min="0" max="100" step="1" value="40" />
-          </label>
-          <label class="search-control">
-            AI drafts
-            <input id="operationDraftLimitInput" type="number" min="0" max="100" step="1" value="20" />
-          </label>
           <button id="startYandexImportJobButton" class="primary-button" type="button">Импорт Ozon → Yandex</button>
           <button id="startYandexStockJobButton" class="secondary-button" type="button">Остатки Ozon → Yandex</button>
           <button id="startLinkedRecoveryJobButton" class="secondary-button" type="button">Восстановить привязанные</button>
           <button id="startRestoreArchivedJobButton" class="secondary-button" type="button">Вытащить архив + остаток</button>
-          <button id="startYandexQualityJobButton" class="secondary-button" type="button">Yandex quality + AI drafts</button>
           <button id="startHealthJobButton" class="secondary-button" type="button">Диагностика</button>
-          <a class="secondary-link-button compact-button" href="/ai-drafts.html">AI drafts</a>
+          <a class="secondary-link-button compact-button" href="/ai-drafts.html">AI качество карточек</a>
         </div>
         <div id="operationStatus" class="sync-status-pill">Готово к запуску.</div>
       </section>

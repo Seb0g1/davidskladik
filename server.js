@@ -5640,6 +5640,47 @@ async function sendApprovedYandexProductContent(product = {}, options = {}) {
   return sent;
 }
 
+function latestAiContentDraft(product = {}, status = "pending") {
+  const normalizedStatus = cleanText(status).toLowerCase();
+  return [...(normalizeWarehouseProduct(product).aiContentDrafts || [])]
+    .filter((draft) => !normalizedStatus || draft.status === normalizedStatus)
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] || null;
+}
+
+function latestAiImageBatch(product = {}, status = "pending") {
+  const normalizedStatus = cleanText(status).toLowerCase();
+  const drafts = [...(normalizeWarehouseProduct(product).aiImages || [])]
+    .filter((draft) => (!normalizedStatus || draft.status === normalizedStatus) && draft.resultUrl)
+    .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+  if (!drafts.length) return { batchId: "", drafts: [] };
+  const latest = drafts[drafts.length - 1];
+  const batchId = latest.batchId || latest.id;
+  return {
+    batchId,
+    drafts: drafts.filter((draft) => (latest.batchId ? draft.batchId === latest.batchId : draft.id === latest.id)),
+  };
+}
+
+function buildAiQualityReviewRow(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const imageBatch = latestAiImageBatch(normalized, "pending");
+  return {
+    product: {
+      id: normalized.id,
+      offerId: normalized.offerId,
+      name: normalized.name,
+      marketplace: normalized.marketplace,
+      target: normalized.target,
+      imageUrl: normalized.imageUrl,
+      updatedAt: normalized.updatedAt,
+      cardQuality: normalized.yandex?.extra?.cardQuality || null,
+    },
+    contentDraft: latestAiContentDraft(normalized, "pending"),
+    imageBatchId: imageBatch.batchId,
+    imageDrafts: imageBatch.drafts,
+  };
+}
+
 function compactAiText(value = "", maxLength = 6000) {
   return cleanText(value).replace(/\s+/g, " ").slice(0, maxLength);
 }
@@ -11889,7 +11930,7 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
     if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], updatedAt: product.updatedAt });
 
-    const count = Math.min(4, Math.max(1, Math.floor(Number(request.body.count || request.body.imagesCount || 1) || 1)));
+    const count = Math.min(5, Math.max(1, Math.floor(Number(request.body.count || request.body.imagesCount || 1) || 1)));
     const batchId = crypto.randomUUID();
     const drafts = [];
     for (let index = 1; index <= count; index += 1) {
@@ -12000,6 +12041,261 @@ app.post("/api/warehouse/products/:id/ai-content/generate", async (request, resp
         updatedAt: savedProduct.updatedAt,
       }),
     }).catch((auditError) => logger.warn("ai content generate audit failed", { detail: auditError?.message || String(auditError) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/warehouse/yandex-quality-candidates", requireAdmin, async (request, response, next) => {
+  try {
+    const threshold = Math.max(0, Math.min(100, Math.round(Number(request.query.threshold ?? 40) || 40)));
+    const limit = cleanLimit(request.query.limit, 30000, 50000);
+    const resultLimit = cleanLimit(request.query.resultLimit, 300, 1000);
+    const shops = getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+    if (!shops.length) return response.status(400).json({ error: "Yandex Market is not configured." });
+
+    const warehouse = await readWarehouse();
+    const yandexProducts = (warehouse.products || [])
+      .map((product) => normalizeWarehouseProduct(product))
+      .filter((product) => product.marketplace === "yandex" && cleanText(product.offerId))
+      .slice(0, limit);
+    const qualityByTargetOffer = new Map();
+    const errors = [];
+
+    for (const shop of shops) {
+      const offerIds = yandexProducts
+        .filter((product) => matchesYandexTarget(product.target, shop.id))
+        .map((product) => product.offerId);
+      for (const chunk of chunkArray(offerIds, 200)) {
+        try {
+          const rows = await getYandexOfferCardsContentStatus(shop, chunk, { withRecommendations: true });
+          for (const row of rows) qualityByTargetOffer.set(yandexTargetOfferKey(shop.id, row.offerId), row);
+        } catch (error) {
+          errors.push({ target: shop.id, error: error?.message || "yandex_card_quality_failed" });
+        }
+      }
+    }
+
+    const now = new Date().toISOString();
+    const changedProducts = [];
+    const lowQuality = [];
+    for (const product of warehouse.products || []) {
+      const normalized = normalizeWarehouseProduct(product);
+      if (normalized.marketplace !== "yandex" || !normalized.offerId) continue;
+      const shop = getYandexShopByTarget(normalized.target);
+      const quality = shop ? qualityByTargetOffer.get(yandexTargetOfferKey(shop.id, normalized.offerId)) : null;
+      if (!quality) continue;
+      product.yandex = normalizeYandexDraft({
+        ...(product.yandex || {}),
+        extra: {
+          ...(product.yandex?.extra || {}),
+          cardQuality: quality,
+        },
+      });
+      product.updatedAt = now;
+      changedProducts.push(product);
+      if (Number(quality.contentRating || 0) <= threshold) lowQuality.push(product);
+    }
+    if (changedProducts.length) {
+      await writeWarehouseProductPatch(changedProducts, { reason: "yandex_card_quality_find", writeLinks: false });
+    }
+
+    lowQuality.sort((a, b) => {
+      const qa = Number(normalizeWarehouseProduct(a).yandex?.extra?.cardQuality?.contentRating || 0);
+      const qb = Number(normalizeWarehouseProduct(b).yandex?.extra?.cardQuality?.contentRating || 0);
+      return qa - qb || String(a.offerId || "").localeCompare(String(b.offerId || ""));
+    });
+
+    response.json({
+      ok: true,
+      threshold,
+      checked: yandexProducts.length,
+      qualityLoaded: qualityByTargetOffer.size,
+      total: lowQuality.length,
+      errors,
+      products: lowQuality.slice(0, resultLimit).map(buildAiQualityReviewRow),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/products/:id/yandex-quality-draft/generate", requireAdmin, async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const normalized = normalizeWarehouseProduct(product);
+    if (normalized.marketplace !== "yandex") return response.status(400).json({ error: "Генерация качества доступна только для Yandex Market." });
+
+    const count = Math.min(5, Math.max(1, Math.floor(Number(request.body.imagesCount || request.body.count || 5) || 5)));
+    const quality = normalized.yandex?.extra?.cardQuality || {};
+    const before = cloneAuditValue({
+      id: product.id,
+      aiContentDrafts: product.aiContentDrafts || [],
+      aiImages: product.aiImages || [],
+      updatedAt: product.updatedAt,
+    });
+    let savedDraft = null;
+    const errors = [];
+
+    try {
+      const draft = await generateAiProductContentDraft(normalized, { marketplace: "yandex" });
+      savedDraft = normalizeAiContentDraft({
+        ...draft,
+        marketplace: "yandex",
+        source: "yandex_card_quality_manual",
+        qualityBefore: quality.contentRating,
+        recommendations: quality.recommendations,
+        model: (await readEffectiveAiSettings()).textModel || openaiTextModel,
+      });
+      if (savedDraft) {
+        product.aiContentDrafts = normalizeAiContentDrafts([...(product.aiContentDrafts || []), savedDraft]);
+      }
+    } catch (error) {
+      errors.push({ type: "content", error: error?.message || "ai_content_draft_failed" });
+      if (isOpenAiBillingLimitError(error)) {
+        return response.status(400).json({ error: error.message, code: error.code || "ai_billing_limit", errors });
+      }
+    }
+
+    const batchId = crypto.randomUUID();
+    const imageDrafts = [];
+    for (let index = 1; index <= count; index += 1) {
+      try {
+        const imageDraft = await generateOzonAiImageDraft(normalized, {
+          prompt: `Create marketplace-ready product photo ${index} of ${count} for ${normalized.name || normalized.offerId}. Clean white studio background, realistic perfume or cosmetics product packshot, premium ecommerce lighting, no text overlays, no extra objects.`,
+          sourceImageUrl: request.body.sourceImageUrl || normalized.imageUrl,
+          batchId,
+          variantIndex: index,
+          variantTotal: count,
+        }, request);
+        imageDrafts.push(imageDraft);
+      } catch (error) {
+        errors.push({ type: "image", index, error: error?.message || "ai_image_draft_failed" });
+        if (isOpenAiBillingLimitError(error)) break;
+      }
+    }
+    if (imageDrafts.length) {
+      product.aiImages = normalizeAiImageDrafts([...(product.aiImages || []), ...imageDrafts]);
+    }
+    product.updatedAt = new Date().toISOString();
+
+    const saved = await writeWarehouseProductPatch([product], { reason: "yandex_card_quality_manual_draft", writeLinks: false });
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    const row = buildAiQualityReviewRow(savedProduct);
+    response.json({
+      ok: Boolean(savedDraft && imageDrafts.length === count),
+      partial: Boolean(errors.length && (savedDraft || imageDrafts.length)),
+      contentDraft: savedDraft,
+      imageDrafts,
+      batchId,
+      errors,
+      row,
+      product: savedProduct,
+    });
+    appendAudit(request, "yandex.card_quality.manual_generate", {
+      productId: product.id,
+      offerId: normalized.offerId,
+      batchId,
+      imagesRequested: count,
+      imagesCreated: imageDrafts.length,
+      oldValue: before,
+      newValue: { id: savedProduct.id, aiContentDrafts: savedProduct.aiContentDrafts || [], aiImages: savedProduct.aiImages || [] },
+    }).catch((auditError) => logger.warn("yandex quality manual generate audit failed", { detail: auditError?.message || String(auditError) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/products/:id/yandex-quality-draft/send", requireAdmin, async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const normalizedBefore = normalizeWarehouseProduct(product);
+    if (normalizedBefore.marketplace !== "yandex") return response.status(400).json({ error: "Отправка качества доступна только для Yandex Market." });
+
+    product.aiContentDrafts = normalizeAiContentDrafts(product.aiContentDrafts || []);
+    product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
+    const contentDraftId = cleanText(request.body.contentDraftId);
+    const imageBatchId = cleanText(request.body.imageBatchId);
+    const primaryImageDraftId = cleanText(request.body.primaryImageDraftId);
+    const contentDraft = contentDraftId
+      ? product.aiContentDrafts.find((draft) => draft.id === contentDraftId)
+      : latestAiContentDraft(product, "pending");
+    let imageBatch = imageBatchId
+      ? product.aiImages.filter((draft) => draft.batchId === imageBatchId && draft.resultUrl)
+      : latestAiImageBatch(product, "pending").drafts;
+    let primaryImageDraft = primaryImageDraftId
+      ? imageBatch.find((draft) => draft.id === primaryImageDraftId)
+      : imageBatch[0];
+    if (!contentDraft && !imageBatch.length) return response.status(400).json({ error: "Нет черновика текста или фото для отправки." });
+
+    const before = cloneAuditValue({
+      id: product.id,
+      yandex: product.yandex || {},
+      aiContentDrafts: product.aiContentDrafts || [],
+      aiImages: product.aiImages || [],
+      imageUrl: product.imageUrl || "",
+      updatedAt: product.updatedAt,
+    });
+    if (contentDraft) {
+      const enhanced = applyAiContentDraftToProduct(product, contentDraft, "yandex");
+      Object.assign(product, enhanced);
+      product.aiContentDrafts = normalizeAiContentDrafts(product.aiContentDrafts || []);
+      const draftToApprove = product.aiContentDrafts.find((draft) => draft.id === contentDraft.id);
+      if (draftToApprove) {
+        draftToApprove.status = "approved";
+        draftToApprove.reviewedAt = new Date().toISOString();
+      }
+      product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
+      imageBatch = imageBatchId
+        ? product.aiImages.filter((draft) => draft.batchId === imageBatchId && draft.resultUrl)
+        : latestAiImageBatch(product, "pending").drafts;
+      primaryImageDraft = primaryImageDraftId
+        ? imageBatch.find((draft) => draft.id === primaryImageDraftId)
+        : imageBatch[0];
+    }
+    if (imageBatch.length) {
+      const primaryUrl = primaryImageDraft?.resultUrl || imageBatch[0]?.resultUrl;
+      if (!primaryUrl) return response.status(400).json({ error: "В выбранных AI-фото нет URL результата." });
+      const reviewedAt = new Date().toISOString();
+      imageBatch.forEach((draft) => {
+        if (draft.status === "pending") {
+          draft.status = "approved";
+          draft.reviewedAt = reviewedAt;
+        }
+      });
+      const batchUrls = [
+        primaryUrl,
+        ...imageBatch.map((draft) => draft.resultUrl).filter((url) => url && url !== primaryUrl),
+      ].slice(0, 10);
+      const yandex = product.yandex || {};
+      const currentPictures = splitList(yandex.pictures);
+      product.yandex = normalizeYandexDraft({
+        ...yandex,
+        pictures: [...batchUrls, ...currentPictures.filter((url) => !batchUrls.includes(url))],
+      });
+      product.imageUrl = primaryUrl;
+    }
+    product.aiContentDrafts = normalizeAiContentDrafts(product.aiContentDrafts || []);
+    product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
+    product.updatedAt = new Date().toISOString();
+
+    const saved = await writeWarehouseProductPatch([product], { reason: "yandex_card_quality_manual_send", writeLinks: false });
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    const mode = contentDraft && imageBatch.length ? "both" : (imageBatch.length ? "image" : "content");
+    const yandexSend = await sendApprovedYandexProductContent(savedProduct, { mode });
+    response.json({ ok: Boolean(yandexSend.ok), product: savedProduct, row: buildAiQualityReviewRow(savedProduct), yandexSend });
+    appendAudit(request, "yandex.card_quality.manual_send", {
+      productId: product.id,
+      offerId: normalizedBefore.offerId,
+      mode,
+      yandexSend,
+      oldValue: before,
+      newValue: { id: savedProduct.id, yandex: savedProduct.yandex || {}, aiContentDrafts: savedProduct.aiContentDrafts || [], aiImages: savedProduct.aiImages || [] },
+    }).catch((auditError) => logger.warn("yandex quality manual send audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
     next(error);
   }

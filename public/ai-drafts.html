@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI черновики | Magic Vibes</title>
+    <title>AI качество карточек | Magic Vibes</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <main class="page-shell import-page-shell">
       <section class="panel import-hero-panel">
         <div>
-          <p class="eyebrow">AI review</p>
-          <h1>AI черновики</h1>
-          <p class="muted-text">Проверка описаний и изображений перед отправкой в карточки маркетплейса.</p>
+          <p class="eyebrow">Yandex quality lab</p>
+          <h1>AI качество карточек</h1>
+          <p class="muted-text">Найдите товары с низким качеством, сгенерируйте новый текст и 5 фото, проверьте результат и только потом отправьте изменения в Яндекс.</p>
         </div>
         <div class="header-actions">
           <a class="secondary-link-button compact-button" href="/operations.html">Операции</a>
@@ -23,30 +23,23 @@
       <section class="panel import-toolbar-panel">
         <div class="import-toolbar">
           <label class="search-control">
-            Статус
-            <select id="draftStatusSelect">
-              <option value="pending" selected>На проверке</option>
-              <option value="approved">Принятые</option>
-              <option value="rejected">Отклоненные</option>
-              <option value="">Все</option>
-            </select>
+            Качество до
+            <input id="qualityThresholdInput" type="number" min="0" max="100" step="1" value="40" />
           </label>
           <label class="search-control">
-            Маркетплейс
-            <select id="draftMarketplaceSelect">
-              <option value="yandex" selected>Yandex Market</option>
-              <option value="ozon">Ozon</option>
-              <option value="">Все</option>
-            </select>
+            Проверить товаров
+            <input id="qualityLimitInput" type="number" min="1" max="50000" step="100" value="30000" />
           </label>
+          <button id="findLowQualityButton" class="primary-button" type="button">Найти товары</button>
           <button id="refreshDraftsButton" class="secondary-button" type="button">Обновить</button>
         </div>
-        <div id="draftStatus" class="sync-status-pill">Загружаю...</div>
+        <div id="draftStatus" class="sync-status-pill">Готово к поиску</div>
       </section>
 
       <section class="panel import-list-panel">
         <div class="import-list-head">
-          <h2>Очередь проверки</h2>
+          <h2>Карточки до порога</h2>
+          <p class="muted-text">По каждой карточке генерация запускается вручную. Отправка в Яндекс происходит только после нажатия “Отправить”.</p>
         </div>
         <div id="draftsList" class="history-list"></div>
       </section>
