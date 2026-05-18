@@ -13578,6 +13578,40 @@ function pickArchivedStockRestoreCandidates(products = [], { marketplace = "all"
     .slice(0, max);
 }
 
+async function applyArchivedStockRestoreLocalPatch(warehouse, targetProducts, stockActions, unarchiveActions, stock, now = new Date().toISOString()) {
+  const restoredStockIds = new Set((Array.isArray(stockActions) ? stockActions : []).filter((item) => item.ok).map((item) => String(item.id)));
+  const unarchivedIds = new Set((Array.isArray(unarchiveActions) ? unarchiveActions : []).filter((item) => item.ok).map((item) => String(item.id)));
+  const touchedIds = new Set((Array.isArray(targetProducts) ? targetProducts : []).map((product) => String(product.id)));
+  const changedProducts = [];
+  for (const product of warehouse.products || []) {
+    if (!touchedIds.has(String(product.id))) continue;
+    product.targetStock = stock;
+    product.noSupplierAutomation = product.noSupplierAutomation || {};
+    product.noSupplierAutomation.stockZeroAt = null;
+    product.noSupplierAutomation.archivedAt = null;
+    product.noSupplierAutomation.recoveredAt = now;
+    product.noSupplierAutomation.manualSellableAt = now;
+    product.noSupplierAutomation.lastError = null;
+    if (restoredStockIds.has(String(product.id)) || unarchivedIds.has(String(product.id))) {
+      product.marketplaceState = {
+        ...(product.marketplaceState || {}),
+        code: "active",
+        status: "active",
+        archived: false,
+        stock,
+      };
+      product.status = "active";
+      product.archived = false;
+    }
+    product.updatedAt = now;
+    changedProducts.push(product);
+  }
+  if (changedProducts.length) {
+    await writeWarehouseProductPatch(changedProducts, { reason: "archived_stock_restore", writeLinks: false });
+  }
+  return changedProducts.length;
+}
+
 async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
   const requestedLimit = Number(payload?.limit || 30000);
   const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
@@ -13629,6 +13663,7 @@ async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
   const firstStockActions = [];
   const unarchiveActions = [];
   const secondStockActions = [];
+  let localPatched = 0;
   const batches = chunkArray(targetProducts, batchSize);
   for (let index = 0; index < batches.length; index += 1) {
     const batch = batches[index];
@@ -13641,17 +13676,28 @@ async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
       processed: processedBefore,
       total: targetProducts.length,
     });
-    firstStockActions.push(...await restoreStocksOnMarketplaces(batch));
+    const batchFirstStockActions = await restoreStocksOnMarketplaces(batch);
+    firstStockActions.push(...batchFirstStockActions);
     await reportProgress(
       10 + ((processedBefore + Math.floor(batch.length / 3)) / Math.max(1, targetProducts.length)) * 80,
       `Восстанавливаю остатки: ${processedBefore + Math.floor(batch.length / 3)} из ${targetProducts.length}.`,
     );
-    unarchiveActions.push(...await unarchiveProductsOnMarketplaces(batch));
+    const batchUnarchiveActions = await unarchiveProductsOnMarketplaces(batch);
+    unarchiveActions.push(...batchUnarchiveActions);
     await reportProgress(
       10 + ((processedBefore + Math.floor((batch.length * 2) / 3)) / Math.max(1, targetProducts.length)) * 80,
       `Разархивирую карточки: ${processedBefore + Math.floor((batch.length * 2) / 3)} из ${targetProducts.length}.`,
     );
-    secondStockActions.push(...await restoreStocksOnMarketplaces(batch));
+    const batchSecondStockActions = await restoreStocksOnMarketplaces(batch);
+    secondStockActions.push(...batchSecondStockActions);
+    localPatched += await applyArchivedStockRestoreLocalPatch(
+      warehouse,
+      batch,
+      [...batchFirstStockActions, ...batchSecondStockActions],
+      batchUnarchiveActions,
+      stock,
+      new Date().toISOString(),
+    );
     await reportProgress(
       10 + (processedAfter / Math.max(1, targetProducts.length)) * 80,
       `Обработано ${processedAfter} из ${targetProducts.length}.`,
@@ -13661,41 +13707,11 @@ async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
       batches: batches.length,
       processed: processedAfter,
       total: targetProducts.length,
+      localPatched,
     });
   }
   const stockActions = [...firstStockActions, ...secondStockActions];
   const productStatuses = summarizeSupplierRecoveryProducts(targetProducts, stockActions, unarchiveActions);
-  const restoredStockIds = new Set(stockActions.filter((item) => item.ok).map((item) => String(item.id)));
-  const unarchivedIds = new Set(unarchiveActions.filter((item) => item.ok).map((item) => String(item.id)));
-  const touchedIds = new Set(targetProducts.map((product) => String(product.id)));
-  const now = new Date().toISOString();
-  const changedProducts = [];
-  for (const product of warehouse.products || []) {
-    if (!touchedIds.has(String(product.id))) continue;
-    product.targetStock = stock;
-    product.noSupplierAutomation = product.noSupplierAutomation || {};
-    product.noSupplierAutomation.stockZeroAt = null;
-    product.noSupplierAutomation.archivedAt = null;
-    product.noSupplierAutomation.recoveredAt = now;
-    product.noSupplierAutomation.manualSellableAt = now;
-    product.noSupplierAutomation.lastError = null;
-    if (restoredStockIds.has(String(product.id)) || unarchivedIds.has(String(product.id))) {
-      product.marketplaceState = {
-        ...(product.marketplaceState || {}),
-        code: "active",
-        status: "active",
-        archived: false,
-        stock,
-      };
-      product.status = "active";
-      product.archived = false;
-    }
-    product.updatedAt = now;
-    changedProducts.push(product);
-  }
-  if (changedProducts.length) {
-    await writeWarehouseProductPatch(changedProducts, { reason: "archived_stock_restore", writeLinks: false });
-  }
 
   const stockOkIds = new Set(stockActions.filter((item) => item.ok).map((item) => String(item.id)));
   const unarchiveOkIds = new Set(unarchiveActions.filter((item) => item.ok).map((item) => String(item.id)));
