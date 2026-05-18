@@ -106,6 +106,7 @@ const {
   productContentQuality,
   applyAiContentDraftToProduct,
   buildYandexOfferMapping,
+  sendApprovedYandexProductContent,
   shouldPreferCompatibleOpenAiChatRequest,
   isCodexSaleAiProvider,
   openAiChatCompletionAttempts,

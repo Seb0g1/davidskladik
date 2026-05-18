@@ -5546,7 +5546,7 @@ function buildYandexOfferMapping(product, overrides = {}) {
   return { offer, missing, ready: missing.length === 0 };
 }
 
-async function sendApprovedYandexProductContent(product = {}) {
+async function sendApprovedYandexProductContent(product = {}, options = {}) {
   const normalized = normalizeWarehouseProduct(product);
   if (cleanText(normalized.marketplace).toLowerCase() !== "yandex") {
     return { ok: true, skipped: true, reason: "not_yandex" };
@@ -5556,34 +5556,54 @@ async function sendApprovedYandexProductContent(product = {}) {
   if (!shop.apiKey || !shop.businessId) return { ok: false, error: "yandex_shop_not_configured", target: shop.id || normalized.target };
 
   const built = buildYandexOfferMapping(normalized);
-  if (!built.ready) {
+  const mode = cleanText(options.mode || "content").toLowerCase();
+  const partialOffer = compactObject({
+    offerId: built.offer?.offerId || normalized.offerId,
+    name: mode === "image" ? undefined : built.offer?.name,
+    vendor: mode === "image" ? undefined : built.offer?.vendor,
+    description: mode === "image" ? undefined : built.offer?.description,
+    pictures: mode === "content" ? undefined : built.offer?.pictures,
+  });
+  const missing = [];
+  if (!partialOffer.offerId) missing.push("offerId");
+  if (mode !== "image" && !partialOffer.description) missing.push("description");
+  if (mode !== "content" && !partialOffer.pictures?.length) missing.push("pictures");
+  if (missing.length) {
     return {
       ok: false,
-      error: `yandex_offer_not_ready: ${(built.missing || []).join(", ")}`,
-      missing: built.missing || [],
+      error: `yandex_update_not_ready: ${missing.join(", ")}`,
+      mode,
+      missing,
       target: shop.id,
       offerId: built.offer?.offerId || normalized.offerId,
     };
   }
 
-  const [result] = await sendYandexOfferMappings(shop, [built.offer]);
+  const [result] = await sendYandexOfferMappings(shop, [partialOffer]);
   if (!result?.ok) {
-    return {
+    const failed = {
       ok: false,
       error: result?.error || "yandex_content_send_failed",
+      mode,
       target: shop.id,
       businessId: shop.businessId,
-      offerId: built.offer.offerId,
+      offerId: partialOffer.offerId,
       result,
     };
+    logger.warn("approved yandex product content send failed", failed);
+    return failed;
   }
-  return {
+  const sent = {
     ok: true,
+    mode,
     target: shop.id,
     businessId: shop.businessId,
-    offerId: built.offer.offerId,
+    offerId: partialOffer.offerId,
+    fields: Object.keys(partialOffer).filter((key) => key !== "offerId"),
     result,
   };
+  logger.info("approved yandex product content sent", sent);
+  return sent;
 }
 
 function compactAiText(value = "", maxLength = 6000) {
@@ -12004,7 +12024,7 @@ app.post("/api/warehouse/products/:id/ai-content/:draftId/approve", async (reque
     const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_content_approve", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
     const yandexSend = marketplace === "yandex"
-      ? await sendApprovedYandexProductContent(savedProduct)
+      ? await sendApprovedYandexProductContent(savedProduct, { mode: "content" })
       : { ok: true, skipped: true, reason: "not_yandex" };
     response.json({ ok: true, draft, product: savedProduct, yandexSend });
     appendAudit(request, "warehouse.ai_content.approve", {
@@ -12087,7 +12107,7 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
     const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_approve", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
     const yandexSend = normalizeWarehouseProduct(savedProduct).marketplace === "yandex"
-      ? await sendApprovedYandexProductContent(savedProduct)
+      ? await sendApprovedYandexProductContent(savedProduct, { mode: "image" })
       : { ok: true, skipped: true, reason: "not_yandex" };
     response.json({ ok: true, draft, product: savedProduct, yandexSend });
     appendAudit(request, "warehouse.ai_image.approve", {
@@ -14333,6 +14353,12 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
     imageDraftsCreated: result.imageDraftsCreated,
     warnings: warnings.length,
     failed: result.failed,
+    sampleErrors: failed.slice(0, 5).map((item) => ({
+      id: item.id,
+      offerId: item.offerId,
+      error: item.error,
+    })),
+    sampleWarnings: warnings.slice(0, 5),
   });
   return result;
 }
@@ -16390,6 +16416,7 @@ module.exports = {
   productContentQuality,
   applyAiContentDraftToProduct,
   buildYandexOfferMapping,
+  sendApprovedYandexProductContent,
   shouldPreferCompatibleOpenAiChatRequest,
   isCodexSaleAiProvider,
   openAiChatCompletionAttempts,
