@@ -105,8 +105,15 @@ els.list?.addEventListener("click", async (event) => {
   if (!button || button.disabled) return;
   button.disabled = true;
   try {
-    await api(button.dataset.reviewPath, { method: "POST", body: {} });
+    const payload = await api(button.dataset.reviewPath, { method: "POST", body: {} });
+    let message = "Готово.";
+    if (payload.yandexSend) {
+      message = payload.yandexSend.ok
+        ? (payload.yandexSend.skipped ? "Принято локально." : "Принято и отправлено в Яндекс.")
+        : `Принято локально, но Яндекс отклонил обновление: ${payload.yandexSend.error || "неизвестная ошибка"}`;
+    }
     await loadDrafts();
+    els.status.textContent = message;
   } catch (error) {
     els.status.textContent = `Ошибка: ${error.message}`;
     button.disabled = false;

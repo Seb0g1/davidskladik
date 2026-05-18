@@ -5442,6 +5442,46 @@ function buildYandexOfferMapping(product, overrides = {}) {
   return { offer, missing, ready: missing.length === 0 };
 }
 
+async function sendApprovedYandexProductContent(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  if (cleanText(normalized.marketplace).toLowerCase() !== "yandex") {
+    return { ok: true, skipped: true, reason: "not_yandex" };
+  }
+  const shop = getYandexShopByTarget(normalized.target);
+  if (!shop) return { ok: false, error: "yandex_shop_not_found" };
+  if (!shop.apiKey || !shop.businessId) return { ok: false, error: "yandex_shop_not_configured", target: shop.id || normalized.target };
+
+  const built = buildYandexOfferMapping(normalized);
+  if (!built.ready) {
+    return {
+      ok: false,
+      error: `yandex_offer_not_ready: ${(built.missing || []).join(", ")}`,
+      missing: built.missing || [],
+      target: shop.id,
+      offerId: built.offer?.offerId || normalized.offerId,
+    };
+  }
+
+  const [result] = await sendYandexOfferMappings(shop, [built.offer]);
+  if (!result?.ok) {
+    return {
+      ok: false,
+      error: result?.error || "yandex_content_send_failed",
+      target: shop.id,
+      businessId: shop.businessId,
+      offerId: built.offer.offerId,
+      result,
+    };
+  }
+  return {
+    ok: true,
+    target: shop.id,
+    businessId: shop.businessId,
+    offerId: built.offer.offerId,
+    result,
+  };
+}
+
 function compactAiText(value = "", maxLength = 6000) {
   return cleanText(value).replace(/\s+/g, " ").slice(0, maxLength);
 }
@@ -11857,12 +11897,16 @@ app.post("/api/warehouse/products/:id/ai-content/:draftId/approve", async (reque
     product.updatedAt = new Date().toISOString();
     const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_content_approve", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
-    response.json({ ok: true, draft, product: savedProduct });
+    const yandexSend = marketplace === "yandex"
+      ? await sendApprovedYandexProductContent(savedProduct)
+      : { ok: true, skipped: true, reason: "not_yandex" };
+    response.json({ ok: true, draft, product: savedProduct, yandexSend });
     appendAudit(request, "warehouse.ai_content.approve", {
       productId: product.id,
       offerId: product.offerId,
       draftId: draft.id,
       marketplace,
+      yandexSend,
       newValue: cloneAuditValue({ id: savedProduct.id, yandex: savedProduct.yandex || {}, ozon: savedProduct.ozon || {} }),
     }).catch((auditError) => logger.warn("ai content approve audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
@@ -11896,7 +11940,7 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     const conflict = productConflict(product, request.body.expectedUpdatedAt);
     if (conflict) return conflictResponse(response, [conflict]);
-    const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], ozon: product.ozon || {}, imageUrl: product.imageUrl || "", updatedAt: product.updatedAt });
+    const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], yandex: product.yandex || {}, ozon: product.ozon || {}, imageUrl: product.imageUrl || "", updatedAt: product.updatedAt });
 
     product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
     const draft = product.aiImages.find((item) => item.id === request.params.draftId);
@@ -11936,13 +11980,17 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
 
     const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_approve", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
-    response.json({ ok: true, draft, product: savedProduct });
+    const yandexSend = normalizeWarehouseProduct(savedProduct).marketplace === "yandex"
+      ? await sendApprovedYandexProductContent(savedProduct)
+      : { ok: true, skipped: true, reason: "not_yandex" };
+    response.json({ ok: true, draft, product: savedProduct, yandexSend });
     appendAudit(request, "warehouse.ai_image.approve", {
       productId: product.id,
       offerId: product.offerId,
       draftId: draft.id,
       oldValue: before,
-      newValue: { id: savedProduct.id, aiImages: savedProduct.aiImages || [], ozon: savedProduct.ozon || {}, imageUrl: savedProduct.imageUrl || "", updatedAt: savedProduct.updatedAt },
+      yandexSend,
+      newValue: { id: savedProduct.id, aiImages: savedProduct.aiImages || [], yandex: savedProduct.yandex || {}, ozon: savedProduct.ozon || {}, imageUrl: savedProduct.imageUrl || "", updatedAt: savedProduct.updatedAt },
     }).catch((auditError) => logger.warn("ai image approve audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
     next(error);
