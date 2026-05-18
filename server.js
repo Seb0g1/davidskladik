@@ -119,6 +119,7 @@ const openaiBaseUrl = cleanText(process.env.OPENAI_BASE_URL);
 const openaiRelayUrl = cleanText(process.env.OPENAI_RELAY_URL);
 const openaiRelaySecret = cleanText(process.env.OPENAI_RELAY_SECRET);
 const openaiRelayTimeoutMs = Math.max(30_000, Number(process.env.OPENAI_RELAY_TIMEOUT_MS || 180_000) || 180_000);
+const maskedSecretValue = "__masked__";
 let openaiImageConfig = null;
 {
   const raw = cleanText(process.env.OPENAI_IMAGE_CONFIG);
@@ -4421,6 +4422,17 @@ function defaultAppSettings() {
       autoSyncEnabled: autoSyncMinutes > 0,
       autoSyncMinutes: Math.max(5, Number(autoSyncMinutes || 30) || 30),
     },
+    ai: {
+      enabled: true,
+      providerId: cleanText(process.env.OPENAI_PROVIDER_ID || "codexsale"),
+      baseUrl: openaiBaseUrl || "https://codex.sale/v1",
+      apiKey: "",
+      textModel: openaiTextModel,
+      imageModel: openaiImageModel,
+      imageSize: openaiImageSize,
+      imageQuality: openaiImageQuality,
+      imageFormat: openaiImageFormat,
+    },
     markupRules: [],
     availabilityRules: [
       { marketplace: "all", minAvailableSuppliers: 5, coefficientDelta: -0.05, targetStock: 10 },
@@ -4459,6 +4471,28 @@ function normalizeAvailabilityRule(input = {}) {
   };
 }
 
+function normalizeAiSettings(input = {}, fallback = defaultAppSettings().ai) {
+  const raw = input && typeof input === "object" ? input : {};
+  const imageModel = cleanText(raw.imageModel || raw.image_model || fallback.imageModel || openaiImageModel);
+  const imageFormat = cleanText(raw.imageFormat || raw.image_format || fallback.imageFormat || openaiImageFormat).toLowerCase();
+  const imageSize = cleanText(raw.imageSize || raw.image_size || fallback.imageSize || openaiImageSize);
+  const imageQuality = cleanText(raw.imageQuality || raw.image_quality || fallback.imageQuality || openaiImageQuality);
+  const textModel = cleanText(raw.textModel || raw.text_model || fallback.textModel || openaiTextModel);
+  const baseUrl = cleanText(raw.baseUrl || raw.base_url || fallback.baseUrl || openaiBaseUrl);
+  const apiKey = cleanText(raw.apiKey || raw.api_key || fallback.apiKey);
+  return {
+    enabled: parseBooleanSetting(raw.enabled, fallback.enabled !== false),
+    providerId: cleanText(raw.providerId || raw.provider_id || fallback.providerId || "codexsale"),
+    baseUrl,
+    apiKey: apiKey === maskedSecretValue ? cleanText(fallback.apiKey) : apiKey,
+    textModel,
+    imageModel: normalizeOpenAiImageModelName(imageModel || "gpt-image-2"),
+    imageSize: imageSize || "1024x1024",
+    imageQuality: imageQuality || "auto",
+    imageFormat: ["png", "jpeg", "jpg", "webp"].includes(imageFormat) ? imageFormat : "png",
+  };
+}
+
 function normalizeAppSettings(input = {}) {
   const fallback = defaultAppSettings();
   const fixedUsdRate = Number(input.fixedUsdRate ?? input.fixed_usd_rate ?? fallback.fixedUsdRate);
@@ -4493,8 +4527,29 @@ function normalizeAppSettings(input = {}) {
       autoSyncEnabled: automationEnabled,
       autoSyncMinutes: Number.isFinite(automationMinutes) && automationMinutes >= 5 ? Math.round(automationMinutes) : fallback.automation.autoSyncMinutes,
     },
+    ai: normalizeAiSettings(input.ai || {}, fallback.ai),
     markupRules: rules,
     availabilityRules,
+  };
+}
+
+function maskSecret(value = "") {
+  const secret = cleanText(value);
+  if (!secret) return "";
+  return secret.length <= 8 ? "••••" : `••••${secret.slice(-4)}`;
+}
+
+function publicAppSettings(settings = {}) {
+  const normalized = normalizeAppSettings(settings);
+  return {
+    ...normalized,
+    ai: {
+      ...normalized.ai,
+      apiKey: normalized.ai.apiKey ? maskedSecretValue : "",
+      apiKeyMasked: maskSecret(normalized.ai.apiKey),
+      apiKeySet: Boolean(normalized.ai.apiKey || cleanText(process.env.OPENAI_API_KEY)),
+      source: normalized.ai.apiKey ? "settings" : (cleanText(process.env.OPENAI_API_KEY) ? "env" : "empty"),
+    },
   };
 }
 
@@ -4833,8 +4888,27 @@ function isOpenAiRelayConfigured() {
   return Boolean(openaiRelayUrl && openaiRelaySecret);
 }
 
-function isOpenAiDirectConfigured() {
-  return Boolean(cleanText(process.env.OPENAI_API_KEY));
+function effectiveAiSettingsFromAppSettings(settings = {}) {
+  const stored = normalizeAppSettings(settings).ai || {};
+  return {
+    ...stored,
+    enabled: stored.enabled !== false,
+    apiKey: cleanText(stored.apiKey) || cleanText(process.env.OPENAI_API_KEY),
+    baseUrl: cleanText(stored.baseUrl) || openaiBaseUrl,
+    textModel: cleanText(stored.textModel) || openaiTextModel,
+    imageModel: normalizeOpenAiImageModelName(stored.imageModel || openaiImageModel),
+    imageSize: cleanText(stored.imageSize) || openaiImageSize,
+    imageQuality: cleanText(stored.imageQuality) || openaiImageQuality,
+    imageFormat: cleanText(stored.imageFormat) || openaiImageFormat,
+  };
+}
+
+async function readEffectiveAiSettings() {
+  return effectiveAiSettingsFromAppSettings(await readAppSettings());
+}
+
+function isOpenAiDirectConfigured(aiSettings = {}) {
+  return Boolean(cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY));
 }
 
 function assertOpenAiRelayEnvPair() {
@@ -4852,27 +4926,39 @@ function assertOpenAiRelayEnvPair() {
   }
 }
 
-function assertImageGenerationConfigured() {
+function assertImageGenerationConfigured(aiSettings = {}) {
   assertOpenAiRelayEnvPair();
-  if (isOpenAiRelayConfigured() || isOpenAiDirectConfigured()) return;
+  if (aiSettings.enabled === false) {
+    const error = new Error("AI-генерация выключена в настройках сайта.");
+    error.statusCode = 400;
+    error.code = "openai_disabled";
+    throw error;
+  }
+  if (isOpenAiRelayConfigured() || isOpenAiDirectConfigured(aiSettings)) return;
   const error = new Error(
-    "Генерация недоступна: задайте OPENAI_API_KEY на этом сервере или вынесите вызов OpenAI на VPS в поддерживаемом регионе и укажите OPENAI_RELAY_URL + OPENAI_RELAY_SECRET (см. scripts/openai-relay-server.cjs).",
+    "Генерация недоступна: задайте AI API key в настройках сайта или OPENAI_API_KEY на сервере.",
   );
   error.statusCode = 400;
   error.code = "openai_not_configured";
   throw error;
 }
 
-function assertTextGenerationConfigured() {
-  if (isOpenAiDirectConfigured()) return;
-  const error = new Error("AI-описание недоступно: задайте OPENAI_API_KEY и OPENAI_BASE_URL=https://codex.sale/v1 в .env.");
+function assertTextGenerationConfigured(aiSettings = {}) {
+  if (aiSettings.enabled === false) {
+    const error = new Error("AI-описание выключено в настройках сайта.");
+    error.statusCode = 400;
+    error.code = "openai_disabled";
+    throw error;
+  }
+  if (isOpenAiDirectConfigured(aiSettings)) return;
+  const error = new Error("AI-описание недоступно: задайте API key и Base endpoint в настройках сайта.");
   error.statusCode = 400;
   error.code = "openai_text_not_configured";
   throw error;
 }
 
-function getOpenAiClient() {
-  const apiKey = cleanText(process.env.OPENAI_API_KEY);
+function getOpenAiClient(aiSettings = {}) {
+  const apiKey = cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY);
   if (!apiKey) {
     const error = new Error("OPENAI_API_KEY не задан для прямого вызова OpenAI.");
     error.statusCode = 400;
@@ -4880,7 +4966,8 @@ function getOpenAiClient() {
     throw error;
   }
   const options = { apiKey };
-  if (openaiBaseUrl) options.baseURL = openaiBaseUrl;
+  const baseUrl = cleanText(aiSettings.baseUrl) || openaiBaseUrl;
+  if (baseUrl) options.baseURL = baseUrl;
   return new OpenAI(options);
 }
 
@@ -4912,10 +4999,11 @@ function extractJsonObjectFromText(text = "") {
 }
 
 async function createOpenAiJsonChat(messages = []) {
-  assertTextGenerationConfigured();
-  const client = getOpenAiClient();
+  const aiSettings = await readEffectiveAiSettings();
+  assertTextGenerationConfigured(aiSettings);
+  const client = getOpenAiClient(aiSettings);
   const request = {
-    model: openaiTextModel,
+    model: aiSettings.textModel || openaiTextModel,
     messages,
     temperature: 0.2,
     response_format: { type: "json_object" },
@@ -4959,8 +5047,8 @@ async function resizeOzonAiImageOutputBuffer(buffer, format) {
   }
 }
 
-function ozonAiImageStoredSizeLabel() {
-  return ozonAiImageTargetPx ? `${ozonAiImageTargetPx}x${ozonAiImageTargetPx}` : openaiImageSize;
+function ozonAiImageStoredSizeLabel(aiSettings = {}) {
+  return ozonAiImageTargetPx ? `${ozonAiImageTargetPx}x${ozonAiImageTargetPx}` : (cleanText(aiSettings.imageSize) || openaiImageSize);
 }
 
 function normalizeOpenAiImageError(error) {
@@ -5055,7 +5143,8 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batch
     throw error;
   }
 
-  assertImageGenerationConfigured();
+  const aiSettings = await readEffectiveAiSettings();
+  assertImageGenerationConfigured(aiSettings);
 
   const sourcePath = localPublicFilePathFromUrl(sourceUrl, request);
   let sourceBuffer;
@@ -5097,20 +5186,20 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batch
     if (isOpenAiRelayConfigured()) {
       imageBase64 = await fetchOpenAiImageViaRelay({ prompt: generatedPrompt, sourceBuffer, sourceMimeType, referenceImages });
     } else {
-      const client = getOpenAiClient();
+      const client = getOpenAiClient(aiSettings);
       const image = [await toFile(sourceBuffer, sourceFileName, { type: sourceMimeType })];
       if (logoReference) {
         image.push(await toFile(logoReference.sourceBuffer, logoReference.sourceFileName, { type: logoReference.sourceMimeType }));
       }
       const editRequest = {
-        model: openaiImageModel,
+        model: aiSettings.imageModel || openaiImageModel,
         image: image.length === 1 ? image[0] : image,
         prompt: generatedPrompt,
-        size: openaiImageSize,
-        quality: openaiImageQuality,
-        output_format: openaiImageFormat,
+        size: aiSettings.imageSize || openaiImageSize,
+        quality: aiSettings.imageQuality || openaiImageQuality,
+        output_format: aiSettings.imageFormat || openaiImageFormat,
       };
-      if (openAiImageSupportsInputFidelity(openaiImageModel)) editRequest.input_fidelity = "high";
+      if (openAiImageSupportsInputFidelity(aiSettings.imageModel || openaiImageModel)) editRequest.input_fidelity = "high";
       if (openaiImageConfig && typeof openaiImageConfig === "object") {
         editRequest.image_config = JSON.stringify(openaiImageConfig);
       }
@@ -5128,10 +5217,10 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batch
   }
 
   let outBuffer = Buffer.from(imageBase64, "base64");
-  outBuffer = await resizeOzonAiImageOutputBuffer(outBuffer, openaiImageFormat);
+  outBuffer = await resizeOzonAiImageOutputBuffer(outBuffer, aiSettings.imageFormat || openaiImageFormat);
 
   await fs.mkdir(aiImageDir, { recursive: true });
-  const extension = aiImageExtension(openaiImageFormat);
+  const extension = aiImageExtension(aiSettings.imageFormat || openaiImageFormat);
   const fileName = `${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}${extension}`;
   const filePath = path.join(aiImageDir, fileName);
   await fs.writeFile(filePath, outBuffer);
@@ -5146,10 +5235,10 @@ async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batch
     batchId,
     variantIndex,
     variantTotal,
-    model: openaiImageModel,
-    size: ozonAiImageStoredSizeLabel(),
-    quality: openaiImageQuality,
-    format: openaiImageFormat,
+    model: aiSettings.imageModel || openaiImageModel,
+    size: ozonAiImageStoredSizeLabel(aiSettings),
+    quality: aiSettings.imageQuality || openaiImageQuality,
+    format: aiSettings.imageFormat || openaiImageFormat,
   });
 }
 
@@ -5309,7 +5398,7 @@ async function generateAiProductContentDraft(product = {}, options = {}) {
     vendor: compactAiText(parsed.vendor, 120),
     bulletPoints: Array.isArray(parsed.bulletPoints || parsed.bullets) ? (parsed.bulletPoints || parsed.bullets) : [],
     seoKeywords: Array.isArray(parsed.seoKeywords || parsed.keywords) ? (parsed.seoKeywords || parsed.keywords) : [],
-    model: openaiTextModel,
+    model: cleanText(response?.model) || openaiTextModel,
     generatedAt: new Date().toISOString(),
   };
   if (!draft.name && !draft.description) {
@@ -10673,8 +10762,9 @@ app.delete("/api/users/:username", requireAdmin, async (request, response, next)
 
 app.get("/api/settings", requireAdmin, async (_request, response, next) => {
   try {
+    const settings = await readAppSettings();
     response.json({
-      settings: await readAppSettings(),
+      settings: publicAppSettings(settings),
     });
   } catch (error) {
     next(error);
@@ -10683,12 +10773,33 @@ app.get("/api/settings", requireAdmin, async (_request, response, next) => {
 
 async function saveSettingsHandler(request, response, next) {
   try {
-    const settings = await writeAppSettings(request.body || {});
+    const previous = await readAppSettings();
+    const rawSettings = { ...(request.body || {}) };
+    if (!rawSettings.ai) {
+      rawSettings.ai = previous.ai || {};
+    } else {
+      const incomingKey = cleanText(rawSettings.ai.apiKey || rawSettings.ai.api_key);
+      const clearKey = rawSettings.ai.clearApiKey === true || rawSettings.ai.apiKeySet === false;
+      if (clearKey) {
+        rawSettings.ai = { ...rawSettings.ai, apiKey: "" };
+      } else if (!incomingKey || incomingKey === maskedSecretValue) {
+        rawSettings.ai = { ...rawSettings.ai, apiKey: previous.ai?.apiKey || "" };
+      }
+    }
+    const settings = await writeAppSettings(rawSettings);
     appendAudit(request, "settings.update", {
       fixedUsdRate: settings.fixedUsdRate,
       defaultMarkups: settings.defaultMarkups,
       markupRules: settings.markupRules.length,
       availabilityRules: settings.availabilityRules.length,
+      ai: {
+        enabled: settings.ai?.enabled !== false,
+        providerId: settings.ai?.providerId,
+        baseUrl: settings.ai?.baseUrl,
+        textModel: settings.ai?.textModel,
+        imageModel: settings.ai?.imageModel,
+        apiKeySet: Boolean(settings.ai?.apiKey),
+      },
     }).catch((auditError) => {
       logger.warn("settings audit append failed", { detail: auditError?.message || String(auditError) });
     });
@@ -10697,7 +10808,7 @@ async function saveSettingsHandler(request, response, next) {
     } catch (queueError) {
       logger.warn("settings auto price queue failed", { detail: queueError?.message || String(queueError) });
     }
-    response.json({ ok: true, settings });
+    response.json({ ok: true, settings: publicAppSettings(settings) });
   } catch (error) {
     next(error);
   }
@@ -10705,6 +10816,49 @@ async function saveSettingsHandler(request, response, next) {
 
 app.put("/api/settings", requireAdmin, saveSettingsHandler);
 app.post("/api/settings", requireAdmin, saveSettingsHandler);
+
+app.post("/api/settings/ai/test", requireAdmin, async (request, response, next) => {
+  try {
+    const previous = await readAppSettings();
+    const rawAi = request.body?.ai || previous.ai || {};
+    const incomingKey = cleanText(rawAi.apiKey || rawAi.api_key);
+    const ai = normalizeAiSettings({
+      ...rawAi,
+      apiKey: (!incomingKey || incomingKey === maskedSecretValue) ? previous.ai?.apiKey || "" : incomingKey,
+    }, previous.ai || defaultAppSettings().ai);
+    const effective = effectiveAiSettingsFromAppSettings({ ...previous, ai });
+    assertTextGenerationConfigured(effective);
+    const client = getOpenAiClient(effective);
+    const startedAt = Date.now();
+    const result = await client.chat.completions.create({
+      model: effective.textModel || openaiTextModel,
+      messages: [
+        { role: "system", content: "Return JSON only." },
+        { role: "user", content: "{\"ok\":true}" },
+      ],
+      temperature: 0,
+      response_format: { type: "json_object" },
+    }).catch(async (error) => {
+      const detail = cleanText(error?.message || error?.error?.message || "");
+      if (/response_format|json_object|temperature/i.test(detail)) {
+        return client.chat.completions.create({
+          model: effective.textModel || openaiTextModel,
+          messages: [{ role: "user", content: "Return exactly: OK" }],
+        });
+      }
+      throw error;
+    });
+    response.json({
+      ok: true,
+      providerId: effective.providerId,
+      baseUrl: effective.baseUrl,
+      model: cleanText(result?.model) || effective.textModel,
+      latencyMs: Date.now() - startedAt,
+    });
+  } catch (error) {
+    next(normalizeOpenAiImageError(error));
+  }
+});
 
 app.get("/api/marketplace-accounts", (_request, response) => {
   response.json({

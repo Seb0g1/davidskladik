@@ -38,6 +38,58 @@
           </label>
 
           <section class="detail-section">
+            <h3>AI-провайдер</h3>
+            <p>Нейронка улучшает описание карточки для Yandex Market и помогает довести товар до готовности к продаже. Ключ хранится в настройках сайта и не показывается полностью.</p>
+            <label class="search-control auto-toggle-control" for="aiEnabledInput">
+              <span>Включить AI-описания и AI-фото</span>
+              <input id="aiEnabledInput" name="aiEnabled" type="checkbox" />
+              <span class="toggle-ui" aria-hidden="true"></span>
+            </label>
+            <div class="settings-user-form">
+              <label>
+                ID провайдера
+                <input id="aiProviderIdInput" name="aiProviderId" type="text" autocomplete="off" placeholder="codexsale" />
+              </label>
+              <label>
+                Base endpoint
+                <input id="aiBaseUrlInput" name="aiBaseUrl" type="url" autocomplete="off" placeholder="https://codex.sale/v1" />
+              </label>
+              <label>
+                API key
+                <input id="aiApiKeyInput" name="aiApiKey" type="password" autocomplete="new-password" placeholder="Оставьте пустым, чтобы не менять" />
+              </label>
+              <label>
+                Модель текста
+                <input id="aiTextModelInput" name="aiTextModel" type="text" autocomplete="off" placeholder="gpt-5.4-mini" />
+              </label>
+              <label>
+                Модель картинок
+                <input id="aiImageModelInput" name="aiImageModel" type="text" autocomplete="off" placeholder="gpt-image-2" />
+              </label>
+              <label>
+                Размер картинки
+                <input id="aiImageSizeInput" name="aiImageSize" type="text" autocomplete="off" placeholder="1024x1024" />
+              </label>
+              <label>
+                Качество картинки
+                <input id="aiImageQualityInput" name="aiImageQuality" type="text" autocomplete="off" placeholder="auto" />
+              </label>
+              <label>
+                Формат картинки
+                <select id="aiImageFormatInput" name="aiImageFormat">
+                  <option value="png">png</option>
+                  <option value="jpeg">jpeg</option>
+                  <option value="webp">webp</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-inline-actions">
+              <button id="aiTestButton" class="secondary-button compact-button" type="button">Проверить AI</button>
+            </div>
+            <div id="aiSettingsStatus" class="rate-info">AI ещё не проверялся.</div>
+          </section>
+
+          <section class="detail-section">
             <h3>Гибкие правила наценки</h3>
             <p>Пример: если цена поставщика от 10 USD — коэффициент 3.0; от 20 USD — 2.8. Можно задавать правила отдельно для Ozon, ЯМ или для всех.</p>
             <div id="markupRulesList" class="settings-rules-list"></div>

@@ -20,6 +20,7 @@ process.env.DATABASE_URL = "";
 process.env.JSON_FALLBACK_ENABLED = "true";
 
 const appUsersPath = path.join(__dirname, "..", "data", "app-users.json");
+const appSettingsPath = path.join(__dirname, "..", "data", "app-settings.json");
 const marketplaceAccountsPath = path.join(__dirname, "..", "data", "marketplace-accounts.json");
 const warehousePath = path.join(__dirname, "..", "data", "warehouse.json");
 const operationJobsPath = path.join(__dirname, "..", "data", "operation-jobs.json");
@@ -1877,6 +1878,55 @@ test("PUT /api/settings saves markup settings", async () => {
   }
 });
 
+test("PUT /api/settings saves AI provider settings without exposing API key", async () => {
+  const backup = await backupFile(appSettingsPath);
+  const agent = request.agent(app);
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  const before = await agent.get("/api/settings").expect(200);
+  const previous = before.body.settings;
+  try {
+    const res = await agent
+      .put("/api/settings")
+      .send({
+        ...previous,
+        ai: {
+          enabled: true,
+          providerId: "codexsale",
+          baseUrl: "https://codex.sale/v1",
+          apiKey: "sk-test-secret-1234",
+          textModel: "gpt-5.4-mini",
+          imageModel: "gpt-image-2",
+          imageSize: "1024x1024",
+          imageQuality: "auto",
+          imageFormat: "png",
+        },
+      })
+      .expect(200);
+
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.settings.ai.providerId, "codexsale");
+    assert.equal(res.body.settings.ai.apiKeySet, true);
+    assert.equal(res.body.settings.ai.apiKey, "__masked__");
+    assert.equal(res.body.settings.ai.apiKeyMasked.endsWith("1234"), true);
+
+    const second = await agent
+      .put("/api/settings")
+      .send({
+        ...res.body.settings,
+        ai: { ...res.body.settings.ai, textModel: "gpt-5.4" },
+      })
+      .expect(200);
+    assert.equal(second.body.settings.ai.apiKeySet, true);
+    assert.equal(second.body.settings.ai.textModel, "gpt-5.4");
+  } finally {
+    await restoreFile(appSettingsPath, backup);
+  }
+});
+
 test("resolveMarkupCoefficient applies threshold >= 10 USD", () => {
   const value = resolveMarkupCoefficient({
     productMarkup: 0,
@@ -2224,6 +2274,7 @@ test("normalizeWarehouseProduct preserves AI image draft review state", () => {
 });
 
 test("AI image generation requires OpenAI key before creating draft", async () => {
+  const settingsBackup = await backupFile(appSettingsPath);
   const agent = request.agent(app);
   const smokeId = `smoke-ai-${Date.now()}`;
   let product;
@@ -2257,6 +2308,15 @@ test("AI image generation requires OpenAI key before creating draft", async () =
   delete process.env.OPENAI_RELAY_URL;
   delete process.env.OPENAI_RELAY_SECRET;
   try {
+    const currentSettings = await agent.get("/api/settings").expect(200);
+    await agent
+      .put("/api/settings")
+      .send({
+        ...currentSettings.body.settings,
+        ai: { ...(currentSettings.body.settings.ai || {}), apiKeySet: false, apiKey: "" },
+      })
+      .expect(200);
+
     const res = await agent
       .post(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`)
       .send({ sourceImageUrl: "http://localhost/uploads/images/source.png" })
@@ -2271,6 +2331,7 @@ test("AI image generation requires OpenAI key before creating draft", async () =
     if (previousRelaySecret === undefined) delete process.env.OPENAI_RELAY_SECRET;
     else process.env.OPENAI_RELAY_SECRET = previousRelaySecret;
     if (product?.id) await agent.delete(`/api/warehouse/products/${encodeURIComponent(product.id)}`).expect(200);
+    await restoreFile(appSettingsPath, settingsBackup);
   }
 });
 

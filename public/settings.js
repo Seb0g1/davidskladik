@@ -8,6 +8,17 @@ const logoutButton = document.querySelector("#logoutButton");
 const settingsAnimateAutoFocusInput = document.querySelector("#settingsAnimateAutoFocusInput");
 const autoSyncEnabledInput = document.querySelector("#autoSyncEnabledInput");
 const autoSyncMinutesInput = document.querySelector("#autoSyncMinutesInput");
+const aiEnabledInput = document.querySelector("#aiEnabledInput");
+const aiProviderIdInput = document.querySelector("#aiProviderIdInput");
+const aiBaseUrlInput = document.querySelector("#aiBaseUrlInput");
+const aiApiKeyInput = document.querySelector("#aiApiKeyInput");
+const aiTextModelInput = document.querySelector("#aiTextModelInput");
+const aiImageModelInput = document.querySelector("#aiImageModelInput");
+const aiImageSizeInput = document.querySelector("#aiImageSizeInput");
+const aiImageQualityInput = document.querySelector("#aiImageQualityInput");
+const aiImageFormatInput = document.querySelector("#aiImageFormatInput");
+const aiTestButton = document.querySelector("#aiTestButton");
+const aiSettingsStatus = document.querySelector("#aiSettingsStatus");
 const manualSyncButton = document.querySelector("#manualSyncButton");
 const manualPriceUpdateButton = document.querySelector("#manualPriceUpdateButton");
 const manualSyncStatus = document.querySelector("#manualSyncStatus");
@@ -376,6 +387,39 @@ function collectAvailabilityRules() {
     .sort((a, b) => b.minAvailableSuppliers - a.minAvailableSuppliers);
 }
 
+function renderAiSettings(ai = {}) {
+  if (aiEnabledInput) aiEnabledInput.checked = ai.enabled !== false;
+  if (aiProviderIdInput) aiProviderIdInput.value = ai.providerId || "codexsale";
+  if (aiBaseUrlInput) aiBaseUrlInput.value = ai.baseUrl || "https://codex.sale/v1";
+  if (aiApiKeyInput) {
+    aiApiKeyInput.value = "";
+    aiApiKeyInput.placeholder = ai.apiKeyMasked ? `Сохранён: ${ai.apiKeyMasked}` : "Оставьте пустым, чтобы не менять";
+  }
+  if (aiTextModelInput) aiTextModelInput.value = ai.textModel || "gpt-5.4-mini";
+  if (aiImageModelInput) aiImageModelInput.value = ai.imageModel || "gpt-image-2";
+  if (aiImageSizeInput) aiImageSizeInput.value = ai.imageSize || "1024x1024";
+  if (aiImageQualityInput) aiImageQualityInput.value = ai.imageQuality || "auto";
+  if (aiImageFormatInput) aiImageFormatInput.value = ai.imageFormat || "png";
+  if (aiSettingsStatus) {
+    const source = ai.source === "settings" ? "ключ сохранён в настройках" : (ai.source === "env" ? "ключ берётся из .env" : "ключ не задан");
+    aiSettingsStatus.textContent = `AI: ${ai.enabled === false ? "выключен" : "включён"}, ${source}.`;
+  }
+}
+
+function collectAiSettings() {
+  return {
+    enabled: Boolean(aiEnabledInput?.checked),
+    providerId: String(aiProviderIdInput?.value || "codexsale").trim(),
+    baseUrl: String(aiBaseUrlInput?.value || "").trim(),
+    apiKey: String(aiApiKeyInput?.value || "").trim(),
+    textModel: String(aiTextModelInput?.value || "gpt-5.4-mini").trim(),
+    imageModel: String(aiImageModelInput?.value || "gpt-image-2").trim(),
+    imageSize: String(aiImageSizeInput?.value || "1024x1024").trim(),
+    imageQuality: String(aiImageQualityInput?.value || "auto").trim(),
+    imageFormat: String(aiImageFormatInput?.value || "png").trim(),
+  };
+}
+
 async function loadSettings() {
   const data = await api("/api/settings");
   const settings = data.settings || {};
@@ -384,6 +428,7 @@ async function loadSettings() {
   settingsForm.elements.defaultYandexMarkup.value = settings.defaultMarkups?.yandex || 1.6;
   if (autoSyncEnabledInput) autoSyncEnabledInput.checked = settings.automation?.autoSyncEnabled !== false;
   if (autoSyncMinutesInput) autoSyncMinutesInput.value = settings.automation?.autoSyncMinutes || 30;
+  renderAiSettings(settings.ai || {});
   renderRules(settings.markupRules || []);
   renderAvailabilityRules(settings.availabilityRules || []);
   if (settingsAnimateAutoFocusInput) {
@@ -405,16 +450,18 @@ settingsForm.addEventListener("submit", async (event) => {
       autoSyncEnabled: Boolean(autoSyncEnabledInput?.checked),
       autoSyncMinutes: Number(autoSyncMinutesInput?.value || 30),
     },
+    ai: collectAiSettings(),
     markupRules: collectRules(),
     availabilityRules: collectAvailabilityRules(),
   };
   statusBox.textContent = "Сохраняю настройки...";
   try {
-    await api("/api/settings", {
+    const data = await api("/api/settings", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
+    renderAiSettings(data.settings?.ai || payload.ai);
     statusBox.textContent = "Настройки сохранены.";
   } catch (error) {
     statusBox.textContent = error.message;
@@ -450,6 +497,25 @@ availabilityRulesList?.addEventListener("click", (event) => {
   if (row) row.remove();
   if (!availabilityRulesList.querySelector(".settings-rule-row")) {
     renderAvailabilityRules([]);
+  }
+});
+
+aiTestButton?.addEventListener("click", async () => {
+  aiTestButton.disabled = true;
+  if (aiSettingsStatus) aiSettingsStatus.textContent = "Проверяю AI-подключение...";
+  try {
+    const result = await api("/api/settings/ai/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ai: collectAiSettings() }),
+    });
+    if (aiSettingsStatus) {
+      aiSettingsStatus.textContent = `AI подключен. Модель: ${result.model || "ok"}, ответ за ${result.latencyMs || 0} мс.`;
+    }
+  } catch (error) {
+    if (aiSettingsStatus) aiSettingsStatus.textContent = `AI не подключен: ${error.message}`;
+  } finally {
+    aiTestButton.disabled = false;
   }
 });
 
