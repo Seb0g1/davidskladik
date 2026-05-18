@@ -13743,7 +13743,10 @@ async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
       10 + ((processedBefore + Math.floor(batch.length / 3)) / Math.max(1, targetProducts.length)) * 80,
       `Восстанавливаю остатки: ${processedBefore + Math.floor(batch.length / 3)} из ${targetProducts.length}.`,
     );
-    const batchUnarchiveActions = await unarchiveProductsOnMarketplaces(batch);
+    const batchUnarchiveActions = await verifyYandexUnarchiveActions(
+      batch,
+      await unarchiveProductsOnMarketplaces(batch),
+    );
     unarchiveActions.push(...batchUnarchiveActions);
     await reportProgress(
       10 + ((processedBefore + Math.floor((batch.length * 2) / 3)) / Math.max(1, targetProducts.length)) * 80,
@@ -14594,7 +14597,7 @@ async function sendZeroStocksToMarketplace(products = []) {
     if (!product?.id || !product?.offerId || !product?.target) {
       actions.push({
         id: product?.id || "",
-        type: "restore_stock",
+        type: "zero_stock",
         offerId: product?.offerId || "",
         target: product?.target || "",
         ok: false,
@@ -14612,7 +14615,7 @@ async function sendZeroStocksToMarketplace(products = []) {
     if (marketplace === "ozon") {
       const account = getOzonAccountByTarget(target);
       if (!account) {
-        actions.push(...items.map((item) => ({ id: item.id, type: "restore_stock", target, ok: false, error: "ozon_account_not_found" })));
+        actions.push(...items.map((item) => ({ id: item.id, type: "zero_stock", target, ok: false, error: "ozon_account_not_found" })));
         continue;
       }
       for (const chunk of chunkArray(items, 100)) {
@@ -14633,8 +14636,16 @@ async function sendZeroStocksToMarketplace(products = []) {
 
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
-      if (!shop) continue;
-      for (const stockShop of yandexStockShops([shop])) {
+      if (!shop) {
+        actions.push(...items.map((item) => ({ id: item.id, type: "zero_stock", target, ok: false, error: "yandex_shop_not_found" })));
+        continue;
+      }
+      const stockShops = yandexStockShops([shop]);
+      if (!stockShops.length) {
+        actions.push(...items.map((item) => ({ id: item.id, type: "zero_stock", target: shop.id, ok: false, error: "yandex_stock_campaign_not_configured" })));
+        continue;
+      }
+      for (const stockShop of stockShops) {
         for (const chunk of chunkArray(items, 100)) {
           try {
             await sendYandexStockChunk(stockShop, chunk.map((item) => ({ offerId: item.offerId, stock: 0 })));
@@ -14645,6 +14656,9 @@ async function sendZeroStocksToMarketplace(products = []) {
           }
         }
       }
+    }
+    if (!["ozon", "yandex"].includes(marketplace)) {
+      actions.push(...items.map((item) => ({ id: item.id, type: "zero_stock", target, ok: false, error: "unsupported_marketplace" })));
     }
   }
 
@@ -14718,7 +14732,7 @@ async function archiveProductsOnMarketplaces(products = []) {
     if (!product?.id || !product?.target || (product.marketplace === "yandex" && !cleanText(product.offerId))) {
       actions.push({
         id: product?.id || "",
-        type: "unarchive",
+        type: "archive",
         offerId: product?.offerId || "",
         target: product?.target || "",
         ok: false,
@@ -14735,7 +14749,10 @@ async function archiveProductsOnMarketplaces(products = []) {
     const [marketplace, target] = key.split(":");
     if (marketplace === "ozon") {
       const account = getOzonAccountByTarget(target);
-      if (!account) continue;
+      if (!account) {
+        actions.push(...items.map((item) => ({ id: item.id, type: "archive", target, ok: false, error: "ozon_account_not_found" })));
+        continue;
+      }
       for (const chunk of chunkArray(items, 100)) {
         const productIds = chunk.map((item) => Number(item.productId || 0)).filter((id) => id > 0);
         if (!productIds.length) continue;
@@ -14760,7 +14777,10 @@ async function archiveProductsOnMarketplaces(products = []) {
 
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
-      if (!shop) continue;
+      if (!shop) {
+        actions.push(...items.map((item) => ({ id: item.id, type: "archive", target, offerId: item.offerId, ok: false, error: "yandex_shop_not_found" })));
+        continue;
+      }
       for (const chunk of chunkArray(items, 200)) {
         const archiveResults = await sendYandexOfferArchiveState(shop, chunk.map((item) => item.offerId), true);
         const byOfferId = new Map(archiveResults.map((item) => [cleanText(item.offerId).toLowerCase(), item]));
@@ -14778,7 +14798,7 @@ async function archiveProductsOnMarketplaces(products = []) {
       }
     }
     if (!["ozon", "yandex"].includes(marketplace)) {
-      actions.push(...items.map((item) => ({ id: item.id, type: "restore_stock", target, ok: false, error: "unsupported_marketplace" })));
+      actions.push(...items.map((item) => ({ id: item.id, type: "archive", target, ok: false, error: "unsupported_marketplace" })));
     }
   }
   return actions;
@@ -14788,7 +14808,17 @@ async function restoreStocksOnMarketplaces(products = []) {
   const actions = [];
   const byTarget = new Map();
   for (const product of products) {
-    if (!product?.id || !product?.offerId || !product?.target) continue;
+    if (!product?.id || !product?.offerId || !product?.target) {
+      actions.push({
+        id: product?.id || "",
+        type: "restore_stock",
+        offerId: product?.offerId || "",
+        target: product?.target || "",
+        ok: false,
+        error: !product?.id ? "missing_product_id" : (!product?.offerId ? "missing_offer_id" : "missing_target"),
+      });
+      continue;
+    }
     const key = `${product.marketplace}:${product.target}`;
     if (!byTarget.has(key)) byTarget.set(key, []);
     byTarget.get(key).push(product);
@@ -14798,7 +14828,10 @@ async function restoreStocksOnMarketplaces(products = []) {
     const [marketplace, target] = key.split(":");
     if (marketplace === "ozon") {
       const account = getOzonAccountByTarget(target);
-      if (!account) continue;
+      if (!account) {
+        actions.push(...items.map((item) => ({ id: item.id, type: "restore_stock", target, ok: false, error: "ozon_account_not_found" })));
+        continue;
+      }
       for (const chunk of chunkArray(items, 100)) {
         const payload = {
           stocks: await buildOzonStockPayloadItems(
@@ -14858,7 +14891,7 @@ async function restoreStocksOnMarketplaces(products = []) {
       }
     }
     if (!["ozon", "yandex"].includes(marketplace)) {
-      actions.push(...items.map((item) => ({ id: item.id, type: "unarchive", target, offerId: item.offerId, ok: false, error: "unsupported_marketplace" })));
+      actions.push(...items.map((item) => ({ id: item.id, type: "restore_stock", target, offerId: item.offerId, ok: false, error: "unsupported_marketplace" })));
     }
   }
   return actions;
@@ -14868,8 +14901,17 @@ async function unarchiveProductsOnMarketplaces(products = []) {
   const actions = [];
   const byTarget = new Map();
   for (const product of products) {
-    if (!product?.id || !product?.target) continue;
-    if (product.marketplace === "yandex" && !cleanText(product.offerId)) continue;
+    if (!product?.id || !product?.target || (product.marketplace === "yandex" && !cleanText(product.offerId))) {
+      actions.push({
+        id: product?.id || "",
+        type: "unarchive",
+        offerId: product?.offerId || "",
+        target: product?.target || "",
+        ok: false,
+        error: !product?.id ? "missing_product_id" : (!product?.target ? "missing_target" : "missing_offer_id"),
+      });
+      continue;
+    }
     const key = `${product.marketplace}:${product.target}`;
     if (!byTarget.has(key)) byTarget.set(key, []);
     byTarget.get(key).push(product);
@@ -14917,6 +14959,9 @@ async function unarchiveProductsOnMarketplaces(products = []) {
           };
         }));
       }
+    }
+    if (!["ozon", "yandex"].includes(marketplace)) {
+      actions.push(...items.map((item) => ({ id: item.id, type: "unarchive", target, offerId: item.offerId, ok: false, error: "unsupported_marketplace" })));
     }
   }
   return actions;
@@ -15101,6 +15146,11 @@ function summarizeSupplierRecoveryProducts(products = [], stockActions = [], una
     const unarchiveOk = unarchive.filter((action) => action.ok).length;
     const unarchiveFailed = unarchive.filter((action) => !action.ok).length;
     const failed = productActions.find((action) => !action.ok);
+    const needsUnarchive = productLooksArchived(product);
+    const sellable = stockOk > 0
+      && stockFailed === 0
+      && unarchiveFailed === 0
+      && (!needsUnarchive || unarchiveOk > 0);
     return {
       id: product.id,
       offerId: product.offerId || "",
@@ -15110,8 +15160,8 @@ function summarizeSupplierRecoveryProducts(products = [], stockActions = [], una
       stockFailed,
       unarchiveOk,
       unarchiveFailed,
-      sellable: stockOk > 0 && stockFailed === 0 && unarchiveFailed === 0,
-      status: failed ? "error" : (stockOk > 0 ? "sellable" : "no_action"),
+      sellable,
+      status: failed ? "error" : (sellable ? "sellable" : (productActions.length ? "processed" : "no_action")),
       error: failed?.error || null,
     };
   });
