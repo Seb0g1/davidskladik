@@ -3224,6 +3224,24 @@ test("warehouse links can store selected PriceMaster row without supplier articl
   );
 });
 
+test("warehouse links treat synthetic no-article PriceMaster ids as selected rows", () => {
+  const product = normalizeWarehouseProduct({
+    id: "synthetic-no-article-link-product",
+    links: [{
+      id: "draft-row",
+      article: "__no_article__:2285084",
+      matchType: "article",
+      exactName: "CLEOPATRA",
+      supplierName: "3185",
+      priceCurrency: "USD",
+    }],
+  });
+  assert.equal(product.links[0].article, "");
+  assert.equal(product.links[0].matchType, "selected_row");
+  assert.equal(product.links[0].sourceRowId, "2285084");
+  assert.equal(warehouseLinkIdentityKey(product.links[0]).startsWith("selected_row|row:2285084|"), true);
+});
+
 test("recovery queues archived linked product when supplier is available", () => {
   const recovered = pickSupplierRecoveryCandidates([
     {

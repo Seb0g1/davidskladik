@@ -3,6 +3,18 @@ const VALID_MAIN_TABS = new Set(["warehouse", "suppliers", "accounts"]);
 const WAREHOUSE_AUTO_FOCUS_ANIM_STORAGE_KEY = "magicVibesWarehouseAutoFocusAnim";
 const WAREHOUSE_LIVE_POLL_MS = 45000;
 const WAREHOUSE_LIVE_MAX_RESTORE_PAGES = 2;
+const PM_NO_ARTICLE_PREFIX = "__no_article__:";
+
+function pmNoArticleRowId(value) {
+  const text = String(value || "").trim();
+  return text.toLowerCase().startsWith(PM_NO_ARTICLE_PREFIX)
+    ? text.slice(PM_NO_ARTICLE_PREFIX.length).trim()
+    : "";
+}
+
+function pmRealArticle(value) {
+  return pmNoArticleRowId(value) ? "" : String(value || "").trim();
+}
 
 const state = {
   session: null,
@@ -677,9 +689,10 @@ function renderPmOfferPanel(panel, rows, input) {
     btn.setAttribute("role", "option");
     const selectRow = (event) => {
       event.preventDefault();
-      input.value = row.article || row.name || "";
+      const article = pmRealArticle(row.article);
+      input.value = article || row.name || "";
       input.dataset.pmSelectedValue = input.value;
-      setPmSelectedRow(input, { ...row, matchType: row.article ? "article" : "selected_row", exactName: row.name || "", sourceRowId: row.rowId || "" });
+      setPmSelectedRow(input, { ...row, article, matchType: article ? "article" : "selected_row", exactName: row.name || "", sourceRowId: row.rowId || pmNoArticleRowId(row.article) || "" });
       const supplierInput = form?.querySelector('[name="supplierName"]');
       if (supplierInput && row.partnerName) {
         supplierInput.value = row.partnerName;
@@ -2919,19 +2932,23 @@ function renderWarehouseDetail(group, { force = false } = {}) {
             ? suppliers
                 .slice(0, 10)
                 .map(
-                  (item) => `
+                  (item) => {
+                    const article = pmRealArticle(item.article);
+                    const sourceRowId = item.rowId || pmNoArticleRowId(item.article) || "";
+                    return `
                     <div class="supplier-line ${item.stopped ? "stopped" : ""}">
                       <div>
                         <strong>${escapeHtml(item.partnerName || item.supplierName || "Поставщик")}</strong>
-                        <span>${escapeHtml(item.article || "Без артикула")} · ${escapeHtml(item.name || "")}</span>
+                        <span>${escapeHtml(article || "Без артикула")} · ${escapeHtml(item.name || "")}</span>
                         ${item.stopped ? `<span class="stop-note">На стопе${item.stopReason ? `: ${escapeHtml(item.stopReason)}` : ""}</span>` : ""}
                       </div>
                       <div class="supplier-line-actions">
                         <div class="money">${formatUsd(item.price)}</div>
-                        <button class="secondary-button compact-button add-supplier-draft" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" data-article="${escapeHtml(item.article || "")}" data-match-type="${escapeHtml(item.article ? "article" : "selected_row")}" data-exact-name="${escapeHtml(item.name || "")}" data-source-row-id="${escapeHtml(item.rowId || "")}" data-supplier-name="${escapeHtml(item.partnerName || item.supplierName || "")}" data-partner-id="${escapeHtml(item.partnerId || "")}" data-price-currency="${escapeHtml(item.priceCurrency || item.sourceCurrency || "USD")}">&#1042; &#1095;&#1077;&#1088;&#1085;&#1086;&#1074;&#1080;&#1082;</button>
+                        <button class="secondary-button compact-button add-supplier-draft" type="button" data-draft-key="${escapeHtml(linkDraftKeyValue)}" data-article="${escapeHtml(article)}" data-match-type="${escapeHtml(article ? "article" : "selected_row")}" data-exact-name="${escapeHtml(item.name || "")}" data-source-row-id="${escapeHtml(sourceRowId)}" data-supplier-name="${escapeHtml(item.partnerName || item.supplierName || "")}" data-partner-id="${escapeHtml(item.partnerId || "")}" data-price-currency="${escapeHtml(item.priceCurrency || item.sourceCurrency || "USD")}">&#1042; &#1095;&#1077;&#1088;&#1085;&#1086;&#1074;&#1080;&#1082;</button>
                       </div>
                     </div>
-                  `,
+                  `;
+                  },
                 )
                 .join("")
             : '<div class="empty-mini">Нет совпадений PriceMaster.</div>'
@@ -4362,12 +4379,13 @@ elements.warehouseDetail.addEventListener("submit", async (event) => {
   const selectedOffer = getPmSelectedRow(articleInput);
   const selectedArticleValue = String(articleInput?.dataset.pmSelectedValue || "").trim();
   const rawArticle = String(data.get("article") || "").trim();
+  const selectedArticle = pmRealArticle(selectedOffer?.article);
   const article = selectedOffer && selectedArticleValue && rawArticle === selectedArticleValue
-    ? String(selectedOffer.article || "").trim()
-    : rawArticle;
-  const matchType = selectedOffer?.matchType || (selectedOffer && !selectedOffer.article ? "selected_row" : "article");
+    ? selectedArticle
+    : pmRealArticle(rawArticle);
+  const sourceRowId = String(selectedOffer?.sourceRowId || selectedOffer?.rowId || pmNoArticleRowId(selectedOffer?.article) || pmNoArticleRowId(rawArticle) || "").trim();
+  const matchType = selectedOffer?.matchType || (selectedOffer && !selectedArticle ? "selected_row" : "article");
   const exactName = String(selectedOffer?.exactName || selectedOffer?.name || "").trim();
-  const sourceRowId = String(selectedOffer?.sourceRowId || selectedOffer?.rowId || "").trim();
   if (!article && !exactName && !sourceRowId) {
     elements.warehouseStatus.textContent = "Укажите артикул PriceMaster или выберите строку PriceMaster по названию.";
     return;
@@ -4540,12 +4558,14 @@ elements.warehouseDetail.addEventListener("click", async (event) => {
   const saveDraftsButton = event.target.closest(".save-link-drafts");
   if (addSupplierDraftButton) {
     const key = addSupplierDraftButton.dataset.draftKey || "";
+    const article = pmRealArticle(addSupplierDraftButton.dataset.article);
+    const sourceRowId = String(addSupplierDraftButton.dataset.sourceRowId || pmNoArticleRowId(addSupplierDraftButton.dataset.article) || "").trim();
     const draft = {
       id: createClientDraftId(),
-      article: String(addSupplierDraftButton.dataset.article || "").trim(),
-      matchType: String(addSupplierDraftButton.dataset.matchType || "article").trim() || "article",
+      article,
+      matchType: article ? "article" : (String(addSupplierDraftButton.dataset.matchType || "selected_row").trim() || "selected_row"),
       exactName: String(addSupplierDraftButton.dataset.exactName || "").trim(),
-      sourceRowId: String(addSupplierDraftButton.dataset.sourceRowId || "").trim(),
+      sourceRowId,
       keyword: "",
       supplierName: String(addSupplierDraftButton.dataset.supplierName || "").trim(),
       partnerId: String(addSupplierDraftButton.dataset.partnerId || "").trim(),

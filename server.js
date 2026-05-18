@@ -2008,13 +2008,26 @@ function normalizeWarehouseProduct(input = {}) {
   };
 }
 
+function parsePriceMasterNoArticleRowId(value) {
+  const text = cleanText(value);
+  const prefix = "__no_article__:";
+  if (!text.toLowerCase().startsWith(prefix)) return "";
+  return cleanText(text.slice(prefix.length));
+}
+
 function normalizeWarehouseLink(input = {}) {
   const priceCurrency = cleanText(input.priceCurrency || input.price_currency || input.currency).toUpperCase();
   const matchTypeRaw = cleanText(input.matchType || input.match_type);
-  const matchType = ["article", "selected_row", "exact_name"].includes(matchTypeRaw) ? matchTypeRaw : "article";
+  let matchType = ["article", "selected_row", "exact_name"].includes(matchTypeRaw) ? matchTypeRaw : "article";
   const exactName = cleanText(input.exactName || input.exact_name || input.nativeName || input.name);
-  const sourceRowId = cleanText(input.sourceRowId || input.source_row_id || input.rowId);
-  const article = cleanText(input.article || input.offerId || input.nativeId);
+  let sourceRowId = cleanText(input.sourceRowId || input.source_row_id || input.rowId);
+  let article = cleanText(input.article || input.offerId || input.nativeId);
+  const syntheticNoArticleRowId = parsePriceMasterNoArticleRowId(article);
+  if (syntheticNoArticleRowId) {
+    article = "";
+    sourceRowId = sourceRowId || syntheticNoArticleRowId;
+    matchType = "selected_row";
+  }
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
     article,
