@@ -134,9 +134,23 @@ test("GET /health", async () => {
   const res = await request(app).get("/health").expect(200);
   assert.equal(res.body.ok, true);
   assert.ok(res.body.service);
+  assert.equal(typeof res.body.version, "string");
+  assert.ok(res.body.version.length > 0);
   assert.ok(res.body.components);
   assert.equal(res.body.components.storage.mode, "json");
   assert.equal(res.body.components.redis.queueMode, "inline");
+});
+
+test("index page busts app asset cache with build version", async () => {
+  const agent = request.agent(app);
+  await agent
+    .post("/api/login")
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
+    .expect(200);
+  const res = await agent.get("/").expect(200);
+  assert.match(res.text, /\/app\.js\?v=[^"]+/);
+  assert.match(res.text, /\/styles\.css\?v=[^"]+/);
+  assert.match(res.headers["cache-control"], /no-cache/);
 });
 
 test("GET /health deep exposes operational component details", async () => {

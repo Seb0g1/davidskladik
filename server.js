@@ -2,6 +2,7 @@ const fs = require("fs/promises");
 const fsSync = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { execFileSync } = require("child_process");
 const express = require("express");
 const compression = require("compression");
 const rateLimit = require("express-rate-limit");
@@ -70,6 +71,7 @@ const yandexExistingOffersCachePath = path.join(dataDir, "yandex-existing-offers
 const operationJobsPath = path.join(dataDir, "operation-jobs.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
+const buildVersion = cleanBuildVersion(process.env.APP_BUILD_VERSION || process.env.GIT_COMMIT || readGitCommit());
 const sessionCookieName = "pm_session";
 const sessionTtlMs = 1000 * 60 * 60 * 12;
 const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || process.env.DEFAULT_AUTO_SYNC_MINUTES || 30);
@@ -798,6 +800,45 @@ function healthTimeout(promise, timeoutMs = 2500) {
   ]);
 }
 
+function cleanBuildVersion(value) {
+  return String(value || "").trim().replace(/[^\w.-]/g, "").slice(0, 80) || "dev";
+}
+
+function readGitCommit() {
+  try {
+    return execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: __dirname,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch (_error) {
+    return "";
+  }
+}
+
+function cacheControlForMutableAsset(response) {
+  response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+  response.setHeader("Pragma", "no-cache");
+  response.setHeader("Expires", "0");
+}
+
+function addBuildVersionToIndexHtml(html) {
+  const version = encodeURIComponent(buildVersion);
+  return String(html || "")
+    .replace(/href="\/styles\.css(?:\?v=[^"]*)?"/g, `href="/styles.css?v=${version}"`)
+    .replace(/src="\/app\.js(?:\?v=[^"]*)?"/g, `src="/app.js?v=${version}"`);
+}
+
+async function serveIndexHtml(_request, response, next) {
+  try {
+    const html = await fs.readFile(path.join(publicDir, "index.html"), "utf8");
+    cacheControlForMutableAsset(response);
+    response.type("html").send(addBuildVersionToIndexHtml(html));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function collectHealthDetails({ deep = false } = {}) {
   const components = {
     storage: {
@@ -872,7 +913,7 @@ async function collectHealthDetails({ deep = false } = {}) {
     components.redis.enabled ? components.redis : null,
   ].filter(Boolean);
   const ok = required.every((component) => component.ok !== false);
-  return { ok, service: "magic-vibes-warehouse", time: new Date().toISOString(), components };
+  return { ok, service: "magic-vibes-warehouse", version: buildVersion, time: new Date().toISOString(), components };
 }
 
 app.get("/health", async (request, response) => {
@@ -932,7 +973,15 @@ app.get("/api/session", (request, response) => {
 });
 
 app.use(requireAuth);
-app.use(express.static(publicDir));
+app.get(["/", "/index.html"], serveIndexHtml);
+app.use(express.static(publicDir, {
+  setHeaders(response, filePath) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === ".js" || ext === ".css" || ext === ".html") {
+      cacheControlForMutableAsset(response);
+    }
+  },
+}));
 
 function cleanLimit(value, fallback = 100, max = 500) {
   const parsed = Number.parseInt(value, 10);
