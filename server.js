@@ -79,7 +79,6 @@ const autoSyncInitialDelaySeconds = Math.max(30, Number(process.env.AUTO_SYNC_IN
 const autoZeroStockOnNoSupplier = process.env.AUTO_ZERO_STOCK_ON_NO_SUPPLIER !== "false";
 const autoArchiveOnNoLinks = process.env.AUTO_ARCHIVE_ON_NO_LINKS === "true";
 const keepUnlinkedProductsSellable = process.env.KEEP_UNLINKED_PRODUCTS_SELLABLE !== "false";
-const noSupplierFreshLinkGraceMs = Math.max(0, Number(process.env.NO_SUPPLIER_FRESH_LINK_GRACE_MS || 10 * 60 * 1000) || 0);
 const autoRestoreOnSupplierReturn = process.env.AUTO_RESTORE_ON_SUPPLIER_RETURN !== "false";
 const bullmqEnabled = process.env.BULLMQ_ENABLED === "true";
 const redisUrl = cleanText(process.env.REDIS_URL);
@@ -14935,33 +14934,15 @@ function marketplaceProductNeedsSalesRecovery(product = {}, { includeUnknown = t
   return targetStock > 0 && !marketplaceHasPositiveStock(product);
 }
 
-function productHasFreshLinkMutation(product = {}, now = new Date()) {
-  if (!noSupplierFreshLinkGraceMs) return false;
-  const nowMs = toDateOrNull(now)?.getTime() || Date.now();
-  const times = (Array.isArray(product.links) ? product.links.flatMap((link) => [link.updatedAt, link.createdAt]) : [])
-    .map((value) => toDateOrNull(value)?.getTime() || 0)
-    .filter(Boolean);
-  if (!times.length) return false;
-  return nowMs - Math.max(...times) <= noSupplierFreshLinkGraceMs;
-}
-
 function pickNoSupplierAutomationCandidates(products = [], options = {}) {
   const list = Array.isArray(products) ? products : [];
-  const now = options.now || new Date();
-  const linkedNoSupplier = list.filter((product) => (
-    product.hasLinks
-    && !product.selectedSupplier
-    && !product.noSupplierAutomation?.manualSellableAt
-    && !productHasFreshLinkMutation(product, now)
-  ));
   const noLinkProducts = options.includeNoLinks
     && !keepUnlinkedProductsSellable
     ? list.filter((product) => !product.hasLinks && !product.noSupplierAutomation?.manualSellableAt)
     : [];
-  const noSupplierProducts = [...linkedNoSupplier, ...noLinkProducts];
   return {
     toZeroStock: autoZeroStockOnNoSupplier
-      ? noSupplierProducts.filter((product) => !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product))
+      ? noLinkProducts.filter((product) => !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product))
       : [],
     toArchive: autoArchiveOnNoLinks
       ? noLinkProducts.filter(

@@ -2879,12 +2879,11 @@ test("background automation scope combines marketplace changes and PriceMaster d
   assert.deepEqual(withPriceMaster.productIds, ["marketplace-change", "pm-change"]);
 });
 
-test("automation queues linked product for stock=0 when supplier disappeared", () => {
+test("automation does not zero linked product when supplier temporarily disappeared", () => {
   const { toZeroStock } = pickNoSupplierAutomationCandidates([
     { id: "linked-no-supplier", hasLinks: true, selectedSupplier: null, noSupplierAutomation: {}, marketplaceState: { code: "active" } },
   ]);
-  assert.equal(toZeroStock.length, 1);
-  assert.equal(toZeroStock[0].id, "linked-no-supplier");
+  assert.equal(toZeroStock.length, 0);
 });
 
 test("automation does not zero manually restored linked product", () => {
@@ -2909,7 +2908,7 @@ test("automation does not archive linked product without supplier", () => {
   assert.equal(toArchive.length, 0);
 });
 
-test("automation re-queues stock=0 when marketplace stock returned after prior zero", () => {
+test("automation does not re-queue stock=0 for linked product after prior zero", () => {
   const product = {
     id: "stock-returned",
     hasLinks: true,
@@ -2918,9 +2917,8 @@ test("automation re-queues stock=0 when marketplace stock returned after prior z
     marketplaceState: { stock: 2 },
   };
   assert.equal(marketplaceHasPositiveStock(product), true);
-  const { toZeroStock } = pickNoSupplierAutomationCandidates([product]);
-  assert.equal(toZeroStock.length, 1);
-  assert.equal(toZeroStock[0].id, "stock-returned");
+  const { toZeroStock } = pickNoSupplierAutomationCandidates([product], { includeNoLinks: true });
+  assert.equal(toZeroStock.length, 0);
 });
 
 test("Ozon stock payload targets configured warehouses and zeros all of them", async () => {
@@ -3362,6 +3360,6 @@ test("no-supplier automation does not archive linked products while supplier is 
   assert.equal(freshResult.toArchive.length, 0);
 
   const oldResult = pickNoSupplierAutomationCandidates([old], { includeNoLinks: true, now });
-  assert.equal(oldResult.toZeroStock.length, 1);
+  assert.equal(oldResult.toZeroStock.length, 0);
   assert.equal(oldResult.toArchive.length, 0);
 });
