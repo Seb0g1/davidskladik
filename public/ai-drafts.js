@@ -190,7 +190,7 @@ function renderRow(row = {}) {
 function renderRows() {
   els.list.innerHTML = rows.length
     ? rows.map(renderRow).join("")
-    : '<div class="empty-state">Нажмите “Найти товары” — сюда попадут карточки с качеством до выбранного порога.</div>';
+    : '<div class="empty-state">Пока нет локально сохранённых карточек ниже порога. Нажмите “Обновить качество из Яндекса”, чтобы загрузить свежие данные.</div>';
 }
 
 function replaceRow(nextRow) {
@@ -251,6 +251,17 @@ function failSearchProgress(message) {
   setSearchProgress(100, "Поиск остановлен", message || "ошибка");
 }
 
+async function loadCachedQuality() {
+  const threshold = Math.max(0, Math.min(100, Number(els.threshold?.value || 40) || 40));
+  const limit = Math.max(1, Math.min(50000, Number(els.limit?.value || 30000) || 30000));
+  els.status.textContent = "Показываю карточки до порога из локального кеша...";
+  const payload = await api(`/api/warehouse/yandex-quality-candidates?cached=1&threshold=${encodeURIComponent(threshold)}&limit=${encodeURIComponent(limit)}&resultLimit=500`);
+  rows = payload.products || [];
+  els.status.textContent = `Локально найдено ${payload.total || rows.length}; quality в кеше ${payload.qualityLoaded || 0}; товаров ${payload.checked || 0}`;
+  setSearchProgress(100, "Локальные карточки загружены", `найдено ${payload.total || rows.length} · quality ${payload.qualityLoaded || 0}`);
+  renderRows();
+}
+
 async function findLowQuality() {
   const threshold = Math.max(0, Math.min(100, Number(els.threshold?.value || 40) || 40));
   const limit = Math.max(1, Math.min(50000, Number(els.limit?.value || 30000) || 30000));
@@ -278,7 +289,17 @@ async function generateForProduct(productId) {
     button.textContent = "Генерирую...";
   }
   els.status.textContent = "Генерирую новый текст и 5 фото...";
+  startSearchProgress(5);
+  setSearchProgress(12, "Генерирую AI-текст", "затем 5 фото");
   try {
+    const progressStartedAt = Date.now();
+    stopSearchProgressTimer();
+    let percent = 18;
+    searchProgressTimer = window.setInterval(() => {
+      const seconds = Math.round((Date.now() - progressStartedAt) / 1000);
+      percent = Math.min(92, percent + 3);
+      setSearchProgress(percent, "Генерирую 5 фото к карточке", `${seconds} сек`);
+    }, 1000);
     const payload = await api(`/api/warehouse/products/${encodeURIComponent(productId)}/yandex-quality-draft/generate`, {
       method: "POST",
       body: { imagesCount: 5 },
@@ -286,10 +307,13 @@ async function generateForProduct(productId) {
     replaceRow(payload.row);
     renderRows();
     const errors = Array.isArray(payload.errors) ? payload.errors.length : 0;
+    stopSearchProgressTimer();
+    setSearchProgress(100, "Генерация завершена", `фото ${payload.imageDrafts?.length || 0}/5`);
     els.status.textContent = errors
       ? `Черновик создан частично: фото ${payload.imageDrafts?.length || 0}/5, ошибок ${errors}`
       : "Готово: создан новый текст и 5 фото.";
   } catch (error) {
+    failSearchProgress(error.message);
     els.status.textContent = `Ошибка генерации: ${error.message}`;
   } finally {
     if (button) button.disabled = false;
@@ -334,8 +358,8 @@ els.find?.addEventListener("click", () => {
 });
 
 els.refresh?.addEventListener("click", () => {
-  findLowQuality().catch((error) => {
-    els.status.textContent = `Ошибка обновления: ${error.message}`;
+  loadCachedQuality().catch((error) => {
+    els.status.textContent = `Ошибка локальной загрузки: ${error.message}`;
   });
 });
 
@@ -357,4 +381,7 @@ els.list?.addEventListener("click", (event) => {
   }
 });
 
-renderRows();
+loadCachedQuality().catch((error) => {
+  els.status.textContent = `Ошибка локальной загрузки: ${error.message}`;
+  renderRows();
+});

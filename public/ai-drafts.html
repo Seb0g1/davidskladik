@@ -30,10 +30,10 @@
             Проверить товаров
             <input id="qualityLimitInput" type="number" min="1" max="50000" step="100" value="30000" />
           </label>
-          <button id="findLowQualityButton" class="primary-button" type="button">Найти товары</button>
-          <button id="refreshDraftsButton" class="secondary-button" type="button">Обновить</button>
+          <button id="findLowQualityButton" class="primary-button" type="button">Обновить качество из Яндекса</button>
+          <button id="refreshDraftsButton" class="secondary-button" type="button">Показать локально</button>
         </div>
-        <div id="draftStatus" class="sync-status-pill">Готово к поиску</div>
+        <div id="draftStatus" class="sync-status-pill">Загружаю локальные карточки...</div>
         <div id="qualitySearchProgress" class="ai-search-progress" hidden>
           <div class="ai-search-progress-head">
             <strong id="qualitySearchProgressLabel">Ожидаю запуск</strong>
@@ -48,7 +48,7 @@
       <section class="panel import-list-panel">
         <div class="import-list-head">
           <h2>Карточки до порога</h2>
-          <p class="muted-text">По каждой карточке генерация запускается вручную. Отправка в Яндекс происходит только после нажатия “Отправить”.</p>
+          <p class="muted-text">Карточки до 40 показываются автоматически из последнего сохранённого качества. Обновление из Яндекса запускается отдельно.</p>
         </div>
         <div id="draftsList" class="history-list"></div>
       </section>

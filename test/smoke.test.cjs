@@ -2431,6 +2431,47 @@ test("normalizeWarehouseProduct preserves AI image draft review state", () => {
   assert.equal(product.aiImages[0].resultUrl, "http://localhost/uploads/ai-images/result.png");
 });
 
+test("AI quality candidates load cached low-quality cards without Yandex sync", async () => {
+  const agent = request.agent(app);
+  const smokeId = `smoke-yandex-quality-${Date.now()}`;
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: smokeId,
+        target: "yandex-qa",
+        marketplace: "yandex",
+        offerId: "LOW-QUALITY-40",
+        name: "Low Quality Yandex Product",
+        yandex: {
+          extra: {
+            cardQuality: {
+              contentRating: 35,
+              averageContentRating: 56,
+              recommendations: ["Add description", { text: "Add photos" }],
+            },
+          },
+        },
+      })
+      .expect(200);
+
+    const res = await agent
+      .get("/api/warehouse/yandex-quality-candidates?cached=1&threshold=40&limit=1000&resultLimit=20")
+      .expect(200);
+
+    assert.equal(res.body.cached, true);
+    assert.ok(res.body.qualityLoaded >= 1);
+    assert.ok(res.body.products.some((row) => row.product?.id === smokeId));
+  } finally {
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}`).expect(200);
+  }
+});
+
 test("AI image generation requires OpenAI key before creating draft", async () => {
   const settingsBackup = await backupFile(appSettingsPath);
   const agent = request.agent(app);

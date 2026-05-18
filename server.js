@@ -5292,15 +5292,31 @@ async function fetchOpenAiCompatibleImageGeneration(aiSettings, { prompt }) {
 }
 
 async function fetchCodexSaleImage(aiSettings, imageOptions) {
+  if (!imageOptions?.sourceBuffer) {
+    return fetchOpenAiCompatibleImageGeneration(aiSettings, imageOptions);
+  }
   try {
     return await fetchOpenAiCompatibleImageEdit(aiSettings, imageOptions);
   } catch (error) {
-    if (!isOpenAiRequestFormatError(error)) throw error;
-    logger.warn("codex sale image edit rejected request format, trying generation endpoint", {
+    if (isOpenAiBillingLimitError(error)) throw error;
+    logger.warn("codex sale image edit failed, trying generation endpoint", {
       detail: error?.message || String(error),
     });
     return fetchOpenAiCompatibleImageGeneration(aiSettings, imageOptions);
   }
+}
+
+async function fetchDirectOpenAiImageGeneration(client, aiSettings, prompt) {
+  const request = {
+    model: aiSettings.imageModel || openaiImageModel,
+    prompt,
+    size: aiSettings.imageSize || openaiImageSize,
+    response_format: "b64_json",
+  };
+  const quality = cleanText(aiSettings.imageQuality || openaiImageQuality);
+  if (quality && quality !== "auto") request.quality = quality;
+  const result = await client.images.generate(request);
+  return imageBase64FromOpenAiImageResult(result);
 }
 
 async function resizeOzonAiImageOutputBuffer(buffer, format) {
@@ -5417,13 +5433,62 @@ async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType, 
   }
 }
 
-async function generateOzonAiImageDraft(product, { prompt, sourceImageUrl, batchId, variantIndex = 1, variantTotal = 1 }, request) {
-  const sourceUrl = cleanText(sourceImageUrl) || firstImageUrl(product.ozon?.primaryImage || product.ozon?.images || product.imageUrl);
-  if (!sourceUrl) {
-    const error = new Error("Укажите исходное фото товара перед генерацией AI-изображения.");
-    error.statusCode = 400;
-    error.code = "source_image_required";
+async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, batchId, variantIndex = 1, variantTotal = 1 }, request) {
+  const aiSettings = await readEffectiveAiSettings();
+  assertImageGenerationConfigured(aiSettings);
+  const generatedPrompt = buildOzonAiImagePrompt(product, prompt, { variantIndex, variantTotal });
+  let imageBase64;
+  try {
+    if (isCodexSaleAiProvider(aiSettings)) {
+      imageBase64 = await fetchCodexSaleImage(aiSettings, { prompt: generatedPrompt });
+    } else {
+      const client = getOpenAiClient(aiSettings);
+      imageBase64 = await fetchDirectOpenAiImageGeneration(client, aiSettings, generatedPrompt);
+    }
+  } catch (error) {
+    throw normalizeOpenAiImageError(error);
+  }
+  if (!imageBase64) {
+    const error = new Error("OpenAI РЅРµ РІРµСЂРЅСѓР» РёР·РѕР±СЂР°Р¶РµРЅРёРµ. РџРѕРїСЂРѕР±СѓР№С‚Рµ РїРѕРІС‚РѕСЂРёС‚СЊ РіРµРЅРµСЂР°С†РёСЋ.");
+    error.statusCode = 502;
+    error.code = "openai_image_empty";
     throw error;
+  }
+
+  let outBuffer = Buffer.from(imageBase64, "base64");
+  outBuffer = await resizeOzonAiImageOutputBuffer(outBuffer, aiSettings.imageFormat || openaiImageFormat);
+
+  await fs.mkdir(aiImageDir, { recursive: true });
+  const extension = aiImageExtension(aiSettings.imageFormat || openaiImageFormat);
+  const fileName = `${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}${extension}`;
+  const filePath = path.join(aiImageDir, fileName);
+  await fs.writeFile(filePath, outBuffer);
+
+  const relativeUrl = `/uploads/ai-images/${fileName}`;
+  return normalizeAiImageDraft({
+    status: "pending",
+    prompt: generatedPrompt,
+    productName: product.name || product.ozon?.name,
+    sourceImageUrl: "",
+    resultUrl: `${uploadBaseUrl(request)}${relativeUrl}`,
+    batchId,
+    variantIndex,
+    variantTotal,
+    model: aiSettings.imageModel || openaiImageModel,
+    size: ozonAiImageStoredSizeLabel(aiSettings),
+    quality: aiSettings.imageQuality || openaiImageQuality,
+    format: aiSettings.imageFormat || openaiImageFormat,
+  });
+}
+
+async function generateOzonAiImageDraft(product, options = {}, request) {
+  const { prompt, sourceImageUrl, batchId, variantIndex = 1, variantTotal = 1 } = options;
+  const hasExplicitSource = Object.prototype.hasOwnProperty.call(options, "sourceImageUrl");
+  const sourceUrl = hasExplicitSource
+    ? cleanText(sourceImageUrl)
+    : (cleanText(sourceImageUrl) || firstImageUrl(product.ozon?.primaryImage || product.ozon?.images || product.imageUrl));
+  if (!sourceUrl) {
+    return generateOzonAiImageDraftFromPromptOnly(product, { prompt, batchId, variantIndex, variantTotal }, request);
   }
 
   const aiSettings = await readEffectiveAiSettings();
@@ -12051,14 +12116,39 @@ app.get("/api/warehouse/yandex-quality-candidates", requireAdmin, async (request
     const threshold = Math.max(0, Math.min(100, Math.round(Number(request.query.threshold ?? 40) || 40)));
     const limit = cleanLimit(request.query.limit, 30000, 50000);
     const resultLimit = cleanLimit(request.query.resultLimit, 300, 1000);
-    const shops = getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
-    if (!shops.length) return response.status(400).json({ error: "Yandex Market is not configured." });
-
     const warehouse = await readWarehouse();
     const yandexProducts = (warehouse.products || [])
       .map((product) => normalizeWarehouseProduct(product))
       .filter((product) => product.marketplace === "yandex" && cleanText(product.offerId))
       .slice(0, limit);
+
+    if (parseBooleanSetting(request.query.cached || request.query.cacheOnly, false)) {
+      const lowQuality = (warehouse.products || [])
+        .filter((product) => {
+          const normalized = normalizeWarehouseProduct(product);
+          const rating = Number(normalized.yandex?.extra?.cardQuality?.contentRating);
+          return normalized.marketplace === "yandex" && Number.isFinite(rating) && rating <= threshold;
+        })
+        .sort((a, b) => {
+          const qa = Number(normalizeWarehouseProduct(a).yandex?.extra?.cardQuality?.contentRating || 0);
+          const qb = Number(normalizeWarehouseProduct(b).yandex?.extra?.cardQuality?.contentRating || 0);
+          return qa - qb || String(a.offerId || "").localeCompare(String(b.offerId || ""));
+        });
+      return response.json({
+        ok: true,
+        cached: true,
+        threshold,
+        checked: yandexProducts.length,
+        qualityLoaded: (warehouse.products || []).filter((product) => Number.isFinite(Number(normalizeWarehouseProduct(product).yandex?.extra?.cardQuality?.contentRating))).length,
+        total: lowQuality.length,
+        errors: [],
+        products: lowQuality.slice(0, resultLimit).map(buildAiQualityReviewRow),
+      });
+    }
+
+    const shops = getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+    if (!shops.length) return response.status(400).json({ error: "Yandex Market is not configured." });
+
     const qualityByTargetOffer = new Map();
     const errors = [];
 
@@ -12165,7 +12255,7 @@ app.post("/api/warehouse/products/:id/yandex-quality-draft/generate", requireAdm
       try {
         const imageDraft = await generateOzonAiImageDraft(normalized, {
           prompt: `Create marketplace-ready product photo ${index} of ${count} for ${normalized.name || normalized.offerId}. Clean white studio background, realistic perfume or cosmetics product packshot, premium ecommerce lighting, no text overlays, no extra objects.`,
-          sourceImageUrl: request.body.sourceImageUrl || normalized.imageUrl,
+          sourceImageUrl: request.body.sourceImageUrl || "",
           batchId,
           variantIndex: index,
           variantTotal: count,
