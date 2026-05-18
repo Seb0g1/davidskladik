@@ -564,7 +564,7 @@ test("Yandex stock restore candidates ignore zero stock rows and dedupe by busin
   assert.ok(restoreProducts.every((item) => String(item.id || "").startsWith("yandex-")));
 });
 
-test("Yandex stock shops expand comma-separated campaign ids", () => {
+test("Yandex stock shops use only the configured stock campaign from comma-separated ids", () => {
   assert.deepEqual(parseYandexCampaignIds("128820967,149026853; 149079105 149079105"), [
     "128820967",
     "149026853",
@@ -577,10 +577,8 @@ test("Yandex stock shops expand comma-separated campaign ids", () => {
     businessId: "171782339",
     campaignId: "128820967,149026853",
   }]);
-  assert.equal(shops.length, 2);
+  assert.equal(shops.length, 1);
   assert.equal(shops[0].campaignId, "128820967");
-  assert.equal(shops[1].campaignId, "149026853");
-  assert.equal(shops[1].id, "yandex-main-149026853");
 });
 
 test("Yandex API error summary includes nested response details", () => {

@@ -101,6 +101,7 @@ const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 10000) || 10000));
 const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
+const yandexStockCampaignIds = new Set(parseYandexCampaignIds(process.env.YANDEX_STOCK_CAMPAIGN_IDS || "128820967"));
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const openaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
 const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1024x1024");
@@ -5492,7 +5493,12 @@ function yandexStockShops(shops = null) {
     id: index === 0 ? shop.id : `${shop.id}-${campaignId}`,
     name: index === 0 ? shop.name : `${shop.name || shop.id} #${campaignId}`,
     campaignId,
-  }))).filter((shop) => shop.apiKey && shop.businessId && shop.campaignId);
+  }))).filter((shop) => (
+    shop.apiKey
+    && shop.businessId
+    && shop.campaignId
+    && (!yandexStockCampaignIds.size || yandexStockCampaignIds.has(String(shop.campaignId)))
+  ));
 }
 
 function parseYandexCampaignIds(value) {
