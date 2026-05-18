@@ -2887,6 +2887,20 @@ test("automation queues linked product for stock=0 when supplier disappeared", (
   assert.equal(toZeroStock[0].id, "linked-no-supplier");
 });
 
+test("automation does not zero manually restored linked product", () => {
+  const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates([
+    {
+      id: "linked-manual-sellable",
+      hasLinks: true,
+      selectedSupplier: null,
+      noSupplierAutomation: { manualSellableAt: "2026-05-18T12:00:00.000Z" },
+      marketplaceState: { code: "active", stock: 3 },
+    },
+  ]);
+  assert.equal(toZeroStock.length, 0);
+  assert.equal(toArchive.length, 0);
+});
+
 test("automation does not archive linked product without supplier", () => {
   const { toArchive } = pickNoSupplierAutomationCandidates([
     { id: "candidate", hasLinks: true, selectedSupplier: null, noSupplierAutomation: { stockZeroAt: "2026-01-01T00:00:00.000Z" }, marketplaceState: { code: "inactive" } },

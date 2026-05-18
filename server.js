@@ -14856,6 +14856,7 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
   const linkedNoSupplier = list.filter((product) => (
     product.hasLinks
     && !product.selectedSupplier
+    && !product.noSupplierAutomation?.manualSellableAt
     && !productHasFreshLinkMutation(product, now)
   ));
   const noLinkProducts = options.includeNoLinks
@@ -15071,6 +15072,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     const status = statusById.get(productId);
     if (status?.sellable) {
       product.noSupplierAutomation.recoveredAt = now;
+      product.noSupplierAutomation.manualSellableAt = now;
       product.noSupplierAutomation.stockZeroAt = null;
       product.noSupplierAutomation.archivedAt = null;
       product.noSupplierAutomation.lastError = null;
