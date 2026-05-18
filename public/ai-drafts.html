@@ -34,6 +34,15 @@
           <button id="refreshDraftsButton" class="secondary-button" type="button">Обновить</button>
         </div>
         <div id="draftStatus" class="sync-status-pill">Готово к поиску</div>
+        <div id="qualitySearchProgress" class="ai-search-progress" hidden>
+          <div class="ai-search-progress-head">
+            <strong id="qualitySearchProgressLabel">Ожидаю запуск</strong>
+            <span id="qualitySearchProgressMeta">0%</span>
+          </div>
+          <div class="ai-search-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="qualitySearchProgressBar" class="ai-search-progress-bar"></div>
+          </div>
+        </div>
       </section>
 
       <section class="panel import-list-panel">

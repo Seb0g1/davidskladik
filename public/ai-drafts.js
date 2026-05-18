@@ -4,11 +4,17 @@ const els = {
   find: document.querySelector("#findLowQualityButton"),
   refresh: document.querySelector("#refreshDraftsButton"),
   status: document.querySelector("#draftStatus"),
+  progress: document.querySelector("#qualitySearchProgress"),
+  progressTrack: document.querySelector("#qualitySearchProgress .ai-search-progress-track"),
+  progressBar: document.querySelector("#qualitySearchProgressBar"),
+  progressLabel: document.querySelector("#qualitySearchProgressLabel"),
+  progressMeta: document.querySelector("#qualitySearchProgressMeta"),
   list: document.querySelector("#draftsList"),
 };
 
 let rows = [];
 const selectedPrimary = new Map();
+let searchProgressTimer = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -195,16 +201,71 @@ function replaceRow(nextRow) {
   else rows.unshift(nextRow);
 }
 
+function stopSearchProgressTimer() {
+  if (searchProgressTimer) {
+    window.clearInterval(searchProgressTimer);
+    searchProgressTimer = null;
+  }
+}
+
+function setSearchProgress(percent, label, meta = "") {
+  const safePercent = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+  if (els.progress) els.progress.hidden = false;
+  if (els.progressBar) els.progressBar.style.width = `${safePercent}%`;
+  if (els.progressTrack) els.progressTrack.setAttribute("aria-valuenow", String(safePercent));
+  if (els.progressLabel) els.progressLabel.textContent = label;
+  if (els.progressMeta) els.progressMeta.textContent = meta || `${safePercent}%`;
+}
+
+function startSearchProgress(limit) {
+  stopSearchProgressTimer();
+  let percent = 4;
+  const startedAt = Date.now();
+  setSearchProgress(percent, "Готовлю запрос к Yandex Market", `до ${limit} товаров`);
+  searchProgressTimer = window.setInterval(() => {
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    if (percent < 28) {
+      percent += 4;
+      setSearchProgress(percent, "Отправляю список артикулов в Яндекс", `${seconds} сек`);
+    } else if (percent < 68) {
+      percent += 2;
+      setSearchProgress(percent, "Загружаю качество карточек", `${seconds} сек`);
+    } else {
+      percent = Math.min(92, percent + 1);
+      setSearchProgress(percent, "Обрабатываю найденные карточки", `${seconds} сек`);
+    }
+  }, 700);
+}
+
+function finishSearchProgress(payload = {}) {
+  stopSearchProgressTimer();
+  setSearchProgress(
+    100,
+    "Поиск завершён",
+    `найдено ${payload.total || 0} · quality ${payload.qualityLoaded || 0} · проверено ${payload.checked || 0}`,
+  );
+}
+
+function failSearchProgress(message) {
+  stopSearchProgressTimer();
+  setSearchProgress(100, "Поиск остановлен", message || "ошибка");
+}
+
 async function findLowQuality() {
   const threshold = Math.max(0, Math.min(100, Number(els.threshold?.value || 40) || 40));
   const limit = Math.max(1, Math.min(50000, Number(els.limit?.value || 30000) || 30000));
   els.status.textContent = "Загружаю качество карточек из Яндекса...";
   els.find.disabled = true;
+  startSearchProgress(limit);
   try {
     const payload = await api(`/api/warehouse/yandex-quality-candidates?threshold=${encodeURIComponent(threshold)}&limit=${encodeURIComponent(limit)}&resultLimit=500`);
     rows = payload.products || [];
     els.status.textContent = `Найдено ${payload.total || rows.length}; качество загружено ${payload.qualityLoaded || 0}; проверено ${payload.checked || 0}`;
+    finishSearchProgress(payload);
     renderRows();
+  } catch (error) {
+    failSearchProgress(error.message);
+    throw error;
   } finally {
     els.find.disabled = false;
   }
