@@ -3867,6 +3867,25 @@ td {
   gap: 10px;
 }
 
+.ai-draft-item {
+  align-items: start;
+}
+
+.ai-draft-item .ai-inline-preview {
+  width: min(180px, 100%);
+  min-height: 0;
+  max-height: 180px;
+  margin: 10px 0;
+  object-fit: contain;
+}
+
+.history-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .ai-inline-thumb {
   min-width: 0;
   display: grid;

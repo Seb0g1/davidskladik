@@ -3,10 +3,13 @@ const els = {
   sendLimit: document.querySelector("#operationSendLimitInput"),
   restoreStock: document.querySelector("#operationRestoreStockInput"),
   restoreMarketplace: document.querySelector("#operationRestoreMarketplaceSelect"),
+  qualityThreshold: document.querySelector("#operationQualityThresholdInput"),
+  draftLimit: document.querySelector("#operationDraftLimitInput"),
   startImport: document.querySelector("#startYandexImportJobButton"),
   startStocks: document.querySelector("#startYandexStockJobButton"),
   startLinkedRecovery: document.querySelector("#startLinkedRecoveryJobButton"),
   startRestoreArchived: document.querySelector("#startRestoreArchivedJobButton"),
+  startYandexQuality: document.querySelector("#startYandexQualityJobButton"),
   startHealth: document.querySelector("#startHealthJobButton"),
   refresh: document.querySelector("#refreshOperationsButton"),
   status: document.querySelector("#operationStatus"),
@@ -69,6 +72,9 @@ function jobSummary(job = {}) {
   if (Number.isFinite(Number(result.unarchived))) parts.push(`разархивировано ${result.unarchived}`);
   if (Number.isFinite(Number(result.unarchiveFailed)) && Number(result.unarchiveFailed) > 0) parts.push(`ошибки разархива ${result.unarchiveFailed}`);
   if (Number.isFinite(Number(result.stockFailed)) && Number(result.stockFailed) > 0) parts.push(`ошибки остатков ${result.stockFailed}`);
+  if (Number.isFinite(Number(result.qualityLoaded))) parts.push(`quality ${result.qualityLoaded}`);
+  if (Number.isFinite(Number(result.lowQuality))) parts.push(`ниже порога ${result.lowQuality}`);
+  if (Number.isFinite(Number(result.draftsCreated))) parts.push(`AI drafts ${result.draftsCreated}`);
   if (Number.isFinite(Number(result.skippedByLimit))) parts.push(`следующий запуск ${result.skippedByLimit}`);
   if (result.ok === false && job.error) parts.push(job.error);
   return parts.join(" · ") || job.summary || job.error || "";
@@ -121,6 +127,8 @@ async function startJob(type) {
   const restoreMarketplace = ["yandex", "ozon", "all"].includes(els.restoreMarketplace?.value)
     ? els.restoreMarketplace.value
     : "yandex";
+  const threshold = Math.max(0, Math.min(100, Number(els.qualityThreshold?.value || 40) || 40));
+  const draftLimit = Math.max(0, Math.min(100, Number(els.draftLimit?.value || 20) || 20));
   els.status.textContent = "Ставлю задачу в фон...";
   const payload = type === "yandex-import-send"
     ? { limit, sendLimit }
@@ -130,7 +138,9 @@ async function startJob(type) {
         ? { limit }
         : type === "restore-archived-stock"
           ? { limit, stock: restoreStock, marketplace: restoreMarketplace }
-        : {};
+          : type === "yandex-card-quality-ai-drafts"
+            ? { limit, threshold, draftLimit, generateImages: true }
+            : {};
   const result = await api("/api/operations", {
     method: "POST",
     body: { type, payload },
@@ -166,6 +176,12 @@ els.startLinkedRecovery?.addEventListener("click", () => {
 els.startRestoreArchived?.addEventListener("click", () => {
   startJob("restore-archived-stock").catch((error) => {
     els.status.textContent = `Не удалось запустить восстановление архива: ${error.message}`;
+  });
+});
+
+els.startYandexQuality?.addEventListener("click", () => {
+  startJob("yandex-card-quality-ai-drafts").catch((error) => {
+    els.status.textContent = `Не удалось запустить Yandex quality AI drafts: ${error.message}`;
   });
 });
 
