@@ -3378,18 +3378,10 @@ async function getYandexPriceMap(shop, offerIds) {
 async function getYandexOfferIdSet(shop, offerIds) {
   const set = new Set();
 
-  for (const chunk of chunkArray(offerIds, 100)) {
-    const data = await yandexRequest(
-      shop,
-      "POST",
-      `/v2/businesses/${shop.businessId}/offer-mappings`,
-      { offerIds: chunk },
-    );
-
-    for (const item of data.result?.offerMappings || data.result?.offers || data.offerMappings || []) {
-      const offerId = item.offer?.offerId || item.offerId || item.mapping?.offerId;
-      if (offerId) set.add(offerId);
-    }
+  const mappings = await getYandexOfferMappingsByOfferIds(shop, offerIds);
+  for (const item of mappings) {
+    const offerId = yandexOfferIdFromMapping(item);
+    if (offerId) set.add(offerId);
   }
 
   return set;
@@ -4088,6 +4080,28 @@ async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY, op
   }
 
   return items.slice(0, maxItems);
+}
+
+async function getYandexOfferMappingsByOfferIds(shop, offerIds = [], options = {}) {
+  const ids = [...new Set((Array.isArray(offerIds) ? offerIds : [])
+    .map(cleanText)
+    .filter(Boolean))];
+  const items = [];
+  if (!ids.length) return items;
+
+  for (const chunk of chunkArray(ids, 100)) {
+    const body = { offerIds: chunk };
+    if (options.archived === true || options.archived === false) body.archived = options.archived;
+    const data = await yandexRequest(
+      shop,
+      "POST",
+      `/v2/businesses/${shop.businessId}/offer-mappings`,
+      body,
+    );
+    items.push(...(data.result?.offerMappings || data.result?.offers || data.offerMappings || []));
+  }
+
+  return items;
 }
 
 function yandexOfferIdFromMapping(item = {}) {
@@ -14823,6 +14837,89 @@ async function unarchiveProductsOnMarketplaces(products = []) {
   return actions;
 }
 
+async function verifyYandexUnarchiveActions(products = [], actions = [], options = {}) {
+  const verified = (Array.isArray(actions) ? actions : []).map((action) => ({ ...action }));
+  const productsById = new Map((Array.isArray(products) ? products : [])
+    .map((product) => [String(product.id), product]));
+  const pendingByTarget = new Map();
+  for (const action of verified) {
+    if (!action?.ok || action.type !== "unarchive") continue;
+    const product = productsById.get(String(action.id));
+    if (!product || product.marketplace !== "yandex") continue;
+    const offerId = cleanText(action.offerId || product.offerId);
+    const target = cleanText(action.target || product.target);
+    if (!offerId || !target) continue;
+    const key = target;
+    if (!pendingByTarget.has(key)) pendingByTarget.set(key, []);
+    pendingByTarget.get(key).push({ action, offerId });
+  }
+  if (!pendingByTarget.size) return verified;
+
+  const attempts = Math.max(1, Math.min(5, Math.round(Number(options.attempts || process.env.YANDEX_UNARCHIVE_VERIFY_ATTEMPTS || 3) || 3)));
+  const delayMs = Math.max(0, Math.min(10000, Math.round(Number(options.delayMs ?? process.env.YANDEX_UNARCHIVE_VERIFY_DELAY_MS ?? 1500) || 1500)));
+  const activeOfferIds = new Set();
+  const archivedOfferIds = new Set();
+  const failedTargets = new Map();
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    activeOfferIds.clear();
+    archivedOfferIds.clear();
+    failedTargets.clear();
+
+    for (const [target, rows] of pendingByTarget.entries()) {
+      const shop = getYandexShopByTarget(target);
+      if (!shop) {
+        failedTargets.set(target, "shop_not_found");
+        continue;
+      }
+      const offerIds = rows.map((row) => row.offerId);
+      try {
+        const [activeMappings, archivedMappings] = await Promise.all([
+          getYandexOfferMappingsByOfferIds(shop, offerIds, { archived: false }),
+          getYandexOfferMappingsByOfferIds(shop, offerIds, { archived: true }),
+        ]);
+        for (const item of activeMappings) {
+          const offerId = yandexOfferIdFromMapping(item).toLowerCase();
+          if (offerId) activeOfferIds.add(`${target}:${offerId}`);
+        }
+        for (const item of archivedMappings) {
+          const offerId = yandexOfferIdFromMapping(item).toLowerCase();
+          if (offerId) archivedOfferIds.add(`${target}:${offerId}`);
+        }
+      } catch (error) {
+        failedTargets.set(target, error?.message || "yandex_unarchive_verify_failed");
+      }
+    }
+
+    const remaining = [];
+    for (const [target, rows] of pendingByTarget.entries()) {
+      for (const row of rows) {
+        const key = `${target}:${row.offerId.toLowerCase()}`;
+        if (!activeOfferIds.has(key)) remaining.push(row);
+      }
+    }
+    if (!remaining.length) break;
+    if (attempt < attempts && delayMs > 0) await sleep(delayMs);
+  }
+
+  for (const [target, rows] of pendingByTarget.entries()) {
+    const targetError = failedTargets.get(target);
+    for (const row of rows) {
+      const key = `${target}:${row.offerId.toLowerCase()}`;
+      if (activeOfferIds.has(key)) {
+        row.action.verified = true;
+        continue;
+      }
+      row.action.ok = false;
+      row.action.verified = false;
+      row.action.error = targetError
+        || (archivedOfferIds.has(key) ? "still_archived_after_unarchive" : "unarchive_not_visible_after_api");
+    }
+  }
+
+  return verified;
+}
+
 function marketplaceHasPositiveStock(product = {}) {
   const state = product.marketplaceState || {};
   if (Number(state.stock || 0) > 0 || Number(state.present || 0) > 0) return true;
@@ -15053,8 +15150,13 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     });
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [], source };
   }
-  const unarchiveActions = await unarchiveProductsOnMarketplaces(recovered);
-  const stockActions = await restoreStocksOnMarketplaces(recovered);
+  const firstStockActions = await restoreStocksOnMarketplaces(recovered);
+  const unarchiveActions = await verifyYandexUnarchiveActions(
+    recovered,
+    await unarchiveProductsOnMarketplaces(recovered),
+  );
+  const secondStockActions = await restoreStocksOnMarketplaces(recovered);
+  const stockActions = [...firstStockActions, ...secondStockActions];
   const productStatuses = summarizeSupplierRecoveryProducts(recovered, stockActions, unarchiveActions);
   const warehouse = await readWarehouse();
   const now = new Date().toISOString();
