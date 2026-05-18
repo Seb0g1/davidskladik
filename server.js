@@ -8766,6 +8766,10 @@ function isWarehouseArticleLikeQuery(query) {
   return /\d/.test(text) || /[\-_/\\#№]/.test(text);
 }
 
+function isWarehouseStrictIdentitySearch(filters = {}) {
+  return isWarehouseArticleLikeQuery(filters.q || "");
+}
+
 function warehouseProductSearchIdentityTokens(product = {}) {
   const links = Array.isArray(product.links) ? product.links : [];
   return [
@@ -8888,7 +8892,6 @@ function warehousePagePostgresWhere(filters = {}) {
           { offerId: { equals: q, mode: "insensitive" } },
           { productId: { equals: q, mode: "insensitive" } },
           { links: { some: { supplierArticle: { equals: q, mode: "insensitive" } } } },
-          { links: { some: { partnerId: { equals: q, mode: "insensitive" } } } },
         ],
       });
     } else {
@@ -9125,6 +9128,7 @@ async function buildFastWarehousePageFromPostgres({
   const linkedFilter = cleanText(filters.linked || "all");
   const needsComputedLinkFilter = linkedFilter === "ready" || linkedFilter === "changed" || linkedFilter === "linked_archived";
   const needsDeepBrandFilter = Boolean(cleanText(filters.brand || ""));
+  const strictIdentitySearch = isWarehouseStrictIdentitySearch(filters);
   const where = warehousePagePostgresWhere(needsDeepBrandFilter || needsComputedLinkFilter ? { ...filters, brand: "", state: "all" } : filters);
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
@@ -9142,7 +9146,7 @@ async function buildFastWarehousePageFromPostgres({
   pageTrace("postgres:after-query", traceStartedAt);
   let dbRows = initialDbRows;
   let pageBaseCount = dbRows.length;
-  if (!needsDeepBrandFilter && !needsComputedLinkFilter) {
+  if (!needsDeepBrandFilter && !needsComputedLinkFilter && !strictIdentitySearch) {
     dbRows = await addWarehousePostgresPageGroupSiblings(prisma, where, dbRows);
   }
   const normalizedSuppliers = summary.normalizedSuppliers;
@@ -9163,7 +9167,7 @@ async function buildFastWarehousePageFromPostgres({
   if (needsDeepBrandFilter || needsComputedLinkFilter) {
     const pageSlice = allProducts.slice(offset, offset + pageSize);
     pageBaseCount = pageSlice.length;
-    visibleProducts = addWarehousePageGroupSiblings(allProducts, pageSlice);
+    visibleProducts = strictIdentitySearch ? pageSlice : addWarehousePageGroupSiblings(allProducts, pageSlice);
   }
   const pageProducts = await enrichWeakOzonProductsForPage(visibleProducts);
   const pageWarehouse = {
@@ -9388,7 +9392,10 @@ async function buildFastWarehousePage({
   const total = filtered.length;
   const offset = (page - 1) * pageSize;
   const pageSlice = filtered.slice(offset, offset + pageSize);
-  const pageProducts = await enrichWeakOzonProductsForPage(addWarehousePageGroupSiblings(filtered, pageSlice));
+  const strictIdentitySearch = isWarehouseStrictIdentitySearch(filters);
+  const pageProducts = await enrichWeakOzonProductsForPage(
+    strictIdentitySearch ? pageSlice : addWarehousePageGroupSiblings(filtered, pageSlice),
+  );
   const built = await buildFreshWarehouseProductsForWarehouse(
     { ...warehouse, products: pageProducts },
     pageProducts.map((product) => product.id),
@@ -12994,22 +13001,33 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
     || Boolean(product.noSupplierAutomation?.stockZeroAt)
     || Boolean(product.noSupplierAutomation?.archivedAt)
   ));
+  const notReady = candidates.length - ready.length;
+  const alreadySellable = Math.max(0, ready.length - needsRecovery.length);
   const result = await runSupplierRecoveryAutomation(
     { products: needsRecovery },
     { productIds: needsRecovery.map((product) => product.id), source: "targeted", force: true },
   );
+  const sellableRecovered = Number(result.sellableRecovered || 0);
+  const unarchiveFailed = Number(result.unarchiveFailed || 0);
+  const stockFailed = Number(result.stockFailed || 0);
   return {
     ok: result.errors?.length ? false : true,
     partial: Boolean(result.errors?.length && (result.recovered || result.restoredStocks || result.unarchived)),
     scanned: Math.min(limit, (warehouse.products || []).length),
     candidates: candidates.length,
     ready: ready.length,
+    notReady,
+    alreadySellable,
     needsRecovery: needsRecovery.length,
     recovered: result.recovered || 0,
+    sellableRecovered,
     restoredStocks: result.restoredStocks || 0,
     unarchived: result.unarchived || 0,
+    unarchiveFailed,
+    stockFailed,
     errors: result.errors || [],
-    summary: `Проверено ${candidates.length}; готово к продаже ${ready.length}; нужно восстановить ${needsRecovery.length}; восстановлено ${result.recovered || 0}.`,
+    productStatuses: result.productStatuses || [],
+    summary: `Проверено ${candidates.length}; с доступным поставщиком ${ready.length}; уже продавались ${alreadySellable}; нужно восстановить ${needsRecovery.length}; полностью восстановлено ${sellableRecovered}; без поставщика ${notReady}; ошибки разархива ${unarchiveFailed}; ошибки остатков ${stockFailed}.`,
   };
 }
 
@@ -14153,6 +14171,39 @@ function summarizeNoSupplierAutomationProducts(products = [], actions = []) {
   });
 }
 
+function summarizeSupplierRecoveryProducts(products = [], stockActions = [], unarchiveActions = []) {
+  const actionsByProduct = new Map();
+  for (const action of [...stockActions, ...unarchiveActions]) {
+    if (!action?.id) continue;
+    const id = String(action.id);
+    if (!actionsByProduct.has(id)) actionsByProduct.set(id, []);
+    actionsByProduct.get(id).push(action);
+  }
+  return (Array.isArray(products) ? products : []).map((product) => {
+    const productActions = actionsByProduct.get(String(product.id)) || [];
+    const stock = productActions.filter((action) => action.type === "restore_stock");
+    const unarchive = productActions.filter((action) => action.type === "unarchive");
+    const stockOk = stock.filter((action) => action.ok).length;
+    const stockFailed = stock.filter((action) => !action.ok).length;
+    const unarchiveOk = unarchive.filter((action) => action.ok).length;
+    const unarchiveFailed = unarchive.filter((action) => !action.ok).length;
+    const failed = productActions.find((action) => !action.ok);
+    return {
+      id: product.id,
+      offerId: product.offerId || "",
+      marketplace: product.marketplace || "",
+      target: product.target || "",
+      stockOk,
+      stockFailed,
+      unarchiveOk,
+      unarchiveFailed,
+      sellable: stockOk > 0 && stockFailed === 0 && unarchiveFailed === 0,
+      status: failed ? "error" : (stockOk > 0 ? "sellable" : "no_action"),
+      error: failed?.error || null,
+    };
+  });
+}
+
 async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
   const products = Array.isArray(preview?.products) ? preview.products : [];
   const now = new Date().toISOString();
@@ -14254,23 +14305,30 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   }
   const unarchiveActions = await unarchiveProductsOnMarketplaces(recovered);
   const stockActions = await restoreStocksOnMarketplaces(recovered);
+  const productStatuses = summarizeSupplierRecoveryProducts(recovered, stockActions, unarchiveActions);
   const warehouse = await readWarehouse();
   const now = new Date().toISOString();
   const recoveredIds = new Set(recovered.map((item) => String(item.id)));
+  const sellableIds = new Set(productStatuses.filter((item) => item.sellable).map((item) => String(item.id)));
+  const statusById = new Map(productStatuses.map((item) => [String(item.id), item]));
   const restoredStockById = new Map(stockActions
     .filter((item) => item.ok)
     .map((item) => [String(item.id), Math.max(1, Math.round(Number(item.stock || 1)))]));
-  const unarchivedIds = new Set(unarchiveActions.filter((item) => item.ok).map((item) => String(item.id)));
   const changedProducts = [];
   for (const product of warehouse.products) {
     const productId = String(product.id);
     if (!recoveredIds.has(productId)) continue;
     product.noSupplierAutomation = product.noSupplierAutomation || {};
-    product.noSupplierAutomation.recoveredAt = now;
-    product.noSupplierAutomation.stockZeroAt = null;
-    product.noSupplierAutomation.archivedAt = null;
-    product.noSupplierAutomation.lastError = null;
-    if (restoredStockById.has(productId) || unarchivedIds.has(productId)) {
+    const status = statusById.get(productId);
+    if (status?.sellable) {
+      product.noSupplierAutomation.recoveredAt = now;
+      product.noSupplierAutomation.stockZeroAt = null;
+      product.noSupplierAutomation.archivedAt = null;
+      product.noSupplierAutomation.lastError = null;
+    } else if (status?.error) {
+      product.noSupplierAutomation.lastError = status.error;
+    }
+    if (sellableIds.has(productId)) {
       product.marketplaceState = {
         ...(product.marketplaceState || {}),
         code: "active",
@@ -14308,15 +14366,22 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     source,
     products: products.length,
     recovered: recovered.length,
+    sellableRecovered: sellableIds.size,
     restoredStocks: stockActions.filter((item) => item.ok).length,
     unarchived: unarchiveActions.filter((item) => item.ok).length,
+    stockFailed: stockActions.filter((item) => !item.ok).length,
+    unarchiveFailed: unarchiveActions.filter((item) => !item.ok).length,
     errors: errors.length,
   });
   return {
     recovered: recovered.length,
+    sellableRecovered: sellableIds.size,
     restoredStocks: stockActions.filter((item) => item.ok).length,
     unarchived: unarchiveActions.filter((item) => item.ok).length,
+    stockFailed: stockActions.filter((item) => !item.ok).length,
+    unarchiveFailed: unarchiveActions.filter((item) => !item.ok).length,
     errors,
+    productStatuses,
     source,
   };
 }
@@ -14771,6 +14836,7 @@ module.exports = {
   writeWarehouse,
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
+  warehousePagePostgresWhere,
   addWarehousePageGroupSiblings,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,

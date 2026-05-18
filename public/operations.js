@@ -56,8 +56,15 @@ function jobSummary(job = {}) {
   if (Number.isFinite(Number(result.sent))) parts.push(`карточки ${result.sent}/${result.failed || 0}`);
   if (Number.isFinite(Number(result.priceSent))) parts.push(`цены ${result.priceSent}/${result.priceFailed || 0}`);
   if (Number.isFinite(Number(result.stockSent))) parts.push(`остатки ${result.stockSent}/${result.stockFailed || 0}`);
+  if (Number.isFinite(Number(result.candidates))) parts.push(`привязанных ${result.candidates}`);
+  if (Number.isFinite(Number(result.ready))) parts.push(`с поставщиком ${result.ready}`);
+  if (Number.isFinite(Number(result.alreadySellable))) parts.push(`уже продавались ${result.alreadySellable}`);
+  if (Number.isFinite(Number(result.needsRecovery))) parts.push(`нужно восстановить ${result.needsRecovery}`);
   if (Number.isFinite(Number(result.recovered))) parts.push(`восстановлено ${result.recovered}`);
+  if (Number.isFinite(Number(result.sellableRecovered))) parts.push(`готовы к продаже ${result.sellableRecovered}`);
   if (Number.isFinite(Number(result.unarchived))) parts.push(`разархивировано ${result.unarchived}`);
+  if (Number.isFinite(Number(result.unarchiveFailed)) && Number(result.unarchiveFailed) > 0) parts.push(`ошибки разархива ${result.unarchiveFailed}`);
+  if (Number.isFinite(Number(result.stockFailed)) && Number(result.stockFailed) > 0) parts.push(`ошибки остатков ${result.stockFailed}`);
   if (Number.isFinite(Number(result.skippedByLimit))) parts.push(`следующий запуск ${result.skippedByLimit}`);
   if (result.ok === false && job.error) parts.push(job.error);
   return parts.join(" · ") || job.error || "";
@@ -70,8 +77,11 @@ function jobWarnings(job = {}) {
 
 function jobFailedRows(job = {}) {
   const result = job.result || {};
-  return (Array.isArray(result.results) ? result.results : [])
-    .filter((item) => item && item.ok === false)
+  const rows = Array.isArray(result.results)
+    ? result.results
+    : (Array.isArray(result.productStatuses) ? result.productStatuses : []);
+  return rows
+    .filter((item) => item && (item.ok === false || item.status === "error"))
     .slice(0, 8);
 }
 

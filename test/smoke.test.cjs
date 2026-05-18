@@ -68,6 +68,7 @@ const {
   productFromPostgres,
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
+  warehousePagePostgresWhere,
   addWarehousePageGroupSiblings,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
@@ -1590,7 +1591,15 @@ test("warehouse page search matches supplier link fields", () => {
   assert.equal(warehousePageProductMatches(product, { q: "pm-link-777" }), true);
   assert.equal(warehousePageProductMatches(product, { q: "special supplier" }), true);
   assert.equal(warehousePageProductMatches(product, { q: "amber" }), true);
+  assert.equal(warehousePageProductMatches(product, { q: "991" }), false);
   assert.equal(warehousePageProductMatches(product, { q: "missing-query" }), false);
+});
+
+test("warehouse page article search does not treat supplier partner id as product article", () => {
+  const where = warehousePagePostgresWhere({ q: "991" });
+  const serialized = JSON.stringify(where);
+  assert.equal(serialized.includes("supplierArticle"), true);
+  assert.equal(serialized.includes("partnerId"), false);
 });
 
 test("POST /api/login неверный пароль", async () => {
