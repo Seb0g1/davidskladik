@@ -1979,6 +1979,40 @@ test("PUT /api/settings saves AI provider settings without exposing API key", as
   }
 });
 
+test("AI settings test error does not mention Price Master", async () => {
+  const backup = await backupFile(appSettingsPath);
+  const previousKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  const agent = request.agent(app);
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    const res = await agent
+      .post("/api/settings/ai/test")
+      .send({
+        ai: {
+          enabled: true,
+          providerId: "codexsale",
+          baseUrl: "https://codex.sale/v1",
+          apiKeySet: false,
+          apiKey: "",
+          textModel: "gpt-5.4-mini",
+        },
+      })
+      .expect(400);
+
+    assert.match(res.body.error, /AI/);
+    assert.doesNotMatch(`${res.body.error} ${res.body.detail}`, /Price Master/i);
+  } finally {
+    if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
+    else process.env.OPENAI_API_KEY = previousKey;
+    await restoreFile(appSettingsPath, backup);
+  }
+});
+
 test("resolveMarkupCoefficient applies threshold >= 10 USD", () => {
   const value = resolveMarkupCoefficient({
     productMarkup: 0,

@@ -4474,13 +4474,14 @@ function normalizeAvailabilityRule(input = {}) {
 
 function normalizeAiSettings(input = {}, fallback = defaultAppSettings().ai) {
   const raw = input && typeof input === "object" ? input : {};
+  const hasApiKey = Object.prototype.hasOwnProperty.call(raw, "apiKey") || Object.prototype.hasOwnProperty.call(raw, "api_key");
   const imageModel = cleanText(raw.imageModel || raw.image_model || fallback.imageModel || openaiImageModel);
   const imageFormat = cleanText(raw.imageFormat || raw.image_format || fallback.imageFormat || openaiImageFormat).toLowerCase();
   const imageSize = cleanText(raw.imageSize || raw.image_size || fallback.imageSize || openaiImageSize);
   const imageQuality = cleanText(raw.imageQuality || raw.image_quality || fallback.imageQuality || openaiImageQuality);
   const textModel = cleanText(raw.textModel || raw.text_model || fallback.textModel || openaiTextModel);
   const baseUrl = cleanText(raw.baseUrl || raw.base_url || fallback.baseUrl || openaiBaseUrl);
-  const apiKey = cleanText(raw.apiKey || raw.api_key || fallback.apiKey);
+  const apiKey = hasApiKey ? cleanText(raw.apiKey ?? raw.api_key ?? "") : cleanText(fallback.apiKey);
   return {
     enabled: parseBooleanSetting(raw.enabled, fallback.enabled !== false),
     providerId: cleanText(raw.providerId || raw.provider_id || fallback.providerId || "codexsale"),
@@ -5059,6 +5060,9 @@ function normalizeOpenAiImageError(error) {
     billingError.statusCode = 402;
     billingError.code = "openai_billing_limit";
     return billingError;
+  }
+  if (error && Number.isFinite(Number(error.status)) && !Number.isFinite(Number(error.statusCode))) {
+    error.statusCode = Number(error.status);
   }
   return error;
 }
@@ -10823,9 +10827,10 @@ app.post("/api/settings/ai/test", requireAdmin, async (request, response, next) 
     const previous = await readAppSettings();
     const rawAi = request.body?.ai || previous.ai || {};
     const incomingKey = cleanText(rawAi.apiKey || rawAi.api_key);
+    const clearKey = rawAi.clearApiKey === true || rawAi.apiKeySet === false;
     const ai = normalizeAiSettings({
       ...rawAi,
-      apiKey: (!incomingKey || incomingKey === maskedSecretValue) ? previous.ai?.apiKey || "" : incomingKey,
+      apiKey: clearKey ? "" : ((!incomingKey || incomingKey === maskedSecretValue) ? previous.ai?.apiKey || "" : incomingKey),
     }, previous.ai || defaultAppSettings().ai);
     const effective = effectiveAiSettingsFromAppSettings({ ...previous, ai });
     assertTextGenerationConfigured(effective);
@@ -15372,6 +15377,23 @@ app.post("/api/warehouse/sync/run", requireAdmin, async (_request, response, nex
   }
 });
 
+function requestErrorTitle(error, request) {
+  if (error instanceof multer.MulterError) return "Не удалось загрузить изображение";
+  const pathName = cleanText(request?.path).toLowerCase();
+  const code = cleanText(error?.code).toLowerCase();
+  if (
+    pathName.includes("/ai/")
+    || pathName.includes("/ai-")
+    || pathName.includes("/settings/ai")
+    || code.startsWith("openai")
+  ) return "AI запрос не выполнен";
+  if (pathName.includes("pricemaster")) return "Не удалось выполнить запрос к Price Master";
+  if (pathName.includes("ozon") || pathName.includes("yandex") || pathName.includes("marketplace")) {
+    return "Не удалось выполнить запрос к маркетплейсу";
+  }
+  return "Не удалось выполнить запрос";
+}
+
 app.use((error, request, response, _next) => {
   logger.error("request error", {
     path: request.path,
@@ -15383,7 +15405,7 @@ app.use((error, request, response, _next) => {
   });
   const uploadError = error instanceof multer.MulterError;
   response.status(uploadError ? 400 : error.statusCode || 500).json({
-    error: uploadError ? "Не удалось загрузить изображение" : "Не удалось выполнить запрос к Price Master",
+    error: requestErrorTitle(error, request),
     detail: error.statusCode ? error.message : (error.code || error.message),
     code: error.code || null,
     matches: error.matches || undefined,
