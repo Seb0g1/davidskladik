@@ -8332,7 +8332,9 @@ async function findPriceMasterRowsForLinkFast(linkInput, usdRate, managedSupplie
   if (!warehouseLinkHasMatchTarget(link)) return [];
   const key = priceMasterLinkLookupCacheKey(link, usdRate);
   const cached = priceMasterLinkLookupCache.get(key);
-  if (cached && Date.now() - cached.at < priceMasterLinkLookupCacheTtlMs) return cached.rows;
+  if (cached && Date.now() - cached.at < priceMasterLinkLookupCacheTtlMs) {
+    if (cached.rows.length || options.live === false) return cached.rows;
+  }
 
   const snapshotMap = await getPriceMasterMatchesForLinks([link], managedSuppliers, usdRate).catch((error) => {
     logger.warn("PriceMaster snapshot link lookup skipped", { detail: error?.message || String(error) });
@@ -8368,7 +8370,7 @@ async function findPriceMasterRowsForLinkFast(linkInput, usdRate, managedSupplie
       matchType: link.matchType,
       detail: error?.message || String(error),
     });
-    setPriceMasterLinkLookupCache(key, []);
+    if (options.cacheEmpty !== false) setPriceMasterLinkLookupCache(key, []);
     return [];
   }
 }
@@ -12021,7 +12023,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const warehouse = await readWarehouse();
-    const linkSaveLookupOptions = { live: false, timeoutMs: 500 };
+    const linkSaveLookupOptions = { live: true, timeoutMs: 2500, cacheEmpty: false };
     const rawLinks = Array.isArray(request.body.links) && request.body.links.length ? request.body.links : [request.body];
     const submittedLinks = Array.from(new Map(rawLinks
       .map((link) => normalizeWarehouseLink(link))
@@ -12144,7 +12146,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     }
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
-    const linkSaveLookupOptions = { live: false, timeoutMs: 500 };
+    const linkSaveLookupOptions = { live: true, timeoutMs: 2500, cacheEmpty: false };
     link = await resolvePriceMasterLinkForSave(link, usdRate, warehouse.suppliers, linkSaveLookupOptions);
     await assertPriceMasterLinkExists(link, usdRate, warehouse.suppliers, linkSaveLookupOptions);
     const now = new Date().toISOString();
