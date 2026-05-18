@@ -1492,14 +1492,18 @@ function getOzonAccountByTarget(targetId) {
 function getYandexShopByTarget(targetId) {
   const shops = getYandexShops();
   const target = cleanText(targetId || "");
+  const normalizedTarget = target.toLowerCase();
   if (target === "yandex") return shops[0] || null;
   const exact = shops.find((shop) => (
-    cleanText(shop.id) === target
-    || cleanText(shop.campaignId) === target
-    || cleanText(shop.businessId) === target
+    cleanText(shop.id).toLowerCase() === normalizedTarget
+    || cleanText(shop.campaignId).toLowerCase() === normalizedTarget
+    || cleanText(shop.businessId).toLowerCase() === normalizedTarget
+    || cleanText(shop.name).toLowerCase() === normalizedTarget
+    || parseYandexCampaignIds(shop.campaignId).some((campaignId) => cleanText(campaignId).toLowerCase() === normalizedTarget)
+    || parseYandexCampaignIds(shop.campaignId).some((campaignId) => `${cleanText(shop.id).toLowerCase()}-${cleanText(campaignId).toLowerCase()}` === normalizedTarget)
   ));
   if (exact) return exact;
-  if (target.startsWith("yandex") && shops.length === 1) return shops[0] || null;
+  if (shops.length === 1 && target && target !== "ozon") return shops[0] || null;
   return null;
 }
 
@@ -1510,7 +1514,9 @@ function matchesOzonTarget(targetId, accountId) {
 
 function matchesYandexTarget(targetId, shopId) {
   const target = cleanText(targetId || "");
-  return target === cleanText(shopId || "") || target === "yandex";
+  const shop = getYandexShopByTarget(target);
+  if (shop) return cleanText(shop.id).toLowerCase() === cleanText(shopId || "").toLowerCase();
+  return target.toLowerCase() === cleanText(shopId || "").toLowerCase() || target.toLowerCase() === "yandex";
 }
 
 function marketplaceTargets() {

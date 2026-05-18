@@ -3349,6 +3349,7 @@ test("Yandex target lookup accepts campaign and old generated target", async () 
     }]);
     assert.equal(getYandexShopByTarget("128820967")?.id, "yandex-real");
     assert.equal(getYandexShopByTarget("yandex-06c2112c")?.id, "yandex-real");
+    assert.equal(getYandexShopByTarget("legacy-yandex-target")?.id, "yandex-real");
   } finally {
     await restoreFile(marketplaceAccountsPath, previousAccounts);
     if (previousShops === undefined) delete process.env.YANDEX_SHOPS_JSON;
