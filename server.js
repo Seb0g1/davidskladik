@@ -5297,10 +5297,19 @@ function ozonAiImageStoredSizeLabel(aiSettings = {}) {
   return ozonAiImageTargetPx ? `${ozonAiImageTargetPx}x${ozonAiImageTargetPx}` : (cleanText(aiSettings.imageSize) || openaiImageSize);
 }
 
+function isOpenAiBillingLimitError(error = {}) {
+  const detail = cleanText(error?.message || error?.error?.message || error?.detail);
+  const code = cleanText(error?.code || error?.error?.code).toLowerCase();
+  return Boolean(
+    code === "openai_billing_limit"
+      || /billing hard limit|hard limit has been reached|quota|insufficient_quota|billing limit/i.test(detail)
+  );
+}
+
 function normalizeOpenAiImageError(error) {
   const detail = cleanText(error?.message || error?.error?.message || error?.detail);
   if (/billing hard limit|hard limit has been reached|quota|insufficient_quota/i.test(detail)) {
-    const billingError = new Error("Лимит биллинга OpenAI исчерпан на relay/API-ключе. Пополните баланс или увеличьте hard limit в OpenAI Billing, затем повторите генерацию.");
+    const billingError = new Error("Лимит AI-провайдера исчерпан на API-ключе. Пополните баланс или увеличьте hard limit в настройках Codex Sale/OpenAI, затем повторите генерацию.");
     billingError.statusCode = 402;
     billingError.code = "openai_billing_limit";
     return billingError;
@@ -14269,6 +14278,8 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
 
   const draftResults = [];
   const draftProducts = [];
+  let stoppedByBillingLimit = false;
+  let imageGenerationStoppedReason = "";
   for (const { product, quality } of lowQualityProducts.slice(0, draftLimit)) {
     const normalized = normalizeWarehouseProduct(product);
     try {
@@ -14286,7 +14297,7 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
       }
       let imageDraftCreated = false;
       let imageError = "";
-      if (generateImages) {
+      if (generateImages && !imageGenerationStoppedReason) {
         try {
           const imageDraft = await generateOzonAiImageDraft(normalized, {
             prompt: `Create a clean marketplace product photo for ${normalized.name || normalized.offerId}. White background, realistic perfume product image, no text overlays.`,
@@ -14295,6 +14306,7 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
           imageDraftCreated = true;
         } catch (imageDraftError) {
           imageError = imageDraftError?.message || "ai_image_draft_failed";
+          if (isOpenAiBillingLimitError(imageDraftError)) imageGenerationStoppedReason = imageError;
         }
       }
       product.updatedAt = new Date().toISOString();
@@ -14318,7 +14330,12 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
         contentRating: quality.contentRating,
         ok: false,
         error: error?.message || "ai_draft_failed",
+        fatal: isOpenAiBillingLimitError(error) || undefined,
       });
+      if (isOpenAiBillingLimitError(error)) {
+        stoppedByBillingLimit = true;
+        break;
+      }
     }
   }
   if (draftProducts.length) {
@@ -14339,6 +14356,8 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
     lowQuality: lowQualityProducts.length,
     draftsCreated: draftResults.filter((item) => item.ok).length,
     imageDraftsCreated: draftResults.filter((item) => item.imageDraft).length,
+    stoppedByBillingLimit,
+    imageGenerationStoppedReason,
     warnings,
     failed: failed.length,
     results: draftResults,
@@ -14351,6 +14370,8 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
     lowQuality: result.lowQuality,
     draftsCreated: result.draftsCreated,
     imageDraftsCreated: result.imageDraftsCreated,
+    stoppedByBillingLimit: result.stoppedByBillingLimit,
+    imageGenerationStopped: Boolean(result.imageGenerationStoppedReason),
     warnings: warnings.length,
     failed: result.failed,
     sampleErrors: failed.slice(0, 5).map((item) => ({
@@ -16420,6 +16441,7 @@ module.exports = {
   shouldPreferCompatibleOpenAiChatRequest,
   isCodexSaleAiProvider,
   openAiChatCompletionAttempts,
+  isOpenAiBillingLimitError,
   isOpenAiRequestFormatError,
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,

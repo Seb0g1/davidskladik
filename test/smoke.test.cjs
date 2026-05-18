@@ -110,6 +110,7 @@ const {
   shouldPreferCompatibleOpenAiChatRequest,
   isCodexSaleAiProvider,
   openAiChatCompletionAttempts,
+  isOpenAiBillingLimitError,
   isOpenAiRequestFormatError,
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
@@ -2056,6 +2057,12 @@ test("OpenAI request format errors are retryable for compatible providers", () =
     code: "invalid_api_key",
     error: { message: "invalid key" },
   }), false);
+});
+
+test("OpenAI billing limit errors are detected for fail-fast AI jobs", () => {
+  assert.equal(isOpenAiBillingLimitError({ code: "openai_billing_limit" }), true);
+  assert.equal(isOpenAiBillingLimitError({ message: "insufficient_quota" }), true);
+  assert.equal(isOpenAiBillingLimitError({ message: "temporary upstream timeout" }), false);
 });
 
 test("Codex Sale AI requests prefer compatible chat parameters first", () => {
