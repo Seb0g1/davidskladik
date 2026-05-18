@@ -14874,17 +14874,15 @@ async function verifyYandexUnarchiveActions(products = [], actions = [], options
       }
       const offerIds = rows.map((row) => row.offerId);
       try {
-        const [activeMappings, archivedMappings] = await Promise.all([
-          getYandexOfferMappingsByOfferIds(shop, offerIds, { archived: false }),
-          getYandexOfferMappingsByOfferIds(shop, offerIds, { archived: true }),
-        ]);
-        for (const item of activeMappings) {
+        const mappings = await getYandexOfferMappingsByOfferIds(shop, offerIds);
+        for (const item of mappings) {
           const offerId = yandexOfferIdFromMapping(item).toLowerCase();
-          if (offerId) activeOfferIds.add(`${target}:${offerId}`);
-        }
-        for (const item of archivedMappings) {
-          const offerId = yandexOfferIdFromMapping(item).toLowerCase();
-          if (offerId) archivedOfferIds.add(`${target}:${offerId}`);
+          if (!offerId) continue;
+          const offer = pickYandexOfferFromMapping(item);
+          const state = pickYandexState(item, offer);
+          const key = `${target}:${offerId}`;
+          if (state.code === "archived") archivedOfferIds.add(key);
+          else activeOfferIds.add(key);
         }
       } catch (error) {
         failedTargets.set(target, error?.message || "yandex_unarchive_verify_failed");
