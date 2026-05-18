@@ -2998,15 +2998,35 @@ test("recovery queues archived linked product when supplier is available", () =>
       marketplaceState: { code: "archived" },
     },
     {
+      id: "unknown-with-supplier",
+      hasLinks: true,
+      selectedSupplier: { price: 10, available: true },
+      targetStock: 3,
+      noSupplierAutomation: {},
+      marketplaceState: { code: "unknown", partial: true },
+    },
+    {
+      id: "zero-stock-with-supplier",
+      hasLinks: true,
+      selectedSupplier: { price: 10, available: true },
+      targetStock: 3,
+      noSupplierAutomation: {},
+      marketplaceState: { code: "active", stock: 0 },
+    },
+    {
       id: "active-with-supplier",
       hasLinks: true,
       selectedSupplier: { price: 10, available: true },
+      targetStock: 3,
       noSupplierAutomation: {},
-      marketplaceState: { code: "active" },
+      marketplaceState: { code: "active", stock: 3 },
     },
   ]);
-  assert.equal(recovered.length, 1);
-  assert.equal(recovered[0].id, "archived-with-supplier");
+  assert.deepEqual(recovered.map((product) => product.id), [
+    "archived-with-supplier",
+    "unknown-with-supplier",
+    "zero-stock-with-supplier",
+  ]);
 });
 
 test("targeted supplier recovery reports no-op without full warehouse side effects", async () => {

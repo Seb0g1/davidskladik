@@ -12117,6 +12117,7 @@ async function processMarketplaceJob(name, data = {}) {
       usdRate: data.usdRate,
       minDiffRub: 0,
       minDiffPct: 0,
+      force: data.force === true,
       dryRun: false,
     });
   }
@@ -12141,7 +12142,7 @@ async function processMarketplaceJob(name, data = {}) {
       : [];
     if (productIds.length) {
       const products = await buildFreshWarehouseProducts(productIds);
-      return runSupplierRecoveryAutomation({ products }, { productIds, source: "targeted" });
+      return runSupplierRecoveryAutomation({ products }, { productIds, source: "targeted", force: data.force === true });
     }
     const preview = await buildWarehouseView({ sync: false });
     return runSupplierRecoveryAutomation(preview, { source: "full" });
@@ -12956,16 +12957,7 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
   const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
   const warehouse = await readWarehouse();
   const candidates = (warehouse.products || [])
-    .filter((product) => {
-      if (!Array.isArray(product.links) || !product.links.length) return false;
-      const stateCode = cleanText(product.marketplaceState?.code || product.status).toLowerCase();
-      return Boolean(product.archived)
-        || Boolean(product.marketplaceState?.archived)
-        || stateCode === "archived"
-        || stateCode === "out_of_stock"
-        || Boolean(product.noSupplierAutomation?.stockZeroAt)
-        || Boolean(product.noSupplierAutomation?.archivedAt);
-    })
+    .filter((product) => Array.isArray(product.links) && product.links.length)
     .slice(0, limit);
 
   if (!candidates.length) {
@@ -12997,9 +12989,14 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
   }
 
   const ready = rebuilt.filter((product) => product.hasLinks && product.selectedSupplier);
+  const needsRecovery = ready.filter((product) => (
+    marketplaceProductNeedsSalesRecovery(product, { includeUnknown: true })
+    || Boolean(product.noSupplierAutomation?.stockZeroAt)
+    || Boolean(product.noSupplierAutomation?.archivedAt)
+  ));
   const result = await runSupplierRecoveryAutomation(
-    { products: ready },
-    { productIds: ready.map((product) => product.id), source: "targeted" },
+    { products: needsRecovery },
+    { productIds: needsRecovery.map((product) => product.id), source: "targeted", force: true },
   );
   return {
     ok: result.errors?.length ? false : true,
@@ -13007,11 +13004,12 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
     scanned: Math.min(limit, (warehouse.products || []).length),
     candidates: candidates.length,
     ready: ready.length,
+    needsRecovery: needsRecovery.length,
     recovered: result.recovered || 0,
     restoredStocks: result.restoredStocks || 0,
     unarchived: result.unarchived || 0,
     errors: result.errors || [],
-    summary: `Проверено ${candidates.length}; готово к восстановлению ${ready.length}; восстановлено ${result.recovered || 0}.`,
+    summary: `Проверено ${candidates.length}; готово к продаже ${ready.length}; нужно восстановить ${needsRecovery.length}; восстановлено ${result.recovered || 0}.`,
   };
 }
 
@@ -14066,6 +14064,16 @@ function marketplaceHasPositiveStock(product = {}) {
     .some((warehouse) => Number(warehouse.stock || warehouse.present || 0) > 0);
 }
 
+function marketplaceProductNeedsSalesRecovery(product = {}, { includeUnknown = true } = {}) {
+  const state = product.marketplaceState || {};
+  const code = cleanText(state.code || product.status).toLowerCase();
+  const archived = Boolean(product.archived || state.archived || code === "archived");
+  if (archived || code === "out_of_stock" || code === "inactive") return true;
+  if (includeUnknown && (!code || code === "unknown" || state.partial)) return true;
+  const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
+  return targetStock > 0 && !marketplaceHasPositiveStock(product);
+}
+
 function productHasFreshLinkMutation(product = {}, now = new Date()) {
   if (!noSupplierFreshLinkGraceMs) return false;
   const nowMs = toDateOrNull(now)?.getTime() || Date.now();
@@ -14109,11 +14117,16 @@ function pickSupplierRecoveryCandidates(products = [], { productIds } = {}) {
   return (Array.isArray(products) ? products : []).filter((product) => {
     if (idSet && !idSet.has(String(product.id))) return false;
     if (!product.hasLinks || !product.selectedSupplier) return false;
-    if (product.noSupplierAutomation?.recoveredAt && !product.noSupplierAutomation?.stockZeroAt && product.marketplaceState?.code === "active") return false;
+    const needsRecovery = marketplaceProductNeedsSalesRecovery(product, { includeUnknown: true });
+    if (
+      product.noSupplierAutomation?.recoveredAt
+      && !product.noSupplierAutomation?.stockZeroAt
+      && !product.noSupplierAutomation?.archivedAt
+      && !needsRecovery
+    ) return false;
     return Boolean(product.noSupplierAutomation?.stockZeroAt)
       || Boolean(product.noSupplierAutomation?.archivedAt)
-      || product.marketplaceState?.code === "archived"
-      || product.marketplaceState?.code === "out_of_stock";
+      || needsRecovery;
   });
 }
 
@@ -14239,10 +14252,8 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     });
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [], source };
   }
-  const [stockActions, unarchiveActions] = await Promise.all([
-    restoreStocksOnMarketplaces(recovered),
-    unarchiveProductsOnMarketplaces(recovered),
-  ]);
+  const unarchiveActions = await unarchiveProductsOnMarketplaces(recovered);
+  const stockActions = await restoreStocksOnMarketplaces(recovered);
   const warehouse = await readWarehouse();
   const now = new Date().toISOString();
   const recoveredIds = new Set(recovered.map((item) => String(item.id)));
@@ -14285,6 +14296,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
       usdRate: undefined,
       minDiffRub: 0,
       minDiffPct: 0,
+      force: Boolean(options.force),
     },
     { priority: 2 },
   );
