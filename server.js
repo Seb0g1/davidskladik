@@ -5139,12 +5139,29 @@ function isOpenAiRequestFormatError(error = {}) {
   );
 }
 
-async function createOpenAiChatCompletionWithFallback(client, request = {}) {
-  const attempts = [
-    request,
-    { ...request, response_format: undefined },
-    { ...request, response_format: undefined, temperature: undefined },
-  ].map((item) => Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined)));
+function shouldPreferCompatibleOpenAiChatRequest(aiSettings = {}) {
+  const providerId = cleanText(aiSettings.providerId).toLowerCase();
+  const baseUrl = cleanText(aiSettings.baseUrl).toLowerCase();
+  return providerId === "codexsale" || baseUrl.includes("codex.sale");
+}
+
+function openAiChatCompletionAttempts(request = {}, options = {}) {
+  const cleanAttempt = (item = {}) => Object.fromEntries(Object.entries(item).filter(([, value]) => value !== undefined));
+  const strict = cleanAttempt(request);
+  const withoutJsonFormat = cleanAttempt({ ...request, response_format: undefined });
+  const compatible = cleanAttempt({ ...request, response_format: undefined, temperature: undefined });
+  const rawAttempts = options.preferCompatible ? [compatible, strict, withoutJsonFormat] : [strict, withoutJsonFormat, compatible];
+  const seen = new Set();
+  return rawAttempts.filter((attempt) => {
+    const key = JSON.stringify(attempt);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+async function createOpenAiChatCompletionWithFallback(client, request = {}, options = {}) {
+  const attempts = openAiChatCompletionAttempts(request, options);
   let lastError = null;
   for (const attempt of attempts) {
     try {
@@ -5167,7 +5184,9 @@ async function createOpenAiJsonChat(messages = []) {
     temperature: 0.2,
     response_format: { type: "json_object" },
   };
-  return createOpenAiChatCompletionWithFallback(client, request);
+  return createOpenAiChatCompletionWithFallback(client, request, {
+    preferCompatible: shouldPreferCompatibleOpenAiChatRequest(aiSettings),
+  });
 }
 
 function imageBase64FromOpenAiImageEditResult(result) {
@@ -11064,6 +11083,8 @@ app.post("/api/settings/ai/test", requireAdmin, async (request, response, next) 
       ],
       temperature: 0,
       response_format: { type: "json_object" },
+    }, {
+      preferCompatible: shouldPreferCompatibleOpenAiChatRequest(effective),
     });
     response.json({
       ok: true,
@@ -16284,6 +16305,8 @@ module.exports = {
   productContentQuality,
   applyAiContentDraftToProduct,
   buildYandexOfferMapping,
+  shouldPreferCompatibleOpenAiChatRequest,
+  openAiChatCompletionAttempts,
   isOpenAiRequestFormatError,
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,

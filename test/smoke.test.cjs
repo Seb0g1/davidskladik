@@ -106,6 +106,8 @@ const {
   productContentQuality,
   applyAiContentDraftToProduct,
   buildYandexOfferMapping,
+  shouldPreferCompatibleOpenAiChatRequest,
+  openAiChatCompletionAttempts,
   isOpenAiRequestFormatError,
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
@@ -2052,6 +2054,22 @@ test("OpenAI request format errors are retryable for compatible providers", () =
     code: "invalid_api_key",
     error: { message: "invalid key" },
   }), false);
+});
+
+test("Codex Sale AI requests prefer compatible chat parameters first", () => {
+  assert.equal(shouldPreferCompatibleOpenAiChatRequest({
+    providerId: "codexsale",
+    baseUrl: "https://codex.sale/v1",
+  }), true);
+  const attempts = openAiChatCompletionAttempts({
+    model: "gpt-5.4-mini",
+    messages: [{ role: "user", content: "{}" }],
+    temperature: 0.2,
+    response_format: { type: "json_object" },
+  }, { preferCompatible: true });
+  assert.equal(attempts[0].response_format, undefined);
+  assert.equal(attempts[0].temperature, undefined);
+  assert.equal(attempts[1].response_format.type, "json_object");
 });
 
 test("resolveMarkupCoefficient applies threshold >= 10 USD", () => {
