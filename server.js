@@ -13616,7 +13616,8 @@ async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
   const requestedLimit = Number(payload?.limit || 30000);
   const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
   const stock = Math.max(1, Math.min(9999, Math.round(Number(payload?.stock || 3) || 3)));
-  const marketplace = cleanText(payload?.marketplace || "all").toLowerCase();
+  const requestedMarketplace = cleanText(payload?.marketplace || "yandex").toLowerCase();
+  const marketplace = ["yandex", "ozon", "all"].includes(requestedMarketplace) ? requestedMarketplace : "yandex";
   const batchSize = Math.max(20, Math.min(300, Math.round(Number(payload?.batchSize || 100) || 100)));
   const reportProgress = async (progress, summary) => {
     if (typeof options.onProgress !== "function") return;
@@ -13632,6 +13633,7 @@ async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
       ok: true,
       scanned: Math.min(limit, (warehouse.products || []).length),
       candidates: 0,
+      marketplace,
       stock,
       restoredStocks: 0,
       unarchived: 0,
@@ -13728,6 +13730,7 @@ async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
     partial: Boolean(errors.length && (restoredStocks || unarchived)),
     scanned: Math.min(limit, (warehouse.products || []).length),
     candidates: candidates.length,
+    marketplace,
     stock,
     restoredStocks,
     unarchived,

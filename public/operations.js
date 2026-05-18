@@ -2,6 +2,7 @@ const els = {
   limit: document.querySelector("#operationLimitInput"),
   sendLimit: document.querySelector("#operationSendLimitInput"),
   restoreStock: document.querySelector("#operationRestoreStockInput"),
+  restoreMarketplace: document.querySelector("#operationRestoreMarketplaceSelect"),
   startImport: document.querySelector("#startYandexImportJobButton"),
   startStocks: document.querySelector("#startYandexStockJobButton"),
   startLinkedRecovery: document.querySelector("#startLinkedRecoveryJobButton"),
@@ -117,6 +118,9 @@ async function startJob(type) {
   const limit = Math.max(1, Math.min(50000, Number(els.limit.value || 30000) || 30000));
   const sendLimit = Math.max(1, Math.min(10000, Number(els.sendLimit.value || 5000) || 5000));
   const restoreStock = Math.max(1, Math.min(9999, Number(els.restoreStock?.value || 3) || 3));
+  const restoreMarketplace = ["yandex", "ozon", "all"].includes(els.restoreMarketplace?.value)
+    ? els.restoreMarketplace.value
+    : "yandex";
   els.status.textContent = "Ставлю задачу в фон...";
   const payload = type === "yandex-import-send"
     ? { limit, sendLimit }
@@ -125,7 +129,7 @@ async function startJob(type) {
       : type === "linked-supplier-recovery"
         ? { limit }
         : type === "restore-archived-stock"
-          ? { limit, stock: restoreStock, marketplace: "all" }
+          ? { limit, stock: restoreStock, marketplace: restoreMarketplace }
         : {};
   const result = await api("/api/operations", {
     method: "POST",
