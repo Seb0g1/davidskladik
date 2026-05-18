@@ -2751,7 +2751,7 @@ test("automation ignores products without links", () => {
   assert.equal(toArchive.length, 0);
 });
 
-test("targeted automation can process a product after its last link is removed", () => {
+test("targeted automation keeps unlinked products sellable by default", () => {
   const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates([
     {
       id: "nolinks-targeted",
@@ -2761,9 +2761,8 @@ test("targeted automation can process a product after its last link is removed",
       marketplaceState: { code: "active", stock: 3 },
     },
   ], { includeNoLinks: true });
-  assert.equal(toZeroStock.length, 1);
-  assert.equal(toArchive.length, 1);
-  assert.equal(toZeroStock[0].id, "nolinks-targeted");
+  assert.equal(toZeroStock.length, 0);
+  assert.equal(toArchive.length, 0);
 });
 
 test("targeted no-supplier automation reports only supplied product scope when no action is needed", async () => {

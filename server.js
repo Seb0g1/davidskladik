@@ -78,6 +78,7 @@ const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || process.env.DEFA
 const autoSyncInitialDelaySeconds = Math.max(30, Number(process.env.AUTO_SYNC_INITIAL_DELAY_SECONDS || 120) || 120);
 const autoZeroStockOnNoSupplier = process.env.AUTO_ZERO_STOCK_ON_NO_SUPPLIER !== "false";
 const autoArchiveOnNoLinks = process.env.AUTO_ARCHIVE_ON_NO_LINKS === "true";
+const keepUnlinkedProductsSellable = process.env.KEEP_UNLINKED_PRODUCTS_SELLABLE !== "false";
 const noSupplierFreshLinkGraceMs = Math.max(0, Number(process.env.NO_SUPPLIER_FRESH_LINK_GRACE_MS || 10 * 60 * 1000) || 0);
 const autoRestoreOnSupplierReturn = process.env.AUTO_RESTORE_ON_SUPPLIER_RETURN !== "false";
 const bullmqEnabled = process.env.BULLMQ_ENABLED === "true";
@@ -13572,7 +13573,7 @@ async function runArchivedStockRestoreOperation(payload = {}) {
   const warehouse = await readWarehouse();
   const candidates = pickArchivedStockRestoreCandidates(warehouse.products || [], { marketplace, limit });
   if (!candidates.length) {
-    return {
+    const result = {
       ok: true,
       scanned: Math.min(limit, (warehouse.products || []).length),
       candidates: 0,
@@ -13582,6 +13583,17 @@ async function runArchivedStockRestoreOperation(payload = {}) {
       errors: [],
       summary: "Архивных товаров для восстановления не найдено.",
     };
+    logger.info("archived stock restore complete", {
+      candidates: 0,
+      stock,
+      restoredStocks: 0,
+      unarchived: 0,
+      sellableRecovered: 0,
+      stockFailed: 0,
+      unarchiveFailed: 0,
+      errors: 0,
+    });
+    return result;
   }
 
   const targetProducts = candidates.map((product) => normalizeWarehouseProduct({
@@ -13639,7 +13651,7 @@ async function runArchivedStockRestoreOperation(payload = {}) {
   const unarchived = unarchiveActions.filter((item) => item.ok).length;
   const stockFailed = stockActions.filter((item) => !item.ok).length;
   const unarchiveFailed = unarchiveActions.filter((item) => !item.ok).length;
-  return {
+  const result = {
     ok: errors.length === 0,
     partial: Boolean(errors.length && (restoredStocks || unarchived)),
     scanned: Math.min(limit, (warehouse.products || []).length),
@@ -13654,6 +13666,17 @@ async function runArchivedStockRestoreOperation(payload = {}) {
     productStatuses,
     summary: `Архивных товаров ${candidates.length}; остаток ${stock}; отправок остатка ${restoredStocks}; разархивировано ${unarchived}; готово к продаже ${sellableRecovered}; ошибки остатков ${stockFailed}; ошибки разархива ${unarchiveFailed}.`,
   };
+  logger.info("archived stock restore complete", {
+    candidates: result.candidates,
+    stock,
+    restoredStocks,
+    unarchived,
+    sellableRecovered,
+    stockFailed,
+    unarchiveFailed,
+    errors: errors.length,
+  });
+  return result;
 }
 
 async function runOperationPayload(job) {
@@ -14745,6 +14768,7 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
     && !productHasFreshLinkMutation(product, now)
   ));
   const noLinkProducts = options.includeNoLinks
+    && !keepUnlinkedProductsSellable
     ? list.filter((product) => !product.hasLinks && !product.noSupplierAutomation?.manualSellableAt)
     : [];
   const noSupplierProducts = [...linkedNoSupplier, ...noLinkProducts];
