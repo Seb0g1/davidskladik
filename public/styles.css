@@ -4008,6 +4008,21 @@ td {
   font-weight: 850;
 }
 
+.ai-draft-image-note {
+  min-height: 112px;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  border: 1px dashed color-mix(in srgb, var(--warn) 34%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--warn-soft) 36%, transparent);
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.45;
+  text-align: center;
+}
+
 .ai-draft-name {
   color: var(--ink-strong);
   font-size: 17px;

@@ -75,6 +75,8 @@ function jobSummary(job = {}) {
   if (Number.isFinite(Number(result.qualityLoaded))) parts.push(`quality ${result.qualityLoaded}`);
   if (Number.isFinite(Number(result.lowQuality))) parts.push(`ниже порога ${result.lowQuality}`);
   if (Number.isFinite(Number(result.draftsCreated))) parts.push(`AI drafts ${result.draftsCreated}`);
+  if (Number.isFinite(Number(result.imageDraftsCreated))) parts.push(`AI фото ${result.imageDraftsCreated}`);
+  if (result.imageGenerationStoppedReason) parts.push(`AI фото: ${result.imageGenerationStoppedReason}`);
   if (Number.isFinite(Number(result.skippedByLimit))) parts.push(`следующий запуск ${result.skippedByLimit}`);
   if (result.ok === false && job.error) parts.push(job.error);
   return parts.join(" · ") || job.summary || job.error || "";

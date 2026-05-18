@@ -38,23 +38,25 @@ function formatDate(value) {
 
 function recommendationText(input) {
   if (input === undefined || input === null) return "";
-  if (typeof input === "string" || typeof input === "number" || typeof input === "boolean") return String(input);
+  if (typeof input === "string" || typeof input === "number" || typeof input === "boolean") {
+    const value = String(input).trim();
+    return value === "[object Object]" ? "" : value;
+  }
   if (Array.isArray(input)) return input.map(recommendationText).filter(Boolean).join(": ");
   if (typeof input === "object") {
-    return String(
-      input.message
-        || input.text
-        || input.name
-        || input.title
-        || input.description
-        || input.comment
-        || input.reason
-        || input.recommendation
-        || input.value
-        || input.details
-        || input.error
-        || "",
-    );
+    const value = input.message
+      || input.text
+      || input.name
+      || input.title
+      || input.description
+      || input.comment
+      || input.reason
+      || input.recommendation
+      || input.value
+      || input.details
+      || input.error
+      || "";
+    return recommendationText(value);
   }
   return "";
 }
@@ -88,23 +90,29 @@ function renderList(title, items, className = "") {
 }
 
 function renderImageBlock(row = {}, product = {}, draft = {}) {
-  const resultUrl = draft.resultUrl || "";
-  const sourceUrl = draft.sourceImageUrl || product.imageUrl || "";
-  if (row.type !== "image" && !resultUrl) return "";
+  const relatedImageDraft = row.relatedImageDraft || {};
+  const resultUrl = draft.resultUrl || relatedImageDraft.resultUrl || "";
+  const sourceUrl = draft.sourceImageUrl || relatedImageDraft.sourceImageUrl || product.imageUrl || "";
+  if (!sourceUrl && !resultUrl) {
+    return row.type === "content"
+      ? '<div class="ai-draft-image-note">Фото товара не загружено, поэтому AI-изображение пока не создано.</div>'
+      : "";
+  }
+  const resultCaption = row.type === "image" ? "AI черновик" : "AI фото к этому описанию";
   return `
     <div class="ai-draft-media-grid">
       ${sourceUrl ? `
         <figure class="ai-draft-figure">
           <img src="${escapeHtml(sourceUrl)}" alt="" loading="lazy" />
-          <figcaption>Исходное фото</figcaption>
+          <figcaption>${escapeHtml(row.type === "content" ? "Фото товара" : "Исходное фото")}</figcaption>
         </figure>
       ` : ""}
       ${resultUrl ? `
         <figure class="ai-draft-figure ai-draft-figure--result">
           <img src="${escapeHtml(resultUrl)}" alt="" loading="lazy" />
-          <figcaption>AI черновик</figcaption>
+          <figcaption>${escapeHtml(resultCaption)}</figcaption>
         </figure>
-      ` : ""}
+      ` : row.type === "content" ? '<div class="ai-draft-image-note">AI-фото для этого товара еще не создано. Проверьте лимит AI-провайдера и параметр image drafts в операции.</div>' : ""}
     </div>
   `;
 }

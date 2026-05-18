@@ -1890,10 +1890,13 @@ function normalizeAiImageDrafts(input = []) {
 
 function aiRecommendationText(input) {
   if (input === undefined || input === null) return "";
-  if (typeof input === "string" || typeof input === "number" || typeof input === "boolean") return cleanText(input);
+  if (typeof input === "string" || typeof input === "number" || typeof input === "boolean") {
+    const value = cleanText(input);
+    return value === "[object Object]" ? "" : value;
+  }
   if (Array.isArray(input)) return input.map(aiRecommendationText).filter(Boolean).join(": ");
   if (typeof input === "object") {
-    return cleanText(
+    return aiRecommendationText(
       input.message
         || input.text
         || input.name
@@ -12012,10 +12015,14 @@ app.get("/api/warehouse/ai-drafts", requireAdmin, async (request, response, next
     for (const product of warehouse.products || []) {
       const normalized = normalizeWarehouseProduct(product);
       if (marketplace && normalized.marketplace !== marketplace) continue;
+      const allImageDrafts = normalized.aiImages || [];
+      const latestImageDraft = allImageDrafts
+        .filter((draft) => !status || draft.status === status)
+        .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] || null;
       const contentDrafts = (normalized.aiContentDrafts || [])
         .filter((draft) => !status || draft.status === status)
-        .map((draft) => ({ type: "content", draft }));
-      const imageDrafts = (normalized.aiImages || [])
+        .map((draft) => ({ type: "content", draft, relatedImageDraft: latestImageDraft }));
+      const imageDrafts = allImageDrafts
         .filter((draft) => !status || draft.status === status)
         .map((draft) => ({ type: "image", draft }));
       for (const item of [...contentDrafts, ...imageDrafts]) {
@@ -12032,6 +12039,7 @@ app.get("/api/warehouse/ai-drafts", requireAdmin, async (request, response, next
           },
           type: item.type,
           draft: item.draft,
+          relatedImageDraft: item.relatedImageDraft || null,
         });
       }
     }
