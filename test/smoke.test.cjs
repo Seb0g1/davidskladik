@@ -2109,6 +2109,8 @@ test("PUT /api/settings saves AI provider settings without exposing API key", as
       .expect(200);
     assert.equal(second.body.settings.ai.apiKeySet, true);
     assert.equal(second.body.settings.ai.textModel, "gpt-5.4");
+    assert.equal(second.body.priceAffectingChanged, false);
+    assert.equal(second.body.priceRepriceQueued, false);
   } finally {
     await restoreFile(appSettingsPath, backup);
   }

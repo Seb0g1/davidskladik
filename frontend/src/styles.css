@@ -959,6 +959,69 @@ button:disabled {
   gap: 12px;
 }
 
+.pricing-settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+}
+
+.settings-panel-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-rule-table {
+  display: grid;
+  gap: 8px;
+}
+
+.settings-rule-head,
+.settings-rule-row {
+  display: grid;
+  grid-template-columns: minmax(128px, 1.1fr) minmax(110px, .9fr) minmax(110px, .9fr) 42px;
+  gap: 8px;
+  align-items: center;
+}
+
+.availability-rule-table .settings-rule-head,
+.availability-rule-table .settings-rule-row {
+  grid-template-columns: minmax(128px, 1.1fr) minmax(118px, .9fr) minmax(100px, .85fr) minmax(88px, .75fr) 42px;
+}
+
+.settings-rule-head {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.settings-rule-row {
+  border: 1px solid var(--line);
+  background: rgba(8, 17, 31, .45);
+  padding: 8px;
+}
+
+.settings-rule-row input,
+.settings-rule-row select {
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  background: #0c1728;
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.settings-save-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 .draft-card-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1032,6 +1095,7 @@ button:disabled {
   .summary-grid.three,
   .control-grid,
   .settings-grid,
+  .pricing-settings-grid,
   .draft-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1086,6 +1150,7 @@ button:disabled {
   .ai-grid,
   .control-grid,
   .settings-grid,
+  .pricing-settings-grid,
   .draft-card-grid,
   .diagnostics-summary {
     grid-template-columns: 1fr;
@@ -1129,8 +1194,25 @@ button:disabled {
   }
 
   .marketplace-row,
-  .merge-form {
+  .merge-form,
+  .settings-rule-head,
+  .settings-rule-row,
+  .availability-rule-table .settings-rule-head,
+  .availability-rule-table .settings-rule-row {
     grid-template-columns: 1fr;
+  }
+
+  .settings-rule-head {
+    display: none;
+  }
+
+  .settings-save-footer {
+    justify-content: stretch;
+  }
+
+  .settings-save-footer .primary-action {
+    width: 100%;
+    justify-content: center;
   }
 
   .marketplace-flags {

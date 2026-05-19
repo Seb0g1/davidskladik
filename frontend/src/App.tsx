@@ -1228,6 +1228,75 @@ function OperationsPage() {
   );
 }
 
+type MarkupRuleDraft = {
+  marketplace: string;
+  minUsd: number;
+  coefficient: number;
+};
+
+type AvailabilityRuleDraft = {
+  marketplace: string;
+  minAvailableSuppliers: number;
+  coefficientDelta: number;
+  targetStock: number;
+};
+
+const defaultAvailabilityRule: AvailabilityRuleDraft = {
+  marketplace: "all",
+  minAvailableSuppliers: 1,
+  coefficientDelta: 0,
+  targetStock: 3,
+};
+
+function normalizeMarketplace(value: unknown) {
+  const text = String(value || "all").toLowerCase();
+  return text === "ozon" || text === "yandex" ? text : "all";
+}
+
+function settingsArray(value: unknown) {
+  return Array.isArray(value) ? value.map(asRecord) : [];
+}
+
+function readMarkupRules(value: unknown): MarkupRuleDraft[] {
+  return settingsArray(value).map((rule) => ({
+    marketplace: normalizeMarketplace(rule.marketplace),
+    minUsd: numberValue(rule.minUsd, 0),
+    coefficient: numberValue(rule.coefficient, 1),
+  }));
+}
+
+function readAvailabilityRules(value: unknown): AvailabilityRuleDraft[] {
+  return settingsArray(value).map((rule) => ({
+    marketplace: normalizeMarketplace(rule.marketplace),
+    minAvailableSuppliers: Math.max(0, Math.round(numberValue(rule.minAvailableSuppliers, 1))),
+    coefficientDelta: numberValue(rule.coefficientDelta, 0),
+    targetStock: Math.max(0, Math.round(numberValue(rule.targetStock, 3))),
+  }));
+}
+
+function settingsSavePayload(draft: Record<string, unknown>) {
+  const markups = asRecord(draft.defaultMarkups);
+  const markupRules = readMarkupRules(draft.markupRules)
+    .filter((rule) => Number.isFinite(rule.coefficient) && rule.coefficient > 0)
+    .map((rule) => ({
+      marketplace: rule.marketplace,
+      minUsd: Math.max(0, rule.minUsd),
+      coefficient: rule.coefficient,
+    }));
+  const availabilityRules = readAvailabilityRules(draft.availabilityRules);
+  return {
+    ...draft,
+    fixedUsdRate: numberValue(draft.fixedUsdRate, 95),
+    defaultMarkups: {
+      ...markups,
+      ozon: numberValue(markups.ozon, 1.7),
+      yandex: numberValue(markups.yandex, 1.6),
+    },
+    markupRules,
+    availabilityRules: availabilityRules.length ? availabilityRules : [defaultAvailabilityRule],
+  };
+}
+
 function SettingsPage() {
   const queryClient = useQueryClient();
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: () => fetchJson("/api/settings", SettingsResponseSchema) });
@@ -1242,8 +1311,10 @@ function SettingsPage() {
 
   const draftAi = asRecord(draft.ai);
   const draftMarkups = asRecord(draft.defaultMarkups);
+  const markupRules = readMarkupRules(draft.markupRules);
+  const availabilityRules = readAvailabilityRules(draft.availabilityRules);
   const save = useMutation({
-    mutationFn: () => fetchJson("/api/settings", SettingsResponseSchema, mutationBody(draft)),
+    mutationFn: () => fetchJson("/api/settings", SettingsResponseSchema, mutationBody(settingsSavePayload(draft))),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
   });
   const testAi = useMutation({
@@ -1252,19 +1323,82 @@ function SettingsPage() {
   const update = (patch: Record<string, unknown>) => setDraft((current) => ({ ...current, ...patch }));
   const updateAi = (patch: Record<string, unknown>) => update({ ai: { ...draftAi, ...patch } });
   const updateMarkups = (patch: Record<string, unknown>) => update({ defaultMarkups: { ...draftMarkups, ...patch } });
+  const setMarkupRules = (rules: MarkupRuleDraft[]) => update({ markupRules: rules });
+  const setAvailabilityRules = (rules: AvailabilityRuleDraft[]) => update({ availabilityRules: rules });
+  const updateMarkupRule = (index: number, patch: Partial<MarkupRuleDraft>) => {
+    setMarkupRules(markupRules.map((rule, ruleIndex) => (ruleIndex === index ? { ...rule, ...patch } : rule)));
+  };
+  const updateAvailabilityRule = (index: number, patch: Partial<AvailabilityRuleDraft>) => {
+    setAvailabilityRules(availabilityRules.map((rule, ruleIndex) => (ruleIndex === index ? { ...rule, ...patch } : rule)));
+  };
+  const saveButton = (
+    <button className="primary-action" onClick={() => save.mutate()} disabled={save.isPending}>
+      {save.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить
+    </button>
+  );
 
   return (
     <>
-      <PageHeader title="Настройки" subtitle="Курс, наценки, правила доступности, маркетплейсы и AI-провайдер в новом интерфейсе." action={<button className="primary-action" onClick={() => save.mutate()} disabled={save.isPending}><Save size={16} /> Сохранить</button>} />
+      <PageHeader title="Настройки" subtitle="Курс, наценки, правила доступности, маркетплейсы и AI-провайдер в новом интерфейсе." action={saveButton} />
       {settingsQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю настройки...</div>}
-      <section className="settings-grid">
+      <section className="settings-grid pricing-settings-grid">
         <div className="settings-panel">
-          <div className="section-title"><div><span>Цены</span><h3>Курс и наценки</h3></div></div>
-          <label>Курс USD<input type="number" value={String(draft.fixedUsdRate ?? settings.fixedUsdRate ?? "")} onChange={(event) => update({ fixedUsdRate: numberValue(event.target.value) })} /></label>
-          <label>Наценка Ozon<input type="number" step="0.01" value={String(draftMarkups.ozon ?? markups.ozon ?? "")} onChange={(event) => updateMarkups({ ozon: numberValue(event.target.value) })} /></label>
-          <label>Наценка Yandex<input type="number" step="0.01" value={String(draftMarkups.yandex ?? markups.yandex ?? "")} onChange={(event) => updateMarkups({ yandex: numberValue(event.target.value) })} /></label>
+          <div className="section-title"><div><span>Цены</span><h3>Базовые цены</h3></div></div>
+          <label>Курс USD/RUB<input type="number" min="0.0001" step="0.0001" value={String(draft.fixedUsdRate ?? settings.fixedUsdRate ?? "")} onChange={(event) => update({ fixedUsdRate: numberValue(event.target.value) })} /></label>
+          <label>Базовая наценка Ozon<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.ozon ?? markups.ozon ?? "")} onChange={(event) => updateMarkups({ ozon: numberValue(event.target.value) })} /></label>
+          <label>Базовая наценка Yandex Market<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.yandex ?? markups.yandex ?? "")} onChange={(event) => updateMarkups({ yandex: numberValue(event.target.value) })} /></label>
           <div className="soft-empty compact">После изменения курса или наценки backend ставит пересчет цен в очередь.</div>
         </div>
+
+        <div className="settings-panel settings-panel-wide">
+          <div className="section-title">
+            <div><span>Наценки</span><h3>Гибкие правила наценки</h3></div>
+            <button className="secondary-action" type="button" onClick={() => setMarkupRules([...markupRules, { marketplace: "all", minUsd: 0, coefficient: 1 }])}>Добавить</button>
+          </div>
+          <p className="settings-hint">Правила применяются по цене поставщика в USD. Пустой список допустим: тогда используются базовые наценки.</p>
+          <div className="settings-rule-table">
+            <div className="settings-rule-head"><span>Маркетплейс</span><span>От цены, USD</span><span>Коэффициент</span><span></span></div>
+            {markupRules.map((rule, index) => (
+              <div className="settings-rule-row" key={`markup-${index}`}>
+                <select value={rule.marketplace} onChange={(event) => updateMarkupRule(index, { marketplace: event.target.value })}>
+                  <option value="all">Все</option>
+                  <option value="ozon">Ozon</option>
+                  <option value="yandex">Yandex Market</option>
+                </select>
+                <input type="number" min="0" step="0.0001" value={String(rule.minUsd)} onChange={(event) => updateMarkupRule(index, { minUsd: numberValue(event.target.value) })} />
+                <input type="number" min="0.0001" step="0.0001" value={String(rule.coefficient)} onChange={(event) => updateMarkupRule(index, { coefficient: numberValue(event.target.value, 1) })} />
+                <button className="icon-action danger" type="button" title="Удалить правило" onClick={() => setMarkupRules(markupRules.filter((_, ruleIndex) => ruleIndex !== index))}><Trash2 size={15} /></button>
+              </div>
+            ))}
+            {!markupRules.length && <div className="soft-empty compact">Гибких правил нет. Будут использоваться базовые наценки Ozon/Yandex.</div>}
+          </div>
+        </div>
+
+        <div className="settings-panel settings-panel-wide">
+          <div className="section-title">
+            <div><span>Остатки</span><h3>Доступность и остатки</h3></div>
+            <button className="secondary-action" type="button" onClick={() => setAvailabilityRules([...availabilityRules, defaultAvailabilityRule])}>Добавить</button>
+          </div>
+          <p className="settings-hint">Если доступных поставщиков много, правило может снизить коэффициент и поднять целевой остаток. При пустом списке при сохранении добавится безопасное правило all / 1 / 0 / 3.</p>
+          <div className="settings-rule-table availability-rule-table">
+            <div className="settings-rule-head"><span>Маркетплейс</span><span>Поставщиков от</span><span>Поправка</span><span>Остаток</span><span></span></div>
+            {availabilityRules.map((rule, index) => (
+              <div className="settings-rule-row" key={`availability-${index}`}>
+                <select value={rule.marketplace} onChange={(event) => updateAvailabilityRule(index, { marketplace: event.target.value })}>
+                  <option value="all">Все</option>
+                  <option value="ozon">Ozon</option>
+                  <option value="yandex">Yandex Market</option>
+                </select>
+                <input type="number" min="0" step="1" value={String(rule.minAvailableSuppliers)} onChange={(event) => updateAvailabilityRule(index, { minAvailableSuppliers: Math.round(numberValue(event.target.value, 1)) })} />
+                <input type="number" step="0.0001" value={String(rule.coefficientDelta)} onChange={(event) => updateAvailabilityRule(index, { coefficientDelta: numberValue(event.target.value) })} />
+                <input type="number" min="0" step="1" value={String(rule.targetStock)} onChange={(event) => updateAvailabilityRule(index, { targetStock: Math.round(numberValue(event.target.value, 3)) })} />
+                <button className="icon-action danger" type="button" title="Удалить правило" onClick={() => setAvailabilityRules(availabilityRules.filter((_, ruleIndex) => ruleIndex !== index))}><Trash2 size={15} /></button>
+              </div>
+            ))}
+            {!availabilityRules.length && <div className="soft-empty compact">При сохранении будет добавлено дефолтное правило: все площадки, от 1 поставщика, поправка 0, остаток 3.</div>}
+          </div>
+        </div>
+
         <div className="settings-panel">
           <div className="section-title"><div><span>AI</span><h3>Провайдер и модели</h3></div><button className="secondary-action" onClick={() => testAi.mutate()} disabled={testAi.isPending}>Тест</button></div>
           <label>Provider ID<input value={String(draftAi.providerId ?? ai.providerId ?? "")} onChange={(event) => updateAi({ providerId: event.target.value })} /></label>
@@ -1275,12 +1409,14 @@ function SettingsPage() {
           {testAi.error && <div className="inline-error">{errorMessage(testAi.error)}</div>}
           {testAi.isSuccess && <div className="success-strip">AI подключен.</div>}
         </div>
+
         <div className="settings-panel">
           <div className="section-title"><div><span>Yandex</span><h3>Склад остатков</h3></div></div>
           <label>Warehouse ID<input value={String(asRecord(draft.yandex).warehouseId ?? asRecord(settings.yandex).warehouseId ?? "128820967")} onChange={(event) => update({ yandex: { ...asRecord(draft.yandex), warehouseId: event.target.value } })} /></label>
           <div className="soft-empty compact">Остатки должны уходить только в Magic Stick: 128820967.</div>
         </div>
       </section>
+
       {(save.error) && <div className="inline-error">{errorMessage(save.error)}</div>}
       {save.isSuccess && (
         <div className={save.data?.priceRepriceQueueError ? "inline-error" : "success-strip"}>
@@ -1291,6 +1427,7 @@ function SettingsPage() {
               : "Настройки сохранены. Ценовые правила не менялись, пересчет не нужен."}
         </div>
       )}
+      <div className="settings-save-footer">{saveButton}</div>
     </>
   );
 }
