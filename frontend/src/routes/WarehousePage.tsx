@@ -11,6 +11,7 @@ import { asRecord, compactDate, copyPlainText, errorMessage, money, numberValue,
 import { ProductGroup, firstImage, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, preferredGroupPrimary, statusLabel } from "../lib/warehouse";
 
 const pageSize = 80;
+const mobileListMedia = "(max-width: 640px)";
 
 type LinkDraft = {
   article: string;
@@ -963,6 +964,7 @@ function DetailPanel({ selectedGroup, products, onClose }: { selectedGroup: stri
 export function WarehousePage() {
   const [filters, setFilters] = useState<Filters>(() => readFilters());
   const [selectedGroup, setSelectedGroup] = useState(() => selectedGroupFromPath());
+  const [isMobileList, setIsMobileList] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileListMedia).matches);
   const debouncedQ = useDebounced(filters.q, 250);
   const effectiveFilters = { ...filters, q: debouncedQ };
   const parentRef = useRef<HTMLDivElement>(null);
@@ -999,10 +1001,17 @@ export function WarehousePage() {
     enabled: Boolean(selectedGroup),
   });
   const detailProducts = detailQuery.data?.products?.length ? detailQuery.data.products : selectedRowsOnPage;
+  useEffect(() => {
+    const media = window.matchMedia(mobileListMedia);
+    const onChange = () => setIsMobileList(media.matches);
+    onChange();
+    media.addEventListener?.("change", onChange);
+    return () => media.removeEventListener?.("change", onChange);
+  }, []);
   const virtualizer = useVirtualizer({
     count: groups.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 174,
+    estimateSize: () => (isMobileList ? 272 : 174),
     overscan: 8,
   });
   const setFilter = (key: keyof Filters, value: string | boolean | number) => {
