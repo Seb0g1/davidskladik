@@ -3684,6 +3684,26 @@ test("SKU diagnostics focuses exact product matches and reports hidden supplier 
           selectedSupplier: { supplierName: "Supplier", article: "DIFFERENT", price: 12, available: true },
           marketplaceState: { code: "archived", archived: true, stock: 0 },
           noSupplierAutomation: { recoveredAt: "2026-05-19T00:00:00.000Z" },
+          lastStockSend: {
+            type: "restore_stock",
+            status: "success",
+            at: "2026-05-19T00:01:00.000Z",
+            target: "128820967",
+            offerId: "41059",
+            stock: 3,
+          },
+          lastArchiveSend: {
+            type: "unarchive",
+            status: "success",
+            at: "2026-05-19T00:01:01.000Z",
+            target: "yandex-real",
+            offerId: "41059",
+          },
+          lastYandexPriceSend: {
+            status: "success",
+            at: "2026-05-19T00:01:02.000Z",
+            requestedPrice: 1990,
+          },
         },
       ],
     });
@@ -3692,6 +3712,12 @@ test("SKU diagnostics focuses exact product matches and reports hidden supplier 
     assert.equal(diagnostics.hiddenSupplierOnlyMatches, 1);
     assert.equal(diagnostics.products[0].id, "diag-primary");
     assert.equal(diagnostics.products[0].archived, true);
+    assert.equal(diagnostics.products[0].lastStockSend.type, "restore_stock");
+    assert.equal(diagnostics.products[0].lastStockSend.stock, 3);
+    assert.equal(diagnostics.products[0].lastArchiveSend.type, "unarchive");
+    assert.equal(diagnostics.products[0].lastYandexPriceSend.requestedPrice, 1990);
+    assert.equal(diagnostics.products[0].automation.protectedFromNoSupplierArchive, true);
+    assert.equal(diagnostics.products[0].automation.wouldArchiveAsNoSupplier, false);
   } finally {
     if (previousWarehouse) await writeWarehouse(JSON.parse(previousWarehouse));
     else await restoreFile(warehousePath, previousWarehouse);

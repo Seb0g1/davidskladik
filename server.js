@@ -2039,6 +2039,46 @@ function normalizeLastPriceSend(input = {}) {
   };
 }
 
+function normalizeLastMarketplaceCommand(input = {}) {
+  if (!input || typeof input !== "object") return null;
+  if (!Object.keys(input).length) return null;
+  const type = cleanText(input.type || input.action || input.command);
+  const status = cleanText(input.status || (input.ok === true ? "success" : (input.ok === false ? "error" : ""))).toLowerCase();
+  const at = cleanText(input.at || input.sentAt || input.updatedAt);
+  const target = cleanText(input.target || input.shopId || input.account || "");
+  const offerId = cleanText(input.offerId || input.offer_id || input.sku || "");
+  const stock = Number(input.stock ?? input.count ?? input.targetStock ?? NaN);
+  const error = cleanText(input.error || "");
+  const warning = cleanText(input.warning || "");
+  const detail = cleanText(input.detail || input.message || "");
+  if (!type && !status && !at && !target && !offerId && !error && !warning && !detail && !Number.isFinite(stock)) return null;
+  return compactObject({
+    type: type || null,
+    status: status || null,
+    at: at || null,
+    target: target || null,
+    offerId: offerId || null,
+    stock: Number.isFinite(stock) ? Math.max(0, Math.round(stock)) : null,
+    error: error || null,
+    warning: warning || null,
+    detail: detail || null,
+  });
+}
+
+function marketplaceCommandFromAction(action = {}, product = {}, at = new Date().toISOString()) {
+  return normalizeLastMarketplaceCommand({
+    type: action.type,
+    status: action.ok ? "success" : (action.skipped ? "skipped" : "error"),
+    at,
+    target: action.target || product.target,
+    offerId: action.offerId || product.offerId,
+    stock: action.stock,
+    error: action.error,
+    warning: action.warning,
+    detail: action.reason || "",
+  });
+}
+
 function normalizeWarehouseProduct(input = {}) {
   const target = cleanText(input.target || input.marketplace || "ozon");
   const inputMarketplace = cleanText(input.marketplace || input.marketplace_id || "").toLowerCase();
@@ -2082,6 +2122,8 @@ function normalizeWarehouseProduct(input = {}) {
     yandex: yandexDraft,
     lastOzonPriceSend: normalizeLastPriceSend(input.lastOzonPriceSend || input.last_ozon_price_send),
     lastYandexPriceSend: normalizeLastPriceSend(input.lastYandexPriceSend || input.last_yandex_price_send),
+    lastStockSend: normalizeLastMarketplaceCommand(input.lastStockSend || input.last_stock_send),
+    lastArchiveSend: normalizeLastMarketplaceCommand(input.lastArchiveSend || input.last_archive_send),
     marketplaceState: normalizeMarketplaceState(input.marketplaceState || input.marketplace_state || input.ozonState),
     exports: normalizeProductExports(input.exports),
     aiImages: normalizeAiImageDrafts(input.aiImages || input.ai_images || input.imageDrafts),
@@ -10168,7 +10210,37 @@ function publicSelectedSupplierDiagnostics(supplier = null) {
   };
 }
 
-function publicWarehouseDiagnosticProduct(product = {}) {
+function latestProductCommand(product = {}, kind = "stock") {
+  return kind === "archive"
+    ? normalizeLastMarketplaceCommand(product.lastArchiveSend || {})
+    : normalizeLastMarketplaceCommand(product.lastStockSend || {});
+}
+
+function buildWarehouseProductAutomationDiagnostics(product = {}, contextProducts = []) {
+  const candidates = Array.isArray(contextProducts) && contextProducts.length ? contextProducts : [product];
+  const noSupplier = pickNoSupplierAutomationCandidates(candidates, { includeNoLinks: true });
+  const toZero = new Set(noSupplier.toZeroStock.map((item) => String(item.id)));
+  const toArchive = new Set(noSupplier.toArchive.map((item) => String(item.id)));
+  const hasDirectLinks = product.hasLinks || (Array.isArray(product.links) && product.links.length > 0);
+  return {
+    wouldSendTargetStock: shouldSendTargetStockForProduct(product),
+    wouldRecoverSupplier: pickSupplierRecoveryCandidates(candidates, { productIds: [product.id] }).some((item) => String(item.id) === String(product.id)),
+    wouldZeroStockAsNoSupplier: toZero.has(String(product.id)),
+    wouldArchiveAsNoSupplier: toArchive.has(String(product.id)),
+    protectedFromNoSupplierArchive: Boolean(hasDirectLinks || product.noSupplierAutomation?.manualSellableAt),
+    sameOfferGroupProtected: Boolean(
+      marketplaceOfferAutomationKey(product)
+      && candidates.some((item) =>
+        String(item.id) !== String(product.id)
+        && marketplaceOfferAutomationKey(item) === marketplaceOfferAutomationKey(product)
+        && (item.hasLinks || (Array.isArray(item.links) && item.links.length > 0) || item.noSupplierAutomation?.manualSellableAt)
+      )
+    ),
+    needsSalesRecovery: marketplaceProductNeedsSalesRecovery(product, { includeUnknown: true }),
+  };
+}
+
+function publicWarehouseDiagnosticProduct(product = {}, contextProducts = []) {
   const state = product.marketplaceState || {};
   return {
     id: product.id,
@@ -10190,6 +10262,11 @@ function publicWarehouseDiagnosticProduct(product = {}) {
     currentPrice: product.currentPrice ?? null,
     targetPrice: product.targetPrice ?? null,
     targetStock: product.targetStock ?? null,
+    lastOzonPriceSend: product.lastOzonPriceSend || null,
+    lastYandexPriceSend: product.lastYandexPriceSend || null,
+    lastStockSend: latestProductCommand(product, "stock"),
+    lastArchiveSend: latestProductCommand(product, "archive"),
+    automation: buildWarehouseProductAutomationDiagnostics(product, contextProducts),
     autoPriceEnabled: product.autoPriceEnabled !== false,
     status: product.status || state.code || "",
     archived: Boolean(product.archived || state.archived || cleanText(state.code).toLowerCase() === "archived"),
@@ -10256,7 +10333,7 @@ async function buildWarehouseSkuDiagnostics(sku = "", { limit = 50, auditLimit =
     matched: diagnosticProducts.length,
     hiddenSupplierOnlyMatches: Math.max(0, strictMatches.length - diagnosticProducts.length),
     warnings,
-    products: diagnosticProducts.map(publicWarehouseDiagnosticProduct),
+    products: diagnosticProducts.map((product) => publicWarehouseDiagnosticProduct(product, diagnosticProducts)),
     audit: latestAudit.map((entry) => ({
       at: entry.at,
       user: entry.user,
@@ -13607,10 +13684,11 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     }
   }
   for (const action of stockActions) {
-    if (!action.ok) continue;
     const product = warehouse.products.find((entry) => entry.id === action.id);
     if (!product) continue;
     touchedProductIds.add(product.id);
+    product.lastStockSend = marketplaceCommandFromAction(action, product, sentAt);
+    if (!action.ok) continue;
     const stock = Math.max(0, Math.round(Number(action.stock || 0)));
     const marketplaceState = {
       ...(product.marketplaceState || {}),
@@ -14607,10 +14685,16 @@ function pickArchivedStockRestoreCandidates(products = [], { marketplace = "all"
 async function applyArchivedStockRestoreLocalPatch(warehouse, targetProducts, stockActions, unarchiveActions, stock, now = new Date().toISOString()) {
   const restoredStockIds = new Set((Array.isArray(stockActions) ? stockActions : []).filter((item) => item.ok).map((item) => String(item.id)));
   const unarchivedIds = new Set((Array.isArray(unarchiveActions) ? unarchiveActions : []).filter((item) => item.ok).map((item) => String(item.id)));
+  const stockActionById = new Map((Array.isArray(stockActions) ? stockActions : []).map((item) => [String(item.id), item]));
+  const unarchiveActionById = new Map((Array.isArray(unarchiveActions) ? unarchiveActions : []).map((item) => [String(item.id), item]));
   const touchedIds = new Set((Array.isArray(targetProducts) ? targetProducts : []).map((product) => String(product.id)));
   const changedProducts = [];
   for (const product of warehouse.products || []) {
     if (!touchedIds.has(String(product.id))) continue;
+    const stockAction = stockActionById.get(String(product.id));
+    const unarchiveAction = unarchiveActionById.get(String(product.id));
+    if (stockAction) product.lastStockSend = marketplaceCommandFromAction(stockAction, product, now);
+    if (unarchiveAction) product.lastArchiveSend = marketplaceCommandFromAction(unarchiveAction, product, now);
     product.targetStock = stock;
     product.noSupplierAutomation = product.noSupplierAutomation || {};
     product.noSupplierAutomation.stockZeroAt = null;
@@ -16407,6 +16491,8 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     const product = warehouse.products.find((item) => item.id === action.id);
     if (!product) continue;
     product.noSupplierAutomation = product.noSupplierAutomation || { stockZeroAt: null, archivedAt: null, lastError: null };
+    if (action.type === "zero_stock") product.lastStockSend = marketplaceCommandFromAction(action, product, now);
+    if (action.type === "archive") product.lastArchiveSend = marketplaceCommandFromAction(action, product, now);
     if (action.ok && action.type === "zero_stock") product.noSupplierAutomation.stockZeroAt = now;
     if (action.ok && action.type === "archive") product.noSupplierAutomation.archivedAt = now;
     product.noSupplierAutomation.lastError = action.ok || action.skipped ? null : action.error;
@@ -16477,6 +16563,16 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   const recoveredIds = new Set(recovered.map((item) => String(item.id)));
   const sellableIds = new Set(productStatuses.filter((item) => item.sellable).map((item) => String(item.id)));
   const statusById = new Map(productStatuses.map((item) => [String(item.id), item]));
+  const stockActionsById = new Map();
+  const unarchiveActionsById = new Map();
+  for (const action of stockActions) {
+    const id = String(action.id || "");
+    if (id) stockActionsById.set(id, action);
+  }
+  for (const action of unarchiveActions) {
+    const id = String(action.id || "");
+    if (id) unarchiveActionsById.set(id, action);
+  }
   const restoredStockById = new Map(stockActions
     .filter((item) => item.ok)
     .map((item) => [String(item.id), Math.max(1, Math.round(Number(item.stock || 1)))]));
@@ -16486,6 +16582,10 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     if (!recoveredIds.has(productId)) continue;
     product.noSupplierAutomation = product.noSupplierAutomation || {};
     const status = statusById.get(productId);
+    const stockAction = stockActionsById.get(productId);
+    const unarchiveAction = unarchiveActionsById.get(productId);
+    if (stockAction) product.lastStockSend = marketplaceCommandFromAction(stockAction, product, now);
+    if (unarchiveAction) product.lastArchiveSend = marketplaceCommandFromAction(unarchiveAction, product, now);
     if (status?.sellable) {
       product.noSupplierAutomation.recoveredAt = now;
       product.noSupplierAutomation.manualSellableAt = now;
