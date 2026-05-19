@@ -251,6 +251,17 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
       link.productOfferId,
     ].filter(Boolean).join(" ").toLowerCase().includes(q));
   }, [links, linkFilter]);
+  const groupLinkSignatures = useMemo(() => products.map(productLinksSignature), [products]);
+  const groupLinkCounts = useMemo(() => products.map((item) => (item.links || []).length), [products]);
+  const groupLinksSynced = products.length <= 1
+    || (new Set(groupLinkSignatures).size <= 1 && new Set(groupLinkCounts).size <= 1);
+  const refreshAfterMutation = (payload?: unknown) => {
+    if (payload) updateCachedProducts(queryClient, payload);
+    void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+    void queryClient.invalidateQueries({ queryKey: ["warehouse", "group-detail"] });
+    void queryClient.invalidateQueries({ queryKey: ["warehouse", "diagnostics"] });
+    onSaved();
+  };
 
   const searchQuery = useQuery({
     queryKey: ["pricemaster", "search", debouncedSearch],
@@ -271,9 +282,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
     onSuccess: (payload) => {
       setDrafts([]);
       setDraft(emptyLinkDraft(draft.priceCurrency));
-      updateCachedProducts(queryClient, payload);
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-      onSaved();
+      refreshAfterMutation(payload);
     },
   });
 
@@ -284,9 +293,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
       { method: "DELETE", body: JSON.stringify({ expectedUpdatedAt: products.find((item) => item.id === link.productId)?.updatedAt || products[0]?.updatedAt || "" }) },
     ),
     onSuccess: (payload) => {
-      updateCachedProducts(queryClient, payload);
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-      onSaved();
+      refreshAfterMutation(payload);
     },
   });
 
@@ -307,9 +314,18 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
     },
     onSuccess: (payload) => {
       setSelectedLinkIds([]);
-      updateCachedProducts(queryClient, payload);
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-      onSaved();
+      refreshAfterMutation(payload);
+    },
+  });
+
+  const syncMutation = useMutation({
+    mutationFn: async () => fetchJson("/api/warehouse/products/links/sync-group", MutationProductResponseSchema, mutationBody({
+      productIds,
+      optimisticLocks,
+    })),
+    onSuccess: (payload) => {
+      setSelectedLinkIds([]);
+      refreshAfterMutation(payload);
     },
   });
 
@@ -322,6 +338,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
     saveMutation.reset();
     deleteMutation.reset();
     bulkDeleteMutation.reset();
+    syncMutation.reset();
   }, [draftScopeKey]);
 
   const addDraft = (nextDraft: LinkDraft) => {
@@ -373,6 +390,15 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
           <strong>{selectedSupplierCount}/{products.length}</strong>
           <span>выбран поставщик</span>
         </div>
+      </div>
+
+      <div className={groupLinksSynced ? "success-strip compact" : "warning-strip compact"}>
+        <span>{groupLinksSynced ? "Привязки группы синхронизированы" : "Есть расхождение Ozon/Yandex по PriceMaster-привязкам"}</span>
+        {!groupLinksSynced ? (
+          <button className="secondary-action" type="button" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending}>
+            {syncMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Синхронизировать группу
+          </button>
+        ) : null}
       </div>
 
       {links.length ? (
@@ -499,8 +525,8 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
           )) : <span>Новые привязки появятся здесь до сохранения.</span>}
           {draftIsFilled && <span className="draft-chip is-current">{draft.article || "текущий ввод"} · {draft.keyword || draft.priceCurrency}</span>}
         </div>
-        {(saveMutation.error || deleteMutation.error || bulkDeleteMutation.error) && <div className="inline-error">
-          {errorMessage(saveMutation.error || deleteMutation.error || bulkDeleteMutation.error)}
+        {(saveMutation.error || deleteMutation.error || bulkDeleteMutation.error || syncMutation.error) && <div className="inline-error">
+          {errorMessage(saveMutation.error || deleteMutation.error || bulkDeleteMutation.error || syncMutation.error)}
           {failedLinks.length ? (
             <ul className="pm-failed-links">
               {failedLinks.slice(0, 8).map((item, index) => {

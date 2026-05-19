@@ -78,6 +78,7 @@ const {
   preferWarehousePrimaryIdentityMatches,
   buildWarehouseSkuDiagnostics,
   addWarehousePageGroupSiblings,
+  expandWarehouseProductsToGroups,
   buildWarehousePageProductGroups,
   linkedRecoveryCandidateProducts,
   summarizeWarehouseCounterStats,
@@ -99,6 +100,7 @@ const {
   warehouseProductLinksSignature,
   warehouseGroupLinkSignature,
   buildCommonWarehouseGroupLinks,
+  syncWarehouseProductGroupLinks,
   marketplacePriceBreakdown,
   productConflict,
   canIgnoreStaleLinkSaveConflict,
@@ -2386,6 +2388,47 @@ test("common warehouse group links synchronize supplier-aware signatures", () =>
   assert.ok(warehouseProductLinksSignature(products[0]).includes("row:2066033"));
 });
 
+test("warehouse group expansion includes marketplace siblings by offerId and manual group", () => {
+  const products = [
+    { id: "ozon-1", offerId: "41059", marketplace: "ozon" },
+    { id: "yandex-1", offerId: "41059", marketplace: "yandex" },
+    { id: "other", offerId: "999", marketplace: "ozon" },
+    { id: "manual-a", offerId: "A", manualGroupId: "manual-1", marketplace: "ozon" },
+    { id: "manual-b", offerId: "B", manualGroupId: "manual-1", marketplace: "yandex" },
+  ];
+  assert.deepEqual(
+    expandWarehouseProductsToGroups(products, [products[0]]).map((product) => product.id).sort(),
+    ["ozon-1", "yandex-1"],
+  );
+  assert.deepEqual(
+    expandWarehouseProductsToGroups(products, [products[3]]).map((product) => product.id).sort(),
+    ["manual-a", "manual-b"],
+  );
+});
+
+test("syncWarehouseProductGroupLinks spreads union links to every marketplace sibling", () => {
+  const products = [
+    {
+      id: "ozon-1",
+      offerId: "14547634",
+      marketplace: "ozon",
+      links: [{ id: "ozon-link", article: "11333", supplierName: "Zurab", partnerId: "10", priceCurrency: "USD" }],
+    },
+    {
+      id: "yandex-1",
+      offerId: "14547634",
+      marketplace: "yandex",
+      links: [{ id: "yandex-link", matchType: "selected_row", sourceRowId: "2066033", exactName: "Tester 30 ml", supplierName: "Svetlana", partnerId: "96", priceCurrency: "USD" }],
+    },
+  ];
+  const result = syncWarehouseProductGroupLinks(products, { now: "2026-05-19T12:00:00.000Z", username: "tester" });
+  assert.equal(result.changedProducts.length, 2);
+  assert.equal(products[0].links.length, 2);
+  assert.equal(products[1].links.length, 2);
+  assert.equal(warehouseGroupLinkSignature(products).ok, true);
+  assert.equal(warehouseProductLinksSignature(products[0]), warehouseProductLinksSignature(products[1]));
+});
+
 test("marketplace price breakdown returns separate coefficients for shared PriceMaster links", () => {
   const rows = marketplacePriceBreakdown([
     {
@@ -3031,12 +3074,6 @@ test("bulk warehouse link delete removes grouped marketplace refs together", asy
         expectedUpdatedAt: first.body.product.updatedAt,
         expectedLinksSignature: warehouseProductLinksSignature(first.body.product),
       },
-      {
-        productId: secondId,
-        linkId: "link-b",
-        expectedUpdatedAt: second.body.product.updatedAt,
-        expectedLinksSignature: warehouseProductLinksSignature(second.body.product),
-      },
     ];
     const removed = await agent
       .post("/api/warehouse/products/links/delete")
@@ -3045,13 +3082,63 @@ test("bulk warehouse link delete removes grouped marketplace refs together", asy
     assert.equal(removed.body.changed, 2);
     assert.equal(removed.body.products.length, 2);
     assert.equal(removed.body.products.every((product) => product.links.length === 0), true);
+    assert.equal(removed.body.groupLinkSignature.ok, true);
+    assert.deepEqual(removed.body.expandedProductIds.sort(), [firstId, secondId].sort());
 
     const repeated = await agent
       .post("/api/warehouse/products/links/delete")
-      .send({ refs })
+      .send({ refs: refs.map((ref) => ({ productId: ref.productId, linkId: ref.linkId })) })
       .expect(200);
     assert.equal(repeated.body.alreadyDeleted, true);
     assert.equal(repeated.body.changed, 0);
+  } finally {
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(firstId)}`).catch(() => {});
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(secondId)}`).catch(() => {});
+  }
+});
+
+test("sync-group repairs divergent PriceMaster links across marketplace siblings", async () => {
+  const agent = request.agent(app);
+  const suffix = Date.now();
+  const firstId = `smoke-sync-link-a-${suffix}`;
+  const secondId = `smoke-sync-link-b-${suffix}`;
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: firstId,
+        target: "ozon",
+        marketplace: "ozon",
+        offerId: "SYNC-LINK-1",
+        name: "Sync link Ozon",
+        links: [{ id: "link-a", article: "PM-SYNC-1", supplierName: "Supplier A", partnerId: "1" }],
+      })
+      .expect(200);
+    await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: secondId,
+        target: "yandex-01",
+        marketplace: "yandex",
+        offerId: "SYNC-LINK-1",
+        name: "Sync link Yandex",
+        links: [{ id: "link-b", matchType: "selected_row", sourceRowId: "2066033", exactName: "Tester 30 ml", supplierName: "Supplier B", partnerId: "2" }],
+      })
+      .expect(200);
+
+    const synced = await agent
+      .post("/api/warehouse/products/links/sync-group")
+      .send({ productIds: [firstId] })
+      .expect(200);
+    assert.equal(synced.body.products.length, 2);
+    assert.equal(synced.body.products.every((product) => product.links.length === 2), true);
+    assert.equal(synced.body.groupLinkSignature.ok, true);
+    assert.deepEqual(synced.body.expandedProductIds.sort(), [firstId, secondId].sort());
   } finally {
     await agent.delete(`/api/warehouse/products/${encodeURIComponent(firstId)}`).catch(() => {});
     await agent.delete(`/api/warehouse/products/${encodeURIComponent(secondId)}`).catch(() => {});

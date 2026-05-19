@@ -77,6 +77,8 @@ function operationStatItems(job: Record<string, unknown>) {
     ["stockFailed", "Ошибки остатков"],
     ["unarchiveFailed", "Ошибки архива"],
     ["failed", "Ошибки"],
+    ["repairedGroups", "PM группы"],
+    ["changedProducts", "Изменено товаров"],
     ["draftsCreated", "AI drafts"],
     ["imageDraftsCreated", "AI фото"],
   ];
@@ -203,6 +205,7 @@ export function OperationsPage() {
         <button className="primary-action" onClick={() => startMutation.mutate("linked-supplier-recovery")} disabled={startMutation.isPending}>Восстановить привязанные</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("restore-archived-stock")} disabled={startMutation.isPending}>Восстановить архив</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("yandex-card-quality-ai-drafts")} disabled={startMutation.isPending}>AI качество карточек</button>
+        <button className="secondary-action" onClick={() => startMutation.mutate("repair-pricemaster-group-links")} disabled={startMutation.isPending}>Синхронизировать PM группы</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("health-deep")} disabled={startMutation.isPending}>Глубокий health</button>
       </section>
       {startMutation.error && <div className="inline-error">{errorMessage(startMutation.error)}</div>}

@@ -10060,6 +10060,59 @@ function addWarehousePageGroupSiblings(sourceProducts = [], pageProducts = []) {
   return Array.from(byId.values());
 }
 
+function expandWarehouseProductsToGroups(sourceProducts = [], seedProducts = []) {
+  const seeds = Array.isArray(seedProducts) ? seedProducts : [];
+  const seedIds = new Set(seeds.map((product) => String(product?.id || "")).filter(Boolean));
+  const groupKeys = new Set(seeds.map(warehouseProductPageGroupKey).filter(Boolean));
+  const byId = new Map();
+  for (const product of Array.isArray(sourceProducts) ? sourceProducts : []) {
+    if (!product?.id) continue;
+    const id = String(product.id);
+    const groupKey = warehouseProductPageGroupKey(product);
+    if (seedIds.has(id) || (groupKey && groupKeys.has(groupKey))) byId.set(id, product);
+  }
+  return Array.from(byId.values());
+}
+
+function warehouseProductsForGroupKey(sourceProducts = [], groupKey = "") {
+  const key = cleanText(groupKey);
+  if (!key) return [];
+  return (Array.isArray(sourceProducts) ? sourceProducts : [])
+    .filter((product) => warehouseProductPageGroupKey(product) === key);
+}
+
+function syncWarehouseProductGroupLinks(products = [], { now = new Date().toISOString(), username = "system" } = {}) {
+  const targetProducts = Array.isArray(products) ? products.filter((product) => product?.id) : [];
+  const commonLinks = buildCommonWarehouseGroupLinks(targetProducts, [], { now, username });
+  const changedProducts = [];
+  const oldValues = [];
+  for (const product of targetProducts) {
+    const beforeSignature = warehouseProductLinkDetailsSignature(product);
+    const beforeValue = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
+    product.links = commonLinks.map((link) => normalizeWarehouseLink({
+      ...link,
+      createdAt: link.createdAt || now,
+      updatedAt: now,
+      createdBy: link.createdBy || username,
+      updatedBy: username,
+    }));
+    if (commonLinks.length) product.autoPriceEnabled = true;
+    if (warehouseProductLinkDetailsSignature(product) !== beforeSignature) {
+      product.updatedAt = now;
+      changedProducts.push(product);
+      oldValues.push(beforeValue);
+    }
+  }
+  return {
+    products: targetProducts,
+    changedProducts,
+    changedIds: changedProducts.map((product) => product.id),
+    oldValues,
+    commonLinks,
+    groupLinkSignature: warehouseGroupLinkSignature(targetProducts),
+  };
+}
+
 function buildWarehousePageProductGroups(products = []) {
   const groups = new Map();
   for (const product of Array.isArray(products) ? products : []) {
@@ -13293,7 +13346,12 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       .filter(Boolean));
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для привязки." });
 
-    return await withWarehouseProductMutationLock(Array.from(ids), async () => {
+    const initialWarehouse = await readWarehouse();
+    const initialSeeds = (initialWarehouse.products || []).filter((product) => ids.has(String(product.id)));
+    if (!initialSeeds.length) return response.status(404).json({ error: "Warehouse products not found." });
+    const expandedProductIds = expandWarehouseProductsToGroups(initialWarehouse.products || [], initialSeeds).map((product) => String(product.id));
+
+    return await withWarehouseProductMutationLock(expandedProductIds, async () => {
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const warehouse = await readWarehouse();
@@ -13312,7 +13370,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     if (!baseLink.article && !baseLink.exactName && !baseLink.sourceRowId) {
       return response.status(400).json({ error: "Укажите артикул PriceMaster или выберите строку PriceMaster по названию." });
     }
-    const targetProducts = warehouse.products.filter((product) => ids.has(String(product.id)));
+    const seedProducts = (warehouse.products || []).filter((product) => ids.has(String(product.id)));
+    const targetProducts = expandWarehouseProductsToGroups(warehouse.products || [], seedProducts);
+    const expandedIds = new Set(targetProducts.map((product) => String(product.id)));
     if (!targetProducts.length) return response.status(404).json({ error: "РўРѕРІР°СЂС‹ СЃРєР»Р°РґР° РЅРµ РЅР°Р№РґРµРЅС‹." });
     const now = new Date().toISOString();
     const username = requestUsername(request);
@@ -13334,6 +13394,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         products: savedProducts,
         persisted: "already_written",
         alreadyWritten: true,
+        expandedProductIds: targetProducts.map((product) => product.id),
         groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
         marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
       });
@@ -13357,7 +13418,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const oldValues = [];
 
     for (const product of warehouse.products) {
-      if (!ids.has(String(product.id))) continue;
+      if (!expandedIds.has(String(product.id))) continue;
       const beforeDetailsSignature = warehouseProductLinkDetailsSignature(product);
       const beforeValue = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
       product.links = commonLinks.map((link) => normalizeWarehouseLink({
@@ -13392,6 +13453,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         products: savedProducts,
         persisted: "unchanged",
         unchanged: true,
+        expandedProductIds: targetProducts.map((product) => product.id),
         groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
         marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
       });
@@ -13408,6 +13470,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       changed: savedProducts.length || updatedIds.length,
       products: savedProducts,
       persisted: "written",
+      expandedProductIds: targetProducts.map((product) => product.id),
       groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
       marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
     });
@@ -13433,8 +13496,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       oldValue: oldValues,
       newValue: savedProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
-    queueMarketplaceJob("supplier-recovery-automation", { productIds: updatedIds }, { priority: 1 });
-    queueImmediateAutoPricePush(updatedIds, "link_bulk_add_or_update");
+    const expandedUpdatedIds = targetProducts.map((product) => product.id);
+    queueMarketplaceJob("supplier-recovery-automation", { productIds: expandedUpdatedIds }, { priority: 1 });
+    queueImmediateAutoPricePush(expandedUpdatedIds, "link_bulk_add_or_update");
     });
   } catch (error) {
     next(error);
@@ -13508,6 +13572,164 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
   }
 });
 
+async function buildWarehouseLinkMutationResponseProducts(warehouse, products = [], options = {}) {
+  const targetProducts = Array.isArray(products) ? products.filter((product) => product?.id) : [];
+  const productsWithLinks = targetProducts.filter((product) => (product.links || []).length);
+  const builtProducts = productsWithLinks.length
+    ? await buildFreshWarehouseProductsFromKnownProducts(warehouse, productsWithLinks, options)
+    : [];
+  const builtById = new Map(builtProducts.map((product) => [String(product.id), product]));
+  return targetProducts.map((product) => {
+    const built = builtById.get(String(product.id));
+    if (built) return built;
+    return {
+      ...normalizeWarehouseProduct(product),
+      links: [],
+      suppliers: [],
+      selectedSupplier: null,
+      selectedSupplierReason: "No saved PriceMaster links.",
+      ready: false,
+      changed: false,
+      hasLinks: false,
+      status: "no_links",
+    };
+  });
+}
+
+async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
+  const refs = (Array.isArray(refsInput) ? refsInput : [])
+    .map((ref) => ({
+      productId: cleanText(ref.productId),
+      linkId: cleanText(ref.linkId),
+      expectedUpdatedAt: cleanText(ref.expectedUpdatedAt),
+      expectedLinksSignature: cleanText(ref.expectedLinksSignature),
+    }))
+    .filter((ref) => ref.productId && ref.linkId);
+  if (!refs.length) return response.status(400).json({ error: "No PriceMaster links selected for delete." });
+
+  const requestedIds = new Set(refs.map((ref) => String(ref.productId)));
+  const initialWarehouse = await readWarehouse();
+  const initialSeeds = (initialWarehouse.products || []).filter((product) => requestedIds.has(String(product.id)));
+  const expandedProductIds = expandWarehouseProductsToGroups(initialWarehouse.products || [], initialSeeds)
+    .map((product) => String(product.id));
+  if (!expandedProductIds.length) {
+    return response.json({ ok: true, changed: 0, products: [], persisted: "already_deleted", alreadyDeleted: true, deletedRefs: [], alreadyDeletedRefs: refs });
+  }
+
+  return await withWarehouseProductMutationLock(expandedProductIds, async () => {
+    const warehouse = await readWarehouse();
+    const seedProducts = (warehouse.products || []).filter((product) => requestedIds.has(String(product.id)));
+    const targetProducts = expandWarehouseProductsToGroups(warehouse.products || [], seedProducts);
+    const targetIds = new Set(targetProducts.map((product) => String(product.id)));
+    const deleteKeys = new Set();
+    const deletedRefs = [];
+    const alreadyDeletedRefs = [];
+    const conflicts = [];
+
+    for (const ref of refs) {
+      const product = warehouse.products.find((item) => String(item.id) === String(ref.productId));
+      if (!product) {
+        alreadyDeletedRefs.push(ref);
+        continue;
+      }
+      const link = (Array.isArray(product.links) ? product.links : [])
+        .find((item) => String(item.id) === String(ref.linkId));
+      if (!link) {
+        const conflict = productConflict(product, {
+          expectedUpdatedAt: ref.expectedUpdatedAt,
+          expectedLinksSignature: ref.expectedLinksSignature,
+        });
+        if (conflict) {
+          conflicts.push(conflict);
+          continue;
+        }
+        alreadyDeletedRefs.push(ref);
+        continue;
+      }
+      const conflict = productConflict(product, {
+        expectedUpdatedAt: ref.expectedUpdatedAt,
+        expectedLinksSignature: ref.expectedLinksSignature,
+      });
+      if (conflict) {
+        conflicts.push(conflict);
+        continue;
+      }
+      deleteKeys.add(warehouseLinkTargetKey(link));
+      deletedRefs.push(ref);
+    }
+
+    if (conflicts.length) return conflictResponse(response, conflicts);
+    const expandedIds = targetProducts.map((product) => product.id);
+    if (!deleteKeys.size) {
+      const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, targetProducts);
+      return response.json({
+        ok: true,
+        changed: 0,
+        products: responseProducts,
+        persisted: "already_deleted",
+        alreadyDeleted: true,
+        deletedRefs,
+        alreadyDeletedRefs,
+        expandedProductIds: expandedIds,
+        groupLinkSignature: warehouseGroupLinkSignature(responseProducts),
+        marketplacePriceBreakdown: marketplacePriceBreakdown(responseProducts),
+      });
+    }
+
+    const changedProducts = [];
+    const oldValues = [];
+    for (const product of warehouse.products) {
+      if (!targetIds.has(String(product.id))) continue;
+      const previousLinks = Array.isArray(product.links) ? product.links : [];
+      const nextLinks = compactWarehouseLinks(previousLinks.filter((link) => !deleteKeys.has(warehouseLinkTargetKey(link))));
+      if (warehouseProductLinkDetailsSignature({ ...product, links: nextLinks }) === warehouseProductLinkDetailsSignature(product)) continue;
+      oldValues.push(cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt }));
+      product.links = nextLinks;
+      product.updatedAt = new Date().toISOString();
+      changedProducts.push(product);
+    }
+
+    if (!changedProducts.length) {
+      const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, targetProducts);
+      return response.json({
+        ok: true,
+        changed: 0,
+        products: responseProducts,
+        persisted: "already_deleted",
+        alreadyDeleted: true,
+        deletedRefs,
+        alreadyDeletedRefs,
+        expandedProductIds: expandedIds,
+        groupLinkSignature: warehouseGroupLinkSignature(responseProducts),
+        marketplacePriceBreakdown: marketplacePriceBreakdown(responseProducts),
+      });
+    }
+
+    await writeWarehouseProductPatch(changedProducts, { reason: "warehouse_links_group_delete" });
+    const changedIds = changedProducts.map((product) => product.id);
+    const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, targetProducts);
+    response.json({
+      ok: true,
+      changed: changedProducts.length,
+      products: responseProducts,
+      persisted: "written",
+      deletedRefs,
+      alreadyDeletedRefs,
+      expandedProductIds: expandedIds,
+      groupLinkSignature: warehouseGroupLinkSignature(responseProducts),
+      marketplacePriceBreakdown: marketplacePriceBreakdown(responseProducts),
+    });
+    appendAudit(request, "warehouse.links.bulk_delete", {
+      productIds: changedIds,
+      oldValue: oldValues,
+      newValue: responseProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
+    }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
+    queueMarketplaceJob("no-supplier-automation", { productIds: changedIds }, { priority: 1 });
+    const idsWithRemainingLinks = responseProducts.filter((product) => (product.links || []).length).map((product) => product.id);
+    if (idsWithRemainingLinks.length) queueImmediateAutoPricePush(idsWithRemainingLinks, "link_delete");
+  });
+}
+
 app.post("/api/warehouse/products/links/delete", async (request, response, next) => {
   try {
     const refs = (Array.isArray(request.body?.refs) ? request.body.refs : [])
@@ -13519,6 +13741,7 @@ app.post("/api/warehouse/products/links/delete", async (request, response, next)
       }))
       .filter((ref) => ref.productId && ref.linkId);
     if (!refs.length) return response.status(400).json({ error: "Не выбраны привязки для удаления." });
+    return await deleteWarehouseGroupLinkRefs(request, response, refs);
     const refsByProduct = new Map();
     for (const ref of refs) {
       if (!refsByProduct.has(ref.productId)) refsByProduct.set(ref.productId, []);
@@ -13603,6 +13826,12 @@ app.post("/api/warehouse/products/links/delete", async (request, response, next)
 
 app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, response, next) => {
   try {
+    return await deleteWarehouseGroupLinkRefs(request, response, [{
+      productId: request.params.productId,
+      linkId: request.params.linkId,
+      expectedUpdatedAt: request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt,
+      expectedLinksSignature: request.body?.expectedLinksSignature || request.query?.expectedLinksSignature,
+    }]);
     return await withWarehouseProductMutationLock([request.params.productId], async () => {
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.productId);
@@ -13647,6 +13876,62 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     queueMarketplaceJob("no-supplier-automation", { productIds: [request.params.productId] }, { priority: 1 });
     if ((responseProduct.links || []).length) queueImmediateAutoPricePush([request.params.productId], "link_delete");
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/products/links/sync-group", async (request, response, next) => {
+  try {
+    const productIds = (Array.isArray(request.body?.productIds) ? request.body.productIds : [])
+      .map((id) => cleanText(id))
+      .filter(Boolean);
+    const groupKey = cleanText(request.body?.groupKey);
+    const initialWarehouse = await readWarehouse();
+    const initialSeeds = groupKey
+      ? warehouseProductsForGroupKey(initialWarehouse.products || [], groupKey)
+      : (initialWarehouse.products || []).filter((product) => productIds.includes(String(product.id)));
+    if (!initialSeeds.length) return response.status(404).json({ error: "Warehouse group not found." });
+    const expandedProductIds = expandWarehouseProductsToGroups(initialWarehouse.products || [], initialSeeds)
+      .map((product) => String(product.id));
+
+    return await withWarehouseProductMutationLock(expandedProductIds, async () => {
+      const warehouse = await readWarehouse();
+      const seedProducts = groupKey
+        ? warehouseProductsForGroupKey(warehouse.products || [], groupKey)
+        : (warehouse.products || []).filter((product) => productIds.includes(String(product.id)));
+      const targetProducts = expandWarehouseProductsToGroups(warehouse.products || [], seedProducts);
+      if (!targetProducts.length) return response.status(404).json({ error: "Warehouse group not found." });
+
+      const now = new Date().toISOString();
+      const username = requestUsername(request);
+      const syncResult = syncWarehouseProductGroupLinks(targetProducts, { now, username });
+      const changedProducts = syncResult.changedProducts || [];
+      const expandedIds = targetProducts.map((product) => product.id);
+      if (changedProducts.length) {
+        await writeWarehouseProductPatch(changedProducts, { reason: "warehouse_links_sync_group" });
+      }
+      const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, targetProducts);
+      response.json({
+        ok: true,
+        changed: changedProducts.length,
+        products: responseProducts,
+        persisted: changedProducts.length ? "written" : "unchanged",
+        unchanged: !changedProducts.length,
+        expandedProductIds: expandedIds,
+        groupLinkSignature: warehouseGroupLinkSignature(responseProducts),
+        marketplacePriceBreakdown: marketplacePriceBreakdown(responseProducts),
+      });
+      if (changedProducts.length) {
+        appendAudit(request, "warehouse.links.sync_group", {
+          productIds: changedProducts.map((product) => product.id),
+          oldValue: syncResult.oldValues || [],
+          newValue: responseProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
+        }).catch((auditError) => logger.warn("link sync audit append failed", { detail: auditError?.message || String(auditError) }));
+        queueMarketplaceJob("supplier-recovery-automation", { productIds: expandedIds }, { priority: 1 });
+        queueImmediateAutoPricePush(expandedIds, "link_sync_group");
+      }
     });
   } catch (error) {
     next(error);
@@ -14790,6 +15075,7 @@ function operationTitle(type = "") {
     "linked-supplier-recovery": "Restore linked marketplace cards",
     "restore-archived-stock": "Restore archived stock",
     "yandex-card-quality-ai-drafts": "Yandex card quality AI drafts",
+    "repair-pricemaster-group-links": "Repair PriceMaster group links",
     "health-deep": "Deep health check",
   };
   return titles[type] || type || "Operation";
@@ -15263,6 +15549,78 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
   return result;
 }
 
+async function runPriceMasterGroupLinksRepairOperation(payload = {}, options = {}) {
+  const requestedLimit = Number(payload?.limit || 50000);
+  const limit = Math.max(1, Math.min(100000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 50000));
+  const warehouse = await readWarehouse();
+  const groups = new Map();
+  for (const product of (warehouse.products || [])) {
+    const groupKey = warehouseProductPageGroupKey(product);
+    if (!groupKey) continue;
+    if (!groups.has(groupKey)) groups.set(groupKey, []);
+    groups.get(groupKey).push(product);
+  }
+
+  const candidates = Array.from(groups.entries())
+    .filter(([, products]) => products.length > 1 && products.some((product) => (product.links || []).length))
+    .slice(0, limit);
+  const changedProducts = [];
+  const changedIds = [];
+  const repairedGroups = [];
+  let skippedGroups = 0;
+  const now = new Date().toISOString();
+  let processed = 0;
+
+  for (const [groupKey, products] of candidates) {
+    processed += 1;
+    const before = warehouseGroupLinkSignature(products);
+    if (before.ok) {
+      skippedGroups += 1;
+    } else {
+      const syncResult = syncWarehouseProductGroupLinks(products, { now, username: "operation" });
+      if ((syncResult.changedProducts || []).length) {
+        changedProducts.push(...syncResult.changedProducts);
+        changedIds.push(...syncResult.changedProducts.map((product) => product.id));
+        repairedGroups.push({
+          groupKey,
+          products: products.map((product) => product.id),
+          before,
+          after: warehouseGroupLinkSignature(products),
+        });
+      } else {
+        skippedGroups += 1;
+      }
+    }
+    if (processed % 50 === 0) {
+      await options.onProgress?.({
+        progress: 10 + (processed / Math.max(1, candidates.length)) * 80,
+        summary: `Checked ${processed} of ${candidates.length} PriceMaster groups.`,
+      });
+    }
+  }
+
+  const uniqueChanged = Array.from(new Map(changedProducts.map((product) => [String(product.id), product])).values());
+  if (uniqueChanged.length) {
+    for (const chunk of chunkArray(uniqueChanged, 200)) {
+      await writeWarehouseProductPatch(chunk, { reason: "warehouse_links_repair_group" });
+    }
+    const uniqueIds = Array.from(new Set(changedIds.map(String)));
+    queueMarketplaceJob("supplier-recovery-automation", { productIds: uniqueIds }, { priority: 2 });
+    queueImmediateAutoPricePush(uniqueIds, "link_repair_group");
+  }
+
+  return {
+    ok: true,
+    processedGroups: candidates.length,
+    repairedGroups: repairedGroups.length,
+    changedProducts: uniqueChanged.length,
+    changedProductIds: uniqueChanged.map((product) => product.id),
+    skippedGroups,
+    groups: repairedGroups.slice(0, 200),
+    summary: `PriceMaster groups checked ${candidates.length}; repaired ${repairedGroups.length}; changed products ${uniqueChanged.length}; skipped ${skippedGroups}.`,
+  };
+}
+
 async function runOperationPayload(job, options = {}) {
   const auditRequest = { session: { username: job.user || "system", role: job.role || "admin" } };
   if (job.type === "yandex-import-send") {
@@ -15314,6 +15672,15 @@ async function runOperationPayload(job, options = {}) {
     const result = await runYandexCardQualityAiDraftOperation(job.payload || {}, options);
     await appendAudit(auditRequest, "yandex.card_quality.ai_drafts", {
       entityType: "yandex_card_quality",
+      entityId: "all",
+      newValue: result,
+    });
+    return result;
+  }
+  if (job.type === "repair-pricemaster-group-links") {
+    const result = await runPriceMasterGroupLinksRepairOperation(job.payload || {}, options);
+    await appendAudit(auditRequest, "warehouse.links.repair_group", {
+      entityType: "warehouse_pricemaster_group_links",
       entityId: "all",
       newValue: result,
     });
@@ -17314,6 +17681,8 @@ module.exports = {
   preferWarehousePrimaryIdentityMatches,
   buildWarehouseSkuDiagnostics,
   addWarehousePageGroupSiblings,
+  expandWarehouseProductsToGroups,
+  syncWarehouseProductGroupLinks,
   buildWarehousePageProductGroups,
   linkedRecoveryCandidateProducts,
   summarizeWarehouseCounterStats,
