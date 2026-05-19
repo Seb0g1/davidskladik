@@ -4174,7 +4174,7 @@ async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY, op
   return items.slice(0, maxItems);
 }
 
-async function getYandexOfferMappingsByOfferIds(shop, offerIds = [], options = {}) {
+async function getYandexOfferMappingsByOfferIds(shop, offerIds = []) {
   const ids = [...new Set((Array.isArray(offerIds) ? offerIds : [])
     .map(cleanText)
     .filter(Boolean))];
@@ -4183,7 +4183,6 @@ async function getYandexOfferMappingsByOfferIds(shop, offerIds = [], options = {
 
   for (const chunk of chunkArray(ids, 100)) {
     const body = { offerIds: chunk };
-    if (options.archived === true || options.archived === false) body.archived = options.archived;
     const data = await yandexRequest(
       shop,
       "POST",
