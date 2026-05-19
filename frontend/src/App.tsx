@@ -17,8 +17,9 @@ import {
 } from "lucide-react";
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import type { QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { fetchJson, mutationBody } from "./api";
+import { ApiError, fetchJson, mutationBody } from "./api";
 import {
   AiImagesResponseSchema,
   DiagnosticsSchema,
@@ -29,8 +30,56 @@ import {
   ProductLink,
   WarehousePageSchema,
 } from "./types";
+import type { WarehousePage } from "./types";
 
 const pageSize = 80;
+
+type MutationPayload = {
+  product?: Product;
+  products?: Product[];
+};
+
+function mutationProducts(payload?: MutationPayload | null): Product[] {
+  if (!payload) return [];
+  const products = [...(Array.isArray(payload.products) ? payload.products : [])];
+  if (payload.product) products.push(payload.product);
+  const unique = new Map(products.filter(Boolean).map((product) => [product.id, product]));
+  return Array.from(unique.values());
+}
+
+function updateCachedProducts(queryClient: QueryClient, payload?: MutationPayload | null) {
+  const products = mutationProducts(payload);
+  if (!products.length) return;
+  const byId = new Map(products.map((product) => [String(product.id), product]));
+  queryClient.setQueriesData({ queryKey: ["warehouse", "page"] }, (old: WarehousePage | undefined) => {
+    if (!old?.items?.length) return old;
+    let changed = false;
+    const items = old.items.map((item) => {
+      const next = byId.get(String(item.id));
+      if (!next) return item;
+      changed = true;
+      return { ...item, ...next };
+    });
+    return changed ? { ...old, items } : old;
+  });
+}
+
+function errorMessage(error: unknown): string {
+  if (!error) return "";
+  if (error instanceof ApiError) {
+    const detail = error.detail && typeof error.detail === "object" ? error.detail as Record<string, unknown> : {};
+    const code = error.code || detail.code;
+    const model = detail.model || detail.imageModel;
+    const endpoint = detail.endpoint || detail.apiBaseUrl;
+    const suffix = [code && `code: ${code}`, model && `model: ${model}`, endpoint && `endpoint: ${endpoint}`].filter(Boolean).join(" · ");
+    return suffix ? `${error.message} · ${suffix}` : error.message;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
 
 function productGroupKey(product: Product): string {
   const raw = product.raw && typeof product.raw === "object" && !Array.isArray(product.raw)
@@ -177,15 +226,19 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   const links = products.flatMap((item) => (item.links || []).map((link) => ({ ...link, productId: item.id })));
   const [drafts, setDrafts] = useState<Array<{ article: string; supplierName: string; keyword: string; priceCurrency: string }>>([]);
   const [draft, setDraft] = useState({ article: "", supplierName: "", keyword: "", priceCurrency: "USD" });
+  const draftIsFilled = Boolean(draft.article.trim() || draft.supplierName.trim() || draft.keyword.trim());
+  const pendingDrafts = draftIsFilled ? [...drafts, draft] : drafts;
 
   const saveMutation = useMutation({
     mutationFn: async () => fetchJson("/api/warehouse/products/links/bulk", MutationProductResponseSchema, mutationBody({
       productIds,
       optimisticLocks,
-      links: drafts,
+      links: pendingDrafts,
     })),
-    onSuccess: () => {
+    onSuccess: (payload) => {
       setDrafts([]);
+      setDraft({ article: "", supplierName: "", keyword: "", priceCurrency: "USD" });
+      updateCachedProducts(queryClient, payload);
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
       onSaved();
     },
@@ -197,7 +250,8 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
       MutationProductResponseSchema,
       { method: "DELETE", body: JSON.stringify({ expectedUpdatedAt: products.find((item) => item.id === link.productId)?.updatedAt || products[0]?.updatedAt || "" }) },
     ),
-    onSuccess: () => {
+    onSuccess: (payload) => {
+      updateCachedProducts(queryClient, payload);
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
       onSaved();
     },
@@ -246,17 +300,20 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
           }}>
             <Link2 size={16} /> Добавить в черновик
           </button>
-          <button className="primary-action" disabled={!drafts.length || saveMutation.isPending} type="button" onClick={() => saveMutation.mutate()}>
+          <button className="primary-action" disabled={!pendingDrafts.length || saveMutation.isPending} type="button" onClick={() => saveMutation.mutate()}>
             {saveMutation.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить привязки
           </button>
         </div>
         <div className="draft-preview">
-          <strong>Черновик: {drafts.length}</strong>
+          <strong>Черновик: {pendingDrafts.length}</strong>
           {drafts.length ? drafts.map((item, index) => (
-            <span key={`${item.article}-${index}`}>{item.article || "без артикула"} · {item.supplierName || "без поставщика"}</span>
+            <button className="draft-chip" type="button" key={`${item.article}-${index}`} onClick={() => setDrafts(drafts.filter((_, itemIndex) => itemIndex !== index))} title="Убрать из черновика">
+              {item.article || "без артикула"} · {item.supplierName || "без поставщика"} <X size={12} />
+            </button>
           )) : <span>Новые привязки появятся здесь до сохранения.</span>}
+          {draftIsFilled && <span className="draft-chip is-current">{draft.article || "текущий ввод"} · {draft.supplierName || "без поставщика"}</span>}
         </div>
-        {(saveMutation.error || deleteMutation.error) && <div className="inline-error">{(saveMutation.error || deleteMutation.error as Error).message}</div>}
+        {(saveMutation.error || deleteMutation.error) && <div className="inline-error">{errorMessage(saveMutation.error || deleteMutation.error)}</div>}
       </div>
     </section>
   );
@@ -265,7 +322,12 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
 function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState("");
+  const [freshDrafts, setFreshDrafts] = useState(product.aiImages || []);
   const drafts = product.aiImages || [];
+  const visibleDrafts = freshDrafts.length ? freshDrafts : drafts;
+  useEffect(() => {
+    setFreshDrafts(product.aiImages || []);
+  }, [product.id, product.aiImages]);
   const generateMutation = useMutation({
     mutationFn: async () => {
       setProgress("подготовка");
@@ -286,8 +348,11 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
         window.clearInterval(timer);
       }
     },
-    onSuccess: () => {
+    onSuccess: (payload) => {
       setProgress("готово");
+      const responseDrafts = payload.product?.aiImages?.length ? payload.product.aiImages : payload.drafts;
+      setFreshDrafts(responseDrafts || []);
+      updateCachedProducts(queryClient, payload);
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
       onSaved();
     },
@@ -300,7 +365,9 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
       MutationProductResponseSchema,
       mutationBody({ expectedUpdatedAt: product.updatedAt || "" }),
     ),
-    onSuccess: () => {
+    onSuccess: (payload) => {
+      if (payload.product?.aiImages?.length) setFreshDrafts(payload.product.aiImages);
+      updateCachedProducts(queryClient, payload);
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
       onSaved();
     },
@@ -319,19 +386,100 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
       </div>
       {progress && <div className="progress-line"><span style={{ width: progress === "готово" ? "100%" : progress === "сохранение" ? "82%" : "48%" }} />{progress}</div>}
       <div className="ai-grid">
-        {drafts.length ? drafts.slice(0, 10).map((draft) => (
-          <div className="ai-card" key={draft.id}>
+        {visibleDrafts.length ? visibleDrafts.slice(0, 10).map((draft) => (
+          <div className={`ai-card ${draft.status === "approved" ? "is-approved" : draft.status === "rejected" ? "is-rejected" : ""}`} key={draft.id}>
             {draft.resultUrl ? <img src={draft.resultUrl} alt="" /> : <div className="image-placeholder"><Bot size={20} /></div>}
             <div className="ai-actions">
-              <span>{draft.status || "pending"}</span>
-              <button type="button" onClick={() => reviewMutation.mutate({ draftId: draft.id, action: "approve" })} title="Одобрить"><Check size={15} /></button>
-              <button type="button" onClick={() => reviewMutation.mutate({ draftId: draft.id, action: "reject" })} title="Отклонить"><X size={15} /></button>
+              <span>{draft.status || "pending"}{draft.variantIndex ? ` · ${draft.variantIndex}/${draft.variantTotal || "?"}` : ""}</span>
+              <div className="ai-action-buttons">
+                <button type="button" disabled={reviewMutation.isPending || draft.status === "approved"} onClick={() => reviewMutation.mutate({ draftId: draft.id, action: "approve" })} title="Одобрить"><Check size={15} /></button>
+                <button type="button" disabled={reviewMutation.isPending || draft.status === "rejected"} onClick={() => reviewMutation.mutate({ draftId: draft.id, action: "reject" })} title="Отклонить"><X size={15} /></button>
+              </div>
             </div>
           </div>
         )) : <div className="soft-empty">Здесь появятся сгенерированные изображения.</div>}
       </div>
-      {(generateMutation.error || reviewMutation.error) && <div className="inline-error">{(generateMutation.error || reviewMutation.error as Error).message}</div>}
+      {(generateMutation.error || reviewMutation.error) && <div className="inline-error">{errorMessage(generateMutation.error || reviewMutation.error)}</div>}
     </section>
+  );
+}
+
+function DiagnosticValue({ label, value, tone }: { label: string; value: unknown; tone?: string }) {
+  const text = value === true ? "да" : value === false ? "нет" : String(value ?? "—");
+  return (
+    <div className={`diagnostic-value ${tone || ""}`}>
+      <span>{label}</span>
+      <strong>{text}</strong>
+    </div>
+  );
+}
+
+function commandText(command: unknown, empty = "нет отправки") {
+  const item = asRecord(command);
+  if (!Object.keys(item).length) return empty;
+  const parts = [
+    item.type,
+    item.status,
+    item.stock !== undefined ? `остаток ${item.stock}` : "",
+    item.requestedPrice !== undefined ? `цена ${money(item.requestedPrice)}` : "",
+    item.target,
+    compactDate(typeof item.at === "string" ? item.at : ""),
+  ].filter(Boolean);
+  return parts.join(" · ") || empty;
+}
+
+function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unknown>; error: unknown; loading: boolean }) {
+  if (loading) return <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю диагностику...</div>;
+  if (error) return <div className="inline-error">{errorMessage(error)}</div>;
+  if (!data) return <div className="soft-empty">Диагностика пока не загружена.</div>;
+
+  const products = Array.isArray(data.products) ? data.products.map(asRecord) : [];
+  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+  const audit = Array.isArray(data.audit) ? data.audit.map(asRecord).slice(0, 6) : [];
+
+  return (
+    <div className="diagnostics-panel">
+      <div className="diagnostics-summary">
+        <DiagnosticValue label="SKU" value={data.sku} />
+        <DiagnosticValue label="Найдено" value={data.matched} />
+        <DiagnosticValue label="Скрыто supplier-only" value={data.hiddenSupplierOnlyMatches} />
+      </div>
+      {warnings.length > 0 && <div className="warning-strip">{warnings.map(String).join(" · ")}</div>}
+      {products.map((item) => {
+        const supplier = asRecord(item.selectedSupplier);
+        const automation = asRecord(item.automation);
+        return (
+          <div className="diagnostic-card" key={String(item.id)}>
+            <div className="diagnostic-card-head">
+              <strong>{String(item.offerId || item.id || "товар")}</strong>
+              <span>{String(item.marketplace || "marketplace")} · {String(item.status || "status")}</span>
+            </div>
+            <div className="diagnostics-summary">
+              <DiagnosticValue label="Архив" value={item.archived} tone={item.archived ? "danger" : "success"} />
+              <DiagnosticValue label="Привязки" value={item.hasLinks} tone={item.hasLinks ? "success" : "warn"} />
+              <DiagnosticValue label="Готов" value={item.ready} tone={item.ready ? "success" : "warn"} />
+              <DiagnosticValue label="Остаток" value={item.targetStock} />
+              <DiagnosticValue label="Цена" value={money(item.targetPrice || item.currentPrice)} />
+            </div>
+            <div className="diagnostic-lines">
+              <span><b>Поставщик:</b> {supplier.supplierName ? `${supplier.supplierName} · ${supplier.article || "без артикула"} · ${supplier.currency || ""}` : "не выбран"}</span>
+              <span><b>Остаток:</b> {commandText(item.lastStockSend)}</span>
+              <span><b>Архив:</b> {commandText(item.lastArchiveSend)}</span>
+              <span><b>Yandex цена:</b> {commandText(item.lastYandexPriceSend, "нет цены")}</span>
+              <span><b>Защита:</b> {automation.protectedFromNoSupplierArchive ? "не архивировать автоматикой" : "без защиты"} · {automation.wouldArchiveAsNoSupplier ? "может уйти в архив" : "не уйдет в архив"}</span>
+            </div>
+          </div>
+        );
+      })}
+      {audit.length > 0 && (
+        <div className="audit-list">
+          <strong>Последние действия</strong>
+          {audit.map((entry, index) => (
+            <span key={`${entry.at}-${index}`}>{compactDate(typeof entry.at === "string" ? entry.at : "")} · {String(entry.user || "system")} · {String(entry.action || "audit")}</span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -391,9 +539,7 @@ function DetailPanel({ selectedGroup, products, onClose }: { selectedGroup: stri
           </button>
         </div>
         {diagnosticsOpen && (
-          <pre className="diagnostics-box">
-            {diagnostics.isLoading ? "Загрузка..." : JSON.stringify(diagnostics.data || diagnostics.error || {}, null, 2)}
-          </pre>
+          <DiagnosticsPanel data={diagnostics.data} error={diagnostics.error} loading={diagnostics.isLoading} />
         )}
       </section>
     </aside>
@@ -430,6 +576,11 @@ function WarehouseApp() {
     () => rows.filter((item) => productGroupKey(item) === selectedGroup),
     [rows, selectedGroup],
   );
+
+  useEffect(() => {
+    if (!selectedGroup || pageQuery.isLoading) return;
+    if (!rows.some((item) => productGroupKey(item) === selectedGroup)) setSelectedGroup("");
+  }, [pageQuery.isLoading, rows, selectedGroup]);
 
   const detailQuery = useQuery({
     queryKey: ["warehouse", "group-detail", selectedGroup],
@@ -506,7 +657,7 @@ function WarehouseApp() {
 
       <section className={`workspace ${selectedGroup ? "detail-open" : ""}`}>
         <div className="list-panel">
-          {pageQuery.error && <div className="inline-error">{(pageQuery.error as Error).message}</div>}
+          {pageQuery.error && <div className="inline-error">{errorMessage(pageQuery.error)}</div>}
           <div ref={parentRef} className="virtual-list">
             <div style={{ height: `${rowVirtualizer.getTotalSize()}px`, position: "relative" }}>
               {rowVirtualizer.getVirtualItems().map((virtualRow) => {

@@ -465,6 +465,22 @@ button:disabled {
   color: var(--text);
 }
 
+.draft-chip {
+  min-height: 28px;
+  border: 1px solid var(--line);
+  background: rgba(12, 23, 40, .9);
+  color: var(--text);
+  padding: 4px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.draft-chip.is-current {
+  border-style: dashed;
+  color: var(--blue);
+}
+
 .soft-empty,
 .list-loading {
   border: 1px dashed var(--line);
@@ -494,6 +510,14 @@ button:disabled {
   grid-template-rows: 1fr auto;
 }
 
+.ai-card.is-approved {
+  border-color: rgba(80, 216, 144, .5);
+}
+
+.ai-card.is-rejected {
+  opacity: .58;
+}
+
 .ai-card img,
 .image-placeholder {
   min-height: 168px;
@@ -509,6 +533,11 @@ button:disabled {
   padding: 6px 8px;
   color: var(--muted);
   font-size: 12px;
+}
+
+.ai-action-buttons {
+  display: inline-flex;
+  gap: 6px;
 }
 
 .ai-actions button {
@@ -535,15 +564,68 @@ button:disabled {
   background: rgba(56, 163, 255, .22);
 }
 
-.diagnostics-box {
-  max-height: 260px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: #07101d;
+.diagnostics-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.diagnostics-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.diagnostic-value {
+  min-height: 56px;
   border: 1px solid var(--line);
+  background: rgba(8, 17, 31, .5);
+  padding: 9px 10px;
+  display: grid;
+  gap: 4px;
+}
+
+.diagnostic-value span,
+.diagnostic-card-head span,
+.diagnostic-lines,
+.audit-list span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.diagnostic-value strong {
+  color: var(--text);
+}
+
+.diagnostic-value.success strong { color: var(--green); }
+.diagnostic-value.warn strong { color: var(--yellow); }
+.diagnostic-value.danger strong { color: var(--red); }
+
+.diagnostic-card {
+  border: 1px solid var(--line);
+  background: rgba(8, 17, 31, .45);
   padding: 12px;
-  color: #bfd0ea;
+  display: grid;
+  gap: 10px;
+}
+
+.diagnostic-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.diagnostic-lines,
+.audit-list {
+  display: grid;
+  gap: 6px;
+}
+
+.warning-strip {
+  border: 1px solid rgba(255, 209, 102, .32);
+  background: rgba(255, 209, 102, .09);
+  color: var(--yellow);
+  padding: 10px 12px;
 }
 
 .inline-error {
@@ -623,7 +705,8 @@ button:disabled {
   .summary-grid,
   .stats-grid,
   .draft-grid,
-  .ai-grid {
+  .ai-grid,
+  .diagnostics-summary {
     grid-template-columns: 1fr;
   }
 
