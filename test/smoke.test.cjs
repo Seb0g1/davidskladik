@@ -80,6 +80,8 @@ const {
   pickWeakOzonProductIds,
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
+  marketplaceOfferAutomationKey,
+  shouldSendTargetStockForProduct,
   warehouseLinkIdentityKey,
   productLinkPostgresIdentityKey,
   dedupeProductLinkRows,
@@ -3027,6 +3029,53 @@ test("automation does not re-queue stock=0 for linked product after prior zero",
   assert.equal(marketplaceHasPositiveStock(product), true);
   const { toZeroStock } = pickNoSupplierAutomationCandidates([product], { includeNoLinks: true });
   assert.equal(toZeroStock.length, 0);
+});
+
+test("automation protects unlinked duplicate offer when sibling is linked", () => {
+  const linked = {
+    id: "linked-sku",
+    marketplace: "yandex",
+    target: "yandex-real",
+    offerId: "DUP-SKU-1",
+    hasLinks: true,
+    selectedSupplier: { price: 10, available: true },
+    noSupplierAutomation: {},
+    marketplaceState: { code: "active", stock: 3 },
+  };
+  const duplicateWithoutLinks = {
+    id: "unlinked-duplicate-sku",
+    marketplace: "yandex",
+    target: "yandex-real",
+    offerId: "DUP-SKU-1",
+    hasLinks: false,
+    selectedSupplier: null,
+    noSupplierAutomation: {},
+    marketplaceState: { code: "active", stock: 3 },
+  };
+
+  assert.equal(marketplaceOfferAutomationKey(linked), "yandex:yandex-real:dup-sku-1");
+  const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates([linked, duplicateWithoutLinks], { includeNoLinks: true });
+  assert.deepEqual(toZeroStock.map((product) => product.id), []);
+  assert.deepEqual(toArchive.map((product) => product.id), []);
+});
+
+test("stock push never sends zero for linked product while supplier is unavailable", () => {
+  assert.equal(shouldSendTargetStockForProduct({
+    id: "linked-without-current-supplier",
+    hasLinks: true,
+    ready: false,
+    selectedSupplier: null,
+    targetStock: null,
+    marketplaceState: { code: "active", stock: 3 },
+  }), false);
+  assert.equal(shouldSendTargetStockForProduct({
+    id: "linked-ready",
+    hasLinks: true,
+    ready: true,
+    selectedSupplier: { price: 10, available: true },
+    targetStock: 3,
+    marketplaceState: { code: "active", stock: 0 },
+  }), true);
 });
 
 test("Ozon stock payload targets configured warehouses and zeros all of them", async () => {

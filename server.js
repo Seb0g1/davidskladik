@@ -13251,9 +13251,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       skipped.push({ id: product.id, offerId: product.offerId, reason: "no_pricemaster_link" });
       continue;
     }
-    const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
-    const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
-    if (targetStock !== currentStock) stockItems.push(product);
+    if (shouldSendTargetStockForProduct(product)) stockItems.push(product);
     if (!product.ready) {
       skipped.push({ id: product.id, offerId: product.offerId, reason: "not_ready" });
       continue;
@@ -13828,9 +13826,7 @@ function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_
     .filter((product) => {
       if (!product?.hasLinks) return false;
       if (product.changed && Number(product.nextPrice || 0) > 0) return true;
-      const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
-      const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
-      return targetStock !== currentStock;
+      return shouldSendTargetStockForProduct(product);
     })
     .map((product) => product.id)
     .filter(Boolean)
@@ -16068,6 +16064,21 @@ function marketplaceHasPositiveStock(product = {}) {
     .some((warehouse) => Number(warehouse.stock || warehouse.present || 0) > 0);
 }
 
+function marketplaceOfferAutomationKey(product = {}) {
+  const marketplace = cleanText(product.marketplace).toLowerCase();
+  const target = cleanText(product.target).toLowerCase();
+  const offerId = cleanText(product.offerId).toLowerCase();
+  return marketplace && target && offerId ? `${marketplace}:${target}:${offerId}` : "";
+}
+
+function shouldSendTargetStockForProduct(product = {}) {
+  if (!product?.hasLinks || !product.ready || !product.selectedSupplier) return false;
+  const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
+  if (targetStock <= 0) return false;
+  const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
+  return targetStock !== currentStock;
+}
+
 function marketplaceProductNeedsSalesRecovery(product = {}, { includeUnknown = true } = {}) {
   const state = product.marketplaceState || {};
   const code = cleanText(state.code || product.status).toLowerCase();
@@ -16080,9 +16091,17 @@ function marketplaceProductNeedsSalesRecovery(product = {}, { includeUnknown = t
 
 function pickNoSupplierAutomationCandidates(products = [], options = {}) {
   const list = Array.isArray(products) ? products : [];
+  const protectedOfferKeys = new Set(list
+    .filter((product) => product.hasLinks || product.noSupplierAutomation?.manualSellableAt)
+    .map(marketplaceOfferAutomationKey)
+    .filter(Boolean));
   const noLinkProducts = options.includeNoLinks
     && !keepUnlinkedProductsSellable
-    ? list.filter((product) => !product.hasLinks && !product.noSupplierAutomation?.manualSellableAt)
+    ? list.filter((product) => {
+        if (product.hasLinks || product.noSupplierAutomation?.manualSellableAt) return false;
+        const key = marketplaceOfferAutomationKey(product);
+        return !key || !protectedOfferKeys.has(key);
+      })
     : [];
   return {
     toZeroStock: autoZeroStockOnNoSupplier
@@ -16846,6 +16865,8 @@ module.exports = {
   pickWeakOzonProductIds,
   buildOzonStockPayloadItems,
   marketplaceHasPositiveStock,
+  marketplaceOfferAutomationKey,
+  shouldSendTargetStockForProduct,
   warehouseLinkIdentityKey,
   productLinkPostgresIdentityKey,
   dedupeProductLinkRows,
