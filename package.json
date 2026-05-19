@@ -23,6 +23,7 @@
     "frontend:dev": "vite --config frontend/vite.config.ts",
     "frontend:build": "vite build --config frontend/vite.config.ts",
     "frontend:check": "tsc -p frontend/tsconfig.json --noEmit",
+    "smoke:ui": "node scripts/smoke-modern-ui.cjs",
     "build": "npm run frontend:build",
     "relay:openai": "node scripts/openai-relay-server.cjs",
     "audit": "npm audit"

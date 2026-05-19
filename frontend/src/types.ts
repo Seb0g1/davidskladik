@@ -140,6 +140,11 @@ export const OperationCreateSchema = z.object({
   job: z.record(z.string(), z.unknown()).optional(),
 }).passthrough();
 
+export const OperationDetailSchema = z.object({
+  ok: z.boolean().optional(),
+  job: z.record(z.string(), z.unknown()).optional(),
+}).passthrough();
+
 export const SettingsResponseSchema = z.object({
   ok: z.boolean().optional(),
   settings: z.record(z.string(), z.unknown()).default({}),

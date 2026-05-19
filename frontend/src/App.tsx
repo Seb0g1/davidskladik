@@ -32,6 +32,7 @@ import {
   MutationProductResponseSchema,
   NoSupplierSchema,
   OperationCreateSchema,
+  OperationDetailSchema,
   OperationsSchema,
   PriceMasterSearchRow,
   PriceMasterSearchSchema,
@@ -119,7 +120,8 @@ function errorMessage(error: unknown): string {
     const code = error.code || detail.code;
     const model = detail.model || detail.imageModel;
     const endpoint = detail.endpoint || detail.apiBaseUrl;
-    const suffix = [code && `code: ${code}`, model && `model: ${model}`, endpoint && `endpoint: ${endpoint}`].filter(Boolean).join(" · ");
+    const status = detail.status || error.status;
+    const suffix = [code && `code: ${code}`, model && `model: ${model}`, endpoint && `endpoint: ${endpoint}`, status && `status: ${status}`].filter(Boolean).join(" · ");
     return suffix ? `${error.message} · ${suffix}` : error.message;
   }
   return error instanceof Error ? error.message : String(error);
@@ -1167,12 +1169,139 @@ function jobSummary(job: Record<string, unknown>): string {
   return parts.join(" · ") || String(job.summary || "");
 }
 
+function operationIssueType(value: unknown): "pending" | "expected marketplace block" | "queue error" | "hard error" {
+  const text = JSON.stringify(value || {}).toLowerCase();
+  if (text.includes("pending") || text.includes("not_visible_after_api") || text.includes("accepted")) return "pending";
+  if (text.includes("fbo") || text.includes("forbidden") || text.includes("marketplace block") || text.includes("already")) return "expected marketplace block";
+  if (text.includes("queue") || text.includes("stalled") || text.includes("bullmq") || text.includes("redis")) return "queue error";
+  return "hard error";
+}
+
+function operationIssues(job: Record<string, unknown>) {
+  const result = asRecord(job.result);
+  const directErrors = Array.isArray(result.errors) ? result.errors : [];
+  const resultRows = Array.isArray(result.results) ? result.results : [];
+  const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+  const failedRows = resultRows.filter((item) => {
+    const row = asRecord(item);
+    return row.ok === false || row.error || row.status === "failed";
+  });
+  const items = [...directErrors, ...failedRows, ...warnings].slice(0, 80);
+  if (job.error) items.unshift({ error: job.error });
+  return items.map((item, index) => {
+    const row = asRecord(item);
+    const offerId = row.offerId || row.sku || row.article || row.id || row.productId || "";
+    const detail = row.error || row.detail || row.message || row.reason || row.code || JSON.stringify(item);
+    const type = operationIssueType(item);
+    return {
+      key: `${offerId || "issue"}-${index}`,
+      type,
+      offerId: String(offerId || "-"),
+      detail: String(detail || "-"),
+    };
+  });
+}
+
+function operationStatItems(job: Record<string, unknown>) {
+  const result = asRecord(job.result);
+  const keys = [
+    ["processed", "Обработано"],
+    ["products", "Товаров"],
+    ["candidates", "Кандидаты"],
+    ["recovered", "Восстановлено"],
+    ["sellableRecovered", "Готовы"],
+    ["restoredStocks", "Остатки"],
+    ["unarchived", "Разархив"],
+    ["stockFailed", "Ошибки остатков"],
+    ["unarchiveFailed", "Ошибки архива"],
+    ["failed", "Ошибки"],
+    ["draftsCreated", "AI drafts"],
+    ["imageDraftsCreated", "AI фото"],
+  ];
+  return keys
+    .map(([key, label]) => ({ key, label, value: result[key] }))
+    .filter((item) => Number.isFinite(Number(item.value)));
+}
+
+function OperationDetailPanel({ jobId }: { jobId: string }) {
+  const [copied, setCopied] = useState(false);
+  const detailQuery = useQuery({
+    queryKey: ["operation", jobId],
+    queryFn: () => fetchJson(`/api/operations/${encodeURIComponent(jobId)}`, OperationDetailSchema),
+    enabled: Boolean(jobId),
+    refetchInterval: (query) => {
+      const status = String(asRecord(query.state.data?.job).status || "");
+      return status === "queued" || status === "running" ? 3000 : false;
+    },
+  });
+  const job = asRecord(detailQuery.data?.job);
+  const result = asRecord(job.result);
+  const issues = operationIssues(job);
+  const stats = operationStatItems(job);
+  const copyIssues = async () => {
+    const text = issues.map((item) => `${item.type}: ${item.offerId} - ${item.detail}`).join("\n");
+    const ok = await copyPlainText(text || jobSummary(job));
+    setCopied(ok);
+    window.setTimeout(() => setCopied(false), 1400);
+  };
+
+  if (!jobId) return null;
+
+  return (
+    <section className="operation-detail">
+      {detailQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю детали операции...</div>}
+      {!detailQuery.isLoading && (
+        <>
+          <div className="section-title">
+            <div>
+              <span>Детали операции</span>
+              <h3>{String(job.title || job.type || "Операция")}</h3>
+            </div>
+            <button className="secondary-action" type="button" onClick={() => detailQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
+          </div>
+          <div className="operation-meta">
+            <span>{jobStatusLabel(job.status)} · {Math.round(numberValue(job.progress, 0))}%</span>
+            <span>{String(job.user || "system")} · {compactDate(String(job.createdAt || ""))}</span>
+            {job.finishedAt ? <span>Финиш: {compactDate(String(job.finishedAt))}</span> : null}
+          </div>
+          <div className="operation-progress"><span style={{ width: `${Math.max(0, Math.min(100, numberValue(job.progress, 0)))}%` }} /></div>
+          <p className="operation-summary">{jobSummary(job) || String(result.summary || "")}</p>
+          {stats.length ? (
+            <div className="operation-stats">
+              {stats.map((item) => <DiagnosticValue key={item.key} label={item.label} value={item.value} tone={Number(item.value) > 0 && String(item.key).toLowerCase().includes("failed") ? "danger" : ""} />)}
+            </div>
+          ) : null}
+          {issues.length ? (
+            <div className="operation-issues">
+              <div className="section-title compact-title">
+                <div><span>Ошибки и предупреждения</span><h3>{issues.length}</h3></div>
+                <button className="secondary-action" type="button" onClick={copyIssues}><Copy size={16} /> {copied ? "Скопировано" : "Скопировать"}</button>
+              </div>
+              {issues.slice(0, 20).map((item) => (
+                <div className={`operation-issue ${item.type.replaceAll(" ", "-")}`} key={item.key}>
+                  <strong>{item.type}</strong>
+                  <span>{item.offerId}</span>
+                  <small>{item.detail}</small>
+                </div>
+              ))}
+              {issues.length > 20 && <div className="soft-empty compact">Показаны первые 20 записей. Полный список можно скопировать кнопкой выше.</div>}
+            </div>
+          ) : <div className="success-strip">Критичных ошибок в результате операции не найдено.</div>}
+          {issues.length ? <div className="soft-empty compact">Повтор только ошибок будет доступен после того, как backend начнет сохранять точный список SKU для безопасного повторного запуска.</div> : null}
+        </>
+      )}
+      {detailQuery.error && <div className="inline-error">{errorMessage(detailQuery.error)}</div>}
+    </section>
+  );
+}
+
 function OperationsPage() {
   const [limit, setLimit] = useState(30000);
   const [sendLimit, setSendLimit] = useState(5000);
   const [stock, setStock] = useState(3);
   const [threshold, setThreshold] = useState(40);
   const [draftLimit, setDraftLimit] = useState(20);
+  const [selectedJobId, setSelectedJobId] = useState("");
   const queryClient = useQueryClient();
   const jobsQuery = useQuery({
     queryKey: ["operations"],
@@ -1190,9 +1319,14 @@ function OperationsPage() {
             ? { limit, threshold, draftLimit, generateImages: true }
             : { limit },
     })),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["operations"] }),
+    onSuccess: (payload) => {
+      const id = String(payload.job?.id || "");
+      if (id) setSelectedJobId(id);
+      queryClient.invalidateQueries({ queryKey: ["operations"] });
+    },
   });
   const jobs = jobsQuery.data?.jobs || [];
+  const selectedJob = selectedJobId || String(jobs[0]?.id || "");
   return (
     <>
       <PageHeader title="Операции" subtitle="Массовые задачи, прогресс, частичные ошибки и быстрый повтор через очередь." action={<button className="secondary-action" onClick={() => jobsQuery.refetch()}><RefreshCw size={16} /> Обновить</button>} />
@@ -1213,17 +1347,21 @@ function OperationsPage() {
       <section className="table-panel">
         {jobsQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю операции...</div>}
         {jobs.map((job) => (
-          <article className="job-row" key={String(job.id)}>
+          <article className={`job-row ${String(job.id) === selectedJob ? "is-selected" : ""}`} key={String(job.id)}>
             <div>
               <strong>{String(job.title || job.type)}</strong>
               <span>{jobStatusLabel(job.status)} · {String(job.user || "system")} · {compactDate(String(job.createdAt || ""))}</span>
               <small>{jobSummary(job)}</small>
             </div>
-            <div className="progress-pill">{Math.round(numberValue(job.progress, 0))}%</div>
+            <div className="row-actions">
+              <button className="secondary-action" type="button" onClick={() => setSelectedJobId(String(job.id))}>Детали</button>
+              <div className="progress-pill">{Math.round(numberValue(job.progress, 0))}%</div>
+            </div>
           </article>
         ))}
         {!jobsQuery.isLoading && !jobs.length && <div className="soft-empty">Задач пока нет.</div>}
       </section>
+      {selectedJob ? <OperationDetailPanel jobId={selectedJob} /> : null}
     </>
   );
 }
@@ -1415,6 +1553,12 @@ function SettingsPage() {
           <label>Warehouse ID<input value={String(asRecord(draft.yandex).warehouseId ?? asRecord(settings.yandex).warehouseId ?? "128820967")} onChange={(event) => update({ yandex: { ...asRecord(draft.yandex), warehouseId: event.target.value } })} /></label>
           <div className="soft-empty compact">Остатки должны уходить только в Magic Stick: 128820967.</div>
         </div>
+
+        <div className="settings-panel">
+          <div className="section-title"><div><span>Fallback</span><h3>Старый интерфейс</h3></div></div>
+          <div className="soft-empty compact">Legacy оставлен только как аварийный fallback на время приемки нового интерфейса.</div>
+          <a className="secondary-action" href="/legacy">Открыть legacy</a>
+        </div>
       </section>
 
       {(save.error) && <div className="inline-error">{errorMessage(save.error)}</div>}
@@ -1464,6 +1608,8 @@ function AiDraftsPage() {
   const [status, setStatus] = useState("pending");
   const [threshold, setThreshold] = useState(40);
   const [limit, setLimit] = useState(300);
+  const [generatingProductId, setGeneratingProductId] = useState("");
+  const [lastGenerateProductId, setLastGenerateProductId] = useState("");
   const queryClient = useQueryClient();
   const draftsQuery = useQuery({
     queryKey: ["ai-drafts", status],
@@ -1474,11 +1620,16 @@ function AiDraftsPage() {
     queryFn: () => fetchJson(`/api/warehouse/yandex-quality-candidates?cached=1&threshold=${threshold}&limit=${limit}&resultLimit=300`, YandexQualityCandidatesSchema),
   });
   const generate = useMutation({
-    mutationFn: (productId: string) => fetchJson(`/api/warehouse/products/${encodeURIComponent(productId)}/yandex-quality-draft/generate`, AiImagesResponseSchema, mutationBody({ count: 5, imagesCount: 5 })),
+    mutationFn: async (productId: string) => {
+      setGeneratingProductId(productId);
+      setLastGenerateProductId(productId);
+      return fetchJson(`/api/warehouse/products/${encodeURIComponent(productId)}/yandex-quality-draft/generate`, AiImagesResponseSchema, mutationBody({ count: 5, imagesCount: 5 }));
+    },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["ai-drafts"] });
       void queryClient.invalidateQueries({ queryKey: ["quality-candidates"] });
     },
+    onSettled: () => setGeneratingProductId(""),
   });
   const send = useMutation({
     mutationFn: (productId: string) => fetchJson(`/api/warehouse/products/${encodeURIComponent(productId)}/yandex-quality-draft/send`, MutationProductResponseSchema, mutationBody({})),
@@ -1502,7 +1653,15 @@ function AiDraftsPage() {
         <Stat label="Ниже порога" value={candidatesQuery.data?.total || 0} />
         <Stat label="Черновики" value={draftsQuery.data?.total || 0} />
       </section>
-      {(generate.error || send.error) && <div className="inline-error">{errorMessage(generate.error || send.error)}</div>}
+      {generate.isPending && (
+        <div className="progress-line"><span style={{ width: "58%" }} />Генерация текста и 5 фото через image endpoint...</div>
+      )}
+      {(generate.error || send.error) && (
+        <div className="inline-error">
+          {errorMessage(generate.error || send.error)}
+          {generate.error ? <button className="secondary-action inline-retry" type="button" disabled={!lastGenerateProductId || generate.isPending} onClick={() => lastGenerateProductId && generate.mutate(lastGenerateProductId)}>Повторить</button> : null}
+        </div>
+      )}
       <section className="table-panel">
         <div className="section-title"><div><span>Кандидаты</span><h3>Качество карточки до {threshold}</h3></div></div>
         {candidatesQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю кандидатов...</div>}
@@ -1517,7 +1676,9 @@ function AiDraftsPage() {
                 <span>{String(product.name || "Без названия")} · качество {String(quality.contentRating || row.quality || "-")}</span>
               </div>
               <div className="row-actions">
-                <button className="secondary-action" onClick={() => generate.mutate(productId)} disabled={generate.isPending || !productId}>Текст + 5 фото</button>
+                <button className="secondary-action" onClick={() => generate.mutate(productId)} disabled={generate.isPending || !productId}>
+                  {generate.isPending && generatingProductId === productId ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} Текст + 5 фото
+                </button>
                 <button className="primary-action" onClick={() => send.mutate(productId)} disabled={send.isPending || !productId}>Отправить</button>
               </div>
             </article>
@@ -1533,12 +1694,14 @@ function AiDraftsPage() {
             const draft = asRecord(row.draft);
             const related = asRecord(row.relatedImageDraft);
             const imageUrl = String(draft.resultUrl || related.resultUrl || product.imageUrl || "");
+            const imageDrafts = Array.isArray(row.imageDrafts) ? row.imageDrafts : [];
             return (
               <article className="ai-review-card" key={`${product.id}-${draft.id}`}>
                 <div className="ai-review-image">{imageUrl ? <img src={imageUrl} alt="" /> : <Bot size={22} />}</div>
                 <div>
                   <strong>{String(product.offerId || product.name || product.id)}</strong>
                   <span>{String(row.type || "draft")} · {String(draft.status || "pending")} · качество {String(asRecord(product.cardQuality).contentRating || "-")}</span>
+                  <span>Фото-черновики: {String(imageDrafts.length || (imageUrl ? 1 : 0))}/5</span>
                   <p>{String(draft.description || draft.text || draft.prompt || "Черновик без текста").slice(0, 360)}</p>
                 </div>
               </article>
@@ -1576,7 +1739,6 @@ function AppShell() {
               {item.icon}{item.label}
             </a>
           ))}
-          <a href="/legacy">Legacy</a>
         </nav>
       </header>
       {route === "operations" ? <OperationsPage /> : null}

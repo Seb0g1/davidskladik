@@ -930,6 +930,11 @@ button:disabled {
   align-items: center;
 }
 
+.job-row.is-selected {
+  border-color: rgba(56, 163, 255, .55);
+  background: rgba(56, 163, 255, .1);
+}
+
 .job-row strong,
 .job-row span,
 .job-row small {
@@ -951,6 +956,88 @@ button:disabled {
   display: grid;
   place-items: center;
   font-weight: 800;
+}
+
+.operation-detail {
+  border: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(17, 28, 46, .96), rgba(8, 17, 31, .78));
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.operation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.operation-meta span,
+.operation-summary {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.operation-progress {
+  height: 8px;
+  border: 1px solid var(--line);
+  background: rgba(8, 17, 31, .7);
+  overflow: hidden;
+}
+
+.operation-progress span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue), var(--green));
+}
+
+.operation-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.operation-issues {
+  display: grid;
+  gap: 8px;
+}
+
+.compact-title {
+  margin-top: 4px;
+}
+
+.operation-issue {
+  border: 1px solid var(--line);
+  background: rgba(8, 17, 31, .48);
+  padding: 10px;
+  display: grid;
+  grid-template-columns: 180px 140px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.operation-issue strong {
+  color: var(--yellow);
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+.operation-issue.hard-error strong,
+.operation-issue.queue-error strong {
+  color: var(--red);
+}
+
+.operation-issue.pending strong {
+  color: var(--blue);
+}
+
+.operation-issue small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.inline-retry {
+  margin-left: 10px;
 }
 
 .settings-grid {
@@ -1149,6 +1236,7 @@ button:disabled {
   .draft-grid,
   .ai-grid,
   .control-grid,
+  .operation-stats,
   .settings-grid,
   .pricing-settings-grid,
   .draft-card-grid,
@@ -1194,6 +1282,7 @@ button:disabled {
   }
 
   .marketplace-row,
+  .operation-issue,
   .merge-form,
   .settings-rule-head,
   .settings-rule-row,
