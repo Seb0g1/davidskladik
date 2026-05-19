@@ -10435,10 +10435,97 @@ function buildWarehouseProductAutomationDiagnostics(product = {}, contextProduct
   };
 }
 
+function marketplaceCommandHasError(command = {}) {
+  const normalized = command && typeof command === "object" ? command : {};
+  const status = cleanText(normalized.status || "").toLowerCase();
+  return Boolean(status === "error" || status === "failed" || status.includes("fail") || normalized.error);
+}
+
+function marketplaceCommandIsPending(command = {}) {
+  const normalized = command && typeof command === "object" ? command : {};
+  const status = cleanText(normalized.status || "").toLowerCase();
+  const detail = cleanText(normalized.detail || normalized.warning || normalized.error || "").toLowerCase();
+  return Boolean(
+    status === "pending"
+      || status === "queued"
+      || status === "accepted"
+      || status === "processing"
+      || detail.includes("pending")
+      || detail.includes("not_visible")
+  );
+}
+
+function warehouseProductDiagnosticSaleState(product = {}, contextProducts = []) {
+  const state = product.marketplaceState || {};
+  const lastStockSend = latestProductCommand(product, "stock");
+  const lastArchiveSend = latestProductCommand(product, "archive");
+  const lastPriceSend = normalizeWarehouseProduct(product).marketplace === "yandex"
+    ? normalizeLastPriceSend(product.lastYandexPriceSend || {})
+    : normalizeLastPriceSend(product.lastOzonPriceSend || product.lastYandexPriceSend || {});
+  const hasLinks = Boolean(product.hasLinks || (Array.isArray(product.links) && product.links.length));
+  const selectedSupplier = Boolean(product.selectedSupplier);
+  const archived = Boolean(productLooksArchived(product));
+  const stock = Number(product.targetStock ?? product.stock ?? state.stock ?? state.availableStock ?? 0);
+  const lastError = cleanText(
+    product.noSupplierAutomation?.lastError
+      || lastStockSend?.error
+      || lastArchiveSend?.error
+      || lastPriceSend?.detail
+      || "",
+  );
+
+  if (marketplaceCommandHasError(lastStockSend) || marketplaceCommandHasError(lastArchiveSend) || marketplaceCommandHasError(lastPriceSend) || lastError) {
+    return { code: "api_error", label: "API error", reason: lastError || "last_marketplace_command_failed" };
+  }
+  if (marketplaceCommandIsPending(lastStockSend) || marketplaceCommandIsPending(lastArchiveSend) || marketplaceCommandIsPending(lastPriceSend)) {
+    return { code: "api_pending", label: "API pending", reason: "marketplace_status_not_visible_yet" };
+  }
+  if (archived) return { code: "archived", label: "Архив", reason: "marketplace_card_archived" };
+  if (!hasLinks) return { code: "no_links", label: "Нет привязки", reason: "no_pricemaster_links" };
+  if (!selectedSupplier) return { code: "no_supplier", label: "Нет поставщика", reason: "linked_but_supplier_not_selected" };
+  if (!Number.isFinite(stock) || stock <= 0) return { code: "no_stock", label: "Нет остатка", reason: "target_stock_is_zero" };
+  return { code: "ready", label: "Готов к продаже", reason: "linked_supplier_stock_and_not_archived" };
+}
+
+function buildWarehouseDiagnosticsGroupSummary(products = []) {
+  const summary = {
+    total: 0,
+    linked: 0,
+    ready: 0,
+    archived: 0,
+    noLinks: 0,
+    noSupplier: 0,
+    noStock: 0,
+    apiPending: 0,
+    apiError: 0,
+    marketplaces: [],
+  };
+  const marketplaces = new Set();
+  for (const product of Array.isArray(products) ? products : []) {
+    const normalized = normalizeWarehouseProduct(product);
+    const saleState = warehouseProductDiagnosticSaleState(normalized, products);
+    summary.total += 1;
+    if (normalized.hasLinks || (Array.isArray(normalized.links) && normalized.links.length)) summary.linked += 1;
+    if (saleState.code === "ready") summary.ready += 1;
+    if (saleState.code === "archived") summary.archived += 1;
+    if (saleState.code === "no_links") summary.noLinks += 1;
+    if (saleState.code === "no_supplier") summary.noSupplier += 1;
+    if (saleState.code === "no_stock") summary.noStock += 1;
+    if (saleState.code === "api_pending") summary.apiPending += 1;
+    if (saleState.code === "api_error") summary.apiError += 1;
+    const marketplace = cleanText(normalized.marketplace || normalized.target || "");
+    if (marketplace) marketplaces.add(marketplace);
+  }
+  summary.marketplaces = Array.from(marketplaces).sort();
+  return summary;
+}
+
 function publicWarehouseDiagnosticProduct(product = {}, contextProducts = []) {
   const state = product.marketplaceState || {};
+  const saleState = warehouseProductDiagnosticSaleState(product, contextProducts);
   return {
     id: product.id,
+    groupKey: warehouseProductPageGroupKey(product) || "",
     marketplace: product.marketplace || "",
     target: product.target || "",
     targetName: product.targetName || "",
@@ -10465,6 +10552,10 @@ function publicWarehouseDiagnosticProduct(product = {}, contextProducts = []) {
     autoPriceEnabled: product.autoPriceEnabled !== false,
     status: product.status || state.code || "",
     archived: Boolean(product.archived || state.archived || cleanText(state.code).toLowerCase() === "archived"),
+    saleState,
+    saleStateCode: saleState.code,
+    saleStateLabel: saleState.label,
+    saleReason: saleState.reason,
     marketplaceState: state,
     noSupplierAutomation: product.noSupplierAutomation || {},
     links: (Array.isArray(product.links) ? product.links : []).map((link) => ({
@@ -10493,6 +10584,7 @@ async function buildWarehouseSkuDiagnostics(sku = "", { limit = 50, auditLimit =
   const products = Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [];
   const strictMatches = products.filter((product) => warehouseProductMatchesSearchQuery(product, query));
   const focusedMatches = preferWarehousePrimaryIdentityMatches(strictMatches, { q: query });
+  const hiddenSupplierOnlyMatches = Math.max(0, strictMatches.length - focusedMatches.length);
   const primaryOfferIds = new Set(
     focusedMatches
       .filter((product) => warehouseProductSearchRank(product, query) <= 2)
@@ -10504,6 +10596,17 @@ async function buildWarehouseSkuDiagnostics(sku = "", { limit = 50, auditLimit =
     for (const product of products) {
       const offerId = cleanText(product.offerId).toLowerCase();
       if (offerId && primaryOfferIds.has(offerId)) productIds.add(String(product.id));
+    }
+  }
+  const matchedGroupKeys = new Set(
+    products
+      .filter((product) => productIds.has(String(product.id)))
+      .map(warehouseProductPageGroupKey)
+      .filter(Boolean),
+  );
+  if (matchedGroupKeys.size) {
+    for (const product of products) {
+      if (matchedGroupKeys.has(warehouseProductPageGroupKey(product))) productIds.add(String(product.id));
     }
   }
   const matchedProducts = products
@@ -10521,12 +10624,27 @@ async function buildWarehouseSkuDiagnostics(sku = "", { limit = 50, auditLimit =
   const latestAudit = await readAuditFiltered({ q: query }, Math.max(1, Math.min(100, Math.round(Number(auditLimit || 30) || 30))));
   const warnings = [];
   if (!diagnosticProducts.length) warnings.push("sku_not_found");
-  if (strictMatches.length > diagnosticProducts.length) warnings.push("supplier_only_matches_hidden_by_primary_identity");
+  if (hiddenSupplierOnlyMatches > 0) warnings.push("supplier_only_matches_hidden_by_primary_identity");
+  const firstGroupKey = diagnosticProducts.map(warehouseProductPageGroupKey).find(Boolean) || "";
+  const groupProducts = firstGroupKey
+    ? diagnosticProducts.filter((product) => warehouseProductPageGroupKey(product) === firstGroupKey)
+    : diagnosticProducts;
+  const groupSummary = buildWarehouseDiagnosticsGroupSummary(groupProducts);
   return {
     sku: query,
     normalizedSku: normalizedQuery,
+    groupKey: firstGroupKey,
+    group: {
+      groupKey: firstGroupKey,
+      offerId: cleanText(groupProducts[0]?.offerId || query),
+      manualGroupId: cleanText(groupProducts[0]?.manualGroupId || groupProducts[0]?.raw?.manualGroupId || ""),
+      name: cleanText(groupProducts[0]?.name || groupProducts[0]?.offerId || query),
+      marketplaces: groupSummary.marketplaces,
+      statusSummary: groupSummary,
+    },
+    statusSummary: groupSummary,
     matched: diagnosticProducts.length,
-    hiddenSupplierOnlyMatches: Math.max(0, strictMatches.length - diagnosticProducts.length),
+    hiddenSupplierOnlyMatches,
     warnings,
     products: diagnosticProducts.map((product) => publicWarehouseDiagnosticProduct(product, diagnosticProducts)),
     audit: latestAudit.map((entry) => ({
@@ -11709,14 +11827,25 @@ async function saveSettingsHandler(request, response, next) {
     }).catch((auditError) => {
       logger.warn("settings audit append failed", { detail: auditError?.message || String(auditError) });
     });
+    let priceRepriceQueued = false;
+    let priceRepriceQueueError = "";
     if (shouldReprice) {
       try {
         queueImmediateAutoPricePush([], "settings_price_update", { force: true });
+        priceRepriceQueued = true;
       } catch (queueError) {
+        priceRepriceQueueError = queueError?.message || String(queueError);
         logger.warn("settings auto price queue failed", { detail: queueError?.message || String(queueError) });
       }
     }
-    response.json({ ok: true, settings: publicAppSettings(settings) });
+    response.json({
+      ok: true,
+      settings: publicAppSettings(settings),
+      priceAffectingChanged: shouldReprice,
+      priceRepriceQueued,
+      priceRepriceReason: shouldReprice ? "settings_price_update" : "no_price_affecting_changes",
+      priceRepriceQueueError,
+    });
   } catch (error) {
     next(error);
   }

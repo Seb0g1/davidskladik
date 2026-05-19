@@ -141,7 +141,12 @@ export const OperationCreateSchema = z.object({
 }).passthrough();
 
 export const SettingsResponseSchema = z.object({
+  ok: z.boolean().optional(),
   settings: z.record(z.string(), z.unknown()).default({}),
+  priceAffectingChanged: z.boolean().optional().default(false),
+  priceRepriceQueued: z.boolean().optional().default(false),
+  priceRepriceReason: z.coerce.string().optional().default(""),
+  priceRepriceQueueError: z.coerce.string().optional().default(""),
 }).passthrough();
 
 export const NoSupplierSchema = z.object({

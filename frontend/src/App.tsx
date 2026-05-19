@@ -676,6 +676,14 @@ function DiagnosticValue({ label, value, tone }: { label: string; value: unknown
   );
 }
 
+function saleTone(code: unknown) {
+  const text = String(code || "");
+  if (text === "ready") return "success";
+  if (text === "api_error" || text === "archived") return "danger";
+  if (text === "api_pending" || text === "no_supplier" || text === "no_stock" || text === "no_links") return "warn";
+  return "";
+}
+
 function commandText(command: unknown, empty = "нет отправки") {
   const item = asRecord(command);
   if (!Object.keys(item).length) return empty;
@@ -690,6 +698,12 @@ function commandText(command: unknown, empty = "нет отправки") {
   return parts.join(" · ") || empty;
 }
 
+function supplierText(supplierInput: unknown) {
+  const supplier = asRecord(supplierInput);
+  if (!Object.keys(supplier).length || !supplier.supplierName) return "не выбран";
+  return `${supplier.supplierName}${supplier.article ? ` · ${supplier.article}` : ""}${supplier.currency ? ` · ${supplier.currency}` : ""}`;
+}
+
 function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unknown>; error: unknown; loading: boolean }) {
   if (loading) return <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю диагностику...</div>;
   if (error) return <div className="inline-error">{errorMessage(error)}</div>;
@@ -697,22 +711,38 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
   const products = Array.isArray(data.products) ? data.products.map(asRecord) : [];
   const warnings = Array.isArray(data.warnings) ? data.warnings : [];
   const audit = Array.isArray(data.audit) ? data.audit.map(asRecord).slice(0, 6) : [];
+  const group = asRecord(data.group);
+  const summary = asRecord(data.statusSummary || group.statusSummary);
+  const marketplaces = Array.isArray(summary.marketplaces) ? summary.marketplaces.map(String).join(", ") : "-";
   return (
     <div className="diagnostics-panel">
       <div className="diagnostics-summary">
         <DiagnosticValue label="SKU" value={data.sku} />
-        <DiagnosticValue label="Найдено" value={data.matched} />
+        <DiagnosticValue label="В группе" value={summary.total ?? data.matched} />
         <DiagnosticValue label="Скрыто supplier-only" value={data.hiddenSupplierOnlyMatches} />
+      </div>
+      <div className="diagnostics-summary diagnostics-summary-wide">
+        <DiagnosticValue label="Маркетплейсы" value={marketplaces} />
+        <DiagnosticValue label="Готово" value={`${summary.ready ?? 0}/${summary.total ?? products.length}`} tone={Number(summary.ready || 0) > 0 ? "success" : "warn"} />
+        <DiagnosticValue label="Архив" value={summary.archived ?? 0} tone={Number(summary.archived || 0) > 0 ? "danger" : "success"} />
+        <DiagnosticValue label="Нет поставщика" value={summary.noSupplier ?? 0} tone={Number(summary.noSupplier || 0) > 0 ? "warn" : "success"} />
+        <DiagnosticValue label="Нет остатка" value={summary.noStock ?? 0} tone={Number(summary.noStock || 0) > 0 ? "warn" : "success"} />
+        <DiagnosticValue label="API ошибки" value={summary.apiError ?? 0} tone={Number(summary.apiError || 0) > 0 ? "danger" : "success"} />
       </div>
       {warnings.length > 0 && <div className="warning-strip">{warnings.map(String).join(" · ")}</div>}
       {products.map((item) => {
-        const supplier = asRecord(item.selectedSupplier);
         const automation = asRecord(item.automation);
+        const saleState = asRecord(item.saleState);
+        const saleCode = String(item.saleStateCode || saleState.code || "");
         return (
           <div className="diagnostic-card" key={String(item.id)}>
             <div className="diagnostic-card-head">
               <strong>{String(item.offerId || item.id || "товар")}</strong>
               <span>{String(item.marketplace || "marketplace")} · {String(item.status || "status")}</span>
+            </div>
+            <div className={`diagnostic-state ${saleTone(saleCode)}`}>
+              <strong>{String(item.saleStateLabel || saleState.label || "Статус неизвестен")}</strong>
+              <span>{String(item.saleReason || saleState.reason || "нет причины")}</span>
             </div>
             <div className="diagnostics-summary">
               <DiagnosticValue label="Архив" value={item.archived} tone={item.archived ? "danger" : "success"} />
@@ -722,10 +752,11 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
               <DiagnosticValue label="Цена" value={money(item.targetPrice || item.currentPrice)} />
             </div>
             <div className="diagnostic-lines">
-              <span><b>Поставщик:</b> {supplier.supplierName ? `${supplier.supplierName} · ${supplier.article || "без артикула"} · ${supplier.currency || ""}` : "не выбран"}</span>
-              <span><b>Остаток:</b> {commandText(item.lastStockSend)}</span>
-              <span><b>Архив:</b> {commandText(item.lastArchiveSend)}</span>
-              <span><b>Yandex цена:</b> {commandText(item.lastYandexPriceSend, "нет цены")}</span>
+              <span><b>Поставщик:</b> {supplierText(item.selectedSupplier)}</span>
+              <span><b>Последний остаток:</b> {commandText(item.lastStockSend)}</span>
+              <span><b>Последний архив/разархив:</b> {commandText(item.lastArchiveSend)}</span>
+              <span><b>Yandex цена:</b> {commandText(item.lastYandexPriceSend, "нет отправки цены")}</span>
+              <span><b>Ozon цена:</b> {commandText(item.lastOzonPriceSend, "нет отправки цены")}</span>
               <span><b>Защита:</b> {automation.protectedFromNoSupplierArchive ? "не архивировать автоматикой" : "без защиты"} · {automation.wouldArchiveAsNoSupplier ? "может уйти в архив" : "не уйдет в архив"}</span>
             </div>
           </div>
@@ -1251,7 +1282,15 @@ function SettingsPage() {
         </div>
       </section>
       {(save.error) && <div className="inline-error">{errorMessage(save.error)}</div>}
-      {save.isSuccess && <div className="success-strip">Настройки сохранены. Если менялись цены, пересчет поставлен в очередь.</div>}
+      {save.isSuccess && (
+        <div className={save.data?.priceRepriceQueueError ? "inline-error" : "success-strip"}>
+          {save.data?.priceRepriceQueueError
+            ? `Настройки сохранены, но пересчет цен не поставился в очередь: ${save.data.priceRepriceQueueError}`
+            : save.data?.priceAffectingChanged
+              ? (save.data.priceRepriceQueued ? "Настройки сохранены. Курс/наценки изменились, пересчет цен поставлен в очередь." : "Настройки сохранены. Курс/наценки изменились, но очередь пересчета не подтвердилась.")
+              : "Настройки сохранены. Ценовые правила не менялись, пересчет не нужен."}
+        </div>
+      )}
     </>
   );
 }

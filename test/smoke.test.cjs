@@ -2012,21 +2012,27 @@ test("PUT /api/settings saves markup settings", async () => {
 
   const before = await agent.get("/api/settings").expect(200);
   const previous = before.body.settings;
+  const nextRate = Number(previous.fixedUsdRate || 95) === 95 ? 96 : 95;
+  const nextOzonMarkup = Number(previous.defaultMarkups?.ozon || 1.7) === 1.91 ? 1.92 : 1.91;
   try {
     const res = await agent
       .put("/api/settings")
       .send({
-        fixedUsdRate: 95,
-        defaultMarkups: { ozon: 1.91, yandex: 1.62 },
-        markupRules: [{ marketplace: "all", minUsd: 0, coefficient: 1.91 }],
+        fixedUsdRate: nextRate,
+        defaultMarkups: { ozon: nextOzonMarkup, yandex: 1.62 },
+        markupRules: [{ marketplace: "all", minUsd: 0, coefficient: nextOzonMarkup }],
         availabilityRules: [{ marketplace: "all", minAvailableSuppliers: 5, coefficientDelta: -0.05, targetStock: 10 }],
       })
       .expect(200);
 
     assert.equal(res.body.ok, true);
-    assert.equal(res.body.settings.defaultMarkups.ozon, 1.91);
-    assert.equal(res.body.settings.markupRules[0].coefficient, 1.91);
+    assert.equal(res.body.settings.fixedUsdRate, nextRate);
+    assert.equal(res.body.settings.defaultMarkups.ozon, nextOzonMarkup);
+    assert.equal(res.body.settings.markupRules[0].coefficient, nextOzonMarkup);
     assert.equal(res.body.settings.availabilityRules[0].targetStock, 10);
+    assert.equal(res.body.priceAffectingChanged, true);
+    assert.equal(res.body.priceRepriceQueued, true);
+    assert.equal(res.body.priceRepriceReason, "settings_price_update");
   } finally {
     if (previous) {
       await agent.put("/api/settings").send(previous);
@@ -3881,19 +3887,42 @@ test("SKU diagnostics focuses exact product matches and reports hidden supplier 
             requestedPrice: 1990,
           },
         },
+        {
+          id: "diag-ozon-sibling",
+          marketplace: "ozon",
+          target: "ozon",
+          offerId: "41059",
+          productId: "123456",
+          name: "Correct product Ozon",
+          links: [{ id: "diag-ozon-link", article: "DIFFERENT", supplierName: "Supplier" }],
+          selectedSupplier: { supplierName: "Supplier", article: "DIFFERENT", price: 11, available: true },
+          marketplaceState: { code: "active", archived: false, stock: 5 },
+          targetStock: 5,
+        },
       ],
     });
     const diagnostics = await buildWarehouseSkuDiagnostics("41059");
-    assert.equal(diagnostics.matched, 1);
+    assert.equal(diagnostics.matched, 2);
     assert.equal(diagnostics.hiddenSupplierOnlyMatches, 1);
-    assert.equal(diagnostics.products[0].id, "diag-primary");
-    assert.equal(diagnostics.products[0].archived, true);
-    assert.equal(diagnostics.products[0].lastStockSend.type, "restore_stock");
-    assert.equal(diagnostics.products[0].lastStockSend.stock, 3);
-    assert.equal(diagnostics.products[0].lastArchiveSend.type, "unarchive");
-    assert.equal(diagnostics.products[0].lastYandexPriceSend.requestedPrice, 1990);
-    assert.equal(diagnostics.products[0].automation.protectedFromNoSupplierArchive, true);
-    assert.equal(diagnostics.products[0].automation.wouldArchiveAsNoSupplier, false);
+    assert.equal(diagnostics.group.groupKey, "offer:41059");
+    assert.equal(diagnostics.statusSummary.total, 2);
+    assert.equal(diagnostics.statusSummary.archived, 1);
+    assert.equal(diagnostics.statusSummary.ready, 0);
+    assert.equal(diagnostics.statusSummary.noSupplier, 1);
+    assert.deepEqual(diagnostics.statusSummary.marketplaces.sort(), ["ozon", "yandex"]);
+    const primary = diagnostics.products.find((product) => product.id === "diag-primary");
+    const sibling = diagnostics.products.find((product) => product.id === "diag-ozon-sibling");
+    assert.ok(primary);
+    assert.ok(sibling);
+    assert.equal(primary.archived, true);
+    assert.equal(primary.saleStateCode, "archived");
+    assert.equal(primary.lastStockSend.type, "restore_stock");
+    assert.equal(primary.lastStockSend.stock, 3);
+    assert.equal(primary.lastArchiveSend.type, "unarchive");
+    assert.equal(primary.lastYandexPriceSend.requestedPrice, 1990);
+    assert.equal(primary.automation.protectedFromNoSupplierArchive, true);
+    assert.equal(primary.automation.wouldArchiveAsNoSupplier, false);
+    assert.equal(sibling.saleStateCode, "no_supplier");
   } finally {
     if (previousWarehouse) await writeWarehouse(JSON.parse(previousWarehouse));
     else await restoreFile(warehousePath, previousWarehouse);

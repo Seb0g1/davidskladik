@@ -770,6 +770,10 @@ button:disabled {
   gap: 8px;
 }
 
+.diagnostics-summary-wide {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
 .diagnostic-value {
   min-height: 56px;
   border: 1px solid var(--line);
@@ -809,6 +813,44 @@ button:disabled {
   gap: 10px;
   flex-wrap: wrap;
 }
+
+.diagnostic-state {
+  border: 1px solid var(--line);
+  background: rgba(17, 31, 52, .7);
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.diagnostic-state strong {
+  color: var(--text);
+}
+
+.diagnostic-state span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.diagnostic-state.success {
+  border-color: rgba(80, 216, 144, .32);
+  background: rgba(80, 216, 144, .08);
+}
+
+.diagnostic-state.success strong { color: var(--green); }
+
+.diagnostic-state.warn {
+  border-color: rgba(255, 209, 102, .34);
+  background: rgba(255, 209, 102, .08);
+}
+
+.diagnostic-state.warn strong { color: var(--yellow); }
+
+.diagnostic-state.danger {
+  border-color: rgba(255, 107, 107, .36);
+  background: rgba(255, 107, 107, .08);
+}
+
+.diagnostic-state.danger strong { color: var(--red); }
 
 .diagnostic-lines,
 .audit-list {
