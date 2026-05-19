@@ -37,7 +37,7 @@ app.get("/api/operations/:id", requireAdmin, async (request, response, next) => 
 app.post("/api/operations", requireAdmin, async (request, response, next) => {
   try {
     const type = cleanText(request.body?.type);
-    if (!["yandex-import-send", "yandex-stock-sync", "linked-supplier-recovery", "restore-archived-stock", "yandex-card-quality-ai-drafts", "health-deep"].includes(type)) {
+    if (!["yandex-import-send", "yandex-stock-sync", "linked-supplier-recovery", "restore-archived-stock", "yandex-card-quality-ai-drafts", "repair-pricemaster-group-links", "health-deep"].includes(type)) {
       return response.status(400).json({ error: "Unsupported operation type." });
     }
     const job = await upsertOperationJob({
