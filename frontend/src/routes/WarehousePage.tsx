@@ -7,7 +7,7 @@ import { AiImagesResponseSchema, DiagnosticsSchema, Filters, GroupDetailSchema, 
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
-import { asRecord, compactDate, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
+import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
 import { ProductGroup, firstImage, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, preferredGroupPrimary, statusLabel } from "../lib/warehouse";
 
 const pageSize = 80;
@@ -569,7 +569,6 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
           count: 5,
           forceCodexSale: true,
           requireSourceImage: true,
-          expectedUpdatedAt: product.updatedAt || "",
         }));
       } finally {
         window.clearInterval(timer);
@@ -832,7 +831,7 @@ function CopyActions({ product }: { product: Product }) {
   };
   return (
     <div className="copy-actions" aria-label="quick copy">
-      <button className="copy-action" type="button" onClick={() => copyValue("name", product.name || "")} title="Скопировать название">
+      <button className="copy-action" type="button" onClick={() => copyValue("name", copyableLatinProductName(product.name) || product.offerId || product.sku || "")} title="Скопировать название">
         <Copy size={15} /> {copied === "name" ? "Скопировано" : "Название"}
       </button>
       <button className="copy-action" type="button" onClick={() => copyValue("article", product.offerId || product.sku || "")} title="Скопировать артикул">

@@ -117,7 +117,7 @@ const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 10000) || 10000));
 const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
-const yandexStockCampaignIds = new Set(parseYandexCampaignIds(process.env.YANDEX_STOCK_CAMPAIGN_IDS || "128820967"));
+const yandexStockCampaignIds = new Set(["128820967"]);
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const rawOpenaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
 const openaiImageModel = (() => {
@@ -6449,7 +6449,7 @@ async function restoreYandexArchivedStocks(rows = [], shops = null) {
 
 function yandexStockShops(shops = null) {
   const source = Array.isArray(shops) && shops.length ? shops : getYandexShops();
-  return source.flatMap((shop) => parseYandexCampaignIds(shop.campaignId || shop.campaign_id).map((campaignId, index) => ({
+  const expanded = source.flatMap((shop) => parseYandexCampaignIds(shop.campaignId || shop.campaign_id).map((campaignId, index) => ({
     ...shop,
     id: index === 0 ? shop.id : `${shop.id}-${campaignId}`,
     name: index === 0 ? shop.name : `${shop.name || shop.id} #${campaignId}`,
@@ -6458,8 +6458,16 @@ function yandexStockShops(shops = null) {
     shop.apiKey
     && shop.businessId
     && shop.campaignId
-    && (!yandexStockCampaignIds.size || yandexStockCampaignIds.has(String(shop.campaignId)))
   ));
+  const allowed = expanded.filter((shop) => yandexStockCampaignIds.has(String(shop.campaignId)));
+  const skipped = expanded.filter((shop) => !yandexStockCampaignIds.has(String(shop.campaignId)));
+  if (skipped.length) {
+    logger.warn("yandex stock campaign skipped", {
+      allowedCampaignIds: Array.from(yandexStockCampaignIds),
+      skippedCampaignIds: [...new Set(skipped.map((shop) => String(shop.campaignId)))],
+    });
+  }
+  return allowed;
 }
 
 function parseYandexCampaignIds(value) {
@@ -6496,12 +6504,13 @@ async function sendYandexStockRowsWithFallback(shop, rows = []) {
   if (!chunk.length) return { sent: 0, failed: 0, results: [] };
   const target = shop.id;
   const targetName = shop.name || "Yandex Market";
+  const targetCampaignId = cleanText(shop.campaignId || shop.campaign_id);
   try {
     await sendYandexStockChunk(shop, chunk);
     return {
       sent: chunk.length,
       failed: 0,
-      results: [{ target, targetName, sent: chunk.length, ok: true }],
+      results: [{ target, targetName, targetCampaignId, sent: chunk.length, ok: true }],
     };
   } catch (error) {
     const chunkError = error?.message || error?.code || "Yandex stock update failed";
@@ -6515,6 +6524,7 @@ async function sendYandexStockRowsWithFallback(shop, rows = []) {
           offerId: item.offerId,
           target,
           targetName,
+          targetCampaignId,
           stock: item.stock,
           ok: false,
           error: chunkError,
@@ -6533,6 +6543,7 @@ async function sendYandexStockRowsWithFallback(shop, rows = []) {
           offerId: item.offerId,
           target,
           targetName,
+          targetCampaignId,
           stock: item.stock,
           sent: 1,
           ok: true,
@@ -6544,6 +6555,7 @@ async function sendYandexStockRowsWithFallback(shop, rows = []) {
           offerId: item.offerId,
           target,
           targetName,
+          targetCampaignId,
           stock: item.stock,
           ok: false,
           error: itemError?.message || itemError?.code || chunkError,
@@ -12577,8 +12589,6 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
-    const conflict = productConflict(product, request.body.expectedUpdatedAt);
-    if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], updatedAt: product.updatedAt });
 
     const sourceImageUrl = cleanText(request.body.sourceImageUrl) || firstImageUrl(product.ozon?.primaryImage || product.ozon?.images || product.imageUrl);
@@ -12623,11 +12633,13 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
       }
     }
     const draft = drafts[drafts.length - 1];
-    product.aiImages = normalizeAiImageDrafts([...(product.aiImages || []), ...drafts]);
-    product.updatedAt = new Date().toISOString();
+    const freshWarehouse = await readWarehouse();
+    const freshProduct = freshWarehouse.products.find((item) => item.id === request.params.id) || product;
+    freshProduct.aiImages = normalizeAiImageDrafts([...(freshProduct.aiImages || []), ...drafts]);
+    freshProduct.updatedAt = new Date().toISOString();
 
-    const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_generate", writeLinks: false });
-    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    const saved = await writeWarehouseProductPatch([freshProduct], { reason: "warehouse_ai_image_generate", writeLinks: false });
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(freshProduct);
     response.json({ ok: true, draft, drafts, batchId, product: savedProduct });
     logger.info("ai image drafts generation complete", {
       productId: product.id,

@@ -216,6 +216,22 @@ test("modern PriceMaster link UI keeps drafts scoped and removes manual supplier
   assert.match(source, /className="pm-result-title"/);
 });
 
+test("modern copy name action keeps only latin letters and digits", async () => {
+  const commonSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "lib", "common.ts"), "utf8");
+  const warehouseSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "routes", "WarehousePage.tsx"), "utf8");
+  assert.match(commonSource, /copyableLatinProductName/);
+  assert.match(commonSource, /\[\^A-Za-z0-9\]\+/);
+  assert.match(warehouseSource, /copyableLatinProductName\(product\.name\) \|\| product\.offerId \|\| product\.sku/);
+
+  const sanitize = (value) => String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  assert.equal(sanitize("12 Parfumeurs Le Charmeur Парфюмерная вода 100 мл"), "12 Parfumeurs Le Charmeur 100");
+});
+
 test("warehouse page product groups merge marketplace variants by offer and manual group", () => {
   const products = [
     normalizeWarehouseProduct({ id: "ozon-1", marketplace: "ozon", offerId: "41059", name: "Ozon row", links: [{ id: "l1", article: "pm-1", supplierName: "A" }] }),
@@ -759,6 +775,14 @@ test("Yandex stock shops use only the configured stock campaign from comma-separ
   }]);
   assert.equal(shops.length, 1);
   assert.equal(shops[0].campaignId, "128820967");
+  const expressOnly = yandexStockShops([{
+    id: "yandex-express",
+    name: "Yandex Express",
+    apiKey: "token",
+    businessId: "171782339",
+    campaignId: "149026853",
+  }]);
+  assert.equal(expressOnly.length, 0);
 });
 
 test("Yandex API error summary includes nested response details", () => {
@@ -2936,6 +2960,14 @@ test("Codex Sale AI image generation uses edit endpoint with source image", asyn
           name: "Smoke Codex Sale Image Product",
           primaryImage: "https://example.invalid/source.png",
         },
+        aiImages: [
+          {
+            id: "existing-draft",
+            status: "pending",
+            sourceImageUrl: "https://example.invalid/source.png",
+            resultUrl: "http://localhost/uploads/ai-images/existing.png",
+          },
+        ],
       })
       .expect(200);
 
@@ -2969,10 +3001,13 @@ test("Codex Sale AI image generation uses edit endpoint with source image", asyn
         sourceImageUrl: "https://example.invalid/source.png",
         prompt: "Create clean marketplace product image",
         count: 1,
+        expectedUpdatedAt: "2020-01-01T00:00:00.000Z",
       })
       .expect(200);
 
     assert.equal(res.body.drafts.length, 1);
+    assert.equal(res.body.product.aiImages.length, 2);
+    assert.equal(res.body.product.aiImages[0].id, "existing-draft");
     assert.equal(calls.length, 2);
     assert.equal(calls[0].sourceFetch, true);
     assert.equal(calls[1].model, "gpt-image-2");

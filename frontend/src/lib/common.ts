@@ -69,6 +69,15 @@ export function compactDate(value?: string | null): string {
   return date.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+export function copyableLatinProductName(value: unknown): string {
+  return String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export async function copyPlainText(value: unknown): Promise<boolean> {
   const text = String(value ?? "");
   if (!text.trim()) return false;
