@@ -454,11 +454,34 @@ function draftFromSearchRow(row: PriceMasterSearchRow): LinkDraft {
   };
 }
 
+function linkSourceId(link: ProductLink): string {
+  return String(link.sourceRowId || link.rowId || link.id || "").trim();
+}
+
+function linkMatchText(link: ProductLink): string {
+  const type = String(link.matchType || "").toLowerCase();
+  if (type === "selected_row") return "точная строка PriceMaster";
+  if (type) return type;
+  return linkSourceId(link) ? "строка PriceMaster" : "ручная привязка";
+}
+
+function linkTitleText(link: ProductLink): string {
+  return link.exactName || link.keyword || link.article || link.supplierArticle || "PriceMaster строка";
+}
+
 function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const productIds = products.map((item) => item.id).filter(Boolean);
   const optimisticLocks = products.map((item) => ({ id: item.id, expectedUpdatedAt: item.updatedAt || "" }));
-  const links = products.flatMap((item) => (item.links || []).map((link) => ({ ...link, productId: item.id })));
+  const links = products.flatMap((item) => (item.links || []).map((link) => ({
+    ...link,
+    productId: item.id,
+    productOfferId: item.offerId,
+    productMarketplace: marketplaceLabel(item.marketplace),
+    productTarget: item.target || "",
+    productSelectedSupplier: item.selectedSupplier,
+  })));
+  const selectedSupplierCount = products.filter((item) => item.selectedSupplier).length;
   const [drafts, setDrafts] = useState<LinkDraft[]>([]);
   const [draft, setDraft] = useState<LinkDraft>({ article: "", supplierName: "", keyword: "", priceCurrency: "USD" });
   const [search, setSearch] = useState("");
@@ -517,18 +540,53 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
       <div className="section-title">
         <div>
           <span>PriceMaster</span>
-          <h3>Привязки поставщиков</h3>
+          <h3>Точная связь с PriceMaster</h3>
         </div>
         <span className="section-count">{links.length}</span>
       </div>
 
+      <div className="pm-link-summary">
+        <div>
+          <strong>{links.length}</strong>
+          <span>строк PM сохранено</span>
+        </div>
+        <div>
+          <strong>{products.length}</strong>
+          <span>карточек в группе</span>
+        </div>
+        <div>
+          <strong>{selectedSupplierCount}/{products.length}</strong>
+          <span>выбран поставщик</span>
+        </div>
+      </div>
+
       <div className="links-list">
         {links.length ? links.map((link) => (
-          <div className="link-item" key={`${link.productId}-${link.id}-${link.article}-${link.supplierName}`}>
-            <div>
-              <strong>{link.article || link.supplierArticle || "без артикула"}</strong>
-              <span>{link.supplierName || "поставщик не указан"}</span>
-              <small>{link.keyword || "без ключевого слова"} · {link.priceCurrency || "USD"} · {compactDate(link.updatedAt || link.createdAt)}</small>
+          <div className="link-item pm-link-item" key={`${link.productId}-${link.id}-${link.article}-${link.supplierName}`}>
+            <div className="pm-link-body">
+              <div className="pm-link-head">
+                <div>
+                  <strong>{link.article || link.supplierArticle || "без артикула PriceMaster"}</strong>
+                  <span>{link.supplierName || "поставщик не указан"}</span>
+                </div>
+                <span className="pm-source-pill">{linkMatchText(link)}</span>
+              </div>
+              <div className="pm-link-grid">
+                <span><b>Row ID</b>{linkSourceId(link) || "не сохранен"}</span>
+                <span><b>Partner ID</b>{link.partnerId || "не указан"}</span>
+                <span><b>Название/ключ</b>{linkTitleText(link)}</span>
+                <span><b>Валюта</b>{link.priceCurrency || "USD"}</span>
+                <span><b>Обновлено</b>{compactDate(link.updatedAt || link.createdAt)}</span>
+                <span><b>Кто изменил</b>{link.updatedBy || link.createdBy || "system"}</span>
+              </div>
+              <div className="pm-route-list">
+                <span className="pm-route-chip">
+                  {link.productMarketplace} → {link.productOfferId || link.productId}{link.productTarget ? ` · ${link.productTarget}` : ""}
+                </span>
+                <span className="pm-route-chip muted">
+                  выбран: {supplierText(link.productSelectedSupplier)}
+                </span>
+              </div>
             </div>
             <button className="icon-action danger" type="button" onClick={() => deleteMutation.mutate(link)} title="Удалить привязку">
               <Trash2 size={16} />
@@ -549,15 +607,21 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
             {searchQuery.error && <div className="inline-error">{errorMessage(searchQuery.error)}</div>}
             {searchQuery.data?.rows.map((row) => (
               <button className="pm-result" type="button" key={`${row.id}-${row.article}-${row.supplierName}`} onClick={() => addDraft(draftFromSearchRow(row))}>
-                <strong>{row.article || "без артикула"}</strong>
+                <div className="pm-result-head">
+                  <strong>{row.article || "без артикула"}</strong>
+                  <span>выбрать точную строку</span>
+                </div>
                 <span>{row.supplierName || "поставщик не указан"} · {row.keyword || row.name || "без названия"}</span>
-                <small>{money(row.price)} · {row.priceCurrency || row.currency || "USD"} · {row.available ? "в наличии" : "нет наличия"} · {compactDate(row.updatedAt)}</small>
+                <small>row {row.rowId || row.id} · partner {row.partnerId || "-"} · {money(row.price)} · {row.priceCurrency || row.currency || "USD"} · {row.available ? "в наличии" : "нет наличия"} · {compactDate(row.updatedAt)}</small>
               </button>
             ))}
           </div>
         )}
 
         <div className="section-subtitle">Ручная привязка</div>
+        <div className="info-strip compact">
+          Лучше выбирать строку из поиска: тогда сохраняется rowId, partnerId и точное название PriceMaster. Ручная привязка нужна только как запасной вариант.
+        </div>
         <div className="draft-grid">
           <input value={draft.article} onChange={(event) => setDraft({ ...draft, article: event.target.value })} placeholder="Артикул PriceMaster" />
           <input value={draft.supplierName} onChange={(event) => setDraft({ ...draft, supplierName: event.target.value })} placeholder="Поставщик" />
@@ -741,6 +805,7 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
         const automation = asRecord(item.automation);
         const saleState = asRecord(item.saleState);
         const saleCode = String(item.saleStateCode || saleState.code || "");
+        const itemLinks = Array.isArray(item.links) ? item.links.map(asRecord) : [];
         return (
           <div className="diagnostic-card" key={String(item.id)}>
             <div className="diagnostic-card-head">
@@ -760,6 +825,14 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
             </div>
             <div className="diagnostic-lines">
               <span><b>Поставщик:</b> {supplierText(item.selectedSupplier)}</span>
+              <div className="diagnostic-pm-links">
+                <b>PriceMaster:</b>
+                {itemLinks.length ? itemLinks.map((link, index) => (
+                  <span className="diagnostic-pm-chip" key={`${link.id || link.article}-${index}`}>
+                    {String(link.article || link.supplierArticle || "без артикула")} · {String(link.supplierName || "поставщик не указан")} · row {String(link.sourceRowId || link.rowId || link.id || "-")} · partner {String(link.partnerId || "-")}
+                  </span>
+                )) : <span className="diagnostic-pm-chip muted">нет привязки</span>}
+              </div>
               <span><b>Последний остаток:</b> {commandText(item.lastStockSend)}</span>
               <span><b>Последний архив/разархив:</b> {commandText(item.lastArchiveSend)}</span>
               <span><b>Yandex цена:</b> {commandText(item.lastYandexPriceSend, "нет отправки цены")}</span>
