@@ -23,7 +23,9 @@ const appUsersPath = path.join(__dirname, "..", "data", "app-users.json");
 const appSettingsPath = path.join(__dirname, "..", "data", "app-settings.json");
 const marketplaceAccountsPath = path.join(__dirname, "..", "data", "marketplace-accounts.json");
 const warehousePath = path.join(__dirname, "..", "data", "warehouse.json");
+const personalWarehousePath = path.join(__dirname, "..", "data", "personal-warehouse.json");
 const operationJobsPath = path.join(__dirname, "..", "data", "operation-jobs.json");
+const auditLogPath = path.join(__dirname, "..", "data", "audit-log.jsonl");
 
 async function backupFile(filePath) {
   try {
@@ -1964,6 +1966,105 @@ test("admin can add employees and managers cannot open admin areas", async () =>
     await admin.delete(`/api/users/${encodeURIComponent(username)}`).expect(200);
   } finally {
     await restoreFile(appUsersPath, backup);
+  }
+});
+
+test("admin can read employee PriceMaster link statistics and managers cannot", async () => {
+  const usersBackup = await backupFile(appUsersPath);
+  const warehouseBackup = await backupFile(personalWarehousePath);
+  const auditBackup = await backupFile(auditLogPath);
+  const admin = request.agent(app);
+  const manager = request.agent(app);
+  const now = new Date().toISOString();
+  const oldDate = new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString();
+
+  try {
+    await restoreFile(appUsersPath, JSON.stringify({
+      users: [{ username: "manager-stats", password: "manager-pass", role: "manager" }],
+    }, null, 2));
+    const statsWarehouse = {
+      products: [
+        {
+          id: "stats-product-1",
+          marketplace: "ozon",
+          offerId: "STATS-1",
+          name: "Stats product",
+          links: [
+            { id: "stats-link-1", article: "PM-1", supplierName: "Supplier", createdBy: "admin", updatedBy: "manager-stats", createdAt: now, updatedAt: now },
+          ],
+        },
+      ],
+      suppliers: [],
+    };
+    await writeWarehouse(statsWarehouse);
+    await restoreFile(auditLogPath, [
+      JSON.stringify({
+        at: now,
+        user: "admin",
+        role: "admin",
+        action: "warehouse.links.bulk_save",
+        productId: ["stats-product-1", "stats-product-2"],
+        details: {
+          productIds: ["stats-product-1", "stats-product-2"],
+          offerIds: ["STATS-1", "STATS-2"],
+          links: [{ article: "PM-1", supplierName: "Supplier" }],
+        },
+      }),
+      JSON.stringify({
+        at: now,
+        user: "manager-stats",
+        role: "manager",
+        action: "warehouse.link.delete",
+        productId: "stats-product-1",
+        details: { productId: "stats-product-1", offerId: "STATS-1", linkId: "stats-link-1" },
+      }),
+      JSON.stringify({
+        at: oldDate,
+        user: "admin",
+        role: "admin",
+        action: "warehouse.links.bulk_save",
+        productId: ["old-product"],
+        details: { productIds: ["old-product"], links: [{ article: "OLD" }] },
+      }),
+    ].join("\n") + "\n");
+
+    await admin
+      .post("/api/login")
+      .send({ username: "admin", password: process.env.APP_PASSWORD })
+      .expect(200);
+    await manager
+      .post("/api/login")
+      .send({ username: "manager-stats", password: "manager-pass" })
+      .expect(200);
+
+    await manager.get("/api/users/stats?period=30d").expect(403);
+    const res = await admin.get("/api/users/stats?period=30d").expect(200);
+    assert.equal(res.body.period, "30d");
+    assert.equal(res.body.periodDays, 30);
+    const adminStats = res.body.users.find((user) => user.username === "admin");
+    const managerStats = res.body.users.find((user) => user.username === "manager-stats");
+    assert.ok(adminStats);
+    assert.ok(managerStats);
+    assert.equal(adminStats.currentLinksCreated, 1);
+    assert.equal(adminStats.linksAdded, 2);
+    assert.equal(adminStats.affectedProducts, 2);
+    assert.equal(adminStats.affectedOfferIds, 2);
+    assert.equal(managerStats.currentLinksUpdated, 1);
+    assert.equal(managerStats.linksDeleted, 1);
+
+    const all = await admin.get("/api/users/stats?period=all").expect(200);
+    assert.equal(all.body.period, "all");
+    const allAdminStats = all.body.users.find((user) => user.username === "admin");
+    assert.ok(allAdminStats.linksAdded >= 3);
+  } finally {
+    await restoreFile(appUsersPath, usersBackup);
+    if (warehouseBackup) {
+      await writeWarehouse(JSON.parse(warehouseBackup));
+    } else {
+      await writeWarehouse({ products: [], suppliers: [] });
+    }
+    await restoreFile(personalWarehousePath, warehouseBackup);
+    await restoreFile(auditLogPath, auditBackup);
   }
 });
 

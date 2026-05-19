@@ -163,6 +163,31 @@ export const UsersResponseSchema = z.object({
   users: z.array(z.record(z.string(), z.unknown())).optional().default([]),
 }).passthrough();
 
+export const UserStatsRowSchema = z.object({
+  username: z.coerce.string(),
+  role: z.coerce.string().optional().default(""),
+  active: z.boolean().optional().default(true),
+  source: z.coerce.string().optional().default(""),
+  currentLinksCreated: z.number().optional().default(0),
+  currentLinksUpdated: z.number().optional().default(0),
+  actionsTotal: z.number().optional().default(0),
+  linksAdded: z.number().optional().default(0),
+  linksUpdated: z.number().optional().default(0),
+  linksDeleted: z.number().optional().default(0),
+  affectedProducts: z.number().optional().default(0),
+  affectedOfferIds: z.number().optional().default(0),
+  lastActionAt: z.coerce.string().optional().nullable(),
+}).passthrough();
+
+export const UsersStatsResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  period: z.coerce.string().optional().default("30d"),
+  periodDays: z.number().optional().nullable(),
+  from: z.coerce.string().optional().nullable(),
+  to: z.coerce.string().optional().nullable(),
+  users: z.array(UserStatsRowSchema).optional().default([]),
+}).passthrough();
+
 export const AuditLogSchema = z.object({
   audit: z.array(z.record(z.string(), z.unknown())).optional().default([]),
   total: z.number().optional().default(0),

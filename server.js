@@ -11611,6 +11611,11 @@ registerUsersRoutes(app, {
   readStoredAppUsers,
   writeStoredAppUsers,
   appendAudit,
+  getPrisma,
+  shouldUsePostgresStorage,
+  jsonFallbackEnabled,
+  readAuditFiltered,
+  readWarehouse,
   logger,
 });
 

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, RefreshCw, Save, Search, Trash2 } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
-import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SyncStatusSchema, UsersResponseSchema } from "../types";
+import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SyncStatusSchema, UsersResponseSchema, UsersStatsResponseSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
@@ -90,12 +90,21 @@ function settingsSavePayload(draft: Record<string, unknown>) {
 function UsersSettingsPanel() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState({ username: "", password: "", role: "manager" });
+  const [statsPeriod, setStatsPeriod] = useState("30d");
   const usersQuery = useQuery({ queryKey: ["users"], queryFn: () => fetchJson("/api/users", UsersResponseSchema) });
+  const statsQuery = useQuery({
+    queryKey: ["user-stats", statsPeriod],
+    queryFn: () => fetchJson(`/api/users/stats?period=${encodeURIComponent(statsPeriod)}`, UsersStatsResponseSchema),
+  });
+  const refreshUsers = () => {
+    void queryClient.invalidateQueries({ queryKey: ["users"] });
+    void queryClient.invalidateQueries({ queryKey: ["user-stats"] });
+  };
   const createUser = useMutation({
     mutationFn: () => fetchJson("/api/users", UsersResponseSchema, mutationBody(form)),
     onSuccess: () => {
       setForm({ username: "", password: "", role: "manager" });
-      void queryClient.invalidateQueries({ queryKey: ["users"] });
+      refreshUsers();
     },
   });
   const updateUser = useMutation({
@@ -104,7 +113,7 @@ function UsersSettingsPanel() {
       UsersResponseSchema,
       { method: "PUT", body: JSON.stringify(patch), headers: { "Content-Type": "application/json" } },
     ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }),
+    onSuccess: refreshUsers,
   });
   const deleteUser = useMutation({
     mutationFn: (username: string) => fetchJson(
@@ -112,10 +121,12 @@ function UsersSettingsPanel() {
       UsersResponseSchema,
       { method: "DELETE" },
     ),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }),
+    onSuccess: refreshUsers,
   });
   const users = usersQuery.data?.users || [];
+  const stats = statsQuery.data?.users || [];
   return (
+    <>
     <section className="settings-panel settings-panel-wide">
       <div className="section-title"><div><span>Доступ</span><h3>Сотрудники и роли</h3></div></div>
       <div className="settings-form-row">
@@ -149,6 +160,41 @@ function UsersSettingsPanel() {
       })}
       {(createUser.error || updateUser.error || deleteUser.error) && <div className="inline-error">{errorMessage(createUser.error || updateUser.error || deleteUser.error)}</div>}
     </section>
+    <section className="settings-panel settings-panel-wide">
+      <div className="section-title">
+        <div><span>PriceMaster</span><h3>Статистика привязок</h3></div>
+        <div className="row-actions">
+          <select value={statsPeriod} onChange={(event) => setStatsPeriod(event.target.value)}>
+            <option value="7d">7 дней</option>
+            <option value="30d">30 дней</option>
+            <option value="90d">90 дней</option>
+            <option value="all">Все</option>
+          </select>
+          <button className="secondary-action" type="button" onClick={() => statsQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
+        </div>
+      </div>
+      {statsQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Считаю статистику...</div>}
+      {!statsQuery.isLoading && !stats.length && <div className="soft-empty">По выбранному периоду действий нет.</div>}
+      {stats.map((row) => (
+        <article className="job-row employee-stats-row" key={String(row.username)}>
+          <div>
+            <strong>{String(row.username || "system")}</strong>
+            <span>{String(row.role || "-")} · {row.active !== false ? "активен" : "выключен"} · действий {Number(row.actionsTotal || 0)}</span>
+            <small>последнее: {compactDate(String(row.lastActionAt || "")) || "нет действий за период"}</small>
+          </div>
+          <div className="employee-stats-grid">
+            <span><b>{Number(row.currentLinksCreated || 0)}</b>создал активных</span>
+            <span><b>{Number(row.currentLinksUpdated || 0)}</b>изменил активных</span>
+            <span><b>{Number(row.linksAdded || 0)}</b>добавил</span>
+            <span><b>{Number(row.linksUpdated || 0)}</b>обновил</span>
+            <span><b>{Number(row.linksDeleted || 0)}</b>удалил</span>
+            <span><b>{Number(row.affectedProducts || 0)}</b>товаров</span>
+          </div>
+        </article>
+      ))}
+      {statsQuery.error && <div className="inline-error">{errorMessage(statsQuery.error)}</div>}
+    </section>
+    </>
   );
 }
 

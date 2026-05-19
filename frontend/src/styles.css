@@ -584,6 +584,33 @@ button:disabled {
   gap: 8px;
 }
 
+.employee-stats-row {
+  align-items: start;
+}
+
+.employee-stats-grid {
+  min-width: min(520px, 100%);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.employee-stats-grid span {
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, .07);
+  background: rgba(12, 23, 40, .55);
+  padding: 7px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.employee-stats-grid b {
+  display: block;
+  color: var(--text);
+  font-size: 16px;
+}
+
 .pm-link-grid span {
   min-height: 48px;
   border: 1px solid rgba(255, 255, 255, .07);
@@ -1406,6 +1433,7 @@ button:disabled {
   .draft-card-grid,
   .pm-link-summary,
   .pm-link-grid,
+  .employee-stats-grid,
   .diagnostics-summary {
     grid-template-columns: 1fr;
   }
