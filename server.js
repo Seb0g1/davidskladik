@@ -16,6 +16,9 @@ require("dotenv").config();
 
 const logger = require("./lib/logger");
 const { createStaticAppHandlers } = require("./lib/static-app");
+const { registerOperationsRoutes } = require("./routes/operations");
+const { registerSettingsRoutes } = require("./routes/settings");
+const { registerUsersRoutes } = require("./routes/users");
 const {
   postgresModeEnabled,
   jsonFallbackEnabled,
@@ -11646,210 +11649,40 @@ app.get("/api/marketplaces", (_request, response) => {
     });
 });
 
-app.get("/api/users", requireAdmin, async (_request, response, next) => {
-  try {
-    response.json({ users: (await configuredUsersForAdminAsync()).map(publicAppUser) });
-  } catch (error) {
-    next(error);
-  }
+registerUsersRoutes(app, {
+  requireAdmin,
+  cleanText,
+  requestUsername,
+  configuredUsersForAdminAsync,
+  publicAppUser,
+  normalizeAppUser,
+  normalizeAppRole,
+  readStoredAppUsers,
+  writeStoredAppUsers,
+  appendAudit,
+  logger,
 });
 
-app.post("/api/users", requireAdmin, async (request, response, next) => {
-  try {
-    const user = normalizeAppUser(request.body || {}, { source: "local", defaultRole: "manager" });
-    if (!user.username) return response.status(400).json({ error: "Укажите логин сотрудника." });
-    if (!user.password || user.password.length < 6) return response.status(400).json({ error: "Укажите пароль сотрудника минимум 6 символов." });
-    const exists = (await configuredUsersForAdminAsync()).some((item) => item.username.toLowerCase() === user.username.toLowerCase());
-    if (exists) return response.status(409).json({ error: "Пользователь с таким логином уже существует." });
-    const users = await readStoredAppUsers();
-    users.push({ ...user, source: "local", protected: false, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-    await writeStoredAppUsers(users);
-    appendAudit(request, "users.create", {
-      username: user.username,
-      role: user.role,
-      oldValue: null,
-      newValue: publicAppUser(user),
-    }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
-    response.json({ ok: true, users: (await configuredUsersForAdminAsync()).map(publicAppUser) });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.put("/api/users/:username", requireAdmin, async (request, response, next) => {
-  try {
-    const username = cleanText(request.params.username);
-    const currentUsername = requestUsername(request);
-    const users = await readStoredAppUsers({ includeDisabled: true });
-    const index = users.findIndex((item) => item.username.toLowerCase() === username.toLowerCase());
-    if (index < 0) return response.status(404).json({ error: "Локальный сотрудник не найден. Пользователей из .env можно менять только в .env." });
-    const before = publicAppUser(users[index]);
-    const nextUser = {
-      ...users[index],
-      role: normalizeAppRole(request.body.role, users[index].role || "manager"),
-      updatedAt: new Date().toISOString(),
-    };
-    if (request.body.active !== undefined || request.body.disabled !== undefined) {
-      const active = request.body.active !== undefined
-        ? Boolean(request.body.active)
-        : !Boolean(request.body.disabled);
-      if (!active && username.toLowerCase() === currentUsername.toLowerCase()) {
-        return response.status(400).json({ error: "Нельзя выключить текущего пользователя. Сначала войдите под другим администратором." });
-      }
-      nextUser.disabled = !active;
-    }
-    if (nextUser.role !== "admin" && username.toLowerCase() === currentUsername.toLowerCase()) {
-      return response.status(400).json({ error: "Нельзя снять роль администратора с текущего пользователя. Сначала войдите под другим администратором." });
-    }
-    if (request.body.password) {
-      const password = cleanText(request.body.password);
-      if (password.length < 6) return response.status(400).json({ error: "Пароль должен быть минимум 6 символов." });
-      nextUser.password = password;
-    }
-    users[index] = nextUser;
-    await writeStoredAppUsers(users);
-    appendAudit(request, "users.update", {
-      username,
-      role: nextUser.role,
-      oldValue: before,
-      newValue: publicAppUser(nextUser),
-    }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
-    response.json({ ok: true, users: (await configuredUsersForAdminAsync()).map(publicAppUser) });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.delete("/api/users/:username", requireAdmin, async (request, response, next) => {
-  try {
-    const username = cleanText(request.params.username);
-    const currentUsername = requestUsername(request);
-    if (username.toLowerCase() === currentUsername.toLowerCase()) {
-      return response.status(400).json({ error: "Нельзя удалить текущего пользователя. Сначала войдите под другим администратором." });
-    }
-    const users = await readStoredAppUsers({ includeDisabled: true });
-    const target = users.find((item) => item.username.toLowerCase() === username.toLowerCase());
-    if (!target) return response.status(404).json({ error: "Локальный сотрудник не найден. Пользователей из .env удалить нельзя." });
-    const remaining = users.filter((item) => item.username.toLowerCase() !== username.toLowerCase());
-    await writeStoredAppUsers(remaining);
-    appendAudit(request, "users.delete", {
-      username,
-      oldValue: publicAppUser(target),
-      newValue: null,
-    }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
-    response.json({ ok: true, users: (await configuredUsersForAdminAsync()).map(publicAppUser) });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/settings", requireAdmin, async (_request, response, next) => {
-  try {
-    const settings = await readAppSettings();
-    response.json({
-      settings: publicAppSettings(settings),
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-async function saveSettingsHandler(request, response, next) {
-  try {
-    const previous = await readAppSettings();
-    const rawSettings = { ...(request.body || {}) };
-    if (!rawSettings.ai) {
-      rawSettings.ai = previous.ai || {};
-    } else {
-      const incomingKey = cleanText(rawSettings.ai.apiKey || rawSettings.ai.api_key);
-      const clearKey = rawSettings.ai.clearApiKey === true || rawSettings.ai.apiKeySet === false;
-      if (clearKey) {
-        rawSettings.ai = { ...rawSettings.ai, apiKey: "" };
-      } else if (!incomingKey || incomingKey === maskedSecretValue) {
-        rawSettings.ai = { ...rawSettings.ai, apiKey: previous.ai?.apiKey || "" };
-      }
-    }
-    const settings = await writeAppSettings(rawSettings);
-    const shouldReprice = priceAffectingSettingsChanged(previous, settings);
-    appendAudit(request, "settings.update", {
-      fixedUsdRate: settings.fixedUsdRate,
-      defaultMarkups: settings.defaultMarkups,
-      markupRules: settings.markupRules.length,
-      availabilityRules: settings.availabilityRules.length,
-      priceAffecting: shouldReprice,
-      ai: {
-        enabled: settings.ai?.enabled !== false,
-        providerId: settings.ai?.providerId,
-        baseUrl: settings.ai?.baseUrl,
-        textModel: settings.ai?.textModel,
-        imageModel: settings.ai?.imageModel,
-        apiKeySet: Boolean(settings.ai?.apiKey),
-      },
-    }).catch((auditError) => {
-      logger.warn("settings audit append failed", { detail: auditError?.message || String(auditError) });
-    });
-    let priceRepriceQueued = false;
-    let priceRepriceQueueError = "";
-    if (shouldReprice) {
-      try {
-        queueImmediateAutoPricePush([], "settings_price_update", { force: true });
-        priceRepriceQueued = true;
-      } catch (queueError) {
-        priceRepriceQueueError = queueError?.message || String(queueError);
-        logger.warn("settings auto price queue failed", { detail: queueError?.message || String(queueError) });
-      }
-    }
-    response.json({
-      ok: true,
-      settings: publicAppSettings(settings),
-      priceAffectingChanged: shouldReprice,
-      priceRepriceQueued,
-      priceRepriceReason: shouldReprice ? "settings_price_update" : "no_price_affecting_changes",
-      priceRepriceQueueError,
-    });
-  } catch (error) {
-    next(error);
-  }
-}
-
-app.put("/api/settings", requireAdmin, saveSettingsHandler);
-app.post("/api/settings", requireAdmin, saveSettingsHandler);
-
-app.post("/api/settings/ai/test", requireAdmin, async (request, response, next) => {
-  try {
-    const previous = await readAppSettings();
-    const rawAi = request.body?.ai || previous.ai || {};
-    const incomingKey = cleanText(rawAi.apiKey || rawAi.api_key);
-    const clearKey = rawAi.clearApiKey === true || rawAi.apiKeySet === false;
-    const ai = normalizeAiSettings({
-      ...rawAi,
-      apiKey: clearKey ? "" : ((!incomingKey || incomingKey === maskedSecretValue) ? previous.ai?.apiKey || "" : incomingKey),
-    }, previous.ai || defaultAppSettings().ai);
-    const effective = effectiveAiSettingsFromAppSettings({ ...previous, ai });
-    assertTextGenerationConfigured(effective);
-    const client = getOpenAiClient(effective);
-    const startedAt = Date.now();
-    const result = await createOpenAiChatCompletionWithFallback(client, {
-      model: effective.textModel || openaiTextModel,
-      messages: [
-        { role: "system", content: "Return JSON only." },
-        { role: "user", content: "{\"ok\":true}" },
-      ],
-      temperature: 0,
-      response_format: { type: "json_object" },
-    }, {
-      preferCompatible: shouldPreferCompatibleOpenAiChatRequest(effective),
-    });
-    response.json({
-      ok: true,
-      providerId: effective.providerId,
-      baseUrl: effective.baseUrl,
-      model: cleanText(result?.model) || effective.textModel,
-      latencyMs: Date.now() - startedAt,
-    });
-  } catch (error) {
-    next(normalizeOpenAiImageError(error));
-  }
+registerSettingsRoutes(app, {
+  requireAdmin,
+  cleanText,
+  readAppSettings,
+  writeAppSettings,
+  publicAppSettings,
+  defaultAppSettings,
+  maskedSecretValue,
+  normalizeAiSettings,
+  effectiveAiSettingsFromAppSettings,
+  assertTextGenerationConfigured,
+  getOpenAiClient,
+  createOpenAiChatCompletionWithFallback,
+  shouldPreferCompatibleOpenAiChatRequest,
+  openaiTextModel,
+  priceAffectingSettingsChanged,
+  queueImmediateAutoPricePush,
+  appendAudit,
+  logger,
+  normalizeOpenAiImageError,
 });
 
 app.get("/api/marketplace-accounts", (_request, response) => {
@@ -15587,49 +15420,17 @@ function startOperationJob(job) {
   }, 10);
 }
 
-app.get("/api/operations", requireAdmin, async (request, response, next) => {
-  try {
-    const limit = cleanLimit(request.query.limit, 50, 300);
-    const jobs = await readOperationJobs(limit);
-    response.json({ ok: true, jobs: jobs.map(operationJobPublic), total: jobs.length });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/operations/:id", requireAdmin, async (request, response, next) => {
-  try {
-    const id = cleanText(request.params.id);
-    const jobs = await readOperationJobs(300);
-    const job = jobs.find((item) => item.id === id) || activeOperationJobs.get(id);
-    if (!job) return response.status(404).json({ error: "Operation not found." });
-    response.json({ ok: true, job: operationJobPublic(job) });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/operations", requireAdmin, async (request, response, next) => {
-  try {
-    const type = cleanText(request.body?.type);
-    if (!["yandex-import-send", "yandex-stock-sync", "linked-supplier-recovery", "restore-archived-stock", "yandex-card-quality-ai-drafts", "health-deep"].includes(type)) {
-      return response.status(400).json({ error: "Unsupported operation type." });
-    }
-    const job = await upsertOperationJob({
-      id: crypto.randomUUID(),
-      type,
-      title: operationTitle(type),
-      status: "queued",
-      user: request.session?.username || "system",
-      role: request.session?.role || "admin",
-      payload: request.body?.payload && typeof request.body.payload === "object" ? request.body.payload : {},
-      progress: 0,
-    });
-    startOperationJob(job);
-    response.status(202).json({ ok: true, job: operationJobPublic(job) });
-  } catch (error) {
-    next(error);
-  }
+registerOperationsRoutes(app, {
+  requireAdmin,
+  cleanLimit,
+  cleanText,
+  crypto,
+  readOperationJobs,
+  upsertOperationJob,
+  operationJobPublic,
+  operationTitle,
+  startOperationJob,
+  activeOperationJobs,
 });
 
 app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
