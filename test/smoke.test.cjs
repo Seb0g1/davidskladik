@@ -72,6 +72,8 @@ const {
   warehousePageProductMatches,
   warehousePagePostgresWhere,
   sortWarehouseProductsForSearch,
+  preferWarehousePrimaryIdentityMatches,
+  buildWarehouseSkuDiagnostics,
   addWarehousePageGroupSiblings,
   linkedRecoveryCandidateProducts,
   summarizeWarehouseCounterStats,
@@ -3579,6 +3581,68 @@ test("warehouse page article search matches exact identifiers only", () => {
   assert.equal(warehousePageProductMatches(exact, { q: "pm-link-777" }), true);
   assert.equal(warehousePageProductMatches(partial, { q: "pm-link-777" }), false);
   assert.equal(warehousePageProductMatches(partial, { q: "Wrong product" }), true);
+});
+
+test("warehouse page article search hides supplier-only matches when product id matches", () => {
+  const supplierMatch = normalizeWarehouseProduct({
+    id: "supplier-link-only-match",
+    target: "ozon",
+    marketplace: "ozon",
+    offerId: "OTHER-41059",
+    name: "Wrong product",
+    links: [{ id: "supplier-link-only", article: "41059", supplierName: "Supplier" }],
+  });
+  const offerMatch = normalizeWarehouseProduct({
+    id: "primary-offer-match",
+    target: "yandex-real",
+    marketplace: "yandex",
+    offerId: "41059",
+    name: "Correct product",
+    links: [{ id: "primary-offer-link", article: "DIFFERENT", supplierName: "Supplier" }],
+  });
+  const filtered = preferWarehousePrimaryIdentityMatches([supplierMatch, offerMatch], { q: "41059" });
+  assert.deepEqual(filtered.map((product) => product.id), ["primary-offer-match"]);
+});
+
+test("SKU diagnostics focuses exact product matches and reports hidden supplier matches", async () => {
+  const previousWarehouse = await backupFile(warehousePath);
+  try {
+    await writeWarehouse({
+      createdAt: "2026-05-19T00:00:00.000Z",
+      updatedAt: "2026-05-19T00:00:00.000Z",
+      suppliers: [],
+      products: [
+        {
+          id: "diag-supplier-only",
+          marketplace: "ozon",
+          target: "ozon",
+          offerId: "OTHER-41059",
+          name: "Wrong product",
+          links: [{ id: "diag-link-only", article: "41059", supplierName: "Supplier" }],
+          marketplaceState: { code: "active", stock: 1 },
+        },
+        {
+          id: "diag-primary",
+          marketplace: "yandex",
+          target: "yandex-real",
+          offerId: "41059",
+          name: "Correct product",
+          links: [{ id: "diag-primary-link", article: "DIFFERENT", supplierName: "Supplier" }],
+          selectedSupplier: { supplierName: "Supplier", article: "DIFFERENT", price: 12, available: true },
+          marketplaceState: { code: "archived", archived: true, stock: 0 },
+          noSupplierAutomation: { recoveredAt: "2026-05-19T00:00:00.000Z" },
+        },
+      ],
+    });
+    const diagnostics = await buildWarehouseSkuDiagnostics("41059");
+    assert.equal(diagnostics.matched, 1);
+    assert.equal(diagnostics.hiddenSupplierOnlyMatches, 1);
+    assert.equal(diagnostics.products[0].id, "diag-primary");
+    assert.equal(diagnostics.products[0].archived, true);
+  } finally {
+    if (previousWarehouse) await writeWarehouse(JSON.parse(previousWarehouse));
+    else await restoreFile(warehousePath, previousWarehouse);
+  }
 });
 
 test("no-supplier automation does not archive linked products while supplier is recalculating", () => {

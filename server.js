@@ -9623,6 +9623,14 @@ function sortWarehouseProductsForSearch(products = [], filters = {}) {
   });
 }
 
+function preferWarehousePrimaryIdentityMatches(products = [], filters = {}) {
+  const rows = Array.isArray(products) ? products : [];
+  if (!isWarehouseStrictIdentitySearch(filters)) return rows;
+  const query = filters.q || "";
+  const primaryMatches = rows.filter((product) => warehouseProductSearchRank(product, query) <= 2);
+  return primaryMatches.length ? primaryMatches : rows;
+}
+
 function warehouseProductMatchesSearchQuery(product = {}, query = "") {
   const q = cleanText(query || "");
   if (!q) return true;
@@ -9991,18 +9999,19 @@ async function buildFastWarehousePageFromPostgres({
   const needsComputedLinkFilter = linkedFilter === "ready" || linkedFilter === "changed" || linkedFilter === "linked_archived";
   const needsDeepBrandFilter = Boolean(cleanText(filters.brand || ""));
   const strictIdentitySearch = isWarehouseStrictIdentitySearch(filters);
+  const needsInMemoryPage = needsDeepBrandFilter || needsComputedLinkFilter || strictIdentitySearch;
   const where = warehousePagePostgresWhere(needsDeepBrandFilter || needsComputedLinkFilter ? { ...filters, brand: "", state: "all" } : filters);
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
   const [summary, dbTotal, initialDbRows] = await Promise.all([
     getWarehousePostgresSummary(prisma, rate),
-    needsDeepBrandFilter || needsComputedLinkFilter ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
+    needsInMemoryPage ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
     prisma.warehouseProduct.findMany({
       where,
       include: { links: true },
       orderBy: warehousePagePostgresOrderBy(),
-      skip: needsDeepBrandFilter || needsComputedLinkFilter ? 0 : offset,
-      take: needsDeepBrandFilter || needsComputedLinkFilter ? undefined : pageSize,
+      skip: needsInMemoryPage ? 0 : offset,
+      take: needsInMemoryPage ? undefined : pageSize,
     }),
   ]);
   pageTrace("postgres:after-query", traceStartedAt);
@@ -10021,15 +10030,18 @@ async function buildFastWarehousePageFromPostgres({
       { livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
     );
   }
-  if (needsDeepBrandFilter || needsComputedLinkFilter) {
+  if (needsInMemoryPage) {
     allProducts = sortWarehouseProductsForSearch(
-      allProducts.filter((product) => warehousePageProductMatches(product, filters)),
+      preferWarehousePrimaryIdentityMatches(
+        allProducts.filter((product) => warehousePageProductMatches(product, filters)),
+        filters,
+      ),
       filters,
     );
   }
-  const total = needsDeepBrandFilter || needsComputedLinkFilter ? allProducts.length : dbTotal;
+  const total = needsInMemoryPage ? allProducts.length : dbTotal;
   let visibleProducts = allProducts;
-  if (needsDeepBrandFilter || needsComputedLinkFilter) {
+  if (needsInMemoryPage) {
     const pageSlice = allProducts.slice(offset, offset + pageSize);
     pageBaseCount = pageSlice.length;
     visibleProducts = strictIdentitySearch ? pageSlice : addWarehousePageGroupSiblings(allProducts, pageSlice);
@@ -10140,6 +10152,118 @@ function normalizeWarehouseDetailProduct(product = {}) {
     noSupplierAutomation: product.noSupplierAutomation || {},
     marketplaceState: product.marketplaceState || {},
     partial: false,
+  };
+}
+
+function publicSelectedSupplierDiagnostics(supplier = null) {
+  if (!supplier) return null;
+  return {
+    supplierName: supplier.supplierName || supplier.name || "",
+    article: supplier.article || supplier.supplierArticle || "",
+    partnerId: supplier.partnerId || "",
+    available: supplier.available !== false,
+    price: supplier.price ?? supplier.calculatedPrice ?? null,
+    priceRub: supplier.priceRub ?? supplier.calculatedPriceRub ?? null,
+    currency: supplier.currency || supplier.priceCurrency || "",
+  };
+}
+
+function publicWarehouseDiagnosticProduct(product = {}) {
+  const state = product.marketplaceState || {};
+  return {
+    id: product.id,
+    marketplace: product.marketplace || "",
+    target: product.target || "",
+    targetName: product.targetName || "",
+    offerId: product.offerId || "",
+    productId: product.productId || "",
+    sku: product.sku || product.ozon?.sku || product.yandex?.sku || "",
+    barcode: product.barcode || product.ozon?.barcode || product.yandex?.barcode || "",
+    name: product.name || "",
+    brand: resolveWarehouseBrand(product),
+    hasLinks: Boolean(product.hasLinks),
+    ready: Boolean(product.ready),
+    changed: Boolean(product.changed),
+    supplierCount: Number(product.supplierCount || 0),
+    availableSupplierCount: Number(product.availableSupplierCount || 0),
+    selectedSupplier: publicSelectedSupplierDiagnostics(product.selectedSupplier),
+    currentPrice: product.currentPrice ?? null,
+    targetPrice: product.targetPrice ?? null,
+    targetStock: product.targetStock ?? null,
+    autoPriceEnabled: product.autoPriceEnabled !== false,
+    status: product.status || state.code || "",
+    archived: Boolean(product.archived || state.archived || cleanText(state.code).toLowerCase() === "archived"),
+    marketplaceState: state,
+    noSupplierAutomation: product.noSupplierAutomation || {},
+    links: (Array.isArray(product.links) ? product.links : []).map((link) => ({
+      id: link.id || "",
+      article: link.article || "",
+      supplierName: link.supplierName || "",
+      partnerId: link.partnerId || "",
+      keyword: link.keyword || "",
+      matchType: link.matchType || "",
+      sourceRowId: link.sourceRowId || "",
+      updatedAt: link.updatedAt || "",
+      updatedBy: link.updatedBy || "",
+    })),
+  };
+}
+
+async function buildWarehouseSkuDiagnostics(sku = "", { limit = 50, auditLimit = 30, usdRate } = {}) {
+  const query = cleanText(sku);
+  if (!query) {
+    const error = new Error("Укажите sku.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const normalizedQuery = normalizeWarehouseSearchToken(query);
+  const warehouse = await readWarehouse();
+  const products = Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [];
+  const strictMatches = products.filter((product) => warehouseProductMatchesSearchQuery(product, query));
+  const focusedMatches = preferWarehousePrimaryIdentityMatches(strictMatches, { q: query });
+  const primaryOfferIds = new Set(
+    focusedMatches
+      .filter((product) => warehouseProductSearchRank(product, query) <= 2)
+      .map((product) => cleanText(product.offerId).toLowerCase())
+      .filter(Boolean),
+  );
+  const productIds = new Set(focusedMatches.map((product) => String(product.id)));
+  if (primaryOfferIds.size) {
+    for (const product of products) {
+      const offerId = cleanText(product.offerId).toLowerCase();
+      if (offerId && primaryOfferIds.has(offerId)) productIds.add(String(product.id));
+    }
+  }
+  const matchedProducts = products
+    .filter((product) => productIds.has(String(product.id)))
+    .slice(0, Math.max(1, Math.min(100, Math.round(Number(limit || 50) || 50))));
+  const built = matchedProducts.length
+    ? await buildFreshWarehouseProductsFromKnownProducts(
+      warehouse,
+      matchedProducts,
+      { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate },
+    )
+    : [];
+  const builtById = new Map(built.map((product) => [String(product.id), normalizeWarehouseProduct(product)]));
+  const diagnosticProducts = matchedProducts.map((product) => normalizeWarehouseDetailProduct(builtById.get(String(product.id)) || product));
+  const latestAudit = await readAuditFiltered({ q: query }, Math.max(1, Math.min(100, Math.round(Number(auditLimit || 30) || 30))));
+  const warnings = [];
+  if (!diagnosticProducts.length) warnings.push("sku_not_found");
+  if (strictMatches.length > diagnosticProducts.length) warnings.push("supplier_only_matches_hidden_by_primary_identity");
+  return {
+    sku: query,
+    normalizedSku: normalizedQuery,
+    matched: diagnosticProducts.length,
+    hiddenSupplierOnlyMatches: Math.max(0, strictMatches.length - diagnosticProducts.length),
+    warnings,
+    products: diagnosticProducts.map(publicWarehouseDiagnosticProduct),
+    audit: latestAudit.map((entry) => ({
+      at: entry.at,
+      user: entry.user,
+      action: entry.action,
+      productIds: auditEntryProductIds(entry),
+      details: entry.details || {},
+    })),
   };
 }
 
@@ -11586,6 +11710,18 @@ app.get("/api/warehouse/brands", async (request, response, next) => {
   }
 });
 
+app.get("/api/warehouse/products/diagnostics", async (request, response, next) => {
+  try {
+    const sku = cleanText(request.query.sku || request.query.q || request.query.offerId || "");
+    const limit = cleanLimit(request.query.limit, 50, 100);
+    const auditLimit = cleanLimit(request.query.auditLimit, 30, 100);
+    const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
+    response.json(await buildWarehouseSkuDiagnostics(sku, { limit, auditLimit, usdRate }));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/warehouse/products/page", async (request, response, next) => {
   try {
     const sync = request.query.sync === "true";
@@ -11622,14 +11758,21 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     let rows = Array.isArray(data.products) ? data.products.slice() : [];
     if (!sync && !refreshPrices) queueChangedWarehousePrices(rows, "warehouse_page_detected_changed_prices");
 
-    rows = rows.filter((item) => warehousePageProductMatches(item, {
+    const filters = {
       q,
       autoOnly,
       linked,
       marketplace,
       state: stateCode,
       brand: brandFilter,
-    }));
+    };
+    rows = sortWarehouseProductsForSearch(
+      preferWarehousePrimaryIdentityMatches(
+        rows.filter((item) => warehousePageProductMatches(item, filters)),
+        filters,
+      ),
+      filters,
+    );
 
     const total = rows.length;
     const offset = (page - 1) * pageSize;
@@ -16871,6 +17014,8 @@ module.exports = {
   warehousePageProductMatches,
   warehousePagePostgresWhere,
   sortWarehouseProductsForSearch,
+  preferWarehousePrimaryIdentityMatches,
+  buildWarehouseSkuDiagnostics,
   addWarehousePageGroupSiblings,
   linkedRecoveryCandidateProducts,
   summarizeWarehouseCounterStats,
