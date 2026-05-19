@@ -89,6 +89,11 @@ export const WarehousePageSchema = z.object({
   items: z.array(ProductSchema).optional().default([]),
 }).passthrough();
 
+export const WarehouseBrandsSchema = z.object({
+  brands: z.array(z.coerce.string()).optional().default([]),
+  source: z.coerce.string().optional().default(""),
+}).passthrough();
+
 export const GroupDetailSchema = z.object({
   products: z.array(ProductSchema).default([]),
   suppliers: z.array(SupplierSchema).optional().default([]),

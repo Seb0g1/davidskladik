@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Bot, Check, ChevronRight, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
-import { AiImagesResponseSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, WarehousePageSchema } from "../types";
+import { AiImagesResponseSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
@@ -402,17 +402,15 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
         ) : null}
       </div>
 
-      {links.length ? (
-        <div className="pm-link-toolbar">
-          <input value={linkFilter} onChange={(event) => setLinkFilter(event.target.value)} placeholder="Фильтр по поставщику, артикулу или названию" />
+      <div className="pm-link-toolbar">
+          <input value={linkFilter} onChange={(event) => setLinkFilter(event.target.value)} placeholder="Фильтр сохраненных поставщиков: поставщик, артикул или название" />
           <button className="secondary-action" type="button" onClick={() => copyPlainText(savedSupplierList.join("\n"))} disabled={!savedSupplierList.length}>
             <Copy size={16} /> Скопировать поставщиков
           </button>
           <button className="secondary-action danger" type="button" onClick={() => bulkDeleteMutation.mutate()} disabled={!selectedLinkIds.length || bulkDeleteMutation.isPending}>
             {bulkDeleteMutation.isPending ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Удалить выбранные {selectedLinkIds.length || ""}
           </button>
-        </div>
-      ) : null}
+      </div>
 
       <div className="links-list">
         {filteredLinks.length ? filteredLinks.map((link) => (
@@ -1032,6 +1030,12 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const debouncedQ = useDebounced(filters.q, 250);
   const effectiveFilters = { ...filters, q: debouncedQ };
   const parentRef = useRef<HTMLDivElement>(null);
+  const brandsQuery = useQuery({
+    queryKey: ["warehouse", "brands"],
+    queryFn: () => fetchJson("/api/warehouse/brands", WarehouseBrandsSchema),
+    staleTime: 10 * 60_000,
+  });
+  const brandOptions = brandsQuery.data?.brands || [];
 
   useEffect(() => {
     const onPop = () => {
@@ -1112,7 +1116,13 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           <option value="inactive">Неактивные</option>
           <option value="out_of_stock">Нет остатка</option>
         </select>
-        <input className="brand-filter" value={filters.brand} onChange={(event) => setFilter("brand", event.target.value)} placeholder="Бренд" />
+        <label className="brand-filter-wrap">
+          <input className="brand-filter" list="warehouse-brand-list" value={filters.brand} onChange={(event) => setFilter("brand", event.target.value)} placeholder="Бренд" />
+          <datalist id="warehouse-brand-list">
+            {brandOptions.map((brand) => <option value={brand} key={brand} />)}
+          </datalist>
+          <span>{brandsQuery.isLoading ? "загружаю бренды" : `${brandOptions.length} брендов`}</span>
+        </label>
         <label className="toggle-filter">
           <input type="checkbox" checked={filters.autoOnly} onChange={(event) => setFilter("autoOnly", event.target.checked)} />
           Только автопрайс

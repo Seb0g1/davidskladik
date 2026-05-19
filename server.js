@@ -7711,20 +7711,34 @@ async function getWarehouseBrandListFromPostgres(prisma) {
     return warehouseBrandListCache.value.slice();
   }
   const rows = await prisma.warehouseProduct.findMany({
-    where: {
-      AND: [
-        enabledWarehouseTargetWhere(),
-        { brand: { not: null } },
-        { brand: { not: "" } },
-      ],
+    where: enabledWarehouseTargetWhere(),
+    select: {
+      id: true,
+      marketplace: true,
+      target: true,
+      offerId: true,
+      productId: true,
+      name: true,
+      brand: true,
+      raw: true,
     },
-    distinct: ["brand"],
-    select: { brand: true },
-    orderBy: { brand: "asc" },
+    orderBy: [
+      { brand: "asc" },
+      { offerId: "asc" },
+    ],
   });
   const unique = new Map();
   for (const row of rows) {
-    const brand = cleanText(row.brand);
+    const brand = resolveWarehouseBrand({
+      ...(row.raw || {}),
+      id: row.id,
+      marketplace: row.marketplace,
+      target: row.target,
+      offerId: row.offerId,
+      productId: row.productId,
+      name: row.name,
+      brand: row.brand,
+    });
     if (!brand) continue;
     const key = brand.toLowerCase();
     if (!unique.has(key)) unique.set(key, brand);

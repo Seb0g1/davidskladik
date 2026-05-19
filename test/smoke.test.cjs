@@ -219,6 +219,7 @@ test("modern PriceMaster link UI keeps drafts scoped and removes manual supplier
 test("modern UI uses role-gating, logo branding, and group-level PM counts", async () => {
   const appSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "App.tsx"), "utf8");
   const warehouseSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "routes", "WarehousePage.tsx"), "utf8");
+  const typesSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "types.ts"), "utf8");
   const stylesSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "styles.css"), "utf8");
   assert.match(appSource, /\/api\/session/);
   assert.match(appSource, /visibleNavItems/);
@@ -230,7 +231,11 @@ test("modern UI uses role-gating, logo branding, and group-level PM counts", asy
   assert.match(warehouseSource, /isAdmin \? <QuickActions/);
   assert.match(warehouseSource, /isAdmin \? <AiImagesPanel/);
   assert.match(warehouseSource, /isAdmin \? <section className="detail-section">/);
+  assert.match(warehouseSource, /\/api\/warehouse\/brands/);
+  assert.match(warehouseSource, /datalist id="warehouse-brand-list"/);
+  assert.match(typesSource, /WarehouseBrandsSchema/);
   assert.match(stylesSource, /\.brand-logo/);
+  assert.match(stylesSource, /\.brand-filter-wrap/);
   assert.match(stylesSource, /overflow-x: hidden/);
 });
 
