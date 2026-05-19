@@ -550,18 +550,25 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
 
   const generateMutation = useMutation({
     mutationFn: async () => {
-      setProgress("подготовка");
+      const sourceImageUrl = firstImage(product);
+      if (!sourceImageUrl) throw new Error("Для Codex-генерации нужно исходное фото товара.");
+      setProgress("подготовка исходного фото");
       const timer = window.setInterval(() => setProgress((current) => {
-        if (current === "подготовка") return "генерация 1/5";
-        if (current === "генерация 1/5") return "генерация 3/5";
-        if (current === "генерация 3/5") return "сохранение";
+        if (current === "подготовка исходного фото") return "Codex: фото 1/5";
+        if (current === "Codex: фото 1/5") return "Codex: фото 2/5";
+        if (current === "Codex: фото 2/5") return "Codex: фото 3/5";
+        if (current === "Codex: фото 3/5") return "Codex: фото 4/5";
+        if (current === "Codex: фото 4/5") return "Codex: фото 5/5";
+        if (current === "Codex: фото 5/5") return "сохранение";
         return current;
-      }), 1400);
+      }), 4500);
       try {
         return await fetchJson(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`, AiImagesResponseSchema, mutationBody({
-          sourceImageUrl: firstImage(product),
-          prompt: `Создай 5 реалистичных marketplace-фото для товара ${product.name || product.offerId}: белый фон, премиальный свет, без лишнего текста и водяных знаков.`,
+          sourceImageUrl,
+          prompt: `Создай 5 реалистичных marketplace-фото через Codex для товара ${product.name || product.offerId}. Обязательно используй исходное фото как референс формы, флакона, упаковки и цвета. Белый или светлый студийный фон, премиальный свет, без водяных знаков, без лишнего текста и без искажения товара.`,
           count: 5,
+          forceCodexSale: true,
+          requireSourceImage: true,
           expectedUpdatedAt: product.updatedAt || "",
         }));
       } finally {
@@ -601,10 +608,10 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
           <h3>Фото-черновики</h3>
         </div>
         <button className="primary-action" type="button" disabled={generateMutation.isPending} onClick={() => generateMutation.mutate()}>
-          {generateMutation.isPending ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} Сгенерировать 5 фото
+          {generateMutation.isPending ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} Codex: 5 фото
         </button>
       </div>
-      {progress && <div className="progress-line"><span style={{ width: progress === "готово" ? "100%" : progress === "сохранение" ? "82%" : "48%" }} />{progress}</div>}
+      {progress && <div className="progress-line"><span style={{ width: progress === "готово" ? "100%" : progress === "сохранение" ? "88%" : progress.includes("5/5") ? "76%" : progress.includes("3/5") ? "52%" : "28%" }} />{progress}</div>}
       <div className="ai-grid">
         {visibleDrafts.length ? visibleDrafts.slice(0, 10).map((draft) => (
           <div className={`ai-card ${draft.status === "approved" ? "is-approved" : draft.status === "rejected" ? "is-rejected" : ""}`} key={draft.id}>

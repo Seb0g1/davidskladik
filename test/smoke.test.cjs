@@ -2866,7 +2866,7 @@ test("AI image generation requires OpenAI key before creating draft", async () =
   }
 });
 
-test("Codex Sale AI image generation uses image generation endpoint without fetching source", async () => {
+test("Codex Sale AI image generation uses edit endpoint with source image", async () => {
   const settingsBackup = await backupFile(appSettingsPath);
   const originalFetch = global.fetch;
   const agent = request.agent(app);
@@ -2918,8 +2918,21 @@ test("Codex Sale AI image generation uses image generation endpoint without fetc
       .expect(200);
 
     global.fetch = async (url, options = {}) => {
-      calls.push({ url: String(url), body: options.body ? JSON.parse(options.body) : null });
-      if (String(url) !== "https://codex.sale/v1/images/generations") {
+      if (String(url) === "https://example.invalid/source.png") {
+        calls.push({ url: String(url), sourceFetch: true });
+        return new Response(Buffer.from(generatedPngBase64, "base64"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      }
+      const form = options.body;
+      calls.push({
+        url: String(url),
+        model: typeof form?.get === "function" ? form.get("model") : null,
+        prompt: typeof form?.get === "function" ? form.get("prompt") : null,
+        image: typeof form?.get === "function" ? form.get("image") : null,
+      });
+      if (String(url) !== "https://codex.sale/v1/images/edits") {
         throw new Error(`unexpected fetch ${url}`);
       }
       return new Response(JSON.stringify({ data: [{ b64_json: generatedPngBase64 }] }), {
@@ -2938,9 +2951,11 @@ test("Codex Sale AI image generation uses image generation endpoint without fetc
       .expect(200);
 
     assert.equal(res.body.drafts.length, 1);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].body.model, "gpt-image-2");
-    assert.equal(calls[0].body.response_format, "b64_json");
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].sourceFetch, true);
+    assert.equal(calls[1].model, "gpt-image-2");
+    assert.ok(calls[1].image);
+    assert.match(String(calls[1].prompt || ""), /Smoke Codex Sale Image Product/);
     assert.equal(res.body.draft.sourceImageUrl, "https://example.invalid/source.png");
     assert.match(res.body.draft.resultUrl, /\/uploads\/ai-images\//);
     const generatedPathname = new URL(res.body.draft.resultUrl).pathname;

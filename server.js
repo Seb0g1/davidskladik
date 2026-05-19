@@ -138,6 +138,9 @@ const openaiBaseUrl = cleanText(process.env.OPENAI_BASE_URL);
 const openaiRelayUrl = cleanText(process.env.OPENAI_RELAY_URL);
 const openaiRelaySecret = cleanText(process.env.OPENAI_RELAY_SECRET);
 const openaiRelayTimeoutMs = Math.max(30_000, Number(process.env.OPENAI_RELAY_TIMEOUT_MS || 180_000) || 180_000);
+const aiImageGenerationAttempts = Math.max(1, Math.min(5, Number(process.env.AI_IMAGE_GENERATION_ATTEMPTS || 3) || 3));
+const aiImageGenerationRetryDelayMs = Math.max(1000, Number(process.env.AI_IMAGE_GENERATION_RETRY_DELAY_MS || 5000) || 5000);
+const aiImageGenerationSequenceDelayMs = Math.max(0, Number(process.env.AI_IMAGE_GENERATION_SEQUENCE_DELAY_MS || 1200) || 1200);
 const maskedSecretValue = "__masked__";
 let openaiImageConfig = null;
 {
@@ -5156,6 +5159,15 @@ async function readEffectiveAiSettings() {
   return effectiveAiSettingsFromAppSettings(await readAppSettings());
 }
 
+function forceCodexSaleAiImageSettings(aiSettings = {}) {
+  return {
+    ...aiSettings,
+    providerId: "codexsale",
+    baseUrl: "https://codex.sale/v1",
+    imageModel: "gpt-image-2",
+  };
+}
+
 function isOpenAiDirectConfigured(aiSettings = {}) {
   return Boolean(cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY));
 }
@@ -5379,17 +5391,34 @@ async function parseOpenAiCompatibleImageResponse(response) {
 async function fetchOpenAiCompatibleImageEdit(aiSettings, { prompt, sourceBuffer, sourceMimeType, sourceFileName }) {
   const apiKey = cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY);
   const model = effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings);
+  const endpoint = `${openAiCompatibleImageBaseUrl(aiSettings)}/images/edits`;
+  logger.info("ai image edit request", {
+    provider: cleanText(aiSettings.providerId) || "openai-compatible",
+    endpoint,
+    model,
+    size: aiSettings.imageSize || openaiImageSize,
+    sourceMimeType: cleanText(sourceMimeType) || "image/png",
+    promptLength: cleanText(prompt).length,
+  });
   const form = new FormData();
   form.append("model", model);
   form.append("image", new Blob([sourceBuffer], { type: cleanText(sourceMimeType) || "image/png" }), sourceFileName || fileNameFromImageMime(sourceMimeType));
   form.append("prompt", prompt);
   form.append("size", aiSettings.imageSize || openaiImageSize);
-  const response = await fetch(`${openAiCompatibleImageBaseUrl(aiSettings)}/images/edits`, {
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body: form,
   });
-  return parseOpenAiCompatibleImageResponse(response);
+  const imageBase64 = await parseOpenAiCompatibleImageResponse(response);
+  logger.info("ai image edit response", {
+    provider: cleanText(aiSettings.providerId) || "openai-compatible",
+    endpoint,
+    model,
+    ok: true,
+    bytesBase64: imageBase64.length,
+  });
+  return imageBase64;
 }
 
 async function fetchOpenAiCompatibleImageGeneration(aiSettings, { prompt }) {
@@ -5427,7 +5456,7 @@ async function fetchOpenAiCompatibleImageGeneration(aiSettings, { prompt }) {
   return imageBase64;
 }
 
-async function fetchCodexSaleImage(aiSettings, imageOptions) {
+async function fetchCodexSaleImage(aiSettings, imageOptions = {}) {
   if (!imageOptions?.sourceBuffer) {
     return fetchOpenAiCompatibleImageGeneration(aiSettings, imageOptions);
   }
@@ -5435,6 +5464,7 @@ async function fetchCodexSaleImage(aiSettings, imageOptions) {
     return await fetchOpenAiCompatibleImageEdit(aiSettings, imageOptions);
   } catch (error) {
     if (isOpenAiBillingLimitError(error)) throw error;
+    if (imageOptions.allowGenerationFallback === false) throw error;
     logger.warn("codex sale image edit failed, trying generation endpoint", {
       detail: error?.message || String(error),
     });
@@ -5621,25 +5651,24 @@ async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, sourceI
 }
 
 async function generateOzonAiImageDraft(product, options = {}, request) {
-  const { prompt, sourceImageUrl, batchId, variantIndex = 1, variantTotal = 1 } = options;
+  const { prompt, sourceImageUrl, batchId, variantIndex = 1, variantTotal = 1, requireSourceImage = false, allowGenerationFallback = true, forceCodexSale = false } = options;
   const hasExplicitSource = Object.prototype.hasOwnProperty.call(options, "sourceImageUrl");
   const sourceUrl = hasExplicitSource
     ? cleanText(sourceImageUrl)
     : (cleanText(sourceImageUrl) || firstImageUrl(product.ozon?.primaryImage || product.ozon?.images || product.imageUrl));
   if (!sourceUrl) {
+    if (requireSourceImage) {
+      const error = new Error("Для генерации через Codex нужно исходное фото товара. Добавьте фото в карточку или загрузите его перед генерацией.");
+      error.statusCode = 400;
+      error.code = "source_image_required";
+      throw error;
+    }
     return generateOzonAiImageDraftFromPromptOnly(product, { prompt, batchId, variantIndex, variantTotal }, request);
   }
 
-  const aiSettings = await readEffectiveAiSettings();
+  let aiSettings = await readEffectiveAiSettings();
+  if (forceCodexSale) aiSettings = forceCodexSaleAiImageSettings(aiSettings);
   assertImageGenerationConfigured(aiSettings);
-
-  if (isCodexSaleAiProvider(aiSettings) && !isOpenAiRelayConfigured()) {
-    return generateOzonAiImageDraftFromPromptOnly(
-      product,
-      { prompt, sourceImageUrl: sourceUrl, batchId, variantIndex, variantTotal },
-      request,
-    );
-  }
 
   const sourcePath = localPublicFilePathFromUrl(sourceUrl, request);
   let sourceBuffer;
@@ -5678,7 +5707,7 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
   const referenceImages = logoReference?.payload ? [logoReference.payload] : [];
   let imageBase64;
   try {
-    if (isOpenAiRelayConfigured()) {
+    if (!forceCodexSale && isOpenAiRelayConfigured()) {
       imageBase64 = await fetchOpenAiImageViaRelay({ prompt: generatedPrompt, sourceBuffer, sourceMimeType, referenceImages });
     } else if (isCodexSaleAiProvider(aiSettings)) {
       imageBase64 = await fetchCodexSaleImage(aiSettings, {
@@ -5686,6 +5715,7 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
         sourceBuffer,
         sourceMimeType,
         sourceFileName,
+        allowGenerationFallback,
       });
     } else {
       const client = getOpenAiClient(aiSettings);
@@ -12424,6 +12454,45 @@ app.get("/api/warehouse/products/:id", async (request, response, next) => {
   }
 });
 
+function isRetryableAiImageGenerationError(error = {}) {
+  if (isOpenAiBillingLimitError(error)) return false;
+  const status = Number(error.statusCode || error.status || 0);
+  const code = cleanText(error.code || error.error?.code).toLowerCase();
+  if ([408, 409, 425, 429].includes(status)) return true;
+  if (status >= 500 && status < 600) return true;
+  return Boolean(
+    code.includes("timeout")
+      || code.includes("rate_limit")
+      || code.includes("temporar")
+      || code.includes("overload")
+      || code.includes("request_failed")
+  );
+}
+
+async function generateOzonAiImageDraftWithRetry(product, options, request, loggerContext = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= aiImageGenerationAttempts; attempt += 1) {
+    try {
+      return await generateOzonAiImageDraft(product, options, request);
+    } catch (error) {
+      lastError = error;
+      const retryable = isRetryableAiImageGenerationError(error);
+      logger.warn("ai image draft generation attempt failed", {
+        ...loggerContext,
+        attempt,
+        attempts: aiImageGenerationAttempts,
+        retryable,
+        detail: error?.message || String(error),
+        code: error?.code,
+        statusCode: error?.statusCode || error?.status,
+      });
+      if (!retryable || attempt >= aiImageGenerationAttempts) break;
+      await sleep(aiImageGenerationRetryDelayMs * attempt);
+    }
+  }
+  throw lastError;
+}
+
 app.post("/api/warehouse/products/:id/ai-images/generate", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
@@ -12433,6 +12502,13 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
     if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], updatedAt: product.updatedAt });
 
+    const sourceImageUrl = cleanText(request.body.sourceImageUrl) || firstImageUrl(product.ozon?.primaryImage || product.ozon?.images || product.imageUrl);
+    if (!sourceImageUrl) {
+      return response.status(400).json({
+        error: "Для генерации через Codex нужно исходное фото товара. Добавьте фото в карточку или загрузите его перед генерацией.",
+        code: "source_image_required",
+      });
+    }
     const count = Math.min(5, Math.max(1, Math.floor(Number(request.body.count || request.body.imagesCount || 1) || 1)));
     const batchId = crypto.randomUUID();
     const drafts = [];
@@ -12441,17 +12517,31 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
       offerId: product.offerId,
       target: product.target,
       count,
-      hasSourceImageUrl: Boolean(cleanText(request.body.sourceImageUrl)),
+      hasSourceImageUrl: Boolean(sourceImageUrl),
       hasPrompt: Boolean(cleanText(request.body.prompt)),
+      provider: "codexsale",
+      sequential: true,
+      attempts: aiImageGenerationAttempts,
     });
     for (let index = 1; index <= count; index += 1) {
-      drafts.push(await generateOzonAiImageDraft(product, {
+      drafts.push(await generateOzonAiImageDraftWithRetry(product, {
         prompt: request.body.prompt,
-        sourceImageUrl: request.body.sourceImageUrl,
+        sourceImageUrl,
         batchId,
         variantIndex: index,
         variantTotal: count,
-      }, request));
+        requireSourceImage: true,
+        allowGenerationFallback: false,
+        forceCodexSale: true,
+      }, request, {
+        productId: product.id,
+        offerId: product.offerId,
+        variantIndex: index,
+        variantTotal: count,
+      }));
+      if (index < count && aiImageGenerationSequenceDelayMs > 0) {
+        await sleep(aiImageGenerationSequenceDelayMs);
+      }
     }
     const draft = drafts[drafts.length - 1];
     product.aiImages = normalizeAiImageDrafts([...(product.aiImages || []), ...drafts]);
