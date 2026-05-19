@@ -57,6 +57,22 @@ button:disabled {
   background: linear-gradient(180deg, rgba(22, 36, 58, .96), rgba(13, 24, 40, .96));
 }
 
+.brand-lockup {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brand-logo {
+  width: 46px;
+  height: 46px;
+  border: 1px solid rgba(255, 255, 255, .14);
+  background: #fff;
+  object-fit: contain;
+  padding: 4px;
+}
+
 .topbar h1 {
   margin: 2px 0 0;
   font-size: 24px;
@@ -143,6 +159,32 @@ button:disabled {
   margin: 0;
   color: var(--muted);
   max-width: 860px;
+}
+
+.access-denied-panel {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  min-height: 260px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  text-align: center;
+  color: var(--muted);
+  padding: 24px;
+}
+
+.access-denied-panel strong {
+  color: var(--text);
+  font-size: 20px;
+}
+
+.access-denied-panel a {
+  border: 1px solid rgba(56, 163, 255, .45);
+  background: rgba(56, 163, 255, .14);
+  color: var(--text);
+  padding: 8px 12px;
+  text-decoration: none;
 }
 
 .search-box {
@@ -400,8 +442,16 @@ button:disabled {
 
 .detail-panel {
   height: calc(100vh - 166px);
-  overflow: auto;
+  max-width: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 14px;
+}
+
+.detail-panel *,
+.pm-section *,
+.marketplace-row * {
+  min-width: 0;
 }
 
 .empty-panel {
@@ -508,6 +558,27 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   margin-bottom: 10px;
+}
+
+.pm-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.pm-section .draft-box {
+  order: 4;
+}
+
+.pm-section .pm-link-toolbar {
+  order: 5;
+}
+
+.pm-section .links-list {
+  order: 6;
+}
+
+.pm-section .inline-error {
+  order: 7;
 }
 
 .link-item {
@@ -1531,6 +1602,9 @@ button:disabled {
     inset: 0;
     z-index: 50;
     height: 100vh;
+    width: 100vw;
+    max-width: 100vw;
+    overflow-x: hidden;
     border: 0;
     background: var(--panel);
     box-shadow: -24px 0 60px rgba(0, 0, 0, .42);
@@ -1562,6 +1636,11 @@ button:disabled {
     align-items: flex-start;
     flex-direction: column;
     padding: 12px;
+  }
+
+  .brand-logo {
+    width: 40px;
+    height: 40px;
   }
 
   .topbar h1,

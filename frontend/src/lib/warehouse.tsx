@@ -30,13 +30,19 @@ export function uniqueLinks(products: Product[]): ProductLink[] {
   const byKey = new Map<string, ProductLink>();
   for (const product of products) {
     for (const link of product.links || []) {
-      const key = [
-        link.id || "",
-        link.article || link.supplierArticle || "",
-        link.supplierName || "",
-        link.partnerId || "",
-        link.keyword || "",
-      ].join("|").toLowerCase();
+      const raw = link as Record<string, unknown>;
+      const article = String(link.article || link.supplierArticle || "").trim().toLowerCase();
+      const rowId = String(raw.sourceRowId || raw.rowId || "").trim().toLowerCase();
+      const exactName = String(raw.exactName || raw.name || "").trim().toLowerCase();
+      const matchType = article ? "article" : (rowId ? "selected_row" : String(link.matchType || "exact_name").toLowerCase());
+      const primary = article ? `article:${article}` : (rowId ? `row:${rowId}` : `name:${exactName}`);
+      const supplier = [
+        String(link.supplierName || "").trim().toLowerCase(),
+        String(link.partnerId || "").trim() ? `partner:${String(link.partnerId).trim().toLowerCase()}` : "",
+      ].filter(Boolean).sort().join("&") || "manual";
+      const keyword = String(link.keyword || "").trim().toLowerCase();
+      const currency = String(link.priceCurrency || "USD").trim().toUpperCase() === "RUB" ? "RUB" : "USD";
+      const key = [matchType, primary, supplier, keyword, currency].join("|");
       if (!byKey.has(key)) byKey.set(key, link);
     }
   }

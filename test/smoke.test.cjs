@@ -216,6 +216,24 @@ test("modern PriceMaster link UI keeps drafts scoped and removes manual supplier
   assert.match(source, /className="pm-result-title"/);
 });
 
+test("modern UI uses role-gating, logo branding, and group-level PM counts", async () => {
+  const appSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "App.tsx"), "utf8");
+  const warehouseSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "routes", "WarehousePage.tsx"), "utf8");
+  const stylesSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "styles.css"), "utf8");
+  assert.match(appSource, /\/api\/session/);
+  assert.match(appSource, /visibleNavItems/);
+  assert.match(appSource, /brand-logo/);
+  assert.match(appSource, /WarehousePage isAdmin=\{isAdmin\}/);
+  assert.match(warehouseSource, /WarehousePage\(\{ isAdmin = true \}/);
+  assert.match(warehouseSource, /const groupLinkCount = uniqueLinks\(products\)\.length/);
+  assert.match(warehouseSource, /isAdmin \? <GroupActions/);
+  assert.match(warehouseSource, /isAdmin \? <QuickActions/);
+  assert.match(warehouseSource, /isAdmin \? <AiImagesPanel/);
+  assert.match(warehouseSource, /isAdmin \? <section className="detail-section">/);
+  assert.match(stylesSource, /\.brand-logo/);
+  assert.match(stylesSource, /overflow-x: hidden/);
+});
+
 test("modern copy name action keeps only latin letters and digits", async () => {
   const commonSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "lib", "common.ts"), "utf8");
   const warehouseSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "routes", "WarehousePage.tsx"), "utf8");
@@ -235,7 +253,7 @@ test("modern copy name action keeps only latin letters and digits", async () => 
 test("warehouse page product groups merge marketplace variants by offer and manual group", () => {
   const products = [
     normalizeWarehouseProduct({ id: "ozon-1", marketplace: "ozon", offerId: "41059", name: "Ozon row", links: [{ id: "l1", article: "pm-1", supplierName: "A" }] }),
-    normalizeWarehouseProduct({ id: "yandex-1", marketplace: "yandex", offerId: "41059", name: "Yandex row", links: [{ id: "l1", article: "pm-1", supplierName: "A" }] }),
+    normalizeWarehouseProduct({ id: "yandex-1", marketplace: "yandex", offerId: "41059", name: "Yandex row", links: [{ id: "l2", article: "pm-1", supplierName: "A" }] }),
     normalizeWarehouseProduct({ id: "ozon-2", marketplace: "ozon", offerId: "DIFFERENT", name: "Different" }),
     normalizeWarehouseProduct({ id: "manual-a", marketplace: "ozon", offerId: "A-1", manualGroupId: "manual-demo", name: "Manual A" }),
     normalizeWarehouseProduct({ id: "manual-b", marketplace: "yandex", offerId: "B-1", manualGroupId: "manual-demo", name: "Manual B" }),
@@ -1982,6 +2000,7 @@ test("admin can add employees and managers cannot open admin areas", async () =>
 
     await manager.get("/api/settings").expect(403);
     await manager.get("/api/history").expect(403);
+    await manager.get("/api/pricemaster/search?q=no-such-pricemaster-row&limit=1").expect(200);
     await manager.get("/settings.html").expect(302).expect("Location", "/");
 
     const disabled = await admin
@@ -2116,6 +2135,9 @@ test("admin can read employee PriceMaster link statistics and managers cannot", 
       .expect("Content-Type", /application\/pdf/);
     assert.ok(Buffer.isBuffer(pdf.body));
     assert.equal(pdf.body.subarray(0, 4).toString("utf8"), "%PDF");
+    assert.ok(pdf.body.length > 5000);
+    const usersRouteSource = await fs.readFile(path.join(__dirname, "..", "routes", "users.js"), "utf8");
+    assert.match(usersRouteSource, /logo1\.png/);
 
     await admin.delete("/api/users/delete-stats?hard=true").expect(200);
     const usersAfterHardDelete = await admin.get("/api/users").expect(200);
@@ -2772,6 +2794,23 @@ test("warehouse brand filter scans non-standard marketplace fields", () => {
   };
 
   assert.equal(warehouseBrandMatches(product, "Amouage"), true);
+});
+
+test("warehouse brand filter finds brand in nested raw marketplace attributes", () => {
+  const product = {
+    name: "Niche perfume 100 ml",
+    ozon: {
+      rawPayload: {
+        result: {
+          attributes: [
+            { attribute_name: "Brand", values: [{ value: "Marc-Antoine Barrois" }] },
+          ],
+        },
+      },
+    },
+  };
+
+  assert.equal(warehouseBrandMatches(product, "marc antoine"), true);
 });
 
 test("warehouse brand filter does not match arbitrary raw text", () => {

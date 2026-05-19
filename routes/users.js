@@ -504,6 +504,148 @@ function makeUsersStatsPdf(report = {}) {
   });
 }
 
+function makeUsersStatsPdfV2(report = {}) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: "A4", margin: 38, info: { Title: "Magic Vibe - user statistics" } });
+    const chunks = [];
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    const regularFont = path.join(__dirname, "..", "assets", "fonts", "NotoSans-Regular.ttf");
+    const boldFont = path.join(__dirname, "..", "assets", "fonts", "NotoSans-Bold.ttf");
+    const hasFonts = fs.existsSync(regularFont) && fs.existsSync(boldFont);
+    if (hasFonts) {
+      doc.registerFont("regular", regularFont);
+      doc.registerFont("bold", boldFont);
+      doc.font("regular");
+    }
+    const font = (name) => {
+      if (hasFonts) doc.font(name === "bold" ? "bold" : "regular");
+      else doc.font(name === "bold" ? "Helvetica-Bold" : "Helvetica");
+    };
+    const left = doc.page.margins.left;
+    const right = doc.page.width - doc.page.margins.right;
+    const width = right - left;
+    const bottomY = doc.page.height - 42;
+    const summary = report.summary || {};
+    const logoPath = path.join(__dirname, "..", "public", "logo1.png");
+    const generatedAt = formatDateRu(new Date());
+    let pageNo = 1;
+
+    const fitText = (value, max = 80) => {
+      const text = pdfText(value);
+      return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}...` : text;
+    };
+    const drawFooter = () => {
+      font("regular");
+      doc.fillColor("#64748b").fontSize(8).text(
+        `Magic Vibe / ДавидСклад · сформировано ${generatedAt} · стр. ${pageNo}`,
+        left,
+        doc.page.height - 30,
+        { width, align: "center", lineBreak: false },
+      );
+    };
+    const drawHeader = () => {
+      doc.rect(0, 0, doc.page.width, 118).fill("#07111f");
+      const logoSize = 54;
+      if (fs.existsSync(logoPath)) {
+        try {
+          doc.roundedRect(left, 25, logoSize, logoSize, 8).fill("#ffffff");
+          doc.image(logoPath, left + 5, 30, { fit: [logoSize - 10, logoSize - 10], align: "center", valign: "center" });
+        } catch (_error) {
+          font("bold");
+          doc.fillColor("#ffffff").fontSize(13).text("Magic Vibe", left, 38, { width: 120, lineBreak: false });
+        }
+      } else {
+        font("bold");
+        doc.fillColor("#ffffff").fontSize(13).text("Magic Vibe", left, 38, { width: 120, lineBreak: false });
+      }
+      const textX = left + logoSize + 16;
+      font("bold");
+      doc.fillColor("#ffffff").fontSize(22).text("Magic Vibe", textX, 28, { width: width - logoSize - 16, lineBreak: false });
+      doc.fontSize(14).text("Статистика сотрудников ДавидСклад", textX, 56, { width: width - logoSize - 16, lineBreak: false });
+      font("regular");
+      doc.fillColor("#b9c7dc").fontSize(9).text(`Период: ${periodLabel(report)} · сформировано: ${generatedAt}`, textX, 80, { width: width - logoSize - 16, lineBreak: false });
+    };
+    const drawCard = (x, y, w, label, value) => {
+      doc.roundedRect(x, y, w, 58, 6).fillAndStroke("#f4f7fb", "#d7dfec");
+      font("regular");
+      doc.fillColor("#5b677a").fontSize(8).text(label, x + 10, y + 10, { width: w - 20, height: 14, ellipsis: true });
+      font("bold");
+      doc.fillColor("#0f172a").fontSize(18).text(String(value ?? 0), x + 10, y + 29, { width: w - 20, height: 22, ellipsis: true });
+    };
+
+    drawHeader();
+    const cardGap = 8;
+    const cardWidth = (width - cardGap * 3) / 4;
+    [
+      ["Активных связей", summary.currentLinksCreated || 0],
+      ["Действий", summary.actionsTotal || 0],
+      ["Добавлено", summary.linksAdded || 0],
+      ["Товаров затронуто", summary.affectedProducts || 0],
+    ].forEach((card, index) => drawCard(left + index * (cardWidth + cardGap), 142, cardWidth, card[0], card[1]));
+
+    font("bold");
+    doc.fillColor("#0f172a").fontSize(13).text("Сотрудники", left, 222, { width, lineBreak: false });
+    const columns = [
+      { key: "username", label: "Сотрудник", width: 128 },
+      { key: "currentLinksCreated", label: "Активн.", width: 54 },
+      { key: "linksAdded", label: "Добав.", width: 54 },
+      { key: "linksUpdated", label: "Обнов.", width: 56 },
+      { key: "linksDeleted", label: "Удал.", width: 48 },
+      { key: "affectedProducts", label: "Товаров", width: 58 },
+      { key: "lastActionAt", label: "Последнее действие", width: Math.max(110, width - 398) },
+    ];
+    const rowHeight = 34;
+    const drawTableHeader = (y) => {
+      let x = left;
+      doc.rect(left, y, width, 24).fill("#eaf1fb");
+      font("bold");
+      doc.fillColor("#1f2a3d").fontSize(8);
+      for (const column of columns) {
+        doc.text(column.label, x + 4, y + 8, { width: column.width - 8, height: 12, ellipsis: true });
+        x += column.width;
+      }
+      return y + 24;
+    };
+    let y = drawTableHeader(246);
+    for (const user of report.users || []) {
+      if (y + rowHeight > bottomY) {
+        drawFooter();
+        doc.addPage();
+        pageNo += 1;
+        y = drawTableHeader(42);
+      }
+      let x = left;
+      doc.rect(left, y, width, rowHeight).fillAndStroke("#ffffff", "#edf2f7");
+      const status = user.deleted ? "удален" : (user.active === false ? "выключен" : "активен");
+      const values = {
+        username: `${user.username || "system"} · ${status}`,
+        currentLinksCreated: user.currentLinksCreated || 0,
+        linksAdded: user.linksAdded || 0,
+        linksUpdated: user.linksUpdated || 0,
+        linksDeleted: user.linksDeleted || 0,
+        affectedProducts: user.affectedProducts || 0,
+        lastActionAt: formatDateRu(user.lastActionAt),
+      };
+      font("regular");
+      doc.fillColor("#111827").fontSize(8);
+      for (const column of columns) {
+        doc.text(fitText(values[column.key], column.key === "username" ? 34 : 24), x + 4, y + 8, { width: column.width - 8, height: 18, ellipsis: true });
+        x += column.width;
+      }
+      y += rowHeight;
+    }
+    if (!(report.users || []).length) {
+      font("regular");
+      doc.fillColor("#5b677a").fontSize(10).text("По выбранным фильтрам действий нет.", left, y + 10, { width });
+    }
+    drawFooter();
+    doc.end();
+  });
+}
+
 app.post("/api/users/stats/export", requireAdmin, async (request, response, next) => {
   try {
     const report = await buildUsersStatsResponse({
@@ -512,7 +654,7 @@ app.post("/api/users/stats/export", requireAdmin, async (request, response, next
       includeInactive: request.body?.includeInactive !== false,
       includeDeleted: request.body?.includeDeleted !== false,
     });
-    const pdf = await makeUsersStatsPdf(report);
+    const pdf = await makeUsersStatsPdfV2(report);
     response.setHeader("Content-Type", "application/pdf");
     response.setHeader("Content-Disposition", `attachment; filename="magic-vibe-user-stats-${report.period || "report"}.pdf"`);
     response.send(pdf);

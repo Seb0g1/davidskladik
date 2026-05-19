@@ -1638,6 +1638,40 @@ function extractBrandFromAttributes(attributes = []) {
   return "";
 }
 
+function extractBrandFromNestedAttributes(value = {}, depth = 0) {
+  if (!value || depth > 6) return "";
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractBrandFromNestedAttributes(item, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value !== "object") return "";
+  const directName = cleanText(value.name || value.attribute_name || value.attributeName || value.title).toLowerCase();
+  const directId = Number(value.id || value.attribute_id || value.attributeId || 0);
+  if (directId === 85 || directName === "бренд" || directName === "brand" || directName.includes("brand")) {
+    const values = Array.isArray(value.values) ? value.values : [];
+    const fromValues = values
+      .map((item) => cleanText(item?.value || item?.name || item?.text))
+      .find(Boolean);
+    const directValue = cleanText(value.value || value.text);
+    if (fromValues || directValue) return fromValues || directValue;
+  }
+  for (const [key, child] of Object.entries(value)) {
+    const normalizedKey = normalizeSearchText(key);
+    if (normalizedKey.includes("brand") || normalizedKey.includes("vendor") || normalizedKey.includes("бренд")) {
+      if (typeof child === "string" || typeof child === "number") {
+        const text = cleanText(child);
+        if (text) return text;
+      }
+    }
+    const found = extractBrandFromNestedAttributes(child, depth + 1);
+    if (found) return found;
+  }
+  return "";
+}
+
 function flattenAttributeText(attributes = []) {
   return (attributes || [])
     .flatMap((attribute) => [
@@ -1657,11 +1691,21 @@ function resolveWarehouseBrand(product = {}) {
     product.brand ||
       product.vendor ||
       product.brandName ||
+      product.raw?.brand ||
+      product.raw?.vendor ||
+      product.raw?.brandName ||
       product.ozon?.vendor ||
       product.ozon?.brand ||
+      product.ozon?.brandName ||
       product.yandex?.vendor ||
       product.yandex?.brand ||
-      extractBrandFromAttributes(product.ozon?.attributes),
+      product.yandex?.brandName ||
+      extractBrandFromAttributes(product.ozon?.attributes) ||
+      extractBrandFromAttributes(product.yandex?.attributes) ||
+      extractBrandFromNestedAttributes(product.ozon) ||
+      extractBrandFromNestedAttributes(product.yandex) ||
+      extractBrandFromNestedAttributes(product.rawPayload) ||
+      extractBrandFromNestedAttributes(product.raw),
   );
 }
 
@@ -10245,20 +10289,8 @@ function buildWarehousePageProductGroups(products = []) {
     const marketplace = marketplaceRaw.includes("ozon") ? "Ozon" : marketplaceRaw.includes("yandex") ? "Yandex" : marketplaceRaw;
     if (marketplace && !group.marketplaces.includes(marketplace)) group.marketplaces.push(marketplace);
     for (const link of normalized.links || []) {
-      const linkKey = [
-        cleanText(link.id),
-        cleanText(link.article || link.supplierArticle),
-        cleanText(link.supplierName),
-        cleanText(link.partnerId),
-        cleanText(link.sourceRowId),
-      ].join("|");
-      if (!group.links.some((item) => [
-        cleanText(item.id),
-        cleanText(item.article || item.supplierArticle),
-        cleanText(item.supplierName),
-        cleanText(item.partnerId),
-        cleanText(item.sourceRowId),
-      ].join("|") === linkKey)) {
+      const linkKey = warehouseLinkTargetKey(link);
+      if (!group.links.some((item) => warehouseLinkTargetKey(item) === linkKey)) {
         group.links.push(link);
       }
     }
@@ -10451,7 +10483,8 @@ async function buildFastWarehousePageFromPostgres({
   }
   const normalizedSuppliers = summary.normalizedSuppliers;
   const counterStats = summary.counterStats;
-  let allProducts = sortWarehouseProductsForSearch(dbRows.map(productFromPostgres), filters);
+  const siblingSourceProducts = dbRows.map(productFromPostgres);
+  let allProducts = sortWarehouseProductsForSearch(siblingSourceProducts, filters);
   if (needsComputedLinkFilter) {
     allProducts = await buildFreshWarehouseProductsForWarehouse(
       { products: allProducts, suppliers: normalizedSuppliers },
@@ -10473,7 +10506,7 @@ async function buildFastWarehousePageFromPostgres({
   if (needsInMemoryPage) {
     const pageSlice = allProducts.slice(offset, offset + pageSize);
     pageBaseCount = pageSlice.length;
-    visibleProducts = strictIdentitySearch ? pageSlice : addWarehousePageGroupSiblings(allProducts, pageSlice);
+    visibleProducts = strictIdentitySearch ? pageSlice : addWarehousePageGroupSiblings(siblingSourceProducts, pageSlice);
   }
   const pageProducts = await enrichWeakOzonProductsForPage(visibleProducts);
   const pageWarehouse = {
@@ -10990,6 +11023,7 @@ async function buildFastWarehousePage({
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
   const sourceProducts = Array.isArray(warehouse.products) ? warehouse.products : [];
   const enabledProducts = sourceProducts.filter(isWarehouseProductTargetEnabled);
+  const siblingSourceProducts = enabledProducts.map(normalizeWarehouseProduct);
   const filtered = sortWarehouseProductsForSearch(
     enabledProducts.filter((product) => warehousePageProductMatches(product, filters)),
     filters,
@@ -10999,7 +11033,7 @@ async function buildFastWarehousePage({
   const pageSlice = filtered.slice(offset, offset + pageSize);
   const strictIdentitySearch = isWarehouseStrictIdentitySearch(filters);
   const pageProducts = await enrichWeakOzonProductsForPage(
-    strictIdentitySearch ? pageSlice : addWarehousePageGroupSiblings(filtered, pageSlice),
+    strictIdentitySearch ? pageSlice : addWarehousePageGroupSiblings(siblingSourceProducts, pageSlice),
   );
   const built = await buildFreshWarehouseProductsForWarehouse(
     { ...warehouse, products: pageProducts },
@@ -12212,7 +12246,7 @@ app.get("/api/suppliers", async (request, response, next) => {
   }
 });
 
-app.get("/api/pricemaster/search", requireAdmin, async (request, response, next) => {
+app.get("/api/pricemaster/search", async (request, response, next) => {
   try {
     const q = cleanText(request.query.q || request.query.search || "");
     const supplier = cleanText(request.query.supplier || "");

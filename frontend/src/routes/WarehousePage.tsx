@@ -8,7 +8,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
-import { ProductGroup, firstImage, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, preferredGroupPrimary, statusLabel } from "../lib/warehouse";
+import { ProductGroup, firstImage, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
 
 const pageSize = 80;
 const mobileListMedia = "(max-width: 640px)";
@@ -212,6 +212,7 @@ function linkTitleText(link: ProductLink): string {
 function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const productIds = products.map((item) => item.id).filter(Boolean);
+  const uniqueGroupLinks = useMemo(() => uniqueLinks(products), [products]);
   const draftScopeKey = productIds.slice().sort().join("|");
   const optimisticLocks = products.map((item) => ({
     id: item.id,
@@ -367,20 +368,20 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   const failedLinks = Array.isArray(saveErrorDetail?.failedLinks) ? saveErrorDetail.failedLinks : [];
 
   return (
-    <section className="detail-section">
+    <section className="detail-section pm-section">
       <div className="section-title">
         <div>
           <span>PriceMaster</span>
           <p className="section-note">Общие привязки для всей группы: Ozon и Yandex получают один набор PriceMaster, но цена считается отдельно по коэффициенту маркетплейса.</p>
           <h3>Точная связь с PriceMaster</h3>
         </div>
-        <span className="section-count">{links.length}</span>
+        <span className="section-count">{uniqueGroupLinks.length}</span>
       </div>
 
       <div className="pm-link-summary">
         <div>
-          <strong>{links.length}</strong>
-          <span>строк PM сохранено</span>
+          <strong>{uniqueGroupLinks.length}</strong>
+          <span>общих PM-привязок</span>
         </div>
         <div>
           <strong>{products.length}</strong>
@@ -758,6 +759,7 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
 }
 
 function MarketplaceRows({ products }: { products: Product[] }) {
+  const groupLinkCount = uniqueLinks(products).length;
   return (
     <section className="detail-section">
       <div className="section-title">
@@ -803,8 +805,8 @@ function MarketplaceRows({ products }: { products: Product[] }) {
                 <strong>{stock || "-"}</strong>
               </div>
               <div>
-                <small>Привязки</small>
-                <strong>{(product.links || []).length}</strong>
+                <small>Общие PM</small>
+                <strong>{groupLinkCount}</strong>
               </div>
               <div className="marketplace-flags">
                 {formulaParts.length ? formulaParts.map((part) => <span className="formula-chip" key={part}>{part}</span>) : <span className="formula-chip">PriceMaster не выбран</span>}
@@ -959,7 +961,7 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
   );
 }
 
-function DetailPanel({ selectedGroup, products, onClose }: { selectedGroup: string; products: Product[]; onClose: () => void }) {
+function DetailPanel({ selectedGroup, products, onClose, isAdmin }: { selectedGroup: string; products: Product[]; onClose: () => void; isAdmin: boolean }) {
   const primary = products.length ? preferredGroupPrimary(products) : undefined;
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const groupQueryKey = ["warehouse", "group-detail", selectedGroup];
@@ -982,6 +984,7 @@ function DetailPanel({ selectedGroup, products, onClose }: { selectedGroup: stri
   const image = firstImage(primary);
   const status = statusLabel(primary);
   const refreshDetail = () => void queryClient.invalidateQueries({ queryKey: groupQueryKey });
+  const groupLinkCount = uniqueLinks(products).length;
 
   return (
     <aside className="detail-panel">
@@ -999,14 +1002,14 @@ function DetailPanel({ selectedGroup, products, onClose }: { selectedGroup: stri
         <Stat label="Текущая цена" value={money(primary.currentPrice)} />
         <Stat label="Новая цена" value={money(primary.newPrice || primary.targetPrice)} />
         <Stat label="Остаток" value={primary.targetStock || primary.stock || "-"} />
-        <Stat label="Привязки" value={products.reduce((sum, item) => sum + (item.links || []).length, 0)} />
+        <Stat label="Привязки" value={groupLinkCount} />
       </div>
-      <MarketplaceRows products={products} />
-      <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} />
       <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} />
-      <QuickActions primary={primary} products={products} onDone={refreshDetail} />
-      <AiImagesPanel product={primary} onSaved={refreshDetail} />
-      <section className="detail-section">
+      <MarketplaceRows products={products} />
+      {isAdmin ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}
+      {isAdmin ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
+      {isAdmin ? <AiImagesPanel product={primary} onSaved={refreshDetail} /> : null}
+      {isAdmin ? <section className="detail-section">
         <div className="section-title">
           <div>
             <span>Диагностика</span>
@@ -1017,12 +1020,12 @@ function DetailPanel({ selectedGroup, products, onClose }: { selectedGroup: stri
           </button>
         </div>
         {diagnosticsOpen && <DiagnosticsPanel data={diagnostics.data} error={diagnostics.error} loading={diagnostics.isLoading} />}
-      </section>
+      </section> : null}
     </aside>
   );
 }
 
-export function WarehousePage() {
+export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const [filters, setFilters] = useState<Filters>(() => readFilters());
   const [selectedGroup, setSelectedGroup] = useState(() => selectedGroupFromPath());
   const [isMobileList, setIsMobileList] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileListMedia).matches);
@@ -1145,7 +1148,7 @@ export function WarehousePage() {
             <button disabled={!pageQuery.data?.hasMore} onClick={() => setFilter("page", filters.page + 1)}>Дальше</button>
           </div>
         </div>
-        <DetailPanel selectedGroup={selectedGroup} products={detailProducts} onClose={() => setSelectedGroup("")} />
+        <DetailPanel selectedGroup={selectedGroup} products={detailProducts} onClose={() => setSelectedGroup("")} isAdmin={isAdmin} />
       </section>
     </>
   );
