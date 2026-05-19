@@ -86,6 +86,7 @@ const {
   marketplaceOfferAutomationKey,
   shouldSendTargetStockForProduct,
   pickTargetStockSendProducts,
+  priceAffectingSettingsChanged,
   warehouseLinkIdentityKey,
   productLinkPostgresIdentityKey,
   dedupeProductLinkRows,
@@ -1968,6 +1969,30 @@ test("PUT /api/settings saves markup settings", async () => {
       await agent.put("/api/settings").send(previous);
     }
   }
+});
+
+test("price settings changes trigger repricing decisions", () => {
+  const base = {
+    fixedUsdRate: 95,
+    defaultMarkups: { ozon: 1.7, yandex: 1.6 },
+    markupRules: [{ marketplace: "all", minUsd: 0, coefficient: 1.7 }],
+    availabilityRules: [{ marketplace: "all", minAvailableSuppliers: 1, coefficientDelta: 0, targetStock: 3 }],
+    ai: { textModel: "gpt-5.4-mini", imageModel: "gpt-image-2" },
+  };
+
+  assert.equal(priceAffectingSettingsChanged(base, {
+    ...base,
+    ai: { textModel: "gpt-5.5", imageModel: "gpt-image-2" },
+  }), false);
+  assert.equal(priceAffectingSettingsChanged(base, { ...base, fixedUsdRate: 101 }), true);
+  assert.equal(priceAffectingSettingsChanged(base, {
+    ...base,
+    defaultMarkups: { ozon: 1.8, yandex: 1.6 },
+  }), true);
+  assert.equal(priceAffectingSettingsChanged(base, {
+    ...base,
+    availabilityRules: [{ marketplace: "all", minAvailableSuppliers: 1, coefficientDelta: 0, targetStock: 5 }],
+  }), true);
 });
 
 test("PUT /api/settings saves AI provider settings without exposing API key", async () => {

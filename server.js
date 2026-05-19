@@ -228,6 +228,7 @@ let immediateAutoPushTimer = null;
 let immediateAutoPushAll = false;
 const immediateAutoPushIds = new Set();
 let immediateAutoPushChain = Promise.resolve();
+let immediateAutoPushForce = false;
 const changedPriceAutoPushAt = new Map();
 let changedPriceAutoPushLastBatchAt = 0;
 const detectedPriceAutoPushDefaultCooldownMs = 15 * 60_000;
@@ -4758,6 +4759,18 @@ function publicAppSettings(settings = {}) {
       source: normalized.ai.apiKey ? "settings" : (cleanText(process.env.OPENAI_API_KEY) ? "env" : "empty"),
     },
   };
+}
+
+function priceAffectingSettingsChanged(previous = {}, next = {}) {
+  const prev = normalizeAppSettings(previous || {});
+  const current = normalizeAppSettings(next || {});
+  const pick = (settings) => ({
+    fixedUsdRate: Number(settings.fixedUsdRate || 0),
+    defaultMarkups: settings.defaultMarkups || {},
+    markupRules: settings.markupRules || [],
+    availabilityRules: settings.availabilityRules || [],
+  });
+  return JSON.stringify(pick(prev)) !== JSON.stringify(pick(current));
 }
 
 async function readAppSettings() {
@@ -11496,11 +11509,13 @@ async function saveSettingsHandler(request, response, next) {
       }
     }
     const settings = await writeAppSettings(rawSettings);
+    const shouldReprice = priceAffectingSettingsChanged(previous, settings);
     appendAudit(request, "settings.update", {
       fixedUsdRate: settings.fixedUsdRate,
       defaultMarkups: settings.defaultMarkups,
       markupRules: settings.markupRules.length,
       availabilityRules: settings.availabilityRules.length,
+      priceAffecting: shouldReprice,
       ai: {
         enabled: settings.ai?.enabled !== false,
         providerId: settings.ai?.providerId,
@@ -11512,10 +11527,12 @@ async function saveSettingsHandler(request, response, next) {
     }).catch((auditError) => {
       logger.warn("settings audit append failed", { detail: auditError?.message || String(auditError) });
     });
-    try {
-      queueImmediateAutoPricePush([], "settings_update");
-    } catch (queueError) {
-      logger.warn("settings auto price queue failed", { detail: queueError?.message || String(queueError) });
+    if (shouldReprice) {
+      try {
+        queueImmediateAutoPricePush([], "settings_price_update", { force: true });
+      } catch (queueError) {
+        logger.warn("settings auto price queue failed", { detail: queueError?.message || String(queueError) });
+      }
     }
     response.json({ ok: true, settings: publicAppSettings(settings) });
   } catch (error) {
@@ -13968,8 +13985,9 @@ function initMarketplaceQueue() {
   }
 }
 
-function queueImmediateAutoPricePush(productIds = [], reason = "price_change_detected") {
+function queueImmediateAutoPricePush(productIds = [], reason = "price_change_detected", options = {}) {
   if (process.env.DISABLE_BACKGROUND_JOBS === "true") return;
+  if (options.force === true) immediateAutoPushForce = true;
   if (Array.isArray(productIds) && productIds.length) {
     productIds.forEach((id) => immediateAutoPushIds.add(String(id)));
   } else {
@@ -13978,7 +13996,9 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
   if (immediateAutoPushTimer) return;
   immediateAutoPushTimer = setTimeout(() => {
     const ids = immediateAutoPushAll ? undefined : Array.from(immediateAutoPushIds);
+    const force = immediateAutoPushForce;
     immediateAutoPushAll = false;
+    immediateAutoPushForce = false;
     immediateAutoPushIds.clear();
     immediateAutoPushTimer = null;
     immediateAutoPushChain = immediateAutoPushChain
@@ -13991,6 +14011,7 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
             usdRate: undefined,
             minDiffRub: 0,
             minDiffPct: 0,
+            force,
             reason,
           },
           { priority: 1 },
@@ -14006,6 +14027,7 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
           logger.info("immediate auto price push complete", {
             reason,
             scope: ids ? ids.length : "all",
+            force,
             sent: result.sent,
             failed: result.failed,
             stockSent: result.stockSent,
@@ -17140,6 +17162,7 @@ module.exports = {
   marketplaceOfferAutomationKey,
   shouldSendTargetStockForProduct,
   pickTargetStockSendProducts,
+  priceAffectingSettingsChanged,
   warehouseLinkIdentityKey,
   productLinkPostgresIdentityKey,
   dedupeProductLinkRows,
