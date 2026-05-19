@@ -168,6 +168,9 @@ export const UserStatsRowSchema = z.object({
   role: z.coerce.string().optional().default(""),
   active: z.boolean().optional().default(true),
   source: z.coerce.string().optional().default(""),
+  deleted: z.boolean().optional().default(false),
+  hardDeleted: z.boolean().optional().default(false),
+  deletedAt: z.coerce.string().optional().nullable(),
   currentLinksCreated: z.number().optional().default(0),
   currentLinksUpdated: z.number().optional().default(0),
   actionsTotal: z.number().optional().default(0),
@@ -185,6 +188,10 @@ export const UsersStatsResponseSchema = z.object({
   periodDays: z.number().optional().nullable(),
   from: z.coerce.string().optional().nullable(),
   to: z.coerce.string().optional().nullable(),
+  summary: z.record(z.string(), z.unknown()).optional().default({}),
+  includeInactive: z.boolean().optional().default(true),
+  includeDeleted: z.boolean().optional().default(true),
+  selectedUsers: z.array(z.coerce.string()).optional().default([]),
   users: z.array(UserStatsRowSchema).optional().default([]),
 }).passthrough();
 

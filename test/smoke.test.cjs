@@ -20,6 +20,7 @@ process.env.DATABASE_URL = "";
 process.env.JSON_FALLBACK_ENABLED = "true";
 
 const appUsersPath = path.join(__dirname, "..", "data", "app-users.json");
+const appDeletedUsersPath = path.join(__dirname, "..", "data", "app-users-deleted.json");
 const appSettingsPath = path.join(__dirname, "..", "data", "app-settings.json");
 const marketplaceAccountsPath = path.join(__dirname, "..", "data", "marketplace-accounts.json");
 const warehousePath = path.join(__dirname, "..", "data", "warehouse.json");
@@ -1990,6 +1991,7 @@ test("admin can add employees and managers cannot open admin areas", async () =>
 
 test("admin can read employee PriceMaster link statistics and managers cannot", async () => {
   const usersBackup = await backupFile(appUsersPath);
+  const deletedUsersBackup = await backupFile(appDeletedUsersPath);
   const warehouseBackup = await backupFile(personalWarehousePath);
   const auditBackup = await backupFile(auditLogPath);
   const admin = request.agent(app);
@@ -1999,8 +2001,12 @@ test("admin can read employee PriceMaster link statistics and managers cannot", 
 
   try {
     await restoreFile(appUsersPath, JSON.stringify({
-      users: [{ username: "manager-stats", password: "manager-pass", role: "manager" }],
+      users: [
+        { username: "manager-stats", password: "manager-pass", role: "manager" },
+        { username: "delete-stats", password: "delete-pass", role: "manager" },
+      ],
     }, null, 2));
+    await restoreFile(appDeletedUsersPath, null);
     const statsWarehouse = {
       products: [
         {
@@ -2060,6 +2066,8 @@ test("admin can read employee PriceMaster link statistics and managers cannot", 
     const res = await admin.get("/api/users/stats?period=30d").expect(200);
     assert.equal(res.body.period, "30d");
     assert.equal(res.body.periodDays, 30);
+    assert.ok(res.body.summary);
+    assert.equal(res.body.summary.actionsTotal, 2);
     const adminStats = res.body.users.find((user) => user.username === "admin");
     const managerStats = res.body.users.find((user) => user.username === "manager-stats");
     assert.ok(adminStats);
@@ -2075,8 +2083,22 @@ test("admin can read employee PriceMaster link statistics and managers cannot", 
     assert.equal(all.body.period, "all");
     const allAdminStats = all.body.users.find((user) => user.username === "admin");
     assert.ok(allAdminStats.linksAdded >= 3);
+
+    await manager.post("/api/users/stats/export").send({ period: "30d" }).expect(403);
+    const pdf = await admin
+      .post("/api/users/stats/export")
+      .send({ period: "30d", usernames: ["admin", "manager-stats"] })
+      .expect(200)
+      .expect("Content-Type", /application\/pdf/);
+    assert.ok(Buffer.isBuffer(pdf.body));
+    assert.equal(pdf.body.subarray(0, 4).toString("utf8"), "%PDF");
+
+    await admin.delete("/api/users/delete-stats?hard=true").expect(200);
+    const usersAfterHardDelete = await admin.get("/api/users").expect(200);
+    assert.equal(usersAfterHardDelete.body.users.some((user) => user.username === "delete-stats"), false);
   } finally {
     await restoreFile(appUsersPath, usersBackup);
+    await restoreFile(appDeletedUsersPath, deletedUsersBackup);
     if (warehouseBackup) {
       await writeWarehouse(JSON.parse(warehouseBackup));
     } else {
@@ -4240,6 +4262,39 @@ test("SKU diagnostics focuses exact product matches and reports hidden supplier 
     assert.equal(primary.automation.protectedFromNoSupplierArchive, true);
     assert.equal(primary.automation.wouldArchiveAsNoSupplier, false);
     assert.equal(sibling.saleStateCode, "no_supplier");
+  } finally {
+    if (previousWarehouse) await writeWarehouse(JSON.parse(previousWarehouse));
+    else await restoreFile(warehousePath, previousWarehouse);
+  }
+});
+
+test("SKU diagnostics separates stale marketplace stock from missing PriceMaster stock", async () => {
+  const previousWarehouse = await backupFile(warehousePath);
+  try {
+    await writeWarehouse({
+      products: [
+        {
+          id: "diag-stale-stock",
+          marketplace: "ozon",
+          target: "ozon",
+          offerId: "STALE-STOCK-1",
+          name: "Stale stock product",
+          links: [{ id: "stale-link", article: "PM-STOCK", supplierName: "Supplier" }],
+          hasLinks: true,
+          supplierCount: 1,
+          availableSupplierCount: 1,
+          selectedSupplier: { supplierName: "Supplier", article: "PM-STOCK", price: 10, available: true },
+          targetStock: 3,
+          marketplaceState: { code: "out_of_stock", stock: 0 },
+        },
+      ],
+      suppliers: [],
+    });
+    const diagnostics = await buildWarehouseSkuDiagnostics("STALE-STOCK-1");
+    assert.equal(diagnostics.statusSummary.stockStale, 1);
+    assert.equal(diagnostics.statusSummary.noStock, 0);
+    assert.equal(diagnostics.products[0].saleStateCode, "stock_stale");
+    assert.equal(diagnostics.products[0].saleReason, "linked_supplier_target_stock_positive_but_marketplace_stock_is_zero");
   } finally {
     if (previousWarehouse) await writeWarehouse(JSON.parse(previousWarehouse));
     else await restoreFile(warehousePath, previousWarehouse);

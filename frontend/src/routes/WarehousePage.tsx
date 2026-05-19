@@ -635,7 +635,7 @@ function saleTone(code: unknown) {
   const text = String(code || "");
   if (text === "ready") return "success";
   if (text === "api_error" || text === "archived") return "danger";
-  if (text === "api_pending" || text === "no_supplier" || text === "no_stock" || text === "no_links") return "warn";
+  if (text === "api_pending" || text === "no_supplier" || text === "no_stock" || text === "no_links" || text === "stock_stale") return "warn";
   return "";
 }
 
@@ -685,6 +685,7 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
         <DiagnosticValue label="Архив" value={summary.archived ?? 0} tone={Number(summary.archived || 0) > 0 ? "danger" : "success"} />
         <DiagnosticValue label="Нет поставщика" value={summary.noSupplier ?? 0} tone={Number(summary.noSupplier || 0) > 0 ? "warn" : "success"} />
         <DiagnosticValue label="Нет остатка" value={summary.noStock ?? 0} tone={Number(summary.noStock || 0) > 0 ? "warn" : "success"} />
+        <DiagnosticValue label="Остаток ждёт отправки" value={summary.stockStale ?? 0} tone={Number(summary.stockStale || 0) > 0 ? "warn" : "success"} />
         <DiagnosticValue label="API ошибки" value={summary.apiError ?? 0} tone={Number(summary.apiError || 0) > 0 ? "danger" : "success"} />
       </div>
       <div className="diagnostics-summary diagnostics-summary-wide">

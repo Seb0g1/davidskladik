@@ -1,3 +1,7 @@
+const fs = require("fs");
+const path = require("path");
+const PDFDocument = require("pdfkit");
+
 function registerUsersRoutes(app, deps) {
   const {
     requireAdmin,
@@ -9,6 +13,8 @@ function registerUsersRoutes(app, deps) {
     normalizeAppRole,
     readStoredAppUsers,
     writeStoredAppUsers,
+    readDeletedAppUsers,
+    writeDeletedAppUsers,
     appendAudit,
     getPrisma,
     shouldUsePostgresStorage,
@@ -35,6 +41,36 @@ function usersStatsPeriod(input) {
     periodDays: days,
     from: new Date(now.getTime() - days * 24 * 60 * 60 * 1000),
     to: now,
+  };
+}
+
+function booleanQuery(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  const normalized = cleanText(value).toLowerCase();
+  return ["1", "true", "yes", "on"].includes(normalized);
+}
+
+function selectedUsernamesFromInput(input) {
+  const raw = Array.isArray(input) ? input : cleanText(input).split(",");
+  return raw
+    .map((value) => cleanText(value))
+    .filter(Boolean);
+}
+
+function statsSummary(users = []) {
+  const activeUsers = users.filter((user) => user.active !== false && !user.deleted).length;
+  return {
+    totalUsers: users.length,
+    activeUsers,
+    deletedUsers: users.filter((user) => user.deleted).length,
+    currentLinksCreated: users.reduce((sum, user) => sum + Number(user.currentLinksCreated || 0), 0),
+    currentLinksUpdated: users.reduce((sum, user) => sum + Number(user.currentLinksUpdated || 0), 0),
+    actionsTotal: users.reduce((sum, user) => sum + Number(user.actionsTotal || 0), 0),
+    linksAdded: users.reduce((sum, user) => sum + Number(user.linksAdded || 0), 0),
+    linksUpdated: users.reduce((sum, user) => sum + Number(user.linksUpdated || 0), 0),
+    linksDeleted: users.reduce((sum, user) => sum + Number(user.linksDeleted || 0), 0),
+    affectedProducts: users.reduce((sum, user) => sum + Number(user.affectedProducts || 0), 0),
+    affectedOfferIds: users.reduce((sum, user) => sum + Number(user.affectedOfferIds || 0), 0),
   };
 }
 
@@ -121,6 +157,9 @@ function makeUserStats(username, user = {}) {
     role: user.role || "",
     active: user.active !== false && user.disabled !== true,
     source: user.source || "",
+    deleted: Boolean(user.deleted || user.hardDeleted),
+    hardDeleted: Boolean(user.hardDeleted || user.deleted),
+    deletedAt: user.deletedAt || null,
     currentLinksCreated: 0,
     currentLinksUpdated: 0,
     actionsTotal: 0,
@@ -139,6 +178,9 @@ function publicUserStats(stats) {
     role: stats.role,
     active: stats.active,
     source: stats.source,
+    deleted: Boolean(stats.deleted),
+    hardDeleted: Boolean(stats.hardDeleted),
+    deletedAt: stats.deletedAt || null,
     currentLinksCreated: stats.currentLinksCreated,
     currentLinksUpdated: stats.currentLinksUpdated,
     actionsTotal: stats.actionsTotal,
@@ -159,6 +201,13 @@ function getStatsBucket(statsByUser, usernameInput, user = {}) {
   if (user.role && !stats.role) stats.role = user.role;
   if (user.source && !stats.source) stats.source = user.source;
   if (user.active !== undefined || user.disabled !== undefined) stats.active = user.active !== false && user.disabled !== true;
+  if (user.deleted || user.hardDeleted) {
+    stats.deleted = true;
+    stats.hardDeleted = true;
+    stats.active = false;
+    stats.deletedAt = user.deletedAt || stats.deletedAt || null;
+    if (!stats.source) stats.source = "deleted";
+  }
   return stats;
 }
 
@@ -240,6 +289,65 @@ async function readLinkAuditEntriesForStats(period) {
   return entries.filter((entry) => linkAuditActions.has(cleanText(entry.action)));
 }
 
+async function buildUsersStatsResponse(options = {}) {
+  const period = usersStatsPeriod(options.period);
+  const selectedUsers = new Set(selectedUsernamesFromInput(options.users).map((username) => username.toLowerCase()));
+  const includeInactive = Boolean(options.includeInactive);
+  const includeDeleted = Boolean(options.includeDeleted);
+  const statsByUser = new Map();
+  const users = (await configuredUsersForAdminAsync()).map(publicAppUser);
+  for (const user of users) getStatsBucket(statsByUser, user.username, user);
+  const deletedUsers = typeof readDeletedAppUsers === "function" ? await readDeletedAppUsers() : [];
+  for (const user of deletedUsers) {
+    getStatsBucket(statsByUser, user.username, {
+      role: "",
+      source: "deleted",
+      active: false,
+      deleted: true,
+      hardDeleted: true,
+      deletedAt: user.deletedAt,
+    });
+  }
+
+  if (shouldUsePostgresStorage()) {
+    try {
+      await readCurrentLinkStatsFromPostgres(statsByUser);
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("user stats links postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+      await readCurrentLinkStatsFromWarehouse(statsByUser);
+    }
+  } else {
+    await readCurrentLinkStatsFromWarehouse(statsByUser);
+  }
+
+  applyAuditStats(statsByUser, await readLinkAuditEntriesForStats(period));
+  const allStats = Array.from(statsByUser.values())
+    .map(publicUserStats)
+    .filter((user) => includeInactive || user.active !== false || user.deleted)
+    .filter((user) => includeDeleted || !user.deleted)
+    .filter((user) => !selectedUsers.size || selectedUsers.has(cleanText(user.username).toLowerCase()))
+    .sort((a, b) => {
+      const totalB = b.currentLinksCreated + b.currentLinksUpdated + b.actionsTotal;
+      const totalA = a.currentLinksCreated + a.currentLinksUpdated + a.actionsTotal;
+      if (totalB !== totalA) return totalB - totalA;
+      return a.username.localeCompare(b.username);
+    });
+
+  return {
+    ok: true,
+    period: period.key,
+    periodDays: period.periodDays,
+    from: period.from ? period.from.toISOString() : null,
+    to: period.to.toISOString(),
+    includeInactive,
+    includeDeleted,
+    selectedUsers: Array.from(selectedUsers),
+    summary: statsSummary(allStats),
+    users: allStats,
+  };
+}
+
 app.get("/api/users", requireAdmin, async (_request, response, next) => {
   try {
     response.json({ users: (await configuredUsersForAdminAsync()).map(publicAppUser) });
@@ -250,41 +358,164 @@ app.get("/api/users", requireAdmin, async (_request, response, next) => {
 
 app.get("/api/users/stats", requireAdmin, async (request, response, next) => {
   try {
-    const period = usersStatsPeriod(request.query.period);
-    const statsByUser = new Map();
-    const users = (await configuredUsersForAdminAsync()).map(publicAppUser);
-    for (const user of users) getStatsBucket(statsByUser, user.username, user);
+    response.json(await buildUsersStatsResponse({
+      period: request.query.period,
+      users: request.query.users,
+      includeInactive: booleanQuery(request.query.includeInactive, true),
+      includeDeleted: booleanQuery(request.query.includeDeleted, true),
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
 
-    if (shouldUsePostgresStorage()) {
-      try {
-        await readCurrentLinkStatsFromPostgres(statsByUser);
-      } catch (error) {
-        if (!jsonFallbackEnabled()) throw error;
-        logger.warn("user stats links postgres failed, using JSON fallback", { detail: error?.message || String(error) });
-        await readCurrentLinkStatsFromWarehouse(statsByUser);
-      }
-    } else {
-      await readCurrentLinkStatsFromWarehouse(statsByUser);
+function periodLabel(report = {}) {
+  if (report.period === "all") return "все время";
+  return `${report.periodDays || ""} дней`;
+}
+
+function formatDateRu(value) {
+  if (!value) return "-";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleString("ru-RU", { timeZone: "Europe/Moscow" });
+}
+
+function pdfText(value) {
+  return String(value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function makeUsersStatsPdf(report = {}) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ size: "A4", margin: 42, info: { Title: "Magic Vibe - статистика сотрудников" } });
+    const chunks = [];
+    doc.on("data", (chunk) => chunks.push(chunk));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+
+    const regularFont = path.join(__dirname, "..", "assets", "fonts", "NotoSans-Regular.ttf");
+    const boldFont = path.join(__dirname, "..", "assets", "fonts", "NotoSans-Bold.ttf");
+    const hasFonts = fs.existsSync(regularFont) && fs.existsSync(boldFont);
+    if (hasFonts) {
+      doc.registerFont("regular", regularFont);
+      doc.registerFont("bold", boldFont);
+      doc.font("regular");
     }
 
-    applyAuditStats(statsByUser, await readLinkAuditEntriesForStats(period));
-    const stats = Array.from(statsByUser.values())
-      .map(publicUserStats)
-      .sort((a, b) => {
-        const totalB = b.currentLinksCreated + b.currentLinksUpdated + b.actionsTotal;
-        const totalA = a.currentLinksCreated + a.currentLinksUpdated + a.actionsTotal;
-        if (totalB !== totalA) return totalB - totalA;
-        return a.username.localeCompare(b.username);
-      });
+    const font = (name) => {
+      if (hasFonts) doc.font(name === "bold" ? "bold" : "regular");
+      else doc.font(name === "bold" ? "Helvetica-Bold" : "Helvetica");
+    };
+    const width = doc.page.width - doc.page.margins.left - doc.page.margins.right;
+    const left = doc.page.margins.left;
+    const top = doc.page.margins.top;
+    const summary = report.summary || {};
 
-    response.json({
-      ok: true,
-      period: period.key,
-      periodDays: period.periodDays,
-      from: period.from ? period.from.toISOString() : null,
-      to: period.to.toISOString(),
-      users: stats,
+    doc.rect(0, 0, doc.page.width, 118).fill("#07111f");
+    doc.fillColor("#ffffff");
+    font("bold");
+    doc.fontSize(22).text("Magic Vibe", left, top - 8);
+    doc.fontSize(15).text("Статистика сотрудников ДавидСклад", left, top + 22);
+    font("regular");
+    doc.fillColor("#b9c7dc").fontSize(9).text(`Период: ${periodLabel(report)} · сформировано: ${formatDateRu(new Date())}`, left, top + 48);
+    doc.fillColor("#ffffff").fontSize(9).text("Подпись: Magic Vibe / ДавидСклад", left, top + 66);
+
+    doc.y = 142;
+    const cardGap = 8;
+    const cardWidth = (width - cardGap * 3) / 4;
+    const cards = [
+      ["Активных связей", summary.currentLinksCreated || 0],
+      ["Действий", summary.actionsTotal || 0],
+      ["Добавлено", summary.linksAdded || 0],
+      ["Товаров затронуто", summary.affectedProducts || 0],
+    ];
+    cards.forEach((card, index) => {
+      const x = left + index * (cardWidth + cardGap);
+      doc.roundedRect(x, doc.y, cardWidth, 58, 6).fillAndStroke("#f4f7fb", "#d7dfec");
+      doc.fillColor("#5b677a");
+      font("regular");
+      doc.fontSize(8).text(card[0], x + 10, doc.y + 10, { width: cardWidth - 20 });
+      doc.fillColor("#0f172a");
+      font("bold");
+      doc.fontSize(18).text(String(card[1]), x + 10, doc.y + 27, { width: cardWidth - 20 });
     });
+    doc.y += 84;
+
+    font("bold");
+    doc.fillColor("#0f172a").fontSize(13).text("Сотрудники", left, doc.y);
+    doc.y += 22;
+    const columns = [
+      { key: "username", label: "Сотрудник", width: 118 },
+      { key: "currentLinksCreated", label: "Активн.", width: 52 },
+      { key: "linksAdded", label: "Добав.", width: 52 },
+      { key: "linksUpdated", label: "Обнов.", width: 54 },
+      { key: "linksDeleted", label: "Удал.", width: 48 },
+      { key: "affectedProducts", label: "Товаров", width: 56 },
+      { key: "lastActionAt", label: "Последнее действие", width: 130 },
+    ];
+    const rowHeight = 34;
+    const drawHeader = () => {
+      let x = left;
+      doc.rect(left, doc.y, width, 24).fill("#eaf1fb");
+      font("bold");
+      doc.fillColor("#1f2a3d").fontSize(8);
+      for (const column of columns) {
+        doc.text(column.label, x + 4, doc.y + 8, { width: column.width - 8, ellipsis: true });
+        x += column.width;
+      }
+      doc.y += 24;
+    };
+    drawHeader();
+    font("regular");
+    for (const user of report.users || []) {
+      if (doc.y + rowHeight > doc.page.height - 54) {
+        doc.addPage();
+        doc.y = top;
+        drawHeader();
+      }
+      let x = left;
+      doc.rect(left, doc.y, width, rowHeight).fillAndStroke("#ffffff", "#edf2f7");
+      const status = user.deleted ? "удален" : (user.active === false ? "выключен" : "активен");
+      const values = {
+        username: `${user.username || "system"} · ${status}`,
+        currentLinksCreated: user.currentLinksCreated || 0,
+        linksAdded: user.linksAdded || 0,
+        linksUpdated: user.linksUpdated || 0,
+        linksDeleted: user.linksDeleted || 0,
+        affectedProducts: user.affectedProducts || 0,
+        lastActionAt: formatDateRu(user.lastActionAt),
+      };
+      doc.fillColor("#111827").fontSize(8);
+      for (const column of columns) {
+        doc.text(pdfText(values[column.key]), x + 4, doc.y + 8, { width: column.width - 8, height: 20, ellipsis: true });
+        x += column.width;
+      }
+      doc.y += rowHeight;
+    }
+    if (!(report.users || []).length) {
+      doc.fillColor("#5b677a").fontSize(10).text("По выбранным фильтрам действий нет.", left, doc.y + 8);
+    }
+
+    const bottom = doc.page.height - 36;
+    doc.fillColor("#64748b");
+    font("regular");
+    doc.fontSize(8).text("Magic Vibe · документ сформирован автоматически, история действий и привязок сохранена в ДавидСклад.", left, bottom, { width, align: "center" });
+    doc.end();
+  });
+}
+
+app.post("/api/users/stats/export", requireAdmin, async (request, response, next) => {
+  try {
+    const report = await buildUsersStatsResponse({
+      period: request.body?.period,
+      users: request.body?.usernames || request.body?.users,
+      includeInactive: request.body?.includeInactive !== false,
+      includeDeleted: request.body?.includeDeleted !== false,
+    });
+    const pdf = await makeUsersStatsPdf(report);
+    response.setHeader("Content-Type", "application/pdf");
+    response.setHeader("Content-Disposition", `attachment; filename="magic-vibe-user-stats-${report.period || "report"}.pdf"`);
+    response.send(pdf);
   } catch (error) {
     next(error);
   }
@@ -360,8 +591,56 @@ app.delete("/api/users/:username", requireAdmin, async (request, response, next)
   try {
     const username = cleanText(request.params.username);
     const currentUsername = requestUsername(request);
+    const hardDelete = booleanQuery(request.query.hard, false) || booleanQuery(request.body?.hard, false);
     if (username.toLowerCase() === currentUsername.toLowerCase()) {
       return response.status(400).json({ error: "Нельзя удалить текущего пользователя. Сначала войдите под другим администратором." });
+    }
+    if (hardDelete) {
+      const allUsers = await configuredUsersForAdminAsync();
+      const targetUser = allUsers.find((item) => item.username.toLowerCase() === username.toLowerCase());
+      if (!targetUser) return response.status(404).json({ error: "User not found." });
+      const activeAdminsAfterDelete = allUsers.filter((item) => (
+        item.username.toLowerCase() !== username.toLowerCase()
+        && item.role === "admin"
+        && item.disabled !== true
+      ));
+      if (targetUser.role === "admin" && !activeAdminsAfterDelete.length) {
+        return response.status(400).json({ error: "Cannot delete the last active admin." });
+      }
+
+      const storedUsers = await readStoredAppUsers({ includeDisabled: true });
+      const storedTarget = storedUsers.find((item) => item.username.toLowerCase() === username.toLowerCase());
+      const before = publicAppUser(storedTarget || targetUser);
+      if (storedTarget) {
+        const remaining = storedUsers.filter((item) => item.username.toLowerCase() !== username.toLowerCase());
+        if (shouldUsePostgresStorage()) {
+          try {
+            await getPrisma().appUser.deleteMany({ where: { username, protected: false } });
+          } catch (error) {
+            if (!jsonFallbackEnabled()) throw error;
+            logger.warn("hard delete app user postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+          }
+        }
+        await writeStoredAppUsers(remaining);
+      } else {
+        if (typeof readDeletedAppUsers !== "function" || typeof writeDeletedAppUsers !== "function") {
+          return response.status(409).json({ error: "Env user hard delete requires tombstone storage." });
+        }
+        const deletedUsers = await readDeletedAppUsers();
+        deletedUsers.push({
+          username,
+          deletedAt: new Date().toISOString(),
+          deletedBy: currentUsername,
+          reason: "hard_delete_env_user",
+        });
+        await writeDeletedAppUsers(deletedUsers);
+      }
+      appendAudit(request, "users.hard_delete", {
+        username,
+        oldValue: before,
+        newValue: null,
+      }).catch((auditError) => logger.warn("user audit append failed", { detail: auditError?.message || String(auditError) }));
+      return response.json({ ok: true, users: (await configuredUsersForAdminAsync()).map(publicAppUser) });
     }
     const users = await readStoredAppUsers({ includeDisabled: true });
     const target = users.find((item) => item.username.toLowerCase() === username.toLowerCase());

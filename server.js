@@ -75,6 +75,7 @@ const marketplaceAccountsPath = path.join(dataDir, "marketplace-accounts.json");
 const auditLogPath = path.join(dataDir, "audit-log.jsonl");
 const appSettingsPath = path.join(dataDir, "app-settings.json");
 const appUsersPath = path.join(dataDir, "app-users.json");
+const appDeletedUsersPath = path.join(dataDir, "app-users-deleted.json");
 const priceRetryQueuePath = path.join(dataDir, "price-retry-queue.json");
 const yandexExistingOffersCachePath = path.join(dataDir, "yandex-existing-offers.json");
 const operationJobsPath = path.join(dataDir, "operation-jobs.json");
@@ -427,6 +428,7 @@ function toDateOrNull(value) {
 }
 
 function configuredUsers() {
+  const deletedUsernames = readDeletedAppUsernamesSync();
   const users = [];
   const primary = normalizeAppUser({
     username: process.env.APP_USER || "admin",
@@ -437,10 +439,11 @@ function configuredUsers() {
 
   users.push(...readEnvJsonUsers());
   users.push(...readStoredAppUsersSync());
-  return dedupeAppUsers(users).filter((user) => !user.disabled);
+  return dedupeAppUsers(users).filter((user) => !user.disabled && !deletedUsernames.has(cleanText(user.username).toLowerCase()));
 }
 
 async function configuredUsersAsync() {
+  const deletedUsernames = await readDeletedAppUsernames();
   const users = [];
   const primary = normalizeAppUser({
     username: process.env.APP_USER || "admin",
@@ -451,10 +454,11 @@ async function configuredUsersAsync() {
 
   users.push(...readEnvJsonUsers());
   users.push(...await readStoredAppUsers());
-  return dedupeAppUsers(users).filter((user) => !user.disabled);
+  return dedupeAppUsers(users).filter((user) => !user.disabled && !deletedUsernames.has(cleanText(user.username).toLowerCase()));
 }
 
 async function configuredUsersForAdminAsync() {
+  const deletedUsernames = await readDeletedAppUsernames();
   const users = [];
   const primary = normalizeAppUser({
     username: process.env.APP_USER || "admin",
@@ -465,7 +469,7 @@ async function configuredUsersForAdminAsync() {
 
   users.push(...readEnvJsonUsers());
   users.push(...await readStoredAppUsers({ includeDisabled: true }));
-  return dedupeAppUsers(users);
+  return dedupeAppUsers(users).filter((user) => !deletedUsernames.has(cleanText(user.username).toLowerCase()));
 }
 
 function normalizeAppRole(value, fallback = "manager") {
@@ -541,6 +545,55 @@ function readStoredAppUsersSync() {
   } catch (_error) {
     return [];
   }
+}
+
+function normalizeDeletedAppUser(input = {}) {
+  const username = cleanText(input.username || input.user || input.login);
+  if (!username) return null;
+  return {
+    username,
+    deletedAt: input.deletedAt || new Date().toISOString(),
+    deletedBy: cleanText(input.deletedBy || ""),
+    reason: cleanText(input.reason || "hard_delete"),
+  };
+}
+
+function readDeletedAppUsersSync() {
+  try {
+    const parsed = JSON.parse(fsSync.readFileSync(appDeletedUsersPath, "utf8"));
+    const users = Array.isArray(parsed.users) ? parsed.users : [];
+    return users.map(normalizeDeletedAppUser).filter(Boolean);
+  } catch (_error) {
+    return [];
+  }
+}
+
+function readDeletedAppUsernamesSync() {
+  return new Set(readDeletedAppUsersSync().map((item) => cleanText(item.username).toLowerCase()).filter(Boolean));
+}
+
+async function readDeletedAppUsers() {
+  return readDeletedAppUsersSync();
+}
+
+async function readDeletedAppUsernames() {
+  return new Set((await readDeletedAppUsers()).map((item) => cleanText(item.username).toLowerCase()).filter(Boolean));
+}
+
+async function writeDeletedAppUsers(users = []) {
+  const byUser = new Map();
+  for (const user of users.map(normalizeDeletedAppUser).filter(Boolean)) {
+    byUser.set(cleanText(user.username).toLowerCase(), user);
+  }
+  await fs.mkdir(dataDir, { recursive: true });
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    users: Array.from(byUser.values()).sort((a, b) => a.username.localeCompare(b.username)),
+  };
+  const temporaryPath = `${appDeletedUsersPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(payload, null, 2), "utf8");
+  await fs.rename(temporaryPath, appDeletedUsersPath);
+  return payload.users;
 }
 
 function appUserFromPostgres(row = {}) {
@@ -2069,6 +2122,8 @@ function normalizeWarehouseProduct(input = {}) {
     currentPrice: Number(input.currentPrice ?? input.marketplacePrice ?? input.current_price ?? 0) || null,
     targetPrice: Number(input.targetPrice ?? input.nextPrice ?? input.calculatedPrice ?? 0) || null,
     targetStock: Number.isFinite(Number(input.targetStock)) ? Number(input.targetStock) : null,
+    supplierCount: Number.isFinite(Number(input.supplierCount)) ? Number(input.supplierCount) : 0,
+    availableSupplierCount: Number.isFinite(Number(input.availableSupplierCount)) ? Number(input.availableSupplierCount) : 0,
     name,
     keyword: cleanText(input.keyword),
     markup: targetMeta.marketplace === "yandex" && !keepYandexMarkup ? 0 : rawMarkup,
@@ -10591,9 +10646,11 @@ function warehouseProductDiagnosticSaleState(product = {}, contextProducts = [])
     ? normalizeLastPriceSend(product.lastYandexPriceSend || {})
     : normalizeLastPriceSend(product.lastOzonPriceSend || product.lastYandexPriceSend || {});
   const hasLinks = Boolean(product.hasLinks || (Array.isArray(product.links) && product.links.length));
-  const selectedSupplier = Boolean(product.selectedSupplier);
+  const selectedSupplier = Boolean(product.selectedSupplier || Number(product.availableSupplierCount || 0) > 0);
   const archived = Boolean(productLooksArchived(product));
   const stock = Number(product.targetStock ?? product.stock ?? state.stock ?? state.availableStock ?? 0);
+  const stateCode = cleanText(state.code || product.status || "").toLowerCase();
+  const marketplaceStock = Number(state.stock ?? state.present ?? state.availableStock ?? NaN);
   const lastError = cleanText(
     product.noSupplierAutomation?.lastError
       || lastStockSend?.error
@@ -10612,6 +10669,13 @@ function warehouseProductDiagnosticSaleState(product = {}, contextProducts = [])
   if (!hasLinks) return { code: "no_links", label: "Нет привязки", reason: "no_pricemaster_links" };
   if (!selectedSupplier) return { code: "no_supplier", label: "Нет поставщика", reason: "linked_but_supplier_not_selected" };
   if (!Number.isFinite(stock) || stock <= 0) return { code: "no_stock", label: "Нет остатка", reason: "target_stock_is_zero" };
+  if (
+    stock > 0
+    && (stateCode === "out_of_stock" || stateCode === "inactive" || stateCode.includes("out_of_stock"))
+    && (!Number.isFinite(marketplaceStock) || marketplaceStock <= 0)
+  ) {
+    return { code: "stock_stale", label: "Stock push needed", reason: "linked_supplier_target_stock_positive_but_marketplace_stock_is_zero" };
+  }
   return { code: "ready", label: "Готов к продаже", reason: "linked_supplier_stock_and_not_archived" };
 }
 
@@ -10624,6 +10688,7 @@ function buildWarehouseDiagnosticsGroupSummary(products = []) {
     noLinks: 0,
     noSupplier: 0,
     noStock: 0,
+    stockStale: 0,
     apiPending: 0,
     apiError: 0,
     marketplaces: [],
@@ -10639,6 +10704,7 @@ function buildWarehouseDiagnosticsGroupSummary(products = []) {
     if (saleState.code === "no_links") summary.noLinks += 1;
     if (saleState.code === "no_supplier") summary.noSupplier += 1;
     if (saleState.code === "no_stock") summary.noStock += 1;
+    if (saleState.code === "stock_stale") summary.stockStale += 1;
     if (saleState.code === "api_pending") summary.apiPending += 1;
     if (saleState.code === "api_error") summary.apiError += 1;
     const marketplace = cleanText(normalized.marketplace || normalized.target || "");
@@ -10663,7 +10729,7 @@ function publicWarehouseDiagnosticProduct(product = {}, contextProducts = []) {
     barcode: product.barcode || product.ozon?.barcode || product.yandex?.barcode || "",
     name: product.name || "",
     brand: resolveWarehouseBrand(product),
-    hasLinks: Boolean(product.hasLinks),
+    hasLinks: Boolean(product.hasLinks || (Array.isArray(product.links) && product.links.length)),
     ready: Boolean(product.ready),
     changed: Boolean(product.changed),
     supplierCount: Number(product.supplierCount || 0),
@@ -10751,7 +10817,18 @@ async function buildWarehouseSkuDiagnostics(sku = "", { limit = 50, auditLimit =
     )
     : [];
   const builtById = new Map(built.map((product) => [String(product.id), normalizeWarehouseProduct(product)]));
-  const diagnosticProducts = matchedProducts.map((product) => normalizeWarehouseDetailProduct(builtById.get(String(product.id)) || product));
+  const diagnosticProducts = matchedProducts.map((product) => {
+    const builtProduct = builtById.get(String(product.id));
+    if (!builtProduct) return normalizeWarehouseDetailProduct(product);
+    return normalizeWarehouseDetailProduct({
+      ...builtProduct,
+      selectedSupplier: builtProduct.selectedSupplier || product.selectedSupplier || null,
+      supplierCount: Number(builtProduct.supplierCount || product.supplierCount || 0),
+      availableSupplierCount: Number(builtProduct.availableSupplierCount || product.availableSupplierCount || 0),
+      targetStock: Number(builtProduct.targetStock || 0) > 0 ? builtProduct.targetStock : product.targetStock,
+      links: Array.isArray(builtProduct.links) && builtProduct.links.length ? builtProduct.links : product.links,
+    });
+  });
   const latestAudit = await readAuditFiltered({ q: query }, Math.max(1, Math.min(100, Math.round(Number(auditLimit || 30) || 30))));
   const warnings = [];
   if (!diagnosticProducts.length) warnings.push("sku_not_found");
@@ -11821,6 +11898,8 @@ registerUsersRoutes(app, {
   normalizeAppRole,
   readStoredAppUsers,
   writeStoredAppUsers,
+  readDeletedAppUsers,
+  writeDeletedAppUsers,
   appendAudit,
   getPrisma,
   shouldUsePostgresStorage,

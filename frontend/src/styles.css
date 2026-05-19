@@ -602,6 +602,50 @@ button:disabled {
   align-items: start;
 }
 
+.employee-stats-dashboard {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.employee-stats-controls,
+.employee-user-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.employee-user-picker {
+  max-height: 118px;
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  background: rgba(8, 17, 31, .42);
+}
+
+.employee-user-chip {
+  border: 1px solid var(--line);
+  min-height: 32px;
+  color: var(--muted);
+  background: #0c1728;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+}
+
+.employee-user-chip.is-selected {
+  color: var(--text);
+  border-color: rgba(56, 163, 255, .62);
+  background: rgba(56, 163, 255, .16);
+}
+
+.danger-action {
+  color: #ffd1d7;
+  border-color: rgba(255, 107, 122, .52);
+}
+
 .employee-stats-grid {
   min-width: min(520px, 100%);
   display: grid;
@@ -1536,6 +1580,7 @@ button:disabled {
   }
 
   .summary-grid,
+  .employee-stats-dashboard,
   .stats-grid,
   .draft-grid,
   .manual-link-grid,
@@ -1551,6 +1596,16 @@ button:disabled {
   .employee-stats-grid,
   .diagnostics-summary {
     grid-template-columns: 1fr;
+  }
+
+  .employee-stats-controls {
+    align-items: stretch;
+  }
+
+  .employee-stats-controls > *,
+  .employee-user-chip {
+    width: 100%;
+    justify-content: flex-start;
   }
 
   .job-row,

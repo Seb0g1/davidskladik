@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, RefreshCw, Save, Search, Trash2 } from "lucide-react";
+import { CheckSquare, Download, Loader2, RefreshCw, Save, Search, Square, Trash2, UserX } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
 import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SyncStatusSchema, UsersResponseSchema, UsersStatsResponseSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -87,14 +87,47 @@ function settingsSavePayload(draft: Record<string, unknown>) {
   };
 }
 
+function recordNumber(record: Record<string, unknown>, key: string) {
+  const value = Number(record[key] || 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+function userStatusText(row: Record<string, unknown>) {
+  if (row.deleted || row.hardDeleted) return "удален";
+  if (row.active === false || row.disabled === true) return "выключен";
+  return "активен";
+}
+
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function UsersSettingsPanel() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState({ username: "", password: "", role: "manager" });
   const [statsPeriod, setStatsPeriod] = useState("30d");
+  const [selectedStatsUsers, setSelectedStatsUsers] = useState<string[]>([]);
+  const [includeInactiveStats, setIncludeInactiveStats] = useState(true);
+  const [includeDeletedStats, setIncludeDeletedStats] = useState(true);
   const usersQuery = useQuery({ queryKey: ["users"], queryFn: () => fetchJson("/api/users", UsersResponseSchema) });
   const statsQuery = useQuery({
-    queryKey: ["user-stats", statsPeriod],
-    queryFn: () => fetchJson(`/api/users/stats?period=${encodeURIComponent(statsPeriod)}`, UsersStatsResponseSchema),
+    queryKey: ["user-stats", statsPeriod, selectedStatsUsers, includeInactiveStats, includeDeletedStats],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        period: statsPeriod,
+        includeInactive: includeInactiveStats ? "1" : "0",
+        includeDeleted: includeDeletedStats ? "1" : "0",
+      });
+      if (selectedStatsUsers.length) params.set("users", selectedStatsUsers.join(","));
+      return fetchJson(`/api/users/stats?${params.toString()}`, UsersStatsResponseSchema);
+    },
   });
   const refreshUsers = () => {
     void queryClient.invalidateQueries({ queryKey: ["users"] });
@@ -123,8 +156,43 @@ function UsersSettingsPanel() {
     ),
     onSuccess: refreshUsers,
   });
+  const hardDeleteUser = useMutation({
+    mutationFn: (username: string) => fetchJson(
+      `/api/users/${encodeURIComponent(username)}?hard=true`,
+      UsersResponseSchema,
+      { method: "DELETE" },
+    ),
+    onSuccess: refreshUsers,
+  });
+  const exportStats = useMutation({
+    mutationFn: async () => {
+      const response = await fetch("/api/users/stats/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          period: statsPeriod,
+          usernames: selectedStatsUsers,
+          includeInactive: includeInactiveStats,
+          includeDeleted: includeDeletedStats,
+        }),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      return response.blob();
+    },
+    onSuccess: (blob) => saveBlob(blob, `magic-vibe-user-stats-${statsPeriod}.pdf`),
+  });
   const users = usersQuery.data?.users || [];
   const stats = statsQuery.data?.users || [];
+  const summary = asRecord(statsQuery.data?.summary);
+  const statsUsers = Array.from(new Set([
+    ...users.map((user) => String(user.username || "")).filter(Boolean),
+    ...stats.map((user) => String(user.username || "")).filter(Boolean),
+  ])).sort((a, b) => a.localeCompare(b));
+  const toggleStatsUser = (username: string) => {
+    setSelectedStatsUsers((current) => (
+      current.includes(username) ? current.filter((item) => item !== username) : [...current, username]
+    ));
+  };
   return (
     <>
     <section className="settings-panel settings-panel-wide">
@@ -154,11 +222,14 @@ function UsersSettingsPanel() {
               <button className="secondary-action" type="button" disabled={protectedUser || updateUser.isPending} onClick={() => updateUser.mutate({ username, patch: { role: role === "admin" ? "manager" : "admin" } })}>{role === "admin" ? "Сделать manager" : "Сделать admin"}</button>
               <button className="secondary-action" type="button" disabled={protectedUser || updateUser.isPending} onClick={() => updateUser.mutate({ username, patch: { active: !active } })}>{active ? "Выключить" : "Включить"}</button>
               <button className="icon-action danger" type="button" disabled={protectedUser || deleteUser.isPending} onClick={() => deleteUser.mutate(username)} title="Удалить"><Trash2 size={15} /></button>
+              <button className="secondary-action danger-action" type="button" disabled={hardDeleteUser.isPending} onClick={() => {
+                if (window.confirm("Удалить " + username + " полностью из списка? История действий сохранится.")) hardDeleteUser.mutate(username);
+              }}><UserX size={15} /> Удалить полностью</button>
             </div>
           </article>
         );
       })}
-      {(createUser.error || updateUser.error || deleteUser.error) && <div className="inline-error">{errorMessage(createUser.error || updateUser.error || deleteUser.error)}</div>}
+      {(createUser.error || updateUser.error || deleteUser.error || hardDeleteUser.error) && <div className="inline-error">{errorMessage(createUser.error || updateUser.error || deleteUser.error || hardDeleteUser.error)}</div>}
     </section>
     <section className="settings-panel settings-panel-wide">
       <div className="section-title">
@@ -173,13 +244,36 @@ function UsersSettingsPanel() {
           <button className="secondary-action" type="button" onClick={() => statsQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
         </div>
       </div>
+      <div className="employee-stats-dashboard">
+        <DiagnosticValue label="Сотрудников" value={recordNumber(summary, "totalUsers")} />
+        <DiagnosticValue label="Действий" value={recordNumber(summary, "actionsTotal")} />
+        <DiagnosticValue label="Добавлено" value={recordNumber(summary, "linksAdded")} tone="success" />
+        <DiagnosticValue label="Товаров" value={recordNumber(summary, "affectedProducts")} />
+      </div>
+      <div className="employee-stats-controls">
+        <label className="toggle-filter"><input type="checkbox" checked={includeInactiveStats} onChange={(event) => setIncludeInactiveStats(event.target.checked)} /> Выключенные</label>
+        <label className="toggle-filter"><input type="checkbox" checked={includeDeletedStats} onChange={(event) => setIncludeDeletedStats(event.target.checked)} /> Удаленные</label>
+        <button className="secondary-action" type="button" disabled={!selectedStatsUsers.length} onClick={() => setSelectedStatsUsers([])}>Все сотрудники</button>
+        <button className="primary-action" type="button" disabled={exportStats.isPending} onClick={() => exportStats.mutate()}><Download size={16} /> Экспорт PDF</button>
+      </div>
+      <div className="employee-user-picker">
+        {statsUsers.map((username) => {
+          const selected = selectedStatsUsers.includes(username);
+          return (
+            <button className={selected ? "employee-user-chip is-selected" : "employee-user-chip"} type="button" key={username} onClick={() => toggleStatsUser(username)}>
+              {selected ? <CheckSquare size={14} /> : <Square size={14} />} {username}
+            </button>
+          );
+        })}
+      </div>
+      {exportStats.error && <div className="inline-error">{errorMessage(exportStats.error)}</div>}
       {statsQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Считаю статистику...</div>}
       {!statsQuery.isLoading && !stats.length && <div className="soft-empty">По выбранному периоду действий нет.</div>}
       {stats.map((row) => (
         <article className="job-row employee-stats-row" key={String(row.username)}>
           <div>
             <strong>{String(row.username || "system")}</strong>
-            <span>{String(row.role || "-")} · {row.active !== false ? "активен" : "выключен"} · действий {Number(row.actionsTotal || 0)}</span>
+            <span>{String(row.role || "-")} · {userStatusText(row)} · действий {Number(row.actionsTotal || 0)}</span>
             <small>последнее: {compactDate(String(row.lastActionAt || "")) || "нет действий за период"}</small>
           </div>
           <div className="employee-stats-grid">
