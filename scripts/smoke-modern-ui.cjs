@@ -75,14 +75,14 @@ async function main() {
 
     for (const sku of skuList) {
       await page.goto(`${baseUrl}/app/warehouse?q=${encodeURIComponent(sku)}`, { waitUntil: "domcontentloaded" });
-      await page.waitForTimeout(1200);
+      await page.waitForSelector(".product-row", { timeout: 45000 });
       const body = await page.locator("body").textContent();
       assert.ok((body || "").toLowerCase().includes(sku.toLowerCase()), `warehouse search must show ${sku}`);
     }
 
     const primarySku = skuList[0];
     await page.goto(`${baseUrl}/app/warehouse?q=${encodeURIComponent(primarySku)}`, { waitUntil: "domcontentloaded" });
-    await page.waitForTimeout(1200);
+    await page.waitForSelector(".product-row", { timeout: 45000 });
     const firstRow = page.locator(".product-row").first();
     await firstRow.click();
     await page.locator(".detail-panel").waitFor({ timeout: 10000 });
