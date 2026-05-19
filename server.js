@@ -103,7 +103,11 @@ const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.
 const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
 const yandexStockCampaignIds = new Set(parseYandexCampaignIds(process.env.YANDEX_STOCK_CAMPAIGN_IDS || "128820967"));
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
-const openaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
+const rawOpenaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
+const openaiImageModel = (() => {
+  const normalized = cleanText(rawOpenaiImageModel).toLowerCase();
+  return normalized.startsWith("gpt-image") || normalized.startsWith("dall-e") ? rawOpenaiImageModel : "gpt-image-2";
+})();
 const openaiTextModel = cleanText(process.env.OPENAI_TEXT_MODEL || process.env.AI_TEXT_MODEL || "gpt-5.4-mini");
 const openaiImageSize = cleanText(process.env.OPENAI_IMAGE_SIZE || "1024x1024");
 const ozonAiImageTargetPx = (() => {
@@ -140,6 +144,15 @@ function normalizeOpenAiImageModelName(model) {
   const normalized = cleanText(model);
   if (normalized.toLowerCase() === "gpt-image-1.5-high-fidelity") return "gpt-image-1.5";
   return normalized;
+}
+function isOpenAiImageModelName(model) {
+  const normalized = cleanText(model).toLowerCase();
+  return normalized.startsWith("gpt-image") || normalized.startsWith("dall-e");
+}
+function effectiveOpenAiImageModel(model, aiSettings = {}) {
+  if (isCodexSaleAiProvider(aiSettings)) return "gpt-image-2";
+  const normalized = normalizeOpenAiImageModelName(model);
+  return isOpenAiImageModelName(normalized) ? normalized : (openaiImageModel || "gpt-image-2");
 }
 const ozonAiImageDefaultPrompt = cleanText(process.env.OZON_AI_IMAGE_PROMPT)
   || 'Сгенерируй продающее изображение для карточки товара на Ozon. Используй название товара: "{productName}". Сохрани узнаваемость товара с исходного фото, улучшив фон, свет, композицию и визуальную привлекательность для маркетплейса. Не добавляй логотипы, водяные знаки, недостоверные характеристики или лишний текст.';
@@ -4639,7 +4652,7 @@ function normalizeAiSettings(input = {}, fallback = defaultAppSettings().ai) {
     baseUrl,
     apiKey: apiKey === maskedSecretValue ? cleanText(fallback.apiKey) : apiKey,
     textModel,
-    imageModel: normalizeOpenAiImageModelName(imageModel || "gpt-image-2"),
+    imageModel: effectiveOpenAiImageModel(imageModel || "gpt-image-2", { providerId: raw.providerId || raw.provider_id || fallback.providerId, baseUrl }),
     imageSize: imageSize || "1024x1024",
     imageQuality: imageQuality || "auto",
     imageFormat: ["png", "jpeg", "jpg", "webp"].includes(imageFormat) ? imageFormat : "png",
@@ -5049,7 +5062,7 @@ function effectiveAiSettingsFromAppSettings(settings = {}) {
     apiKey: cleanText(stored.apiKey) || cleanText(process.env.OPENAI_API_KEY),
     baseUrl: cleanText(stored.baseUrl) || openaiBaseUrl,
     textModel: cleanText(stored.textModel) || openaiTextModel,
-    imageModel: normalizeOpenAiImageModelName(stored.imageModel || openaiImageModel),
+    imageModel: effectiveOpenAiImageModel(stored.imageModel || openaiImageModel, stored),
     imageSize: cleanText(stored.imageSize) || openaiImageSize,
     imageQuality: cleanText(stored.imageQuality) || openaiImageQuality,
     imageFormat: cleanText(stored.imageFormat) || openaiImageFormat,
@@ -5260,8 +5273,9 @@ async function parseOpenAiCompatibleImageResponse(response) {
 
 async function fetchOpenAiCompatibleImageEdit(aiSettings, { prompt, sourceBuffer, sourceMimeType, sourceFileName }) {
   const apiKey = cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY);
+  const model = effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings);
   const form = new FormData();
-  form.append("model", aiSettings.imageModel || openaiImageModel);
+  form.append("model", model);
   form.append("image", new Blob([sourceBuffer], { type: cleanText(sourceMimeType) || "image/png" }), sourceFileName || fileNameFromImageMime(sourceMimeType));
   form.append("prompt", prompt);
   form.append("size", aiSettings.imageSize || openaiImageSize);
@@ -5275,6 +5289,7 @@ async function fetchOpenAiCompatibleImageEdit(aiSettings, { prompt, sourceBuffer
 
 async function fetchOpenAiCompatibleImageGeneration(aiSettings, { prompt }) {
   const apiKey = cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY);
+  const model = effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings);
   const response = await fetch(`${openAiCompatibleImageBaseUrl(aiSettings)}/images/generations`, {
     method: "POST",
     headers: {
@@ -5282,7 +5297,7 @@ async function fetchOpenAiCompatibleImageGeneration(aiSettings, { prompt }) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: aiSettings.imageModel || openaiImageModel,
+      model,
       prompt,
       size: aiSettings.imageSize || openaiImageSize,
       response_format: "b64_json",
@@ -5308,7 +5323,7 @@ async function fetchCodexSaleImage(aiSettings, imageOptions) {
 
 async function fetchDirectOpenAiImageGeneration(client, aiSettings, prompt) {
   const request = {
-    model: aiSettings.imageModel || openaiImageModel,
+    model: effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings),
     prompt,
     size: aiSettings.imageSize || openaiImageSize,
     response_format: "b64_json",
@@ -5474,7 +5489,7 @@ async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, batchId
     batchId,
     variantIndex,
     variantTotal,
-    model: aiSettings.imageModel || openaiImageModel,
+    model: effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings),
     size: ozonAiImageStoredSizeLabel(aiSettings),
     quality: aiSettings.imageQuality || openaiImageQuality,
     format: aiSettings.imageFormat || openaiImageFormat,
@@ -5547,14 +5562,14 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
         image.push(await toFile(logoReference.sourceBuffer, logoReference.sourceFileName, { type: logoReference.sourceMimeType }));
       }
       const editRequest = {
-        model: aiSettings.imageModel || openaiImageModel,
+        model: effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings),
         image: image.length === 1 ? image[0] : image,
         prompt: generatedPrompt,
         size: aiSettings.imageSize || openaiImageSize,
         quality: aiSettings.imageQuality || openaiImageQuality,
         output_format: aiSettings.imageFormat || openaiImageFormat,
       };
-      if (openAiImageSupportsInputFidelity(aiSettings.imageModel || openaiImageModel)) editRequest.input_fidelity = "high";
+      if (openAiImageSupportsInputFidelity(effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings))) editRequest.input_fidelity = "high";
       if (openaiImageConfig && typeof openaiImageConfig === "object") {
         editRequest.image_config = JSON.stringify(openaiImageConfig);
       }
@@ -5590,7 +5605,7 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
     batchId,
     variantIndex,
     variantTotal,
-    model: aiSettings.imageModel || openaiImageModel,
+    model: effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings),
     size: ozonAiImageStoredSizeLabel(aiSettings),
     quality: aiSettings.imageQuality || openaiImageQuality,
     format: aiSettings.imageFormat || openaiImageFormat,
@@ -16861,6 +16876,7 @@ module.exports = {
   sendApprovedYandexProductContent,
   shouldPreferCompatibleOpenAiChatRequest,
   isCodexSaleAiProvider,
+  effectiveOpenAiImageModel,
   openAiChatCompletionAttempts,
   isOpenAiBillingLimitError,
   isOpenAiRequestFormatError,

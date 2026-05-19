@@ -109,6 +109,7 @@ const {
   sendApprovedYandexProductContent,
   shouldPreferCompatibleOpenAiChatRequest,
   isCodexSaleAiProvider,
+  effectiveOpenAiImageModel,
   openAiChatCompletionAttempts,
   isOpenAiBillingLimitError,
   isOpenAiRequestFormatError,
@@ -2057,6 +2058,14 @@ test("OpenAI request format errors are retryable for compatible providers", () =
     code: "invalid_api_key",
     error: { message: "invalid key" },
   }), false);
+});
+
+test("AI image requests never reuse text model names", () => {
+  const codexSale = { providerId: "codexsale", baseUrl: "https://codex.sale/v1" };
+  assert.equal(effectiveOpenAiImageModel("gpt-5.4", codexSale), "gpt-image-2");
+  assert.equal(effectiveOpenAiImageModel("gpt-5.4-mini", codexSale), "gpt-image-2");
+  assert.equal(effectiveOpenAiImageModel("gpt-image-1.5", codexSale), "gpt-image-2");
+  assert.equal(effectiveOpenAiImageModel("gpt-image-2", codexSale), "gpt-image-2");
 });
 
 test("OpenAI billing limit errors are detected for fail-fast AI jobs", () => {
