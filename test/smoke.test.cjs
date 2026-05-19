@@ -76,6 +76,7 @@ const {
   preferWarehousePrimaryIdentityMatches,
   buildWarehouseSkuDiagnostics,
   addWarehousePageGroupSiblings,
+  buildWarehousePageProductGroups,
   linkedRecoveryCandidateProducts,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,
@@ -191,6 +192,29 @@ test("legacy page aliases keep old admin screens available", async () => {
   assert.match(res.text, /settingsForm/);
   const operations = await agent.get("/legacy/operations").expect(200);
   assert.match(operations.text, /operationsList/);
+});
+
+test("warehouse page product groups merge marketplace variants by offer and manual group", () => {
+  const products = [
+    normalizeWarehouseProduct({ id: "ozon-1", marketplace: "ozon", offerId: "41059", name: "Ozon row", links: [{ id: "l1", article: "pm-1", supplierName: "A" }] }),
+    normalizeWarehouseProduct({ id: "yandex-1", marketplace: "yandex", offerId: "41059", name: "Yandex row", links: [{ id: "l1", article: "pm-1", supplierName: "A" }] }),
+    normalizeWarehouseProduct({ id: "ozon-2", marketplace: "ozon", offerId: "DIFFERENT", name: "Different" }),
+    normalizeWarehouseProduct({ id: "manual-a", marketplace: "ozon", offerId: "A-1", manualGroupId: "manual-demo", name: "Manual A" }),
+    normalizeWarehouseProduct({ id: "manual-b", marketplace: "yandex", offerId: "B-1", manualGroupId: "manual-demo", name: "Manual B" }),
+  ];
+
+  const groups = buildWarehousePageProductGroups(products);
+  const group41059 = groups.find((group) => group.offerId === "41059");
+  assert.ok(group41059);
+  assert.equal(group41059.products.length, 2);
+  assert.deepEqual(group41059.marketplaces, ["Ozon", "Yandex"]);
+  assert.equal(group41059.links.length, 1);
+
+  assert.equal(groups.filter((group) => group.offerId === "DIFFERENT").length, 1);
+  const manualGroup = groups.find((group) => group.manualGroupId === "manual-demo");
+  assert.ok(manualGroup);
+  assert.equal(manualGroup.products.length, 2);
+  assert.deepEqual(manualGroup.products.map((product) => product.offerId).sort(), ["A-1", "B-1"]);
 });
 
 test("old index path can still be opened directly", async () => {

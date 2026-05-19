@@ -10018,6 +10018,79 @@ function addWarehousePageGroupSiblings(sourceProducts = [], pageProducts = []) {
   return Array.from(byId.values());
 }
 
+function buildWarehousePageProductGroups(products = []) {
+  const groups = new Map();
+  for (const product of Array.isArray(products) ? products : []) {
+    const normalized = normalizeWarehouseProduct(product);
+    const groupKey = warehouseProductPageGroupKey(normalized) || `id:${normalized.id}`;
+    if (!groups.has(groupKey)) {
+      groups.set(groupKey, {
+        groupKey,
+        offerId: normalized.offerId || "",
+        manualGroupId: normalized.manualGroupId || normalized.raw?.manualGroupId || "",
+        name: normalized.name || normalized.offerId || normalized.id,
+        brand: resolveWarehouseBrand(normalized) || normalized.brand || "",
+        imageUrl: normalized.imageUrl || "",
+        marketplaces: [],
+        products: [],
+        links: [],
+        statusSummary: {
+          total: 0,
+          linked: 0,
+          archived: 0,
+          ready: 0,
+          changed: 0,
+          withoutSupplier: 0,
+          marketplaces: [],
+        },
+      });
+    }
+    const group = groups.get(groupKey);
+    group.products.push(normalized);
+    if (!group.imageUrl && normalized.imageUrl) group.imageUrl = normalized.imageUrl;
+    if (!group.brand && (resolveWarehouseBrand(normalized) || normalized.brand)) group.brand = resolveWarehouseBrand(normalized) || normalized.brand;
+    const marketplaceRaw = cleanText(normalized.marketplace || normalized.target || "marketplace").toLowerCase();
+    const marketplace = marketplaceRaw.includes("ozon") ? "Ozon" : marketplaceRaw.includes("yandex") ? "Yandex" : marketplaceRaw;
+    if (marketplace && !group.marketplaces.includes(marketplace)) group.marketplaces.push(marketplace);
+    for (const link of normalized.links || []) {
+      const linkKey = [
+        cleanText(link.id),
+        cleanText(link.article || link.supplierArticle),
+        cleanText(link.supplierName),
+        cleanText(link.partnerId),
+        cleanText(link.sourceRowId),
+      ].join("|");
+      if (!group.links.some((item) => [
+        cleanText(item.id),
+        cleanText(item.article || item.supplierArticle),
+        cleanText(item.supplierName),
+        cleanText(item.partnerId),
+        cleanText(item.sourceRowId),
+      ].join("|") === linkKey)) {
+        group.links.push(link);
+      }
+    }
+    const stateCode = cleanText(normalized.marketplaceState?.code || normalized.status).toLowerCase();
+    const archived = Boolean(normalized.archived || stateCode.includes("archiv"));
+    const linked = Array.isArray(normalized.links) && normalized.links.length > 0;
+    const ready = linked && !archived && Number(normalized.targetStock || normalized.stock || 0) > 0;
+    const changed = Number(normalized.nextPrice || normalized.newPrice || normalized.targetPrice || 0) > 0
+      && Number(normalized.marketplacePrice || normalized.currentPrice || 0) !== Number(normalized.nextPrice || normalized.newPrice || normalized.targetPrice || 0);
+    group.statusSummary.total += 1;
+    if (linked) group.statusSummary.linked += 1;
+    if (archived) group.statusSummary.archived += 1;
+    if (ready) group.statusSummary.ready += 1;
+    if (changed) group.statusSummary.changed += 1;
+    if (!normalized.selectedSupplier && linked) group.statusSummary.withoutSupplier += 1;
+    group.statusSummary.marketplaces = group.marketplaces;
+  }
+  return Array.from(groups.values()).map((group) => ({
+    ...group,
+    marketplaces: group.marketplaces.sort(),
+    products: group.products.sort((a, b) => String(a.marketplace || "").localeCompare(String(b.marketplace || "")) || String(a.target || "").localeCompare(String(b.target || ""))),
+  }));
+}
+
 function linkedRecoveryCandidateProducts(products = [], limit = 30000) {
   const max = Math.max(1, Math.min(50000, Math.round(Number(limit || 30000) || 30000)));
   const rows = (Array.isArray(products) ? products : [])
@@ -11938,6 +12011,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     const marketplace = cleanText(request.query.marketplace || "all");
     const stateCode = cleanText(request.query.state || "all");
     const brandFilter = cleanText(request.query.brand || "");
+    const grouped = parseBooleanSetting(request.query.grouped, false);
 
     if (shouldUsePostgresStorage() && !sync && !refreshPrices) {
       const fastPage = await buildFastWarehousePage({
@@ -11954,6 +12028,17 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
         },
       });
       queueChangedWarehousePrices(fastPage.items, "warehouse_page_detected_changed_prices");
+      if (grouped) {
+        const groups = buildWarehousePageProductGroups(fastPage.items);
+        return response.json({
+          ...fastPage,
+          grouped: true,
+          rowTotal: fastPage.total,
+          total: groups.length,
+          groups,
+          items: groups,
+        });
+      }
       return response.json(fastPage);
     }
 
@@ -11990,6 +12075,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
       partial: false,
     }));
 
+    const groups = grouped ? buildWarehousePageProductGroups(items) : null;
     response.json({
       createdAt: data.createdAt,
       updatedAt: data.updatedAt || null,
@@ -12007,9 +12093,12 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
       noSupplierAlerts: Array.isArray(data.noSupplierAlerts) ? data.noSupplierAlerts.slice(0, 10) : [],
       page,
       pageSize,
-      total,
+      total: grouped ? groups.length : total,
+      rowTotal: total,
+      grouped,
+      groups: groups || undefined,
       hasMore: offset + items.length < total,
-      items,
+      items: groups || items,
     });
   } catch (error) {
     next(error);
@@ -17379,6 +17468,7 @@ module.exports = {
   preferWarehousePrimaryIdentityMatches,
   buildWarehouseSkuDiagnostics,
   addWarehousePageGroupSiblings,
+  buildWarehousePageProductGroups,
   linkedRecoveryCandidateProducts,
   summarizeWarehouseCounterStats,
   pickOzonDetailOfferIds,

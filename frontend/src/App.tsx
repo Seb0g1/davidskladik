@@ -5,6 +5,7 @@ import {
   Check,
   ChevronRight,
   CirclePlay,
+  Copy,
   ImagePlus,
   Link2,
   Loader2,
@@ -21,7 +22,7 @@ import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ApiError, fetchJson, mutationBody } from "./api";
+import { ApiError, fetchJson, mutationBody, patchBody } from "./api";
 import {
   AiDraftsSchema,
   AiImagesResponseSchema,
@@ -58,6 +59,22 @@ type LinkDraft = {
   sourceRowId?: string;
   exactName?: string;
   matchType?: string;
+};
+
+type ProductGroup = {
+  groupKey: string;
+  primary: Product;
+  products: Product[];
+  links: ProductLink[];
+  marketplaces: string[];
+  statusSummary: {
+    total: number;
+    linked: number;
+    archived: number;
+    ready: number;
+    changed: number;
+    withoutSupplier: number;
+  };
 };
 
 type AppRoute = "warehouse" | "operations" | "settings" | "ai-drafts" | "no-supplier";
@@ -124,6 +141,73 @@ function productGroupKey(product: Product): string {
   return `offer:${String(product.offerId || product.sku || product.id).trim().toLowerCase()}`;
 }
 
+function uniqueLinks(products: Product[]): ProductLink[] {
+  const byKey = new Map<string, ProductLink>();
+  for (const product of products) {
+    for (const link of product.links || []) {
+      const key = [
+        link.id || "",
+        link.article || link.supplierArticle || "",
+        link.supplierName || "",
+        link.partnerId || "",
+        link.keyword || "",
+      ].join("|").toLowerCase();
+      if (!byKey.has(key)) byKey.set(key, link);
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+function marketplaceLabel(value?: string | null): string {
+  const key = String(value || "").toLowerCase();
+  if (key.includes("ozon")) return "Ozon";
+  if (key.includes("yandex")) return "Yandex";
+  return value || "Marketplace";
+}
+
+function preferredGroupPrimary(products: Product[]): Product {
+  return [...products].sort((a, b) => {
+    const aScore = (firstImage(a) ? 8 : 0) + (a.marketplace === "yandex" ? 4 : 0) + ((a.links || []).length ? 2 : 0) + (a.archived ? -2 : 0);
+    const bScore = (firstImage(b) ? 8 : 0) + (b.marketplace === "yandex" ? 4 : 0) + ((b.links || []).length ? 2 : 0) + (b.archived ? -2 : 0);
+    return bScore - aScore || String(a.name || "").localeCompare(String(b.name || ""), "ru");
+  })[0] || products[0];
+}
+
+function groupProductsForList(products: Product[]): ProductGroup[] {
+  const groups = new Map<string, Product[]>();
+  for (const product of products) {
+    const key = productGroupKey(product);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)?.push(product);
+  }
+  return Array.from(groups.entries()).map(([groupKey, groupProducts]) => {
+    const productsSorted = [...groupProducts].sort((a, b) => String(a.marketplace || "").localeCompare(String(b.marketplace || "")));
+    const links = uniqueLinks(productsSorted);
+    const marketplaces = Array.from(new Set(productsSorted.map((product) => marketplaceLabel(product.marketplace)).filter(Boolean))).sort();
+    const statusSummary = productsSorted.reduce<ProductGroup["statusSummary"]>((summary, product) => {
+      const stateCode = String(product.marketplaceState?.code || product.status || "").toLowerCase();
+      const linked = (product.links || []).length > 0;
+      const archived = Boolean(product.archived || stateCode.includes("archiv"));
+      const changed = Number(product.newPrice || product.targetPrice || 0) > 0 && Number(product.currentPrice || 0) !== Number(product.newPrice || product.targetPrice || 0);
+      summary.total += 1;
+      if (linked) summary.linked += 1;
+      if (archived) summary.archived += 1;
+      if (linked && !archived) summary.ready += 1;
+      if (changed) summary.changed += 1;
+      if (linked && !product.selectedSupplier) summary.withoutSupplier += 1;
+      return summary;
+    }, { total: 0, linked: 0, archived: 0, ready: 0, changed: 0, withoutSupplier: 0 });
+    return {
+      groupKey,
+      primary: preferredGroupPrimary(productsSorted),
+      products: productsSorted,
+      links,
+      marketplaces,
+      statusSummary,
+    };
+  });
+}
+
 function firstImage(product?: Product): string {
   if (!product) return "";
   if (product.imageUrl) return product.imageUrl;
@@ -146,6 +230,29 @@ function compactDate(value?: string | null): string {
   return date.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+async function copyPlainText(value: unknown): Promise<boolean> {
+  const text = String(value ?? "");
+  if (!text.trim()) return false;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the legacy textarea path when browser clipboard permissions are unavailable.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  textarea.remove();
+  return copied || true;
+}
+
 function statusLabel(product: Product): { label: string; tone: string; icon: ReactNode } {
   const stateCode = String(product.marketplaceState?.code || product.status || "").toLowerCase();
   const linked = (product.links || []).length > 0;
@@ -155,6 +262,22 @@ function statusLabel(product: Product): { label: string; tone: string; icon: Rea
     return { label: "Цена изменилась", tone: "info", icon: <RefreshCw size={14} /> };
   }
   return { label: "Готов к продаже", tone: "success", icon: <PackageCheck size={14} /> };
+}
+
+function groupStatusLabel(group: ProductGroup): { label: string; tone: string; icon: ReactNode } {
+  const { statusSummary } = group;
+  if (statusSummary.archived > 0) return { label: `Архив ${statusSummary.archived}/${statusSummary.total}`, tone: "danger", icon: <Archive size={14} /> };
+  if (!statusSummary.linked) return { label: "Нет привязки", tone: "warn", icon: <AlertCircle size={14} /> };
+  if (statusSummary.changed > 0) return { label: `Цена изм. ${statusSummary.changed}`, tone: "info", icon: <RefreshCw size={14} /> };
+  if (statusSummary.withoutSupplier > 0) return { label: `Нет пост. ${statusSummary.withoutSupplier}`, tone: "warn", icon: <AlertCircle size={14} /> };
+  return { label: `Готовы ${statusSummary.ready}/${statusSummary.total}`, tone: "success", icon: <PackageCheck size={14} /> };
+}
+
+function groupPrice(group: ProductGroup): number {
+  const prices = group.products
+    .map((product) => Number(product.newPrice || product.targetPrice || product.currentPrice || 0))
+    .filter((price) => Number.isFinite(price) && price > 0);
+  return prices.length ? Math.min(...prices) : 0;
 }
 
 function currentRoute(): AppRoute {
@@ -269,6 +392,42 @@ function ProductRow({ product, selected, onSelect }: { product: Product; selecte
       <div className="product-price">
         <strong>{money(product.newPrice || product.targetPrice || product.currentPrice)}</strong>
         <span>текущая {money(product.currentPrice)}</span>
+      </div>
+      <ChevronRight className="row-chevron" size={18} />
+    </button>
+  );
+}
+
+function ProductGroupRow({ group, selected, onSelect }: { group: ProductGroup; selected: boolean; onSelect: () => void }) {
+  const primary = group.primary;
+  const status = groupStatusLabel(group);
+  const image = firstImage(primary);
+  const offer = primary.offerId || primary.sku || primary.id;
+  return (
+    <button className={`product-row group-row ${selected ? "is-selected" : ""}`} type="button" onClick={onSelect}>
+      <div className="product-thumb">
+        {image ? <img src={image} alt="" loading="lazy" /> : <PackageCheck size={20} />}
+      </div>
+      <div className="product-main">
+        <div className="product-title-line">
+          <strong>{offer}</strong>
+          <span className={`pill ${status.tone}`}>{status.icon}{status.label}</span>
+        </div>
+        <div className="product-name">{primary.name || "Без названия"}</div>
+        <div className="market-badges" aria-label="marketplaces">
+          {group.marketplaces.map((marketplace) => <span className="market-badge" key={marketplace}>{marketplace}</span>)}
+          <span className="market-badge muted">{group.products.length} стр.</span>
+          <span className="market-badge muted">{group.links.length} прив.</span>
+        </div>
+        <div className="product-meta">
+          <span>{primary.brand || "без бренда"}</span>
+          <span>готовы {group.statusSummary.ready}/{group.statusSummary.total}</span>
+          <span>архив {group.statusSummary.archived}</span>
+        </div>
+      </div>
+      <div className="product-price">
+        <strong>{money(groupPrice(group))}</strong>
+        <span>мин. по группе</span>
       </div>
       <ChevronRight className="row-chevron" size={18} />
     </button>
@@ -584,11 +743,170 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
   );
 }
 
-function QuickActions({ primary, onDone }: { primary: Product; onDone: () => void }) {
+function MarketplaceRows({ products }: { products: Product[] }) {
+  return (
+    <section className="detail-section">
+      <div className="section-title">
+        <div>
+          <span>Marketplace</span>
+          <h3>Строки карточки</h3>
+        </div>
+        <span className="section-count">{products.length}</span>
+      </div>
+      <div className="marketplace-rows">
+        {products.map((product) => {
+          const status = statusLabel(product);
+          const stock = Number(product.targetStock || product.stock || 0);
+          const changed = Number(product.newPrice || product.targetPrice || 0) > 0 && Number(product.currentPrice || 0) !== Number(product.newPrice || product.targetPrice || 0);
+          return (
+            <div className="marketplace-row" key={product.id}>
+              <div>
+                <strong>{marketplaceLabel(product.marketplace)}</strong>
+                <span>{product.offerId || product.sku || product.id}</span>
+              </div>
+              <span className={`pill ${status.tone}`}>{status.icon}{status.label}</span>
+              <div>
+                <small>Цена</small>
+                <strong>{money(product.newPrice || product.targetPrice || product.currentPrice)}</strong>
+              </div>
+              <div>
+                <small>Остаток</small>
+                <strong>{stock || "-"}</strong>
+              </div>
+              <div>
+                <small>Привязки</small>
+                <strong>{(product.links || []).length}</strong>
+              </div>
+              <div className="marketplace-flags">
+                {product.archived && <span>Архив</span>}
+                {changed && <span>Цена ждет</span>}
+                {!product.selectedSupplier && (product.links || []).length > 0 && <span>Поставщик не выбран</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function CopyActions({ product }: { product: Product }) {
+  const [copied, setCopied] = useState("");
+  const copyValue = async (label: string, value: unknown) => {
+    const ok = await copyPlainText(value);
+    if (!ok) return;
+    setCopied(label);
+    window.setTimeout(() => setCopied(""), 1400);
+  };
+  return (
+    <div className="copy-actions" aria-label="quick copy">
+      <button className="copy-action" type="button" onClick={() => copyValue("name", product.name || "")} title="Скопировать название">
+        <Copy size={15} /> {copied === "name" ? "Скопировано" : "Название"}
+      </button>
+      <button className="copy-action" type="button" onClick={() => copyValue("article", product.offerId || product.sku || "")} title="Скопировать артикул">
+        <Copy size={15} /> {copied === "article" ? "Скопировано" : "Артикул"}
+      </button>
+    </div>
+  );
+}
+
+function GroupActions({ products, selectedGroup, onDone }: { products: Product[]; selectedGroup: string; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const [mergeQuery, setMergeQuery] = useState("");
+  const optimisticLocks = products.map((item) => ({ id: item.id, expectedUpdatedAt: item.updatedAt || "" }));
+  const productIds = products.map((item) => item.id).filter(Boolean);
+  const primaryOffer = products.find((item) => item.offerId)?.offerId || products[0]?.id || "";
+
+  const groupMutation = useMutation({
+    mutationFn: async ({ productIds: ids, groupId }: { productIds: string[]; groupId: string }) => fetchJson(
+      "/api/warehouse/products/group",
+      MutationProductResponseSchema,
+      patchBody({ productIds: ids, groupId, optimisticLocks }),
+    ),
+    onSuccess: (payload) => {
+      updateCachedProducts(queryClient, payload);
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      onDone();
+    },
+  });
+
+  const ungroupMutation = useMutation({
+    mutationFn: async () => fetchJson(
+      "/api/warehouse/products/ungroup",
+      MutationProductResponseSchema,
+      patchBody({ productIds, optimisticLocks }),
+    ),
+    onSuccess: (payload) => {
+      updateCachedProducts(queryClient, payload);
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      onDone();
+    },
+  });
+
+  const mergeMutation = useMutation({
+    mutationFn: async () => {
+      const q = mergeQuery.trim();
+      if (!q) throw new Error("Введите SKU или артикул для объединения.");
+      const result = await fetchJson(
+        `/api/warehouse/products/page?q=${encodeURIComponent(q)}&pageSize=20&page=1&grouped=false`,
+        WarehousePageSchema,
+      );
+      const ids = Array.from(new Set([...productIds, ...(result.items || []).map((item) => item.id).filter(Boolean)]));
+      if (ids.length < 2) throw new Error("Не нашел вторую карточку для объединения.");
+      const groupId = selectedGroup.startsWith("manual:") ? selectedGroup.slice(7) : `manual-${String(primaryOffer || Date.now()).trim().toLowerCase()}`;
+      return groupMutation.mutateAsync({ productIds: ids, groupId });
+    },
+    onSuccess: () => setMergeQuery(""),
+  });
+
+  return (
+    <section className="detail-section">
+      <div className="section-title">
+        <div>
+          <span>Группа</span>
+          <h3>Объединение Ozon / Yandex</h3>
+        </div>
+      </div>
+      <div className="group-tools">
+        <button
+          className="secondary-action"
+          type="button"
+          disabled={products.length < 2 || groupMutation.isPending}
+          onClick={() => groupMutation.mutate({ productIds, groupId: selectedGroup.startsWith("manual:") ? selectedGroup.slice(7) : `manual-${String(primaryOffer || Date.now()).trim().toLowerCase()}` })}
+        >
+          <Link2 size={16} /> Закрепить группу
+        </button>
+        <button
+          className="secondary-action"
+          type="button"
+          disabled={!products.length || ungroupMutation.isPending}
+          onClick={() => ungroupMutation.mutate()}
+        >
+          <X size={16} /> Разъединить
+        </button>
+      </div>
+      <div className="merge-form">
+        <input value={mergeQuery} onChange={(event) => setMergeQuery(event.target.value)} placeholder="SKU/offerId другой карточки" />
+        <button className="primary-action" type="button" disabled={mergeMutation.isPending} onClick={() => mergeMutation.mutate()}>
+          {mergeMutation.isPending ? <Loader2 className="spin" size={16} /> : <Link2 size={16} />} Объединить
+        </button>
+      </div>
+      {(groupMutation.error || ungroupMutation.error || mergeMutation.error) && (
+        <div className="inline-error">{errorMessage(groupMutation.error || ungroupMutation.error || mergeMutation.error)}</div>
+      )}
+    </section>
+  );
+}
+
+function QuickActions({ primary, products, onDone }: { primary: Product; products: Product[]; onDone: () => void }) {
   const start = useMutation({
     mutationFn: (type: string) => fetchJson("/api/operations", OperationCreateSchema, mutationBody({
       type,
-      payload: { productIds: [primary.id], offerIds: [primary.offerId].filter(Boolean), limit: 1 },
+      payload: {
+        productIds: products.map((item) => item.id).filter(Boolean),
+        offerIds: Array.from(new Set(products.map((item) => item.offerId).filter(Boolean))),
+        limit: Math.max(1, products.length || 1),
+      },
     })),
     onSuccess: onDone,
   });
@@ -611,7 +929,7 @@ function QuickActions({ primary, onDone }: { primary: Product; onDone: () => voi
 }
 
 function DetailPanel({ selectedGroup, products, onClose }: { selectedGroup: string; products: Product[]; onClose: () => void }) {
-  const primary = products[0];
+  const primary = products.length ? preferredGroupPrimary(products) : undefined;
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const groupQueryKey = ["warehouse", "group-detail", selectedGroup];
   const queryClient = useQueryClient();
@@ -642,6 +960,7 @@ function DetailPanel({ selectedGroup, products, onClose }: { selectedGroup: stri
           <span className={`pill ${status.tone}`}>{status.icon}{status.label}</span>
           <h2>{primary.name || primary.offerId}</h2>
           <p>{primary.offerId} · {primary.marketplace} · {primary.brand || "без бренда"}</p>
+          <CopyActions product={primary} />
         </div>
         <button className="mobile-close" type="button" onClick={onClose}><X size={18} /></button>
       </div>
@@ -651,8 +970,10 @@ function DetailPanel({ selectedGroup, products, onClose }: { selectedGroup: stri
         <Stat label="Остаток" value={primary.targetStock || primary.stock || "-"} />
         <Stat label="Привязки" value={products.reduce((sum, item) => sum + (item.links || []).length, 0)} />
       </div>
+      <MarketplaceRows products={products} />
+      <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} />
       <LinksPanel products={products} onSaved={refreshDetail} />
-      <QuickActions primary={primary} onDone={refreshDetail} />
+      <QuickActions primary={primary} products={products} onDone={refreshDetail} />
       <AiImagesPanel product={primary} onSaved={refreshDetail} />
       <section className="detail-section">
         <div className="section-title">
@@ -695,12 +1016,13 @@ function WarehousePage() {
     queryFn: () => fetchJson(buildPageUrl(effectiveFilters), WarehousePageSchema),
   });
   const rows = pageQuery.data?.items || [];
-  const selectedRowsOnPage = useMemo(() => rows.filter((item) => productGroupKey(item) === selectedGroup), [rows, selectedGroup]);
+  const groups = useMemo(() => groupProductsForList(rows), [rows]);
+  const selectedRowsOnPage = useMemo(() => groups.find((group) => group.groupKey === selectedGroup)?.products || [], [groups, selectedGroup]);
 
   useEffect(() => {
     if (!selectedGroup || pageQuery.isLoading) return;
-    if (!rows.some((item) => productGroupKey(item) === selectedGroup)) setSelectedGroup("");
-  }, [pageQuery.isLoading, rows, selectedGroup]);
+    if (!groups.some((group) => group.groupKey === selectedGroup)) setSelectedGroup("");
+  }, [pageQuery.isLoading, groups, selectedGroup]);
 
   const detailQuery = useQuery({
     queryKey: ["warehouse", "group-detail", selectedGroup],
@@ -709,9 +1031,9 @@ function WarehousePage() {
   });
   const detailProducts = detailQuery.data?.products?.length ? detailQuery.data.products : selectedRowsOnPage;
   const virtualizer = useVirtualizer({
-    count: rows.length,
+    count: groups.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 136,
+    estimateSize: () => 174,
     overscan: 8,
   });
   const setFilter = (key: keyof Filters, value: string | boolean | number) => {
@@ -751,7 +1073,7 @@ function WarehousePage() {
         <input className="brand-filter" value={filters.brand} onChange={(event) => setFilter("brand", event.target.value)} placeholder="Бренд" />
         <label className="toggle-filter">
           <input type="checkbox" checked={filters.autoOnly} onChange={(event) => setFilter("autoOnly", event.target.checked)} />
-          AUTO
+          Только автопрайс
         </label>
       </section>
       <section className="summary-grid">
@@ -767,17 +1089,16 @@ function WarehousePage() {
           <div ref={parentRef} className="virtual-list">
             <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
               {virtualizer.getVirtualItems().map((virtualRow) => {
-                const product = rows[virtualRow.index];
-                const key = productGroupKey(product);
+                const group = groups[virtualRow.index];
                 return (
-                  <div key={product.id} style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start}px)` }}>
-                    <ProductRow product={product} selected={key === selectedGroup} onSelect={() => setSelectedGroup(key)} />
+                  <div key={group.groupKey} style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start}px)` }}>
+                    <ProductGroupRow group={group} selected={group.groupKey === selectedGroup} onSelect={() => setSelectedGroup(group.groupKey)} />
                   </div>
                 );
               })}
             </div>
             {pageQuery.isLoading && <div className="list-loading"><Loader2 className="spin" /> Загружаю каталог...</div>}
-            {!pageQuery.isLoading && !rows.length && <div className="list-loading">Ничего не найдено.</div>}
+            {!pageQuery.isLoading && !groups.length && <div className="list-loading">Ничего не найдено.</div>}
           </div>
           <div className="pager">
             <button disabled={filters.page <= 1} onClick={() => setFilter("page", Math.max(1, filters.page - 1))}>Назад</button>
