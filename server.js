@@ -15824,12 +15824,10 @@ async function sendZeroStocksToMarketplace(products = []) {
 async function sendTargetStocksToMarketplace(products = []) {
   const actions = [];
   const byTarget = new Map();
-  for (const product of products) {
-    const stock = Math.max(0, Math.round(Number(product?.targetStock || 0)));
-    if (!product?.id || !product?.offerId || !product?.target) continue;
+  for (const product of pickTargetStockSendProducts(products)) {
     const key = `${product.marketplace}:${product.target}`;
     if (!byTarget.has(key)) byTarget.set(key, []);
-    byTarget.get(key).push({ ...product, targetStock: stock });
+    byTarget.get(key).push(product);
   }
 
   for (const [key, items] of byTarget.entries()) {
@@ -16228,6 +16226,20 @@ function shouldSendTargetStockForProduct(product = {}) {
   if (targetStock <= 0) return false;
   const currentStock = Math.max(0, Math.round(Number(product.marketplaceState?.stock || 0)));
   return targetStock !== currentStock;
+}
+
+function pickTargetStockSendProducts(products = []) {
+  return (Array.isArray(products) ? products : [])
+    .filter((product) =>
+      product?.id
+      && product.offerId
+      && product.target
+      && shouldSendTargetStockForProduct(product)
+    )
+    .map((product) => ({
+      ...product,
+      targetStock: Math.max(1, Math.round(Number(product.targetStock || 0))),
+    }));
 }
 
 function marketplaceProductNeedsSalesRecovery(product = {}, { includeUnknown = true } = {}) {
@@ -17027,6 +17039,7 @@ module.exports = {
   marketplaceHasPositiveStock,
   marketplaceOfferAutomationKey,
   shouldSendTargetStockForProduct,
+  pickTargetStockSendProducts,
   warehouseLinkIdentityKey,
   productLinkPostgresIdentityKey,
   dedupeProductLinkRows,

@@ -85,6 +85,7 @@ const {
   marketplaceHasPositiveStock,
   marketplaceOfferAutomationKey,
   shouldSendTargetStockForProduct,
+  pickTargetStockSendProducts,
   warehouseLinkIdentityKey,
   productLinkPostgresIdentityKey,
   dedupeProductLinkRows,
@@ -3079,6 +3080,58 @@ test("stock push never sends zero for linked product while supplier is unavailab
     targetStock: 3,
     marketplaceState: { code: "active", stock: 0 },
   }), true);
+});
+
+test("target stock push only selects ready linked products with positive changed stock", () => {
+  const selected = pickTargetStockSendProducts([
+    {
+      id: "ready-linked",
+      marketplace: "yandex",
+      target: "yandex-main",
+      offerId: "SKU-READY",
+      hasLinks: true,
+      ready: true,
+      selectedSupplier: { price: 10, available: true },
+      targetStock: 3,
+      marketplaceState: { code: "active", stock: 0 },
+    },
+    {
+      id: "missing-supplier",
+      marketplace: "yandex",
+      target: "yandex-main",
+      offerId: "SKU-NO-SUPPLIER",
+      hasLinks: true,
+      ready: false,
+      selectedSupplier: null,
+      targetStock: 0,
+      marketplaceState: { code: "active", stock: 3 },
+    },
+    {
+      id: "unchanged-stock",
+      marketplace: "yandex",
+      target: "yandex-main",
+      offerId: "SKU-SAME",
+      hasLinks: true,
+      ready: true,
+      selectedSupplier: { price: 10, available: true },
+      targetStock: 3,
+      marketplaceState: { code: "active", stock: 3 },
+    },
+    {
+      id: "unlinked-positive",
+      marketplace: "yandex",
+      target: "yandex-main",
+      offerId: "SKU-UNLINKED",
+      hasLinks: false,
+      ready: true,
+      selectedSupplier: { price: 10, available: true },
+      targetStock: 3,
+      marketplaceState: { code: "active", stock: 0 },
+    },
+  ]);
+
+  assert.deepEqual(selected.map((product) => product.id), ["ready-linked"]);
+  assert.equal(selected[0].targetStock, 3);
 });
 
 test("Ozon stock payload targets configured warehouses and zeros all of them", async () => {
