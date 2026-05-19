@@ -111,6 +111,13 @@ async function main() {
 
     await page.goto(`${baseUrl}/app/settings`, { waitUntil: "domcontentloaded" });
     await page.getByText(/Курс USD\/RUB/i).waitFor({ timeout: 10000 });
+    const settingsTabs = page.locator(".settings-tabs button");
+    await settingsTabs.nth(3).click();
+    await page.getByText(/Сотрудники и роли/i).waitFor({ timeout: 10000 });
+    await settingsTabs.nth(4).click();
+    await page.getByText(/Аудит действий/i).waitFor({ timeout: 10000 });
+    await settingsTabs.nth(5).click();
+    await page.getByText(/Retry queue/i).waitFor({ timeout: 10000 });
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(500);
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);

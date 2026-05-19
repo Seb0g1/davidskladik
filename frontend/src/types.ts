@@ -154,6 +154,31 @@ export const SettingsResponseSchema = z.object({
   priceRepriceQueueError: z.coerce.string().optional().default(""),
 }).passthrough();
 
+export const UsersResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  users: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
+export const AuditLogSchema = z.object({
+  audit: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  total: z.number().optional().default(0),
+}).passthrough();
+
+export const PriceRetryQueueSchema = z.object({
+  ok: z.boolean().optional(),
+  updatedAt: z.coerce.string().optional().nullable(),
+  total: z.number().optional().default(0),
+  items: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
+export const PriceHistorySchema = z.object({
+  ok: z.boolean().optional(),
+  total: z.number().optional().default(0),
+  items: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
+export const SyncStatusSchema = z.record(z.string(), z.unknown());
+
 export const NoSupplierSchema = z.object({
   createdAt: z.coerce.string().optional().nullable(),
   total: z.number().optional().default(0),

@@ -26,6 +26,7 @@ import { ApiError, fetchJson, mutationBody, patchBody } from "./api";
 import {
   AiDraftsSchema,
   AiImagesResponseSchema,
+  AuditLogSchema,
   DiagnosticsSchema,
   Filters,
   GroupDetailSchema,
@@ -34,11 +35,15 @@ import {
   OperationCreateSchema,
   OperationDetailSchema,
   OperationsSchema,
+  PriceHistorySchema,
   PriceMasterSearchRow,
   PriceMasterSearchSchema,
+  PriceRetryQueueSchema,
   Product,
   ProductLink,
   SettingsResponseSchema,
+  SyncStatusSchema,
+  UsersResponseSchema,
   WarehousePageSchema,
   YandexQualityCandidatesSchema,
 } from "./types";
@@ -1379,6 +1384,17 @@ type AvailabilityRuleDraft = {
   targetStock: number;
 };
 
+type SettingsTab = "prices" | "marketplaces" | "ai" | "users" | "audit" | "system";
+
+const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
+  { id: "prices", label: "Цены" },
+  { id: "marketplaces", label: "Маркетплейсы" },
+  { id: "ai", label: "AI" },
+  { id: "users", label: "Сотрудники" },
+  { id: "audit", label: "Аудит" },
+  { id: "system", label: "Система" },
+];
+
 const defaultAvailabilityRule: AvailabilityRuleDraft = {
   marketplace: "all",
   minAvailableSuppliers: 1,
@@ -1435,6 +1451,165 @@ function settingsSavePayload(draft: Record<string, unknown>) {
   };
 }
 
+function UsersSettingsPanel() {
+  const queryClient = useQueryClient();
+  const [form, setForm] = useState({ username: "", password: "", role: "manager" });
+  const usersQuery = useQuery({ queryKey: ["users"], queryFn: () => fetchJson("/api/users", UsersResponseSchema) });
+  const createUser = useMutation({
+    mutationFn: () => fetchJson("/api/users", UsersResponseSchema, mutationBody(form)),
+    onSuccess: () => {
+      setForm({ username: "", password: "", role: "manager" });
+      void queryClient.invalidateQueries({ queryKey: ["users"] });
+    },
+  });
+  const updateUser = useMutation({
+    mutationFn: ({ username, patch }: { username: string; patch: Record<string, unknown> }) => fetchJson(
+      `/api/users/${encodeURIComponent(username)}`,
+      UsersResponseSchema,
+      { method: "PUT", body: JSON.stringify(patch), headers: { "Content-Type": "application/json" } },
+    ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }),
+  });
+  const deleteUser = useMutation({
+    mutationFn: (username: string) => fetchJson(
+      `/api/users/${encodeURIComponent(username)}`,
+      UsersResponseSchema,
+      { method: "DELETE" },
+    ),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["users"] }),
+  });
+  const users = usersQuery.data?.users || [];
+  return (
+    <section className="settings-panel settings-panel-wide">
+      <div className="section-title"><div><span>Доступ</span><h3>Сотрудники и роли</h3></div></div>
+      <div className="settings-form-row">
+        <input placeholder="Логин" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} />
+        <input placeholder="Пароль минимум 6 символов" type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />
+        <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
+          <option value="manager">manager</option>
+          <option value="admin">admin</option>
+        </select>
+        <button className="primary-action" type="button" disabled={createUser.isPending || !form.username || form.password.length < 6} onClick={() => createUser.mutate()}>Добавить</button>
+      </div>
+      {usersQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю сотрудников...</div>}
+      {users.map((user) => {
+        const username = String(user.username || "");
+        const role = String(user.role || "manager");
+        const active = user.active !== false && user.disabled !== true;
+        const protectedUser = Boolean(user.protected);
+        return (
+          <article className="job-row" key={username}>
+            <div>
+              <strong>{username}</strong>
+              <span>{role} · {active ? "активен" : "выключен"} · {String(user.source || "local")}</span>
+            </div>
+            <div className="row-actions">
+              <button className="secondary-action" type="button" disabled={protectedUser || updateUser.isPending} onClick={() => updateUser.mutate({ username, patch: { role: role === "admin" ? "manager" : "admin" } })}>{role === "admin" ? "Сделать manager" : "Сделать admin"}</button>
+              <button className="secondary-action" type="button" disabled={protectedUser || updateUser.isPending} onClick={() => updateUser.mutate({ username, patch: { active: !active } })}>{active ? "Выключить" : "Включить"}</button>
+              <button className="icon-action danger" type="button" disabled={protectedUser || deleteUser.isPending} onClick={() => deleteUser.mutate(username)} title="Удалить"><Trash2 size={15} /></button>
+            </div>
+          </article>
+        );
+      })}
+      {(createUser.error || updateUser.error || deleteUser.error) && <div className="inline-error">{errorMessage(createUser.error || updateUser.error || deleteUser.error)}</div>}
+    </section>
+  );
+}
+
+function AuditSettingsPanel() {
+  const [q, setQ] = useState("");
+  const auditQuery = useQuery({
+    queryKey: ["audit", q],
+    queryFn: () => fetchJson(`/api/audit-log?limit=120&q=${encodeURIComponent(q)}`, AuditLogSchema),
+  });
+  const audit = auditQuery.data?.audit || [];
+  return (
+    <section className="settings-panel settings-panel-wide">
+      <div className="section-title">
+        <div><span>Журнал</span><h3>Аудит действий</h3></div>
+        <button className="secondary-action" type="button" onClick={() => auditQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
+      </div>
+      <div className="search-box compact-search"><Search size={16} /><input placeholder="Поиск по пользователю, SKU, действию" value={q} onChange={(event) => setQ(event.target.value)} /></div>
+      {auditQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю аудит...</div>}
+      {audit.map((entry, index) => (
+        <article className="job-row" key={`${String(entry.id || entry.createdAt || "")}-${index}`}>
+          <div>
+            <strong>{String(entry.action || "action")}</strong>
+            <span>{String(entry.username || entry.user || "system")} · {compactDate(String(entry.createdAt || entry.time || ""))}</span>
+            <small>{String(entry.entityType || "")} {String(entry.entityId || "")}</small>
+          </div>
+        </article>
+      ))}
+      {!auditQuery.isLoading && !audit.length && <div className="soft-empty">Записей аудита не найдено.</div>}
+    </section>
+  );
+}
+
+function SystemSettingsPanel() {
+  const queryClient = useQueryClient();
+  const retryQuery = useQuery({ queryKey: ["price-retry"], queryFn: () => fetchJson("/api/warehouse/prices/retry-queue", PriceRetryQueueSchema) });
+  const historyQuery = useQuery({ queryKey: ["price-history"], queryFn: () => fetchJson("/api/warehouse/prices/history?limit=80", PriceHistorySchema) });
+  const syncQuery = useQuery({ queryKey: ["warehouse-sync"], queryFn: () => fetchJson("/api/warehouse/sync/status", SyncStatusSchema) });
+  const dailyQuery = useQuery({ queryKey: ["daily-sync"], queryFn: () => fetchJson("/api/daily-sync", SyncStatusSchema) });
+  const runSync = useMutation({
+    mutationFn: () => fetchJson("/api/warehouse/sync/run", SyncStatusSchema, mutationBody({})),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["warehouse-sync"] }),
+  });
+  const runDaily = useMutation({
+    mutationFn: () => fetchJson("/api/daily-sync/run", SyncStatusSchema, mutationBody({})),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["daily-sync"] }),
+  });
+  const retryPrices = useMutation({
+    mutationFn: () => fetchJson("/api/warehouse/prices/retry", SyncStatusSchema, mutationBody({ confirmed: true })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["price-retry"] });
+      void queryClient.invalidateQueries({ queryKey: ["price-history"] });
+    },
+  });
+  const clearRetry = useMutation({
+    mutationFn: () => fetchJson("/api/warehouse/prices/retry-queue", SyncStatusSchema, { method: "DELETE" }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["price-retry"] }),
+  });
+  const retryItems = retryQuery.data?.items || [];
+  const historyItems = historyQuery.data?.items || [];
+  return (
+    <section className="settings-grid pricing-settings-grid">
+      <div className="settings-panel">
+        <div className="section-title"><div><span>Sync</span><h3>Синхронизация</h3></div></div>
+        <DiagnosticValue label="Warehouse sync" value={String(syncQuery.data?.status || syncQuery.data?.running || "-")} />
+        <DiagnosticValue label="Daily sync" value={String(dailyQuery.data?.status || dailyQuery.data?.running || "-")} />
+        <div className="row-actions">
+          <button className="primary-action" type="button" disabled={runSync.isPending} onClick={() => runSync.mutate()}>Запустить warehouse sync</button>
+          <button className="secondary-action" type="button" disabled={runDaily.isPending} onClick={() => runDaily.mutate()}>Запустить daily sync</button>
+        </div>
+      </div>
+      <div className="settings-panel">
+        <div className="section-title"><div><span>Цены</span><h3>Retry queue</h3></div></div>
+        <DiagnosticValue label="В очереди" value={retryQuery.data?.total || retryItems.length} tone={retryItems.length ? "warn" : ""} />
+        <div className="row-actions">
+          <button className="primary-action" type="button" disabled={!retryItems.length || retryPrices.isPending} onClick={() => retryPrices.mutate()}>Повторить цены</button>
+          <button className="secondary-action" type="button" disabled={!retryItems.length || clearRetry.isPending} onClick={() => clearRetry.mutate()}>Очистить очередь</button>
+        </div>
+      </div>
+      <div className="settings-panel settings-panel-wide">
+        <div className="section-title"><div><span>История</span><h3>Последние отправки цен</h3></div><button className="secondary-action" type="button" onClick={() => historyQuery.refetch()}><RefreshCw size={16} /> Обновить</button></div>
+        {historyQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю историю цен...</div>}
+        {historyItems.slice(0, 40).map((item, index) => (
+          <article className="job-row" key={`${String(item.id || item.offerId || "")}-${index}`}>
+            <div>
+              <strong>{String(item.offerId || item.productId || "-")}</strong>
+              <span>{String(item.marketplace || "-")} · {String(item.status || "-")} · {compactDate(String(item.createdAt || item.sentAt || item.at || ""))}</span>
+              <small>цена {String(item.requestedPrice || item.price || "-")} · {String(item.error || item.detail || "")}</small>
+            </div>
+          </article>
+        ))}
+        {!historyQuery.isLoading && !historyItems.length && <div className="soft-empty">Истории отправки цен пока нет.</div>}
+      </div>
+      {(runSync.error || runDaily.error || retryPrices.error || clearRetry.error) && <div className="inline-error">{errorMessage(runSync.error || runDaily.error || retryPrices.error || clearRetry.error)}</div>}
+    </section>
+  );
+}
+
 function SettingsPage() {
   const queryClient = useQueryClient();
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: () => fetchJson("/api/settings", SettingsResponseSchema) });
@@ -1442,6 +1617,7 @@ function SettingsPage() {
   const ai = asRecord(settings.ai);
   const markups = asRecord(settings.defaultMarkups);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const [activeTab, setActiveTab] = useState<SettingsTab>("prices");
 
   useEffect(() => {
     if (settingsQuery.data?.settings) setDraft(settingsQuery.data.settings);
@@ -1478,8 +1654,13 @@ function SettingsPage() {
   return (
     <>
       <PageHeader title="Настройки" subtitle="Курс, наценки, правила доступности, маркетплейсы и AI-провайдер в новом интерфейсе." action={saveButton} />
+      <nav className="settings-tabs" aria-label="settings sections">
+        {settingsTabs.map((tab) => (
+          <button key={tab.id} className={activeTab === tab.id ? "is-active" : ""} type="button" onClick={() => setActiveTab(tab.id)}>{tab.label}</button>
+        ))}
+      </nav>
       {settingsQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю настройки...</div>}
-      <section className="settings-grid pricing-settings-grid">
+      {activeTab === "prices" && <section className="settings-grid pricing-settings-grid">
         <div className="settings-panel">
           <div className="section-title"><div><span>Цены</span><h3>Базовые цены</h3></div></div>
           <label>Курс USD/RUB<input type="number" min="0.0001" step="0.0001" value={String(draft.fixedUsdRate ?? settings.fixedUsdRate ?? "")} onChange={(event) => update({ fixedUsdRate: numberValue(event.target.value) })} /></label>
@@ -1536,7 +1717,9 @@ function SettingsPage() {
             {!availabilityRules.length && <div className="soft-empty compact">При сохранении будет добавлено дефолтное правило: все площадки, от 1 поставщика, поправка 0, остаток 3.</div>}
           </div>
         </div>
+      </section>}
 
+      {activeTab === "ai" && <section className="settings-grid pricing-settings-grid">
         <div className="settings-panel">
           <div className="section-title"><div><span>AI</span><h3>Провайдер и модели</h3></div><button className="secondary-action" onClick={() => testAi.mutate()} disabled={testAi.isPending}>Тест</button></div>
           <label>Provider ID<input value={String(draftAi.providerId ?? ai.providerId ?? "")} onChange={(event) => updateAi({ providerId: event.target.value })} /></label>
@@ -1547,7 +1730,9 @@ function SettingsPage() {
           {testAi.error && <div className="inline-error">{errorMessage(testAi.error)}</div>}
           {testAi.isSuccess && <div className="success-strip">AI подключен.</div>}
         </div>
+      </section>}
 
+      {activeTab === "marketplaces" && <section className="settings-grid pricing-settings-grid">
         <div className="settings-panel">
           <div className="section-title"><div><span>Yandex</span><h3>Склад остатков</h3></div></div>
           <label>Warehouse ID<input value={String(asRecord(draft.yandex).warehouseId ?? asRecord(settings.yandex).warehouseId ?? "128820967")} onChange={(event) => update({ yandex: { ...asRecord(draft.yandex), warehouseId: event.target.value } })} /></label>
@@ -1559,7 +1744,11 @@ function SettingsPage() {
           <div className="soft-empty compact">Legacy оставлен только как аварийный fallback на время приемки нового интерфейса.</div>
           <a className="secondary-action" href="/legacy">Открыть legacy</a>
         </div>
-      </section>
+      </section>}
+
+      {activeTab === "users" && <UsersSettingsPanel />}
+      {activeTab === "audit" && <AuditSettingsPanel />}
+      {activeTab === "system" && <SystemSettingsPanel />}
 
       {(save.error) && <div className="inline-error">{errorMessage(save.error)}</div>}
       {save.isSuccess && (

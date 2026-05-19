@@ -1046,6 +1046,44 @@ button:disabled {
   gap: 12px;
 }
 
+.settings-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.settings-tabs button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  background: rgba(30, 45, 70, .86);
+  color: var(--text);
+  padding: 8px 12px;
+}
+
+.settings-tabs button.is-active {
+  border-color: rgba(56, 163, 255, .55);
+  background: rgba(56, 163, 255, .18);
+}
+
+.settings-form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 160px auto;
+  gap: 8px;
+}
+
+.settings-form-row input,
+.settings-form-row select {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  background: #0c1728;
+  color: var(--text);
+  padding: 0 11px;
+}
+
+.compact-search {
+  min-height: 40px;
+}
+
 .pricing-settings-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: start;
@@ -1284,6 +1322,7 @@ button:disabled {
   .marketplace-row,
   .operation-issue,
   .merge-form,
+  .settings-form-row,
   .settings-rule-head,
   .settings-rule-row,
   .availability-rule-table .settings-rule-head,
