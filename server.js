@@ -16,6 +16,7 @@ require("dotenv").config();
 
 const logger = require("./lib/logger");
 const { createStaticAppHandlers } = require("./lib/static-app");
+const { registerAuthSessionRoutes } = require("./routes/auth-session");
 const { registerOperationsRoutes } = require("./routes/operations");
 const { registerSettingsRoutes } = require("./routes/settings");
 const { registerUsersRoutes } = require("./routes/users");
@@ -928,55 +929,17 @@ app.get("/health", async (request, response) => {
   response.json(await collectHealthDetails({ deep }));
 });
 
-app.post("/api/login", loginLimiter, async (request, response, next) => {
-  const username = String(request.body.username || "");
-  const password = String(request.body.password || "");
-  let users;
-  try {
-    users = await configuredUsersAsync();
-  } catch (error) {
-    return next(error);
-  }
-
-  if (!users.length || users.every((item) => !item.password)) {
-    return response.status(500).json({ error: "APP_PASSWORD или APP_USERS_JSON не задан в .env" });
-  }
-
-  const user = users.find((item) => timingSafeEqual(username, item.username) && verifyStoredPassword(password, item.password));
-
-  if (!user) {
-    return response.status(401).json({ error: "Неверный логин или пароль" });
-  }
-
-  const token = createSessionToken(user);
-  const secure = String(process.env.PUBLIC_BASE_URL || "").startsWith("https://");
-  response.cookie(sessionCookieName, token, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure,
-    maxAge: sessionTtlMs,
-    path: "/",
-  });
-  response.json({ ok: true, username: user.username, role: user.role });
-});
-
-app.post("/api/logout", (_request, response) => {
-  response.clearCookie(sessionCookieName, { path: "/" });
-  response.json({ ok: true });
-});
-
-app.get("/api/session", (request, response) => {
-  const session = readSession(request);
-  response.json({
-    authenticated: Boolean(session),
-    username: session?.username || null,
-    role: session?.role || null,
-    permissions: {
-      admin: isAdminSession(session),
-      settings: isAdminSession(session),
-      priceMasterAudit: isAdminSession(session),
-    },
-  });
+registerAuthSessionRoutes(app, {
+  loginLimiter,
+  configuredUsersAsync,
+  timingSafeEqual,
+  verifyStoredPassword,
+  createSessionToken,
+  sessionCookieName,
+  sessionTtlMs,
+  readSession,
+  isAdminSession,
+  isSecureSessionCookie: () => String(process.env.PUBLIC_BASE_URL || "").startsWith("https://"),
 });
 
 app.use(requireAuth);
