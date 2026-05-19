@@ -4686,7 +4686,7 @@ function normalizeAiSettings(input = {}, fallback = defaultAppSettings().ai) {
   const imageSize = cleanText(raw.imageSize || raw.image_size || fallback.imageSize || openaiImageSize);
   const imageQuality = cleanText(raw.imageQuality || raw.image_quality || fallback.imageQuality || openaiImageQuality);
   const textModel = cleanText(raw.textModel || raw.text_model || fallback.textModel || openaiTextModel);
-  const baseUrl = cleanText(raw.baseUrl || raw.base_url || fallback.baseUrl || openaiBaseUrl);
+  const baseUrl = normalizeOpenAiCompatibleBaseUrl(cleanText(raw.baseUrl || raw.base_url || fallback.baseUrl || openaiBaseUrl));
   const apiKey = hasApiKey ? cleanText(raw.apiKey ?? raw.api_key ?? "") : cleanText(fallback.apiKey);
   return {
     enabled: parseBooleanSetting(raw.enabled, fallback.enabled !== false),
@@ -5301,8 +5301,30 @@ async function imageBase64FromOpenAiImageResult(result) {
   return "";
 }
 
+function normalizeOpenAiCompatibleBaseUrl(value) {
+  const raw = cleanText(value).replace(/\/+$/u, "");
+  if (!raw) return "";
+  try {
+    const parsed = new URL(raw);
+    const host = parsed.hostname.toLowerCase();
+    if (host === "codex.sale" || host.endsWith(".codex.sale")) {
+      return `${parsed.origin}/v1`;
+    }
+    parsed.pathname = parsed.pathname
+      .replace(/\/v1\/(?:chat\/completions|responses|images\/generations|images\/edits|models)$/iu, "/v1")
+      .replace(/\/(?:chat\/completions|responses|images\/generations|images\/edits|models)$/iu, "");
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString().replace(/\/+$/u, "");
+  } catch (_error) {
+    return raw
+      .replace(/\/v1\/(?:chat\/completions|responses|images\/generations|images\/edits|models)$/iu, "/v1")
+      .replace(/\/(?:chat\/completions|responses|images\/generations|images\/edits|models)$/iu, "");
+  }
+}
+
 function openAiCompatibleImageBaseUrl(aiSettings = {}) {
-  return (cleanText(aiSettings.baseUrl) || openaiBaseUrl || "https://api.openai.com/v1").replace(/\/+$/u, "");
+  return normalizeOpenAiCompatibleBaseUrl(cleanText(aiSettings.baseUrl) || openaiBaseUrl || "https://api.openai.com/v1");
 }
 
 async function parseOpenAiCompatibleImageResponse(response) {
@@ -5344,7 +5366,15 @@ async function fetchOpenAiCompatibleImageEdit(aiSettings, { prompt, sourceBuffer
 async function fetchOpenAiCompatibleImageGeneration(aiSettings, { prompt }) {
   const apiKey = cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY);
   const model = effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings);
-  const response = await fetch(`${openAiCompatibleImageBaseUrl(aiSettings)}/images/generations`, {
+  const endpoint = `${openAiCompatibleImageBaseUrl(aiSettings)}/images/generations`;
+  logger.info("ai image generation request", {
+    provider: cleanText(aiSettings.providerId) || "openai-compatible",
+    endpoint,
+    model,
+    size: aiSettings.imageSize || openaiImageSize,
+    promptLength: cleanText(prompt).length,
+  });
+  const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -5357,7 +5387,15 @@ async function fetchOpenAiCompatibleImageGeneration(aiSettings, { prompt }) {
       response_format: "b64_json",
     }),
   });
-  return parseOpenAiCompatibleImageResponse(response);
+  const imageBase64 = await parseOpenAiCompatibleImageResponse(response);
+  logger.info("ai image generation response", {
+    provider: cleanText(aiSettings.providerId) || "openai-compatible",
+    endpoint,
+    model,
+    ok: true,
+    bytesBase64: imageBase64.length,
+  });
+  return imageBase64;
 }
 
 async function fetchCodexSaleImage(aiSettings, imageOptions) {
@@ -12289,6 +12327,14 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
     const count = Math.min(5, Math.max(1, Math.floor(Number(request.body.count || request.body.imagesCount || 1) || 1)));
     const batchId = crypto.randomUUID();
     const drafts = [];
+    logger.info("ai image drafts generation started", {
+      productId: product.id,
+      offerId: product.offerId,
+      target: product.target,
+      count,
+      hasSourceImageUrl: Boolean(cleanText(request.body.sourceImageUrl)),
+      hasPrompt: Boolean(cleanText(request.body.prompt)),
+    });
     for (let index = 1; index <= count; index += 1) {
       drafts.push(await generateOzonAiImageDraft(product, {
         prompt: request.body.prompt,
@@ -12305,6 +12351,14 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
     const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_generate", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
     response.json({ ok: true, draft, drafts, batchId, product: savedProduct });
+    logger.info("ai image drafts generation complete", {
+      productId: product.id,
+      offerId: product.offerId,
+      target: product.target,
+      count,
+      drafts: drafts.length,
+      batchId,
+    });
     appendAudit(request, "warehouse.ai_image.generate", {
       productId: product.id,
       offerId: product.offerId,
@@ -12315,6 +12369,12 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
       newValue: { id: savedProduct.id, aiImages: savedProduct.aiImages || [], updatedAt: savedProduct.updatedAt },
     }).catch((auditError) => logger.warn("ai image generate audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
+    logger.warn("ai image drafts generation failed", {
+      productId: request.params.id,
+      detail: error?.message || String(error),
+      code: error?.code,
+      statusCode: error?.statusCode || error?.status,
+    });
     next(error);
   }
 });

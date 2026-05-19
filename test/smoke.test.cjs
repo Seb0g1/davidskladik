@@ -2023,7 +2023,7 @@ test("PUT /api/settings saves AI provider settings without exposing API key", as
         ai: {
           enabled: true,
           providerId: "codexsale",
-          baseUrl: "https://codex.sale/v1",
+          baseUrl: "https://codex.sale/v1/images/generations",
           apiKey: "sk-test-secret-1234",
           textModel: "gpt-5.4-mini",
           imageModel: "gpt-image-2",
@@ -2036,6 +2036,7 @@ test("PUT /api/settings saves AI provider settings without exposing API key", as
 
     assert.equal(res.body.ok, true);
     assert.equal(res.body.settings.ai.providerId, "codexsale");
+    assert.equal(res.body.settings.ai.baseUrl, "https://codex.sale/v1");
     assert.equal(res.body.settings.ai.apiKeySet, true);
     assert.equal(res.body.settings.ai.apiKey, "__masked__");
     assert.equal(res.body.settings.ai.apiKeyMasked.endsWith("1234"), true);
@@ -2071,7 +2072,7 @@ test("AI settings test error does not mention Price Master", async () => {
         ai: {
           enabled: true,
           providerId: "codexsale",
-          baseUrl: "https://codex.sale/v1",
+          baseUrl: "https://codex.sale/v1/images/generations",
           apiKeySet: false,
           apiKey: "",
           textModel: "gpt-5.4-mini",
@@ -2608,7 +2609,7 @@ test("Codex Sale AI image generation uses image generation endpoint without fetc
           ...(currentSettings.body.settings.ai || {}),
           enabled: true,
           providerId: "codexsale",
-          baseUrl: "https://codex.sale/v1",
+          baseUrl: "https://codex.sale/v1/images/generations",
           apiKey: "sk-test-codex-sale-image",
           textModel: "gpt-5.4-mini",
           imageModel: "gpt-image-2",
