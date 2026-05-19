@@ -97,6 +97,9 @@ const {
   warehouseProductLinkDetailsSignature,
   mergeWarehouseLinkForSave,
   warehouseProductLinksSignature,
+  warehouseGroupLinkSignature,
+  buildCommonWarehouseGroupLinks,
+  marketplacePriceBreakdown,
   productConflict,
   canIgnoreStaleLinkSaveConflict,
   warehouseLinkHasMatchTarget,
@@ -2352,6 +2355,65 @@ test("resolveMarkupCoefficient uses Yandex defaults and Yandex-scoped rules", ()
     },
   });
   assert.equal(value, 2.4);
+});
+
+test("resolveMarkupCoefficient keeps marketplace scoped rules separate", () => {
+  const appSettings = {
+    defaultMarkups: { ozon: 1.7, yandex: 1.6 },
+    markupRules: [
+      { marketplace: "ozon", minUsd: 10, coefficient: 3.1 },
+      { marketplace: "yandex", minUsd: 10, coefficient: 2.2 },
+    ],
+  };
+  assert.equal(resolveMarkupCoefficient({ productMarkup: 0, marketplace: "ozon", supplierUsdPrice: 20, appSettings }), 3.1);
+  assert.equal(resolveMarkupCoefficient({ productMarkup: 0, marketplace: "yandex", supplierUsdPrice: 20, appSettings }), 2.2);
+});
+
+test("common warehouse group links synchronize supplier-aware signatures", () => {
+  const products = [
+    { id: "ozon-1", marketplace: "ozon", links: [{ id: "a", article: "A1", supplierName: "Alpha", partnerId: "1", priceCurrency: "USD" }] },
+    { id: "yandex-1", marketplace: "yandex", links: [{ id: "b", article: "A1", supplierName: "Beta", partnerId: "2", priceCurrency: "USD" }] },
+  ];
+  const commonLinks = buildCommonWarehouseGroupLinks(products, [
+    { id: "c", matchType: "selected_row", sourceRowId: "2066033", exactName: "Tester 30 ml", supplierName: "Gamma", partnerId: "3", priceCurrency: "USD" },
+  ], { now: "2026-05-19T00:00:00.000Z", username: "tester" });
+  for (const product of products) product.links = commonLinks;
+  const signature = warehouseGroupLinkSignature(products);
+  assert.equal(signature.ok, true);
+  assert.equal(signature.products[0].linkCount, 3);
+  assert.equal(signature.products[1].signature, signature.products[0].signature);
+  assert.ok(warehouseProductLinksSignature(products[0]).includes("partner:1"));
+  assert.ok(warehouseProductLinksSignature(products[0]).includes("row:2066033"));
+});
+
+test("marketplace price breakdown returns separate coefficients for shared PriceMaster links", () => {
+  const rows = marketplacePriceBreakdown([
+    {
+      id: "ozon-1",
+      offerId: "41059",
+      marketplace: "ozon",
+      markupCoefficient: 1.7,
+      usdRate: 100,
+      currentPrice: 1500,
+      targetPrice: 1700,
+      selectedSupplier: { supplierName: "Alpha", article: "A1", price: 10, priceCurrency: "USD", calculatedPrice: 1700 },
+    },
+    {
+      id: "yandex-1",
+      offerId: "41059",
+      marketplace: "yandex",
+      markupCoefficient: 1.6,
+      usdRate: 100,
+      currentPrice: 1500,
+      targetPrice: 1600,
+      selectedSupplier: { supplierName: "Alpha", article: "A1", price: 10, priceCurrency: "USD", calculatedPrice: 1600 },
+    },
+  ]);
+  assert.equal(rows[0].marketplace, "ozon");
+  assert.equal(rows[0].targetPrice, 1700);
+  assert.equal(rows[1].marketplace, "yandex");
+  assert.equal(rows[1].markupCoefficient, 1.6);
+  assert.notEqual(rows[0].targetPrice, rows[1].targetPrice);
 });
 
 test("Ozon current cabinet price prefers seller price visible in cabinet", () => {

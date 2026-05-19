@@ -354,6 +354,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
       <div className="section-title">
         <div>
           <span>PriceMaster</span>
+          <p className="section-note">Общие привязки для всей группы: Ozon и Yandex получают один набор PriceMaster, но цена считается отдельно по коэффициенту маркетплейса.</p>
           <h3>Точная связь с PriceMaster</h3>
         </div>
         <span className="section-count">{links.length}</span>
@@ -663,6 +664,15 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
       {products.map((item) => {
         const automation = asRecord(item.automation);
         const saleState = asRecord(item.saleState);
+        const formula = asRecord(item.priceFormula);
+        const selectedSupplier = asRecord(item.selectedSupplier);
+        const formulaText = [
+          item.marketplace ? String(item.marketplace) : "",
+          selectedSupplier.price ? `${String(selectedSupplier.price)} ${String(selectedSupplier.currency || "USD")}` : "",
+          formula.usdRate ? `курс ${String(formula.usdRate)}` : "",
+          formula.markupCoefficient ? `коэф. ${String(formula.markupCoefficient)}` : "",
+          item.targetPrice ? `итог ${money(item.targetPrice)}` : "",
+        ].filter(Boolean).join(" · ");
         const saleCode = String(item.saleStateCode || saleState.code || "");
         const itemLinks = Array.isArray(item.links) ? item.links.map(asRecord) : [];
         return (
@@ -684,6 +694,7 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
             </div>
             <div className="diagnostic-lines">
               <span><b>Поставщик:</b> {supplierText(item.selectedSupplier)}</span>
+              {formulaText && <span><b>Формула цены:</b> {formulaText}</span>}
               <div className="diagnostic-pm-links">
                 <b>PriceMaster:</b>
                 {itemLinks.length ? itemLinks.map((link, index) => (
@@ -728,6 +739,21 @@ function MarketplaceRows({ products }: { products: Product[] }) {
           const status = statusLabel(product);
           const stock = Number(product.targetStock || product.stock || 0);
           const changed = Number(product.newPrice || product.targetPrice || 0) > 0 && Number(product.currentPrice || 0) !== Number(product.newPrice || product.targetPrice || 0);
+          const supplier = asRecord(product.selectedSupplier);
+          const formula = asRecord(product.priceFormula);
+          const markupCoefficient = Number(product.markupCoefficient || supplier.markupCoefficient || formula.markupCoefficient || 0) || 0;
+          const baseMarkupCoefficient = Number(supplier.baseMarkupCoefficient || formula.baseMarkupCoefficient || 0) || 0;
+          const usdRate = Number(product.usdRate || formula.usdRate || 0) || 0;
+          const supplierPrice = Number(supplier.price || formula.selectedSupplierPrice || 0) || 0;
+          const supplierCurrency = String(supplier.currency || supplier.priceCurrency || formula.selectedSupplierCurrency || "");
+          const targetPrice = Number(product.newPrice || product.targetPrice || formula.targetPrice || 0) || 0;
+          const formulaParts = [
+            supplier.supplierName ? `Поставщик: ${String(supplier.supplierName)}${supplier.article ? ` · ${String(supplier.article)}` : ""}` : "",
+            markupCoefficient ? `Коэф.: ${markupCoefficient}${baseMarkupCoefficient && baseMarkupCoefficient !== markupCoefficient ? ` (база ${baseMarkupCoefficient})` : ""}` : "",
+            usdRate ? `Курс: ${usdRate}` : "",
+            supplierPrice ? `PM: ${supplierPrice} ${supplierCurrency || "USD"}` : "",
+            targetPrice ? `Новая цена: ${money(targetPrice)}` : "",
+          ].filter(Boolean);
           return (
             <div className="marketplace-row" key={product.id}>
               <div>
@@ -748,6 +774,8 @@ function MarketplaceRows({ products }: { products: Product[] }) {
                 <strong>{(product.links || []).length}</strong>
               </div>
               <div className="marketplace-flags">
+                {formulaParts.length ? formulaParts.map((part) => <span className="formula-chip" key={part}>{part}</span>) : <span className="formula-chip">PriceMaster не выбран</span>}
+                <span className="formula-chip muted">общие привязки, отдельный расчет цены</span>
                 {product.archived && <span>Архив</span>}
                 {changed && <span>Цена ждет</span>}
                 {!product.selectedSupplier && (product.links || []).length > 0 && <span>Поставщик не выбран</span>}

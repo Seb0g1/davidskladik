@@ -2295,6 +2295,72 @@ function warehouseProductLinksSignature(product = {}) {
     .join("||");
 }
 
+function warehouseGroupLinkSignature(products = []) {
+  const rows = (Array.isArray(products) ? products : [])
+    .map((product) => ({
+      productId: product.id || "",
+      offerId: product.offerId || "",
+      marketplace: normalizeWarehouseProduct(product).marketplace || "",
+      linkCount: compactWarehouseLinks(product.links || []).length,
+      signature: warehouseProductLinksSignature(product),
+    }));
+  const signatures = Array.from(new Set(rows.map((row) => row.signature)));
+  return {
+    ok: signatures.length <= 1,
+    signature: signatures[0] || "",
+    uniqueCount: signatures.length,
+    products: rows,
+  };
+}
+
+function buildCommonWarehouseGroupLinks(products = [], incomingLinks = [], { now = new Date().toISOString(), username = "system" } = {}) {
+  const byKey = new Map();
+  const addLink = (input = {}) => {
+    const normalized = normalizeWarehouseLink(input);
+    if (!warehouseLinkHasMatchTarget(normalized)) return;
+    const key = warehouseLinkTargetKey(normalized);
+    const next = normalizeWarehouseLink({
+      ...normalized,
+      createdAt: normalized.createdAt || now,
+      updatedAt: normalized.updatedAt || now,
+      createdBy: normalized.createdBy || username,
+      updatedBy: normalized.updatedBy || username,
+    });
+    const existing = byKey.get(key);
+    byKey.set(key, existing ? mergeWarehouseLinkForSave(existing, next, { now, username }) : next);
+  };
+  for (const product of Array.isArray(products) ? products : []) {
+    for (const link of Array.isArray(product.links) ? product.links : []) addLink(link);
+  }
+  for (const link of Array.isArray(incomingLinks) ? incomingLinks : []) addLink(link);
+  return compactWarehouseLinks(Array.from(byKey.values()));
+}
+
+function marketplacePriceBreakdown(products = []) {
+  return (Array.isArray(products) ? products : []).map((product) => {
+    const normalized = normalizeWarehouseProduct(product);
+    const supplier = product.selectedSupplier || {};
+    const formula = product.priceFormula || {};
+    return {
+      productId: product.id || "",
+      offerId: product.offerId || "",
+      marketplace: normalized.marketplace || "",
+      target: product.target || "",
+      supplierName: supplier.supplierName || supplier.partnerName || supplier.name || "",
+      supplierArticle: supplier.article || supplier.supplierArticle || "",
+      markupCoefficient: Number(product.markupCoefficient || supplier.markupCoefficient || formula.markupCoefficient || 0) || null,
+      baseMarkupCoefficient: Number(supplier.baseMarkupCoefficient || formula.baseMarkupCoefficient || 0) || null,
+      usdRate: Number(product.usdRate || formula.usdRate || 0) || null,
+      selectedSupplierPrice: Number(supplier.price ?? formula.selectedSupplierPrice ?? 0) || null,
+      selectedSupplierCurrency: supplier.priceCurrency || supplier.currency || formula.selectedSupplierCurrency || "",
+      calculatedPrice: Number(supplier.calculatedPrice || formula.calculatedPrice || 0) || null,
+      targetPrice: Number(product.targetPrice || product.nextPrice || formula.targetPrice || 0) || null,
+      currentPrice: Number(product.currentPrice || formula.currentPrice || 0) || null,
+      targetStock: Number(product.targetStock || 0) || null,
+    };
+  });
+}
+
 function normalizeSupplierArticle(input = {}) {
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
@@ -9341,6 +9407,20 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       ...product,
       brand: resolveWarehouseBrand(product),
       markupCoefficient,
+      usdRate: rate,
+      priceFormula: {
+        marketplace: product.marketplace,
+        usdRate: rate,
+        selectedSupplierPrice: selectedSupplierWithPolicy ? Number(selectedSupplierWithPolicy.price || 0) : null,
+        selectedSupplierCurrency: selectedSupplierWithPolicy?.priceCurrency || selectedSupplierWithPolicy?.currency || "",
+        baseMarkupCoefficient,
+        markupCoefficient,
+        calculatedPrice: rawNextPrice || null,
+        targetPrice: nextPrice || null,
+        currentPrice,
+        availabilityRule: availabilityPolicy.rule || null,
+        targetStock: availabilityPolicy.targetStock ?? null,
+      },
       autoPriceEnabled: normalizedLinks.length > 0 ? true : product.autoPriceEnabled !== false,
       autoPriceMin: minAuto > 0 ? minAuto : null,
       autoPriceMax: maxAuto > 0 ? maxAuto : null,
@@ -9530,6 +9610,20 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       ...product,
       brand: resolveWarehouseBrand(product),
       markupCoefficient,
+      usdRate: rate,
+      priceFormula: {
+        marketplace: product.marketplace,
+        usdRate: rate,
+        selectedSupplierPrice: selectedSupplierWithPolicy ? Number(selectedSupplierWithPolicy.price || 0) : null,
+        selectedSupplierCurrency: selectedSupplierWithPolicy?.priceCurrency || selectedSupplierWithPolicy?.currency || "",
+        baseMarkupCoefficient,
+        markupCoefficient,
+        calculatedPrice: rawNextPrice || null,
+        targetPrice: nextPrice || null,
+        currentPrice,
+        availabilityRule: availabilityPolicy.rule || null,
+        targetStock: availabilityPolicy.targetStock ?? null,
+      },
       autoPriceEnabled: normalizedLinks.length > 0 ? true : product.autoPriceEnabled !== false,
       autoPriceMin: minAuto > 0 ? minAuto : null,
       autoPriceMax: maxAuto > 0 ? maxAuto : null,
@@ -10349,6 +10443,9 @@ function publicSelectedSupplierDiagnostics(supplier = null) {
     available: supplier.available !== false,
     price: supplier.price ?? supplier.calculatedPrice ?? null,
     priceRub: supplier.priceRub ?? supplier.calculatedPriceRub ?? null,
+    calculatedPrice: supplier.calculatedPrice ?? supplier.priceRub ?? supplier.calculatedPriceRub ?? null,
+    markupCoefficient: supplier.markupCoefficient ?? null,
+    baseMarkupCoefficient: supplier.baseMarkupCoefficient ?? null,
     currency: supplier.currency || supplier.priceCurrency || "",
   };
 }
@@ -10489,6 +10586,9 @@ function publicWarehouseDiagnosticProduct(product = {}, contextProducts = []) {
     supplierCount: Number(product.supplierCount || 0),
     availableSupplierCount: Number(product.availableSupplierCount || 0),
     selectedSupplier: publicSelectedSupplierDiagnostics(product.selectedSupplier),
+    markupCoefficient: product.markupCoefficient ?? null,
+    usdRate: product.usdRate ?? product.priceFormula?.usdRate ?? null,
+    priceFormula: product.priceFormula || null,
     currentPrice: product.currentPrice ?? null,
     targetPrice: product.targetPrice ?? null,
     targetStock: product.targetStock ?? null,
@@ -10619,12 +10719,9 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
   await ensureWarehousePostgresLinksBackfilled(prisma);
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
-  const cacheKey = `group:${groupKey}:${rate}:${JSON.stringify({
-    marketplace: cleanText(filters.marketplace || "all"),
-    state: cleanText(filters.state || "all"),
-  })}`;
+  const cacheKey = `group:${groupKey}:${rate}:all-marketplaces`;
   return warehousePostgresCachedDetail(cacheKey, async () => {
-    const baseWhere = warehousePagePostgresWhere({ ...filters, q: "", linked: "all", brand: "" });
+    const baseWhere = warehousePagePostgresWhere({ marketplace: "all", state: "all", q: "", linked: "all", brand: "" });
     let rows = [];
     if (kind === "offer") {
       rows = await prisma.warehouseProduct.findMany({
@@ -10662,9 +10759,12 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
       { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
     );
     const builtMap = new Map(built.map((product) => [product.id, product]));
+    const detailProducts = pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product)));
     return {
-      products: pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product))),
+      products: detailProducts,
       suppliers: normalizedSuppliers,
+      groupLinkSignature: warehouseGroupLinkSignature(detailProducts),
+      marketplacePriceBreakdown: marketplacePriceBreakdown(detailProducts),
     };
   });
 }
@@ -10687,9 +10787,12 @@ async function buildWarehouseGroupDetail(groupKey, { usdRate, filters = {} } = {
     { livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
   );
   const builtMap = new Map(built.map((product) => [product.id, product]));
+  const detailProducts = pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product)));
   return {
-    products: pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product))),
+    products: detailProducts,
     suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers : [],
+    groupLinkSignature: warehouseGroupLinkSignature(detailProducts),
+    marketplacePriceBreakdown: marketplacePriceBreakdown(detailProducts),
   };
 }
 
@@ -13210,17 +13313,30 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       return response.status(400).json({ error: "Укажите артикул PriceMaster или выберите строку PriceMaster по названию." });
     }
     const targetProducts = warehouse.products.filter((product) => ids.has(String(product.id)));
+    if (!targetProducts.length) return response.status(404).json({ error: "РўРѕРІР°СЂС‹ СЃРєР»Р°РґР° РЅРµ РЅР°Р№РґРµРЅС‹." });
+    const now = new Date().toISOString();
+    const username = requestUsername(request);
+    const commonLinks = buildCommonWarehouseGroupLinks(targetProducts, baseLinks, { now, username });
+    const commonSignature = commonLinks.map((link) => warehouseLinkTargetKey(link)).sort().join("||");
     const locks = productLocksFromRequest(request.body);
     const conflicts = collectProductConflictsExceptBackground(targetProducts, locks, { mergeOnly: true });
     const blockingConflicts = conflicts.filter((conflict) => {
       const product = targetProducts.find((item) => String(item.id) === String(conflict.id));
-      return !canIgnoreStaleLinkSaveConflict(product, baseLinks, locks.get(String(conflict.id)));
+      return !canIgnoreStaleLinkSaveConflict(product, commonLinks, locks.get(String(conflict.id)));
     });
     if (blockingConflicts.length) {
-      const alreadyApplied = targetProducts.length > 0 && targetProducts.every((product) => warehouseProductHasLinks(product, baseLinks));
+      const alreadyApplied = targetProducts.length > 0 && targetProducts.every((product) => warehouseProductLinksSignature(product) === commonSignature);
       if (!alreadyApplied) return conflictResponse(response, blockingConflicts);
       const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, targetProducts, { usdRate });
-      return response.json({ ok: true, changed: savedProducts.length || targetProducts.length, products: savedProducts, persisted: "already_written", alreadyWritten: true });
+      return response.json({
+        ok: true,
+        changed: savedProducts.length || targetProducts.length,
+        products: savedProducts,
+        persisted: "already_written",
+        alreadyWritten: true,
+        groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
+        marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
+      });
     }
     const failedLinks = [];
     for (const [index, linkToValidate] of baseLinks.entries()) {
@@ -13237,8 +13353,6 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         failedLinks,
       });
     }
-    const now = new Date().toISOString();
-    const username = requestUsername(request);
     const updatedIds = [];
     const oldValues = [];
 
@@ -13246,22 +13360,13 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       if (!ids.has(String(product.id))) continue;
       const beforeDetailsSignature = warehouseProductLinkDetailsSignature(product);
       const beforeValue = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
-      product.links = Array.isArray(product.links) ? product.links : [];
-      for (const linkToSave of baseLinks) {
-        const link = normalizeWarehouseLink({
-          ...linkToSave,
-          createdAt: linkToSave.createdAt || now,
-          updatedAt: now,
-          createdBy: linkToSave.createdBy || username,
-          updatedBy: username,
-        });
-        const index = product.links.findIndex((item) => item.id === link.id || warehouseLinksEqualForSave(item, link));
-        if (index >= 0) {
-          product.links[index] = mergeWarehouseLinkForSave(product.links[index], link, { now, username });
-        }
-        else product.links.push(link);
-      }
-      product.links = compactWarehouseLinks(product.links);
+      product.links = commonLinks.map((link) => normalizeWarehouseLink({
+        ...link,
+        createdAt: link.createdAt || now,
+        updatedAt: now,
+        createdBy: link.createdBy || username,
+        updatedBy: username,
+      }));
       if (warehouseProductLinkDetailsSignature(product) === beforeDetailsSignature) continue;
       oldValues.push(beforeValue);
       product.autoPriceEnabled = true;
@@ -13270,18 +13375,42 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     }
 
     if (!targetProducts.length) return response.status(404).json({ error: "Товары склада не найдены." });
+    const groupSignatureAfterMutation = warehouseGroupLinkSignature(targetProducts);
+    if (!groupSignatureAfterMutation.ok) {
+      return response.status(409).json({
+        error: "PriceMaster links were not synchronized for the whole group. Nothing was queued for marketplace updates.",
+        code: "warehouse_group_links_not_synced",
+        groupLinkSignature: groupSignatureAfterMutation,
+      });
+    }
+
     if (!updatedIds.length) {
       const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, targetProducts, { usdRate });
-      return response.json({ ok: true, changed: 0, products: savedProducts, persisted: "unchanged", unchanged: true });
+      return response.json({
+        ok: true,
+        changed: 0,
+        products: savedProducts,
+        persisted: "unchanged",
+        unchanged: true,
+        groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
+        marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
+      });
     }
 
     await writeWarehouseProductPatch(
       warehouse.products.filter((product) => updatedIds.includes(product.id)),
       { reason: "warehouse_links_bulk_save" },
     );
-    const updatedProducts = warehouse.products.filter((product) => updatedIds.includes(product.id));
+    const updatedProducts = targetProducts;
     const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, updatedProducts, { usdRate });
-    response.json({ ok: true, changed: savedProducts.length || updatedIds.length, products: savedProducts, persisted: "written" });
+    response.json({
+      ok: true,
+      changed: savedProducts.length || updatedIds.length,
+      products: savedProducts,
+      persisted: "written",
+      groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
+      marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
+    });
     appendAudit(request, "warehouse.links.bulk_save", {
       productIds: updatedIds,
       links: baseLinks.map((link) => ({
@@ -17206,6 +17335,9 @@ module.exports = {
   warehouseProductLinkDetailsSignature,
   mergeWarehouseLinkForSave,
   warehouseProductLinksSignature,
+  warehouseGroupLinkSignature,
+  buildCommonWarehouseGroupLinks,
+  marketplacePriceBreakdown,
   productConflict,
   canIgnoreStaleLinkSaveConflict,
   warehouseLinkHasMatchTarget,

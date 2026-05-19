@@ -343,6 +343,9 @@ export function SettingsPage() {
       </nav>
       {settingsQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю настройки...</div>}
       {activeTab === "prices" && <section className="settings-grid pricing-settings-grid">
+        <div className="settings-panel settings-panel-wide">
+          <div className="settings-hint">Ozon и Yandex используют общие привязки PriceMaster в объединенной карточке, но цена считается отдельно по своему базовому коэффициенту, правилам наценки и доступности.</div>
+        </div>
         <div className="settings-panel">
           <div className="section-title"><div><span>Цены</span><h3>Базовые цены</h3></div></div>
           <label>Курс USD/RUB<input type="number" min="0.0001" step="0.0001" value={String(draft.fixedUsdRate ?? settings.fixedUsdRate ?? "")} onChange={(event) => update({ fixedUsdRate: numberValue(event.target.value) })} /></label>
