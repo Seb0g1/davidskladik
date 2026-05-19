@@ -54,6 +54,7 @@ const port = Number(process.env.PORT || 3000);
 const dataDir = path.join(__dirname, "data");
 const configDir = path.join(__dirname, "config");
 const publicDir = path.join(__dirname, "public");
+const modernAppDir = path.join(publicDir, "app-modern");
 const uploadImageDir = path.join(publicDir, "uploads", "images");
 const aiImageDir = path.join(publicDir, "uploads", "ai-images");
 const aiImageLogoPath = path.join(publicDir, "logo.png");
@@ -858,6 +859,19 @@ async function serveIndexHtml(_request, response, next) {
   }
 }
 
+async function serveModernAppHtml(_request, response, next) {
+  try {
+    const html = await fs.readFile(path.join(modernAppDir, "index.html"), "utf8");
+    cacheControlForMutableAsset(response);
+    response.type("html").send(html);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return response.status(503).type("html").send("Modern warehouse app is not built. Run npm run frontend:build.");
+    }
+    next(error);
+  }
+}
+
 async function collectHealthDetails({ deep = false } = {}) {
   const components = {
     storage: {
@@ -992,6 +1006,7 @@ app.get("/api/session", (request, response) => {
 });
 
 app.use(requireAuth);
+app.get(/^\/app(?:\/.*)?$/u, serveModernAppHtml);
 app.get(["/", "/index.html"], serveIndexHtml);
 app.use(express.static(publicDir, {
   setHeaders(response, filePath) {

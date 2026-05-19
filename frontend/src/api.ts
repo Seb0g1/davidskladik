@@ -1,0 +1,59 @@
+import { z } from "zod";
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  detail?: unknown;
+
+  constructor(message: string, status: number, code?: string, detail?: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+    this.detail = detail;
+  }
+}
+
+export async function fetchJson<T>(url: string, schema: z.ZodType<T>, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...init,
+    headers: {
+      ...(init.body ? { "Content-Type": "application/json" } : {}),
+      ...(init.headers || {}),
+    },
+  });
+
+  const contentType = response.headers.get("content-type") || "";
+  const payload = contentType.includes("application/json")
+    ? await response.json().catch(() => ({}))
+    : await response.text().catch(() => "");
+
+  if (response.status === 401) {
+    window.location.href = "/login.html";
+    throw new ApiError("Требуется вход", response.status, "unauthorized", payload);
+  }
+
+  if (!response.ok) {
+    const message = typeof payload === "object" && payload
+      ? String((payload as { error?: string; detail?: string }).error || (payload as { detail?: string }).detail || `HTTP ${response.status}`)
+      : String(payload || `HTTP ${response.status}`);
+    throw new ApiError(message, response.status, typeof payload === "object" && payload ? (payload as { code?: string }).code : undefined, payload);
+  }
+
+  return schema.parse(payload);
+}
+
+export function mutationBody(input: unknown): RequestInit {
+  return {
+    method: "POST",
+    body: JSON.stringify(input),
+  };
+}
+
+export function patchBody(input: unknown): RequestInit {
+  return {
+    method: "PATCH",
+    body: JSON.stringify(input),
+  };
+}
