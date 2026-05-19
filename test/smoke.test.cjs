@@ -3467,7 +3467,7 @@ test("forced recovery includes already active linked product", () => {
 });
 
 test("supplier recovery treats delayed Yandex unarchive visibility as pending, not failed", () => {
-  const [status] = summarizeSupplierRecoveryProducts([
+  const [notVisibleStatus, stillArchivedStatus] = summarizeSupplierRecoveryProducts([
     {
       id: "pending-yandex-unarchive",
       offerId: "CC-AASH5001",
@@ -3475,8 +3475,16 @@ test("supplier recovery treats delayed Yandex unarchive visibility as pending, n
       target: "yandex-real",
       marketplaceState: { code: "archived", archived: true },
     },
+    {
+      id: "still-archived-after-api",
+      offerId: "41044",
+      marketplace: "yandex",
+      target: "yandex-real",
+      marketplaceState: { code: "archived", archived: true },
+    },
   ], [
     { id: "pending-yandex-unarchive", type: "restore_stock", ok: true, stock: 2 },
+    { id: "still-archived-after-api", type: "restore_stock", ok: true, stock: 2 },
   ], [
     {
       id: "pending-yandex-unarchive",
@@ -3488,11 +3496,25 @@ test("supplier recovery treats delayed Yandex unarchive visibility as pending, n
       verified: false,
       warning: "unarchive_not_visible_after_api",
     },
+    {
+      id: "still-archived-after-api",
+      type: "unarchive",
+      target: "yandex-real",
+      offerId: "41044",
+      ok: true,
+      pending: true,
+      verified: false,
+      warning: "still_archived_after_unarchive",
+    },
   ]);
-  assert.equal(status.sellable, true);
-  assert.equal(status.unarchiveFailed, 0);
-  assert.equal(status.unarchivePending, 1);
-  assert.equal(status.warning, "unarchive_not_visible_after_api");
+  assert.equal(notVisibleStatus.sellable, true);
+  assert.equal(notVisibleStatus.unarchiveFailed, 0);
+  assert.equal(notVisibleStatus.unarchivePending, 1);
+  assert.equal(notVisibleStatus.warning, "unarchive_not_visible_after_api");
+  assert.equal(stillArchivedStatus.sellable, true);
+  assert.equal(stillArchivedStatus.unarchiveFailed, 0);
+  assert.equal(stillArchivedStatus.unarchivePending, 1);
+  assert.equal(stillArchivedStatus.warning, "still_archived_after_unarchive");
 });
 
 test("Yandex target lookup accepts campaign and old generated target", async () => {

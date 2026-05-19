@@ -16053,16 +16053,11 @@ async function verifyYandexUnarchiveActions(products = [], actions = [], options
         continue;
       }
       row.action.verified = false;
-      if (archivedOfferIds.has(key)) {
-        row.action.ok = false;
-        row.action.error = "still_archived_after_unarchive";
-        continue;
-      }
       row.action.ok = true;
       row.action.pending = true;
       row.action.warning = targetError
         ? `unarchive_verify_pending: ${targetError}`
-        : "unarchive_not_visible_after_api";
+        : (archivedOfferIds.has(key) ? "still_archived_after_unarchive" : "unarchive_not_visible_after_api");
       delete row.action.error;
     }
   }
