@@ -19,6 +19,7 @@ const { createStaticAppHandlers } = require("./lib/static-app");
 const { registerAuthSessionRoutes } = require("./routes/auth-session");
 const { registerOperationsRoutes } = require("./routes/operations");
 const { registerSettingsRoutes } = require("./routes/settings");
+const { registerStaticAppRoutes } = require("./routes/static-app");
 const { registerUsersRoutes } = require("./routes/users");
 const {
   postgresModeEnabled,
@@ -943,22 +944,15 @@ registerAuthSessionRoutes(app, {
 });
 
 app.use(requireAuth);
-app.get(/^\/app(?:\/.*)?$/u, serveModernAppHtml);
-app.get(["/legacy", "/legacy/", "/legacy/index.html"], serveIndexHtml);
-app.get(["/legacy/settings", "/legacy/settings.html"], (request, response, next) => servePublicHtml("settings.html", request, response, next));
-app.get(["/legacy/ai-drafts", "/legacy/ai-drafts.html"], (request, response, next) => servePublicHtml("ai-drafts.html", request, response, next));
-app.get(["/legacy/operations", "/legacy/operations.html"], (request, response, next) => servePublicHtml("operations.html", request, response, next));
-app.get(["/legacy/no-supplier", "/legacy/no-supplier.html"], (request, response, next) => servePublicHtml("no-supplier.html", request, response, next));
-app.get(["/legacy/pricemaster", "/legacy/pricemaster.html"], (request, response, next) => servePublicHtml("pricemaster.html", request, response, next));
-app.get(["/", "/index.html"], serveModernAppHtml);
-app.use(express.static(publicDir, {
-  setHeaders(response, filePath) {
-    const ext = path.extname(filePath).toLowerCase();
-    if (ext === ".js" || ext === ".css" || ext === ".html") {
-      cacheControlForMutableAsset(response);
-    }
-  },
-}));
+registerStaticAppRoutes(app, {
+  express,
+  path,
+  publicDir,
+  cacheControlForMutableAsset,
+  serveIndexHtml,
+  servePublicHtml,
+  serveModernAppHtml,
+});
 
 function cleanLimit(value, fallback = 100, max = 500) {
   const parsed = Number.parseInt(value, 10);
