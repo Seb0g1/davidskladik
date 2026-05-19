@@ -71,6 +71,7 @@ const {
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
   warehousePagePostgresWhere,
+  warehousePagePostgresPrimaryIdentityWhere,
   sortWarehouseProductsForSearch,
   preferWarehousePrimaryIdentityMatches,
   buildWarehouseSkuDiagnostics,
@@ -1742,6 +1743,15 @@ test("warehouse page article search does not treat supplier partner id as produc
   const serialized = JSON.stringify(where);
   assert.equal(serialized.includes("supplierArticle"), true);
   assert.equal(serialized.includes("partnerId"), false);
+});
+
+test("warehouse page strict postgres search checks product identity before supplier links", () => {
+  const primaryWhere = warehousePagePostgresPrimaryIdentityWhere({ q: "41059", linked: "linked" });
+  const serialized = JSON.stringify(primaryWhere);
+  assert.equal(serialized.includes("supplierArticle"), false);
+  assert.equal(serialized.includes("\"offerId\""), true);
+  assert.equal(serialized.includes("\"productId\""), true);
+  assert.equal(serialized.includes("\"links\":{\"some\":{}"), true);
 });
 
 test("warehouse page article search ranks product offer ids before supplier links", () => {

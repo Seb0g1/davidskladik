@@ -9807,6 +9807,24 @@ function warehousePagePostgresWhere(filters = {}) {
   return { AND: and.filter((item) => Object.keys(item || {}).length) };
 }
 
+function warehousePagePostgresPrimaryIdentityWhere(filters = {}) {
+  const q = cleanText(filters.q || "");
+  if (!q || !isWarehouseArticleLikeQuery(q)) return warehousePagePostgresWhere(filters);
+  const base = warehousePagePostgresWhere({ ...filters, q: "" });
+  return {
+    AND: [
+      ...(Array.isArray(base.AND) ? base.AND : []),
+      {
+        OR: [
+          { id: { equals: q, mode: "insensitive" } },
+          { offerId: { equals: q, mode: "insensitive" } },
+          { productId: { equals: q, mode: "insensitive" } },
+        ],
+      },
+    ].filter((item) => Object.keys(item || {}).length),
+  };
+}
+
 function warehouseStateCounter(products = [], marketplace = "") {
   const rows = Array.isArray(products) ? products : [];
   const market = cleanText(marketplace).toLowerCase();
@@ -10056,13 +10074,16 @@ async function buildFastWarehousePageFromPostgres({
   const strictIdentitySearch = isWarehouseStrictIdentitySearch(filters);
   const needsInMemoryPage = needsDeepBrandFilter || needsComputedLinkFilter || strictIdentitySearch;
   const where = warehousePagePostgresWhere(needsDeepBrandFilter || needsComputedLinkFilter ? { ...filters, brand: "", state: "all" } : filters);
+  const strictPrimaryWhere = strictIdentitySearch
+    ? warehousePagePostgresPrimaryIdentityWhere(needsDeepBrandFilter || needsComputedLinkFilter ? { ...filters, brand: "", state: "all" } : filters)
+    : null;
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
   const [summary, dbTotal, initialDbRows] = await Promise.all([
     getWarehousePostgresSummary(prisma, rate),
     needsInMemoryPage ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
     prisma.warehouseProduct.findMany({
-      where,
+      where: strictPrimaryWhere || where,
       include: { links: true },
       orderBy: warehousePagePostgresOrderBy(),
       skip: needsInMemoryPage ? 0 : offset,
@@ -10071,6 +10092,14 @@ async function buildFastWarehousePageFromPostgres({
   ]);
   pageTrace("postgres:after-query", traceStartedAt);
   let dbRows = initialDbRows;
+  if (strictIdentitySearch && dbRows.length === 0) {
+    dbRows = await prisma.warehouseProduct.findMany({
+      where,
+      include: { links: true },
+      orderBy: warehousePagePostgresOrderBy(),
+    });
+    pageTrace("postgres:after-strict-fallback-query", traceStartedAt);
+  }
   let pageBaseCount = dbRows.length;
   if (!needsDeepBrandFilter && !needsComputedLinkFilter && !strictIdentitySearch) {
     dbRows = await addWarehousePostgresPageGroupSiblings(prisma, where, dbRows);
@@ -17147,6 +17176,7 @@ module.exports = {
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
   warehousePagePostgresWhere,
+  warehousePagePostgresPrimaryIdentityWhere,
   sortWarehouseProductsForSearch,
   preferWarehousePrimaryIdentityMatches,
   buildWarehouseSkuDiagnostics,

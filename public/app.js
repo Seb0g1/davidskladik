@@ -2864,7 +2864,7 @@ function renderWarehouseDetail(group, { force = false } = {}) {
       </div>
     </section>
 
-    <section class="detail-section">
+    <section class="detail-section link-workbench">
       <h3>Привязки PriceMaster</h3>
       <div class="link-list">
         ${
@@ -2924,7 +2924,7 @@ function renderWarehouseDetail(group, { force = false } = {}) {
       ${elements.linkFormTemplate.innerHTML.replace("<form", `<form data-product-id="${escapeHtml(product.id)}" data-product-ids="${escapeHtml(groupProductIds.join(","))}" data-draft-key="${escapeHtml(linkDraftKeyValue)}"`)}
     </section>
 
-    <section class="detail-section">
+    <section class="detail-section supplier-picker-section">
       <h3>Все найденные поставщики</h3>
       <div class="supplier-list">
         ${
