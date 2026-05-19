@@ -120,6 +120,41 @@ function draftFromSearchRow(row: PriceMasterSearchRow): LinkDraft {
   };
 }
 
+function cleanLinkPart(value: unknown): string {
+  return String(value || "").trim();
+}
+
+function parseNoArticleRowId(value: unknown): string {
+  const text = cleanLinkPart(value);
+  const prefix = "__no_article__:";
+  return text.toLowerCase().startsWith(prefix) ? cleanLinkPart(text.slice(prefix.length)) : "";
+}
+
+function linkPrimarySignature(link: Partial<ProductLink | LinkDraft>): string {
+  const raw = link as Record<string, unknown>;
+  let article = cleanLinkPart(raw.article || raw.supplierArticle);
+  let sourceRowId = cleanLinkPart(raw.sourceRowId || raw.rowId);
+  const exactName = cleanLinkPart(raw.exactName || raw.name);
+  const noArticleRowId = parseNoArticleRowId(article);
+  let matchType = cleanLinkPart(link.matchType || "").toLowerCase();
+  if (noArticleRowId) {
+    article = "";
+    sourceRowId = sourceRowId || noArticleRowId;
+    matchType = "selected_row";
+  }
+  if (!["article", "selected_row", "exact_name"].includes(matchType)) matchType = "article";
+  if (article) matchType = "article";
+  const primary = article
+    ? `article:${article.toLowerCase()}`
+    : (sourceRowId ? `row:${sourceRowId}` : `name:${exactName.toLowerCase()}`);
+  const currency = cleanLinkPart(link.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
+  return [matchType, primary, currency].join("|");
+}
+
+function productLinksSignature(product: Product): string {
+  return Array.from(new Set((product.links || []).map(linkPrimarySignature).filter(Boolean))).sort().join("||");
+}
+
 function linkSourceId(link: ProductLink): string {
   return String(link.sourceRowId || link.rowId || link.id || "").trim();
 }
@@ -138,7 +173,11 @@ function linkTitleText(link: ProductLink): string {
 function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const productIds = products.map((item) => item.id).filter(Boolean);
-  const optimisticLocks = products.map((item) => ({ id: item.id, expectedUpdatedAt: item.updatedAt || "" }));
+  const optimisticLocks = products.map((item) => ({
+    id: item.id,
+    expectedUpdatedAt: item.updatedAt || "",
+    expectedLinksSignature: productLinksSignature(item),
+  }));
   const links = products.flatMap((item) => (item.links || []).map((link) => ({
     ...link,
     productId: item.id,
