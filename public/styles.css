@@ -1947,7 +1947,8 @@ td {
   flex-direction: column;
   min-width: 0;
   max-height: min(78vh, 920px);
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   background: var(--detail-bg);
   padding: 18px;
 }
@@ -2098,10 +2099,14 @@ td {
 
 .detail-metrics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  margin-bottom: 16px;
-  min-height: 128px;
+  grid-auto-rows: minmax(132px, auto);
+  align-items: stretch;
+  margin-bottom: 18px;
+  min-height: 0;
+  height: auto;
+  overflow: visible;
 }
 
 .detail-metrics div,
@@ -2115,7 +2120,13 @@ td {
 }
 
 .detail-metrics div {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
   padding: 10px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .detail-metrics span,
@@ -2284,13 +2295,15 @@ td {
 }
 
 .link-workbench {
+  position: relative;
+  z-index: 1;
+  clear: both;
   padding: 14px;
+  margin-top: 4px;
   border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
   border-radius: 8px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 44%),
-    var(--panel);
-  box-shadow: 0 16px 34px rgba(10, 24, 48, 0.12);
+  background: var(--panel-strong);
+  box-shadow: 0 12px 28px rgba(10, 24, 48, 0.16);
 }
 
 .link-workbench h3,
@@ -2307,7 +2320,7 @@ td {
 .link-workbench .link-item,
 .link-workbench .pending-link-item,
 .supplier-picker-section .supplier-line {
-  background: color-mix(in srgb, var(--panel-strong) 88%, transparent);
+  background: var(--tile);
 }
 
 .link-workbench .empty-mini,
@@ -2319,7 +2332,7 @@ td {
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--tile-soft) 62%, transparent);
+  background: var(--panel);
 }
 
 .pending-link-box {
@@ -2379,6 +2392,26 @@ td {
   justify-content: space-between;
   align-items: flex-start;
   gap: 10px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.link-item > div,
+.supplier-line > div:first-child,
+.pending-link-item > div {
+  min-width: 0;
+}
+
+.link-item strong,
+.supplier-line strong,
+.pending-link-item strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.link-item .text-button,
+.pending-link-item .text-button {
+  flex: 0 0 auto;
 }
 
 .supplier-line-actions {
@@ -2397,9 +2430,10 @@ td {
 
 .inline-link-form {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  margin-top: 8px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  margin-top: 10px;
+  min-width: 0;
 }
 
 .inline-link-form input,
@@ -2407,6 +2441,7 @@ td {
   min-height: 36px;
   padding: 0 8px;
   font-size: 12px;
+  min-width: 0;
 }
 
 .link-currency-toggle {
