@@ -196,6 +196,17 @@ test("legacy page aliases keep old admin screens available", async () => {
   assert.match(operations.text, /operationsList/);
 });
 
+test("modern PriceMaster link UI keeps drafts scoped and removes manual supplier search", async () => {
+  const source = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "routes", "WarehousePage.tsx"), "utf8");
+  assert.match(source, /draftScopeKey/);
+  assert.match(source, /setDrafts\(\[\]\)/);
+  assert.match(source, /<LinksPanel key=\{products\.map\(\(item\) => item\.id\)\.sort\(\)\.join\("\|"\)\}/);
+  assert.match(source, /expectedLinksSignature: productLinksSignature\(item\)/);
+  assert.doesNotMatch(source, /supplier=\$\{encodeURIComponent/);
+  assert.doesNotMatch(source, /setSupplierFilter/);
+  assert.match(source, /className="pm-result-title"/);
+});
+
 test("warehouse page product groups merge marketplace variants by offer and manual group", () => {
   const products = [
     normalizeWarehouseProduct({ id: "ozon-1", marketplace: "ozon", offerId: "41059", name: "Ozon row", links: [{ id: "l1", article: "pm-1", supplierName: "A" }] }),

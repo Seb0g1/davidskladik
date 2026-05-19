@@ -727,6 +727,14 @@ button:disabled {
   gap: 8px;
 }
 
+.draft-grid.single-field {
+  grid-template-columns: 1fr;
+}
+
+.manual-link-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 120px;
+}
+
 .draft-actions {
   display: flex;
   gap: 8px;
@@ -783,6 +791,17 @@ button:disabled {
   white-space: nowrap;
 }
 
+.pm-result .pm-result-title {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.35;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .pm-result-head span {
   border: 1px solid rgba(56, 163, 255, .28);
   color: var(--blue);
@@ -814,6 +833,29 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.draft-chip-rich {
+  max-width: 100%;
+  align-items: flex-start;
+  text-align: left;
+}
+
+.draft-chip-rich span,
+.draft-chip-rich small {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.draft-chip-rich b {
+  color: var(--text);
+}
+
+.draft-chip-rich small {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .draft-chip.is-current {
@@ -1425,6 +1467,7 @@ button:disabled {
   .summary-grid,
   .stats-grid,
   .draft-grid,
+  .manual-link-grid,
   .ai-grid,
   .control-grid,
   .operation-stats,

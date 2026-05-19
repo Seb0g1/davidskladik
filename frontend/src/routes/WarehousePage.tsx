@@ -21,6 +21,9 @@ type LinkDraft = {
   sourceRowId?: string;
   exactName?: string;
   matchType?: string;
+  price?: number | null;
+  available?: boolean;
+  updatedAt?: string | null;
 };
 
 function readFilters(): Filters {
@@ -111,13 +114,20 @@ function draftFromSearchRow(row: PriceMasterSearchRow): LinkDraft {
   return {
     article: row.article,
     supplierName: row.supplierName,
-    keyword: row.keyword || row.name,
+    keyword: "",
     priceCurrency: row.priceCurrency || row.currency || "USD",
     partnerId: row.partnerId || "",
     sourceRowId: row.rowId || row.id,
-    exactName: row.keyword || row.name,
+    exactName: row.name || row.keyword,
     matchType: "selected_row",
+    price: row.price,
+    available: row.available,
+    updatedAt: row.updatedAt,
   };
+}
+
+function emptyLinkDraft(currency = "USD"): LinkDraft {
+  return { article: "", supplierName: "", keyword: "", priceCurrency: currency };
 }
 
 function cleanLinkPart(value: unknown): string {
@@ -155,6 +165,28 @@ function productLinksSignature(product: Product): string {
   return Array.from(new Set((product.links || []).map(linkPrimarySignature).filter(Boolean))).sort().join("||");
 }
 
+function draftTitle(draft: LinkDraft): string {
+  return draft.article || "без артикула";
+}
+
+function draftSubtitle(draft: LinkDraft): string {
+  return [
+    draft.exactName || draft.keyword || "",
+    draft.supplierName || "",
+  ].filter(Boolean).join(" · ") || "ручной fallback";
+}
+
+function draftMeta(draft: LinkDraft): string {
+  return [
+    draft.sourceRowId ? `row ${draft.sourceRowId}` : "",
+    draft.partnerId ? `partner ${draft.partnerId}` : "",
+    draft.price ? money(draft.price) : "",
+    draft.priceCurrency || "USD",
+    draft.available === undefined ? "" : (draft.available ? "в наличии" : "нет наличия"),
+    compactDate(draft.updatedAt || ""),
+  ].filter(Boolean).join(" · ");
+}
+
 function linkSourceId(link: ProductLink): string {
   return String(link.sourceRowId || link.rowId || link.id || "").trim();
 }
@@ -173,6 +205,7 @@ function linkTitleText(link: ProductLink): string {
 function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const productIds = products.map((item) => item.id).filter(Boolean);
+  const draftScopeKey = productIds.slice().sort().join("|");
   const optimisticLocks = products.map((item) => ({
     id: item.id,
     expectedUpdatedAt: item.updatedAt || "",
@@ -188,21 +221,19 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   })));
   const selectedSupplierCount = products.filter((item) => item.selectedSupplier).length;
   const [drafts, setDrafts] = useState<LinkDraft[]>([]);
-  const [draft, setDraft] = useState<LinkDraft>({ article: "", supplierName: "", keyword: "", priceCurrency: "USD" });
+  const [draft, setDraft] = useState<LinkDraft>(() => emptyLinkDraft());
   const [search, setSearch] = useState("");
-  const [supplierFilter, setSupplierFilter] = useState("");
   const debouncedSearch = useDebounced(search, 250);
-  const debouncedSupplier = useDebounced(supplierFilter, 250);
-  const draftIsFilled = Boolean(draft.article.trim() || draft.supplierName.trim() || draft.keyword.trim());
+  const draftIsFilled = Boolean(draft.article.trim() || draft.keyword.trim());
   const pendingDrafts = draftIsFilled ? [...drafts, draft] : drafts;
 
   const searchQuery = useQuery({
-    queryKey: ["pricemaster", "search", debouncedSearch, debouncedSupplier],
+    queryKey: ["pricemaster", "search", debouncedSearch],
     queryFn: () => fetchJson(
-      `/api/pricemaster/search?q=${encodeURIComponent(debouncedSearch)}&supplier=${encodeURIComponent(debouncedSupplier)}&limit=20`,
+      `/api/pricemaster/search?q=${encodeURIComponent(debouncedSearch)}&limit=20`,
       PriceMasterSearchSchema,
     ),
-    enabled: debouncedSearch.trim().length >= 2 || debouncedSupplier.trim().length >= 2,
+    enabled: debouncedSearch.trim().length >= 2,
     staleTime: 30_000,
   });
 
@@ -214,7 +245,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
     })),
     onSuccess: (payload) => {
       setDrafts([]);
-      setDraft({ article: "", supplierName: "", keyword: "", priceCurrency: "USD" });
+      setDraft(emptyLinkDraft(draft.priceCurrency));
       updateCachedProducts(queryClient, payload);
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
       onSaved();
@@ -234,10 +265,18 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
     },
   });
 
+  useEffect(() => {
+    setDrafts([]);
+    setDraft(emptyLinkDraft());
+    setSearch("");
+    saveMutation.reset();
+    deleteMutation.reset();
+  }, [draftScopeKey]);
+
   const addDraft = (nextDraft: LinkDraft) => {
-    if (!nextDraft.article.trim() && !nextDraft.supplierName.trim()) return;
+    if (!nextDraft.article.trim() && !nextDraft.sourceRowId && !nextDraft.exactName && !nextDraft.keyword.trim()) return;
     setDrafts((items) => [...items, nextDraft]);
-    setDraft({ article: "", supplierName: "", keyword: "", priceCurrency: "USD" });
+    setDraft(emptyLinkDraft(nextDraft.priceCurrency));
   };
 
   return (
@@ -302,9 +341,8 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
 
       <div className="draft-box">
         <div className="section-subtitle">Найти строку PriceMaster</div>
-        <div className="draft-grid">
+        <div className="draft-grid single-field">
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Артикул, название или штрихкод" />
-          <input value={supplierFilter} onChange={(event) => setSupplierFilter(event.target.value)} placeholder="Поставщик" />
         </div>
         {(searchQuery.isFetching || searchQuery.data?.rows.length || searchQuery.error) && (
           <div className="pm-results">
@@ -316,7 +354,8 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
                   <strong>{row.article || "без артикула"}</strong>
                   <span>выбрать точную строку</span>
                 </div>
-                <span>{row.supplierName || "поставщик не указан"} · {row.keyword || row.name || "без названия"}</span>
+                <span className="pm-result-title">{row.name || row.keyword || "без названия"}</span>
+                <span>{row.supplierName || "поставщик не указан"}</span>
                 <small>row {row.rowId || row.id} · partner {row.partnerId || "-"} · {money(row.price)} · {row.priceCurrency || row.currency || "USD"} · {row.available ? "в наличии" : "нет наличия"} · {compactDate(row.updatedAt)}</small>
               </button>
             ))}
@@ -327,9 +366,8 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
         <div className="info-strip compact">
           Лучше выбирать строку из поиска: тогда сохраняется rowId, partnerId и точное название PriceMaster. Ручная привязка нужна только как запасной вариант.
         </div>
-        <div className="draft-grid">
+        <div className="draft-grid manual-link-grid">
           <input value={draft.article} onChange={(event) => setDraft({ ...draft, article: event.target.value })} placeholder="Артикул PriceMaster" />
-          <input value={draft.supplierName} onChange={(event) => setDraft({ ...draft, supplierName: event.target.value })} placeholder="Поставщик" />
           <input value={draft.keyword} onChange={(event) => setDraft({ ...draft, keyword: event.target.value })} placeholder="Ключевое слово" />
           <select value={draft.priceCurrency} onChange={(event) => setDraft({ ...draft, priceCurrency: event.target.value })}>
             <option value="USD">USD</option>
@@ -347,11 +385,13 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
         <div className="draft-preview">
           <strong>Черновик: {pendingDrafts.length}</strong>
           {drafts.length ? drafts.map((item, index) => (
-            <button className="draft-chip" type="button" key={`${item.article}-${index}`} onClick={() => setDrafts(drafts.filter((_, itemIndex) => itemIndex !== index))} title="Убрать из черновика">
-              {item.article || "без артикула"} · {item.supplierName || "без поставщика"} <X size={12} />
+            <button className="draft-chip draft-chip-rich" type="button" key={`${item.article || item.sourceRowId || item.exactName}-${index}`} onClick={() => setDrafts(drafts.filter((_, itemIndex) => itemIndex !== index))} title="Убрать из черновика">
+              <span><b>{draftTitle(item)}</b>{draftSubtitle(item)}</span>
+              {draftMeta(item) && <small>{draftMeta(item)}</small>}
+              <X size={12} />
             </button>
           )) : <span>Новые привязки появятся здесь до сохранения.</span>}
-          {draftIsFilled && <span className="draft-chip is-current">{draft.article || "текущий ввод"} · {draft.supplierName || "без поставщика"}</span>}
+          {draftIsFilled && <span className="draft-chip is-current">{draft.article || "текущий ввод"} · {draft.keyword || draft.priceCurrency}</span>}
         </div>
         {(saveMutation.error || deleteMutation.error) && <div className="inline-error">{errorMessage(saveMutation.error || deleteMutation.error)}</div>}
       </div>
@@ -778,7 +818,7 @@ function DetailPanel({ selectedGroup, products, onClose }: { selectedGroup: stri
       </div>
       <MarketplaceRows products={products} />
       <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} />
-      <LinksPanel products={products} onSaved={refreshDetail} />
+      <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} />
       <QuickActions primary={primary} products={products} onDone={refreshDetail} />
       <AiImagesPanel product={primary} onSaved={refreshDetail} />
       <section className="detail-section">
