@@ -158,7 +158,13 @@ function linkPrimarySignature(link: Partial<ProductLink | LinkDraft>): string {
     ? `article:${article.toLowerCase()}`
     : (sourceRowId ? `row:${sourceRowId}` : `name:${exactName.toLowerCase()}`);
   const currency = cleanLinkPart(link.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
-  return [matchType, primary, currency].join("|");
+  const supplierKeys = [
+    cleanLinkPart(raw.supplierName).toLowerCase(),
+    cleanLinkPart(raw.partnerId) ? `partner:${cleanLinkPart(raw.partnerId)}` : "",
+  ].filter(Boolean).sort();
+  const supplierTarget = supplierKeys.length ? supplierKeys.join("&") : "manual";
+  const keyword = cleanLinkPart(raw.keyword).toLowerCase();
+  return [matchType, primary, supplierTarget, keyword, currency].join("|");
 }
 
 function productLinksSignature(product: Product): string {
@@ -223,14 +229,32 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   const [drafts, setDrafts] = useState<LinkDraft[]>([]);
   const [draft, setDraft] = useState<LinkDraft>(() => emptyLinkDraft());
   const [search, setSearch] = useState("");
+  const [linkFilter, setLinkFilter] = useState("");
+  const [selectedLinkIds, setSelectedLinkIds] = useState<string[]>([]);
   const debouncedSearch = useDebounced(search, 250);
   const draftIsFilled = Boolean(draft.article.trim() || draft.keyword.trim());
   const pendingDrafts = draftIsFilled ? [...drafts, draft] : drafts;
+  const draftKeys = useMemo(() => new Set(drafts.map(linkPrimarySignature)), [drafts]);
+  const savedSupplierList = useMemo(() => Array.from(new Set(links.map((link) => link.supplierName).filter(Boolean))).sort(), [links]);
+  const filteredLinks = useMemo(() => {
+    const q = linkFilter.trim().toLowerCase();
+    if (!q) return links;
+    return links.filter((link) => [
+      link.article,
+      link.supplierArticle,
+      link.supplierName,
+      link.partnerId,
+      link.exactName,
+      link.keyword,
+      link.sourceRowId,
+      link.productOfferId,
+    ].filter(Boolean).join(" ").toLowerCase().includes(q));
+  }, [links, linkFilter]);
 
   const searchQuery = useQuery({
     queryKey: ["pricemaster", "search", debouncedSearch],
     queryFn: () => fetchJson(
-      `/api/pricemaster/search?q=${encodeURIComponent(debouncedSearch)}&limit=20`,
+      `/api/pricemaster/search?q=${encodeURIComponent(debouncedSearch)}&limit=100`,
       PriceMasterSearchSchema,
     ),
     enabled: debouncedSearch.trim().length >= 2,
@@ -265,19 +289,64 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
     },
   });
 
+  const bulkDeleteMutation = useMutation({
+    mutationFn: async () => {
+      const refs = links
+        .filter((link) => selectedLinkIds.includes(`${link.productId}:${link.id}`))
+        .map((link) => {
+          const product = products.find((item) => item.id === link.productId) || products[0];
+          return {
+            productId: link.productId,
+            linkId: link.id,
+            expectedUpdatedAt: product?.updatedAt || "",
+            expectedLinksSignature: product ? productLinksSignature(product) : "",
+          };
+        });
+      return fetchJson("/api/warehouse/products/links/delete", MutationProductResponseSchema, mutationBody({ refs }));
+    },
+    onSuccess: (payload) => {
+      setSelectedLinkIds([]);
+      updateCachedProducts(queryClient, payload);
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      onSaved();
+    },
+  });
+
   useEffect(() => {
     setDrafts([]);
     setDraft(emptyLinkDraft());
     setSearch("");
+    setLinkFilter("");
+    setSelectedLinkIds([]);
     saveMutation.reset();
     deleteMutation.reset();
+    bulkDeleteMutation.reset();
   }, [draftScopeKey]);
 
   const addDraft = (nextDraft: LinkDraft) => {
     if (!nextDraft.article.trim() && !nextDraft.sourceRowId && !nextDraft.exactName && !nextDraft.keyword.trim()) return;
-    setDrafts((items) => [...items, nextDraft]);
+    const key = linkPrimarySignature(nextDraft);
+    setDrafts((items) => items.some((item) => linkPrimarySignature(item) === key) ? items : [...items, nextDraft]);
     setDraft(emptyLinkDraft(nextDraft.priceCurrency));
   };
+
+  const addAllSearchRows = () => {
+    const rows = searchQuery.data?.rows || [];
+    if (!rows.length) return;
+    setDrafts((items) => {
+      const byKey = new Map(items.map((item) => [linkPrimarySignature(item), item]));
+      for (const row of rows) {
+        const nextDraft = draftFromSearchRow(row);
+        byKey.set(linkPrimarySignature(nextDraft), nextDraft);
+      }
+      return Array.from(byKey.values());
+    });
+  };
+
+  const saveErrorDetail = saveMutation.error && typeof (saveMutation.error as { detail?: unknown }).detail === "object"
+    ? (saveMutation.error as { detail?: { failedLinks?: unknown[] } }).detail
+    : null;
+  const failedLinks = Array.isArray(saveErrorDetail?.failedLinks) ? saveErrorDetail.failedLinks : [];
 
   return (
     <section className="detail-section">
@@ -304,9 +373,30 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
         </div>
       </div>
 
+      {links.length ? (
+        <div className="pm-link-toolbar">
+          <input value={linkFilter} onChange={(event) => setLinkFilter(event.target.value)} placeholder="Фильтр по поставщику, артикулу или названию" />
+          <button className="secondary-action" type="button" onClick={() => copyPlainText(savedSupplierList.join("\n"))} disabled={!savedSupplierList.length}>
+            <Copy size={16} /> Скопировать поставщиков
+          </button>
+          <button className="secondary-action danger" type="button" onClick={() => bulkDeleteMutation.mutate()} disabled={!selectedLinkIds.length || bulkDeleteMutation.isPending}>
+            {bulkDeleteMutation.isPending ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Удалить выбранные {selectedLinkIds.length || ""}
+          </button>
+        </div>
+      ) : null}
+
       <div className="links-list">
-        {links.length ? links.map((link) => (
+        {filteredLinks.length ? filteredLinks.map((link) => (
           <div className="link-item pm-link-item" key={`${link.productId}-${link.id}-${link.article}-${link.supplierName}`}>
+            <label className="pm-link-select" title="Выбрать привязку">
+              <input
+                type="checkbox"
+                checked={selectedLinkIds.includes(`${link.productId}:${link.id}`)}
+                onChange={(event) => setSelectedLinkIds((ids) => event.target.checked
+                  ? Array.from(new Set([...ids, `${link.productId}:${link.id}`]))
+                  : ids.filter((id) => id !== `${link.productId}:${link.id}`))}
+              />
+            </label>
             <div className="pm-link-body">
               <div className="pm-link-head">
                 <div>
@@ -336,7 +426,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
               <Trash2 size={16} />
             </button>
           </div>
-        )) : <div className="soft-empty">У товара пока нет привязок PriceMaster.</div>}
+        )) : <div className="soft-empty">{links.length ? "По фильтру привязки не найдены." : "У товара пока нет привязок PriceMaster."}</div>}
       </div>
 
       <div className="draft-box">
@@ -344,21 +434,32 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
         <div className="draft-grid single-field">
           <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Артикул, название или штрихкод" />
         </div>
+        {searchQuery.data?.rows.length ? (
+          <div className="pm-search-actions">
+            <span>Найдено: {searchQuery.data.rows.length}</span>
+            <button className="secondary-action" type="button" onClick={addAllSearchRows}>
+              <Check size={16} /> Выбрать все найденные
+            </button>
+          </div>
+        ) : null}
         {(searchQuery.isFetching || searchQuery.data?.rows.length || searchQuery.error) && (
           <div className="pm-results">
             {searchQuery.isFetching && <div className="soft-empty compact"><Loader2 className="spin" size={16} /> Ищу в PriceMaster...</div>}
             {searchQuery.error && <div className="inline-error">{errorMessage(searchQuery.error)}</div>}
-            {searchQuery.data?.rows.map((row) => (
-              <button className="pm-result" type="button" key={`${row.id}-${row.article}-${row.supplierName}`} onClick={() => addDraft(draftFromSearchRow(row))}>
+            {searchQuery.data?.rows.map((row) => {
+              const rowDraft = draftFromSearchRow(row);
+              const alreadySelected = draftKeys.has(linkPrimarySignature(rowDraft));
+              return (
+              <button className={`pm-result${alreadySelected ? " is-selected" : ""}`} type="button" key={`${row.id}-${row.article}-${row.supplierName}`} onClick={() => addDraft(rowDraft)}>
                 <div className="pm-result-head">
                   <strong>{row.article || "без артикула"}</strong>
-                  <span>выбрать точную строку</span>
+                  <span>{alreadySelected ? "уже в черновике" : "выбрать точную строку"}</span>
                 </div>
                 <span className="pm-result-title">{row.name || row.keyword || "без названия"}</span>
                 <span>{row.supplierName || "поставщик не указан"}</span>
                 <small>row {row.rowId || row.id} · partner {row.partnerId || "-"} · {money(row.price)} · {row.priceCurrency || row.currency || "USD"} · {row.available ? "в наличии" : "нет наличия"} · {compactDate(row.updatedAt)}</small>
               </button>
-            ))}
+            );})}
           </div>
         )}
 
@@ -378,8 +479,11 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
           <button className="secondary-action" type="button" onClick={() => addDraft(draft)}>
             <Link2 size={16} /> Добавить в черновик
           </button>
+          <button className="secondary-action" type="button" onClick={() => { setDrafts([]); setDraft(emptyLinkDraft(draft.priceCurrency)); }} disabled={!pendingDrafts.length}>
+            <X size={16} /> Очистить черновик
+          </button>
           <button className="primary-action" disabled={!pendingDrafts.length || saveMutation.isPending} type="button" onClick={() => saveMutation.mutate()}>
-            {saveMutation.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить привязки
+            {saveMutation.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить {pendingDrafts.length} привязок
           </button>
         </div>
         <div className="draft-preview">
@@ -393,7 +497,17 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
           )) : <span>Новые привязки появятся здесь до сохранения.</span>}
           {draftIsFilled && <span className="draft-chip is-current">{draft.article || "текущий ввод"} · {draft.keyword || draft.priceCurrency}</span>}
         </div>
-        {(saveMutation.error || deleteMutation.error) && <div className="inline-error">{errorMessage(saveMutation.error || deleteMutation.error)}</div>}
+        {(saveMutation.error || deleteMutation.error || bulkDeleteMutation.error) && <div className="inline-error">
+          {errorMessage(saveMutation.error || deleteMutation.error || bulkDeleteMutation.error)}
+          {failedLinks.length ? (
+            <ul className="pm-failed-links">
+              {failedLinks.slice(0, 8).map((item, index) => {
+                const row = asRecord(item);
+                return <li key={`${row.index || index}-${row.article || row.sourceRowId || index}`}>{[row.index !== undefined ? `#${Number(row.index) + 1}` : "", row.article || row.sourceRowId || row.exactName, row.supplierName, row.detail].filter(Boolean).join(" · ")}</li>;
+              })}
+            </ul>
+          ) : null}
+        </div>}
       </div>
     </section>
   );
@@ -520,6 +634,9 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
   const group = asRecord(data.group);
   const summary = asRecord(data.statusSummary || group.statusSummary);
   const marketplaces = Array.isArray(summary.marketplaces) ? summary.marketplaces.map(String).join(", ") : "-";
+  const diagnosticLinks = products.flatMap((item) => Array.isArray(item.links) ? item.links.map(asRecord) : []);
+  const activeLinks = diagnosticLinks.filter((link) => link.missingInPriceMaster !== true);
+  const unavailableLinks = diagnosticLinks.filter((link) => link.available === false || link.missingInPriceMaster === true);
   return (
     <div className="diagnostics-panel">
       <div className="diagnostics-summary">
@@ -534,6 +651,12 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
         <DiagnosticValue label="Нет поставщика" value={summary.noSupplier ?? 0} tone={Number(summary.noSupplier || 0) > 0 ? "warn" : "success"} />
         <DiagnosticValue label="Нет остатка" value={summary.noStock ?? 0} tone={Number(summary.noStock || 0) > 0 ? "warn" : "success"} />
         <DiagnosticValue label="API ошибки" value={summary.apiError ?? 0} tone={Number(summary.apiError || 0) > 0 ? "danger" : "success"} />
+      </div>
+      <div className="diagnostics-summary diagnostics-summary-wide">
+        <DiagnosticValue label="PM привязки" value={diagnosticLinks.length} tone={diagnosticLinks.length ? "success" : "warn"} />
+        <DiagnosticValue label="PM найдено" value={activeLinks.length} tone={activeLinks.length ? "success" : "warn"} />
+        <DiagnosticValue label="PM без наличия/ошибка" value={unavailableLinks.length} tone={unavailableLinks.length ? "warn" : "success"} />
+        <DiagnosticValue label="Выбран поставщик" value={products.filter((item) => asRecord(item.selectedSupplier).supplierName).length} tone="success" />
       </div>
       {warnings.length > 0 && <div className="warning-strip">{warnings.map(String).join(" · ")}</div>}
       {products.map((item) => {

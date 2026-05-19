@@ -204,6 +204,9 @@ test("modern PriceMaster link UI keeps drafts scoped and removes manual supplier
   assert.match(source, /expectedLinksSignature: productLinksSignature\(item\)/);
   assert.doesNotMatch(source, /supplier=\$\{encodeURIComponent/);
   assert.doesNotMatch(source, /setSupplierFilter/);
+  assert.match(source, /limit=100/);
+  assert.match(source, /addAllSearchRows/);
+  assert.match(source, /selectedLinkIds/);
   assert.match(source, /className="pm-result-title"/);
 });
 
@@ -3635,7 +3638,7 @@ test("warehouse link save merge enriches an existing matching link", () => {
   assert.equal(product.links[0].id, "link-original");
   assert.equal(product.links[0].supplierName, "Supplier Save");
   assert.equal(product.links[0].partnerId, "909");
-  assert.equal(warehouseProductLinksSignature(product), beforePrimarySignature);
+  assert.notEqual(warehouseProductLinksSignature(product), beforePrimarySignature);
   assert.notEqual(warehouseProductLinkDetailsSignature(product), beforeDetailsSignature);
 });
 
@@ -3646,6 +3649,41 @@ test("warehouse product normalization keeps same article for different suppliers
     links: [
       { id: "link-a", article: "PM-3", supplierName: "Supplier A", partnerId: "101" },
       { id: "link-b", article: "pm-3", supplierName: "Supplier B", partnerId: "202" },
+    ],
+  });
+
+  assert.equal(product.links.length, 2);
+});
+
+test("warehouse links signature is supplier-aware for same article", () => {
+  const supplierA = normalizeWarehouseProduct({
+    id: "supplier-aware-a",
+    links: [{ id: "link-a", article: "PM-3", supplierName: "Supplier A", partnerId: "101", priceCurrency: "USD" }],
+  });
+  const supplierB = normalizeWarehouseProduct({
+    id: "supplier-aware-b",
+    links: [{ id: "link-b", article: "PM-3", supplierName: "Supplier B", partnerId: "202", priceCurrency: "USD" }],
+  });
+  const both = normalizeWarehouseProduct({
+    id: "supplier-aware-both",
+    links: [
+      { id: "link-a", article: "PM-3", supplierName: "Supplier A", partnerId: "101", priceCurrency: "USD" },
+      { id: "link-b", article: "PM-3", supplierName: "Supplier B", partnerId: "202", priceCurrency: "USD" },
+    ],
+  });
+
+  assert.notEqual(warehouseProductLinksSignature(supplierA), warehouseProductLinksSignature(supplierB));
+  assert.match(warehouseProductLinksSignature(both), /supplier a/);
+  assert.match(warehouseProductLinksSignature(both), /supplier b/);
+});
+
+test("warehouse links keep manual fallback separate from exact supplier rows", () => {
+  const product = normalizeWarehouseProduct({
+    id: "manual-fallback-link-product",
+    offerId: "MANUAL-FALLBACK-1",
+    links: [
+      { id: "link-a", article: "PM-4", supplierName: "Supplier A", partnerId: "101" },
+      { id: "link-manual", article: "pm-4", priceCurrency: "USD" },
     ],
   });
 
@@ -3675,7 +3713,7 @@ test("warehouse link locks ignore background-only product updates", () => {
   assert.equal(conflict.id, "link-lock-product");
 });
 
-test("warehouse link locks ignore supplier enrichment for same PriceMaster target", () => {
+test("warehouse link locks detect supplier changes for same PriceMaster target", () => {
   const product = normalizeWarehouseProduct({
     id: "link-enrichment-lock-product",
     offerId: "LOCK-2",
@@ -3688,10 +3726,11 @@ test("warehouse link locks ignore supplier enrichment for same PriceMaster targe
     updatedAt: "2026-05-14T10:05:00.000Z",
     links: [{ ...product.links[0], supplierName: "Supplier A", partnerId: "101", updatedAt: "2026-05-14T10:05:00.000Z" }],
   });
-  assert.equal(productConflict(enriched, {
+  const conflict = productConflict(enriched, {
     expectedUpdatedAt: "2026-05-14T10:00:00.000Z",
     expectedLinksSignature,
-  }), null);
+  });
+  assert.equal(conflict.id, "link-enrichment-lock-product");
 });
 
 test("warehouse link save accepts stale lock after the links were already cleared", () => {

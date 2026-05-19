@@ -2160,11 +2160,10 @@ function warehouseLinkTargetKey(input = {}) {
   const primary = link.article
     ? `article:${link.article.toLowerCase()}`
     : (link.sourceRowId ? `row:${link.sourceRowId}` : `name:${link.exactName.toLowerCase()}`);
-  const supplierTarget = normalizeSupplierName(link.supplierName) || link.partnerId;
   return [
     link.matchType,
     primary,
-    supplierTarget,
+    warehouseLinkSupplierSignature(link),
     link.keyword.toLowerCase(),
     link.priceCurrency,
   ].join("|");
@@ -2190,17 +2189,27 @@ function warehouseLinkSupplierKeys(input = {}) {
   ].filter(Boolean);
 }
 
-function warehouseLinksHaveCompatibleSupplierTarget(a = {}, b = {}) {
-  const left = warehouseLinkSupplierKeys(a);
-  const right = warehouseLinkSupplierKeys(b);
-  if (!left.length || !right.length) return true;
+function warehouseLinkSupplierSignature(input = {}) {
+  const keys = warehouseLinkSupplierKeys(input).sort();
+  return keys.length ? keys.join("&") : "manual";
+}
+
+function warehouseLinksHaveCompatibleSupplierTarget(existingLink = {}, incomingLink = {}) {
+  const left = warehouseLinkSupplierKeys(existingLink);
+  const right = warehouseLinkSupplierKeys(incomingLink);
+  if (!left.length && !right.length) return true;
+  if (!left.length && right.length) return true;
+  if (left.length && !right.length) return false;
   const rightSet = new Set(right);
   return left.some((key) => rightSet.has(key));
 }
 
 function warehouseLinksEqualForSave(a = {}, b = {}) {
+  const left = normalizeWarehouseLink(a);
+  const right = normalizeWarehouseLink(b);
   return warehouseLinkPrimaryTargetKey(a) === warehouseLinkPrimaryTargetKey(b)
-    && warehouseLinksHaveCompatibleSupplierTarget(a, b);
+    && left.keyword.toLowerCase() === right.keyword.toLowerCase()
+    && warehouseLinksHaveCompatibleSupplierTarget(left, right);
 }
 
 function warehouseLinkMeaningfulSignature(input = {}) {
@@ -2281,7 +2290,7 @@ function warehouseProductHasLinks(product = {}, links = []) {
 
 function warehouseProductLinksSignature(product = {}) {
   return compactWarehouseLinks(product.links || [])
-    .map((link) => warehouseLinkPrimaryTargetKey(link))
+    .map((link) => warehouseLinkTargetKey(link))
     .sort()
     .join("||");
 }
@@ -8973,6 +8982,22 @@ async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers 
   throw error;
 }
 
+function priceMasterLinkValidationFailure(error, linkInput = {}, index = 0) {
+  const link = normalizeWarehouseLink(linkInput);
+  return {
+    index,
+    article: link.article,
+    exactName: link.exactName,
+    sourceRowId: link.sourceRowId,
+    supplierName: link.supplierName,
+    partnerId: link.partnerId,
+    priceCurrency: link.priceCurrency,
+    code: error?.code || "PM_LINK_NOT_FOUND",
+    detail: error?.message || String(error),
+    matches: Array.isArray(error?.matches) ? error.matches : [],
+  };
+}
+
 async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSuppliers = [], options = {}) {
   const link = normalizeWarehouseLink(linkInput);
   if (!warehouseLinkHasMatchTarget(link)) return link;
@@ -13197,9 +13222,21 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, targetProducts, { usdRate });
       return response.json({ ok: true, changed: savedProducts.length || targetProducts.length, products: savedProducts, persisted: "already_written", alreadyWritten: true });
     }
-    await Promise.all(baseLinks.map((linkToValidate) =>
-      assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers, linkSaveLookupOptions),
-    ));
+    const failedLinks = [];
+    for (const [index, linkToValidate] of baseLinks.entries()) {
+      try {
+        await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers, linkSaveLookupOptions);
+      } catch (error) {
+        failedLinks.push(priceMasterLinkValidationFailure(error, linkToValidate, index));
+      }
+    }
+    if (failedLinks.length) {
+      return response.status(400).json({
+        error: `PriceMaster validation failed for ${failedLinks.length} link(s). Nothing was saved.`,
+        code: "PM_LINK_BULK_VALIDATION_FAILED",
+        failedLinks,
+      });
+    }
     const now = new Date().toISOString();
     const username = requestUsername(request);
     const updatedIds = [];
@@ -17162,6 +17199,8 @@ module.exports = {
   pickTargetStockSendProducts,
   priceAffectingSettingsChanged,
   warehouseLinkIdentityKey,
+  warehouseLinkTargetKey,
+  warehouseLinkSupplierSignature,
   productLinkPostgresIdentityKey,
   dedupeProductLinkRows,
   warehouseProductLinkDetailsSignature,

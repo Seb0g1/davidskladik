@@ -503,6 +503,13 @@ button:disabled {
   gap: 8px;
 }
 
+.pm-link-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
 .link-item {
   min-height: 72px;
   border: 1px solid var(--line);
@@ -551,6 +558,13 @@ button:disabled {
 .pm-link-item {
   min-height: 0;
   align-items: start;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.pm-link-select {
+  display: grid;
+  place-items: start;
+  padding-top: 4px;
 }
 
 .pm-link-body {
@@ -767,6 +781,17 @@ button:disabled {
   margin-top: 10px;
 }
 
+.pm-search-actions {
+  margin-top: 8px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .pm-result {
   min-height: 72px;
   border: 1px solid var(--line);
@@ -781,6 +806,11 @@ button:disabled {
 .pm-result:hover {
   border-color: rgba(56, 163, 255, .5);
   background: rgba(56, 163, 255, .12);
+}
+
+.pm-result.is-selected {
+  border-color: rgba(80, 216, 144, .5);
+  background: rgba(80, 216, 144, .1);
 }
 
 .pm-result span,
@@ -861,6 +891,13 @@ button:disabled {
 .draft-chip.is-current {
   border-style: dashed;
   color: var(--blue);
+}
+
+.pm-failed-links {
+  margin: 8px 0 0 18px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
 }
 
 .soft-empty,
@@ -1416,6 +1453,7 @@ button:disabled {
   .settings-grid,
   .pricing-settings-grid,
   .draft-card-grid,
+  .pm-link-toolbar,
   .pm-link-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1475,6 +1513,7 @@ button:disabled {
   .pricing-settings-grid,
   .draft-card-grid,
   .pm-link-summary,
+  .pm-link-toolbar,
   .pm-link-grid,
   .employee-stats-grid,
   .diagnostics-summary {
