@@ -59,6 +59,7 @@ const {
   backgroundAutomationProductIds,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
+  summarizeSupplierRecoveryProducts,
   runNoSupplierMarketplaceAutomation,
   runSupplierRecoveryAutomation,
   pickWarehouseSupplier,
@@ -3463,6 +3464,35 @@ test("forced recovery includes already active linked product", () => {
     },
   ], { force: true });
   assert.deepEqual(recovered.map((product) => product.id), ["active-linked"]);
+});
+
+test("supplier recovery treats delayed Yandex unarchive visibility as pending, not failed", () => {
+  const [status] = summarizeSupplierRecoveryProducts([
+    {
+      id: "pending-yandex-unarchive",
+      offerId: "CC-AASH5001",
+      marketplace: "yandex",
+      target: "yandex-real",
+      marketplaceState: { code: "archived", archived: true },
+    },
+  ], [
+    { id: "pending-yandex-unarchive", type: "restore_stock", ok: true, stock: 2 },
+  ], [
+    {
+      id: "pending-yandex-unarchive",
+      type: "unarchive",
+      target: "yandex-real",
+      offerId: "CC-AASH5001",
+      ok: true,
+      pending: true,
+      verified: false,
+      warning: "unarchive_not_visible_after_api",
+    },
+  ]);
+  assert.equal(status.sellable, true);
+  assert.equal(status.unarchiveFailed, 0);
+  assert.equal(status.unarchivePending, 1);
+  assert.equal(status.warning, "unarchive_not_visible_after_api");
 });
 
 test("Yandex target lookup accepts campaign and old generated target", async () => {

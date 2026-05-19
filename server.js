@@ -14410,6 +14410,7 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
   );
   const sellableRecovered = Number(result.sellableRecovered || 0);
   const unarchiveFailed = Number(result.unarchiveFailed || 0);
+  const unarchivePending = Number(result.unarchivePending || 0);
   const stockFailed = Number(result.stockFailed || 0);
   return {
     ok: result.errors?.length ? false : true,
@@ -14424,6 +14425,7 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
     sellableRecovered,
     restoredStocks: result.restoredStocks || 0,
     unarchived: result.unarchived || 0,
+    unarchivePending,
     unarchiveFailed,
     stockFailed,
     errors: result.errors || [],
@@ -14608,6 +14610,7 @@ async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
     .map((item) => ({ id: item.id, offerId: item.offerId, type: item.type, target: item.target, error: item.error }));
   const restoredStocks = stockActions.filter((item) => item.ok).length;
   const unarchived = unarchiveActions.filter((item) => item.ok).length;
+  const unarchivePending = unarchiveActions.filter((item) => item.ok && item.pending).length;
   const stockFailed = stockActions.filter((item) => !item.ok).length;
   const unarchiveFailed = unarchiveActions.filter((item) => !item.ok).length;
   const result = {
@@ -14619,6 +14622,7 @@ async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
     stock,
     restoredStocks,
     unarchived,
+    unarchivePending,
     sellableRecovered,
     stockFailed,
     unarchiveFailed,
@@ -14631,6 +14635,7 @@ async function runArchivedStockRestoreOperation(payload = {}, options = {}) {
     stock,
     restoredStocks,
     unarchived,
+    unarchivePending,
     sellableRecovered,
     stockFailed,
     unarchiveFailed,
@@ -16045,12 +16050,21 @@ async function verifyYandexUnarchiveActions(products = [], actions = [], options
       const key = `${target}:${row.offerId.toLowerCase()}`;
       if (activeOfferIds.has(key)) {
         row.action.verified = true;
+        row.action.pending = false;
         continue;
       }
-      row.action.ok = false;
       row.action.verified = false;
-      row.action.error = targetError
-        || (archivedOfferIds.has(key) ? "still_archived_after_unarchive" : "unarchive_not_visible_after_api");
+      if (archivedOfferIds.has(key)) {
+        row.action.ok = false;
+        row.action.error = "still_archived_after_unarchive";
+        continue;
+      }
+      row.action.ok = true;
+      row.action.pending = true;
+      row.action.warning = targetError
+        ? `unarchive_verify_pending: ${targetError}`
+        : "unarchive_not_visible_after_api";
+      delete row.action.error;
     }
   }
 
@@ -16177,6 +16191,7 @@ function summarizeSupplierRecoveryProducts(products = [], stockActions = [], una
     const stockFailed = stock.filter((action) => !action.ok).length;
     const unarchiveOk = unarchive.filter((action) => action.ok).length;
     const unarchiveFailed = unarchive.filter((action) => !action.ok).length;
+    const unarchivePending = unarchive.filter((action) => action.ok && action.pending).length;
     const failed = productActions.find((action) => !action.ok);
     const needsUnarchive = productLooksArchived(product);
     const sellable = stockOk > 0
@@ -16192,9 +16207,11 @@ function summarizeSupplierRecoveryProducts(products = [], stockActions = [], una
       stockFailed,
       unarchiveOk,
       unarchiveFailed,
+      unarchivePending,
       sellable,
       status: failed ? "error" : (sellable ? "sellable" : (productActions.length ? "processed" : "no_action")),
       error: failed?.error || null,
+      warning: productActions.find((action) => action.warning)?.warning || null,
     };
   });
 }
@@ -16363,6 +16380,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   const errors = [...stockActions, ...unarchiveActions]
     .filter((item) => !item.ok)
     .map((item) => ({ id: item.id, type: item.type, error: item.error }));
+  const unarchivePending = unarchiveActions.filter((item) => item.ok && item.pending).length;
   logger.info("supplier recovery automation complete", {
     source,
     products: products.length,
@@ -16370,6 +16388,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     sellableRecovered: sellableIds.size,
     restoredStocks: stockActions.filter((item) => item.ok).length,
     unarchived: unarchiveActions.filter((item) => item.ok).length,
+    unarchivePending,
     stockFailed: stockActions.filter((item) => !item.ok).length,
     unarchiveFailed: unarchiveActions.filter((item) => !item.ok).length,
     errors: errors.length,
@@ -16379,6 +16398,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     sellableRecovered: sellableIds.size,
     restoredStocks: stockActions.filter((item) => item.ok).length,
     unarchived: unarchiveActions.filter((item) => item.ok).length,
+    unarchivePending,
     stockFailed: stockActions.filter((item) => !item.ok).length,
     unarchiveFailed: unarchiveActions.filter((item) => !item.ok).length,
     errors,
@@ -16841,6 +16861,7 @@ module.exports = {
   backgroundAutomationProductIds,
   pickNoSupplierAutomationCandidates,
   pickSupplierRecoveryCandidates,
+  summarizeSupplierRecoveryProducts,
   runNoSupplierMarketplaceAutomation,
   runSupplierRecoveryAutomation,
   pickWarehouseSupplier,
