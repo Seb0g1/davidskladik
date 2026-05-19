@@ -1943,26 +1943,12 @@ td {
   position: sticky;
   top: 14px;
   align-self: start;
-  display: flex;
-  flex-direction: column;
   min-width: 0;
   max-height: min(78vh, 920px);
   overflow-y: auto;
   overflow-x: hidden;
   background: var(--detail-bg);
   padding: 18px;
-}
-
-.warehouse-detail > .detail-section {
-  order: 20;
-}
-
-.warehouse-detail > .link-workbench {
-  order: 8;
-}
-
-.warehouse-detail > .supplier-picker-section {
-  order: 9;
 }
 
 .detail-empty,
@@ -6520,4 +6506,60 @@ select.is-invalid {
 
 .supplier-inactive-form textarea {
   min-height: 96px;
+}
+
+/* Warehouse detail layout guard: keep the link editor in normal flow. */
+.warehouse-detail {
+  display: block;
+  overflow-x: hidden;
+}
+
+.warehouse-detail .detail-metrics {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(108px, auto);
+  margin: 0 0 16px;
+  height: auto;
+  overflow: visible;
+}
+
+.warehouse-detail .detail-metrics > * {
+  min-width: 0;
+  min-height: 0;
+}
+
+.warehouse-detail .link-workbench,
+.warehouse-detail .supplier-picker-section {
+  position: static;
+  z-index: auto;
+  width: 100%;
+  margin: 16px 0 0;
+  box-sizing: border-box;
+  opacity: 1;
+  backdrop-filter: none;
+}
+
+.warehouse-detail .link-workbench {
+  background: var(--panel-strong);
+  isolation: isolate;
+}
+
+.warehouse-detail .link-workbench .link-list,
+.warehouse-detail .link-workbench .pending-link-box,
+.warehouse-detail .link-workbench .inline-link-form,
+.warehouse-detail .supplier-picker-section .supplier-list {
+  width: 100%;
+  min-width: 0;
+}
+
+.warehouse-detail .link-item,
+.warehouse-detail .pending-link-item,
+.warehouse-detail .supplier-line {
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+@media (max-width: 420px) {
+  .warehouse-detail .detail-metrics {
+    grid-template-columns: 1fr;
+  }
 }

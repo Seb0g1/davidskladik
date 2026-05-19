@@ -2977,6 +2977,15 @@ function renderWarehouseDetail(group, { force = false } = {}) {
       </div>
     </section>
   `;
+  const metricsElement = elements.warehouseDetail.querySelector(".detail-metrics");
+  const linkWorkbenchElement = elements.warehouseDetail.querySelector(".link-workbench");
+  const supplierPickerElement = elements.warehouseDetail.querySelector(".supplier-picker-section");
+  if (metricsElement && linkWorkbenchElement) {
+    metricsElement.insertAdjacentElement("afterend", linkWorkbenchElement);
+  }
+  if (linkWorkbenchElement && supplierPickerElement) {
+    linkWorkbenchElement.insertAdjacentElement("afterend", supplierPickerElement);
+  }
   loadDetailPriceHistory(group);
   loadDetailLinkAudit(group);
   return true;
