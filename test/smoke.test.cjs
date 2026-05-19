@@ -2584,6 +2584,93 @@ test("AI image generation requires OpenAI key before creating draft", async () =
   }
 });
 
+test("Codex Sale AI image generation uses image generation endpoint without fetching source", async () => {
+  const settingsBackup = await backupFile(appSettingsPath);
+  const originalFetch = global.fetch;
+  const agent = request.agent(app);
+  const smokeId = `smoke-codex-sale-image-${Date.now()}`;
+  const generatedPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const calls = [];
+  let generatedUploadPath = null;
+
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    const currentSettings = await agent.get("/api/settings").expect(200);
+    await agent
+      .put("/api/settings")
+      .send({
+        ...currentSettings.body.settings,
+        ai: {
+          ...(currentSettings.body.settings.ai || {}),
+          enabled: true,
+          providerId: "codexsale",
+          baseUrl: "https://codex.sale/v1",
+          apiKey: "sk-test-codex-sale-image",
+          textModel: "gpt-5.4-mini",
+          imageModel: "gpt-image-2",
+          imageSize: "1024x1024",
+          imageQuality: "auto",
+          imageFormat: "png",
+        },
+      })
+      .expect(200);
+
+    await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: smokeId,
+        target: "ozon",
+        marketplace: "ozon",
+        offerId: smokeId,
+        name: "Smoke Codex Sale Image Product",
+        ozon: {
+          offerId: smokeId,
+          name: "Smoke Codex Sale Image Product",
+          primaryImage: "https://example.invalid/source.png",
+        },
+      })
+      .expect(200);
+
+    global.fetch = async (url, options = {}) => {
+      calls.push({ url: String(url), body: options.body ? JSON.parse(options.body) : null });
+      if (String(url) !== "https://codex.sale/v1/images/generations") {
+        throw new Error(`unexpected fetch ${url}`);
+      }
+      return new Response(JSON.stringify({ data: [{ b64_json: generatedPngBase64 }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const res = await agent
+      .post(`/api/warehouse/products/${encodeURIComponent(smokeId)}/ai-images/generate`)
+      .send({
+        sourceImageUrl: "https://example.invalid/source.png",
+        prompt: "Create clean marketplace product image",
+        count: 1,
+      })
+      .expect(200);
+
+    assert.equal(res.body.drafts.length, 1);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].body.model, "gpt-image-2");
+    assert.equal(calls[0].body.response_format, "b64_json");
+    assert.equal(res.body.draft.sourceImageUrl, "https://example.invalid/source.png");
+    assert.match(res.body.draft.resultUrl, /\/uploads\/ai-images\//);
+    const generatedPathname = new URL(res.body.draft.resultUrl).pathname;
+    generatedUploadPath = path.join(__dirname, "..", "public", ...generatedPathname.split("/").filter(Boolean));
+  } finally {
+    global.fetch = originalFetch;
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}`).catch(() => {});
+    if (generatedUploadPath) await fs.unlink(generatedUploadPath).catch(() => {});
+    await restoreFile(appSettingsPath, settingsBackup);
+  }
+});
+
 test("warehouse product patch rejects stale expectedUpdatedAt", async () => {
   const agent = request.agent(app);
   const smokeId = `smoke-lock-${Date.now()}`;

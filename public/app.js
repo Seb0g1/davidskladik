@@ -2360,7 +2360,7 @@ async function generateAiImageFromMain() {
   const selectedGroupKey = state.selectedWarehouseGroupKey;
   const sourceImageUrl = String(elements.aiImageSourceInput?.value || aiImageSourceForProduct(product) || "").trim();
   const prompt = String(elements.aiImagePromptInput?.value || "").trim();
-  const count = Math.max(1, Math.min(4, Number(elements.aiImageCountInput?.value || 3) || 3));
+  const count = Math.max(1, Math.min(5, Number(elements.aiImageCountInput?.value || 5) || 5));
   let finalStatus = "";
   let progress = 8;
   let progressTimer = null;

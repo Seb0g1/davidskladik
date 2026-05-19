@@ -5502,10 +5502,13 @@ async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType, 
   }
 }
 
-async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, batchId, variantIndex = 1, variantTotal = 1 }, request) {
+async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, sourceImageUrl = "", batchId, variantIndex = 1, variantTotal = 1 }, request) {
   const aiSettings = await readEffectiveAiSettings();
   assertImageGenerationConfigured(aiSettings);
-  const generatedPrompt = buildOzonAiImagePrompt(product, prompt, { variantIndex, variantTotal });
+  const sourceHint = cleanText(sourceImageUrl)
+    ? `\n\nReference product image URL for context: ${cleanText(sourceImageUrl)}. Generate a new marketplace-ready image; do not copy watermarks or UI elements from the source.`
+    : "";
+  const generatedPrompt = buildOzonAiImagePrompt(product, `${cleanText(prompt)}${sourceHint}`, { variantIndex, variantTotal });
   let imageBase64;
   try {
     if (isCodexSaleAiProvider(aiSettings)) {
@@ -5538,7 +5541,7 @@ async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, batchId
     status: "pending",
     prompt: generatedPrompt,
     productName: product.name || product.ozon?.name,
-    sourceImageUrl: "",
+    sourceImageUrl: cleanText(sourceImageUrl),
     resultUrl: `${uploadBaseUrl(request)}${relativeUrl}`,
     batchId,
     variantIndex,
@@ -5562,6 +5565,14 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
 
   const aiSettings = await readEffectiveAiSettings();
   assertImageGenerationConfigured(aiSettings);
+
+  if (isCodexSaleAiProvider(aiSettings) && !isOpenAiRelayConfigured()) {
+    return generateOzonAiImageDraftFromPromptOnly(
+      product,
+      { prompt, sourceImageUrl: sourceUrl, batchId, variantIndex, variantTotal },
+      request,
+    );
+  }
 
   const sourcePath = localPublicFilePathFromUrl(sourceUrl, request);
   let sourceBuffer;
