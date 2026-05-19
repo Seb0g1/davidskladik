@@ -164,13 +164,42 @@ test("GET /health", async () => {
   assert.equal(res.body.components.redis.queueMode, "inline");
 });
 
-test("index page busts app asset cache with build version", async () => {
+test("modern index is primary and legacy index keeps cache-busted assets", async () => {
   const agent = request.agent(app);
   await agent
     .post("/api/login")
     .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
   const res = await agent.get("/").expect(200);
+  assert.match(res.text, /\/app-modern\/assets\/index-[^"]+\.js/);
+  assert.match(res.text, /\/app-modern\/assets\/index-[^"]+\.css/);
+  assert.match(res.headers["cache-control"], /no-cache/);
+
+  const legacyRes = await agent.get("/legacy").expect(200);
+  assert.match(legacyRes.text, /\/app\.js\?v=[^"]+/);
+  assert.match(legacyRes.text, /\/styles\.css\?v=[^"]+/);
+  assert.match(legacyRes.headers["cache-control"], /no-cache/);
+});
+
+test("legacy page aliases keep old admin screens available", async () => {
+  const agent = request.agent(app);
+  await agent
+    .post("/api/login")
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
+    .expect(200);
+  const res = await agent.get("/legacy/settings").expect(200);
+  assert.match(res.text, /settingsForm/);
+  const operations = await agent.get("/legacy/operations").expect(200);
+  assert.match(operations.text, /operationsList/);
+});
+
+test("old index path can still be opened directly", async () => {
+  const agent = request.agent(app);
+  await agent
+    .post("/api/login")
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
+    .expect(200);
+  const res = await agent.get("/legacy/index.html").expect(200);
   assert.match(res.text, /\/app\.js\?v=[^"]+/);
   assert.match(res.text, /\/styles\.css\?v=[^"]+/);
   assert.match(res.headers["cache-control"], /no-cache/);

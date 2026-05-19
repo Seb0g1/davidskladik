@@ -859,6 +859,16 @@ async function serveIndexHtml(_request, response, next) {
   }
 }
 
+async function servePublicHtml(fileName, _request, response, next) {
+  try {
+    const html = await fs.readFile(path.join(publicDir, fileName), "utf8");
+    cacheControlForMutableAsset(response);
+    response.type("html").send(addBuildVersionToIndexHtml(html));
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function serveModernAppHtml(_request, response, next) {
   try {
     const html = await fs.readFile(path.join(modernAppDir, "index.html"), "utf8");
@@ -1007,7 +1017,13 @@ app.get("/api/session", (request, response) => {
 
 app.use(requireAuth);
 app.get(/^\/app(?:\/.*)?$/u, serveModernAppHtml);
-app.get(["/", "/index.html"], serveIndexHtml);
+app.get(["/legacy", "/legacy/", "/legacy/index.html"], serveIndexHtml);
+app.get(["/legacy/settings", "/legacy/settings.html"], (request, response, next) => servePublicHtml("settings.html", request, response, next));
+app.get(["/legacy/ai-drafts", "/legacy/ai-drafts.html"], (request, response, next) => servePublicHtml("ai-drafts.html", request, response, next));
+app.get(["/legacy/operations", "/legacy/operations.html"], (request, response, next) => servePublicHtml("operations.html", request, response, next));
+app.get(["/legacy/no-supplier", "/legacy/no-supplier.html"], (request, response, next) => servePublicHtml("no-supplier.html", request, response, next));
+app.get(["/legacy/pricemaster", "/legacy/pricemaster.html"], (request, response, next) => servePublicHtml("pricemaster.html", request, response, next));
+app.get(["/", "/index.html"], serveModernAppHtml);
 app.use(express.static(publicDir, {
   setHeaders(response, filePath) {
     const ext = path.extname(filePath).toLowerCase();
@@ -12088,6 +12104,102 @@ app.get("/api/suppliers", async (request, response, next) => {
       })),
       supplierSync,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/pricemaster/search", requireAdmin, async (request, response, next) => {
+  try {
+    const q = cleanText(request.query.q || request.query.search || "");
+    const supplier = cleanText(request.query.supplier || "");
+    const limit = cleanLimit(request.query.limit, 30, 100);
+    const settings = await readAppSettings();
+    const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+
+    const mapRow = (row = {}) => {
+      const priceCurrency = cleanText(row.priceCurrency || row.currency || row.sourceCurrency || "USD") || "USD";
+      const normalizedPrice = normalizePriceMasterPrice(row.price ?? row.NativePrice ?? 0, usdRate, priceCurrency);
+      const article = cleanText(row.article || row.NativeID || row.offerId || row.nativeId || "");
+      const name = cleanText(row.name || row.NativeName || row.nativeName || "");
+      const partnerName = cleanText(row.partnerName || row.PartnerName || row.supplierName || "");
+      const rowId = cleanText(row.rowId || row.RowID || row.id || "");
+      return {
+        id: rowId || `${article}:${partnerName}:${name}`,
+        rowId,
+        article,
+        supplierName: partnerName,
+        partnerId: cleanText(row.partnerId || row.PartnerID || ""),
+        keyword: name,
+        name,
+        price: normalizedPrice.price || Number(row.price || row.NativePrice || 0) || 0,
+        originalPrice: normalizedPrice.originalPrice,
+        currency: normalizedPrice.priceCurrency || priceCurrency,
+        priceCurrency: normalizedPrice.priceCurrency || priceCurrency,
+        available: row.available !== false && row.active !== false && Number(normalizedPrice.price || row.price || row.NativePrice || 0) > 0,
+        active: row.active !== false,
+        updatedAt: row.docDate || row.DocDate || row.updatedAt || null,
+      };
+    };
+
+    const rows = [];
+    try {
+      const params = [];
+      const conditions = ["r.Ignored = 0", "r.Active = 1"];
+      if (q) {
+        conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
+        const like = likeSearch(q);
+        params.push(like, like, like, like);
+      }
+      if (supplier) {
+        conditions.push("p.PartnerName LIKE ?");
+        params.push(likeSearch(supplier));
+      }
+      params.push(limit);
+      const [liveRows] = await pool.query(
+        `
+        SELECT
+          r.NativeID AS article,
+          r.NativeName AS name,
+          r.NativePrice AS price,
+          r.Active AS active,
+          r.RowID AS rowId,
+          d.DocDate AS docDate,
+          d.PartnerID AS partnerId,
+          p.PartnerName AS partnerName
+        FROM OfferRows r
+        JOIN OfferDocs d ON d.DocID = r.DocID
+        LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY d.DocDate DESC, r.RowID DESC
+        LIMIT ?
+        `,
+        params,
+      );
+      rows.push(...liveRows.map(mapRow));
+    } catch (error) {
+      logger.warn("PriceMaster search live query failed, using snapshot", { detail: error?.message || String(error) });
+      const qLower = q.toLowerCase();
+      const supplierLower = supplier.toLowerCase();
+      const indexes = await getPriceMasterSnapshotIndexes();
+      const candidates = [];
+      for (const row of indexes.rows || []) {
+        const mapped = mapRow(row);
+        const haystack = [mapped.article, mapped.name, mapped.keyword, mapped.supplierName].join(" ").toLowerCase();
+        if (qLower && !haystack.includes(qLower)) continue;
+        if (supplierLower && !mapped.supplierName.toLowerCase().includes(supplierLower)) continue;
+        candidates.push(mapped);
+        if (candidates.length >= limit) break;
+      }
+      rows.push(...candidates);
+    }
+
+    const unique = new Map();
+    for (const row of rows) {
+      const key = [row.rowId, row.article, row.supplierName, row.keyword].join("|");
+      if (!unique.has(key)) unique.set(key, row);
+    }
+    response.json({ ok: true, rows: Array.from(unique.values()).slice(0, limit), total: unique.size });
   } catch (error) {
     next(error);
   }

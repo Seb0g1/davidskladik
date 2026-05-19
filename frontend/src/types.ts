@@ -107,11 +107,73 @@ export const MutationProductResponseSchema = z.object({
   warehouse: z.unknown().optional(),
 }).passthrough();
 
+export const PriceMasterSearchRowSchema = z.object({
+  id: z.coerce.string(),
+  rowId: z.coerce.string().optional().default(""),
+  article: z.coerce.string().optional().default(""),
+  supplierName: z.coerce.string().optional().default(""),
+  partnerId: z.coerce.string().optional().default(""),
+  keyword: z.coerce.string().optional().default(""),
+  name: z.coerce.string().optional().default(""),
+  price: z.number().optional().nullable(),
+  originalPrice: z.number().optional().nullable(),
+  currency: z.coerce.string().optional().default("USD"),
+  priceCurrency: z.coerce.string().optional().default("USD"),
+  available: z.boolean().optional().default(false),
+  updatedAt: z.coerce.string().optional().nullable(),
+}).passthrough();
+
+export const PriceMasterSearchSchema = z.object({
+  ok: z.boolean().optional(),
+  rows: z.array(PriceMasterSearchRowSchema).optional().default([]),
+  total: z.number().optional().default(0),
+}).passthrough();
+
+export const OperationsSchema = z.object({
+  ok: z.boolean().optional(),
+  jobs: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  total: z.number().optional().default(0),
+}).passthrough();
+
+export const OperationCreateSchema = z.object({
+  ok: z.boolean().optional(),
+  job: z.record(z.string(), z.unknown()).optional(),
+}).passthrough();
+
+export const SettingsResponseSchema = z.object({
+  settings: z.record(z.string(), z.unknown()).default({}),
+}).passthrough();
+
+export const NoSupplierSchema = z.object({
+  createdAt: z.coerce.string().optional().nullable(),
+  total: z.number().optional().default(0),
+  withoutSupplier: z.number().optional().default(0),
+  alerts: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
+export const AiDraftsSchema = z.object({
+  ok: z.boolean().optional(),
+  drafts: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  total: z.number().optional().default(0),
+}).passthrough();
+
+export const YandexQualityCandidatesSchema = z.object({
+  ok: z.boolean().optional(),
+  cached: z.boolean().optional(),
+  threshold: z.number().optional(),
+  checked: z.number().optional().default(0),
+  qualityLoaded: z.number().optional().default(0),
+  total: z.number().optional().default(0),
+  errors: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  products: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
 export type Product = z.infer<typeof ProductSchema>;
 export type ProductLink = z.infer<typeof LinkSchema>;
 export type WarehousePage = z.infer<typeof WarehousePageSchema>;
 export type GroupDetail = z.infer<typeof GroupDetailSchema>;
 export type AiImage = z.infer<typeof AiImageSchema>;
+export type PriceMasterSearchRow = z.infer<typeof PriceMasterSearchRowSchema>;
 
 export type Filters = {
   q: string;
