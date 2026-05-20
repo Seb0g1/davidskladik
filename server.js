@@ -1053,6 +1053,83 @@ function uploadBaseUrl(request) {
   return String(process.env.PUBLIC_BASE_URL || `${request.protocol}://${request.get("host")}`).replace(/\/$/, "");
 }
 
+function isLocalhostName(hostname = "") {
+  const host = cleanText(hostname).toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "0.0.0.0";
+}
+
+function marketplaceImageError(code, message, details = {}) {
+  const error = new Error(message);
+  error.statusCode = 400;
+  error.code = code;
+  Object.assign(error, details);
+  return error;
+}
+
+async function validateLocalUploadImagePath(pathname = "") {
+  const normalizedPath = cleanText(pathname);
+  const roots = [
+    { prefix: "/uploads/ai-images/", dir: aiImageDir },
+    { prefix: "/uploads/images/", dir: uploadImageDir },
+  ];
+  const match = roots.find((item) => normalizedPath.startsWith(item.prefix));
+  if (!match) return;
+  const relativeName = decodeURIComponent(normalizedPath.slice(match.prefix.length));
+  if (!relativeName || relativeName !== path.basename(relativeName)) {
+    throw marketplaceImageError("marketplace_image_url_invalid", "Некорректный путь AI-фото для отправки в маркетплейс.", { imagePath: normalizedPath });
+  }
+  const filePath = path.join(match.dir, relativeName);
+  let stat = null;
+  try {
+    stat = await fs.stat(filePath);
+  } catch (_error) {
+    throw marketplaceImageError("marketplace_image_file_missing", "Файл AI-фото не найден на сервере. Сгенерируйте фото заново.", { imagePath: normalizedPath });
+  }
+  if (!stat.isFile() || stat.size < 1024) {
+    throw marketplaceImageError("marketplace_image_file_empty", "AI-фото пустое или повреждено. Сгенерируйте фото заново.", { imagePath: normalizedPath, size: stat.size || 0 });
+  }
+}
+
+async function normalizeMarketplaceImageUrlForSend(rawUrl = "", request = null) {
+  const sourceUrl = cleanText(rawUrl);
+  if (!sourceUrl) {
+    throw marketplaceImageError("marketplace_image_url_missing", "В AI-черновике нет URL фото для отправки.");
+  }
+  const publicBase = cleanText(process.env.PUBLIC_BASE_URL);
+  const fallbackBase = request ? uploadBaseUrl(request) : publicBase;
+  let parsed = null;
+  try {
+    parsed = sourceUrl.startsWith("/") ? new URL(sourceUrl, publicBase || fallbackBase) : new URL(sourceUrl);
+  } catch (_error) {
+    throw marketplaceImageError("marketplace_image_url_invalid", "AI-фото имеет некорректный URL для отправки.", { imageUrl: sourceUrl });
+  }
+  if (!/^https?:$/i.test(parsed.protocol)) {
+    throw marketplaceImageError("marketplace_image_url_invalid", "Маркетплейс принимает только http/https URL фото.", { imageUrl: sourceUrl });
+  }
+  if (isLocalhostName(parsed.hostname)) {
+    if (!publicBase) {
+      throw marketplaceImageError(
+        "marketplace_image_public_base_missing",
+        "AI-фото сейчас ссылается на localhost. Укажите PUBLIC_BASE_URL=https://davidsklad.ru и повторите отправку.",
+        { imageUrl: sourceUrl },
+      );
+    }
+    let publicParsed = null;
+    try {
+      publicParsed = new URL(publicBase);
+    } catch (_error) {
+      throw marketplaceImageError("marketplace_image_public_base_invalid", "PUBLIC_BASE_URL некорректный. Укажите публичный адрес сайта, например https://davidsklad.ru.", { publicBase });
+    }
+    parsed.protocol = publicParsed.protocol;
+    parsed.host = publicParsed.host;
+  }
+  if (isLocalhostName(parsed.hostname)) {
+    throw marketplaceImageError("marketplace_image_url_not_public", "AI-фото должно иметь публичный URL, не localhost.", { imageUrl: parsed.toString() });
+  }
+  await validateLocalUploadImagePath(parsed.pathname);
+  return parsed.toString();
+}
+
 function imageExtension(file) {
   const byMime = {
     "image/jpeg": ".jpg",
@@ -6024,12 +6101,15 @@ async function sendApprovedYandexProductContent(product = {}, options = {}) {
 
   const built = buildYandexOfferMapping(normalized);
   const mode = cleanText(options.mode || "content").toLowerCase();
+  const pictureOverride = Array.isArray(options.pictures)
+    ? options.pictures.map((url) => cleanText(url)).filter(Boolean)
+    : [];
   const partialOffer = compactObject({
     offerId: built.offer?.offerId || normalized.offerId,
     name: mode === "image" ? undefined : built.offer?.name,
     vendor: mode === "image" ? undefined : built.offer?.vendor,
     description: mode === "image" ? undefined : built.offer?.description,
-    pictures: mode === "content" ? undefined : built.offer?.pictures,
+    pictures: mode === "content" ? undefined : (pictureOverride.length ? pictureOverride : built.offer?.pictures),
   });
   const missing = [];
   if (!partialOffer.offerId) missing.push("offerId");
@@ -13759,7 +13839,14 @@ app.post("/api/warehouse/products/:id/yandex-quality-draft/send", requireAdmin, 
         ? imageBatch.find((draft) => draft.id === primaryImageDraftId)
         : imageBatch[0];
     }
+    let yandexPicturesForSend = [];
     if (imageBatch.length) {
+      for (const draft of imageBatch) {
+        draft.resultUrl = await normalizeMarketplaceImageUrlForSend(draft.resultUrl, request);
+      }
+      if (primaryImageDraft) {
+        primaryImageDraft.resultUrl = await normalizeMarketplaceImageUrlForSend(primaryImageDraft.resultUrl, request);
+      }
       const primaryUrl = primaryImageDraft?.resultUrl || imageBatch[0]?.resultUrl;
       if (!primaryUrl) return response.status(400).json({ error: "В выбранных AI-фото нет URL результата." });
       const reviewedAt = new Date().toISOString();
@@ -13773,6 +13860,7 @@ app.post("/api/warehouse/products/:id/yandex-quality-draft/send", requireAdmin, 
         primaryUrl,
         ...imageBatch.map((draft) => draft.resultUrl).filter((url) => url && url !== primaryUrl),
       ].slice(0, 10);
+      yandexPicturesForSend = batchUrls;
       const yandex = product.yandex || {};
       const currentPictures = splitList(yandex.pictures);
       product.yandex = normalizeYandexDraft({
@@ -13788,7 +13876,7 @@ app.post("/api/warehouse/products/:id/yandex-quality-draft/send", requireAdmin, 
     const saved = await writeWarehouseProductPatch([product], { reason: "yandex_card_quality_manual_send", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
     const mode = contentDraft && imageBatch.length ? "both" : (imageBatch.length ? "image" : "content");
-    const yandexSend = await sendApprovedYandexProductContent(savedProduct, { mode });
+    const yandexSend = await sendApprovedYandexProductContent(savedProduct, { mode, pictures: yandexPicturesForSend });
     response.json({ ok: Boolean(yandexSend.ok), product: savedProduct, row: buildAiQualityReviewRow(savedProduct), yandexSend });
     appendAudit(request, "yandex.card_quality.manual_send", {
       productId: product.id,
@@ -13918,6 +14006,28 @@ function applyAiImageDraftToProduct(product = {}, draftId = "", options = {}) {
   return { product: normalizeWarehouseProduct(next), draft, batchDrafts, batchUrls };
 }
 
+async function normalizeAiImageDraftUrlsForMarketplaceSend(product = {}, draftId = "", request = null) {
+  product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
+  const draft = product.aiImages.find((item) => item.id === draftId);
+  if (!draft) {
+    const error = new Error("AI image draft not found.");
+    error.statusCode = 404;
+    error.code = "ai_image_draft_not_found";
+    throw error;
+  }
+  const batchDrafts = draft.batchId
+    ? product.aiImages.filter((item) => item.batchId === draft.batchId && item.resultUrl)
+    : [draft];
+  if (!batchDrafts.length || !draft.resultUrl) {
+    throw marketplaceImageError("ai_image_result_url_missing", "В AI-черновике нет URL фото для отправки.");
+  }
+  for (const item of batchDrafts) {
+    item.resultUrl = await normalizeMarketplaceImageUrlForSend(item.resultUrl, request);
+  }
+  draft.resultUrl = await normalizeMarketplaceImageUrlForSend(draft.resultUrl, request);
+  return { draft, batchDrafts };
+}
+
 app.post("/api/warehouse/products/:id/ai-content/:draftId/approve", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
@@ -14032,13 +14142,18 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
     const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], yandex: product.yandex || {}, ozon: product.ozon || {}, imageUrl: product.imageUrl || "", updatedAt: product.updatedAt });
 
     product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
-    const draft = product.aiImages.find((item) => item.id === request.params.draftId);
+    let draft = product.aiImages.find((item) => item.id === request.params.draftId);
     if (!draft) return response.status(404).json({ error: "AI-черновик изображения не найден." });
     if (!draft.resultUrl) return response.status(400).json({ error: "В AI-черновике нет URL результата." });
 
-    const batchDrafts = draft.batchId
+    let batchDrafts = draft.batchId
       ? product.aiImages.filter((item) => item.batchId === draft.batchId && item.resultUrl)
       : [draft];
+    if (normalizeWarehouseProduct(product).marketplace === "yandex") {
+      const prepared = await normalizeAiImageDraftUrlsForMarketplaceSend(product, draft.id, request);
+      draft = prepared.draft;
+      batchDrafts = prepared.batchDrafts;
+    }
     draft.status = "approved";
     draft.reviewedAt = new Date().toISOString();
     batchDrafts.forEach((item) => {
@@ -14070,7 +14185,7 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
     const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_approve", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
     const yandexSend = normalizeWarehouseProduct(savedProduct).marketplace === "yandex"
-      ? await sendApprovedYandexProductContent(savedProduct, { mode: "image" })
+      ? await sendApprovedYandexProductContent(savedProduct, { mode: "image", pictures: batchUrls })
       : { ok: true, skipped: true, reason: "not_yandex" };
     response.json({ ok: true, draft, product: savedProduct, yandexSend });
     appendAudit(request, "warehouse.ai_image.approve", {
@@ -14106,9 +14221,10 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/send", async (request, 
         : [sourceDraft];
       product.aiImages.push(...sourceBatch.map((item) => normalizeAiImageDraft(item)).filter(Boolean));
     }
+    await normalizeAiImageDraftUrlsForMarketplaceSend(product, sourceDraft.id, request);
     const applied = applyAiImageDraftToProduct(product, sourceDraft.id, { sentMarketplace: marketplace });
     const sendResult = marketplace === "yandex"
-      ? await sendApprovedYandexProductContent(applied.product, { mode: "image" })
+      ? await sendApprovedYandexProductContent(applied.product, { mode: "image", pictures: applied.batchUrls })
       : await sendApprovedOzonProductContent(applied.product, { mode: "image" });
     const sendError = marketplaceSendResultError(sendResult, `${marketplace}_image_send_failed`);
     if (sendError) return next(sendError);
