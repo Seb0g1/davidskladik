@@ -183,27 +183,27 @@ const aiImageStudioPresets = [
   {
     id: "white-packshot",
     label: "White background",
-    prompt: "Studio ecommerce packshot on a clean white background. Preserve the exact product shape, bottle, box, cap color and label layout from the source photo. Premium soft light, natural shadow, no added text, no watermark.",
+    prompt: "Studio ecommerce packshot on a clean white background. Single perfume bottle only. Preserve the exact bottle shape, cap color and label layout from the source photo. Remove or ignore boxes and all outer packaging. Premium soft light, natural shadow, no added text, no watermark.",
   },
   {
     id: "premium-shadow",
     label: "Premium shadow",
-    prompt: "Premium perfume product photo with elegant soft shadow and subtle reflective surface. Keep the original bottle and packaging recognizable. Minimal luxury composition, no text overlays, no extra objects covering the product.",
+    prompt: "Premium perfume bottle photo with elegant soft shadow and subtle reflective surface. Keep only the original bottle recognizable. No box, no packaging, no props, no text overlays, no extra objects covering the product.",
   },
   {
     id: "lifestyle",
     label: "Lifestyle",
-    prompt: "Tasteful lifestyle scene for a perfume marketplace card. Use a neutral luxury bathroom or vanity setting, soft daylight, product in focus. Preserve source product appearance; no hands, no faces, no text.",
+    prompt: "Tasteful minimal lifestyle scene for a perfume marketplace card. Single bottle only in a neutral luxury setting, soft daylight, product in focus. Remove any box or packaging from the source. No hands, no faces, no text.",
   },
   {
-    id: "bottle-and-box",
-    label: "Bottle + box",
-    prompt: "Marketplace image showing perfume bottle and packaging together, clean studio composition. If the source has only one object, create a matching simple box silhouette only when it does not invent brand claims. No extra text.",
+    id: "bottle-only",
+    label: "Bottle only",
+    prompt: "Marketplace image showing only the perfume bottle, clean studio composition. If the source photo includes a box or package, remove it and keep the bottle as the only product. Do not create or hallucinate any packaging. No extra text.",
   },
   {
     id: "close-up",
     label: "Close-up",
-    prompt: "Close-up hero image of the perfume bottle and cap with crisp highlights. Keep the product proportions and label area consistent with the source photo. Premium macro style, no watermark, no decorative text.",
+    prompt: "Close-up hero image of the perfume bottle and cap with crisp highlights. Keep the bottle proportions and label area consistent with the source photo. Crop out or remove packaging. Premium macro style, no watermark, no decorative text.",
   },
 ];
 
@@ -5270,9 +5270,11 @@ function buildOzonWarehouseProductItem(product, overrides = {}) {
 function buildOzonAiImagePrompt(product, promptOverride = "", options = {}) {
   const productName = cleanText(product?.name || product?.ozon?.name || product?.offerId || "товар");
   const template = cleanText(promptOverride) || ozonAiImageDefaultPrompt;
-  const base = template.includes("{productName}")
+  let base = template.includes("{productName}")
     ? template.replaceAll("{productName}", productName)
     : `${template}\n\nНазвание товара: ${productName}`;
+  const bottleOnlyInstruction = "Perfume photo rule: show one clean perfume bottle only. Remove or ignore any box, outer packaging, cartons, bags, brochures, accessories, props, hands, faces, and extra text. Do not create or hallucinate packaging, even if the source photo contains a box.";
+  base = `${base}\n\n${bottleOnlyInstruction}`;
   const variantIndex = Number(options.variantIndex || 0);
   const variantTotal = Number(options.variantTotal || 0);
   if (!variantIndex || variantTotal <= 1) return base;
@@ -13664,7 +13666,7 @@ app.post("/api/warehouse/products/:id/yandex-quality-draft/generate", requireAdm
     for (let index = 1; index <= count; index += 1) {
       try {
         const imageDraft = await generateOzonAiImageDraft(normalized, {
-          prompt: `Create marketplace-ready product photo ${index} of ${count} for ${normalized.name || normalized.offerId}. Clean white studio background, realistic perfume or cosmetics product packshot, premium ecommerce lighting, no text overlays, no extra objects.`,
+          prompt: `Create marketplace-ready product photo ${index} of ${count} for ${normalized.name || normalized.offerId}. Clean white studio background, realistic perfume bottle packshot, single bottle only, no box, no outer packaging, no cartons, no props, premium ecommerce lighting, no text overlays, no extra objects.`,
           sourceImageUrl: request.body.sourceImageUrl || "",
           batchId,
           variantIndex: index,
