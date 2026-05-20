@@ -1980,6 +1980,9 @@ function normalizeAiImageDraft(input = {}) {
     format: cleanText(input.format),
     createdAt: input.createdAt || input.created_at || new Date().toISOString(),
     reviewedAt: input.reviewedAt || input.reviewed_at || null,
+    sentAt: input.sentAt || input.sent_at || null,
+    sentMarketplace: cleanText(input.sentMarketplace || input.sent_marketplace),
+    sendResult: input.sendResult && typeof input.sendResult === "object" ? input.sendResult : undefined,
   });
   return draft.resultUrl || draft.sourceImageUrl || draft.prompt ? draft : null;
 }
@@ -2039,6 +2042,9 @@ function normalizeAiContentDraft(input = {}) {
     model: cleanText(input.model),
     createdAt: input.createdAt || input.created_at || new Date().toISOString(),
     reviewedAt: input.reviewedAt || input.reviewed_at || null,
+    sentAt: input.sentAt || input.sent_at || null,
+    sentMarketplace: cleanText(input.sentMarketplace || input.sent_marketplace),
+    sendResult: input.sendResult && typeof input.sendResult === "object" ? input.sendResult : undefined,
   });
   return draft.name || draft.description || draft.vendor || draft.bulletPoints?.length ? draft : null;
 }
@@ -5252,6 +5258,7 @@ function buildOzonWarehouseProductItem(product, overrides = {}) {
     ...overrides,
     offerId: overrides.offerId || ozon.offerId || product.offerId,
     name: overrides.name || ozon.name || product.name,
+    categoryId: overrides.categoryId || overrides.category_id || ozon.categoryId || ozon.category_id || ozon.descriptionCategoryId || ozon.description_category_id || ozon.marketCategoryId || ozon.market_category_id,
     attributesJson: overrides.attributesJson ?? ozon.attributes ?? [],
     complexAttributesJson: overrides.complexAttributesJson ?? ozon.complexAttributes ?? [],
     extraJson: overrides.extraJson ?? ozon.extra ?? {},
@@ -6064,6 +6071,53 @@ async function sendApprovedYandexProductContent(product = {}, options = {}) {
   return sent;
 }
 
+async function sendApprovedOzonProductContent(product = {}, options = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  if (cleanText(normalized.marketplace).toLowerCase() !== "ozon") {
+    return { ok: true, skipped: true, reason: "not_ozon" };
+  }
+  const account = getOzonAccountByTarget(normalized.target || "ozon");
+  if (!account) return { ok: false, error: "ozon_account_not_found" };
+  if (!account.clientId || !account.apiKey) return { ok: false, error: "ozon_account_not_configured", target: account.id || normalized.target };
+
+  const mode = cleanText(options.mode || "content").toLowerCase() === "image" ? "image" : "content";
+  const built = buildOzonWarehouseProductItem(normalized, options.overrides || {});
+  if (!built.ready) {
+    return {
+      ok: false,
+      error: "ozon_update_not_ready",
+      code: "ozon_update_not_ready",
+      mode,
+      target: account.id,
+      offerId: normalized.ozon?.offerId || normalized.offerId,
+      missing: built.missing || [],
+    };
+  }
+
+  const result = await ozonRequest("/v2/product/import", { items: [built.item] }, account);
+  const sent = {
+    ok: true,
+    mode,
+    target: account.id,
+    offerId: built.item.offer_id || normalized.offerId,
+    fields: mode === "image" ? ["primary_image", "images"] : ["name", "description"],
+    result,
+  };
+  logger.info("approved ozon product content sent", sent);
+  return sent;
+}
+
+function marketplaceSendResultError(result = {}, fallbackCode = "marketplace_send_failed") {
+  if (result?.ok) return null;
+  const error = new Error(result?.error || fallbackCode);
+  error.statusCode = 400;
+  error.code = result?.code || result?.error || fallbackCode;
+  if (Array.isArray(result?.missing)) error.missing = result.missing;
+  error.marketplace = result?.marketplace;
+  error.result = result;
+  return error;
+}
+
 function latestAiContentDraft(product = {}, status = "pending") {
   const normalizedStatus = cleanText(status).toLowerCase();
   return [...(normalizeWarehouseProduct(product).aiContentDrafts || [])]
@@ -6166,6 +6220,26 @@ function applyAiContentDraftToProduct(product = {}, draft = {}, marketplace = "y
       next.name = next.yandex.name || next.name;
       next.description = next.yandex.description || next.description;
       next.brand = next.yandex.vendor || next.brand;
+    }
+  }
+  if (marketplace === "ozon") {
+    const current = next.ozon || {};
+    next.ozon = normalizeOzonDraft({
+      ...current,
+      name: cleanDraft.name || current.name || next.yandex?.name || next.name,
+      description: cleanDraft.description || current.description || next.yandex?.description || next.description || next.name,
+      vendor: cleanDraft.vendor || current.vendor || next.yandex?.vendor || next.brand,
+      extra: {
+        ...parseJsonField(current.extra, {}),
+        aiBulletPoints: cleanDraft.bulletPoints,
+        aiSeoKeywords: cleanDraft.seoKeywords,
+        aiContentUpdatedAt: new Date().toISOString(),
+      },
+    });
+    if (next.marketplace === "ozon") {
+      next.name = next.ozon.name || next.name;
+      next.description = next.ozon.description || next.description;
+      next.brand = next.ozon.vendor || next.brand;
     }
   }
   return normalizeWarehouseProduct(next);
@@ -13324,12 +13398,26 @@ app.post("/api/warehouse/products/:id/ai-assistant", async (request, response, n
     const previewProduct = applyAiContentDraftToProduct(product, draft, marketplace);
     const afterValidation = productContentQuality(previewProduct, marketplace);
     const aiSettings = await readEffectiveAiSettings();
+    const savedDraft = normalizeAiContentDraft({
+      ...draft,
+      marketplace,
+      source: "assistant",
+      model: draft.model || aiSettings.textModel || openaiTextModel,
+    });
+    let savedProduct = normalizeWarehouseProduct(product);
+    if (savedDraft) {
+      product.aiContentDrafts = normalizeAiContentDrafts([...(product.aiContentDrafts || []), savedDraft]);
+      product.updatedAt = new Date().toISOString();
+      const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_assistant_draft", writeLinks: false });
+      savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    }
     response.json({
       ok: true,
       productId: product.id,
       offerId: product.offerId,
       marketplace,
-      draft,
+      draft: savedDraft || draft,
+      product: savedProduct,
       before: beforeValidation,
       after: afterValidation,
       reasons: beforeValidation.reasons || [],
@@ -13755,6 +13843,76 @@ app.get("/api/warehouse/ai-drafts", requireAdmin, async (request, response, next
   }
 });
 
+function findWarehouseProductForMarketplace(warehouse = {}, seedProduct = {}, marketplace = "") {
+  const wanted = cleanText(marketplace || seedProduct.marketplace || "").toLowerCase();
+  const products = Array.isArray(warehouse.products) ? warehouse.products : [];
+  const siblings = expandWarehouseProductsToGroups(products, [seedProduct]);
+  return siblings.find((item) => cleanText(item.marketplace).toLowerCase() === wanted)
+    || (cleanText(seedProduct.marketplace).toLowerCase() === wanted ? seedProduct : null);
+}
+
+function applyAiImageDraftToProduct(product = {}, draftId = "", options = {}) {
+  const next = { ...normalizeWarehouseProduct(product) };
+  next.aiImages = normalizeAiImageDrafts(next.aiImages || []);
+  const draft = next.aiImages.find((item) => item.id === draftId);
+  if (!draft) {
+    const error = new Error("AI image draft not found.");
+    error.statusCode = 404;
+    error.code = "ai_image_draft_not_found";
+    throw error;
+  }
+  if (!draft.resultUrl) {
+    const error = new Error("AI image draft has no result URL.");
+    error.statusCode = 400;
+    error.code = "ai_image_result_url_missing";
+    throw error;
+  }
+  const batchDrafts = draft.batchId
+    ? next.aiImages.filter((item) => item.batchId === draft.batchId && item.resultUrl)
+    : [draft];
+  const batchUrls = [
+    draft.resultUrl,
+    ...batchDrafts.map((item) => item.resultUrl).filter((url) => url && url !== draft.resultUrl),
+  ];
+  const now = new Date().toISOString();
+  draft.status = "approved";
+  draft.reviewedAt = now;
+  if (options.sentMarketplace) {
+    draft.sentAt = now;
+    draft.sentMarketplace = cleanText(options.sentMarketplace);
+  }
+  batchDrafts.forEach((item) => {
+    if (item.status === "pending") {
+      item.status = "approved";
+      item.reviewedAt = now;
+    }
+    if (options.sentMarketplace) {
+      item.sentAt = now;
+      item.sentMarketplace = cleanText(options.sentMarketplace);
+    }
+  });
+
+  if (next.marketplace === "yandex") {
+    const yandex = next.yandex || {};
+    const pictures = splitList(yandex.pictures);
+    next.yandex = normalizeYandexDraft({
+      ...yandex,
+      pictures: [...batchUrls, ...pictures.filter((url) => !batchUrls.includes(url))],
+    });
+  } else {
+    const ozon = next.ozon || {};
+    const images = splitList(ozon.images);
+    next.ozon = normalizeOzonDraft({
+      ...ozon,
+      primaryImage: draft.resultUrl,
+      images: [...batchUrls, ...images.filter((url) => !batchUrls.includes(url))],
+    });
+  }
+  next.imageUrl = draft.resultUrl;
+  next.updatedAt = now;
+  return { product: normalizeWarehouseProduct(next), draft, batchDrafts, batchUrls };
+}
+
 app.post("/api/warehouse/products/:id/ai-content/:draftId/approve", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
@@ -13784,6 +13942,57 @@ app.post("/api/warehouse/products/:id/ai-content/:draftId/approve", async (reque
       yandexSend,
       newValue: cloneAuditValue({ id: savedProduct.id, yandex: savedProduct.yandex || {}, ozon: savedProduct.ozon || {} }),
     }).catch((auditError) => logger.warn("ai content approve audit failed", { detail: auditError?.message || String(auditError) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/products/:id/ai-content/:draftId/send", async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const seedProduct = warehouse.products.find((item) => item.id === request.params.id);
+    if (!seedProduct) return response.status(404).json({ error: "Product not found." });
+    const sourceDraft = (seedProduct.aiContentDrafts || []).find((item) => item.id === request.params.draftId);
+    if (!sourceDraft) return response.status(404).json({ error: "AI content draft not found." });
+    if (sourceDraft.status === "rejected") return response.status(400).json({ error: "AI content draft is rejected." });
+    const marketplace = cleanText(request.body?.marketplace || sourceDraft.marketplace || seedProduct.marketplace || "yandex").toLowerCase() === "ozon" ? "ozon" : "yandex";
+    const product = findWarehouseProductForMarketplace(warehouse, seedProduct, marketplace);
+    if (!product) return response.status(404).json({ error: `Marketplace product not found: ${marketplace}.`, code: "marketplace_product_not_found", marketplace });
+
+    product.aiContentDrafts = normalizeAiContentDrafts(product.aiContentDrafts || []);
+    if (!product.aiContentDrafts.some((item) => item.id === sourceDraft.id)) {
+      product.aiContentDrafts.push(normalizeAiContentDraft({ ...sourceDraft, marketplace }));
+    }
+    const draft = product.aiContentDrafts.find((item) => item.id === sourceDraft.id) || sourceDraft;
+    const enhanced = applyAiContentDraftToProduct(product, draft, marketplace);
+    const sendResult = marketplace === "yandex"
+      ? await sendApprovedYandexProductContent(enhanced, { mode: "content" })
+      : await sendApprovedOzonProductContent(enhanced, { mode: "content" });
+    const sendError = marketplaceSendResultError(sendResult, `${marketplace}_content_send_failed`);
+    if (sendError) return next(sendError);
+
+    Object.assign(product, enhanced);
+    product.aiContentDrafts = normalizeAiContentDrafts(product.aiContentDrafts || []);
+    const savedDraft = product.aiContentDrafts.find((item) => item.id === sourceDraft.id);
+    if (savedDraft) {
+      savedDraft.status = "approved";
+      savedDraft.reviewedAt = savedDraft.reviewedAt || new Date().toISOString();
+      savedDraft.sentAt = new Date().toISOString();
+      savedDraft.sentMarketplace = marketplace;
+      savedDraft.sendResult = sendResult;
+    }
+    product.updatedAt = new Date().toISOString();
+    const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_content_send", writeLinks: false });
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    response.json({ ok: true, marketplace, mode: "content", target: savedProduct.target || marketplace, offerId: savedProduct.offerId, sentFields: sendResult.fields || ["name", "description"], result: sendResult, product: savedProduct, draft: savedDraft });
+    appendAudit(request, "warehouse.ai_content.send", {
+      productId: product.id,
+      offerId: product.offerId,
+      draftId: sourceDraft.id,
+      marketplace,
+      sendResult,
+      newValue: cloneAuditValue({ id: savedProduct.id, yandex: savedProduct.yandex || {}, ozon: savedProduct.ozon || {}, aiContentDrafts: savedProduct.aiContentDrafts || [] }),
+    }).catch((auditError) => logger.warn("ai content send audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
     next(error);
   }
@@ -13867,6 +14076,62 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
       yandexSend,
       newValue: { id: savedProduct.id, aiImages: savedProduct.aiImages || [], yandex: savedProduct.yandex || {}, ozon: savedProduct.ozon || {}, imageUrl: savedProduct.imageUrl || "", updatedAt: savedProduct.updatedAt },
     }).catch((auditError) => logger.warn("ai image approve audit failed", { detail: auditError?.message || String(auditError) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/products/:id/ai-images/:draftId/send", async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const seedProduct = warehouse.products.find((item) => item.id === request.params.id);
+    if (!seedProduct) return response.status(404).json({ error: "Product not found." });
+    const sourceDraft = (normalizeAiImageDrafts(seedProduct.aiImages || [])).find((item) => item.id === request.params.draftId);
+    if (!sourceDraft) return response.status(404).json({ error: "AI image draft not found." });
+    if (!sourceDraft.resultUrl) return response.status(400).json({ error: "AI image draft has no result URL.", code: "ai_image_result_url_missing" });
+    if (sourceDraft.status === "rejected") return response.status(400).json({ error: "AI image draft is rejected." });
+    const marketplace = cleanText(request.body?.marketplace || seedProduct.marketplace || "yandex").toLowerCase() === "ozon" ? "ozon" : "yandex";
+    const product = findWarehouseProductForMarketplace(warehouse, seedProduct, marketplace);
+    if (!product) return response.status(404).json({ error: `Marketplace product not found: ${marketplace}.`, code: "marketplace_product_not_found", marketplace });
+
+    product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
+    if (!product.aiImages.some((item) => item.id === sourceDraft.id)) {
+      const sourceBatch = sourceDraft.batchId
+        ? normalizeAiImageDrafts(seedProduct.aiImages || []).filter((item) => item.batchId === sourceDraft.batchId)
+        : [sourceDraft];
+      product.aiImages.push(...sourceBatch.map((item) => normalizeAiImageDraft(item)).filter(Boolean));
+    }
+    const applied = applyAiImageDraftToProduct(product, sourceDraft.id, { sentMarketplace: marketplace });
+    const sendResult = marketplace === "yandex"
+      ? await sendApprovedYandexProductContent(applied.product, { mode: "image" })
+      : await sendApprovedOzonProductContent(applied.product, { mode: "image" });
+    const sendError = marketplaceSendResultError(sendResult, `${marketplace}_image_send_failed`);
+    if (sendError) return next(sendError);
+
+    Object.assign(product, applied.product);
+    product.aiImages = normalizeAiImageDrafts(product.aiImages || []);
+    const sentIds = new Set([sourceDraft.id, ...applied.batchDrafts.map((item) => item.id)]);
+    product.aiImages.forEach((item) => {
+      if (!sentIds.has(item.id)) return;
+      item.status = "approved";
+      item.reviewedAt = item.reviewedAt || new Date().toISOString();
+      item.sentAt = new Date().toISOString();
+      item.sentMarketplace = marketplace;
+      item.sendResult = sendResult;
+    });
+    product.updatedAt = new Date().toISOString();
+    const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_send", writeLinks: false });
+    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
+    const savedDraft = (savedProduct.aiImages || []).find((item) => item.id === sourceDraft.id) || sourceDraft;
+    response.json({ ok: true, marketplace, mode: "image", target: savedProduct.target || marketplace, offerId: savedProduct.offerId, sentFields: sendResult.fields || ["images"], result: sendResult, product: savedProduct, draft: savedDraft });
+    appendAudit(request, "warehouse.ai_image.send", {
+      productId: product.id,
+      offerId: product.offerId,
+      draftId: sourceDraft.id,
+      marketplace,
+      sendResult,
+      newValue: cloneAuditValue({ id: savedProduct.id, yandex: savedProduct.yandex || {}, ozon: savedProduct.ozon || {}, aiImages: savedProduct.aiImages || [] }),
+    }).catch((auditError) => logger.warn("ai image send audit failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
     next(error);
   }
@@ -14457,13 +14722,29 @@ async function buildWarehouseLinkMutationResponseProducts(warehouse, products = 
 
 async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
   const refs = (Array.isArray(refsInput) ? refsInput : [])
-    .map((ref) => ({
-      productId: cleanText(ref.productId),
-      linkId: cleanText(ref.linkId),
-      expectedUpdatedAt: cleanText(ref.expectedUpdatedAt),
-      expectedLinksSignature: cleanText(ref.expectedLinksSignature),
-    }))
-    .filter((ref) => ref.productId && ref.linkId);
+    .map((ref) => {
+      const normalized = {
+        ...ref,
+        productId: cleanText(ref.productId),
+        linkId: cleanText(ref.linkId),
+        linkTargetKey: cleanText(ref.linkTargetKey || ref.targetKey),
+        expectedUpdatedAt: cleanText(ref.expectedUpdatedAt),
+        expectedLinksSignature: cleanText(ref.expectedLinksSignature),
+        article: cleanText(ref.article || ref.supplierArticle),
+        supplierArticle: cleanText(ref.supplierArticle || ref.article),
+        supplierName: cleanText(ref.supplierName),
+        partnerId: cleanText(ref.partnerId),
+        rowId: cleanText(ref.rowId),
+        sourceRowId: cleanText(ref.sourceRowId || ref.rowId),
+        exactName: cleanText(ref.exactName || ref.name),
+        matchType: cleanText(ref.matchType),
+        keyword: cleanText(ref.keyword),
+        priceCurrency: cleanText(ref.priceCurrency || "USD"),
+      };
+      normalized.linkTargetKey = normalized.linkTargetKey || (warehouseLinkHasMatchTarget(normalized) ? warehouseLinkTargetKey(normalized) : "");
+      return normalized;
+    })
+    .filter((ref) => ref.productId && (ref.linkId || ref.linkTargetKey));
   if (!refs.length) return response.status(400).json({ error: "No PriceMaster links selected for delete." });
 
   const requestedIds = new Set(refs.map((ref) => String(ref.productId)));
@@ -14491,10 +14772,18 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
         alreadyDeletedRefs.push(ref);
         continue;
       }
-      const link = (Array.isArray(product.links) ? product.links : [])
-        .find((item) => String(item.id) === String(ref.linkId));
+      const productLinks = Array.isArray(product.links) ? product.links : [];
+      const link = productLinks.find((item) => ref.linkId && String(item.id) === String(ref.linkId))
+        || productLinks.find((item) => ref.linkTargetKey && warehouseLinkTargetKey(item) === ref.linkTargetKey);
       if (!link) {
-        alreadyDeletedRefs.push(ref);
+        const siblingHasLink = targetProducts.some((targetProduct) => (targetProduct.links || [])
+          .some((item) => ref.linkTargetKey && warehouseLinkTargetKey(item) === ref.linkTargetKey));
+        if (siblingHasLink && ref.linkTargetKey) {
+          deleteKeys.add(ref.linkTargetKey);
+          deletedRefs.push(ref);
+        } else {
+          alreadyDeletedRefs.push(ref);
+        }
         continue;
       }
       const conflict = productConflict(product, {
@@ -14505,7 +14794,7 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
         conflicts.push(conflict);
         continue;
       }
-      deleteKeys.add(warehouseLinkTargetKey(link));
+      deleteKeys.add(ref.linkTargetKey || warehouseLinkTargetKey(link));
       deletedRefs.push(ref);
     }
 
@@ -14585,12 +14874,14 @@ app.post("/api/warehouse/products/links/delete", async (request, response, next)
   try {
     const refs = (Array.isArray(request.body?.refs) ? request.body.refs : [])
       .map((ref) => ({
+        ...ref,
         productId: cleanText(ref.productId),
         linkId: cleanText(ref.linkId),
+        linkTargetKey: cleanText(ref.linkTargetKey || ref.targetKey),
         expectedUpdatedAt: cleanText(ref.expectedUpdatedAt),
         expectedLinksSignature: cleanText(ref.expectedLinksSignature),
       }))
-      .filter((ref) => ref.productId && ref.linkId);
+      .filter((ref) => ref.productId && (ref.linkId || ref.linkTargetKey || warehouseLinkHasMatchTarget(ref)));
     if (!refs.length) return response.status(400).json({ error: "Не выбраны привязки для удаления." });
     return await deleteWarehouseGroupLinkRefs(request, response, refs);
     const refsByProduct = new Map();
@@ -14678,8 +14969,10 @@ app.post("/api/warehouse/products/links/delete", async (request, response, next)
 app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, response, next) => {
   try {
     return await deleteWarehouseGroupLinkRefs(request, response, [{
+      ...(request.body || {}),
       productId: request.params.productId,
       linkId: request.params.linkId,
+      linkTargetKey: request.body?.linkTargetKey || request.body?.targetKey || request.query?.linkTargetKey || request.query?.targetKey,
       expectedUpdatedAt: request.body?.expectedUpdatedAt || request.query?.expectedUpdatedAt,
       expectedLinksSignature: request.body?.expectedLinksSignature || request.query?.expectedLinksSignature,
     }]);

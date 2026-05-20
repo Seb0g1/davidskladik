@@ -147,6 +147,7 @@ export const AiAssistantResponseSchema = z.object({
   offerId: z.coerce.string().optional().default(""),
   marketplace: z.coerce.string().optional().default("yandex"),
   draft: z.record(z.string(), z.unknown()).optional().default({}),
+  product: ProductSchema.optional().nullable(),
   before: z.record(z.string(), z.unknown()).optional().default({}),
   after: z.record(z.string(), z.unknown()).optional().default({}),
   reasons: z.array(z.coerce.string()).optional().default([]),

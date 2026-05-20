@@ -179,6 +179,31 @@ function productLinksSignature(product: Product): string {
   return Array.from(new Set((product.links || []).map(linkPrimarySignature).filter(Boolean))).sort().join("||");
 }
 
+function linkDeleteRef(link: ProductLink & { productId?: string }, product?: Product) {
+  const raw = link as Record<string, unknown>;
+  return {
+    productId: link.productId || product?.id || "",
+    linkId: link.id || "",
+    linkTargetKey: linkPrimarySignature(link),
+    article: link.article || link.supplierArticle || "",
+    supplierArticle: link.supplierArticle || link.article || "",
+    supplierName: link.supplierName || "",
+    partnerId: link.partnerId || "",
+    rowId: raw.rowId || "",
+    sourceRowId: raw.sourceRowId || raw.rowId || "",
+    exactName: raw.exactName || raw.name || "",
+    matchType: link.matchType || "",
+    keyword: link.keyword || "",
+    priceCurrency: link.priceCurrency || "USD",
+    expectedUpdatedAt: product?.updatedAt || "",
+    expectedLinksSignature: product ? productLinksSignature(product) : "",
+  };
+}
+
+function linkSelectionKey(link: ProductLink & { productId?: string }): string {
+  return `${link.productId || ""}:${link.id || linkPrimarySignature(link)}`;
+}
+
 function draftTitle(draft: LinkDraft): string {
   return draft.article || "без артикула";
 }
@@ -297,17 +322,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   const deleteMutation = useMutation({
     mutationFn: async (link: ProductLink & { productId?: string }) => {
       const product = products.find((item) => item.id === link.productId) || products[0];
-      return fetchJson(
-        `/api/warehouse/products/${encodeURIComponent(String(link.productId || productIds[0]))}/links/${encodeURIComponent(String(link.id || ""))}`,
-        MutationProductResponseSchema,
-        {
-          method: "DELETE",
-          body: JSON.stringify({
-            expectedUpdatedAt: product?.updatedAt || "",
-            expectedLinksSignature: product ? productLinksSignature(product) : "",
-          }),
-        },
-      );
+      return fetchJson("/api/warehouse/products/links/delete", MutationProductResponseSchema, mutationBody({ refs: [linkDeleteRef(link, product)] }));
     },
     onSuccess: (payload) => {
       refreshAfterMutation(payload);
@@ -317,16 +332,8 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   const bulkDeleteMutation = useMutation({
     mutationFn: async () => {
       const refs = links
-        .filter((link) => selectedLinkIds.includes(`${link.productId}:${link.id}`))
-        .map((link) => {
-          const product = products.find((item) => item.id === link.productId) || products[0];
-          return {
-            productId: link.productId,
-            linkId: link.id,
-            expectedUpdatedAt: product?.updatedAt || "",
-            expectedLinksSignature: product ? productLinksSignature(product) : "",
-          };
-        });
+        .filter((link) => selectedLinkIds.includes(linkSelectionKey(link)))
+        .map((link) => linkDeleteRef(link, products.find((item) => item.id === link.productId) || products[0]));
       return fetchJson("/api/warehouse/products/links/delete", MutationProductResponseSchema, mutationBody({ refs }));
     },
     onSuccess: (payload) => {
@@ -430,14 +437,14 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
 
       <div className="links-list">
         {filteredLinks.length ? filteredLinks.map((link) => (
-          <div className="link-item pm-link-item" key={`${link.productId}-${link.id}-${link.article}-${link.supplierName}`}>
+          <div className="link-item pm-link-item" key={`${link.productId}-${link.id || linkPrimarySignature(link)}-${link.article}-${link.supplierName}`}>
             <label className="pm-link-select" title="Выбрать привязку">
               <input
                 type="checkbox"
-                checked={selectedLinkIds.includes(`${link.productId}:${link.id}`)}
+                checked={selectedLinkIds.includes(linkSelectionKey(link))}
                 onChange={(event) => setSelectedLinkIds((ids) => event.target.checked
-                  ? Array.from(new Set([...ids, `${link.productId}:${link.id}`]))
-                  : ids.filter((id) => id !== `${link.productId}:${link.id}`))}
+                  ? Array.from(new Set([...ids, linkSelectionKey(link)]))
+                  : ids.filter((id) => id !== linkSelectionKey(link)))}
               />
             </label>
             <div className="pm-link-body">
@@ -579,7 +586,7 @@ function aiJobProgressPercent(jobInput: unknown) {
   return Math.max(4, Math.min(100, Math.round((done / total) * 100)));
 }
 
-function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => void }) {
+function AiImagesPanel({ product, products, onSaved }: { product: Product; products: Product[]; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState("");
   const [freshDrafts, setFreshDrafts] = useState(product.aiImages || []);
@@ -587,6 +594,17 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
   const [activeJobId, setActiveJobId] = useState("");
   const [activeJob, setActiveJob] = useState<Record<string, unknown> | null>(null);
   const visibleDrafts = freshDrafts.length ? freshDrafts : product.aiImages || [];
+  const targetProducts = useMemo(() => {
+    const byMarketplace = new Map<string, Product>();
+    for (const item of products.length ? products : [product]) {
+      const raw = String(item.marketplace || "").toLowerCase();
+      const marketplace = raw.includes("ozon") ? "ozon" : raw.includes("yandex") ? "yandex" : "";
+      if (marketplace && !byMarketplace.has(marketplace)) byMarketplace.set(marketplace, item);
+    }
+    return Array.from(byMarketplace.entries()).map(([marketplace, item]) => ({ marketplace, product: item, label: marketplace === "ozon" ? "Ozon" : "Yandex" }));
+  }, [product, products]);
+  const assistantDraft = asRecord(assistant?.draft);
+  const contentDraftId = String(assistantDraft.id || "");
   useEffect(() => {
     setFreshDrafts(product.aiImages || []);
   }, [product.aiImages]);
@@ -629,7 +647,14 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
 
   const assistantMutation = useMutation({
     mutationFn: async () => fetchJson(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-assistant`, AiAssistantResponseSchema, mutationBody({ marketplace: "yandex" })),
-    onSuccess: (payload) => setAssistant(payload),
+    onSuccess: (payload) => {
+      setAssistant(payload);
+      if (payload.product) {
+        updateCachedProducts(queryClient, { product: payload.product });
+        void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+        onSaved();
+      }
+    },
   });
 
   const generateMutation = useMutation({
@@ -677,6 +702,33 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
     },
   });
 
+  const contentSendMutation = useMutation({
+    mutationFn: async ({ marketplace }: { targetProduct: Product; marketplace: string }) => fetchJson(
+      `/api/warehouse/products/${encodeURIComponent(product.id)}/ai-content/${encodeURIComponent(contentDraftId)}/send`,
+      MutationProductResponseSchema,
+      mutationBody({ marketplace }),
+    ),
+    onSuccess: (payload) => {
+      updateCachedProducts(queryClient, payload);
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      onSaved();
+    },
+  });
+
+  const imageSendMutation = useMutation({
+    mutationFn: async ({ marketplace, draftId }: { targetProduct: Product; marketplace: string; draftId: string }) => fetchJson(
+      `/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/${encodeURIComponent(draftId)}/send`,
+      MutationProductResponseSchema,
+      mutationBody({ marketplace }),
+    ),
+    onSuccess: (payload) => {
+      if (payload.product?.aiImages?.length) setFreshDrafts(payload.product.aiImages);
+      updateCachedProducts(queryClient, payload);
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      onSaved();
+    },
+  });
+
   const generationBusy = generateMutation.isPending || jobRunning;
   const jobError = asRecord(asRecord(activeJob).lastError);
   const jobErrorText = String(jobError.detail || jobError.code || "");
@@ -710,6 +762,22 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
             return <span className={row.ok ? "is-ok" : ""} key={`${row.id || index}`}>{row.ok ? "✓" : "•"} {String(row.label || row.id)} · {String(row.detail || "")}</span>;
           })}
         </div>
+        {contentDraftId ? <div className="ai-send-panel">
+          <strong>Отправка текста</strong>
+          <div className="ai-send-actions">
+            {targetProducts.map((target) => (
+              <button
+                className="secondary-action"
+                type="button"
+                key={`content-${target.marketplace}`}
+                disabled={contentSendMutation.isPending}
+                onClick={() => contentSendMutation.mutate({ targetProduct: target.product, marketplace: target.marketplace })}
+              >
+                {contentSendMutation.isPending ? <Loader2 className="spin" size={15} /> : <Check size={15} />} Текст в {target.label}
+              </button>
+            ))}
+          </div>
+        </div> : null}
       </div>}
       {progress && <div className="progress-line"><span style={{ width: `${aiJobProgressPercent(activeJob || { progress: generateMutation.isPending ? 5 : 100 })}%` }} />{progress}</div>}
       <div className="ai-grid">
@@ -723,13 +791,26 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
                 <button type="button" disabled={reviewMutation.isPending || draft.status === "rejected"} onClick={() => reviewMutation.mutate({ draftId: draft.id, action: "reject" })} title="Отклонить"><X size={15} /></button>
               </div>
             </div>
+            <div className="ai-send-actions compact">
+              {targetProducts.map((target) => (
+                <button
+                  type="button"
+                  key={`image-${draft.id}-${target.marketplace}`}
+                  disabled={imageSendMutation.isPending || !draft.resultUrl}
+                  onClick={() => imageSendMutation.mutate({ targetProduct: target.product, marketplace: target.marketplace, draftId: draft.id })}
+                  title={`Отправить фото в ${target.label}`}
+                >
+                  {imageSendMutation.isPending ? <Loader2 className="spin" size={14} /> : <ImagePlus size={14} />} {target.label}
+                </button>
+              ))}
+            </div>
           </div>
         )) : <div className="soft-empty">Здесь появятся сгенерированные изображения.</div>}
       </div>
       {jobErrorText && ["failed", "partial"].includes(String(asRecord(activeJob).status || "")) && <div className="inline-error">
         {jobErrorText}{jobError.code ? ` | code: ${String(jobError.code)}` : ""}{jobError.status ? ` | status: ${String(jobError.status)}` : ""}{jobError.model ? ` | model: ${String(jobError.model)}` : ""}{jobError.endpoint ? ` | endpoint: ${String(jobError.endpoint)}` : ""}
       </div>}
-      {(assistantMutation.error || generateMutation.error || reviewMutation.error || jobQuery.error) && <div className="inline-error">{errorMessage(assistantMutation.error || generateMutation.error || reviewMutation.error || jobQuery.error)}</div>}
+      {(assistantMutation.error || generateMutation.error || reviewMutation.error || contentSendMutation.error || imageSendMutation.error || jobQuery.error) && <div className="inline-error">{errorMessage(assistantMutation.error || generateMutation.error || reviewMutation.error || contentSendMutation.error || imageSendMutation.error || jobQuery.error)}</div>}
     </section>
   );
 }
@@ -1069,7 +1150,7 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
   );
 }
 
-function DetailPanel({ selectedGroup, products, onClose, isAdmin }: { selectedGroup: string; products: Product[]; onClose: () => void; isAdmin: boolean }) {
+function DetailPanel({ selectedGroup, products, onClose, isAdmin, filteredOut = false }: { selectedGroup: string; products: Product[]; onClose: () => void; isAdmin: boolean; filteredOut?: boolean }) {
   const primary = products.length ? preferredGroupPrimary(products) : undefined;
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const groupQueryKey = ["warehouse", "group-detail", selectedGroup];
@@ -1106,6 +1187,7 @@ function DetailPanel({ selectedGroup, products, onClose, isAdmin }: { selectedGr
         </div>
         <button className="mobile-close" type="button" onClick={onClose}><X size={18} /></button>
       </div>
+      {filteredOut ? <div className="warning-strip compact">Карточка скрыта текущими фильтрами, но открыта для проверки.</div> : null}
       <div className="stats-grid">
         <Stat label="Текущая цена" value={money(primary.currentPrice)} />
         <Stat label="Новая цена" value={money(primary.newPrice || primary.targetPrice)} />
@@ -1116,7 +1198,7 @@ function DetailPanel({ selectedGroup, products, onClose, isAdmin }: { selectedGr
       <MarketplaceRows products={products} />
       {isAdmin ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}
       {isAdmin ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
-      {isAdmin ? <AiImagesPanel product={primary} onSaved={refreshDetail} /> : null}
+      {isAdmin ? <AiImagesPanel product={primary} products={products} onSaved={refreshDetail} /> : null}
       {isAdmin ? <section className="detail-section">
         <div className="section-title">
           <div>
@@ -1145,6 +1227,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     queryFn: () => fetchJson("/api/warehouse/brands", WarehouseBrandsSchema),
     staleTime: 10 * 60_000,
   });
+
   const brandOptions = brandsQuery.data?.brands || [];
 
   useEffect(() => {
@@ -1167,11 +1250,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const rows = pageQuery.data?.items || [];
   const groups = useMemo(() => groupProductsForList(rows), [rows]);
   const selectedRowsOnPage = useMemo(() => groups.find((group) => group.groupKey === selectedGroup)?.products || [], [groups, selectedGroup]);
-
-  useEffect(() => {
-    if (!selectedGroup || pageQuery.isLoading) return;
-    if (!groups.some((group) => group.groupKey === selectedGroup)) setSelectedGroup("");
-  }, [pageQuery.isLoading, groups, selectedGroup]);
+  const selectedFilteredOut = Boolean(selectedGroup && !pageQuery.isLoading && !groups.some((group) => group.groupKey === selectedGroup));
 
   const detailQuery = useQuery({
     queryKey: ["warehouse", "group-detail", selectedGroup],
@@ -1268,7 +1347,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
             <button disabled={!pageQuery.data?.hasMore} onClick={() => setFilter("page", filters.page + 1)}>Дальше</button>
           </div>
         </div>
-        <DetailPanel selectedGroup={selectedGroup} products={detailProducts} onClose={() => setSelectedGroup("")} isAdmin={isAdmin} />
+        <DetailPanel selectedGroup={selectedGroup} products={detailProducts} onClose={() => setSelectedGroup("")} isAdmin={isAdmin} filteredOut={selectedFilteredOut && Boolean(detailProducts.length)} />
       </section>
     </>
   );

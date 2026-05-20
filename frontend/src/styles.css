@@ -1121,6 +1121,7 @@ button:disabled {
 .preset-strip,
 .ai-assistant-tags,
 .ai-checklist,
+.ai-send-actions,
 .section-actions {
   display: flex;
   flex-wrap: wrap;
@@ -1161,6 +1162,32 @@ button:disabled {
 .ai-checklist span.is-ok {
   border-color: rgba(61, 220, 151, .35);
   color: var(--green);
+}
+
+.ai-send-panel {
+  border-top: 1px solid rgba(56, 163, 255, .18);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-send-actions button {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.ai-send-actions.compact {
+  padding: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.ai-send-actions.compact button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 4px 8px;
 }
 
 .ai-card {
