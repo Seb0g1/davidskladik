@@ -1090,6 +1090,56 @@ async function validateLocalUploadImagePath(pathname = "") {
   }
 }
 
+async function validatePublicMarketplaceImageUrl(imageUrl = "") {
+  const url = cleanText(imageUrl);
+  if (!url) return;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+  let response = null;
+  try {
+    response = await fetch(url, {
+      method: "GET",
+      redirect: "follow",
+      headers: {
+        Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        Range: "bytes=0-4095",
+      },
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw marketplaceImageError(
+      "marketplace_image_public_fetch_failed",
+      "Публичный URL AI-фото не открывается с сервера. Яндекс тоже не сможет забрать картинку.",
+      { imageUrl: url, detail: error?.message || String(error) },
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+  const contentType = cleanText(response.headers.get("content-type")).toLowerCase();
+  if (!response.ok && response.status !== 206) {
+    throw marketplaceImageError(
+      "marketplace_image_public_http_error",
+      `Публичный URL AI-фото вернул HTTP ${response.status}. Отправка в маркетплейс остановлена.`,
+      { imageUrl: url, status: response.status, contentType },
+    );
+  }
+  if (!contentType.startsWith("image/")) {
+    throw marketplaceImageError(
+      "marketplace_image_public_not_image",
+      "Публичный URL AI-фото открывается не как изображение. Проверьте PUBLIC_BASE_URL и доступность /uploads/ai-images.",
+      { imageUrl: url, status: response.status, contentType },
+    );
+  }
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (bytes.length < 256) {
+    throw marketplaceImageError(
+      "marketplace_image_public_empty",
+      "Публичный URL AI-фото возвращает слишком маленький файл. Сгенерируйте фото заново.",
+      { imageUrl: url, status: response.status, contentType, size: bytes.length },
+    );
+  }
+}
+
 async function normalizeMarketplaceImageUrlForSend(rawUrl = "", request = null) {
   const sourceUrl = cleanText(rawUrl);
   if (!sourceUrl) {
@@ -1127,6 +1177,7 @@ async function normalizeMarketplaceImageUrlForSend(rawUrl = "", request = null) 
     throw marketplaceImageError("marketplace_image_url_not_public", "AI-фото должно иметь публичный URL, не localhost.", { imageUrl: parsed.toString() });
   }
   await validateLocalUploadImagePath(parsed.pathname);
+  await validatePublicMarketplaceImageUrl(parsed.toString());
   return parsed.toString();
 }
 
