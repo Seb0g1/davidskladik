@@ -13,11 +13,11 @@ import { ProductGroup, firstImage, groupPrice, groupProductsForList, groupStatus
 const pageSize = 80;
 const mobileListMedia = "(max-width: 640px)";
 const studioPhotoPresets = [
-  { id: "white-packshot", label: "White", prompt: "Clean white marketplace packshot, premium soft light, single perfume bottle only, remove any box or packaging from the source photo." },
-  { id: "premium-shadow", label: "Shadow", prompt: "Premium studio shadow, luxury reflective surface, one centered perfume bottle only, no box, no packaging, no props." },
-  { id: "lifestyle", label: "Lifestyle", prompt: "Tasteful perfume lifestyle scene, neutral vanity setting, one bottle only, no hands, no faces, no box or packaging." },
-  { id: "bottle-only", label: "Bottle", prompt: "Bottle-only marketplace composition, clean studio layout, keep the perfume bottle and remove all outer packaging." },
-  { id: "close-up", label: "Close-up", prompt: "Close-up hero image of bottle and cap, crop out packaging, crisp highlights, no text overlays." },
+  { id: "white-packshot", label: "White", prompt: "Clean white marketplace packshot, full perfume bottle visible from cap to base, centered, upright, not cropped, 10-15% margin on every side, remove any box or packaging." },
+  { id: "premium-shadow", label: "Shadow", prompt: "Premium studio shadow, subtle reflection, one centered perfume bottle only, full bottle inside frame, no crop, no box, no packaging, no props." },
+  { id: "lifestyle", label: "Lifestyle", prompt: "Minimal light studio scene, one centered bottle only, full bottle visible, no hands, no faces, no box or packaging, no typography." },
+  { id: "bottle-only", label: "Bottle", prompt: "Bottle-only marketplace composition, clean studio layout, entire bottle fits inside square image, no packaging, no extra text outside original label." },
+  { id: "close-up", label: "Full bottle", prompt: "Clean hero image with crisp highlights, but keep the full bottle visible from cap to base, centered, no crop, no text overlays." },
 ];
 
 type LinkDraft = {
@@ -709,7 +709,7 @@ function AiImagesPanel({ product, products, onSaved }: { product: Product; produ
       setProgress("preparing");
       return await fetchJson(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`, AiImageJobResponseSchema, mutationBody({
         sourceImageUrl,
-        prompt: `Create 5 realistic marketplace photos through Codex for perfume product ${product.name || product.offerId}. Use the source product photo as the required reference for bottle shape, cap, label and color. Final images must show only one clean perfume bottle. Remove or ignore any box, outer packaging, cartons, bags, brochures, accessories or props. Do not create or hallucinate packaging. White or light studio background, premium lighting, no watermarks, no extra text, no product distortion.`,
+        prompt: `Create 5 realistic marketplace photos through Codex for perfume product ${product.name || product.offerId}. Use the source product photo as the required reference for bottle shape, cap, original label and color. Final images must show only one clean perfume bottle, upright and centered. The full bottle must fit inside the square image from cap to base, with 10-15% empty margin on every side; do not crop, cut off, zoom into, or place the bottle at the edge. Remove or ignore any box, outer packaging, cartons, bags, brochures, accessories or props. Do not create or hallucinate packaging. No headline, no marketing typography, no large brand text outside the original bottle label. White or light studio background, premium lighting, no watermarks, no product distortion.`,
         photoPresets: studioPhotoPresets,
         count: 5,
         forceCodexSale: true,

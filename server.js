@@ -183,27 +183,27 @@ const aiImageStudioPresets = [
   {
     id: "white-packshot",
     label: "White background",
-    prompt: "Studio ecommerce packshot on a clean white background. Single perfume bottle only. Preserve the exact bottle shape, cap color and label layout from the source photo. Remove or ignore boxes and all outer packaging. Premium soft light, natural shadow, no added text, no watermark.",
+    prompt: "Centered ecommerce packshot on a clean white background. Single perfume bottle only, full bottle visible from cap to base, not cropped, centered with 10-15% empty margin on every side. Preserve the exact bottle shape, cap color and existing label from the source photo. Remove boxes and outer packaging. No added text outside the product label, no watermark.",
   },
   {
     id: "premium-shadow",
     label: "Premium shadow",
-    prompt: "Premium perfume bottle photo with elegant soft shadow and subtle reflective surface. Keep only the original bottle recognizable. No box, no packaging, no props, no text overlays, no extra objects covering the product.",
+    prompt: "Premium perfume bottle photo with elegant soft shadow and subtle reflective surface. Full bottle visible, centered, not cut off by frame edges, product occupies about 75-85% of canvas height. Keep only the original bottle recognizable. No box, no packaging, no props, no text overlays.",
   },
   {
     id: "lifestyle",
     label: "Lifestyle",
-    prompt: "Tasteful minimal lifestyle scene for a perfume marketplace card. Single bottle only in a neutral luxury setting, soft daylight, product in focus. Remove any box or packaging from the source. No hands, no faces, no text.",
+    prompt: "Minimal marketplace lifestyle scene. Single perfume bottle only, centered, full bottle visible with safe margins, soft daylight, product in focus. Remove any box or packaging from the source. No hands, no faces, no typography or marketing text.",
   },
   {
     id: "bottle-only",
     label: "Bottle only",
-    prompt: "Marketplace image showing only the perfume bottle, clean studio composition. If the source photo includes a box or package, remove it and keep the bottle as the only product. Do not create or hallucinate any packaging. No extra text.",
+    prompt: "Marketplace image showing only the perfume bottle, clean studio composition. Entire bottle must fit inside the square image, centered, no crop at top, bottom, left, or right. If the source photo includes a box, remove it. Do not create packaging. No extra text outside the original bottle label.",
   },
   {
     id: "close-up",
     label: "Close-up",
-    prompt: "Close-up hero image of the perfume bottle and cap with crisp highlights. Keep the bottle proportions and label area consistent with the source photo. Crop out or remove packaging. Premium macro style, no watermark, no decorative text.",
+    prompt: "Clean hero image of the perfume bottle with crisp highlights, but keep the full bottle visible from cap to base. Do not crop the bottle. Keep proportions and label area consistent with the source photo. Remove packaging. No decorative text, no headline, no logo outside the original label.",
   },
 ];
 
@@ -5401,18 +5401,18 @@ function buildOzonAiImagePrompt(product, promptOverride = "", options = {}) {
   let base = template.includes("{productName}")
     ? template.replaceAll("{productName}", productName)
     : `${template}\n\nНазвание товара: ${productName}`;
-  const bottleOnlyInstruction = "Perfume photo rule: show one clean perfume bottle only. Remove or ignore any box, outer packaging, cartons, bags, brochures, accessories, props, hands, faces, and extra text. Do not create or hallucinate packaging, even if the source photo contains a box.";
+  const bottleOnlyInstruction = "Strict marketplace packshot rules: show one clean perfume bottle only. The full bottle must fit inside the square frame from cap to base, centered, upright, not cropped, with 10-15% empty margin on every side. Do not place the bottle on the far left or far right. Remove or ignore any box, outer packaging, cartons, bags, brochures, accessories, props, hands, faces, and all extra text. Do not create headlines, brand typography, marketing copy, icons, or labels outside the original bottle label. Do not hallucinate packaging, even if the source photo contains a box.";
   base = `${base}\n\n${bottleOnlyInstruction}`;
   const variantIndex = Number(options.variantIndex || 0);
   const variantTotal = Number(options.variantTotal || 0);
   if (!variantIndex || variantTotal <= 1) return base;
   const variantBriefs = [
-    "Вариант 1: главный продающий слайд. Сделай крупный товар, сильный заголовок из названия, тип товара и объем, минимум лишнего текста.",
-    "Вариант 2: слайд преимуществ. Сделай 2-3 аккуратных инфоблока с иконками: стиль, назначение, подарок/ежедневное использование, без медицинских обещаний.",
-    "Вариант 3: слайд характера аромата. Если товар парфюмерный, покажи ноты/настроение/характер; если нет, покажи ключевые свойства из названия.",
-    "Вариант 4: чистый premium marketplace packshot. Больше воздуха, бренд-зона с логотипом, короткий заголовок и один главный акцент.",
+    "Variant 1: clean white-background packshot, full centered bottle, natural shadow, no text outside the bottle label.",
+    "Variant 2: premium soft-shadow packshot, full centered bottle, subtle reflection, safe margins, no text outside the bottle label.",
+    "Variant 3: minimal light studio scene, full centered bottle, no props touching the product, no typography.",
+    "Variant 4: clean ecommerce packshot with more air, full centered bottle, no logo or headline outside the original label.",
   ];
-  return `${base}\n\n${variantBriefs[variantIndex - 1] || variantBriefs[0]}\nЭто вариант ${variantIndex} из ${variantTotal}; композиция должна заметно отличаться от других вариантов.`;
+  return `${base}\n\n${variantBriefs[variantIndex - 1] || variantBriefs[0]}\nThis is variant ${variantIndex} of ${variantTotal}; change only lighting/background subtly. Never crop the bottle and never add text outside the original product label.`;
 }
 
 function publicAiImageStudioPresets() {
@@ -13797,7 +13797,7 @@ app.post("/api/warehouse/products/:id/yandex-quality-draft/generate", requireAdm
     for (let index = 1; index <= count; index += 1) {
       try {
         const imageDraft = await generateOzonAiImageDraft(normalized, {
-          prompt: `Create marketplace-ready product photo ${index} of ${count} for ${normalized.name || normalized.offerId}. Clean white studio background, realistic perfume bottle packshot, single bottle only, no box, no outer packaging, no cartons, no props, premium ecommerce lighting, no text overlays, no extra objects.`,
+          prompt: `Create marketplace-ready product photo ${index} of ${count} for ${normalized.name || normalized.offerId}. Clean square ecommerce packshot, realistic perfume bottle only, full bottle visible from cap to base, centered, upright, not cropped, 10-15% empty margin on every side. No box, no outer packaging, no cartons, no props, no headline, no typography, no text overlays, no extra objects. Text is allowed only if it already exists on the original bottle label.`,
           sourceImageUrl: request.body.sourceImageUrl || "",
           batchId,
           variantIndex: index,
