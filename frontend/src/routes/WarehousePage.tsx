@@ -34,6 +34,19 @@ type LinkDraft = {
   updatedAt?: string | null;
 };
 
+type LinkRow = ProductLink & {
+  productId?: string;
+  productOfferId?: string;
+  productMarketplace?: string;
+  productTarget?: string;
+  productSelectedSupplier?: unknown;
+  productOfferIds?: string[];
+  productMarketplaces?: string[];
+  productTargets?: string[];
+  productSelectedSuppliers?: unknown[];
+  groupCount?: number;
+};
+
 function readFilters(): Filters {
   const params = new URLSearchParams(window.location.search);
   return {
@@ -259,6 +272,30 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
     productTarget: item.target || "",
     productSelectedSupplier: item.selectedSupplier,
   })));
+  const groupLinkRows = useMemo<LinkRow[]>(() => {
+    const byKey = new Map<string, LinkRow>();
+    for (const link of links as LinkRow[]) {
+      const key = linkPrimarySignature(link);
+      const existing = byKey.get(key);
+      if (!existing) {
+        byKey.set(key, {
+          ...link,
+          productOfferIds: link.productOfferId ? [link.productOfferId] : [],
+          productMarketplaces: link.productMarketplace ? [link.productMarketplace] : [],
+          productTargets: link.productTarget ? [link.productTarget] : [],
+          productSelectedSuppliers: link.productSelectedSupplier ? [link.productSelectedSupplier] : [],
+          groupCount: 1,
+        });
+        continue;
+      }
+      existing.groupCount = Number(existing.groupCount || 0) + 1;
+      if (link.productOfferId && !existing.productOfferIds?.includes(link.productOfferId)) existing.productOfferIds = [...(existing.productOfferIds || []), link.productOfferId];
+      if (link.productMarketplace && !existing.productMarketplaces?.includes(link.productMarketplace)) existing.productMarketplaces = [...(existing.productMarketplaces || []), link.productMarketplace];
+      if (link.productTarget && !existing.productTargets?.includes(link.productTarget)) existing.productTargets = [...(existing.productTargets || []), link.productTarget];
+      if (link.productSelectedSupplier) existing.productSelectedSuppliers = [...(existing.productSelectedSuppliers || []), link.productSelectedSupplier];
+    }
+    return Array.from(byKey.values());
+  }, [links]);
   const selectedSupplierCount = products.filter((item) => item.selectedSupplier).length;
   const [drafts, setDrafts] = useState<LinkDraft[]>([]);
   const [draft, setDraft] = useState<LinkDraft>(() => emptyLinkDraft());
@@ -269,11 +306,11 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   const draftIsFilled = Boolean(draft.article.trim() || draft.keyword.trim());
   const pendingDrafts = draftIsFilled ? [...drafts, draft] : drafts;
   const draftKeys = useMemo(() => new Set(drafts.map(linkPrimarySignature)), [drafts]);
-  const savedSupplierList = useMemo(() => Array.from(new Set(links.map((link) => link.supplierName).filter(Boolean))).sort(), [links]);
+  const savedSupplierList = useMemo(() => Array.from(new Set(groupLinkRows.map((link) => link.supplierName).filter(Boolean))).sort(), [groupLinkRows]);
   const filteredLinks = useMemo(() => {
     const q = linkFilter.trim().toLowerCase();
-    if (!q) return links;
-    return links.filter((link) => [
+    if (!q) return groupLinkRows;
+    return groupLinkRows.filter((link) => [
       link.article,
       link.supplierArticle,
       link.supplierName,
@@ -282,8 +319,10 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
       link.keyword,
       link.sourceRowId,
       link.productOfferId,
+      ...(link.productOfferIds || []),
+      ...(link.productMarketplaces || []),
     ].filter(Boolean).join(" ").toLowerCase().includes(q));
-  }, [links, linkFilter]);
+  }, [groupLinkRows, linkFilter]);
   const groupLinkSignatures = useMemo(() => products.map(productLinksSignature), [products]);
   const groupLinkCounts = useMemo(() => products.map((item) => (item.links || []).length), [products]);
   const groupLinksSynced = products.length <= 1
@@ -331,7 +370,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async () => {
-      const refs = links
+      const refs = groupLinkRows
         .filter((link) => selectedLinkIds.includes(linkSelectionKey(link)))
         .map((link) => linkDeleteRef(link, products.find((item) => item.id === link.productId) || products[0]));
       return fetchJson("/api/warehouse/products/links/delete", MutationProductResponseSchema, mutationBody({ refs }));
@@ -465,10 +504,16 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
               </div>
               <div className="pm-route-list">
                 <span className="pm-route-chip">
-                  {link.productMarketplace} → {link.productOfferId || link.productId}{link.productTarget ? ` · ${link.productTarget}` : ""}
+                  Общая связь группы: {(link.productMarketplaces || [link.productMarketplace]).filter(Boolean).join(" + ") || "marketplace"}
                 </span>
                 <span className="pm-route-chip muted">
-                  выбран: {supplierText(link.productSelectedSupplier)}
+                  Карточки: {(link.productOfferIds || [link.productOfferId]).filter(Boolean).join(", ") || link.productId}
+                </span>
+                <span className="pm-route-chip muted">
+                  Строк с этой связью: {link.groupCount || 1}/{products.length}
+                </span>
+                <span className="pm-route-chip muted">
+                  выбран: {supplierText((link.productSelectedSuppliers || [link.productSelectedSupplier]).find(Boolean))}
                 </span>
               </div>
             </div>
@@ -476,7 +521,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
               <Trash2 size={16} />
             </button>
           </div>
-        )) : <div className="soft-empty">{links.length ? "По фильтру привязки не найдены." : "У товара пока нет привязок PriceMaster."}</div>}
+        )) : <div className="soft-empty">{groupLinkRows.length ? "По фильтру привязки не найдены." : "У товара пока нет привязок PriceMaster."}</div>}
       </div>
 
       <div className="draft-box">
