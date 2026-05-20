@@ -1118,6 +1118,51 @@ button:disabled {
   gap: 10px;
 }
 
+.preset-strip,
+.ai-assistant-tags,
+.ai-checklist,
+.section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.preset-strip {
+  margin: 0 0 12px;
+}
+
+.ai-assistant-card {
+  border: 1px solid rgba(56, 163, 255, .28);
+  background: rgba(56, 163, 255, .07);
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ai-assistant-card p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.ai-assistant-tags span,
+.ai-checklist span {
+  border: 1px solid var(--line);
+  background: rgba(12, 23, 40, .72);
+  padding: 5px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.ai-checklist span.is-ok {
+  border-color: rgba(61, 220, 151, .35);
+  color: var(--green);
+}
+
 .ai-card {
   border: 1px solid var(--line);
   background: rgba(8, 17, 31, .45);

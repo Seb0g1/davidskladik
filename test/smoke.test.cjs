@@ -233,9 +233,13 @@ test("modern UI uses role-gating, logo branding, and group-level PM counts", asy
   assert.match(warehouseSource, /isAdmin \? <section className="detail-section">/);
   assert.match(warehouseSource, /\/api\/warehouse\/brands/);
   assert.match(warehouseSource, /datalist id="warehouse-brand-list"/);
+  assert.match(warehouseSource, /\/ai-assistant/);
+  assert.match(warehouseSource, /studioPhotoPresets/);
   assert.match(typesSource, /WarehouseBrandsSchema/);
+  assert.match(typesSource, /AiAssistantResponseSchema/);
   assert.match(stylesSource, /\.brand-logo/);
   assert.match(stylesSource, /\.brand-filter-wrap/);
+  assert.match(stylesSource, /\.ai-assistant-card/);
   assert.match(stylesSource, /overflow-x: hidden/);
 });
 
@@ -253,6 +257,19 @@ test("modern copy name action keeps only latin letters and digits", async () => 
     .replace(/\s+/g, " ")
     .trim();
   assert.equal(sanitize("12 Parfumeurs Le Charmeur Парфюмерная вода 100 мл"), "12 Parfumeurs Le Charmeur 100");
+});
+
+test("Codex Sale AI config supports env key aliases and image presets", async () => {
+  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  const settingsSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "routes", "SettingsPage.tsx"), "utf8");
+  assert.match(serverSource, /CODEX_LB_API_KEY/);
+  assert.match(serverSource, /CODEX_SALE_API_KEY/);
+  assert.match(serverSource, /https:\/\/codex\.sale\/v1/);
+  assert.match(serverSource, /gpt-image-2/);
+  assert.match(serverSource, /aiImageStudioPresets/);
+  assert.match(serverSource, /\/api\/warehouse\/products\/:id\/ai-assistant/);
+  assert.match(settingsSource, /codexSaleAiPreset/);
+  assert.match(settingsSource, /Codex Sale preset/);
 });
 
 test("warehouse page product groups merge marketplace variants by offer and manual group", () => {
@@ -2312,7 +2329,11 @@ test("PUT /api/settings saves AI provider settings without exposing API key", as
 test("AI settings test error does not mention Price Master", async () => {
   const backup = await backupFile(appSettingsPath);
   const previousKey = process.env.OPENAI_API_KEY;
+  const previousCodexLbKey = process.env.CODEX_LB_API_KEY;
+  const previousCodexSaleKey = process.env.CODEX_SALE_API_KEY;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.CODEX_LB_API_KEY;
+  delete process.env.CODEX_SALE_API_KEY;
   const agent = request.agent(app);
   await agent
     .post("/api/login")
@@ -2339,6 +2360,10 @@ test("AI settings test error does not mention Price Master", async () => {
   } finally {
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;
+    if (previousCodexLbKey === undefined) delete process.env.CODEX_LB_API_KEY;
+    else process.env.CODEX_LB_API_KEY = previousCodexLbKey;
+    if (previousCodexSaleKey === undefined) delete process.env.CODEX_SALE_API_KEY;
+    else process.env.CODEX_SALE_API_KEY = previousCodexSaleKey;
     await restoreFile(appSettingsPath, backup);
   }
 });
@@ -2923,9 +2948,13 @@ test("AI image generation requires OpenAI key before creating draft", async () =
   assert.ok(product);
 
   const previousKey = process.env.OPENAI_API_KEY;
+  const previousCodexLbKey = process.env.CODEX_LB_API_KEY;
+  const previousCodexSaleKey = process.env.CODEX_SALE_API_KEY;
   const previousRelayUrl = process.env.OPENAI_RELAY_URL;
   const previousRelaySecret = process.env.OPENAI_RELAY_SECRET;
   delete process.env.OPENAI_API_KEY;
+  delete process.env.CODEX_LB_API_KEY;
+  delete process.env.CODEX_SALE_API_KEY;
   delete process.env.OPENAI_RELAY_URL;
   delete process.env.OPENAI_RELAY_SECRET;
   try {
@@ -2947,6 +2976,10 @@ test("AI image generation requires OpenAI key before creating draft", async () =
   } finally {
     if (previousKey === undefined) delete process.env.OPENAI_API_KEY;
     else process.env.OPENAI_API_KEY = previousKey;
+    if (previousCodexLbKey === undefined) delete process.env.CODEX_LB_API_KEY;
+    else process.env.CODEX_LB_API_KEY = previousCodexLbKey;
+    if (previousCodexSaleKey === undefined) delete process.env.CODEX_SALE_API_KEY;
+    else process.env.CODEX_SALE_API_KEY = previousCodexSaleKey;
     if (previousRelayUrl === undefined) delete process.env.OPENAI_RELAY_URL;
     else process.env.OPENAI_RELAY_URL = previousRelayUrl;
     if (previousRelaySecret === undefined) delete process.env.OPENAI_RELAY_SECRET;

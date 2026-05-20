@@ -38,6 +38,17 @@ const defaultAvailabilityRule: AvailabilityRuleDraft = {
   targetStock: 3,
 };
 
+const codexSaleAiPreset = {
+  enabled: true,
+  providerId: "codexsale",
+  baseUrl: "https://codex.sale/v1",
+  textModel: "gpt-5.4-mini",
+  imageModel: "gpt-image-2",
+  imageSize: "1024x1024",
+  imageQuality: "auto",
+  imageFormat: "png",
+};
+
 function normalizeMarketplace(value: unknown) {
   const text = String(value || "all").toLowerCase();
   return text === "ozon" || text === "yandex" ? text : "all";
@@ -500,7 +511,13 @@ export function SettingsPage() {
 
       {activeTab === "ai" && <section className="settings-grid pricing-settings-grid">
         <div className="settings-panel">
-          <div className="section-title"><div><span>AI</span><h3>Провайдер и модели</h3></div><button className="secondary-action" onClick={() => testAi.mutate()} disabled={testAi.isPending}>Тест</button></div>
+          <div className="section-title">
+            <div><span>AI</span><h3>Провайдер и модели</h3></div>
+            <div className="section-actions">
+              <button className="secondary-action" type="button" onClick={() => updateAi({ ...codexSaleAiPreset, apiKey: draftAi.apiKey || "" })}>Codex Sale preset</button>
+              <button className="secondary-action" onClick={() => testAi.mutate()} disabled={testAi.isPending}>Тест</button>
+            </div>
+          </div>
           <label>Provider ID<input value={String(draftAi.providerId ?? ai.providerId ?? "")} onChange={(event) => updateAi({ providerId: event.target.value })} /></label>
           <label>Base URL<input value={String(draftAi.baseUrl ?? ai.baseUrl ?? "")} onChange={(event) => updateAi({ baseUrl: event.target.value })} /></label>
           <label>Text model<input value={String(draftAi.textModel ?? ai.textModel ?? "")} onChange={(event) => updateAi({ textModel: event.target.value })} /></label>

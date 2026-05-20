@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Bot, Check, ChevronRight, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
-import { AiImagesResponseSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
+import { AiAssistantResponseSchema, AiImagesResponseSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
@@ -12,6 +12,13 @@ import { ProductGroup, firstImage, groupPrice, groupProductsForList, groupStatus
 
 const pageSize = 80;
 const mobileListMedia = "(max-width: 640px)";
+const studioPhotoPresets = [
+  { id: "white-packshot", label: "White", prompt: "Clean white marketplace packshot, premium soft light, exact product shape from source photo." },
+  { id: "premium-shadow", label: "Shadow", prompt: "Premium studio shadow, luxury reflective surface, product centered and recognizable." },
+  { id: "lifestyle", label: "Lifestyle", prompt: "Tasteful perfume lifestyle scene, neutral vanity setting, no hands or faces." },
+  { id: "bottle-and-box", label: "Bottle+box", prompt: "Bottle and packaging marketplace composition, clean studio layout." },
+  { id: "close-up", label: "Close-up", prompt: "Close-up hero image of bottle and cap, crisp highlights, no text overlays." },
+];
 
 type LinkDraft = {
   article: string;
@@ -544,8 +551,17 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState("");
   const [freshDrafts, setFreshDrafts] = useState(product.aiImages || []);
+  const [assistant, setAssistant] = useState<Record<string, unknown> | null>(null);
   const visibleDrafts = freshDrafts.length ? freshDrafts : product.aiImages || [];
-  useEffect(() => setFreshDrafts(product.aiImages || []), [product.id, product.aiImages]);
+  useEffect(() => {
+    setFreshDrafts(product.aiImages || []);
+    setAssistant(null);
+  }, [product.id, product.aiImages]);
+
+  const assistantMutation = useMutation({
+    mutationFn: async () => fetchJson(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-assistant`, AiAssistantResponseSchema, mutationBody({ marketplace: "yandex" })),
+    onSuccess: (payload) => setAssistant(payload),
+  });
 
   const generateMutation = useMutation({
     mutationFn: async () => {
@@ -565,6 +581,7 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
         return await fetchJson(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`, AiImagesResponseSchema, mutationBody({
           sourceImageUrl,
           prompt: `Создай 5 реалистичных marketplace-фото через Codex для товара ${product.name || product.offerId}. Обязательно используй исходное фото как референс формы, флакона, упаковки и цвета. Белый или светлый студийный фон, премиальный свет, без водяных знаков, без лишнего текста и без искажения товара.`,
+          photoPresets: studioPhotoPresets,
           count: 5,
           forceCodexSale: true,
           requireSourceImage: true,
@@ -603,12 +620,31 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
       <div className="section-title">
         <div>
           <span>AI</span>
-          <h3>Фото-черновики</h3>
+          <h3>AI-помощник карточки</h3>
         </div>
+        <button className="secondary-action" type="button" disabled={assistantMutation.isPending} onClick={() => assistantMutation.mutate()}>
+          {assistantMutation.isPending ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />} Улучшить карточку
+        </button>
         <button className="primary-action" type="button" disabled={generateMutation.isPending} onClick={() => generateMutation.mutate()}>
           {generateMutation.isPending ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} Codex: 5 фото
         </button>
       </div>
+      <div className="preset-strip">
+        {studioPhotoPresets.map((preset) => <span className="formula-chip" key={preset.id}>{preset.label}</span>)}
+      </div>
+      {assistant && <div className="ai-assistant-card">
+        <strong>Черновик улучшения</strong>
+        <p>{String(asRecord(assistant.draft).description || "").slice(0, 520) || "AI вернул черновик, но описание пустое."}</p>
+        <div className="ai-assistant-tags">
+          {(Array.isArray(asRecord(assistant.draft).seoKeywords) ? asRecord(assistant.draft).seoKeywords as unknown[] : []).slice(0, 10).map((item, index) => <span key={`${item}-${index}`}>{String(item)}</span>)}
+        </div>
+        <div className="ai-checklist">
+          {(Array.isArray(assistant.checklist) ? assistant.checklist : []).map((item, index) => {
+            const row = asRecord(item);
+            return <span className={row.ok ? "is-ok" : ""} key={`${row.id || index}`}>{row.ok ? "✓" : "•"} {String(row.label || row.id)} · {String(row.detail || "")}</span>;
+          })}
+        </div>
+      </div>}
       {progress && <div className="progress-line"><span style={{ width: progress === "готово" ? "100%" : progress === "сохранение" ? "88%" : progress.includes("5/5") ? "76%" : progress.includes("3/5") ? "52%" : "28%" }} />{progress}</div>}
       <div className="ai-grid">
         {visibleDrafts.length ? visibleDrafts.slice(0, 10).map((draft) => (
@@ -624,7 +660,7 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
           </div>
         )) : <div className="soft-empty">Здесь появятся сгенерированные изображения.</div>}
       </div>
-      {(generateMutation.error || reviewMutation.error) && <div className="inline-error">{errorMessage(generateMutation.error || reviewMutation.error)}</div>}
+      {(assistantMutation.error || generateMutation.error || reviewMutation.error) && <div className="inline-error">{errorMessage(assistantMutation.error || generateMutation.error || reviewMutation.error)}</div>}
     </section>
   );
 }

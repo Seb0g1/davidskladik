@@ -109,6 +109,20 @@ export const AiImagesResponseSchema = z.object({
   product: ProductSchema.optional(),
 }).passthrough();
 
+export const AiAssistantResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  productId: z.coerce.string().optional().default(""),
+  offerId: z.coerce.string().optional().default(""),
+  marketplace: z.coerce.string().optional().default("yandex"),
+  draft: z.record(z.string(), z.unknown()).optional().default({}),
+  before: z.record(z.string(), z.unknown()).optional().default({}),
+  after: z.record(z.string(), z.unknown()).optional().default({}),
+  reasons: z.array(z.coerce.string()).optional().default([]),
+  checklist: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  photoPresets: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  provider: z.record(z.string(), z.unknown()).optional().default({}),
+}).passthrough();
+
 export const MutationProductResponseSchema = z.object({
   ok: z.boolean().optional(),
   product: ProductSchema.optional(),

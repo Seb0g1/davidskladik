@@ -176,6 +176,34 @@ function effectiveOpenAiImageModel(model, aiSettings = {}) {
 const ozonAiImageDefaultPrompt = cleanText(process.env.OZON_AI_IMAGE_PROMPT)
   || 'Сгенерируй продающее изображение для карточки товара на Ozon. Используй название товара: "{productName}". Сохрани узнаваемость товара с исходного фото, улучшив фон, свет, композицию и визуальную привлекательность для маркетплейса. Не добавляй логотипы, водяные знаки, недостоверные характеристики или лишний текст.';
 
+const aiImageStudioPresets = [
+  {
+    id: "white-packshot",
+    label: "White background",
+    prompt: "Studio ecommerce packshot on a clean white background. Preserve the exact product shape, bottle, box, cap color and label layout from the source photo. Premium soft light, natural shadow, no added text, no watermark.",
+  },
+  {
+    id: "premium-shadow",
+    label: "Premium shadow",
+    prompt: "Premium perfume product photo with elegant soft shadow and subtle reflective surface. Keep the original bottle and packaging recognizable. Minimal luxury composition, no text overlays, no extra objects covering the product.",
+  },
+  {
+    id: "lifestyle",
+    label: "Lifestyle",
+    prompt: "Tasteful lifestyle scene for a perfume marketplace card. Use a neutral luxury bathroom or vanity setting, soft daylight, product in focus. Preserve source product appearance; no hands, no faces, no text.",
+  },
+  {
+    id: "bottle-and-box",
+    label: "Bottle + box",
+    prompt: "Marketplace image showing perfume bottle and packaging together, clean studio composition. If the source has only one object, create a matching simple box silhouette only when it does not invent brand claims. No extra text.",
+  },
+  {
+    id: "close-up",
+    label: "Close-up",
+    prompt: "Close-up hero image of the perfume bottle and cap with crisp highlights. Keep the product proportions and label area consistent with the source photo. Premium macro style, no watermark, no decorative text.",
+  },
+];
+
 let dailySyncTimer = null;
 let dailySyncNextRunAt = null;
 let dailySyncPromise = null;
@@ -1940,6 +1968,8 @@ function normalizeAiImageDraft(input = {}) {
     batchId: cleanText(input.batchId || input.batch_id),
     variantIndex: Number(input.variantIndex || input.variant_index || 0) || 0,
     variantTotal: Number(input.variantTotal || input.variant_total || 0) || 0,
+    presetId: cleanText(input.presetId || input.preset_id),
+    presetLabel: cleanText(input.presetLabel || input.preset_label),
     layout: cleanText(input.layout),
     model: cleanText(input.model),
     size: cleanText(input.size),
@@ -4880,14 +4910,15 @@ function maskSecret(value = "") {
 
 function publicAppSettings(settings = {}) {
   const normalized = normalizeAppSettings(settings);
+  const effectiveAiApiKey = configuredAiApiKey(normalized.ai);
   return {
     ...normalized,
     ai: {
       ...normalized.ai,
       apiKey: normalized.ai.apiKey ? maskedSecretValue : "",
       apiKeyMasked: maskSecret(normalized.ai.apiKey),
-      apiKeySet: Boolean(normalized.ai.apiKey || cleanText(process.env.OPENAI_API_KEY)),
-      source: normalized.ai.apiKey ? "settings" : (cleanText(process.env.OPENAI_API_KEY) ? "env" : "empty"),
+      apiKeySet: Boolean(effectiveAiApiKey),
+      source: normalized.ai.apiKey ? "settings" : (effectiveAiApiKey ? "env" : "empty"),
     },
   };
 }
@@ -5235,6 +5266,32 @@ function buildOzonAiImagePrompt(product, promptOverride = "", options = {}) {
   return `${base}\n\n${variantBriefs[variantIndex - 1] || variantBriefs[0]}\nЭто вариант ${variantIndex} из ${variantTotal}; композиция должна заметно отличаться от других вариантов.`;
 }
 
+function publicAiImageStudioPresets() {
+  return aiImageStudioPresets.map(({ id, label, prompt }) => ({ id, label, prompt }));
+}
+
+function normalizeAiImageStudioPresetList(input) {
+  const raw = Array.isArray(input) ? input : [];
+  const byId = new Map(aiImageStudioPresets.map((preset) => [preset.id, preset]));
+  const selected = raw
+    .map((item) => {
+      if (typeof item === "string") return byId.get(cleanText(item)) || null;
+      if (!item || typeof item !== "object") return null;
+      const id = cleanText(item.id || item.presetId);
+      const existing = byId.get(id);
+      if (existing) return existing;
+      const prompt = cleanText(item.prompt);
+      if (!prompt) return null;
+      return {
+        id: id || `custom-${crypto.createHash("sha1").update(prompt).digest("hex").slice(0, 8)}`,
+        label: cleanText(item.label) || "Custom",
+        prompt,
+      };
+    })
+    .filter(Boolean);
+  return selected.length ? selected.slice(0, 5) : aiImageStudioPresets.slice(0, 5);
+}
+
 function isOpenAiRelayConfigured() {
   return Boolean(openaiRelayUrl && openaiRelaySecret);
 }
@@ -5244,7 +5301,7 @@ function effectiveAiSettingsFromAppSettings(settings = {}) {
   return {
     ...stored,
     enabled: stored.enabled !== false,
-    apiKey: cleanText(stored.apiKey) || cleanText(process.env.OPENAI_API_KEY),
+    apiKey: configuredAiApiKey(stored),
     baseUrl: cleanText(stored.baseUrl) || openaiBaseUrl,
     textModel: cleanText(stored.textModel) || openaiTextModel,
     imageModel: effectiveOpenAiImageModel(stored.imageModel || openaiImageModel, stored),
@@ -5252,6 +5309,16 @@ function effectiveAiSettingsFromAppSettings(settings = {}) {
     imageQuality: cleanText(stored.imageQuality) || openaiImageQuality,
     imageFormat: cleanText(stored.imageFormat) || openaiImageFormat,
   };
+}
+
+function configuredAiEnvApiKey() {
+  return cleanText(process.env.CODEX_LB_API_KEY)
+    || cleanText(process.env.CODEX_SALE_API_KEY)
+    || cleanText(process.env.OPENAI_API_KEY);
+}
+
+function configuredAiApiKey(aiSettings = {}) {
+  return cleanText(aiSettings.apiKey) || configuredAiEnvApiKey();
 }
 
 async function readEffectiveAiSettings() {
@@ -5268,7 +5335,7 @@ function forceCodexSaleAiImageSettings(aiSettings = {}) {
 }
 
 function isOpenAiDirectConfigured(aiSettings = {}) {
-  return Boolean(cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY));
+  return Boolean(configuredAiApiKey(aiSettings));
 }
 
 function assertOpenAiRelayEnvPair() {
@@ -5318,7 +5385,7 @@ function assertTextGenerationConfigured(aiSettings = {}) {
 }
 
 function getOpenAiClient(aiSettings = {}) {
-  const apiKey = cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY);
+  const apiKey = configuredAiApiKey(aiSettings);
   if (!apiKey) {
     const error = new Error("OPENAI_API_KEY не задан для прямого вызова OpenAI.");
     error.statusCode = 400;
@@ -5488,7 +5555,7 @@ async function parseOpenAiCompatibleImageResponse(response) {
 }
 
 async function fetchOpenAiCompatibleImageEdit(aiSettings, { prompt, sourceBuffer, sourceMimeType, sourceFileName }) {
-  const apiKey = cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY);
+  const apiKey = configuredAiApiKey(aiSettings);
   const model = effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings);
   const endpoint = `${openAiCompatibleImageBaseUrl(aiSettings)}/images/edits`;
   logger.info("ai image edit request", {
@@ -5521,7 +5588,7 @@ async function fetchOpenAiCompatibleImageEdit(aiSettings, { prompt, sourceBuffer
 }
 
 async function fetchOpenAiCompatibleImageGeneration(aiSettings, { prompt }) {
-  const apiKey = cleanText(aiSettings.apiKey) || cleanText(process.env.OPENAI_API_KEY);
+  const apiKey = configuredAiApiKey(aiSettings);
   const model = effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings);
   const endpoint = `${openAiCompatibleImageBaseUrl(aiSettings)}/images/generations`;
   logger.info("ai image generation request", {
@@ -5698,7 +5765,7 @@ async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType, 
   }
 }
 
-async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, sourceImageUrl = "", batchId, variantIndex = 1, variantTotal = 1 }, request) {
+async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, sourceImageUrl = "", batchId, variantIndex = 1, variantTotal = 1, presetId = "", presetLabel = "" }, request) {
   const aiSettings = await readEffectiveAiSettings();
   assertImageGenerationConfigured(aiSettings);
   const sourceHint = cleanText(sourceImageUrl)
@@ -5742,6 +5809,8 @@ async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, sourceI
     batchId,
     variantIndex,
     variantTotal,
+    presetId: cleanText(presetId),
+    presetLabel: cleanText(presetLabel),
     model: effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings),
     size: ozonAiImageStoredSizeLabel(aiSettings),
     quality: aiSettings.imageQuality || openaiImageQuality,
@@ -5762,7 +5831,7 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
       error.code = "source_image_required";
       throw error;
     }
-    return generateOzonAiImageDraftFromPromptOnly(product, { prompt, batchId, variantIndex, variantTotal }, request);
+    return generateOzonAiImageDraftFromPromptOnly(product, { prompt, batchId, variantIndex, variantTotal, presetId: options.presetId, presetLabel: options.presetLabel }, request);
   }
 
   let aiSettings = await readEffectiveAiSettings();
@@ -5866,6 +5935,8 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
     batchId,
     variantIndex,
     variantTotal,
+    presetId: cleanText(options.presetId),
+    presetLabel: cleanText(options.presetLabel),
     model: effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings),
     size: ozonAiImageStoredSizeLabel(aiSettings),
     quality: aiSettings.imageQuality || openaiImageQuality,
@@ -12647,6 +12718,7 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
       });
     }
     const count = Math.min(5, Math.max(1, Math.floor(Number(request.body.count || request.body.imagesCount || 1) || 1)));
+    const studioPresets = normalizeAiImageStudioPresetList(request.body.photoPresets || request.body.presets);
     const batchId = crypto.randomUUID();
     const drafts = [];
     logger.info("ai image drafts generation started", {
@@ -12661,12 +12733,16 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
       attempts: aiImageGenerationAttempts,
     });
     for (let index = 1; index <= count; index += 1) {
+      const preset = studioPresets[(index - 1) % studioPresets.length];
+      const prompt = [cleanText(request.body.prompt), preset?.prompt].filter(Boolean).join("\n\n");
       drafts.push(await generateOzonAiImageDraftWithRetry(product, {
-        prompt: request.body.prompt,
+        prompt,
         sourceImageUrl,
         batchId,
         variantIndex: index,
         variantTotal: count,
+        presetId: preset?.id,
+        presetLabel: preset?.label,
         requireSourceImage: true,
         allowGenerationFallback: false,
         forceCodexSale: true,
@@ -12713,6 +12789,77 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
       code: error?.code,
       statusCode: error?.statusCode || error?.status,
     });
+    next(error);
+  }
+});
+
+function buildAiAssistantChecklist(product = {}, validation = {}, draft = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const hasSourceImage = Boolean(firstImageUrl(normalized.ozon?.primaryImage || normalized.ozon?.images || normalized.imageUrl));
+  return [
+    {
+      id: "description",
+      label: "Проверить новое описание",
+      ok: cleanText(draft.description).length >= 300,
+      detail: cleanText(draft.description).length ? `${cleanText(draft.description).length} символов` : "описание не создано",
+    },
+    {
+      id: "seo",
+      label: "Проверить SEO-фразы",
+      ok: Array.isArray(draft.seoKeywords) && draft.seoKeywords.length >= 5,
+      detail: `${Array.isArray(draft.seoKeywords) ? draft.seoKeywords.length : 0} фраз`,
+    },
+    {
+      id: "photo",
+      label: "Сгенерировать 5 фото по studio presets",
+      ok: hasSourceImage,
+      detail: hasSourceImage ? "исходное фото есть" : "нет исходного фото",
+    },
+    {
+      id: "marketplace",
+      label: "Проверить требования маркетплейса",
+      ok: Boolean(validation.ready),
+      detail: (validation.missing || validation.reasons || []).join(", ") || "критичных замечаний нет",
+    },
+    {
+      id: "manual-review",
+      label: "Одобрить вручную перед отправкой",
+      ok: false,
+      detail: "AI ничего не публикует без кнопки подтверждения",
+    },
+  ];
+}
+
+app.post("/api/warehouse/products/:id/ai-assistant", async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const marketplace = cleanText(request.body.marketplace || "yandex").toLowerCase() === "ozon" ? "ozon" : "yandex";
+    const beforeValidation = productContentQuality(product, marketplace);
+    const draft = await generateAiProductContentDraft(product, { marketplace });
+    const previewProduct = applyAiContentDraftToProduct(product, draft, marketplace);
+    const afterValidation = productContentQuality(previewProduct, marketplace);
+    const aiSettings = await readEffectiveAiSettings();
+    response.json({
+      ok: true,
+      productId: product.id,
+      offerId: product.offerId,
+      marketplace,
+      draft,
+      before: beforeValidation,
+      after: afterValidation,
+      reasons: beforeValidation.reasons || [],
+      checklist: buildAiAssistantChecklist(previewProduct, afterValidation, draft),
+      photoPresets: publicAiImageStudioPresets(),
+      provider: {
+        providerId: aiSettings.providerId,
+        baseUrl: normalizeOpenAiCompatibleBaseUrl(aiSettings.baseUrl),
+        textModel: aiSettings.textModel || openaiTextModel,
+        imageModel: effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings),
+      },
+    });
+  } catch (error) {
     next(error);
   }
 });
