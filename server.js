@@ -8951,6 +8951,9 @@ function applyOzonInfoToWarehouseProduct(product, info = {}, account = {}, stock
   const primaryImage = firstImageUrl(info.primary_image || info.primaryImage || info.images || info.images360 || info.color_image);
   const productUrl = info.product_url || info.url || (sku ? `https://www.ozon.ru/product/${encodeURIComponent(String(sku))}/` : product.productUrl);
   const betterName = cleanText(info.name);
+  const nextName = betterName && !isWeakProductName(betterName, product.offerId)
+    ? betterName
+    : (betterName && isWeakProductName(product.name, product.offerId) ? betterName : product.name || betterName);
   const priceDetails = normalizeOzonPriceDetails(priceInfo);
   const cabinetPrice =
     pickOzonCabinetListedPrice(priceDetails) || parseMoneyValue(info.price) || product.marketplacePrice || null;
@@ -8963,7 +8966,7 @@ function applyOzonInfoToWarehouseProduct(product, info = {}, account = {}, stock
     target: product.target || account.id,
     marketplace: "ozon",
     targetName: account.name || product.targetName || "Ozon",
-    name: betterName && isWeakProductName(product.name, product.offerId) ? betterName : product.name || betterName,
+    name: nextName,
     productId: product.productId || info.product_id || info.id,
     sku: sku || product.sku,
     productUrl,
@@ -8975,7 +8978,7 @@ function applyOzonInfoToWarehouseProduct(product, info = {}, account = {}, stock
       ...(product.ozon || {}),
       offerId: product.offerId,
       vendor: cleanText(info.brand || info.vendor || (product.ozon || {}).vendor || ""),
-      name: info.name || product.ozon?.name || product.name,
+      name: betterName || product.ozon?.name || nextName,
       description: info.description || product.ozon?.description || "",
       categoryId: info.description_category_id || info.category_id || product.ozon?.categoryId,
       typeId: info.type_id || info.description_type_id || product.ozon?.typeId,

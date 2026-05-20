@@ -1542,6 +1542,8 @@ test("Ozon enrichment keeps existing state when stock and status are missing", (
   assert.equal(enriched.marketplaceState.code, "active");
   assert.equal(enriched.marketplaceState.stock, 3);
   assert.equal(enriched.marketplacePrice, 1000);
+  assert.equal(enriched.name, "Better Ozon name");
+  assert.equal(enriched.ozon.name, "Better Ozon name");
   assert.equal(enriched.imageUrl, "https://example.test/image.jpg");
 });
 
