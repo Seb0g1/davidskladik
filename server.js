@@ -80,6 +80,7 @@ const priceRetryQueuePath = path.join(dataDir, "price-retry-queue.json");
 const ozonUnarchiveQueuePath = path.join(dataDir, "ozon-unarchive-queue.json");
 const yandexExistingOffersCachePath = path.join(dataDir, "yandex-existing-offers.json");
 const operationJobsPath = path.join(dataDir, "operation-jobs.json");
+const aiImageJobsPath = path.join(dataDir, "ai-image-jobs.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
 const buildVersion = cleanBuildVersion(process.env.APP_BUILD_VERSION || process.env.GIT_COMMIT || readGitCommit());
@@ -12868,85 +12869,365 @@ async function generateOzonAiImageDraftWithRetry(product, options, request, logg
   throw lastError;
 }
 
-app.post("/api/warehouse/products/:id/ai-images/generate", async (request, response, next) => {
-  try {
-    const warehouse = await readWarehouse();
-    const product = warehouse.products.find((item) => item.id === request.params.id);
-    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
-    const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], updatedAt: product.updatedAt });
+const activeAiImageJobs = new Map();
 
-    const sourceImageUrl = cleanText(request.body.sourceImageUrl) || firstImageUrl(product.ozon?.primaryImage || product.ozon?.images || product.imageUrl);
-    if (!sourceImageUrl) {
-      return response.status(400).json({
-        error: "Для генерации через Codex нужно исходное фото товара. Добавьте фото в карточку или загрузите его перед генерацией.",
-        code: "source_image_required",
-      });
+function aiImageJobErrorPayload(error = {}) {
+  return compactObject({
+    detail: cleanText(error?.message || error?.error?.message || error?.detail || String(error)),
+    code: cleanText(error?.code || error?.error?.code),
+    status: Number(error?.statusCode || error?.status || 0) || undefined,
+    model: cleanText(error?.model || "gpt-image-2"),
+    endpoint: cleanText(error?.endpoint || "https://codex.sale/v1/images/edits"),
+  });
+}
+
+function normalizeAiImageJob(input = {}) {
+  const status = cleanText(input.status || "queued").toLowerCase();
+  const allowedStatus = new Set(["queued", "running", "completed", "failed", "partial"]);
+  const variantTotal = Math.max(1, Math.min(5, Number(input.variantTotal || input.variant_total || 5) || 5));
+  const draftIds = Array.isArray(input.draftIds || input.draft_ids)
+    ? (input.draftIds || input.draft_ids).map(cleanText).filter(Boolean)
+    : [];
+  return compactObject({
+    id: cleanText(input.id || input.jobId || input.job_id) || crypto.randomUUID(),
+    productId: cleanText(input.productId || input.product_id),
+    offerId: cleanText(input.offerId || input.offer_id),
+    target: cleanText(input.target),
+    batchId: cleanText(input.batchId || input.batch_id) || crypto.randomUUID(),
+    status: allowedStatus.has(status) ? status : "queued",
+    progress: Math.max(0, Math.min(100, Number(input.progress || 0) || 0)),
+    variantIndex: Math.max(0, Math.min(variantTotal, Number(input.variantIndex || input.variant_index || 0) || 0)),
+    variantTotal,
+    draftIds,
+    lastError: input.lastError || input.last_error || null,
+    model: cleanText(input.model || "gpt-image-2"),
+    endpoint: cleanText(input.endpoint || "https://codex.sale/v1/images/edits"),
+    presetId: cleanText(input.presetId || input.preset_id),
+    presetLabel: cleanText(input.presetLabel || input.preset_label),
+    sourceImageUrl: cleanText(input.sourceImageUrl || input.source_image_url),
+    prompt: cleanText(input.prompt),
+    createdBy: cleanText(input.createdBy || input.created_by || "system"),
+    createdAt: input.createdAt || input.created_at || new Date().toISOString(),
+    startedAt: input.startedAt || input.started_at || null,
+    updatedAt: input.updatedAt || input.updated_at || new Date().toISOString(),
+    finishedAt: input.finishedAt || input.finished_at || null,
+  });
+}
+
+async function readAiImageJobs() {
+  try {
+    const payload = JSON.parse(await fs.readFile(aiImageJobsPath, "utf8"));
+    const jobs = Array.isArray(payload?.jobs) ? payload.jobs : (Array.isArray(payload) ? payload : []);
+    return jobs.map(normalizeAiImageJob).filter((job) => job.id && job.productId);
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    logger.warn("read ai image jobs failed", { detail: error?.message || String(error) });
+    return [];
+  }
+}
+
+async function writeAiImageJobs(jobs = []) {
+  await fs.mkdir(dataDir, { recursive: true });
+  const normalized = (Array.isArray(jobs) ? jobs : [])
+    .map(normalizeAiImageJob)
+    .filter((job) => job.id && job.productId)
+    .sort((left, right) => String(right.updatedAt || "").localeCompare(String(left.updatedAt || "")))
+    .slice(0, 250);
+  const temporaryPath = `${aiImageJobsPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify({ updatedAt: new Date().toISOString(), jobs: normalized }, null, 2), "utf8");
+  await fs.rename(temporaryPath, aiImageJobsPath);
+  return normalized;
+}
+
+async function upsertAiImageJob(jobInput = {}) {
+  const job = normalizeAiImageJob({ ...jobInput, updatedAt: new Date().toISOString() });
+  const jobs = await readAiImageJobs();
+  const index = jobs.findIndex((item) => item.id === job.id);
+  if (index >= 0) jobs[index] = job;
+  else jobs.unshift(job);
+  await writeAiImageJobs(jobs);
+  return job;
+}
+
+async function findActiveAiImageJob(productId) {
+  const id = cleanText(productId);
+  if (!id) return null;
+  const jobs = await readAiImageJobs();
+  return jobs.find((job) => job.productId === id && ["queued", "running"].includes(job.status) && activeAiImageJobs.has(job.id)) || null;
+}
+
+function publicAiImageJob(jobInput = {}) {
+  const job = normalizeAiImageJob(jobInput);
+  return compactObject({
+    id: job.id,
+    jobId: job.id,
+    productId: job.productId,
+    offerId: job.offerId,
+    target: job.target,
+    batchId: job.batchId,
+    status: job.status,
+    progress: job.progress,
+    variantIndex: job.variantIndex,
+    variantTotal: job.variantTotal,
+    draftIds: job.draftIds || [],
+    lastError: job.lastError || null,
+    model: job.model,
+    endpoint: job.endpoint,
+    presetId: job.presetId,
+    presetLabel: job.presetLabel,
+    sourceImageUrl: job.sourceImageUrl,
+    startedAt: job.startedAt || null,
+    updatedAt: job.updatedAt || null,
+    finishedAt: job.finishedAt || null,
+  });
+}
+
+function aiImageGenerationRequestFromBody(product, body = {}) {
+  return {
+    sourceImageUrl: cleanText(body.sourceImageUrl) || firstImageUrl(product.ozon?.primaryImage || product.ozon?.images || product.imageUrl),
+    count: Math.min(5, Math.max(1, Math.floor(Number(body.count || body.imagesCount || 5) || 5))),
+    studioPresets: normalizeAiImageStudioPresetList(body.photoPresets || body.presets),
+    prompt: cleanText(body.prompt),
+  };
+}
+
+async function appendAiImageDraftToProduct(productId, draft) {
+  const warehouse = await readWarehouse();
+  const product = warehouse.products.find((item) => item.id === productId);
+  if (!product) {
+    const error = new Error("Warehouse product not found.");
+    error.statusCode = 404;
+    error.code = "warehouse_product_not_found";
+    throw error;
+  }
+  product.aiImages = normalizeAiImageDrafts([...(product.aiImages || []), draft]);
+  product.updatedAt = new Date().toISOString();
+  const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_generate", writeLinks: false });
+  return saved?.products?.find((item) => item.id === productId) || normalizeWarehouseProduct(product);
+}
+
+async function generateAiImageDraftsSynchronously(product, generation, request, batchId = crypto.randomUUID()) {
+  const drafts = [];
+  for (let index = 1; index <= generation.count; index += 1) {
+    const preset = generation.studioPresets[(index - 1) % generation.studioPresets.length];
+    const prompt = [generation.prompt, preset?.prompt].filter(Boolean).join("\n\n");
+    const draft = await generateOzonAiImageDraftWithRetry(product, {
+      prompt,
+      sourceImageUrl: generation.sourceImageUrl,
+      batchId,
+      variantIndex: index,
+      variantTotal: generation.count,
+      presetId: preset?.id,
+      presetLabel: preset?.label,
+      requireSourceImage: true,
+      allowGenerationFallback: false,
+      forceCodexSale: true,
+    }, request, {
+      productId: product.id,
+      offerId: product.offerId,
+      variantIndex: index,
+      variantTotal: generation.count,
+    });
+    drafts.push(draft);
+    if (index < generation.count && aiImageGenerationSequenceDelayMs > 0) await sleep(aiImageGenerationSequenceDelayMs);
+  }
+  return drafts;
+}
+
+async function runAiImageGenerationJob(jobInput, generation, requestContext = {}) {
+  let job = normalizeAiImageJob({ ...jobInput, status: "running", progress: 2, startedAt: new Date().toISOString(), lastError: null });
+  activeAiImageJobs.set(job.id, true);
+  await upsertAiImageJob(job);
+  const auditRequest = {
+    session: {
+      username: cleanText(requestContext.username || job.createdBy || "system") || "system",
+      role: cleanText(requestContext.role || "admin") || "admin",
+    },
+  };
+  let savedProduct = null;
+  try {
+    const initialWarehouse = await readWarehouse();
+    const product = initialWarehouse.products.find((item) => item.id === job.productId);
+    if (!product) {
+      const error = new Error("Warehouse product not found.");
+      error.statusCode = 404;
+      error.code = "warehouse_product_not_found";
+      throw error;
     }
-    const count = Math.min(5, Math.max(1, Math.floor(Number(request.body.count || request.body.imagesCount || 1) || 1)));
-    const studioPresets = normalizeAiImageStudioPresetList(request.body.photoPresets || request.body.presets);
-    const batchId = crypto.randomUUID();
-    const drafts = [];
-    logger.info("ai image drafts generation started", {
+    logger.info("ai image drafts job started", {
+      jobId: job.id,
       productId: product.id,
       offerId: product.offerId,
       target: product.target,
-      count,
-      hasSourceImageUrl: Boolean(sourceImageUrl),
-      hasPrompt: Boolean(cleanText(request.body.prompt)),
+      count: generation.count,
       provider: "codexsale",
       sequential: true,
       attempts: aiImageGenerationAttempts,
     });
-    for (let index = 1; index <= count; index += 1) {
-      const preset = studioPresets[(index - 1) % studioPresets.length];
-      const prompt = [cleanText(request.body.prompt), preset?.prompt].filter(Boolean).join("\n\n");
-      drafts.push(await generateOzonAiImageDraftWithRetry(product, {
-        prompt,
-        sourceImageUrl,
-        batchId,
+    for (let index = 1; index <= generation.count; index += 1) {
+      const preset = generation.studioPresets[(index - 1) % generation.studioPresets.length];
+      job = await upsertAiImageJob({
+        ...job,
+        status: "running",
         variantIndex: index,
-        variantTotal: count,
+        variantTotal: generation.count,
+        progress: Math.max(5, Math.floor(((index - 1) / generation.count) * 90)),
+        presetId: preset?.id,
+        presetLabel: preset?.label,
+        lastError: null,
+      });
+      const prompt = [generation.prompt, preset?.prompt].filter(Boolean).join("\n\n");
+      const draft = await generateOzonAiImageDraftWithRetry(product, {
+        prompt,
+        sourceImageUrl: generation.sourceImageUrl,
+        batchId: job.batchId,
+        variantIndex: index,
+        variantTotal: generation.count,
         presetId: preset?.id,
         presetLabel: preset?.label,
         requireSourceImage: true,
         allowGenerationFallback: false,
         forceCodexSale: true,
-      }, request, {
+      }, requestContext, {
+        jobId: job.id,
         productId: product.id,
         offerId: product.offerId,
         variantIndex: index,
-        variantTotal: count,
-      }));
-      if (index < count && aiImageGenerationSequenceDelayMs > 0) {
-        await sleep(aiImageGenerationSequenceDelayMs);
-      }
+        variantTotal: generation.count,
+      });
+      savedProduct = await appendAiImageDraftToProduct(product.id, draft);
+      job = await upsertAiImageJob({
+        ...job,
+        draftIds: Array.from(new Set([...(job.draftIds || []), draft.id])),
+        progress: Math.floor((index / generation.count) * 100),
+        variantIndex: index,
+        variantTotal: generation.count,
+        status: "running",
+      });
+      if (index < generation.count && aiImageGenerationSequenceDelayMs > 0) await sleep(aiImageGenerationSequenceDelayMs);
     }
-    const draft = drafts[drafts.length - 1];
-    const freshWarehouse = await readWarehouse();
-    const freshProduct = freshWarehouse.products.find((item) => item.id === request.params.id) || product;
-    freshProduct.aiImages = normalizeAiImageDrafts([...(freshProduct.aiImages || []), ...drafts]);
-    freshProduct.updatedAt = new Date().toISOString();
+    job = await upsertAiImageJob({
+      ...job,
+      status: "completed",
+      progress: 100,
+      variantIndex: generation.count,
+      variantTotal: generation.count,
+      finishedAt: new Date().toISOString(),
+      lastError: null,
+    });
+    logger.info("ai image drafts job complete", {
+      jobId: job.id,
+      productId: job.productId,
+      offerId: job.offerId,
+      drafts: job.draftIds.length,
+      batchId: job.batchId,
+    });
+    appendAudit(auditRequest, "warehouse.ai_image.generate", {
+      productId: job.productId,
+      offerId: job.offerId,
+      draftIds: job.draftIds,
+      batchId: job.batchId,
+      count: generation.count,
+      jobId: job.id,
+      oldValue: requestContext.before || null,
+      newValue: savedProduct ? { id: savedProduct.id, aiImages: savedProduct.aiImages || [], updatedAt: savedProduct.updatedAt } : null,
+    }).catch((auditError) => logger.warn("ai image generate audit failed", { detail: auditError?.message || String(auditError) }));
+  } catch (error) {
+    const errorPayload = aiImageJobErrorPayload(error);
+    job = await upsertAiImageJob({
+      ...job,
+      status: (job.draftIds || []).length ? "partial" : "failed",
+      progress: (job.draftIds || []).length ? job.progress : 0,
+      lastError: errorPayload,
+      finishedAt: new Date().toISOString(),
+    });
+    logger.warn("ai image drafts job failed", {
+      jobId: job.id,
+      productId: job.productId,
+      offerId: job.offerId,
+      drafts: job.draftIds.length,
+      ...errorPayload,
+    });
+  } finally {
+    activeAiImageJobs.delete(job.id);
+  }
+  return job;
+}
 
-    const saved = await writeWarehouseProductPatch([freshProduct], { reason: "warehouse_ai_image_generate", writeLinks: false });
-    const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(freshProduct);
-    response.json({ ok: true, draft, drafts, batchId, product: savedProduct });
-    logger.info("ai image drafts generation complete", {
+app.post("/api/warehouse/products/:id/ai-images/generate", async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "РўРѕРІР°СЂ СЃРєР»Р°РґР° РЅРµ РЅР°Р№РґРµРЅ." });
+    const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], updatedAt: product.updatedAt });
+    const generation = aiImageGenerationRequestFromBody(product, request.body);
+    if (!generation.sourceImageUrl) {
+      return response.status(400).json({
+        error: "Р”Р»СЏ РіРµРЅРµСЂР°С†РёРё С‡РµСЂРµР· Codex РЅСѓР¶РЅРѕ РёСЃС…РѕРґРЅРѕРµ С„РѕС‚Рѕ С‚РѕРІР°СЂР°.",
+        code: "source_image_required",
+      });
+    }
+    assertImageGenerationConfigured(forceCodexSaleAiImageSettings(await readEffectiveAiSettings()));
+
+    const syncMode = request.body?.sync === true || cleanText(request.body?.mode).toLowerCase() === "sync";
+    if (syncMode) {
+      const batchId = crypto.randomUUID();
+      const drafts = await generateAiImageDraftsSynchronously(product, generation, request, batchId);
+      const draft = drafts[drafts.length - 1];
+      let savedProduct = null;
+      for (const item of drafts) savedProduct = await appendAiImageDraftToProduct(product.id, item);
+      response.json({ ok: true, draft, drafts, batchId, product: savedProduct || product });
+      appendAudit(request, "warehouse.ai_image.generate", {
+        productId: product.id,
+        offerId: product.offerId,
+        draftId: draft.id,
+        batchId,
+        count: generation.count,
+        oldValue: before,
+        newValue: savedProduct ? { id: savedProduct.id, aiImages: savedProduct.aiImages || [], updatedAt: savedProduct.updatedAt } : null,
+      }).catch((auditError) => logger.warn("ai image generate audit failed", { detail: auditError?.message || String(auditError) }));
+      return;
+    }
+
+    const activeJob = await findActiveAiImageJob(product.id);
+    if (activeJob) {
+      return response.status(202).json({
+        ok: true,
+        jobId: activeJob.id,
+        status: activeJob.status,
+        productId: product.id,
+        batchId: activeJob.batchId,
+        job: publicAiImageJob(activeJob),
+      });
+    }
+
+    const job = await upsertAiImageJob({
       productId: product.id,
       offerId: product.offerId,
       target: product.target,
-      count,
-      drafts: drafts.length,
-      batchId,
+      batchId: crypto.randomUUID(),
+      status: "queued",
+      progress: 0,
+      variantTotal: generation.count,
+      model: "gpt-image-2",
+      endpoint: "https://codex.sale/v1/images/edits",
+      sourceImageUrl: generation.sourceImageUrl,
+      prompt: generation.prompt,
+      createdBy: requestUsername(request),
     });
-    appendAudit(request, "warehouse.ai_image.generate", {
-      productId: product.id,
-      offerId: product.offerId,
-      draftId: draft.id,
-      batchId,
-      count,
-      oldValue: before,
-      newValue: { id: savedProduct.id, aiImages: savedProduct.aiImages || [], updatedAt: savedProduct.updatedAt },
-    }).catch((auditError) => logger.warn("ai image generate audit failed", { detail: auditError?.message || String(auditError) }));
+    activeAiImageJobs.set(job.id, true);
+    response.status(202).json({ ok: true, jobId: job.id, status: "queued", productId: product.id, batchId: job.batchId, job: publicAiImageJob(job) });
+    setImmediate(() => {
+      runAiImageGenerationJob(job, generation, {
+        session: { username: requestUsername(request), role: request.session?.role || "admin" },
+        headers: { host: request.headers.host, "x-forwarded-proto": request.headers["x-forwarded-proto"] },
+        protocol: request.protocol,
+        get: (name) => request.get(name),
+        username: requestUsername(request),
+        role: request.session?.role || "admin",
+        before,
+      }).catch((error) => logger.warn("ai image background job launcher failed", { jobId: job.id, detail: error?.message || String(error) }));
+    });
   } catch (error) {
     logger.warn("ai image drafts generation failed", {
       productId: request.params.id,
@@ -12954,6 +13235,19 @@ app.post("/api/warehouse/products/:id/ai-images/generate", async (request, respo
       code: error?.code,
       statusCode: error?.statusCode || error?.status,
     });
+    next(error);
+  }
+});
+
+app.get("/api/warehouse/products/:id/ai-images/jobs/:jobId", async (request, response, next) => {
+  try {
+    const jobs = await readAiImageJobs();
+    const job = jobs.find((item) => item.id === request.params.jobId && item.productId === request.params.id);
+    if (!job) return response.status(404).json({ error: "AI image job not found.", code: "ai_image_job_not_found" });
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id) || null;
+    response.json({ ok: true, job: publicAiImageJob(job), product: product ? normalizeWarehouseProduct(product) : null });
+  } catch (error) {
     next(error);
   }
 });
@@ -18385,6 +18679,12 @@ module.exports = {
   ozonUnarchiveQueuePath,
   ozonUnarchiveDateKey,
   nextOzonUnarchiveRetryAt,
+  readAiImageJobs,
+  writeAiImageJobs,
+  normalizeAiImageJob,
+  publicAiImageJob,
+  runAiImageGenerationJob,
+  aiImageJobsPath,
 };
 
 if (require.main === module) {

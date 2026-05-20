@@ -109,6 +109,38 @@ export const AiImagesResponseSchema = z.object({
   product: ProductSchema.optional(),
 }).passthrough();
 
+export const AiImageJobSchema = z.object({
+  id: z.coerce.string().optional().default(""),
+  jobId: z.coerce.string().optional().default(""),
+  productId: z.coerce.string().optional().default(""),
+  offerId: z.coerce.string().optional().default(""),
+  batchId: z.coerce.string().optional().default(""),
+  status: z.coerce.string().optional().default("queued"),
+  progress: z.number().optional().default(0),
+  variantIndex: z.number().optional().default(0),
+  variantTotal: z.number().optional().default(5),
+  draftIds: z.array(z.coerce.string()).optional().default([]),
+  lastError: z.record(z.string(), z.unknown()).optional().nullable(),
+  model: z.coerce.string().optional().default(""),
+  endpoint: z.coerce.string().optional().default(""),
+  presetId: z.coerce.string().optional().default(""),
+  presetLabel: z.coerce.string().optional().default(""),
+  sourceImageUrl: z.coerce.string().optional().default(""),
+  startedAt: z.string().optional().nullable(),
+  updatedAt: z.string().optional().nullable(),
+  finishedAt: z.string().optional().nullable(),
+}).passthrough();
+
+export const AiImageJobResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  jobId: z.coerce.string().optional().default(""),
+  status: z.coerce.string().optional().default(""),
+  productId: z.coerce.string().optional().default(""),
+  batchId: z.coerce.string().optional().default(""),
+  job: AiImageJobSchema.optional(),
+  product: ProductSchema.optional().nullable(),
+}).passthrough();
+
 export const AiAssistantResponseSchema = z.object({
   ok: z.boolean().optional(),
   productId: z.coerce.string().optional().default(""),

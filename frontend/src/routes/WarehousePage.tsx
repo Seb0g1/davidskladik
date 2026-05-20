@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Bot, Check, ChevronRight, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
-import { AiAssistantResponseSchema, AiImagesResponseSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
+import { AiAssistantResponseSchema, AiImageJobResponseSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
@@ -556,16 +556,76 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   );
 }
 
+function aiJobProgressText(jobInput: unknown) {
+  const job = asRecord(jobInput);
+  const status = String(job.status || "");
+  const index = Number(job.variantIndex || 0);
+  const total = Number(job.variantTotal || 5) || 5;
+  const done = Array.isArray(job.draftIds) ? job.draftIds.length : 0;
+  if (status === "queued") return "подготовка";
+  if (status === "running") return index ? `Codex: генерация ${index}/${total}, готово ${done}/${total}` : `Codex: готово ${done}/${total}`;
+  if (status === "completed") return `готово ${done || total}/${total}`;
+  if (status === "partial") return `частично готово ${done}/${total}`;
+  if (status === "failed") return "ошибка генерации";
+  return "";
+}
+
+function aiJobProgressPercent(jobInput: unknown) {
+  const job = asRecord(jobInput);
+  const progress = Number(job.progress || 0);
+  if (Number.isFinite(progress) && progress > 0) return Math.max(4, Math.min(100, progress));
+  const total = Number(job.variantTotal || 5) || 5;
+  const done = Array.isArray(job.draftIds) ? job.draftIds.length : 0;
+  return Math.max(4, Math.min(100, Math.round((done / total) * 100)));
+}
+
 function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState("");
   const [freshDrafts, setFreshDrafts] = useState(product.aiImages || []);
   const [assistant, setAssistant] = useState<Record<string, unknown> | null>(null);
+  const [activeJobId, setActiveJobId] = useState("");
+  const [activeJob, setActiveJob] = useState<Record<string, unknown> | null>(null);
   const visibleDrafts = freshDrafts.length ? freshDrafts : product.aiImages || [];
   useEffect(() => {
     setFreshDrafts(product.aiImages || []);
+  }, [product.aiImages]);
+  useEffect(() => {
+    setFreshDrafts(product.aiImages || []);
     setAssistant(null);
-  }, [product.id, product.aiImages]);
+    setActiveJobId("");
+    setActiveJob(null);
+    setProgress("");
+  }, [product.id]);
+
+  const jobRunning = ["queued", "running"].includes(String(asRecord(activeJob).status || ""));
+  const jobQuery = useQuery({
+    queryKey: ["warehouse", "ai-image-job", product.id, activeJobId],
+    enabled: Boolean(activeJobId),
+    queryFn: async () => fetchJson(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/jobs/${encodeURIComponent(activeJobId)}`, AiImageJobResponseSchema),
+    refetchInterval: jobRunning ? 3000 : false,
+  });
+
+  useEffect(() => {
+    const payload = jobQuery.data;
+    if (!payload) return;
+    const job = asRecord(payload.job);
+    if (Object.keys(job).length) {
+      setActiveJob(job);
+      setProgress(aiJobProgressText(job));
+    }
+    if (payload.product?.aiImages?.length) {
+      setFreshDrafts(payload.product.aiImages);
+      updateCachedProducts(queryClient, { product: payload.product });
+    }
+    const status = String(job.status || "");
+    if (["completed", "failed", "partial"].includes(status)) {
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      onSaved();
+    } else if (status === "running") {
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+    }
+  }, [jobQuery.data, queryClient, onSaved]);
 
   const assistantMutation = useMutation({
     mutationFn: async () => fetchJson(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-assistant`, AiAssistantResponseSchema, mutationBody({ marketplace: "yandex" })),
@@ -575,39 +635,32 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
   const generateMutation = useMutation({
     mutationFn: async () => {
       const sourceImageUrl = firstImage(product);
-      if (!sourceImageUrl) throw new Error("Для Codex-генерации нужно исходное фото товара.");
-      setProgress("подготовка исходного фото");
-      const timer = window.setInterval(() => setProgress((current) => {
-        if (current === "подготовка исходного фото") return "Codex: фото 1/5";
-        if (current === "Codex: фото 1/5") return "Codex: фото 2/5";
-        if (current === "Codex: фото 2/5") return "Codex: фото 3/5";
-        if (current === "Codex: фото 3/5") return "Codex: фото 4/5";
-        if (current === "Codex: фото 4/5") return "Codex: фото 5/5";
-        if (current === "Codex: фото 5/5") return "сохранение";
-        return current;
-      }), 4500);
-      try {
-        return await fetchJson(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`, AiImagesResponseSchema, mutationBody({
-          sourceImageUrl,
-          prompt: `Создай 5 реалистичных marketplace-фото через Codex для товара ${product.name || product.offerId}. Обязательно используй исходное фото как референс формы, флакона, упаковки и цвета. Белый или светлый студийный фон, премиальный свет, без водяных знаков, без лишнего текста и без искажения товара.`,
-          photoPresets: studioPhotoPresets,
-          count: 5,
-          forceCodexSale: true,
-          requireSourceImage: true,
-        }));
-      } finally {
-        window.clearInterval(timer);
-      }
+      if (!sourceImageUrl) throw new Error("Source product photo is required for Codex generation.");
+      setProgress("preparing");
+      return await fetchJson(`/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/generate`, AiImageJobResponseSchema, mutationBody({
+        sourceImageUrl,
+        prompt: `Create 5 realistic marketplace photos through Codex for product ${product.name || product.offerId}. Use the source product photo as the required reference for shape, bottle, packaging and color. White or light studio background, premium lighting, no watermarks, no extra text, no product distortion.`,
+        photoPresets: studioPhotoPresets,
+        count: 5,
+        forceCodexSale: true,
+        requireSourceImage: true,
+      }));
     },
     onSuccess: (payload) => {
-      setProgress("готово");
-      const responseDrafts = payload.product?.aiImages?.length ? payload.product.aiImages : payload.drafts;
-      setFreshDrafts(responseDrafts || []);
-      updateCachedProducts(queryClient, payload);
+      const job = asRecord(payload.job);
+      const jobId = String(payload.jobId || job.id || job.jobId || "");
+      if (jobId) {
+        setActiveJobId(jobId);
+        setActiveJob(job);
+        setProgress(aiJobProgressText(job) || "preparing");
+      }
+      if (payload.product?.aiImages?.length) {
+        setFreshDrafts(payload.product.aiImages);
+        updateCachedProducts(queryClient, { product: payload.product });
+      }
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-      onSaved();
     },
-    onError: () => setProgress("ошибка"),
+    onError: () => setProgress("start failed"),
   });
 
   const reviewMutation = useMutation({
@@ -624,6 +677,10 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
     },
   });
 
+  const generationBusy = generateMutation.isPending || jobRunning;
+  const jobError = asRecord(asRecord(activeJob).lastError);
+  const jobErrorText = String(jobError.detail || jobError.code || "");
+
   return (
     <section className="detail-section">
       <div className="section-title">
@@ -634,8 +691,8 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
         <button className="secondary-action" type="button" disabled={assistantMutation.isPending} onClick={() => assistantMutation.mutate()}>
           {assistantMutation.isPending ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />} Улучшить карточку
         </button>
-        <button className="primary-action" type="button" disabled={generateMutation.isPending} onClick={() => generateMutation.mutate()}>
-          {generateMutation.isPending ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} Codex: 5 фото
+        <button className="primary-action" type="button" disabled={generationBusy} onClick={() => generateMutation.mutate()}>
+          {generationBusy ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} Codex: 5 фото
         </button>
       </div>
       <div className="preset-strip">
@@ -654,7 +711,7 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
           })}
         </div>
       </div>}
-      {progress && <div className="progress-line"><span style={{ width: progress === "готово" ? "100%" : progress === "сохранение" ? "88%" : progress.includes("5/5") ? "76%" : progress.includes("3/5") ? "52%" : "28%" }} />{progress}</div>}
+      {progress && <div className="progress-line"><span style={{ width: `${aiJobProgressPercent(activeJob || { progress: generateMutation.isPending ? 5 : 100 })}%` }} />{progress}</div>}
       <div className="ai-grid">
         {visibleDrafts.length ? visibleDrafts.slice(0, 10).map((draft) => (
           <div className={`ai-card ${draft.status === "approved" ? "is-approved" : draft.status === "rejected" ? "is-rejected" : ""}`} key={draft.id}>
@@ -669,7 +726,10 @@ function AiImagesPanel({ product, onSaved }: { product: Product; onSaved: () => 
           </div>
         )) : <div className="soft-empty">Здесь появятся сгенерированные изображения.</div>}
       </div>
-      {(assistantMutation.error || generateMutation.error || reviewMutation.error) && <div className="inline-error">{errorMessage(assistantMutation.error || generateMutation.error || reviewMutation.error)}</div>}
+      {jobErrorText && ["failed", "partial"].includes(String(asRecord(activeJob).status || "")) && <div className="inline-error">
+        {jobErrorText}{jobError.code ? ` | code: ${String(jobError.code)}` : ""}{jobError.status ? ` | status: ${String(jobError.status)}` : ""}{jobError.model ? ` | model: ${String(jobError.model)}` : ""}{jobError.endpoint ? ` | endpoint: ${String(jobError.endpoint)}` : ""}
+      </div>}
+      {(assistantMutation.error || generateMutation.error || reviewMutation.error || jobQuery.error) && <div className="inline-error">{errorMessage(assistantMutation.error || generateMutation.error || reviewMutation.error || jobQuery.error)}</div>}
     </section>
   );
 }

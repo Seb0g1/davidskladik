@@ -26,6 +26,7 @@ const marketplaceAccountsPath = path.join(__dirname, "..", "data", "marketplace-
 const warehousePath = path.join(__dirname, "..", "data", "warehouse.json");
 const personalWarehousePath = path.join(__dirname, "..", "data", "personal-warehouse.json");
 const operationJobsPath = path.join(__dirname, "..", "data", "operation-jobs.json");
+const aiImageJobsPath = path.join(__dirname, "..", "data", "ai-image-jobs.json");
 const auditLogPath = path.join(__dirname, "..", "data", "audit-log.jsonl");
 
 async function backupFile(filePath) {
@@ -3082,6 +3083,7 @@ test("Codex Sale AI image generation uses edit endpoint with source image", asyn
         sourceImageUrl: "https://example.invalid/source.png",
         prompt: "Create clean marketplace product image",
         count: 1,
+        sync: true,
         expectedUpdatedAt: "2020-01-01T00:00:00.000Z",
       })
       .expect(200);
@@ -3103,6 +3105,131 @@ test("Codex Sale AI image generation uses edit endpoint with source image", asyn
     await agent.delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}`).catch(() => {});
     if (generatedUploadPath) await fs.unlink(generatedUploadPath).catch(() => {});
     await restoreFile(appSettingsPath, settingsBackup);
+  }
+});
+
+test("AI image generation starts background job and saves drafts progressively", async () => {
+  const settingsBackup = await backupFile(appSettingsPath);
+  const jobsBackup = await backupFile(aiImageJobsPath);
+  const originalFetch = global.fetch;
+  const agent = request.agent(app);
+  const smokeId = `smoke-ai-job-${Date.now()}`;
+  const generatedPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const generatedUploadPaths = [];
+  let editCalls = 0;
+  let activeEdits = 0;
+  let maxConcurrentEdits = 0;
+
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    const currentSettings = await agent.get("/api/settings").expect(200);
+    await agent
+      .put("/api/settings")
+      .send({
+        ...currentSettings.body.settings,
+        ai: {
+          ...(currentSettings.body.settings.ai || {}),
+          enabled: true,
+          providerId: "codexsale",
+          baseUrl: "https://codex.sale/v1",
+          apiKey: "sk-test-codex-sale-image",
+          textModel: "gpt-5.4-mini",
+          imageModel: "gpt-image-2",
+          imageSize: "1024x1024",
+          imageQuality: "auto",
+          imageFormat: "png",
+        },
+      })
+      .expect(200);
+
+    await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: smokeId,
+        target: "ozon",
+        marketplace: "ozon",
+        offerId: smokeId,
+        name: "Smoke AI Job Product",
+        ozon: {
+          offerId: smokeId,
+          name: "Smoke AI Job Product",
+          primaryImage: "https://example.invalid/job-source.png",
+        },
+      })
+      .expect(200);
+
+    global.fetch = async (url, options = {}) => {
+      if (String(url) === "https://example.invalid/job-source.png") {
+        return new Response(Buffer.from(generatedPngBase64, "base64"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        });
+      }
+      if (String(url) !== "https://codex.sale/v1/images/edits") {
+        throw new Error(`unexpected fetch ${url}`);
+      }
+      assert.equal(typeof options.body?.get, "function");
+      editCalls += 1;
+      activeEdits += 1;
+      maxConcurrentEdits = Math.max(maxConcurrentEdits, activeEdits);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      activeEdits -= 1;
+      return new Response(JSON.stringify({ data: [{ b64_json: generatedPngBase64 }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const start = await agent
+      .post(`/api/warehouse/products/${encodeURIComponent(smokeId)}/ai-images/generate`)
+      .send({
+        sourceImageUrl: "https://example.invalid/job-source.png",
+        prompt: "Create two clean marketplace product images",
+        count: 2,
+      })
+      .expect(202);
+
+    assert.ok(start.body.jobId);
+    assert.equal(start.body.status, "queued");
+
+    const duplicate = await agent
+      .post(`/api/warehouse/products/${encodeURIComponent(smokeId)}/ai-images/generate`)
+      .send({
+        sourceImageUrl: "https://example.invalid/job-source.png",
+        prompt: "Create duplicate product images",
+        count: 2,
+      })
+      .expect(202);
+    assert.equal(duplicate.body.jobId, start.body.jobId);
+
+    let jobPayload = null;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      jobPayload = await agent
+        .get(`/api/warehouse/products/${encodeURIComponent(smokeId)}/ai-images/jobs/${encodeURIComponent(start.body.jobId)}`)
+        .expect(200);
+      if (["completed", "failed", "partial"].includes(jobPayload.body.job.status)) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    assert.equal(jobPayload.body.job.status, "completed");
+    assert.equal(jobPayload.body.job.draftIds.length, 2);
+    assert.equal(editCalls, 2);
+    assert.equal(maxConcurrentEdits, 1);
+    assert.equal(jobPayload.body.product.aiImages.length, 2);
+    for (const draft of jobPayload.body.product.aiImages) {
+      const generatedPathname = new URL(draft.resultUrl).pathname;
+      generatedUploadPaths.push(path.join(__dirname, "..", "public", ...generatedPathname.split("/").filter(Boolean)));
+    }
+  } finally {
+    global.fetch = originalFetch;
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}`).catch(() => {});
+    for (const filePath of generatedUploadPaths) await fs.unlink(filePath).catch(() => {});
+    await restoreFile(appSettingsPath, settingsBackup);
+    await restoreFile(aiImageJobsPath, jobsBackup);
   }
 });
 
