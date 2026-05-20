@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, Loader2, RefreshCw } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
-import { OperationCreateSchema, OperationDetailSchema, OperationsSchema } from "../types";
+import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartPreviewSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyPlainText, errorMessage, numberValue } from "../lib/common";
@@ -163,6 +163,136 @@ function OperationDetailPanel({ jobId }: { jobId: string }) {
   );
 }
 
+function SupplierCartPanel() {
+  const [marketplace, setMarketplace] = useState("all");
+  const [limit, setLimit] = useState(100);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const queryClient = useQueryClient();
+  const previewMutation = useMutation({
+    mutationFn: () => {
+      const params = new URLSearchParams({ marketplace, limit: String(limit) });
+      return fetchJson(`/api/supplier-cart/preview?${params.toString()}`, SupplierCartPreviewSchema);
+    },
+    onSuccess: (payload) => {
+      setSelected(new Set((payload.rows || []).filter((row) => row.ready && !row.alreadyCommitted).map((row) => row.key)));
+    },
+  });
+  const commitMutation = useMutation({
+    mutationFn: () => fetchJson("/api/supplier-cart/commit", SupplierCartCommitSchema, mutationBody({
+      rows: previewMutation.data?.rows || [],
+      keys: Array.from(selected),
+    })),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
+      previewMutation.mutate();
+    },
+  });
+  const historyQuery = useQuery({
+    queryKey: ["supplier-cart-history"],
+    queryFn: () => fetchJson("/api/supplier-cart/history", SupplierCartHistorySchema),
+  });
+  const rows = previewMutation.data?.rows || [];
+  const toggleRow = (key: string) => {
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const selectedReady = rows.filter((row) => selected.has(row.key) && row.ready && !row.alreadyCommitted);
+
+  return (
+    <section className="table-panel supplier-cart-panel">
+      <div className="section-title">
+        <div>
+          <span>Автокорзина PriceMaster</span>
+          <h3>Заказы Ozon/Yandex &rarr; заявки поставщикам</h3>
+        </div>
+        <button className="secondary-action" type="button" onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending}>
+          {previewMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Найти новые заказы
+        </button>
+      </div>
+      <div className="control-grid compact-controls">
+        <label>Маркетплейс
+          <select value={marketplace} onChange={(event) => setMarketplace(event.target.value)}>
+            <option value="all">Ozon + Yandex</option>
+            <option value="ozon">Ozon</option>
+            <option value="yandex">Yandex</option>
+          </select>
+        </label>
+        <label>Лимит строк
+          <input type="number" value={limit} onChange={(event) => setLimit(numberValue(event.target.value, 100))} />
+        </label>
+      </div>
+      {previewMutation.data ? (
+        <div className="operation-stats">
+          <DiagnosticValue label="Найдено" value={previewMutation.data.total} />
+          <DiagnosticValue label="Готово" value={previewMutation.data.ready} tone={previewMutation.data.ready ? "success" : ""} />
+          <DiagnosticValue label="Уже в PM" value={previewMutation.data.alreadyCommitted} />
+          <DiagnosticValue label="Пропущено" value={previewMutation.data.skipped} tone={previewMutation.data.skipped ? "warning" : ""} />
+        </div>
+      ) : null}
+      {previewMutation.data?.warnings?.length ? (
+        <div className="inline-error">
+          {previewMutation.data.warnings.map((warning, index) => `${String(warning.marketplace || "api")}: ${String(warning.error || "error")}`).join(" · ")}
+        </div>
+      ) : null}
+      {rows.length ? (
+        <>
+          <div className="supplier-cart-actions">
+            <button className="primary-action" type="button" disabled={!selectedReady.length || commitMutation.isPending} onClick={() => commitMutation.mutate()}>
+              {commitMutation.isPending ? <Loader2 className="spin" size={16} /> : null}
+              Добавить выбранное в PriceMaster ({selectedReady.length})
+            </button>
+            <button className="secondary-action" type="button" onClick={() => setSelected(new Set(rows.filter((row) => row.ready && !row.alreadyCommitted).map((row) => row.key)))}>
+              Выбрать готовые
+            </button>
+            <button className="secondary-action" type="button" onClick={() => setSelected(new Set())}>Снять выбор</button>
+          </div>
+          <div className="supplier-cart-list">
+            {rows.map((row) => {
+              const disabled = !row.ready || row.alreadyCommitted;
+              return (
+                <article className={`supplier-cart-row ${row.ready ? "ready" : "skipped"}`} key={row.key}>
+                  <label className="checkline">
+                    <input type="checkbox" disabled={disabled} checked={selected.has(row.key)} onChange={() => toggleRow(row.key)} />
+                    <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
+                  </label>
+                  <strong>{row.productName || row.offerId}</strong>
+                  <div className="meta-grid">
+                    <span>Кол-во: {row.quantity}</span>
+                    <span>Поставщик: {row.supplierName || "-"}</span>
+                    <span>PM row: {row.offerRowId || "-"}</span>
+                    <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
+                  </div>
+                  {row.alreadyCommitted ? <small>Уже в заявке PriceMaster: Doc {row.requestDocId}, Row {row.requestRowId}</small> : null}
+                  {!row.ready && !row.alreadyCommitted ? <small className="danger-text">Причина: {row.skipReason || "не готово"}</small> : null}
+                </article>
+              );
+            })}
+          </div>
+        </>
+      ) : previewMutation.data ? <div className="soft-empty">Новых заказов для автокорзины не найдено.</div> : <div className="soft-empty">Нажмите “Найти новые заказы”, чтобы собрать черновик заявок PriceMaster.</div>}
+      {commitMutation.data ? <div className="success-strip">Добавлено в PriceMaster: {commitMutation.data.inserted}. Документы: {commitMutation.data.docIds.join(", ") || "-"}</div> : null}
+      {previewMutation.error && <div className="inline-error">{errorMessage(previewMutation.error)}</div>}
+      {commitMutation.error && <div className="inline-error">{errorMessage(commitMutation.error)}</div>}
+      <div className="section-title compact-title">
+        <div><span>История автокорзины</span><h3>{historyQuery.data?.totalProcessed || 0} обработано</h3></div>
+        <button className="secondary-action" type="button" onClick={() => historyQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
+      </div>
+      {(historyQuery.data?.history || []).slice(0, 5).map((item, index) => {
+        const row = asRecord(item);
+        return (
+          <div className="soft-empty compact" key={`${String(row.at || "")}-${index}`}>
+            {String(row.at || "")} · {String(row.user || "system")} · добавлено {String(row.inserted || 0)} · docs {Array.isArray(row.docIds) ? row.docIds.join(", ") : "-"}
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
 export function OperationsPage() {
   const [limit, setLimit] = useState(30000);
   const [sendLimit, setSendLimit] = useState(5000);
@@ -216,6 +346,7 @@ export function OperationsPage() {
         <button className="secondary-action" onClick={() => startMutation.mutate("health-deep")} disabled={startMutation.isPending}>Глубокий health</button>
       </section>
       {startMutation.error && <div className="inline-error">{errorMessage(startMutation.error)}</div>}
+      <SupplierCartPanel />
       <section className="table-panel">
         {jobsQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю операции...</div>}
         {jobs.map((job) => (

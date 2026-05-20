@@ -1602,6 +1602,74 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
+.supplier-cart-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.compact-controls {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.supplier-cart-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.supplier-cart-list {
+  display: grid;
+  gap: 10px;
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.supplier-cart-row {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: rgba(12, 25, 43, 0.72);
+}
+
+.supplier-cart-row.ready {
+  border-color: rgba(78, 211, 154, 0.45);
+}
+
+.supplier-cart-row.skipped {
+  border-color: rgba(255, 207, 102, 0.35);
+}
+
+.checkline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.meta-grid span {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.danger-text {
+  color: #ff9aa8;
+}
+
 .inline-retry {
   margin-left: 10px;
 }

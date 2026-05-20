@@ -82,6 +82,7 @@ const ozonUnarchiveQueuePath = path.join(dataDir, "ozon-unarchive-queue.json");
 const yandexExistingOffersCachePath = path.join(dataDir, "yandex-existing-offers.json");
 const operationJobsPath = path.join(dataDir, "operation-jobs.json");
 const aiImageJobsPath = path.join(dataDir, "ai-image-jobs.json");
+const supplierCartStatePath = path.join(dataDir, "supplier-cart-state.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
 const buildVersion = cleanBuildVersion(process.env.APP_BUILD_VERSION || process.env.GIT_COMMIT || readGitCommit());
@@ -4961,6 +4962,15 @@ function defaultAppSettings() {
         yandex: { shopName: "parfumerius", logoUrl: "" },
       },
     },
+    supplierCart: {
+      enabled: true,
+      mode: "draft",
+      marketplaces: ["ozon", "yandex"],
+      lookbackHours: 48,
+      includeOzonStatuses: ["awaiting_packaging"],
+      includeYandexStatuses: ["PROCESSING"],
+      includeYandexSubstatuses: ["STARTED"],
+    },
   };
 }
 
@@ -5026,6 +5036,28 @@ function normalizeBrandingSettings(input = {}, fallback = defaultAppSettings().b
   };
 }
 
+function normalizeSupplierCartSettings(input = {}, fallback = defaultAppSettings().supplierCart) {
+  const raw = input && typeof input === "object" ? input : {};
+  const marketplaces = Array.isArray(raw.marketplaces)
+    ? raw.marketplaces.map((item) => cleanText(item).toLowerCase()).filter((item) => item === "ozon" || item === "yandex")
+    : fallback.marketplaces;
+  const lookbackHours = Number(raw.lookbackHours ?? raw.lookback_hours ?? fallback.lookbackHours);
+  const normalizeStatuses = (value, fallbackValue) => {
+    const source = Array.isArray(value) ? value : splitList(value);
+    const statuses = source.map((item) => cleanText(item).toUpperCase()).filter(Boolean);
+    return statuses.length ? Array.from(new Set(statuses)) : fallbackValue;
+  };
+  return {
+    enabled: parseBooleanSetting(raw.enabled, fallback.enabled !== false),
+    mode: cleanText(raw.mode).toLowerCase() === "auto" ? "auto" : "draft",
+    marketplaces: marketplaces.length ? Array.from(new Set(marketplaces)) : ["ozon", "yandex"],
+    lookbackHours: Number.isFinite(lookbackHours) && lookbackHours > 0 ? Math.min(720, Math.round(lookbackHours)) : fallback.lookbackHours,
+    includeOzonStatuses: normalizeStatuses(raw.includeOzonStatuses || raw.include_ozon_statuses, fallback.includeOzonStatuses),
+    includeYandexStatuses: normalizeStatuses(raw.includeYandexStatuses || raw.include_yandex_statuses, fallback.includeYandexStatuses),
+    includeYandexSubstatuses: normalizeStatuses(raw.includeYandexSubstatuses || raw.include_yandex_substatuses, fallback.includeYandexSubstatuses),
+  };
+}
+
 function normalizeAiSettings(input = {}, fallback = defaultAppSettings().ai) {
   const raw = input && typeof input === "object" ? input : {};
   const hasApiKey = Object.prototype.hasOwnProperty.call(raw, "apiKey") || Object.prototype.hasOwnProperty.call(raw, "api_key");
@@ -5087,6 +5119,7 @@ function normalizeAppSettings(input = {}) {
     markupRules: rules,
     availabilityRules,
     branding: normalizeBrandingSettings(input.branding || {}, fallback.branding),
+    supplierCart: normalizeSupplierCartSettings(input.supplierCart || input.supplier_cart || {}, fallback.supplierCart),
   };
 }
 
@@ -16761,6 +16794,529 @@ function operationJobPublic(job = {}) {
   };
 }
 
+function normalizeSupplierCartState(input = {}) {
+  const processed = input.processed && typeof input.processed === "object" && !Array.isArray(input.processed)
+    ? input.processed
+    : {};
+  const history = Array.isArray(input.history) ? input.history : [];
+  return {
+    updatedAt: input.updatedAt || null,
+    processed,
+    history: history
+      .filter((item) => item && typeof item === "object")
+      .slice(-1000),
+  };
+}
+
+async function readSupplierCartState() {
+  try {
+    return normalizeSupplierCartState(JSON.parse(await fs.readFile(supplierCartStatePath, "utf8")));
+  } catch (error) {
+    if (error.code === "ENOENT") return normalizeSupplierCartState();
+    throw error;
+  }
+}
+
+async function writeSupplierCartState(state = {}) {
+  const normalized = normalizeSupplierCartState({
+    ...state,
+    updatedAt: new Date().toISOString(),
+  });
+  await fs.mkdir(dataDir, { recursive: true });
+  const temporaryPath = `${supplierCartStatePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(normalized, null, 2), "utf8");
+  await fs.rename(temporaryPath, supplierCartStatePath);
+  return normalized;
+}
+
+function supplierCartRange(input = {}, settings = defaultAppSettings().supplierCart) {
+  const now = new Date();
+  const to = toDateOrNull(input.to) || now;
+  const from = toDateOrNull(input.from) || new Date(to.getTime() - Math.max(1, Number(settings.lookbackHours || 48)) * 60 * 60 * 1000);
+  return { from, to };
+}
+
+function supplierCartItemKey(line = {}) {
+  return [
+    cleanText(line.marketplace).toLowerCase(),
+    cleanText(line.accountId || line.campaignId || line.target).toLowerCase(),
+    cleanText(line.orderId || line.postingNumber || line.externalOrderId).toLowerCase(),
+    cleanText(line.itemId || line.offerId || line.sku).toLowerCase(),
+  ].join("|");
+}
+
+function normalizeSupplierCartLine(input = {}) {
+  const marketplace = cleanText(input.marketplace).toLowerCase();
+  const offerId = cleanText(input.offerId || input.offer_id || input.sku);
+  const quantity = Math.max(1, Math.round(Number(input.quantity || input.count || 1) || 1));
+  const line = {
+    key: cleanText(input.key),
+    marketplace,
+    accountId: cleanText(input.accountId || input.account_id || input.target || input.campaignId),
+    accountName: cleanText(input.accountName || input.account_name),
+    campaignId: cleanText(input.campaignId || input.campaign_id),
+    orderId: cleanText(input.orderId || input.order_id || input.postingNumber || input.posting_number),
+    postingNumber: cleanText(input.postingNumber || input.posting_number),
+    externalOrderId: cleanText(input.externalOrderId || input.external_order_id),
+    itemId: cleanText(input.itemId || input.item_id || input.id || offerId),
+    offerId,
+    productName: cleanText(input.productName || input.product_name || input.name),
+    quantity,
+    orderedAt: input.orderedAt || input.createdAt || input.in_process_at || null,
+    status: cleanText(input.status),
+    raw: input.raw && typeof input.raw === "object" ? input.raw : undefined,
+  };
+  line.key = line.key || supplierCartItemKey(line);
+  return line;
+}
+
+function normalizeSupplierCartPreviewRow(input = {}) {
+  const line = normalizeSupplierCartLine(input);
+  return {
+    ...line,
+    warehouseProductId: cleanText(input.warehouseProductId || input.productId),
+    groupKey: cleanText(input.groupKey),
+    groupOfferId: cleanText(input.groupOfferId || input.group_offer_id || line.offerId),
+    supplierName: cleanText(input.supplierName || input.partnerName),
+    partnerId: cleanText(input.partnerId),
+    offerRowId: cleanText(input.offerRowId || input.rowId || input.sourceRowId),
+    price: Number(input.price || 0) || 0,
+    originalPrice: Number(input.originalPrice || 0) || 0,
+    priceCurrency: cleanText(input.priceCurrency || input.currency || "USD").toUpperCase(),
+    available: input.available !== false,
+    ready: Boolean(input.ready),
+    alreadyCommitted: Boolean(input.alreadyCommitted),
+    skipReason: cleanText(input.skipReason || input.reason),
+    requestDocId: cleanText(input.requestDocId || input.docId),
+    requestRowId: cleanText(input.requestRowId || input.rowId),
+  };
+}
+
+function normalizeOzonSupplierCartPostings(data = {}, account = {}) {
+  const postings = Array.isArray(data?.result?.postings)
+    ? data.result.postings
+    : (Array.isArray(data?.postings) ? data.postings : []);
+  const lines = [];
+  for (const posting of postings) {
+    const products = Array.isArray(posting.products) ? posting.products : [];
+    for (const product of products) {
+      const line = normalizeSupplierCartLine({
+        marketplace: "ozon",
+        accountId: account.id || account.clientId || "ozon",
+        accountName: account.name || "Ozon",
+        orderId: posting.order_id || posting.orderId || posting.posting_number,
+        postingNumber: posting.posting_number,
+        externalOrderId: posting.posting_number,
+        itemId: product.sku || product.offer_id || product.offerId,
+        offerId: product.offer_id || product.offerId,
+        productName: product.name,
+        quantity: product.quantity,
+        orderedAt: posting.in_process_at || posting.created_at,
+        status: posting.status,
+        raw: { postingNumber: posting.posting_number, product },
+      });
+      if (line.offerId) lines.push(line);
+    }
+  }
+  return lines;
+}
+
+function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
+  const orders = Array.isArray(data?.orders)
+    ? data.orders
+    : (Array.isArray(data?.result?.orders) ? data.result.orders : []);
+  const lines = [];
+  for (const order of orders) {
+    const items = Array.isArray(order.items) ? order.items : [];
+    for (const item of items) {
+      const itemStatus = cleanText(item.itemStatus || item.status).toUpperCase();
+      if (itemStatus === "REJECTED" || itemStatus === "RETURNED") continue;
+      const line = normalizeSupplierCartLine({
+        marketplace: "yandex",
+        accountId: shop.id || shop.campaignId || "yandex",
+        accountName: shop.name || "Yandex Market",
+        campaignId: order.campaignId || shop.campaignId,
+        orderId: order.id || order.orderId,
+        externalOrderId: order.externalOrderId,
+        itemId: item.id || item.offerId,
+        offerId: item.offerId,
+        productName: item.offerName || item.name,
+        quantity: item.count,
+        orderedAt: order.creationDate || order.creationDateTime || order.updateDate,
+        status: order.status,
+        raw: { orderId: order.id, item },
+      });
+      if (line.offerId) lines.push(line);
+    }
+  }
+  return lines;
+}
+
+async function fetchOzonSupplierCartLines({ from, to, limit, statuses } = {}) {
+  const accounts = getOzonAccounts();
+  const lines = [];
+  const statusList = (Array.isArray(statuses) && statuses.length ? statuses : ["awaiting_packaging"])
+    .map((item) => cleanText(item).toLowerCase())
+    .filter(Boolean);
+  for (const account of accounts) {
+    for (const status of statusList) {
+      let offset = 0;
+      while (lines.length < limit) {
+        const pageLimit = Math.min(1000, Math.max(1, limit - lines.length));
+        const data = await ozonRequest("/v3/posting/fbs/list", {
+          dir: "ASC",
+          filter: {
+            since: from.toISOString(),
+            to: to.toISOString(),
+            status,
+          },
+          limit: pageLimit,
+          offset,
+          with: { analytics_data: false, financial_data: false },
+        }, account);
+        const pageLines = normalizeOzonSupplierCartPostings(data, account);
+        lines.push(...pageLines);
+        const postings = Array.isArray(data?.result?.postings) ? data.result.postings : [];
+        if (postings.length < pageLimit) break;
+        offset += postings.length;
+      }
+    }
+  }
+  return lines.slice(0, limit);
+}
+
+async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substatuses } = {}) {
+  const shops = uniqueYandexShopsByBusiness();
+  const lines = [];
+  const statusList = (Array.isArray(statuses) && statuses.length ? statuses : ["PROCESSING"])
+    .map((item) => cleanText(item).toUpperCase())
+    .filter(Boolean);
+  const substatusList = (Array.isArray(substatuses) && substatuses.length ? substatuses : ["STARTED"])
+    .map((item) => cleanText(item).toUpperCase())
+    .filter(Boolean);
+  for (const shop of shops) {
+    let pageToken = "";
+    while (lines.length < limit) {
+      const campaignIds = parseYandexCampaignIds(shop.campaignId).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+      const query = new URLSearchParams({ limit: String(Math.min(50, Math.max(1, limit - lines.length))) });
+      if (pageToken) query.set("pageToken", pageToken);
+      const data = await yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/orders?${query.toString()}`, {
+        ...(campaignIds.length ? { campaignIds } : {}),
+        statuses: statusList,
+        substatuses: substatusList,
+        dates: {
+          updateDateFrom: from.toISOString(),
+          updateDateTo: to.toISOString(),
+        },
+        fake: false,
+        sourcePlatforms: ["MARKET"],
+      });
+      lines.push(...normalizeYandexSupplierCartOrders(data, shop));
+      pageToken = cleanText(data?.paging?.nextPageToken || data?.result?.paging?.nextPageToken || data?.nextPageToken);
+      if (!pageToken) break;
+    }
+  }
+  return lines.slice(0, limit);
+}
+
+function findSupplierCartWarehouseProduct(warehouse = {}, line = {}) {
+  const offer = cleanText(line.offerId).toLowerCase();
+  if (!offer) return null;
+  const products = Array.isArray(warehouse.products) ? warehouse.products : [];
+  const candidates = products.filter((product) => cleanText(product.offerId).toLowerCase() === offer);
+  if (!candidates.length) return null;
+  const marketplace = cleanText(line.marketplace).toLowerCase();
+  const target = cleanText(line.accountId || line.campaignId).toLowerCase();
+  return candidates.find((product) => {
+    const normalized = normalizeWarehouseProduct(product);
+    if (normalized.marketplace !== marketplace) return false;
+    if (!target) return true;
+    if (marketplace === "ozon") return matchesOzonTarget(product.target, target) || cleanText(product.target).toLowerCase() === target;
+    return matchesYandexTarget(product.target, target) || cleanText(product.target).toLowerCase() === target;
+  }) || candidates.find((product) => normalizeWarehouseProduct(product).marketplace === marketplace) || candidates[0];
+}
+
+async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}) {
+  const normalizedLine = normalizeSupplierCartLine(line);
+  const processed = state.processed?.[normalizedLine.key];
+  const product = findSupplierCartWarehouseProduct(warehouse, normalizedLine);
+  if (!product) {
+    return normalizeSupplierCartPreviewRow({
+      ...normalizedLine,
+      ready: false,
+      skipReason: "product_not_found",
+      alreadyCommitted: Boolean(processed),
+      requestDocId: processed?.requestDocId,
+      requestRowId: processed?.requestRowId,
+    });
+  }
+  const groupProducts = expandWarehouseProductsToGroups(warehouse.products || [], [product]);
+  const groupLinks = buildCommonWarehouseGroupLinks(groupProducts, []);
+  if (!groupLinks.length) {
+    return normalizeSupplierCartPreviewRow({
+      ...normalizedLine,
+      warehouseProductId: product.id,
+      groupKey: warehouseProductPageGroupKey(product),
+      groupOfferId: product.offerId,
+      ready: false,
+      skipReason: "no_pricemaster_link",
+      alreadyCommitted: Boolean(processed),
+      requestDocId: processed?.requestDocId,
+      requestRowId: processed?.requestRowId,
+    });
+  }
+  const usdRate = await getUsdRate();
+  const matches = await getLivePriceMasterMatchesForLinks(groupLinks, warehouse.suppliers || [], usdRate);
+  const candidates = [];
+  for (const [linkId, rows] of matches.entries()) {
+    for (const row of rows || []) {
+      if (!row.available || !row.active || Number(row.price || 0) <= 0) continue;
+      candidates.push({ ...row, linkId });
+    }
+  }
+  candidates.sort((left, right) =>
+    Number(left.price || Number.POSITIVE_INFINITY) - Number(right.price || Number.POSITIVE_INFINITY)
+    || String(left.partnerName || "").localeCompare(String(right.partnerName || ""), "ru", { sensitivity: "base" }),
+  );
+  const selected = candidates[0] || null;
+  if (!selected) {
+    return normalizeSupplierCartPreviewRow({
+      ...normalizedLine,
+      warehouseProductId: product.id,
+      groupKey: warehouseProductPageGroupKey(product),
+      groupOfferId: product.offerId,
+      ready: false,
+      skipReason: "supplier_not_available",
+      alreadyCommitted: Boolean(processed),
+      requestDocId: processed?.requestDocId,
+      requestRowId: processed?.requestRowId,
+    });
+  }
+  return normalizeSupplierCartPreviewRow({
+    ...normalizedLine,
+    warehouseProductId: product.id,
+    groupKey: warehouseProductPageGroupKey(product),
+    groupOfferId: product.offerId,
+    supplierName: selected.partnerName,
+    partnerId: selected.partnerId,
+    offerRowId: selected.rowId,
+    price: selected.price,
+    originalPrice: selected.originalPrice,
+    priceCurrency: selected.priceCurrency,
+    available: true,
+    ready: true,
+    alreadyCommitted: Boolean(processed),
+    requestDocId: processed?.requestDocId,
+    requestRowId: processed?.requestRowId,
+  });
+}
+
+async function buildSupplierCartPreview(params = {}) {
+  const appSettings = await readAppSettings();
+  const settings = normalizeSupplierCartSettings(appSettings.supplierCart || {});
+  const marketplace = cleanText(params.marketplace || "all").toLowerCase();
+  const limit = Math.max(1, Math.min(1000, Number(params.limit || 100) || 100));
+  const range = supplierCartRange(params, settings);
+  const enabledMarketplaces = new Set(settings.marketplaces || ["ozon", "yandex"]);
+  const lines = [];
+  const warnings = [];
+  if ((marketplace === "all" || marketplace === "ozon") && enabledMarketplaces.has("ozon")) {
+    try {
+      lines.push(...await fetchOzonSupplierCartLines({
+        ...range,
+        limit: Math.max(1, limit - lines.length),
+        statuses: settings.includeOzonStatuses,
+      }));
+    } catch (error) {
+      warnings.push({ marketplace: "ozon", error: error?.message || String(error) });
+    }
+  }
+  if ((marketplace === "all" || marketplace === "yandex") && enabledMarketplaces.has("yandex") && lines.length < limit) {
+    try {
+      lines.push(...await fetchYandexSupplierCartLines({
+        ...range,
+        limit: Math.max(1, limit - lines.length),
+        statuses: settings.includeYandexStatuses,
+        substatuses: settings.includeYandexSubstatuses,
+      }));
+    } catch (error) {
+      warnings.push({ marketplace: "yandex", error: error?.message || String(error) });
+    }
+  }
+  const uniqueLines = Array.from(new Map(lines.map((line) => [line.key, line])).values()).slice(0, limit);
+  const warehouse = await readWarehouse();
+  const state = await readSupplierCartState();
+  const rows = [];
+  for (const line of uniqueLines) {
+    try {
+      rows.push(await resolveSupplierCartRow(warehouse, line, state));
+    } catch (error) {
+      rows.push(normalizeSupplierCartPreviewRow({
+        ...line,
+        ready: false,
+        skipReason: `pricemaster_error: ${error?.message || String(error)}`,
+        alreadyCommitted: Boolean(state.processed?.[line.key]),
+        requestDocId: state.processed?.[line.key]?.requestDocId,
+        requestRowId: state.processed?.[line.key]?.requestRowId,
+      }));
+    }
+  }
+  const ready = rows.filter((row) => row.ready && !row.alreadyCommitted).length;
+  const alreadyCommitted = rows.filter((row) => row.alreadyCommitted).length;
+  const skipped = rows.length - ready - alreadyCommitted;
+  return {
+    ok: true,
+    mode: settings.mode,
+    from: range.from.toISOString(),
+    to: range.to.toISOString(),
+    limit,
+    rows,
+    warnings,
+    total: rows.length,
+    ready,
+    skipped,
+    alreadyCommitted,
+    summary: `Supplier cart preview: ${rows.length} rows; ready ${ready}; already ${alreadyCommitted}; skipped ${skipped}.`,
+  };
+}
+
+async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) {
+  const readyRows = rows.map(normalizeSupplierCartPreviewRow).filter((row) => row.ready && !row.alreadyCommitted && row.offerRowId && row.partnerId);
+  if (!readyRows.length) return { inserted: [], skipped: rows.length, docIds: [] };
+  const state = await readSupplierCartState();
+  const freshRows = readyRows.filter((row) => !state.processed?.[row.key]);
+  if (!freshRows.length) return { inserted: [], skipped: readyRows.length, docIds: [] };
+  const byPartner = new Map();
+  for (const row of freshRows) {
+    const partnerId = cleanText(row.partnerId);
+    if (!byPartner.has(partnerId)) byPartner.set(partnerId, []);
+    byPartner.get(partnerId).push(row);
+  }
+  const connection = await pool.getConnection();
+  const inserted = [];
+  const docIds = [];
+  let lockAcquired = false;
+  try {
+    const [lockRows] = await connection.query("SELECT GET_LOCK('davidsklad_supplier_cart', 10) AS locked");
+    lockAcquired = Number(lockRows?.[0]?.locked || 0) === 1;
+    if (!lockAcquired) {
+      const error = new Error("PriceMaster cart is busy. Try again in a few seconds.");
+      error.statusCode = 409;
+      throw error;
+    }
+    await connection.beginTransaction();
+    const [[docMax]] = await connection.query("SELECT COALESCE(MAX(DocID), 0) AS maxDocId FROM RequestDocs");
+    const [[rowMax]] = await connection.query("SELECT COALESCE(MAX(RowID), 0) AS maxRowId FROM RequestRows");
+    let nextDocId = Number(docMax?.maxDocId || 0) + 1;
+    let nextRowId = Number(rowMax?.maxRowId || 0) + 1;
+    for (const [partnerId, partnerRows] of byPartner.entries()) {
+      const docId = nextDocId++;
+      const comment = `ДавидСклад автокорзина ${new Date().toLocaleString("ru-RU")}`;
+      await connection.query(
+        "INSERT INTO RequestDocs (DocID, DocDate, PartnerID, Sended, Recieved, Comment, Registered) VALUES (?, NOW(), ?, 0, 0, ?, 1)",
+        [docId, Number(partnerId), comment],
+      );
+      docIds.push(docId);
+      for (const row of partnerRows) {
+        const requestRowId = nextRowId++;
+        const rowComment = [
+          "ДавидСклад",
+          row.marketplace,
+          row.orderId || row.postingNumber,
+          row.offerId,
+        ].filter(Boolean).join(" · ").slice(0, 250);
+        await connection.query(
+          "INSERT INTO RequestRows (RowID, OfferRowID, RequestQuant, RequestPrice, RequestComment, DocID) VALUES (?, ?, ?, 0.00, ?, ?)",
+          [requestRowId, Number(row.offerRowId), Math.max(1, Math.round(Number(row.quantity || 1))), rowComment, docId],
+        );
+        inserted.push({
+          ...row,
+          requestDocId: String(docId),
+          requestRowId: String(requestRowId),
+          committedAt: new Date().toISOString(),
+        });
+      }
+    }
+    await connection.commit();
+  } catch (error) {
+    try { await connection.rollback(); } catch (_rollbackError) {}
+    throw error;
+  } finally {
+    if (lockAcquired) {
+      try { await connection.query("SELECT RELEASE_LOCK('davidsklad_supplier_cart')"); } catch (_releaseError) {}
+    }
+    connection.release();
+  }
+
+  const nextState = await readSupplierCartState();
+  for (const row of inserted) {
+    nextState.processed[row.key] = {
+      key: row.key,
+      marketplace: row.marketplace,
+      orderId: row.orderId,
+      postingNumber: row.postingNumber,
+      offerId: row.offerId,
+      quantity: row.quantity,
+      supplierName: row.supplierName,
+      partnerId: row.partnerId,
+      offerRowId: row.offerRowId,
+      requestDocId: row.requestDocId,
+      requestRowId: row.requestRowId,
+      committedAt: row.committedAt,
+      committedBy: requestUsername(request),
+    };
+  }
+  nextState.history = [
+    ...(nextState.history || []),
+    {
+      at: new Date().toISOString(),
+      user: requestUsername(request),
+      inserted: inserted.length,
+      docIds,
+      rows: inserted.map((row) => ({
+        key: row.key,
+        marketplace: row.marketplace,
+        orderId: row.orderId,
+        offerId: row.offerId,
+        quantity: row.quantity,
+        supplierName: row.supplierName,
+        partnerId: row.partnerId,
+        requestDocId: row.requestDocId,
+        requestRowId: row.requestRowId,
+      })),
+    },
+  ].slice(-1000);
+  await writeSupplierCartState(nextState);
+  await appendAudit(request || { session: { username: "system", role: "admin" } }, "supplier_cart.commit", {
+    entityType: "supplier_cart",
+    entityId: "pricemaster",
+    newValue: { inserted: inserted.length, docIds, rows: inserted },
+  });
+  return { inserted, skipped: readyRows.length - inserted.length, docIds };
+}
+
+async function runSupplierCartPreviewOperation(payload = {}) {
+  const result = await buildSupplierCartPreview(payload);
+  return { ...result, ok: result.warnings.length === 0 || result.rows.length > 0 };
+}
+
+async function runSupplierCartCommitOperation(payload = {}, request = null) {
+  const sourceRows = Array.isArray(payload.rows) && payload.rows.length
+    ? payload.rows
+    : (await buildSupplierCartPreview(payload)).rows;
+  const keys = new Set(Array.isArray(payload.keys) ? payload.keys.map(cleanText).filter(Boolean) : []);
+  const rows = keys.size ? sourceRows.filter((row) => keys.has(cleanText(row.key))) : sourceRows;
+  const result = await insertSupplierCartRowsIntoPriceMaster(rows, request);
+  return {
+    ok: true,
+    inserted: result.inserted.length,
+    skipped: result.skipped,
+    docIds: result.docIds,
+    rows: result.inserted,
+    summary: `Supplier cart committed ${result.inserted.length}; skipped ${result.skipped}.`,
+  };
+}
+
 function operationTitle(type = "") {
   const titles = {
     "yandex-import-send": "Ozon -> Yandex import",
@@ -16770,6 +17326,8 @@ function operationTitle(type = "") {
     "restore-archived-stock": "Restore archived stock",
     "yandex-card-quality-ai-drafts": "Yandex card quality AI drafts",
     "repair-pricemaster-group-links": "Repair PriceMaster group links",
+    "marketplace-supplier-cart-preview": "Supplier cart preview",
+    "marketplace-supplier-cart-commit": "Supplier cart commit",
     "health-deep": "Deep health check",
   };
   return titles[type] || type || "Operation";
@@ -17416,6 +17974,18 @@ async function runOperationPayload(job, options = {}) {
     });
     return result;
   }
+  if (job.type === "marketplace-supplier-cart-preview") {
+    const result = await runSupplierCartPreviewOperation(job.payload || {});
+    await appendAudit(auditRequest, "supplier_cart.preview", {
+      entityType: "supplier_cart",
+      entityId: "preview",
+      newValue: result,
+    });
+    return result;
+  }
+  if (job.type === "marketplace-supplier-cart-commit") {
+    return runSupplierCartCommitOperation(job.payload || {}, auditRequest);
+  }
   if (job.type === "health-deep") {
     return collectHealthDetails({ deep: true });
   }
@@ -17483,6 +18053,54 @@ registerOperationsRoutes(app, {
   operationTitle,
   startOperationJob,
   activeOperationJobs,
+});
+
+app.get("/api/supplier-cart/preview", requireAdmin, async (request, response, next) => {
+  try {
+    const preview = await buildSupplierCartPreview({
+      marketplace: request.query.marketplace,
+      from: request.query.from,
+      to: request.query.to,
+      limit: request.query.limit,
+    });
+    response.json(preview);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/supplier-cart/commit", requireAdmin, async (request, response, next) => {
+  try {
+    const rows = Array.isArray(request.body?.rows) ? request.body.rows : [];
+    const keys = Array.isArray(request.body?.keys) ? request.body.keys : [];
+    const sourceRows = rows.length ? rows : (await buildSupplierCartPreview(request.body || {})).rows;
+    const selectedKeys = new Set(keys.map(cleanText).filter(Boolean));
+    const selectedRows = selectedKeys.size ? sourceRows.filter((row) => selectedKeys.has(cleanText(row.key))) : sourceRows;
+    const result = await insertSupplierCartRowsIntoPriceMaster(selectedRows, request);
+    response.json({
+      ok: true,
+      inserted: result.inserted.length,
+      skipped: result.skipped,
+      docIds: result.docIds,
+      rows: result.inserted,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/supplier-cart/history", requireAdmin, async (_request, response, next) => {
+  try {
+    const state = await readSupplierCartState();
+    response.json({
+      ok: true,
+      updatedAt: state.updatedAt,
+      totalProcessed: Object.keys(state.processed || {}).length,
+      history: (state.history || []).slice().reverse(),
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
