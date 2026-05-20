@@ -12833,7 +12833,15 @@ app.get("/api/warehouse/products/:id", async (request, response, next) => {
 function isRetryableAiImageGenerationError(error = {}) {
   if (isOpenAiBillingLimitError(error)) return false;
   const status = Number(error.statusCode || error.status || 0);
-  const code = cleanText(error.code || error.error?.code).toLowerCase();
+  const code = cleanText(error.code || error.error?.code || error.cause?.code || error.cause?.cause?.code).toLowerCase();
+  const detail = cleanText(
+    error.message
+      || error.error?.message
+      || error.detail
+      || error.cause?.message
+      || error.cause?.cause?.message
+      || String(error),
+  ).toLowerCase();
   if ([408, 409, 425, 429].includes(status)) return true;
   if (status >= 500 && status < 600) return true;
   return Boolean(
@@ -12842,6 +12850,13 @@ function isRetryableAiImageGenerationError(error = {}) {
       || code.includes("temporar")
       || code.includes("overload")
       || code.includes("request_failed")
+      || ["eai_again", "enotfound", "econnreset", "econnrefused", "etimedout", "und_err_connect_timeout", "und_err_headers_timeout", "und_err_body_timeout"].includes(code)
+      || detail.includes("fetch failed")
+      || detail.includes("connection error")
+      || detail.includes("network")
+      || detail.includes("dns")
+      || detail.includes("eai_again")
+      || detail.includes("temporar")
   );
 }
 
@@ -12873,8 +12888,15 @@ const activeAiImageJobs = new Map();
 
 function aiImageJobErrorPayload(error = {}) {
   return compactObject({
-    detail: cleanText(error?.message || error?.error?.message || error?.detail || String(error)),
-    code: cleanText(error?.code || error?.error?.code),
+    detail: cleanText(
+      error?.message
+        || error?.error?.message
+        || error?.detail
+        || error?.cause?.message
+        || error?.cause?.cause?.message
+        || String(error),
+    ),
+    code: cleanText(error?.code || error?.error?.code || error?.cause?.code || error?.cause?.cause?.code),
     status: Number(error?.statusCode || error?.status || 0) || undefined,
     model: cleanText(error?.model || "gpt-image-2"),
     endpoint: cleanText(error?.endpoint || "https://codex.sale/v1/images/edits"),
@@ -12888,7 +12910,7 @@ function normalizeAiImageJob(input = {}) {
   const draftIds = Array.isArray(input.draftIds || input.draft_ids)
     ? (input.draftIds || input.draft_ids).map(cleanText).filter(Boolean)
     : [];
-  return compactObject({
+  const job = compactObject({
     id: cleanText(input.id || input.jobId || input.job_id) || crypto.randomUUID(),
     productId: cleanText(input.productId || input.product_id),
     offerId: cleanText(input.offerId || input.offer_id),
@@ -12912,6 +12934,8 @@ function normalizeAiImageJob(input = {}) {
     updatedAt: input.updatedAt || input.updated_at || new Date().toISOString(),
     finishedAt: input.finishedAt || input.finished_at || null,
   });
+  job.draftIds = draftIds;
+  return job;
 }
 
 async function readAiImageJobs() {
@@ -13119,7 +13143,7 @@ async function runAiImageGenerationJob(jobInput, generation, requestContext = {}
       jobId: job.id,
       productId: job.productId,
       offerId: job.offerId,
-      drafts: job.draftIds.length,
+      drafts: (job.draftIds || []).length,
       batchId: job.batchId,
     });
     appendAudit(auditRequest, "warehouse.ai_image.generate", {
@@ -13145,7 +13169,7 @@ async function runAiImageGenerationJob(jobInput, generation, requestContext = {}
       jobId: job.id,
       productId: job.productId,
       offerId: job.offerId,
-      drafts: job.draftIds.length,
+      drafts: (job.draftIds || []).length,
       ...errorPayload,
     });
   } finally {
