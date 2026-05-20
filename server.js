@@ -5401,7 +5401,7 @@ function buildOzonAiImagePrompt(product, promptOverride = "", options = {}) {
   let base = template.includes("{productName}")
     ? template.replaceAll("{productName}", productName)
     : `${template}\n\nНазвание товара: ${productName}`;
-  const bottleOnlyInstruction = "Strict marketplace packshot rules: show one clean perfume bottle only. The full bottle must fit inside the square frame from cap to base, centered, upright, not cropped, with 10-15% empty margin on every side. Do not place the bottle on the far left or far right. Remove or ignore any box, outer packaging, cartons, bags, brochures, accessories, props, hands, faces, and all extra text. Do not create headlines, brand typography, marketing copy, icons, or labels outside the original bottle label. Do not hallucinate packaging, even if the source photo contains a box.";
+  const bottleOnlyInstruction = "Strict marketplace packshot rules: create exactly one standalone image. Do not create a collage, grid, contact sheet, split-screen, multi-panel layout, before/after layout, or multiple variants inside one image. Show one clean perfume bottle only. The full bottle must fit inside the square frame from cap to base, centered, upright, not cropped, with 10-15% empty margin on every side. Do not place the bottle on the far left or far right. Remove or ignore any box, outer packaging, cartons, bags, brochures, accessories, props, hands, faces, and all extra text. Do not create headlines, brand typography, marketing copy, icons, or labels outside the original bottle label. Do not hallucinate packaging, even if the source photo contains a box.";
   base = `${base}\n\n${bottleOnlyInstruction}`;
   const variantIndex = Number(options.variantIndex || 0);
   const variantTotal = Number(options.variantTotal || 0);
@@ -5412,7 +5412,7 @@ function buildOzonAiImagePrompt(product, promptOverride = "", options = {}) {
     "Variant 3: minimal light studio scene, full centered bottle, no props touching the product, no typography.",
     "Variant 4: clean ecommerce packshot with more air, full centered bottle, no logo or headline outside the original label.",
   ];
-  return `${base}\n\n${variantBriefs[variantIndex - 1] || variantBriefs[0]}\nThis is variant ${variantIndex} of ${variantTotal}; change only lighting/background subtly. Never crop the bottle and never add text outside the original product label.`;
+  return `${base}\n\n${variantBriefs[variantIndex - 1] || variantBriefs[0]}\nThis request generates only variant ${variantIndex} of ${variantTotal}; output exactly one final image, not all variants together. Change only lighting/background subtly. Never crop the bottle and never add text outside the original product label.`;
 }
 
 function publicAiImageStudioPresets() {
@@ -13797,7 +13797,7 @@ app.post("/api/warehouse/products/:id/yandex-quality-draft/generate", requireAdm
     for (let index = 1; index <= count; index += 1) {
       try {
         const imageDraft = await generateOzonAiImageDraft(normalized, {
-          prompt: `Create marketplace-ready product photo ${index} of ${count} for ${normalized.name || normalized.offerId}. Clean square ecommerce packshot, realistic perfume bottle only, full bottle visible from cap to base, centered, upright, not cropped, 10-15% empty margin on every side. No box, no outer packaging, no cartons, no props, no headline, no typography, no text overlays, no extra objects. Text is allowed only if it already exists on the original bottle label.`,
+          prompt: `Create exactly one marketplace-ready product photo ${index} of ${count} for ${normalized.name || normalized.offerId}. This is one image only; do not create a collage, grid, contact sheet, split-screen, multi-panel layout, or multiple bottles in one image. Clean square ecommerce packshot, realistic perfume bottle only, full bottle visible from cap to base, centered, upright, not cropped, 10-15% empty margin on every side. No box, no outer packaging, no cartons, no props, no headline, no typography, no text overlays, no extra objects. Text is allowed only if it already exists on the original bottle label.`,
           sourceImageUrl: request.body.sourceImageUrl || "",
           batchId,
           variantIndex: index,
