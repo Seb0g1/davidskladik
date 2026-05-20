@@ -295,11 +295,20 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   });
 
   const deleteMutation = useMutation({
-    mutationFn: async (link: ProductLink & { productId?: string }) => fetchJson(
-      `/api/warehouse/products/${encodeURIComponent(String(link.productId || productIds[0]))}/links/${encodeURIComponent(String(link.id || ""))}`,
-      MutationProductResponseSchema,
-      { method: "DELETE", body: JSON.stringify({ expectedUpdatedAt: products.find((item) => item.id === link.productId)?.updatedAt || products[0]?.updatedAt || "" }) },
-    ),
+    mutationFn: async (link: ProductLink & { productId?: string }) => {
+      const product = products.find((item) => item.id === link.productId) || products[0];
+      return fetchJson(
+        `/api/warehouse/products/${encodeURIComponent(String(link.productId || productIds[0]))}/links/${encodeURIComponent(String(link.id || ""))}`,
+        MutationProductResponseSchema,
+        {
+          method: "DELETE",
+          body: JSON.stringify({
+            expectedUpdatedAt: product?.updatedAt || "",
+            expectedLinksSignature: product ? productLinksSignature(product) : "",
+          }),
+        },
+      );
+    },
     onSuccess: (payload) => {
       refreshAfterMutation(payload);
     },
@@ -681,6 +690,8 @@ function commandText(command: unknown, empty = "нет отправки") {
     item.status,
     item.stock !== undefined ? `остаток ${item.stock}` : "",
     item.requestedPrice !== undefined ? `цена ${money(item.requestedPrice)}` : "",
+    item.warning ? String(item.warning) : "",
+    item.nextRetryAt ? `next ${compactDate(String(item.nextRetryAt))}` : "",
     item.target,
     compactDate(typeof item.at === "string" ? item.at : ""),
   ].filter(Boolean);
@@ -816,6 +827,8 @@ function MarketplaceRows({ products }: { products: Product[] }) {
           const supplierPrice = Number(supplier.price || formula.selectedSupplierPrice || 0) || 0;
           const supplierCurrency = String(supplier.currency || supplier.priceCurrency || formula.selectedSupplierCurrency || "");
           const targetPrice = Number(product.newPrice || product.targetPrice || formula.targetPrice || 0) || 0;
+          const lastArchiveSend = asRecord(asRecord(product).lastArchiveSend);
+          const ozonUnarchiveQueued = Boolean(lastArchiveSend.queuedByDailyLimit || lastArchiveSend.warning === "ozon_unarchive_daily_limit_queued");
           const formulaParts = [
             supplier.supplierName ? `Поставщик: ${String(supplier.supplierName)}${supplier.article ? ` · ${String(supplier.article)}` : ""}` : "",
             markupCoefficient ? `Коэф.: ${markupCoefficient}${baseMarkupCoefficient && baseMarkupCoefficient !== markupCoefficient ? ` (база ${baseMarkupCoefficient})` : ""}` : "",
@@ -843,6 +856,7 @@ function MarketplaceRows({ products }: { products: Product[] }) {
                 <strong>{groupLinkCount}</strong>
               </div>
               <div className="marketplace-flags">
+                {ozonUnarchiveQueued && <span>Ожидает разархива Ozon{lastArchiveSend.nextRetryAt ? ` · ${compactDate(String(lastArchiveSend.nextRetryAt))}` : ""}</span>}
                 {formulaParts.length ? formulaParts.map((part) => <span className="formula-chip" key={part}>{part}</span>) : <span className="formula-chip">PriceMaster не выбран</span>}
                 <span className="formula-chip muted">общие привязки, отдельный расчет цены</span>
                 {product.archived && <span>Архив</span>}

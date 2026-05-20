@@ -109,6 +109,10 @@ export function firstImage(product?: Product): string {
 }
 
 export function statusLabel(product: Product): { label: string; tone: string; icon: ReactNode } {
+  const lastArchiveSend = asRecord(asRecord(product).lastArchiveSend);
+  if (lastArchiveSend.queuedByDailyLimit || lastArchiveSend.warning === "ozon_unarchive_daily_limit_queued") {
+    return { label: "РћР¶РёРґР°РµС‚ СЂР°Р·Р°СЂС…РёРІР° Ozon", tone: "warn", icon: <AlertCircle size={14} /> };
+  }
   const stateCode = String(product.marketplaceState?.code || product.status || "").toLowerCase();
   const linked = (product.links || []).length > 0;
   if (product.archived || stateCode.includes("archiv")) return { label: "Архив", tone: "danger", icon: <Archive size={14} /> };

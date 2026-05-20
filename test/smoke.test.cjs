@@ -158,6 +158,10 @@ const {
   writeWarehouse,
   writePriceRetryQueue,
   priceRetryQueuePath,
+  unarchiveProductsOnMarketplaces,
+  readOzonUnarchiveQueue,
+  writeOzonUnarchiveQueue,
+  ozonUnarchiveQueuePath,
 } = require("../server.js");
 const postgres = require("../lib/postgres.js");
 const seedPostgres = require("../scripts/seed-postgres-from-json.cjs");
@@ -3172,13 +3176,68 @@ test("warehouse link writes reject stale expectedUpdatedAt before validation", a
     assert.equal(add.body.conflicts[0].id, smokeId);
     assert.equal(add.body.conflicts[0].freshProduct.id, smokeId);
 
-    const remove = await agent
+    const alreadyRemoved = await agent
       .delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}/links/no-link?expectedUpdatedAt=${encodeURIComponent(staleUpdatedAt)}`)
-      .expect(409);
-    assert.equal(remove.body.code, "warehouse_product_conflict");
-    assert.equal(remove.body.conflicts[0].freshProduct.id, smokeId);
+      .expect(200);
+    assert.equal(alreadyRemoved.body.alreadyDeleted, true);
   } finally {
     await agent.delete(`/api/warehouse/products/${encodeURIComponent(smokeId)}`).expect(200);
+  }
+});
+
+test("single warehouse link delete ignores stale background updatedAt when link signature is unchanged", async () => {
+  const agent = request.agent(app);
+  const suffix = Date.now();
+  const firstId = `smoke-single-link-a-${suffix}`;
+  const secondId = `smoke-single-link-b-${suffix}`;
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    const first = await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: firstId,
+        target: "ozon",
+        marketplace: "ozon",
+        offerId: "SINGLE-LINK-1",
+        name: "Single link Ozon",
+        links: [{ id: "link-a", article: "PM-SINGLE-1", supplierName: "Supplier A" }],
+      })
+      .expect(200);
+    await agent
+      .post("/api/warehouse/products")
+      .send({
+        id: secondId,
+        target: "yandex-01",
+        marketplace: "yandex",
+        offerId: "SINGLE-LINK-1",
+        name: "Single link Yandex",
+        links: [{ id: "link-b", article: "PM-SINGLE-1", supplierName: "Supplier A" }],
+      })
+      .expect(200);
+
+    const expectedUpdatedAt = first.body.product.updatedAt;
+    const expectedLinksSignature = warehouseProductLinksSignature(first.body.product);
+    await agent
+      .patch(`/api/warehouse/products/${encodeURIComponent(firstId)}`)
+      .send({ markup: 1.91, expectedUpdatedAt })
+      .expect(200);
+
+    const removed = await agent
+      .delete(`/api/warehouse/products/${encodeURIComponent(firstId)}/links/link-a`)
+      .send({ expectedUpdatedAt, expectedLinksSignature })
+      .expect(200);
+
+    assert.equal(removed.body.changed, 2);
+    assert.equal(removed.body.products.length, 2);
+    assert.equal(removed.body.products.every((product) => product.links.length === 0), true);
+    assert.equal(removed.body.groupLinkSignature.ok, true);
+  } finally {
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(firstId)}`).catch(() => {});
+    await agent.delete(`/api/warehouse/products/${encodeURIComponent(secondId)}`).catch(() => {});
   }
 });
 
@@ -3243,6 +3302,66 @@ test("bulk warehouse link delete removes grouped marketplace refs together", asy
   } finally {
     await agent.delete(`/api/warehouse/products/${encodeURIComponent(firstId)}`).catch(() => {});
     await agent.delete(`/api/warehouse/products/${encodeURIComponent(secondId)}`).catch(() => {});
+  }
+});
+
+test("Ozon unarchive daily limit queues overflow and resumes when quota is available", async () => {
+  const accountsBackup = await backupFile(marketplaceAccountsPath);
+  const queueBackup = await backupFile(ozonUnarchiveQueuePath);
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), body: JSON.parse(options.body || "{}") });
+    return new Response(JSON.stringify({ result: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    await restoreFile(marketplaceAccountsPath, JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      accounts: [{
+        id: "ozon-test",
+        marketplace: "ozon",
+        name: "Ozon Test",
+        clientId: "client",
+        apiKey: "key",
+        syncEnabled: true,
+      }],
+    }, null, 2));
+    await writeOzonUnarchiveQueue({ items: [], daily: {} });
+    const products = Array.from({ length: 101 }, (_, index) => ({
+      id: `ozon-queue-${index + 1}`,
+      marketplace: "ozon",
+      target: "ozon-test",
+      productId: String(index + 1),
+      offerId: `OZQ-${index + 1}`,
+    }));
+
+    const firstRun = await unarchiveProductsOnMarketplaces(products);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].body.product_id.length, 100);
+    assert.equal(firstRun.filter((item) => item.ok && !item.pending).length, 100);
+    assert.equal(firstRun.filter((item) => item.queuedByDailyLimit).length, 1);
+    assert.equal(firstRun.find((item) => item.queuedByDailyLimit).warning, "ozon_unarchive_daily_limit_queued");
+
+    let queue = await readOzonUnarchiveQueue();
+    assert.equal(queue.items.length, 1);
+    assert.equal(queue.items[0].id, "ozon-queue-101");
+
+    await writeOzonUnarchiveQueue({ ...queue, daily: {} });
+    const secondRun = await unarchiveProductsOnMarketplaces([products[100]]);
+    assert.equal(calls.length, 2);
+    assert.deepEqual(calls[1].body.product_id, [101]);
+    assert.equal(secondRun[0].ok, true);
+    assert.equal(secondRun[0].pending, undefined);
+    queue = await readOzonUnarchiveQueue();
+    assert.equal(queue.items.length, 0);
+  } finally {
+    global.fetch = originalFetch;
+    await restoreFile(marketplaceAccountsPath, accountsBackup);
+    await restoreFile(ozonUnarchiveQueuePath, queueBackup);
   }
 });
 

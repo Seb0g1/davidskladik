@@ -77,6 +77,7 @@ const appSettingsPath = path.join(dataDir, "app-settings.json");
 const appUsersPath = path.join(dataDir, "app-users.json");
 const appDeletedUsersPath = path.join(dataDir, "app-users-deleted.json");
 const priceRetryQueuePath = path.join(dataDir, "price-retry-queue.json");
+const ozonUnarchiveQueuePath = path.join(dataDir, "ozon-unarchive-queue.json");
 const yandexExistingOffersCachePath = path.join(dataDir, "yandex-existing-offers.json");
 const operationJobsPath = path.join(dataDir, "operation-jobs.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
@@ -118,6 +119,7 @@ const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 10000) || 10000));
 const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
 const yandexStockCampaignIds = new Set(["128820967"]);
+const ozonUnarchiveDailyLimit = Math.max(1, Math.min(10000, Number(process.env.OZON_UNARCHIVE_DAILY_LIMIT || 100) || 100));
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const rawOpenaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
 const openaiImageModel = (() => {
@@ -2136,6 +2138,9 @@ function normalizeLastMarketplaceCommand(input = {}) {
   const error = cleanText(input.error || "");
   const warning = cleanText(input.warning || "");
   const detail = cleanText(input.detail || input.message || "");
+  const nextRetryAt = cleanText(input.nextRetryAt || input.next_retry_at || "");
+  const pending = Boolean(input.pending);
+  const queuedByDailyLimit = Boolean(input.queuedByDailyLimit);
   if (!type && !status && !at && !target && !offerId && !error && !warning && !detail && !Number.isFinite(stock)) return null;
   return compactObject({
     type: type || null,
@@ -2147,6 +2152,9 @@ function normalizeLastMarketplaceCommand(input = {}) {
     error: error || null,
     warning: warning || null,
     detail: detail || null,
+    pending,
+    queuedByDailyLimit,
+    nextRetryAt: nextRetryAt || null,
   });
 }
 
@@ -2161,6 +2169,9 @@ function marketplaceCommandFromAction(action = {}, product = {}, at = new Date()
     error: action.error,
     warning: action.warning,
     detail: action.reason || "",
+    pending: action.pending,
+    queuedByDailyLimit: action.queuedByDailyLimit,
+    nextRetryAt: action.nextRetryAt,
   });
 }
 
@@ -7195,6 +7206,160 @@ async function writePriceRetryQueue(queue) {
   await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
   await fs.rename(tmpPath, priceRetryQueuePath);
   return payload;
+}
+
+function ozonUnarchiveDateKey(date = new Date()) {
+  const value = date instanceof Date ? date : new Date(date);
+  const ms = Number.isFinite(value.getTime()) ? value.getTime() : Date.now();
+  return new Date(ms + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function nextOzonUnarchiveRetryAt(date = new Date()) {
+  const value = date instanceof Date ? date : new Date(date);
+  const base = Number.isFinite(value.getTime()) ? value : new Date();
+  const moscow = new Date(base.getTime() + 3 * 60 * 60 * 1000);
+  moscow.setUTCHours(24, 5, 0, 0);
+  return new Date(moscow.getTime() - 3 * 60 * 60 * 1000).toISOString();
+}
+
+function ozonUnarchiveQueueKey(item = {}) {
+  return [
+    cleanText(item.target),
+    cleanText(item.productId || item.product_id),
+    cleanText(item.offerId || item.offer_id),
+    cleanText(item.id || item.productUuid),
+  ].filter(Boolean).join(":");
+}
+
+function normalizeOzonUnarchiveQueueItem(item = {}, fallback = {}) {
+  const now = new Date().toISOString();
+  return {
+    id: cleanText(item.id || fallback.id),
+    productId: cleanText(item.productId || item.product_id || fallback.productId),
+    offerId: cleanText(item.offerId || item.offer_id || fallback.offerId),
+    target: cleanText(item.target || fallback.target),
+    marketplace: "ozon",
+    status: cleanText(item.status || "pending") || "pending",
+    queuedAt: cleanText(item.queuedAt || item.queued_at) || now,
+    nextRetryAt: cleanText(item.nextRetryAt || item.next_retry_at) || nextOzonUnarchiveRetryAt(),
+    lastAttemptAt: cleanText(item.lastAttemptAt || item.last_attempt_at),
+    attempts: Math.max(0, Number(item.attempts || 0) || 0),
+    warning: cleanText(item.warning || "ozon_unarchive_daily_limit_queued"),
+    error: cleanText(item.error),
+  };
+}
+
+function normalizeOzonUnarchiveQueue(queue = {}) {
+  const items = Array.isArray(queue.items) ? queue.items : [];
+  const daily = queue.daily && typeof queue.daily === "object" ? queue.daily : {};
+  const byKey = new Map();
+  for (const item of items) {
+    const normalized = normalizeOzonUnarchiveQueueItem(item);
+    const key = ozonUnarchiveQueueKey(normalized);
+    if (key && normalized.status !== "done") byKey.set(key, normalized);
+  }
+  return {
+    updatedAt: cleanText(queue.updatedAt),
+    daily,
+    items: Array.from(byKey.values()),
+  };
+}
+
+async function readOzonUnarchiveQueue() {
+  try {
+    const text = await fs.readFile(ozonUnarchiveQueuePath, "utf8");
+    if (!text.trim()) return { updatedAt: null, daily: {}, items: [] };
+    return normalizeOzonUnarchiveQueue(JSON.parse(text));
+  } catch (error) {
+    if (error.code === "ENOENT") return { updatedAt: null, daily: {}, items: [] };
+    if (error instanceof SyntaxError) {
+      logger.warn("ozon unarchive queue is invalid, resetting in memory", { detail: error.message });
+      return { updatedAt: null, daily: {}, items: [] };
+    }
+    throw error;
+  }
+}
+
+async function writeOzonUnarchiveQueue(queue = {}) {
+  const payload = normalizeOzonUnarchiveQueue({
+    ...queue,
+    updatedAt: new Date().toISOString(),
+  });
+  await fs.mkdir(dataDir, { recursive: true });
+  const tmpPath = `${ozonUnarchiveQueuePath}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+  await fs.rename(tmpPath, ozonUnarchiveQueuePath);
+  return payload;
+}
+
+function ozonUnarchiveDailyUsed(queue = {}, target = "", date = new Date()) {
+  const key = ozonUnarchiveDateKey(date);
+  const targetKey = cleanText(target) || "default";
+  return Math.max(0, Number(queue.daily?.[key]?.[targetKey] || 0) || 0);
+}
+
+function setOzonUnarchiveDailyUsed(queue = {}, target = "", used = 0, date = new Date()) {
+  const key = ozonUnarchiveDateKey(date);
+  const targetKey = cleanText(target) || "default";
+  queue.daily = queue.daily && typeof queue.daily === "object" ? queue.daily : {};
+  queue.daily[key] = queue.daily[key] && typeof queue.daily[key] === "object" ? queue.daily[key] : {};
+  queue.daily[key][targetKey] = Math.max(0, Math.round(Number(used || 0) || 0));
+  for (const dateKey of Object.keys(queue.daily)) {
+    if (dateKey < key) delete queue.daily[dateKey];
+  }
+  return queue;
+}
+
+function queueOzonUnarchiveItems(queue = {}, products = [], { nextRetryAt = nextOzonUnarchiveRetryAt(), warning = "ozon_unarchive_daily_limit_queued" } = {}) {
+  const normalizedQueue = normalizeOzonUnarchiveQueue(queue);
+  const byKey = new Map(normalizedQueue.items.map((item) => [ozonUnarchiveQueueKey(item), item]));
+  for (const product of Array.isArray(products) ? products : []) {
+    const item = normalizeOzonUnarchiveQueueItem({
+      id: product.id,
+      productId: product.productId,
+      offerId: product.offerId,
+      target: product.target,
+      nextRetryAt,
+      warning,
+      status: "pending",
+    });
+    const key = ozonUnarchiveQueueKey(item);
+    if (!key) continue;
+    const existing = byKey.get(key);
+    byKey.set(key, {
+      ...(existing || {}),
+      ...item,
+      queuedAt: existing?.queuedAt || item.queuedAt,
+      attempts: existing?.attempts || item.attempts,
+      lastAttemptAt: existing?.lastAttemptAt || item.lastAttemptAt,
+    });
+  }
+  normalizedQueue.items = Array.from(byKey.values());
+  return normalizedQueue;
+}
+
+function removeOzonUnarchiveQueueItems(queue = {}, products = []) {
+  const removeKeys = new Set((Array.isArray(products) ? products : []).map(ozonUnarchiveQueueKey).filter(Boolean));
+  const normalizedQueue = normalizeOzonUnarchiveQueue(queue);
+  normalizedQueue.items = normalizedQueue.items.filter((item) => !removeKeys.has(ozonUnarchiveQueueKey(item)));
+  return normalizedQueue;
+}
+
+function ozonUnarchiveQueuedActions(products = [], queue = {}, { warning = "ozon_unarchive_daily_limit_queued", nextRetryAt = nextOzonUnarchiveRetryAt() } = {}) {
+  const normalizedQueue = normalizeOzonUnarchiveQueue(queue);
+  return (Array.isArray(products) ? products : []).map((item) => ({
+    id: item.id,
+    type: "unarchive",
+    target: item.target,
+    offerId: item.offerId,
+    ok: true,
+    pending: true,
+    warning,
+    queuedByDailyLimit: true,
+    nextRetryAt,
+    dailyLimit: ozonUnarchiveDailyLimit,
+    queueSize: normalizedQueue.items.length,
+  }));
 }
 
 function normalizeMarketplaceEnum(value) {
@@ -14011,14 +14176,6 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
       const link = (Array.isArray(product.links) ? product.links : [])
         .find((item) => String(item.id) === String(ref.linkId));
       if (!link) {
-        const conflict = productConflict(product, {
-          expectedUpdatedAt: ref.expectedUpdatedAt,
-          expectedLinksSignature: ref.expectedLinksSignature,
-        });
-        if (conflict) {
-          conflicts.push(conflict);
-          continue;
-        }
         alreadyDeletedRefs.push(ref);
         continue;
       }
@@ -15471,6 +15628,9 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
       recovered: 0,
       restoredStocks: 0,
       unarchived: 0,
+      unarchivePending: 0,
+      queuedByDailyLimit: 0,
+      queueSize: (await readOzonUnarchiveQueue().catch(() => ({ items: [] }))).items.length || 0,
       errors: [],
       summary: "Нет привязанных карточек, которым нужно восстановление.",
     };
@@ -15509,6 +15669,7 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
   const sellableRecovered = Number(result.sellableRecovered || 0);
   const unarchiveFailed = Number(result.unarchiveFailed || 0);
   const unarchivePending = Number(result.unarchivePending || 0);
+  const queuedByDailyLimit = Number(result.queuedByDailyLimit || 0);
   const stockFailed = Number(result.stockFailed || 0);
   return {
     ok: result.errors?.length ? false : true,
@@ -15524,6 +15685,10 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
     restoredStocks: result.restoredStocks || 0,
     unarchived: result.unarchived || 0,
     unarchivePending,
+    queuedByDailyLimit,
+    nextRetryAt: result.nextRetryAt || null,
+    queueSize: result.queueSize || 0,
+    queuedSamples: result.queuedSamples || [],
     unarchiveFailed,
     stockFailed,
     errors: result.errors || [],
@@ -17090,15 +17255,50 @@ async function unarchiveProductsOnMarketplaces(products = []) {
         actions.push(...items.map((item) => ({ id: item.id, type: "unarchive", target, ok: false, error: "ozon_account_not_found" })));
         continue;
       }
-      for (const chunk of chunkArray(items, 100)) {
+      let queueState = await readOzonUnarchiveQueue();
+      const dailyUsed = ozonUnarchiveDailyUsed(queueState, target);
+      const remainingToday = Math.max(0, ozonUnarchiveDailyLimit - dailyUsed);
+      const runnableItems = items.slice(0, remainingToday);
+      const queuedItems = items.slice(remainingToday);
+      if (queuedItems.length) {
+        const nextRetryAt = nextOzonUnarchiveRetryAt();
+        queueState = queueOzonUnarchiveItems(queueState, queuedItems, { nextRetryAt });
+        await writeOzonUnarchiveQueue(queueState);
+        actions.push(...ozonUnarchiveQueuedActions(queuedItems, queueState, { nextRetryAt }));
+      }
+      let usedToday = dailyUsed;
+      for (const chunk of chunkArray(runnableItems, 100)) {
         const productIds = chunk.map((item) => Number(item.productId || 0)).filter((id) => id > 0);
         if (!productIds.length) continue;
         try {
           await ozonRequest("/v1/product/unarchive", { product_id: productIds }, account);
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "unarchive", ok: true })));
+          usedToday += productIds.length;
+          queueState = removeOzonUnarchiveQueueItems(queueState, chunk);
+          setOzonUnarchiveDailyUsed(queueState, target, usedToday);
+          await writeOzonUnarchiveQueue(queueState);
+          actions.push(...chunk.map((item) => ({
+            id: item.id,
+            type: "unarchive",
+            target,
+            offerId: item.offerId,
+            ok: true,
+            dailyLimit: ozonUnarchiveDailyLimit,
+            dailyUsed: usedToday,
+            queueSize: queueState.items.length,
+          })));
         } catch (error) {
           const detail = error?.message || "unarchive_failed";
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "unarchive", ok: false, error: detail })));
+          if (/daily|суточ|лимит|limit|quota|auto.?archive|автоархив/i.test(detail)) {
+            const nextRetryAt = nextOzonUnarchiveRetryAt();
+            queueState = queueOzonUnarchiveItems(queueState, chunk, { nextRetryAt });
+            await writeOzonUnarchiveQueue(queueState);
+            actions.push(...ozonUnarchiveQueuedActions(chunk, queueState, {
+              warning: "ozon_unarchive_daily_limit_queued",
+              nextRetryAt,
+            }));
+          } else {
+            actions.push(...chunk.map((item) => ({ id: item.id, type: "unarchive", target, offerId: item.offerId, ok: false, error: detail })));
+          }
         }
       }
       continue;
@@ -17352,11 +17552,13 @@ function summarizeSupplierRecoveryProducts(products = [], stockActions = [], una
     const unarchiveOk = unarchive.filter((action) => action.ok).length;
     const unarchiveFailed = unarchive.filter((action) => !action.ok).length;
     const unarchivePending = unarchive.filter((action) => action.ok && action.pending).length;
+    const queuedByDailyLimit = unarchive.filter((action) => action.ok && action.queuedByDailyLimit).length;
     const failed = productActions.find((action) => !action.ok);
     const needsUnarchive = productLooksArchived(product);
     const sellable = stockOk > 0
       && stockFailed === 0
       && unarchiveFailed === 0
+      && queuedByDailyLimit === 0
       && (!needsUnarchive || unarchiveOk > 0);
     return {
       id: product.id,
@@ -17368,6 +17570,8 @@ function summarizeSupplierRecoveryProducts(products = [], stockActions = [], una
       unarchiveOk,
       unarchiveFailed,
       unarchivePending,
+      queuedByDailyLimit,
+      nextRetryAt: unarchive.find((action) => action.nextRetryAt)?.nextRetryAt || null,
       sellable,
       status: failed ? "error" : (sellable ? "sellable" : (productActions.length ? "processed" : "no_action")),
       error: failed?.error || null,
@@ -17464,8 +17668,27 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
   }
   const products = Array.isArray(preview?.products) ? preview.products : [];
-  const recovered = pickSupplierRecoveryCandidates(products, options);
+  let recovered = pickSupplierRecoveryCandidates(products, options);
   const source = options.source || (Array.isArray(options.productIds) && options.productIds.length ? "targeted" : "full");
+  let queuedOzonProducts = [];
+  try {
+    const queueState = await readOzonUnarchiveQueue();
+    const queuedIds = Array.from(new Set((queueState.items || [])
+      .filter((item) => item.status !== "done")
+      .map((item) => cleanText(item.id))
+      .filter(Boolean)));
+    const missingQueuedIds = queuedIds.filter((id) => !recovered.some((product) => String(product.id) === id));
+    if (missingQueuedIds.length) {
+      queuedOzonProducts = await buildFreshWarehouseProducts(missingQueuedIds);
+      const existingIds = new Set(recovered.map((product) => String(product.id)));
+      recovered = [
+        ...recovered,
+        ...queuedOzonProducts.filter((product) => product?.marketplace === "ozon" && !existingIds.has(String(product.id))),
+      ];
+    }
+  } catch (error) {
+    logger.warn("ozon unarchive queue load failed during supplier recovery", { detail: error?.message || String(error) });
+  }
   if (!recovered.length) {
     logger.info("supplier recovery automation complete", {
       source,
@@ -17557,6 +17780,12 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     .filter((item) => !item.ok)
     .map((item) => ({ id: item.id, type: item.type, error: item.error }));
   const unarchivePending = unarchiveActions.filter((item) => item.ok && item.pending).length;
+  const queuedByDailyLimit = unarchiveActions.filter((item) => item.ok && item.queuedByDailyLimit).length;
+  const queuedNextRetryAt = unarchiveActions
+    .filter((item) => item.queuedByDailyLimit && item.nextRetryAt)
+    .map((item) => item.nextRetryAt)
+    .sort()[0] || null;
+  const ozonQueueState = await readOzonUnarchiveQueue().catch(() => ({ items: [] }));
   logger.info("supplier recovery automation complete", {
     source,
     products: products.length,
@@ -17565,6 +17794,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     restoredStocks: stockActions.filter((item) => item.ok).length,
     unarchived: unarchiveActions.filter((item) => item.ok).length,
     unarchivePending,
+    queuedByDailyLimit,
     stockFailed: stockActions.filter((item) => !item.ok).length,
     unarchiveFailed: unarchiveActions.filter((item) => !item.ok).length,
     errors: errors.length,
@@ -17575,6 +17805,13 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     restoredStocks: stockActions.filter((item) => item.ok).length,
     unarchived: unarchiveActions.filter((item) => item.ok).length,
     unarchivePending,
+    queuedByDailyLimit,
+    nextRetryAt: queuedNextRetryAt,
+    queueSize: Array.isArray(ozonQueueState.items) ? ozonQueueState.items.length : 0,
+    queuedSamples: unarchiveActions
+      .filter((item) => item.queuedByDailyLimit)
+      .slice(0, 20)
+      .map((item) => ({ id: item.id, offerId: item.offerId, target: item.target, nextRetryAt: item.nextRetryAt })),
     stockFailed: stockActions.filter((item) => !item.ok).length,
     unarchiveFailed: unarchiveActions.filter((item) => !item.ok).length,
     errors,
@@ -18142,6 +18379,12 @@ module.exports = {
   readPriceRetryQueue,
   writePriceRetryQueue,
   priceRetryQueuePath,
+  unarchiveProductsOnMarketplaces,
+  readOzonUnarchiveQueue,
+  writeOzonUnarchiveQueue,
+  ozonUnarchiveQueuePath,
+  ozonUnarchiveDateKey,
+  nextOzonUnarchiveRetryAt,
 };
 
 if (require.main === module) {
