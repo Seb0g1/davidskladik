@@ -1190,6 +1190,79 @@ button:disabled {
   padding: 4px 8px;
 }
 
+.branding-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.branding-card {
+  border: 1px solid var(--line);
+  background: rgba(8, 17, 31, .36);
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 12px;
+  min-width: 0;
+}
+
+.branding-logo-preview {
+  width: 82px;
+  height: 82px;
+  border: 1px solid rgba(56, 163, 255, .28);
+  background: rgba(12, 23, 40, .8);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.branding-logo-preview img {
+  width: 74px;
+  height: 74px;
+  object-fit: contain;
+}
+
+.branding-logo-preview span {
+  color: var(--blue);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.branding-fields {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.extra-card-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.extra-card-preview {
+  border: 1px solid var(--line);
+  background: rgba(12, 23, 40, .72);
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+  width: 92px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.extra-card-preview img {
+  width: 78px;
+  height: 78px;
+  object-fit: cover;
+  background: #f8fafc;
+}
+
+.compact-title {
+  margin-bottom: 0;
+}
+
 .ai-card {
   border: 1px solid var(--line);
   background: rgba(8, 17, 31, .45);
@@ -1791,6 +1864,8 @@ button:disabled {
   .draft-grid,
   .manual-link-grid,
   .ai-grid,
+  .branding-grid,
+  .branding-card,
   .control-grid,
   .operation-stats,
   .settings-grid,

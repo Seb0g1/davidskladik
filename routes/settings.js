@@ -19,6 +19,13 @@ function registerSettingsRoutes(app, deps) {
     appendAudit,
     logger,
     normalizeOpenAiImageError,
+    uploadImages,
+    sharp,
+    fs,
+    path,
+    crypto,
+    brandingImageDir,
+    uploadBaseUrl,
   } = deps;
 
 app.get("/api/settings", requireAdmin, async (_request, response, next) => {
@@ -92,6 +99,149 @@ async function saveSettingsHandler(request, response, next) {
 
 app.put("/api/settings", requireAdmin, saveSettingsHandler);
 app.post("/api/settings", requireAdmin, saveSettingsHandler);
+
+app.post("/api/settings/branding/logo", requireAdmin, uploadImages.single("logo"), async (request, response, next) => {
+  try {
+    const file = request.file;
+    const marketplace = cleanText(request.body?.marketplace || request.query?.marketplace).toLowerCase();
+    const shopName = cleanText(request.body?.shopName || request.body?.shop_name || request.query?.shopName);
+    if (marketplace !== "ozon" && marketplace !== "yandex") {
+      return response.status(400).json({ error: "marketplace must be ozon or yandex", code: "branding_marketplace_invalid" });
+    }
+    if (!file) {
+      return response.status(400).json({ error: "Upload PNG logo file.", code: "branding_logo_required" });
+    }
+    if (String(file.mimetype || "").toLowerCase() !== "image/png") {
+      return response.status(400).json({ error: "Logo must be PNG.", code: "branding_logo_png_required" });
+    }
+    const meta = await sharp(file.buffer).metadata();
+    if (Number(meta.width) !== 258 || Number(meta.height) !== 258) {
+      return response.status(400).json({
+        error: "Logo must be exactly 258x258 PNG.",
+        code: "logo_invalid_size",
+        width: meta.width || 0,
+        height: meta.height || 0,
+      });
+    }
+    await fs.mkdir(brandingImageDir, { recursive: true });
+    const fileName = `${marketplace}-${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}.png`;
+    const filePath = path.join(brandingImageDir, fileName);
+    await sharp(file.buffer).png({ compressionLevel: 9 }).toFile(filePath);
+    const logoUrl = `/uploads/branding/${fileName}`;
+    const previous = await readAppSettings();
+    const previousBranding = previous.branding || {};
+    const previousMarketplaces = previousBranding.marketplaces || {};
+    const branding = {
+      ...previousBranding,
+      marketplaces: {
+        ...previousMarketplaces,
+        [marketplace]: {
+          ...(previousMarketplaces[marketplace] || {}),
+          shopName: shopName || previousMarketplaces[marketplace]?.shopName || (marketplace === "ozon" ? "Magic Stick" : "parfumerius"),
+          logoUrl,
+        },
+      },
+    };
+    const settings = await writeAppSettings({ ...previous, branding });
+    appendAudit(request, "settings.branding.logo_upload", {
+      marketplace,
+      shopName: branding.marketplaces[marketplace].shopName,
+      logoUrl,
+      width: meta.width,
+      height: meta.height,
+    }).catch((auditError) => {
+      logger.warn("settings branding audit append failed", { detail: auditError?.message || String(auditError) });
+    });
+    response.json({
+      ok: true,
+      marketplace,
+      shopName: branding.marketplaces[marketplace].shopName,
+      logoUrl,
+      url: `${uploadBaseUrl(request)}${logoUrl}`,
+      width: meta.width,
+      height: meta.height,
+      settings: publicAppSettings(settings),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/settings/branding/extra-card", requireAdmin, uploadImages.single("image"), async (request, response, next) => {
+  try {
+    const file = request.file;
+    const marketplace = cleanText(request.body?.marketplace || request.query?.marketplace).toLowerCase();
+    const label = cleanText(request.body?.label || request.query?.label);
+    if (marketplace !== "ozon" && marketplace !== "yandex") {
+      return response.status(400).json({ error: "marketplace must be ozon or yandex", code: "branding_marketplace_invalid" });
+    }
+    if (!file) {
+      return response.status(400).json({ error: "Upload image file.", code: "branding_extra_card_required" });
+    }
+    const meta = await sharp(file.buffer).metadata();
+    if (!meta.width || !meta.height || meta.width < 600 || meta.height < 600) {
+      return response.status(400).json({
+        error: "Extra card image must be at least 600x600.",
+        code: "extra_card_invalid_size",
+        width: meta.width || 0,
+        height: meta.height || 0,
+      });
+    }
+    await fs.mkdir(brandingImageDir, { recursive: true });
+    const fileName = `${marketplace}-extra-${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}.png`;
+    const filePath = path.join(brandingImageDir, fileName);
+    const output = await sharp(file.buffer)
+      .rotate()
+      .resize(1600, 1600, { fit: "inside", withoutEnlargement: true })
+      .png({ compressionLevel: 9 })
+      .toBuffer();
+    await fs.writeFile(filePath, output);
+    const outputMeta = await sharp(output).metadata();
+    const imageUrl = `/uploads/branding/${fileName}`;
+    const previous = await readAppSettings();
+    const previousBranding = previous.branding || {};
+    const previousMarketplaces = previousBranding.marketplaces || {};
+    const currentMarketplace = previousMarketplaces[marketplace] || {};
+    const extraCard = {
+      id: crypto.randomUUID(),
+      label: label || `Фото ${Math.min(7, 6 + (Array.isArray(currentMarketplace.extraCards) ? currentMarketplace.extraCards.length : 0))}`,
+      url: imageUrl,
+      width: outputMeta.width || meta.width,
+      height: outputMeta.height || meta.height,
+      createdAt: new Date().toISOString(),
+    };
+    const branding = {
+      ...previousBranding,
+      marketplaces: {
+        ...previousMarketplaces,
+        [marketplace]: {
+          ...currentMarketplace,
+          shopName: currentMarketplace.shopName || (marketplace === "ozon" ? "Magic Stick" : "parfumerius"),
+          extraCards: [...(Array.isArray(currentMarketplace.extraCards) ? currentMarketplace.extraCards : []), extraCard].slice(-2),
+        },
+      },
+    };
+    const settings = await writeAppSettings({ ...previous, branding });
+    appendAudit(request, "settings.branding.extra_card_upload", {
+      marketplace,
+      label: extraCard.label,
+      imageUrl,
+      width: extraCard.width,
+      height: extraCard.height,
+    }).catch((auditError) => {
+      logger.warn("settings branding extra card audit append failed", { detail: auditError?.message || String(auditError) });
+    });
+    response.json({
+      ok: true,
+      marketplace,
+      card: extraCard,
+      url: `${uploadBaseUrl(request)}${imageUrl}`,
+      settings: publicAppSettings(settings),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.post("/api/settings/ai/test", requireAdmin, async (request, response, next) => {
   try {

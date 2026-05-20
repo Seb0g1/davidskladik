@@ -19,6 +19,7 @@ function jobSummary(job: Record<string, unknown>): string {
     Number.isFinite(Number(result.recovered)) ? `восстановлено ${result.recovered}` : "",
     Number.isFinite(Number(result.sellableRecovered)) ? `готовы ${result.sellableRecovered}` : "",
     Number.isFinite(Number(result.unarchived)) ? `разархивировано ${result.unarchived}` : "",
+    Number.isFinite(Number(result.queuedByDailyLimit)) && Number(result.queuedByDailyLimit) > 0 ? `очередь Ozon ${result.queuedByDailyLimit}` : "",
     Number.isFinite(Number(result.stockFailed)) && Number(result.stockFailed) > 0 ? `ошибки остатков ${result.stockFailed}` : "",
     Number.isFinite(Number(result.unarchiveFailed)) && Number(result.unarchiveFailed) > 0 ? `ошибки архива ${result.unarchiveFailed}` : "",
     Number.isFinite(Number(result.qualityLoaded)) ? `quality ${result.qualityLoaded}` : "",
@@ -74,6 +75,9 @@ function operationStatItems(job: Record<string, unknown>) {
     ["sellableRecovered", "Готовы"],
     ["restoredStocks", "Остатки"],
     ["unarchived", "Разархив"],
+    ["unarchivePending", "Ожидают"],
+    ["queuedByDailyLimit", "Очередь Ozon"],
+    ["queueSize", "Всего в очереди"],
     ["stockFailed", "Ошибки остатков"],
     ["unarchiveFailed", "Ошибки архива"],
     ["failed", "Ошибки"],
@@ -179,6 +183,8 @@ export function OperationsPage() {
         ? { limit, sendLimit }
         : type === "restore-archived-stock"
           ? { limit, stock, marketplace: "yandex" }
+          : type === "ozon-linked-unarchive"
+            ? { limit, marketplace: "ozon", force: true }
           : type === "yandex-card-quality-ai-drafts"
             ? { limit, threshold, draftLimit, generateImages: true }
             : { limit },
@@ -203,6 +209,7 @@ export function OperationsPage() {
       </section>
       <section className="action-strip">
         <button className="primary-action" onClick={() => startMutation.mutate("linked-supplier-recovery")} disabled={startMutation.isPending}>Восстановить привязанные</button>
+        <button className="primary-action" onClick={() => startMutation.mutate("ozon-linked-unarchive")} disabled={startMutation.isPending}>Вернуть Ozon автоархив</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("restore-archived-stock")} disabled={startMutation.isPending}>Восстановить архив</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("yandex-card-quality-ai-drafts")} disabled={startMutation.isPending}>AI качество карточек</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("repair-pricemaster-group-links")} disabled={startMutation.isPending}>Синхронизировать PM группы</button>

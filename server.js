@@ -65,6 +65,7 @@ const publicDir = path.join(__dirname, "public");
 const modernAppDir = path.join(publicDir, "app-modern");
 const uploadImageDir = path.join(publicDir, "uploads", "images");
 const aiImageDir = path.join(publicDir, "uploads", "ai-images");
+const brandingImageDir = path.join(publicDir, "uploads", "branding");
 const aiImageLogoPath = path.join(publicDir, "logo.png");
 const snapshotPath = path.join(dataDir, "snapshot.json");
 const historyPath = path.join(dataDir, "history.jsonl");
@@ -891,6 +892,7 @@ function requireAuth(request, response, next) {
   if (publicPaths.includes(request.path)) return next();
   if (request.path.startsWith("/uploads/images/")) return next();
   if (request.path.startsWith("/uploads/ai-images/")) return next();
+  if (request.path.startsWith("/uploads/branding/")) return next();
   if (request.path === "/api/login" || request.path === "/api/session") return next();
 
   const session = readSession(request);
@@ -1071,6 +1073,7 @@ async function validateLocalUploadImagePath(pathname = "") {
   const roots = [
     { prefix: "/uploads/ai-images/", dir: aiImageDir },
     { prefix: "/uploads/images/", dir: uploadImageDir },
+    { prefix: "/uploads/branding/", dir: brandingImageDir },
   ];
   const match = roots.find((item) => normalizedPath.startsWith(item.prefix));
   if (!match) return;
@@ -4952,6 +4955,12 @@ function defaultAppSettings() {
       { marketplace: "all", minAvailableSuppliers: 5, coefficientDelta: -0.05, targetStock: 10 },
       { marketplace: "all", minAvailableSuppliers: 1, coefficientDelta: 0, targetStock: 3 },
     ],
+    branding: {
+      marketplaces: {
+        ozon: { shopName: "Magic Stick", logoUrl: "" },
+        yandex: { shopName: "parfumerius", logoUrl: "" },
+      },
+    },
   };
 }
 
@@ -4982,6 +4991,38 @@ function normalizeAvailabilityRule(input = {}) {
     minAvailableSuppliers: Math.max(0, Math.round(minAvailableSuppliers)),
     coefficientDelta: Number(coefficientDelta.toFixed(4)),
     targetStock: Math.max(0, Math.round(targetStock)),
+  };
+}
+
+function normalizeMarketplaceBranding(input = {}, fallback = {}) {
+  const raw = input && typeof input === "object" ? input : {};
+  const rawExtraCards = Array.isArray(raw.extraCards || raw.extra_cards) ? (raw.extraCards || raw.extra_cards) : [];
+  return {
+    shopName: cleanText(raw.shopName || raw.shop_name || fallback.shopName),
+    logoUrl: cleanText(raw.logoUrl || raw.logo_url || fallback.logoUrl),
+    extraCards: rawExtraCards
+      .map((item) => ({
+        id: cleanText(item?.id) || crypto.randomUUID(),
+        label: cleanText(item?.label),
+        url: cleanText(item?.url || item?.imageUrl || item?.image_url),
+        width: Number(item?.width || 0) || undefined,
+        height: Number(item?.height || 0) || undefined,
+        createdAt: item?.createdAt || item?.created_at || new Date().toISOString(),
+      }))
+      .filter((item) => item.url)
+      .slice(-2),
+  };
+}
+
+function normalizeBrandingSettings(input = {}, fallback = defaultAppSettings().branding) {
+  const raw = input && typeof input === "object" ? input : {};
+  const marketplaces = raw.marketplaces && typeof raw.marketplaces === "object" ? raw.marketplaces : {};
+  const fallbackMarketplaces = fallback?.marketplaces || {};
+  return {
+    marketplaces: {
+      ozon: normalizeMarketplaceBranding(marketplaces.ozon || raw.ozon, fallbackMarketplaces.ozon || { shopName: "Magic Stick", logoUrl: "" }),
+      yandex: normalizeMarketplaceBranding(marketplaces.yandex || raw.yandex, fallbackMarketplaces.yandex || { shopName: "parfumerius", logoUrl: "" }),
+    },
   };
 }
 
@@ -5045,6 +5086,7 @@ function normalizeAppSettings(input = {}) {
     ai: normalizeAiSettings(input.ai || {}, fallback.ai),
     markupRules: rules,
     availabilityRules,
+    branding: normalizeBrandingSettings(input.branding || {}, fallback.branding),
   };
 }
 
@@ -12436,6 +12478,13 @@ registerSettingsRoutes(app, {
   appendAudit,
   logger,
   normalizeOpenAiImageError,
+  uploadImages,
+  sharp,
+  fs,
+  path,
+  crypto,
+  brandingImageDir,
+  uploadBaseUrl,
 });
 
 registerSystemMediaRoutes(app, {
@@ -13240,6 +13289,274 @@ async function appendAiImageDraftToProduct(productId, draft) {
   return saved?.products?.find((item) => item.id === productId) || normalizeWarehouseProduct(product);
 }
 
+async function appendAiImageDraftsToProduct(productId, drafts = [], reason = "warehouse_premium_image_generate") {
+  const normalizedDrafts = (Array.isArray(drafts) ? drafts : [drafts]).map(normalizeAiImageDraft).filter(Boolean);
+  if (!normalizedDrafts.length) return null;
+  const warehouse = await readWarehouse();
+  const product = warehouse.products.find((item) => item.id === productId);
+  if (!product) {
+    const error = new Error("Warehouse product not found.");
+    error.statusCode = 404;
+    error.code = "warehouse_product_not_found";
+    throw error;
+  }
+  product.aiImages = normalizeAiImageDrafts([...(product.aiImages || []), ...normalizedDrafts]);
+  product.updatedAt = new Date().toISOString();
+  const saved = await writeWarehouseProductPatch([product], { reason, writeLinks: false });
+  return saved?.products?.find((item) => item.id === productId) || normalizeWarehouseProduct(product);
+}
+
+function premiumImageBackgrounds() {
+  return [
+    { id: "white-luxury", label: "White luxury", from: "#fbfcff", to: "#edf3fb", accent: "#d8e2ef", text: "#d7e0ec" },
+    { id: "warm-champagne", label: "Warm champagne", from: "#fff8ed", to: "#ead8bd", accent: "#d7b77d", text: "#e5cfaa" },
+    { id: "marble-light", label: "Light marble", from: "#f7f8f7", to: "#dce2e2", accent: "#b8c3c8", text: "#d5dbdd" },
+    { id: "dark-premium", label: "Dark premium", from: "#111827", to: "#25324a", accent: "#c7a86d", text: "#2f3b53" },
+    { id: "soft-gradient", label: "Soft gradient", from: "#f8fbff", to: "#e9ddf2", accent: "#b7c9e9", text: "#e2d9ef" },
+  ];
+}
+
+function premiumImageBackgroundSvg(theme, size) {
+  const dark = theme.id === "dark-premium";
+  return Buffer.from(`
+<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="${theme.from}"/>
+      <stop offset="1" stop-color="${theme.to}"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="46%" cy="34%" r="58%">
+      <stop offset="0" stop-color="${dark ? "#ffffff" : "#ffffff"}" stop-opacity="${dark ? "0.14" : "0.72"}"/>
+      <stop offset="1" stop-color="${theme.to}" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="blur"><feGaussianBlur stdDeviation="18"/></filter>
+  </defs>
+  <rect width="${size}" height="${size}" fill="url(#bg)"/>
+  <rect width="${size}" height="${size}" fill="url(#glow)"/>
+  <path d="M${size * 0.12} ${size * 0.77} C${size * 0.32} ${size * 0.68}, ${size * 0.62} ${size * 0.88}, ${size * 0.9} ${size * 0.72}" fill="none" stroke="${theme.accent}" stroke-opacity="${dark ? "0.22" : "0.18"}" stroke-width="3"/>
+  <circle cx="${size * 0.78}" cy="${size * 0.20}" r="${size * 0.20}" fill="${theme.accent}" opacity="${dark ? "0.08" : "0.10"}" filter="url(#blur)"/>
+  <rect x="${size * 0.10}" y="${size * 0.11}" width="${size * 0.80}" height="${size * 0.78}" rx="34" fill="none" stroke="${dark ? "#ffffff" : theme.accent}" stroke-opacity="${dark ? "0.08" : "0.13"}"/>
+</svg>`);
+}
+
+function premiumImageShadowSvg(size) {
+  return Buffer.from(`
+<svg width="${size}" height="${Math.round(size * 0.18)}" viewBox="0 0 ${size} ${Math.round(size * 0.18)}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="shadow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#000000" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <ellipse cx="${size / 2}" cy="${Math.round(size * 0.09)}" rx="${Math.round(size * 0.36)}" ry="${Math.round(size * 0.07)}" fill="url(#shadow)"/>
+</svg>`);
+}
+
+function premiumImageLogoBadgeSvg(size) {
+  return Buffer.from(`
+<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0.5" y="0.5" width="${size - 1}" height="${size - 1}" rx="18" fill="#ffffff" fill-opacity="0.72" stroke="#ffffff" stroke-opacity="0.86"/>
+</svg>`);
+}
+
+function productImageUrlsForPremium(product = {}) {
+  return Array.from(new Set([
+    ...splitList(product.imageUrl),
+    ...splitList(product.ozon?.primaryImage),
+    ...splitList(product.ozon?.images),
+    ...splitList(product.yandex?.pictures),
+    ...splitList(product.yandex?.images),
+  ].map(cleanText).filter(Boolean)));
+}
+
+async function readProductSourceImageBuffer(sourceUrl, request) {
+  const localPath = localPublicFilePathFromUrl(sourceUrl, request);
+  let buffer = null;
+  let mimeType = "";
+  if (localPath) {
+    buffer = await fs.readFile(localPath);
+    mimeType = imageMimeFromPath(localPath);
+  } else if (/^https?:\/\//i.test(sourceUrl)) {
+    const response = await fetch(sourceUrl, { headers: { Accept: "image/*,*/*;q=0.8" } });
+    if (!response.ok) {
+      const error = new Error(`Source image fetch failed: HTTP ${response.status}.`);
+      error.statusCode = 400;
+      error.code = "source_image_fetch_failed";
+      throw error;
+    }
+    mimeType = cleanText(response.headers.get("content-type")).split(";")[0];
+    buffer = Buffer.from(await response.arrayBuffer());
+  }
+  if (!buffer || buffer.length < 1024 || !/^image\/(png|jpe?g|webp)$/i.test(mimeType || imageMimeFromPath(sourceUrl))) {
+    const error = new Error("Source image is not ready for premium card generation.");
+    error.statusCode = 400;
+    error.code = "source_image_not_ready";
+    throw error;
+  }
+  try {
+    await sharp(buffer).metadata();
+  } catch (error) {
+    const sourceError = new Error("Source image is damaged or unsupported.");
+    sourceError.statusCode = 400;
+    sourceError.code = "source_image_not_ready";
+    throw sourceError;
+  }
+  return buffer;
+}
+
+function brandingForMarketplace(settings = {}, marketplace = "ozon") {
+  const normalized = normalizeAppSettings(settings);
+  const marketplaces = normalized.branding?.marketplaces || {};
+  const key = marketplace === "yandex" ? "yandex" : "ozon";
+  return marketplaces[key] || {};
+}
+
+async function readBrandingLogoBuffer(settings = {}, marketplace = "ozon", request = null) {
+  const branding = brandingForMarketplace(settings, marketplace);
+  const logoUrl = cleanText(branding.logoUrl);
+  if (!logoUrl) return null;
+  const localPath = localPublicFilePathFromUrl(logoUrl, request);
+  if (!localPath) return null;
+  try {
+    const buffer = await fs.readFile(localPath);
+    const meta = await sharp(buffer).metadata();
+    if (meta.format !== "png" || Number(meta.width) !== 258 || Number(meta.height) !== 258) return null;
+    return buffer;
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function marketplaceExtraCardUrls(marketplace = "ozon", request = null) {
+  const settings = await readAppSettings();
+  const branding = brandingForMarketplace(settings, marketplace);
+  const cards = Array.isArray(branding.extraCards) ? branding.extraCards : [];
+  const urls = [];
+  for (const card of cards.slice(0, 2)) {
+    const rawUrl = cleanText(card?.url);
+    if (!rawUrl) continue;
+    urls.push(await normalizeMarketplaceImageUrlForSend(rawUrl, request));
+  }
+  return Array.from(new Set(urls));
+}
+
+function appendUniqueImages(primary = [], extra = []) {
+  return Array.from(new Set([...(Array.isArray(primary) ? primary : []), ...(Array.isArray(extra) ? extra : [])].map(cleanText).filter(Boolean)));
+}
+
+async function buildPremiumPerfumeImageBuffer(sourceBuffer, { theme, logoBuffer = null, size = 1000 } = {}) {
+  const targetSize = Math.max(512, Math.min(2048, Number(size || 1000) || 1000));
+  const productMaxHeight = Math.round(targetSize * 0.78);
+  const productMaxWidth = Math.round(targetSize * 0.68);
+  let productPipeline = sharp(sourceBuffer).rotate();
+  try {
+    productPipeline = productPipeline.trim({ threshold: 10 });
+  } catch (_error) {
+    productPipeline = sharp(sourceBuffer).rotate();
+  }
+  const productBuffer = await productPipeline
+    .resize(productMaxWidth, productMaxHeight, {
+      fit: "inside",
+      withoutEnlargement: false,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    })
+    .png()
+    .toBuffer();
+  const productMeta = await sharp(productBuffer).metadata();
+  if (!productMeta.width || !productMeta.height || productMeta.width < 80 || productMeta.height < 80) {
+    const error = new Error("Source image is too small after processing.");
+    error.statusCode = 400;
+    error.code = "source_image_not_ready";
+    throw error;
+  }
+  const productLeft = Math.max(0, Math.round((targetSize - productMeta.width) / 2));
+  const productTop = Math.max(0, Math.round(targetSize - productMeta.height - targetSize * 0.12));
+  const shadowSize = Math.round(targetSize * 0.78);
+  const composites = [
+    {
+      input: premiumImageShadowSvg(shadowSize),
+      left: Math.round((targetSize - shadowSize) / 2),
+      top: Math.round(targetSize * 0.79),
+    },
+    { input: productBuffer, left: productLeft, top: productTop },
+  ];
+  if (logoBuffer) {
+    const badgeSize = Math.round(targetSize * 0.094);
+    const badgeMargin = Math.round(targetSize * 0.055);
+    const logoInset = Math.round(badgeSize * 0.15);
+    const badgeLeft = targetSize - badgeMargin - badgeSize;
+    const badgeTop = badgeMargin;
+    const logo = await sharp(logoBuffer)
+      .resize(badgeSize - logoInset * 2, badgeSize - logoInset * 2, { fit: "contain" })
+      .png()
+      .toBuffer();
+    composites.push(
+      { input: premiumImageLogoBadgeSvg(badgeSize), left: badgeLeft, top: badgeTop },
+      { input: logo, left: badgeLeft + logoInset, top: badgeTop + logoInset },
+    );
+  }
+  return sharp(premiumImageBackgroundSvg(theme, targetSize))
+    .composite(composites)
+    .png({ compressionLevel: 9 })
+    .toBuffer();
+}
+
+async function generatePremiumPerfumeImageDrafts(product, options = {}, request) {
+  const count = Math.max(1, Math.min(5, Math.floor(Number(options.count || 5) || 5)));
+  const marketplace = cleanText(options.marketplace || "ozon").toLowerCase() === "yandex" ? "yandex" : "ozon";
+  const useLogo = options.useLogo !== false;
+  const settings = await readAppSettings();
+  const logoBuffer = useLogo ? await readBrandingLogoBuffer(settings, marketplace, request) : null;
+  const sources = productImageUrlsForPremium(product);
+  if (!sources.length) {
+    const error = new Error("Product has no source images for premium card generation.");
+    error.statusCode = 400;
+    error.code = "source_image_required";
+    throw error;
+  }
+  const themes = premiumImageBackgrounds();
+  const targetSize = ozonAiImageTargetPx || 1000;
+  await fs.mkdir(aiImageDir, { recursive: true });
+  const batchId = crypto.randomUUID();
+  const drafts = [];
+  const warnings = [];
+  for (let index = 1; index <= count; index += 1) {
+    const sourceUrl = sources[(index - 1) % sources.length];
+    const theme = themes[(index - 1) % themes.length];
+    let sourceBuffer = null;
+    try {
+      sourceBuffer = await readProductSourceImageBuffer(sourceUrl, request);
+    } catch (error) {
+      if (index === 1) throw error;
+      warnings.push({ sourceImageUrl: sourceUrl, code: error?.code || "source_image_not_ready", detail: error?.message || String(error) });
+      sourceBuffer = await readProductSourceImageBuffer(sources[0], request);
+    }
+    const outBuffer = await buildPremiumPerfumeImageBuffer(sourceBuffer, { theme, logoBuffer, size: targetSize });
+    const fileName = `${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}.png`;
+    const filePath = path.join(aiImageDir, fileName);
+    await fs.writeFile(filePath, outBuffer);
+    const relativeUrl = `/uploads/ai-images/${fileName}`;
+    drafts.push(normalizeAiImageDraft({
+      status: "pending",
+      prompt: `Premium deterministic perfume card: ${theme.label}`,
+      productName: product.name || product.ozon?.name,
+      sourceImageUrl: sourceUrl,
+      resultUrl: `${uploadBaseUrl(request)}${relativeUrl}`,
+      batchId,
+      variantIndex: index,
+      variantTotal: count,
+      presetId: `premium-${theme.id}`,
+      presetLabel: theme.label,
+      layout: "premium-template",
+      model: "premium-template",
+      size: `${targetSize}x${targetSize}`,
+      quality: "deterministic",
+      format: "png",
+    }));
+  }
+  return { drafts, warnings, batchId };
+}
+
 async function generateAiImageDraftsSynchronously(product, generation, request, batchId = crypto.randomUUID()) {
   const drafts = [];
   for (let index = 1; index <= generation.count; index += 1) {
@@ -13387,6 +13704,46 @@ async function runAiImageGenerationJob(jobInput, generation, requestContext = {}
   }
   return job;
 }
+
+app.post("/api/warehouse/products/:id/premium-images/generate", async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Warehouse product not found.", code: "warehouse_product_not_found" });
+    const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], updatedAt: product.updatedAt });
+    const generation = await generatePremiumPerfumeImageDrafts(product, {
+      count: request.body?.count,
+      marketplace: request.body?.marketplace,
+      useLogo: request.body?.useLogo !== false,
+    }, request);
+    const savedProduct = await appendAiImageDraftsToProduct(product.id, generation.drafts, "warehouse_premium_image_generate");
+    appendAudit(request, "warehouse.premium_image.generate", {
+      productId: product.id,
+      offerId: product.offerId,
+      draftIds: generation.drafts.map((draft) => draft.id),
+      batchId: generation.batchId,
+      count: generation.drafts.length,
+      warnings: generation.warnings,
+      oldValue: before,
+      newValue: savedProduct ? { id: savedProduct.id, aiImages: savedProduct.aiImages || [], updatedAt: savedProduct.updatedAt } : null,
+    }).catch((auditError) => logger.warn("premium image generate audit failed", { detail: auditError?.message || String(auditError) }));
+    response.json({
+      ok: true,
+      product: savedProduct || product,
+      drafts: generation.drafts,
+      warnings: generation.warnings,
+      batchId: generation.batchId,
+    });
+  } catch (error) {
+    logger.warn("premium image generation failed", {
+      productId: request.params.id,
+      detail: error?.message || String(error),
+      code: error?.code,
+      statusCode: error?.statusCode || error?.status,
+    });
+    next(error);
+  }
+});
 
 app.post("/api/warehouse/products/:id/ai-images/generate", async (request, response, next) => {
   try {
@@ -13911,12 +14268,13 @@ app.post("/api/warehouse/products/:id/yandex-quality-draft/send", requireAdmin, 
         primaryUrl,
         ...imageBatch.map((draft) => draft.resultUrl).filter((url) => url && url !== primaryUrl),
       ].slice(0, 10);
-      yandexPicturesForSend = batchUrls;
+      const extraCardUrls = await marketplaceExtraCardUrls("yandex", request);
+      yandexPicturesForSend = appendUniqueImages(batchUrls, extraCardUrls).slice(0, 10);
       const yandex = product.yandex || {};
       const currentPictures = splitList(yandex.pictures);
       product.yandex = normalizeYandexDraft({
         ...yandex,
-        pictures: [...batchUrls, ...currentPictures.filter((url) => !batchUrls.includes(url))],
+        pictures: [...yandexPicturesForSend, ...currentPictures.filter((url) => !yandexPicturesForSend.includes(url))],
       });
       product.imageUrl = primaryUrl;
     }
@@ -14214,12 +14572,15 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
       }
     });
     const batchUrls = [draft.resultUrl, ...batchDrafts.map((item) => item.resultUrl).filter((url) => url && url !== draft.resultUrl)];
+    const marketplace = normalizeWarehouseProduct(product).marketplace === "yandex" ? "yandex" : "ozon";
+    const extraCardUrls = await marketplaceExtraCardUrls(marketplace, request);
+    const sendBatchUrls = appendUniqueImages(batchUrls, extraCardUrls).slice(0, 10);
     if (normalizeWarehouseProduct(product).marketplace === "yandex") {
       const yandex = product.yandex || {};
       const pictures = splitList(yandex.pictures);
       product.yandex = normalizeYandexDraft({
         ...yandex,
-        pictures: [...batchUrls, ...pictures.filter((url) => !batchUrls.includes(url))],
+        pictures: [...sendBatchUrls, ...pictures.filter((url) => !sendBatchUrls.includes(url))],
       });
     } else {
       const ozon = product.ozon || {};
@@ -14227,7 +14588,7 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
       product.ozon = normalizeOzonDraft({
         ...ozon,
         primaryImage: draft.resultUrl,
-        images: [...batchUrls, ...images.filter((url) => !batchUrls.includes(url))],
+        images: [...sendBatchUrls, ...images.filter((url) => !sendBatchUrls.includes(url))],
       });
     }
     product.imageUrl = draft.resultUrl;
@@ -14236,7 +14597,7 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
     const saved = await writeWarehouseProductPatch([product], { reason: "warehouse_ai_image_approve", writeLinks: false });
     const savedProduct = saved.products.find((item) => item.id === product.id) || normalizeWarehouseProduct(product);
     const yandexSend = normalizeWarehouseProduct(savedProduct).marketplace === "yandex"
-      ? await sendApprovedYandexProductContent(savedProduct, { mode: "image", pictures: batchUrls })
+      ? await sendApprovedYandexProductContent(savedProduct, { mode: "image", pictures: sendBatchUrls })
       : { ok: true, skipped: true, reason: "not_yandex" };
     response.json({ ok: true, draft, product: savedProduct, yandexSend });
     appendAudit(request, "warehouse.ai_image.approve", {
@@ -14274,8 +14635,24 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/send", async (request, 
     }
     await normalizeAiImageDraftUrlsForMarketplaceSend(product, sourceDraft.id, request);
     const applied = applyAiImageDraftToProduct(product, sourceDraft.id, { sentMarketplace: marketplace });
+    const extraCardUrls = await marketplaceExtraCardUrls(marketplace, request);
+    if (extraCardUrls.length) {
+      if (marketplace === "yandex") {
+        const yandex = applied.product.yandex || {};
+        applied.product.yandex = normalizeYandexDraft({
+          ...yandex,
+          pictures: appendUniqueImages(splitList(yandex.pictures), extraCardUrls),
+        });
+      } else {
+        const ozon = applied.product.ozon || {};
+        applied.product.ozon = normalizeOzonDraft({
+          ...ozon,
+          images: appendUniqueImages(splitList(ozon.images), extraCardUrls),
+        });
+      }
+    }
     const sendResult = marketplace === "yandex"
-      ? await sendApprovedYandexProductContent(applied.product, { mode: "image", pictures: applied.batchUrls })
+      ? await sendApprovedYandexProductContent(applied.product, { mode: "image", pictures: appendUniqueImages(applied.batchUrls, extraCardUrls) })
       : await sendApprovedOzonProductContent(applied.product, { mode: "image" });
     const sendError = marketplaceSendResultError(sendResult, `${marketplace}_image_send_failed`);
     if (sendError) return next(sendError);
@@ -16389,6 +16766,7 @@ function operationTitle(type = "") {
     "yandex-import-send": "Ozon -> Yandex import",
     "yandex-stock-sync": "Ozon -> Yandex stock sync",
     "linked-supplier-recovery": "Restore linked marketplace cards",
+    "ozon-linked-unarchive": "Restore linked Ozon autoarchive",
     "restore-archived-stock": "Restore archived stock",
     "yandex-card-quality-ai-drafts": "Yandex card quality AI drafts",
     "repair-pricemaster-group-links": "Repair PriceMaster group links",
@@ -16401,7 +16779,22 @@ async function runLinkedSupplierRecoveryOperation(payload = {}) {
   const requestedLimit = Number(payload?.limit || 30000);
   const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
   const warehouse = await readWarehouse();
-  const candidates = linkedRecoveryCandidateProducts(warehouse.products || [], limit);
+  const marketplaceFilter = cleanText(payload?.marketplace || "all").toLowerCase();
+  const productIdSet = Array.isArray(payload?.productIds) && payload.productIds.length
+    ? new Set(payload.productIds.map((id) => cleanText(id)).filter(Boolean))
+    : null;
+  const offerIdSet = Array.isArray(payload?.offerIds) && payload.offerIds.length
+    ? new Set(payload.offerIds.map((id) => cleanText(id).toLowerCase()).filter(Boolean))
+    : null;
+  const candidateLimit = productIdSet || offerIdSet ? Math.max(limit, (warehouse.products || []).length) : limit;
+  const candidates = linkedRecoveryCandidateProducts(warehouse.products || [], candidateLimit)
+    .filter((product) => {
+      if (marketplaceFilter !== "all" && cleanText(product.marketplace).toLowerCase() !== marketplaceFilter) return false;
+      if (productIdSet && !productIdSet.has(String(product.id))) return false;
+      if (offerIdSet && !offerIdSet.has(cleanText(product.offerId).toLowerCase())) return false;
+      return true;
+    })
+    .slice(0, limit);
 
   if (!candidates.length) {
     return {
@@ -16979,6 +17372,19 @@ async function runOperationPayload(job, options = {}) {
     await appendAudit(auditRequest, "marketplace.linked.recovery", {
       entityType: "linked_supplier_recovery",
       entityId: "all",
+      newValue: result,
+    });
+    return result;
+  }
+  if (job.type === "ozon-linked-unarchive") {
+    const result = await runLinkedSupplierRecoveryOperation({
+      ...(job.payload || {}),
+      marketplace: "ozon",
+      force: true,
+    });
+    await appendAudit(auditRequest, "marketplace.ozon.linked_unarchive", {
+      entityType: "ozon_linked_unarchive",
+      entityId: "ozon",
       newValue: result,
     });
     return result;

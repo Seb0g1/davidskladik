@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckSquare, Download, Loader2, RefreshCw, Save, Search, Square, Trash2, UserX } from "lucide-react";
+import { CheckSquare, Download, Loader2, RefreshCw, Save, Search, Square, Trash2, Upload, UserX } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
 import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SyncStatusSchema, UsersResponseSchema, UsersStatsResponseSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -118,6 +118,129 @@ function saveBlob(blob: Blob, filename: string) {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function brandingMarketplace(settings: Record<string, unknown>, marketplace: "ozon" | "yandex") {
+  return asRecord(asRecord(asRecord(settings.branding).marketplaces)[marketplace]);
+}
+
+function BrandingLogoPanel({
+  marketplace,
+  label,
+  settings,
+  draft,
+  update,
+}: {
+  marketplace: "ozon" | "yandex";
+  label: string;
+  settings: Record<string, unknown>;
+  draft: Record<string, unknown>;
+  update: (patch: Record<string, unknown>) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [extraCardFile, setExtraCardFile] = useState<File | null>(null);
+  const draftBranding = asRecord(draft.branding);
+  const draftMarketplaces = asRecord(draftBranding.marketplaces);
+  const current = {
+    ...brandingMarketplace(settings, marketplace),
+    ...asRecord(draftMarketplaces[marketplace]),
+  };
+  const shopName = String(current.shopName || (marketplace === "ozon" ? "Magic Stick" : "parfumerius"));
+  const logoUrl = String(current.logoUrl || "");
+  const updateMarketplace = (patch: Record<string, unknown>) => {
+    update({
+      branding: {
+        ...draftBranding,
+        marketplaces: {
+          ...draftMarketplaces,
+          [marketplace]: {
+            ...current,
+            ...patch,
+          },
+        },
+      },
+    });
+  };
+  const uploadLogo = useMutation({
+    mutationFn: async () => {
+      if (!logoFile) throw new Error("Выберите PNG 258x258.");
+      const body = new FormData();
+      body.set("logo", logoFile);
+      body.set("marketplace", marketplace);
+      body.set("shopName", shopName);
+      const response = await fetch("/api/settings/branding/logo", {
+        method: "POST",
+        body,
+        credentials: "same-origin",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(String(payload.error || `HTTP ${response.status}`));
+      return SettingsResponseSchema.parse(payload);
+    },
+    onSuccess: (payload) => {
+      if (payload.settings) update({ branding: asRecord(payload.settings.branding) });
+      setLogoFile(null);
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+  const uploadExtraCard = useMutation({
+    mutationFn: async () => {
+      if (!extraCardFile) throw new Error("Выберите картинку для 6/7 фото.");
+      const body = new FormData();
+      body.set("image", extraCardFile);
+      body.set("marketplace", marketplace);
+      body.set("label", `Фото ${Math.min(7, 6 + (Array.isArray(current.extraCards) ? current.extraCards.length : 0))}`);
+      const response = await fetch("/api/settings/branding/extra-card", {
+        method: "POST",
+        body,
+        credentials: "same-origin",
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(String(payload.error || `HTTP ${response.status}`));
+      return SettingsResponseSchema.parse(payload);
+    },
+    onSuccess: (payload) => {
+      if (payload.settings) update({ branding: asRecord(payload.settings.branding) });
+      setExtraCardFile(null);
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
+    },
+  });
+  const extraCards = Array.isArray(current.extraCards) ? current.extraCards.map(asRecord) : [];
+  return (
+    <div className="branding-card">
+      <div className="branding-logo-preview">
+        {logoUrl ? <img src={logoUrl} alt={shopName} /> : <span>{label.slice(0, 2)}</span>}
+      </div>
+      <div className="branding-fields">
+        <div className="section-title compact-title"><div><span>{label}</span><h3>{shopName}</h3></div></div>
+        <label>Название магазина<input value={shopName} onChange={(event) => updateMarketplace({ shopName: event.target.value })} /></label>
+        <label>Логотип PNG 258x258<input type="file" accept="image/png" onChange={(event) => setLogoFile(event.target.files?.[0] || null)} /></label>
+        <label>Доп. фото 6/7<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setExtraCardFile(event.target.files?.[0] || null)} /></label>
+        <div className="draft-actions">
+          <button className="secondary-action" type="button" disabled={!logoFile || uploadLogo.isPending} onClick={() => uploadLogo.mutate()}>
+            {uploadLogo.isPending ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Загрузить логотип
+          </button>
+          <button className="secondary-action" type="button" disabled={!extraCardFile || uploadExtraCard.isPending} onClick={() => uploadExtraCard.mutate()}>
+            {uploadExtraCard.isPending ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Добавить 6/7 фото
+          </button>
+          {logoUrl ? <span className="formula-chip">PNG 258x258</span> : <span className="formula-chip">Логотип не загружен</span>}
+        </div>
+        {extraCards.length ? <div className="extra-card-preview-row">
+          {extraCards.map((card, index) => (
+            <span className="extra-card-preview" key={String(card.id || card.url || index)}>
+              {card.url ? <img src={String(card.url)} alt="" /> : null}
+              <small>{String(card.label || `Фото ${index + 6}`)}</small>
+            </span>
+          ))}
+        </div> : <div className="soft-empty compact">Дополнительные 6/7 фото для {label} пока не загружены.</div>}
+        {uploadLogo.error && <div className="inline-error">{errorMessage(uploadLogo.error)}</div>}
+        {uploadExtraCard.error && <div className="inline-error">{errorMessage(uploadExtraCard.error)}</div>}
+        {uploadLogo.isSuccess && <div className="success-strip">Логотип сохранен.</div>}
+        {uploadExtraCard.isSuccess && <div className="success-strip">Дополнительное фото сохранено.</div>}
+      </div>
+    </div>
+  );
 }
 
 function UsersSettingsPanel() {
@@ -529,6 +652,15 @@ export function SettingsPage() {
       </section>}
 
       {activeTab === "marketplaces" && <section className="settings-grid pricing-settings-grid">
+        <div className="settings-panel settings-panel-wide">
+          <div className="section-title"><div><span>Брендинг</span><h3>Логотипы магазинов для премиум-фото</h3></div></div>
+          <div className="settings-hint">PNG 258x258 с прозрачным фоном. Логотип ставится маленьким бейджем на премиальные фото и не перекрывает флакон.</div>
+          <div className="branding-grid">
+            <BrandingLogoPanel marketplace="ozon" label="Ozon" settings={settings} draft={draft} update={update} />
+            <BrandingLogoPanel marketplace="yandex" label="Yandex" settings={settings} draft={draft} update={update} />
+          </div>
+        </div>
+
         <div className="settings-panel">
           <div className="section-title"><div><span>Yandex</span><h3>Склад остатков</h3></div></div>
           <label>Warehouse ID<input value={String(asRecord(draft.yandex).warehouseId ?? asRecord(settings.yandex).warehouseId ?? "128820967")} onChange={(event) => update({ yandex: { ...asRecord(draft.yandex), warehouseId: event.target.value } })} /></label>

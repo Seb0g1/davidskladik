@@ -650,6 +650,7 @@ function AiImagesPanel({ product, products, onSaved }: { product: Product; produ
   }, [product, products]);
   const assistantDraft = asRecord(assistant?.draft);
   const contentDraftId = String(assistantDraft.id || "");
+  const premiumMarketplace = String(product.marketplace || "").toLowerCase().includes("yandex") ? "yandex" : "ozon";
   useEffect(() => {
     setFreshDrafts(product.aiImages || []);
   }, [product.aiImages]);
@@ -733,6 +734,22 @@ function AiImagesPanel({ product, products, onSaved }: { product: Product; produ
     onError: () => setProgress("start failed"),
   });
 
+  const premiumMutation = useMutation({
+    mutationFn: async () => fetchJson(
+      `/api/warehouse/products/${encodeURIComponent(product.id)}/premium-images/generate`,
+      MutationProductResponseSchema,
+      mutationBody({ count: 5, marketplace: premiumMarketplace, useLogo: true }),
+    ),
+    onSuccess: (payload) => {
+      if (payload.product?.aiImages?.length) setFreshDrafts(payload.product.aiImages);
+      updateCachedProducts(queryClient, payload);
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      setProgress("premium photos ready");
+      onSaved();
+    },
+    onError: () => setProgress("premium failed"),
+  });
+
   const reviewMutation = useMutation({
     mutationFn: async ({ draftId, action }: { draftId: string; action: "approve" | "reject" }) => fetchJson(
       `/api/warehouse/products/${encodeURIComponent(product.id)}/ai-images/${encodeURIComponent(draftId)}/${action}`,
@@ -775,6 +792,7 @@ function AiImagesPanel({ product, products, onSaved }: { product: Product; produ
   });
 
   const generationBusy = generateMutation.isPending || jobRunning;
+  const premiumBusy = premiumMutation.isPending;
   const jobError = asRecord(asRecord(activeJob).lastError);
   const jobErrorText = String(jobError.detail || jobError.code || "");
 
@@ -782,16 +800,20 @@ function AiImagesPanel({ product, products, onSaved }: { product: Product; produ
     <section className="detail-section">
       <div className="section-title">
         <div>
-          <span>AI</span>
+          <span>Фото карточки</span>
           <h3>AI-помощник карточки</h3>
         </div>
+        <button className="primary-action" type="button" disabled={premiumBusy} onClick={() => premiumMutation.mutate()}>
+          {premiumBusy ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} Собрать 5 премиум-фото
+        </button>
         <button className="secondary-action" type="button" disabled={assistantMutation.isPending} onClick={() => assistantMutation.mutate()}>
           {assistantMutation.isPending ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />} Улучшить карточку
         </button>
-        <button className="primary-action" type="button" disabled={generationBusy} onClick={() => generateMutation.mutate()}>
+        <button className="secondary-action" type="button" disabled={generationBusy} onClick={() => generateMutation.mutate()}>
           {generationBusy ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} Codex: 5 фото
         </button>
       </div>
+      <div className="info-strip compact">Премиум-фото собираются из реальных фото товара через шаблоны: без коллажей, без обрезки флакона и без перерисовки AI.</div>
       <div className="preset-strip">
         {studioPhotoPresets.map((preset) => <span className="formula-chip" key={preset.id}>{preset.label}</span>)}
       </div>
@@ -855,7 +877,7 @@ function AiImagesPanel({ product, products, onSaved }: { product: Product; produ
       {jobErrorText && ["failed", "partial"].includes(String(asRecord(activeJob).status || "")) && <div className="inline-error">
         {jobErrorText}{jobError.code ? ` | code: ${String(jobError.code)}` : ""}{jobError.status ? ` | status: ${String(jobError.status)}` : ""}{jobError.model ? ` | model: ${String(jobError.model)}` : ""}{jobError.endpoint ? ` | endpoint: ${String(jobError.endpoint)}` : ""}
       </div>}
-      {(assistantMutation.error || generateMutation.error || reviewMutation.error || contentSendMutation.error || imageSendMutation.error || jobQuery.error) && <div className="inline-error">{errorMessage(assistantMutation.error || generateMutation.error || reviewMutation.error || contentSendMutation.error || imageSendMutation.error || jobQuery.error)}</div>}
+      {(assistantMutation.error || generateMutation.error || premiumMutation.error || reviewMutation.error || contentSendMutation.error || imageSendMutation.error || jobQuery.error) && <div className="inline-error">{errorMessage(assistantMutation.error || generateMutation.error || premiumMutation.error || reviewMutation.error || contentSendMutation.error || imageSendMutation.error || jobQuery.error)}</div>}
     </section>
   );
 }
