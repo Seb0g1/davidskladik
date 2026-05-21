@@ -81,6 +81,12 @@ function operationStatItems(job: Record<string, unknown>) {
     ["stockFailed", "Ошибки остатков"],
     ["unarchiveFailed", "Ошибки архива"],
     ["failed", "Ошибки"],
+    ["ozonSent", "Ozon цены"],
+    ["ozonFailed", "Ozon ошибки"],
+    ["ozonSkipped", "Ozon пропуск"],
+    ["yandexSent", "Yandex цены"],
+    ["yandexFailed", "Yandex ошибки"],
+    ["yandexSkipped", "Yandex пропуск"],
     ["repairedGroups", "PM группы"],
     ["changedProducts", "Изменено товаров"],
     ["draftsCreated", "AI drafts"],
@@ -163,7 +169,7 @@ function OperationDetailPanel({ jobId }: { jobId: string }) {
   );
 }
 
-function SupplierCartPanel() {
+export function SupplierCartPanel() {
   const [marketplace, setMarketplace] = useState("all");
   const [limit, setLimit] = useState(100);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -317,6 +323,8 @@ export function OperationsPage() {
             ? { limit, marketplace: "ozon", force: true }
           : type === "yandex-card-quality-ai-drafts"
             ? { limit, threshold, draftLimit, generateImages: true }
+            : type === "yandex-price-push"
+              ? { limit, force: false, onlyChanged: true }
             : { limit },
     })),
     onSuccess: (payload) => {
@@ -342,11 +350,20 @@ export function OperationsPage() {
         <button className="primary-action" onClick={() => startMutation.mutate("ozon-linked-unarchive")} disabled={startMutation.isPending}>Вернуть Ozon автоархив</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("restore-archived-stock")} disabled={startMutation.isPending}>Восстановить архив</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("yandex-card-quality-ai-drafts")} disabled={startMutation.isPending}>AI качество карточек</button>
+        <button className="secondary-action" onClick={() => startMutation.mutate("yandex-price-push")} disabled={startMutation.isPending}>Отправить новые цены Yandex</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("repair-pricemaster-group-links")} disabled={startMutation.isPending}>Синхронизировать PM группы</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("health-deep")} disabled={startMutation.isPending}>Глубокий health</button>
       </section>
       {startMutation.error && <div className="inline-error">{errorMessage(startMutation.error)}</div>}
-      <SupplierCartPanel />
+      <section className="table-panel supplier-cart-panel">
+        <div className="section-title">
+          <div>
+            <span>Автокорзина PriceMaster</span>
+            <h3>Черновики закупок по заказам вынесены в отдельный раздел</h3>
+          </div>
+          <a className="secondary-action" href="/app/supplier-cart">Открыть автокорзину</a>
+        </div>
+      </section>
       <section className="table-panel">
         {jobsQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю операции...</div>}
         {jobs.map((job) => (

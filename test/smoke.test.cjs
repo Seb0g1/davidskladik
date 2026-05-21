@@ -3787,6 +3787,24 @@ test("PriceMaster delta price push targets only linked changed rows", () => {
   );
 });
 
+test("PriceMaster delta price push expands impacted rows to marketplace siblings", () => {
+  const warehouse = {
+    products: [
+      { id: "ozon-row", marketplace: "ozon", offerId: "SKU-1", links: [{ article: "A-1", supplierName: "Supplier", partnerId: "101" }] },
+      { id: "yandex-row", marketplace: "yandex", offerId: "SKU-1", links: [] },
+      { id: "other-row", marketplace: "yandex", offerId: "SKU-2", links: [] },
+    ],
+  };
+  const result = priceMasterChangeImpactProductIds(warehouse, [{
+    type: "price_changed",
+    current: { article: "A-1", name: "Alpha", partnerId: "101", partnerName: "Supplier", rowId: 10, price: 20 },
+  }]);
+
+  assert.deepEqual(result.productIds, ["ozon-row", "yandex-row"]);
+  assert.equal(result.directProducts, 1);
+  assert.equal(result.groupExpandedProducts, 2);
+});
+
 test("PriceMaster delta price push refuses oversized change sets", () => {
   const result = priceMasterChangeImpactProductIds(
     { products: [{ id: "p1", links: [{ article: "A-1" }] }] },

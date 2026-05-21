@@ -123,6 +123,7 @@ const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.
 const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
 const yandexStockCampaignIds = new Set(["128820967"]);
 const ozonUnarchiveDailyLimit = Math.max(1, Math.min(10000, Number(process.env.OZON_UNARCHIVE_DAILY_LIMIT || 100) || 100));
+const ozonUnarchiveQueueBatchLimit = Math.max(1, Math.min(1000, Number(process.env.OZON_UNARCHIVE_QUEUE_BATCH_LIMIT || ozonUnarchiveDailyLimit) || ozonUnarchiveDailyLimit));
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const rawOpenaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
 const openaiImageModel = (() => {
@@ -2781,26 +2782,36 @@ function priceMasterChangeImpactProductIds(warehouse = {}, changes = [], options
   if (!rows.length) return { productIds: [], scannedChanges: relevantChanges.length, skipped: false, reason: null };
 
   const productIds = new Set();
+  const matchedProducts = [];
   for (const product of warehouse.products || []) {
     const links = Array.isArray(product.links) ? product.links : [];
     if (!links.length) continue;
     const matched = links.some((link) => rows.some((row) => priceMasterChangedRowMatchesWarehouseLink(row, link)));
     if (!matched) continue;
     productIds.add(product.id);
+    matchedProducts.push(product);
     if (productIds.size >= maxProducts) {
+      const expanded = expandWarehouseProductsToGroups(warehouse.products || [], matchedProducts);
+      const expandedIds = Array.from(new Set([...Array.from(productIds), ...expanded.map((product) => product.id).filter(Boolean)]));
       return {
-        productIds: Array.from(productIds),
+        productIds: expandedIds.slice(0, maxProducts),
         scannedChanges: relevantChanges.length,
         skipped: true,
         reason: "too_many_impacted_products",
+        directProducts: productIds.size,
+        groupExpandedProducts: expandedIds.length,
       };
     }
   }
+  const expanded = expandWarehouseProductsToGroups(warehouse.products || [], matchedProducts);
+  const expandedIds = Array.from(new Set([...Array.from(productIds), ...expanded.map((product) => product.id).filter(Boolean)]));
   return {
-    productIds: Array.from(productIds),
+    productIds: expandedIds.slice(0, maxProducts),
     scannedChanges: relevantChanges.length,
-    skipped: false,
-    reason: null,
+    skipped: expandedIds.length > maxProducts,
+    reason: expandedIds.length > maxProducts ? "too_many_impacted_products" : null,
+    directProducts: productIds.size,
+    groupExpandedProducts: expandedIds.length,
   };
 }
 
@@ -15664,19 +15675,57 @@ app.post("/api/warehouse/products/links/sync-group", async (request, response, n
   }
 });
 
-async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDiffPct = 0, dryRun = false, force = false, refreshMarketplacePrices = false } = {}) {
+function warehousePriceMarketplaceStats(items = [], failed = [], skipped = []) {
+  const failedIds = new Set((Array.isArray(failed) ? failed : []).map((item) => String(item.id || item.productId || "")));
+  const successItems = (Array.isArray(items) ? items : []).filter((item) => !failedIds.has(String(item.id || item.productId || "")));
+  const count = (rows, marketplace) => rows.filter((item) => cleanText(item.marketplace).toLowerCase() === marketplace).length;
+  return {
+    ozonSent: count(successItems, "ozon"),
+    ozonFailed: count(Array.isArray(failed) ? failed : [], "ozon"),
+    ozonSkipped: count(Array.isArray(skipped) ? skipped : [], "ozon"),
+    yandexSent: count(successItems, "yandex"),
+    yandexFailed: count(Array.isArray(failed) ? failed : [], "yandex"),
+    yandexSkipped: count(Array.isArray(skipped) ? skipped : [], "yandex"),
+  };
+}
+
+async function sendWarehousePrices({
+  productIds,
+  usdRate,
+  minDiffRub = 0,
+  minDiffPct = 0,
+  dryRun = false,
+  force = false,
+  refreshMarketplacePrices = false,
+  marketplace = "all",
+  onlyChanged = false,
+  livePriceMaster = false,
+  limit,
+} = {}) {
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
+  const marketplaceFilter = cleanText(marketplace || "all").toLowerCase();
+  const normalizedMarketplaceFilter = ["ozon", "yandex"].includes(marketplaceFilter) ? marketplaceFilter : "all";
+  const normalizedLimit = Math.max(0, Math.round(Number(limit || 0) || 0));
   let preview = null;
   let selected = [];
   if (ids) {
     const settings = await readAppSettings();
     const rate = Number(settings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     preview = { usdRate: rate };
-    selected = await buildFreshWarehouseProducts(Array.from(ids), { refreshPrices: Boolean(refreshMarketplacePrices), usdRate: rate });
+    selected = await buildFreshWarehouseProducts(Array.from(ids), {
+      refreshPrices: Boolean(refreshMarketplacePrices),
+      usdRate: rate,
+      livePriceMaster: Boolean(livePriceMaster),
+      batchPriceMaster: Boolean(livePriceMaster),
+    });
   } else {
     preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
     selected = preview.products;
   }
+  if (normalizedMarketplaceFilter !== "all") {
+    selected = selected.filter((product) => cleanText(product.marketplace).toLowerCase() === normalizedMarketplaceFilter);
+  }
+  if (normalizedLimit > 0) selected = selected.slice(0, normalizedLimit);
   const skipped = [];
   const items = [];
   const stockItems = [];
@@ -15689,12 +15738,16 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
 
   for (const product of selected) {
     if (!product.hasLinks) {
-      skipped.push({ id: product.id, offerId: product.offerId, reason: "no_pricemaster_link" });
+      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason: "no_pricemaster_link" });
       continue;
     }
     if (shouldSendTargetStockForProduct(product)) stockItems.push(product);
     if (!product.ready) {
-      skipped.push({ id: product.id, offerId: product.offerId, reason: "not_ready" });
+      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason: "not_ready" });
+      continue;
+    }
+    if (onlyChanged && !force && product.changed === false) {
+      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason: "unchanged" });
       continue;
     }
     const current = Number(product.currentPrice || 0);
@@ -15710,6 +15763,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       skipped.push({
         id: product.id,
         offerId: product.offerId,
+        marketplace: product.marketplace,
         reason: skipDecision.reason,
         diffRub: skipDecision.diffRub,
         diffPct: skipDecision.diffPct,
@@ -15734,6 +15788,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       skipped.push({
         id: product.id,
         offerId: product.offerId,
+        marketplace: product.marketplace,
         reason: "ozon_price_delayed",
         nextRetryAt: delayedRetry.nextRetryAt,
         error: delayedRetry.error || "ozon_per_item_price_limit",
@@ -15756,6 +15811,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   }
 
   if (dryRun) {
+    const stats = warehousePriceMarketplaceStats(items, [], skipped);
     return {
       ok: true,
       dryRun: true,
@@ -15764,6 +15820,7 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
       stockReadyToSend: stockItems.length,
       skipped,
       items,
+      ...stats,
     };
   }
 
@@ -15945,8 +16002,10 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
   if (failedQueued.length || delayedQueueUpdates.length) await writePriceRetryQueue({ items: deduped });
   schedulePriceRetryItems([...failedQueued, ...delayedQueueUpdates]);
 
+  const stats = warehousePriceMarketplaceStats(items, failed, skipped);
   return {
     ok: true,
+    selected: selected.length,
     sent: items.length - failed.length,
     failed: failed.length,
     stockSent: stockActions.filter((item) => item.ok).length,
@@ -15954,8 +16013,10 @@ async function sendWarehousePrices({ productIds, usdRate, minDiffRub = 0, minDif
     queued: deduped.length,
     delayed: delayedQueueUpdates.length,
     skipped,
+    failedItems: failed,
     results,
     stockActions,
+    ...stats,
   };
 }
 
@@ -15968,6 +16029,11 @@ async function processMarketplaceJob(name, data = {}) {
       minDiffPct: 0,
       force: data.force === true,
       dryRun: false,
+      marketplace: data.marketplace || "all",
+      onlyChanged: data.onlyChanged === true,
+      refreshMarketplacePrices: data.refreshMarketplacePrices === true,
+      livePriceMaster: data.livePriceMaster === true,
+      limit: data.limit,
     });
   }
   if (name === "no-supplier-automation") {
@@ -16033,6 +16099,10 @@ async function sendPriceMasterDeltaWarehousePrices(priceMaster = {}, warehouse =
   const result = await processMarketplaceJob("auto-price-push", {
     productIds: delta.productIds,
     usdRate,
+    refreshMarketplacePrices: true,
+    livePriceMaster: true,
+    marketplace: "all",
+    onlyChanged: false,
   });
   return {
     ...result,
@@ -16165,6 +16235,12 @@ function initMarketplaceQueue() {
           failed: result.failed || 0,
           stockSent: result.stockSent || 0,
           stockFailed: result.stockFailed || 0,
+          ozonSent: result.ozonSent || 0,
+          ozonFailed: result.ozonFailed || 0,
+          ozonSkipped: result.ozonSkipped || 0,
+          yandexSent: result.yandexSent || 0,
+          yandexFailed: result.yandexFailed || 0,
+          yandexSkipped: result.yandexSkipped || 0,
           skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
         });
         return;
@@ -16237,6 +16313,12 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
             failed: result.failed,
             stockSent: result.stockSent,
             stockFailed: result.stockFailed,
+            ozonSent: result.ozonSent || 0,
+            ozonFailed: result.ozonFailed || 0,
+            ozonSkipped: result.ozonSkipped || 0,
+            yandexSent: result.yandexSent || 0,
+            yandexFailed: result.yandexFailed || 0,
+            yandexSkipped: result.yandexSkipped || 0,
             skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
             skippedReasons,
           });
@@ -16406,6 +16488,10 @@ app.post("/api/warehouse/prices/send", async (request, response, next) => {
       dryRun: request.body.dryRun === true,
       force: request.body.force === true,
       refreshMarketplacePrices: request.body.refreshMarketplacePrices === true,
+      marketplace: request.body.marketplace || "all",
+      onlyChanged: request.body.onlyChanged === true,
+      livePriceMaster: request.body.livePriceMaster === true,
+      limit: request.body.limit,
     }));
   } catch (error) {
     next(error);
@@ -17321,6 +17407,7 @@ function operationTitle(type = "") {
   const titles = {
     "yandex-import-send": "Ozon -> Yandex import",
     "yandex-stock-sync": "Ozon -> Yandex stock sync",
+    "yandex-price-push": "Send new Yandex prices",
     "linked-supplier-recovery": "Restore linked marketplace cards",
     "ozon-linked-unarchive": "Restore linked Ozon autoarchive",
     "restore-archived-stock": "Restore archived stock",
@@ -17331,6 +17418,38 @@ function operationTitle(type = "") {
     "health-deep": "Deep health check",
   };
   return titles[type] || type || "Operation";
+}
+
+async function runYandexPricePushOperation(payload = {}) {
+  const requestedLimit = Number(payload?.limit || 30000);
+  const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));
+  const force = payload?.force === true;
+  const onlyChanged = payload?.onlyChanged !== false;
+  const result = await sendWarehousePrices({
+    marketplace: "yandex",
+    limit,
+    force,
+    onlyChanged,
+    refreshMarketplacePrices: true,
+    livePriceMaster: true,
+  });
+  return {
+    ok: result.ok,
+    marketplace: "yandex",
+    limit,
+    force,
+    onlyChanged,
+    processed: result.selected || limit,
+    sent: result.sent || 0,
+    failed: result.failed || 0,
+    skipped: Array.isArray(result.skipped) ? result.skipped.length : Number(result.skipped || 0) || 0,
+    yandexSent: result.yandexSent || 0,
+    yandexFailed: result.yandexFailed || 0,
+    yandexSkipped: result.yandexSkipped || 0,
+    errors: Array.isArray(result.failedItems) ? result.failedItems : [],
+    ...result,
+    summary: `Yandex price push sent ${result.yandexSent || result.sent || 0}; failed ${result.yandexFailed || result.failed || 0}; skipped ${result.yandexSkipped || (Array.isArray(result.skipped) ? result.skipped.length : 0)}.`,
+  };
 }
 
 async function runLinkedSupplierRecoveryOperation(payload = {}) {
@@ -17924,6 +18043,15 @@ async function runOperationPayload(job, options = {}) {
       newValue: result,
     });
     return { ok: result.ok, limit, ...result };
+  }
+  if (job.type === "yandex-price-push") {
+    const result = await runYandexPricePushOperation(job.payload || {});
+    await appendAudit(auditRequest, "yandex.price.push", {
+      entityType: "yandex_price_push",
+      entityId: "yandex",
+      newValue: result,
+    });
+    return result;
   }
   if (job.type === "linked-supplier-recovery") {
     const result = await runLinkedSupplierRecoveryOperation(job.payload || {});
@@ -19480,10 +19608,23 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   let queuedOzonProducts = [];
   try {
     const queueState = await readOzonUnarchiveQueue();
-    const queuedIds = Array.from(new Set((queueState.items || [])
-      .filter((item) => item.status !== "done")
-      .map((item) => cleanText(item.id))
-      .filter(Boolean)));
+    const nowMs = Date.now();
+    const perTargetTaken = new Map();
+    const queuedIds = [];
+    for (const item of queueState.items || []) {
+      if (item.status === "done") continue;
+      const id = cleanText(item.id);
+      if (!id) continue;
+      const retryAtMs = item.nextRetryAt ? new Date(item.nextRetryAt).getTime() : 0;
+      if (retryAtMs && Number.isFinite(retryAtMs) && retryAtMs > nowMs) continue;
+      const target = cleanText(item.target) || "default";
+      const remainingToday = Math.max(0, ozonUnarchiveDailyLimit - ozonUnarchiveDailyUsed(queueState, target));
+      const taken = perTargetTaken.get(target) || 0;
+      if (taken >= remainingToday) continue;
+      queuedIds.push(id);
+      perTargetTaken.set(target, taken + 1);
+      if (queuedIds.length >= ozonUnarchiveQueueBatchLimit) break;
+    }
     const missingQueuedIds = queuedIds.filter((id) => !recovered.some((product) => String(product.id) === id));
     if (missingQueuedIds.length) {
       queuedOzonProducts = await buildFreshWarehouseProducts(missingQueuedIds);
@@ -19593,10 +19734,12 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     .map((item) => item.nextRetryAt)
     .sort()[0] || null;
   const ozonQueueState = await readOzonUnarchiveQueue().catch(() => ({ items: [] }));
+  const productStatusesTotal = productStatuses.length;
   logger.info("supplier recovery automation complete", {
     source,
     products: products.length,
     recovered: recovered.length,
+    queuedPulled: queuedOzonProducts.length,
     sellableRecovered: sellableIds.size,
     restoredStocks: stockActions.filter((item) => item.ok).length,
     unarchived: unarchiveActions.filter((item) => item.ok).length,
@@ -19615,6 +19758,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     queuedByDailyLimit,
     nextRetryAt: queuedNextRetryAt,
     queueSize: Array.isArray(ozonQueueState.items) ? ozonQueueState.items.length : 0,
+    queuedProcessedThisRun: queuedOzonProducts.length,
     queuedSamples: unarchiveActions
       .filter((item) => item.queuedByDailyLimit)
       .slice(0, 20)
@@ -19622,7 +19766,8 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     stockFailed: stockActions.filter((item) => !item.ok).length,
     unarchiveFailed: unarchiveActions.filter((item) => !item.ok).length,
     errors,
-    productStatuses,
+    productStatuses: productStatuses.slice(0, 200),
+    productStatusesTotal,
     source,
   };
 }

@@ -1,17 +1,19 @@
-import { AlertCircle, CirclePlay, PackageCheck, Settings, Sparkles } from "lucide-react";
+import { AlertCircle, CirclePlay, PackageCheck, Settings, ShoppingCart, Sparkles } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { WarehousePage } from "./routes/WarehousePage";
 import { OperationsPage } from "./routes/OperationsPage";
 import { SettingsPage } from "./routes/SettingsPage";
 import { AiDraftsPage } from "./routes/AiDraftsPage";
 import { NoSupplierPage } from "./routes/NoSupplierPage";
+import { SupplierCartPage } from "./routes/SupplierCartPage";
 
-type AppRoute = "warehouse" | "operations" | "settings" | "ai-drafts" | "no-supplier";
+type AppRoute = "warehouse" | "operations" | "supplier-cart" | "settings" | "ai-drafts" | "no-supplier";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
   { route: "warehouse", href: "/app/warehouse", label: "Каталог", icon: <PackageCheck size={16} /> },
   { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} /> },
+  { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
   { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
   { route: "ai-drafts", href: "/app/ai-drafts", label: "AI drafts", icon: <Sparkles size={16} /> },
   { route: "no-supplier", href: "/app/no-supplier", label: "Ошибки наличия", icon: <AlertCircle size={16} /> },
@@ -20,6 +22,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
 function currentRoute(): AppRoute {
   const path = window.location.pathname;
   if (path.startsWith("/app/operations")) return "operations";
+  if (path.startsWith("/app/supplier-cart")) return "supplier-cart";
   if (path.startsWith("/app/settings")) return "settings";
   if (path.startsWith("/app/ai-drafts")) return "ai-drafts";
   if (path.startsWith("/app/no-supplier")) return "no-supplier";
@@ -84,6 +87,7 @@ function AppShell() {
         </section>
       ) : null}
       {!accessDenied && route === "operations" ? <OperationsPage /> : null}
+      {!accessDenied && route === "supplier-cart" ? <SupplierCartPage /> : null}
       {!accessDenied && route === "settings" ? <SettingsPage /> : null}
       {!accessDenied && route === "ai-drafts" ? <AiDraftsPage /> : null}
       {!accessDenied && route === "no-supplier" ? <NoSupplierPage /> : null}
