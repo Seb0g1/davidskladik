@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Bot, Check, ChevronRight, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
-import { AiAssistantResponseSchema, AiImageJobResponseSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
+import { AiAssistantResponseSchema, AiImageJobResponseSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
@@ -1199,6 +1199,10 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
     })),
     onSuccess: onDone,
   });
+  const repair = useMutation({
+    mutationFn: () => fetchJson(`/api/warehouse/products/${encodeURIComponent(primary.id)}/repair`, ProductRepairSchema, mutationBody({})),
+    onSuccess: onDone,
+  });
   return (
     <section className="detail-section">
       <div className="section-title">
@@ -1208,11 +1212,16 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
         </div>
       </div>
       <div className="quick-actions">
+        <button className="primary-action" type="button" onClick={() => repair.mutate()} disabled={repair.isPending}>
+          {repair.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Проверить и починить товар
+        </button>
         <button className="secondary-action" type="button" onClick={() => start.mutate("linked-supplier-recovery")} disabled={start.isPending}>Восстановить товар</button>
         <button className="secondary-action" type="button" onClick={() => start.mutate("yandex-stock-sync")} disabled={start.isPending}>Отправить остаток</button>
         <button className="secondary-action" type="button" onClick={() => start.mutate("yandex-import-send")} disabled={start.isPending}>Отправить цену</button>
       </div>
+      {repair.data ? <div className="success-strip compact">Links {repair.data.linksSynced} · prices {repair.data.priceSent} · stock {repair.data.stockSent} · {repair.data.pending ? "ожидает восстановления" : "готово"}</div> : null}
       {start.error && <div className="inline-error">{errorMessage(start.error)}</div>}
+      {repair.error && <div className="inline-error">{errorMessage(repair.error)}</div>}
     </section>
   );
 }
@@ -1293,6 +1302,14 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     queryKey: ["warehouse", "brands"],
     queryFn: () => fetchJson("/api/warehouse/brands", WarehouseBrandsSchema),
     staleTime: 10 * 60_000,
+  });
+  const queryClient = useQueryClient();
+  const refreshBrands = useMutation({
+    mutationFn: () => fetchJson("/api/warehouse/brands/refresh", WarehouseBrandsSchema, mutationBody({ limit: 500 })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["warehouse", "brands"] });
+      void queryClient.invalidateQueries({ queryKey: ["warehouse", "page"] });
+    },
   });
 
   const brandOptions = brandsQuery.data?.brands || [];
@@ -1378,6 +1395,11 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
             {brandOptions.map((brand) => <option value={brand} key={brand} />)}
           </datalist>
           <span>{brandsQuery.isLoading ? "загружаю бренды" : `${brandOptions.length} брендов`}</span>
+          {isAdmin ? (
+            <button className="icon-action" type="button" title="Обновить список брендов" onClick={() => refreshBrands.mutate()} disabled={refreshBrands.isPending}>
+              {refreshBrands.isPending ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
+            </button>
+          ) : null}
         </label>
         <label className="toggle-filter">
           <input type="checkbox" checked={filters.autoOnly} onChange={(event) => setFilter("autoOnly", event.target.checked)} />

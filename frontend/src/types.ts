@@ -201,6 +201,56 @@ export const OperationDetailSchema = z.object({
   job: z.record(z.string(), z.unknown()).optional(),
 }).passthrough();
 
+export const OzonUnarchiveQueueSchema = z.object({
+  ok: z.boolean().optional(),
+  updatedAt: z.coerce.string().optional().nullable(),
+  dailyLimit: z.number().optional().default(100),
+  total: z.number().optional().default(0),
+  due: z.number().optional().default(0),
+  future: z.number().optional().default(0),
+  availableToday: z.number().optional().default(0),
+  nextRetryAt: z.coerce.string().optional().nullable(),
+  targets: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  items: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
+export const PricePreviewSchema = z.object({
+  ok: z.boolean().optional(),
+  dryRun: z.boolean().optional(),
+  selected: z.number().optional().default(0),
+  readyToSend: z.number().optional().default(0),
+  stockReadyToSend: z.number().optional().default(0),
+  skipped: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  items: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  ozonSent: z.number().optional().default(0),
+  ozonFailed: z.number().optional().default(0),
+  ozonSkipped: z.number().optional().default(0),
+  yandexSent: z.number().optional().default(0),
+  yandexFailed: z.number().optional().default(0),
+  yandexSkipped: z.number().optional().default(0),
+}).passthrough();
+
+export const ProductRepairSchema = z.object({
+  ok: z.boolean().optional(),
+  productIds: z.array(z.coerce.string()).optional().default([]),
+  linksSynced: z.number().optional().default(0),
+  priceSent: z.number().optional().default(0),
+  stockSent: z.number().optional().default(0),
+  unarchiveStatus: z.coerce.string().optional().default(""),
+  pending: z.boolean().optional().default(false),
+  errors: z.array(z.unknown()).optional().default([]),
+  nextRetryAt: z.coerce.string().optional().nullable(),
+}).passthrough();
+
+export const SystemStatusSchema = z.object({
+  ok: z.boolean().optional(),
+  time: z.coerce.string().optional().default(""),
+  health: z.record(z.string(), z.unknown()).optional().default({}),
+  dailySync: z.record(z.string(), z.unknown()).optional().default({}),
+  queues: z.record(z.string(), z.unknown()).optional().default({}),
+  operations: z.record(z.string(), z.unknown()).optional().default({}),
+}).passthrough();
+
 export const SupplierCartRowSchema = z.object({
   key: z.coerce.string(),
   marketplace: z.coerce.string().optional().default(""),

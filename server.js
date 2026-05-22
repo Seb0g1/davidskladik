@@ -1070,6 +1070,13 @@ function marketplaceImageError(code, message, details = {}) {
   return error;
 }
 
+function marketplaceImageLooksLikePlaceholder(value = "") {
+  const text = cleanText(value).toLowerCase();
+  if (!text) return true;
+  const filename = text.split("?")[0].split("#")[0].split("/").pop() || text;
+  return /placeholder|no[-_ ]?image|missing[-_ ]?image|empty[-_ ]?image|broken[-_ ]?image|default[-_ ]?image|sync|reload|refresh/.test(filename);
+}
+
 async function validateLocalUploadImagePath(pathname = "") {
   const normalizedPath = cleanText(pathname);
   const roots = [
@@ -1093,6 +1100,12 @@ async function validateLocalUploadImagePath(pathname = "") {
   if (!stat.isFile() || stat.size < 1024) {
     throw marketplaceImageError("marketplace_image_file_empty", "AI-фото пустое или повреждено. Сгенерируйте фото заново.", { imagePath: normalizedPath, size: stat.size || 0 });
   }
+  try {
+    const meta = await sharp(filePath).metadata();
+    if (!meta.width || !meta.height || meta.width < 80 || meta.height < 80) throw new Error("invalid_dimensions");
+  } catch (error) {
+    throw marketplaceImageError("marketplace_image_decode_failed", "AI-С„РѕС‚Рѕ РЅРµ РѕС‚РєСЂС‹РІР°РµС‚СЃСЏ РєР°Рє РІР°Р»РёРґРЅРѕРµ РёР·РѕР±СЂР°Р¶РµРЅРёРµ.", { imagePath: normalizedPath, detail: error?.message || String(error) });
+  }
 }
 
 async function validatePublicMarketplaceImageUrl(imageUrl = "") {
@@ -1107,7 +1120,6 @@ async function validatePublicMarketplaceImageUrl(imageUrl = "") {
       redirect: "follow",
       headers: {
         Accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
-        Range: "bytes=0-4095",
       },
       signal: controller.signal,
     });
@@ -1143,10 +1155,19 @@ async function validatePublicMarketplaceImageUrl(imageUrl = "") {
       { imageUrl: url, status: response.status, contentType, size: bytes.length },
     );
   }
+  try {
+    const meta = await sharp(bytes).metadata();
+    if (!meta.width || !meta.height || meta.width < 80 || meta.height < 80) throw new Error("invalid_dimensions");
+  } catch (error) {
+    throw marketplaceImageError("marketplace_image_decode_failed", "РџСѓР±Р»РёС‡РЅС‹Р№ URL РІРµСЂРЅСѓР» С„Р°Р№Р», РєРѕС‚РѕСЂС‹Р№ РЅРµ РѕС‚РєСЂС‹РІР°РµС‚СЃСЏ РєР°Рє РёР·РѕР±СЂР°Р¶РµРЅРёРµ.", { imageUrl: url, status: response.status, contentType, detail: error?.message || String(error) });
+  }
 }
 
 async function normalizeMarketplaceImageUrlForSend(rawUrl = "", request = null) {
   const sourceUrl = cleanText(rawUrl);
+  if (marketplaceImageLooksLikePlaceholder(sourceUrl)) {
+    throw marketplaceImageError("marketplace_image_placeholder", "Р¤РѕС‚Рѕ РїРѕС…РѕР¶Рµ РЅР° placeholder/Р·Р°РіР»СѓС€РєСѓ. РћС‚РїСЂР°РІРєР° РѕСЃС‚Р°РЅРѕРІР»РµРЅР°.", { imageUrl: sourceUrl });
+  }
   if (!sourceUrl) {
     throw marketplaceImageError("marketplace_image_url_missing", "В AI-черновике нет URL фото для отправки.");
   }
@@ -1850,36 +1871,77 @@ function flattenAttributeText(attributes = []) {
     .join(" ");
 }
 
+function collectWarehouseBrandCandidates(value, { depth = 0, key = "" } = {}) {
+  if (depth > 8 || value === null || value === undefined) return [];
+  const normalizedKey = normalizeSearchText(key);
+  const keyLooksLikeBrand =
+    normalizedKey.includes("brand")
+    || normalizedKey.includes("vendor")
+    || normalizedKey.includes("manufacturer")
+    || normalizedKey.includes("trademark")
+    || normalizedKey.includes("бренд")
+    || normalizedKey.includes("производитель");
+  if (typeof value === "string" || typeof value === "number") {
+    const text = cleanText(value);
+    return keyLooksLikeBrand && text ? [text] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectWarehouseBrandCandidates(item, { depth: depth + 1, key }));
+  }
+  if (typeof value !== "object") return [];
+  const direct = [];
+  if (keyLooksLikeBrand) {
+    const fromNamedValue = cleanText(value.value || value.text || value.name || value.title);
+    if (fromNamedValue) direct.push(fromNamedValue);
+  }
+  if (Array.isArray(value.values)) {
+    const attributeName = normalizeSearchText(value.name || value.attribute_name || value.attributeName || value.id || value.attributeId || key);
+    const attributeLooksLikeBrand = attributeName.includes("brand") || attributeName.includes("vendor") || attributeName.includes("бренд") || attributeName.includes("производитель");
+    if (attributeLooksLikeBrand) {
+      direct.push(...value.values.flatMap((item) => [item?.value, item?.name, item?.text]).map(cleanText).filter(Boolean));
+    }
+  }
+  return [
+    ...direct,
+    ...Object.entries(value).flatMap(([childKey, childValue]) => collectWarehouseBrandCandidates(childValue, { depth: depth + 1, key: childKey })),
+  ];
+}
+
+function resolveWarehouseBrandCandidates(product = {}) {
+  return Array.from(new Map([
+    product.brand,
+    product.vendor,
+    product.brandName,
+    product.raw?.brand,
+    product.raw?.vendor,
+    product.raw?.brandName,
+    product.ozon?.vendor,
+    product.ozon?.brand,
+    product.ozon?.brandName,
+    product.yandex?.vendor,
+    product.yandex?.brand,
+    product.yandex?.brandName,
+    extractBrandFromAttributes(product.ozon?.attributes),
+    extractBrandFromAttributes(product.yandex?.attributes),
+    ...collectWarehouseBrandCandidates(product.ozon),
+    ...collectWarehouseBrandCandidates(product.yandex),
+    ...collectWarehouseBrandCandidates(product.rawPayload),
+    ...collectWarehouseBrandCandidates(product.raw),
+  ].map(cleanText).filter(Boolean).map((item) => [item.toLowerCase(), item])).values());
+}
+
 function resolveWarehouseBrand(product = {}) {
-  return cleanText(
-    product.brand ||
-      product.vendor ||
-      product.brandName ||
-      product.raw?.brand ||
-      product.raw?.vendor ||
-      product.raw?.brandName ||
-      product.ozon?.vendor ||
-      product.ozon?.brand ||
-      product.ozon?.brandName ||
-      product.yandex?.vendor ||
-      product.yandex?.brand ||
-      product.yandex?.brandName ||
-      extractBrandFromAttributes(product.ozon?.attributes) ||
-      extractBrandFromAttributes(product.yandex?.attributes) ||
-      extractBrandFromNestedAttributes(product.ozon) ||
-      extractBrandFromNestedAttributes(product.yandex) ||
-      extractBrandFromNestedAttributes(product.rawPayload) ||
-      extractBrandFromNestedAttributes(product.raw),
-  );
+  return resolveWarehouseBrandCandidates(product)[0] || "";
 }
 
 function warehouseBrandSearchHaystack(product = {}) {
   return [
-    resolveWarehouseBrand(product),
+    ...resolveWarehouseBrandCandidates(product),
     product.name,
     product.ozon?.name,
     product.yandex?.name,
     flattenAttributeText(product.ozon?.attributes),
+    flattenAttributeText(product.yandex?.attributes),
   ]
     .map((value) => normalizeSearchText(value))
     .filter(Boolean)
@@ -7656,6 +7718,57 @@ function ozonUnarchiveQueuedActions(products = [], queue = {}, { warning = "ozon
   }));
 }
 
+function ozonUnarchiveQueuePublic(queue = {}, { limit = 1000 } = {}) {
+  const normalized = normalizeOzonUnarchiveQueue(queue);
+  const now = Date.now();
+  const dailyLimit = ozonUnarchiveDailyLimit;
+  const targets = new Map();
+  const items = normalized.items
+    .filter((item) => item.status !== "done")
+    .map((item) => {
+      const target = cleanText(item.target) || "default";
+      const nextMs = item.nextRetryAt ? new Date(item.nextRetryAt).getTime() : 0;
+      const due = !nextMs || !Number.isFinite(nextMs) || nextMs <= now;
+      const existing = targets.get(target) || {
+        target,
+        dailyLimit,
+        dailyUsed: ozonUnarchiveDailyUsed(normalized, target),
+        availableToday: Math.max(0, dailyLimit - ozonUnarchiveDailyUsed(normalized, target)),
+        due: 0,
+        future: 0,
+        total: 0,
+      };
+      existing.total += 1;
+      if (due) existing.due += 1;
+      else existing.future += 1;
+      targets.set(target, existing);
+      return {
+        ...item,
+        queueKey: ozonUnarchiveQueueKey(item),
+        due,
+        dailyLimit,
+        dailyUsed: ozonUnarchiveDailyUsed(normalized, target),
+        availableToday: Math.max(0, dailyLimit - ozonUnarchiveDailyUsed(normalized, target)),
+      };
+    })
+    .sort((a, b) => {
+      if (a.due !== b.due) return a.due ? -1 : 1;
+      return new Date(a.nextRetryAt || a.queuedAt || 0) - new Date(b.nextRetryAt || b.queuedAt || 0);
+    });
+  return {
+    ok: true,
+    updatedAt: normalized.updatedAt,
+    dailyLimit,
+    total: items.length,
+    due: items.filter((item) => item.due).length,
+    future: items.filter((item) => !item.due).length,
+    availableToday: Array.from(targets.values()).reduce((sum, item) => sum + item.availableToday, 0),
+    nextRetryAt: items.filter((item) => !item.due).map((item) => item.nextRetryAt).filter(Boolean).sort()[0] || null,
+    targets: Array.from(targets.values()),
+    items: items.slice(0, cleanLimit(limit, 1000, 5000)),
+  };
+}
+
 function normalizeMarketplaceEnum(value) {
   const text = cleanText(value).toLowerCase();
   return text === "yandex" ? "yandex" : "ozon";
@@ -8259,7 +8372,7 @@ async function getWarehouseBrandListFromPostgres(prisma) {
   });
   const unique = new Map();
   for (const row of rows) {
-    const brand = resolveWarehouseBrand({
+    const product = {
       ...(row.raw || {}),
       id: row.id,
       marketplace: row.marketplace,
@@ -8268,10 +8381,13 @@ async function getWarehouseBrandListFromPostgres(prisma) {
       productId: row.productId,
       name: row.name,
       brand: row.brand,
-    });
-    if (!brand) continue;
-    const key = brand.toLowerCase();
-    if (!unique.has(key)) unique.set(key, brand);
+    };
+    const brands = resolveWarehouseBrandCandidates(product);
+    for (const brand of brands) {
+      if (!brand) continue;
+      const key = brand.toLowerCase();
+      if (!unique.has(key)) unique.set(key, brand);
+    }
   }
   const brands = Array.from(unique.values()).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
   warehouseBrandListCache = { at: Date.now(), value: brands };
@@ -12545,6 +12661,36 @@ registerSystemMediaRoutes(app, {
   logger,
 });
 
+app.get("/api/system/status", requireAdmin, async (_request, response, next) => {
+  try {
+    const [health, dailySync, priceRetry, ozonQueue, operations] = await Promise.all([
+      collectHealthDetails({ deep: true }).catch((error) => ({ ok: false, error: error?.message || String(error) })),
+      readDailySyncState().catch((error) => ({ status: "error", error: error?.message || String(error) })),
+      readPriceRetryQueue().catch((error) => ({ items: [], error: error?.message || String(error) })),
+      readOzonUnarchiveQueue().catch((error) => ({ items: [], error: error?.message || String(error) })),
+      readOperationJobs(20).catch((error) => ({ jobs: [], error: error?.message || String(error) })),
+    ]);
+    const jobs = Array.isArray(operations.jobs) ? operations.jobs : Array.isArray(operations) ? operations : [];
+    response.json({
+      ok: health.ok !== false,
+      time: new Date().toISOString(),
+      health,
+      dailySync,
+      queues: {
+        priceRetry: { total: Array.isArray(priceRetry.items) ? priceRetry.items.length : 0, updatedAt: priceRetry.updatedAt || null, error: priceRetry.error || "" },
+        ozonUnarchive: ozonUnarchiveQueuePublic(ozonQueue, { limit: 20 }),
+      },
+      operations: {
+        latest: jobs.slice(0, 10),
+        failed: jobs.filter((job) => ["failed", "error"].includes(cleanText(job.status).toLowerCase())).slice(0, 10),
+        error: operations.error || "",
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/warehouse", async (request, response, next) => {
   try {
     const sync = request.query.sync === "true";
@@ -12571,7 +12717,7 @@ app.get("/api/warehouse/brands", async (request, response, next) => {
   try {
     if (shouldUsePostgresStorage()) {
       const brands = await getWarehouseBrandListFromPostgres(getPrisma());
-      return response.json({ brands, source: "postgres" });
+      return response.json({ brands, source: "postgres", count: brands.length });
     }
     const warehouse = await readWarehouse();
     const unique = new Map();
@@ -12582,7 +12728,130 @@ app.get("/api/warehouse/brands", async (request, response, next) => {
       if (!unique.has(key)) unique.set(key, b);
     }
     const brands = Array.from(unique.values()).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
-    response.json({ brands });
+    response.json({ brands, count: brands.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/brands/refresh", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = cleanLimit(request.body?.limit || request.query?.limit, 300, 2000);
+    clearWarehouseViewCache();
+    warehouseBrandListCache = null;
+    let scanned = 0;
+    let weakBrand = 0;
+    if (shouldUsePostgresStorage()) {
+      const rows = await getPrisma().warehouseProduct.findMany({
+        where: enabledWarehouseTargetWhere(),
+        select: { id: true, name: true, brand: true, raw: true, marketplace: true, target: true, offerId: true, productId: true },
+        take: limit,
+        orderBy: [{ updatedAt: "desc" }],
+      });
+      scanned = rows.length;
+      weakBrand = rows.filter((row) => !resolveWarehouseBrand({ ...(row.raw || {}), name: row.name, brand: row.brand, marketplace: row.marketplace, target: row.target, offerId: row.offerId, productId: row.productId })).length;
+      const brands = await getWarehouseBrandListFromPostgres(getPrisma());
+      return response.json({ ok: true, source: "postgres", scanned, weakBrand, brands, brandCount: brands.length, refreshed: 0, note: "brand_cache_cleared" });
+    }
+    const warehouse = await readWarehouse();
+    scanned = Math.min(limit, (warehouse.products || []).length);
+    weakBrand = (warehouse.products || []).slice(0, limit).filter((product) => !resolveWarehouseBrand(product)).length;
+    const unique = new Map();
+    for (const product of warehouse.products || []) {
+      for (const brand of resolveWarehouseBrandCandidates(product)) {
+        const key = brand.toLowerCase();
+        if (!unique.has(key)) unique.set(key, brand);
+      }
+    }
+    return response.json({ ok: true, source: "json", scanned, weakBrand, brands: Array.from(unique.values()).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" })), brandCount: unique.size, refreshed: 0, note: "brand_cache_cleared" });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/ozon/unarchive-queue", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = cleanLimit(request.query.limit, 1000, 5000);
+    response.json(ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/ozon/unarchive-queue/process", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = cleanLimit(request.body?.limit || request.query?.limit, ozonUnarchiveQueueBatchLimit, 1000);
+    const queue = await readOzonUnarchiveQueue();
+    const publicQueue = ozonUnarchiveQueuePublic(queue, { limit: 5000 });
+    const dueItems = (publicQueue.items || []).filter((item) => item.due && item.availableToday > 0).slice(0, limit);
+    const ids = dueItems.map((item) => cleanText(item.id)).filter(Boolean);
+    if (!ids.length) {
+      return response.json({ ok: true, selected: 0, result: { recovered: 0, unarchivePending: publicQueue.due }, queue: publicQueue });
+    }
+    const products = await buildFreshWarehouseProducts(ids, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true });
+    const result = await runSupplierRecoveryAutomation({ products }, { productIds: ids, source: "ozon_unarchive_queue_manual", force: true });
+    response.json({ ok: true, selected: ids.length, result, queue: ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 5000 }) });
+    appendAudit(request, "ozon.unarchive_queue.process", {
+      selected: ids.length,
+      productIds: ids,
+      result,
+    }).catch((auditError) => logger.warn("ozon queue audit append failed", { detail: auditError?.message || String(auditError) }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/products/:id/repair", requireAdmin, async (request, response, next) => {
+  try {
+    const initialWarehouse = await readWarehouse();
+    const seed = (initialWarehouse.products || []).find((product) => String(product.id) === String(request.params.id));
+    if (!seed) return response.status(404).json({ error: "Warehouse product not found." });
+    const initialGroup = expandWarehouseProductsToGroups(initialWarehouse.products || [], [seed]);
+    const initialIds = initialGroup.map((product) => String(product.id)).filter(Boolean);
+    return await withWarehouseProductMutationLock(initialIds, async () => {
+      const warehouse = await readWarehouse();
+      const currentSeed = (warehouse.products || []).find((product) => String(product.id) === String(request.params.id));
+      if (!currentSeed) return response.status(404).json({ error: "Warehouse product not found." });
+      const groupProducts = expandWarehouseProductsToGroups(warehouse.products || [], [currentSeed]);
+      const productIds = groupProducts.map((product) => String(product.id)).filter(Boolean);
+      const syncResult = syncWarehouseProductGroupLinks(groupProducts, { now: new Date().toISOString(), username: requestUsername(request) });
+      if ((syncResult.changedProducts || []).length) {
+        await writeWarehouseProductPatch(syncResult.changedProducts, { reason: "warehouse_product_repair_links_sync" });
+      }
+      const priceResult = await sendWarehousePrices({
+        productIds,
+        dryRun: false,
+        force: true,
+        onlyChanged: false,
+        refreshMarketplacePrices: true,
+        livePriceMaster: true,
+        marketplace: "all",
+      });
+      const freshProducts = await buildFreshWarehouseProducts(productIds, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true });
+      const recoveryResult = await runSupplierRecoveryAutomation({ products: freshProducts }, { productIds, source: "product_repair", force: true });
+      const diagnostics = await buildWarehouseSkuDiagnostics(currentSeed.offerId || currentSeed.sku || currentSeed.productId || currentSeed.id, { limit: 50, auditLimit: 30 });
+      const payload = {
+        ok: true,
+        productIds,
+        linksSynced: (syncResult.changedProducts || []).length,
+        priceSent: Number(priceResult.sent || priceResult.items?.length || 0) || 0,
+        stockSent: Number(priceResult.stockSent || recoveryResult.restoredStocks || 0) || 0,
+        unarchiveStatus: recoveryResult.unarchivePending ? "pending" : "done",
+        pending: Number(recoveryResult.unarchivePending || 0) > 0,
+        errors: [...(priceResult.failed || []), ...(recoveryResult.errors || [])],
+        nextRetryAt: recoveryResult.nextRetryAt || null,
+        priceResult,
+        recoveryResult,
+        diagnostics,
+      };
+      response.json(payload);
+      appendAudit(request, "warehouse.product.repair", {
+        productId: currentSeed.id,
+        offerId: currentSeed.offerId,
+        productIds,
+        result: payload,
+      }).catch((auditError) => logger.warn("product repair audit append failed", { detail: auditError?.message || String(auditError) }));
+    });
   } catch (error) {
     next(error);
   }
@@ -16492,6 +16761,25 @@ app.post("/api/warehouse/prices/send", async (request, response, next) => {
       onlyChanged: request.body.onlyChanged === true,
       livePriceMaster: request.body.livePriceMaster === true,
       limit: request.body.limit,
+    }));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/warehouse/prices/preview", requireAdmin, async (request, response, next) => {
+  try {
+    const marketplace = cleanText(request.query.marketplace || "all").toLowerCase();
+    const onlyChanged = String(request.query.onlyChanged ?? "true") !== "false";
+    const limit = cleanLimit(request.query.limit, 200, 2000);
+    response.json(await sendWarehousePrices({
+      dryRun: true,
+      marketplace,
+      onlyChanged,
+      limit,
+      refreshMarketplacePrices: request.query.refreshMarketplacePrices === "true",
+      livePriceMaster: request.query.livePriceMaster !== "false",
+      force: request.query.force === "true",
     }));
   } catch (error) {
     next(error);
