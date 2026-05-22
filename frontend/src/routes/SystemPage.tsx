@@ -58,15 +58,15 @@ export function SystemPage() {
         <StatusCard label="Ozon recovery" value={Number(ozonQueue.total || 0)} detail={`due: ${Number(ozonQueue.due || 0)}`} />
         <StatusCard label="Ошибки операций" value={failed.length} tone={failed.length ? "warn" : "success"} />
       </div>
-      <div className="table-panel">
+      <div className="table-panel system-table">
         <div className="table-head"><span>Компонент</span><span>Статус</span><span>Детали</span></div>
         {Object.entries(components).map(([name, value]) => {
           const row = asRecord(value);
           return (
             <div className="table-row" key={name}>
-              <span><Database size={14} /> {name}</span>
-              <span>{row.ok === false ? <AlertCircle size={14} /> : <Activity size={14} />} {row.ok === false ? "error" : "ok"}</span>
-              <span>{text(row.error || row.mode || row.queueMode || row.accounts || row.shops) || "-"}</span>
+              <span data-label="Компонент"><Database size={14} /> {name}</span>
+              <span data-label="Статус">{row.ok === false ? <AlertCircle size={14} /> : <Activity size={14} />} {row.ok === false ? "error" : "ok"}</span>
+              <span data-label="Детали">{text(row.error || row.mode || row.queueMode || row.accounts || row.shops) || "-"}</span>
             </div>
           );
         })}

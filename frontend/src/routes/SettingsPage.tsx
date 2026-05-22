@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckSquare, Download, Loader2, RefreshCw, Save, Search, Square, Trash2, Upload, UserX } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
-import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SyncStatusSchema, UsersResponseSchema, UsersStatsResponseSchema } from "../types";
+import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SuppliersResponseSchema, SyncStatusSchema, UsersResponseSchema, UsersStatsResponseSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
@@ -520,6 +520,75 @@ function SystemSettingsPanel() {
   );
 }
 
+function SupplierStockModePanel() {
+  const queryClient = useQueryClient();
+  const [search, setSearch] = useState("");
+  const suppliersQuery = useQuery({
+    queryKey: ["suppliers", "stock-mode"],
+    queryFn: () => fetchJson("/api/suppliers", SuppliersResponseSchema),
+    staleTime: 60_000,
+  });
+  const updateSupplier = useMutation({
+    mutationFn: ({ id, pricingMode }: { id: string; pricingMode: string }) =>
+      fetchJson(`/api/suppliers/${encodeURIComponent(id)}`, SuppliersResponseSchema, mutationBody({ pricingMode })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+    },
+  });
+  const suppliers = suppliersQuery.data?.suppliers || [];
+  const filtered = suppliers
+    .filter((supplier) => {
+      const haystack = [supplier.name, supplier.partnerId, supplier.pricingMode].filter(Boolean).join(" ").toLowerCase();
+      return !search.trim() || haystack.includes(search.trim().toLowerCase());
+    })
+    .slice(0, 80);
+
+  return (
+    <div className="settings-panel settings-panel-wide">
+      <div className="section-title">
+        <div>
+          <span>PriceMaster</span>
+          <h3>Складской источник без цены</h3>
+        </div>
+        <button className="secondary-action" type="button" onClick={() => suppliersQuery.refetch()} disabled={suppliersQuery.isFetching}>
+          {suppliersQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+        </button>
+      </div>
+      <div className="settings-hint">
+        Включайте для “нашего склада”: наличие участвует в продаже и восстановлении, но цена PriceMaster не берется в авторасчет. Цена отправляется только из ручной fallback-цены в карточке.
+      </div>
+      <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти поставщика PriceMaster" />
+      <div className="supplier-mode-list">
+        {filtered.map((supplier) => {
+          const id = supplier.id || supplier.partnerId || supplier.name || "";
+          const stockOnly = supplier.pricingMode === "stock_only" || supplier.stockOnly === true;
+          return (
+            <article className={`supplier-mode-row ${stockOnly ? "is-stock-only" : ""}`} key={id}>
+              <div>
+                <strong>{supplier.name || supplier.partnerId || "Поставщик"}</strong>
+                <span>{supplier.partnerId ? `partner ${supplier.partnerId}` : "без partnerId"} · товаров {supplier.impactProductCount || 0}</span>
+              </div>
+              <label className="toggle-line">
+                <input
+                  type="checkbox"
+                  checked={stockOnly}
+                  disabled={!id || updateSupplier.isPending}
+                  onChange={(event) => updateSupplier.mutate({ id, pricingMode: event.target.checked ? "stock_only" : "normal" })}
+                />
+                <span>складской / не брать цену</span>
+              </label>
+            </article>
+          );
+        })}
+        {suppliersQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю поставщиков...</div>}
+        {!suppliersQuery.isLoading && !filtered.length && <div className="soft-empty">Поставщики не найдены.</div>}
+      </div>
+      {updateSupplier.error && <div className="inline-error">{errorMessage(updateSupplier.error)}</div>}
+    </div>
+  );
+}
+
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: () => fetchJson("/api/settings", SettingsResponseSchema) });
@@ -652,6 +721,8 @@ export function SettingsPage() {
       </section>}
 
       {activeTab === "marketplaces" && <section className="settings-grid pricing-settings-grid">
+        <SupplierStockModePanel />
+
         <div className="settings-panel settings-panel-wide">
           <div className="section-title"><div><span>Брендинг</span><h3>Логотипы магазинов для премиум-фото</h3></div></div>
           <div className="settings-hint">PNG 258x258 с прозрачным фоном. Логотип ставится маленьким бейджем на премиальные фото и не перекрывает флакон.</div>

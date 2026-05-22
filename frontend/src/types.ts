@@ -12,6 +12,12 @@ export const LinkSchema = z.object({
   matchType: z.coerce.string().optional().default(""),
   keyword: z.coerce.string().optional().default(""),
   priceCurrency: z.coerce.string().optional().default("USD"),
+  pricingMode: z.coerce.string().optional().default("normal"),
+  stockOnly: z.boolean().optional(),
+  priceEligible: z.boolean().optional(),
+  stockEligible: z.boolean().optional(),
+  stockOnlyCount: z.number().optional().default(0),
+  priceEligibleCount: z.number().optional().default(0),
   updatedBy: z.coerce.string().optional().nullable(),
   createdBy: z.coerce.string().optional().nullable(),
   updatedAt: z.coerce.string().optional().nullable(),
@@ -23,7 +29,16 @@ export const SupplierSchema = z.object({
   name: z.coerce.string().optional().default(""),
   partnerId: z.coerce.string().optional().nullable(),
   active: z.boolean().optional(),
+  stopped: z.boolean().optional(),
+  pricingMode: z.coerce.string().optional().default("normal"),
+  stockOnly: z.boolean().optional(),
+  impactProductCount: z.number().optional().default(0),
   stopReason: z.coerce.string().optional().nullable(),
+}).passthrough();
+
+export const SuppliersResponseSchema = z.object({
+  suppliers: z.array(SupplierSchema).optional().default([]),
+  supplierSync: z.record(z.string(), z.unknown()).optional().default({}),
 }).passthrough();
 
 export const AiImageSchema = z.object({
@@ -67,6 +82,10 @@ export const ProductSchema = z.object({
   links: z.array(LinkSchema).optional().default([]),
   suppliers: z.array(SupplierSchema).optional().default([]),
   selectedSupplier: z.unknown().optional().nullable(),
+  stockOnlyFallbackActive: z.boolean().optional().default(false),
+  stockOnlyManualPriceMissing: z.boolean().optional().default(false),
+  stockOnlyManualPrices: z.record(z.string(), z.unknown()).optional().default({}),
+  stockOnlyAvailableSupplierCount: z.number().optional().default(0),
   noSupplierAutomation: z.record(z.string(), z.unknown()).optional().default({}),
   aiImages: z.array(AiImageSchema).optional().default([]),
 }).passthrough();

@@ -67,6 +67,7 @@ const {
   runNoSupplierMarketplaceAutomation,
   runSupplierRecoveryAutomation,
   pickWarehouseSupplier,
+  pickWarehouseStockOnlySupplier,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
   mergeProducts,
@@ -2729,6 +2730,12 @@ test("normalizeManagedSupplier defaults PriceMaster currency to USD", () => {
   assert.equal(supplier.priceCurrency, "USD");
 });
 
+test("normalizeManagedSupplier supports stock-only pricing mode", () => {
+  const supplier = normalizeManagedSupplier({ name: "Own stock", pricingMode: "stock_only" });
+  assert.equal(supplier.pricingMode, "stock_only");
+  assert.equal(supplier.stockOnly, true);
+});
+
 test("normalizePriceMasterSnapshotItemForPostgres prepares rows for PostgreSQL", () => {
   const updatedAt = new Date("2026-05-13T03:00:00.000Z");
   const row = normalizePriceMasterSnapshotItemForPostgres({
@@ -2789,6 +2796,18 @@ test("pickWarehouseSupplier chooses the cheapest available calculated price", ()
     { partnerName: "Missing", available: false, price: 1, calculatedPrice: 100, docDate: "2026-01-03" },
   ]);
   assert.equal(picked.partnerName, "Cheap");
+});
+
+test("pickWarehouseSupplier ignores stock-only suppliers for price", () => {
+  const picked = pickWarehouseSupplier([
+    { partnerName: "Own stock", available: true, price: 1, calculatedPrice: 78, docDate: "2026-01-03", stockOnly: true, priceEligible: false },
+    { partnerName: "Real supplier", available: true, price: 90, calculatedPrice: 12636, docDate: "2026-01-01", priceEligible: true },
+  ]);
+  assert.equal(picked.partnerName, "Real supplier");
+  const fallback = pickWarehouseStockOnlySupplier([
+    { partnerName: "Own stock", available: true, price: 1, calculatedPrice: 78, docDate: "2026-01-03", stockOnly: true, priceEligible: false },
+  ]);
+  assert.equal(fallback.partnerName, "Own stock");
 });
 
 test("warehouse brand filter falls back to marketplace product data", () => {

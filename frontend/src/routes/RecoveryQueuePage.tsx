@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, RefreshCcw } from "lucide-react";
+import { Clock3, Loader2, RefreshCcw } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
 import { OzonUnarchiveQueueSchema } from "../types";
 
@@ -31,6 +31,7 @@ export function RecoveryQueuePage() {
   });
   const data = queue.data;
   const items = data?.items || [];
+  const visibleItems = items.slice(0, 200);
   return (
     <section className="page-section">
       <div className="section-title">
@@ -48,20 +49,30 @@ export function RecoveryQueuePage() {
         <div><span>Осталось лимита</span><strong>{data?.availableToday ?? 0}</strong></div>
         <div><span>Следующая попытка</span><strong>{moneyDate(data?.nextRetryAt)}</strong></div>
       </div>
+      <div className="info-strip">
+        <Clock3 size={18} />
+        <div>
+          <strong>Это не ошибка, а очередь лимита Ozon.</strong>
+          <span>Товары уже привязаны, цены и остатки могут быть отправлены, но разархив Ozon выполняется пачками в пределах дневного лимита. Просроченные строки система продолжит автоматически, кнопку можно использовать для ручного запуска.</span>
+        </div>
+      </div>
       {process.error ? <div className="inline-error">{String((process.error as Error).message || process.error)}</div> : null}
       {queue.error ? <div className="inline-error">{String((queue.error as Error).message || queue.error)}</div> : null}
-      <div className="table-panel">
+      <div className="table-panel queue-table">
         <div className="table-head">
           <span>SKU</span><span>OfferId</span><span>Цель</span><span>Статус</span><span>Попытки</span><span>Когда</span>
         </div>
-        {items.length ? items.map((item) => (
+        {items.length > visibleItems.length ? (
+          <div className="table-note">Показаны первые {visibleItems.length} строк из {items.length}. Остальные останутся в очереди и обработаются автоматически по лимиту Ozon.</div>
+        ) : null}
+        {visibleItems.length ? visibleItems.map((item) => (
           <div className="table-row" key={text(item.queueKey || item.id || item.offerId)}>
-            <span>{text(item.id) || "-"}</span>
-            <span>{text(item.offerId) || "-"}</span>
-            <span>{text(item.target) || "-"}</span>
-            <span>{item.due ? "можно запускать" : text(item.warning || item.status || "pending")}</span>
-            <span>{numberValue(item.attempts)}</span>
-            <span>{moneyDate(item.nextRetryAt)}</span>
+            <span data-label="SKU">{text(item.id) || "-"}</span>
+            <span data-label="OfferId">{text(item.offerId) || "-"}</span>
+            <span data-label="Цель">{text(item.target) || "-"}</span>
+            <span data-label="Статус">{item.due ? "можно запускать" : text(item.warning || item.status || "pending")}</span>
+            <span data-label="Попытки">{numberValue(item.attempts)}</span>
+            <span data-label="Когда">{moneyDate(item.nextRetryAt)}</span>
           </div>
         )) : <div className="empty-state">Очередь восстановления Ozon пуста.</div>}
       </div>

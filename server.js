@@ -252,6 +252,8 @@ function setManualWarehouseSyncProgress(patch = {}) {
 }
 let warehousePostgresLinkBackfillPromise = null;
 let warehousePostgresLinkBackfillDone = false;
+let warehousePostgresBrandBackfillPromise = null;
+let warehousePostgresBrandBackfillDone = false;
 let priceMasterSnapshotMemoryCache = null;
 let priceMasterArticleIndexCache = null;
 let priceMasterSnapshotIndexCache = null;
@@ -1923,10 +1925,10 @@ function resolveWarehouseBrandCandidates(product = {}) {
     product.yandex?.brandName,
     extractBrandFromAttributes(product.ozon?.attributes),
     extractBrandFromAttributes(product.yandex?.attributes),
-    ...collectWarehouseBrandCandidates(product.ozon),
-    ...collectWarehouseBrandCandidates(product.yandex),
-    ...collectWarehouseBrandCandidates(product.rawPayload),
-    ...collectWarehouseBrandCandidates(product.raw),
+    extractBrandFromNestedAttributes(product.ozon),
+    extractBrandFromNestedAttributes(product.yandex),
+    extractBrandFromNestedAttributes(product.rawPayload),
+    extractBrandFromNestedAttributes(product.raw),
   ].map(cleanText).filter(Boolean).map((item) => [item.toLowerCase(), item])).values());
 }
 
@@ -1980,6 +1982,7 @@ function warehouseBrandMatches(product = {}, brandFilter = "") {
   const needle = normalizeSearchText(brandFilter);
   if (!needle) return true;
   if (warehouseBrandSearchHaystack(product).includes(needle)) return true;
+  if (process.env.WAREHOUSE_ENABLE_DEEP_BRAND_SCAN !== "true") return false;
   return warehouseBrandDeepHaystack(product).includes(needle);
 }
 
@@ -2409,6 +2412,7 @@ function normalizeWarehouseProduct(input = {}) {
     currentPrice: Number(input.currentPrice ?? input.marketplacePrice ?? input.current_price ?? 0) || null,
     targetPrice: Number(input.targetPrice ?? input.nextPrice ?? input.calculatedPrice ?? 0) || null,
     targetStock: Number.isFinite(Number(input.targetStock)) ? Number(input.targetStock) : null,
+    stockOnlyManualPrices: normalizeStockOnlyManualPrices(input.stockOnlyManualPrices || input.stock_only_manual_prices || input.raw?.stockOnlyManualPrices),
     supplierCount: Number.isFinite(Number(input.supplierCount)) ? Number(input.supplierCount) : 0,
     availableSupplierCount: Number.isFinite(Number(input.availableSupplierCount)) ? Number(input.availableSupplierCount) : 0,
     name,
@@ -2440,6 +2444,28 @@ function normalizeWarehouseProduct(input = {}) {
     updatedAt: input.updatedAt || new Date().toISOString(),
     links: compactWarehouseLinks(input.links || []),
   };
+}
+
+function normalizeManualPriceValue(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return null;
+  return roundPrice(number);
+}
+
+function normalizeStockOnlyManualPrices(input = {}) {
+  const value = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  return compactObject({
+    default: normalizeManualPriceValue(value.default ?? value.base ?? value.group),
+    ozon: normalizeManualPriceValue(value.ozon),
+    yandex: normalizeManualPriceValue(value.yandex),
+  });
+}
+
+function stockOnlyManualPriceForProduct(product = {}) {
+  const prices = normalizeStockOnlyManualPrices(product.stockOnlyManualPrices || product.raw?.stockOnlyManualPrices);
+  const marketplace = cleanText(product.marketplace).toLowerCase();
+  const scoped = marketplace === "ozon" ? prices.ozon : marketplace === "yandex" ? prices.yandex : null;
+  return normalizeManualPriceValue(scoped ?? prices.default);
 }
 
 function parsePriceMasterNoArticleRowId(value) {
@@ -2716,16 +2742,36 @@ function normalizeSupplierArticle(input = {}) {
   };
 }
 
+function normalizeSupplierPricingMode(input = {}) {
+  const raw = input.raw && typeof input.raw === "object" && !Array.isArray(input.raw) ? input.raw : {};
+  const value = cleanText(
+    input.pricingMode
+    || input.pricing_mode
+    || input.priceMode
+    || input.price_mode
+    || raw.pricingMode
+    || raw.pricing_mode
+    || raw.priceMode
+    || raw.price_mode
+  ).toLowerCase().replace(/[-\s]+/g, "_");
+  return ["stock_only", "stockonly", "inventory_only", "no_price", "stock_fallback"].includes(value)
+    ? "stock_only"
+    : "normal";
+}
+
 function normalizeManagedSupplier(input = {}) {
   const inactiveUntil = cleanText(input.inactiveUntil || input.inactive_until);
   const stopped = Boolean(input.stopped);
   const priceCurrency = cleanText(input.priceCurrency || input.price_currency || input.currency || "USD").toUpperCase();
+  const pricingMode = normalizeSupplierPricingMode(input);
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
     partnerId: cleanText(input.partnerId || input.partner_id),
     source: cleanText(input.source || "manual"),
     name: cleanText(input.name),
     priceCurrency: priceCurrency === "RUB" || priceCurrency === "RUR" ? "RUB" : "USD",
+    pricingMode,
+    stockOnly: pricingMode === "stock_only",
     stopped,
     note: cleanText(input.note),
     stopReason: cleanText(input.stopReason || input.stop_reason),
@@ -8353,45 +8399,103 @@ async function getWarehouseBrandListFromPostgres(prisma) {
   ) {
     return warehouseBrandListCache.value.slice();
   }
+  await ensureWarehousePostgresBrandsBackfilled(prisma);
   const rows = await prisma.warehouseProduct.findMany({
-    where: enabledWarehouseTargetWhere(),
-    select: {
-      id: true,
-      marketplace: true,
-      target: true,
-      offerId: true,
-      productId: true,
-      name: true,
-      brand: true,
-      raw: true,
+    where: {
+      AND: [
+        enabledWarehouseTargetWhere(),
+        { brand: { not: null } },
+        { brand: { not: "" } },
+      ],
     },
-    orderBy: [
-      { brand: "asc" },
-      { offerId: "asc" },
-    ],
+    select: {
+      brand: true,
+    },
+    distinct: ["brand"],
+    orderBy: { brand: "asc" },
   });
   const unique = new Map();
   for (const row of rows) {
-    const product = {
-      ...(row.raw || {}),
-      id: row.id,
-      marketplace: row.marketplace,
-      target: row.target,
-      offerId: row.offerId,
-      productId: row.productId,
-      name: row.name,
-      brand: row.brand,
-    };
-    const brands = resolveWarehouseBrandCandidates(product);
-    for (const brand of brands) {
-      if (!brand) continue;
-      const key = brand.toLowerCase();
-      if (!unique.has(key)) unique.set(key, brand);
-    }
+    const brand = cleanText(row.brand);
+    if (!brand) continue;
+    const key = brand.toLowerCase();
+    if (!unique.has(key)) unique.set(key, brand);
   }
   const brands = Array.from(unique.values()).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
   warehouseBrandListCache = { at: Date.now(), value: brands };
   return brands.slice();
+}
+
+function resolveWarehouseBrandFromPostgresRow(row = {}) {
+  const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  return resolveWarehouseBrand({
+    ...raw,
+    id: row.id,
+    marketplace: row.marketplace,
+    target: row.target,
+    offerId: row.offerId,
+    productId: row.productId,
+    name: row.name || raw.name,
+    brand: row.brand || raw.brand,
+  });
+}
+
+async function ensureWarehousePostgresBrandsBackfilled(prisma, { force = false } = {}) {
+  if (!prisma) return { updated: 0, scanned: 0, skipped: true };
+  if (warehousePostgresBrandBackfillDone && !force) return { updated: 0, scanned: 0, skipped: true };
+  if (warehousePostgresBrandBackfillPromise && !force) return warehousePostgresBrandBackfillPromise;
+  const maxRows = Math.max(1000, Math.min(100000, Number(process.env.WAREHOUSE_BRAND_BACKFILL_LIMIT || 50000) || 50000));
+  warehousePostgresBrandBackfillPromise = (async () => {
+    const rows = await prisma.warehouseProduct.findMany({
+      where: {
+        AND: [
+          enabledWarehouseTargetWhere(),
+          force ? {} : {
+            OR: [
+              { brand: null },
+              { brand: "" },
+            ],
+          },
+        ].filter((item) => Object.keys(item || {}).length),
+      },
+      select: { id: true, name: true, brand: true, raw: true, marketplace: true, target: true, offerId: true, productId: true },
+      take: maxRows,
+      orderBy: [{ updatedAt: "desc" }],
+    });
+    let updated = 0;
+    const updates = [];
+    for (const row of rows) {
+      const brand = cleanText(resolveWarehouseBrandFromPostgresRow(row));
+      if (!brand) continue;
+      if (cleanText(row.brand).toLowerCase() === brand.toLowerCase()) continue;
+      updates.push({ id: row.id, brand });
+    }
+    for (const batch of chunkArray(updates, 250)) {
+      await runWithLimitedConcurrency(batch, 2, async (item) => {
+        await prisma.warehouseProduct.update({
+          where: { id: item.id },
+          data: { brand: item.brand },
+        });
+        updated += 1;
+      });
+    }
+    warehousePostgresBrandBackfillDone = rows.length < maxRows;
+    warehouseBrandListCache = null;
+    if (updated || rows.length) {
+      logger.info("warehouse postgres brands backfilled from raw", {
+        scanned: rows.length,
+        updated,
+        complete: warehousePostgresBrandBackfillDone,
+      });
+    }
+    return { updated, scanned: rows.length, skipped: false, complete: warehousePostgresBrandBackfillDone };
+  })().catch((error) => {
+    logger.warn("warehouse postgres brand backfill failed", { detail: error?.message || String(error) });
+    return { updated: 0, scanned: 0, skipped: false, error: error?.message || String(error) };
+  }).finally(() => {
+    warehousePostgresBrandBackfillPromise = null;
+  });
+  return warehousePostgresBrandBackfillPromise;
 }
 
 async function ensureWarehousePostgresLinksBackfilled(prisma) {
@@ -9460,6 +9564,19 @@ function findManagedSupplierForPriceMasterRow(row = {}, maps = managedSupplierMa
   return maps.byPartnerId.get(String(row.partnerId || "")) || maps.byName.get(normalizeSupplierName(row.partnerName)) || null;
 }
 
+function priceMasterSupplierPricingMeta(row = {}, maps = managedSupplierMaps()) {
+  const supplier = findManagedSupplierForPriceMasterRow(row, maps);
+  const pricingMode = normalizeSupplierPricingMode(supplier || {});
+  const stockOnly = pricingMode === "stock_only";
+  return {
+    managedSupplier: supplier || null,
+    pricingMode,
+    stockOnly,
+    priceEligible: !stockOnly,
+    stockEligible: true,
+  };
+}
+
 function resolvePriceMasterRowCurrency(row = {}, link = {}, maps = managedSupplierMaps()) {
   const supplier = findManagedSupplierForPriceMasterRow(row, maps);
   return supplier?.priceCurrency || link.priceCurrency || "USD";
@@ -9488,6 +9605,7 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
       .filter((row) => priceMasterRowMatchesLink(row, link))
       .map((row) => {
         const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
+        const pricingMeta = priceMasterSupplierPricingMeta(row, supplierMaps);
         const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
         const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate, priceCurrency);
         const price = stoppedSupplier ? 0 : normalizedPrice.price;
@@ -9507,7 +9625,11 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
           active,
           stopped: Boolean(stoppedSupplier),
           stopReason: stoppedSupplier?.note || null,
-          available: active && price > 0,
+          pricingMode: pricingMeta.pricingMode,
+          stockOnly: pricingMeta.stockOnly,
+          priceEligible: pricingMeta.priceEligible,
+          stockEligible: pricingMeta.stockEligible,
+          available: active && (pricingMeta.stockOnly || price > 0),
           docDate: row.docDate,
         };
       });
@@ -9565,12 +9687,19 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
     .filter((row) => priceMasterRowMatchesLink(row, link))
     .map((row) => {
       const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
+      const pricingMeta = priceMasterSupplierPricingMeta(row, supplierMaps);
+      const priceData = normalizePriceMasterPrice(row.price, usdRate, priceCurrency);
       return {
         ...row,
         priceCurrency,
-        ...normalizePriceMasterPrice(row.price, usdRate, priceCurrency),
+        ...priceData,
+        pricingMode: pricingMeta.pricingMode,
+        stockOnly: pricingMeta.stockOnly,
+        priceEligible: pricingMeta.priceEligible,
+        stockEligible: pricingMeta.stockEligible,
         active: Boolean(row.active),
         ignored: Boolean(row.ignored),
+        available: Boolean(row.active) && (pricingMeta.stockOnly || Number(priceData.price || 0) > 0),
       };
     });
 }
@@ -9589,10 +9718,17 @@ function priceMasterSnapshotLinkRow(row = {}, link = {}, usdRate, supplierMaps =
     partnerName: cleanText(row.partnerName || raw.partnerName || raw.PartnerName || raw.name || ""),
   };
   const priceCurrency = resolvePriceMasterRowCurrency(base, link, supplierMaps);
+  const pricingMeta = priceMasterSupplierPricingMeta(base, supplierMaps);
+  const priceData = normalizePriceMasterPrice(base.price, usdRate, priceCurrency);
   return {
     ...base,
     priceCurrency,
-    ...normalizePriceMasterPrice(base.price, usdRate, priceCurrency),
+    ...priceData,
+    pricingMode: pricingMeta.pricingMode,
+    stockOnly: pricingMeta.stockOnly,
+    priceEligible: pricingMeta.priceEligible,
+    stockEligible: pricingMeta.stockEligible,
+    available: Boolean(base.active) && (pricingMeta.stockOnly || Number(priceData.price || 0) > 0),
   };
 }
 
@@ -9796,6 +9932,7 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
       .filter((row) => priceMasterRowMatchesLink(row, link))
       .map((row) => {
         const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
+        const pricingMeta = priceMasterSupplierPricingMeta(row, supplierMaps);
         const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
         const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate, priceCurrency);
         const price = stoppedSupplier ? 0 : normalizedPrice.price;
@@ -9815,7 +9952,11 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
           active,
           stopped: Boolean(stoppedSupplier),
           stopReason: stoppedSupplier?.note || null,
-          available: active && price > 0,
+          pricingMode: pricingMeta.pricingMode,
+          stockOnly: pricingMeta.stockOnly,
+          priceEligible: pricingMeta.priceEligible,
+          stockEligible: pricingMeta.stockEligible,
+          available: active && (pricingMeta.stockOnly || price > 0),
           docDate: row.docDate,
         };
       });
@@ -9906,12 +10047,22 @@ async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSupplier
 
 function pickWarehouseSupplier(matches) {
   return [...matches]
-    .filter((match) => match.available)
+    .filter((match) => match.available && match.priceEligible !== false && match.stockOnly !== true)
     .sort(
       (a, b) =>
         Number(a.calculatedPrice || 0) - Number(b.calculatedPrice || 0)
         || Number(a.price || 0) - Number(b.price || 0)
         || String(b.docDate).localeCompare(String(a.docDate)),
+    )[0] || null;
+}
+
+function pickWarehouseStockOnlySupplier(matches) {
+  return [...matches]
+    .filter((match) => match.available && (match.stockOnly === true || match.priceEligible === false))
+    .sort(
+      (a, b) =>
+        String(b.docDate).localeCompare(String(a.docDate))
+        || String(a.partnerName || a.supplierName || "").localeCompare(String(b.partnerName || b.supplierName || "")),
     )[0] || null;
 }
 
@@ -10166,18 +10317,26 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
         ...link,
         matchedCount: matched.length,
         availableCount: matched.filter((item) => item.available).length,
+        priceEligibleCount: matched.filter((item) => item.available && item.priceEligible !== false && item.stockOnly !== true).length,
+        stockOnlyCount: matched.filter((item) => item.available && (item.stockOnly === true || item.priceEligible === false)).length,
+        stockOnly: matched.some((item) => item.stockOnly === true || item.priceEligible === false),
+        priceEligible: matched.some((item) => item.priceEligible !== false && item.stockOnly !== true),
         missingInPriceMaster: matched.length === 0,
       };
     });
-    const availableSupplierCount = suppliers.filter((supplier) => supplier.available).length;
+    const availableSupplierCount = suppliers.filter((supplier) => supplier.available && supplier.priceEligible !== false && supplier.stockOnly !== true).length;
+    const stockOnlyAvailableSupplierCount = suppliers.filter((supplier) => supplier.available && (supplier.stockOnly === true || supplier.priceEligible === false)).length;
     const selectedSupplier = pickWarehouseSupplier(suppliers);
+    const stockOnlySupplier = selectedSupplier ? null : pickWarehouseStockOnlySupplier(suppliers);
+    const stockOnlyFallbackActive = Boolean(!selectedSupplier && stockOnlySupplier);
+    const stockOnlyManualPrice = stockOnlyFallbackActive ? stockOnlyManualPriceForProduct(product) : null;
     const fallbackMarkup = product.marketplace === "ozon"
       ? Number(targetMarkups.ozon || appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
       : Number(targetMarkups.yandex || appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
     const baseMarkupCoefficient = Number(productMarkupOverride || selectedSupplier?.markupCoefficient || fallbackMarkup);
     const availabilityPolicy = resolveAvailabilityPolicy({
       marketplace: product.marketplace,
-      availableSupplierCount,
+      availableSupplierCount: availableSupplierCount || stockOnlyAvailableSupplierCount,
       baseMarkup: baseMarkupCoefficient,
       appSettings,
     });
@@ -10190,16 +10349,25 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
           availabilityRule: availabilityPolicy.rule,
           calculatedPrice: calculateRubPrice(selectedSupplier.price, rate, markupCoefficient),
         }
-      : null;
-    const rawNextPrice = selectedSupplierWithPolicy
+      : (stockOnlySupplier
+          ? {
+              ...stockOnlySupplier,
+              baseMarkupCoefficient,
+              markupCoefficient,
+              availabilityRule: availabilityPolicy.rule,
+              calculatedPrice: null,
+              manualPrice: stockOnlyManualPrice,
+            }
+          : null);
+    const rawNextPrice = selectedSupplier && selectedSupplierWithPolicy
       ? Number(selectedSupplierWithPolicy.calculatedPrice || calculateRubPrice(selectedSupplierWithPolicy.price, rate, markupCoefficient))
-      : 0;
+      : (stockOnlyManualPrice || 0);
     const minAuto = Number(product.autoPriceMin || 0);
     const maxAuto = Number(product.autoPriceMax || 0);
     const persistedCurrentPrice = Number(product.currentPrice || product.marketplacePrice || 0) || null;
     const persistedNextPrice = Number(product.targetPrice || product.nextPrice || 0) || 0;
     let nextPrice = rawNextPrice;
-    if ((!Number.isFinite(nextPrice) || nextPrice <= 0) && product.marketplace === "yandex" && persistedNextPrice > 0) {
+    if (!stockOnlyFallbackActive && (!Number.isFinite(nextPrice) || nextPrice <= 0) && product.marketplace === "yandex" && persistedNextPrice > 0) {
       nextPrice = persistedNextPrice;
     }
     if (nextPrice > 0 && minAuto > 0 && nextPrice < minAuto) nextPrice = minAuto;
@@ -10215,7 +10383,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       priceFormula: {
         marketplace: product.marketplace,
         usdRate: rate,
-        selectedSupplierPrice: selectedSupplierWithPolicy ? Number(selectedSupplierWithPolicy.price || 0) : null,
+        selectedSupplierPrice: selectedSupplierWithPolicy && !stockOnlyFallbackActive ? Number(selectedSupplierWithPolicy.price || 0) : null,
         selectedSupplierCurrency: selectedSupplierWithPolicy?.priceCurrency || selectedSupplierWithPolicy?.currency || "",
         baseMarkupCoefficient,
         markupCoefficient,
@@ -10224,6 +10392,9 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
         currentPrice,
         availabilityRule: availabilityPolicy.rule || null,
         targetStock: availabilityPolicy.targetStock ?? null,
+        stockOnlyFallbackActive,
+        stockOnlyManualPrice,
+        priceSource: stockOnlyFallbackActive ? "stock_only_manual" : "pricemaster",
       },
       autoPriceEnabled: normalizedLinks.length > 0 ? true : product.autoPriceEnabled !== false,
       autoPriceMin: minAuto > 0 ? minAuto : null,
@@ -10232,7 +10403,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       ozonMinPrice,
       nextPrice,
       changed: nextPrice > 0 && nextPrice !== currentPrice,
-      ready: Boolean(selectedSupplierWithPolicy && nextPrice > 0),
+      ready: Boolean(selectedSupplierWithPolicy && (nextPrice > 0 || stockOnlyFallbackActive)),
       selectedSupplier: selectedSupplierWithPolicy,
       fallbackSuppliers: suppliers
         .filter((supplier) => supplier.available)
@@ -10242,7 +10413,12 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
           article: supplier.article || "",
           price: supplier.price,
           calculatedPrice: supplier.calculatedPrice,
+          stockOnly: Boolean(supplier.stockOnly || supplier.priceEligible === false),
         })),
+      stockOnlyFallbackActive,
+      stockOnlyManualPriceMissing: Boolean(stockOnlyFallbackActive && !stockOnlyManualPrice),
+      stockOnlyManualPrices: normalizeStockOnlyManualPrices(product.stockOnlyManualPrices),
+      stockOnlyAvailableSupplierCount,
       selectedSupplierReason: selectedSupplier
         ? "Выбран доступный поставщик с минимальной рассчитанной ценой."
         : "Нет доступного поставщика.",
@@ -10256,7 +10432,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
         : (product.marketplace === "yandex" ? Number(product.targetStock || 0) || null : null),
       hasLinks: links.length > 0,
       autoArchiveCandidate: links.length === 0,
-      status: selectedSupplier ? (nextPrice !== currentPrice ? "price_changed" : "ok") : "no_supplier",
+      status: selectedSupplier ? (nextPrice !== currentPrice ? "price_changed" : "ok") : (stockOnlyFallbackActive ? (stockOnlyManualPrice ? "stock_only_fallback" : "stock_only_manual_price_missing") : "no_supplier"),
     };
   });
 
@@ -10369,18 +10545,26 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         ...link,
         matchedCount: matched.length,
         availableCount: matched.filter((item) => item.available).length,
+        priceEligibleCount: matched.filter((item) => item.available && item.priceEligible !== false && item.stockOnly !== true).length,
+        stockOnlyCount: matched.filter((item) => item.available && (item.stockOnly === true || item.priceEligible === false)).length,
+        stockOnly: matched.some((item) => item.stockOnly === true || item.priceEligible === false),
+        priceEligible: matched.some((item) => item.priceEligible !== false && item.stockOnly !== true),
         missingInPriceMaster: matched.length === 0,
       };
     });
-    const availableSupplierCount = suppliers.filter((supplier) => supplier.available).length;
+    const availableSupplierCount = suppliers.filter((supplier) => supplier.available && supplier.priceEligible !== false && supplier.stockOnly !== true).length;
+    const stockOnlyAvailableSupplierCount = suppliers.filter((supplier) => supplier.available && (supplier.stockOnly === true || supplier.priceEligible === false)).length;
     const selectedSupplier = pickWarehouseSupplier(suppliers);
+    const stockOnlySupplier = selectedSupplier ? null : pickWarehouseStockOnlySupplier(suppliers);
+    const stockOnlyFallbackActive = Boolean(!selectedSupplier && stockOnlySupplier);
+    const stockOnlyManualPrice = stockOnlyFallbackActive ? stockOnlyManualPriceForProduct(product) : null;
     const fallbackMarkup = product.marketplace === "ozon"
       ? Number(appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
       : Number(appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
     const baseMarkupCoefficient = Number(productMarkupOverride || selectedSupplier?.markupCoefficient || fallbackMarkup);
     const availabilityPolicy = resolveAvailabilityPolicy({
       marketplace: product.marketplace,
-      availableSupplierCount,
+      availableSupplierCount: availableSupplierCount || stockOnlyAvailableSupplierCount,
       baseMarkup: baseMarkupCoefficient,
       appSettings,
     });
@@ -10393,16 +10577,25 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
           availabilityRule: availabilityPolicy.rule,
           calculatedPrice: calculateRubPrice(selectedSupplier.price, rate, markupCoefficient),
         }
-      : null;
-    const rawNextPrice = selectedSupplierWithPolicy
+      : (stockOnlySupplier
+          ? {
+              ...stockOnlySupplier,
+              baseMarkupCoefficient,
+              markupCoefficient,
+              availabilityRule: availabilityPolicy.rule,
+              calculatedPrice: null,
+              manualPrice: stockOnlyManualPrice,
+            }
+          : null);
+    const rawNextPrice = selectedSupplier && selectedSupplierWithPolicy
       ? Number(selectedSupplierWithPolicy.calculatedPrice || calculateRubPrice(selectedSupplierWithPolicy.price, rate, markupCoefficient))
-      : 0;
+      : (stockOnlyManualPrice || 0);
     const minAuto = Number(product.autoPriceMin || 0);
     const maxAuto = Number(product.autoPriceMax || 0);
     const persistedCurrentPrice = Number(product.currentPrice || product.marketplacePrice || 0) || null;
     const persistedNextPrice = Number(product.targetPrice || product.nextPrice || 0) || 0;
     let nextPrice = rawNextPrice;
-    if ((!Number.isFinite(nextPrice) || nextPrice <= 0) && product.marketplace === "yandex" && persistedNextPrice > 0) {
+    if (!stockOnlyFallbackActive && (!Number.isFinite(nextPrice) || nextPrice <= 0) && product.marketplace === "yandex" && persistedNextPrice > 0) {
       nextPrice = persistedNextPrice;
     }
     if (nextPrice > 0 && minAuto > 0 && nextPrice < minAuto) nextPrice = minAuto;
@@ -10418,7 +10611,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       priceFormula: {
         marketplace: product.marketplace,
         usdRate: rate,
-        selectedSupplierPrice: selectedSupplierWithPolicy ? Number(selectedSupplierWithPolicy.price || 0) : null,
+        selectedSupplierPrice: selectedSupplierWithPolicy && !stockOnlyFallbackActive ? Number(selectedSupplierWithPolicy.price || 0) : null,
         selectedSupplierCurrency: selectedSupplierWithPolicy?.priceCurrency || selectedSupplierWithPolicy?.currency || "",
         baseMarkupCoefficient,
         markupCoefficient,
@@ -10427,6 +10620,9 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         currentPrice,
         availabilityRule: availabilityPolicy.rule || null,
         targetStock: availabilityPolicy.targetStock ?? null,
+        stockOnlyFallbackActive,
+        stockOnlyManualPrice,
+        priceSource: stockOnlyFallbackActive ? "stock_only_manual" : "pricemaster",
       },
       autoPriceEnabled: normalizedLinks.length > 0 ? true : product.autoPriceEnabled !== false,
       autoPriceMin: minAuto > 0 ? minAuto : null,
@@ -10435,7 +10631,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       ozonMinPrice,
       nextPrice,
       changed: nextPrice > 0 && nextPrice !== currentPrice,
-      ready: Boolean(selectedSupplierWithPolicy && nextPrice > 0),
+      ready: Boolean(selectedSupplierWithPolicy && (nextPrice > 0 || stockOnlyFallbackActive)),
       selectedSupplier: selectedSupplierWithPolicy,
       fallbackSuppliers: suppliers
         .filter((supplier) => supplier.available)
@@ -10445,7 +10641,12 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
           article: supplier.article || "",
           price: supplier.price,
           calculatedPrice: supplier.calculatedPrice,
+          stockOnly: Boolean(supplier.stockOnly || supplier.priceEligible === false),
         })),
+      stockOnlyFallbackActive,
+      stockOnlyManualPriceMissing: Boolean(stockOnlyFallbackActive && !stockOnlyManualPrice),
+      stockOnlyManualPrices: normalizeStockOnlyManualPrices(product.stockOnlyManualPrices),
+      stockOnlyAvailableSupplierCount,
       selectedSupplierReason: selectedSupplier
         ? "Выбран доступный поставщик с минимальной расчётной ценой."
         : "Нет доступного поставщика.",
@@ -10459,7 +10660,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         : (product.marketplace === "yandex" ? Number(product.targetStock || 0) || null : null),
       hasLinks: links.length > 0,
       autoArchiveCandidate: links.length === 0,
-      status: selectedSupplier ? (nextPrice !== currentPrice ? "price_changed" : "ok") : "no_supplier",
+      status: selectedSupplier ? (nextPrice !== currentPrice ? "price_changed" : "ok") : (stockOnlyFallbackActive ? (stockOnlyManualPrice ? "stock_only_fallback" : "stock_only_manual_price_missing") : "no_supplier"),
     };
   });
 }
@@ -10702,7 +10903,14 @@ function warehousePagePostgresWhere(filters = {}) {
   const stateCode = cleanText(filters.state || "all");
   if (stateCode !== "all") and.push({ status: stateCode });
   const brandFilter = cleanText(filters.brand || "");
-  if (brandFilter) and.push({ brand: { contains: brandFilter, mode: "insensitive" } });
+  if (brandFilter) {
+    and.push({
+      OR: [
+        { brand: { contains: brandFilter, mode: "insensitive" } },
+        { name: { contains: brandFilter, mode: "insensitive" } },
+      ],
+    });
+  }
   const q = cleanText(filters.q || "");
   if (q) {
     if (isWarehouseArticleLikeQuery(q)) {
@@ -11110,12 +11318,13 @@ async function buildFastWarehousePageFromPostgres({
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
   const linkedFilter = cleanText(filters.linked || "all");
   const needsComputedLinkFilter = linkedFilter === "ready" || linkedFilter === "changed" || linkedFilter === "linked_archived";
-  const needsDeepBrandFilter = Boolean(cleanText(filters.brand || ""));
+  if (cleanText(filters.brand || "")) await ensureWarehousePostgresBrandsBackfilled(prisma);
   const strictIdentitySearch = isWarehouseStrictIdentitySearch(filters);
-  const needsInMemoryPage = needsDeepBrandFilter || needsComputedLinkFilter || strictIdentitySearch;
-  const where = warehousePagePostgresWhere(needsDeepBrandFilter || needsComputedLinkFilter ? { ...filters, brand: "", state: "all" } : filters);
+  const needsInMemoryPage = needsComputedLinkFilter || strictIdentitySearch;
+  const postgresFilters = needsComputedLinkFilter ? { ...filters, state: "all" } : filters;
+  const where = warehousePagePostgresWhere(postgresFilters);
   const strictPrimaryWhere = strictIdentitySearch
-    ? warehousePagePostgresPrimaryIdentityWhere(needsDeepBrandFilter || needsComputedLinkFilter ? { ...filters, brand: "", state: "all" } : filters)
+    ? warehousePagePostgresPrimaryIdentityWhere(postgresFilters)
     : null;
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
@@ -11141,7 +11350,7 @@ async function buildFastWarehousePageFromPostgres({
     pageTrace("postgres:after-strict-fallback-query", traceStartedAt);
   }
   let pageBaseCount = dbRows.length;
-  if (!needsDeepBrandFilter && !needsComputedLinkFilter && !strictIdentitySearch) {
+  if (!needsComputedLinkFilter && !strictIdentitySearch) {
     dbRows = await addWarehousePostgresPageGroupSiblings(prisma, where, dbRows);
   }
   const normalizedSuppliers = summary.normalizedSuppliers;
@@ -12739,10 +12948,13 @@ app.post("/api/warehouse/brands/refresh", requireAdmin, async (request, response
     const limit = cleanLimit(request.body?.limit || request.query?.limit, 300, 2000);
     clearWarehouseViewCache();
     warehouseBrandListCache = null;
+    warehousePostgresBrandBackfillDone = false;
     let scanned = 0;
     let weakBrand = 0;
     if (shouldUsePostgresStorage()) {
-      const rows = await getPrisma().warehouseProduct.findMany({
+      const prisma = getPrisma();
+      const backfill = await ensureWarehousePostgresBrandsBackfilled(prisma, { force: true });
+      const rows = await prisma.warehouseProduct.findMany({
         where: enabledWarehouseTargetWhere(),
         select: { id: true, name: true, brand: true, raw: true, marketplace: true, target: true, offerId: true, productId: true },
         take: limit,
@@ -12750,8 +12962,8 @@ app.post("/api/warehouse/brands/refresh", requireAdmin, async (request, response
       });
       scanned = rows.length;
       weakBrand = rows.filter((row) => !resolveWarehouseBrand({ ...(row.raw || {}), name: row.name, brand: row.brand, marketplace: row.marketplace, target: row.target, offerId: row.offerId, productId: row.productId })).length;
-      const brands = await getWarehouseBrandListFromPostgres(getPrisma());
-      return response.json({ ok: true, source: "postgres", scanned, weakBrand, brands, brandCount: brands.length, refreshed: 0, note: "brand_cache_cleared" });
+      const brands = await getWarehouseBrandListFromPostgres(prisma);
+      return response.json({ ok: true, source: "postgres", scanned, weakBrand, brands, brandCount: brands.length, refreshed: Number(backfill.updated || 0), backfill, note: "brand_cache_cleared" });
     }
     const warehouse = await readWarehouse();
     scanned = Math.min(limit, (warehouse.products || []).length);
@@ -13253,6 +13465,12 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
       priceCurrency: request.body.priceCurrency !== undefined
         ? normalizeManagedSupplier({ priceCurrency: request.body.priceCurrency }).priceCurrency
         : (supplier.priceCurrency || "USD"),
+      pricingMode: request.body.pricingMode !== undefined || request.body.pricing_mode !== undefined
+        ? normalizeSupplierPricingMode(request.body)
+        : normalizeSupplierPricingMode(supplier),
+      stockOnly: request.body.pricingMode !== undefined || request.body.pricing_mode !== undefined
+        ? normalizeSupplierPricingMode(request.body) === "stock_only"
+        : normalizeSupplierPricingMode(supplier) === "stock_only",
       inactiveComment: request.body.inactiveComment !== undefined ? cleanText(request.body.inactiveComment) : (supplier.inactiveComment || ""),
       inactiveUntil: request.body.inactiveUntil !== undefined ? (cleanText(request.body.inactiveUntil) || null) : (supplier.inactiveUntil || null),
       inactiveUntilUnknown: request.body.inactiveUntilUnknown !== undefined ? Boolean(request.body.inactiveUntilUnknown) : Boolean(supplier.inactiveUntilUnknown),
@@ -15247,6 +15465,26 @@ app.patch("/api/warehouse/products/auto-price/all", async (request, response, ne
 app.patch("/api/warehouse/products/group", async (request, response, next) => {
   try {
     const ids = new Set((Array.isArray(request.body.productIds) ? request.body.productIds : []).map(String));
+    if (Object.prototype.hasOwnProperty.call(request.body || {}, "stockOnlyManualPrices")) {
+      if (!ids.size) return response.status(400).json({ error: "Select a product group for stock-only fallback prices." });
+      const warehouse = await readWarehouse();
+      const seedProducts = warehouse.products.filter((product) => ids.has(String(product.id)));
+      const productsToChange = expandWarehouseProductsToGroups(warehouse.products, seedProducts);
+      const prices = normalizeStockOnlyManualPrices(request.body.stockOnlyManualPrices);
+      const oldValues = [];
+      const now = new Date().toISOString();
+      for (const product of productsToChange) {
+        oldValues.push(cloneAuditValue({ id: product.id, stockOnlyManualPrices: product.stockOnlyManualPrices || null, updatedAt: product.updatedAt }));
+        product.stockOnlyManualPrices = prices;
+        product.updatedAt = now;
+      }
+      if (productsToChange.length) {
+        await writeWarehouseProductPatch(productsToChange, { reason: "warehouse_stock_only_manual_prices", writeLinks: false });
+      }
+      const products = await buildFreshWarehouseProductsFromKnownProducts(warehouse, productsToChange);
+      await appendAudit(request, "warehouse.stock_only_manual_prices.save", { productIds: productsToChange.map((product) => product.id), oldValue: oldValues, newValue: prices });
+      return response.json({ ok: true, changed: productsToChange.length, stockOnlyManualPrices: prices, products });
+    }
     if (ids.size < 2) return response.status(400).json({ error: "Выберите минимум два товара для объединения." });
     const warehouse = await readWarehouse();
     const productsToChange = warehouse.products.filter((product) => ids.has(product.id));
@@ -16013,6 +16251,16 @@ async function sendWarehousePrices({
     if (shouldSendTargetStockForProduct(product)) stockItems.push(product);
     if (!product.ready) {
       skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason: "not_ready" });
+      continue;
+    }
+    if (product.stockOnlyFallbackActive && !(Number(product.nextPrice || 0) > 0)) {
+      skipped.push({
+        id: product.id,
+        offerId: product.offerId,
+        marketplace: product.marketplace,
+        reason: "stock_only_manual_price_missing",
+        supplier: product.selectedSupplier,
+      });
       continue;
     }
     if (onlyChanged && !force && product.changed === false) {
@@ -20518,6 +20766,7 @@ module.exports = {
   runNoSupplierMarketplaceAutomation,
   runSupplierRecoveryAutomation,
   pickWarehouseSupplier,
+  pickWarehouseStockOnlySupplier,
   resolveWarehouseBrand,
   warehouseBrandMatches,
   normalizeWarehouseProduct,

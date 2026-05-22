@@ -192,6 +192,20 @@ function productLinksSignature(product: Product): string {
   return Array.from(new Set((product.links || []).map(linkPrimarySignature).filter(Boolean))).sort().join("||");
 }
 
+function isStockOnlyLink(link: Partial<ProductLink>): boolean {
+  const raw = link as Record<string, unknown>;
+  return raw.stockOnly === true || raw.priceEligible === false || String(raw.pricingMode || "").toLowerCase() === "stock_only";
+}
+
+function stockOnlyManualPricesFromProducts(products: Product[]) {
+  const first = products.map((item) => asRecord(item.stockOnlyManualPrices)).find((value) => Object.keys(value).length) || {};
+  return {
+    default: Number(first.default || 0) || "",
+    ozon: Number(first.ozon || 0) || "",
+    yandex: Number(first.yandex || 0) || "",
+  };
+}
+
 function linkDeleteRef(link: ProductLink & { productId?: string }, product?: Product) {
   const raw = link as Record<string, unknown>;
   return {
@@ -301,6 +315,8 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   const [draft, setDraft] = useState<LinkDraft>(() => emptyLinkDraft());
   const [search, setSearch] = useState("");
   const [linkFilter, setLinkFilter] = useState("");
+  const [linkKind, setLinkKind] = useState<"all" | "normal" | "stock_only">("all");
+  const [manualPrices, setManualPrices] = useState<Record<string, string | number>>(() => stockOnlyManualPricesFromProducts(products));
   const [selectedLinkIds, setSelectedLinkIds] = useState<string[]>([]);
   const debouncedSearch = useDebounced(search, 250);
   const draftIsFilled = Boolean(draft.article.trim() || draft.keyword.trim());
@@ -309,20 +325,24 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
   const savedSupplierList = useMemo(() => Array.from(new Set(groupLinkRows.map((link) => link.supplierName).filter(Boolean))).sort(), [groupLinkRows]);
   const filteredLinks = useMemo(() => {
     const q = linkFilter.trim().toLowerCase();
-    if (!q) return groupLinkRows;
-    return groupLinkRows.filter((link) => [
-      link.article,
-      link.supplierArticle,
-      link.supplierName,
-      link.partnerId,
-      link.exactName,
-      link.keyword,
-      link.sourceRowId,
-      link.productOfferId,
-      ...(link.productOfferIds || []),
-      ...(link.productMarketplaces || []),
-    ].filter(Boolean).join(" ").toLowerCase().includes(q));
-  }, [groupLinkRows, linkFilter]);
+    return groupLinkRows.filter((link) => {
+      if (linkKind === "stock_only" && !isStockOnlyLink(link)) return false;
+      if (linkKind === "normal" && isStockOnlyLink(link)) return false;
+      if (!q) return true;
+      return [
+        link.article,
+        link.supplierArticle,
+        link.supplierName,
+        link.partnerId,
+        link.exactName,
+        link.keyword,
+        link.sourceRowId,
+        link.productOfferId,
+        ...(link.productOfferIds || []),
+        ...(link.productMarketplaces || []),
+      ].filter(Boolean).join(" ").toLowerCase().includes(q);
+    });
+  }, [groupLinkRows, linkFilter, linkKind]);
   const groupLinkSignatures = useMemo(() => products.map(productLinksSignature), [products]);
   const groupLinkCounts = useMemo(() => products.map((item) => (item.links || []).length), [products]);
   const groupLinksSynced = products.length <= 1
@@ -392,16 +412,31 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
     },
   });
 
+  const manualPricesMutation = useMutation({
+    mutationFn: async () => fetchJson("/api/warehouse/products/group", MutationProductResponseSchema, mutationBody({
+      productIds,
+      stockOnlyManualPrices: {
+        default: numberValue(manualPrices.default, 0) || null,
+        ozon: numberValue(manualPrices.ozon, 0) || null,
+        yandex: numberValue(manualPrices.yandex, 0) || null,
+      },
+    })),
+    onSuccess: (payload) => refreshAfterMutation(payload),
+  });
+
   useEffect(() => {
     setDrafts([]);
     setDraft(emptyLinkDraft());
     setSearch("");
     setLinkFilter("");
+    setLinkKind("all");
+    setManualPrices(stockOnlyManualPricesFromProducts(products));
     setSelectedLinkIds([]);
     saveMutation.reset();
     deleteMutation.reset();
     bulkDeleteMutation.reset();
     syncMutation.reset();
+    manualPricesMutation.reset();
   }, [draftScopeKey]);
 
   const addDraft = (nextDraft: LinkDraft) => {
@@ -464,8 +499,29 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
         ) : null}
       </div>
 
+      <div className="stock-only-price-box">
+        <div>
+          <strong>Ручная цена складского fallback</strong>
+          <span>Если обычных поставщиков нет, товар можно оставить в продаже по этой цене. Цена складского PriceMaster-поставщика не используется.</span>
+        </div>
+        <div className="stock-only-price-grid">
+          <label>База группы<input type="number" min="0" value={String(manualPrices.default ?? "")} onChange={(event) => setManualPrices((current) => ({ ...current, default: event.target.value }))} /></label>
+          <label>Ozon<input type="number" min="0" value={String(manualPrices.ozon ?? "")} onChange={(event) => setManualPrices((current) => ({ ...current, ozon: event.target.value }))} /></label>
+          <label>Yandex<input type="number" min="0" value={String(manualPrices.yandex ?? "")} onChange={(event) => setManualPrices((current) => ({ ...current, yandex: event.target.value }))} /></label>
+          <button className="secondary-action" type="button" onClick={() => manualPricesMutation.mutate()} disabled={manualPricesMutation.isPending}>
+            {manualPricesMutation.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить цену
+          </button>
+        </div>
+        {manualPricesMutation.error && <div className="inline-error">{errorMessage(manualPricesMutation.error)}</div>}
+      </div>
+
       <div className="pm-link-toolbar">
           <input value={linkFilter} onChange={(event) => setLinkFilter(event.target.value)} placeholder="Фильтр сохраненных поставщиков: поставщик, артикул или название" />
+          <select value={linkKind} onChange={(event) => setLinkKind(event.target.value as "all" | "normal" | "stock_only")}>
+            <option value="all">Все связи</option>
+            <option value="normal">Обычные</option>
+            <option value="stock_only">Складские</option>
+          </select>
           <button className="secondary-action" type="button" onClick={() => copyPlainText(savedSupplierList.join("\n"))} disabled={!savedSupplierList.length}>
             <Copy size={16} /> Скопировать поставщиков
           </button>
@@ -493,6 +549,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
                   <span>{link.supplierName || "поставщик не указан"}</span>
                 </div>
                 <span className="pm-source-pill">{linkMatchText(link)}</span>
+                {isStockOnlyLink(link) && <span className="pm-source-pill stock-only">не берет цену</span>}
               </div>
               <div className="pm-link-grid">
                 <span><b>Row ID</b>{linkSourceId(link) || "не сохранен"}</span>
@@ -1035,13 +1092,17 @@ function MarketplaceRows({ products }: { products: Product[] }) {
           const supplierPrice = Number(supplier.price || formula.selectedSupplierPrice || 0) || 0;
           const supplierCurrency = String(supplier.currency || supplier.priceCurrency || formula.selectedSupplierCurrency || "");
           const targetPrice = Number(product.newPrice || product.targetPrice || formula.targetPrice || 0) || 0;
+          const stockOnlyFallback = Boolean(product.stockOnlyFallbackActive || formula.stockOnlyFallbackActive || supplier.stockOnly || supplier.priceEligible === false);
+          const stockOnlyManualPrice = Number(formula.stockOnlyManualPrice || supplier.manualPrice || targetPrice || 0) || 0;
           const lastArchiveSend = asRecord(asRecord(product).lastArchiveSend);
           const ozonUnarchiveQueued = Boolean(lastArchiveSend.queuedByDailyLimit || lastArchiveSend.warning === "ozon_unarchive_daily_limit_queued");
           const formulaParts = [
+            stockOnlyFallback ? "Складской fallback · цена PM не используется" : "",
             supplier.supplierName ? `Поставщик: ${String(supplier.supplierName)}${supplier.article ? ` · ${String(supplier.article)}` : ""}` : "",
             markupCoefficient ? `Коэф.: ${markupCoefficient}${baseMarkupCoefficient && baseMarkupCoefficient !== markupCoefficient ? ` (база ${baseMarkupCoefficient})` : ""}` : "",
             usdRate ? `Курс: ${usdRate}` : "",
-            supplierPrice ? `PM: ${supplierPrice} ${supplierCurrency || "USD"}` : "",
+            supplierPrice && !stockOnlyFallback ? `PM: ${supplierPrice} ${supplierCurrency || "USD"}` : "",
+            stockOnlyFallback && stockOnlyManualPrice ? `Ручная fallback-цена: ${money(stockOnlyManualPrice)}` : "",
             targetPrice ? `Новая цена: ${money(targetPrice)}` : "",
           ].filter(Boolean);
           return (

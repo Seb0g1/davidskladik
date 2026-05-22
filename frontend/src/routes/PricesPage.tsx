@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BadgeDollarSign, Loader2, RefreshCcw, Send } from "lucide-react";
+import { BadgeDollarSign, CheckCircle2, Loader2, RefreshCcw, Send } from "lucide-react";
 import { useState } from "react";
 import { fetchJson, mutationBody } from "../api";
 import { MutationProductResponseSchema, PricePreviewSchema } from "../types";
@@ -47,18 +47,28 @@ export function PricesPage() {
           {preview.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Обновить
         </button>
       </div>
-      <div className="control-grid">
-        <select value={marketplace} onChange={(event) => setMarketplace(event.target.value)}>
-          <option value="all">Ozon + Yandex</option>
-          <option value="yandex">Только Yandex</option>
-          <option value="ozon">Только Ozon</option>
-        </select>
+      <div className="info-strip success">
+        <CheckCircle2 size={18} />
+        <div>
+          <strong>Автоматическая отправка цен включена.</strong>
+          <span>Когда меняется PriceMaster, курс, наценка или привязка, система сама пересчитывает и отправляет цены в Ozon и Yandex. Эта страница нужна для контроля, проверки очереди и ручного “отправить сейчас”, если нужно ускорить.</span>
+        </div>
+      </div>
+      <div className="control-grid price-controls">
+        <label>
+          Маркетплейс
+          <select value={marketplace} onChange={(event) => setMarketplace(event.target.value)}>
+            <option value="all">Ozon + Yandex</option>
+            <option value="yandex">Только Yandex</option>
+            <option value="ozon">Только Ozon</option>
+          </select>
+        </label>
         <label className="toggle-row">
           <input type="checkbox" checked={onlyChanged} onChange={(event) => setOnlyChanged(event.target.checked)} />
           Только измененные
         </label>
         <button className="primary-action" type="button" onClick={() => send.mutate({ marketplace })} disabled={send.isPending || !items.length}>
-          {send.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Отправить измененные
+          {send.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Отправить сейчас
         </button>
         <button className="secondary-action" type="button" onClick={() => send.mutate({ marketplace: "yandex", force: true })} disabled={send.isPending}>
           <BadgeDollarSign size={16} /> Force Yandex
@@ -72,18 +82,18 @@ export function PricesPage() {
       </div>
       {preview.error ? <div className="inline-error">{String((preview.error as Error).message || preview.error)}</div> : null}
       {send.error ? <div className="inline-error">{String((send.error as Error).message || send.error)}</div> : null}
-      <div className="table-panel">
+      <div className="table-panel price-table">
         <div className="table-head">
           <span>Маркет</span><span>Артикул</span><span>Текущая</span><span>Новая</span><span>Поставщик</span><span>Статус</span>
         </div>
         {items.map((item) => (
           <div className="table-row" key={`${text(item.marketplace)}-${text(item.id || item.offerId)}`}>
-            <span>{text(item.marketplace)}</span>
-            <span>{text(item.offerId)}</span>
-            <span>{money(item.oldPrice)}</span>
-            <span>{money(item.price)}</span>
-            <span>{text((item.supplier as { supplierName?: string })?.supplierName || (item.supplier as { name?: string })?.name || "") || "-"}</span>
-            <span>changed</span>
+            <span data-label="Маркет">{text(item.marketplace)}</span>
+            <span data-label="Артикул">{text(item.offerId)}</span>
+            <span data-label="Текущая">{money(item.oldPrice)}</span>
+            <span data-label="Новая">{money(item.price)}</span>
+            <span data-label="Поставщик">{text((item.supplier as { supplierName?: string })?.supplierName || (item.supplier as { name?: string })?.name || "") || "-"}</span>
+            <span data-label="Статус">changed</span>
           </div>
         ))}
         {!items.length && !preview.isLoading ? <div className="empty-state">Новых цен к отправке нет.</div> : null}
