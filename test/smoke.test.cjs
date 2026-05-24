@@ -3838,6 +3838,26 @@ test("PriceMaster delta price push refuses oversized change sets", () => {
   assert.deepEqual(result.productIds, []);
 });
 
+test("PriceMaster delta can fall back to full linked price reconcile", () => {
+  const result = priceMasterChangeImpactProductIds(
+    {
+      products: [
+        { id: "ozon-row", marketplace: "ozon", offerId: "SKU-1", links: [{ article: "A-1" }] },
+        { id: "yandex-row", marketplace: "yandex", offerId: "SKU-1", links: [] },
+        { id: "unlinked", marketplace: "ozon", offerId: "SKU-2", links: [] },
+      ],
+    },
+    [
+      { type: "price_changed", current: { article: "A-1", partnerId: "1" } },
+      { type: "price_changed", current: { article: "A-2", partnerId: "1" } },
+    ],
+    { maxChanges: 1, fullReconcileOnTooMany: true },
+  );
+  assert.equal(result.fallbackFullReconcile, true);
+  assert.equal(result.reason, "too_many_pricemaster_changes_full_reconcile");
+  assert.deepEqual(result.productIds, ["ozon-row", "yandex-row"]);
+});
+
 test("marketplace sync change fingerprint ignores timestamp-only churn", () => {
   const before = [{
     id: "p1",

@@ -1608,6 +1608,51 @@ button:disabled {
   margin-top: 3px;
 }
 
+.price-automation-hero {
+  border: 1px solid rgba(80, 216, 144, .34);
+  background:
+    linear-gradient(135deg, rgba(80, 216, 144, .12), rgba(56, 163, 255, .08)),
+    rgba(8, 17, 31, .74);
+  padding: 18px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
+  gap: 18px;
+  align-items: center;
+}
+
+.price-automation-hero h3 {
+  margin: 4px 0 8px;
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.price-automation-hero p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.price-automation-badge {
+  border: 1px solid rgba(80, 216, 144, .38);
+  background: rgba(3, 105, 72, .22);
+  padding: 14px;
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}
+
+.price-automation-badge strong {
+  font-size: 22px;
+  text-transform: uppercase;
+}
+
+.price-automation-badge span {
+  color: #a8f2c8;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
 .control-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(120px, 1fr));
@@ -1617,6 +1662,28 @@ button:disabled {
 .control-grid.price-controls {
   grid-template-columns: minmax(220px, 320px) minmax(170px, auto) minmax(220px, 1fr) minmax(180px, 260px);
   align-items: end;
+}
+
+.price-summary-grid {
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+}
+
+.price-skip-strip {
+  border: 1px solid rgba(255, 209, 102, .22);
+  background: rgba(255, 209, 102, .07);
+  padding: 10px 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  color: var(--muted);
+}
+
+.price-skip-strip b {
+  color: var(--yellow);
+  font-size: 12px;
+  border: 1px solid rgba(255, 209, 102, .24);
+  padding: 4px 7px;
 }
 
 .control-grid label,
@@ -2087,6 +2154,7 @@ button:disabled {
 
   .summary-grid,
   .summary-grid.three,
+  .price-summary-grid,
   .control-grid,
   .control-grid.price-controls,
   .settings-grid,
@@ -2095,6 +2163,10 @@ button:disabled {
   .pm-link-toolbar,
   .pm-link-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .price-automation-hero {
+    grid-template-columns: 1fr;
   }
 
   .workspace {
@@ -2196,6 +2268,7 @@ button:disabled {
   }
 
   .summary-grid,
+  .price-summary-grid,
   .employee-stats-dashboard,
   .stats-grid,
   .draft-grid,

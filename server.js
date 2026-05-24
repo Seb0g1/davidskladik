@@ -110,6 +110,8 @@ const marketplaceQueueAutoPricePushEnabled = process.env.MARKETPLACE_QUEUE_AUTO_
 const priceMasterDeltaPricePushEnabled = process.env.PRICEMASTER_DELTA_PRICE_PUSH_ENABLED !== "false";
 const priceMasterDeltaMaxChanges = Math.max(1, Number(process.env.PRICEMASTER_DELTA_MAX_CHANGES || 5000) || 5000);
 const priceMasterDeltaMaxProducts = Math.max(1, Number(process.env.PRICEMASTER_DELTA_MAX_PRODUCTS || 2000) || 2000);
+const autoPriceReconcileMaxProducts = Math.max(1, Number(process.env.AUTO_PRICE_RECONCILE_MAX_PRODUCTS || 12000) || 12000);
+const autoPriceReconcileBatchSize = Math.max(50, Math.min(1000, Number(process.env.AUTO_PRICE_RECONCILE_BATCH_SIZE || 500) || 500));
 const dailySyncTime = process.env.DAILY_SYNC_TIME || "11:00";
 const dailySyncEnabled = process.env.DAILY_SYNC_ENABLED !== "false";
 const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
@@ -2879,6 +2881,23 @@ function priceMasterChangeImpactProductIds(warehouse = {}, changes = [], options
   const relevantChanges = (Array.isArray(changes) ? changes : []).filter((change) => relevantTypes.has(change?.type));
   if (!relevantChanges.length) return { productIds: [], scannedChanges: 0, skipped: false, reason: null };
   if (relevantChanges.length > maxChanges) {
+    if (options.fullReconcileOnTooMany === true) {
+      const reconcileLimit = Math.max(1, Number(options.fullReconcileMaxProducts || autoPriceReconcileMaxProducts) || autoPriceReconcileMaxProducts);
+      const products = Array.isArray(warehouse.products) ? warehouse.products : [];
+      const linked = products.filter((product) => product?.autoPriceEnabled !== false && Array.isArray(product.links) && product.links.length);
+      const expanded = expandWarehouseProductsToGroups(products, linked);
+      const ids = Array.from(new Set(expanded.map((product) => cleanText(product.id)).filter(Boolean)));
+      const truncated = ids.length > reconcileLimit;
+      return {
+        productIds: ids.slice(0, reconcileLimit),
+        scannedChanges: relevantChanges.length,
+        skipped: truncated,
+        reason: truncated ? "too_many_pricemaster_changes_full_reconcile_limited" : "too_many_pricemaster_changes_full_reconcile",
+        fallbackFullReconcile: true,
+        directProducts: linked.length,
+        groupExpandedProducts: ids.length,
+      };
+    }
     return {
       productIds: [],
       scannedChanges: relevantChanges.length,
@@ -16596,6 +16615,8 @@ async function sendPriceMasterDeltaWarehousePrices(priceMaster = {}, warehouse =
   const delta = priceMasterChangeImpactProductIds(warehouse, priceMaster.changedRows || [], {
     maxChanges: options.maxChanges || priceMasterDeltaMaxChanges,
     maxProducts: options.maxProducts || priceMasterDeltaMaxProducts,
+    fullReconcileOnTooMany: options.fullReconcileOnTooMany !== false,
+    fullReconcileMaxProducts: options.fullReconcileMaxProducts || autoPriceReconcileMaxProducts,
   });
   if (delta.skipped) {
     logger.warn("PriceMaster delta price push limited", {
@@ -16613,13 +16634,58 @@ async function sendPriceMasterDeltaWarehousePrices(priceMaster = {}, warehouse =
       delta,
     };
   }
+  if (delta.fallbackFullReconcile) {
+    const batches = chunkArray(delta.productIds, autoPriceReconcileBatchSize);
+    const queuedProducts = delta.productIds.length;
+    void (async () => {
+      for (const batch of batches) {
+        try {
+          await queueMarketplaceJob(
+            "auto-price-push",
+            {
+              productIds: batch,
+              usdRate,
+              refreshMarketplacePrices: true,
+              livePriceMaster: true,
+              marketplace: "all",
+              onlyChanged: true,
+              reason: delta.reason,
+            },
+            { priority: 2 },
+          );
+        } catch (error) {
+          logger.warn("PriceMaster full reconcile price batch failed", {
+            reason: delta.reason,
+            batchSize: batch.length,
+            detail: error?.message || String(error),
+          });
+        }
+      }
+    })();
+    logger.info("PriceMaster delta price push queued full reconcile", {
+      reason: delta.reason,
+      scannedChanges: delta.scannedChanges,
+      products: queuedProducts,
+      batches: batches.length,
+      batchSize: autoPriceReconcileBatchSize,
+    });
+    return {
+      ok: true,
+      sent: 0,
+      failed: 0,
+      queued: queuedProducts,
+      queuedBatches: batches.length,
+      skipped: [],
+      delta,
+    };
+  }
   const result = await processMarketplaceJob("auto-price-push", {
     productIds: delta.productIds,
     usdRate,
     refreshMarketplacePrices: true,
     livePriceMaster: true,
     marketplace: "all",
-    onlyChanged: false,
+    onlyChanged: options.onlyChanged !== false,
   });
   return {
     ...result,
@@ -16811,6 +16877,11 @@ function queueImmediateAutoPricePush(productIds = [], reason = "price_change_det
             minDiffPct: 0,
             force,
             reason,
+            marketplace: options.marketplace || "all",
+            onlyChanged: options.onlyChanged !== undefined ? options.onlyChanged === true : !force,
+            refreshMarketplacePrices: options.refreshMarketplacePrices !== false,
+            livePriceMaster: options.livePriceMaster !== false,
+            limit: options.limit,
           },
           { priority: 1 },
         );
@@ -20380,11 +20451,13 @@ async function runDailyRefresh(trigger = "manual") {
           automationSkippedReason: automation.reason || recovery.reason || null,
           pricePush: pricePush
             ? {
-                sent: Number(pricePush.sent || 0),
-                failed: Number(pricePush.failed || 0),
-                skipped: Array.isArray(pricePush.skipped) ? pricePush.skipped.length : 0,
-                error: pricePush.error || null,
-              }
+              sent: Number(pricePush.sent || 0),
+              failed: Number(pricePush.failed || 0),
+              queued: Number(pricePush.queued || 0),
+              queuedBatches: Number(pricePush.queuedBatches || 0),
+              skipped: Array.isArray(pricePush.skipped) ? pricePush.skipped.length : 0,
+              error: pricePush.error || null,
+            }
             : null,
         },
       }));
@@ -20451,6 +20524,8 @@ async function runAutoSyncCycle(trigger = "auto") {
       automationSkippedReason: automation.reason || recovery.reason || null,
       priceMasterDeltaProducts: autoPricePush.delta?.productIds?.length || 0,
       priceMasterDeltaSkippedReason: autoPricePush.delta?.reason || null,
+      autoPriceQueued: autoPricePush.queued || 0,
+      autoPriceQueuedBatches: autoPricePush.queuedBatches || 0,
       autoPriceSent: autoPricePush.sent || 0,
       autoPriceFailed: autoPricePush.failed || 0,
       autoPriceSkipped: Array.isArray(autoPricePush.skipped) ? autoPricePush.skipped.length : 0,
