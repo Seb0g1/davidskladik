@@ -126,6 +126,9 @@ const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YAN
 const yandexStockCampaignIds = new Set(["128820967"]);
 const ozonUnarchiveDailyLimit = Math.max(1, Math.min(10000, Number(process.env.OZON_UNARCHIVE_DAILY_LIMIT || 100) || 100));
 const ozonUnarchiveQueueBatchLimit = Math.max(1, Math.min(1000, Number(process.env.OZON_UNARCHIVE_QUEUE_BATCH_LIMIT || ozonUnarchiveDailyLimit) || ozonUnarchiveDailyLimit));
+const ozonUnarchiveQueueAutoEnabled = process.env.OZON_UNARCHIVE_QUEUE_AUTO_ENABLED !== "false";
+const ozonUnarchiveQueueAutoIntervalMinutes = Math.max(5, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INTERVAL_MINUTES || 30) || 30);
+const ozonUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 180) || 180);
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const rawOpenaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
 const openaiImageModel = (() => {
@@ -234,6 +237,11 @@ let manualWarehouseSyncState = {
 let autoSyncTimer = null;
 let autoSyncRunning = false;
 let autoSyncNextRunAt = null;
+let ozonUnarchiveQueueAutoTimer = null;
+let ozonUnarchiveQueueAutoRunning = false;
+let ozonUnarchiveQueueAutoNextRunAt = null;
+let ozonUnarchiveQueueAutoLastRunAt = null;
+let ozonUnarchiveQueueAutoLastResult = null;
 let warehouseWritePromise = Promise.resolve();
 let warehouseMemoryCache = null;
 let warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
@@ -7834,6 +7842,16 @@ function ozonUnarchiveQueuePublic(queue = {}, { limit = 1000 } = {}) {
   };
 }
 
+function ozonUnarchiveQueueAutomationPublic() {
+  return {
+    autoEnabled: ozonUnarchiveQueueAutoEnabled,
+    autoRunning: ozonUnarchiveQueueAutoRunning,
+    lastAutoRunAt: ozonUnarchiveQueueAutoLastRunAt,
+    nextAutoRunAt: ozonUnarchiveQueueAutoNextRunAt,
+    lastAutoResult: ozonUnarchiveQueueAutoLastResult,
+  };
+}
+
 function normalizeMarketplaceEnum(value) {
   const text = cleanText(value).toLowerCase();
   return text === "yandex" ? "yandex" : "ozon";
@@ -13000,10 +13018,108 @@ app.post("/api/warehouse/brands/refresh", requireAdmin, async (request, response
   }
 });
 
+async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarchiveQueueBatchLimit, force = true } = {}) {
+  if (ozonUnarchiveQueueAutoRunning) {
+    return {
+      ok: true,
+      skipped: true,
+      reason: "already_running",
+      selected: 0,
+      result: { recovered: 0, unarchivePending: 0 },
+      queue: ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 5000 }),
+      ...ozonUnarchiveQueueAutomationPublic(),
+    };
+  }
+  ozonUnarchiveQueueAutoRunning = true;
+  const startedAt = new Date().toISOString();
+  try {
+    const normalizedLimit = Math.max(1, Math.min(5000, Math.round(Number(limit || ozonUnarchiveQueueBatchLimit) || ozonUnarchiveQueueBatchLimit)));
+    const queue = await readOzonUnarchiveQueue();
+    const publicQueue = ozonUnarchiveQueuePublic(queue, { limit: 5000 });
+    const perTargetTaken = new Map();
+    const dueItems = [];
+    for (const item of publicQueue.items || []) {
+      if (!item.due) continue;
+      const target = cleanText(item.target) || "default";
+      const available = Math.max(0, Number(item.availableToday || 0) || 0);
+      const taken = perTargetTaken.get(target) || 0;
+      if (taken >= available) continue;
+      dueItems.push(item);
+      perTargetTaken.set(target, taken + 1);
+      if (dueItems.length >= normalizedLimit) break;
+    }
+    const ids = dueItems.map((item) => cleanText(item.id)).filter(Boolean);
+    if (!ids.length) {
+      const empty = {
+        ok: true,
+        source,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        selected: 0,
+        result: { recovered: 0, unarchivePending: publicQueue.due, queueSize: publicQueue.total },
+        queue: publicQueue,
+      };
+      ozonUnarchiveQueueAutoLastResult = {
+        source,
+        selected: 0,
+        recovered: 0,
+        unarchivePending: publicQueue.due,
+        queueSize: publicQueue.total,
+        at: empty.finishedAt,
+      };
+      return { ...empty, ...ozonUnarchiveQueueAutomationPublic() };
+    }
+    const products = await buildFreshWarehouseProducts(ids, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true });
+    const result = await runSupplierRecoveryAutomation({ products }, { productIds: ids, source, force });
+    const freshQueue = ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 5000 });
+    const finishedAt = new Date().toISOString();
+    ozonUnarchiveQueueAutoLastResult = {
+      source,
+      selected: ids.length,
+      recovered: Number(result.recovered || 0),
+      restoredStocks: Number(result.restoredStocks || 0),
+      unarchived: Number(result.unarchived || 0),
+      unarchivePending: Number(result.unarchivePending || 0),
+      queuedByDailyLimit: Number(result.queuedByDailyLimit || 0),
+      queueSize: Number(freshQueue.total || 0),
+      errors: Array.isArray(result.errors) ? result.errors.length : 0,
+      at: finishedAt,
+    };
+    logger.info("ozon unarchive queue processed", ozonUnarchiveQueueAutoLastResult);
+    return {
+      ok: true,
+      source,
+      startedAt,
+      finishedAt,
+      selected: ids.length,
+      productIds: ids,
+      result,
+      queue: freshQueue,
+      ...ozonUnarchiveQueueAutomationPublic(),
+    };
+  } catch (error) {
+    const finishedAt = new Date().toISOString();
+    ozonUnarchiveQueueAutoLastResult = {
+      source,
+      selected: 0,
+      error: error?.message || String(error),
+      at: finishedAt,
+    };
+    logger.warn("ozon unarchive queue process failed", { source, detail: error?.message || String(error) });
+    throw error;
+  } finally {
+    ozonUnarchiveQueueAutoRunning = false;
+    ozonUnarchiveQueueAutoLastRunAt = new Date().toISOString();
+  }
+}
+
 app.get("/api/ozon/unarchive-queue", requireAdmin, async (request, response, next) => {
   try {
     const limit = cleanLimit(request.query.limit, 1000, 5000);
-    response.json(ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit }));
+    response.json({
+      ...ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit }),
+      ...ozonUnarchiveQueueAutomationPublic(),
+    });
   } catch (error) {
     next(error);
   }
@@ -13012,19 +13128,11 @@ app.get("/api/ozon/unarchive-queue", requireAdmin, async (request, response, nex
 app.post("/api/ozon/unarchive-queue/process", requireAdmin, async (request, response, next) => {
   try {
     const limit = cleanLimit(request.body?.limit || request.query?.limit, ozonUnarchiveQueueBatchLimit, 1000);
-    const queue = await readOzonUnarchiveQueue();
-    const publicQueue = ozonUnarchiveQueuePublic(queue, { limit: 5000 });
-    const dueItems = (publicQueue.items || []).filter((item) => item.due && item.availableToday > 0).slice(0, limit);
-    const ids = dueItems.map((item) => cleanText(item.id)).filter(Boolean);
-    if (!ids.length) {
-      return response.json({ ok: true, selected: 0, result: { recovered: 0, unarchivePending: publicQueue.due }, queue: publicQueue });
-    }
-    const products = await buildFreshWarehouseProducts(ids, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true });
-    const result = await runSupplierRecoveryAutomation({ products }, { productIds: ids, source: "ozon_unarchive_queue_manual", force: true });
-    response.json({ ok: true, selected: ids.length, result, queue: ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 5000 }) });
+    const result = await processOzonUnarchiveQueue({ source: "ozon_unarchive_queue_manual", limit, force: true });
+    response.json(result);
     appendAudit(request, "ozon.unarchive_queue.process", {
-      selected: ids.length,
-      productIds: ids,
+      selected: result.selected || 0,
+      productIds: result.productIds || [],
       result,
     }).catch((auditError) => logger.warn("ozon queue audit append failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
@@ -16598,6 +16706,13 @@ async function processMarketplaceJob(name, data = {}) {
     const preview = await buildWarehouseView({ sync: false });
     return runSupplierRecoveryAutomation(preview, { source: "full" });
   }
+  if (name === "ozon-unarchive-queue-process") {
+    return processOzonUnarchiveQueue({
+      source: data.source || "ozon_unarchive_queue_auto",
+      limit: data.limit || ozonUnarchiveQueueBatchLimit,
+      force: data.force !== false,
+    });
+  }
   return null;
 }
 
@@ -18022,6 +18137,7 @@ function operationTitle(type = "") {
     "repair-pricemaster-group-links": "Repair PriceMaster group links",
     "marketplace-supplier-cart-preview": "Supplier cart preview",
     "marketplace-supplier-cart-commit": "Supplier cart commit",
+    "ozon-unarchive-queue-process": "Process Ozon autoarchive queue",
     "health-deep": "Deep health check",
   };
   return titles[type] || type || "Operation";
@@ -18678,6 +18794,19 @@ async function runOperationPayload(job, options = {}) {
     await appendAudit(auditRequest, "marketplace.ozon.linked_unarchive", {
       entityType: "ozon_linked_unarchive",
       entityId: "ozon",
+      newValue: result,
+    });
+    return result;
+  }
+  if (job.type === "ozon-unarchive-queue-process") {
+    const result = await processOzonUnarchiveQueue({
+      source: "ozon_unarchive_queue_operation",
+      limit: job.payload?.limit || ozonUnarchiveQueueBatchLimit,
+      force: job.payload?.force !== false,
+    });
+    await appendAudit(auditRequest, "ozon.unarchive_queue.operation", {
+      entityType: "ozon_unarchive_queue",
+      entityId: "operation",
       newValue: result,
     });
     return result;
@@ -20694,6 +20823,46 @@ function scheduleAutoSync(delayMs = 10_000) {
   }, delayMs);
 }
 
+async function nextOzonUnarchiveQueueAutoDelayMs(fallbackMs = ozonUnarchiveQueueAutoIntervalMinutes * 60 * 1000) {
+  try {
+    const queue = ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 5000 });
+    if (queue.due > 0 && queue.availableToday > 0) return 1000;
+    const nextMs = queue.nextRetryAt ? new Date(queue.nextRetryAt).getTime() - Date.now() : 0;
+    if (Number.isFinite(nextMs) && nextMs > 0) return Math.min(fallbackMs, Math.max(30_000, nextMs));
+  } catch (error) {
+    logger.warn("ozon unarchive queue auto delay check failed", { detail: error?.message || String(error) });
+  }
+  return fallbackMs;
+}
+
+function scheduleOzonUnarchiveQueueAuto(delayMs = ozonUnarchiveQueueAutoIntervalMinutes * 60 * 1000) {
+  if (!ozonUnarchiveQueueAutoEnabled) {
+    ozonUnarchiveQueueAutoNextRunAt = null;
+    logger.info("ozon unarchive queue auto disabled");
+    return;
+  }
+  if (ozonUnarchiveQueueAutoTimer) clearTimeout(ozonUnarchiveQueueAutoTimer);
+  const normalizedDelay = Math.max(30_000, Number(delayMs || 0) || ozonUnarchiveQueueAutoIntervalMinutes * 60 * 1000);
+  ozonUnarchiveQueueAutoNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
+  ozonUnarchiveQueueAutoTimer = setTimeout(async () => {
+    try {
+      await queueMarketplaceJob(
+        "ozon-unarchive-queue-process",
+        {
+          source: "ozon_unarchive_queue_auto",
+          limit: ozonUnarchiveQueueBatchLimit,
+          force: true,
+        },
+        { priority: 2 },
+      );
+    } catch (error) {
+      logger.warn("ozon unarchive queue auto tick failed", { detail: error?.message || String(error) });
+    } finally {
+      scheduleOzonUnarchiveQueueAuto(await nextOzonUnarchiveQueueAutoDelayMs());
+    }
+  }, normalizedDelay);
+}
+
 app.post("/api/sync", async (_request, response, next) => {
   try {
     response.json(await runSync());
@@ -20817,6 +20986,7 @@ async function startServer() {
 
   scheduleDailySync();
   schedulePriceRetryProcessing(30_000);
+  scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
   scheduleAutoSync(autoSyncInitialDelaySeconds * 1000);
 }
 
@@ -20944,6 +21114,7 @@ module.exports = {
   writePriceRetryQueue,
   priceRetryQueuePath,
   unarchiveProductsOnMarketplaces,
+  processOzonUnarchiveQueue,
   readOzonUnarchiveQueue,
   writeOzonUnarchiveQueue,
   ozonUnarchiveQueuePath,

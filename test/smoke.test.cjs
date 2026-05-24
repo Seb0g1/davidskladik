@@ -161,9 +161,11 @@ const {
   writePriceRetryQueue,
   priceRetryQueuePath,
   unarchiveProductsOnMarketplaces,
+  processOzonUnarchiveQueue,
   readOzonUnarchiveQueue,
   writeOzonUnarchiveQueue,
   ozonUnarchiveQueuePath,
+  ozonUnarchiveDateKey,
 } = require("../server.js");
 const postgres = require("../lib/postgres.js");
 const seedPostgres = require("../scripts/seed-postgres-from-json.cjs");
@@ -3509,6 +3511,45 @@ test("Ozon unarchive daily limit queues overflow and resumes when quota is avail
   } finally {
     global.fetch = originalFetch;
     await restoreFile(marketplaceAccountsPath, accountsBackup);
+    await restoreFile(ozonUnarchiveQueuePath, queueBackup);
+  }
+});
+
+test("Ozon unarchive queue processor skips future rows and exhausted daily limits", async () => {
+  const queueBackup = await backupFile(ozonUnarchiveQueuePath);
+  try {
+    await writeOzonUnarchiveQueue({
+      items: [{
+        id: "future-row",
+        productId: "1001",
+        offerId: "FUTURE-1",
+        target: "ozon-test",
+        nextRetryAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+      }],
+      daily: {},
+    });
+    const futureResult = await processOzonUnarchiveQueue({ source: "smoke_future", limit: 10 });
+    assert.equal(futureResult.selected, 0);
+    assert.equal((await readOzonUnarchiveQueue()).items.length, 1);
+
+    await writeOzonUnarchiveQueue({
+      items: [{
+        id: "limit-row",
+        productId: "1002",
+        offerId: "LIMIT-1",
+        target: "ozon-test",
+        nextRetryAt: new Date(Date.now() - 60 * 1000).toISOString(),
+      }],
+      daily: {
+        [ozonUnarchiveDateKey()]: {
+          "ozon-test": 100,
+        },
+      },
+    });
+    const limitedResult = await processOzonUnarchiveQueue({ source: "smoke_limit", limit: 10 });
+    assert.equal(limitedResult.selected, 0);
+    assert.equal((await readOzonUnarchiveQueue()).items.length, 1);
+  } finally {
     await restoreFile(ozonUnarchiveQueuePath, queueBackup);
   }
 });

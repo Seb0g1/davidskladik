@@ -229,6 +229,11 @@ export const OzonUnarchiveQueueSchema = z.object({
   future: z.number().optional().default(0),
   availableToday: z.number().optional().default(0),
   nextRetryAt: z.coerce.string().optional().nullable(),
+  autoEnabled: z.boolean().optional().default(true),
+  autoRunning: z.boolean().optional().default(false),
+  lastAutoRunAt: z.coerce.string().optional().nullable(),
+  nextAutoRunAt: z.coerce.string().optional().nullable(),
+  lastAutoResult: z.record(z.string(), z.unknown()).optional().nullable(),
   targets: z.array(z.record(z.string(), z.unknown())).optional().default([]),
   items: z.array(z.record(z.string(), z.unknown())).optional().default([]),
 }).passthrough();
