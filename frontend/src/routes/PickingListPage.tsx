@@ -1,0 +1,204 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, Copy, Loader2, RefreshCw, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { z } from "zod";
+import { fetchJson, patchBody } from "../api";
+import { DiagnosticValue } from "../components/DiagnosticValue";
+import { PageHeader } from "../components/PageHeader";
+import { SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema } from "../types";
+import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
+
+type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
+
+const statusLabel = (status: string) => {
+  const labels: Record<string, string> = {
+    open: "к сборке",
+    picked: "собрано",
+    missing: "не было",
+    reordered: "перезаказано",
+    all: "все",
+  };
+  return labels[status] || status || "-";
+};
+
+const rowSearchText = (row: PickingRow) => [
+  row.productName,
+  row.offerId,
+  row.orderId,
+  row.postingNumber,
+  row.supplierName,
+].join(" ").toLowerCase();
+
+export function PickingListPage() {
+  const [status, setStatus] = useState("open");
+  const [supplier, setSupplier] = useState("");
+  const [q, setQ] = useState("");
+  const [period, setPeriod] = useState("30d");
+  const [copied, setCopied] = useState(false);
+  const queryClient = useQueryClient();
+  const listQuery = useQuery({
+    queryKey: ["supplier-picking-list", status, supplier, q],
+    queryFn: () => {
+      const params = new URLSearchParams({ status, limit: "500" });
+      if (supplier) params.set("supplier", supplier);
+      if (q) params.set("q", q);
+      return fetchJson(`/api/supplier-picking-list?${params.toString()}`, SupplierPickingListSchema);
+    },
+    refetchInterval: 15000,
+  });
+  const invoiceQuery = useQuery({
+    queryKey: ["supplier-picking-list", "invoices", period],
+    queryFn: () => fetchJson(`/api/supplier-picking-list/invoices?period=${encodeURIComponent(period)}`, SupplierPickingInvoiceSchema),
+  });
+  const updateMutation = useMutation({
+    mutationFn: ({ key, nextStatus }: { key: string; nextStatus: string }) =>
+      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({ status: nextStatus })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
+    },
+  });
+  const rows = listQuery.data?.rows || [];
+  const filteredRows = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return needle ? rows.filter((row) => rowSearchText(row).includes(needle)) : rows;
+  }, [q, rows]);
+  const grouped = useMemo(() => {
+    const groups = new Map<string, PickingRow[]>();
+    for (const row of filteredRows) {
+      const key = row.supplierName || "Без поставщика";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)?.push(row);
+    }
+    return Array.from(groups.entries()).sort((left, right) => left[0].localeCompare(right[0], "ru", { sensitivity: "base" }));
+  }, [filteredRows]);
+  const summary = listQuery.data?.summary || {};
+  const suppliers = listQuery.data?.suppliers || [];
+  const invoiceRows = invoiceQuery.data?.rows || [];
+  const copyInvoice = async () => {
+    const text = invoiceRows.map((row) => [
+      row.supplierName,
+      row.offerId,
+      row.productName,
+      `x${row.quantity}`,
+      row.price ? `${row.price} ${row.priceCurrency}` : "",
+    ].filter(Boolean).join(" | ")).join("\n");
+    setCopied(await copyPlainText(text));
+    window.setTimeout(() => setCopied(false), 1600);
+  };
+
+  return (
+    <section className="page-section picking-page">
+      <PageHeader
+        title="Сборка"
+        subtitle="Лист закупки для сотрудников: собрать товар у поставщика или отметить, что товара не было."
+        action={<button className="secondary-action" type="button" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>{listQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить</button>}
+      />
+
+      <div className="summary-grid picking-summary">
+        <DiagnosticValue label="К сборке" value={numberValue(summary.open)} tone={numberValue(summary.open) ? "warn" : ""} />
+        <DiagnosticValue label="Собрано" value={numberValue(summary.picked)} tone="success" />
+        <DiagnosticValue label="Не было" value={numberValue(summary.missing)} tone={numberValue(summary.missing) ? "danger" : ""} />
+        <DiagnosticValue label="Поставщиков" value={numberValue(summary.suppliers)} />
+      </div>
+
+      <div className="control-grid compact-controls">
+        <label>Статус
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="open">К сборке</option>
+            <option value="picked">Собрано</option>
+            <option value="missing">Не было</option>
+            <option value="reordered">Перезаказано</option>
+            <option value="all">Все</option>
+          </select>
+        </label>
+        <label>Поставщик
+          <select value={supplier} onChange={(event) => setSupplier(event.target.value)}>
+            <option value="">Все поставщики</option>
+            {suppliers.map((item) => <option value={item} key={item}>{item}</option>)}
+          </select>
+        </label>
+        <label>Поиск
+          <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="SKU, товар, заказ" />
+        </label>
+      </div>
+
+      {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
+      {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}
+
+      <div className="picking-groups">
+        {grouped.map(([supplierName, supplierRows]) => (
+          <article className="picking-supplier-card" key={supplierName}>
+            <div className="picking-supplier-head">
+              <div>
+                <span>Поставщик</span>
+                <h3>{supplierName}</h3>
+              </div>
+              <strong>{supplierRows.length}</strong>
+            </div>
+            <div className="picking-row-list">
+              {supplierRows.map((row) => (
+                <div className={`picking-row status-${row.status}`} key={row.key}>
+                  <div className="picking-main">
+                    <strong>{row.productName || row.offerId}</strong>
+                    <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
+                  </div>
+                  <div className="meta-grid">
+                    <span>Кол-во: {row.quantity}</span>
+                    <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
+                    <span>Доверие: {row.trustFactor}/100</span>
+                    <span>{row.orderCutoffTime ? `Заказы до ${row.orderCutoffTime}` : "Без дедлайна"}</span>
+                    {row.reseller ? <span>Перекупщик</span> : null}
+                    <span>Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
+                    <span>Статус: {statusLabel(row.status)}</span>
+                  </div>
+                  {row.status === "missing" ? <small className="danger-text">Поставщик пропущен для этого SKU до {compactDate(row.nextRetryAt)}. Автокорзина попробует другого поставщика.</small> : null}
+                  <div className="picking-actions">
+                    <button className="primary-action success-action" type="button" disabled={updateMutation.isPending || row.status === "picked"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "picked" })}>
+                      <Check size={16} /> Собрал
+                    </button>
+                    <button className="secondary-action danger-action" type="button" disabled={updateMutation.isPending || row.status === "missing"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "missing" })}>
+                      <X size={16} /> Не было
+                    </button>
+                    {row.status !== "open" ? <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>Вернуть</button> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
+        {!grouped.length && !listQuery.isLoading ? <div className="empty-state">Строк для выбранного фильтра нет.</div> : null}
+      </div>
+
+      <section className="table-panel picking-invoices">
+        <div className="section-title">
+          <div>
+            <span>Внутренняя накладная</span>
+            <h3>Собранные позиции</h3>
+          </div>
+          <div className="supplier-cart-actions">
+            <select value={period} onChange={(event) => setPeriod(event.target.value)}>
+              <option value="7d">7 дней</option>
+              <option value="30d">30 дней</option>
+              <option value="all">Все</option>
+            </select>
+            <button className="secondary-action" type="button" onClick={copyInvoice} disabled={!invoiceRows.length}><Copy size={16} /> {copied ? "Скопировано" : "Скопировать"}</button>
+          </div>
+        </div>
+        <div className="picking-invoice-list">
+          {invoiceRows.slice(0, 80).map((row) => (
+            <div className="picking-invoice-row" key={`${row.key}-${row.pickedAt || ""}`}>
+              <span>{compactDate(row.pickedAt)}</span>
+              <strong>{row.supplierName}</strong>
+              <span>{row.offerId}</span>
+              <span>{row.productName}</span>
+              <span>x{row.quantity}</span>
+              <span>{row.price ? `${row.price} ${row.priceCurrency}` : money(0)}</span>
+            </div>
+          ))}
+          {!invoiceRows.length ? <div className="soft-empty">Собранных строк за период нет.</div> : null}
+        </div>
+      </section>
+    </section>
+  );
+}

@@ -12,6 +12,7 @@
     "db:seed-from-json": "node scripts/seed-postgres-from-json.cjs",
     "db:export": "node scripts/export-postgres-data.cjs",
     "db:import": "node scripts/import-postgres-data.cjs",
+    "db:migrate-json-state": "node scripts/migrate-json-state-to-postgres.cjs",
     "db:repair-warehouse": "node scripts/repair-warehouse-products.cjs",
     "db:materialize-yandex": "node scripts/materialize-yandex-exported-products.cjs",
     "repair:ozon-details": "node scripts/repair-ozon-product-details.cjs",

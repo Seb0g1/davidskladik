@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, BadgeDollarSign, CirclePlay, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, CirclePlay, ClipboardList, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { WarehousePage } from "./routes/WarehousePage";
 import { OperationsPage } from "./routes/OperationsPage";
@@ -9,16 +9,20 @@ import { SupplierCartPage } from "./routes/SupplierCartPage";
 import { RecoveryQueuePage } from "./routes/RecoveryQueuePage";
 import { PricesPage } from "./routes/PricesPage";
 import { SystemPage } from "./routes/SystemPage";
+import { PickingListPage } from "./routes/PickingListPage";
+import { ProblemProductsPage } from "./routes/ProblemProductsPage";
 
-type AppRoute = "warehouse" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "settings" | "system" | "ai-drafts" | "no-supplier";
+type AppRoute = "warehouse" | "picking-list" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "settings" | "system" | "ai-drafts" | "no-supplier";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
   { route: "warehouse", href: "/app/warehouse", label: "Каталог", icon: <PackageCheck size={16} /> },
+  { route: "picking-list", href: "/app/picking-list", label: "Сборка", icon: <ClipboardList size={16} /> },
   { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} /> },
   { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
   { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
   { route: "prices", href: "/app/prices", label: "Цены", icon: <BadgeDollarSign size={16} /> },
+  { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} /> },
   { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
   { route: "system", href: "/app/system", label: "Система", icon: <Activity size={16} /> },
   { route: "ai-drafts", href: "/app/ai-drafts", label: "AI drafts", icon: <Sparkles size={16} /> },
@@ -27,10 +31,12 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
 
 function currentRoute(): AppRoute {
   const path = window.location.pathname;
+  if (path.startsWith("/app/picking-list")) return "picking-list";
   if (path.startsWith("/app/operations")) return "operations";
   if (path.startsWith("/app/supplier-cart")) return "supplier-cart";
   if (path.startsWith("/app/recovery-queue")) return "recovery-queue";
   if (path.startsWith("/app/prices")) return "prices";
+  if (path.startsWith("/app/problem-products")) return "problem-products";
   if (path.startsWith("/app/settings")) return "settings";
   if (path.startsWith("/app/system")) return "system";
   if (path.startsWith("/app/ai-drafts")) return "ai-drafts";
@@ -66,17 +72,18 @@ function AppShell() {
     setRoute(currentRoute());
   };
   const isAdmin = session?.role === "admin";
+  const canUseStaffRoutes = session?.role === "manager" || isAdmin;
   const canUseAdminRoutes = session === null ? false : isAdmin;
-  const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => item.route === "warehouse");
-  const accessDenied = route !== "warehouse" && !canUseAdminRoutes;
+  const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => item.route === "warehouse" || item.route === "picking-list");
+  const accessDenied = (route !== "warehouse" && route !== "picking-list" && !canUseAdminRoutes) || (route === "picking-list" && !canUseStaffRoutes);
   return (
     <main className="app-shell">
       <header className="topbar">
         <div className="brand-lockup">
           <img className="brand-logo" src="/logo1.png" alt="Magic Vibe" />
           <div>
-          <span className="eyebrow">Рабочий интерфейс</span>
-          <h1>ДавидСклад</h1>
+            <span className="eyebrow">Рабочий интерфейс</span>
+            <h1>ДавидСклад</h1>
           </div>
         </div>
         <nav>
@@ -91,14 +98,16 @@ function AppShell() {
         <section className="access-denied-panel">
           <AlertCircle size={24} />
           <strong>Нет доступа</strong>
-          <span>Для роли manager доступен только каталог и привязки PriceMaster.</span>
+          <span>Для роли manager доступны каталог, привязки PriceMaster и лист сборки.</span>
           <a href="/app/warehouse" onClick={(event) => navigate(event, "/app/warehouse")}>Вернуться в каталог</a>
         </section>
       ) : null}
       {!accessDenied && route === "operations" ? <OperationsPage /> : null}
+      {!accessDenied && route === "picking-list" ? <PickingListPage /> : null}
       {!accessDenied && route === "supplier-cart" ? <SupplierCartPage /> : null}
       {!accessDenied && route === "recovery-queue" ? <RecoveryQueuePage /> : null}
       {!accessDenied && route === "prices" ? <PricesPage /> : null}
+      {!accessDenied && route === "problem-products" ? <ProblemProductsPage /> : null}
       {!accessDenied && route === "settings" ? <SettingsPage /> : null}
       {!accessDenied && route === "system" ? <SystemPage /> : null}
       {!accessDenied && route === "ai-drafts" ? <AiDraftsPage /> : null}

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckSquare, Download, Loader2, RefreshCw, Save, Search, Square, Trash2, Upload, UserX } from "lucide-react";
-import { fetchJson, mutationBody } from "../api";
+import { fetchJson, mutationBody, patchBody } from "../api";
 import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SuppliersResponseSchema, SyncStatusSchema, UsersResponseSchema, UsersStatsResponseSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { DiagnosticValue } from "../components/DiagnosticValue";
@@ -529,8 +529,8 @@ function SupplierStockModePanel() {
     staleTime: 60_000,
   });
   const updateSupplier = useMutation({
-    mutationFn: ({ id, pricingMode }: { id: string; pricingMode: string }) =>
-      fetchJson(`/api/suppliers/${encodeURIComponent(id)}`, SuppliersResponseSchema, mutationBody({ pricingMode })),
+    mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) =>
+      fetchJson(`/api/suppliers/${encodeURIComponent(id)}`, SuppliersResponseSchema, patchBody(patch)),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
@@ -556,7 +556,7 @@ function SupplierStockModePanel() {
         </button>
       </div>
       <div className="settings-hint">
-        Включайте для “нашего склада”: наличие участвует в продаже и восстановлении, но цена PriceMaster не берется в авторасчет. Цена отправляется только из ручной fallback-цены в карточке.
+        Включайте для “нашего склада”: наличие участвует в продаже и восстановлении, но цена PriceMaster не берется в авторасчет. Для автокорзины задавайте доверие, дедлайн приема заказов и признак перекупщика: так система выберет лучшего поставщика именно сейчас.
       </div>
       <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Найти поставщика PriceMaster" />
       <div className="supplier-mode-list">
@@ -574,10 +574,39 @@ function SupplierStockModePanel() {
                   type="checkbox"
                   checked={stockOnly}
                   disabled={!id || updateSupplier.isPending}
-                  onChange={(event) => updateSupplier.mutate({ id, pricingMode: event.target.checked ? "stock_only" : "normal" })}
+                  onChange={(event) => updateSupplier.mutate({ id, patch: { pricingMode: event.target.checked ? "stock_only" : "normal" } })}
                 />
                 <span>складской / не брать цену</span>
               </label>
+              <div className="supplier-quality-controls">
+                <label>Доверие
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    defaultValue={supplier.trustFactor ?? 100}
+                    disabled={!id || updateSupplier.isPending}
+                    onBlur={(event) => updateSupplier.mutate({ id, patch: { trustFactor: Number(event.target.value) || 0 } })}
+                  />
+                </label>
+                <label>Заказы до
+                  <input
+                    defaultValue={supplier.orderCutoffTime || ""}
+                    placeholder="13:00"
+                    disabled={!id || updateSupplier.isPending}
+                    onBlur={(event) => updateSupplier.mutate({ id, patch: { orderCutoffTime: event.target.value } })}
+                  />
+                </label>
+                <label className="toggle-line">
+                  <input
+                    type="checkbox"
+                    checked={supplier.reseller === true}
+                    disabled={!id || updateSupplier.isPending}
+                    onChange={(event) => updateSupplier.mutate({ id, patch: { reseller: event.target.checked } })}
+                  />
+                  <span>перекупщик</span>
+                </label>
+              </div>
             </article>
           );
         })}

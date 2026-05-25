@@ -83,6 +83,7 @@ const yandexExistingOffersCachePath = path.join(dataDir, "yandex-existing-offers
 const operationJobsPath = path.join(dataDir, "operation-jobs.json");
 const aiImageJobsPath = path.join(dataDir, "ai-image-jobs.json");
 const supplierCartStatePath = path.join(dataDir, "supplier-cart-state.json");
+const supplierPickingListPath = path.join(dataDir, "supplier-picking-list.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
 const buildVersion = cleanBuildVersion(process.env.APP_BUILD_VERSION || process.env.GIT_COMMIT || readGitCommit());
@@ -300,6 +301,11 @@ const detectedPriceAutoPushDefaultCooldownMs = 15 * 60_000;
 const detectedPriceAutoPushDefaultBatchCooldownMs = 30_000;
 let priceRetryTimer = null;
 let priceRetryRunning = false;
+let supplierCartAutoTimer = null;
+let supplierCartAutoRunning = false;
+let supplierCartAutoNextRunAt = null;
+let supplierCartAutoLastRunAt = null;
+let supplierCartAutoLastResult = null;
 let marketplaceQueue = null;
 let marketplaceWorker = null;
 const warehouseProductMutationLocks = new Map();
@@ -928,6 +934,12 @@ function requireAuth(request, response, next) {
 function requireAdmin(request, response, next) {
   if (isAdminSession(request.session)) return next();
   return response.status(403).json({ error: "Доступ только для администратора.", code: "admin_required" });
+}
+
+function requireStaff(request, response, next) {
+  const role = cleanText(request.session?.role).toLowerCase();
+  if (role === "admin" || role === "manager") return next();
+  return response.status(403).json({ error: "Нужен доступ сотрудника.", code: "staff_required" });
 }
 
 function healthTimeout(promise, timeoutMs = 2500) {
@@ -1946,6 +1958,82 @@ function resolveWarehouseBrand(product = {}) {
   return resolveWarehouseBrandCandidates(product)[0] || "";
 }
 
+function normalizedBrandIndexKey(value = "") {
+  return normalizeSearchText(value).replace(/\s+/g, " ").trim();
+}
+
+function warehouseBrandIndexRowsForProduct(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const candidates = [];
+  const push = (value, source, confidence = 80) => {
+    const displayBrand = cleanText(value);
+    const normalizedBrand = normalizedBrandIndexKey(displayBrand);
+    if (!displayBrand || !normalizedBrand || normalizedBrand.length < 2) return;
+    candidates.push({
+      normalizedBrand,
+      displayBrand,
+      productId: normalized.id,
+      marketplace: normalized.marketplace === "yandex" ? "yandex" : "ozon",
+      offerId: normalized.offerId || normalized.id,
+      source,
+      confidence,
+    });
+  };
+  push(normalized.brand, "brand", 100);
+  push(normalized.vendor, "vendor", 95);
+  push(normalized.brandName, "brand_name", 95);
+  push(normalized.raw?.brand, "raw", 90);
+  push(normalized.raw?.vendor, "raw", 88);
+  push(normalized.ozon?.brand || normalized.ozon?.vendor || normalized.ozon?.brandName, "ozon_attribute", 90);
+  push(normalized.yandex?.brand || normalized.yandex?.vendor || normalized.yandex?.brandName, "yandex_attribute", 90);
+  for (const brand of resolveWarehouseBrandCandidates(normalized)) push(brand, "raw", 80);
+  const unique = new Map();
+  for (const row of candidates) {
+    const key = `${row.normalizedBrand}|${row.productId}|${row.source}`;
+    if (!unique.has(key)) unique.set(key, row);
+  }
+  return Array.from(unique.values());
+}
+
+async function rebuildWarehouseBrandIndexPostgres(prisma, { limit = 100000 } = {}) {
+  if (!prisma?.brandIndexItem) return { ok: false, skipped: true, reason: "brand_index_model_missing" };
+  const rows = await prisma.warehouseProduct.findMany({
+    where: enabledWarehouseTargetWhere(),
+    select: { id: true, marketplace: true, target: true, offerId: true, productId: true, name: true, brand: true, raw: true },
+    take: Math.max(100, Math.min(200000, Number(limit || 100000) || 100000)),
+    orderBy: [{ updatedAt: "desc" }],
+  });
+  let indexed = 0;
+  await prisma.brandIndexItem.deleteMany({});
+  for (const batch of chunkArray(rows, 500)) {
+    const data = batch.flatMap((row) => warehouseBrandIndexRowsForProduct(productFromPostgres({ ...row, links: [] })));
+    if (!data.length) continue;
+    const result = await prisma.brandIndexItem.createMany({ data, skipDuplicates: true });
+    indexed += result.count || 0;
+  }
+  warehouseBrandListCache = null;
+  return { ok: true, scanned: rows.length, indexed };
+}
+
+async function brandIndexProductIdsForFilterPostgres(prisma, brandFilter = "") {
+  const normalizedBrand = normalizedBrandIndexKey(brandFilter);
+  if (!normalizedBrand || !prisma?.brandIndexItem) return [];
+  let rows = await prisma.brandIndexItem.findMany({
+    where: { normalizedBrand: { contains: normalizedBrand, mode: "insensitive" } },
+    select: { productId: true },
+    take: 50000,
+  });
+  if (!rows.length) {
+    await rebuildWarehouseBrandIndexPostgres(prisma, { limit: Number(process.env.WAREHOUSE_BRAND_INDEX_REBUILD_LIMIT || 100000) || 100000 });
+    rows = await prisma.brandIndexItem.findMany({
+      where: { normalizedBrand: { contains: normalizedBrand, mode: "insensitive" } },
+      select: { productId: true },
+      take: 50000,
+    });
+  }
+  return Array.from(new Set(rows.map((row) => row.productId).filter(Boolean)));
+}
+
 function warehouseBrandSearchHaystack(product = {}) {
   return [
     ...resolveWarehouseBrandCandidates(product),
@@ -2769,11 +2857,27 @@ function normalizeSupplierPricingMode(input = {}) {
     : "normal";
 }
 
+function normalizeSupplierTrustFactor(value, fallback = 100) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return Math.max(0, Math.min(100, Number(fallback || 100) || 100));
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
+function normalizeSupplierOrderCutoff(value = "") {
+  const text = cleanText(value);
+  const match = text.match(/^(\d{1,2})(?::?(\d{2}))?$/);
+  if (!match) return "";
+  const hour = Math.max(0, Math.min(23, Number(match[1]) || 0));
+  const minute = Math.max(0, Math.min(59, Number(match[2] || 0) || 0));
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
 function normalizeManagedSupplier(input = {}) {
   const inactiveUntil = cleanText(input.inactiveUntil || input.inactive_until);
   const stopped = Boolean(input.stopped);
   const priceCurrency = cleanText(input.priceCurrency || input.price_currency || input.currency || "USD").toUpperCase();
   const pricingMode = normalizeSupplierPricingMode(input);
+  const raw = input.raw && typeof input.raw === "object" && !Array.isArray(input.raw) ? input.raw : {};
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
     partnerId: cleanText(input.partnerId || input.partner_id),
@@ -2782,6 +2886,9 @@ function normalizeManagedSupplier(input = {}) {
     priceCurrency: priceCurrency === "RUB" || priceCurrency === "RUR" ? "RUB" : "USD",
     pricingMode,
     stockOnly: pricingMode === "stock_only",
+    trustFactor: normalizeSupplierTrustFactor(input.trustFactor ?? input.trust_factor ?? raw.trustFactor ?? raw.trust_factor, 100),
+    orderCutoffTime: normalizeSupplierOrderCutoff(input.orderCutoffTime || input.order_cutoff_time || raw.orderCutoffTime || raw.order_cutoff_time),
+    reseller: Boolean(input.reseller ?? raw.reseller),
     stopped,
     note: cleanText(input.note),
     stopReason: cleanText(input.stopReason || input.stop_reason),
@@ -5110,6 +5217,9 @@ function defaultAppSettings() {
     },
     supplierCart: {
       enabled: true,
+      autoEnabled: true,
+      scheduleTimes: ["09:30", "12:00", "15:00"],
+      timezone: "Europe/Moscow",
       mode: "draft",
       marketplaces: ["ozon", "yandex"],
       lookbackHours: 48,
@@ -5195,6 +5305,12 @@ function normalizeSupplierCartSettings(input = {}, fallback = defaultAppSettings
   };
   return {
     enabled: parseBooleanSetting(raw.enabled, fallback.enabled !== false),
+    autoEnabled: parseBooleanSetting(raw.autoEnabled ?? raw.auto_enabled, fallback.autoEnabled !== false),
+    scheduleTimes: (Array.isArray(raw.scheduleTimes || raw.schedule_times) ? (raw.scheduleTimes || raw.schedule_times) : fallback.scheduleTimes || ["09:30", "12:00", "15:00"])
+      .map((item) => normalizeSupplierOrderCutoff(item))
+      .filter(Boolean)
+      .slice(0, 10),
+    timezone: cleanText(raw.timezone || fallback.timezone || "Europe/Moscow") || "Europe/Moscow",
     mode: cleanText(raw.mode).toLowerCase() === "auto" ? "auto" : "draft",
     marketplaces: marketplaces.length ? Array.from(new Set(marketplaces)) : ["ozon", "yandex"],
     lookbackHours: Number.isFinite(lookbackHours) && lookbackHours > 0 ? Math.min(720, Math.round(lookbackHours)) : fallback.lookbackHours,
@@ -7694,7 +7810,68 @@ function normalizeOzonUnarchiveQueue(queue = {}) {
   };
 }
 
+function ozonUnarchiveQueueItemToPostgres(item = {}) {
+  const normalized = normalizeOzonUnarchiveQueueItem(item);
+  return {
+    queueKey: ozonUnarchiveQueueKey(normalized) || crypto.randomUUID(),
+    productId: cleanText(normalized.productId || normalized.id) || null,
+    offerId: cleanText(normalized.offerId || normalized.id) || "unknown",
+    target: cleanText(normalized.target) || null,
+    status: normalized.status === "done" || normalized.status === "success" ? "success" : (["pending", "processing", "failed", "delayed"].includes(normalized.status) ? normalized.status : "pending"),
+    queuedAt: toDateOrNull(normalized.queuedAt) || new Date(),
+    nextRetryAt: toDateOrNull(normalized.nextRetryAt),
+    lastAttemptAt: toDateOrNull(normalized.lastAttemptAt),
+    attempts: Math.max(0, Number(normalized.attempts || 0) || 0),
+    warning: cleanText(normalized.warning) || null,
+    error: cleanText(normalized.error) || null,
+    raw: normalized,
+  };
+}
+
+function ozonUnarchiveQueueItemFromPostgres(row = {}) {
+  const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  return normalizeOzonUnarchiveQueueItem({
+    ...raw,
+    id: raw.id || row.productId || row.offerId,
+    productId: row.productId,
+    offerId: row.offerId,
+    target: row.target,
+    status: row.status === "success" ? "done" : row.status,
+    queuedAt: row.queuedAt?.toISOString?.() || raw.queuedAt,
+    nextRetryAt: row.nextRetryAt?.toISOString?.() || raw.nextRetryAt,
+    lastAttemptAt: row.lastAttemptAt?.toISOString?.() || raw.lastAttemptAt,
+    attempts: row.attempts,
+    warning: row.warning || raw.warning,
+    error: row.error || raw.error,
+  });
+}
+
 async function readOzonUnarchiveQueue() {
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      const rows = await prisma.ozonUnarchiveQueueItem.findMany({
+        where: { status: { in: ["pending", "processing", "failed", "delayed"] } },
+        orderBy: [{ nextRetryAt: "asc" }, { queuedAt: "asc" }],
+        take: 5000,
+      });
+      const jsonDaily = await fs.readFile(ozonUnarchiveQueuePath, "utf8")
+        .then((text) => JSON.parse(text || "{}")?.daily || {})
+        .catch(() => ({}));
+      const updatedAt = rows.reduce((latest, row) => {
+        const time = row.updatedAt ? row.updatedAt.getTime() : 0;
+        return time > latest ? time : latest;
+      }, 0);
+      return normalizeOzonUnarchiveQueue({
+        updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
+        daily: jsonDaily,
+        items: rows.map(ozonUnarchiveQueueItemFromPostgres),
+      });
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("read ozon unarchive queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   try {
     const text = await fs.readFile(ozonUnarchiveQueuePath, "utf8");
     if (!text.trim()) return { updatedAt: null, daily: {}, items: [] };
@@ -7714,6 +7891,43 @@ async function writeOzonUnarchiveQueue(queue = {}) {
     ...queue,
     updatedAt: new Date().toISOString(),
   });
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      const queueKeys = payload.items.map(ozonUnarchiveQueueKey).filter(Boolean);
+      await prisma.$transaction(async (tx) => {
+        if (queueKeys.length) {
+          await tx.ozonUnarchiveQueueItem.deleteMany({ where: { queueKey: { notIn: queueKeys }, status: { not: "success" } } });
+        } else {
+          await tx.ozonUnarchiveQueueItem.deleteMany({ where: { status: { not: "success" } } });
+        }
+        for (const item of payload.items) {
+          const data = ozonUnarchiveQueueItemToPostgres(item);
+          await tx.ozonUnarchiveQueueItem.upsert({
+            where: { queueKey: data.queueKey },
+            create: data,
+            update: {
+              productId: data.productId,
+              offerId: data.offerId,
+              target: data.target,
+              status: data.status,
+              queuedAt: data.queuedAt,
+              nextRetryAt: data.nextRetryAt,
+              lastAttemptAt: data.lastAttemptAt,
+              attempts: data.attempts,
+              warning: data.warning,
+              error: data.error,
+              raw: data.raw,
+            },
+          });
+        }
+      });
+      if (!jsonFallbackEnabled()) return payload;
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("write ozon unarchive queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   await fs.mkdir(dataDir, { recursive: true });
   const tmpPath = `${ozonUnarchiveQueuePath}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
@@ -8435,6 +8649,32 @@ async function getWarehouseBrandListFromPostgres(prisma) {
     && Date.now() - warehouseBrandListCache.at < warehouseBrandListCacheTtlMs
   ) {
     return warehouseBrandListCache.value.slice();
+  }
+  if (prisma?.brandIndexItem) {
+    try {
+      let rows = await prisma.brandIndexItem.findMany({
+        select: { normalizedBrand: true, displayBrand: true },
+        distinct: ["normalizedBrand"],
+        orderBy: { displayBrand: "asc" },
+        take: 10000,
+      });
+      if (!rows.length) {
+        await rebuildWarehouseBrandIndexPostgres(prisma, { limit: Number(process.env.WAREHOUSE_BRAND_INDEX_REBUILD_LIMIT || 100000) || 100000 });
+        rows = await prisma.brandIndexItem.findMany({
+          select: { normalizedBrand: true, displayBrand: true },
+          distinct: ["normalizedBrand"],
+          orderBy: { displayBrand: "asc" },
+          take: 10000,
+        });
+      }
+      if (rows.length) {
+        const brands = rows.map((row) => cleanText(row.displayBrand)).filter(Boolean).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
+        warehouseBrandListCache = { at: Date.now(), value: brands };
+        return brands.slice();
+      }
+    } catch (error) {
+      logger.warn("warehouse brand index list failed, using product brands", { detail: error?.message || String(error) });
+    }
   }
   await ensureWarehousePostgresBrandsBackfilled(prisma);
   const rows = await prisma.warehouseProduct.findMany({
@@ -9611,7 +9851,34 @@ function priceMasterSupplierPricingMeta(row = {}, maps = managedSupplierMaps()) 
     stockOnly,
     priceEligible: !stockOnly,
     stockEligible: true,
+    trustFactor: normalizeSupplierTrustFactor(supplier?.trustFactor, 100),
+    orderCutoffTime: normalizeSupplierOrderCutoff(supplier?.orderCutoffTime || ""),
+    reseller: Boolean(supplier?.reseller),
   };
+}
+
+function supplierOrderCutoffPassed(orderCutoffTime = "", now = new Date()) {
+  const cutoff = normalizeSupplierOrderCutoff(orderCutoffTime);
+  if (!cutoff) return false;
+  const [hour, minute] = cutoff.split(":").map((item) => Number(item) || 0);
+  const moscow = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Europe/Moscow",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const currentHour = Number(moscow.find((part) => part.type === "hour")?.value || 0);
+  const currentMinute = Number(moscow.find((part) => part.type === "minute")?.value || 0);
+  return currentHour * 60 + currentMinute > hour * 60 + minute;
+}
+
+function supplierCartOrderScore(row = {}, now = new Date()) {
+  const price = Number(row.price || Number.POSITIVE_INFINITY);
+  const trust = normalizeSupplierTrustFactor(row.trustFactor, 100);
+  const trustPenalty = (100 - trust) / 100 * 0.18;
+  const resellerPenalty = row.reseller ? 0.12 : 0;
+  const cutoffPenalty = supplierOrderCutoffPassed(row.orderCutoffTime, now) ? 1000 : 0;
+  return price * (1 + trustPenalty + resellerPenalty) + cutoffPenalty;
 }
 
 function resolvePriceMasterRowCurrency(row = {}, link = {}, maps = managedSupplierMaps()) {
@@ -9666,6 +9933,9 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
           stockOnly: pricingMeta.stockOnly,
           priceEligible: pricingMeta.priceEligible,
           stockEligible: pricingMeta.stockEligible,
+          trustFactor: pricingMeta.trustFactor,
+          orderCutoffTime: pricingMeta.orderCutoffTime,
+          reseller: pricingMeta.reseller,
           available: active && (pricingMeta.stockOnly || price > 0),
           docDate: row.docDate,
         };
@@ -9734,6 +10004,9 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
         stockOnly: pricingMeta.stockOnly,
         priceEligible: pricingMeta.priceEligible,
         stockEligible: pricingMeta.stockEligible,
+        trustFactor: pricingMeta.trustFactor,
+        orderCutoffTime: pricingMeta.orderCutoffTime,
+        reseller: pricingMeta.reseller,
         active: Boolean(row.active),
         ignored: Boolean(row.ignored),
         available: Boolean(row.active) && (pricingMeta.stockOnly || Number(priceData.price || 0) > 0),
@@ -9765,6 +10038,9 @@ function priceMasterSnapshotLinkRow(row = {}, link = {}, usdRate, supplierMaps =
     stockOnly: pricingMeta.stockOnly,
     priceEligible: pricingMeta.priceEligible,
     stockEligible: pricingMeta.stockEligible,
+    trustFactor: pricingMeta.trustFactor,
+    orderCutoffTime: pricingMeta.orderCutoffTime,
+    reseller: pricingMeta.reseller,
     available: Boolean(base.active) && (pricingMeta.stockOnly || Number(priceData.price || 0) > 0),
   };
 }
@@ -9825,7 +10101,14 @@ async function getLivePriceMasterMatchesForLinks(links, managedSuppliers = [], u
         active,
         stopped: Boolean(stoppedSupplier),
         stopReason: stoppedSupplier?.note || null,
-        available: active && price > 0,
+        pricingMode: row.pricingMode,
+        stockOnly: row.stockOnly,
+        priceEligible: row.priceEligible,
+        stockEligible: row.stockEligible,
+        trustFactor: row.trustFactor,
+        orderCutoffTime: row.orderCutoffTime,
+        reseller: row.reseller,
+        available: active && (row.stockOnly || price > 0),
         docDate: row.docDate,
       };
     }));
@@ -9993,6 +10276,9 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
           stockOnly: pricingMeta.stockOnly,
           priceEligible: pricingMeta.priceEligible,
           stockEligible: pricingMeta.stockEligible,
+          trustFactor: pricingMeta.trustFactor,
+          orderCutoffTime: pricingMeta.orderCutoffTime,
+          reseller: pricingMeta.reseller,
           available: active && (pricingMeta.stockOnly || price > 0),
           docDate: row.docDate,
         };
@@ -11355,11 +11641,23 @@ async function buildFastWarehousePageFromPostgres({
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
   const linkedFilter = cleanText(filters.linked || "all");
   const needsComputedLinkFilter = linkedFilter === "ready" || linkedFilter === "changed" || linkedFilter === "linked_archived";
-  if (cleanText(filters.brand || "")) await ensureWarehousePostgresBrandsBackfilled(prisma);
+  const brandFilter = cleanText(filters.brand || "");
+  let brandIndexProductIds = [];
+  if (brandFilter) {
+    await ensureWarehousePostgresBrandsBackfilled(prisma);
+    brandIndexProductIds = await brandIndexProductIdsForFilterPostgres(prisma, brandFilter).catch((error) => {
+      logger.warn("warehouse brand index filter failed, using product brand fallback", { detail: error?.message || String(error) });
+      return [];
+    });
+  }
   const strictIdentitySearch = isWarehouseStrictIdentitySearch(filters);
   const needsInMemoryPage = needsComputedLinkFilter || strictIdentitySearch;
-  const postgresFilters = needsComputedLinkFilter ? { ...filters, state: "all" } : filters;
+  const postgresFilters = {
+    ...(needsComputedLinkFilter ? { ...filters, state: "all" } : filters),
+    ...(brandIndexProductIds.length ? { brand: "" } : {}),
+  };
   const where = warehousePagePostgresWhere(postgresFilters);
+  if (brandIndexProductIds.length) where.AND.push({ id: { in: brandIndexProductIds } });
   const strictPrimaryWhere = strictIdentitySearch
     ? warehousePagePostgresPrimaryIdentityWhere(postgresFilters)
     : null;
@@ -13018,7 +13316,36 @@ app.post("/api/warehouse/brands/refresh", requireAdmin, async (request, response
   }
 });
 
-async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarchiveQueueBatchLimit, force = true } = {}) {
+app.get("/api/warehouse/brands/index-status", requireAdmin, async (_request, response, next) => {
+  try {
+    if (!shouldUsePostgresStorage()) {
+      return response.json({ ok: true, source: "json", indexed: 0, products: 0, ready: false });
+    }
+    const prisma = getPrisma();
+    const [indexed, products] = await Promise.all([
+      prisma.brandIndexItem.count().catch(() => 0),
+      prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }).catch(() => 0),
+    ]);
+    response.json({ ok: true, source: "postgres", indexed, products, ready: indexed > 0, stale: indexed === 0 && products > 0 });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/brands/rebuild-index", requireAdmin, async (request, response, next) => {
+  try {
+    if (!shouldUsePostgresStorage()) {
+      return response.status(400).json({ error: "Brand index requires PostgreSQL storage.", code: "postgres_required" });
+    }
+    const limit = cleanLimit(request.body?.limit || request.query?.limit, 100000, 200000);
+    const result = await rebuildWarehouseBrandIndexPostgres(getPrisma(), { limit });
+    response.json({ ...result, source: "postgres" });
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarchiveQueueBatchLimit, force = false } = {}) {
   if (ozonUnarchiveQueueAutoRunning) {
     return {
       ok: true,
@@ -13041,7 +13368,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
     for (const item of publicQueue.items || []) {
       if (!item.due) continue;
       const target = cleanText(item.target) || "default";
-      const available = Math.max(0, Number(item.availableToday || 0) || 0);
+      const available = force ? normalizedLimit : Math.max(0, Number(item.availableToday || 0) || 0);
       const taken = perTargetTaken.get(target) || 0;
       if (taken >= available) continue;
       dueItems.push(item);
@@ -13070,13 +13397,19 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       return { ...empty, ...ozonUnarchiveQueueAutomationPublic() };
     }
     const products = await buildFreshWarehouseProducts(ids, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true });
-    const result = await runSupplierRecoveryAutomation({ products }, { productIds: ids, source, force });
+    const result = await runSupplierRecoveryAutomation({ products }, {
+      productIds: ids,
+      source,
+      force,
+      forceOzonDailyLimit: Boolean(force),
+    });
     const freshQueue = ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 5000 });
     const finishedAt = new Date().toISOString();
     ozonUnarchiveQueueAutoLastResult = {
       source,
-      selected: ids.length,
-      recovered: Number(result.recovered || 0),
+        selected: ids.length,
+        force: Boolean(force),
+        recovered: Number(result.recovered || 0),
       restoredStocks: Number(result.restoredStocks || 0),
       unarchived: Number(result.unarchived || 0),
       unarchivePending: Number(result.unarchivePending || 0),
@@ -13092,6 +13425,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       startedAt,
       finishedAt,
       selected: ids.length,
+      force: Boolean(force),
       productIds: ids,
       result,
       queue: freshQueue,
@@ -13139,6 +13473,66 @@ app.post("/api/ozon/unarchive-queue/process", requireAdmin, async (request, resp
     next(error);
   }
 });
+
+async function repairWarehouseProductGroup(productId, request = null) {
+  const initialWarehouse = await readWarehouse();
+  const seed = (initialWarehouse.products || []).find((product) => String(product.id) === String(productId));
+  if (!seed) {
+    const error = new Error("Warehouse product not found.");
+    error.statusCode = 404;
+    throw error;
+  }
+  const initialGroup = expandWarehouseProductsToGroups(initialWarehouse.products || [], [seed]);
+  const initialIds = initialGroup.map((product) => String(product.id)).filter(Boolean);
+  return withWarehouseProductMutationLock(initialIds, async () => {
+    const warehouse = await readWarehouse();
+    const currentSeed = (warehouse.products || []).find((product) => String(product.id) === String(productId));
+    if (!currentSeed) {
+      const error = new Error("Warehouse product not found.");
+      error.statusCode = 404;
+      throw error;
+    }
+    const groupProducts = expandWarehouseProductsToGroups(warehouse.products || [], [currentSeed]);
+    const productIds = groupProducts.map((product) => String(product.id)).filter(Boolean);
+    const syncResult = syncWarehouseProductGroupLinks(groupProducts, { now: new Date().toISOString(), username: requestUsername(request) });
+    if ((syncResult.changedProducts || []).length) {
+      await writeWarehouseProductPatch(syncResult.changedProducts, { reason: "warehouse_product_repair_links_sync" });
+    }
+    const priceResult = await sendWarehousePrices({
+      productIds,
+      dryRun: false,
+      force: true,
+      onlyChanged: false,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      marketplace: "all",
+    });
+    const freshProducts = await buildFreshWarehouseProducts(productIds, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true });
+    const recoveryResult = await runSupplierRecoveryAutomation({ products: freshProducts }, { productIds, source: "product_repair", force: true });
+    const diagnostics = await buildWarehouseSkuDiagnostics(currentSeed.offerId || currentSeed.sku || currentSeed.productId || currentSeed.id, { limit: 50, auditLimit: 30 });
+    const payload = {
+      ok: true,
+      productIds,
+      linksSynced: (syncResult.changedProducts || []).length,
+      priceSent: Number(priceResult.sent || priceResult.items?.length || 0) || 0,
+      stockSent: Number(priceResult.stockSent || recoveryResult.restoredStocks || 0) || 0,
+      unarchiveStatus: recoveryResult.unarchivePending ? "pending" : "done",
+      pending: Number(recoveryResult.unarchivePending || 0) > 0,
+      errors: [...(priceResult.failed || []), ...(recoveryResult.errors || [])],
+      nextRetryAt: recoveryResult.nextRetryAt || null,
+      priceResult,
+      recoveryResult,
+      diagnostics,
+    };
+    appendAudit(request || { session: { username: "system", role: "admin" } }, "warehouse.product.repair", {
+      productId: currentSeed.id,
+      offerId: currentSeed.offerId,
+      productIds,
+      result: payload,
+    }).catch((auditError) => logger.warn("product repair audit append failed", { detail: auditError?.message || String(auditError) }));
+    return payload;
+  });
+}
 
 app.post("/api/warehouse/products/:id/repair", requireAdmin, async (request, response, next) => {
   try {
@@ -13408,6 +13802,67 @@ app.get("/api/suppliers", async (request, response, next) => {
   }
 });
 
+app.get("/api/suppliers/:id/profile", requireAdmin, async (request, response, next) => {
+  try {
+    const supplierId = cleanText(request.params.id);
+    const warehouse = await readWarehouse();
+    const suppliers = (warehouse.suppliers || []).map(normalizeManagedSupplier);
+    const supplier = suppliers.find((item) => cleanText(item.id) === supplierId || cleanText(item.partnerId) === supplierId || normalizeSupplierName(item.name) === normalizeSupplierName(supplierId));
+    if (!supplier) return response.status(404).json({ error: "Supplier not found.", code: "supplier_not_found" });
+    const picking = await readSupplierPickingState();
+    const rows = Object.values(picking.rows || {})
+      .map(normalizeSupplierPickingRow)
+      .filter((row) =>
+        (supplier.partnerId && cleanText(row.partnerId) === cleanText(supplier.partnerId))
+        || normalizeSupplierName(row.supplierName) === normalizeSupplierName(supplier.name)
+      );
+    const picked = rows.filter((row) => row.status === "picked");
+    const missing = rows.filter((row) => row.status === "missing");
+    const blocks = Object.values((await readSupplierCartState()).supplierBlocks || {})
+      .filter((block) => cleanText(block.partnerId) === cleanText(supplier.partnerId));
+    const averagePrice = rows.length ? rows.reduce((sum, row) => sum + Number(row.price || 0), 0) / rows.length : 0;
+    response.json({
+      ok: true,
+      supplier,
+      stats: {
+        picked: picked.length,
+        missing: missing.length,
+        totalPurchases: rows.length,
+        successRate: rows.length ? Math.round((picked.length / rows.length) * 100) : null,
+        averagePrice,
+      },
+      blocks,
+      history: rows.slice(0, 200),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/suppliers/:id/profile", requireAdmin, async (request, response, next) => {
+  try {
+    const supplierId = cleanText(request.params.id);
+    const warehouse = await readWarehouse();
+    const suppliers = (warehouse.suppliers || []).map(normalizeManagedSupplier);
+    const index = suppliers.findIndex((item) => cleanText(item.id) === supplierId || cleanText(item.partnerId) === supplierId || normalizeSupplierName(item.name) === normalizeSupplierName(supplierId));
+    if (index < 0) return response.status(404).json({ error: "Supplier not found.", code: "supplier_not_found" });
+    suppliers[index] = normalizeManagedSupplier({
+      ...suppliers[index],
+      ...request.body,
+      raw: {
+        ...(suppliers[index].raw || {}),
+        ...(request.body?.raw || {}),
+      },
+    });
+    warehouse.suppliers = suppliers;
+    await writeWarehouseJsonPayload(warehouse);
+    warehousePostgresSuppliersCache = null;
+    response.json({ ok: true, supplier: suppliers[index] });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/pricemaster/search", async (request, response, next) => {
   try {
     const q = cleanText(request.query.q || request.query.search || "");
@@ -13589,6 +14044,13 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
       stopped: request.body.stopped !== undefined ? Boolean(request.body.stopped) : supplier.stopped,
       note: request.body.note !== undefined ? cleanText(request.body.note) : supplier.note,
       stopReason: request.body.stopReason !== undefined ? cleanText(request.body.stopReason) : supplier.stopReason,
+      trustFactor: request.body.trustFactor !== undefined || request.body.trust_factor !== undefined
+        ? normalizeSupplierTrustFactor(request.body.trustFactor ?? request.body.trust_factor, supplier.trustFactor || 100)
+        : normalizeSupplierTrustFactor(supplier.trustFactor, 100),
+      orderCutoffTime: request.body.orderCutoffTime !== undefined || request.body.order_cutoff_time !== undefined
+        ? normalizeSupplierOrderCutoff(request.body.orderCutoffTime || request.body.order_cutoff_time)
+        : normalizeSupplierOrderCutoff(supplier.orderCutoffTime || ""),
+      reseller: request.body.reseller !== undefined ? Boolean(request.body.reseller) : Boolean(supplier.reseller),
       priceCurrency: request.body.priceCurrency !== undefined
         ? normalizeManagedSupplier({ priceCurrency: request.body.priceCurrency }).priceCurrency
         : (supplier.priceCurrency || "USD"),
@@ -16323,6 +16785,117 @@ function warehousePriceMarketplaceStats(items = [], failed = [], skipped = []) {
   };
 }
 
+function salesAutomationReason(value = "") {
+  const reason = cleanText(value || "ok");
+  const map = {
+    no_pricemaster_link: "no_supplier",
+    not_ready: "no_supplier",
+    no_next_price: "no_price",
+    ozon_price_delayed: "in_retry",
+    ozon_unarchive_daily_limit_queued: "ozon_limit",
+    stock_only_manual_price_missing: "stock_only_manual_price_missing",
+    unchanged: "unchanged",
+    send_failed: "api_error",
+  };
+  return map[reason] || reason || "ok";
+}
+
+async function upsertSalesAutomationSkuStates(rows = []) {
+  if (!shouldUsePostgresStorage() || !rows.length) return { updated: 0, skipped: true };
+  try {
+    const prisma = getPrisma();
+    let updated = 0;
+    for (const batch of chunkArray(rows, 250)) {
+      const validBatch = batch.filter((row) => cleanText(row.offerId));
+      await prisma.$transaction(validBatch.map((row) => {
+        const marketplace = cleanText(row.marketplace).toLowerCase() === "yandex" ? "yandex" : "ozon";
+        const target = cleanText(row.target) || "default";
+        const offerId = cleanText(row.offerId);
+        updated += 1;
+        return prisma.salesAutomationSkuState.upsert({
+          where: { marketplace_target_offerId: { marketplace, target, offerId } },
+          create: {
+            productId: cleanText(row.productId || row.id) || null,
+            marketplace,
+            target,
+            offerId,
+            currentPrice: Number(row.currentPrice ?? row.oldPrice ?? 0) || null,
+            targetPrice: Number(row.targetPrice ?? row.price ?? 0) || null,
+            targetStock: Number(row.targetStock ?? row.stock ?? 0) || null,
+            priceStatus: row.priceStatus || "pending",
+            stockStatus: row.stockStatus || "pending",
+            unarchiveStatus: row.unarchiveStatus || "pending",
+            reason: salesAutomationReason(row.reason || "ok"),
+            lastCalculatedAt: toDateOrNull(row.lastCalculatedAt) || new Date(),
+            lastPriceSentAt: toDateOrNull(row.lastPriceSentAt),
+            lastStockSentAt: toDateOrNull(row.lastStockSentAt),
+            lastError: cleanText(row.lastError || row.error) || null,
+            raw: row,
+          },
+          update: {
+            productId: cleanText(row.productId || row.id) || null,
+            currentPrice: Number(row.currentPrice ?? row.oldPrice ?? 0) || null,
+            targetPrice: Number(row.targetPrice ?? row.price ?? 0) || null,
+            targetStock: Number(row.targetStock ?? row.stock ?? 0) || null,
+            priceStatus: row.priceStatus || "pending",
+            stockStatus: row.stockStatus || "pending",
+            unarchiveStatus: row.unarchiveStatus || "pending",
+            reason: salesAutomationReason(row.reason || "ok"),
+            lastCalculatedAt: toDateOrNull(row.lastCalculatedAt) || new Date(),
+            lastPriceSentAt: toDateOrNull(row.lastPriceSentAt),
+            lastStockSentAt: toDateOrNull(row.lastStockSentAt),
+            lastError: cleanText(row.lastError || row.error) || null,
+            raw: row,
+          },
+        });
+      }));
+    }
+    return { updated };
+  } catch (error) {
+    if (!jsonFallbackEnabled()) throw error;
+    logger.warn("sales automation state upsert failed", { detail: error?.message || String(error) });
+    return { updated: 0, error: error?.message || String(error) };
+  }
+}
+
+async function updateSalesAutomationFromPriceResult({ items = [], failed = [], skipped = [], stockActions = [], sentAt = new Date().toISOString() } = {}) {
+  const failedById = new Map((failed || []).map((item) => [cleanText(item.id || item.productId), item]));
+  const stockById = new Map((stockActions || []).map((item) => [cleanText(item.id), item]));
+  const rows = [];
+  for (const item of items || []) {
+    const failedItem = failedById.get(cleanText(item.id || item.productId));
+    const stock = stockById.get(cleanText(item.id || item.productId));
+    rows.push({
+      ...item,
+      productId: item.productId || item.id,
+      currentPrice: item.oldPrice,
+      targetPrice: item.price,
+      targetStock: stock?.stock ?? null,
+      priceStatus: failedItem ? (isOzonPerItemPriceLimitError({ message: failedItem.error }) ? "delayed" : "failed") : "success",
+      stockStatus: stock ? (stock.ok ? "success" : "failed") : "pending",
+      unarchiveStatus: stock?.queuedByDailyLimit ? "delayed" : "pending",
+      reason: failedItem ? (isOzonPerItemPriceLimitError({ message: failedItem.error }) ? "in_retry" : "api_error") : "ok",
+      lastPriceSentAt: failedItem ? null : sentAt,
+      lastStockSentAt: stock?.ok ? sentAt : null,
+      lastError: failedItem?.error || stock?.error || "",
+      lastCalculatedAt: sentAt,
+    });
+  }
+  for (const row of skipped || []) {
+    rows.push({
+      ...row,
+      productId: row.productId || row.id,
+      priceStatus: row.reason === "unchanged" ? "success" : (row.reason === "ozon_price_delayed" ? "delayed" : "pending"),
+      stockStatus: "pending",
+      unarchiveStatus: row.reason === "ozon_price_delayed" ? "delayed" : "pending",
+      reason: row.reason,
+      lastError: row.error || "",
+      lastCalculatedAt: sentAt,
+    });
+  }
+  return upsertSalesAutomationSkuStates(rows);
+}
+
 async function sendWarehousePrices({
   productIds,
   usdRate,
@@ -16647,6 +17220,8 @@ async function sendWarehousePrices({
   schedulePriceRetryItems([...failedQueued, ...delayedQueueUpdates]);
 
   const stats = warehousePriceMarketplaceStats(items, failed, skipped);
+  updateSalesAutomationFromPriceResult({ items, failed, skipped, stockActions, sentAt })
+    .catch((error) => logger.warn("sales automation state background update failed", { detail: error?.message || String(error) }));
   return {
     ok: true,
     selected: selected.length,
@@ -16710,7 +17285,7 @@ async function processMarketplaceJob(name, data = {}) {
     return processOzonUnarchiveQueue({
       source: data.source || "ozon_unarchive_queue_auto",
       limit: data.limit || ozonUnarchiveQueueBatchLimit,
-      force: data.force !== false,
+      force: data.force === true,
     });
   }
   return null;
@@ -17220,6 +17795,240 @@ app.get("/api/warehouse/prices/preview", requireAdmin, async (request, response,
   }
 });
 
+app.get("/api/sales-automation/summary", requireAdmin, async (_request, response, next) => {
+  try {
+    const [retryQueue, ozonQueue] = await Promise.all([
+      readPriceRetryQueue().catch(() => ({ items: [] })),
+      readOzonUnarchiveQueue().catch(() => ({ items: [] })),
+    ]);
+    if (shouldUsePostgresStorage()) {
+      try {
+        const prisma = getPrisma();
+        const [total, reasons, statuses, latest] = await Promise.all([
+          prisma.salesAutomationSkuState.count(),
+          prisma.salesAutomationSkuState.groupBy({ by: ["reason"], _count: { _all: true } }),
+          prisma.salesAutomationSkuState.groupBy({ by: ["marketplace", "priceStatus"], _count: { _all: true } }),
+          prisma.salesAutomationSkuState.findFirst({ orderBy: { updatedAt: "desc" } }),
+        ]);
+        return response.json({
+          ok: true,
+          source: "postgres",
+          autoEnabled: true,
+          total,
+          updatedAt: latest?.updatedAt?.toISOString?.() || null,
+          retryTotal: retryQueue.items?.length || 0,
+          ozonUnarchiveQueued: normalizeOzonUnarchiveQueue(ozonQueue).items.length,
+          reasons: Object.fromEntries(reasons.map((row) => [row.reason || "unknown", row._count?._all || 0])),
+          statuses: statuses.map((row) => ({ marketplace: row.marketplace, priceStatus: row.priceStatus, count: row._count?._all || 0 })),
+        });
+      } catch (error) {
+        if (!jsonFallbackEnabled()) throw error;
+        logger.warn("sales automation summary postgres failed, using live preview fallback", { detail: error?.message || String(error) });
+      }
+    }
+    const preview = await sendWarehousePrices({ dryRun: true, marketplace: "all", onlyChanged: false, limit: 500, livePriceMaster: true });
+    response.json({
+      ok: true,
+      source: "preview",
+      autoEnabled: true,
+      total: Number(preview.selected || 0),
+      updatedAt: new Date().toISOString(),
+      retryTotal: retryQueue.items?.length || 0,
+      ozonUnarchiveQueued: normalizeOzonUnarchiveQueue(ozonQueue).items.length,
+      reasons: (preview.skipped || []).reduce((acc, row) => {
+        const key = salesAutomationReason(row.reason || "unknown");
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {}),
+      statuses: [],
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/sales-automation/items", requireAdmin, async (request, response, next) => {
+  try {
+    const marketplace = cleanText(request.query.marketplace || "all").toLowerCase();
+    const reason = cleanText(request.query.reason || "");
+    const q = cleanText(request.query.q || "");
+    const limit = cleanLimit(request.query.limit, 200, 2000);
+    if (shouldUsePostgresStorage()) {
+      try {
+        const where = {
+          AND: [
+            marketplace !== "all" && ["ozon", "yandex"].includes(marketplace) ? { marketplace } : {},
+            reason ? { reason } : {},
+            q ? {
+              OR: [
+                { offerId: { contains: q, mode: "insensitive" } },
+                { productId: { contains: q, mode: "insensitive" } },
+                { lastError: { contains: q, mode: "insensitive" } },
+              ],
+            } : {},
+          ].filter((item) => Object.keys(item || {}).length),
+        };
+        const [total, items] = await Promise.all([
+          getPrisma().salesAutomationSkuState.count({ where }),
+          getPrisma().salesAutomationSkuState.findMany({ where, orderBy: { updatedAt: "desc" }, take: limit }),
+        ]);
+        return response.json({
+          ok: true,
+          source: "postgres",
+          total,
+          items: items.map((item) => ({
+            id: item.id,
+            productId: item.productId,
+            marketplace: item.marketplace,
+            target: item.target,
+            offerId: item.offerId,
+            currentPrice: item.currentPrice,
+            targetPrice: item.targetPrice,
+            targetStock: item.targetStock,
+            priceStatus: item.priceStatus,
+            stockStatus: item.stockStatus,
+            unarchiveStatus: item.unarchiveStatus,
+            reason: item.reason,
+            lastCalculatedAt: item.lastCalculatedAt?.toISOString?.() || null,
+            lastPriceSentAt: item.lastPriceSentAt?.toISOString?.() || null,
+            lastStockSentAt: item.lastStockSentAt?.toISOString?.() || null,
+            lastError: item.lastError || "",
+            updatedAt: item.updatedAt?.toISOString?.() || null,
+            raw: item.raw || {},
+          })),
+        });
+      } catch (error) {
+        if (!jsonFallbackEnabled()) throw error;
+        logger.warn("sales automation items postgres failed, using live preview fallback", { detail: error?.message || String(error) });
+      }
+    }
+    const preview = await sendWarehousePrices({ dryRun: true, marketplace, onlyChanged: false, limit, livePriceMaster: true });
+    const items = [
+      ...(preview.items || []).map((item) => ({ ...item, reason: "ok", priceStatus: "pending" })),
+      ...(preview.skipped || []).map((item) => ({ ...item, reason: salesAutomationReason(item.reason), priceStatus: item.reason === "unchanged" ? "success" : "pending" })),
+    ].filter((item) => !reason || salesAutomationReason(item.reason) === reason);
+    response.json({ ok: true, source: "preview", total: items.length, items: items.slice(0, limit) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/sales-automation/run", requireAdmin, async (request, response, next) => {
+  try {
+    const marketplace = cleanText(request.body?.marketplace || "all").toLowerCase();
+    const force = request.body?.force === true;
+    const onlyChanged = request.body?.onlyChanged !== false;
+    const result = await sendWarehousePrices({
+      confirmed: true,
+      marketplace,
+      force,
+      onlyChanged,
+      livePriceMaster: true,
+      refreshMarketplacePrices: true,
+      limit: cleanLimit(request.body?.limit, 1000, 50000),
+    });
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+function problemProductCategoryFromAutomation(row = {}) {
+  const reason = salesAutomationReason(row.reason || row.raw?.reason || "");
+  if (reason === "no_supplier") return "no_supplier";
+  if (reason === "no_price") return "no_price";
+  if (reason === "stock_only_manual_price_missing") return "stock_only_manual_price_missing";
+  if (reason === "api_error") return "api_error";
+  if (reason === "in_retry") return "price_retry";
+  if (reason === "ozon_limit") return "ozon_autoarchive";
+  if (row.priceStatus === "failed" || row.stockStatus === "failed") return "api_error";
+  return reason && reason !== "ok" && reason !== "unchanged" ? reason : "";
+}
+
+app.get("/api/problem-products", requireAdmin, async (request, response, next) => {
+  try {
+    const category = cleanText(request.query.category || "all");
+    const q = cleanText(request.query.q || "");
+    const limit = cleanLimit(request.query.limit, 200, 2000);
+    let items = [];
+    if (shouldUsePostgresStorage()) {
+      try {
+        const rows = await getPrisma().salesAutomationSkuState.findMany({
+          where: {
+            AND: [
+              q ? {
+                OR: [
+                  { offerId: { contains: q, mode: "insensitive" } },
+                  { productId: { contains: q, mode: "insensitive" } },
+                  { lastError: { contains: q, mode: "insensitive" } },
+                ],
+              } : {},
+              category !== "all" ? { reason: category === "price_retry" ? "in_retry" : category } : {},
+            ].filter((item) => Object.keys(item || {}).length),
+          },
+          orderBy: { updatedAt: "desc" },
+          take: limit,
+        });
+        items = rows
+          .map((row) => ({
+            id: row.id,
+            productId: row.productId,
+            marketplace: row.marketplace,
+            target: row.target,
+            offerId: row.offerId,
+            category: problemProductCategoryFromAutomation(row),
+            reason: row.reason,
+            currentPrice: row.currentPrice,
+            targetPrice: row.targetPrice,
+            targetStock: row.targetStock,
+            lastError: row.lastError || "",
+            updatedAt: row.updatedAt?.toISOString?.() || null,
+          }))
+          .filter((row) => row.category);
+      } catch (error) {
+        if (!jsonFallbackEnabled()) throw error;
+        logger.warn("problem products postgres failed, using preview fallback", { detail: error?.message || String(error) });
+      }
+    }
+    if (!items.length) {
+      const preview = await sendWarehousePrices({ dryRun: true, marketplace: "all", onlyChanged: false, limit, livePriceMaster: true });
+      items = (preview.skipped || [])
+        .map((row) => ({
+          ...row,
+          productId: row.productId || row.id,
+          category: problemProductCategoryFromAutomation(row),
+          reason: salesAutomationReason(row.reason),
+        }))
+        .filter((row) => row.category && (category === "all" || row.category === category));
+    }
+    const summary = items.reduce((acc, row) => {
+      acc[row.category] = (acc[row.category] || 0) + 1;
+      return acc;
+    }, {});
+    response.json({ ok: true, total: items.length, summary, items: items.slice(0, limit) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/problem-products/repair", requireAdmin, async (request, response, next) => {
+  try {
+    const productIds = Array.isArray(request.body?.productIds) ? request.body.productIds.map(cleanText).filter(Boolean) : [];
+    if (!productIds.length) return response.status(400).json({ error: "No productIds selected.", code: "problem_products_empty" });
+    const results = [];
+    for (const id of productIds.slice(0, 100)) {
+      try {
+        results.push(await repairWarehouseProductGroup(id, request));
+      } catch (error) {
+        results.push({ ok: false, productId: id, error: error?.message || String(error) });
+      }
+    }
+    response.json({ ok: results.every((item) => item.ok !== false), repaired: results.filter((item) => item.ok !== false).length, failed: results.filter((item) => item.ok === false).length, results });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/warehouse/prices/retry", async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
@@ -17606,17 +18415,140 @@ function normalizeSupplierCartState(input = {}) {
   const processed = input.processed && typeof input.processed === "object" && !Array.isArray(input.processed)
     ? input.processed
     : {};
+  const supplierBlocks = input.supplierBlocks && typeof input.supplierBlocks === "object" && !Array.isArray(input.supplierBlocks)
+    ? input.supplierBlocks
+    : {};
+  const draft = input.draft && typeof input.draft === "object" && !Array.isArray(input.draft)
+    ? input.draft
+    : null;
   const history = Array.isArray(input.history) ? input.history : [];
   return {
     updatedAt: input.updatedAt || null,
     processed,
+    supplierBlocks,
+    draft: draft ? {
+      id: cleanText(draft.id) || crypto.randomUUID(),
+      generatedAt: draft.generatedAt || null,
+      generatedBy: cleanText(draft.generatedBy),
+      params: draft.params && typeof draft.params === "object" ? draft.params : {},
+      rows: Array.isArray(draft.rows) ? draft.rows.map(normalizeSupplierCartPreviewRow) : [],
+      summary: draft.summary && typeof draft.summary === "object" ? draft.summary : {},
+    } : null,
     history: history
       .filter((item) => item && typeof item === "object")
       .slice(-1000),
   };
 }
 
+function supplierCartDraftRowToPostgres(draftId, row = {}) {
+  const normalized = normalizeSupplierCartPreviewRow(row);
+  return {
+    draftId,
+    cartKey: normalized.key,
+    marketplace: normalized.marketplace || null,
+    accountName: normalized.accountName || null,
+    orderId: normalized.orderId || null,
+    postingNumber: normalized.postingNumber || null,
+    offerId: normalized.offerId || null,
+    productName: normalized.productName || null,
+    quantity: normalized.quantity,
+    supplierName: normalized.supplierName || null,
+    partnerId: normalized.partnerId || null,
+    offerRowId: normalized.offerRowId || null,
+    price: normalized.price || null,
+    priceCurrency: normalized.priceCurrency || null,
+    supplierScore: normalized.supplierScore || null,
+    ready: Boolean(normalized.ready),
+    alreadyCommitted: Boolean(normalized.alreadyCommitted),
+    skipReason: normalized.skipReason || null,
+    requestDocId: normalized.requestDocId || null,
+    requestRowId: normalized.requestRowId || null,
+    raw: normalized,
+  };
+}
+
+function supplierCartDraftRowFromPostgres(row = {}) {
+  const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  return normalizeSupplierCartPreviewRow({
+    ...raw,
+    key: row.cartKey || raw.key,
+    marketplace: row.marketplace || raw.marketplace,
+    accountName: row.accountName || raw.accountName,
+    orderId: row.orderId || raw.orderId,
+    postingNumber: row.postingNumber || raw.postingNumber,
+    offerId: row.offerId || raw.offerId,
+    productName: row.productName || raw.productName,
+    quantity: row.quantity ?? raw.quantity,
+    supplierName: row.supplierName || raw.supplierName,
+    partnerId: row.partnerId || raw.partnerId,
+    offerRowId: row.offerRowId || raw.offerRowId,
+    price: row.price === null || row.price === undefined ? raw.price : Number(row.price),
+    priceCurrency: row.priceCurrency || raw.priceCurrency,
+    supplierScore: row.supplierScore === null || row.supplierScore === undefined ? raw.supplierScore : Number(row.supplierScore),
+    ready: row.ready,
+    alreadyCommitted: row.alreadyCommitted,
+    skipReason: row.skipReason || raw.skipReason,
+    requestDocId: row.requestDocId || raw.requestDocId,
+    requestRowId: row.requestRowId || raw.requestRowId,
+  });
+}
+
+function supplierBlockFromPostgres(row = {}) {
+  const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  return {
+    ...raw,
+    key: row.blockKey,
+    offerId: row.offerId,
+    partnerId: row.partnerId,
+    supplierName: row.supplierName || raw.supplierName || "",
+    reason: row.reason || raw.reason || "",
+    sourceKey: row.sourceKey || raw.sourceKey || "",
+    blockedBy: row.blockedBy || raw.blockedBy || "",
+    blockedAt: row.blockedAt?.toISOString?.() || raw.blockedAt || "",
+    expiresAt: row.expiresAt?.toISOString?.() || raw.expiresAt || "",
+    active: row.active !== false,
+  };
+}
+
 async function readSupplierCartState() {
+  if (shouldUsePostgresStorage()) {
+    try {
+      const [draft, blocks] = await Promise.all([
+        getPrisma().supplierCartDraft.findFirst({
+          where: { active: true },
+          include: { rows: { orderBy: { createdAt: "asc" } } },
+          orderBy: { generatedAt: "desc" },
+        }),
+        getPrisma().supplierBlock.findMany({
+          where: { active: true, expiresAt: { gt: new Date() } },
+          orderBy: { expiresAt: "asc" },
+          take: 5000,
+        }),
+      ]);
+      const jsonState = await fs.readFile(supplierCartStatePath, "utf8")
+        .then((text) => normalizeSupplierCartState(JSON.parse(text || "{}")))
+        .catch(() => normalizeSupplierCartState());
+      const supplierBlocks = { ...(jsonState.supplierBlocks || {}) };
+      for (const block of blocks.map(supplierBlockFromPostgres)) {
+        if (block.key) supplierBlocks[block.key] = block;
+      }
+      return normalizeSupplierCartState({
+        ...jsonState,
+        supplierBlocks,
+        draft: draft ? {
+          id: draft.id,
+          generatedAt: draft.generatedAt?.toISOString?.() || null,
+          generatedBy: draft.generatedBy || "",
+          params: draft.params || {},
+          rows: (draft.rows || []).map(supplierCartDraftRowFromPostgres),
+          summary: draft.summary || {},
+        } : jsonState.draft,
+      });
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("read supplier cart state postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   try {
     return normalizeSupplierCartState(JSON.parse(await fs.readFile(supplierCartStatePath, "utf8")));
   } catch (error) {
@@ -17630,11 +18562,379 @@ async function writeSupplierCartState(state = {}) {
     ...state,
     updatedAt: new Date().toISOString(),
   });
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      if (normalized.draft?.id) {
+        await prisma.$transaction(async (tx) => {
+          await tx.supplierCartDraft.updateMany({ where: { active: true, id: { not: normalized.draft.id } }, data: { active: false } });
+          await tx.supplierCartDraft.upsert({
+            where: { id: normalized.draft.id },
+            create: {
+              id: normalized.draft.id,
+              generatedAt: toDateOrNull(normalized.draft.generatedAt) || new Date(),
+              generatedBy: normalized.draft.generatedBy || null,
+              marketplace: cleanText(normalized.draft.params?.marketplace || "all") || "all",
+              from: toDateOrNull(normalized.draft.params?.from),
+              to: toDateOrNull(normalized.draft.params?.to),
+              summary: normalized.draft.summary || {},
+              params: normalized.draft.params || {},
+              active: true,
+            },
+            update: {
+              generatedAt: toDateOrNull(normalized.draft.generatedAt) || new Date(),
+              generatedBy: normalized.draft.generatedBy || null,
+              marketplace: cleanText(normalized.draft.params?.marketplace || "all") || "all",
+              from: toDateOrNull(normalized.draft.params?.from),
+              to: toDateOrNull(normalized.draft.params?.to),
+              summary: normalized.draft.summary || {},
+              params: normalized.draft.params || {},
+              active: true,
+            },
+          });
+          await tx.supplierCartDraftRow.deleteMany({ where: { draftId: normalized.draft.id } });
+          const rows = (normalized.draft.rows || []).map((row) => supplierCartDraftRowToPostgres(normalized.draft.id, row));
+          for (const batch of chunkArray(rows, 500)) {
+            if (batch.length) await tx.supplierCartDraftRow.createMany({ data: batch, skipDuplicates: true });
+          }
+        });
+      }
+      const blocks = Object.values(normalized.supplierBlocks || {}).filter((block) => block && typeof block === "object");
+      for (const block of blocks) {
+        const key = cleanText(block.key || supplierBlockKey(block.offerId, block.partnerId));
+        const offerId = cleanText(block.offerId);
+        const partnerId = cleanText(block.partnerId);
+        const expiresAt = toDateOrNull(block.expiresAt);
+        if (!key || !offerId || !partnerId || !expiresAt) continue;
+        await prisma.supplierBlock.upsert({
+          where: { blockKey: key },
+          create: {
+            blockKey: key,
+            offerId,
+            partnerId,
+            supplierName: cleanText(block.supplierName) || null,
+            reason: cleanText(block.reason) || null,
+            sourceKey: cleanText(block.sourceKey) || null,
+            blockedBy: cleanText(block.blockedBy) || null,
+            blockedAt: toDateOrNull(block.blockedAt) || new Date(),
+            expiresAt,
+            active: block.active !== false,
+            raw: block,
+          },
+          update: {
+            supplierName: cleanText(block.supplierName) || null,
+            reason: cleanText(block.reason) || null,
+            sourceKey: cleanText(block.sourceKey) || null,
+            blockedBy: cleanText(block.blockedBy) || null,
+            blockedAt: toDateOrNull(block.blockedAt) || new Date(),
+            expiresAt,
+            active: block.active !== false,
+            raw: block,
+          },
+        });
+      }
+      if (!jsonFallbackEnabled()) return normalized;
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("write supplier cart state postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
   await fs.mkdir(dataDir, { recursive: true });
   const temporaryPath = `${supplierCartStatePath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(temporaryPath, JSON.stringify(normalized, null, 2), "utf8");
   await fs.rename(temporaryPath, supplierCartStatePath);
   return normalized;
+}
+
+function supplierBlockKey(offerId = "", partnerId = "") {
+  return `${cleanText(offerId).toLowerCase()}|${cleanText(partnerId).toLowerCase()}`;
+}
+
+function activeSupplierBlocksForOffer(state = {}, offerId = "", now = new Date()) {
+  const normalizedOffer = cleanText(offerId).toLowerCase();
+  const blocks = state.supplierBlocks && typeof state.supplierBlocks === "object" ? state.supplierBlocks : {};
+  const active = new Set();
+  for (const block of Object.values(blocks)) {
+    if (!block || typeof block !== "object") continue;
+    if (cleanText(block.offerId).toLowerCase() !== normalizedOffer) continue;
+    const expiresAt = toDateOrNull(block.expiresAt);
+    if (expiresAt && expiresAt.getTime() <= now.getTime()) continue;
+    const partnerId = cleanText(block.partnerId).toLowerCase();
+    if (partnerId) active.add(partnerId);
+  }
+  return active;
+}
+
+function normalizeSupplierPickingRow(input = {}) {
+  const key = cleanText(input.key || supplierCartItemKey(input));
+  const status = ["picked", "missing", "reordered"].includes(cleanText(input.status).toLowerCase())
+    ? cleanText(input.status).toLowerCase()
+    : "open";
+  return {
+    key,
+    marketplace: cleanText(input.marketplace).toLowerCase(),
+    accountName: cleanText(input.accountName || input.account_name),
+    orderId: cleanText(input.orderId || input.order_id),
+    postingNumber: cleanText(input.postingNumber || input.posting_number),
+    offerId: cleanText(input.offerId || input.offer_id),
+    productName: cleanText(input.productName || input.product_name || input.name),
+    quantity: Math.max(1, Math.round(Number(input.quantity || 1) || 1)),
+    supplierName: cleanText(input.supplierName || input.partnerName),
+    partnerId: cleanText(input.partnerId),
+    offerRowId: cleanText(input.offerRowId || input.rowId || input.sourceRowId),
+    price: Number(input.price || 0) || 0,
+    priceCurrency: cleanText(input.priceCurrency || input.currency || "USD").toUpperCase(),
+    trustFactor: normalizeSupplierTrustFactor(input.trustFactor, 100),
+    orderCutoffTime: normalizeSupplierOrderCutoff(input.orderCutoffTime || input.order_cutoff_time),
+    reseller: Boolean(input.reseller),
+    supplierScore: Number(input.supplierScore || input.score || 0) || 0,
+    requestDocId: cleanText(input.requestDocId || input.docId),
+    requestRowId: cleanText(input.requestRowId || input.rowId),
+    status,
+    createdAt: input.createdAt || new Date().toISOString(),
+    createdBy: cleanText(input.createdBy || input.committedBy),
+    pickedBy: cleanText(input.pickedBy),
+    pickedAt: input.pickedAt || null,
+    missingBy: cleanText(input.missingBy),
+    missingAt: input.missingAt || null,
+    missingReason: cleanText(input.missingReason || input.reason),
+    nextRetryAt: input.nextRetryAt || null,
+    replacementFor: cleanText(input.replacementFor),
+    replacementKey: cleanText(input.replacementKey),
+  };
+}
+
+function normalizeSupplierPickingState(input = {}) {
+  const rows = input.rows && typeof input.rows === "object" && !Array.isArray(input.rows) ? input.rows : {};
+  const invoices = Array.isArray(input.invoices) ? input.invoices : [];
+  const normalizedRows = {};
+  for (const [key, row] of Object.entries(rows)) {
+    const normalized = normalizeSupplierPickingRow({ ...row, key: row?.key || key });
+    if (normalized.key) normalizedRows[normalized.key] = normalized;
+  }
+  return {
+    updatedAt: input.updatedAt || null,
+    rows: normalizedRows,
+    invoices: invoices.filter((item) => item && typeof item === "object").slice(-1000),
+  };
+}
+
+function supplierPickingRowToPostgres(row = {}) {
+  const normalized = normalizeSupplierPickingRow(row);
+  return {
+    pickingKey: normalized.key,
+    marketplace: normalized.marketplace || null,
+    accountName: normalized.accountName || null,
+    orderId: normalized.orderId || null,
+    postingNumber: normalized.postingNumber || null,
+    offerId: normalized.offerId || null,
+    productName: normalized.productName || null,
+    quantity: normalized.quantity,
+    supplierName: normalized.supplierName || null,
+    partnerId: normalized.partnerId || null,
+    offerRowId: normalized.offerRowId || null,
+    price: normalized.price || null,
+    priceCurrency: normalized.priceCurrency || null,
+    trustFactor: normalized.trustFactor,
+    orderCutoffTime: normalized.orderCutoffTime || null,
+    reseller: Boolean(normalized.reseller),
+    supplierScore: normalized.supplierScore || null,
+    requestDocId: normalized.requestDocId || null,
+    requestRowId: normalized.requestRowId || null,
+    status: normalized.status,
+    createdBy: normalized.createdBy || null,
+    pickedBy: normalized.pickedBy || null,
+    pickedAt: toDateOrNull(normalized.pickedAt),
+    missingBy: normalized.missingBy || null,
+    missingAt: toDateOrNull(normalized.missingAt),
+    missingReason: normalized.missingReason || null,
+    nextRetryAt: toDateOrNull(normalized.nextRetryAt),
+    replacementFor: normalized.replacementFor || null,
+    replacementKey: normalized.replacementKey || null,
+    raw: normalized,
+  };
+}
+
+function supplierPickingRowFromPostgres(row = {}) {
+  const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  return normalizeSupplierPickingRow({
+    ...raw,
+    key: row.pickingKey || raw.key,
+    marketplace: row.marketplace || raw.marketplace,
+    accountName: row.accountName || raw.accountName,
+    orderId: row.orderId || raw.orderId,
+    postingNumber: row.postingNumber || raw.postingNumber,
+    offerId: row.offerId || raw.offerId,
+    productName: row.productName || raw.productName,
+    quantity: row.quantity ?? raw.quantity,
+    supplierName: row.supplierName || raw.supplierName,
+    partnerId: row.partnerId || raw.partnerId,
+    offerRowId: row.offerRowId || raw.offerRowId,
+    price: row.price === null || row.price === undefined ? raw.price : Number(row.price),
+    priceCurrency: row.priceCurrency || raw.priceCurrency,
+    trustFactor: row.trustFactor ?? raw.trustFactor,
+    orderCutoffTime: row.orderCutoffTime || raw.orderCutoffTime,
+    reseller: row.reseller,
+    supplierScore: row.supplierScore === null || row.supplierScore === undefined ? raw.supplierScore : Number(row.supplierScore),
+    requestDocId: row.requestDocId || raw.requestDocId,
+    requestRowId: row.requestRowId || raw.requestRowId,
+    status: row.status || raw.status,
+    createdAt: row.createdAt?.toISOString?.() || raw.createdAt,
+    createdBy: row.createdBy || raw.createdBy,
+    pickedBy: row.pickedBy || raw.pickedBy,
+    pickedAt: row.pickedAt?.toISOString?.() || raw.pickedAt,
+    missingBy: row.missingBy || raw.missingBy,
+    missingAt: row.missingAt?.toISOString?.() || raw.missingAt,
+    missingReason: row.missingReason || raw.missingReason,
+    nextRetryAt: row.nextRetryAt?.toISOString?.() || raw.nextRetryAt,
+    replacementFor: row.replacementFor || raw.replacementFor,
+    replacementKey: row.replacementKey || raw.replacementKey,
+  });
+}
+
+async function readSupplierPickingState() {
+  if (shouldUsePostgresStorage()) {
+    try {
+      const rows = await getPrisma().supplierPickingRow.findMany({
+        orderBy: [{ createdAt: "desc" }],
+        take: 10000,
+      });
+      const normalizedRows = {};
+      for (const row of rows.map(supplierPickingRowFromPostgres)) {
+        if (row.key) normalizedRows[row.key] = row;
+      }
+      return normalizeSupplierPickingState({
+        updatedAt: rows[0]?.updatedAt?.toISOString?.() || null,
+        rows: normalizedRows,
+      });
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("read supplier picking state postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+  try {
+    return normalizeSupplierPickingState(JSON.parse(await fs.readFile(supplierPickingListPath, "utf8")));
+  } catch (error) {
+    if (error.code === "ENOENT") return normalizeSupplierPickingState();
+    throw error;
+  }
+}
+
+async function writeSupplierPickingState(state = {}) {
+  const normalized = normalizeSupplierPickingState({
+    ...state,
+    updatedAt: new Date().toISOString(),
+  });
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      const rows = Object.values(normalized.rows || {}).map(supplierPickingRowToPostgres).filter((row) => row.pickingKey);
+      for (const batch of chunkArray(rows, 250)) {
+        await prisma.$transaction(batch.map((row) => prisma.supplierPickingRow.upsert({
+          where: { pickingKey: row.pickingKey },
+          create: row,
+          update: {
+            marketplace: row.marketplace,
+            accountName: row.accountName,
+            orderId: row.orderId,
+            postingNumber: row.postingNumber,
+            offerId: row.offerId,
+            productName: row.productName,
+            quantity: row.quantity,
+            supplierName: row.supplierName,
+            partnerId: row.partnerId,
+            offerRowId: row.offerRowId,
+            price: row.price,
+            priceCurrency: row.priceCurrency,
+            trustFactor: row.trustFactor,
+            orderCutoffTime: row.orderCutoffTime,
+            reseller: row.reseller,
+            supplierScore: row.supplierScore,
+            requestDocId: row.requestDocId,
+            requestRowId: row.requestRowId,
+            status: row.status,
+            createdBy: row.createdBy,
+            pickedBy: row.pickedBy,
+            pickedAt: row.pickedAt,
+            missingBy: row.missingBy,
+            missingAt: row.missingAt,
+            missingReason: row.missingReason,
+            nextRetryAt: row.nextRetryAt,
+            replacementFor: row.replacementFor,
+            replacementKey: row.replacementKey,
+            raw: row.raw,
+          },
+        })));
+      }
+      if (!jsonFallbackEnabled()) return normalized;
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("write supplier picking state postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+  await fs.mkdir(dataDir, { recursive: true });
+  const temporaryPath = `${supplierPickingListPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(normalized, null, 2), "utf8");
+  await fs.rename(temporaryPath, supplierPickingListPath);
+  return normalized;
+}
+
+async function createSupplierPickingRows(inserted = [], request = null) {
+  const rows = inserted.map(normalizeSupplierCartPreviewRow).filter((row) => row.key);
+  if (!rows.length) return [];
+  const state = await readSupplierPickingState();
+  const created = [];
+  for (const row of rows) {
+    const existing = state.rows[row.key] ? normalizeSupplierPickingRow(state.rows[row.key]) : null;
+    if (existing && existing.status !== "missing") continue;
+    const pickingKey = existing?.status === "missing"
+      ? `${row.key}|retry:${row.requestRowId || Date.now()}`
+      : row.key;
+    if (state.rows[pickingKey]) continue;
+    const pickingRow = normalizeSupplierPickingRow({
+      ...row,
+      key: pickingKey,
+      status: "open",
+      createdAt: row.committedAt || new Date().toISOString(),
+      createdBy: requestUsername(request),
+      replacementFor: existing?.status === "missing" ? existing.key : "",
+    });
+    state.rows[pickingRow.key] = pickingRow;
+    if (existing?.status === "missing") {
+      state.rows[existing.key] = normalizeSupplierPickingRow({
+        ...existing,
+        status: "reordered",
+        replacementKey: pickingRow.key,
+      });
+    }
+    created.push(pickingRow);
+  }
+  if (created.length) await writeSupplierPickingState(state);
+  for (const row of created) {
+    await appendAudit(request || { session: { username: "system", role: "admin" } }, "supplier_picking.created", {
+      entityType: "supplier_picking",
+      entityId: row.key,
+      newValue: row,
+    }).catch((error) => logger.warn("supplier picking audit failed", { detail: error?.message || String(error) }));
+  }
+  return created;
+}
+
+function supplierPickingInvoiceRows(state = {}, period = "30d") {
+  const now = new Date();
+  const normalizedPeriod = cleanText(period || "30d").toLowerCase();
+  const from = normalizedPeriod === "all"
+    ? null
+    : new Date(now.getTime() - Math.max(1, Number.parseInt(normalizedPeriod, 10) || 30) * 24 * 60 * 60 * 1000);
+  return Object.values(state.rows || {})
+    .map(normalizeSupplierPickingRow)
+    .filter((row) => row.status === "picked")
+    .filter((row) => {
+      if (!from) return true;
+      const pickedAt = toDateOrNull(row.pickedAt || row.createdAt);
+      return pickedAt && pickedAt.getTime() >= from.getTime();
+    })
+    .sort((left, right) => String(right.pickedAt || right.createdAt).localeCompare(String(left.pickedAt || left.createdAt)));
 }
 
 function supplierCartRange(input = {}, settings = defaultAppSettings().supplierCart) {
@@ -17691,6 +18991,10 @@ function normalizeSupplierCartPreviewRow(input = {}) {
     price: Number(input.price || 0) || 0,
     originalPrice: Number(input.originalPrice || 0) || 0,
     priceCurrency: cleanText(input.priceCurrency || input.currency || "USD").toUpperCase(),
+    trustFactor: normalizeSupplierTrustFactor(input.trustFactor, 100),
+    orderCutoffTime: normalizeSupplierOrderCutoff(input.orderCutoffTime || input.order_cutoff_time),
+    reseller: Boolean(input.reseller),
+    supplierScore: Number(input.supplierScore || input.score || 0) || 0,
     available: input.available !== false,
     ready: Boolean(input.ready),
     alreadyCommitted: Boolean(input.alreadyCommitted),
@@ -17876,14 +19180,27 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}) {
   const usdRate = await getUsdRate();
   const matches = await getLivePriceMasterMatchesForLinks(groupLinks, warehouse.suppliers || [], usdRate);
   const candidates = [];
+  const blockedPartnerIds = activeSupplierBlocksForOffer(state, normalizedLine.offerId);
+  let blockedAvailable = 0;
+  let cutoffPassedAvailable = 0;
   for (const [linkId, rows] of matches.entries()) {
     for (const row of rows || []) {
       if (!row.available || !row.active || Number(row.price || 0) <= 0) continue;
+      if (blockedPartnerIds.has(cleanText(row.partnerId).toLowerCase())) {
+        blockedAvailable += 1;
+        continue;
+      }
+      if (supplierOrderCutoffPassed(row.orderCutoffTime)) {
+        cutoffPassedAvailable += 1;
+        continue;
+      }
       candidates.push({ ...row, linkId });
     }
   }
   candidates.sort((left, right) =>
-    Number(left.price || Number.POSITIVE_INFINITY) - Number(right.price || Number.POSITIVE_INFINITY)
+    supplierCartOrderScore(left) - supplierCartOrderScore(right)
+    || Number(left.price || Number.POSITIVE_INFINITY) - Number(right.price || Number.POSITIVE_INFINITY)
+    || normalizeSupplierTrustFactor(right.trustFactor, 100) - normalizeSupplierTrustFactor(left.trustFactor, 100)
     || String(left.partnerName || "").localeCompare(String(right.partnerName || ""), "ru", { sensitivity: "base" }),
   );
   const selected = candidates[0] || null;
@@ -17894,7 +19211,9 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}) {
       groupKey: warehouseProductPageGroupKey(product),
       groupOfferId: product.offerId,
       ready: false,
-      skipReason: "supplier_not_available",
+      skipReason: blockedAvailable
+        ? "supplier_blocked_no_alternative"
+        : (cutoffPassedAvailable ? "supplier_cutoff_passed_no_alternative" : "supplier_not_available"),
       alreadyCommitted: Boolean(processed),
       requestDocId: processed?.requestDocId,
       requestRowId: processed?.requestRowId,
@@ -17911,6 +19230,10 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}) {
     price: selected.price,
     originalPrice: selected.originalPrice,
     priceCurrency: selected.priceCurrency,
+    trustFactor: selected.trustFactor,
+    orderCutoffTime: selected.orderCutoffTime,
+    reseller: selected.reseller,
+    supplierScore: supplierCartOrderScore(selected),
     available: true,
     ready: true,
     alreadyCommitted: Boolean(processed),
@@ -17974,6 +19297,7 @@ async function buildSupplierCartPreview(params = {}) {
   const skipped = rows.length - ready - alreadyCommitted;
   return {
     ok: true,
+    draftId: cleanText(params.draftId),
     mode: settings.mode,
     from: range.from.toISOString(),
     to: range.to.toISOString(),
@@ -17986,6 +19310,117 @@ async function buildSupplierCartPreview(params = {}) {
     alreadyCommitted,
     summary: `Supplier cart preview: ${rows.length} rows; ready ${ready}; already ${alreadyCommitted}; skipped ${skipped}.`,
   };
+}
+
+async function generateSupplierCartDraft(params = {}, request = null) {
+  const preview = await buildSupplierCartPreview(params);
+  const state = await readSupplierCartState();
+  const draft = {
+    id: crypto.randomUUID(),
+    generatedAt: new Date().toISOString(),
+    generatedBy: requestUsername(request),
+    params: {
+      marketplace: cleanText(params.marketplace || "all"),
+      from: params.from || preview.from,
+      to: params.to || preview.to,
+      limit: preview.limit,
+    },
+    rows: preview.rows || [],
+    summary: {
+      total: preview.total,
+      ready: preview.ready,
+      skipped: preview.skipped,
+      alreadyCommitted: preview.alreadyCommitted,
+      warnings: preview.warnings || [],
+    },
+  };
+  state.draft = draft;
+  await writeSupplierCartState(state);
+  await appendAudit(request || { session: { username: "system", role: "admin" } }, "supplier_cart.draft_generate", {
+    entityType: "supplier_cart",
+    entityId: draft.id,
+    newValue: draft.summary,
+  }).catch((error) => logger.warn("supplier cart draft audit failed", { detail: error?.message || String(error) }));
+  return { ...preview, draftId: draft.id, generatedAt: draft.generatedAt, generatedBy: draft.generatedBy };
+}
+
+function supplierCartAutomationPublic() {
+  return {
+    autoRunning: supplierCartAutoRunning,
+    lastAutoRunAt: supplierCartAutoLastRunAt,
+    nextAutoRunAt: supplierCartAutoNextRunAt,
+    lastAutoResult: supplierCartAutoLastResult,
+  };
+}
+
+function nextMoscowScheduleTimeIso(times = ["09:30", "12:00", "15:00"], now = new Date()) {
+  const schedule = (Array.isArray(times) ? times : [])
+    .map(normalizeSupplierOrderCutoff)
+    .filter(Boolean)
+    .sort();
+  const source = schedule.length ? schedule : ["09:30", "12:00", "15:00"];
+  const moscowNow = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+  for (let day = 0; day < 8; day += 1) {
+    const base = new Date(Date.UTC(moscowNow.getUTCFullYear(), moscowNow.getUTCMonth(), moscowNow.getUTCDate() + day, 0, 0, 0, 0));
+    for (const time of source) {
+      const [hours, minutes] = time.split(":").map((item) => Number(item) || 0);
+      const moscowCandidate = new Date(base);
+      moscowCandidate.setUTCHours(hours, minutes, 0, 0);
+      const utcCandidate = new Date(moscowCandidate.getTime() - 3 * 60 * 60 * 1000);
+      if (utcCandidate.getTime() > now.getTime() + 30_000) return utcCandidate.toISOString();
+    }
+  }
+  return new Date(now.getTime() + 30 * 60 * 1000).toISOString();
+}
+
+async function processSupplierCartAutoGenerate({ source = "scheduler" } = {}) {
+  if (supplierCartAutoRunning) return { ok: true, skipped: true, reason: "already_running", ...supplierCartAutomationPublic() };
+  supplierCartAutoRunning = true;
+  supplierCartAutoLastRunAt = new Date().toISOString();
+  try {
+    const settings = normalizeSupplierCartSettings((await readAppSettings()).supplierCart || {});
+    if (settings.enabled === false || settings.autoEnabled === false) {
+      supplierCartAutoLastResult = { ok: true, skipped: true, reason: "disabled", at: new Date().toISOString() };
+      return { ...supplierCartAutoLastResult, ...supplierCartAutomationPublic() };
+    }
+    const result = await generateSupplierCartDraft({ marketplace: "all", limit: Number(process.env.SUPPLIER_CART_AUTO_LIMIT || 300) || 300 }, { session: { username: "system", role: "admin" } });
+    supplierCartAutoLastResult = {
+      ok: true,
+      source,
+      draftId: result.draftId,
+      total: result.total,
+      ready: result.ready,
+      skipped: result.skipped,
+      alreadyCommitted: result.alreadyCommitted,
+      at: new Date().toISOString(),
+    };
+    logger.info("supplier cart auto draft generated", supplierCartAutoLastResult);
+    return { ...supplierCartAutoLastResult, ...supplierCartAutomationPublic() };
+  } catch (error) {
+    supplierCartAutoLastResult = { ok: false, source, error: error?.message || String(error), at: new Date().toISOString() };
+    logger.warn("supplier cart auto draft failed", { detail: error?.message || String(error) });
+    return { ...supplierCartAutoLastResult, ...supplierCartAutomationPublic() };
+  } finally {
+    supplierCartAutoRunning = false;
+  }
+}
+
+async function scheduleSupplierCartAuto(delayMs = null) {
+  if (supplierCartAutoTimer) clearTimeout(supplierCartAutoTimer);
+  const settings = normalizeSupplierCartSettings((await readAppSettings().catch(() => defaultAppSettings())).supplierCart || {});
+  if (settings.enabled === false || settings.autoEnabled === false) {
+    supplierCartAutoNextRunAt = null;
+    return;
+  }
+  const nextIso = delayMs === null
+    ? nextMoscowScheduleTimeIso(settings.scheduleTimes)
+    : new Date(Date.now() + Math.max(30_000, Number(delayMs) || 30_000)).toISOString();
+  supplierCartAutoNextRunAt = nextIso;
+  supplierCartAutoTimer = setTimeout(async () => {
+    supplierCartAutoTimer = null;
+    await processSupplierCartAutoGenerate({ source: "scheduler" });
+    await scheduleSupplierCartAuto();
+  }, Math.max(30_000, new Date(nextIso).getTime() - Date.now()));
 }
 
 async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) {
@@ -18068,10 +19503,37 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
       supplierName: row.supplierName,
       partnerId: row.partnerId,
       offerRowId: row.offerRowId,
+      trustFactor: row.trustFactor,
+      orderCutoffTime: row.orderCutoffTime,
+      reseller: row.reseller,
+      supplierScore: row.supplierScore,
       requestDocId: row.requestDocId,
       requestRowId: row.requestRowId,
       committedAt: row.committedAt,
       committedBy: requestUsername(request),
+    };
+  }
+  if (nextState.draft?.rows?.length) {
+    const processedByKey = nextState.processed || {};
+    nextState.draft.rows = nextState.draft.rows.map((row) => {
+      const normalized = normalizeSupplierCartPreviewRow(row);
+      const processed = processedByKey[normalized.key];
+      return processed
+        ? normalizeSupplierCartPreviewRow({
+            ...normalized,
+            alreadyCommitted: true,
+            requestDocId: processed.requestDocId || normalized.requestDocId,
+            requestRowId: processed.requestRowId || normalized.requestRowId,
+          })
+        : normalized;
+    });
+    const rows = nextState.draft.rows;
+    nextState.draft.summary = {
+      ...(nextState.draft.summary || {}),
+      total: rows.length,
+      ready: rows.filter((row) => row.ready && !row.alreadyCommitted).length,
+      alreadyCommitted: rows.filter((row) => row.alreadyCommitted).length,
+      skipped: rows.filter((row) => !row.ready && !row.alreadyCommitted).length,
     };
   }
   nextState.history = [
@@ -18089,6 +19551,9 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
         quantity: row.quantity,
         supplierName: row.supplierName,
         partnerId: row.partnerId,
+        trustFactor: row.trustFactor,
+        orderCutoffTime: row.orderCutoffTime,
+        reseller: row.reseller,
         requestDocId: row.requestDocId,
         requestRowId: row.requestRowId,
       })),
@@ -18100,7 +19565,8 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
     entityId: "pricemaster",
     newValue: { inserted: inserted.length, docIds, rows: inserted },
   });
-  return { inserted, skipped: readyRows.length - inserted.length, docIds };
+  const pickingCreated = await createSupplierPickingRows(inserted, request);
+  return { inserted, skipped: readyRows.length - inserted.length, docIds, pickingCreated };
 }
 
 async function runSupplierCartPreviewOperation(payload = {}) {
@@ -18120,6 +19586,7 @@ async function runSupplierCartCommitOperation(payload = {}, request = null) {
     inserted: result.inserted.length,
     skipped: result.skipped,
     docIds: result.docIds,
+    pickingCreated: result.pickingCreated?.length || 0,
     rows: result.inserted,
     summary: `Supplier cart committed ${result.inserted.length}; skipped ${result.skipped}.`,
   };
@@ -18802,7 +20269,7 @@ async function runOperationPayload(job, options = {}) {
     const result = await processOzonUnarchiveQueue({
       source: "ozon_unarchive_queue_operation",
       limit: job.payload?.limit || ozonUnarchiveQueueBatchLimit,
-      force: job.payload?.force !== false,
+      force: job.payload?.force === true,
     });
     await appendAudit(auditRequest, "ozon.unarchive_queue.operation", {
       entityType: "ozon_unarchive_queue",
@@ -18933,11 +20400,79 @@ app.get("/api/supplier-cart/preview", requireAdmin, async (request, response, ne
   }
 });
 
+app.get("/api/supplier-cart/draft", requireAdmin, async (_request, response, next) => {
+  try {
+    const state = await readSupplierCartState();
+    const rows = state.draft?.rows || [];
+    const ready = rows.filter((row) => row.ready && !row.alreadyCommitted).length;
+    const alreadyCommitted = rows.filter((row) => row.alreadyCommitted).length;
+    const skipped = rows.length - ready - alreadyCommitted;
+    response.json({
+      ok: true,
+      draftId: state.draft?.id || "",
+      generatedAt: state.draft?.generatedAt || null,
+      generatedBy: state.draft?.generatedBy || "",
+      rows,
+      total: rows.length,
+      ready,
+      skipped,
+      alreadyCommitted,
+      warnings: state.draft?.summary?.warnings || [],
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/supplier-cart/schedule", requireAdmin, async (_request, response, next) => {
+  try {
+    const settings = normalizeSupplierCartSettings((await readAppSettings()).supplierCart || {});
+    response.json({ ok: true, settings, ...supplierCartAutomationPublic() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/supplier-cart/schedule", requireAdmin, async (request, response, next) => {
+  try {
+    const appSettings = await readAppSettings();
+    const settings = normalizeSupplierCartSettings({
+      ...(appSettings.supplierCart || {}),
+      ...(request.body || {}),
+    });
+    await writeAppSettings({
+      ...appSettings,
+      supplierCart: settings,
+    });
+    await scheduleSupplierCartAuto();
+    response.json({ ok: true, settings, ...supplierCartAutomationPublic() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/supplier-cart/generate", requireAdmin, async (request, response, next) => {
+  try {
+    const preview = await generateSupplierCartDraft({
+      marketplace: request.body?.marketplace || request.query.marketplace,
+      from: request.body?.from || request.query.from,
+      to: request.body?.to || request.query.to,
+      limit: request.body?.limit || request.query.limit,
+    }, request);
+    response.json(preview);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/supplier-cart/commit", requireAdmin, async (request, response, next) => {
   try {
     const rows = Array.isArray(request.body?.rows) ? request.body.rows : [];
     const keys = Array.isArray(request.body?.keys) ? request.body.keys : [];
-    const sourceRows = rows.length ? rows : (await buildSupplierCartPreview(request.body || {})).rows;
+    const state = await readSupplierCartState();
+    const sourceRows = rows.length
+      ? rows
+      : (state.draft?.rows?.length ? state.draft.rows : (await buildSupplierCartPreview(request.body || {})).rows);
     const selectedKeys = new Set(keys.map(cleanText).filter(Boolean));
     const selectedRows = selectedKeys.size ? sourceRows.filter((row) => selectedKeys.has(cleanText(row.key))) : sourceRows;
     const result = await insertSupplierCartRowsIntoPriceMaster(selectedRows, request);
@@ -18946,6 +20481,7 @@ app.post("/api/supplier-cart/commit", requireAdmin, async (request, response, ne
       inserted: result.inserted.length,
       skipped: result.skipped,
       docIds: result.docIds,
+      pickingCreated: result.pickingCreated?.length || 0,
       rows: result.inserted,
     });
   } catch (error) {
@@ -18961,6 +20497,148 @@ app.get("/api/supplier-cart/history", requireAdmin, async (_request, response, n
       updatedAt: state.updatedAt,
       totalProcessed: Object.keys(state.processed || {}).length,
       history: (state.history || []).slice().reverse(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/supplier-picking-list", requireStaff, async (request, response, next) => {
+  try {
+    const state = await readSupplierPickingState();
+    const status = cleanText(request.query.status || "open").toLowerCase();
+    const supplier = cleanText(request.query.supplier).toLowerCase();
+    const q = cleanText(request.query.q).toLowerCase();
+    const limit = cleanLimit(request.query.limit, 500);
+    let rows = Object.values(state.rows || {}).map(normalizeSupplierPickingRow);
+    if (status && status !== "all") rows = rows.filter((row) => row.status === status);
+    if (supplier) rows = rows.filter((row) => cleanText(row.supplierName).toLowerCase().includes(supplier));
+    if (q) {
+      rows = rows.filter((row) => [
+        row.productName,
+        row.offerId,
+        row.orderId,
+        row.postingNumber,
+        row.supplierName,
+      ].some((value) => cleanText(value).toLowerCase().includes(q)));
+    }
+    rows.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
+    const allRows = Object.values(state.rows || {}).map(normalizeSupplierPickingRow);
+    const suppliers = Array.from(new Set(allRows.map((row) => row.supplierName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
+    response.json({
+      ok: true,
+      updatedAt: state.updatedAt,
+      rows: rows.slice(0, limit),
+      total: rows.length,
+      suppliers,
+      summary: {
+        open: allRows.filter((row) => row.status === "open").length,
+        picked: allRows.filter((row) => row.status === "picked").length,
+        missing: allRows.filter((row) => row.status === "missing").length,
+        reordered: allRows.filter((row) => row.status === "reordered").length,
+        suppliers: suppliers.length,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, response, next) => {
+  try {
+    const key = cleanText(request.params.key || "");
+    const status = cleanText(request.body?.status).toLowerCase();
+    if (!["open", "picked", "missing"].includes(status)) {
+      return response.status(400).json({ error: "Unsupported picking status.", code: "supplier_picking_status_invalid" });
+    }
+    const state = await readSupplierPickingState();
+    const current = state.rows[key] ? normalizeSupplierPickingRow(state.rows[key]) : null;
+    if (!current) return response.status(404).json({ error: "Picking row not found.", code: "supplier_picking_not_found" });
+    const now = new Date();
+    const username = requestUsername(request);
+    const nextRow = normalizeSupplierPickingRow({
+      ...current,
+      status,
+      ...(status === "picked" ? { pickedBy: username, pickedAt: now.toISOString() } : {}),
+      ...(status === "missing" ? {
+        missingBy: username,
+        missingAt: now.toISOString(),
+        missingReason: cleanText(request.body?.reason || "employee_missing"),
+        nextRetryAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      } : {}),
+      ...(status === "open" ? {
+        pickedBy: "",
+        pickedAt: null,
+        missingBy: "",
+        missingAt: null,
+        missingReason: "",
+        nextRetryAt: null,
+      } : {}),
+    });
+    state.rows[key] = nextRow;
+    await writeSupplierPickingState(state);
+
+    const cartState = await readSupplierCartState();
+    const blockKey = supplierBlockKey(current.offerId, current.partnerId);
+    if (status === "missing" && current.offerId && current.partnerId) {
+      cartState.supplierBlocks[blockKey] = {
+        offerId: current.offerId,
+        partnerId: current.partnerId,
+        supplierName: current.supplierName,
+        reason: "employee_missing",
+        blockedAt: now.toISOString(),
+        blockedBy: username,
+        expiresAt: nextRow.nextRetryAt,
+        sourcePickingKey: current.key,
+      };
+      const sourceCartKey = current.replacementFor || current.key.replace(/\|retry:.+$/, "");
+      if (cartState.processed?.[sourceCartKey]) delete cartState.processed[sourceCartKey];
+      await writeSupplierCartState(cartState);
+      await appendAudit(request, "supplier_cart.supplier_blocked", {
+        entityType: "supplier_cart",
+        entityId: blockKey,
+        newValue: cartState.supplierBlocks[blockKey],
+      });
+    } else if (status === "open" && cartState.supplierBlocks?.[blockKey]?.sourcePickingKey === current.key) {
+      delete cartState.supplierBlocks[blockKey];
+      await writeSupplierCartState(cartState);
+    }
+
+    await appendAudit(request, `supplier_picking.${status === "picked" ? "picked" : status === "missing" ? "missing" : "status_update"}`, {
+      entityType: "supplier_picking",
+      entityId: key,
+      oldValue: current,
+      newValue: nextRow,
+    });
+    response.json({ ok: true, row: nextRow });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/supplier-picking-list/invoices", requireStaff, async (request, response, next) => {
+  try {
+    const state = await readSupplierPickingState();
+    const period = cleanText(request.query.period || "30d").toLowerCase();
+    const rows = supplierPickingInvoiceRows(state, period);
+    const groups = [];
+    const bySupplierDate = new Map();
+    for (const row of rows) {
+      const date = String(row.pickedAt || row.createdAt || "").slice(0, 10) || "unknown";
+      const key = `${row.supplierName || "-"}|${date}`;
+      if (!bySupplierDate.has(key)) bySupplierDate.set(key, { supplierName: row.supplierName || "-", date, rows: [], totalQuantity: 0, totalValue: 0 });
+      const group = bySupplierDate.get(key);
+      group.rows.push(row);
+      group.totalQuantity += Number(row.quantity || 0);
+      group.totalValue += Number(row.quantity || 0) * Number(row.price || 0);
+    }
+    groups.push(...bySupplierDate.values());
+    response.json({
+      ok: true,
+      period,
+      total: rows.length,
+      groups,
+      rows,
     });
   } catch (error) {
     next(error);
@@ -19898,7 +21576,7 @@ async function restoreStocksOnMarketplaces(products = []) {
   return actions;
 }
 
-async function unarchiveProductsOnMarketplaces(products = []) {
+async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
   const actions = [];
   const byTarget = new Map();
   for (const product of products) {
@@ -19927,8 +21605,10 @@ async function unarchiveProductsOnMarketplaces(products = []) {
         continue;
       }
       let queueState = await readOzonUnarchiveQueue();
+      const forceDailyLimit = options.forceOzonDailyLimit === true;
       const dailyUsed = ozonUnarchiveDailyUsed(queueState, target);
-      const remainingToday = Math.max(0, ozonUnarchiveDailyLimit - dailyUsed);
+      const effectiveDailyUsed = forceDailyLimit ? 0 : dailyUsed;
+      const remainingToday = Math.max(0, ozonUnarchiveDailyLimit - effectiveDailyUsed);
       const runnableItems = items.slice(0, remainingToday);
       const queuedItems = items.slice(remainingToday);
       if (queuedItems.length) {
@@ -19937,7 +21617,7 @@ async function unarchiveProductsOnMarketplaces(products = []) {
         await writeOzonUnarchiveQueue(queueState);
         actions.push(...ozonUnarchiveQueuedActions(queuedItems, queueState, { nextRetryAt }));
       }
-      let usedToday = dailyUsed;
+      let usedToday = effectiveDailyUsed;
       for (const chunk of chunkArray(runnableItems, 100)) {
         const productIds = chunk.map((item) => Number(item.productId || 0)).filter((id) => id > 0);
         if (!productIds.length) continue;
@@ -20387,7 +22067,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   const firstStockActions = await restoreStocksOnMarketplaces(recovered);
   const unarchiveActions = await verifyYandexUnarchiveActions(
     recovered,
-    await unarchiveProductsOnMarketplaces(recovered),
+    await unarchiveProductsOnMarketplaces(recovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),
   );
   const secondStockActions = await restoreStocksOnMarketplaces(recovered);
   const stockActions = [...firstStockActions, ...secondStockActions];
@@ -20851,7 +22531,7 @@ function scheduleOzonUnarchiveQueueAuto(delayMs = ozonUnarchiveQueueAutoInterval
         {
           source: "ozon_unarchive_queue_auto",
           limit: ozonUnarchiveQueueBatchLimit,
-          force: true,
+          force: false,
         },
         { priority: 2 },
       );
@@ -20987,6 +22667,7 @@ async function startServer() {
   scheduleDailySync();
   schedulePriceRetryProcessing(30_000);
   scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
+  scheduleSupplierCartAuto(180_000).catch((error) => logger.warn("supplier cart auto scheduler failed", { detail: error?.message || String(error) }));
   scheduleAutoSync(autoSyncInitialDelaySeconds * 1000);
 }
 
@@ -21119,7 +22800,20 @@ module.exports = {
   writeOzonUnarchiveQueue,
   ozonUnarchiveQueuePath,
   ozonUnarchiveDateKey,
+  ozonUnarchiveDailyUsed,
   nextOzonUnarchiveRetryAt,
+  normalizeSupplierPickingRow,
+  normalizeSupplierPickingState,
+  readSupplierPickingState,
+  writeSupplierPickingState,
+  createSupplierPickingRows,
+  supplierPickingInvoiceRows,
+  supplierBlockKey,
+  activeSupplierBlocksForOffer,
+  normalizeSupplierTrustFactor,
+  normalizeSupplierOrderCutoff,
+  supplierOrderCutoffPassed,
+  supplierCartOrderScore,
   readAiImageJobs,
   writeAiImageJobs,
   normalizeAiImageJob,

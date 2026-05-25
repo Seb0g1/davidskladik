@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Bot, Check, ChevronRight, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
-import { AiAssistantResponseSchema, AiImageJobResponseSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
+import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
@@ -1366,7 +1366,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   });
   const queryClient = useQueryClient();
   const refreshBrands = useMutation({
-    mutationFn: () => fetchJson("/api/warehouse/brands/refresh", WarehouseBrandsSchema, mutationBody({ limit: 500 })),
+    mutationFn: () => fetchJson("/api/warehouse/brands/rebuild-index", BrandIndexStatusSchema, mutationBody({ limit: 100000 })),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["warehouse", "brands"] });
       void queryClient.invalidateQueries({ queryKey: ["warehouse", "page"] });

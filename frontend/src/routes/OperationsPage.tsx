@@ -174,30 +174,33 @@ export function SupplierCartPanel() {
   const [limit, setLimit] = useState(100);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
-  const previewMutation = useMutation({
-    mutationFn: () => {
-      const params = new URLSearchParams({ marketplace, limit: String(limit) });
-      return fetchJson(`/api/supplier-cart/preview?${params.toString()}`, SupplierCartPreviewSchema);
-    },
+  const draftQuery = useQuery({
+    queryKey: ["supplier-cart-draft"],
+    queryFn: () => fetchJson("/api/supplier-cart/draft", SupplierCartPreviewSchema),
+  });
+  const generateMutation = useMutation({
+    mutationFn: () => fetchJson("/api/supplier-cart/generate", SupplierCartPreviewSchema, mutationBody({ marketplace, limit })),
     onSuccess: (payload) => {
+      queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
       setSelected(new Set((payload.rows || []).filter((row) => row.ready && !row.alreadyCommitted).map((row) => row.key)));
     },
   });
   const commitMutation = useMutation({
     mutationFn: () => fetchJson("/api/supplier-cart/commit", SupplierCartCommitSchema, mutationBody({
-      rows: previewMutation.data?.rows || [],
+      rows: (generateMutation.data || draftQuery.data)?.rows || [],
       keys: Array.from(selected),
     })),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
-      previewMutation.mutate();
+      queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
     },
   });
   const historyQuery = useQuery({
     queryKey: ["supplier-cart-history"],
     queryFn: () => fetchJson("/api/supplier-cart/history", SupplierCartHistorySchema),
   });
-  const rows = previewMutation.data?.rows || [];
+  const previewData = generateMutation.data || draftQuery.data;
+  const rows = previewData?.rows || [];
   const toggleRow = (key: string) => {
     setSelected((current) => {
       const next = new Set(current);
@@ -215,8 +218,8 @@ export function SupplierCartPanel() {
           <span>Автокорзина PriceMaster</span>
           <h3>Заказы Ozon/Yandex &rarr; заявки поставщикам</h3>
         </div>
-        <button className="secondary-action" type="button" onClick={() => previewMutation.mutate()} disabled={previewMutation.isPending}>
-          {previewMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Найти новые заказы
+        <button className="secondary-action" type="button" onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
+          {generateMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Сгенерировать корзину
         </button>
       </div>
       <div className="control-grid compact-controls">
@@ -231,17 +234,18 @@ export function SupplierCartPanel() {
           <input type="number" value={limit} onChange={(event) => setLimit(numberValue(event.target.value, 100))} />
         </label>
       </div>
-      {previewMutation.data ? (
+      {previewData ? (
         <div className="operation-stats">
-          <DiagnosticValue label="Найдено" value={previewMutation.data.total} />
-          <DiagnosticValue label="Готово" value={previewMutation.data.ready} tone={previewMutation.data.ready ? "success" : ""} />
-          <DiagnosticValue label="Уже в PM" value={previewMutation.data.alreadyCommitted} />
-          <DiagnosticValue label="Пропущено" value={previewMutation.data.skipped} tone={previewMutation.data.skipped ? "warning" : ""} />
+          <DiagnosticValue label="Найдено" value={previewData.total} />
+          <DiagnosticValue label="Готово" value={previewData.ready} tone={previewData.ready ? "success" : ""} />
+          <DiagnosticValue label="Уже в PM" value={previewData.alreadyCommitted} />
+          <DiagnosticValue label="Пропущено" value={previewData.skipped} tone={previewData.skipped ? "warning" : ""} />
+          <DiagnosticValue label="Черновик" value={previewData.generatedAt ? compactDate(previewData.generatedAt) : "-"} />
         </div>
       ) : null}
-      {previewMutation.data?.warnings?.length ? (
+      {previewData?.warnings?.length ? (
         <div className="inline-error">
-          {previewMutation.data.warnings.map((warning, index) => `${String(warning.marketplace || "api")}: ${String(warning.error || "error")}`).join(" · ")}
+          {previewData.warnings.map((warning) => `${String(warning.marketplace || "api")}: ${String(warning.error || "error")}`).join(" · ")}
         </div>
       ) : null}
       {rows.length ? (
@@ -271,17 +275,21 @@ export function SupplierCartPanel() {
                     <span>Поставщик: {row.supplierName || "-"}</span>
                     <span>PM row: {row.offerRowId || "-"}</span>
                     <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
+                    <span>Доверие: {row.trustFactor ?? 100}/100</span>
+                    <span>{row.orderCutoffTime ? `Заказы до ${row.orderCutoffTime}` : "Без дедлайна"}</span>
+                    {row.reseller ? <span>Перекупщик</span> : null}
                   </div>
                   {row.alreadyCommitted ? <small>Уже в заявке PriceMaster: Doc {row.requestDocId}, Row {row.requestRowId}</small> : null}
+                  {row.skipReason === "supplier_cutoff_passed_no_alternative" ? <small className="danger-text">Все подходящие поставщики уже закрыли прием заказов на сегодня.</small> : null}
                   {!row.ready && !row.alreadyCommitted ? <small className="danger-text">Причина: {row.skipReason || "не готово"}</small> : null}
                 </article>
               );
             })}
           </div>
         </>
-      ) : previewMutation.data ? <div className="soft-empty">Новых заказов для автокорзины не найдено.</div> : <div className="soft-empty">Нажмите “Найти новые заказы”, чтобы собрать черновик заявок PriceMaster.</div>}
+      ) : previewData ? <div className="soft-empty">Новых заказов для автокорзины не найдено.</div> : <div className="soft-empty">Утром после обновления прайсов нажмите “Сгенерировать корзину”: заказы сохранятся в черновик, и их можно будет спокойно отправить в PriceMaster позже.</div>}
       {commitMutation.data ? <div className="success-strip">Добавлено в PriceMaster: {commitMutation.data.inserted}. Документы: {commitMutation.data.docIds.join(", ") || "-"}</div> : null}
-      {previewMutation.error && <div className="inline-error">{errorMessage(previewMutation.error)}</div>}
+      {generateMutation.error && <div className="inline-error">{errorMessage(generateMutation.error)}</div>}
       {commitMutation.error && <div className="inline-error">{errorMessage(commitMutation.error)}</div>}
       <div className="section-title compact-title">
         <div><span>История автокорзины</span><h3>{historyQuery.data?.totalProcessed || 0} обработано</h3></div>

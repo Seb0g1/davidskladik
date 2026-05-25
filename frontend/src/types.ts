@@ -32,6 +32,9 @@ export const SupplierSchema = z.object({
   stopped: z.boolean().optional(),
   pricingMode: z.coerce.string().optional().default("normal"),
   stockOnly: z.boolean().optional(),
+  trustFactor: z.number().optional().default(100),
+  orderCutoffTime: z.coerce.string().optional().default(""),
+  reseller: z.boolean().optional().default(false),
   impactProductCount: z.number().optional().default(0),
   stopReason: z.coerce.string().optional().nullable(),
 }).passthrough();
@@ -254,6 +257,41 @@ export const PricePreviewSchema = z.object({
   yandexSkipped: z.number().optional().default(0),
 }).passthrough();
 
+export const SalesAutomationSummarySchema = z.object({
+  ok: z.boolean().optional(),
+  source: z.coerce.string().optional().default(""),
+  autoEnabled: z.boolean().optional().default(true),
+  total: z.number().optional().default(0),
+  updatedAt: z.coerce.string().optional().nullable(),
+  retryTotal: z.number().optional().default(0),
+  ozonUnarchiveQueued: z.number().optional().default(0),
+  reasons: z.record(z.string(), z.number()).optional().default({}),
+  statuses: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
+export const SalesAutomationItemsSchema = z.object({
+  ok: z.boolean().optional(),
+  source: z.coerce.string().optional().default(""),
+  total: z.number().optional().default(0),
+  items: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
+export const ProblemProductsSchema = z.object({
+  ok: z.boolean().optional(),
+  total: z.number().optional().default(0),
+  summary: z.record(z.string(), z.number()).optional().default({}),
+  items: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
+export const BrandIndexStatusSchema = z.object({
+  ok: z.boolean().optional(),
+  source: z.coerce.string().optional().default(""),
+  indexed: z.number().optional().default(0),
+  products: z.number().optional().default(0),
+  ready: z.boolean().optional().default(false),
+  stale: z.boolean().optional().default(false),
+}).passthrough();
+
 export const ProductRepairSchema = z.object({
   ok: z.boolean().optional(),
   productIds: z.array(z.coerce.string()).optional().default([]),
@@ -289,6 +327,10 @@ export const SupplierCartRowSchema = z.object({
   offerRowId: z.coerce.string().optional().default(""),
   price: z.number().optional().default(0),
   priceCurrency: z.coerce.string().optional().default("USD"),
+  trustFactor: z.number().optional().default(100),
+  orderCutoffTime: z.coerce.string().optional().default(""),
+  reseller: z.boolean().optional().default(false),
+  supplierScore: z.number().optional().default(0),
   ready: z.boolean().optional().default(false),
   alreadyCommitted: z.boolean().optional().default(false),
   skipReason: z.coerce.string().optional().default(""),
@@ -298,6 +340,9 @@ export const SupplierCartRowSchema = z.object({
 
 export const SupplierCartPreviewSchema = z.object({
   ok: z.boolean().optional(),
+  draftId: z.coerce.string().optional().default(""),
+  generatedAt: z.coerce.string().optional().nullable(),
+  generatedBy: z.coerce.string().optional().default(""),
   from: z.coerce.string().optional().default(""),
   to: z.coerce.string().optional().default(""),
   total: z.number().optional().default(0),
@@ -312,6 +357,7 @@ export const SupplierCartCommitSchema = z.object({
   ok: z.boolean().optional(),
   inserted: z.number().optional().default(0),
   skipped: z.number().optional().default(0),
+  pickingCreated: z.number().optional().default(0),
   docIds: z.array(z.union([z.string(), z.number()])).optional().default([]),
   rows: z.array(SupplierCartRowSchema).optional().default([]),
 }).passthrough();
@@ -321,6 +367,60 @@ export const SupplierCartHistorySchema = z.object({
   updatedAt: z.coerce.string().optional().nullable(),
   totalProcessed: z.number().optional().default(0),
   history: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
+export const SupplierPickingRowSchema = z.object({
+  key: z.coerce.string(),
+  marketplace: z.coerce.string().optional().default(""),
+  accountName: z.coerce.string().optional().default(""),
+  orderId: z.coerce.string().optional().default(""),
+  postingNumber: z.coerce.string().optional().default(""),
+  offerId: z.coerce.string().optional().default(""),
+  productName: z.coerce.string().optional().default(""),
+  quantity: z.number().optional().default(1),
+  supplierName: z.coerce.string().optional().default(""),
+  partnerId: z.coerce.string().optional().default(""),
+  offerRowId: z.coerce.string().optional().default(""),
+  price: z.number().optional().default(0),
+  priceCurrency: z.coerce.string().optional().default("USD"),
+  trustFactor: z.number().optional().default(100),
+  orderCutoffTime: z.coerce.string().optional().default(""),
+  reseller: z.boolean().optional().default(false),
+  supplierScore: z.number().optional().default(0),
+  requestDocId: z.coerce.string().optional().default(""),
+  requestRowId: z.coerce.string().optional().default(""),
+  status: z.coerce.string().optional().default("open"),
+  createdAt: z.coerce.string().optional().default(""),
+  pickedBy: z.coerce.string().optional().default(""),
+  pickedAt: z.coerce.string().optional().nullable(),
+  missingBy: z.coerce.string().optional().default(""),
+  missingAt: z.coerce.string().optional().nullable(),
+  missingReason: z.coerce.string().optional().default(""),
+  nextRetryAt: z.coerce.string().optional().nullable(),
+  replacementFor: z.coerce.string().optional().default(""),
+  replacementKey: z.coerce.string().optional().default(""),
+}).passthrough();
+
+export const SupplierPickingListSchema = z.object({
+  ok: z.boolean().optional(),
+  updatedAt: z.coerce.string().optional().nullable(),
+  total: z.number().optional().default(0),
+  rows: z.array(SupplierPickingRowSchema).optional().default([]),
+  suppliers: z.array(z.string()).optional().default([]),
+  summary: z.record(z.string(), z.unknown()).optional().default({}),
+}).passthrough();
+
+export const SupplierPickingInvoiceSchema = z.object({
+  ok: z.boolean().optional(),
+  period: z.coerce.string().optional().default("30d"),
+  total: z.number().optional().default(0),
+  groups: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+  rows: z.array(SupplierPickingRowSchema).optional().default([]),
+}).passthrough();
+
+export const SupplierPickingUpdateSchema = z.object({
+  ok: z.boolean().optional(),
+  row: SupplierPickingRowSchema,
 }).passthrough();
 
 export const SettingsResponseSchema = z.object({

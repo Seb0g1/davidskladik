@@ -1,97 +1,115 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BadgeDollarSign, CheckCircle2, Clock3, Loader2, RefreshCcw, Send, Zap } from "lucide-react";
+import { AlertTriangle, BadgeDollarSign, CheckCircle2, Loader2, RefreshCcw, Send, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { fetchJson, mutationBody } from "../api";
-import { MutationProductResponseSchema, PricePreviewSchema } from "../types";
+import { MutationProductResponseSchema, SalesAutomationItemsSchema, SalesAutomationSummarySchema } from "../types";
 
 const text = (value: unknown) => String(value ?? "").trim();
+const numberValue = (value: unknown) => Number(value || 0) || 0;
 
 const money = (value: unknown) => {
   const number = Number(value || 0);
   return number > 0 ? `${Math.round(number).toLocaleString("ru-RU")} ₽` : "-";
 };
 
-const numberValue = (value: unknown) => Number(value || 0) || 0;
+const formatDate = (value: unknown) => {
+  const raw = text(value);
+  if (!raw) return "-";
+  const date = new Date(raw);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString("ru-RU") : raw;
+};
 
 const reasonLabel = (reason: unknown) => {
   const value = text(reason);
   const labels: Record<string, string> = {
+    ok: "готово",
     unchanged: "цена уже совпадает",
+    no_supplier: "нет поставщика",
+    no_price: "нет расчетной цены",
+    api_error: "ошибка API",
+    in_retry: "в retry",
+    ozon_limit: "лимит Ozon",
+    stock_only_manual_price_missing: "нужна ручная цена склада",
     no_pricemaster_link: "нет PM-привязки",
     not_ready: "поставщик не готов",
-    stock_only_manual_price_missing: "нужна ручная цена склада",
-    ozon_price_delayed: "ожидает лимит Ozon",
-    no_next_price: "нет расчетной цены",
   };
   return labels[value] || value || "-";
 };
 
 export function PricesPage() {
   const [marketplace, setMarketplace] = useState("all");
-  const [onlyChanged, setOnlyChanged] = useState(true);
+  const [reason, setReason] = useState("all");
   const queryClient = useQueryClient();
-  const preview = useQuery({
-    queryKey: ["warehouse", "prices", "preview", marketplace, onlyChanged],
-    queryFn: () => fetchJson(
-      `/api/warehouse/prices/preview?marketplace=${encodeURIComponent(marketplace)}&onlyChanged=${onlyChanged ? "true" : "false"}&limit=500&refreshMarketplacePrices=true&livePriceMaster=true`,
-      PricePreviewSchema,
-    ),
+
+  const summary = useQuery({
+    queryKey: ["sales-automation", "summary"],
+    queryFn: () => fetchJson("/api/sales-automation/summary", SalesAutomationSummarySchema),
+    refetchInterval: 30_000,
   });
-  const send = useMutation({
-    mutationFn: (payload: { marketplace: string; force?: boolean }) => fetchJson("/api/warehouse/prices/send", MutationProductResponseSchema, mutationBody({
-      confirmed: true,
-      marketplace: payload.marketplace,
-      onlyChanged,
-      force: Boolean(payload.force),
-      livePriceMaster: true,
-      refreshMarketplacePrices: true,
-      limit: 1000,
-    })),
+  const itemsQuery = useQuery({
+    queryKey: ["sales-automation", "items", marketplace, reason],
+    queryFn: () => {
+      const params = new URLSearchParams({ marketplace, limit: "500" });
+      if (reason !== "all") params.set("reason", reason);
+      return fetchJson(`/api/sales-automation/items?${params.toString()}`, SalesAutomationItemsSchema);
+    },
+    refetchInterval: 45_000,
+  });
+  const run = useMutation({
+    mutationFn: (payload: { marketplace: string; force?: boolean; onlyChanged?: boolean }) => fetchJson(
+      "/api/sales-automation/run",
+      MutationProductResponseSchema,
+      mutationBody({
+        marketplace: payload.marketplace,
+        force: Boolean(payload.force),
+        onlyChanged: payload.onlyChanged !== false,
+        limit: 5000,
+      }),
+    ),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["sales-automation"] });
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-      void queryClient.invalidateQueries({ queryKey: ["warehouse", "prices"] });
     },
   });
-  const data = preview.data;
-  const items = data?.items || [];
-  const skipped = data?.skipped || [];
-  const skippedStats = useMemo(() => {
-    const result = new Map<string, number>();
-    for (const row of skipped) {
-      const reason = reasonLabel(row.reason);
-      result.set(reason, (result.get(reason) || 0) + 1);
-    }
-    return Array.from(result.entries()).slice(0, 5);
-  }, [skipped]);
-  const ozonItems = items.filter((item) => text(item.marketplace) === "ozon").length;
-  const yandexItems = items.filter((item) => text(item.marketplace) === "yandex").length;
+
+  const reasons = summary.data?.reasons || {};
+  const reasonOptions = useMemo(() => Object.entries(reasons).sort((a, b) => b[1] - a[1]), [reasons]);
+  const items = itemsQuery.data?.items || [];
+  const yandexIssues = items.filter((item) => text(item.marketplace) === "yandex" && !["ok", "unchanged"].includes(text(item.reason))).length;
+  const ozonIssues = items.filter((item) => text(item.marketplace) === "ozon" && !["ok", "unchanged"].includes(text(item.reason))).length;
 
   return (
     <section className="page-section price-control-page">
       <div className="section-title">
         <div>
-          <span>Price control</span>
-          <h2>Автоцены Ozon и Yandex</h2>
+          <span>Sales automation</span>
+          <h2>Автоматизация цен и остатков</h2>
         </div>
-        <button className="secondary-action" type="button" onClick={() => preview.refetch()} disabled={preview.isFetching}>
-          {preview.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Обновить контроль
+        <button className="secondary-action" type="button" onClick={() => { void summary.refetch(); void itemsQuery.refetch(); }} disabled={summary.isFetching || itemsQuery.isFetching}>
+          {summary.isFetching || itemsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Обновить контроль
         </button>
       </div>
 
       <div className="price-automation-hero">
         <div>
-          <span className="eyebrow">Автоматический режим</span>
-          <h3>Цены отправляются сами после изменения PriceMaster, курса, наценки или привязки.</h3>
+          <span className="eyebrow">Автоматический режим включен</span>
+          <h3>Цены и остатки отправляются фоном после изменений PriceMaster, курса, наценок и привязок.</h3>
           <p>
-            Эта страница нужна для контроля: увидеть, что сейчас отличается от кабинетов, повторить ошибки и вручную ускорить отправку.
-            Обычная работа не требует нажимать кнопку.
+            Эта страница не нужна для ежедневного ручного клика. Она показывает, что ушло в Ozon/Yandex, что стоит в retry, где лимит Ozon, и какие SKU требуют внимания.
           </p>
         </div>
         <div className="price-automation-badge">
           <CheckCircle2 size={22} />
-          <strong>auto on</strong>
-          <span>live PM + cabinet check</span>
+          <strong>{summary.data?.autoEnabled ? "auto on" : "auto off"}</strong>
+          <span>последний расчет: {formatDate(summary.data?.updatedAt)}</span>
         </div>
+      </div>
+
+      <div className="summary-grid price-summary-grid">
+        <div><span>SKU под контролем</span><strong>{summary.data?.total ?? 0}</strong></div>
+        <div><span>Retry цен</span><strong>{summary.data?.retryTotal ?? 0}</strong></div>
+        <div><span>Ozon autoarchive</span><strong>{summary.data?.ozonUnarchiveQueued ?? 0}</strong></div>
+        <div><span>Проблем Ozon / Yandex</span><strong>{ozonIssues} / {yandexIssues}</strong></div>
       </div>
 
       <div className="control-grid price-controls">
@@ -99,60 +117,61 @@ export function PricesPage() {
           Маркетплейс
           <select value={marketplace} onChange={(event) => setMarketplace(event.target.value)}>
             <option value="all">Ozon + Yandex</option>
-            <option value="yandex">Только Yandex</option>
             <option value="ozon">Только Ozon</option>
+            <option value="yandex">Только Yandex</option>
           </select>
         </label>
-        <label className="toggle-row">
-          <input type="checkbox" checked={onlyChanged} onChange={(event) => setOnlyChanged(event.target.checked)} />
-          Только измененные
+        <label>
+          Причина
+          <select value={reason} onChange={(event) => setReason(event.target.value)}>
+            <option value="all">Все причины</option>
+            {reasonOptions.map(([key, count]) => (
+              <option value={key} key={key}>{reasonLabel(key)} · {count}</option>
+            ))}
+          </select>
         </label>
-        <button className="primary-action" type="button" onClick={() => send.mutate({ marketplace })} disabled={send.isPending || !items.length}>
-          {send.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Отправить сейчас
+        <button className="primary-action danger-action" type="button" onClick={() => run.mutate({ marketplace, onlyChanged: true })} disabled={run.isPending}>
+          {run.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Аварийно отправить измененные
         </button>
-        <button className="secondary-action" type="button" onClick={() => send.mutate({ marketplace: "yandex", force: true })} disabled={send.isPending}>
-          <BadgeDollarSign size={16} /> Сверить Yandex force
+        <button className="secondary-action" type="button" onClick={() => run.mutate({ marketplace: "yandex", force: true, onlyChanged: false })} disabled={run.isPending}>
+          <BadgeDollarSign size={16} /> Force Yandex
         </button>
       </div>
 
-      <div className="summary-grid price-summary-grid">
-        <div><span>К отправке</span><strong>{data?.readyToSend ?? 0}</strong></div>
-        <div><span>Ozon</span><strong>{ozonItems}</strong></div>
-        <div><span>Yandex</span><strong>{yandexItems}</strong></div>
-        <div><span>Пропущено</span><strong>{skipped.length}</strong></div>
-      </div>
-
-      {skippedStats.length ? (
-        <div className="price-skip-strip">
-          <Clock3 size={16} />
-          <span>Почему часть товаров не отправляется:</span>
-          {skippedStats.map(([reason, count]) => <b key={reason}>{reason}: {count}</b>)}
-        </div>
-      ) : null}
-
-      {preview.error ? <div className="inline-error">{String((preview.error as Error).message || preview.error)}</div> : null}
-      {send.error ? <div className="inline-error">{String((send.error as Error).message || send.error)}</div> : null}
-      {send.data ? (
+      {run.error ? <div className="inline-error">{String((run.error as Error).message || run.error)}</div> : null}
+      {itemsQuery.error ? <div className="inline-error">{String((itemsQuery.error as Error).message || itemsQuery.error)}</div> : null}
+      {run.data ? (
         <div className="success-strip">
-          Отправлено: {numberValue(send.data.sent)}. Ozon: {numberValue(send.data.ozonSent)}, Yandex: {numberValue(send.data.yandexSent)}, ошибок: {numberValue(send.data.failed)}.
+          Отправлено: {numberValue(run.data.sent)} · Ozon {numberValue(run.data.ozonSent)} · Yandex {numberValue(run.data.yandexSent)} · ошибок {numberValue(run.data.failed)}
         </div>
       ) : null}
+
+      <div className="price-reason-grid">
+        {reasonOptions.length ? reasonOptions.slice(0, 8).map(([key, count]) => (
+          <button className={reason === key ? "is-active" : ""} type="button" key={key} onClick={() => setReason(key)}>
+            <AlertTriangle size={14} />
+            <span>{reasonLabel(key)}</span>
+            <strong>{count}</strong>
+          </button>
+        )) : <span className="muted-text">Причин пропуска пока нет.</span>}
+      </div>
 
       <div className="table-panel price-table">
         <div className="table-head">
-          <span>Маркет</span><span>Артикул</span><span>Сейчас</span><span>Новая</span><span>Поставщик</span><span>Статус</span>
+          <span>Маркет</span><span>Артикул</span><span>Текущая</span><span>Новая</span><span>Остаток</span><span>Причина</span><span>Обновлено</span>
         </div>
         {items.map((item) => (
-          <div className="table-row" key={`${text(item.marketplace)}-${text(item.id || item.offerId)}`}>
+          <div className="table-row" key={`${text(item.marketplace)}-${text(item.productId || item.offerId)}-${text(item.target)}`}>
             <span data-label="Маркет"><Zap size={14} /> {text(item.marketplace)}</span>
             <span data-label="Артикул">{text(item.offerId)}</span>
-            <span data-label="Сейчас">{money(item.oldPrice)}</span>
-            <span data-label="Новая"><strong>{money(item.price)}</strong></span>
-            <span data-label="Поставщик">{text((item.supplier as { supplierName?: string })?.supplierName || (item.supplier as { name?: string })?.name || (item.supplier as { partnerName?: string })?.partnerName || "") || "-"}</span>
-            <span data-label="Статус">изменено</span>
+            <span data-label="Текущая">{money(item.currentPrice ?? item.oldPrice)}</span>
+            <span data-label="Новая"><strong>{money(item.targetPrice ?? item.price)}</strong></span>
+            <span data-label="Остаток">{numberValue(item.targetStock) || "-"}</span>
+            <span data-label="Причина">{reasonLabel(item.reason)}</span>
+            <span data-label="Обновлено">{formatDate(item.updatedAt || item.lastCalculatedAt)}</span>
           </div>
         ))}
-        {!items.length && !preview.isLoading ? <div className="empty-state">Новых цен к отправке нет. Автоотправка продолжит работать в фоне.</div> : null}
+        {!items.length && !itemsQuery.isLoading ? <div className="empty-state">Сейчас нет строк по выбранному фильтру. Автоматизация продолжает работать в фоне.</div> : null}
       </div>
     </section>
   );

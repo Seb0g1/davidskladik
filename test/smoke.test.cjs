@@ -166,6 +166,11 @@ const {
   writeOzonUnarchiveQueue,
   ozonUnarchiveQueuePath,
   ozonUnarchiveDateKey,
+  ozonUnarchiveDailyUsed,
+  normalizeSupplierTrustFactor,
+  normalizeSupplierOrderCutoff,
+  supplierOrderCutoffPassed,
+  supplierCartOrderScore,
 } = require("../server.js");
 const postgres = require("../lib/postgres.js");
 const seedPostgres = require("../scripts/seed-postgres-from-json.cjs");
@@ -2812,6 +2817,20 @@ test("pickWarehouseSupplier ignores stock-only suppliers for price", () => {
   assert.equal(fallback.partnerName, "Own stock");
 });
 
+test("supplier cart scoring respects trust, reseller flag and Moscow cutoff", () => {
+  assert.equal(normalizeSupplierTrustFactor(120), 100);
+  assert.equal(normalizeSupplierTrustFactor(-5), 0);
+  assert.equal(normalizeSupplierOrderCutoff("9:30"), "09:30");
+  assert.equal(supplierOrderCutoffPassed("13:00", new Date("2026-05-25T11:30:00.000Z")), true);
+  assert.equal(supplierOrderCutoffPassed("15:00", new Date("2026-05-25T11:30:00.000Z")), false);
+
+  const trusted = supplierCartOrderScore({ price: 100, trustFactor: 100, orderCutoffTime: "15:00" }, new Date("2026-05-25T08:00:00.000Z"));
+  const reseller = supplierCartOrderScore({ price: 100, trustFactor: 100, reseller: true, orderCutoffTime: "15:00" }, new Date("2026-05-25T08:00:00.000Z"));
+  const late = supplierCartOrderScore({ price: 100, trustFactor: 100, orderCutoffTime: "13:00" }, new Date("2026-05-25T11:30:00.000Z"));
+  assert.ok(trusted < reseller);
+  assert.ok(late > reseller);
+});
+
 test("warehouse brand filter falls back to marketplace product data", () => {
   const product = {
     name: "Нишевый аромат без бренда в корне",
@@ -3508,6 +3527,21 @@ test("Ozon unarchive daily limit queues overflow and resumes when quota is avail
     assert.equal(secondRun[0].pending, undefined);
     queue = await readOzonUnarchiveQueue();
     assert.equal(queue.items.length, 0);
+
+    await writeOzonUnarchiveQueue({
+      items: [],
+      daily: {
+        [ozonUnarchiveDateKey()]: {
+          "ozon-test": 100,
+        },
+      },
+    });
+    const forcedRun = await unarchiveProductsOnMarketplaces([products[100]], { forceOzonDailyLimit: true });
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls[2].body.product_id, [101]);
+    assert.equal(forcedRun[0].ok, true);
+    queue = await readOzonUnarchiveQueue();
+    assert.equal(ozonUnarchiveDailyUsed(queue, "ozon-test"), 1);
   } finally {
     global.fetch = originalFetch;
     await restoreFile(marketplaceAccountsPath, accountsBackup);

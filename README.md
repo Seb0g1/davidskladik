@@ -47,8 +47,8 @@ APP_PASSWORD=...
 Все настройки лежат в `.env`.
 
 ```text
-PM_DB_HOST=81.17.154.153
-PM_DB_PORT=65123
+PM_DB_HOST=
+PM_DB_PORT=
 PM_DB_USER=pm_user
 PM_DB_PASSWORD=...
 PM_DB_NAME=PriceMasterDB

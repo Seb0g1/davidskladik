@@ -77,6 +77,8 @@ model WarehouseProduct {
   links        ProductLink[]
   priceHistory PriceHistory[]
   retryItems   PriceRetryQueueItem[]
+  salesStates  SalesAutomationSkuState[]
+  brandIndex   BrandIndexItem[]
 
   @@index([marketplace, target])
   @@index([marketplace, status, updatedAt])
@@ -86,6 +88,199 @@ model WarehouseProduct {
   @@index([productId])
   @@index([brand])
   @@map("warehouse_products")
+}
+
+model SalesAutomationSkuState {
+  id                String      @id @default(cuid())
+  productId         String?     @map("product_id")
+  marketplace       Marketplace
+  target            String?
+  offerId           String      @map("offer_id")
+  currentPrice      Int?        @map("current_price")
+  targetPrice       Int?        @map("target_price")
+  targetStock       Int?        @map("target_stock")
+  priceStatus       QueueStatus @default(pending) @map("price_status")
+  stockStatus       QueueStatus @default(pending) @map("stock_status")
+  unarchiveStatus   QueueStatus @default(pending) @map("unarchive_status")
+  reason            String      @default("ok")
+  lastCalculatedAt  DateTime?   @map("last_calculated_at")
+  lastPriceSentAt   DateTime?   @map("last_price_sent_at")
+  lastStockSentAt   DateTime?   @map("last_stock_sent_at")
+  lastError         String?     @map("last_error")
+  raw               Json?
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+
+  product WarehouseProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([marketplace, target, offerId])
+  @@index([productId])
+  @@index([marketplace, reason])
+  @@index([priceStatus, stockStatus])
+  @@index([updatedAt])
+  @@map("sales_automation_sku_states")
+}
+
+model OzonUnarchiveQueueItem {
+  id            String      @id @default(cuid())
+  queueKey      String      @unique @map("queue_key")
+  productId     String?     @map("product_id")
+  offerId       String      @map("offer_id")
+  target        String?
+  status        QueueStatus @default(pending)
+  queuedAt      DateTime    @default(now()) @map("queued_at")
+  nextRetryAt   DateTime?   @map("next_retry_at")
+  lastAttemptAt DateTime?   @map("last_attempt_at")
+  attempts      Int         @default(0)
+  warning       String?
+  error         String?
+  raw           Json?
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  @@index([status, nextRetryAt])
+  @@index([target])
+  @@index([offerId])
+  @@map("ozon_unarchive_queue")
+}
+
+model SupplierCartDraft {
+  id          String   @id @default(cuid())
+  generatedAt DateTime @default(now()) @map("generated_at")
+  generatedBy String?  @map("generated_by")
+  marketplace String   @default("all")
+  from        DateTime?
+  to          DateTime?
+  summary     Json?
+  active      Boolean  @default(true)
+  params      Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  rows SupplierCartDraftRow[]
+
+  @@index([active, generatedAt])
+  @@map("supplier_cart_drafts")
+}
+
+model SupplierCartDraftRow {
+  id             String   @id @default(cuid())
+  draftId        String   @map("draft_id")
+  cartKey        String   @map("cart_key")
+  marketplace    String?
+  accountName    String?  @map("account_name")
+  orderId        String?  @map("order_id")
+  postingNumber  String?  @map("posting_number")
+  offerId        String?  @map("offer_id")
+  productName    String?  @map("product_name")
+  quantity       Int      @default(1)
+  supplierName   String?  @map("supplier_name")
+  partnerId      String?  @map("partner_id")
+  offerRowId     String?  @map("offer_row_id")
+  price          Decimal? @db.Decimal(14, 4)
+  priceCurrency  String?  @map("price_currency")
+  supplierScore  Decimal? @map("supplier_score") @db.Decimal(14, 4)
+  ready          Boolean  @default(false)
+  alreadyCommitted Boolean @default(false) @map("already_committed")
+  skipReason     String?  @map("skip_reason")
+  requestDocId   String?  @map("request_doc_id")
+  requestRowId   String?  @map("request_row_id")
+  raw            Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  draft SupplierCartDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, cartKey])
+  @@index([cartKey])
+  @@index([offerId])
+  @@index([ready])
+  @@map("supplier_cart_draft_rows")
+}
+
+model SupplierPickingRow {
+  id             String   @id @default(cuid())
+  pickingKey     String   @unique @map("picking_key")
+  marketplace    String?
+  accountName    String?  @map("account_name")
+  orderId        String?  @map("order_id")
+  postingNumber  String?  @map("posting_number")
+  offerId        String?  @map("offer_id")
+  productName    String?  @map("product_name")
+  quantity       Int      @default(1)
+  supplierName   String?  @map("supplier_name")
+  partnerId      String?  @map("partner_id")
+  offerRowId     String?  @map("offer_row_id")
+  price          Decimal? @db.Decimal(14, 4)
+  priceCurrency  String?  @map("price_currency")
+  trustFactor    Int      @default(100) @map("trust_factor")
+  orderCutoffTime String? @map("order_cutoff_time")
+  reseller       Boolean  @default(false)
+  supplierScore  Decimal? @map("supplier_score") @db.Decimal(14, 4)
+  requestDocId   String?  @map("request_doc_id")
+  requestRowId   String?  @map("request_row_id")
+  status         String   @default("open")
+  createdBy      String?  @map("created_by")
+  pickedBy       String?  @map("picked_by")
+  pickedAt       DateTime? @map("picked_at")
+  missingBy      String?  @map("missing_by")
+  missingAt      DateTime? @map("missing_at")
+  missingReason  String?  @map("missing_reason")
+  nextRetryAt    DateTime? @map("next_retry_at")
+  replacementFor String?  @map("replacement_for")
+  replacementKey String?  @map("replacement_key")
+  raw            Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([supplierName])
+  @@index([partnerId])
+  @@index([offerId])
+  @@map("supplier_picking_rows")
+}
+
+model SupplierBlock {
+  id          String   @id @default(cuid())
+  blockKey    String   @unique @map("block_key")
+  offerId     String   @map("offer_id")
+  partnerId   String   @map("partner_id")
+  supplierName String? @map("supplier_name")
+  reason      String?
+  sourceKey   String?  @map("source_key")
+  blockedBy   String?  @map("blocked_by")
+  blockedAt   DateTime @default(now()) @map("blocked_at")
+  expiresAt   DateTime @map("expires_at")
+  active      Boolean  @default(true)
+  raw         Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([offerId, active, expiresAt])
+  @@index([partnerId])
+  @@map("supplier_blocks")
+}
+
+model BrandIndexItem {
+  id              String      @id @default(cuid())
+  normalizedBrand String      @map("normalized_brand")
+  displayBrand    String      @map("display_brand")
+  productId        String      @map("product_id")
+  marketplace      Marketplace
+  offerId          String      @map("offer_id")
+  source           String
+  confidence       Int         @default(80)
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
+
+  product WarehouseProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([normalizedBrand, productId, source])
+  @@index([normalizedBrand])
+  @@index([displayBrand])
+  @@index([productId])
+  @@index([marketplace])
+  @@map("brand_index_items")
 }
 
 model ProductLink {
