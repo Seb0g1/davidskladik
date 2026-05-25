@@ -28,6 +28,28 @@ function lastResultText(value: unknown) {
   return `выбрано ${selected}, разархив ${unarchived}, ожидает ${pending}, в очереди ${queueSize}`;
 }
 
+function queueAttemptLabel(data: Record<string, unknown> | undefined) {
+  const due = numberValue(data?.due);
+  const availableToday = numberValue(data?.availableToday);
+  if (due > 0 && availableToday > 0) return "сейчас";
+  if (due > 0) return "ждет новый дневной лимит Ozon";
+  return formatDate(data?.nextAutoRunAt || data?.nextRetryAt);
+}
+
+function itemStatusLabel(item: Record<string, unknown>) {
+  if (item.due) {
+    return numberValue(item.availableToday) > 0 ? "готов к разархиву" : "ждет лимит Ozon";
+  }
+  return text(item.warning || item.status || "pending");
+}
+
+function itemWhenLabel(item: Record<string, unknown>) {
+  if (item.due) {
+    return numberValue(item.availableToday) > 0 ? "сейчас" : "после сброса лимита";
+  }
+  return formatDate(item.nextRetryAt);
+}
+
 export function RecoveryQueuePage() {
   const queryClient = useQueryClient();
   const queue = useQuery({
@@ -57,16 +79,16 @@ export function RecoveryQueuePage() {
       </div>
       <div className="summary-grid">
         <div><span>Всего в очереди</span><strong>{data?.total ?? 0}</strong></div>
-        <div><span>Можно сейчас</span><strong>{data?.due ?? 0}</strong></div>
+        <div><span>Готовы к попытке</span><strong>{data?.due ?? 0}</strong></div>
         <div><span>Осталось лимита</span><strong>{data?.availableToday ?? 0}</strong></div>
-        <div><span>Следующая попытка</span><strong>{formatDate(data?.nextAutoRunAt || data?.nextRetryAt)}</strong></div>
+        <div><span>Следующая попытка</span><strong>{queueAttemptLabel(data)}</strong></div>
       </div>
       <div className="info-strip success">
         <CheckCircle2 size={18} />
         <div>
           <strong>Очередь обрабатывается автоматически.</strong>
           <span>
-            Сервер сам проверяет Ozon autoarchive каждые 30 минут и продолжает восстановление после нового дневного лимита.
+            Сервер проверяет Ozon autoarchive каждые 30 минут и продолжает восстановление после нового дневного лимита.
             Ручная кнопка нужна только как аварийный запуск.
           </span>
         </div>
@@ -80,10 +102,10 @@ export function RecoveryQueuePage() {
       <div className="info-strip">
         <Clock3 size={18} />
         <div>
-          <strong>Дневной лимит Ozon не считается ошибкой.</strong>
+          <strong>Старая дата в строке не значит, что товар застрял.</strong>
           <span>
-            Если лимит разархива закончился, товар остается в очереди, цена и остаток продолжают поддерживаться,
-            а следующая попытка будет выполнена автоматически.
+            Если статус “готов к разархиву”, строка уже ожидает ближайшую попытку. Если статус “ждет лимит Ozon”,
+            цена и остаток поддерживаются, а разархив продолжится после сброса дневного лимита.
           </span>
         </div>
       </div>
@@ -101,9 +123,9 @@ export function RecoveryQueuePage() {
             <span data-label="SKU">{text(item.id) || "-"}</span>
             <span data-label="OfferId">{text(item.offerId) || "-"}</span>
             <span data-label="Цель">{text(item.target) || "-"}</span>
-            <span data-label="Статус">{item.due ? "можно запускать" : text(item.warning || item.status || "pending")}</span>
+            <span data-label="Статус">{itemStatusLabel(item)}</span>
             <span data-label="Попытки">{numberValue(item.attempts)}</span>
-            <span data-label="Когда">{formatDate(item.nextRetryAt)}</span>
+            <span data-label="Когда">{itemWhenLabel(item)}</span>
           </div>
         )) : <div className="empty-state">Очередь восстановления Ozon пустая.</div>}
       </div>
