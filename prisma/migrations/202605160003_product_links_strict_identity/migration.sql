@@ -9,7 +9,7 @@ USING (
         lower(coalesce("partner_id", '')),
         lower(coalesce("supplier_name", '')),
         lower(coalesce("keyword", '')),
-        coalesce("price_currency"::text, 'USD')
+        coalesce("price_currency", 'USD'::"PriceCurrency")
       ORDER BY "updated_at" DESC, "created_at" DESC, "id" DESC
     ) AS rn
   FROM "product_links"
@@ -24,5 +24,5 @@ CREATE UNIQUE INDEX IF NOT EXISTS "product_links_strict_identity_idx"
     lower(coalesce("partner_id", '')),
     lower(coalesce("supplier_name", '')),
     lower(coalesce("keyword", '')),
-    coalesce("price_currency"::text, 'USD')
+    coalesce("price_currency", 'USD'::"PriceCurrency")
   );
