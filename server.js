@@ -240,6 +240,7 @@ let autoSyncRunning = false;
 let autoSyncNextRunAt = null;
 let ozonUnarchiveQueueAutoTimer = null;
 let ozonUnarchiveQueueAutoRunning = false;
+let ozonUnarchiveQueueProcessQueued = false;
 let ozonUnarchiveQueueAutoNextRunAt = null;
 let ozonUnarchiveQueueAutoLastRunAt = null;
 let ozonUnarchiveQueueAutoLastResult = null;
@@ -8059,7 +8060,8 @@ function ozonUnarchiveQueuePublic(queue = {}, { limit = 1000 } = {}) {
 function ozonUnarchiveQueueAutomationPublic() {
   return {
     autoEnabled: ozonUnarchiveQueueAutoEnabled,
-    autoRunning: ozonUnarchiveQueueAutoRunning,
+    autoRunning: ozonUnarchiveQueueAutoRunning || ozonUnarchiveQueueProcessQueued,
+    autoQueued: ozonUnarchiveQueueProcessQueued,
     lastAutoRunAt: ozonUnarchiveQueueAutoLastRunAt,
     nextAutoRunAt: ozonUnarchiveQueueAutoNextRunAt,
     lastAutoResult: ozonUnarchiveQueueAutoLastResult,
@@ -13357,6 +13359,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       ...ozonUnarchiveQueueAutomationPublic(),
     };
   }
+  ozonUnarchiveQueueProcessQueued = false;
   ozonUnarchiveQueueAutoRunning = true;
   const startedAt = new Date().toISOString();
   try {
@@ -13459,15 +13462,70 @@ app.get("/api/ozon/unarchive-queue", requireAdmin, async (request, response, nex
   }
 });
 
+function enqueueOzonUnarchiveQueueProcess({ request, source, limit, force }) {
+  if (ozonUnarchiveQueueAutoRunning || ozonUnarchiveQueueProcessQueued) return false;
+  const queuedAt = new Date().toISOString();
+  const queuedThroughBullmq = Boolean(marketplaceQueue);
+  ozonUnarchiveQueueProcessQueued = true;
+  ozonUnarchiveQueueAutoLastResult = {
+    source,
+    selected: 0,
+    queued: true,
+    at: queuedAt,
+  };
+  setTimeout(() => {
+    queueMarketplaceJob("ozon-unarchive-queue-process", { source, limit, force }, { priority: 1 })
+      .then((result) => {
+        if (result && typeof result === "object" && Object.prototype.hasOwnProperty.call(result, "selected") && !result.skipped) {
+          appendAudit(request, "ozon.unarchive_queue.process", {
+            selected: result.selected || 0,
+            productIds: result.productIds || [],
+            result,
+          }).catch((auditError) => logger.warn("ozon queue audit append failed", { detail: auditError?.message || String(auditError) }));
+        }
+      })
+      .catch((error) => {
+        ozonUnarchiveQueueProcessQueued = false;
+        ozonUnarchiveQueueAutoLastResult = {
+          source,
+          selected: 0,
+          error: error?.message || String(error),
+          at: new Date().toISOString(),
+        };
+        logger.warn("ozon queue background enqueue failed", { detail: error?.message || String(error) });
+      })
+      .finally(() => {
+        if (!queuedThroughBullmq && !ozonUnarchiveQueueAutoRunning) {
+          ozonUnarchiveQueueProcessQueued = false;
+        }
+      });
+  }, 0);
+  return true;
+}
+
 app.post("/api/ozon/unarchive-queue/process", requireAdmin, async (request, response, next) => {
   try {
     const limit = cleanLimit(request.body?.limit || request.query?.limit, ozonUnarchiveQueueBatchLimit, 1000);
-    const result = await processOzonUnarchiveQueue({ source: "ozon_unarchive_queue_manual", limit, force: true });
-    response.json(result);
-    appendAudit(request, "ozon.unarchive_queue.process", {
-      selected: result.selected || 0,
-      productIds: result.productIds || [],
-      result,
+    const source = "ozon_unarchive_queue_manual";
+    const accepted = enqueueOzonUnarchiveQueueProcess({ request, source, limit, force: true });
+    const queue = ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 1000 });
+    response.status(202).json({
+      ok: true,
+      accepted,
+      queued: accepted,
+      skipped: !accepted,
+      reason: accepted ? null : "already_running",
+      source,
+      limit,
+      queue,
+      ...queue,
+      ...ozonUnarchiveQueueAutomationPublic(),
+    });
+    appendAudit(request, "ozon.unarchive_queue.queued", {
+      accepted,
+      source,
+      limit,
+      force: true,
     }).catch((auditError) => logger.warn("ozon queue audit append failed", { detail: auditError?.message || String(auditError) }));
   } catch (error) {
     next(error);
