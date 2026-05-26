@@ -404,6 +404,67 @@ model PriceHistory {
   @@map("price_history")
 }
 
+model FinanceOrder {
+  id                 String       @id @default(cuid())
+  marketplace        Marketplace?
+  target             String?
+  orderId            String       @map("order_id")
+  postingNumber      String?      @map("posting_number")
+  offerId            String?      @map("offer_id")
+  productName        String?      @map("product_name")
+  quantity           Int          @default(1)
+  saleAmount         Decimal?     @map("sale_amount") @db.Decimal(14, 2)
+  payoutAmount       Decimal?     @map("payout_amount") @db.Decimal(14, 2)
+  purchaseCost       Decimal?     @map("purchase_cost") @db.Decimal(14, 2)
+  feesAmount         Decimal?     @map("fees_amount") @db.Decimal(14, 2)
+  taxAmount          Decimal?     @map("tax_amount") @db.Decimal(14, 2)
+  penaltiesAmount    Decimal?     @map("penalties_amount") @db.Decimal(14, 2)
+  refundsAmount      Decimal?     @map("refunds_amount") @db.Decimal(14, 2)
+  profitAmount       Decimal?     @map("profit_amount") @db.Decimal(14, 2)
+  supplierName       String?      @map("supplier_name")
+  partnerId          String?      @map("partner_id")
+  source             String       @default("manual")
+  status             String       @default("open")
+  raw                Json?
+  soldAt             DateTime?    @map("sold_at")
+  receivedAt         DateTime?    @map("received_at")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  @@unique([marketplace, target, orderId, offerId])
+  @@index([marketplace, status])
+  @@index([orderId])
+  @@index([offerId])
+  @@index([supplierName])
+  @@index([createdAt])
+  @@map("finance_orders")
+}
+
+model FinanceExpense {
+  id            String    @id @default(cuid())
+  type          String    @default("manual_purchase")
+  supplierName  String?   @map("supplier_name")
+  partnerId     String?   @map("partner_id")
+  offerId       String?   @map("offer_id")
+  productName   String?   @map("product_name")
+  quantity      Int       @default(1)
+  amount        Decimal   @db.Decimal(14, 2)
+  currency      String    @default("RUB")
+  note          String?
+  source        String    @default("manual")
+  status        String    @default("confirmed")
+  spentAt       DateTime  @default(now()) @map("spent_at")
+  raw           Json?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([type])
+  @@index([supplierName])
+  @@index([offerId])
+  @@index([spentAt])
+  @@map("finance_expenses")
+}
+
 model SyncRun {
   id         String     @id @default(cuid())
   trigger    String

@@ -295,6 +295,10 @@ export const BrandIndexStatusSchema = z.object({
 
 export const ProductRepairSchema = z.object({
   ok: z.boolean().optional(),
+  accepted: z.boolean().optional().default(false),
+  repaired: z.number().optional().default(0),
+  failed: z.number().optional().default(0),
+  job: z.record(z.string(), z.unknown()).optional().default({}),
   productIds: z.array(z.coerce.string()).optional().default([]),
   linksSynced: z.number().optional().default(0),
   priceSent: z.number().optional().default(0),
@@ -312,6 +316,73 @@ export const SystemStatusSchema = z.object({
   dailySync: z.record(z.string(), z.unknown()).optional().default({}),
   queues: z.record(z.string(), z.unknown()).optional().default({}),
   operations: z.record(z.string(), z.unknown()).optional().default({}),
+}).passthrough();
+
+export const FinanceSummarySchema = z.object({
+  ok: z.boolean().optional(),
+  period: z.coerce.string().optional().default("30d"),
+  source: z.coerce.string().optional().default(""),
+  summary: z.record(z.string(), z.unknown()).optional().default({}),
+  updatedAt: z.coerce.string().optional().nullable(),
+}).passthrough();
+
+export const FinanceOrderSchema = z.object({
+  id: z.coerce.string(),
+  marketplace: z.coerce.string().optional().default(""),
+  target: z.coerce.string().optional().default(""),
+  orderId: z.coerce.string().optional().default(""),
+  postingNumber: z.coerce.string().optional().default(""),
+  offerId: z.coerce.string().optional().default(""),
+  productName: z.coerce.string().optional().default(""),
+  quantity: z.number().optional().default(1),
+  saleAmount: z.number().nullable().optional(),
+  payoutAmount: z.number().nullable().optional(),
+  purchaseCost: z.number().nullable().optional(),
+  feesAmount: z.number().nullable().optional(),
+  taxAmount: z.number().nullable().optional(),
+  penaltiesAmount: z.number().nullable().optional(),
+  refundsAmount: z.number().nullable().optional(),
+  profitAmount: z.number().nullable().optional(),
+  supplierName: z.coerce.string().optional().default(""),
+  partnerId: z.coerce.string().optional().default(""),
+  source: z.coerce.string().optional().default("manual"),
+  status: z.coerce.string().optional().default("open"),
+  createdAt: z.coerce.string().optional().nullable(),
+}).passthrough();
+
+export const FinanceExpenseSchema = z.object({
+  id: z.coerce.string(),
+  type: z.coerce.string().optional().default("manual_purchase"),
+  supplierName: z.coerce.string().optional().default(""),
+  partnerId: z.coerce.string().optional().default(""),
+  offerId: z.coerce.string().optional().default(""),
+  productName: z.coerce.string().optional().default(""),
+  quantity: z.number().optional().default(1),
+  amount: z.number().optional().default(0),
+  currency: z.coerce.string().optional().default("RUB"),
+  note: z.coerce.string().optional().default(""),
+  source: z.coerce.string().optional().default("manual"),
+  status: z.coerce.string().optional().default("confirmed"),
+  spentAt: z.coerce.string().optional().nullable(),
+}).passthrough();
+
+export const FinanceOrdersSchema = z.object({
+  ok: z.boolean().optional(),
+  source: z.coerce.string().optional().default(""),
+  total: z.number().optional().default(0),
+  orders: z.array(FinanceOrderSchema).optional().default([]),
+}).passthrough();
+
+export const FinanceExpensesSchema = z.object({
+  ok: z.boolean().optional(),
+  source: z.coerce.string().optional().default(""),
+  total: z.number().optional().default(0),
+  expenses: z.array(FinanceExpenseSchema).optional().default([]),
+}).passthrough();
+
+export const FinanceExpenseCreateSchema = z.object({
+  ok: z.boolean().optional(),
+  expense: FinanceExpenseSchema.optional(),
 }).passthrough();
 
 export const SupplierCartRowSchema = z.object({

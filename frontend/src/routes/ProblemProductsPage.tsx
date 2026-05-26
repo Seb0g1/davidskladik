@@ -89,7 +89,13 @@ export function ProblemProductsPage() {
 
       {query.error ? <div className="inline-error">{String((query.error as Error).message || query.error)}</div> : null}
       {repair.error ? <div className="inline-error">{String((repair.error as Error).message || repair.error)}</div> : null}
-      {repair.data ? <div className="success-strip">Repair завершен. Успешно: {Number(repair.data.repaired || 0)}, ошибок: {Number(repair.data.failed || 0)}</div> : null}
+      {repair.data ? (
+        <div className="success-strip">
+          {repair.data.accepted
+            ? `Repair поставлен в очередь: ${text((repair.data.job as Record<string, unknown> | undefined)?.id || "") || "background job"}.`
+            : `Repair завершен. Успешно: ${Number(repair.data.repaired || 0)}, ошибок: ${Number(repair.data.failed || 0)}`}
+        </div>
+      ) : null}
 
       <div className="table-panel price-table">
         <div className="table-head">

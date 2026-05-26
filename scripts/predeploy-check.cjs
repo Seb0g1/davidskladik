@@ -1,0 +1,30 @@
+#!/usr/bin/env node
+"use strict";
+
+const { spawnSync } = require("node:child_process");
+const path = require("node:path");
+
+const root = path.resolve(__dirname, "..");
+
+function run(command, args, options = {}) {
+  process.stdout.write(`\n$ ${[command, ...args].join(" ")}\n`);
+  const result = spawnSync(command, args, {
+    cwd: root,
+    shell: process.platform === "win32",
+    stdio: "inherit",
+    env: { ...process.env, DISABLE_BACKGROUND_JOBS: "true", ...(options.env || {}) },
+  });
+  if (result.status !== 0) {
+    process.stderr.write(`\npredeploy-check failed at: ${[command, ...args].join(" ")}\n`);
+    process.exit(result.status || 1);
+  }
+}
+
+run("npx", ["prisma", "validate"]);
+run("npx", ["prisma", "migrate", "status"]);
+run("npx", ["prisma", "migrate", "deploy"]);
+run("npx", ["prisma", "generate"]);
+run("node", ["scripts/migrate-json-state-to-postgres.cjs"]);
+run("node", ["scripts/ops-diagnose.cjs", "--json", "--deep", "--log-lines=80"]);
+
+process.stdout.write("\npredeploy-check complete\n");

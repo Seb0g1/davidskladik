@@ -1,4 +1,4 @@
-const { test } = require("node:test");
+const { after, test } = require("node:test");
 const assert = require("node:assert/strict");
 const { execFile } = require("node:child_process");
 const fs = require("node:fs/promises");
@@ -171,9 +171,15 @@ const {
   normalizeSupplierOrderCutoff,
   supplierOrderCutoffPassed,
   supplierCartOrderScore,
+  shutdownForTests,
 } = require("../server.js");
 const postgres = require("../lib/postgres.js");
 const seedPostgres = require("../scripts/seed-postgres-from-json.cjs");
+
+after(async () => {
+  await shutdownForTests?.();
+  await postgres.closePrisma?.();
+});
 
 test("GET /health", async () => {
   const res = await request(app).get("/health").expect(200);

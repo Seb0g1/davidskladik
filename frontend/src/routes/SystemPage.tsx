@@ -62,11 +62,12 @@ export function SystemPage() {
         <div className="table-head"><span>Компонент</span><span>Статус</span><span>Детали</span></div>
         {Object.entries(components).map(([name, value]) => {
           const row = asRecord(value);
+          const missing = Array.isArray(row.missing) ? row.missing.join(", ") : "";
           return (
             <div className="table-row" key={name}>
               <span data-label="Компонент"><Database size={14} /> {name}</span>
               <span data-label="Статус">{row.ok === false ? <AlertCircle size={14} /> : <Activity size={14} />} {row.ok === false ? "error" : "ok"}</span>
-              <span data-label="Детали">{text(row.error || row.mode || row.queueMode || row.accounts || row.shops) || "-"}</span>
+              <span data-label="Детали">{missing || text(row.error || row.mode || row.queueMode || row.accounts || row.shops) || "-"}</span>
             </div>
           );
         })}

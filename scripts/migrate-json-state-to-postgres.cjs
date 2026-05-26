@@ -212,11 +212,94 @@ async function migratePicking() {
   return rows;
 }
 
+async function migrateFinance() {
+  const payload = await readJson("finance-state.json", { orders: [], expenses: [] });
+  let orders = 0;
+  let expenses = 0;
+  for (const row of Array.isArray(payload.orders) ? payload.orders : []) {
+    const id = text(row.id);
+    const orderId = text(row.orderId || row.order_id || row.postingNumber || row.posting_number);
+    if (!id || !orderId) continue;
+    const marketplaceText = text(row.marketplace).toLowerCase();
+    const marketplace = marketplaceText === "ozon" || marketplaceText === "yandex" ? marketplaceText : null;
+    const money = (value) => {
+      if (value === undefined || value === null || value === "") return null;
+      const n = Number(value);
+      return Number.isFinite(n) ? n : null;
+    };
+    const profit = money(row.profitAmount ?? row.profit_amount)
+      ?? Number((Number(row.payoutAmount ?? row.payout_amount ?? row.saleAmount ?? row.sale_amount ?? 0)
+        - Number(row.purchaseCost ?? row.purchase_cost ?? 0)
+        - Number(row.feesAmount ?? row.fees_amount ?? 0)
+        - Number(row.taxAmount ?? row.tax_amount ?? 0)
+        - Number(row.penaltiesAmount ?? row.penalties_amount ?? 0)
+        - Number(row.refundsAmount ?? row.refunds_amount ?? 0)).toFixed(2));
+    await prisma.financeOrder.upsert({
+      where: { id },
+      create: {
+        id,
+        marketplace,
+        target: text(row.target) || null,
+        orderId,
+        postingNumber: text(row.postingNumber || row.posting_number) || null,
+        offerId: text(row.offerId || row.offer_id) || null,
+        productName: text(row.productName || row.product_name || row.name) || null,
+        quantity: Math.max(1, Number(row.quantity || 1) || 1),
+        saleAmount: money(row.saleAmount ?? row.sale_amount),
+        payoutAmount: money(row.payoutAmount ?? row.payout_amount),
+        purchaseCost: money(row.purchaseCost ?? row.purchase_cost),
+        feesAmount: money(row.feesAmount ?? row.fees_amount),
+        taxAmount: money(row.taxAmount ?? row.tax_amount),
+        penaltiesAmount: money(row.penaltiesAmount ?? row.penalties_amount),
+        refundsAmount: money(row.refundsAmount ?? row.refunds_amount),
+        profitAmount: profit,
+        supplierName: text(row.supplierName || row.supplier_name) || null,
+        partnerId: text(row.partnerId || row.partner_id) || null,
+        source: text(row.source || "manual") || "manual",
+        status: text(row.status || "open") || "open",
+        soldAt: date(row.soldAt || row.sold_at),
+        receivedAt: date(row.receivedAt || row.received_at),
+        raw: row,
+      },
+      update: { raw: row, status: text(row.status || "open") || "open", profitAmount: profit },
+    });
+    orders += 1;
+  }
+  for (const row of Array.isArray(payload.expenses) ? payload.expenses : []) {
+    const id = text(row.id);
+    const amount = Number(row.amount || 0);
+    if (!id || !(amount > 0)) continue;
+    await prisma.financeExpense.upsert({
+      where: { id },
+      create: {
+        id,
+        type: text(row.type || "manual_purchase") || "manual_purchase",
+        supplierName: text(row.supplierName || row.supplier_name) || null,
+        partnerId: text(row.partnerId || row.partner_id) || null,
+        offerId: text(row.offerId || row.offer_id) || null,
+        productName: text(row.productName || row.product_name || row.name) || null,
+        quantity: Math.max(1, Number(row.quantity || 1) || 1),
+        amount,
+        currency: text(row.currency || "RUB").toUpperCase() || "RUB",
+        note: text(row.note) || null,
+        source: text(row.source || "manual") || "manual",
+        status: text(row.status || "confirmed") || "confirmed",
+        spentAt: date(row.spentAt || row.spent_at) || new Date(),
+        raw: row,
+      },
+      update: { raw: row, amount, status: text(row.status || "confirmed") || "confirmed" },
+    });
+    expenses += 1;
+  }
+  return { orders, expenses };
+}
+
 async function main() {
   const result = {
     ozonQueue: await migrateOzonQueue(),
     supplierCart: await migrateSupplierCart(),
     pickingRows: await migratePicking(),
+    finance: await migrateFinance(),
   };
   console.log(JSON.stringify({ ok: true, result }, null, 2));
 }

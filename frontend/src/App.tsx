@@ -11,8 +11,9 @@ import { PricesPage } from "./routes/PricesPage";
 import { SystemPage } from "./routes/SystemPage";
 import { PickingListPage } from "./routes/PickingListPage";
 import { ProblemProductsPage } from "./routes/ProblemProductsPage";
+import { FinancePage } from "./routes/FinancePage";
 
-type AppRoute = "warehouse" | "picking-list" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "settings" | "system" | "ai-drafts" | "no-supplier";
+type AppRoute = "warehouse" | "picking-list" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "settings" | "system" | "ai-drafts" | "no-supplier";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -23,6 +24,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
   { route: "prices", href: "/app/prices", label: "Цены", icon: <BadgeDollarSign size={16} /> },
   { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} /> },
+  { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} /> },
   { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
   { route: "system", href: "/app/system", label: "Система", icon: <Activity size={16} /> },
   { route: "ai-drafts", href: "/app/ai-drafts", label: "AI drafts", icon: <Sparkles size={16} /> },
@@ -37,6 +39,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/recovery-queue")) return "recovery-queue";
   if (path.startsWith("/app/prices")) return "prices";
   if (path.startsWith("/app/problem-products")) return "problem-products";
+  if (path.startsWith("/app/finance")) return "finance";
   if (path.startsWith("/app/settings")) return "settings";
   if (path.startsWith("/app/system")) return "system";
   if (path.startsWith("/app/ai-drafts")) return "ai-drafts";
@@ -109,6 +112,7 @@ function AppShell() {
       {!accessDenied && route === "recovery-queue" ? <RecoveryQueuePage /> : null}
       {!accessDenied && route === "prices" ? <PricesPage /> : null}
       {!accessDenied && route === "problem-products" ? <ProblemProductsPage /> : null}
+      {!accessDenied && route === "finance" ? <FinancePage /> : null}
       {!accessDenied && route === "settings" ? <SettingsPage /> : null}
       {!accessDenied && route === "system" ? <SystemPage /> : null}
       {!accessDenied && route === "ai-drafts" ? <AiDraftsPage /> : null}

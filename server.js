@@ -27,6 +27,7 @@ const {
   postgresModeEnabled,
   jsonFallbackEnabled,
   getPrisma,
+  closePrisma,
 } = require("./lib/postgres");
 
 if (process.env.NODE_ENV === "production") {
@@ -84,6 +85,7 @@ const operationJobsPath = path.join(dataDir, "operation-jobs.json");
 const aiImageJobsPath = path.join(dataDir, "ai-image-jobs.json");
 const supplierCartStatePath = path.join(dataDir, "supplier-cart-state.json");
 const supplierPickingListPath = path.join(dataDir, "supplier-picking-list.json");
+const financeStatePath = path.join(dataDir, "finance-state.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
 const buildVersion = cleanBuildVersion(process.env.APP_BUILD_VERSION || process.env.GIT_COMMIT || readGitCommit());
@@ -967,11 +969,27 @@ function readGitCommit() {
 }
 
 async function collectHealthDetails({ deep = false } = {}) {
+  const requiredPostgresTables = [
+    "sales_automation_sku_states",
+    "ozon_unarchive_queue",
+    "supplier_cart_drafts",
+    "supplier_cart_draft_rows",
+    "supplier_picking_rows",
+    "supplier_blocks",
+    "brand_index_items",
+    "finance_orders",
+    "finance_expenses",
+  ];
   const components = {
     storage: {
       mode: shouldUsePostgresStorage() ? "postgres" : "json",
       postgresMode: postgresModeEnabled(),
       jsonFallback: jsonFallbackEnabled(),
+    },
+    postgresTables: {
+      required: requiredPostgresTables,
+      missing: [],
+      ok: shouldUsePostgresStorage() ? null : true,
     },
     postgres: {
       configured: Boolean(cleanText(process.env.DATABASE_URL)),
@@ -1003,9 +1021,20 @@ async function collectHealthDetails({ deep = false } = {}) {
     try {
       await healthTimeout(getPrisma().$queryRaw`SELECT 1 AS ok`);
       components.postgres.ok = true;
+      const rows = await healthTimeout(getPrisma().$queryRaw`
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_schema = 'public'
+      `);
+      const present = new Set((Array.isArray(rows) ? rows : []).map((row) => cleanText(row.table_name)));
+      components.postgresTables.present = Array.from(present);
+      components.postgresTables.missing = requiredPostgresTables.filter((name) => !present.has(name));
+      components.postgresTables.ok = components.postgresTables.missing.length === 0;
     } catch (error) {
       components.postgres.ok = false;
       components.postgres.error = error?.message || String(error);
+      components.postgresTables.ok = false;
+      components.postgresTables.error = error?.message || String(error);
     }
   }
 
@@ -1036,6 +1065,7 @@ async function collectHealthDetails({ deep = false } = {}) {
 
   const required = [
     components.postgres.enabled ? components.postgres : null,
+    components.postgres.enabled ? components.postgresTables : null,
     components.pricemaster.configured ? components.pricemaster : null,
     components.redis.enabled ? components.redis : null,
   ].filter(Boolean);
@@ -13456,8 +13486,18 @@ app.post("/api/warehouse/brands/rebuild-index", requireAdmin, async (request, re
       return response.status(400).json({ error: "Brand index requires PostgreSQL storage.", code: "postgres_required" });
     }
     const limit = cleanLimit(request.body?.limit || request.query?.limit, 100000, 200000);
-    const result = await rebuildWarehouseBrandIndexPostgres(getPrisma(), { limit });
-    response.json({ ...result, source: "postgres" });
+    const job = await upsertOperationJob({
+      id: crypto.randomUUID(),
+      type: "brand-index-rebuild",
+      title: operationTitle("brand-index-rebuild"),
+      status: "queued",
+      user: request.session?.username || "system",
+      role: request.session?.role || "admin",
+      payload: { limit },
+      progress: 0,
+    });
+    startOperationJob(job);
+    response.status(202).json({ ok: true, accepted: true, job: operationJobPublic(job), source: "postgres" });
   } catch (error) {
     next(error);
   }
@@ -17950,7 +17990,7 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
   }
 }
 
-app.post("/api/warehouse/prices/send", async (request, response, next) => {
+app.post("/api/warehouse/prices/send", requireAdmin, async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
       return response.status(400).json({ error: "Prices were not sent because manual confirmation is required." });
@@ -18115,16 +18155,24 @@ app.post("/api/sales-automation/run", requireAdmin, async (request, response, ne
     const marketplace = cleanText(request.body?.marketplace || "all").toLowerCase();
     const force = request.body?.force === true;
     const onlyChanged = request.body?.onlyChanged !== false;
-    const result = await sendWarehousePrices({
-      confirmed: true,
-      marketplace,
-      force,
-      onlyChanged,
-      livePriceMaster: true,
-      refreshMarketplacePrices: true,
-      limit: cleanLimit(request.body?.limit, 1000, 50000),
+    const job = await upsertOperationJob({
+      id: crypto.randomUUID(),
+      type: "sales-automation-run",
+      title: operationTitle("sales-automation-run"),
+      status: "queued",
+      user: request.session?.username || "system",
+      role: request.session?.role || "admin",
+      payload: {
+        marketplace,
+        force,
+        onlyChanged,
+        limit: cleanLimit(request.body?.limit, 1000, 50000),
+        reason: "sales_automation_manual",
+      },
+      progress: 0,
     });
-    response.json(result);
+    startOperationJob(job);
+    response.status(202).json({ ok: true, accepted: true, job: operationJobPublic(job) });
   } catch (error) {
     next(error);
   }
@@ -18212,21 +18260,431 @@ app.post("/api/problem-products/repair", requireAdmin, async (request, response,
   try {
     const productIds = Array.isArray(request.body?.productIds) ? request.body.productIds.map(cleanText).filter(Boolean) : [];
     if (!productIds.length) return response.status(400).json({ error: "No productIds selected.", code: "problem_products_empty" });
-    const results = [];
-    for (const id of productIds.slice(0, 100)) {
-      try {
-        results.push(await repairWarehouseProductGroup(id, request));
-      } catch (error) {
-        results.push({ ok: false, productId: id, error: error?.message || String(error) });
-      }
-    }
-    response.json({ ok: results.every((item) => item.ok !== false), repaired: results.filter((item) => item.ok !== false).length, failed: results.filter((item) => item.ok === false).length, results });
+    const job = await upsertOperationJob({
+      id: crypto.randomUUID(),
+      type: "problem-products-repair",
+      title: operationTitle("problem-products-repair"),
+      status: "queued",
+      user: request.session?.username || "system",
+      role: request.session?.role || "admin",
+      payload: { productIds: productIds.slice(0, 100) },
+      progress: 0,
+    });
+    startOperationJob(job);
+    response.status(202).json({ ok: true, accepted: true, job: operationJobPublic(job) });
   } catch (error) {
     next(error);
   }
 });
 
-app.post("/api/warehouse/prices/retry", async (request, response, next) => {
+function normalizeFinanceMoney(value, fallback = 0) {
+  const n = Number(value ?? fallback);
+  return Number.isFinite(n) ? Number(n.toFixed(2)) : Number(fallback || 0);
+}
+
+function financeOrderProfit(row = {}) {
+  const payout = normalizeFinanceMoney(row.payoutAmount ?? row.payout_amount ?? row.saleAmount ?? row.sale_amount, 0);
+  const purchase = normalizeFinanceMoney(row.purchaseCost ?? row.purchase_cost, 0);
+  const fees = normalizeFinanceMoney(row.feesAmount ?? row.fees_amount, 0);
+  const tax = normalizeFinanceMoney(row.taxAmount ?? row.tax_amount, 0);
+  const penalties = normalizeFinanceMoney(row.penaltiesAmount ?? row.penalties_amount, 0);
+  const refunds = normalizeFinanceMoney(row.refundsAmount ?? row.refunds_amount, 0);
+  return normalizeFinanceMoney(payout - purchase - fees - tax - penalties - refunds, 0);
+}
+
+function normalizeFinanceExpense(input = {}) {
+  const spentAt = toDateOrNull(input.spentAt || input.spent_at) || new Date();
+  return {
+    id: cleanText(input.id) || crypto.randomUUID(),
+    type: cleanText(input.type || "manual_purchase") || "manual_purchase",
+    supplierName: cleanText(input.supplierName || input.supplier_name),
+    partnerId: cleanText(input.partnerId || input.partner_id),
+    offerId: cleanText(input.offerId || input.offer_id),
+    productName: cleanText(input.productName || input.product_name || input.name),
+    quantity: Math.max(1, Math.round(Number(input.quantity || 1) || 1)),
+    amount: normalizeFinanceMoney(input.amount, 0),
+    currency: cleanText(input.currency || "RUB").toUpperCase() || "RUB",
+    note: cleanText(input.note),
+    source: cleanText(input.source || "manual") || "manual",
+    status: cleanText(input.status || "confirmed") || "confirmed",
+    spentAt: spentAt.toISOString(),
+    raw: input.raw && typeof input.raw === "object" ? input.raw : input,
+    createdAt: input.createdAt || input.created_at || new Date().toISOString(),
+    updatedAt: input.updatedAt || input.updated_at || new Date().toISOString(),
+  };
+}
+
+function normalizeFinanceOrder(input = {}) {
+  const marketplaceText = cleanText(input.marketplace).toLowerCase();
+  const marketplace = marketplaceText === "ozon" || marketplaceText === "yandex" ? marketplaceText : "";
+  const saleAmount = input.saleAmount ?? input.sale_amount;
+  const payoutAmount = input.payoutAmount ?? input.payout_amount;
+  const purchaseCost = input.purchaseCost ?? input.purchase_cost;
+  const feesAmount = input.feesAmount ?? input.fees_amount;
+  const taxAmount = input.taxAmount ?? input.tax_amount;
+  const penaltiesAmount = input.penaltiesAmount ?? input.penalties_amount;
+  const refundsAmount = input.refundsAmount ?? input.refunds_amount;
+  const row = {
+    id: cleanText(input.id) || crypto.randomUUID(),
+    marketplace,
+    target: cleanText(input.target),
+    orderId: cleanText(input.orderId || input.order_id) || cleanText(input.postingNumber || input.posting_number) || `manual-${crypto.randomUUID()}`,
+    postingNumber: cleanText(input.postingNumber || input.posting_number),
+    offerId: cleanText(input.offerId || input.offer_id),
+    productName: cleanText(input.productName || input.product_name || input.name),
+    quantity: Math.max(1, Math.round(Number(input.quantity || 1) || 1)),
+    saleAmount: saleAmount === undefined || saleAmount === null || saleAmount === "" ? null : normalizeFinanceMoney(saleAmount, 0),
+    payoutAmount: payoutAmount === undefined || payoutAmount === null || payoutAmount === "" ? null : normalizeFinanceMoney(payoutAmount, 0),
+    purchaseCost: purchaseCost === undefined || purchaseCost === null || purchaseCost === "" ? null : normalizeFinanceMoney(purchaseCost, 0),
+    feesAmount: feesAmount === undefined || feesAmount === null || feesAmount === "" ? null : normalizeFinanceMoney(feesAmount, 0),
+    taxAmount: taxAmount === undefined || taxAmount === null || taxAmount === "" ? null : normalizeFinanceMoney(taxAmount, 0),
+    penaltiesAmount: penaltiesAmount === undefined || penaltiesAmount === null || penaltiesAmount === "" ? null : normalizeFinanceMoney(penaltiesAmount, 0),
+    refundsAmount: refundsAmount === undefined || refundsAmount === null || refundsAmount === "" ? null : normalizeFinanceMoney(refundsAmount, 0),
+    supplierName: cleanText(input.supplierName || input.supplier_name),
+    partnerId: cleanText(input.partnerId || input.partner_id),
+    source: cleanText(input.source || "manual") || "manual",
+    status: cleanText(input.status || "open") || "open",
+    soldAt: toDateOrNull(input.soldAt || input.sold_at)?.toISOString?.() || null,
+    receivedAt: toDateOrNull(input.receivedAt || input.received_at)?.toISOString?.() || null,
+    raw: input.raw && typeof input.raw === "object" ? input.raw : input,
+    createdAt: input.createdAt || input.created_at || new Date().toISOString(),
+    updatedAt: input.updatedAt || input.updated_at || new Date().toISOString(),
+  };
+  row.profitAmount = normalizeFinanceMoney(input.profitAmount ?? input.profit_amount ?? financeOrderProfit(row), 0);
+  return row;
+}
+
+function financeOrderFromPostgres(row = {}) {
+  return normalizeFinanceOrder({
+    id: row.id,
+    marketplace: row.marketplace || "",
+    target: row.target || "",
+    orderId: row.orderId,
+    postingNumber: row.postingNumber,
+    offerId: row.offerId,
+    productName: row.productName,
+    quantity: row.quantity,
+    saleAmount: row.saleAmount === null || row.saleAmount === undefined ? null : Number(row.saleAmount),
+    payoutAmount: row.payoutAmount === null || row.payoutAmount === undefined ? null : Number(row.payoutAmount),
+    purchaseCost: row.purchaseCost === null || row.purchaseCost === undefined ? null : Number(row.purchaseCost),
+    feesAmount: row.feesAmount === null || row.feesAmount === undefined ? null : Number(row.feesAmount),
+    taxAmount: row.taxAmount === null || row.taxAmount === undefined ? null : Number(row.taxAmount),
+    penaltiesAmount: row.penaltiesAmount === null || row.penaltiesAmount === undefined ? null : Number(row.penaltiesAmount),
+    refundsAmount: row.refundsAmount === null || row.refundsAmount === undefined ? null : Number(row.refundsAmount),
+    profitAmount: row.profitAmount === null || row.profitAmount === undefined ? null : Number(row.profitAmount),
+    supplierName: row.supplierName,
+    partnerId: row.partnerId,
+    source: row.source,
+    status: row.status,
+    soldAt: row.soldAt?.toISOString?.() || null,
+    receivedAt: row.receivedAt?.toISOString?.() || null,
+    raw: row.raw || {},
+    createdAt: row.createdAt?.toISOString?.() || null,
+    updatedAt: row.updatedAt?.toISOString?.() || null,
+  });
+}
+
+function financeExpenseFromPostgres(row = {}) {
+  return normalizeFinanceExpense({
+    id: row.id,
+    type: row.type,
+    supplierName: row.supplierName,
+    partnerId: row.partnerId,
+    offerId: row.offerId,
+    productName: row.productName,
+    quantity: row.quantity,
+    amount: Number(row.amount || 0),
+    currency: row.currency,
+    note: row.note,
+    source: row.source,
+    status: row.status,
+    spentAt: row.spentAt?.toISOString?.() || null,
+    raw: row.raw || {},
+    createdAt: row.createdAt?.toISOString?.() || null,
+    updatedAt: row.updatedAt?.toISOString?.() || null,
+  });
+}
+
+async function readFinanceJsonFallback() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(financeStatePath, "utf8"));
+    return {
+      orders: Array.isArray(parsed.orders) ? parsed.orders.map(normalizeFinanceOrder) : [],
+      expenses: Array.isArray(parsed.expenses) ? parsed.expenses.map(normalizeFinanceExpense) : [],
+      updatedAt: parsed.updatedAt || null,
+    };
+  } catch (error) {
+    if (error.code === "ENOENT") return { orders: [], expenses: [], updatedAt: null };
+    throw error;
+  }
+}
+
+async function writeFinanceJsonFallback(state = {}) {
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    orders: Array.isArray(state.orders) ? state.orders.map(normalizeFinanceOrder) : [],
+    expenses: Array.isArray(state.expenses) ? state.expenses.map(normalizeFinanceExpense) : [],
+  };
+  await fs.mkdir(dataDir, { recursive: true });
+  const temporaryPath = `${financeStatePath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(temporaryPath, JSON.stringify(payload, null, 2), "utf8");
+  await fs.rename(temporaryPath, financeStatePath);
+  return payload;
+}
+
+function financePeriodWhere(period = "30d", field = "createdAt") {
+  const normalized = cleanText(period || "30d").toLowerCase();
+  if (normalized === "all") return {};
+  const days = normalized === "7d" ? 7 : normalized === "90d" ? 90 : 30;
+  return { [field]: { gte: new Date(Date.now() - days * 24 * 60 * 60 * 1000) } };
+}
+
+function financeSummaryFromRows(orders = [], expenses = []) {
+  const orderIncome = orders.reduce((sum, row) => sum + normalizeFinanceMoney(row.payoutAmount ?? row.saleAmount, 0), 0);
+  const purchaseCost = orders.reduce((sum, row) => sum + normalizeFinanceMoney(row.purchaseCost, 0), 0);
+  const fees = orders.reduce((sum, row) => sum + normalizeFinanceMoney(row.feesAmount, 0), 0);
+  const tax = orders.reduce((sum, row) => sum + normalizeFinanceMoney(row.taxAmount, 0), 0);
+  const penalties = orders.reduce((sum, row) => sum + normalizeFinanceMoney(row.penaltiesAmount, 0), 0);
+  const refunds = orders.reduce((sum, row) => sum + normalizeFinanceMoney(row.refundsAmount, 0), 0);
+  const manualExpenses = expenses.reduce((sum, row) => sum + normalizeFinanceMoney(row.amount, 0), 0);
+  const orderProfit = orders.reduce((sum, row) => sum + normalizeFinanceMoney(row.profitAmount ?? financeOrderProfit(row), 0), 0);
+  return {
+    orders: orders.length,
+    expenses: expenses.length,
+    orderIncome: normalizeFinanceMoney(orderIncome, 0),
+    purchaseCost: normalizeFinanceMoney(purchaseCost, 0),
+    fees: normalizeFinanceMoney(fees, 0),
+    tax: normalizeFinanceMoney(tax, 0),
+    penalties: normalizeFinanceMoney(penalties, 0),
+    refunds: normalizeFinanceMoney(refunds, 0),
+    manualExpenses: normalizeFinanceMoney(manualExpenses, 0),
+    orderProfit: normalizeFinanceMoney(orderProfit, 0),
+    netProfit: normalizeFinanceMoney(orderProfit - manualExpenses, 0),
+  };
+}
+
+async function listFinanceOrders({ period = "30d", q = "", limit = 200 } = {}) {
+  const normalizedLimit = Math.max(1, Math.min(2000, Number(limit || 200) || 200));
+  if (shouldUsePostgresStorage()) {
+    try {
+      const where = {
+        AND: [
+          financePeriodWhere(period, "createdAt"),
+          q ? {
+            OR: [
+              { orderId: { contains: q, mode: "insensitive" } },
+              { postingNumber: { contains: q, mode: "insensitive" } },
+              { offerId: { contains: q, mode: "insensitive" } },
+              { productName: { contains: q, mode: "insensitive" } },
+              { supplierName: { contains: q, mode: "insensitive" } },
+            ],
+          } : {},
+        ].filter((item) => Object.keys(item || {}).length),
+      };
+      const [total, rows] = await Promise.all([
+        getPrisma().financeOrder.count({ where }),
+        getPrisma().financeOrder.findMany({ where, orderBy: { createdAt: "desc" }, take: normalizedLimit }),
+      ]);
+      return { source: "postgres", total, orders: rows.map(financeOrderFromPostgres) };
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("finance orders postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+  const state = await readFinanceJsonFallback();
+  const needle = cleanText(q).toLowerCase();
+  const orders = state.orders
+    .filter((row) => !needle || [row.orderId, row.postingNumber, row.offerId, row.productName, row.supplierName].join(" ").toLowerCase().includes(needle))
+    .slice(0, normalizedLimit);
+  return { source: "json", total: orders.length, orders };
+}
+
+async function listFinanceExpenses({ period = "30d", q = "", limit = 200 } = {}) {
+  const normalizedLimit = Math.max(1, Math.min(2000, Number(limit || 200) || 200));
+  if (shouldUsePostgresStorage()) {
+    try {
+      const where = {
+        AND: [
+          financePeriodWhere(period, "spentAt"),
+          q ? {
+            OR: [
+              { offerId: { contains: q, mode: "insensitive" } },
+              { productName: { contains: q, mode: "insensitive" } },
+              { supplierName: { contains: q, mode: "insensitive" } },
+              { note: { contains: q, mode: "insensitive" } },
+            ],
+          } : {},
+        ].filter((item) => Object.keys(item || {}).length),
+      };
+      const [total, rows] = await Promise.all([
+        getPrisma().financeExpense.count({ where }),
+        getPrisma().financeExpense.findMany({ where, orderBy: { spentAt: "desc" }, take: normalizedLimit }),
+      ]);
+      return { source: "postgres", total, expenses: rows.map(financeExpenseFromPostgres) };
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("finance expenses postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+  const state = await readFinanceJsonFallback();
+  const needle = cleanText(q).toLowerCase();
+  const expenses = state.expenses
+    .filter((row) => !needle || [row.offerId, row.productName, row.supplierName, row.note].join(" ").toLowerCase().includes(needle))
+    .slice(0, normalizedLimit);
+  return { source: "json", total: expenses.length, expenses };
+}
+
+app.get("/api/finance/summary", requireAdmin, async (request, response, next) => {
+  try {
+    const period = cleanText(request.query.period || "30d").toLowerCase();
+    const [ordersResult, expensesResult] = await Promise.all([
+      listFinanceOrders({ period, limit: 2000 }),
+      listFinanceExpenses({ period, limit: 2000 }),
+    ]);
+    response.json({
+      ok: true,
+      period,
+      source: ordersResult.source === expensesResult.source ? ordersResult.source : "mixed",
+      summary: financeSummaryFromRows(ordersResult.orders, expensesResult.expenses),
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/finance/orders", requireAdmin, async (request, response, next) => {
+  try {
+    const result = await listFinanceOrders({
+      period: cleanText(request.query.period || "30d").toLowerCase(),
+      q: cleanText(request.query.q || ""),
+      limit: cleanLimit(request.query.limit, 200, 2000),
+    });
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/finance/orders/:id", requireAdmin, async (request, response, next) => {
+  try {
+    const id = cleanText(request.params.id);
+    const patch = normalizeFinanceOrder({ ...request.body, id });
+    if (shouldUsePostgresStorage()) {
+      try {
+        const row = await getPrisma().financeOrder.upsert({
+          where: { id },
+          create: {
+            id,
+            marketplace: patch.marketplace || null,
+            target: patch.target || null,
+            orderId: patch.orderId,
+            postingNumber: patch.postingNumber || null,
+            offerId: patch.offerId || null,
+            productName: patch.productName || null,
+            quantity: patch.quantity,
+            saleAmount: patch.saleAmount,
+            payoutAmount: patch.payoutAmount,
+            purchaseCost: patch.purchaseCost,
+            feesAmount: patch.feesAmount,
+            taxAmount: patch.taxAmount,
+            penaltiesAmount: patch.penaltiesAmount,
+            refundsAmount: patch.refundsAmount,
+            profitAmount: financeOrderProfit(patch),
+            supplierName: patch.supplierName || null,
+            partnerId: patch.partnerId || null,
+            source: patch.source,
+            status: patch.status,
+            soldAt: toDateOrNull(patch.soldAt),
+            receivedAt: toDateOrNull(patch.receivedAt),
+            raw: patch,
+          },
+          update: {
+            saleAmount: patch.saleAmount,
+            payoutAmount: patch.payoutAmount,
+            purchaseCost: patch.purchaseCost,
+            feesAmount: patch.feesAmount,
+            taxAmount: patch.taxAmount,
+            penaltiesAmount: patch.penaltiesAmount,
+            refundsAmount: patch.refundsAmount,
+            profitAmount: financeOrderProfit(patch),
+            supplierName: patch.supplierName || null,
+            partnerId: patch.partnerId || null,
+            status: patch.status,
+            soldAt: toDateOrNull(patch.soldAt),
+            receivedAt: toDateOrNull(patch.receivedAt),
+            raw: patch,
+          },
+        });
+        await appendAudit(request, "finance.order.update", { entityType: "finance_order", entityId: id, newValue: patch });
+        return response.json({ ok: true, order: financeOrderFromPostgres(row) });
+      } catch (error) {
+        if (!jsonFallbackEnabled()) throw error;
+        logger.warn("finance order postgres write failed, using JSON fallback", { detail: error?.message || String(error) });
+      }
+    }
+    const state = await readFinanceJsonFallback();
+    const nextOrders = [...state.orders.filter((row) => row.id !== id), patch];
+    await writeFinanceJsonFallback({ ...state, orders: nextOrders });
+    response.json({ ok: true, source: "json", order: patch });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/finance/expenses", requireAdmin, async (request, response, next) => {
+  try {
+    const result = await listFinanceExpenses({
+      period: cleanText(request.query.period || "30d").toLowerCase(),
+      q: cleanText(request.query.q || ""),
+      limit: cleanLimit(request.query.limit, 200, 2000),
+    });
+    response.json({ ok: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/finance/expenses", requireAdmin, async (request, response, next) => {
+  try {
+    const expense = normalizeFinanceExpense(request.body || {});
+    if (!(expense.amount > 0)) return response.status(400).json({ error: "Expense amount must be greater than zero.", code: "finance_amount_required" });
+    if (shouldUsePostgresStorage()) {
+      try {
+        const row = await getPrisma().financeExpense.create({
+          data: {
+            id: expense.id,
+            type: expense.type,
+            supplierName: expense.supplierName || null,
+            partnerId: expense.partnerId || null,
+            offerId: expense.offerId || null,
+            productName: expense.productName || null,
+            quantity: expense.quantity,
+            amount: expense.amount,
+            currency: expense.currency,
+            note: expense.note || null,
+            source: expense.source,
+            status: expense.status,
+            spentAt: toDateOrNull(expense.spentAt) || new Date(),
+            raw: expense,
+          },
+        });
+        await appendAudit(request, "finance.expense.create", { entityType: "finance_expense", entityId: row.id, newValue: expense });
+        return response.status(201).json({ ok: true, expense: financeExpenseFromPostgres(row) });
+      } catch (error) {
+        if (!jsonFallbackEnabled()) throw error;
+        logger.warn("finance expense postgres write failed, using JSON fallback", { detail: error?.message || String(error) });
+      }
+    }
+    const state = await readFinanceJsonFallback();
+    await writeFinanceJsonFallback({ ...state, expenses: [expense, ...state.expenses] });
+    response.status(201).json({ ok: true, source: "json", expense });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/prices/retry", requireAdmin, async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
       return response.status(400).json({ error: "Retry was not sent because manual confirmation is required." });
@@ -18243,7 +18701,7 @@ app.post("/api/warehouse/prices/retry", async (request, response, next) => {
   }
 });
 
-app.get("/api/warehouse/prices/retry-queue", async (_request, response, next) => {
+app.get("/api/warehouse/prices/retry-queue", requireAdmin, async (_request, response, next) => {
   try {
     const queue = await readPriceRetryQueue();
     const items = (queue.items || [])
@@ -18258,7 +18716,7 @@ app.get("/api/warehouse/prices/retry-queue", async (_request, response, next) =>
   }
 });
 
-app.get("/api/warehouse/prices/history", async (request, response, next) => {
+app.get("/api/warehouse/prices/history", requireAdmin, async (request, response, next) => {
   try {
     const limit = cleanLimit(request.query.limit, 100, 500);
     const offset = Math.max(0, Number.parseInt(request.query.offset || "0", 10) || 0);
@@ -18280,7 +18738,7 @@ app.get("/api/warehouse/prices/history", async (request, response, next) => {
   }
 });
 
-app.delete("/api/warehouse/prices/retry-queue", async (request, response, next) => {
+app.delete("/api/warehouse/prices/retry-queue", requireAdmin, async (request, response, next) => {
   try {
     const queueKeys = new Set((Array.isArray(request.body?.queueKeys) ? request.body.queueKeys : [])
       .map((key) => String(key || "").trim())
@@ -19802,9 +20260,68 @@ function operationTitle(type = "") {
     "marketplace-supplier-cart-preview": "Supplier cart preview",
     "marketplace-supplier-cart-commit": "Supplier cart commit",
     "ozon-unarchive-queue-process": "Process Ozon autoarchive queue",
+    "sales-automation-run": "Run sales automation",
+    "problem-products-repair": "Repair problem products",
+    "brand-index-rebuild": "Rebuild brand index",
     "health-deep": "Deep health check",
   };
   return titles[type] || type || "Operation";
+}
+
+async function runSalesAutomationOperation(payload = {}) {
+  const result = await sendWarehousePrices({
+    marketplace: payload.marketplace || "all",
+    force: payload.force === true,
+    onlyChanged: payload.onlyChanged !== false,
+    refreshMarketplacePrices: true,
+    livePriceMaster: true,
+    limit: cleanLimit(payload.limit, 1000, 50000),
+    reason: payload.reason || "sales_automation_operation",
+  });
+  return {
+    ok: result.ok !== false,
+    ...result,
+    summary: `Sales automation processed ${result.selected || 0}; sent ${result.sent || result.readyToSend || 0}; skipped ${Array.isArray(result.skipped) ? result.skipped.length : 0}.`,
+  };
+}
+
+async function runProblemProductsRepairOperation(payload = {}, request = null, options = {}) {
+  const productIds = Array.isArray(payload.productIds) ? payload.productIds.map(cleanText).filter(Boolean).slice(0, 100) : [];
+  const results = [];
+  let processed = 0;
+  for (const id of productIds) {
+    processed += 1;
+    await options.onProgress?.({
+      progress: 5 + (processed / Math.max(1, productIds.length)) * 90,
+      summary: `Repairing ${processed} of ${productIds.length} problem products.`,
+    });
+    try {
+      results.push(await repairWarehouseProductGroup(id, request));
+    } catch (error) {
+      results.push({ ok: false, productId: id, error: error?.message || String(error) });
+    }
+  }
+  return {
+    ok: results.every((item) => item.ok !== false),
+    repaired: results.filter((item) => item.ok !== false).length,
+    failed: results.filter((item) => item.ok === false).length,
+    results,
+    summary: `Problem products repaired ${results.filter((item) => item.ok !== false).length}; failed ${results.filter((item) => item.ok === false).length}.`,
+  };
+}
+
+async function runBrandIndexRebuildOperation(payload = {}) {
+  if (!shouldUsePostgresStorage()) {
+    return { ok: false, error: "postgres_required", summary: "Brand index requires PostgreSQL storage." };
+  }
+  const limit = cleanLimit(payload.limit, 100000, 200000);
+  const result = await rebuildWarehouseBrandIndexPostgres(getPrisma(), { limit });
+  return {
+    ok: result.ok !== false,
+    ...result,
+    source: "postgres",
+    summary: `Brand index rebuilt: indexed ${result.indexed || result.created || 0}; scanned ${result.scanned || 0}.`,
+  };
 }
 
 async function runYandexPricePushOperation(payload = {}) {
@@ -20471,6 +20988,33 @@ async function runOperationPayload(job, options = {}) {
     await appendAudit(auditRequest, "ozon.unarchive_queue.operation", {
       entityType: "ozon_unarchive_queue",
       entityId: "operation",
+      newValue: result,
+    });
+    return result;
+  }
+  if (job.type === "sales-automation-run") {
+    const result = await runSalesAutomationOperation(job.payload || {});
+    await appendAudit(auditRequest, "sales_automation.run", {
+      entityType: "sales_automation",
+      entityId: "manual",
+      newValue: result,
+    });
+    return result;
+  }
+  if (job.type === "problem-products-repair") {
+    const result = await runProblemProductsRepairOperation(job.payload || {}, auditRequest, options);
+    await appendAudit(auditRequest, "problem_products.repair", {
+      entityType: "problem_products",
+      entityId: "bulk",
+      newValue: result,
+    });
+    return result;
+  }
+  if (job.type === "brand-index-rebuild") {
+    const result = await runBrandIndexRebuildOperation(job.payload || {});
+    await appendAudit(auditRequest, "warehouse.brands.rebuild_index", {
+      entityType: "brand_index",
+      entityId: "all",
       newValue: result,
     });
     return result;
@@ -22868,9 +23412,37 @@ async function startServer() {
   scheduleAutoSync(autoSyncInitialDelaySeconds * 1000);
 }
 
+async function shutdownForTests() {
+  for (const timer of [
+    dailySyncTimer,
+    autoSyncTimer,
+    ozonUnarchiveQueueAutoTimer,
+    immediateAutoPushTimer,
+    priceRetryTimer,
+    supplierCartAutoTimer,
+  ]) {
+    if (timer) clearTimeout(timer);
+  }
+  dailySyncTimer = null;
+  autoSyncTimer = null;
+  ozonUnarchiveQueueAutoTimer = null;
+  immediateAutoPushTimer = null;
+  priceRetryTimer = null;
+  supplierCartAutoTimer = null;
+  await Promise.allSettled([
+    marketplaceWorker?.close?.(),
+    marketplaceQueue?.close?.(),
+    pool?.end?.(),
+    closePrisma(),
+  ]);
+  marketplaceWorker = null;
+  marketplaceQueue = null;
+}
+
 module.exports = {
   app,
   startServer,
+  shutdownForTests,
   collectHealthDetails,
   resolveMarkupCoefficient,
   resolveAvailabilityPolicy,

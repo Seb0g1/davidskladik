@@ -622,6 +622,7 @@ function SupplierStockModePanel() {
 function ToolsSettingsPanel() {
   const tools = [
     { href: "/app/prices", title: "Цены", text: "Автоматизация цен и остатков, retry и причины пропусков." },
+    { href: "/app/finance", title: "Финансы", text: "Заказы, ручные закупки, поставщики и чистая прибыль." },
     { href: "/app/operations", title: "Операции", text: "Массовые задачи, прогресс и аварийные запуски." },
     { href: "/app/recovery-queue", title: "Восстановление", text: "Очередь Ozon autoarchive и дневной лимит разархива." },
     { href: "/app/no-supplier", title: "Ошибки наличия", text: "Товары без доступного поставщика и риски остатков." },

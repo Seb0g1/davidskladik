@@ -142,7 +142,9 @@ export function PricesPage() {
       {itemsQuery.error ? <div className="inline-error">{String((itemsQuery.error as Error).message || itemsQuery.error)}</div> : null}
       {run.data ? (
         <div className="success-strip">
-          Отправлено: {numberValue(run.data.sent)} · Ozon {numberValue(run.data.ozonSent)} · Yandex {numberValue(run.data.yandexSent)} · ошибок {numberValue(run.data.failed)}
+          {run.data.accepted
+            ? `Запуск поставлен в очередь: ${text((run.data.job as Record<string, unknown> | undefined)?.id || "") || "background job"}.`
+            : `Отправлено: ${numberValue(run.data.sent)} · Ozon ${numberValue(run.data.ozonSent)} · Yandex ${numberValue(run.data.yandexSent)} · ошибок ${numberValue(run.data.failed)}`}
         </div>
       ) : null}
 
