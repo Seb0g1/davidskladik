@@ -109,7 +109,9 @@ const bullmqWorkerConcurrency = Math.max(1, Math.min(4, Number(process.env.BULLM
 const bullmqLockDurationMs = Math.max(60000, Number(process.env.BULLMQ_LOCK_DURATION_MS || 300000) || 300000);
 const bullmqStalledIntervalMs = Math.max(30000, Number(process.env.BULLMQ_STALLED_INTERVAL_MS || 60000) || 60000);
 const bullmqMaxStalledCount = Math.max(1, Number(process.env.BULLMQ_MAX_STALLED_COUNT || 1) || 1);
-const marketplaceQueueAutoPricePushEnabled = process.env.MARKETPLACE_QUEUE_AUTO_PRICE_PUSH_ENABLED === "true";
+const marketplaceQueueAutoPricePushEnabled = process.env.MARKETPLACE_QUEUE_AUTO_PRICE_PUSH_ENABLED !== "false";
+const immediateAutoPushDelayMs = Math.max(1200, Number(process.env.AUTO_PRICE_IMMEDIATE_DELAY_MS || 10000) || 10000);
+const immediateAutoPushFollowupDelayMs = Math.max(1000, Number(process.env.AUTO_PRICE_IMMEDIATE_FOLLOWUP_DELAY_MS || immediateAutoPushDelayMs) || immediateAutoPushDelayMs);
 const priceMasterDeltaPricePushEnabled = process.env.PRICEMASTER_DELTA_PRICE_PUSH_ENABLED !== "false";
 const priceMasterDeltaMaxChanges = Math.max(1, Number(process.env.PRICEMASTER_DELTA_MAX_CHANGES || 5000) || 5000);
 const priceMasterDeltaMaxProducts = Math.max(1, Number(process.env.PRICEMASTER_DELTA_MAX_PRODUCTS || 2000) || 2000);
@@ -280,6 +282,8 @@ const priceMasterSearchCacheMax = Math.max(100, Number(process.env.PRICEMASTER_S
 let warehousePostgresSummaryCache = null;
 const warehousePostgresSummaryCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_PAGE_SUMMARY_CACHE_MS || 15000));
 let warehousePostgresSuppliersCache = null;
+let suppliersListCache = null;
+const suppliersListCacheTtlMs = Math.max(1000, Number(process.env.SUPPLIERS_LIST_CACHE_MS || 30000) || 30000);
 let warehouseBrandListCache = null;
 const warehouseBrandListCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_BRAND_LIST_CACHE_MS || 120000));
 let warehousePostgresDetailCache = new Map();
@@ -296,8 +300,15 @@ const ozonWarehouseCache = new Map();
 let immediateAutoPushTimer = null;
 let immediateAutoPushAll = false;
 const immediateAutoPushIds = new Set();
-let immediateAutoPushChain = Promise.resolve();
+let immediateAutoPushRunning = false;
 let immediateAutoPushForce = false;
+const immediateAutoPushReasons = new Set();
+let immediateAutoPushMarketplace = "all";
+let immediateAutoPushMarketplaceLocked = false;
+let immediateAutoPushOnlyChanged = true;
+let immediateAutoPushRefreshMarketplacePrices = true;
+let immediateAutoPushLivePriceMaster = true;
+let immediateAutoPushLimit = undefined;
 const changedPriceAutoPushAt = new Map();
 let changedPriceAutoPushLastBatchAt = 0;
 const detectedPriceAutoPushDefaultCooldownMs = 15 * 60_000;
@@ -371,6 +382,7 @@ function invalidateWarehouseViewCache() {
   warehouseViewBuilds.clear();
   warehousePostgresSummaryCache = null;
   warehousePostgresSuppliersCache = null;
+  suppliersListCache = null;
   warehouseBrandListCache = null;
   warehousePostgresDetailCache.clear();
   warehouseFastPageCache.clear();
@@ -1014,6 +1026,17 @@ async function collectHealthDetails({ deep = false } = {}) {
     yandex: {
       configured: getYandexShops().length > 0,
       shops: getYandexShops().length,
+    },
+    automation: {
+      pricePush: {
+        mode: marketplaceQueue && marketplaceQueueAutoPricePushEnabled ? "bullmq" : "inline",
+        running: immediateAutoPushRunning,
+        scheduled: Boolean(immediateAutoPushTimer),
+        pendingScope: immediateAutoPushAll ? "all" : immediateAutoPushIds.size,
+        pendingReasons: Array.from(immediateAutoPushReasons).slice(0, 8),
+        delayMs: immediateAutoPushDelayMs,
+        followupDelayMs: immediateAutoPushFollowupDelayMs,
+      },
     },
   };
 
@@ -13979,9 +14002,13 @@ app.get("/api/warehouse/no-supplier", async (request, response, next) => {
 
 app.get("/api/suppliers", async (request, response, next) => {
   try {
+    const refresh = request.query.refresh === "true";
+    if (!refresh && suppliersListCache && Date.now() - suppliersListCache.at < suppliersListCacheTtlMs) {
+      return response.json(cloneAuditValue(suppliersListCache.value));
+    }
     const warehouse = await readWarehouse();
     const supplierSync = { ok: false, partners: 0, imported: 0, changed: false, error: null };
-    if (request.query.refresh === "true") {
+    if (refresh) {
       try {
         const partners = await listPriceMasterPartners();
         const syncedSuppliers = syncWarehouseSuppliersFromPriceMaster(warehouse, partners);
@@ -14004,13 +14031,15 @@ app.get("/api/suppliers", async (request, response, next) => {
       logger.info("supplier auto-reactivated from suppliers api", { count: autoReactivated.length, suppliers: autoReactivated });
     }
     const impactCounts = supplierImpactCountMap(warehouse, warehouse.suppliers || []);
-    response.json({
+    const payload = {
       suppliers: (warehouse.suppliers || []).map((supplier) => ({
         ...supplier,
         impactProductCount: impactCounts.get(supplier.id) || 0,
       })),
       supplierSync,
-    });
+    };
+    suppliersListCache = { at: Date.now(), value: cloneAuditValue(payload) };
+    response.json(payload);
   } catch (error) {
     next(error);
   }
@@ -14069,8 +14098,7 @@ app.patch("/api/suppliers/:id/profile", requireAdmin, async (request, response, 
       },
     });
     warehouse.suppliers = suppliers;
-    await writeWarehouseJsonPayload(warehouse);
-    warehousePostgresSuppliersCache = null;
+    await writeWarehouse(warehouse);
     response.json({ ok: true, supplier: suppliers[index] });
   } catch (error) {
     next(error);
@@ -17700,7 +17728,7 @@ function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
     return marketplaceQueue.add(name, data, {
       jobId: marketplaceJobId(name, data),
       priority,
-      removeOnComplete: 2000,
+      removeOnComplete: name === "auto-price-push" ? true : 2000,
       removeOnFail: 2000,
     }).catch((error) => {
       logger.warn("queue add failed, falling back to inline mode", { name, detail: error?.message || String(error) });
@@ -17735,24 +17763,32 @@ function initMarketplaceQueue() {
     );
     marketplaceWorker.on("failed", (job, error) => {
       logger.warn("marketplace job failed", { job: job?.name, detail: error?.message || String(error) });
+      if (job?.name === "auto-price-push") {
+        immediateAutoPushRunning = false;
+        if (hasPendingImmediateAutoPricePush()) scheduleImmediateAutoPricePushFlush(immediateAutoPushFollowupDelayMs);
+      }
     });
     marketplaceWorker.on("completed", (job, result) => {
-      if (job?.name === "auto-price-push" && result && typeof result === "object") {
-        logger.info("immediate auto price push complete", {
-          reason: job.data?.reason || "bullmq",
-          scope: Array.isArray(job.data?.productIds) ? job.data.productIds.length : "all",
-          sent: result.sent || 0,
-          failed: result.failed || 0,
-          stockSent: result.stockSent || 0,
-          stockFailed: result.stockFailed || 0,
-          ozonSent: result.ozonSent || 0,
-          ozonFailed: result.ozonFailed || 0,
-          ozonSkipped: result.ozonSkipped || 0,
-          yandexSent: result.yandexSent || 0,
-          yandexFailed: result.yandexFailed || 0,
-          yandexSkipped: result.yandexSkipped || 0,
-          skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
-        });
+      if (job?.name === "auto-price-push") {
+        if (result && typeof result === "object") {
+          logger.info("immediate auto price push complete", {
+            reason: job.data?.reason || "bullmq",
+            scope: Array.isArray(job.data?.productIds) ? job.data.productIds.length : "all",
+            sent: result.sent || 0,
+            failed: result.failed || 0,
+            stockSent: result.stockSent || 0,
+            stockFailed: result.stockFailed || 0,
+            ozonSent: result.ozonSent || 0,
+            ozonFailed: result.ozonFailed || 0,
+            ozonSkipped: result.ozonSkipped || 0,
+            yandexSent: result.yandexSent || 0,
+            yandexFailed: result.yandexFailed || 0,
+            yandexSkipped: result.yandexSkipped || 0,
+            skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
+          });
+        }
+        immediateAutoPushRunning = false;
+        if (hasPendingImmediateAutoPricePush()) scheduleImmediateAutoPricePushFlush(immediateAutoPushFollowupDelayMs);
         return;
       }
       logger.info("marketplace job complete", { job: job?.name || "unknown" });
@@ -17776,73 +17812,156 @@ function initMarketplaceQueue() {
   }
 }
 
+function hasPendingImmediateAutoPricePush() {
+  return immediateAutoPushAll || immediateAutoPushIds.size > 0;
+}
+
+function mergeImmediateAutoPricePushOptions(reason = "price_change_detected", options = {}) {
+  immediateAutoPushReasons.add(cleanText(reason) || "price_change_detected");
+  if (options.force === true) {
+    immediateAutoPushForce = true;
+    immediateAutoPushOnlyChanged = false;
+  } else if (options.onlyChanged !== undefined && options.onlyChanged === false) {
+    immediateAutoPushOnlyChanged = false;
+  }
+  const marketplace = cleanText(options.marketplace || "all").toLowerCase();
+  if (marketplace === "ozon" || marketplace === "yandex") {
+    if (!immediateAutoPushMarketplaceLocked) {
+      immediateAutoPushMarketplace = marketplace;
+      immediateAutoPushMarketplaceLocked = true;
+    } else if (immediateAutoPushMarketplace !== marketplace) {
+      immediateAutoPushMarketplace = "all";
+    }
+  } else {
+    immediateAutoPushMarketplace = "all";
+    immediateAutoPushMarketplaceLocked = true;
+  }
+  if (options.refreshMarketplacePrices === false) {
+    immediateAutoPushRefreshMarketplacePrices = false;
+  }
+  if (options.livePriceMaster === false) {
+    immediateAutoPushLivePriceMaster = false;
+  }
+  if (options.limit !== undefined) {
+    const limit = Number(options.limit);
+    if (Number.isFinite(limit) && limit > 0) {
+      immediateAutoPushLimit = immediateAutoPushLimit === undefined ? limit : Math.max(immediateAutoPushLimit, limit);
+    }
+  }
+}
+
+function takeImmediateAutoPricePushBatch() {
+  const ids = immediateAutoPushAll ? undefined : Array.from(immediateAutoPushIds);
+  const reasons = Array.from(immediateAutoPushReasons).filter(Boolean);
+  const batch = {
+    ids,
+    force: immediateAutoPushForce,
+    reason: reasons.length > 1 ? reasons.slice(0, 5).join(",") : (reasons[0] || "price_change_detected"),
+    marketplace: immediateAutoPushMarketplace || "all",
+    onlyChanged: immediateAutoPushForce ? false : immediateAutoPushOnlyChanged,
+    refreshMarketplacePrices: immediateAutoPushRefreshMarketplacePrices,
+    livePriceMaster: immediateAutoPushLivePriceMaster,
+    limit: immediateAutoPushLimit,
+  };
+  immediateAutoPushAll = false;
+  immediateAutoPushForce = false;
+  immediateAutoPushIds.clear();
+  immediateAutoPushReasons.clear();
+  immediateAutoPushMarketplace = "all";
+  immediateAutoPushMarketplaceLocked = false;
+  immediateAutoPushOnlyChanged = true;
+  immediateAutoPushRefreshMarketplacePrices = true;
+  immediateAutoPushLivePriceMaster = true;
+  immediateAutoPushLimit = undefined;
+  return batch;
+}
+
+function scheduleImmediateAutoPricePushFlush(delayMs = immediateAutoPushDelayMs) {
+  if (immediateAutoPushTimer || immediateAutoPushRunning || !hasPendingImmediateAutoPricePush()) return;
+  immediateAutoPushTimer = setTimeout(() => {
+    immediateAutoPushTimer = null;
+    flushImmediateAutoPricePush().catch((error) => {
+      logger.warn("immediate auto price push failed", { detail: error?.message || String(error) });
+    });
+  }, Math.max(0, Number(delayMs) || 0));
+  immediateAutoPushTimer.unref?.();
+}
+
+async function flushImmediateAutoPricePush() {
+  if (immediateAutoPushRunning || !hasPendingImmediateAutoPricePush()) return;
+  const batch = takeImmediateAutoPricePushBatch();
+  immediateAutoPushRunning = true;
+  const queuedMode = Boolean(marketplaceQueue && marketplaceQueueAutoPricePushEnabled);
+  let handedToQueue = false;
+  try {
+    logger.info("immediate auto price push queued", {
+      reason: batch.reason,
+      scope: batch.ids ? batch.ids.length : "all",
+      mode: queuedMode ? "bullmq" : "inline",
+    });
+    const result = await queueMarketplaceJob(
+      "auto-price-push",
+      {
+        productIds: batch.ids,
+        usdRate: undefined,
+        minDiffRub: 0,
+        minDiffPct: 0,
+        force: batch.force,
+        reason: batch.reason,
+        marketplace: batch.marketplace,
+        onlyChanged: batch.onlyChanged,
+        refreshMarketplacePrices: batch.refreshMarketplacePrices,
+        livePriceMaster: batch.livePriceMaster,
+        limit: batch.limit,
+      },
+      { priority: 1 },
+    );
+    handedToQueue = queuedMode && result && typeof result === "object" && !("sent" in result);
+    if (result && typeof result === "object" && "sent" in result) {
+      const skippedReasons = Array.isArray(result.skipped)
+        ? result.skipped.reduce((acc, item) => {
+          const reason = item.reason || "unknown";
+          acc[reason] = (acc[reason] || 0) + 1;
+          return acc;
+        }, {})
+        : {};
+      logger.info("immediate auto price push complete", {
+        reason: batch.reason,
+        scope: batch.ids ? batch.ids.length : "all",
+        force: batch.force,
+        sent: result.sent,
+        failed: result.failed,
+        stockSent: result.stockSent,
+        stockFailed: result.stockFailed,
+        ozonSent: result.ozonSent || 0,
+        ozonFailed: result.ozonFailed || 0,
+        ozonSkipped: result.ozonSkipped || 0,
+        yandexSent: result.yandexSent || 0,
+        yandexFailed: result.yandexFailed || 0,
+        yandexSkipped: result.yandexSkipped || 0,
+        skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
+        skippedReasons,
+      });
+    }
+  } catch (error) {
+    logger.warn("immediate auto price push failed", { reason: batch.reason, detail: error?.message || String(error) });
+  } finally {
+    if (!handedToQueue) {
+      immediateAutoPushRunning = false;
+      if (hasPendingImmediateAutoPricePush()) scheduleImmediateAutoPricePushFlush(immediateAutoPushFollowupDelayMs);
+    }
+  }
+}
+
 function queueImmediateAutoPricePush(productIds = [], reason = "price_change_detected", options = {}) {
   if (process.env.DISABLE_BACKGROUND_JOBS === "true") return;
-  if (options.force === true) immediateAutoPushForce = true;
+  mergeImmediateAutoPricePushOptions(reason, options);
   if (Array.isArray(productIds) && productIds.length) {
     productIds.forEach((id) => immediateAutoPushIds.add(String(id)));
   } else {
     immediateAutoPushAll = true;
   }
-  if (immediateAutoPushTimer) return;
-  immediateAutoPushTimer = setTimeout(() => {
-    const ids = immediateAutoPushAll ? undefined : Array.from(immediateAutoPushIds);
-    const force = immediateAutoPushForce;
-    immediateAutoPushAll = false;
-    immediateAutoPushForce = false;
-    immediateAutoPushIds.clear();
-    immediateAutoPushTimer = null;
-    immediateAutoPushChain = immediateAutoPushChain
-      .then(async () => {
-        logger.info("immediate auto price push queued", { reason, scope: ids ? ids.length : "all" });
-        const result = await queueMarketplaceJob(
-          "auto-price-push",
-          {
-            productIds: ids,
-            usdRate: undefined,
-            minDiffRub: 0,
-            minDiffPct: 0,
-            force,
-            reason,
-            marketplace: options.marketplace || "all",
-            onlyChanged: options.onlyChanged !== undefined ? options.onlyChanged === true : !force,
-            refreshMarketplacePrices: options.refreshMarketplacePrices !== false,
-            livePriceMaster: options.livePriceMaster !== false,
-            limit: options.limit,
-          },
-          { priority: 1 },
-        );
-        if (result && typeof result === "object" && "sent" in result) {
-          const skippedReasons = Array.isArray(result.skipped)
-            ? result.skipped.reduce((acc, item) => {
-              const reason = item.reason || "unknown";
-              acc[reason] = (acc[reason] || 0) + 1;
-              return acc;
-            }, {})
-            : {};
-          logger.info("immediate auto price push complete", {
-            reason,
-            scope: ids ? ids.length : "all",
-            force,
-            sent: result.sent,
-            failed: result.failed,
-            stockSent: result.stockSent,
-            stockFailed: result.stockFailed,
-            ozonSent: result.ozonSent || 0,
-            ozonFailed: result.ozonFailed || 0,
-            ozonSkipped: result.ozonSkipped || 0,
-            yandexSent: result.yandexSent || 0,
-            yandexFailed: result.yandexFailed || 0,
-            yandexSkipped: result.yandexSkipped || 0,
-            skipped: Array.isArray(result.skipped) ? result.skipped.length : 0,
-            skippedReasons,
-          });
-        }
-      })
-      .catch((error) => {
-        logger.warn("immediate auto price push failed", { reason, detail: error?.message || String(error) });
-      });
-  }, 1200);
+  scheduleImmediateAutoPricePushFlush();
 }
 
 function queueChangedWarehousePrices(products = [], reason = "warehouse_changed_prices_detected") {
@@ -23427,6 +23546,10 @@ async function shutdownForTests() {
   autoSyncTimer = null;
   ozonUnarchiveQueueAutoTimer = null;
   immediateAutoPushTimer = null;
+  immediateAutoPushRunning = false;
+  immediateAutoPushAll = false;
+  immediateAutoPushIds.clear();
+  immediateAutoPushReasons.clear();
   priceRetryTimer = null;
   supplierCartAutoTimer = null;
   await Promise.allSettled([
