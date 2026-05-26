@@ -243,7 +243,8 @@ test("modern UI uses role-gating, logo branding, and group-level PM counts", asy
   assert.match(appSource, /\/api\/session/);
   assert.match(appSource, /visibleNavItems/);
   assert.match(appSource, /headerRoutes/);
-  assert.match(appSource, /"warehouse", "picking-list", "supplier-cart", "settings"/);
+  assert.match(appSource, /"warehouse", "picking-list", "suppliers", "supplier-cart", "settings"/);
+  assert.match(appSource, /\/app\/suppliers/);
   assert.match(appSource, /brand-logo/);
   assert.match(appSource, /WarehousePage isAdmin=\{isAdmin\}/);
   assert.match(warehouseSource, /WarehousePage\(\{ isAdmin = true \}/);

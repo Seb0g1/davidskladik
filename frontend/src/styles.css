@@ -2248,6 +2248,205 @@ button:disabled {
   gap: 10px;
 }
 
+.supplier-summary-grid {
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+}
+
+.supplier-layout-grid {
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+  align-items: start;
+}
+
+.supplier-form {
+  display: grid;
+  gap: 10px;
+}
+
+.supplier-list-panel {
+  min-width: 0;
+}
+
+.supplier-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(220px, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.supplier-search {
+  position: relative;
+}
+
+.supplier-search svg {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.supplier-search input {
+  padding-left: 36px;
+}
+
+.supplier-card-list {
+  display: grid;
+  gap: 12px;
+}
+
+.supplier-modern-card {
+  border: 1px solid var(--line);
+  background: rgba(8, 17, 31, .45);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.supplier-modern-card.is-inactive {
+  border-color: rgba(255, 209, 102, .32);
+  background: rgba(255, 209, 102, .06);
+}
+
+.supplier-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.supplier-card-head span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.supplier-card-head h3 {
+  margin: 3px 0 0;
+  font-size: 18px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.supplier-status-pill,
+.supplier-badge-row span {
+  border: 1px solid rgba(148, 163, 184, .22);
+  background: rgba(15, 23, 42, .65);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 8px;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.supplier-status-pill {
+  color: #a8f2c8;
+  border-color: rgba(80, 216, 144, .28);
+}
+
+.supplier-modern-card.is-inactive .supplier-status-pill {
+  color: var(--yellow);
+  border-color: rgba(255, 209, 102, .35);
+}
+
+.supplier-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.supplier-badge-row .warning-badge {
+  color: var(--yellow);
+  border-color: rgba(255, 209, 102, .35);
+}
+
+.supplier-note {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.supplier-articles {
+  border-top: 1px solid rgba(148, 163, 184, .15);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.supplier-article-row,
+.supplier-article-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px 38px;
+  gap: 8px;
+  align-items: center;
+}
+
+.supplier-article-row {
+  border: 1px solid rgba(148, 163, 184, .14);
+  padding: 8px;
+}
+
+.supplier-article-row span,
+.supplier-article-row small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.supplier-article-row small,
+.muted-line {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.supplier-article-form {
+  grid-template-columns: minmax(100px, .8fr) minmax(130px, 1fr) auto 38px;
+}
+
+.supplier-article-form input {
+  min-width: 0;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  background: #0c1728;
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.supplier-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(2, 6, 23, .72);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.supplier-inactive-modal {
+  width: min(560px, 100%);
+  border: 1px solid var(--line);
+  background: #0b1424;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, .38);
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.supplier-inactive-modal textarea {
+  min-height: 92px;
+  border: 1px solid var(--line);
+  background: #0c1728;
+  color: var(--text);
+  padding: 10px;
+  resize: vertical;
+}
+
 .ai-review-card {
   border: 1px solid var(--line);
   background: rgba(8, 17, 31, .45);
@@ -2318,6 +2517,7 @@ button:disabled {
   .control-grid.price-controls,
   .settings-grid,
   .pricing-settings-grid,
+  .supplier-layout-grid,
   .draft-card-grid,
   .pm-link-toolbar,
   .pm-link-grid {
@@ -2443,6 +2643,8 @@ button:disabled {
   .operation-stats,
   .settings-grid,
   .pricing-settings-grid,
+  .supplier-layout-grid,
+  .supplier-summary-grid,
   .draft-card-grid,
   .pm-link-summary,
   .pm-link-toolbar,
@@ -2470,8 +2672,16 @@ button:disabled {
 
   .job-row,
   .ai-review-card,
+  .supplier-toolbar,
+  .supplier-article-row,
+  .supplier-article-form,
   .link-item {
     grid-template-columns: 1fr;
+  }
+
+  .supplier-card-head {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .info-strip {

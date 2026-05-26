@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, CirclePlay, ClipboardList, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, CirclePlay, ClipboardList, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Truck } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { WarehousePage } from "./routes/WarehousePage";
 import { OperationsPage } from "./routes/OperationsPage";
@@ -12,13 +12,15 @@ import { SystemPage } from "./routes/SystemPage";
 import { PickingListPage } from "./routes/PickingListPage";
 import { ProblemProductsPage } from "./routes/ProblemProductsPage";
 import { FinancePage } from "./routes/FinancePage";
+import { SuppliersPage } from "./routes/SuppliersPage";
 
-type AppRoute = "warehouse" | "picking-list" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "settings" | "system" | "ai-drafts" | "no-supplier";
+type AppRoute = "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "settings" | "system" | "ai-drafts" | "no-supplier";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
   { route: "warehouse", href: "/app/warehouse", label: "Каталог", icon: <PackageCheck size={16} /> },
   { route: "picking-list", href: "/app/picking-list", label: "Сборка", icon: <ClipboardList size={16} /> },
+  { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} /> },
   { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} /> },
   { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
   { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
@@ -34,6 +36,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
 function currentRoute(): AppRoute {
   const path = window.location.pathname;
   if (path.startsWith("/app/picking-list")) return "picking-list";
+  if (path.startsWith("/app/suppliers")) return "suppliers";
   if (path.startsWith("/app/operations")) return "operations";
   if (path.startsWith("/app/supplier-cart")) return "supplier-cart";
   if (path.startsWith("/app/recovery-queue")) return "recovery-queue";
@@ -77,7 +80,7 @@ function AppShell() {
   const isAdmin = session?.role === "admin";
   const canUseStaffRoutes = session?.role === "manager" || isAdmin;
   const canUseAdminRoutes = session === null ? false : isAdmin;
-  const headerRoutes = new Set<AppRoute>(isAdmin ? ["warehouse", "picking-list", "supplier-cart", "settings"] : ["warehouse", "picking-list"]);
+  const headerRoutes = new Set<AppRoute>(isAdmin ? ["warehouse", "picking-list", "suppliers", "supplier-cart", "settings"] : ["warehouse", "picking-list"]);
   const visibleNavItems = navItems.filter((item) => headerRoutes.has(item.route));
   const accessDenied = (route !== "warehouse" && route !== "picking-list" && !canUseAdminRoutes) || (route === "picking-list" && !canUseStaffRoutes);
   return (
@@ -108,6 +111,7 @@ function AppShell() {
       ) : null}
       {!accessDenied && route === "operations" ? <OperationsPage /> : null}
       {!accessDenied && route === "picking-list" ? <PickingListPage /> : null}
+      {!accessDenied && route === "suppliers" ? <SuppliersPage /> : null}
       {!accessDenied && route === "supplier-cart" ? <SupplierCartPage /> : null}
       {!accessDenied && route === "recovery-queue" ? <RecoveryQueuePage /> : null}
       {!accessDenied && route === "prices" ? <PricesPage /> : null}
