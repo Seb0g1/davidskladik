@@ -80,6 +80,7 @@ const appUsersPath = path.join(dataDir, "app-users.json");
 const appDeletedUsersPath = path.join(dataDir, "app-users-deleted.json");
 const priceRetryQueuePath = path.join(dataDir, "price-retry-queue.json");
 const ozonUnarchiveQueuePath = path.join(dataDir, "ozon-unarchive-queue.json");
+const ozonUnarchiveDailyStatePath = path.join(dataDir, "ozon-unarchive-daily.json");
 const yandexExistingOffersCachePath = path.join(dataDir, "yandex-existing-offers.json");
 const operationJobsPath = path.join(dataDir, "operation-jobs.json");
 const aiImageJobsPath = path.join(dataDir, "ai-image-jobs.json");
@@ -134,6 +135,11 @@ const ozonUnarchiveQueueBatchLimit = Math.max(1, Math.min(1000, Number(process.e
 const ozonUnarchiveQueueAutoEnabled = process.env.OZON_UNARCHIVE_QUEUE_AUTO_ENABLED !== "false";
 const ozonUnarchiveQueueAutoIntervalMinutes = Math.max(5, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INTERVAL_MINUTES || 30) || 30);
 const ozonUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 180) || 180);
+const stateWriteTransactionTimeoutMs = Math.max(10000, Number(process.env.STATE_WRITE_TRANSACTION_TIMEOUT_MS || 30000) || 30000);
+const stateWriteTransactionMaxWaitMs = Math.max(5000, Number(process.env.STATE_WRITE_TRANSACTION_MAX_WAIT_MS || 10000) || 10000);
+const priceRetryQueueWriteChunkSize = Math.max(10, Math.min(500, Number(process.env.PRICE_RETRY_QUEUE_WRITE_CHUNK_SIZE || 100) || 100));
+const ozonUnarchiveQueueWriteChunkSize = Math.max(10, Math.min(500, Number(process.env.OZON_UNARCHIVE_QUEUE_WRITE_CHUNK_SIZE || 100) || 100));
+const stateJsonBackupOnPostgresWrite = process.env.STATE_JSON_BACKUP_ON_POSTGRES_WRITE === "true";
 const exchangeRateTtlMs = 6 * 60 * 60 * 1000;
 const rawOpenaiImageModel = normalizeOpenAiImageModelName(process.env.OPENAI_IMAGE_MODEL || "gpt-image-2");
 const openaiImageModel = (() => {
@@ -7765,36 +7771,21 @@ async function writePriceRetryQueue(queue) {
   if (shouldUsePostgresStorage()) {
     try {
       const prisma = getPrisma();
-      const queueKeys = payload.items.map((item) => priceRetryQueueKey(item)).filter(Boolean);
-      await prisma.$transaction(async (tx) => {
-        if (queueKeys.length) {
-          await tx.priceRetryQueueItem.deleteMany({ where: { queueKey: { notIn: queueKeys } } });
-        } else {
-          await tx.priceRetryQueueItem.deleteMany({});
-        }
-        for (const item of payload.items) {
-          const data = priceRetryQueueItemToPostgres(item);
-          await tx.priceRetryQueueItem.upsert({
-            where: { queueKey: data.queueKey },
-            create: data,
-            update: {
-              marketplace: data.marketplace,
-              target: data.target,
-              productId: data.productId,
-              offerId: data.offerId,
-              price: data.price,
-              oldPrice: data.oldPrice,
-              status: data.status,
-              attempts: data.attempts,
-              error: data.error,
-              payload: data.payload,
-              nextRetryAt: data.nextRetryAt,
-              lastAttemptAt: data.lastAttemptAt,
-            },
-          });
-        }
-      });
-      if (!jsonFallbackEnabled()) return payload;
+      const rows = payload.items.map(priceRetryQueueItemToPostgres);
+      const queueKeys = rows.map((item) => item.queueKey).filter(Boolean);
+      if (queueKeys.length) {
+        await prisma.priceRetryQueueItem.deleteMany({ where: { queueKey: { notIn: queueKeys } } });
+      } else {
+        await prisma.priceRetryQueueItem.deleteMany({});
+      }
+      await writePrismaStateChunks(rows, priceRetryQueueWriteChunkSize, (data) =>
+        prisma.priceRetryQueueItem.upsert({
+          where: { queueKey: data.queueKey },
+          create: data,
+          update: priceRetryQueueItemUpdateData(data),
+        })
+      );
+      if (!jsonFallbackEnabled() || !stateJsonBackupOnPostgresWrite) return payload;
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
       logger.warn("write price retry queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
@@ -7864,6 +7855,36 @@ function normalizeOzonUnarchiveQueue(queue = {}) {
   };
 }
 
+async function readOzonUnarchiveDailyState() {
+  try {
+    const text = await fs.readFile(ozonUnarchiveDailyStatePath, "utf8");
+    const parsed = JSON.parse(text || "{}");
+    return parsed.daily && typeof parsed.daily === "object" ? parsed.daily : {};
+  } catch (error) {
+    if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) {
+      logger.warn("read ozon unarchive daily state failed", { detail: error?.message || String(error) });
+    }
+  }
+  try {
+    const text = await fs.readFile(ozonUnarchiveQueuePath, "utf8");
+    const parsed = JSON.parse(text || "{}");
+    return parsed.daily && typeof parsed.daily === "object" ? parsed.daily : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+async function writeOzonUnarchiveDailyState(daily = {}) {
+  await fs.mkdir(dataDir, { recursive: true });
+  const payload = {
+    updatedAt: new Date().toISOString(),
+    daily: daily && typeof daily === "object" ? daily : {},
+  };
+  const tmpPath = `${ozonUnarchiveDailyStatePath}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+  await fs.rename(tmpPath, ozonUnarchiveDailyStatePath);
+}
+
 function ozonUnarchiveQueueItemToPostgres(item = {}) {
   const normalized = normalizeOzonUnarchiveQueueItem(item);
   return {
@@ -7879,6 +7900,22 @@ function ozonUnarchiveQueueItemToPostgres(item = {}) {
     warning: cleanText(normalized.warning) || null,
     error: cleanText(normalized.error) || null,
     raw: normalized,
+  };
+}
+
+function ozonUnarchiveQueueItemUpdateData(data = {}) {
+  return {
+    productId: data.productId,
+    offerId: data.offerId,
+    target: data.target,
+    status: data.status,
+    queuedAt: data.queuedAt,
+    nextRetryAt: data.nextRetryAt,
+    lastAttemptAt: data.lastAttemptAt,
+    attempts: data.attempts,
+    warning: data.warning,
+    error: data.error,
+    raw: data.raw,
   };
 }
 
@@ -7909,16 +7946,14 @@ async function readOzonUnarchiveQueue() {
         orderBy: [{ nextRetryAt: "asc" }, { queuedAt: "asc" }],
         take: 5000,
       });
-      const jsonDaily = await fs.readFile(ozonUnarchiveQueuePath, "utf8")
-        .then((text) => JSON.parse(text || "{}")?.daily || {})
-        .catch(() => ({}));
+      const daily = await readOzonUnarchiveDailyState();
       const updatedAt = rows.reduce((latest, row) => {
         const time = row.updatedAt ? row.updatedAt.getTime() : 0;
         return time > latest ? time : latest;
       }, 0);
       return normalizeOzonUnarchiveQueue({
         updatedAt: updatedAt ? new Date(updatedAt).toISOString() : null,
-        daily: jsonDaily,
+        daily,
         items: rows.map(ozonUnarchiveQueueItemFromPostgres),
       });
     } catch (error) {
@@ -7948,41 +7983,29 @@ async function writeOzonUnarchiveQueue(queue = {}) {
   if (shouldUsePostgresStorage()) {
     try {
       const prisma = getPrisma();
-      const queueKeys = payload.items.map(ozonUnarchiveQueueKey).filter(Boolean);
-      await prisma.$transaction(async (tx) => {
-        if (queueKeys.length) {
-          await tx.ozonUnarchiveQueueItem.deleteMany({ where: { queueKey: { notIn: queueKeys }, status: { not: "success" } } });
-        } else {
-          await tx.ozonUnarchiveQueueItem.deleteMany({ where: { status: { not: "success" } } });
-        }
-        for (const item of payload.items) {
-          const data = ozonUnarchiveQueueItemToPostgres(item);
-          await tx.ozonUnarchiveQueueItem.upsert({
-            where: { queueKey: data.queueKey },
-            create: data,
-            update: {
-              productId: data.productId,
-              offerId: data.offerId,
-              target: data.target,
-              status: data.status,
-              queuedAt: data.queuedAt,
-              nextRetryAt: data.nextRetryAt,
-              lastAttemptAt: data.lastAttemptAt,
-              attempts: data.attempts,
-              warning: data.warning,
-              error: data.error,
-              raw: data.raw,
-            },
-          });
-        }
-      });
-      if (!jsonFallbackEnabled()) return payload;
+      const rows = payload.items.map(ozonUnarchiveQueueItemToPostgres);
+      const queueKeys = rows.map((item) => item.queueKey).filter(Boolean);
+      if (queueKeys.length) {
+        await prisma.ozonUnarchiveQueueItem.deleteMany({ where: { queueKey: { notIn: queueKeys }, status: { not: "success" } } });
+      } else {
+        await prisma.ozonUnarchiveQueueItem.deleteMany({ where: { status: { not: "success" } } });
+      }
+      await writePrismaStateChunks(rows, ozonUnarchiveQueueWriteChunkSize, (data) =>
+        prisma.ozonUnarchiveQueueItem.upsert({
+          where: { queueKey: data.queueKey },
+          create: data,
+          update: ozonUnarchiveQueueItemUpdateData(data),
+        })
+      );
+      await writeOzonUnarchiveDailyState(payload.daily);
+      if (!jsonFallbackEnabled() || !stateJsonBackupOnPostgresWrite) return payload;
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
       logger.warn("write ozon unarchive queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
     }
   }
   await fs.mkdir(dataDir, { recursive: true });
+  await writeOzonUnarchiveDailyState(payload.daily);
   const tmpPath = `${ozonUnarchiveQueuePath}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
   await fs.rename(tmpPath, ozonUnarchiveQueuePath);
@@ -8154,6 +8177,34 @@ function priceRetryQueueItemToPostgres(item = {}) {
     createdAt: toDateOrNull(item.queuedAt || item.createdAt) || new Date(),
     updatedAt: toDateOrNull(item.updatedAt) || new Date(),
   };
+}
+
+function priceRetryQueueItemUpdateData(data = {}) {
+  return {
+    marketplace: data.marketplace,
+    target: data.target,
+    productId: data.productId,
+    offerId: data.offerId,
+    price: data.price,
+    oldPrice: data.oldPrice,
+    status: data.status,
+    attempts: data.attempts,
+    error: data.error,
+    payload: data.payload,
+    nextRetryAt: data.nextRetryAt,
+    lastAttemptAt: data.lastAttemptAt,
+  };
+}
+
+async function writePrismaStateChunks(rows = [], chunkSize = 100, buildOperation) {
+  const list = Array.isArray(rows) ? rows : [];
+  if (!list.length) return;
+  for (const chunk of chunkArray(list, chunkSize)) {
+    await getPrisma().$transaction(
+      chunk.map((item) => buildOperation(item)),
+      { maxWait: stateWriteTransactionMaxWaitMs, timeout: stateWriteTransactionTimeoutMs },
+    );
+  }
 }
 
 function priceRetryQueueItemFromPostgres(row = {}) {
