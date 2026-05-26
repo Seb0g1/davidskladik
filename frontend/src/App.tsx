@@ -74,7 +74,8 @@ function AppShell() {
   const isAdmin = session?.role === "admin";
   const canUseStaffRoutes = session?.role === "manager" || isAdmin;
   const canUseAdminRoutes = session === null ? false : isAdmin;
-  const visibleNavItems = isAdmin ? navItems : navItems.filter((item) => item.route === "warehouse" || item.route === "picking-list");
+  const headerRoutes = new Set<AppRoute>(isAdmin ? ["warehouse", "picking-list", "supplier-cart", "settings"] : ["warehouse", "picking-list"]);
+  const visibleNavItems = navItems.filter((item) => headerRoutes.has(item.route));
   const accessDenied = (route !== "warehouse" && route !== "picking-list" && !canUseAdminRoutes) || (route === "picking-list" && !canUseStaffRoutes);
   return (
     <main className="app-shell">

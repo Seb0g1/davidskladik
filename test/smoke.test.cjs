@@ -236,6 +236,8 @@ test("modern UI uses role-gating, logo branding, and group-level PM counts", asy
   const stylesSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "styles.css"), "utf8");
   assert.match(appSource, /\/api\/session/);
   assert.match(appSource, /visibleNavItems/);
+  assert.match(appSource, /headerRoutes/);
+  assert.match(appSource, /"warehouse", "picking-list", "supplier-cart", "settings"/);
   assert.match(appSource, /brand-logo/);
   assert.match(appSource, /WarehousePage isAdmin=\{isAdmin\}/);
   assert.match(warehouseSource, /WarehousePage\(\{ isAdmin = true \}/);
@@ -250,6 +252,7 @@ test("modern UI uses role-gating, logo branding, and group-level PM counts", asy
   assert.match(warehouseSource, /studioPhotoPresets/);
   assert.match(typesSource, /WarehouseBrandsSchema/);
   assert.match(typesSource, /AiAssistantResponseSchema/);
+  assert.match(typesSource, /supplierAlternatives/);
   assert.match(stylesSource, /\.brand-logo/);
   assert.match(stylesSource, /\.brand-filter-wrap/);
   assert.match(stylesSource, /\.ai-assistant-card/);
@@ -283,6 +286,8 @@ test("Codex Sale AI config supports env key aliases and image presets", async ()
   assert.match(serverSource, /\/api\/warehouse\/products\/:id\/ai-assistant/);
   assert.match(settingsSource, /codexSaleAiPreset/);
   assert.match(settingsSource, /Codex Sale preset/);
+  assert.match(settingsSource, /ToolsSettingsPanel/);
+  assert.match(settingsSource, /\/app\/recovery-queue/);
 });
 
 test("warehouse page product groups merge marketplace variants by offer and manual group", () => {
@@ -2803,6 +2808,14 @@ test("pickWarehouseSupplier chooses the cheapest available calculated price", ()
     { partnerName: "Missing", available: false, price: 1, calculatedPrice: 100, docDate: "2026-01-03" },
   ]);
   assert.equal(picked.partnerName, "Cheap");
+});
+
+test("pickWarehouseSupplier prefers cheapest effective final price", () => {
+  const picked = pickWarehouseSupplier([
+    { partnerName: "Raw cheap but final expensive", available: true, price: 10, calculatedPrice: 1700, effectiveFinalPrice: 4000, docDate: "2026-01-02" },
+    { partnerName: "Best final", available: true, price: 12, calculatedPrice: 2040, effectiveFinalPrice: 2500, docDate: "2026-01-01" },
+  ]);
+  assert.equal(picked.partnerName, "Best final");
 });
 
 test("pickWarehouseSupplier ignores stock-only suppliers for price", () => {

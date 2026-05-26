@@ -20,12 +20,13 @@ type AvailabilityRuleDraft = {
   targetStock: number;
 };
 
-type SettingsTab = "prices" | "marketplaces" | "ai" | "users" | "audit" | "system";
+type SettingsTab = "prices" | "marketplaces" | "ai" | "tools" | "users" | "audit" | "system";
 
 const settingsTabs: Array<{ id: SettingsTab; label: string }> = [
   { id: "prices", label: "Цены" },
   { id: "marketplaces", label: "Маркетплейсы" },
   { id: "ai", label: "AI" },
+  { id: "tools", label: "Инструменты" },
   { id: "users", label: "Сотрудники" },
   { id: "audit", label: "Аудит" },
   { id: "system", label: "Система" },
@@ -618,6 +619,31 @@ function SupplierStockModePanel() {
   );
 }
 
+function ToolsSettingsPanel() {
+  const tools = [
+    { href: "/app/prices", title: "Цены", text: "Автоматизация цен и остатков, retry и причины пропусков." },
+    { href: "/app/operations", title: "Операции", text: "Массовые задачи, прогресс и аварийные запуски." },
+    { href: "/app/recovery-queue", title: "Восстановление", text: "Очередь Ozon autoarchive и дневной лимит разархива." },
+    { href: "/app/no-supplier", title: "Ошибки наличия", text: "Товары без доступного поставщика и риски остатков." },
+    { href: "/app/problem-products", title: "Проблемные товары", text: "Единая диагностика SKU, фото, цен, остатков и связей." },
+    { href: "/app/ai-drafts", title: "AI drafts", text: "Черновики карточек и генерация контента." },
+    { href: "/app/system", title: "Система", text: "Health, очереди, кэши и технический статус." },
+  ];
+  return (
+    <section className="settings-grid pricing-settings-grid">
+      {tools.map((tool) => (
+        <article className="settings-panel" key={tool.href}>
+          <div className="section-title">
+            <div><span>Инструмент</span><h3>{tool.title}</h3></div>
+          </div>
+          <p className="settings-hint">{tool.text}</p>
+          <a className="secondary-action" href={tool.href}>Открыть</a>
+        </article>
+      ))}
+    </section>
+  );
+}
+
 export function SettingsPage() {
   const queryClient = useQueryClient();
   const settingsQuery = useQuery({ queryKey: ["settings"], queryFn: () => fetchJson("/api/settings", SettingsResponseSchema) });
@@ -774,6 +800,7 @@ export function SettingsPage() {
         </div>
       </section>}
 
+      {activeTab === "tools" && <ToolsSettingsPanel />}
       {activeTab === "users" && <UsersSettingsPanel />}
       {activeTab === "audit" && <AuditSettingsPanel />}
       {activeTab === "system" && <SystemSettingsPanel />}

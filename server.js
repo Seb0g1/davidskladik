@@ -9928,6 +9928,7 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
           originalPrice: normalizedPrice.originalPrice,
           sourceCurrency: normalizedPrice.sourceCurrency,
           convertedFromRub: normalizedPrice.convertedFromRub,
+          priceSource: "snapshot",
           active,
           stopped: Boolean(stoppedSupplier),
           stopReason: stoppedSupplier?.note || null,
@@ -10036,6 +10037,7 @@ function priceMasterSnapshotLinkRow(row = {}, link = {}, usdRate, supplierMaps =
     ...base,
     priceCurrency,
     ...priceData,
+    priceSource: "postgres_snapshot",
     pricingMode: pricingMeta.pricingMode,
     stockOnly: pricingMeta.stockOnly,
     priceEligible: pricingMeta.priceEligible,
@@ -10100,6 +10102,7 @@ async function getLivePriceMasterMatchesForLinks(links, managedSuppliers = [], u
         originalPrice: row.originalPrice,
         sourceCurrency: row.sourceCurrency,
         convertedFromRub: row.convertedFromRub,
+        priceSource: "live",
         active,
         stopped: Boolean(stoppedSupplier),
         stopReason: stoppedSupplier?.note || null,
@@ -10271,6 +10274,7 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
           originalPrice: normalizedPrice.originalPrice,
           sourceCurrency: normalizedPrice.sourceCurrency,
           convertedFromRub: normalizedPrice.convertedFromRub,
+          priceSource: "live",
           active,
           stopped: Boolean(stoppedSupplier),
           stopReason: stoppedSupplier?.note || null,
@@ -10375,7 +10379,7 @@ function pickWarehouseSupplier(matches) {
     .filter((match) => match.available && match.priceEligible !== false && match.stockOnly !== true)
     .sort(
       (a, b) =>
-        Number(a.calculatedPrice || 0) - Number(b.calculatedPrice || 0)
+        Number(a.effectiveFinalPrice || a.calculatedPrice || 0) - Number(b.effectiveFinalPrice || b.calculatedPrice || 0)
         || Number(a.price || 0) - Number(b.price || 0)
         || String(b.docDate).localeCompare(String(a.docDate)),
     )[0] || null;
@@ -10424,6 +10428,79 @@ function resolveAvailabilityPolicy({ marketplace, availableSupplierCount = 0, ba
     markupCoefficient,
     targetStock,
   };
+}
+
+function enrichSupplierPriceCandidates(suppliers = [], {
+  productMarkupOverride = 0,
+  marketplace = "",
+  rate = 0,
+  appSettings = {},
+  fallbackMarkup = 0,
+  availableSupplierCount = 0,
+  stockOnlyAvailableSupplierCount = 0,
+} = {}) {
+  const policySupplierCount = availableSupplierCount || stockOnlyAvailableSupplierCount;
+  return (Array.isArray(suppliers) ? suppliers : []).map((supplier) => {
+    const baseMarkupCoefficient = Number(productMarkupOverride || supplier.markupCoefficient || fallbackMarkup || 0);
+    const availabilityPolicy = resolveAvailabilityPolicy({
+      marketplace,
+      availableSupplierCount: policySupplierCount,
+      baseMarkup: baseMarkupCoefficient,
+      appSettings,
+    });
+    const markupCoefficient = Number(availabilityPolicy.markupCoefficient || baseMarkupCoefficient);
+    const priceEligible = supplier.priceEligible !== false && supplier.stockOnly !== true;
+    const effectiveFinalPrice = supplier.available && priceEligible
+      ? calculateRubPrice(supplier.price, rate, markupCoefficient)
+      : null;
+    return {
+      ...supplier,
+      baseMarkupCoefficient,
+      markupCoefficient,
+      effectiveMarkupCoefficient: markupCoefficient,
+      availabilityRule: availabilityPolicy.rule,
+      prePolicyCalculatedPrice: Number(supplier.calculatedPrice || 0) || null,
+      calculatedPrice: effectiveFinalPrice || supplier.calculatedPrice || null,
+      effectiveFinalPrice,
+      priceSelectionReason: effectiveFinalPrice
+        ? "cheapest_effective_final_price"
+        : (supplier.stockOnly || supplier.priceEligible === false ? "stock_only_excluded" : "not_available"),
+    };
+  });
+}
+
+function supplierAlternativesForDiagnostics(suppliers = [], limit = 5) {
+  return [...(Array.isArray(suppliers) ? suppliers : [])]
+    .sort((a, b) =>
+      Number(a.effectiveFinalPrice || a.calculatedPrice || Number.MAX_SAFE_INTEGER)
+      - Number(b.effectiveFinalPrice || b.calculatedPrice || Number.MAX_SAFE_INTEGER)
+      || Number(a.price || 0) - Number(b.price || 0)
+      || String(b.docDate).localeCompare(String(a.docDate)))
+    .slice(0, Math.max(1, Number(limit || 5) || 5))
+    .map((supplier) => ({
+      partnerName: supplier.partnerName || supplier.supplierName || "",
+      supplierName: supplier.supplierName || supplier.partnerName || "",
+      partnerId: supplier.partnerId || "",
+      article: supplier.article || "",
+      rowId: supplier.rowId || "",
+      available: Boolean(supplier.available),
+      active: supplier.active !== false,
+      stopped: Boolean(supplier.stopped),
+      stockOnly: Boolean(supplier.stockOnly || supplier.priceEligible === false),
+      priceEligible: supplier.priceEligible !== false && supplier.stockOnly !== true,
+      price: supplier.price,
+      originalPrice: supplier.originalPrice,
+      priceCurrency: supplier.priceCurrency || supplier.currency || "",
+      sourceCurrency: supplier.sourceCurrency || supplier.priceCurrency || "",
+      markupCoefficient: supplier.markupCoefficient,
+      baseMarkupCoefficient: supplier.baseMarkupCoefficient,
+      effectiveFinalPrice: supplier.effectiveFinalPrice || supplier.calculatedPrice || null,
+      calculatedPrice: supplier.calculatedPrice || null,
+      priceSource: supplier.priceSource || supplier.source || "snapshot",
+      exclusionReason: supplier.available
+        ? (supplier.stockOnly || supplier.priceEligible === false ? "stock_only_excluded" : null)
+        : (supplier.stopped ? "supplier_stopped" : "not_available"),
+    }));
 }
 
 function storedMarketplacePrice(product = {}) {
@@ -10603,7 +10680,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
   const products = warehouse.products.filter(isWarehouseProductTargetEnabled).map((product) => {
     const productMarkupOverride = marketplaceProductMarkupOverride(product);
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
-    const suppliers = normalizedLinks.flatMap((link) =>
+    const rawSuppliers = normalizedLinks.flatMap((link) =>
       (matchMap.get(link.id) || []).map((match) => ({
         ...match,
         markupCoefficient: resolveMarkupCoefficient({
@@ -10649,15 +10726,24 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
         missingInPriceMaster: matched.length === 0,
       };
     });
-    const availableSupplierCount = suppliers.filter((supplier) => supplier.available && supplier.priceEligible !== false && supplier.stockOnly !== true).length;
-    const stockOnlyAvailableSupplierCount = suppliers.filter((supplier) => supplier.available && (supplier.stockOnly === true || supplier.priceEligible === false)).length;
+    const availableSupplierCount = rawSuppliers.filter((supplier) => supplier.available && supplier.priceEligible !== false && supplier.stockOnly !== true).length;
+    const stockOnlyAvailableSupplierCount = rawSuppliers.filter((supplier) => supplier.available && (supplier.stockOnly === true || supplier.priceEligible === false)).length;
+    const fallbackMarkup = product.marketplace === "ozon"
+      ? Number(targetMarkups.ozon || appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
+      : Number(targetMarkups.yandex || appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
+    const suppliers = enrichSupplierPriceCandidates(rawSuppliers, {
+      productMarkupOverride,
+      marketplace: product.marketplace,
+      rate,
+      appSettings,
+      fallbackMarkup,
+      availableSupplierCount,
+      stockOnlyAvailableSupplierCount,
+    });
     const selectedSupplier = pickWarehouseSupplier(suppliers);
     const stockOnlySupplier = selectedSupplier ? null : pickWarehouseStockOnlySupplier(suppliers);
     const stockOnlyFallbackActive = Boolean(!selectedSupplier && stockOnlySupplier);
     const stockOnlyManualPrice = stockOnlyFallbackActive ? stockOnlyManualPriceForProduct(product) : null;
-    const fallbackMarkup = product.marketplace === "ozon"
-      ? Number(targetMarkups.ozon || appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
-      : Number(targetMarkups.yandex || appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
     const baseMarkupCoefficient = Number(productMarkupOverride || selectedSupplier?.markupCoefficient || fallbackMarkup);
     const availabilityPolicy = resolveAvailabilityPolicy({
       marketplace: product.marketplace,
@@ -10672,7 +10758,8 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
           baseMarkupCoefficient,
           markupCoefficient,
           availabilityRule: availabilityPolicy.rule,
-          calculatedPrice: calculateRubPrice(selectedSupplier.price, rate, markupCoefficient),
+          calculatedPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient)),
+          effectiveFinalPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient)),
         }
       : (stockOnlySupplier
           ? {
@@ -10719,7 +10806,8 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
         targetStock: availabilityPolicy.targetStock ?? null,
         stockOnlyFallbackActive,
         stockOnlyManualPrice,
-        priceSource: stockOnlyFallbackActive ? "stock_only_manual" : "pricemaster",
+        priceSource: stockOnlyFallbackActive ? "stock_only_manual" : (selectedSupplierWithPolicy?.priceSource || (sourceError ? "timeout" : "snapshot")),
+        priceSelectionReason: selectedSupplierWithPolicy?.priceSelectionReason || null,
       },
       autoPriceEnabled: normalizedLinks.length > 0 ? true : product.autoPriceEnabled !== false,
       autoPriceMin: minAuto > 0 ? minAuto : null,
@@ -10741,12 +10829,15 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
           stockOnly: Boolean(supplier.stockOnly || supplier.priceEligible === false),
         })),
       stockOnlyFallbackActive,
+      supplierAlternatives: supplierAlternativesForDiagnostics(suppliers, 5),
       stockOnlyManualPriceMissing: Boolean(stockOnlyFallbackActive && !stockOnlyManualPrice),
       stockOnlyManualPrices: normalizeStockOnlyManualPrices(product.stockOnlyManualPrices),
       stockOnlyAvailableSupplierCount,
       selectedSupplierReason: selectedSupplier
         ? "Выбран доступный поставщик с минимальной рассчитанной ценой."
         : "Нет доступного поставщика.",
+      priceSelectionReason: selectedSupplier ? "cheapest_effective_final_price" : (stockOnlyFallbackActive ? "stock_only_fallback" : "no_supplier"),
+      priceSource: stockOnlyFallbackActive ? "stock_only_manual" : (selectedSupplierWithPolicy?.priceSource || (sourceError ? "timeout" : "snapshot")),
       links,
       suppliers,
       supplierCount: suppliers.length,
@@ -10827,17 +10918,28 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
   if (!productsToBuild.length) return [];
   const links = productsToBuild.flatMap((product) => product.links || []);
   const priceMasterTimeoutMs = Number(process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 1500);
-  const matchMap = livePriceMaster
-    ? (batchPriceMaster
-        ? await Promise.race([
-            getBatchPriceMasterMatchesForLinks(links, warehouse.suppliers, rate, { timeoutMs: priceMasterTimeoutMs }),
-            promiseTimeout(priceMasterTimeoutMs + 100, "warehouse_page_pm_timeout"),
-          ]).catch((error) => {
-            logger.warn("warehouse page PriceMaster enrichment skipped", { detail: error?.message || String(error) });
-            return new Map();
-          })
-        : await getLivePriceMasterMatchesForLinks(links, warehouse.suppliers, rate))
-    : await getPriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
+  let priceMasterSourceError = null;
+  let matchMap = new Map();
+  if (livePriceMaster) {
+    if (batchPriceMaster) {
+      matchMap = await Promise.race([
+        getBatchPriceMasterMatchesForLinks(links, warehouse.suppliers, rate, { timeoutMs: priceMasterTimeoutMs }),
+        promiseTimeout(priceMasterTimeoutMs + 100, "warehouse_page_pm_timeout"),
+      ]).catch((error) => {
+        priceMasterSourceError = error?.message || String(error);
+        logger.warn("warehouse page PriceMaster enrichment skipped", { detail: priceMasterSourceError });
+        return new Map();
+      });
+    } else {
+      matchMap = await getLivePriceMasterMatchesForLinks(links, warehouse.suppliers, rate).catch((error) => {
+        priceMasterSourceError = error?.message || String(error);
+        logger.warn("warehouse live PriceMaster enrichment skipped", { detail: priceMasterSourceError });
+        return new Map();
+      });
+    }
+  } else {
+    matchMap = await getPriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
+  }
   const [priceMapResult, minPriceResult] = await Promise.all([
     getWarehousePriceMaps(productsToBuild, { refresh: refreshPrices }),
     getWarehouseMinPriceMaps(productsToBuild, { refresh: refreshPrices }),
@@ -10849,7 +10951,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
   return productsToBuild.map((product) => {
     const productMarkupOverride = marketplaceProductMarkupOverride(product);
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
-    const suppliers = normalizedLinks.flatMap((link) =>
+    const rawSuppliers = normalizedLinks.flatMap((link) =>
       (matchMap.get(link.id) || []).map((match) => {
         const markupCoefficient = resolveMarkupCoefficient({
           productMarkup: productMarkupOverride,
@@ -10877,15 +10979,24 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         missingInPriceMaster: matched.length === 0,
       };
     });
-    const availableSupplierCount = suppliers.filter((supplier) => supplier.available && supplier.priceEligible !== false && supplier.stockOnly !== true).length;
-    const stockOnlyAvailableSupplierCount = suppliers.filter((supplier) => supplier.available && (supplier.stockOnly === true || supplier.priceEligible === false)).length;
+    const fallbackMarkup = product.marketplace === "ozon"
+      ? Number(appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
+      : Number(appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
+    const availableSupplierCount = rawSuppliers.filter((supplier) => supplier.available && supplier.priceEligible !== false && supplier.stockOnly !== true).length;
+    const stockOnlyAvailableSupplierCount = rawSuppliers.filter((supplier) => supplier.available && (supplier.stockOnly === true || supplier.priceEligible === false)).length;
+    const suppliers = enrichSupplierPriceCandidates(rawSuppliers, {
+      productMarkupOverride,
+      marketplace: product.marketplace,
+      rate,
+      appSettings,
+      fallbackMarkup,
+      availableSupplierCount,
+      stockOnlyAvailableSupplierCount,
+    });
     const selectedSupplier = pickWarehouseSupplier(suppliers);
     const stockOnlySupplier = selectedSupplier ? null : pickWarehouseStockOnlySupplier(suppliers);
     const stockOnlyFallbackActive = Boolean(!selectedSupplier && stockOnlySupplier);
     const stockOnlyManualPrice = stockOnlyFallbackActive ? stockOnlyManualPriceForProduct(product) : null;
-    const fallbackMarkup = product.marketplace === "ozon"
-      ? Number(appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
-      : Number(appSettings.defaultMarkups?.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
     const baseMarkupCoefficient = Number(productMarkupOverride || selectedSupplier?.markupCoefficient || fallbackMarkup);
     const availabilityPolicy = resolveAvailabilityPolicy({
       marketplace: product.marketplace,
@@ -10900,7 +11011,8 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
           baseMarkupCoefficient,
           markupCoefficient,
           availabilityRule: availabilityPolicy.rule,
-          calculatedPrice: calculateRubPrice(selectedSupplier.price, rate, markupCoefficient),
+          calculatedPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient)),
+          effectiveFinalPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient)),
         }
       : (stockOnlySupplier
           ? {
@@ -10947,7 +11059,8 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         targetStock: availabilityPolicy.targetStock ?? null,
         stockOnlyFallbackActive,
         stockOnlyManualPrice,
-        priceSource: stockOnlyFallbackActive ? "stock_only_manual" : "pricemaster",
+        priceSource: stockOnlyFallbackActive ? "stock_only_manual" : (selectedSupplierWithPolicy?.priceSource || "snapshot"),
+        priceSelectionReason: selectedSupplierWithPolicy?.priceSelectionReason || null,
       },
       autoPriceEnabled: normalizedLinks.length > 0 ? true : product.autoPriceEnabled !== false,
       autoPriceMin: minAuto > 0 ? minAuto : null,
@@ -10969,12 +11082,15 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
           stockOnly: Boolean(supplier.stockOnly || supplier.priceEligible === false),
         })),
       stockOnlyFallbackActive,
+      supplierAlternatives: supplierAlternativesForDiagnostics(suppliers, 5),
       stockOnlyManualPriceMissing: Boolean(stockOnlyFallbackActive && !stockOnlyManualPrice),
       stockOnlyManualPrices: normalizeStockOnlyManualPrices(product.stockOnlyManualPrices),
       stockOnlyAvailableSupplierCount,
       selectedSupplierReason: selectedSupplier
         ? "Выбран доступный поставщик с минимальной расчётной ценой."
         : "Нет доступного поставщика.",
+      priceSelectionReason: selectedSupplier ? "cheapest_effective_final_price" : (stockOnlyFallbackActive ? "stock_only_fallback" : "no_supplier"),
+      priceSource: stockOnlyFallbackActive ? "stock_only_manual" : (selectedSupplierWithPolicy?.priceSource || (priceMasterSourceError ? "timeout" : "snapshot")),
       links,
       suppliers,
       supplierCount: suppliers.length,
@@ -16965,6 +17081,7 @@ async function sendWarehousePrices({
   marketplace = "all",
   onlyChanged = false,
   livePriceMaster = false,
+  reason = "auto-price-push",
   limit,
 } = {}) {
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
@@ -17008,7 +17125,10 @@ async function sendWarehousePrices({
     }
     if (shouldSendTargetStockForProduct(product)) stockItems.push(product);
     if (!product.ready) {
-      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason: "not_ready" });
+      const reason = product.priceSource === "timeout"
+        ? "pm_live_timeout"
+        : (product.hasLinks && !product.selectedSupplier ? "no_supplier" : "not_ready");
+      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason, priceSource: product.priceSource || null });
       continue;
     }
     if (product.stockOnlyFallbackActive && !(Number(product.nextPrice || 0) > 0)) {
@@ -17083,6 +17203,20 @@ async function sendWarehousePrices({
       continue;
     }
     items.push(priceItem);
+  }
+
+  if (!dryRun && items.length) {
+    logger.info("warehouse price push selection", {
+      reason: cleanText(reason) || "auto-price-push",
+      selected: selected.length,
+      readyToSend: items.length,
+      productIds: items.slice(0, 25).map((item) => item.id),
+      firstOfferId: items[0]?.offerId || null,
+      selectedSupplier: items[0]?.supplier?.partnerName || items[0]?.supplier?.supplierName || null,
+      effectiveFinalPrice: Number(items[0]?.supplier?.effectiveFinalPrice || items[0]?.price || 0) || null,
+      alternativesCount: Array.isArray(selected[0]?.supplierAlternatives) ? selected[0].supplierAlternatives.length : 0,
+      pmSource: selected[0]?.priceSource || items[0]?.supplier?.priceSource || null,
+    });
   }
 
   if (dryRun) {
@@ -17310,6 +17444,7 @@ async function processMarketplaceJob(name, data = {}) {
       onlyChanged: data.onlyChanged === true,
       refreshMarketplacePrices: data.refreshMarketplacePrices === true,
       livePriceMaster: data.livePriceMaster === true,
+      reason: data.reason || "auto-price-push",
       limit: data.limit,
     });
   }
@@ -17360,6 +17495,9 @@ async function sendPriceMasterDeltaWarehousePrices(priceMaster = {}, warehouse =
       delta: { productIds: [], skipped: true, reason: "disabled" },
     };
   }
+  priceMasterLinkLookupCache.clear();
+  priceMasterSearchCache.clear();
+  invalidateWarehouseViewCache();
   const delta = priceMasterChangeImpactProductIds(warehouse, priceMaster.changedRows || [], {
     maxChanges: options.maxChanges || priceMasterDeltaMaxChanges,
     maxProducts: options.maxProducts || priceMasterDeltaMaxProducts,
@@ -17434,6 +17572,7 @@ async function sendPriceMasterDeltaWarehousePrices(priceMaster = {}, warehouse =
     livePriceMaster: true,
     marketplace: "all",
     onlyChanged: options.onlyChanged !== false,
+    reason: delta.reason,
   });
   return {
     ...result,

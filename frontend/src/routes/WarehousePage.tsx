@@ -1091,6 +1091,8 @@ function MarketplaceRows({ products }: { products: Product[] }) {
           const usdRate = Number(product.usdRate || formula.usdRate || 0) || 0;
           const supplierPrice = Number(supplier.price || formula.selectedSupplierPrice || 0) || 0;
           const supplierCurrency = String(supplier.currency || supplier.priceCurrency || formula.selectedSupplierCurrency || "");
+          const supplierEffectivePrice = Number(supplier.effectiveFinalPrice || supplier.calculatedPrice || 0) || 0;
+          const supplierAlternatives = Array.isArray((product as any).supplierAlternatives) ? (product as any).supplierAlternatives as Array<Record<string, unknown>> : [];
           const targetPrice = Number(product.newPrice || product.targetPrice || formula.targetPrice || 0) || 0;
           const stockOnlyFallback = Boolean(product.stockOnlyFallbackActive || formula.stockOnlyFallbackActive || supplier.stockOnly || supplier.priceEligible === false);
           const stockOnlyManualPrice = Number(formula.stockOnlyManualPrice || supplier.manualPrice || targetPrice || 0) || 0;
@@ -1102,9 +1104,22 @@ function MarketplaceRows({ products }: { products: Product[] }) {
             markupCoefficient ? `Коэф.: ${markupCoefficient}${baseMarkupCoefficient && baseMarkupCoefficient !== markupCoefficient ? ` (база ${baseMarkupCoefficient})` : ""}` : "",
             usdRate ? `Курс: ${usdRate}` : "",
             supplierPrice && !stockOnlyFallback ? `PM: ${supplierPrice} ${supplierCurrency || "USD"}` : "",
+            supplierEffectivePrice && !stockOnlyFallback ? `Итог поставщика: ${money(supplierEffectivePrice)}` : "",
+            product.priceSource ? `Источник PM: ${String(product.priceSource)}` : "",
             stockOnlyFallback && stockOnlyManualPrice ? `Ручная fallback-цена: ${money(stockOnlyManualPrice)}` : "",
             targetPrice ? `Новая цена: ${money(targetPrice)}` : "",
           ].filter(Boolean);
+          const alternativeParts = supplierAlternatives
+            .slice(0, 5)
+            .map((alt) => {
+              const name = String(alt.partnerName || alt.supplierName || "").trim();
+              const finalPrice = Number(alt.effectiveFinalPrice || alt.calculatedPrice || 0) || 0;
+              const rawPrice = Number(alt.price || 0) || 0;
+              const currency = String(alt.priceCurrency || alt.sourceCurrency || "USD");
+              const excluded = String(alt.exclusionReason || "").trim();
+              return [name, finalPrice ? money(finalPrice) : "", rawPrice ? `PM ${rawPrice} ${currency}` : "", excluded ? `не выбран: ${excluded}` : ""].filter(Boolean).join(" · ");
+            })
+            .filter(Boolean);
           return (
             <div className="marketplace-row" key={product.id}>
               <div>
@@ -1125,6 +1140,7 @@ function MarketplaceRows({ products }: { products: Product[] }) {
                 <strong>{groupLinkCount}</strong>
               </div>
               <div className="marketplace-flags">
+                {alternativeParts.length ? <span className="formula-chip muted">Альтернативы: {alternativeParts.join(" / ")}</span> : null}
                 {ozonUnarchiveQueued && <span>Ожидает разархива Ozon{lastArchiveSend.nextRetryAt ? ` · ${compactDate(String(lastArchiveSend.nextRetryAt))}` : ""}</span>}
                 {formulaParts.length ? formulaParts.map((part) => <span className="formula-chip" key={part}>{part}</span>) : <span className="formula-chip">PriceMaster не выбран</span>}
                 <span className="formula-chip muted">общие привязки, отдельный расчет цены</span>

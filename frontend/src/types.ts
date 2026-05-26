@@ -84,6 +84,7 @@ export const ProductSchema = z.object({
   marketplaceState: z.record(z.string(), z.unknown()).optional().default({}),
   links: z.array(LinkSchema).optional().default([]),
   suppliers: z.array(SupplierSchema).optional().default([]),
+  supplierAlternatives: z.array(z.record(z.string(), z.unknown())).optional().default([]),
   selectedSupplier: z.unknown().optional().nullable(),
   stockOnlyFallbackActive: z.boolean().optional().default(false),
   stockOnlyManualPriceMissing: z.boolean().optional().default(false),
