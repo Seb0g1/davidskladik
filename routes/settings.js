@@ -100,6 +100,102 @@ async function saveSettingsHandler(request, response, next) {
 app.put("/api/settings", requireAdmin, saveSettingsHandler);
 app.post("/api/settings", requireAdmin, saveSettingsHandler);
 
+function pricingAdjustMarketplace(value) {
+  const text = cleanText(value || "all").toLowerCase();
+  return text === "ozon" || text === "yandex" ? text : "all";
+}
+
+function pricingAdjustCoefficient(value, multiplier) {
+  const current = Number(value || 0);
+  if (!Number.isFinite(current) || current <= 0) return null;
+  return Math.max(0.0001, Number((current * multiplier).toFixed(4)));
+}
+
+function pricingAdjustRule(rule, marketplace, multiplier) {
+  const normalized = {
+    marketplace: pricingAdjustMarketplace(rule?.marketplace),
+    minUsd: Number(rule?.minUsd || 0) || 0,
+    coefficient: Number(rule?.coefficient || 0) || 0,
+  };
+  if (marketplace === "all") {
+    return [{ ...normalized, coefficient: pricingAdjustCoefficient(normalized.coefficient, multiplier) || normalized.coefficient }];
+  }
+  if (normalized.marketplace === marketplace) {
+    return [{ ...normalized, coefficient: pricingAdjustCoefficient(normalized.coefficient, multiplier) || normalized.coefficient }];
+  }
+  if (normalized.marketplace !== "all") return [normalized];
+  const other = marketplace === "ozon" ? "yandex" : "ozon";
+  return [
+    { ...normalized, marketplace, coefficient: pricingAdjustCoefficient(normalized.coefficient, multiplier) || normalized.coefficient },
+    { ...normalized, marketplace: other },
+  ];
+}
+
+app.post("/api/settings/pricing/adjust-percent", requireAdmin, async (request, response, next) => {
+  try {
+    const marketplace = pricingAdjustMarketplace(request.body?.marketplace);
+    const direction = cleanText(request.body?.direction).toLowerCase() === "increase" ? "increase" : "decrease";
+    const percent = Number(request.body?.percent);
+    if (!Number.isFinite(percent) || percent <= 0 || percent > 90) {
+      return response.status(400).json({ error: "Укажите процент от 0.01 до 90.", code: "pricing_adjust_percent_invalid" });
+    }
+    const multiplier = direction === "increase" ? 1 + percent / 100 : 1 - percent / 100;
+    const previous = await readAppSettings();
+    const oldValue = {
+      defaultMarkups: previous.defaultMarkups || {},
+      markupRules: Array.isArray(previous.markupRules) ? previous.markupRules : [],
+    };
+    const nextDefaultMarkups = { ...(previous.defaultMarkups || {}) };
+    for (const key of ["ozon", "yandex"]) {
+      if (marketplace !== "all" && marketplace !== key) continue;
+      const adjusted = pricingAdjustCoefficient(nextDefaultMarkups[key], multiplier);
+      if (adjusted) nextDefaultMarkups[key] = adjusted;
+    }
+    const nextRules = (Array.isArray(previous.markupRules) ? previous.markupRules : [])
+      .flatMap((rule) => pricingAdjustRule(rule, marketplace, multiplier));
+    const settings = await writeAppSettings({
+      ...previous,
+      defaultMarkups: nextDefaultMarkups,
+      markupRules: nextRules,
+    });
+    const newValue = {
+      defaultMarkups: settings.defaultMarkups || {},
+      markupRules: settings.markupRules || [],
+    };
+    appendAudit(request, "settings.pricing_adjust_percent", {
+      marketplace,
+      direction,
+      percent,
+      multiplier: Number(multiplier.toFixed(6)),
+      oldValue,
+      newValue,
+    }).catch((auditError) => {
+      logger.warn("settings pricing adjust audit append failed", { detail: auditError?.message || String(auditError) });
+    });
+    let priceRepriceQueued = false;
+    let priceRepriceQueueError = "";
+    try {
+      queueImmediateAutoPricePush([], "settings_price_adjust_percent", { force: true });
+      priceRepriceQueued = true;
+    } catch (queueError) {
+      priceRepriceQueueError = queueError?.message || String(queueError);
+      logger.warn("settings pricing adjust auto price queue failed", { detail: queueError?.message || String(queueError) });
+    }
+    response.json({
+      ok: true,
+      settings: publicAppSettings(settings),
+      changed: true,
+      oldValue,
+      newValue,
+      priceRepriceQueued,
+      priceRepriceReason: "settings_price_adjust_percent",
+      priceRepriceQueueError,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/settings/branding/logo", requireAdmin, uploadImages.single("logo"), async (request, response, next) => {
   try {
     const file = request.file;

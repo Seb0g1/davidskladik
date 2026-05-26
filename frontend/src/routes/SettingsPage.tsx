@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckSquare, Download, Loader2, RefreshCw, Save, Search, Square, Trash2, Upload, UserX } from "lucide-react";
+import { CheckSquare, Download, Loader2, Percent, RefreshCw, Save, Search, Square, Trash2, Upload, UserX } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SuppliersResponseSchema, SyncStatusSchema, UsersResponseSchema, UsersStatsResponseSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -102,6 +102,23 @@ function settingsSavePayload(draft: Record<string, unknown>) {
 function recordNumber(record: Record<string, unknown>, key: string) {
   const value = Number(record[key] || 0);
   return Number.isFinite(value) ? value : 0;
+}
+
+function adjustCoefficient(value: unknown, multiplier: number) {
+  const current = Number(value || 0);
+  if (!Number.isFinite(current) || current <= 0) return 0;
+  return Math.max(0.0001, Number((current * multiplier).toFixed(4)));
+}
+
+function adjustedRulePreview(rule: MarkupRuleDraft, marketplace: string, multiplier: number) {
+  if (marketplace === "all") return [{ ...rule, nextMarketplace: rule.marketplace, nextCoefficient: adjustCoefficient(rule.coefficient, multiplier), splitOnly: false }];
+  if (rule.marketplace === marketplace) return [{ ...rule, nextMarketplace: rule.marketplace, nextCoefficient: adjustCoefficient(rule.coefficient, multiplier), splitOnly: false }];
+  if (rule.marketplace !== "all") return [];
+  const other = marketplace === "ozon" ? "yandex" : "ozon";
+  return [
+    { ...rule, nextMarketplace: marketplace, nextCoefficient: adjustCoefficient(rule.coefficient, multiplier), splitOnly: false },
+    { ...rule, nextMarketplace: other, nextCoefficient: rule.coefficient, splitOnly: true },
+  ];
 }
 
 function userStatusText(row: Record<string, unknown>) {
@@ -653,6 +670,9 @@ export function SettingsPage() {
   const markups = asRecord(settings.defaultMarkups);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [activeTab, setActiveTab] = useState<SettingsTab>("prices");
+  const [adjustMarketplace, setAdjustMarketplace] = useState("all");
+  const [adjustDirection, setAdjustDirection] = useState("decrease");
+  const [adjustPercent, setAdjustPercent] = useState(2);
 
   useEffect(() => {
     if (settingsQuery.data?.settings) setDraft(settingsQuery.data.settings);
@@ -665,6 +685,19 @@ export function SettingsPage() {
   const save = useMutation({
     mutationFn: () => fetchJson("/api/settings", SettingsResponseSchema, mutationBody(settingsSavePayload(draft))),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+  });
+  const adjustPricing = useMutation({
+    mutationFn: () => fetchJson("/api/settings/pricing/adjust-percent", SettingsResponseSchema, mutationBody({
+      marketplace: adjustMarketplace,
+      direction: adjustDirection,
+      percent: adjustPercent,
+    })),
+    onSuccess: (data) => {
+      if (data.settings) setDraft(data.settings);
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+      queryClient.invalidateQueries({ queryKey: ["sales-automation-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["sales-automation-items"] });
+    },
   });
   const testAi = useMutation({
     mutationFn: () => fetchJson("/api/settings/ai/test", SettingsResponseSchema, mutationBody({ ai: draftAi })),
@@ -680,6 +713,14 @@ export function SettingsPage() {
   const updateAvailabilityRule = (index: number, patch: Partial<AvailabilityRuleDraft>) => {
     setAvailabilityRules(availabilityRules.map((rule, ruleIndex) => (ruleIndex === index ? { ...rule, ...patch } : rule)));
   };
+  const adjustMultiplier = adjustDirection === "increase" ? 1 + numberValue(adjustPercent, 0) / 100 : 1 - numberValue(adjustPercent, 0) / 100;
+  const previewMarketplaces = adjustMarketplace === "all" ? ["ozon", "yandex"] : [adjustMarketplace];
+  const adjustedDefaults = previewMarketplaces.map((marketplace) => ({
+    marketplace,
+    current: recordNumber(draftMarkups, marketplace),
+    next: adjustCoefficient(recordNumber(draftMarkups, marketplace), adjustMultiplier),
+  })).filter((row) => row.current > 0 && row.next > 0);
+  const adjustedRules = markupRules.flatMap((rule) => adjustedRulePreview(rule, adjustMarketplace, adjustMultiplier));
   const saveButton = (
     <button className="primary-action" onClick={() => save.mutate()} disabled={save.isPending}>
       {save.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить
@@ -698,6 +739,50 @@ export function SettingsPage() {
       {activeTab === "prices" && <section className="settings-grid pricing-settings-grid">
         <div className="settings-panel settings-panel-wide">
           <div className="settings-hint">Ozon и Yandex используют общие привязки PriceMaster в объединенной карточке, но цена считается отдельно по своему базовому коэффициенту, правилам наценки и доступности.</div>
+        </div>
+        <div className="settings-panel settings-panel-wide">
+          <div className="section-title">
+            <div><span>Быстро</span><h3>Быстрая корректировка цен</h3></div>
+            <button className="primary-action" type="button" disabled={adjustPricing.isPending || !(numberValue(adjustPercent, 0) > 0)} onClick={() => adjustPricing.mutate()}>
+              {adjustPricing.isPending ? <Loader2 className="spin" size={16} /> : <Percent size={16} />} Применить ко всем
+            </button>
+          </div>
+          <p className="settings-hint">Меняет базовые коэффициенты и гибкие правила, а не цены напрямую. Ручные наценки в карточках товаров не трогаются.</p>
+          <div className="settings-rule-row">
+            <select value={adjustMarketplace} onChange={(event) => setAdjustMarketplace(event.target.value)}>
+              <option value="all">Ozon + Yandex</option>
+              <option value="ozon">Ozon</option>
+              <option value="yandex">Yandex Market</option>
+            </select>
+            <select value={adjustDirection} onChange={(event) => setAdjustDirection(event.target.value)}>
+              <option value="decrease">Снизить</option>
+              <option value="increase">Поднять</option>
+            </select>
+            <input type="number" min="0.01" max="90" step="0.01" value={String(adjustPercent)} onChange={(event) => setAdjustPercent(numberValue(event.target.value, 0))} />
+            <span className="settings-hint">%</span>
+          </div>
+          <div className="settings-rule-table">
+            <div className="settings-rule-head"><span>Что изменится</span><span>Было</span><span>Станет</span><span></span></div>
+            {adjustedDefaults.map((row) => (
+              <div className="settings-rule-row" key={`default-${row.marketplace}`}>
+                <span>Базовая наценка {row.marketplace === "ozon" ? "Ozon" : "Yandex"}</span>
+                <span>{row.current.toFixed(4)}</span>
+                <strong>{row.next.toFixed(4)}</strong>
+                <span></span>
+              </div>
+            ))}
+            {adjustedRules.map((rule, index) => (
+              <div className="settings-rule-row" key={`rule-preview-${index}-${rule.marketplace}-${rule.nextMarketplace}-${rule.minUsd}`}>
+                <span>Правило {rule.marketplace} от ${rule.minUsd}{rule.splitOnly ? " · будет разделено" : ""}</span>
+                <span>{rule.coefficient.toFixed(4)}</span>
+                <strong>{rule.nextCoefficient.toFixed(4)}</strong>
+                <span>{rule.nextMarketplace}</span>
+              </div>
+            ))}
+            {!adjustedDefaults.length && !adjustedRules.length && <div className="soft-empty compact">Нет коэффициентов для предпросмотра.</div>}
+          </div>
+          {adjustPricing.error && <div className="inline-error">{errorMessage(adjustPricing.error)}</div>}
+          {adjustPricing.isSuccess && <div className="success-strip">Настройки изменены, пересчет цен поставлен в очередь.</div>}
         </div>
         <div className="settings-panel">
           <div className="section-title"><div><span>Цены</span><h3>Базовые цены</h3></div></div>

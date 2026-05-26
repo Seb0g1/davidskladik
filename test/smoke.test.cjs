@@ -2276,6 +2276,70 @@ test("PUT /api/settings saves markup settings", async () => {
   }
 });
 
+test("POST /api/settings/pricing/adjust-percent updates marketplace coefficients", async () => {
+  const agent = request.agent(app);
+  await agent
+    .post("/api/login")
+    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  const before = await agent.get("/api/settings").expect(200);
+  const previous = before.body.settings;
+  try {
+    await agent
+      .put("/api/settings")
+      .send({
+        ...previous,
+        defaultMarkups: { ozon: 2, yandex: 3 },
+        markupRules: [
+          { marketplace: "all", minUsd: 0, coefficient: 4 },
+          { marketplace: "ozon", minUsd: 10, coefficient: 5 },
+          { marketplace: "yandex", minUsd: 10, coefficient: 6 },
+        ],
+      })
+      .expect(200);
+
+    const res = await agent
+      .post("/api/settings/pricing/adjust-percent")
+      .send({ marketplace: "ozon", direction: "decrease", percent: 2 })
+      .expect(200);
+
+    assert.equal(res.body.ok, true);
+    assert.equal(res.body.priceRepriceQueued, true);
+    assert.equal(res.body.settings.defaultMarkups.ozon, 1.96);
+    assert.equal(res.body.settings.defaultMarkups.yandex, 3);
+    const rules = res.body.settings.markupRules;
+    assert.ok(rules.some((rule) => rule.marketplace === "ozon" && rule.minUsd === 0 && rule.coefficient === 3.92));
+    assert.ok(rules.some((rule) => rule.marketplace === "yandex" && rule.minUsd === 0 && rule.coefficient === 4));
+    assert.ok(rules.some((rule) => rule.marketplace === "ozon" && rule.minUsd === 10 && rule.coefficient === 4.9));
+    assert.ok(rules.some((rule) => rule.marketplace === "yandex" && rule.minUsd === 10 && rule.coefficient === 6));
+    assert.equal(res.body.priceRepriceReason, "settings_price_adjust_percent");
+  } finally {
+    if (previous) await agent.put("/api/settings").send(previous);
+  }
+});
+
+test("manager cannot apply pricing percent adjustment", async () => {
+  const previousUsers = process.env.APP_USERS_JSON;
+  process.env.APP_USERS_JSON = JSON.stringify([
+    { username: "pricing-manager", password: "manager-pass", role: "manager" },
+  ]);
+  try {
+    const manager = request.agent(app);
+    await manager
+      .post("/api/login")
+      .send({ username: "pricing-manager", password: "manager-pass" })
+      .expect(200);
+    await manager
+      .post("/api/settings/pricing/adjust-percent")
+      .send({ marketplace: "all", direction: "decrease", percent: 2 })
+      .expect(403);
+  } finally {
+    if (previousUsers === undefined) delete process.env.APP_USERS_JSON;
+    else process.env.APP_USERS_JSON = previousUsers;
+  }
+});
+
 test("price settings changes trigger repricing decisions", () => {
   const base = {
     fixedUsdRate: 95,
