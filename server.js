@@ -139,6 +139,9 @@ const ozonUnarchiveQueueBatchLimit = Math.max(1, Math.min(1000, Number(process.e
 const ozonUnarchiveQueueAutoEnabled = process.env.OZON_UNARCHIVE_QUEUE_AUTO_ENABLED !== "false";
 const ozonUnarchiveQueueAutoIntervalMinutes = Math.max(5, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INTERVAL_MINUTES || 30) || 30);
 const ozonUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 180) || 180);
+const ozonUnarchiveVerifyDelayMs = Math.max(0, Number(process.env.OZON_UNARCHIVE_VERIFY_DELAY_MS || 5000) || 5000);
+const ozonUnarchiveVerifyAttempts = Math.max(1, Math.min(10, Number(process.env.OZON_UNARCHIVE_VERIFY_ATTEMPTS || 3) || 3));
+const ozonUnarchiveVisibilityRetryMinutes = Math.max(5, Number(process.env.OZON_UNARCHIVE_VISIBILITY_RETRY_MINUTES || ozonUnarchiveQueueAutoIntervalMinutes) || ozonUnarchiveQueueAutoIntervalMinutes);
 const ozonPriceVerifyDelayMs = Math.max(0, Number(process.env.OZON_PRICE_VERIFY_DELAY_MS || 30000) || 30000);
 const ozonPriceVerifyAttempts = Math.max(1, Math.min(10, Number(process.env.OZON_PRICE_VERIFY_ATTEMPTS || 5) || 5));
 const ozonPriceVerifyToleranceRub = Math.max(0, Number(process.env.OZON_PRICE_VERIFY_TOLERANCE_RUB || 0) || 0);
@@ -7910,6 +7913,12 @@ function nextOzonUnarchiveRetryAt(date = new Date()) {
   return new Date(moscow.getTime() - 3 * 60 * 60 * 1000).toISOString();
 }
 
+function nextOzonUnarchiveVisibilityRetryAt(date = new Date()) {
+  const value = date instanceof Date ? date : new Date(date);
+  const base = Number.isFinite(value.getTime()) ? value : new Date();
+  return new Date(base.getTime() + ozonUnarchiveVisibilityRetryMinutes * 60 * 1000).toISOString();
+}
+
 function ozonUnarchiveQueueKey(item = {}) {
   return [
     cleanText(item.target),
@@ -8340,10 +8349,22 @@ async function writePrismaStateChunks(rows = [], chunkSize = 100, buildOperation
   const list = Array.isArray(rows) ? rows : [];
   if (!list.length) return;
   for (const chunk of chunkArray(list, chunkSize)) {
-    await getPrisma().$transaction(
-      chunk.map((item) => buildOperation(item)),
-      { maxWait: stateWriteTransactionMaxWaitMs, timeout: stateWriteTransactionTimeoutMs },
-    );
+    try {
+      await getPrisma().$transaction(
+        chunk.map((item) => buildOperation(item)),
+        { maxWait: stateWriteTransactionMaxWaitMs, timeout: stateWriteTransactionTimeoutMs },
+      );
+    } catch (error) {
+      const detail = error?.message || String(error);
+      if (!/Transaction already closed|expired transaction|timeout|timed out/i.test(detail)) throw error;
+      logger.warn("state postgres transaction timed out, retrying writes one by one", {
+        rows: chunk.length,
+        detail,
+      });
+      for (const item of chunk) {
+        await buildOperation(item);
+      }
+    }
   }
 }
 
@@ -23329,6 +23350,136 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
   return actions;
 }
 
+function ozonInfoLooksArchived(info = {}) {
+  const visibility = cleanText(info.visibility).toUpperCase();
+  const state = cleanText(info.status?.state || info.state || info.state_name || info.status_name).toUpperCase();
+  return Boolean(info.archived || visibility === "ARCHIVED" || state === "ARCHIVED");
+}
+
+async function verifyOzonUnarchiveActions(products = [], actions = [], options = {}) {
+  const verified = (Array.isArray(actions) ? actions : []).map((action) => ({ ...action }));
+  const productsById = new Map((Array.isArray(products) ? products : [])
+    .map((product) => [String(product.id), product]));
+  const pendingByTarget = new Map();
+  for (const action of verified) {
+    if (!action?.ok || action.type !== "unarchive") continue;
+    const product = productsById.get(String(action.id));
+    if (!product || product.marketplace !== "ozon") continue;
+    const target = cleanText(action.target || product.target);
+    if (!target) continue;
+    if (!pendingByTarget.has(target)) pendingByTarget.set(target, []);
+    pendingByTarget.get(target).push({
+      action,
+      product,
+      productId: cleanText(product.productId || action.productId),
+      offerId: cleanText(action.offerId || product.offerId),
+    });
+  }
+  if (!pendingByTarget.size) return verified;
+
+  const attempts = Math.max(1, Math.min(10, Math.round(Number(options.attempts || ozonUnarchiveVerifyAttempts) || ozonUnarchiveVerifyAttempts)));
+  const delayMs = Math.max(0, Math.round(Number(options.delayMs ?? ozonUnarchiveVerifyDelayMs) || 0));
+  const activeKeys = new Set();
+  const archivedKeys = new Set();
+  const visibleKeys = new Set();
+  const failedTargets = new Map();
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    activeKeys.clear();
+    archivedKeys.clear();
+    visibleKeys.clear();
+    failedTargets.clear();
+
+    for (const [target, rows] of pendingByTarget.entries()) {
+      const account = getOzonAccountByTarget(target);
+      if (!account) {
+        failedTargets.set(target, "ozon_account_not_found");
+        continue;
+      }
+      try {
+        const productIds = rows.map((row) => row.productId).filter(Boolean);
+        const offerIds = rows.map((row) => row.offerId).filter(Boolean);
+        const byProductId = productIds.length
+          ? await getOzonProductInfoMapByProductIds(productIds, account, { continueOnError: true })
+          : new Map();
+        const byOfferId = offerIds.length
+          ? await getOzonProductInfoMap(offerIds, account, { continueOnError: true })
+          : new Map();
+
+        for (const row of rows) {
+          const info = (row.productId && byProductId.get(row.productId))
+            || (row.offerId && getOzonOfferMapValue(byOfferId, row.offerId))
+            || null;
+          if (!info) continue;
+          const key = String(row.action.id);
+          visibleKeys.add(key);
+          if (ozonInfoLooksArchived(info)) archivedKeys.add(key);
+          else activeKeys.add(key);
+        }
+      } catch (error) {
+        failedTargets.set(target, error?.message || "ozon_unarchive_verify_failed");
+      }
+    }
+
+    const remaining = [];
+    for (const rows of pendingByTarget.values()) {
+      for (const row of rows) {
+        if (!activeKeys.has(String(row.action.id))) remaining.push(row);
+      }
+    }
+    if (!remaining.length) break;
+    if (attempt < attempts && delayMs > 0) await sleep(delayMs);
+  }
+
+  const retryProducts = [];
+  const nextRetryAt = nextOzonUnarchiveVisibilityRetryAt();
+  for (const [target, rows] of pendingByTarget.entries()) {
+    const targetError = failedTargets.get(target);
+    for (const row of rows) {
+      const key = String(row.action.id);
+      if (activeKeys.has(key)) {
+        row.action.verified = true;
+        row.action.pending = false;
+        continue;
+      }
+      row.action.verified = false;
+      row.action.ok = true;
+      row.action.pending = true;
+      row.action.nextRetryAt = nextRetryAt;
+      row.action.warning = targetError
+        ? `ozon_unarchive_verify_pending: ${targetError}`
+        : (archivedKeys.has(key) ? "still_archived_after_unarchive" : (visibleKeys.has(key) ? "still_archived_after_unarchive" : "unarchive_not_visible_after_api"));
+      delete row.action.error;
+      retryProducts.push(row.product);
+    }
+  }
+
+  if (retryProducts.length) {
+    try {
+      const queueState = queueOzonUnarchiveItems(await readOzonUnarchiveQueue(), retryProducts, {
+        nextRetryAt,
+        warning: "ozon_unarchive_verify_pending",
+      });
+      await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: retryProducts });
+      rescheduleOzonUnarchiveQueueAutoSoon("visibility_pending").catch((error) => {
+        logger.warn("ozon unarchive queue reschedule failed", { detail: error?.message || String(error) });
+      });
+    } catch (error) {
+      logger.warn("ozon unarchive pending requeue failed", { detail: error?.message || String(error) });
+    }
+  }
+
+  return verified;
+}
+
+async function verifyMarketplaceUnarchiveActions(products = [], actions = [], options = {}) {
+  return verifyYandexUnarchiveActions(
+    products,
+    await verifyOzonUnarchiveActions(products, actions, options),
+    options,
+  );
+}
+
 async function verifyYandexUnarchiveActions(products = [], actions = [], options = {}) {
   const verified = (Array.isArray(actions) ? actions : []).map((action) => ({ ...action }));
   const productsById = new Map((Array.isArray(products) ? products : [])
@@ -23711,7 +23862,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [], source };
   }
   const firstStockActions = await restoreStocksOnMarketplaces(recovered);
-  const unarchiveActions = await verifyYandexUnarchiveActions(
+  const unarchiveActions = await verifyMarketplaceUnarchiveActions(
     recovered,
     await unarchiveProductsOnMarketplaces(recovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),
   );
@@ -24484,6 +24635,7 @@ module.exports = {
   writePriceRetryQueue,
   priceRetryQueuePath,
   unarchiveProductsOnMarketplaces,
+  verifyOzonUnarchiveActions,
   processOzonUnarchiveQueue,
   readOzonUnarchiveQueue,
   writeOzonUnarchiveQueue,

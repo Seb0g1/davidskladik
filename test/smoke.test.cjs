@@ -163,6 +163,7 @@ const {
   writePriceRetryQueue,
   priceRetryQueuePath,
   unarchiveProductsOnMarketplaces,
+  verifyOzonUnarchiveActions,
   processOzonUnarchiveQueue,
   readOzonUnarchiveQueue,
   writeOzonUnarchiveQueue,
@@ -3629,6 +3630,73 @@ test("Ozon unarchive daily limit queues overflow and resumes when quota is avail
     assert.equal(forcedRun[0].ok, true);
     queue = await readOzonUnarchiveQueue();
     assert.equal(ozonUnarchiveDailyUsed(queue, "ozon-test"), 1);
+  } finally {
+    global.fetch = originalFetch;
+    await restoreFile(marketplaceAccountsPath, accountsBackup);
+    await restoreFile(ozonUnarchiveQueuePath, queueBackup);
+  }
+});
+
+test("Ozon unarchive verification requeues still archived products", async () => {
+  const accountsBackup = await backupFile(marketplaceAccountsPath);
+  const queueBackup = await backupFile(ozonUnarchiveQueuePath);
+  const originalFetch = global.fetch;
+  global.fetch = async (_url, options = {}) => {
+    const body = JSON.parse(options.body || "{}");
+    const productId = Array.isArray(body.product_id) ? body.product_id[0] : 1001;
+    const offerId = Array.isArray(body.offer_id) ? body.offer_id[0] : "OZON-STILL-ARCHIVED";
+    return new Response(JSON.stringify({
+      items: [{
+        product_id: productId,
+        offer_id: offerId,
+        visibility: "ARCHIVED",
+        status: { state: "ARCHIVED" },
+      }],
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    await restoreFile(marketplaceAccountsPath, JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      accounts: [{
+        id: "ozon-test",
+        marketplace: "ozon",
+        name: "Ozon Test",
+        clientId: "client",
+        apiKey: "key",
+        syncEnabled: true,
+      }],
+    }, null, 2));
+    await writeOzonUnarchiveQueue({ items: [], daily: {} });
+    const product = {
+      id: "ozon-still-archived-product",
+      marketplace: "ozon",
+      target: "ozon-test",
+      productId: "1001",
+      offerId: "OZON-STILL-ARCHIVED",
+    };
+
+    const actions = await verifyOzonUnarchiveActions([product], [{
+      id: product.id,
+      type: "unarchive",
+      target: product.target,
+      offerId: product.offerId,
+      ok: true,
+    }], { attempts: 1, delayMs: 0 });
+
+    assert.equal(actions[0].ok, true);
+    assert.equal(actions[0].pending, true);
+    assert.equal(actions[0].verified, false);
+    assert.equal(actions[0].warning, "still_archived_after_unarchive");
+    assert.ok(actions[0].nextRetryAt);
+
+    const queue = await readOzonUnarchiveQueue();
+    assert.equal(queue.items.length, 1);
+    assert.equal(queue.items[0].id, product.id);
+    assert.equal(queue.items[0].warning, "ozon_unarchive_verify_pending");
   } finally {
     global.fetch = originalFetch;
     await restoreFile(marketplaceAccountsPath, accountsBackup);
