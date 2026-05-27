@@ -1,4 +1,4 @@
-﻿-- Finance v1: marketplace profitability and manual purchases.
+-- Finance v1: marketplace profitability and manual purchases.
 CREATE TABLE IF NOT EXISTS "finance_orders" (
   "id" TEXT NOT NULL,
   "marketplace" "Marketplace",
