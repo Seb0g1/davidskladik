@@ -2304,6 +2304,115 @@ function exactPriceMasterNameMatches(value, expected) {
   return Boolean(left && right && left === right);
 }
 
+function priceMasterNameTokens(value) {
+  return normalizeSearchText(value)
+    .split(" ")
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 2 && !["edp", "edt", "parfum", "perfume", "extrait", "de", "ml"].includes(token));
+}
+
+function extractPriceMasterVolumes(value) {
+  const text = String(value || "").toLowerCase();
+  const volumes = new Set();
+  for (const match of text.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:ml|мл)/gi)) {
+    const number = Number(String(match[1] || "").replace(",", "."));
+    if (Number.isFinite(number) && number > 0) volumes.add(String(number).replace(/\.0$/, ""));
+  }
+  for (const match of text.matchAll(/(?:^|[^0-9])(\d{1,3})(?:\s|$)/g)) {
+    const number = Number(match[1]);
+    if (Number.isFinite(number) && number > 0 && number <= 500) volumes.add(String(number));
+  }
+  return Array.from(volumes);
+}
+
+function priceMasterTesterFlag(value) {
+  const text = normalizeSearchText(value);
+  return /\b(test|tester|пробник|тестер)\b/i.test(text);
+}
+
+function priceMasterArticleCandidateScore(row = {}, productContext = {}) {
+  const productName = cleanText(productContext.name || productContext.title || productContext.offerId || productContext.sku);
+  const rowName = cleanText(row.name || row.NativeName || row.nativeName);
+  const productTokens = priceMasterNameTokens(productName);
+  const rowTokens = new Set(priceMasterNameTokens(rowName));
+  const shared = productTokens.filter((token) => rowTokens.has(token));
+  let score = shared.length * 12;
+  if (productTokens.length && shared.length === productTokens.length) score += 20;
+  if (productName && rowName && exactPriceMasterNameMatches(productName, rowName)) score += 80;
+
+  const productVolumes = extractPriceMasterVolumes(productName);
+  const rowVolumes = extractPriceMasterVolumes(rowName);
+  const sharedVolumes = productVolumes.filter((volume) => rowVolumes.includes(volume));
+  const volumeMismatch = productVolumes.length > 0 && rowVolumes.length > 0 && !sharedVolumes.length;
+  if (sharedVolumes.length) score += 45;
+  if (volumeMismatch) score -= 80;
+
+  const productTester = priceMasterTesterFlag(productName);
+  const rowTester = priceMasterTesterFlag(rowName);
+  if (productTester === rowTester) score += 8;
+  else score -= 35;
+  if (String(row.active ?? row.Active ?? true) === "false" || row.active === false || row.Active === false) score -= 30;
+
+  const reason = [
+    shared.length ? `tokens:${shared.join(",")}` : "tokens:none",
+    sharedVolumes.length ? `volume:${sharedVolumes.join(",")}` : (volumeMismatch ? `volume_mismatch:${productVolumes.join("/")}->${rowVolumes.join("/")}` : "volume:unknown"),
+    productTester === rowTester ? "tester:match" : "tester:mismatch",
+  ];
+  return {
+    score,
+    reason: reason.join("; "),
+    sharedTokens: shared,
+    productVolumes,
+    rowVolumes,
+    volumeMismatch,
+  };
+}
+
+function publicPriceMasterCandidate(row = {}, productContext = {}) {
+  const scored = priceMasterArticleCandidateScore(row, productContext);
+  const partnerName = cleanText(row.partnerName || row.PartnerName);
+  return {
+    rowId: cleanText(row.rowId || row.RowID || row.id),
+    article: cleanText(row.article || row.NativeID || row.nativeId),
+    name: cleanText(row.name || row.NativeName || row.nativeName),
+    partnerName,
+    supplierName: partnerName,
+    partnerId: cleanText(row.partnerId || row.PartnerID),
+    price: Number(row.price ?? row.NativePrice ?? 0) || 0,
+    docDate: cleanText(row.docDate || row.DocDate),
+    active: row.active !== false && row.Active !== false,
+    matchScore: scored.score,
+    reason: scored.reason,
+  };
+}
+
+function pickSafeArticlePriceMasterRow(matches = [], productContext = {}) {
+  const rows = (Array.isArray(matches) ? matches : []).filter(Boolean);
+  if (rows.length <= 1) {
+    return {
+      row: rows[0] || null,
+      resolvedBy: rows.length ? "article_unique" : "",
+      candidates: rows.map((row) => publicPriceMasterCandidate(row, productContext)),
+    };
+  }
+  const scored = rows
+    .map((row) => ({ row, ...priceMasterArticleCandidateScore(row, productContext) }))
+    .sort((a, b) =>
+      b.score - a.score
+      || (Number(b.row.active === false ? 0 : 1) - Number(a.row.active === false ? 0 : 1))
+      || String(b.row.docDate || "").localeCompare(String(a.row.docDate || ""))
+      || Number(b.row.rowId || 0) - Number(a.row.rowId || 0));
+  const [best, second] = scored;
+  const candidates = scored.map((item) => ({
+    ...publicPriceMasterCandidate(item.row, productContext),
+    matchScore: item.score,
+    reason: item.reason,
+  }));
+  const confident = best && best.score >= 35 && (!second || best.score - second.score >= 20);
+  if (!confident) return { row: null, resolvedBy: "", ambiguous: true, candidates };
+  return { row: best.row, resolvedBy: "product_name_score", candidates };
+}
+
 function priceMasterRowMatchesLink(row = {}, link = {}) {
   const supplierOk =
     !link.supplierName ||
@@ -2754,10 +2863,11 @@ function normalizeWarehouseLink(input = {}) {
     sourceRowId = sourceRowId || syntheticNoArticleRowId;
     matchType = "selected_row";
   }
+  const preserveSelectedRow = matchType === "selected_row" && sourceRowId;
   return {
     id: cleanText(input.id) || crypto.randomUUID(),
     article,
-    matchType: article ? "article" : matchType,
+    matchType: article && !preserveSelectedRow ? "article" : matchType,
     exactName,
     sourceRowId,
     keyword: cleanText(input.keyword),
@@ -2769,6 +2879,10 @@ function normalizeWarehouseLink(input = {}) {
     updatedAt: input.updatedAt || input.createdAt || new Date().toISOString(),
     createdBy: cleanText(input.createdBy || input.created_by),
     updatedBy: cleanText(input.updatedBy || input.updated_by || input.createdBy || input.created_by),
+    resolvedBy: cleanText(input.resolvedBy || input.resolved_by),
+    resolvedPriceMasterRow: input.resolvedPriceMasterRow && typeof input.resolvedPriceMasterRow === "object"
+      ? cloneAuditValue(input.resolvedPriceMasterRow)
+      : null,
   };
 }
 
@@ -2779,7 +2893,9 @@ function warehouseLinkHasMatchTarget(input = {}) {
 
 function warehouseLinkIdentityKey(input = {}) {
   const link = normalizeWarehouseLink(input);
-  const primary = link.article
+  const primary = link.matchType === "selected_row" && link.sourceRowId
+    ? `row:${link.sourceRowId}`
+    : link.article
     ? `article:${link.article.toLowerCase()}`
     : (link.sourceRowId ? `row:${link.sourceRowId}` : `name:${link.exactName.toLowerCase()}`);
   return [
@@ -2794,7 +2910,9 @@ function warehouseLinkIdentityKey(input = {}) {
 
 function warehouseLinkTargetKey(input = {}) {
   const link = normalizeWarehouseLink(input);
-  const primary = link.article
+  const primary = link.matchType === "selected_row" && link.sourceRowId
+    ? `row:${link.sourceRowId}`
+    : link.article
     ? `article:${link.article.toLowerCase()}`
     : (link.sourceRowId ? `row:${link.sourceRowId}` : `name:${link.exactName.toLowerCase()}`);
   return [
@@ -2808,7 +2926,9 @@ function warehouseLinkTargetKey(input = {}) {
 
 function warehouseLinkPrimaryTargetKey(input = {}) {
   const link = normalizeWarehouseLink(input);
-  const primary = link.article
+  const primary = link.matchType === "selected_row" && link.sourceRowId
+    ? `row:${link.sourceRowId}`
+    : link.article
     ? `article:${link.article.toLowerCase()}`
     : (link.sourceRowId ? `row:${link.sourceRowId}` : `name:${link.exactName.toLowerCase()}`);
   return [
@@ -10671,15 +10791,30 @@ function priceMasterLinkValidationFailure(error, linkInput = {}, index = 0) {
 async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSuppliers = [], options = {}) {
   const link = normalizeWarehouseLink(linkInput);
   if (!warehouseLinkHasMatchTarget(link)) return link;
+  const productContext = options.productContext || options.product || {};
   const matches = await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers, options);
   if (matches.length) {
-    const best = matches[0];
+    const selection = link.matchType === "article"
+      ? pickSafeArticlePriceMasterRow(matches, productContext)
+      : { row: matches[0], resolvedBy: link.matchType === "selected_row" ? "selected_row" : "exact_name", candidates: matches.map((row) => publicPriceMasterCandidate(row, productContext)) };
+    if (selection.ambiguous) {
+      const error = new Error("У артикула найдено несколько строк PriceMaster, выберите точную строку.");
+      error.statusCode = 409;
+      error.code = "PM_LINK_AMBIGUOUS";
+      error.candidates = selection.candidates.slice(0, 20);
+      error.matches = error.candidates;
+      throw error;
+    }
+    const best = selection.row || matches[0];
     return normalizeWarehouseLink({
       ...link,
-      exactName: link.exactName || (link.matchType !== "article" ? best.name : ""),
-      sourceRowId: link.sourceRowId || (link.matchType === "selected_row" ? best.rowId : ""),
+      matchType: link.matchType === "article" && selection.resolvedBy === "product_name_score" ? "selected_row" : link.matchType,
+      exactName: link.exactName || (link.matchType !== "article" || selection.resolvedBy === "product_name_score" ? best.name : ""),
+      sourceRowId: link.sourceRowId || (link.matchType === "selected_row" || selection.resolvedBy === "product_name_score" ? best.rowId : ""),
       supplierName: link.supplierName || best.partnerName,
       partnerId: link.partnerId || best.partnerId,
+      resolvedBy: selection.resolvedBy,
+      resolvedPriceMasterRow: publicPriceMasterCandidate(best, productContext),
     });
   }
 
@@ -17060,19 +17195,41 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       .map((link) => normalizeWarehouseLink(link))
       .filter(warehouseLinkHasMatchTarget)
       .map((link) => [warehouseLinkTargetKey(link), link])).values());
-    const resolvedLinks = (await Promise.all(submittedLinks.map((submittedLink) =>
-      resolvePriceMasterLinkForSave(submittedLink, usdRate, warehouse.suppliers, linkSaveLookupOptions),
-    ))).filter(warehouseLinkHasMatchTarget);
-    const baseLinks = Array.from(new Map(resolvedLinks
-      .map((link) => [warehouseLinkTargetKey(link), link])).values());
-    const baseLink = baseLinks[0] || normalizeWarehouseLink({});
-    if (!baseLink.article && !baseLink.exactName && !baseLink.sourceRowId) {
-      return response.status(400).json({ error: "Укажите артикул PriceMaster или выберите строку PriceMaster по названию." });
-    }
     const seedProducts = (warehouse.products || []).filter((product) => ids.has(String(product.id)));
     const targetProducts = expandWarehouseProductsToGroups(warehouse.products || [], seedProducts);
     const expandedIds = new Set(targetProducts.map((product) => String(product.id)));
     if (!targetProducts.length) return response.status(404).json({ error: "РўРѕРІР°СЂС‹ СЃРєР»Р°РґР° РЅРµ РЅР°Р№РґРµРЅС‹." });
+    const productContext = targetProducts[0] || seedProducts[0] || {};
+    const resolvedLinks = [];
+    const resolveFailures = [];
+    for (const [index, submittedLink] of submittedLinks.entries()) {
+      try {
+        const resolved = await resolvePriceMasterLinkForSave(submittedLink, usdRate, warehouse.suppliers, {
+          ...linkSaveLookupOptions,
+          productContext,
+        });
+        if (warehouseLinkHasMatchTarget(resolved)) resolvedLinks.push(resolved);
+      } catch (error) {
+        resolveFailures.push(priceMasterLinkValidationFailure(error, submittedLink, index));
+      }
+    }
+    if (resolveFailures.length) {
+      const ambiguous = resolveFailures.some((item) => item.code === "PM_LINK_AMBIGUOUS");
+      return response.status(ambiguous ? 409 : 400).json({
+        error: ambiguous
+          ? "\u0423 \u0430\u0440\u0442\u0438\u043a\u0443\u043b\u0430 \u043d\u0430\u0439\u0434\u0435\u043d\u043e \u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0441\u0442\u0440\u043e\u043a PriceMaster, \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0442\u043e\u0447\u043d\u0443\u044e \u0441\u0442\u0440\u043e\u043a\u0443."
+          : `PriceMaster validation failed for ${resolveFailures.length} link(s). Nothing was saved.`,
+        code: ambiguous ? "PM_LINK_AMBIGUOUS" : "PM_LINK_BULK_VALIDATION_FAILED",
+        failedLinks: resolveFailures,
+        candidates: resolveFailures.flatMap((item) => Array.isArray(item.matches) ? item.matches : []).slice(0, 20),
+      });
+    }
+    const baseLinks = Array.from(new Map(resolvedLinks
+      .map((link) => [warehouseLinkTargetKey(link), link])).values());
+    const baseLink = baseLinks[0] || normalizeWarehouseLink({});
+    if (!baseLink.article && !baseLink.exactName && !baseLink.sourceRowId) {
+      return response.status(400).json({ error: "\u0423\u043a\u0430\u0436\u0438\u0442\u0435 \u0430\u0440\u0442\u0438\u043a\u0443\u043b PriceMaster \u0438\u043b\u0438 \u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435 \u0441\u0442\u0440\u043e\u043a\u0443 PriceMaster \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e." });
+    }
     const now = new Date().toISOString();
     const username = requestUsername(request);
     const commonLinks = buildCommonWarehouseGroupLinks(targetProducts, baseLinks, { now, username });
@@ -17224,8 +17381,15 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const linkSaveLookupOptions = { live: true, timeoutMs: 2500, cacheEmpty: false };
-    link = await resolvePriceMasterLinkForSave(link, usdRate, warehouse.suppliers, linkSaveLookupOptions);
-    await assertPriceMasterLinkExists(link, usdRate, warehouse.suppliers, linkSaveLookupOptions);
+    const linkProductContext = normalizeWarehouseProduct(product);
+    link = await resolvePriceMasterLinkForSave(link, usdRate, warehouse.suppliers, {
+      ...linkSaveLookupOptions,
+      productContext: linkProductContext,
+    });
+    await assertPriceMasterLinkExists(link, usdRate, warehouse.suppliers, {
+      ...linkSaveLookupOptions,
+      productContext: linkProductContext,
+    });
     const now = new Date().toISOString();
     const username = requestUsername(request);
     product.links = Array.isArray(product.links) ? product.links : [];
@@ -25401,6 +25565,8 @@ module.exports = {
   pickTargetStockSendProducts,
   priceAffectingSettingsChanged,
   warehouseLinkIdentityKey,
+  pickSafeArticlePriceMasterRow,
+  priceMasterArticleCandidateScore,
   warehouseLinkTargetKey,
   warehouseLinkSupplierSignature,
   productLinkPostgresIdentityKey,

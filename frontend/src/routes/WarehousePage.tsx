@@ -147,6 +147,24 @@ function draftFromSearchRow(row: PriceMasterSearchRow): LinkDraft {
   };
 }
 
+function draftFromFailedCandidate(candidate: unknown): LinkDraft {
+  const row = asRecord(candidate);
+  return draftFromSearchRow({
+    id: String(row.rowId || row.id || ""),
+    rowId: String(row.rowId || row.id || ""),
+    article: String(row.article || ""),
+    supplierName: String(row.supplierName || row.partnerName || ""),
+    partnerId: String(row.partnerId || ""),
+    keyword: "",
+    name: String(row.name || ""),
+    price: Number(row.price || 0) || null,
+    currency: String(row.priceCurrency || row.currency || "USD"),
+    priceCurrency: String(row.priceCurrency || row.currency || "USD"),
+    available: row.available === undefined ? true : Boolean(row.available),
+    updatedAt: row.updatedAt ? String(row.updatedAt) : null,
+  } as PriceMasterSearchRow);
+}
+
 function emptyLinkDraft(currency = "USD"): LinkDraft {
   return { article: "", supplierName: "", keyword: "", priceCurrency: currency };
 }
@@ -174,8 +192,10 @@ function linkPrimarySignature(link: Partial<ProductLink | LinkDraft>): string {
     matchType = "selected_row";
   }
   if (!["article", "selected_row", "exact_name"].includes(matchType)) matchType = "article";
-  if (article) matchType = "article";
-  const primary = article
+  if (article && !(matchType === "selected_row" && sourceRowId)) matchType = "article";
+  const primary = matchType === "selected_row" && sourceRowId
+    ? `row:${sourceRowId}`
+    : article
     ? `article:${article.toLowerCase()}`
     : (sourceRowId ? `row:${sourceRowId}` : `name:${exactName.toLowerCase()}`);
   const currency = cleanLinkPart(link.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
@@ -655,7 +675,25 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
             <ul className="pm-failed-links">
               {failedLinks.slice(0, 8).map((item, index) => {
                 const row = asRecord(item);
-                return <li key={`${row.index || index}-${row.article || row.sourceRowId || index}`}>{[row.index !== undefined ? `#${Number(row.index) + 1}` : "", row.article || row.sourceRowId || row.exactName, row.supplierName, row.detail].filter(Boolean).join(" · ")}</li>;
+                const candidates = Array.isArray(row.matches) ? row.matches : [];
+                return (
+                  <li key={`${row.index || index}-${row.article || row.sourceRowId || index}`}>
+                    <span>{[row.index !== undefined ? `#${Number(row.index) + 1}` : "", row.article || row.sourceRowId || row.exactName, row.supplierName, row.detail].filter(Boolean).join(" \u00b7 ")}</span>
+                    {candidates.length ? (
+                      <div className="pm-candidate-list">
+                        {candidates.slice(0, 5).map((candidate, candidateIndex) => {
+                          const candidateRow = asRecord(candidate);
+                          const label = [candidateRow.name, candidateRow.price ? money(Number(candidateRow.price)) : "", candidateRow.rowId ? `row ${candidateRow.rowId}` : ""].filter(Boolean).join(" \u00b7 ");
+                          return (
+                            <button className="secondary-action compact" type="button" key={`${candidateRow.rowId || candidateIndex}`} onClick={() => addDraft(draftFromFailedCandidate(candidate))}>
+                              {"\u0412\u044b\u0431\u0440\u0430\u0442\u044c"}: {label || "PriceMaster"}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </li>
+                );
               })}
             </ul>
           ) : null}

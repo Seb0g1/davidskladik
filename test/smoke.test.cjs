@@ -98,6 +98,8 @@ const {
   pickTargetStockSendProducts,
   priceAffectingSettingsChanged,
   warehouseLinkIdentityKey,
+  pickSafeArticlePriceMasterRow,
+  priceMasterArticleCandidateScore,
   productLinkPostgresIdentityKey,
   dedupeProductLinkRows,
   warehouseProductLinkDetailsSignature,
@@ -4387,7 +4389,7 @@ test("postgres product link rows are deduped before createMany", () => {
   assert.equal(rows[0].id, "new");
 });
 
-test("warehouse link identity prefers supplier article over PriceMaster row id", () => {
+test("warehouse link identity keeps selected PriceMaster rows distinct from article-only links", () => {
   const a = warehouseLinkIdentityKey({
     id: "draft-1",
     matchType: "selected_row",
@@ -4402,7 +4404,52 @@ test("warehouse link identity prefers supplier article over PriceMaster row id",
     sourceRowId: "row-b",
     supplierName: " supplier a ",
   });
-  assert.equal(a, b);
+  assert.notEqual(a, b);
+  assert.match(a, /^selected_row\|row:row-a\|/);
+  assert.match(b, /^article\|article:pm-77\|/);
+});
+
+test("duplicate PriceMaster article resolver prefers matching product name and volume", () => {
+  const rows = [
+    {
+      article: "GTT81",
+      name: "Gritti Beyond the Wall Extrait De Parfum 100ml",
+      price: 124,
+      rowId: "2163035",
+      partnerId: "116",
+      partnerName: "Давидгор",
+      active: true,
+    },
+    {
+      article: "GTT81",
+      name: "Gritti Tangerina edp 2ml",
+      price: 3,
+      rowId: "2265774",
+      partnerId: "116",
+      partnerName: "Давидгор",
+      active: true,
+    },
+  ];
+
+  const beyond = pickSafeArticlePriceMasterRow(rows, { name: "Gritti Beyond the Wall 100" });
+  assert.equal(beyond.row.rowId, "2163035");
+  assert.equal(beyond.resolvedBy, "product_name_score");
+
+  const tangerina = pickSafeArticlePriceMasterRow(rows, { name: "Gritti Tangerina 2ml" });
+  assert.equal(tangerina.row.rowId, "2265774");
+  assert.equal(tangerina.resolvedBy, "product_name_score");
+});
+
+test("duplicate PriceMaster article resolver refuses ambiguous low-confidence matches", () => {
+  const rows = [
+    { article: "DUP-1", name: "Brand Alpha 100ml", price: 100, rowId: "1", partnerName: "Supplier" },
+    { article: "DUP-1", name: "Brand Beta 100ml", price: 90, rowId: "2", partnerName: "Supplier" },
+  ];
+  const result = pickSafeArticlePriceMasterRow(rows, { name: "Brand 100" });
+  assert.equal(result.ambiguous, true);
+  assert.equal(result.row, null);
+  assert.equal(result.candidates.length, 2);
+  assert.ok(priceMasterArticleCandidateScore(rows[0], { name: "Brand Alpha 100ml" }).score > 0);
 });
 
 test("warehouse product normalization collapses duplicate supplier links by target", () => {

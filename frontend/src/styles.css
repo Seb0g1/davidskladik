@@ -1259,6 +1259,19 @@ button:disabled {
   gap: 4px;
 }
 
+.pm-candidate-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.secondary-action.compact {
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
 .soft-empty,
 .list-loading {
   border: 1px dashed var(--line);
