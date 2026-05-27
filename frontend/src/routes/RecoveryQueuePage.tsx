@@ -31,19 +31,36 @@ function lastResultText(value: unknown) {
 function queueAttemptLabel(data: Record<string, unknown> | undefined) {
   const due = numberValue(data?.due);
   const availableToday = numberValue(data?.availableToday);
+  const verificationPending = numberValue(data?.verificationPending);
   if (due > 0 && availableToday > 0) return "сейчас";
+  if (verificationPending > 0) return "ждет проверку Ozon";
   if (due > 0) return "ждет новый дневной лимит Ozon";
   return formatDate(data?.nextAutoRunAt || data?.nextRetryAt);
 }
 
+function warningLabel(value: unknown) {
+  const warning = text(value);
+  if (warning === "ozon_unarchive_verify_pending") return "Ozon принял, проверяем выход из архива";
+  if (warning === "still_archived_after_unarchive") return "Ozon все еще держит в архиве";
+  if (warning === "unarchive_not_visible_after_api") return "Ozon пока не показывает товар";
+  if (warning === "ozon_unarchive_daily_limit_queued") return "ждет лимит Ozon";
+  if (warning.startsWith("ozon_unarchive_verify_pending:")) return `проверка Ozon: ${warning.replace("ozon_unarchive_verify_pending:", "").trim()}`;
+  if (warning.startsWith("unarchive_verify_pending:")) return `проверка маркетплейса: ${warning.replace("unarchive_verify_pending:", "").trim()}`;
+  return warning;
+}
+
 function itemStatusLabel(item: Record<string, unknown>) {
+  const warning = text(item.warning);
+  if (warning) return warningLabel(warning);
   if (item.due) {
     return numberValue(item.availableToday) > 0 ? "готов к разархиву" : "ждет лимит Ozon";
   }
-  return text(item.warning || item.status || "pending");
+  return warningLabel(item.status || "pending");
 }
 
 function itemWhenLabel(item: Record<string, unknown>) {
+  const warning = text(item.warning);
+  if (warning === "ozon_unarchive_verify_pending") return formatDate(item.nextRetryAt);
   if (item.due) {
     return numberValue(item.availableToday) > 0 ? "сейчас" : "после сброса лимита";
   }
@@ -80,6 +97,7 @@ export function RecoveryQueuePage() {
       <div className="summary-grid">
         <div><span>Всего в очереди</span><strong>{data?.total ?? 0}</strong></div>
         <div><span>Готовы к попытке</span><strong>{data?.due ?? 0}</strong></div>
+        <div><span>Ждут проверки Ozon</span><strong>{data?.verificationPending ?? 0}</strong></div>
         <div><span>Осталось лимита</span><strong>{data?.availableToday ?? 0}</strong></div>
         <div><span>Следующая попытка</span><strong>{queueAttemptLabel(data)}</strong></div>
       </div>

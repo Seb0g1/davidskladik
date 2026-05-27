@@ -3697,6 +3697,16 @@ test("Ozon unarchive verification requeues still archived products", async () =>
     assert.equal(queue.items.length, 1);
     assert.equal(queue.items[0].id, product.id);
     assert.equal(queue.items[0].warning, "ozon_unarchive_verify_pending");
+    const agent = request.agent(app);
+    await agent
+      .post("/api/login")
+      .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
+      .expect(200);
+    const publicQueue = await agent
+      .get("/api/ozon/unarchive-queue")
+      .expect(200);
+    assert.equal(publicQueue.body.verificationPending, 1);
+    assert.equal(publicQueue.body.warningCounts.ozon_unarchive_verify_pending, 1);
   } finally {
     global.fetch = originalFetch;
     await restoreFile(marketplaceAccountsPath, accountsBackup);

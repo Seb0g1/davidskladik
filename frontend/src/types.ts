@@ -231,6 +231,8 @@ export const OzonUnarchiveQueueSchema = z.object({
   total: z.number().optional().default(0),
   due: z.number().optional().default(0),
   future: z.number().optional().default(0),
+  verificationPending: z.number().optional().default(0),
+  warningCounts: z.record(z.string(), z.number()).optional().default({}),
   availableToday: z.number().optional().default(0),
   nextRetryAt: z.coerce.string().optional().nullable(),
   autoEnabled: z.boolean().optional().default(true),

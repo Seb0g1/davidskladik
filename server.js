@@ -8268,6 +8268,11 @@ function ozonUnarchiveQueuePublic(queue = {}, { limit = 1000 } = {}) {
       if (a.due !== b.due) return a.due ? -1 : 1;
       return new Date(a.nextRetryAt || a.queuedAt || 0) - new Date(b.nextRetryAt || b.queuedAt || 0);
     });
+  const warnings = items.reduce((acc, item) => {
+    const warning = cleanText(item.warning || item.status || "pending") || "pending";
+    acc[warning] = (acc[warning] || 0) + 1;
+    return acc;
+  }, {});
   return {
     ok: true,
     updatedAt: normalized.updatedAt,
@@ -8275,6 +8280,8 @@ function ozonUnarchiveQueuePublic(queue = {}, { limit = 1000 } = {}) {
     total: items.length,
     due: items.filter((item) => item.due).length,
     future: items.filter((item) => !item.due).length,
+    verificationPending: Number(warnings.ozon_unarchive_verify_pending || 0),
+    warningCounts: warnings,
     availableToday: Array.from(targets.values()).reduce((sum, item) => sum + item.availableToday, 0),
     nextRetryAt: items.filter((item) => !item.due).map((item) => item.nextRetryAt).filter(Boolean).sort()[0] || null,
     targets: Array.from(targets.values()),
