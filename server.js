@@ -17443,6 +17443,12 @@ async function updateSalesAutomationFromPriceResult({ items = [], failed = [], s
       lastPriceRequestAt: item.lastPriceRequestAt || sentAt,
       lastPriceVerifiedAt: item.lastPriceVerifiedAt || null,
       verificationAttempts: item.verificationAttempts || failedItem?.verificationAttempts || 0,
+      selectedSupplier: item.supplier || item.selectedSupplier || null,
+      supplierPurchasePrice: Number(item.supplier?.price || item.supplier?.supplierPrice || 0) || null,
+      supplierPurchaseCurrency: cleanText(item.supplier?.priceCurrency || item.supplier?.currency) || null,
+      effectiveFinalPrice: Number(item.supplier?.effectiveFinalPrice || item.supplier?.calculatedPrice || item.price || 0) || null,
+      sourceEvent: item.sourceEvent || "",
+      priceSource: item.priceSource || item.supplier?.priceSource || null,
     });
   }
   for (const row of skipped || []) {
@@ -17825,6 +17831,8 @@ async function sendWarehousePrices({
   if (!dryRun && items.length) {
     logger.info("warehouse price push selection", {
       reason: cleanText(reason) || "auto-price-push",
+      priceIntentId,
+      sourceEvent: sourceEvent || reason,
       selected: selected.length,
       readyToSend: items.length,
       productIds: items.slice(0, 25).map((item) => item.id),
@@ -17833,6 +17841,7 @@ async function sendWarehousePrices({
       effectiveFinalPrice: Number(items[0]?.supplier?.effectiveFinalPrice || items[0]?.price || 0) || null,
       alternativesCount: Array.isArray(selected[0]?.supplierAlternatives) ? selected[0].supplierAlternatives.length : 0,
       pmSource: selected[0]?.priceSource || items[0]?.supplier?.priceSource || null,
+      priceApplyStatus: "queued",
     });
   }
 
@@ -17879,6 +17888,12 @@ async function sendWarehousePrices({
         priceApplyStatus: verify === false ? "api_accepted" : "verification_pending",
         lastRequestedPrice: roundPrice(entry.item.price),
         lastPriceRequestAt: sentAt,
+        selectedSupplier: entry.item.supplier || entry.item.selectedSupplier || null,
+        supplierPurchasePrice: Number(entry.item.supplier?.price || entry.item.supplier?.supplierPrice || 0) || null,
+        supplierPurchaseCurrency: cleanText(entry.item.supplier?.priceCurrency || entry.item.supplier?.currency) || null,
+        effectiveFinalPrice: Number(entry.item.supplier?.effectiveFinalPrice || entry.item.supplier?.calculatedPrice || entry.item.price || 0) || null,
+        sourceEvent: entry.item.sourceEvent || sourceEvent || reason,
+        priceSource: entry.item.priceSource || entry.item.supplier?.priceSource || null,
         raw: {
           ...entry.item,
           payload: entry.payload,
@@ -17886,6 +17901,12 @@ async function sendWarehousePrices({
           priceApplyStatus: verify === false ? "api_accepted" : "verification_pending",
           lastRequestedPrice: roundPrice(entry.item.price),
           lastPriceRequestAt: sentAt,
+          selectedSupplier: entry.item.supplier || entry.item.selectedSupplier || null,
+          supplierPurchasePrice: Number(entry.item.supplier?.price || entry.item.supplier?.supplierPrice || 0) || null,
+          supplierPurchaseCurrency: cleanText(entry.item.supplier?.priceCurrency || entry.item.supplier?.currency) || null,
+          effectiveFinalPrice: Number(entry.item.supplier?.effectiveFinalPrice || entry.item.supplier?.calculatedPrice || entry.item.price || 0) || null,
+          sourceEvent: entry.item.sourceEvent || sourceEvent || reason,
+          priceSource: entry.item.priceSource || entry.item.supplier?.priceSource || null,
         },
       }))).catch((error) => logger.warn("sales automation ozon accepted update failed", { detail: error?.message || String(error) }));
     }
@@ -18540,13 +18561,13 @@ async function flushImmediateAutoPricePush() {
       scope: batch.ids ? batch.ids.length : "all",
       mode: queuedMode ? "bullmq" : "inline",
     });
-    const immediateIntentId = crypto.randomUUID();
-    const result = !batch.ids && batch.livePriceMaster
+    const result = batch.livePriceMaster
       ? await queueAuthoritativePriceReprice({
+        productIds: batch.ids,
         marketplace: batch.marketplace,
         reason: batch.reason,
         sourceEvent: batch.reason,
-        force: batch.force,
+        force: true,
         onlyChanged: batch.onlyChanged,
         refreshMarketplacePrices: batch.refreshMarketplacePrices,
         livePriceMaster: true,
@@ -18558,7 +18579,7 @@ async function flushImmediateAutoPricePush() {
         "auto-price-push",
         {
           productIds: batch.ids,
-          priceIntentId: immediateIntentId,
+          priceIntentId: crypto.randomUUID(),
           usdRate: undefined,
           minDiffRub: 0,
           minDiffPct: 0,
@@ -18877,6 +18898,7 @@ app.get("/api/sales-automation/items", requireAdmin, async (request, response, n
   try {
     const marketplace = cleanText(request.query.marketplace || "all").toLowerCase();
     const reason = cleanText(request.query.reason || "");
+    const statusFilter = cleanText(request.query.status || request.query.applyStatus || "").toLowerCase();
     const q = cleanText(request.query.q || "");
     const limit = cleanLimit(request.query.limit, 200, 2000);
     if (shouldUsePostgresStorage()) {
@@ -18894,46 +18916,56 @@ app.get("/api/sales-automation/items", requireAdmin, async (request, response, n
             } : {},
           ].filter((item) => Object.keys(item || {}).length),
         };
-        const [total, items] = await Promise.all([
-          getPrisma().salesAutomationSkuState.count({ where }),
-          getPrisma().salesAutomationSkuState.findMany({ where, orderBy: { updatedAt: "desc" }, take: limit }),
+        const take = statusFilter ? Math.max(limit, 2000) : limit;
+        const [databaseTotal, items] = await Promise.all([
+          statusFilter ? Promise.resolve(0) : getPrisma().salesAutomationSkuState.count({ where }),
+          getPrisma().salesAutomationSkuState.findMany({ where, orderBy: { updatedAt: "desc" }, take }),
         ]);
+        const publicItems = items.map((item) => {
+          const raw = item.raw && typeof item.raw === "object" && !Array.isArray(item.raw) ? item.raw : {};
+          const selectedSupplier = raw.selectedSupplier || raw.supplier || null;
+          return {
+            id: item.id,
+            productId: item.productId,
+            marketplace: item.marketplace,
+            target: item.target,
+            offerId: item.offerId,
+            currentPrice: item.currentPrice,
+            targetPrice: item.targetPrice,
+            targetStock: item.targetStock,
+            priceStatus: item.priceStatus,
+            stockStatus: item.stockStatus,
+            unarchiveStatus: item.unarchiveStatus,
+            reason: salesAutomationReason(item.reason || raw.reason),
+            lastCalculatedAt: item.lastCalculatedAt?.toISOString?.() || null,
+            lastPriceSentAt: item.lastPriceSentAt?.toISOString?.() || null,
+            lastStockSentAt: item.lastStockSentAt?.toISOString?.() || null,
+            lastError: item.lastError || "",
+            updatedAt: item.updatedAt?.toISOString?.() || null,
+            priceIntentId: raw.priceIntentId || null,
+            lastRequestedPrice: raw.lastRequestedPrice ?? raw.requestedPrice ?? null,
+            lastVerifiedPrice: raw.lastVerifiedPrice ?? raw.verifiedPrice ?? null,
+            lastPriceRequestAt: raw.lastPriceRequestAt || raw.requestedAt || null,
+            lastPriceVerifiedAt: raw.lastPriceVerifiedAt || raw.verifiedAt || null,
+            priceApplyStatus: raw.priceApplyStatus || raw.applyStatus || item.priceStatus,
+            verificationAttempts: raw.verificationAttempts || 0,
+            selectedSupplier,
+            supplierPurchasePrice: raw.supplierPurchasePrice ?? selectedSupplier?.price ?? selectedSupplier?.supplierPrice ?? null,
+            supplierPurchaseCurrency: raw.supplierPurchaseCurrency || selectedSupplier?.priceCurrency || selectedSupplier?.currency || null,
+            effectiveFinalPrice: raw.effectiveFinalPrice ?? selectedSupplier?.effectiveFinalPrice ?? selectedSupplier?.calculatedPrice ?? item.targetPrice ?? null,
+            sourceEvent: raw.sourceEvent || raw.reason || "",
+            priceSource: raw.priceSource || selectedSupplier?.priceSource || null,
+            raw,
+          };
+        });
+        const filteredItems = statusFilter
+          ? publicItems.filter((item) => cleanText(item.priceApplyStatus).toLowerCase() === statusFilter)
+          : publicItems;
         return response.json({
           ok: true,
           source: "postgres",
-          total,
-          items: items.map((item) => {
-            const raw = item.raw && typeof item.raw === "object" && !Array.isArray(item.raw) ? item.raw : {};
-            return {
-              id: item.id,
-              productId: item.productId,
-              marketplace: item.marketplace,
-              target: item.target,
-              offerId: item.offerId,
-              currentPrice: item.currentPrice,
-              targetPrice: item.targetPrice,
-              targetStock: item.targetStock,
-              priceStatus: item.priceStatus,
-              stockStatus: item.stockStatus,
-              unarchiveStatus: item.unarchiveStatus,
-              reason: salesAutomationReason(item.reason || raw.reason),
-              lastCalculatedAt: item.lastCalculatedAt?.toISOString?.() || null,
-              lastPriceSentAt: item.lastPriceSentAt?.toISOString?.() || null,
-              lastStockSentAt: item.lastStockSentAt?.toISOString?.() || null,
-              lastError: item.lastError || "",
-              updatedAt: item.updatedAt?.toISOString?.() || null,
-              priceIntentId: raw.priceIntentId || null,
-              lastRequestedPrice: raw.lastRequestedPrice ?? raw.requestedPrice ?? null,
-              lastVerifiedPrice: raw.lastVerifiedPrice ?? raw.verifiedPrice ?? null,
-              lastPriceRequestAt: raw.lastPriceRequestAt || raw.requestedAt || null,
-              lastPriceVerifiedAt: raw.lastPriceVerifiedAt || raw.verifiedAt || null,
-              priceApplyStatus: raw.priceApplyStatus || raw.applyStatus || item.priceStatus,
-              verificationAttempts: raw.verificationAttempts || 0,
-              selectedSupplier: raw.supplier || raw.selectedSupplier || null,
-              priceSource: raw.priceSource || raw.supplier?.priceSource || null,
-              raw,
-            };
-          }),
+          total: statusFilter ? filteredItems.length : databaseTotal,
+          items: filteredItems.slice(0, limit),
         });
       } catch (error) {
         if (!jsonFallbackEnabled()) throw error;
