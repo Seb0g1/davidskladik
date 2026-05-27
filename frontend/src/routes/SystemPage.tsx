@@ -11,6 +11,7 @@ const dateText = (value: unknown) => {
   const date = new Date(raw);
   return Number.isFinite(date.getTime()) ? date.toLocaleString("ru-RU") : raw;
 };
+const numberValue = (value: unknown) => Number(value || 0) || 0;
 
 function StatusCard({ label, value, detail, tone = "neutral" }: { label: string; value: string | number; detail?: string; tone?: "success" | "warn" | "danger" | "neutral" }) {
   return (
@@ -65,7 +66,12 @@ export function SystemPage() {
         <StatusCard label="Auto prices" value={Number(salesAutomation.total || 0)} detail={`queued: ${Number(salesAutomation.queued || 0)} verify: ${Number(salesAutomation.verificationPending || 0)}`} />
         <StatusCard label="PM timeout" value={Number(salesAutomation.pmTimeout || 0)} tone={Number(salesAutomation.pmTimeout || 0) ? "warn" : "success"} />
         <StatusCard label="Retry цен" value={Number(priceRetry.total || 0)} />
-        <StatusCard label="Ozon recovery" value={Number(ozonQueue.total || 0)} detail={`due: ${Number(ozonQueue.due || 0)}`} />
+        <StatusCard
+          label="Ozon recovery"
+          value={numberValue(ozonQueue.total)}
+          detail={`due: ${numberValue(ozonQueue.due)} verify: ${numberValue(ozonQueue.verificationPending)} limit: ${numberValue(ozonQueue.availableToday)}`}
+          tone={numberValue(ozonQueue.verificationPending) || numberValue(ozonQueue.due) ? "warn" : "success"}
+        />
         <StatusCard label="Active jobs" value={active.length} tone={active.length ? "warn" : "success"} />
         <StatusCard label="Slow requests" value={slowRequests.length} tone={slowRequests.length ? "warn" : "success"} />
         <StatusCard label="Ошибки операций" value={failed.length} tone={failed.length ? "warn" : "success"} />
