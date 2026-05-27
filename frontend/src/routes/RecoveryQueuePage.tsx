@@ -44,6 +44,8 @@ function warningLabel(value: unknown) {
   if (warning === "still_archived_after_unarchive") return "Ozon все еще держит в архиве";
   if (warning === "unarchive_not_visible_after_api") return "Ozon пока не показывает товар";
   if (warning === "ozon_unarchive_daily_limit_queued") return "ждет лимит Ozon";
+  if (warning === "ozon_product_id_missing") return "нет Ozon product_id";
+  if (warning === "ozon_unarchive_api_error") return "ошибка Ozon unarchive";
   if (warning.startsWith("ozon_unarchive_verify_pending:")) return `проверка Ozon: ${warning.replace("ozon_unarchive_verify_pending:", "").trim()}`;
   if (warning.startsWith("unarchive_verify_pending:")) return `проверка маркетплейса: ${warning.replace("unarchive_verify_pending:", "").trim()}`;
   return warning;

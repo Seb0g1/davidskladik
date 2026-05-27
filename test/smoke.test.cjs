@@ -3639,6 +3639,120 @@ test("Ozon unarchive daily limit queues overflow and resumes when quota is avail
   }
 });
 
+test("Ozon unarchive resolves numeric product_id by offerId before API call", async () => {
+  const accountsBackup = await backupFile(marketplaceAccountsPath);
+  const queueBackup = await backupFile(ozonUnarchiveQueuePath);
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const body = JSON.parse(options.body || "{}");
+    calls.push({ url: String(url), body });
+    if (String(url).includes("/v3/product/info/list")) {
+      return new Response(JSON.stringify({
+        items: [{
+          product_id: 777001,
+          offer_id: "OZON-RESOLVE-1",
+          visibility: "ARCHIVED",
+        }],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ result: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    await restoreFile(marketplaceAccountsPath, JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      accounts: [{
+        id: "ozon-test",
+        marketplace: "ozon",
+        name: "Ozon Test",
+        clientId: "client",
+        apiKey: "key",
+        syncEnabled: true,
+      }],
+    }, null, 2));
+    await writeOzonUnarchiveQueue({ items: [], daily: {} });
+
+    const actions = await unarchiveProductsOnMarketplaces([{
+      id: "warehouse-uuid-1",
+      marketplace: "ozon",
+      target: "ozon-test",
+      productId: "warehouse-uuid-1",
+      offerId: "OZON-RESOLVE-1",
+    }]);
+
+    const unarchiveCall = calls.find((call) => String(call.url).includes("/v1/product/unarchive"));
+    assert.ok(unarchiveCall);
+    assert.deepEqual(unarchiveCall.body.product_id, [777001]);
+    assert.equal(actions[0].ok, true);
+    assert.equal(actions[0].ozonProductId, "777001");
+  } finally {
+    global.fetch = originalFetch;
+    await restoreFile(marketplaceAccountsPath, accountsBackup);
+    await restoreFile(ozonUnarchiveQueuePath, queueBackup);
+  }
+});
+
+test("Ozon unarchive records explicit missing product_id instead of silently skipping", async () => {
+  const accountsBackup = await backupFile(marketplaceAccountsPath);
+  const queueBackup = await backupFile(ozonUnarchiveQueuePath);
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), body: JSON.parse(options.body || "{}") });
+    return new Response(JSON.stringify({ items: [] }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    await restoreFile(marketplaceAccountsPath, JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      accounts: [{
+        id: "ozon-test",
+        marketplace: "ozon",
+        name: "Ozon Test",
+        clientId: "client",
+        apiKey: "key",
+        syncEnabled: true,
+      }],
+    }, null, 2));
+    await writeOzonUnarchiveQueue({ items: [], daily: {} });
+
+    const actions = await unarchiveProductsOnMarketplaces([{
+      id: "warehouse-missing-product-id",
+      marketplace: "ozon",
+      target: "ozon-test",
+      productId: "warehouse-missing-product-id",
+      offerId: "OZON-MISSING-ID",
+    }]);
+
+    assert.equal(calls.some((call) => String(call.url).includes("/v1/product/unarchive")), false);
+    assert.equal(actions[0].ok, false);
+    assert.equal(actions[0].pending, true);
+    assert.equal(actions[0].error, "ozon_product_id_missing");
+
+    const queue = await readOzonUnarchiveQueue();
+    assert.equal(queue.items.length, 1);
+    assert.equal(queue.items[0].id, "warehouse-missing-product-id");
+    assert.equal(queue.items[0].warning, "ozon_product_id_missing");
+    assert.equal(queue.items[0].error, "ozon_product_id_missing");
+    assert.equal(queue.items[0].attempts, 1);
+    assert.ok(queue.items[0].lastAttemptAt);
+  } finally {
+    global.fetch = originalFetch;
+    await restoreFile(marketplaceAccountsPath, accountsBackup);
+    await restoreFile(ozonUnarchiveQueuePath, queueBackup);
+  }
+});
+
 test("Ozon unarchive verification requeues still archived products", async () => {
   const accountsBackup = await backupFile(marketplaceAccountsPath);
   const queueBackup = await backupFile(ozonUnarchiveQueuePath);
@@ -4790,11 +4904,11 @@ test("supplier recovery treats delayed Yandex unarchive visibility as pending, n
       warning: "still_archived_after_unarchive",
     },
   ]);
-  assert.equal(notVisibleStatus.sellable, true);
+  assert.equal(notVisibleStatus.sellable, false);
   assert.equal(notVisibleStatus.unarchiveFailed, 0);
   assert.equal(notVisibleStatus.unarchivePending, 1);
   assert.equal(notVisibleStatus.warning, "unarchive_not_visible_after_api");
-  assert.equal(stillArchivedStatus.sellable, true);
+  assert.equal(stillArchivedStatus.sellable, false);
   assert.equal(stillArchivedStatus.unarchiveFailed, 0);
   assert.equal(stillArchivedStatus.unarchivePending, 1);
   assert.equal(stillArchivedStatus.warning, "still_archived_after_unarchive");

@@ -4141,6 +4141,10 @@ function getOzonOfferMapValue(map, offerId) {
   return map.get(exact) || map.get(ozonOfferMapKey(exact));
 }
 
+function ozonProductIdFromInfo(info = {}) {
+  return ozonNumericProductId(info.product_id || info.productId || info.id);
+}
+
 async function getOzonProductInfoMap(offerIds, account = null, options = {}) {
   const map = new Map();
   const ids = offerIds.map((offerId) => String(offerId || "").trim()).filter(Boolean);
@@ -4176,6 +4180,26 @@ async function getOzonProductInfoMap(offerIds, account = null, options = {}) {
   }
 
   return map;
+}
+
+async function resolveOzonUnarchiveProductIds(items = [], account = null) {
+  const rows = (Array.isArray(items) ? items : []).map((item) => ({
+    item,
+    productId: ozonNumericProductId(item.ozonProductId || item.productId || item.product_id),
+    offerId: cleanText(item.offerId || item.offer_id),
+  }));
+  const missing = rows.filter((row) => !row.productId && row.offerId);
+  if (missing.length) {
+    const infoByOfferId = await getOzonProductInfoMap(
+      Array.from(new Set(missing.map((row) => row.offerId))).filter(Boolean),
+      account,
+      { continueOnError: true },
+    );
+    for (const row of missing) {
+      row.productId = ozonProductIdFromInfo(getOzonOfferMapValue(infoByOfferId, row.offerId));
+    }
+  }
+  return rows;
 }
 
 async function getOzonProductInfoMapByProductIds(productIds, account = null, options = {}) {
@@ -8100,19 +8124,29 @@ function nextOzonUnarchiveVisibilityRetryAt(date = new Date()) {
 }
 
 function ozonUnarchiveQueueKey(item = {}) {
+  const warehouseProductId = cleanText(item.warehouseProductId || item.warehouse_product_id || item.id || item.productUuid);
   return [
     cleanText(item.target),
-    cleanText(item.productId || item.product_id),
+    warehouseProductId,
     cleanText(item.offerId || item.offer_id),
-    cleanText(item.id || item.productUuid),
   ].filter(Boolean).join(":");
+}
+
+function ozonNumericProductId(value) {
+  const text = cleanText(value);
+  if (!/^\d+$/.test(text)) return "";
+  return Number(text) > 0 ? text : "";
 }
 
 function normalizeOzonUnarchiveQueueItem(item = {}, fallback = {}) {
   const now = new Date().toISOString();
+  const id = cleanText(item.id || item.warehouseProductId || item.warehouse_product_id || fallback.id || fallback.warehouseProductId);
+  const ozonProductId = ozonNumericProductId(item.ozonProductId || item.ozon_product_id || item.productId || item.product_id || fallback.ozonProductId || fallback.productId);
   return {
-    id: cleanText(item.id || fallback.id),
-    productId: cleanText(item.productId || item.product_id || fallback.productId),
+    id,
+    warehouseProductId: id,
+    productId: ozonProductId,
+    ozonProductId,
     offerId: cleanText(item.offerId || item.offer_id || fallback.offerId),
     target: cleanText(item.target || fallback.target),
     marketplace: "ozon",
@@ -8176,7 +8210,7 @@ function ozonUnarchiveQueueItemToPostgres(item = {}) {
   const normalized = normalizeOzonUnarchiveQueueItem(item);
   return {
     queueKey: ozonUnarchiveQueueKey(normalized) || crypto.randomUUID(),
-    productId: cleanText(normalized.productId || normalized.id) || null,
+    productId: cleanText(normalized.warehouseProductId || normalized.id) || null,
     offerId: cleanText(normalized.offerId || normalized.id) || "unknown",
     target: cleanText(normalized.target) || null,
     status: normalized.status === "done" || normalized.status === "success" ? "success" : (["pending", "processing", "failed", "delayed"].includes(normalized.status) ? normalized.status : "pending"),
@@ -8211,7 +8245,9 @@ function ozonUnarchiveQueueItemFromPostgres(row = {}) {
   return normalizeOzonUnarchiveQueueItem({
     ...raw,
     id: raw.id || row.productId || row.offerId,
-    productId: row.productId,
+    warehouseProductId: raw.warehouseProductId || raw.warehouse_product_id || row.productId,
+    productId: raw.productId || raw.product_id || raw.ozonProductId || raw.ozon_product_id,
+    ozonProductId: raw.ozonProductId || raw.ozon_product_id || raw.productId || raw.product_id,
     offerId: row.offerId,
     target: row.target,
     status: row.status === "success" ? "done" : row.status,
@@ -8365,17 +8401,21 @@ function setOzonUnarchiveDailyUsed(queue = {}, target = "", used = 0, date = new
   return queue;
 }
 
-function queueOzonUnarchiveItems(queue = {}, products = [], { nextRetryAt = nextOzonUnarchiveRetryAt(), warning = "ozon_unarchive_daily_limit_queued" } = {}) {
+function queueOzonUnarchiveItems(queue = {}, products = [], { nextRetryAt = nextOzonUnarchiveRetryAt(), warning = "ozon_unarchive_daily_limit_queued", error = "", attempted = false } = {}) {
   const normalizedQueue = normalizeOzonUnarchiveQueue(queue);
   const byKey = new Map(normalizedQueue.items.map((item) => [ozonUnarchiveQueueKey(item), item]));
+  const now = new Date().toISOString();
   for (const product of Array.isArray(products) ? products : []) {
     const item = normalizeOzonUnarchiveQueueItem({
       id: product.id,
-      productId: product.productId,
+      warehouseProductId: product.id,
+      productId: product.ozonProductId || product.productId,
+      ozonProductId: product.ozonProductId || product.productId,
       offerId: product.offerId,
       target: product.target,
       nextRetryAt,
       warning,
+      error,
       status: "pending",
     });
     const key = ozonUnarchiveQueueKey(item);
@@ -8385,8 +8425,8 @@ function queueOzonUnarchiveItems(queue = {}, products = [], { nextRetryAt = next
       ...(existing || {}),
       ...item,
       queuedAt: existing?.queuedAt || item.queuedAt,
-      attempts: existing?.attempts || item.attempts,
-      lastAttemptAt: existing?.lastAttemptAt || item.lastAttemptAt,
+      attempts: attempted ? Math.max(0, Number(existing?.attempts || 0) || 0) + 1 : (existing?.attempts || item.attempts),
+      lastAttemptAt: attempted ? now : (existing?.lastAttemptAt || item.lastAttemptAt),
     });
   }
   normalizedQueue.items = Array.from(byKey.values());
@@ -8404,6 +8444,8 @@ function ozonUnarchiveQueuedActions(products = [], queue = {}, { warning = "ozon
   const normalizedQueue = normalizeOzonUnarchiveQueue(queue);
   return (Array.isArray(products) ? products : []).map((item) => ({
     id: item.id,
+    warehouseProductId: item.id,
+    ozonProductId: ozonNumericProductId(item.ozonProductId || item.productId),
     type: "unarchive",
     target: item.target,
     offerId: item.offerId,
@@ -8443,6 +8485,8 @@ function ozonUnarchiveQueuePublic(queue = {}, { limit = 1000 } = {}) {
       targets.set(target, existing);
       return {
         ...item,
+        warehouseProductId: item.warehouseProductId || item.id,
+        ozonProductId: item.ozonProductId || item.productId || "",
         queueKey: ozonUnarchiveQueueKey(item),
         due,
         dailyLimit,
@@ -13945,6 +13989,15 @@ app.get("/api/system/status", requireAdmin, async (_request, response, next) => 
     const postgresTables = components.postgresTables || null;
     const runtime = components.runtime || null;
     const ozonPublicQueue = ozonUnarchiveQueuePublic(ozonQueue, { limit: 20 });
+    const ozonFullQueue = ozonUnarchiveQueuePublic(ozonQueue, { limit: 5000 });
+    const ozonUnarchiveQueueStatus = {
+      total: Number(ozonFullQueue.total || 0),
+      due: Number(ozonFullQueue.due || 0),
+      missingOzonProductId: (ozonFullQueue.items || [])
+        .filter((item) => !ozonNumericProductId(item.ozonProductId || item.productId)).length,
+      nextAutoRunAt: ozonUnarchiveQueueAutoNextRunAt,
+      lastAutoResult: ozonUnarchiveQueueAutoLastResult || null,
+    };
     const slowEndpoints = summarizeRecentSlowRequests(30);
     const lastOzonVerification = ozonPublicQueue.items
       ?.map((item) => item.lastAttemptAt || item.updatedAt || null)
@@ -13970,6 +14023,7 @@ app.get("/api/system/status", requireAdmin, async (_request, response, next) => 
       lastPriceRun: salesAutomation.latest || null,
       lastOzonVerification,
       lastAutoarchiveRun: ozonUnarchiveQueueAutoLastResult || null,
+      ozonUnarchiveQueue: ozonUnarchiveQueueStatus,
       dailySync,
       salesAutomation,
       supplierLedger,
@@ -14143,7 +14197,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       perTargetTaken.set(target, taken + 1);
       if (dueItems.length >= normalizedLimit) break;
     }
-    const ids = dueItems.map((item) => cleanText(item.id)).filter(Boolean);
+    const ids = dueItems.map((item) => cleanText(item.warehouseProductId || item.id)).filter(Boolean);
     if (!ids.length) {
       const empty = {
         ok: true,
@@ -24251,15 +24305,50 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
         continue;
       }
       let queueState = await readOzonUnarchiveQueue();
+      const resolvedRows = await resolveOzonUnarchiveProductIds(items, account);
+      const missingRows = resolvedRows.filter((row) => !row.productId);
+      if (missingRows.length) {
+        const missingItems = missingRows.map((row) => row.item);
+        const nextRetryAt = nextOzonUnarchiveVisibilityRetryAt();
+        queueState = queueOzonUnarchiveItems(queueState, missingItems, {
+          nextRetryAt,
+          warning: "ozon_product_id_missing",
+          error: "ozon_product_id_missing",
+          attempted: true,
+        });
+        await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: missingItems });
+        rescheduleOzonUnarchiveQueueAutoSoon("missing_ozon_product_id").catch((error) => {
+          logger.warn("ozon unarchive queue reschedule failed", { detail: error?.message || String(error) });
+        });
+        actions.push(...missingItems.map((item) => ({
+          id: item.id,
+          type: "unarchive",
+          target,
+          offerId: item.offerId,
+          ok: false,
+          pending: true,
+          error: "ozon_product_id_missing",
+          warning: "ozon_product_id_missing",
+          nextRetryAt,
+          queueSize: queueState.items.length,
+        })));
+      }
+      const resolvedItems = resolvedRows
+        .filter((row) => row.productId)
+        .map((row) => ({
+          ...row.item,
+          productId: row.productId,
+          ozonProductId: row.productId,
+        }));
       const forceDailyLimit = options.forceOzonDailyLimit === true;
       const dailyUsed = ozonUnarchiveDailyUsed(queueState, target);
       const effectiveDailyUsed = forceDailyLimit ? 0 : dailyUsed;
       const remainingToday = Math.max(0, ozonUnarchiveDailyLimit - effectiveDailyUsed);
-      const runnableItems = items.slice(0, remainingToday);
-      const queuedItems = items.slice(remainingToday);
+      const runnableItems = resolvedItems.slice(0, remainingToday);
+      const queuedItems = resolvedItems.slice(remainingToday);
       if (queuedItems.length) {
         const nextRetryAt = nextOzonUnarchiveRetryAt();
-        queueState = queueOzonUnarchiveItems(queueState, queuedItems, { nextRetryAt });
+        queueState = queueOzonUnarchiveItems(queueState, queuedItems, { nextRetryAt, attempted: true });
         await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: queuedItems });
         rescheduleOzonUnarchiveQueueAutoSoon("daily_limit_queue").catch((error) => {
           logger.warn("ozon unarchive queue reschedule failed", { detail: error?.message || String(error) });
@@ -24268,8 +24357,30 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
       }
       let usedToday = effectiveDailyUsed;
       for (const chunk of chunkArray(runnableItems, 100)) {
-        const productIds = chunk.map((item) => Number(item.productId || 0)).filter((id) => id > 0);
-        if (!productIds.length) continue;
+        const productIds = chunk.map((item) => Number(ozonNumericProductId(item.ozonProductId || item.productId))).filter((id) => id > 0);
+        if (!productIds.length) {
+          const nextRetryAt = nextOzonUnarchiveVisibilityRetryAt();
+          queueState = queueOzonUnarchiveItems(queueState, chunk, {
+            nextRetryAt,
+            warning: "ozon_product_id_missing",
+            error: "ozon_product_id_missing",
+            attempted: true,
+          });
+          await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: chunk });
+          actions.push(...chunk.map((item) => ({
+            id: item.id,
+            type: "unarchive",
+            target,
+            offerId: item.offerId,
+            ok: false,
+            pending: true,
+            error: "ozon_product_id_missing",
+            warning: "ozon_product_id_missing",
+            nextRetryAt,
+            queueSize: queueState.items.length,
+          })));
+          continue;
+        }
         try {
           await ozonRequest("/v1/product/unarchive", { product_id: productIds }, account);
           usedToday += productIds.length;
@@ -24281,6 +24392,7 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
             type: "unarchive",
             target,
             offerId: item.offerId,
+            ozonProductId: ozonNumericProductId(item.ozonProductId || item.productId),
             ok: true,
             dailyLimit: ozonUnarchiveDailyLimit,
             dailyUsed: usedToday,
@@ -24290,7 +24402,7 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
           const detail = error?.message || "unarchive_failed";
           if (/daily|суточ|лимит|limit|quota|auto.?archive|автоархив/i.test(detail)) {
             const nextRetryAt = nextOzonUnarchiveRetryAt();
-            queueState = queueOzonUnarchiveItems(queueState, chunk, { nextRetryAt });
+            queueState = queueOzonUnarchiveItems(queueState, chunk, { nextRetryAt, attempted: true, error: detail });
             await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: chunk });
             rescheduleOzonUnarchiveQueueAutoSoon("api_limit_queue").catch((rescheduleError) => {
               logger.warn("ozon unarchive queue reschedule failed", { detail: rescheduleError?.message || String(rescheduleError) });
@@ -24300,7 +24412,30 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
               nextRetryAt,
             }));
           } else {
-            actions.push(...chunk.map((item) => ({ id: item.id, type: "unarchive", target, offerId: item.offerId, ok: false, error: detail })));
+            const nextRetryAt = nextOzonUnarchiveVisibilityRetryAt();
+            queueState = queueOzonUnarchiveItems(queueState, chunk, {
+              nextRetryAt,
+              warning: "ozon_unarchive_api_error",
+              error: detail,
+              attempted: true,
+            });
+            await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: chunk });
+            rescheduleOzonUnarchiveQueueAutoSoon("api_error_queue").catch((rescheduleError) => {
+              logger.warn("ozon unarchive queue reschedule failed", { detail: rescheduleError?.message || String(rescheduleError) });
+            });
+            actions.push(...chunk.map((item) => ({
+              id: item.id,
+              type: "unarchive",
+              target,
+              offerId: item.offerId,
+              ozonProductId: ozonNumericProductId(item.ozonProductId || item.productId),
+              ok: false,
+              pending: true,
+              error: detail,
+              warning: "ozon_unarchive_api_error",
+              nextRetryAt,
+              queueSize: queueState.items.length,
+            })));
           }
         }
       }
@@ -24356,7 +24491,7 @@ async function verifyOzonUnarchiveActions(products = [], actions = [], options =
     pendingByTarget.get(target).push({
       action,
       product,
-      productId: cleanText(product.productId || action.productId),
+      productId: ozonNumericProductId(action.ozonProductId || product.ozonProductId || product.productId || action.productId),
       offerId: cleanText(action.offerId || product.offerId),
     });
   }
@@ -24444,6 +24579,7 @@ async function verifyOzonUnarchiveActions(products = [], actions = [], options =
       const queueState = queueOzonUnarchiveItems(await readOzonUnarchiveQueue(), retryProducts, {
         nextRetryAt,
         warning: "ozon_unarchive_verify_pending",
+        attempted: true,
       });
       await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: retryProducts });
       rescheduleOzonUnarchiveQueueAutoSoon("visibility_pending").catch((error) => {
@@ -24691,6 +24827,7 @@ function summarizeSupplierRecoveryProducts(products = [], stockActions = [], una
     const sellable = stockOk > 0
       && stockFailed === 0
       && unarchiveFailed === 0
+      && unarchivePending === 0
       && queuedByDailyLimit === 0
       && (!needsUnarchive || unarchiveOk > 0);
     return {
