@@ -2180,6 +2180,35 @@ button:disabled {
   padding: 0 11px;
 }
 
+.supplier-ledger-strip {
+  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  margin: 10px 0;
+}
+
+.supplier-payment-row {
+  grid-template-columns: minmax(120px, 180px) minmax(180px, 1fr) auto;
+  align-items: end;
+  margin: 8px 0 12px;
+}
+
+.finance-inline-edit {
+  grid-column: span 2;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(88px, 1fr)) auto;
+  gap: 6px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.finance-inline-edit input {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  background: #0c1728;
+  color: var(--text);
+  padding: 0 8px;
+}
+
 .compact-search {
   min-height: 40px;
 }

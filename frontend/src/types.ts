@@ -398,6 +398,62 @@ export const FinanceExpenseCreateSchema = z.object({
   expense: FinanceExpenseSchema.optional(),
 }).passthrough();
 
+export const SupplierLedgerEntrySchema = z.object({
+  id: z.coerce.string(),
+  sourceKey: z.coerce.string().optional().default(""),
+  entryType: z.coerce.string().optional().default("adjustment"),
+  supplierName: z.coerce.string().optional().default(""),
+  partnerId: z.coerce.string().optional().default(""),
+  amount: z.number().optional().default(0),
+  currency: z.coerce.string().optional().default("RUB"),
+  pickingKey: z.coerce.string().optional().default(""),
+  financeOrderId: z.coerce.string().optional().default(""),
+  orderId: z.coerce.string().optional().default(""),
+  postingNumber: z.coerce.string().optional().default(""),
+  offerId: z.coerce.string().optional().default(""),
+  productName: z.coerce.string().optional().default(""),
+  quantity: z.number().optional().default(1),
+  note: z.coerce.string().optional().default(""),
+  status: z.coerce.string().optional().default("active"),
+  occurredAt: z.coerce.string().optional().nullable(),
+  voidedAt: z.coerce.string().optional().nullable(),
+  createdBy: z.coerce.string().optional().default(""),
+}).passthrough();
+
+export const SupplierLedgerSummarySchema = z.object({
+  balance: z.number().optional().default(0),
+  debtTotal: z.number().optional().default(0),
+  paidTotal: z.number().optional().default(0),
+  entries: z.number().optional().default(0),
+  lastPaymentAt: z.coerce.string().optional().nullable(),
+  lastDebtAt: z.coerce.string().optional().nullable(),
+}).passthrough();
+
+const emptySupplierLedgerSummary = {
+  balance: 0,
+  debtTotal: 0,
+  paidTotal: 0,
+  entries: 0,
+  lastPaymentAt: null,
+  lastDebtAt: null,
+};
+
+export const SupplierLedgerResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  source: z.coerce.string().optional().default(""),
+  total: z.number().optional().default(0),
+  supplierName: z.coerce.string().optional().default(""),
+  partnerId: z.coerce.string().optional().default(""),
+  summary: SupplierLedgerSummarySchema.optional().default(emptySupplierLedgerSummary),
+  entries: z.array(SupplierLedgerEntrySchema).optional().default([]),
+}).passthrough();
+
+export const SupplierLedgerPaymentSchema = z.object({
+  ok: z.boolean().optional(),
+  entry: SupplierLedgerEntrySchema.optional(),
+  summary: SupplierLedgerSummarySchema.optional().default(emptySupplierLedgerSummary),
+}).passthrough();
+
 export const SupplierCartRowSchema = z.object({
   key: z.coerce.string(),
   marketplace: z.coerce.string().optional().default(""),
@@ -492,6 +548,7 @@ export const SupplierPickingListSchema = z.object({
   total: z.number().optional().default(0),
   rows: z.array(SupplierPickingRowSchema).optional().default([]),
   suppliers: z.array(z.string()).optional().default([]),
+  supplierLedger: z.record(z.string(), SupplierLedgerSummarySchema).optional().default({}),
   summary: z.record(z.string(), z.unknown()).optional().default({}),
 }).passthrough();
 

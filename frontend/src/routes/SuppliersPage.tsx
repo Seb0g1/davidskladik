@@ -5,7 +5,7 @@ import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageHeader } from "../components/PageHeader";
-import { SupplierSchema, SuppliersResponseSchema } from "../types";
+import { SupplierLedgerPaymentSchema, SupplierSchema, SuppliersResponseSchema } from "../types";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
 
 type Supplier = z.infer<typeof SupplierSchema>;
@@ -33,6 +33,13 @@ type InactiveDraft = {
 
 const MutationResultSchema = z.object({ ok: z.boolean().optional().default(true) }).passthrough();
 const emptySupplierForm: SupplierForm = { id: "", name: "", note: "", stopReason: "", priceCurrency: "USD" };
+
+const moneySigned = (value: unknown) => {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n === 0) return "0 ₽";
+  const sign = n > 0 ? "+" : "-";
+  return `${sign}${Math.round(Math.abs(n)).toLocaleString("ru-RU")} ₽`;
+};
 
 function supplierId(supplier: Supplier) {
   return String(supplier.id || supplier.partnerId || supplier.name || "");
@@ -83,6 +90,8 @@ export function SuppliersPage() {
   const [form, setForm] = useState<SupplierForm>(emptySupplierForm);
   const [articleDrafts, setArticleDrafts] = useState<Record<string, ArticleDraft>>({});
   const [inactiveDraft, setInactiveDraft] = useState<InactiveDraft | null>(null);
+  const [paymentDrafts, setPaymentDrafts] = useState<Record<string, string>>({});
+  const [paymentNotes, setPaymentNotes] = useState<Record<string, string>>({});
 
   const suppliersQuery = useQuery({
     queryKey: ["suppliers"],
@@ -155,6 +164,24 @@ export function SuppliersPage() {
     },
   });
 
+  const paySupplier = useMutation({
+    mutationFn: ({ supplier, amount, note }: { supplier: Supplier; amount: number; note: string }) =>
+      fetchJson("/api/supplier-ledger/payments", SupplierLedgerPaymentSchema, mutationBody({
+        supplierName: supplier.name || "",
+        partnerId: supplier.partnerId || "",
+        amount,
+        note,
+      })),
+    onSuccess: (_data, variables) => {
+      const id = supplierId(variables.supplier);
+      setPaymentDrafts((current) => ({ ...current, [id]: "" }));
+      setPaymentNotes((current) => ({ ...current, [id]: "" }));
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+  });
+
   const suppliers = suppliersQuery.data?.suppliers || [];
   const sync = asRecord(suppliersQuery.data?.supplierSync);
   const activeCount = suppliers.filter(supplierIsActive).length;
@@ -212,7 +239,7 @@ export function SuppliersPage() {
     });
   };
 
-  const anyError = suppliersQuery.error || refreshMutation.error || saveSupplier.error || patchSupplier.error || deleteSupplier.error || saveArticle.error || deleteArticle.error;
+  const anyError = suppliersQuery.error || refreshMutation.error || saveSupplier.error || patchSupplier.error || deleteSupplier.error || saveArticle.error || deleteArticle.error || paySupplier.error;
 
   return (
     <>
@@ -293,6 +320,10 @@ export function SuppliersPage() {
               const raw = asRecord(supplier);
               const articles = supplierArticles(supplier);
               const draft = articleDrafts[id] || { article: "", note: "" };
+              const ledger = asRecord(raw.ledger);
+              const balance = Number(ledger.balance || 0);
+              const paymentAmount = paymentDrafts[id] || "";
+              const paymentNote = paymentNotes[id] || "";
               const active = supplierIsActive(supplier);
               const stockOnly = supplier.pricingMode === "stock_only" || supplier.stockOnly === true;
               return (
@@ -312,6 +343,36 @@ export function SuppliersPage() {
                     {supplier.orderCutoffTime ? <span>до {supplier.orderCutoffTime}</span> : null}
                     {supplier.reseller ? <span>перекупщик</span> : null}
                     {stockOnly ? <span className="warning-badge">не берет цену</span> : null}
+                  </div>
+
+                  <div className="summary-grid compact-summary supplier-ledger-strip">
+                    <DiagnosticValue label={balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(balance)} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
+                    <DiagnosticValue label="Собрано в долг" value={moneySigned(-Number(ledger.debtTotal || 0))} />
+                    <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0))} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
+                    <DiagnosticValue label="Последняя оплата" value={ledger.lastPaymentAt ? compactDate(String(ledger.lastPaymentAt)) : "-"} />
+                  </div>
+                  <div className="settings-form-row supplier-payment-row">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Сумма оплаты, ₽"
+                      value={paymentAmount}
+                      onChange={(event) => setPaymentDrafts((current) => ({ ...current, [id]: event.target.value }))}
+                    />
+                    <input
+                      placeholder="Комментарий"
+                      value={paymentNote}
+                      onChange={(event) => setPaymentNotes((current) => ({ ...current, [id]: event.target.value }))}
+                    />
+                    <button
+                      className="primary-action"
+                      type="button"
+                      disabled={paySupplier.isPending || !(Number(paymentAmount) > 0)}
+                      onClick={() => paySupplier.mutate({ supplier, amount: Number(paymentAmount || 0), note: paymentNote })}
+                    >
+                      {paySupplier.isPending ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />} Заплатил
+                    </button>
                   </div>
 
                   {raw.note ? <p className="supplier-note">{String(raw.note)}</p> : null}

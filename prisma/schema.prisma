@@ -465,6 +465,40 @@ model FinanceExpense {
   @@map("finance_expenses")
 }
 
+model SupplierLedgerEntry {
+  id            String    @id @default(cuid())
+  sourceKey     String    @unique @map("source_key")
+  entryType     String    @map("entry_type")
+  supplierName  String?   @map("supplier_name")
+  partnerId     String?   @map("partner_id")
+  amount        Decimal   @db.Decimal(14, 2)
+  currency      String    @default("RUB")
+  pickingKey    String?   @map("picking_key")
+  financeOrderId String?  @map("finance_order_id")
+  orderId       String?   @map("order_id")
+  postingNumber String?   @map("posting_number")
+  offerId       String?   @map("offer_id")
+  productName   String?   @map("product_name")
+  quantity      Int       @default(1)
+  note          String?
+  status        String    @default("active")
+  occurredAt    DateTime  @default(now()) @map("occurred_at")
+  voidedAt      DateTime? @map("voided_at")
+  createdBy     String?   @map("created_by")
+  raw           Json?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([supplierName])
+  @@index([partnerId])
+  @@index([entryType])
+  @@index([status])
+  @@index([occurredAt])
+  @@index([pickingKey])
+  @@index([financeOrderId])
+  @@map("supplier_ledger_entries")
+}
+
 model SyncRun {
   id         String     @id @default(cuid())
   trigger    String

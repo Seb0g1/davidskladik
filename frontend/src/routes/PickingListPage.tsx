@@ -2,10 +2,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, Loader2, RefreshCw, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
-import { fetchJson, patchBody } from "../api";
+import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageHeader } from "../components/PageHeader";
-import { SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema } from "../types";
+import { SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema } from "../types";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
 type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
@@ -29,12 +29,27 @@ const rowSearchText = (row: PickingRow) => [
   row.supplierName,
 ].join(" ").toLowerCase();
 
+const moneySigned = (value: unknown) => {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n === 0) return "0 ₽";
+  const sign = n > 0 ? "+" : "-";
+  return `${sign}${Math.round(Math.abs(n)).toLocaleString("ru-RU")} ₽`;
+};
+
+const currentGroupTotal = (rows: PickingRow[]) => rows.reduce((sum, row) => {
+  const price = Number(row.price || 0);
+  const quantity = Number(row.quantity || 1) || 1;
+  return sum + price * quantity;
+}, 0);
+
 export function PickingListPage() {
   const [status, setStatus] = useState("open");
   const [supplier, setSupplier] = useState("");
   const [q, setQ] = useState("");
   const [period, setPeriod] = useState("30d");
   const [copied, setCopied] = useState(false);
+  const [paymentDrafts, setPaymentDrafts] = useState<Record<string, string>>({});
+  const [paymentNotes, setPaymentNotes] = useState<Record<string, string>>({});
   const queryClient = useQueryClient();
   const listQuery = useQuery({
     queryKey: ["supplier-picking-list", status, supplier, q],
@@ -56,6 +71,19 @@ export function PickingListPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+  });
+  const paymentMutation = useMutation({
+    mutationFn: ({ supplierName, amount, note }: { supplierName: string; amount: number; note: string }) =>
+      fetchJson("/api/supplier-ledger/payments", SupplierLedgerPaymentSchema, mutationBody({ supplierName, amount, note })),
+    onSuccess: (_data, variables) => {
+      setPaymentDrafts((current) => ({ ...current, [variables.supplierName]: "" }));
+      setPaymentNotes((current) => ({ ...current, [variables.supplierName]: "" }));
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
     },
   });
   const rows = listQuery.data?.rows || [];
@@ -74,6 +102,7 @@ export function PickingListPage() {
   }, [filteredRows]);
   const summary = listQuery.data?.summary || {};
   const suppliers = listQuery.data?.suppliers || [];
+  const supplierLedger = listQuery.data?.supplierLedger || {};
   const invoiceRows = invoiceQuery.data?.rows || [];
   const copyInvoice = async () => {
     const text = invoiceRows.map((row) => [
@@ -125,9 +154,16 @@ export function PickingListPage() {
 
       {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
       {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}
+      {paymentMutation.error ? <div className="inline-error">{errorMessage(paymentMutation.error)}</div> : null}
 
       <div className="picking-groups">
-        {grouped.map(([supplierName, supplierRows]) => (
+        {grouped.map(([supplierName, supplierRows]) => {
+          const ledger = supplierLedger[supplierName] || {};
+          const balance = Number(ledger.balance || 0);
+          const draftAmount = paymentDrafts[supplierName] || "";
+          const draftNote = paymentNotes[supplierName] || "";
+          const total = currentGroupTotal(supplierRows);
+          return (
           <article className="picking-supplier-card" key={supplierName}>
             <div className="picking-supplier-head">
               <div>
@@ -135,6 +171,35 @@ export function PickingListPage() {
                 <h3>{supplierName}</h3>
               </div>
               <strong>{supplierRows.length}</strong>
+            </div>
+            <div className="summary-grid compact-summary supplier-ledger-strip">
+              <DiagnosticValue label={balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(balance)} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
+              <DiagnosticValue label="Собрано в долг" value={moneySigned(-Number(ledger.debtTotal || 0))} />
+              <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0))} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
+              <DiagnosticValue label="Текущая сборка" value={moneySigned(total)} />
+            </div>
+            <div className="settings-form-row supplier-payment-row">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Сумма оплаты, ₽"
+                value={draftAmount}
+                onChange={(event) => setPaymentDrafts((current) => ({ ...current, [supplierName]: event.target.value }))}
+              />
+              <input
+                placeholder="Комментарий"
+                value={draftNote}
+                onChange={(event) => setPaymentNotes((current) => ({ ...current, [supplierName]: event.target.value }))}
+              />
+              <button
+                className="primary-action"
+                type="button"
+                disabled={paymentMutation.isPending || !(Number(draftAmount) > 0)}
+                onClick={() => paymentMutation.mutate({ supplierName, amount: Number(draftAmount || 0), note: draftNote })}
+              >
+                {paymentMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Заплатил
+              </button>
             </div>
             <div className="picking-row-list">
               {supplierRows.map((row) => (
@@ -166,7 +231,8 @@ export function PickingListPage() {
               ))}
             </div>
           </article>
-        ))}
+          );
+        })}
         {!grouped.length && !listQuery.isLoading ? <div className="empty-state">Строк для выбранного фильтра нет.</div> : null}
       </div>
 

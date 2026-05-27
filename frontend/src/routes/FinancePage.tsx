@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, Plus, RefreshCw } from "lucide-react";
-import { fetchJson, mutationBody } from "../api";
-import { FinanceExpenseCreateSchema, FinanceExpensesSchema, FinanceOrdersSchema, FinanceSummarySchema } from "../types";
+import { Check, Loader2, Plus, RefreshCw } from "lucide-react";
+import { fetchJson, mutationBody, patchBody } from "../api";
+import { FinanceExpenseCreateSchema, FinanceExpensesSchema, FinanceOrderSchema, FinanceOrdersSchema, FinanceSummarySchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { errorMessage } from "../lib/common";
 
@@ -12,6 +12,9 @@ const money = (value: unknown) => {
 };
 
 const text = (value: unknown) => String(value ?? "").trim();
+const FinanceOrderUpdateSchema = FinanceSummarySchema.pick({ ok: true }).extend({
+  order: FinanceOrderSchema.optional(),
+}).passthrough();
 
 const dateText = (value: unknown) => {
   const raw = text(value);
@@ -41,6 +44,7 @@ export function FinancePage() {
     amount: "",
     note: "",
   });
+  const [orderDrafts, setOrderDrafts] = useState<Record<string, Record<string, string>>>({});
   const summary = useQuery({
     queryKey: ["finance", "summary", period],
     queryFn: () => fetchJson(`/api/finance/summary?period=${encodeURIComponent(period)}`, FinanceSummarySchema),
@@ -62,6 +66,13 @@ export function FinancePage() {
     })),
     onSuccess: () => {
       setForm({ supplierName: "", partnerId: "", offerId: "", productName: "", quantity: 1, amount: "", note: "" });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+  });
+  const updateOrder = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) =>
+      fetchJson(`/api/finance/orders/${encodeURIComponent(id)}`, FinanceOrderUpdateSchema, patchBody(patch)),
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
     },
   });
@@ -98,6 +109,8 @@ export function FinancePage() {
         <SummaryCard label="Заказов" value={Number(s.orders || 0)} />
         <SummaryCard label="Закупочная цена" value={money(s.purchaseCost)} />
         <SummaryCard label="Комиссии/налоги" value={money(Number(s.fees || 0) + Number(s.tax || 0))} />
+        <SummaryCard label="Долг поставщикам" value={money(s.supplierDebt)} />
+        <SummaryCard label="Оплачено поставщикам" value={money(s.supplierPaid)} />
       </div>
 
       <section className="settings-panel settings-panel-wide">
@@ -114,21 +127,44 @@ export function FinancePage() {
         </div>
         <input placeholder="Комментарий" value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} />
         {createExpense.error ? <div className="inline-error">{errorMessage(createExpense.error)}</div> : null}
+        {updateOrder.error ? <div className="inline-error">{errorMessage(updateOrder.error)}</div> : null}
         {createExpense.isSuccess ? <div className="success-strip">Закупка добавлена в финансы и историю поставщика.</div> : null}
       </section>
 
       <div className="table-panel price-table">
         <div className="table-head"><span>Дата</span><span>Заказ/SKU</span><span>Товар</span><span>Поставщик</span><span>Закупка</span><span>Прибыль</span></div>
-        {(orders.data?.orders || []).map((order) => (
-          <div className="table-row" key={order.id}>
+        {(orders.data?.orders || []).map((order) => {
+          const draft = orderDrafts[order.id] || {};
+          const valueOf = (key: string, fallback: unknown) => draft[key] ?? (fallback === null || fallback === undefined ? "" : String(fallback));
+          const patch = {
+            ...order,
+            saleAmount: Number(valueOf("saleAmount", order.saleAmount) || 0),
+            payoutAmount: Number(valueOf("payoutAmount", order.payoutAmount) || 0),
+            feesAmount: Number(valueOf("feesAmount", order.feesAmount) || 0),
+            taxAmount: Number(valueOf("taxAmount", order.taxAmount) || 0),
+            penaltiesAmount: Number(valueOf("penaltiesAmount", order.penaltiesAmount) || 0),
+            refundsAmount: Number(valueOf("refundsAmount", order.refundsAmount) || 0),
+          };
+          return (
+          <div className="table-row finance-order-row" key={order.id}>
             <span data-label="Дата">{dateText(order.createdAt)}</span>
             <span data-label="Заказ/SKU">{order.orderId || order.postingNumber || order.offerId}</span>
             <span data-label="Товар">{order.productName || "-"}</span>
             <span data-label="Поставщик">{order.supplierName || "-"}</span>
             <span data-label="Закупка">{money(order.purchaseCost)}</span>
             <span data-label="Прибыль">{money(order.profitAmount)}</span>
+            <span data-label="Редактировать" className="finance-inline-edit">
+              <input type="number" placeholder="Продажа" value={valueOf("saleAmount", order.saleAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), saleAmount: event.target.value } }))} />
+              <input type="number" placeholder="Выплата" value={valueOf("payoutAmount", order.payoutAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), payoutAmount: event.target.value } }))} />
+              <input type="number" placeholder="Комиссия" value={valueOf("feesAmount", order.feesAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), feesAmount: event.target.value } }))} />
+              <input type="number" placeholder="Налог" value={valueOf("taxAmount", order.taxAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), taxAmount: event.target.value } }))} />
+              <button className="secondary-action" type="button" disabled={updateOrder.isPending} onClick={() => updateOrder.mutate({ id: order.id, patch })}>
+                {updateOrder.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Сохранить
+              </button>
+            </span>
           </div>
-        ))}
+          );
+        })}
         {!orders.data?.orders?.length && !orders.isLoading ? <div className="empty-state">Заказов за выбранный период пока нет.</div> : null}
       </div>
 

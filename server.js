@@ -1084,6 +1084,7 @@ async function collectHealthDetails({ deep = false } = {}) {
     "brand_index_items",
     "finance_orders",
     "finance_expenses",
+    "supplier_ledger_entries",
   ];
   const components = {
     storage: {
@@ -13766,7 +13767,34 @@ async function readSalesAutomationSystemSummary() {
 
 app.get("/api/system/status", requireAdmin, async (_request, response, next) => {
   try {
-    const [health, dailySync, priceRetry, ozonQueue, operations, salesAutomation, bullmq] = await Promise.all([
+    const supplierLedgerDiagnostics = async () => {
+      if (!shouldUsePostgresStorage()) return { source: "disabled", pickedRows: 0, debtEntries: 0, missingDebtEntries: 0, recentPayments: [] };
+      try {
+        const prisma = getPrisma();
+        const [pickedRows, debtEntries, recentPayments, picked] = await Promise.all([
+          prisma.supplierPickingRow.count({ where: { status: "picked" } }),
+          prisma.supplierLedgerEntry.count({ where: { entryType: "purchase_debt", status: "active" } }),
+          prisma.supplierLedgerEntry.findMany({ where: { entryType: "payment", status: "active" }, orderBy: { occurredAt: "desc" }, take: 10 }),
+          prisma.supplierPickingRow.findMany({ where: { status: "picked" }, select: { pickingKey: true }, take: 5000 }),
+        ]);
+        const sourceKeys = picked.map((row) => supplierLedgerSourceKeyForPicking({ key: row.pickingKey }));
+        const linkedDebts = sourceKeys.length
+          ? await prisma.supplierLedgerEntry.count({ where: { sourceKey: { in: sourceKeys }, entryType: "purchase_debt", status: "active" } })
+          : 0;
+        return {
+          source: "postgres",
+          pickedRows,
+          debtEntries,
+          sampledPickedRows: picked.length,
+          sampledLinkedDebts: linkedDebts,
+          missingDebtEntries: Math.max(0, picked.length - linkedDebts),
+          recentPayments: recentPayments.map(supplierLedgerEntryFromPostgres),
+        };
+      } catch (error) {
+        return { source: "postgres", error: error?.message || String(error), pickedRows: 0, debtEntries: 0, missingDebtEntries: 0, recentPayments: [] };
+      }
+    };
+    const [health, dailySync, priceRetry, ozonQueue, operations, salesAutomation, bullmq, supplierLedger] = await Promise.all([
       collectHealthDetails({ deep: true }).catch((error) => ({ ok: false, error: error?.message || String(error) })),
       readDailySyncState().catch((error) => ({ status: "error", error: error?.message || String(error) })),
       readPriceRetryQueue().catch((error) => ({ items: [], error: error?.message || String(error) })),
@@ -13774,6 +13802,7 @@ app.get("/api/system/status", requireAdmin, async (_request, response, next) => 
       readOperationJobs(20).catch((error) => ({ jobs: [], error: error?.message || String(error) })),
       readSalesAutomationSystemSummary(),
       marketplaceQueueCounts(),
+      supplierLedgerDiagnostics(),
     ]);
     const jobs = Array.isArray(operations.jobs) ? operations.jobs : Array.isArray(operations) ? operations : [];
     const activeJobs = Array.from(activeOperationJobs.values()).map(operationJobPublic).slice(0, 20);
@@ -13808,6 +13837,7 @@ app.get("/api/system/status", requireAdmin, async (_request, response, next) => 
       lastAutoarchiveRun: ozonUnarchiveQueueAutoLastResult || null,
       dailySync,
       salesAutomation,
+      supplierLedger,
       queues: {
         priceRetry: { total: Array.isArray(priceRetry.items) ? priceRetry.items.length : 0, updatedAt: priceRetry.updatedAt || null, error: priceRetry.error || "" },
         ozonUnarchive: ozonPublicQueue,
@@ -14452,10 +14482,13 @@ app.get("/api/suppliers", async (request, response, next) => {
       logger.info("supplier auto-reactivated from suppliers api", { count: autoReactivated.length, suppliers: autoReactivated });
     }
     const impactCounts = supplierImpactCountMap(warehouse, warehouse.suppliers || []);
+    const normalizedSuppliers = (warehouse.suppliers || []).map(normalizeManagedSupplier);
+    const ledgerMap = await supplierLedgerSummaryMapForSuppliers(normalizedSuppliers);
     const payload = {
-      suppliers: (warehouse.suppliers || []).map((supplier) => ({
+      suppliers: normalizedSuppliers.map((supplier) => ({
         ...supplier,
         impactProductCount: impactCounts.get(supplier.id) || 0,
+        ledger: ledgerMap.get(cleanText(supplier.id || supplier.partnerId || supplier.name)) || supplierLedgerSummaryFromEntries([]),
       })),
       supplierSync,
     };
@@ -14485,6 +14518,13 @@ app.get("/api/suppliers/:id/profile", requireAdmin, async (request, response, ne
     const blocks = Object.values((await readSupplierCartState()).supplierBlocks || {})
       .filter((block) => cleanText(block.partnerId) === cleanText(supplier.partnerId));
     const averagePrice = rows.length ? rows.reduce((sum, row) => sum + Number(row.price || 0), 0) / rows.length : 0;
+    const ledger = await listSupplierLedgerEntries({
+      supplierName: supplier.name,
+      partnerId: supplier.partnerId,
+      status: "all",
+      limit: 200,
+      period: "all",
+    });
     response.json({
       ok: true,
       supplier,
@@ -14496,6 +14536,13 @@ app.get("/api/suppliers/:id/profile", requireAdmin, async (request, response, ne
         averagePrice,
       },
       blocks,
+      ledger: {
+        source: ledger.source,
+        total: ledger.total,
+        summary: ledger.summary,
+        entries: ledger.entries,
+        error: ledger.error || "",
+      },
       history: rows.slice(0, 200),
     });
   } catch (error) {
@@ -14521,6 +14568,101 @@ app.patch("/api/suppliers/:id/profile", requireAdmin, async (request, response, 
     warehouse.suppliers = suppliers;
     await writeWarehouse(warehouse);
     response.json({ ok: true, supplier: suppliers[index] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/supplier-ledger/summary", requireStaff, async (request, response, next) => {
+  try {
+    const supplierName = cleanText(request.query.supplierName || request.query.supplier || "");
+    const partnerId = cleanText(request.query.partnerId || "");
+    if (!supplierName && !partnerId) {
+      return response.status(400).json({ error: "supplierName or partnerId is required.", code: "supplier_ledger_identity_required" });
+    }
+    const result = await listSupplierLedgerEntries({
+      supplierName,
+      partnerId,
+      status: "active",
+      limit: cleanLimit(request.query.limit, 100, 500),
+      period: cleanText(request.query.period || "all").toLowerCase(),
+    });
+    response.json({ ok: true, supplierName, partnerId, ...result, entries: result.entries.slice(0, cleanLimit(request.query.limit, 20, 100)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/supplier-ledger/entries", requireStaff, async (request, response, next) => {
+  try {
+    const supplierName = cleanText(request.query.supplierName || request.query.supplier || "");
+    const partnerId = cleanText(request.query.partnerId || "");
+    const result = await listSupplierLedgerEntries({
+      supplierName,
+      partnerId,
+      status: cleanText(request.query.status || "active").toLowerCase(),
+      limit: cleanLimit(request.query.limit, 200, 2000),
+      period: cleanText(request.query.period || "all").toLowerCase(),
+    });
+    response.json({ ok: true, supplierName, partnerId, ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/supplier-ledger/payments", requireStaff, async (request, response, next) => {
+  try {
+    if (!shouldUsePostgresStorage()) {
+      return response.status(503).json({ error: "Supplier ledger requires PostgreSQL.", code: "supplier_ledger_postgres_required" });
+    }
+    const supplierName = cleanText(request.body?.supplierName || request.body?.supplier || "");
+    const partnerId = cleanText(request.body?.partnerId || "");
+    const amount = normalizeFinanceMoney(request.body?.amount, 0);
+    if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required.", code: "supplier_ledger_identity_required" });
+    if (!(amount > 0)) return response.status(400).json({ error: "Payment amount must be greater than zero.", code: "supplier_ledger_amount_required" });
+    const entry = normalizeSupplierLedgerEntry({
+      sourceKey: `payment:${crypto.randomUUID()}`,
+      entryType: "payment",
+      supplierName,
+      partnerId,
+      amount: Math.abs(amount),
+      currency: cleanText(request.body?.currency || "RUB").toUpperCase() || "RUB",
+      note: cleanText(request.body?.note || ""),
+      occurredAt: request.body?.paidAt || request.body?.occurredAt || new Date().toISOString(),
+      createdBy: requestUsername(request),
+      raw: {
+        source: "manual_payment",
+        supplierName,
+        partnerId,
+        amount,
+        note: cleanText(request.body?.note || ""),
+      },
+    });
+    const row = await getPrisma().supplierLedgerEntry.create({
+      data: {
+        id: entry.id,
+        sourceKey: entry.sourceKey,
+        entryType: entry.entryType,
+        supplierName: entry.supplierName || null,
+        partnerId: entry.partnerId || null,
+        amount: entry.amount,
+        currency: entry.currency,
+        note: entry.note || null,
+        status: "active",
+        occurredAt: toDateOrNull(entry.occurredAt) || new Date(),
+        createdBy: entry.createdBy || null,
+        raw: entry.raw,
+      },
+    });
+    const saved = supplierLedgerEntryFromPostgres(row);
+    suppliersListCache = null;
+    await appendAudit(request, "supplier_ledger.payment_create", {
+      entityType: "supplier_ledger",
+      entityId: saved.id,
+      newValue: saved,
+    }).catch((error) => logger.warn("supplier ledger payment audit failed", { detail: error?.message || String(error) }));
+    const summary = await listSupplierLedgerEntries({ supplierName, partnerId, status: "active", limit: 100, period: "all" });
+    response.status(201).json({ ok: true, entry: saved, summary: summary.summary });
   } catch (error) {
     next(error);
   }
@@ -14689,7 +14831,17 @@ app.post("/api/suppliers", async (request, response, next) => {
       newValue: after,
     });
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
-    queueImmediateAutoPricePush([], "supplier_save");
+    queueAuthoritativePriceReprice({
+      marketplace: "all",
+      reason: "supplier_save",
+      sourceEvent: "supplier_save",
+      force: true,
+      onlyChanged: false,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+      priority: 2,
+    }).catch((error) => logger.warn("supplier save reprice queue failed", { detail: error?.message || String(error) }));
   } catch (error) {
     next(error);
   }
@@ -14751,9 +14903,23 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
     const affectedProductIds = supplierImpactProductIds(warehouse, before, supplier);
     if (affectedProductIds.length) {
       queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds }, { priority: 1 });
-      queueMarketplaceJob("supplier-recovery-automation", { productIds: affectedProductIds }, { priority: 2 });
+      queueLinkedProductActivation(affectedProductIds, "supplier_update", {
+        username: requestUsername(request),
+      }).catch((error) => logger.warn("supplier update activation failed", { detail: error?.message || String(error) }));
     }
-    queueImmediateAutoPricePush([], "supplier_update");
+    if (!affectedProductIds.length) {
+      queueAuthoritativePriceReprice({
+        marketplace: "all",
+        reason: "supplier_update",
+        sourceEvent: "supplier_update",
+        force: true,
+        onlyChanged: false,
+        refreshMarketplacePrices: true,
+        livePriceMaster: true,
+        verify: true,
+        priority: 2,
+      }).catch((error) => logger.warn("supplier update reprice queue failed", { detail: error?.message || String(error) }));
+    }
   } catch (error) {
     next(error);
   }
@@ -14793,7 +14959,17 @@ app.post("/api/suppliers/:id/articles", async (request, response, next) => {
     const saved = await writeWarehouse(warehouse);
     await appendAudit(request, "supplier.article.save", { supplierId: supplier.id, article: article.article, oldValue: before, newValue: article });
     response.json({ ok: true, warehouse: saved });
-    queueImmediateAutoPricePush([], "supplier_article_save");
+    queueAuthoritativePriceReprice({
+      marketplace: "all",
+      reason: "supplier_article_save",
+      sourceEvent: "supplier_article_save",
+      force: true,
+      onlyChanged: false,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+      priority: 2,
+    }).catch((error) => logger.warn("supplier article reprice queue failed", { detail: error?.message || String(error) }));
   } catch (error) {
     next(error);
   }
@@ -16583,7 +16759,18 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
       newValue: product,
     });
     response.json({ ok: true, product: freshProduct || normalizeWarehouseProduct(product) });
-    queueImmediateAutoPricePush([product.id], "product_patch");
+    queueAuthoritativePriceReprice({
+      productIds: [product.id],
+      marketplace: "all",
+      reason: "product_patch",
+      sourceEvent: "product_patch",
+      force: true,
+      onlyChanged: false,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+      priority: 1,
+    }).catch((error) => logger.warn("product patch reprice queue failed", { detail: error?.message || String(error), productId: product.id }));
   } catch (error) {
     next(error);
   }
@@ -16646,7 +16833,18 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
       newValue: products.map((product) => ({ id: product.id, markup: product.markup, updatedAt: product.updatedAt })),
     });
     response.json({ ok: true, changed, products });
-    queueImmediateAutoPricePush(Array.from(ids), "bulk_markup_patch");
+    queueAuthoritativePriceReprice({
+      productIds: Array.from(ids),
+      marketplace: "all",
+      reason: "bulk_markup_patch",
+      sourceEvent: "bulk_markup_patch",
+      force: true,
+      onlyChanged: false,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+      priority: 1,
+    }).catch((error) => logger.warn("bulk markup reprice queue failed", { detail: error?.message || String(error), count: ids.size }));
   } catch (error) {
     next(error);
   }
@@ -16686,7 +16884,20 @@ app.patch("/api/warehouse/products/auto-price/bulk", async (request, response, n
       newValue: products.map((product) => ({ id: product.id, autoPriceEnabled: product.autoPriceEnabled, updatedAt: product.updatedAt })),
     });
     response.json({ ok: true, changed, products });
-    if (enabled) queueImmediateAutoPricePush(Array.from(ids), "bulk_auto_enable");
+    if (enabled) {
+      queueAuthoritativePriceReprice({
+        productIds: Array.from(ids),
+        marketplace: "all",
+        reason: "bulk_auto_enable",
+        sourceEvent: "bulk_auto_enable",
+        force: true,
+        onlyChanged: false,
+        refreshMarketplacePrices: true,
+        livePriceMaster: true,
+        verify: true,
+        priority: 1,
+      }).catch((error) => logger.warn("bulk auto-price enable reprice queue failed", { detail: error?.message || String(error), count: ids.size }));
+    }
   } catch (error) {
     next(error);
   }
@@ -16708,7 +16919,19 @@ app.patch("/api/warehouse/products/auto-price/all", async (request, response, ne
     await writeWarehouse(warehouse);
     await appendAudit(request, "warehouse.auto_price.all_update", { productIds: changedIds, newValue: { enabled } });
     response.json({ ok: true, changed, products: [] });
-    if (enabled) queueImmediateAutoPricePush([], "auto_all_enable");
+    if (enabled) {
+      queueAuthoritativePriceReprice({
+        marketplace: "all",
+        reason: "auto_all_enable",
+        sourceEvent: "auto_all_enable",
+        force: true,
+        onlyChanged: false,
+        refreshMarketplacePrices: true,
+        livePriceMaster: true,
+        verify: true,
+        priority: 2,
+      }).catch((error) => logger.warn("all auto-price enable reprice queue failed", { detail: error?.message || String(error) }));
+    }
   } catch (error) {
     next(error);
   }
@@ -16941,14 +17164,19 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     );
     const updatedProducts = targetProducts;
     const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, updatedProducts, { usdRate });
+    const expandedUpdatedIds = targetProducts.map((product) => product.id);
+    const activation = await queueLinkedProductActivation(expandedUpdatedIds, "link_bulk_add_or_update", {
+      username: requestUsername(request),
+    });
     response.json({
       ok: true,
       changed: savedProducts.length || updatedIds.length,
       products: savedProducts,
       persisted: "written",
-      expandedProductIds: targetProducts.map((product) => product.id),
+      expandedProductIds: expandedUpdatedIds,
       groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
       marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
+      ...activation,
     });
     appendAudit(request, "warehouse.links.bulk_save", {
       productIds: updatedIds,
@@ -16972,9 +17200,6 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       oldValue: oldValues,
       newValue: savedProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
-    const expandedUpdatedIds = targetProducts.map((product) => product.id);
-    queueMarketplaceJob("supplier-recovery-automation", { productIds: expandedUpdatedIds }, { priority: 1 });
-    queueImmediateAutoPricePush(expandedUpdatedIds, "link_bulk_add_or_update");
     });
   } catch (error) {
     next(error);
@@ -17025,7 +17250,16 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     product.updatedAt = now;
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_save" });
     const [savedProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product], { usdRate });
-    response.json({ ok: true, product: savedProduct || normalizeWarehouseProduct(product), links: (savedProduct || product).links || [], persisted: "written" });
+    const activation = await queueLinkedProductActivation([product.id], "link_add_or_update", {
+      username: requestUsername(request),
+    });
+    response.json({
+      ok: true,
+      product: savedProduct || normalizeWarehouseProduct(product),
+      links: (savedProduct || product).links || [],
+      persisted: "written",
+      ...activation,
+    });
     appendAudit(request, "warehouse.link.save", {
       productId: product.id,
       offerId: product.offerId,
@@ -17040,8 +17274,6 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       oldValue: before,
       newValue: { id: savedProduct?.id || product.id, links: (savedProduct || product).links || [], updatedAt: (savedProduct || product).updatedAt },
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
-    queueMarketplaceJob("supplier-recovery-automation", { productIds: [product.id] }, { priority: 1 });
-    queueImmediateAutoPricePush([product.id], "link_add_or_update");
     });
   } catch (error) {
     next(error);
@@ -17200,6 +17432,10 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
     await writeWarehouseProductPatch(changedProducts, { reason: "warehouse_links_group_delete" });
     const changedIds = changedProducts.map((product) => product.id);
     const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, targetProducts);
+    const idsWithRemainingLinks = responseProducts.filter((product) => (product.links || []).length).map((product) => product.id);
+    const activation = idsWithRemainingLinks.length
+      ? await queueLinkedProductActivation(idsWithRemainingLinks, "link_delete", { username: requestUsername(request) })
+      : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: idsWithRemainingLinks };
     response.json({
       ok: true,
       changed: changedProducts.length,
@@ -17210,6 +17446,7 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
       expandedProductIds: expandedIds,
       groupLinkSignature: warehouseGroupLinkSignature(responseProducts),
       marketplacePriceBreakdown: marketplacePriceBreakdown(responseProducts),
+      ...activation,
     });
     appendAudit(request, "warehouse.links.bulk_delete", {
       productIds: changedIds,
@@ -17217,8 +17454,6 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
       newValue: responseProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     queueMarketplaceJob("no-supplier-automation", { productIds: changedIds }, { priority: 1 });
-    const idsWithRemainingLinks = responseProducts.filter((product) => (product.links || []).length).map((product) => product.id);
-    if (idsWithRemainingLinks.length) queueImmediateAutoPricePush(idsWithRemainingLinks, "link_delete");
   });
 }
 
@@ -17311,7 +17546,7 @@ app.post("/api/warehouse/products/links/delete", async (request, response, next)
         newValue: responseProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
       }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
       queueMarketplaceJob("no-supplier-automation", { productIds: changedIds }, { priority: 1 });
-      if (idsWithRemainingLinks.length) queueImmediateAutoPricePush(idsWithRemainingLinks, "link_delete");
+      if (idsWithRemainingLinks.length) await queueLinkedProductActivation(idsWithRemainingLinks, "link_delete", { username: requestUsername(request) });
     });
   } catch (error) {
     next(error);
@@ -17371,7 +17606,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
       newValue: { id: responseProduct.id, links: responseProduct.links || [], updatedAt: responseProduct.updatedAt },
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
     queueMarketplaceJob("no-supplier-automation", { productIds: [request.params.productId] }, { priority: 1 });
-    if ((responseProduct.links || []).length) queueImmediateAutoPricePush([request.params.productId], "link_delete");
+    if ((responseProduct.links || []).length) await queueLinkedProductActivation([request.params.productId], "link_delete", { username: requestUsername(request) });
     });
   } catch (error) {
     next(error);
@@ -17409,6 +17644,9 @@ app.post("/api/warehouse/products/links/sync-group", async (request, response, n
         await writeWarehouseProductPatch(changedProducts, { reason: "warehouse_links_sync_group" });
       }
       const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, targetProducts);
+      const activation = changedProducts.length
+        ? await queueLinkedProductActivation(expandedIds, "link_sync_group", { username: requestUsername(request) })
+        : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: expandedIds };
       response.json({
         ok: true,
         changed: changedProducts.length,
@@ -17418,6 +17656,7 @@ app.post("/api/warehouse/products/links/sync-group", async (request, response, n
         expandedProductIds: expandedIds,
         groupLinkSignature: warehouseGroupLinkSignature(responseProducts),
         marketplacePriceBreakdown: marketplacePriceBreakdown(responseProducts),
+        ...activation,
       });
       if (changedProducts.length) {
         appendAudit(request, "warehouse.links.sync_group", {
@@ -17425,8 +17664,6 @@ app.post("/api/warehouse/products/links/sync-group", async (request, response, n
           oldValue: syncResult.oldValues || [],
           newValue: responseProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
         }).catch((auditError) => logger.warn("link sync audit append failed", { detail: auditError?.message || String(auditError) }));
-        queueMarketplaceJob("supplier-recovery-automation", { productIds: expandedIds }, { priority: 1 });
-        queueImmediateAutoPricePush(expandedIds, "link_sync_group");
       }
     });
   } catch (error) {
@@ -17736,6 +17973,123 @@ async function queueAuthoritativePriceReprice({
     );
   }
   return { ok: true, accepted: true, priceIntentId, queued: ids.length, queuedBatches: batches.length };
+}
+
+async function queueLinkedProductActivation(productIds = [], sourceEvent = "link_change_activate_marketplace", requestMeta = {}) {
+  const requestedIds = Array.from(new Set((Array.isArray(productIds) ? productIds : [])
+    .map((id) => cleanText(id))
+    .filter(Boolean)));
+  if (!requestedIds.length) {
+    return {
+      activationQueued: false,
+      recoveryQueued: false,
+      priceIntentId: null,
+      affectedProductIds: requestedIds,
+      queued: 0,
+      queuedBatches: 0,
+    };
+  }
+
+  const normalizedSourceEvent = cleanText(sourceEvent) || "link_change_activate_marketplace";
+  try {
+    priceMasterLinkLookupCache.clear();
+    priceMasterSearchCache.clear();
+    invalidateWarehouseViewCache();
+
+    const warehouse = await readWarehouse();
+    const seeds = (warehouse.products || []).filter((product) => requestedIds.includes(String(product.id)));
+    const affectedProducts = expandWarehouseProductsToGroups(warehouse.products || [], seeds)
+      .filter((product) => product?.id);
+    const affectedProductIds = Array.from(new Set(affectedProducts.map((product) => String(product.id))));
+    const linkedAffectedIds = affectedProducts
+      .filter((product) => Array.isArray(product.links) && product.links.length)
+      .map((product) => String(product.id));
+    const recoveryIds = affectedProductIds;
+    const priceIds = linkedAffectedIds.length ? Array.from(new Set(linkedAffectedIds)) : affectedProductIds;
+
+    if (process.env.DISABLE_BACKGROUND_JOBS === "true") {
+      return {
+        activationQueued: false,
+        recoveryQueued: false,
+        priceIntentId: null,
+        affectedProductIds,
+        queued: 0,
+        queuedBatches: 0,
+        disabled: true,
+      };
+    }
+
+    if (!recoveryIds.length) {
+      return {
+        activationQueued: false,
+        recoveryQueued: false,
+        priceIntentId: null,
+        affectedProductIds,
+        queued: 0,
+        queuedBatches: 0,
+        reason: "no_affected_products",
+      };
+    }
+
+    const recoveryQueue = enqueueMarketplaceJobAccepted(
+      "supplier-recovery-automation",
+      {
+        productIds: recoveryIds,
+        force: true,
+        source: normalizedSourceEvent,
+        sourceEvent: normalizedSourceEvent,
+        requestedBy: requestMeta.username || requestMeta.user || "system",
+      },
+      { priority: 1 },
+    ).catch((error) => {
+      logger.warn("linked product activation recovery queue failed", {
+        sourceEvent: normalizedSourceEvent,
+        detail: error?.message || String(error),
+        count: recoveryIds.length,
+      });
+      return { accepted: false, error: error?.message || String(error) };
+    });
+
+    const priceQueue = await queueAuthoritativePriceReprice({
+      productIds: priceIds,
+      marketplace: "all",
+      reason: normalizedSourceEvent,
+      sourceEvent: normalizedSourceEvent,
+      force: true,
+      onlyChanged: false,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+      priority: 1,
+    });
+    const recoveryResult = await recoveryQueue;
+
+    return {
+      activationQueued: Boolean(recoveryResult?.accepted || priceQueue.accepted),
+      recoveryQueued: Boolean(recoveryResult?.accepted),
+      priceIntentId: priceQueue.priceIntentId || null,
+      affectedProductIds,
+      queued: priceQueue.queued || 0,
+      queuedBatches: priceQueue.queuedBatches || 0,
+      recoveryInlineBackground: Boolean(recoveryResult?.inlineBackground),
+      recoveryQueueError: recoveryResult?.error || recoveryResult?.queueError || null,
+    };
+  } catch (error) {
+    logger.warn("linked product activation failed", {
+      sourceEvent: normalizedSourceEvent,
+      detail: error?.message || String(error),
+      count: requestedIds.length,
+    });
+    return {
+      activationQueued: false,
+      recoveryQueued: false,
+      priceIntentId: null,
+      affectedProductIds: requestedIds,
+      queued: 0,
+      queuedBatches: 0,
+      error: error?.message || String(error),
+    };
+  }
 }
 
 function schedulePmTimeoutRepriceRetry(productIds = [], options = {}) {
@@ -18308,12 +18662,24 @@ async function processMarketplaceJob(name, data = {}) {
     const productIds = Array.isArray(data.productIds)
       ? data.productIds.map((id) => String(id || "").trim()).filter(Boolean)
       : [];
+    const source = cleanText(data.source || data.sourceEvent) || (productIds.length ? "targeted" : "full");
     if (productIds.length) {
-      const products = await buildFreshWarehouseProducts(productIds);
-      return runSupplierRecoveryAutomation({ products }, { productIds, source: "targeted", force: data.force === true });
+      const products = await buildFreshWarehouseProducts(productIds, {
+        refreshPrices: data.refreshPrices !== false,
+        livePriceMaster: data.livePriceMaster !== false,
+        batchPriceMaster: data.livePriceMaster !== false,
+        priceMasterTimeoutMs: Number(data.priceMasterTimeoutMs || 0) || autoPricePmTimeoutMs,
+      });
+      return runSupplierRecoveryAutomation({ products }, {
+        productIds,
+        source,
+        sourceEvent: data.sourceEvent || source,
+        force: data.force === true,
+        forceOzonDailyLimit: data.forceOzonDailyLimit === true,
+      });
     }
     const preview = await buildWarehouseView({ sync: false });
-    return runSupplierRecoveryAutomation(preview, { source: "full" });
+    return runSupplierRecoveryAutomation(preview, { source });
   }
   if (name === "ozon-unarchive-queue-process") {
     return processOzonUnarchiveQueue({
@@ -19388,6 +19754,280 @@ function financeExpenseFromPostgres(row = {}) {
   });
 }
 
+function supplierLedgerSourceKeyForPicking(row = {}) {
+  const key = cleanText(row.key || row.pickingKey || supplierCartItemKey(row));
+  return `picking:${crypto.createHash("sha1").update(key || crypto.randomUUID()).digest("hex")}`;
+}
+
+function normalizeSupplierLedgerType(value = "") {
+  const type = cleanText(value).toLowerCase();
+  return ["purchase_debt", "payment", "adjustment"].includes(type) ? type : "adjustment";
+}
+
+function normalizeSupplierLedgerEntry(input = {}) {
+  const occurredAt = toDateOrNull(input.occurredAt || input.occurred_at || input.paidAt || input.paid_at) || new Date();
+  const voidedAt = toDateOrNull(input.voidedAt || input.voided_at);
+  const entryType = normalizeSupplierLedgerType(input.entryType || input.entry_type || input.type);
+  return {
+    id: cleanText(input.id) || crypto.randomUUID(),
+    sourceKey: cleanText(input.sourceKey || input.source_key) || `${entryType}:${crypto.randomUUID()}`,
+    entryType,
+    supplierName: cleanText(input.supplierName || input.supplier_name),
+    partnerId: cleanText(input.partnerId || input.partner_id),
+    amount: normalizeFinanceMoney(input.amount, 0),
+    currency: cleanText(input.currency || "RUB").toUpperCase() || "RUB",
+    pickingKey: cleanText(input.pickingKey || input.picking_key),
+    financeOrderId: cleanText(input.financeOrderId || input.finance_order_id),
+    orderId: cleanText(input.orderId || input.order_id),
+    postingNumber: cleanText(input.postingNumber || input.posting_number),
+    offerId: cleanText(input.offerId || input.offer_id),
+    productName: cleanText(input.productName || input.product_name || input.name),
+    quantity: Math.max(1, Math.round(Number(input.quantity || 1) || 1)),
+    note: cleanText(input.note),
+    status: cleanText(input.status || "active").toLowerCase() === "voided" ? "voided" : "active",
+    occurredAt: occurredAt.toISOString(),
+    voidedAt: voidedAt?.toISOString?.() || null,
+    createdBy: cleanText(input.createdBy || input.created_by),
+    raw: input.raw && typeof input.raw === "object" ? input.raw : input,
+    createdAt: input.createdAt || input.created_at || new Date().toISOString(),
+    updatedAt: input.updatedAt || input.updated_at || new Date().toISOString(),
+  };
+}
+
+function supplierLedgerEntryFromPostgres(row = {}) {
+  return normalizeSupplierLedgerEntry({
+    id: row.id,
+    sourceKey: row.sourceKey,
+    entryType: row.entryType,
+    supplierName: row.supplierName,
+    partnerId: row.partnerId,
+    amount: Number(row.amount || 0),
+    currency: row.currency,
+    pickingKey: row.pickingKey,
+    financeOrderId: row.financeOrderId,
+    orderId: row.orderId,
+    postingNumber: row.postingNumber,
+    offerId: row.offerId,
+    productName: row.productName,
+    quantity: row.quantity,
+    note: row.note,
+    status: row.status,
+    occurredAt: row.occurredAt?.toISOString?.() || null,
+    voidedAt: row.voidedAt?.toISOString?.() || null,
+    createdBy: row.createdBy,
+    raw: row.raw || {},
+    createdAt: row.createdAt?.toISOString?.() || null,
+    updatedAt: row.updatedAt?.toISOString?.() || null,
+  });
+}
+
+function supplierLedgerIdentityWhere({ supplierName = "", partnerId = "" } = {}) {
+  const name = cleanText(supplierName);
+  const partner = cleanText(partnerId);
+  const OR = [];
+  if (partner) OR.push({ partnerId: partner });
+  if (name) OR.push({ supplierName: name });
+  return OR.length ? { OR } : {};
+}
+
+function supplierLedgerSummaryFromEntries(entries = []) {
+  const active = entries.filter((entry) => entry.status !== "voided");
+  const balance = active.reduce((sum, entry) => sum + normalizeFinanceMoney(entry.amount, 0), 0);
+  const debtTotal = active
+    .filter((entry) => entry.amount < 0)
+    .reduce((sum, entry) => sum + Math.abs(normalizeFinanceMoney(entry.amount, 0)), 0);
+  const paidTotal = active
+    .filter((entry) => entry.amount > 0 && entry.entryType === "payment")
+    .reduce((sum, entry) => sum + normalizeFinanceMoney(entry.amount, 0), 0);
+  const lastPayment = active
+    .filter((entry) => entry.entryType === "payment")
+    .sort((left, right) => String(right.occurredAt).localeCompare(String(left.occurredAt)))[0] || null;
+  const lastDebt = active
+    .filter((entry) => entry.amount < 0)
+    .sort((left, right) => String(right.occurredAt).localeCompare(String(left.occurredAt)))[0] || null;
+  return {
+    balance: normalizeFinanceMoney(balance, 0),
+    debtTotal: normalizeFinanceMoney(debtTotal, 0),
+    paidTotal: normalizeFinanceMoney(paidTotal, 0),
+    entries: active.length,
+    lastPaymentAt: lastPayment?.occurredAt || null,
+    lastDebtAt: lastDebt?.occurredAt || null,
+  };
+}
+
+async function listSupplierLedgerEntries({ supplierName = "", partnerId = "", status = "active", limit = 200, period = "all" } = {}) {
+  const normalizedLimit = Math.max(1, Math.min(2000, Number(limit || 200) || 200));
+  if (!shouldUsePostgresStorage()) return { source: "disabled", total: 0, entries: [], summary: supplierLedgerSummaryFromEntries([]) };
+  const statusText = cleanText(status).toLowerCase();
+  const andFilters = [
+    supplierLedgerIdentityWhere({ supplierName, partnerId }),
+    statusText && statusText !== "all" ? { status: statusText === "voided" ? "voided" : "active" } : {},
+    financePeriodWhere(period, "occurredAt"),
+  ].filter((item) => Object.keys(item || {}).length);
+  const where = andFilters.length ? { AND: andFilters } : {};
+  try {
+    const [total, rows] = await Promise.all([
+      getPrisma().supplierLedgerEntry.count({ where }),
+      getPrisma().supplierLedgerEntry.findMany({ where, orderBy: { occurredAt: "desc" }, take: normalizedLimit }),
+    ]);
+    const entries = rows.map(supplierLedgerEntryFromPostgres);
+    const summaryRows = total > rows.length
+      ? (await getPrisma().supplierLedgerEntry.findMany({ where, orderBy: { occurredAt: "desc" }, take: 10000 })).map(supplierLedgerEntryFromPostgres)
+      : entries;
+    return { source: "postgres", total, entries, summary: supplierLedgerSummaryFromEntries(summaryRows) };
+  } catch (error) {
+    logger.warn("supplier ledger postgres read failed", { detail: error?.message || String(error) });
+    if (!jsonFallbackEnabled()) throw error;
+    return { source: "postgres", total: 0, entries: [], summary: supplierLedgerSummaryFromEntries([]), error: error?.message || String(error) };
+  }
+}
+
+async function supplierLedgerSummaryMapForSuppliers(suppliers = []) {
+  const empty = new Map();
+  if (!shouldUsePostgresStorage() || !Array.isArray(suppliers) || !suppliers.length) return empty;
+  try {
+    const rows = await getPrisma().supplierLedgerEntry.findMany({
+      where: { status: "active" },
+      orderBy: { occurredAt: "desc" },
+      take: 20000,
+    });
+    const byKey = new Map();
+    for (const entry of rows.map(supplierLedgerEntryFromPostgres)) {
+      const keys = [
+        entry.partnerId ? `partner:${cleanText(entry.partnerId).toLowerCase()}` : "",
+        entry.supplierName ? `name:${normalizeSupplierName(entry.supplierName)}` : "",
+      ].filter(Boolean);
+      for (const key of keys) {
+        if (!byKey.has(key)) byKey.set(key, []);
+        byKey.get(key).push(entry);
+      }
+    }
+    for (const supplier of suppliers) {
+      const partnerKey = supplier.partnerId ? `partner:${cleanText(supplier.partnerId).toLowerCase()}` : "";
+      const nameKey = supplier.name ? `name:${normalizeSupplierName(supplier.name)}` : "";
+      const entries = partnerKey && byKey.has(partnerKey) ? byKey.get(partnerKey) : (nameKey && byKey.has(nameKey) ? byKey.get(nameKey) : []);
+      empty.set(cleanText(supplier.id || supplier.partnerId || supplier.name), supplierLedgerSummaryFromEntries(entries));
+    }
+  } catch (error) {
+    logger.warn("supplier ledger summary map failed", { detail: error?.message || String(error) });
+  }
+  return empty;
+}
+
+async function upsertSupplierLedgerDebtFromPickingRow(row = {}, financeOrder = null, request = null) {
+  if (!shouldUsePostgresStorage()) return null;
+  const normalized = normalizeSupplierPickingRow(row);
+  const purchaseCost = normalizeFinanceMoney(financeOrder?.purchaseCost ?? await financePurchaseCostRubFromPicking(normalized), 0);
+  if (!(purchaseCost > 0) || !normalized.supplierName) return null;
+  const entry = normalizeSupplierLedgerEntry({
+    sourceKey: supplierLedgerSourceKeyForPicking(normalized),
+    entryType: "purchase_debt",
+    supplierName: normalized.supplierName,
+    partnerId: normalized.partnerId,
+    amount: -Math.abs(purchaseCost),
+    currency: "RUB",
+    pickingKey: normalized.key,
+    financeOrderId: financeOrder?.id || financeOrderIdForPicking(normalized),
+    orderId: normalized.orderId || normalized.postingNumber || normalized.key,
+    postingNumber: normalized.postingNumber,
+    offerId: normalized.offerId,
+    productName: normalized.productName,
+    quantity: normalized.quantity,
+    note: "Долг создан при отметке Собрал",
+    status: "active",
+    occurredAt: normalized.pickedAt || new Date().toISOString(),
+    createdBy: requestUsername(request || {}),
+    raw: { picking: normalized, financeOrder },
+  });
+  try {
+    const saved = await getPrisma().supplierLedgerEntry.upsert({
+      where: { sourceKey: entry.sourceKey },
+      create: {
+        id: entry.id,
+        sourceKey: entry.sourceKey,
+        entryType: entry.entryType,
+        supplierName: entry.supplierName || null,
+        partnerId: entry.partnerId || null,
+        amount: entry.amount,
+        currency: entry.currency,
+        pickingKey: entry.pickingKey || null,
+        financeOrderId: entry.financeOrderId || null,
+        orderId: entry.orderId || null,
+        postingNumber: entry.postingNumber || null,
+        offerId: entry.offerId || null,
+        productName: entry.productName || null,
+        quantity: entry.quantity,
+        note: entry.note || null,
+        status: "active",
+        occurredAt: toDateOrNull(entry.occurredAt) || new Date(),
+        voidedAt: null,
+        createdBy: entry.createdBy || null,
+        raw: entry.raw,
+      },
+      update: {
+        supplierName: entry.supplierName || null,
+        partnerId: entry.partnerId || null,
+        amount: entry.amount,
+        currency: entry.currency,
+        pickingKey: entry.pickingKey || null,
+        financeOrderId: entry.financeOrderId || null,
+        orderId: entry.orderId || null,
+        postingNumber: entry.postingNumber || null,
+        offerId: entry.offerId || null,
+        productName: entry.productName || null,
+        quantity: entry.quantity,
+        note: entry.note || null,
+        status: "active",
+        occurredAt: toDateOrNull(entry.occurredAt) || new Date(),
+        voidedAt: null,
+        raw: entry.raw,
+      },
+    });
+    suppliersListCache = null;
+    await appendAudit(request || { session: { username: "system", role: "admin" } }, "supplier_ledger.debt_upsert", {
+      entityType: "supplier_ledger",
+      entityId: saved.id,
+      newValue: supplierLedgerEntryFromPostgres(saved),
+    }).catch((error) => logger.warn("supplier ledger audit failed", { detail: error?.message || String(error) }));
+    return supplierLedgerEntryFromPostgres(saved);
+  } catch (error) {
+    logger.warn("supplier ledger debt upsert failed", { detail: error?.message || String(error) });
+    if (!jsonFallbackEnabled()) throw error;
+    return null;
+  }
+}
+
+async function voidSupplierLedgerDebtForPickingRow(row = {}, request = null) {
+  if (!shouldUsePostgresStorage()) return null;
+  const sourceKey = supplierLedgerSourceKeyForPicking(row);
+  try {
+    const saved = await getPrisma().supplierLedgerEntry.update({
+      where: { sourceKey },
+      data: {
+        status: "voided",
+        voidedAt: new Date(),
+        raw: {
+          picking: normalizeSupplierPickingRow(row),
+          voidedBy: requestUsername(request || {}),
+          voidedAt: new Date().toISOString(),
+        },
+      },
+    });
+    suppliersListCache = null;
+    await appendAudit(request || { session: { username: "system", role: "admin" } }, "supplier_ledger.debt_void", {
+      entityType: "supplier_ledger",
+      entityId: saved.id,
+      newValue: supplierLedgerEntryFromPostgres(saved),
+    }).catch((error) => logger.warn("supplier ledger void audit failed", { detail: error?.message || String(error) }));
+    return supplierLedgerEntryFromPostgres(saved);
+  } catch (error) {
+    if (error?.code === "P2025") return null;
+    logger.warn("supplier ledger debt void failed", { detail: error?.message || String(error) });
+    if (!jsonFallbackEnabled()) throw error;
+    return null;
+  }
+}
+
 async function readFinanceJsonFallback() {
   try {
     const parsed = JSON.parse(await fs.readFile(financeStatePath, "utf8"));
@@ -19615,15 +20255,21 @@ async function listFinanceExpenses({ period = "30d", q = "", limit = 200 } = {})
 app.get("/api/finance/summary", requireAdmin, async (request, response, next) => {
   try {
     const period = cleanText(request.query.period || "30d").toLowerCase();
-    const [ordersResult, expensesResult] = await Promise.all([
+    const [ordersResult, expensesResult, supplierLedgerResult] = await Promise.all([
       listFinanceOrders({ period, limit: 2000 }),
       listFinanceExpenses({ period, limit: 2000 }),
+      listSupplierLedgerEntries({ period: "all", status: "active", limit: 2000 }).catch((error) => ({ summary: supplierLedgerSummaryFromEntries([]), error: error?.message || String(error) })),
     ]);
     response.json({
       ok: true,
       period,
       source: ordersResult.source === expensesResult.source ? ordersResult.source : "mixed",
-      summary: financeSummaryFromRows(ordersResult.orders, expensesResult.expenses),
+      summary: {
+        ...financeSummaryFromRows(ordersResult.orders, expensesResult.expenses),
+        supplierBalance: supplierLedgerResult.summary?.balance || 0,
+        supplierDebt: supplierLedgerResult.summary?.debtTotal || 0,
+        supplierPaid: supplierLedgerResult.summary?.paidTotal || 0,
+      },
       updatedAt: new Date().toISOString(),
     });
   } catch (error) {
@@ -21984,8 +22630,7 @@ async function runPriceMasterGroupLinksRepairOperation(payload = {}, options = {
       await writeWarehouseProductPatch(chunk, { reason: "warehouse_links_repair_group" });
     }
     const uniqueIds = Array.from(new Set(changedIds.map(String)));
-    queueMarketplaceJob("supplier-recovery-automation", { productIds: uniqueIds }, { priority: 2 });
-    queueImmediateAutoPricePush(uniqueIds, "link_repair_group");
+    await queueLinkedProductActivation(uniqueIds, "link_repair_group", { username: "operation" });
   }
 
   return {
@@ -22347,12 +22992,15 @@ app.get("/api/supplier-picking-list", requireStaff, async (request, response, ne
     rows.sort((left, right) => String(right.createdAt).localeCompare(String(left.createdAt)));
     const allRows = Object.values(state.rows || {}).map(normalizeSupplierPickingRow);
     const suppliers = Array.from(new Set(allRows.map((row) => row.supplierName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
+    const supplierLedgerMap = await supplierLedgerSummaryMapForSuppliers(suppliers.map((name) => ({ id: name, name })));
+    const supplierLedger = Object.fromEntries(suppliers.map((name) => [name, supplierLedgerMap.get(name) || supplierLedgerSummaryFromEntries([])]));
     response.json({
       ok: true,
       updatedAt: state.updatedAt,
       rows: rows.slice(0, limit),
       total: rows.length,
       suppliers,
+      supplierLedger,
       summary: {
         open: allRows.filter((row) => row.status === "open").length,
         picked: allRows.filter((row) => row.status === "picked").length,
@@ -22427,10 +23075,13 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     }
 
     let financeOrder = null;
+    let supplierLedgerEntry = null;
     if (status === "picked") {
       financeOrder = await upsertFinanceOrderFromPickingRow(nextRow, request);
+      supplierLedgerEntry = await upsertSupplierLedgerDebtFromPickingRow(nextRow, financeOrder, request);
     } else if (current.status === "picked") {
       await removeFinanceOrderForPickingRow(current);
+      supplierLedgerEntry = await voidSupplierLedgerDebtForPickingRow(current, request);
     }
 
     await appendAudit(request, `supplier_picking.${status === "picked" ? "picked" : status === "missing" ? "missing" : "status_update"}`, {
@@ -22439,8 +23090,9 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       oldValue: current,
       newValue: nextRow,
       financeOrderId: financeOrder?.id || null,
+      supplierLedgerEntryId: supplierLedgerEntry?.id || null,
     });
-    response.json({ ok: true, row: nextRow, financeOrder });
+    response.json({ ok: true, row: nextRow, financeOrder, supplierLedgerEntry });
   } catch (error) {
     next(error);
   }
@@ -24094,17 +24746,25 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   } else {
     await writeWarehouse(warehouse);
   }
-  queueMarketplaceJob(
-    "auto-price-push",
-    {
-      productIds: recovered.map((item) => item.id),
-      usdRate: undefined,
-      minDiffRub: 0,
-      minDiffPct: 0,
-      force: Boolean(options.force),
-    },
-    { priority: 2 },
-  );
+  const priceRefresh = await queueAuthoritativePriceReprice({
+    productIds: recovered.map((item) => item.id),
+    marketplace: "all",
+    reason: "supplier_recovery_price_refresh",
+    sourceEvent: cleanText(options.sourceEvent || source) || "supplier_recovery_price_refresh",
+    force: true,
+    onlyChanged: false,
+    refreshMarketplacePrices: true,
+    livePriceMaster: true,
+    verify: true,
+    priority: 2,
+  }).catch((error) => {
+    logger.warn("supplier recovery price refresh queue failed", {
+      source,
+      detail: error?.message || String(error),
+      products: recovered.length,
+    });
+    return { ok: false, accepted: false, queued: 0, queuedBatches: 0, priceIntentId: null, error: error?.message || String(error) };
+  });
 
   const errors = [...stockActions, ...unarchiveActions]
     .filter((item) => !item.ok)
@@ -24130,6 +24790,8 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     stockFailed: stockActions.filter((item) => !item.ok).length,
     unarchiveFailed: unarchiveActions.filter((item) => !item.ok).length,
     errors: errors.length,
+    priceIntentId: priceRefresh.priceIntentId || null,
+    priceQueued: priceRefresh.queued || 0,
   });
   return {
     recovered: recovered.length,
@@ -24140,6 +24802,9 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     queuedByDailyLimit,
     nextRetryAt: queuedNextRetryAt,
     queueSize: Array.isArray(ozonQueueState.items) ? ozonQueueState.items.length : 0,
+    priceIntentId: priceRefresh.priceIntentId || null,
+    priceQueued: priceRefresh.queued || 0,
+    priceQueuedBatches: priceRefresh.queuedBatches || 0,
     queuedProcessedThisRun: queuedOzonProducts.length,
     queuedSamples: unarchiveActions
       .filter((item) => item.queuedByDailyLimit)
@@ -24700,6 +25365,8 @@ module.exports = {
   summarizeSupplierRecoveryProducts,
   runNoSupplierMarketplaceAutomation,
   runSupplierRecoveryAutomation,
+  queueLinkedProductActivation,
+  queueAuthoritativePriceReprice,
   pickWarehouseSupplier,
   pickWarehouseStockOnlySupplier,
   resolveWarehouseBrand,
@@ -24818,6 +25485,12 @@ module.exports = {
   writeSupplierPickingState,
   createSupplierPickingRows,
   supplierPickingInvoiceRows,
+  supplierLedgerSourceKeyForPicking,
+  supplierLedgerEntryFromPostgres,
+  normalizeSupplierLedgerEntry,
+  supplierLedgerSummaryFromEntries,
+  upsertSupplierLedgerDebtFromPickingRow,
+  voidSupplierLedgerDebtForPickingRow,
   supplierBlockKey,
   activeSupplierBlocksForOffer,
   normalizeSupplierTrustFactor,
