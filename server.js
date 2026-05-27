@@ -334,6 +334,8 @@ let priceRetryRunning = false;
 const slowRequestThresholdMs = Math.max(500, Number(process.env.SLOW_REQUEST_LOG_THRESHOLD_MS || 3000) || 3000);
 const recentSlowRequestsMax = Math.max(10, Math.min(200, Number(process.env.SLOW_REQUEST_RECENT_MAX || 50) || 50));
 const recentSlowRequests = [];
+const recentStateWarningsMax = Math.max(10, Math.min(200, Number(process.env.STATE_WARNING_RECENT_MAX || 50) || 50));
+const recentStateWarnings = [];
 let supplierCartAutoTimer = null;
 let supplierCartAutoRunning = false;
 let supplierCartAutoNextRunAt = null;
@@ -368,6 +370,46 @@ function formatRuNumber(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number)) return "0";
   return new Intl.NumberFormat("ru-RU").format(number);
+}
+
+function summarizeRecentSlowRequests(limit = 20) {
+  const items = recentSlowRequests.slice(-Math.max(1, limit));
+  const byPath = new Map();
+  for (const item of items) {
+    const current = byPath.get(item.path) || {
+      path: item.path,
+      count: 0,
+      maxMs: 0,
+      lastMs: 0,
+      lastAt: null,
+      lastStatusCode: null,
+      method: item.method,
+    };
+    current.count += 1;
+    current.maxMs = Math.max(current.maxMs, Number(item.elapsedMs || 0));
+    current.lastMs = Number(item.elapsedMs || 0);
+    current.lastAt = item.at;
+    current.lastStatusCode = item.statusCode;
+    current.method = item.method || current.method;
+    byPath.set(item.path, current);
+  }
+  return {
+    thresholdMs: slowRequestThresholdMs,
+    totalRecent: recentSlowRequests.length,
+    recent: items,
+    byPath: Array.from(byPath.values()).sort((a, b) => b.maxMs - a.maxMs).slice(0, 12),
+  };
+}
+
+async function marketplaceQueueCounts() {
+  if (!bullmqEnabled || !redisUrl) return { enabled: false, mode: "inline", ok: true };
+  if (!marketplaceQueue) return { enabled: true, mode: "bullmq", ok: false, error: "queue_not_initialized" };
+  try {
+    const counts = await healthTimeout(marketplaceQueue.getJobCounts("waiting", "active", "delayed", "failed", "paused", "completed"));
+    return { enabled: true, mode: "bullmq", ok: true, counts };
+  } catch (error) {
+    return { enabled: true, mode: "bullmq", ok: false, error: error?.message || String(error) };
+  }
 }
 
 async function withWarehouseProductMutationLock(productIds = [], worker) {
@@ -405,6 +447,18 @@ function invalidateWarehouseViewCache() {
   warehouseBrandListCache = null;
   warehousePostgresDetailCache.clear();
   warehouseFastPageCache.clear();
+}
+
+function rememberStateWarning(source, error, extra = {}) {
+  const entry = {
+    at: new Date().toISOString(),
+    source: cleanText(source) || "unknown",
+    detail: error?.message || String(error || ""),
+    ...extra,
+  };
+  recentStateWarnings.push(entry);
+  while (recentStateWarnings.length > recentStateWarningsMax) recentStateWarnings.shift();
+  return entry;
 }
 
 function warehouseProductIndexFor(warehouse = {}) {
@@ -1082,6 +1136,8 @@ async function collectHealthDetails({ deep = false } = {}) {
       })(),
       slowRequestThresholdMs,
       recentSlowRequests: recentSlowRequests.slice(-10),
+      slowRequests: summarizeRecentSlowRequests(20),
+      stateWarnings: recentStateWarnings.slice(-20),
     },
     automation: {
       pricePush: {
@@ -1136,6 +1192,7 @@ async function collectHealthDetails({ deep = false } = {}) {
       if (!marketplaceQueue) throw new Error("BullMQ is enabled but queue is not initialized");
       components.redis.counts = await healthTimeout(marketplaceQueue.getJobCounts("waiting", "active", "delayed", "failed"));
       components.redis.ok = true;
+      components.redis.jobs = components.redis.counts;
     } catch (error) {
       components.redis.ok = false;
       components.redis.error = error?.message || String(error);
@@ -7843,6 +7900,7 @@ async function readPriceRetryQueue() {
       };
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
+      rememberStateWarning("price_retry_queue_read_postgres", error);
       logger.warn("read price retry queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
     }
   }
@@ -7889,6 +7947,7 @@ async function writePriceRetryQueue(queue) {
       if (!jsonFallbackEnabled() || !stateJsonBackupOnPostgresWrite) return payload;
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
+      rememberStateWarning("price_retry_queue_write_postgres", error, { items: payload.items.length });
       logger.warn("write price retry queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
     }
   }
@@ -8065,6 +8124,7 @@ async function readOzonUnarchiveQueue() {
       });
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
+      rememberStateWarning("ozon_unarchive_queue_read_postgres", error);
       logger.warn("read ozon unarchive queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
     }
   }
@@ -8108,6 +8168,7 @@ async function writeOzonUnarchiveQueue(queue = {}) {
       if (!jsonFallbackEnabled() || !stateJsonBackupOnPostgresWrite) return payload;
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
+      rememberStateWarning("ozon_unarchive_queue_write_postgres", error, { items: payload.items.length });
       logger.warn("write ozon unarchive queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
     }
   }
@@ -8155,6 +8216,10 @@ async function writeOzonUnarchiveQueueDelta(queue = {}, { upsertProducts = [], r
       return payload;
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
+      rememberStateWarning("ozon_unarchive_queue_delta_write_postgres", error, {
+        upsert: Array.isArray(upsertProducts) ? upsertProducts.length : 0,
+        remove: Array.isArray(removeProducts) ? removeProducts.length : 0,
+      });
       logger.warn("write ozon unarchive queue delta postgres failed, using JSON fallback", { detail: error?.message || String(error) });
     }
   }
@@ -8368,6 +8433,7 @@ async function writePrismaStateChunks(rows = [], chunkSize = 100, buildOperation
         rows: chunk.length,
         detail,
       });
+      rememberStateWarning("state_postgres_transaction_timeout", error, { rows: chunk.length });
       for (const item of chunk) {
         await buildOperation(item);
       }
@@ -8932,25 +8998,16 @@ async function getWarehouseBrandListFromPostgres(prisma) {
         orderBy: { displayBrand: "asc" },
         take: 10000,
       });
-      if (!rows.length) {
-        await rebuildWarehouseBrandIndexPostgres(prisma, { limit: Number(process.env.WAREHOUSE_BRAND_INDEX_REBUILD_LIMIT || 100000) || 100000 });
-        rows = await prisma.brandIndexItem.findMany({
-          select: { normalizedBrand: true, displayBrand: true },
-          distinct: ["normalizedBrand"],
-          orderBy: { displayBrand: "asc" },
-          take: 10000,
-        });
-      }
       if (rows.length) {
         const brands = rows.map((row) => cleanText(row.displayBrand)).filter(Boolean).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
         warehouseBrandListCache = { at: Date.now(), value: brands };
         return brands.slice();
       }
     } catch (error) {
+      rememberStateWarning("warehouse_brand_index_list", error);
       logger.warn("warehouse brand index list failed, using product brands", { detail: error?.message || String(error) });
     }
   }
-  await ensureWarehousePostgresBrandsBackfilled(prisma);
   const rows = await prisma.warehouseProduct.findMany({
     where: {
       AND: [
@@ -12031,6 +12088,39 @@ async function getWarehousePostgresSummary(prisma, rate) {
   return value;
 }
 
+async function getWarehousePostgresSummaryLight(prisma, rate) {
+  const cacheKey = Number(rate || 0).toFixed(4);
+  if (
+    warehousePostgresSummaryCache
+    && warehousePostgresSummaryCache.key === cacheKey
+    && Date.now() - warehousePostgresSummaryCache.at < warehousePostgresSummaryCacheTtlMs
+  ) {
+    return warehousePostgresSummaryCache.value;
+  }
+  const [totalAll, ozonStateCounts, yandexStateCounts, linkedProducts, normalizedSuppliers] = await Promise.all([
+    prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
+    getOzonStateCountsFromPostgres(prisma),
+    getMarketplaceStateCountsFromPostgres(prisma, "yandex"),
+    prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] } }).catch(() => 0),
+    getWarehousePostgresSuppliers(prisma),
+  ]);
+  return {
+    totalAll,
+    ozonStateCounts,
+    yandexStateCounts,
+    normalizedSuppliers,
+    counterStats: {
+      ready: 0,
+      changed: 0,
+      withoutSupplier: 0,
+      linkedProducts,
+      linkedNotReady: 0,
+    },
+    linkedArchived: 0,
+    lightweight: true,
+  };
+}
+
 async function buildFastWarehousePageFromPostgres({
   page = 1,
   pageSize = 60,
@@ -12058,6 +12148,7 @@ async function buildFastWarehousePageFromPostgres({
   }
   const strictIdentitySearch = isWarehouseStrictIdentitySearch(filters);
   const needsInMemoryPage = needsComputedLinkFilter || strictIdentitySearch;
+  const preferLightSummary = Boolean(cleanText(filters.q || "")) && !needsComputedLinkFilter;
   const postgresFilters = {
     ...(needsComputedLinkFilter ? { ...filters, state: "all" } : filters),
     ...(brandIndexProductIds.length ? { brand: "" } : {}),
@@ -12070,7 +12161,7 @@ async function buildFastWarehousePageFromPostgres({
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
   const [summary, dbTotal, initialDbRows] = await Promise.all([
-    getWarehousePostgresSummary(prisma, rate),
+    preferLightSummary ? getWarehousePostgresSummaryLight(prisma, rate) : getWarehousePostgresSummary(prisma, rate),
     needsInMemoryPage ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
     prisma.warehouseProduct.findMany({
       where: strictPrimaryWhere || where,
@@ -12128,11 +12219,13 @@ async function buildFastWarehousePageFromPostgres({
     products: pageProducts,
     suppliers: normalizedSuppliers,
   };
-  const built = await buildFreshWarehouseProductsForWarehouse(
-    pageWarehouse,
-    pageWarehouse.products.map((product) => product.id),
-    { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
-  );
+  const built = preferLightSummary
+    ? []
+    : await buildFreshWarehouseProductsForWarehouse(
+      pageWarehouse,
+      pageWarehouse.products.map((product) => product.id),
+      { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+    );
   pageTrace("postgres:after-build", traceStartedAt);
   const builtMap = new Map(built.map((product) => [product.id, product]));
   const items = pageWarehouse.products.map((product) => {
@@ -12145,7 +12238,7 @@ async function buildFastWarehousePageFromPostgres({
       selectedSupplier: item.selectedSupplier || null,
       noSupplierAutomation: item.noSupplierAutomation || {},
       marketplaceState: item.marketplaceState || {},
-      partial: false,
+      partial: preferLightSummary,
     };
   });
   return {
@@ -12167,6 +12260,7 @@ async function buildFastWarehousePageFromPostgres({
     usdRate: rate,
     priceMaster: await getPriceMasterSnapshotMetaFast(),
     sourceError: "",
+    partial: preferLightSummary,
     noSupplierAlerts: [],
     page,
     pageSize,
@@ -13672,27 +13766,52 @@ async function readSalesAutomationSystemSummary() {
 
 app.get("/api/system/status", requireAdmin, async (_request, response, next) => {
   try {
-    const [health, dailySync, priceRetry, ozonQueue, operations, salesAutomation] = await Promise.all([
+    const [health, dailySync, priceRetry, ozonQueue, operations, salesAutomation, bullmq] = await Promise.all([
       collectHealthDetails({ deep: true }).catch((error) => ({ ok: false, error: error?.message || String(error) })),
       readDailySyncState().catch((error) => ({ status: "error", error: error?.message || String(error) })),
       readPriceRetryQueue().catch((error) => ({ items: [], error: error?.message || String(error) })),
       readOzonUnarchiveQueue().catch((error) => ({ items: [], error: error?.message || String(error) })),
       readOperationJobs(20).catch((error) => ({ jobs: [], error: error?.message || String(error) })),
       readSalesAutomationSystemSummary(),
+      marketplaceQueueCounts(),
     ]);
     const jobs = Array.isArray(operations.jobs) ? operations.jobs : Array.isArray(operations) ? operations : [];
     const activeJobs = Array.from(activeOperationJobs.values()).map(operationJobPublic).slice(0, 20);
+    const components = health.components || {};
+    const postgresTables = components.postgresTables || null;
+    const runtime = components.runtime || null;
+    const ozonPublicQueue = ozonUnarchiveQueuePublic(ozonQueue, { limit: 20 });
+    const slowEndpoints = summarizeRecentSlowRequests(30);
+    const lastOzonVerification = ozonPublicQueue.items
+      ?.map((item) => item.lastAttemptAt || item.updatedAt || null)
+      .filter(Boolean)
+      .sort()
+      .at(-1) || ozonUnarchiveQueueAutoLastRunAt || null;
     response.json({
       ok: health.ok !== false,
       time: new Date().toISOString(),
       health,
-      runtime: health.components?.runtime || null,
+      postgresTables,
+      redis: components.redis || bullmq,
+      bullmq,
+      jobs: {
+        marketplace: bullmq.counts || components.redis?.counts || null,
+        active: activeJobs,
+        latest: jobs.slice(0, 10),
+        failed: jobs.filter((job) => ["failed", "error"].includes(cleanText(job.status).toLowerCase())).slice(0, 10),
+      },
+      slowEndpoints,
+      memory: runtime?.memory || null,
+      runtime,
+      lastPriceRun: salesAutomation.latest || null,
+      lastOzonVerification,
+      lastAutoarchiveRun: ozonUnarchiveQueueAutoLastResult || null,
       dailySync,
       salesAutomation,
       queues: {
         priceRetry: { total: Array.isArray(priceRetry.items) ? priceRetry.items.length : 0, updatedAt: priceRetry.updatedAt || null, error: priceRetry.error || "" },
-        ozonUnarchive: ozonUnarchiveQueuePublic(ozonQueue, { limit: 20 }),
-        marketplace: health.components?.redis?.counts || null,
+        ozonUnarchive: ozonPublicQueue,
+        marketplace: bullmq.counts || components.redis?.counts || null,
       },
       operations: {
         active: activeJobs,
@@ -13700,7 +13819,8 @@ app.get("/api/system/status", requireAdmin, async (_request, response, next) => 
         failed: jobs.filter((job) => ["failed", "error"].includes(cleanText(job.status).toLowerCase())).slice(0, 10),
         error: operations.error || "",
       },
-      slowRequests: recentSlowRequests.slice(-20),
+      slowRequests: slowEndpoints.recent,
+      stateWarnings: recentStateWarnings.slice(-30),
     });
   } catch (error) {
     next(error);
@@ -13821,7 +13941,7 @@ app.post("/api/warehouse/brands/rebuild-index", requireAdmin, async (request, re
       progress: 0,
     });
     startOperationJob(job);
-    response.status(202).json({ ok: true, accepted: true, job: operationJobPublic(job), source: "postgres" });
+    response.status(202).json({ ok: true, accepted: true, jobId: job.id, statusUrl: `/api/operations/${job.id}`, job: operationJobPublic(job), source: "postgres" });
   } catch (error) {
     next(error);
   }
@@ -14017,6 +14137,8 @@ app.post("/api/ozon/unarchive-queue/process", requireAdmin, async (request, resp
       ok: true,
       accepted,
       queued: accepted,
+      jobId: ozonUnarchiveQueueAutoLastResult?.queueRunId || null,
+      statusUrl: "/api/ozon/unarchive-queue",
       skipped: !accepted,
       reason: accepted ? null : "already_running",
       source,
@@ -14167,7 +14289,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
           brand: brandFilter,
         },
       });
-      queueChangedWarehousePrices(fastPage.items, "warehouse_page_detected_changed_prices");
+      if (!fastPage.partial) queueChangedWarehousePrices(fastPage.items, "warehouse_page_detected_changed_prices");
       if (grouped) {
         const groups = buildWarehousePageProductGroups(fastPage.items);
         return response.json({
@@ -18870,6 +18992,7 @@ app.get("/api/sales-automation/summary", requireAdmin, async (_request, response
         });
       } catch (error) {
         if (!jsonFallbackEnabled()) throw error;
+        rememberStateWarning("sales_automation_summary_postgres", error);
         logger.warn("sales automation summary postgres failed, using live preview fallback", { detail: error?.message || String(error) });
       }
     }
@@ -18969,6 +19092,7 @@ app.get("/api/sales-automation/items", requireAdmin, async (request, response, n
         });
       } catch (error) {
         if (!jsonFallbackEnabled()) throw error;
+        rememberStateWarning("sales_automation_items_postgres", error);
         logger.warn("sales automation items postgres failed, using live preview fallback", { detail: error?.message || String(error) });
       }
     }
@@ -19005,7 +19129,7 @@ app.post("/api/sales-automation/run", requireAdmin, async (request, response, ne
       limit: productIds?.length ? 0 : cleanLimit(request.body?.limit, 1000, 50000),
       priority: 1,
     });
-    response.status(202).json({ ok: true, accepted: true, ...result });
+    response.status(202).json({ ok: true, accepted: true, statusUrl: "/api/sales-automation/items", ...result });
   } catch (error) {
     next(error);
   }
@@ -19031,8 +19155,11 @@ app.get("/api/problem-products", requireAdmin, async (request, response, next) =
   try {
     const category = cleanText(request.query.category || "all");
     const q = cleanText(request.query.q || "");
+    const allowPreviewFallback = ["1", "true", "yes"].includes(cleanText(request.query.previewFallback || request.query.liveFallback).toLowerCase());
     const limit = cleanLimit(request.query.limit, 200, 2000);
     let items = [];
+    let source = shouldUsePostgresStorage() ? "postgres" : "preview";
+    let postgresFailed = false;
     if (shouldUsePostgresStorage()) {
       try {
         const rows = await getPrisma().salesAutomationSkuState.findMany({
@@ -19068,11 +19195,14 @@ app.get("/api/problem-products", requireAdmin, async (request, response, next) =
           }))
           .filter((row) => row.category);
       } catch (error) {
+        postgresFailed = true;
         if (!jsonFallbackEnabled()) throw error;
+        rememberStateWarning("problem_products_postgres", error);
         logger.warn("problem products postgres failed, using preview fallback", { detail: error?.message || String(error) });
       }
     }
-    if (!items.length) {
+    if (!shouldUsePostgresStorage() || (postgresFailed && jsonFallbackEnabled()) || allowPreviewFallback) {
+      source = postgresFailed ? "preview_postgres_failed" : "preview";
       const preview = await sendWarehousePrices({ dryRun: true, marketplace: "all", onlyChanged: false, limit, livePriceMaster: true });
       items = (preview.skipped || [])
         .map((row) => ({
@@ -19087,7 +19217,7 @@ app.get("/api/problem-products", requireAdmin, async (request, response, next) =
       acc[row.category] = (acc[row.category] || 0) + 1;
       return acc;
     }, {});
-    response.json({ ok: true, total: items.length, summary, items: items.slice(0, limit) });
+    response.json({ ok: true, source, total: items.length, summary, items: items.slice(0, limit) });
   } catch (error) {
     next(error);
   }
@@ -19108,7 +19238,7 @@ app.post("/api/problem-products/repair", requireAdmin, async (request, response,
       progress: 0,
     });
     startOperationJob(job);
-    response.status(202).json({ ok: true, accepted: true, job: operationJobPublic(job) });
+    response.status(202).json({ ok: true, accepted: true, jobId: job.id, statusUrl: `/api/operations/${job.id}`, job: operationJobPublic(job) });
   } catch (error) {
     next(error);
   }
