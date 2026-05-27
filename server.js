@@ -14197,7 +14197,22 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       perTargetTaken.set(target, taken + 1);
       if (dueItems.length >= normalizedLimit) break;
     }
-    const ids = dueItems.map((item) => cleanText(item.warehouseProductId || item.id)).filter(Boolean);
+    let ids = dueItems.map((item) => cleanText(item.warehouseProductId || item.id)).filter(Boolean);
+    const dueWithoutWarehouseId = dueItems.filter((item) => !cleanText(item.warehouseProductId || item.id) && cleanText(item.offerId));
+    if (dueWithoutWarehouseId.length) {
+      const warehouse = await readWarehouse();
+      for (const item of dueWithoutWarehouseId) {
+        const offerId = cleanText(item.offerId).toLowerCase();
+        const target = cleanText(item.target).toLowerCase();
+        const match = (warehouse.products || []).find((product) =>
+          cleanText(product.marketplace).toLowerCase() === "ozon"
+          && cleanText(product.offerId).toLowerCase() === offerId
+          && (!target || cleanText(product.target).toLowerCase() === target)
+        );
+        if (match?.id) ids.push(String(match.id));
+      }
+    }
+    ids = Array.from(new Set(ids));
     if (!ids.length) {
       const empty = {
         ok: true,
@@ -17298,6 +17313,11 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       const alreadyApplied = targetProducts.length > 0 && targetProducts.every((product) => warehouseProductLinksSignature(product) === commonSignature);
       if (!alreadyApplied) return conflictResponse(response, blockingConflicts);
       const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, targetProducts, { usdRate });
+      const activation = savedProducts.some((product) => (product.links || []).length)
+        ? await queueLinkedProductActivation(targetProducts.map((product) => product.id), "link_bulk_add_or_update_unchanged", {
+          username: requestUsername(request),
+        })
+        : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: targetProducts.map((product) => product.id) };
       return response.json({
         ok: true,
         changed: savedProducts.length || targetProducts.length,
@@ -17307,6 +17327,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         expandedProductIds: targetProducts.map((product) => product.id),
         groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
         marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
+        ...activation,
       });
     }
     const failedLinks = [];
@@ -17357,6 +17378,11 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 
     if (!updatedIds.length) {
       const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, targetProducts, { usdRate });
+      const activation = savedProducts.some((product) => (product.links || []).length)
+        ? await queueLinkedProductActivation(targetProducts.map((product) => product.id), "link_bulk_add_or_update_unchanged", {
+          username: requestUsername(request),
+        })
+        : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: targetProducts.map((product) => product.id) };
       return response.json({
         ok: true,
         changed: 0,
@@ -17366,6 +17392,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         expandedProductIds: targetProducts.map((product) => product.id),
         groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
         marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
+        ...activation,
       });
     }
 
@@ -17462,7 +17489,12 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     if (warehouseProductLinkDetailsSignature(product) === beforeDetailsSignature) {
       const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product], { usdRate });
       const normalized = freshProduct || normalizeWarehouseProduct(product);
-      return response.json({ ok: true, product: normalized, links: normalized.links || [], persisted: "unchanged", unchanged: true });
+      const activation = (normalized.links || []).length
+        ? await queueLinkedProductActivation([product.id], "link_add_or_update_unchanged", {
+          username: requestUsername(request),
+        })
+        : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: [product.id] };
+      return response.json({ ok: true, product: normalized, links: normalized.links || [], persisted: "unchanged", unchanged: true, ...activation });
     }
     if (product.links.length > 0) product.autoPriceEnabled = true;
     product.updatedAt = now;
@@ -17862,8 +17894,8 @@ app.post("/api/warehouse/products/links/sync-group", async (request, response, n
         await writeWarehouseProductPatch(changedProducts, { reason: "warehouse_links_sync_group" });
       }
       const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, targetProducts);
-      const activation = changedProducts.length
-        ? await queueLinkedProductActivation(expandedIds, "link_sync_group", { username: requestUsername(request) })
+      const activation = responseProducts.some((product) => (product.links || []).length)
+        ? await queueLinkedProductActivation(expandedIds, changedProducts.length ? "link_sync_group" : "link_sync_group_unchanged", { username: requestUsername(request) })
         : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: expandedIds };
       response.json({
         ok: true,

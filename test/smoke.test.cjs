@@ -3914,6 +3914,14 @@ test("sync-group repairs divergent PriceMaster links across marketplace siblings
     assert.equal(typeof synced.body.activationQueued, "boolean");
     assert.equal(typeof synced.body.recoveryQueued, "boolean");
     assert.deepEqual(synced.body.affectedProductIds.sort(), [firstId, secondId].sort());
+
+    const repeated = await agent
+      .post("/api/warehouse/products/links/sync-group")
+      .send({ productIds: [firstId] })
+      .expect(200);
+    assert.equal(repeated.body.unchanged, true);
+    assert.equal(repeated.body.disabled, true);
+    assert.deepEqual(repeated.body.affectedProductIds.sort(), [firstId, secondId].sort());
   } finally {
     await agent.delete(`/api/warehouse/products/${encodeURIComponent(firstId)}`).catch(() => {});
     await agent.delete(`/api/warehouse/products/${encodeURIComponent(secondId)}`).catch(() => {});
