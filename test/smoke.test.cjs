@@ -28,6 +28,8 @@ const personalWarehousePath = path.join(__dirname, "..", "data", "personal-wareh
 const operationJobsPath = path.join(__dirname, "..", "data", "operation-jobs.json");
 const aiImageJobsPath = path.join(__dirname, "..", "data", "ai-image-jobs.json");
 const auditLogPath = path.join(__dirname, "..", "data", "audit-log.jsonl");
+const supplierPickingListPath = path.join(__dirname, "..", "data", "supplier-picking-list.json");
+const financeStatePath = path.join(__dirname, "..", "data", "finance-state.json");
 
 async function backupFile(filePath) {
   try {
@@ -167,6 +169,7 @@ const {
   ozonUnarchiveQueuePath,
   ozonUnarchiveDateKey,
   ozonUnarchiveDailyUsed,
+  createSupplierPickingRows,
   normalizeSupplierTrustFactor,
   normalizeSupplierOrderCutoff,
   supplierOrderCutoffPassed,
@@ -4667,6 +4670,63 @@ test("supplier recovery treats delayed Yandex unarchive visibility as pending, n
   assert.equal(stillArchivedStatus.unarchiveFailed, 0);
   assert.equal(stillArchivedStatus.unarchivePending, 1);
   assert.equal(stillArchivedStatus.warning, "still_archived_after_unarchive");
+});
+
+test("picked supplier row creates a finance purchase order", async () => {
+  const pickingBackup = await backupFile(supplierPickingListPath);
+  const financeBackup = await backupFile(financeStatePath);
+  const agent = request.agent(app);
+  await agent
+    .post("/api/login")
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
+    .expect(200);
+
+  try {
+    await restoreFile(supplierPickingListPath, JSON.stringify({ rows: {}, invoices: [] }, null, 2));
+    await restoreFile(financeStatePath, JSON.stringify({ orders: [], expenses: [] }, null, 2));
+    const [row] = await createSupplierPickingRows([{
+      key: "finance-picking-test",
+      marketplace: "ozon",
+      accountName: "Ozon Test",
+      orderId: "ORDER-FIN-1",
+      postingNumber: "POST-FIN-1",
+      offerId: "FIN-SKU-1",
+      productName: "Finance Test Perfume",
+      quantity: 2,
+      supplierName: "Finance Supplier",
+      partnerId: "supplier-finance",
+      price: 950,
+      priceCurrency: "RUB",
+      ready: true,
+    }], { session: { username: "admin", role: "admin" } });
+
+    const picked = await agent
+      .patch(`/api/supplier-picking-list/${encodeURIComponent(row.key)}`)
+      .send({ status: "picked" })
+      .expect(200);
+    assert.equal(picked.body.financeOrder.offerId, "FIN-SKU-1");
+    assert.equal(picked.body.financeOrder.supplierName, "Finance Supplier");
+    assert.equal(picked.body.financeOrder.purchaseCost, 1900);
+
+    const orders = await agent
+      .get("/api/finance/orders?q=FIN-SKU-1&period=all")
+      .expect(200);
+    assert.equal(orders.body.orders.length, 1);
+    assert.equal(orders.body.orders[0].source, "supplier_picking");
+    assert.equal(orders.body.orders[0].purchaseCost, 1900);
+
+    await agent
+      .patch(`/api/supplier-picking-list/${encodeURIComponent(row.key)}`)
+      .send({ status: "open" })
+      .expect(200);
+    const afterOpen = await agent
+      .get("/api/finance/orders?q=FIN-SKU-1&period=all")
+      .expect(200);
+    assert.equal(afterOpen.body.orders.length, 0);
+  } finally {
+    await restoreFile(supplierPickingListPath, pickingBackup);
+    await restoreFile(financeStatePath, financeBackup);
+  }
 });
 
 test("Yandex target lookup accepts campaign and old generated target", async () => {

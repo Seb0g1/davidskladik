@@ -19069,6 +19069,22 @@ function financeOrderProfit(row = {}) {
   return normalizeFinanceMoney(payout - purchase - fees - tax - penalties - refunds, 0);
 }
 
+function financeOrderIdForPicking(row = {}) {
+  const key = cleanText(row.key || supplierCartItemKey(row));
+  return `picking:${crypto.createHash("sha1").update(key || crypto.randomUUID()).digest("hex")}`;
+}
+
+async function financePurchaseCostRubFromPicking(row = {}) {
+  const quantity = Math.max(1, Math.round(Number(row.quantity || 1) || 1));
+  const price = normalizeFinanceMoney(row.price, 0);
+  if (!(price > 0)) return null;
+  const currency = cleanText(row.priceCurrency || row.currency || "USD").toUpperCase();
+  if (currency === "RUB" || currency === "RUR") return normalizeFinanceMoney(price * quantity, 0);
+  const ratePayload = await getUsdRate().catch(() => ({ rate: Number(process.env.DEFAULT_USD_RATE || 95) || 95 }));
+  const usdRate = Number(ratePayload?.rate || ratePayload || process.env.DEFAULT_USD_RATE || 95) || 95;
+  return normalizeFinanceMoney(price * usdRate * quantity, 0);
+}
+
 function normalizeFinanceExpense(input = {}) {
   const spentAt = toDateOrNull(input.spentAt || input.spent_at) || new Date();
   return {
@@ -19207,6 +19223,101 @@ async function writeFinanceJsonFallback(state = {}) {
   await fs.writeFile(temporaryPath, JSON.stringify(payload, null, 2), "utf8");
   await fs.rename(temporaryPath, financeStatePath);
   return payload;
+}
+
+async function upsertFinanceOrderFromPickingRow(row = {}, request = null) {
+  const normalized = normalizeSupplierPickingRow(row);
+  const purchaseCost = await financePurchaseCostRubFromPicking(normalized);
+  const financeOrder = normalizeFinanceOrder({
+    id: financeOrderIdForPicking(normalized),
+    marketplace: normalized.marketplace,
+    target: normalized.accountName || normalized.marketplace,
+    orderId: normalized.orderId || normalized.postingNumber || normalized.key,
+    postingNumber: normalized.postingNumber,
+    offerId: normalized.offerId,
+    productName: normalized.productName,
+    quantity: normalized.quantity,
+    purchaseCost,
+    supplierName: normalized.supplierName,
+    partnerId: normalized.partnerId,
+    source: "supplier_picking",
+    status: "purchase_confirmed",
+    receivedAt: normalized.pickedAt || new Date().toISOString(),
+    raw: { pickingKey: normalized.key, requestDocId: normalized.requestDocId, requestRowId: normalized.requestRowId, picking: normalized },
+  });
+  if (shouldUsePostgresStorage()) {
+    try {
+      const row = await getPrisma().financeOrder.upsert({
+        where: { id: financeOrder.id },
+        create: {
+          id: financeOrder.id,
+          marketplace: financeOrder.marketplace || null,
+          target: financeOrder.target || null,
+          orderId: financeOrder.orderId,
+          postingNumber: financeOrder.postingNumber || null,
+          offerId: financeOrder.offerId || null,
+          productName: financeOrder.productName || null,
+          quantity: financeOrder.quantity,
+          purchaseCost: financeOrder.purchaseCost,
+          profitAmount: financeOrderProfit(financeOrder),
+          supplierName: financeOrder.supplierName || null,
+          partnerId: financeOrder.partnerId || null,
+          source: financeOrder.source,
+          status: financeOrder.status,
+          receivedAt: toDateOrNull(financeOrder.receivedAt),
+          raw: financeOrder.raw,
+        },
+        update: {
+          marketplace: financeOrder.marketplace || null,
+          target: financeOrder.target || null,
+          orderId: financeOrder.orderId,
+          postingNumber: financeOrder.postingNumber || null,
+          offerId: financeOrder.offerId || null,
+          productName: financeOrder.productName || null,
+          quantity: financeOrder.quantity,
+          purchaseCost: financeOrder.purchaseCost,
+          profitAmount: financeOrderProfit(financeOrder),
+          supplierName: financeOrder.supplierName || null,
+          partnerId: financeOrder.partnerId || null,
+          source: financeOrder.source,
+          status: financeOrder.status,
+          receivedAt: toDateOrNull(financeOrder.receivedAt),
+          raw: financeOrder.raw,
+        },
+      });
+      await appendAudit(request || { session: { username: "system", role: "admin" } }, "finance.order.purchase_from_picking", {
+        entityType: "finance_order",
+        entityId: financeOrder.id,
+        newValue: financeOrder,
+      }).catch((error) => logger.warn("finance picking audit failed", { detail: error?.message || String(error) }));
+      return financeOrderFromPostgres(row);
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("finance picking postgres write failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+  const state = await readFinanceJsonFallback();
+  const nextOrders = [financeOrder, ...state.orders.filter((item) => item.id !== financeOrder.id)];
+  await writeFinanceJsonFallback({ ...state, orders: nextOrders });
+  return financeOrder;
+}
+
+async function removeFinanceOrderForPickingRow(row = {}) {
+  const financeOrderId = financeOrderIdForPicking(row);
+  if (shouldUsePostgresStorage()) {
+    try {
+      await getPrisma().financeOrder.delete({ where: { id: financeOrderId } });
+      return { removed: true, source: "postgres", id: financeOrderId };
+    } catch (error) {
+      if (error?.code === "P2025") return { removed: false, source: "postgres", id: financeOrderId };
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("finance picking postgres delete failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+  const state = await readFinanceJsonFallback();
+  const nextOrders = state.orders.filter((item) => item.id !== financeOrderId);
+  if (nextOrders.length !== state.orders.length) await writeFinanceJsonFallback({ ...state, orders: nextOrders });
+  return { removed: nextOrders.length !== state.orders.length, source: "json", id: financeOrderId };
 }
 
 function financePeriodWhere(period = "30d", field = "createdAt") {
@@ -22125,13 +22236,21 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       await writeSupplierCartState(cartState);
     }
 
+    let financeOrder = null;
+    if (status === "picked") {
+      financeOrder = await upsertFinanceOrderFromPickingRow(nextRow, request);
+    } else if (current.status === "picked") {
+      await removeFinanceOrderForPickingRow(current);
+    }
+
     await appendAudit(request, `supplier_picking.${status === "picked" ? "picked" : status === "missing" ? "missing" : "status_update"}`, {
       entityType: "supplier_picking",
       entityId: key,
       oldValue: current,
       newValue: nextRow,
+      financeOrderId: financeOrder?.id || null,
     });
-    response.json({ ok: true, row: nextRow });
+    response.json({ ok: true, row: nextRow, financeOrder });
   } catch (error) {
     next(error);
   }
