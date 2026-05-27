@@ -20,6 +20,7 @@
     "inspect:app-db": "node scripts/ops-diagnose.cjs",
     "ops:diagnose": "node scripts/ops-diagnose.cjs",
     "ops:predeploy": "node scripts/predeploy-check.cjs",
+    "ops:postdeploy": "node scripts/postdeploy-diagnose.cjs",
     "inspect:pm-db": "node scripts/inspect-db.js",
     "test": "node --test --test-timeout=120000 test/smoke.test.cjs",
     "test:unit": "node --test --test-timeout=60000 test/smoke.test.cjs",

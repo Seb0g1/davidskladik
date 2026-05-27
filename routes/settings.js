@@ -16,6 +16,7 @@ function registerSettingsRoutes(app, deps) {
     openaiTextModel,
     priceAffectingSettingsChanged,
     queueImmediateAutoPricePush,
+    queueAuthoritativePriceReprice,
     appendAudit,
     logger,
     normalizeOpenAiImageError,
@@ -75,9 +76,23 @@ async function saveSettingsHandler(request, response, next) {
     });
     let priceRepriceQueued = false;
     let priceRepriceQueueError = "";
+    let priceRepriceQueue = null;
     if (shouldReprice) {
       try {
-        queueImmediateAutoPricePush([], "settings_price_update", { force: true });
+        if (typeof queueAuthoritativePriceReprice === "function") {
+          priceRepriceQueue = await queueAuthoritativePriceReprice({
+            marketplace: "all",
+            reason: "settings_price_update",
+            sourceEvent: "settings.update",
+            force: true,
+            onlyChanged: false,
+            refreshMarketplacePrices: true,
+            livePriceMaster: true,
+            verify: true,
+          });
+        } else {
+          queueImmediateAutoPricePush([], "settings_price_update", { force: true });
+        }
         priceRepriceQueued = true;
       } catch (queueError) {
         priceRepriceQueueError = queueError?.message || String(queueError);
@@ -90,6 +105,9 @@ async function saveSettingsHandler(request, response, next) {
       priceAffectingChanged: shouldReprice,
       priceRepriceQueued,
       priceRepriceReason: shouldReprice ? "settings_price_update" : "no_price_affecting_changes",
+      priceIntentId: priceRepriceQueue?.priceIntentId || null,
+      queued: priceRepriceQueue?.queued || 0,
+      queuedBatches: priceRepriceQueue?.queuedBatches || 0,
       priceRepriceQueueError,
     });
   } catch (error) {
@@ -174,8 +192,22 @@ app.post("/api/settings/pricing/adjust-percent", requireAdmin, async (request, r
     });
     let priceRepriceQueued = false;
     let priceRepriceQueueError = "";
+    let priceRepriceQueue = null;
     try {
-      queueImmediateAutoPricePush([], "settings_price_adjust_percent", { force: true });
+      if (typeof queueAuthoritativePriceReprice === "function") {
+        priceRepriceQueue = await queueAuthoritativePriceReprice({
+          marketplace,
+          reason: "settings_price_adjust_percent",
+          sourceEvent: "settings.pricing_adjust_percent",
+          force: true,
+          onlyChanged: false,
+          refreshMarketplacePrices: true,
+          livePriceMaster: true,
+          verify: true,
+        });
+      } else {
+        queueImmediateAutoPricePush([], "settings_price_adjust_percent", { force: true });
+      }
       priceRepriceQueued = true;
     } catch (queueError) {
       priceRepriceQueueError = queueError?.message || String(queueError);
@@ -189,6 +221,9 @@ app.post("/api/settings/pricing/adjust-percent", requireAdmin, async (request, r
       newValue,
       priceRepriceQueued,
       priceRepriceReason: "settings_price_adjust_percent",
+      priceIntentId: priceRepriceQueue?.priceIntentId || null,
+      queued: priceRepriceQueue?.queued || 0,
+      queuedBatches: priceRepriceQueue?.queuedBatches || 0,
       priceRepriceQueueError,
     });
   } catch (error) {

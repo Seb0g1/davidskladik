@@ -118,6 +118,10 @@ const priceMasterDeltaMaxChanges = Math.max(1, Number(process.env.PRICEMASTER_DE
 const priceMasterDeltaMaxProducts = Math.max(1, Number(process.env.PRICEMASTER_DELTA_MAX_PRODUCTS || 2000) || 2000);
 const autoPriceReconcileMaxProducts = Math.max(1, Number(process.env.AUTO_PRICE_RECONCILE_MAX_PRODUCTS || 12000) || 12000);
 const autoPriceReconcileBatchSize = Math.max(50, Math.min(1000, Number(process.env.AUTO_PRICE_RECONCILE_BATCH_SIZE || 500) || 500));
+const authoritativeRepriceBatchSize = Math.max(25, Math.min(500, Number(process.env.AUTHORITATIVE_REPRICE_BATCH_SIZE || 200) || 200));
+const autoPricePmTimeoutMs = Math.max(1500, Number(process.env.AUTO_PRICE_PM_TIMEOUT_MS || 10000) || 10000);
+const autoPricePmTimeoutRetryMs = Math.max(10000, Number(process.env.AUTO_PRICE_PM_TIMEOUT_RETRY_MS || 120000) || 120000);
+const autoPricePmTimeoutRetryAttempts = Math.max(0, Math.min(5, Number(process.env.AUTO_PRICE_PM_TIMEOUT_RETRY_ATTEMPTS || 2) || 2));
 const dailySyncTime = process.env.DAILY_SYNC_TIME || "11:00";
 const dailySyncEnabled = process.env.DAILY_SYNC_ENABLED !== "false";
 const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
@@ -135,6 +139,9 @@ const ozonUnarchiveQueueBatchLimit = Math.max(1, Math.min(1000, Number(process.e
 const ozonUnarchiveQueueAutoEnabled = process.env.OZON_UNARCHIVE_QUEUE_AUTO_ENABLED !== "false";
 const ozonUnarchiveQueueAutoIntervalMinutes = Math.max(5, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INTERVAL_MINUTES || 30) || 30);
 const ozonUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 180) || 180);
+const ozonPriceVerifyDelayMs = Math.max(0, Number(process.env.OZON_PRICE_VERIFY_DELAY_MS || 30000) || 30000);
+const ozonPriceVerifyAttempts = Math.max(1, Math.min(10, Number(process.env.OZON_PRICE_VERIFY_ATTEMPTS || 5) || 5));
+const ozonPriceVerifyToleranceRub = Math.max(0, Number(process.env.OZON_PRICE_VERIFY_TOLERANCE_RUB || 0) || 0);
 const stateWriteTransactionTimeoutMs = Math.max(10000, Number(process.env.STATE_WRITE_TRANSACTION_TIMEOUT_MS || 30000) || 30000);
 const stateWriteTransactionMaxWaitMs = Math.max(5000, Number(process.env.STATE_WRITE_TRANSACTION_MAX_WAIT_MS || 10000) || 10000);
 const priceRetryQueueWriteChunkSize = Math.max(10, Math.min(500, Number(process.env.PRICE_RETRY_QUEUE_WRITE_CHUNK_SIZE || 100) || 100));
@@ -321,6 +328,9 @@ const detectedPriceAutoPushDefaultCooldownMs = 15 * 60_000;
 const detectedPriceAutoPushDefaultBatchCooldownMs = 30_000;
 let priceRetryTimer = null;
 let priceRetryRunning = false;
+const slowRequestThresholdMs = Math.max(500, Number(process.env.SLOW_REQUEST_LOG_THRESHOLD_MS || 3000) || 3000);
+const recentSlowRequestsMax = Math.max(10, Math.min(200, Number(process.env.SLOW_REQUEST_RECENT_MAX || 50) || 50));
+const recentSlowRequests = [];
 let supplierCartAutoTimer = null;
 let supplierCartAutoRunning = false;
 let supplierCartAutoNextRunAt = null;
@@ -407,6 +417,26 @@ function warehouseProductIndexFor(warehouse = {}) {
 
 app.use(express.json({ limit: "1mb" }));
 app.use(compression({ threshold: 1024 }));
+app.use((request, response, next) => {
+  const startedAt = process.hrtime.bigint();
+  response.on("finish", () => {
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+    if (elapsedMs < slowRequestThresholdMs && response.statusCode < 500) return;
+    const entry = {
+      at: new Date().toISOString(),
+      method: request.method,
+      path: request.originalUrl || request.url,
+      statusCode: response.statusCode,
+      elapsedMs: Math.round(elapsedMs),
+    };
+    recentSlowRequests.push(entry);
+    while (recentSlowRequests.length > recentSlowRequestsMax) recentSlowRequests.shift();
+    if (elapsedMs >= slowRequestThresholdMs) {
+      logger.warn("slow request", entry);
+    }
+  });
+  next();
+});
 
 const uploadImages = multer({
   storage: multer.memoryStorage(),
@@ -1032,6 +1062,23 @@ async function collectHealthDetails({ deep = false } = {}) {
     yandex: {
       configured: getYandexShops().length > 0,
       shops: getYandexShops().length,
+    },
+    runtime: {
+      ok: true,
+      pid: process.pid,
+      node: process.version,
+      uptimeSec: Math.round(process.uptime()),
+      memory: (() => {
+        const memory = process.memoryUsage();
+        return {
+          rssMb: Math.round(memory.rss / 1024 / 1024),
+          heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+          heapTotalMb: Math.round(memory.heapTotal / 1024 / 1024),
+          externalMb: Math.round(memory.external / 1024 / 1024),
+        };
+      })(),
+      slowRequestThresholdMs,
+      recentSlowRequests: recentSlowRequests.slice(-10),
     },
     automation: {
       pricePush: {
@@ -3625,6 +3672,57 @@ async function sendOzonPricePayloadChunks(account, prices) {
     }
   }
   return { results, failed };
+}
+
+async function verifyOzonPriceApplied(account, entries = [], { priceIntentId = "", sentAt = new Date().toISOString(), delayMs = ozonPriceVerifyDelayMs, attempts = ozonPriceVerifyAttempts } = {}) {
+  const pending = new Map((Array.isArray(entries) ? entries : [])
+    .filter((entry) => entry?.payload?.offer_id && Number(entry.payload.price) > 0)
+    .map((entry) => [String(entry.payload.offer_id), entry]));
+  const verified = [];
+  const failed = [];
+  if (!pending.size) return { verified, failed };
+  const maxAttempts = Math.max(1, Number(attempts || 1) || 1);
+  const waitMs = Math.max(0, Number(delayMs || 0) || 0);
+  for (let attempt = 1; attempt <= maxAttempts && pending.size; attempt += 1) {
+    if (waitMs > 0) await sleep(waitMs);
+    const offerIds = Array.from(pending.keys());
+    let priceMap = new Map();
+    try {
+      priceMap = await getOzonPriceMap(offerIds, account);
+    } catch (error) {
+      if (attempt >= maxAttempts) {
+        for (const entry of pending.values()) {
+          const verifyError = new Error(error?.message || "ozon_price_verify_failed");
+          verifyError.code = "ozon_price_verify_failed";
+          failed.push({ ...entry, error: verifyError, verificationAttempts: attempt });
+        }
+        pending.clear();
+      }
+      continue;
+    }
+    for (const [offerId, entry] of Array.from(pending.entries())) {
+      const details = normalizeOzonPriceDetails(getOzonOfferMapValue(priceMap, offerId) || priceMap.get(offerId) || {});
+      const cabinetPrice = roundPrice(pickOzonCabinetListedPrice(details) || details.currentPrice || details.marketingSellerPrice || 0);
+      const requestedPrice = roundPrice(entry.payload.price);
+      const applied = requestedPrice > 0 && cabinetPrice > 0 && Math.abs(cabinetPrice - requestedPrice) <= ozonPriceVerifyToleranceRub;
+      if (!applied) continue;
+      verified.push({
+        ...entry,
+        verifiedPrice: cabinetPrice,
+        verifiedAt: new Date().toISOString(),
+        verificationAttempts: attempt,
+        priceIntentId,
+        sentAt,
+      });
+      pending.delete(offerId);
+    }
+  }
+  for (const entry of pending.values()) {
+    const error = new Error("ozon_price_not_applied");
+    error.code = "ozon_price_not_applied";
+    failed.push({ ...entry, error, verificationAttempts: maxAttempts });
+  }
+  return { verified, failed };
 }
 
 function normalizeOzonWarehouse(input = {}) {
@@ -8004,12 +8102,54 @@ async function writeOzonUnarchiveQueue(queue = {}) {
       logger.warn("write ozon unarchive queue postgres failed, using JSON fallback", { detail: error?.message || String(error) });
     }
   }
+  return writeOzonUnarchiveQueueJson(payload);
+}
+
+async function writeOzonUnarchiveQueueJson(payload = {}) {
   await fs.mkdir(dataDir, { recursive: true });
   await writeOzonUnarchiveDailyState(payload.daily);
   const tmpPath = `${ozonUnarchiveQueuePath}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
   await fs.rename(tmpPath, ozonUnarchiveQueuePath);
   return payload;
+}
+
+function pickOzonUnarchiveQueueItems(queue = {}, products = []) {
+  const wanted = new Set((Array.isArray(products) ? products : []).map(ozonUnarchiveQueueKey).filter(Boolean));
+  if (!wanted.size) return [];
+  return normalizeOzonUnarchiveQueue(queue).items.filter((item) => wanted.has(ozonUnarchiveQueueKey(item)));
+}
+
+async function writeOzonUnarchiveQueueDelta(queue = {}, { upsertProducts = [], removeProducts = [] } = {}) {
+  const payload = normalizeOzonUnarchiveQueue({
+    ...queue,
+    updatedAt: new Date().toISOString(),
+  });
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      const removeKeys = (Array.isArray(removeProducts) ? removeProducts : []).map(ozonUnarchiveQueueKey).filter(Boolean);
+      for (const chunk of chunkArray(removeKeys, ozonUnarchiveQueueWriteChunkSize)) {
+        await prisma.ozonUnarchiveQueueItem.deleteMany({ where: { queueKey: { in: chunk } } });
+      }
+      const rows = pickOzonUnarchiveQueueItems(payload, upsertProducts).map(ozonUnarchiveQueueItemToPostgres);
+      await writePrismaStateChunks(rows, ozonUnarchiveQueueWriteChunkSize, (data) =>
+        prisma.ozonUnarchiveQueueItem.upsert({
+          where: { queueKey: data.queueKey },
+          create: data,
+          update: ozonUnarchiveQueueItemUpdateData(data),
+        })
+      );
+      await writeOzonUnarchiveDailyState(payload.daily);
+      if (!jsonFallbackEnabled()) return payload;
+      if (stateJsonBackupOnPostgresWrite) return writeOzonUnarchiveQueueJson(payload);
+      return payload;
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("write ozon unarchive queue delta postgres failed, using JSON fallback", { detail: error?.message || String(error) });
+    }
+  }
+  return writeOzonUnarchiveQueueJson(payload);
 }
 
 function ozonUnarchiveDailyUsed(queue = {}, target = "", date = new Date()) {
@@ -10890,6 +11030,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     if (nextPrice > 0 && maxAuto > 0 && nextPrice > maxAuto) nextPrice = maxAuto;
     const currentPrice = priceMap.get(product.id) || persistedCurrentPrice;
     const ozonMinPrice = product.marketplace === "ozon" ? minPriceMap.get(product.id) || null : null;
+    const lastPriceSend = product.marketplace === "ozon" ? product.lastOzonPriceSend : product.lastYandexPriceSend;
 
     return {
       ...product,
@@ -10919,6 +11060,12 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       currentPrice,
       ozonMinPrice,
       nextPrice,
+      lastRequestedPrice: Number(lastPriceSend?.requestedPrice || lastPriceSend?.lastRequestedPrice || 0) || null,
+      lastVerifiedMarketplacePrice: Number(lastPriceSend?.verifiedPrice || lastPriceSend?.lastVerifiedPrice || 0) || null,
+      lastPriceRequestAt: lastPriceSend?.lastPriceRequestAt || lastPriceSend?.requestedAt || lastPriceSend?.at || null,
+      lastPriceVerifiedAt: lastPriceSend?.lastPriceVerifiedAt || lastPriceSend?.verifiedAt || null,
+      priceApplyStatus: cleanText(lastPriceSend?.priceApplyStatus || lastPriceSend?.applyStatus || lastPriceSend?.status),
+      priceIntentId: cleanText(lastPriceSend?.priceIntentId),
       changed: nextPrice > 0 && nextPrice !== currentPrice,
       ready: Boolean(selectedSupplierWithPolicy && (nextPrice > 0 || stockOnlyFallbackActive)),
       selectedSupplier: selectedSupplierWithPolicy,
@@ -11012,7 +11159,7 @@ async function buildWarehouseViewCached(params = {}) {
   return build;
 }
 
-async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [], { refreshPrices = false, persistMutations = false, livePriceMaster = false, batchPriceMaster = false, usdRate } = {}) {
+async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [], { refreshPrices = false, persistMutations = false, livePriceMaster = false, batchPriceMaster = false, usdRate, priceMasterTimeoutMs } = {}) {
   const wanted = new Set((productIds || []).map((id) => String(id)));
   if (!wanted.size) return [];
   const appSettings = await readAppSettings();
@@ -11021,14 +11168,14 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
   const productsToBuild = (warehouse.products || []).filter((product) => wanted.has(String(product.id)));
   if (!productsToBuild.length) return [];
   const links = productsToBuild.flatMap((product) => product.links || []);
-  const priceMasterTimeoutMs = Number(process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 1500);
+  const effectivePriceMasterTimeoutMs = Math.max(500, Number(priceMasterTimeoutMs || process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 1500) || 1500);
   let priceMasterSourceError = null;
   let matchMap = new Map();
   if (livePriceMaster) {
     if (batchPriceMaster) {
       matchMap = await Promise.race([
-        getBatchPriceMasterMatchesForLinks(links, warehouse.suppliers, rate, { timeoutMs: priceMasterTimeoutMs }),
-        promiseTimeout(priceMasterTimeoutMs + 100, "warehouse_page_pm_timeout"),
+        getBatchPriceMasterMatchesForLinks(links, warehouse.suppliers, rate, { timeoutMs: effectivePriceMasterTimeoutMs }),
+        promiseTimeout(effectivePriceMasterTimeoutMs + 100, "warehouse_page_pm_timeout"),
       ]).catch((error) => {
         priceMasterSourceError = error?.message || String(error);
         logger.warn("warehouse page PriceMaster enrichment skipped", { detail: priceMasterSourceError });
@@ -11143,6 +11290,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
     if (nextPrice > 0 && maxAuto > 0 && nextPrice > maxAuto) nextPrice = maxAuto;
     const currentPrice = priceMap.get(product.id) || persistedCurrentPrice;
     const ozonMinPrice = product.marketplace === "ozon" ? minPriceMap.get(product.id) || null : null;
+    const lastPriceSend = product.marketplace === "ozon" ? product.lastOzonPriceSend : product.lastYandexPriceSend;
 
     return {
       ...product,
@@ -11172,6 +11320,12 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       currentPrice,
       ozonMinPrice,
       nextPrice,
+      lastRequestedPrice: Number(lastPriceSend?.requestedPrice || lastPriceSend?.lastRequestedPrice || 0) || null,
+      lastVerifiedMarketplacePrice: Number(lastPriceSend?.verifiedPrice || lastPriceSend?.lastVerifiedPrice || 0) || null,
+      lastPriceRequestAt: lastPriceSend?.lastPriceRequestAt || lastPriceSend?.requestedAt || lastPriceSend?.at || null,
+      lastPriceVerifiedAt: lastPriceSend?.lastPriceVerifiedAt || lastPriceSend?.verifiedAt || null,
+      priceApplyStatus: cleanText(lastPriceSend?.priceApplyStatus || lastPriceSend?.applyStatus || lastPriceSend?.status),
+      priceIntentId: cleanText(lastPriceSend?.priceIntentId),
       changed: nextPrice > 0 && nextPrice !== currentPrice,
       ready: Boolean(selectedSupplierWithPolicy && (nextPrice > 0 || stockOnlyFallbackActive)),
       selectedSupplier: selectedSupplierWithPolicy,
@@ -11245,6 +11399,7 @@ async function buildFreshWarehouseProducts(productIds = [], {
   livePriceMaster = false,
   batchPriceMaster = false,
   usdRate,
+  priceMasterTimeoutMs,
 } = {}) {
   const warehouse = await readWarehouse();
   return buildFreshWarehouseProductsForWarehouse(warehouse, productIds, {
@@ -11253,6 +11408,7 @@ async function buildFreshWarehouseProducts(productIds = [], {
     livePriceMaster,
     batchPriceMaster,
     usdRate,
+    priceMasterTimeoutMs,
   });
 }
 
@@ -13401,6 +13557,7 @@ registerSettingsRoutes(app, {
   openaiTextModel,
   priceAffectingSettingsChanged,
   queueImmediateAutoPricePush,
+  queueAuthoritativePriceReprice,
   appendAudit,
   logger,
   normalizeOpenAiImageError,
@@ -13427,30 +13584,95 @@ registerSystemMediaRoutes(app, {
   logger,
 });
 
+async function readSalesAutomationSystemSummary() {
+  if (!shouldUsePostgresStorage()) return { source: "disabled", total: 0 };
+  try {
+    const prisma = getPrisma();
+    const [total, latest, reasonGroups, statusGroups] = await Promise.all([
+      prisma.salesAutomationSkuState.count(),
+      prisma.salesAutomationSkuState.findFirst({
+        orderBy: { updatedAt: "desc" },
+        select: {
+          marketplace: true,
+          target: true,
+          offerId: true,
+          reason: true,
+          priceStatus: true,
+          stockStatus: true,
+          lastCalculatedAt: true,
+          lastPriceSentAt: true,
+          lastStockSentAt: true,
+          lastError: true,
+          updatedAt: true,
+          raw: true,
+        },
+      }),
+      prisma.salesAutomationSkuState.groupBy({ by: ["reason"], _count: { _all: true } }),
+      prisma.salesAutomationSkuState.groupBy({ by: ["priceStatus"], _count: { _all: true } }),
+    ]);
+    const reasons = Object.fromEntries(reasonGroups.map((row) => [row.reason || "unknown", row._count._all]));
+    const priceStatuses = Object.fromEntries(statusGroups.map((row) => [String(row.priceStatus || "unknown"), row._count._all]));
+    const latestRaw = latest?.raw && typeof latest.raw === "object" && !Array.isArray(latest.raw) ? latest.raw : {};
+    return {
+      source: "postgres",
+      total,
+      reasons,
+      priceStatuses,
+      pmTimeout: Number(reasons.pm_live_timeout || 0),
+      queued: Number(reasons.queued || 0),
+      verificationPending: Number(reasons.verification_pending || 0),
+      notApplied: Number(reasons.ozon_price_not_applied || 0),
+      lastCalculatedAt: latest?.lastCalculatedAt?.toISOString?.() || null,
+      lastPriceSentAt: latest?.lastPriceSentAt?.toISOString?.() || null,
+      latest: latest ? {
+        marketplace: latest.marketplace,
+        target: latest.target,
+        offerId: latest.offerId,
+        reason: latest.reason,
+        priceStatus: latest.priceStatus,
+        stockStatus: latest.stockStatus,
+        priceApplyStatus: latestRaw.priceApplyStatus || latestRaw.applyStatus || null,
+        priceIntentId: latestRaw.priceIntentId || null,
+        updatedAt: latest.updatedAt?.toISOString?.() || null,
+        lastError: latest.lastError || "",
+      } : null,
+    };
+  } catch (error) {
+    return { source: "postgres", total: 0, error: error?.message || String(error) };
+  }
+}
+
 app.get("/api/system/status", requireAdmin, async (_request, response, next) => {
   try {
-    const [health, dailySync, priceRetry, ozonQueue, operations] = await Promise.all([
+    const [health, dailySync, priceRetry, ozonQueue, operations, salesAutomation] = await Promise.all([
       collectHealthDetails({ deep: true }).catch((error) => ({ ok: false, error: error?.message || String(error) })),
       readDailySyncState().catch((error) => ({ status: "error", error: error?.message || String(error) })),
       readPriceRetryQueue().catch((error) => ({ items: [], error: error?.message || String(error) })),
       readOzonUnarchiveQueue().catch((error) => ({ items: [], error: error?.message || String(error) })),
       readOperationJobs(20).catch((error) => ({ jobs: [], error: error?.message || String(error) })),
+      readSalesAutomationSystemSummary(),
     ]);
     const jobs = Array.isArray(operations.jobs) ? operations.jobs : Array.isArray(operations) ? operations : [];
+    const activeJobs = Array.from(activeOperationJobs.values()).map(operationJobPublic).slice(0, 20);
     response.json({
       ok: health.ok !== false,
       time: new Date().toISOString(),
       health,
+      runtime: health.components?.runtime || null,
       dailySync,
+      salesAutomation,
       queues: {
         priceRetry: { total: Array.isArray(priceRetry.items) ? priceRetry.items.length : 0, updatedAt: priceRetry.updatedAt || null, error: priceRetry.error || "" },
         ozonUnarchive: ozonUnarchiveQueuePublic(ozonQueue, { limit: 20 }),
+        marketplace: health.components?.redis?.counts || null,
       },
       operations: {
+        active: activeJobs,
         latest: jobs.slice(0, 10),
         failed: jobs.filter((job) => ["failed", "error"].includes(cleanText(job.status).toLowerCase())).slice(0, 10),
         error: operations.error || "",
       },
+      slowRequests: recentSlowRequests.slice(-20),
     });
   } catch (error) {
     next(error);
@@ -13577,7 +13799,7 @@ app.post("/api/warehouse/brands/rebuild-index", requireAdmin, async (request, re
   }
 });
 
-async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarchiveQueueBatchLimit, force = false } = {}) {
+async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarchiveQueueBatchLimit, force = false, queueRunId = "" } = {}) {
   if (ozonUnarchiveQueueAutoRunning) {
     return {
       ok: true,
@@ -13613,6 +13835,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       const empty = {
         ok: true,
         source,
+        queueRunId,
         startedAt,
         finishedAt: new Date().toISOString(),
         selected: 0,
@@ -13621,6 +13844,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       };
       ozonUnarchiveQueueAutoLastResult = {
         source,
+        queueRunId,
         selected: 0,
         recovered: 0,
         unarchivePending: publicQueue.due,
@@ -13640,9 +13864,10 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
     const finishedAt = new Date().toISOString();
     ozonUnarchiveQueueAutoLastResult = {
       source,
-        selected: ids.length,
-        force: Boolean(force),
-        recovered: Number(result.recovered || 0),
+      queueRunId,
+      selected: ids.length,
+      force: Boolean(force),
+      recovered: Number(result.recovered || 0),
       restoredStocks: Number(result.restoredStocks || 0),
       unarchived: Number(result.unarchived || 0),
       unarchivePending: Number(result.unarchivePending || 0),
@@ -13655,6 +13880,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
     return {
       ok: true,
       source,
+      queueRunId,
       startedAt,
       finishedAt,
       selected: ids.length,
@@ -13668,6 +13894,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
     const finishedAt = new Date().toISOString();
     ozonUnarchiveQueueAutoLastResult = {
       source,
+      queueRunId,
       selected: 0,
       error: error?.message || String(error),
       at: finishedAt,
@@ -13695,16 +13922,35 @@ app.get("/api/ozon/unarchive-queue", requireAdmin, async (request, response, nex
 function enqueueOzonUnarchiveQueueProcess({ request, source, limit, force }) {
   if (ozonUnarchiveQueueAutoRunning || ozonUnarchiveQueueProcessQueued) return false;
   const queuedAt = new Date().toISOString();
+  const queueRunId = crypto.randomUUID();
   const queuedThroughBullmq = Boolean(marketplaceQueue);
   ozonUnarchiveQueueProcessQueued = true;
   ozonUnarchiveQueueAutoLastResult = {
     source,
+    queueRunId,
     selected: 0,
     queued: true,
     at: queuedAt,
   };
   setTimeout(() => {
-    queueMarketplaceJob("ozon-unarchive-queue-process", { source, limit, force }, { priority: 1 })
+    if (
+      ozonUnarchiveQueueProcessQueued
+      && !ozonUnarchiveQueueAutoRunning
+      && ozonUnarchiveQueueAutoLastResult?.queueRunId === queueRunId
+    ) {
+      ozonUnarchiveQueueProcessQueued = false;
+      ozonUnarchiveQueueAutoLastResult = {
+        source,
+        queueRunId,
+        selected: 0,
+        error: "queue_start_timeout",
+        at: new Date().toISOString(),
+      };
+      logger.warn("ozon queue process did not start in time", { source, queueRunId });
+    }
+  }, 5 * 60 * 1000).unref?.();
+  setTimeout(() => {
+    queueMarketplaceJob("ozon-unarchive-queue-process", { source, limit, force, queueRunId }, { priority: 1 })
       .then((result) => {
         if (result && typeof result === "object" && Object.prototype.hasOwnProperty.call(result, "selected") && !result.skipped) {
           appendAudit(request, "ozon.unarchive_queue.process", {
@@ -13828,51 +14074,25 @@ app.post("/api/warehouse/products/:id/repair", requireAdmin, async (request, res
     const seed = (initialWarehouse.products || []).find((product) => String(product.id) === String(request.params.id));
     if (!seed) return response.status(404).json({ error: "Warehouse product not found." });
     const initialGroup = expandWarehouseProductsToGroups(initialWarehouse.products || [], [seed]);
-    const initialIds = initialGroup.map((product) => String(product.id)).filter(Boolean);
-    return await withWarehouseProductMutationLock(initialIds, async () => {
-      const warehouse = await readWarehouse();
-      const currentSeed = (warehouse.products || []).find((product) => String(product.id) === String(request.params.id));
-      if (!currentSeed) return response.status(404).json({ error: "Warehouse product not found." });
-      const groupProducts = expandWarehouseProductsToGroups(warehouse.products || [], [currentSeed]);
-      const productIds = groupProducts.map((product) => String(product.id)).filter(Boolean);
-      const syncResult = syncWarehouseProductGroupLinks(groupProducts, { now: new Date().toISOString(), username: requestUsername(request) });
-      if ((syncResult.changedProducts || []).length) {
-        await writeWarehouseProductPatch(syncResult.changedProducts, { reason: "warehouse_product_repair_links_sync" });
-      }
-      const priceResult = await sendWarehousePrices({
-        productIds,
-        dryRun: false,
-        force: true,
-        onlyChanged: false,
-        refreshMarketplacePrices: true,
-        livePriceMaster: true,
-        marketplace: "all",
-      });
-      const freshProducts = await buildFreshWarehouseProducts(productIds, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true });
-      const recoveryResult = await runSupplierRecoveryAutomation({ products: freshProducts }, { productIds, source: "product_repair", force: true });
-      const diagnostics = await buildWarehouseSkuDiagnostics(currentSeed.offerId || currentSeed.sku || currentSeed.productId || currentSeed.id, { limit: 50, auditLimit: 30 });
-      const payload = {
-        ok: true,
-        productIds,
-        linksSynced: (syncResult.changedProducts || []).length,
-        priceSent: Number(priceResult.sent || priceResult.items?.length || 0) || 0,
-        stockSent: Number(priceResult.stockSent || recoveryResult.restoredStocks || 0) || 0,
-        unarchiveStatus: recoveryResult.unarchivePending ? "pending" : "done",
-        pending: Number(recoveryResult.unarchivePending || 0) > 0,
-        errors: [...(priceResult.failed || []), ...(recoveryResult.errors || [])],
-        nextRetryAt: recoveryResult.nextRetryAt || null,
-        priceResult,
-        recoveryResult,
-        diagnostics,
-      };
-      response.json(payload);
-      appendAudit(request, "warehouse.product.repair", {
-        productId: currentSeed.id,
-        offerId: currentSeed.offerId,
-        productIds,
-        result: payload,
-      }).catch((auditError) => logger.warn("product repair audit append failed", { detail: auditError?.message || String(auditError) }));
+    const productIds = initialGroup.map((product) => String(product.id)).filter(Boolean).slice(0, 100);
+    const job = await upsertOperationJob({
+      id: crypto.randomUUID(),
+      type: "problem-products-repair",
+      title: operationTitle("problem-products-repair"),
+      status: "queued",
+      user: request.session?.username || "system",
+      role: request.session?.role || "admin",
+      payload: { productIds, source: "single_product_repair" },
+      progress: 0,
     });
+    startOperationJob(job);
+    appendAudit(request, "warehouse.product.repair_queued", {
+      productId: seed.id,
+      offerId: seed.offerId,
+      productIds,
+      jobId: job.id,
+    }).catch((auditError) => logger.warn("product repair queue audit append failed", { detail: auditError?.message || String(auditError) }));
+    return response.status(202).json({ ok: true, accepted: true, productIds, job: operationJobPublic(job) });
   } catch (error) {
     next(error);
   }
@@ -17081,13 +17301,20 @@ function warehousePriceMarketplaceStats(items = [], failed = [], skipped = []) {
 function salesAutomationReason(value = "") {
   const reason = cleanText(value || "ok");
   const map = {
-    no_pricemaster_link: "no_supplier",
+    no_pricemaster_link: "no_pricemaster_link",
     not_ready: "no_supplier",
     no_next_price: "no_price",
     ozon_price_delayed: "in_retry",
     ozon_unarchive_daily_limit_queued: "ozon_limit",
     stock_only_manual_price_missing: "stock_only_manual_price_missing",
     unchanged: "unchanged",
+    unchanged_verified: "unchanged_verified",
+    queued: "queued",
+    api_accepted: "api_accepted",
+    verification_pending: "verification_pending",
+    verified: "ok",
+    ozon_price_not_applied: "ozon_price_not_applied",
+    pm_live_timeout: "pm_live_timeout",
     send_failed: "api_error",
   };
   return map[reason] || reason || "ok";
@@ -17158,35 +17385,221 @@ async function updateSalesAutomationFromPriceResult({ items = [], failed = [], s
   for (const item of items || []) {
     const failedItem = failedById.get(cleanText(item.id || item.productId));
     const stock = stockById.get(cleanText(item.id || item.productId));
+    const delayedByLimit = failedItem ? isOzonPerItemPriceLimitError({ message: failedItem.error }) : false;
+    const verificationNotApplied = failedItem?.errorCode === "ozon_price_not_applied";
+    const applyStatus = item.priceApplyStatus
+      || (failedItem
+        ? (verificationNotApplied ? "ozon_price_not_applied" : (delayedByLimit ? "ozon_price_delayed" : "api_error"))
+        : (item.marketplace === "ozon" ? "verified" : "api_accepted"));
+    const reason = failedItem
+      ? (verificationNotApplied ? "ozon_price_not_applied" : (delayedByLimit ? "in_retry" : "api_error"))
+      : "ok";
     rows.push({
       ...item,
       productId: item.productId || item.id,
       currentPrice: item.oldPrice,
       targetPrice: item.price,
       targetStock: stock?.stock ?? null,
-      priceStatus: failedItem ? (isOzonPerItemPriceLimitError({ message: failedItem.error }) ? "delayed" : "failed") : "success",
+      priceStatus: failedItem ? (delayedByLimit ? "delayed" : "failed") : "success",
       stockStatus: stock ? (stock.ok ? "success" : "failed") : "pending",
       unarchiveStatus: stock?.queuedByDailyLimit ? "delayed" : "pending",
-      reason: failedItem ? (isOzonPerItemPriceLimitError({ message: failedItem.error }) ? "in_retry" : "api_error") : "ok",
-      lastPriceSentAt: failedItem ? null : sentAt,
+      reason,
+      lastPriceSentAt: failedItem && !verificationNotApplied ? null : sentAt,
       lastStockSentAt: stock?.ok ? sentAt : null,
       lastError: failedItem?.error || stock?.error || "",
       lastCalculatedAt: sentAt,
+      priceIntentId: item.priceIntentId || "",
+      priceApplyStatus: applyStatus,
+      lastRequestedPrice: item.lastRequestedPrice ?? roundPrice(item.price),
+      lastVerifiedPrice: item.lastVerifiedPrice ?? null,
+      lastPriceRequestAt: item.lastPriceRequestAt || sentAt,
+      lastPriceVerifiedAt: item.lastPriceVerifiedAt || null,
+      verificationAttempts: item.verificationAttempts || failedItem?.verificationAttempts || 0,
     });
   }
   for (const row of skipped || []) {
+    const normalizedReason = salesAutomationReason(row.reason);
     rows.push({
       ...row,
       productId: row.productId || row.id,
-      priceStatus: row.reason === "unchanged" ? "success" : (row.reason === "ozon_price_delayed" ? "delayed" : "pending"),
+      priceStatus: normalizedReason === "unchanged_verified" || normalizedReason === "unchanged" ? "success" : (row.reason === "ozon_price_delayed" ? "delayed" : "pending"),
       stockStatus: "pending",
       unarchiveStatus: row.reason === "ozon_price_delayed" ? "delayed" : "pending",
       reason: row.reason,
       lastError: row.error || "",
       lastCalculatedAt: sentAt,
+      priceIntentId: row.priceIntentId || "",
+      priceApplyStatus: row.priceApplyStatus || normalizedReason,
+      lastRequestedPrice: row.lastRequestedPrice ?? null,
+      lastVerifiedPrice: row.lastVerifiedPrice ?? null,
+      lastPriceRequestAt: row.lastPriceRequestAt || null,
+      lastPriceVerifiedAt: row.lastPriceVerifiedAt || null,
+      verificationAttempts: row.verificationAttempts || 0,
     });
   }
   return upsertSalesAutomationSkuStates(rows);
+}
+
+function linkedWarehouseProductsForReprice(warehouse = {}, { productIds, marketplace = "all", limit = 0 } = {}) {
+  const idSet = Array.isArray(productIds) && productIds.length
+    ? new Set(productIds.map((id) => cleanText(id)).filter(Boolean))
+    : null;
+  const marketplaceFilter = cleanText(marketplace || "all").toLowerCase();
+  const rows = (Array.isArray(warehouse.products) ? warehouse.products : [])
+    .filter((product) => !idSet || idSet.has(String(product.id)))
+    .filter((product) => marketplaceFilter === "all" || cleanText(product.marketplace).toLowerCase() === marketplaceFilter)
+    .filter((product) => Array.isArray(product.links) && product.links.length)
+    .filter((product) => isWarehouseProductTargetEnabled(product));
+  const normalizedLimit = Math.max(0, Math.round(Number(limit || 0) || 0));
+  return normalizedLimit > 0 ? rows.slice(0, normalizedLimit) : rows;
+}
+
+async function markSalesAutomationPriceQueued(products = [], {
+  priceIntentId,
+  reason = "queued",
+  marketplace = "all",
+  sourceEvent = "",
+  queuedAt = new Date().toISOString(),
+} = {}) {
+  const rows = (Array.isArray(products) ? products : [])
+    .filter((product) => cleanText(product.offerId))
+    .map((product) => ({
+      productId: product.id,
+      marketplace: cleanText(product.marketplace).toLowerCase() === "yandex" ? "yandex" : "ozon",
+      target: cleanText(product.target) || "default",
+      offerId: cleanText(product.offerId),
+      currentPrice: Number(product.currentPrice || product.marketplacePrice || 0) || null,
+      targetPrice: Number(product.targetPrice || product.nextPrice || 0) || null,
+      targetStock: Number(product.targetStock || product.marketplaceState?.stock || 0) || null,
+      priceStatus: "pending",
+      stockStatus: "pending",
+      unarchiveStatus: "pending",
+      reason: "queued",
+      lastCalculatedAt: queuedAt,
+      raw: {
+        productId: product.id,
+        marketplace: product.marketplace,
+        target: product.target,
+        offerId: product.offerId,
+        priceIntentId,
+        sourceEvent,
+        requestedMarketplace: marketplace,
+        queuedAt,
+        reason,
+        priceApplyStatus: "queued",
+      },
+    }));
+  return upsertSalesAutomationSkuStates(rows);
+}
+
+function enqueueMarketplaceJobAccepted(name, data = {}, { priority = 5 } = {}) {
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return Promise.resolve(null);
+  if (marketplaceQueue) {
+    return marketplaceQueue.add(name, data, {
+      jobId: marketplaceJobId(name, data),
+      priority,
+      removeOnComplete: name === "auto-price-push" || name === "ozon-unarchive-queue-process" ? true : 2000,
+      removeOnFail: 2000,
+    }).catch((error) => {
+      logger.warn("queue add failed, scheduling inline background mode", { name, detail: error?.message || String(error) });
+      setTimeout(() => {
+        processMarketplaceJob(name, data).catch((jobError) => {
+          logger.warn("background marketplace job failed", { name, detail: jobError?.message || String(jobError) });
+        });
+      }, 0).unref?.();
+      return { accepted: true, inlineBackground: true, queueError: error?.message || String(error) };
+    });
+  }
+  setTimeout(() => {
+    processMarketplaceJob(name, data).catch((error) => {
+      logger.warn("background marketplace job failed", { name, detail: error?.message || String(error) });
+    });
+  }, 0).unref?.();
+  return Promise.resolve({ accepted: true, inlineBackground: true });
+}
+
+async function queueAuthoritativePriceReprice({
+  productIds,
+  marketplace = "all",
+  reason = "authoritative_reprice",
+  sourceEvent = "",
+  force = true,
+  onlyChanged = false,
+  refreshMarketplacePrices = true,
+  livePriceMaster = true,
+  verify = true,
+  limit = 0,
+  priority = 1,
+  repriceAttempt = 0,
+} = {}) {
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true") {
+    return { ok: true, accepted: false, disabled: true, queued: 0, queuedBatches: 0 };
+  }
+  priceMasterLinkLookupCache.clear();
+  priceMasterSearchCache.clear();
+  invalidateWarehouseViewCache();
+  const warehouse = await readWarehouse();
+  const products = linkedWarehouseProductsForReprice(warehouse, { productIds, marketplace, limit });
+  const ids = products.map((product) => String(product.id)).filter(Boolean);
+  const priceIntentId = crypto.randomUUID();
+  if (!ids.length) {
+    return { ok: true, accepted: true, priceIntentId, queued: 0, queuedBatches: 0, reason: "no_linked_products" };
+  }
+  const queuedStateProducts = products.length > 1000 ? products.slice(0, 1000) : products;
+  await markSalesAutomationPriceQueued(queuedStateProducts, { priceIntentId, reason, marketplace, sourceEvent: sourceEvent || reason })
+    .catch((error) => logger.warn("sales automation queued state update failed", { detail: error?.message || String(error), priceIntentId }));
+  if (queuedStateProducts.length < products.length) {
+    logger.info("sales automation queued state partially marked", {
+      priceIntentId,
+      marked: queuedStateProducts.length,
+      queued: products.length,
+    });
+  }
+  const batches = chunkArray(ids, authoritativeRepriceBatchSize);
+  for (const batch of batches) {
+    await enqueueMarketplaceJobAccepted(
+      "auto-price-push",
+      {
+        productIds: batch,
+        priceIntentId,
+        usdRate: undefined,
+        minDiffRub: 0,
+        minDiffPct: 0,
+        force: force === true,
+        reason,
+        sourceEvent: sourceEvent || reason,
+        marketplace,
+        onlyChanged: force === true ? false : onlyChanged === true,
+        refreshMarketplacePrices: refreshMarketplacePrices !== false,
+        livePriceMaster: livePriceMaster !== false,
+        verify: verify !== false,
+        repriceAttempt,
+        priceMasterTimeoutMs: autoPricePmTimeoutMs,
+      },
+      { priority },
+    );
+  }
+  return { ok: true, accepted: true, priceIntentId, queued: ids.length, queuedBatches: batches.length };
+}
+
+function schedulePmTimeoutRepriceRetry(productIds = [], options = {}) {
+  const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : []).map(cleanText).filter(Boolean)));
+  if (!ids.length) return;
+  const attempt = Math.max(0, Number(options.repriceAttempt || 0) || 0);
+  if (attempt >= autoPricePmTimeoutRetryAttempts) return;
+  setTimeout(() => {
+    queueAuthoritativePriceReprice({
+      productIds: ids,
+      marketplace: options.marketplace || "all",
+      reason: "pm_live_timeout_retry",
+      sourceEvent: options.sourceEvent || options.reason || "pm_live_timeout",
+      force: true,
+      onlyChanged: false,
+      verify: true,
+      repriceAttempt: attempt + 1,
+      priority: 2,
+    }).catch((error) => logger.warn("pm timeout reprice retry failed", { detail: error?.message || String(error), count: ids.length }));
+  }, autoPricePmTimeoutRetryMs).unref?.();
 }
 
 async function sendWarehousePrices({
@@ -17202,6 +17615,11 @@ async function sendWarehousePrices({
   livePriceMaster = false,
   reason = "auto-price-push",
   limit,
+  verify = true,
+  priceIntentId = "",
+  sourceEvent = "",
+  repriceAttempt = 0,
+  priceMasterTimeoutMs,
 } = {}) {
   const ids = Array.isArray(productIds) ? new Set(productIds.map(String)) : null;
   const marketplaceFilter = cleanText(marketplace || "all").toLowerCase();
@@ -17218,8 +17636,35 @@ async function sendWarehousePrices({
       usdRate: rate,
       livePriceMaster: Boolean(livePriceMaster),
       batchPriceMaster: Boolean(livePriceMaster),
+      priceMasterTimeoutMs: livePriceMaster ? (Number(priceMasterTimeoutMs || 0) || autoPricePmTimeoutMs) : undefined,
     });
   } else {
+    if (livePriceMaster && !dryRun) {
+      const authoritative = await queueAuthoritativePriceReprice({
+        marketplace: normalizedMarketplaceFilter,
+        reason,
+        sourceEvent: sourceEvent || reason,
+        force: force === true,
+        onlyChanged,
+        refreshMarketplacePrices,
+        livePriceMaster,
+        verify,
+        limit: normalizedLimit,
+        repriceAttempt,
+      });
+      return {
+        ok: true,
+        accepted: true,
+        selected: authoritative.queued,
+        sent: 0,
+        failed: 0,
+        queued: authoritative.queued,
+        queuedBatches: authoritative.queuedBatches,
+        priceIntentId: authoritative.priceIntentId,
+        skipped: [],
+        reason: "authoritative_reprice_queued",
+      };
+    }
     preview = await buildWarehouseView({ usdRate: Number(usdRate || 0) || undefined });
     selected = preview.products;
   }
@@ -17239,7 +17684,7 @@ async function sendWarehousePrices({
 
   for (const product of selected) {
     if (!product.hasLinks) {
-      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason: "no_pricemaster_link" });
+      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason: "no_pricemaster_link", priceIntentId, priceApplyStatus: "no_pricemaster_link" });
       continue;
     }
     if (shouldSendTargetStockForProduct(product)) stockItems.push(product);
@@ -17247,7 +17692,7 @@ async function sendWarehousePrices({
       const reason = product.priceSource === "timeout"
         ? "pm_live_timeout"
         : (product.hasLinks && !product.selectedSupplier ? "no_supplier" : "not_ready");
-      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason, priceSource: product.priceSource || null });
+      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason, priceSource: product.priceSource || null, priceIntentId, priceApplyStatus: reason });
       continue;
     }
     if (product.stockOnlyFallbackActive && !(Number(product.nextPrice || 0) > 0)) {
@@ -17257,11 +17702,13 @@ async function sendWarehousePrices({
         marketplace: product.marketplace,
         reason: "stock_only_manual_price_missing",
         supplier: product.selectedSupplier,
+        priceIntentId,
+        priceApplyStatus: "stock_only_manual_price_missing",
       });
       continue;
     }
     if (onlyChanged && !force && product.changed === false) {
-      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason: "unchanged" });
+      skipped.push({ id: product.id, offerId: product.offerId, marketplace: product.marketplace, reason: "unchanged_verified", priceIntentId, priceApplyStatus: "unchanged_verified" });
       continue;
     }
     const current = Number(product.currentPrice || 0);
@@ -17274,13 +17721,16 @@ async function sendWarehousePrices({
       force,
     });
     if (skipDecision.skip) {
+      const reasonCode = skipDecision.reason === "unchanged" ? "unchanged_verified" : skipDecision.reason;
       skipped.push({
         id: product.id,
         offerId: product.offerId,
         marketplace: product.marketplace,
-        reason: skipDecision.reason,
+        reason: reasonCode,
         diffRub: skipDecision.diffRub,
         diffPct: skipDecision.diffPct,
+        priceIntentId,
+        priceApplyStatus: reasonCode,
       });
       continue;
     }
@@ -17294,6 +17744,9 @@ async function sendWarehousePrices({
       markup: product.markupCoefficient,
       supplier: product.selectedSupplier,
       marketplace: product.marketplace,
+      priceIntentId,
+      sourceEvent: sourceEvent || reason,
+      priceApplyStatus: "queued",
     };
     const delayedRetry = product.marketplace === "ozon"
       ? findActiveDelayedPriceRetry(queueState.items, priceItem, new Date(sentAt))
@@ -17306,6 +17759,8 @@ async function sendWarehousePrices({
         reason: "ozon_price_delayed",
         nextRetryAt: delayedRetry.nextRetryAt,
         error: delayedRetry.error || "ozon_per_item_price_limit",
+        priceIntentId,
+        priceApplyStatus: "ozon_price_delayed",
       });
       delayedQueueUpdates.push({
         ...delayedRetry,
@@ -17318,10 +17773,25 @@ async function sendWarehousePrices({
         status: "delayed",
         retryReason: delayedRetry.retryReason || "ozon_per_item_price_limit",
         updatedAt: sentAt,
+        priceIntentId,
+        sourceEvent: sourceEvent || reason,
       });
       continue;
     }
     items.push(priceItem);
+  }
+
+  if (!dryRun) {
+    const pmTimeoutIds = skipped
+      .filter((item) => item.reason === "pm_live_timeout")
+      .map((item) => item.id || item.productId)
+      .filter(Boolean);
+    schedulePmTimeoutRepriceRetry(pmTimeoutIds, {
+      marketplace: normalizedMarketplaceFilter,
+      reason,
+      sourceEvent: sourceEvent || reason,
+      repriceAttempt,
+    });
   }
 
   if (!dryRun && items.length) {
@@ -17354,6 +17824,7 @@ async function sendWarehousePrices({
 
   const results = [];
   const failed = [];
+  const ozonVerifiedById = new Map();
   for (const account of getOzonAccounts()) {
     const targetItems = items.filter((item) => item.marketplace === "ozon" && matchesOzonTarget(item.target, account.id));
     const ozonItems = targetItems
@@ -17363,11 +17834,59 @@ async function sendWarehousePrices({
     const sent = await sendOzonPricePayloadChunks(account, ozonItems.map((entry) => entry.payload));
     results.push(...sent.results.map((entry) => ({ target: account.id, response: entry.response, count: entry.count })));
     const failedOfferIds = new Map(sent.failed.map((entry) => [String(entry.payload.offer_id), entry.error]));
+    const acceptedOzonItems = ozonItems.filter((entry) => !failedOfferIds.has(String(entry.payload.offer_id)));
+    if (acceptedOzonItems.length) {
+      await upsertSalesAutomationSkuStates(acceptedOzonItems.map((entry) => ({
+        ...entry.item,
+        productId: entry.item.productId || entry.item.id,
+        currentPrice: entry.item.oldPrice,
+        targetPrice: entry.item.price,
+        priceStatus: "pending",
+        stockStatus: "pending",
+        unarchiveStatus: "pending",
+        reason: verify === false ? "api_accepted" : "verification_pending",
+        lastPriceSentAt: sentAt,
+        lastCalculatedAt: sentAt,
+        priceIntentId,
+        priceApplyStatus: verify === false ? "api_accepted" : "verification_pending",
+        lastRequestedPrice: roundPrice(entry.item.price),
+        lastPriceRequestAt: sentAt,
+        raw: {
+          ...entry.item,
+          payload: entry.payload,
+          priceIntentId,
+          priceApplyStatus: verify === false ? "api_accepted" : "verification_pending",
+          lastRequestedPrice: roundPrice(entry.item.price),
+          lastPriceRequestAt: sentAt,
+        },
+      }))).catch((error) => logger.warn("sales automation ozon accepted update failed", { detail: error?.message || String(error) }));
+    }
+    if (acceptedOzonItems.length && verify !== false) {
+      const verification = await verifyOzonPriceApplied(account, acceptedOzonItems, { priceIntentId, sentAt });
+      for (const entry of verification.verified) {
+        ozonVerifiedById.set(String(entry.item.id), entry);
+      }
+      failed.push(...verification.failed.map((entry) => ({
+        ...entry.item,
+        error: entry.error?.message || "ozon_price_not_applied",
+        errorCode: entry.error?.code || "ozon_price_not_applied",
+        marketplace: "ozon",
+        verificationAttempts: entry.verificationAttempts,
+      })));
+    } else {
+      for (const entry of acceptedOzonItems) ozonVerifiedById.set(String(entry.item.id), {
+        ...entry,
+        verifiedPrice: roundPrice(entry.item.price),
+        verifiedAt: sentAt,
+        verificationAttempts: 0,
+      });
+    }
     failed.push(...ozonItems
       .filter((entry) => failedOfferIds.has(String(entry.payload.offer_id)))
       .map((entry) => ({
         ...entry.item,
         error: failedOfferIds.get(String(entry.payload.offer_id))?.message || "send_failed",
+        errorCode: failedOfferIds.get(String(entry.payload.offer_id))?.code || "send_failed",
         marketplace: "ozon",
       })));
   }
@@ -17397,7 +17916,9 @@ async function sendWarehousePrices({
   const stockActions = await sendTargetStocksToMarketplace(stockItems);
 
   const warehouse = await readWarehouse();
-  const successIds = new Set(items.map((item) => item.id));
+  const successIds = new Set(items
+    .filter((item) => cleanText(item.marketplace).toLowerCase() !== "ozon" || ozonVerifiedById.has(String(item.id)))
+    .map((item) => item.id));
   for (const failedItem of failed) successIds.delete(failedItem.id);
   const postgresPriceHistoryRows = [];
   const touchedProductIds = new Set();
@@ -17409,12 +17930,26 @@ async function sendWarehousePrices({
     const failedEntryForItem = failed.find((entry) => entry.id === item.id);
     const delayedByLimitForItem = failedEntryForItem ? isOzonPerItemPriceLimitError({ message: failedEntryForItem.error }) : false;
     const oldPriceAdjustedForItem = failedEntryForItem ? isOzonOldPriceLessError({ message: failedEntryForItem.error }) : false;
+    const ozonVerification = item.marketplace === "ozon" ? ozonVerifiedById.get(String(item.id)) : null;
+    const verificationNotApplied = failedEntryForItem?.errorCode === "ozon_price_not_applied";
     const sendStatus = success ? "success" : (delayedByLimitForItem ? "delayed" : (oldPriceAdjustedForItem ? "pending" : "failed"));
     const retryNextAt = failedEntryForItem
       ? new Date(new Date(sentAt).getTime() + priceRetryDelayMs(Number(failedEntryForItem.attempts || 1), { message: failedEntryForItem.error })).toISOString()
       : null;
+    const applyStatus = success
+      ? (item.marketplace === "ozon" ? "verified" : "api_accepted")
+      : (verificationNotApplied ? "ozon_price_not_applied" : (delayedByLimitForItem ? "ozon_price_delayed" : (oldPriceAdjustedForItem ? "in_retry" : "api_error")));
+    const verifiedPrice = success && item.marketplace === "ozon"
+      ? roundPrice(ozonVerification?.verifiedPrice || item.price)
+      : (success && item.marketplace === "yandex" ? roundPrice(item.price) : null);
+    item.priceApplyStatus = applyStatus;
+    item.lastRequestedPrice = roundPrice(item.price);
+    item.lastPriceRequestAt = sentAt;
+    item.lastVerifiedPrice = verifiedPrice;
+    item.lastPriceVerifiedAt = verifiedPrice ? (ozonVerification?.verifiedAt || sentAt) : null;
+    item.verificationAttempts = Number(ozonVerification?.verificationAttempts || failedEntryForItem?.verificationAttempts || 0) || 0;
     if (success) {
-      const sentPrice = roundPrice(item.price);
+      const sentPrice = verifiedPrice || roundPrice(item.price);
       product.marketplacePrice = sentPrice;
       if (item.marketplace === "ozon") {
         product.ozon = {
@@ -17472,6 +18007,17 @@ async function sendWarehousePrices({
       status: sendStatus === "failed" ? "error" : sendStatus,
       at: sentAt,
       requestedPrice: roundPrice(item.price),
+      lastRequestedPrice: roundPrice(item.price),
+      lastPriceRequestAt: sentAt,
+      lastVerifiedPrice: verifiedPrice,
+      lastPriceVerifiedAt: verifiedPrice ? (ozonVerification?.verifiedAt || sentAt) : null,
+      verifiedPrice,
+      verifiedAt: verifiedPrice ? (ozonVerification?.verifiedAt || sentAt) : null,
+      verificationAttempts: item.verificationAttempts,
+      priceApplyStatus: applyStatus,
+      applyStatus,
+      priceIntentId,
+      sourceEvent: sourceEvent || reason,
       cabinetPriceAtSend: Number(item.oldPrice || 0) || null,
       detail: failedEntryForItem ? failedEntryForItem.error : "ok",
       nextRetryAt: failedEntryForItem ? retryNextAt : null,
@@ -17565,6 +18111,11 @@ async function processMarketplaceJob(name, data = {}) {
       livePriceMaster: data.livePriceMaster === true,
       reason: data.reason || "auto-price-push",
       limit: data.limit,
+      verify: data.verify !== false,
+      priceIntentId: cleanText(data.priceIntentId || ""),
+      sourceEvent: data.sourceEvent || data.reason || "auto-price-push",
+      repriceAttempt: Number(data.repriceAttempt || 0) || 0,
+      priceMasterTimeoutMs: Number(data.priceMasterTimeoutMs || 0) || undefined,
     });
   }
   if (name === "no-supplier-automation") {
@@ -17598,6 +18149,7 @@ async function processMarketplaceJob(name, data = {}) {
       source: data.source || "ozon_unarchive_queue_auto",
       limit: data.limit || ozonUnarchiveQueueBatchLimit,
       force: data.force === true,
+      queueRunId: cleanText(data.queueRunId || data.runId),
     });
   }
   return null;
@@ -17640,60 +18192,52 @@ async function sendPriceMasterDeltaWarehousePrices(priceMaster = {}, warehouse =
     };
   }
   if (delta.fallbackFullReconcile) {
-    const batches = chunkArray(delta.productIds, autoPriceReconcileBatchSize);
-    const queuedProducts = delta.productIds.length;
-    void (async () => {
-      for (const batch of batches) {
-        try {
-          await queueMarketplaceJob(
-            "auto-price-push",
-            {
-              productIds: batch,
-              usdRate,
-              refreshMarketplacePrices: true,
-              livePriceMaster: true,
-              marketplace: "all",
-              onlyChanged: true,
-              reason: delta.reason,
-            },
-            { priority: 2 },
-          );
-        } catch (error) {
-          logger.warn("PriceMaster full reconcile price batch failed", {
-            reason: delta.reason,
-            batchSize: batch.length,
-            detail: error?.message || String(error),
-          });
-        }
-      }
-    })();
+    const queued = await queueAuthoritativePriceReprice({
+      productIds: delta.productIds,
+      marketplace: "all",
+      reason: delta.reason,
+      sourceEvent: "pricemaster_delta_full_reconcile",
+      force: false,
+      onlyChanged: true,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+      priority: 2,
+    });
     logger.info("PriceMaster delta price push queued full reconcile", {
       reason: delta.reason,
       scannedChanges: delta.scannedChanges,
-      products: queuedProducts,
-      batches: batches.length,
-      batchSize: autoPriceReconcileBatchSize,
+      products: queued.queued,
+      batches: queued.queuedBatches,
+      batchSize: authoritativeRepriceBatchSize,
     });
     return {
       ok: true,
       sent: 0,
       failed: 0,
-      queued: queuedProducts,
-      queuedBatches: batches.length,
+      queued: queued.queued,
+      queuedBatches: queued.queuedBatches,
+      priceIntentId: queued.priceIntentId,
       skipped: [],
       delta,
     };
   }
-  const result = await processMarketplaceJob("auto-price-push", {
+  const result = await queueAuthoritativePriceReprice({
     productIds: delta.productIds,
-    usdRate,
+    marketplace: "all",
+    reason: delta.reason,
+    sourceEvent: "pricemaster_delta",
+    force: false,
+    onlyChanged: options.onlyChanged !== false,
     refreshMarketplacePrices: true,
     livePriceMaster: true,
-    marketplace: "all",
-    onlyChanged: options.onlyChanged !== false,
-    reason: delta.reason,
+    verify: true,
+    priority: 1,
   });
   return {
+    sent: 0,
+    failed: 0,
+    skipped: [],
     ...result,
     delta,
   };
@@ -17757,13 +18301,31 @@ async function runTargetedBackgroundSupplierAutomations(priceMaster = {}, wareho
 }
 
 function marketplaceJobId(name, data = {}) {
+  if (name === "ozon-unarchive-queue-process") {
+    const source = cleanText(data?.source || "ozon_unarchive_queue_auto");
+    const runId = cleanText(data?.queueRunId || data?.runId || crypto.randomUUID());
+    const force = data?.force === true ? "force" : "normal";
+    const limit = Math.max(1, Math.round(Number(data?.limit || ozonUnarchiveQueueBatchLimit) || ozonUnarchiveQueueBatchLimit));
+    return crypto
+      .createHash("sha1")
+      .update(`${name}|${source}|${force}|${limit}|${runId}`)
+      .digest("hex");
+  }
   const productIds = Array.isArray(data?.productIds)
     ? data.productIds.map((id) => String(id)).filter(Boolean).sort()
     : [];
   const scope = productIds.length ? productIds.join("|") : "all";
+  const intent = cleanText(data?.priceIntentId || "");
+  const eventKey = intent || [
+    cleanText(data?.reason || ""),
+    cleanText(data?.sourceEvent || ""),
+    data?.force === true ? "force" : "normal",
+    data?.livePriceMaster === true ? "live" : "snapshot",
+    data?.marketplace || "all",
+  ].join("|");
   return crypto
     .createHash("sha1")
-    .update(`${name}|${scope}`)
+    .update(`${name}|${scope}|${eventKey}`)
     .digest("hex");
 }
 
@@ -17779,7 +18341,7 @@ function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
     return marketplaceQueue.add(name, data, {
       jobId: marketplaceJobId(name, data),
       priority,
-      removeOnComplete: name === "auto-price-push" ? true : 2000,
+      removeOnComplete: name === "auto-price-push" || name === "ozon-unarchive-queue-process" ? true : 2000,
       removeOnFail: 2000,
     }).catch((error) => {
       logger.warn("queue add failed, falling back to inline mode", { name, detail: error?.message || String(error) });
@@ -17950,23 +18512,40 @@ async function flushImmediateAutoPricePush() {
       scope: batch.ids ? batch.ids.length : "all",
       mode: queuedMode ? "bullmq" : "inline",
     });
-    const result = await queueMarketplaceJob(
-      "auto-price-push",
-      {
-        productIds: batch.ids,
-        usdRate: undefined,
-        minDiffRub: 0,
-        minDiffPct: 0,
-        force: batch.force,
-        reason: batch.reason,
+    const immediateIntentId = crypto.randomUUID();
+    const result = !batch.ids && batch.livePriceMaster
+      ? await queueAuthoritativePriceReprice({
         marketplace: batch.marketplace,
+        reason: batch.reason,
+        sourceEvent: batch.reason,
+        force: batch.force,
         onlyChanged: batch.onlyChanged,
         refreshMarketplacePrices: batch.refreshMarketplacePrices,
-        livePriceMaster: batch.livePriceMaster,
+        livePriceMaster: true,
+        verify: true,
         limit: batch.limit,
-      },
-      { priority: 1 },
-    );
+        priority: 1,
+      })
+      : await enqueueMarketplaceJobAccepted(
+        "auto-price-push",
+        {
+          productIds: batch.ids,
+          priceIntentId: immediateIntentId,
+          usdRate: undefined,
+          minDiffRub: 0,
+          minDiffPct: 0,
+          force: batch.force,
+          reason: batch.reason,
+          sourceEvent: batch.reason,
+          marketplace: batch.marketplace,
+          onlyChanged: batch.onlyChanged,
+          refreshMarketplacePrices: batch.refreshMarketplacePrices,
+          livePriceMaster: batch.livePriceMaster,
+          verify: true,
+          limit: batch.limit,
+        },
+        { priority: 1 },
+      );
     handedToQueue = queuedMode && result && typeof result === "object" && !("sent" in result);
     if (result && typeof result === "object" && "sent" in result) {
       const skippedReasons = Array.isArray(result.skipped)
@@ -18082,9 +18661,15 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
       const sent = await sendOzonPricePayloadChunks(account, ozonItems.map((entry) => entry.payload));
       results.push(...sent.results.map((entry) => ({ target: account.id, response: entry.response, count: entry.count })));
       const failedOfferIds = new Map(sent.failed.map((entry) => [String(entry.payload.offer_id), entry.error]));
+      const acceptedOzonItems = ozonItems.filter((entry) => !failedOfferIds.has(String(entry.payload.offer_id)));
+      const verification = acceptedOzonItems.length
+        ? await verifyOzonPriceApplied(account, acceptedOzonItems, { priceIntentId: `retry-${now.getTime()}`, sentAt: now.toISOString() })
+        : { verified: [], failed: [] };
+      const verificationFailedOfferIds = new Map(verification.failed.map((entry) => [String(entry.payload.offer_id), entry.error]));
       const failedOfferIdSet = new Set(failedOfferIds.keys());
+      const verificationFailedOfferIdSet = new Set(verificationFailedOfferIds.keys());
       for (const entry of ozonItems) {
-        const error = failedOfferIds.get(String(entry.payload.offer_id));
+        const error = failedOfferIds.get(String(entry.payload.offer_id)) || verificationFailedOfferIds.get(String(entry.payload.offer_id));
         const delayed = error ? isOzonPerItemPriceLimitError(error) : false;
         const oldPriceAdjusted = error ? isOzonOldPriceLessError(error) : false;
         historyRows.push({
@@ -18102,6 +18687,9 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
       failed.push(...ozonItems
         .filter((entry) => failedOfferIdSet.has(String(entry.payload.offer_id)))
         .map((entry) => buildPriceRetryItem(entry.item, failedOfferIds.get(String(entry.payload.offer_id)), now)));
+      failed.push(...ozonItems
+        .filter((entry) => verificationFailedOfferIdSet.has(String(entry.payload.offer_id)))
+        .map((entry) => buildPriceRetryItem(entry.item, verificationFailedOfferIds.get(String(entry.payload.offer_id)), now)));
     }
 
     for (const shop of getYandexShops()) {
@@ -18177,6 +18765,9 @@ app.post("/api/warehouse/prices/send", requireAdmin, async (request, response, n
       onlyChanged: request.body.onlyChanged === true,
       livePriceMaster: request.body.livePriceMaster === true,
       limit: request.body.limit,
+      verify: request.body.verify !== false,
+      priceIntentId: cleanText(request.body.priceIntentId || crypto.randomUUID()),
+      sourceEvent: "warehouse_prices_send",
     }));
   } catch (error) {
     next(error);
@@ -18283,26 +18874,38 @@ app.get("/api/sales-automation/items", requireAdmin, async (request, response, n
           ok: true,
           source: "postgres",
           total,
-          items: items.map((item) => ({
-            id: item.id,
-            productId: item.productId,
-            marketplace: item.marketplace,
-            target: item.target,
-            offerId: item.offerId,
-            currentPrice: item.currentPrice,
-            targetPrice: item.targetPrice,
-            targetStock: item.targetStock,
-            priceStatus: item.priceStatus,
-            stockStatus: item.stockStatus,
-            unarchiveStatus: item.unarchiveStatus,
-            reason: item.reason,
-            lastCalculatedAt: item.lastCalculatedAt?.toISOString?.() || null,
-            lastPriceSentAt: item.lastPriceSentAt?.toISOString?.() || null,
-            lastStockSentAt: item.lastStockSentAt?.toISOString?.() || null,
-            lastError: item.lastError || "",
-            updatedAt: item.updatedAt?.toISOString?.() || null,
-            raw: item.raw || {},
-          })),
+          items: items.map((item) => {
+            const raw = item.raw && typeof item.raw === "object" && !Array.isArray(item.raw) ? item.raw : {};
+            return {
+              id: item.id,
+              productId: item.productId,
+              marketplace: item.marketplace,
+              target: item.target,
+              offerId: item.offerId,
+              currentPrice: item.currentPrice,
+              targetPrice: item.targetPrice,
+              targetStock: item.targetStock,
+              priceStatus: item.priceStatus,
+              stockStatus: item.stockStatus,
+              unarchiveStatus: item.unarchiveStatus,
+              reason: salesAutomationReason(item.reason || raw.reason),
+              lastCalculatedAt: item.lastCalculatedAt?.toISOString?.() || null,
+              lastPriceSentAt: item.lastPriceSentAt?.toISOString?.() || null,
+              lastStockSentAt: item.lastStockSentAt?.toISOString?.() || null,
+              lastError: item.lastError || "",
+              updatedAt: item.updatedAt?.toISOString?.() || null,
+              priceIntentId: raw.priceIntentId || null,
+              lastRequestedPrice: raw.lastRequestedPrice ?? raw.requestedPrice ?? null,
+              lastVerifiedPrice: raw.lastVerifiedPrice ?? raw.verifiedPrice ?? null,
+              lastPriceRequestAt: raw.lastPriceRequestAt || raw.requestedAt || null,
+              lastPriceVerifiedAt: raw.lastPriceVerifiedAt || raw.verifiedAt || null,
+              priceApplyStatus: raw.priceApplyStatus || raw.applyStatus || item.priceStatus,
+              verificationAttempts: raw.verificationAttempts || 0,
+              selectedSupplier: raw.supplier || raw.selectedSupplier || null,
+              priceSource: raw.priceSource || raw.supplier?.priceSource || null,
+              raw,
+            };
+          }),
         });
       } catch (error) {
         if (!jsonFallbackEnabled()) throw error;
@@ -18322,27 +18925,27 @@ app.get("/api/sales-automation/items", requireAdmin, async (request, response, n
 
 app.post("/api/sales-automation/run", requireAdmin, async (request, response, next) => {
   try {
-    const marketplace = cleanText(request.body?.marketplace || "all").toLowerCase();
+    const marketplaceValue = cleanText(request.body?.marketplace || "all").toLowerCase();
+    const marketplace = ["ozon", "yandex"].includes(marketplaceValue) ? marketplaceValue : "all";
     const force = request.body?.force === true;
-    const onlyChanged = request.body?.onlyChanged !== false;
-    const job = await upsertOperationJob({
-      id: crypto.randomUUID(),
-      type: "sales-automation-run",
-      title: operationTitle("sales-automation-run"),
-      status: "queued",
-      user: request.session?.username || "system",
-      role: request.session?.role || "admin",
-      payload: {
-        marketplace,
-        force,
-        onlyChanged,
-        limit: cleanLimit(request.body?.limit, 1000, 50000),
-        reason: "sales_automation_manual",
-      },
-      progress: 0,
+    const onlyChanged = request.body?.onlyChanged === true;
+    const productIds = Array.isArray(request.body?.productIds)
+      ? request.body.productIds.map(cleanText).filter(Boolean).slice(0, 5000)
+      : undefined;
+    const result = await queueAuthoritativePriceReprice({
+      productIds,
+      marketplace,
+      reason: cleanText(request.body?.reason || "sales_automation_manual"),
+      sourceEvent: "sales_automation_manual",
+      force,
+      onlyChanged,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: request.body?.verify !== false,
+      limit: productIds?.length ? 0 : cleanLimit(request.body?.limit, 1000, 50000),
+      priority: 1,
     });
-    startOperationJob(job);
-    response.status(202).json({ ok: true, accepted: true, job: operationJobPublic(job) });
+    response.status(202).json({ ok: true, accepted: true, ...result });
   } catch (error) {
     next(error);
   }
@@ -18350,10 +18953,14 @@ app.post("/api/sales-automation/run", requireAdmin, async (request, response, ne
 
 function problemProductCategoryFromAutomation(row = {}) {
   const reason = salesAutomationReason(row.reason || row.raw?.reason || "");
+  if (reason === "no_pricemaster_link") return "no_supplier";
   if (reason === "no_supplier") return "no_supplier";
   if (reason === "no_price") return "no_price";
   if (reason === "stock_only_manual_price_missing") return "stock_only_manual_price_missing";
   if (reason === "api_error") return "api_error";
+  if (reason === "ozon_price_not_applied") return "api_error";
+  if (reason === "pm_live_timeout") return "api_error";
+  if (reason === "verification_pending" || reason === "api_accepted" || reason === "queued") return "price_retry";
   if (reason === "in_retry") return "price_retry";
   if (reason === "ozon_limit") return "ozon_autoarchive";
   if (row.priceStatus === "failed" || row.stockStatus === "failed") return "api_error";
@@ -20439,19 +21046,22 @@ function operationTitle(type = "") {
 }
 
 async function runSalesAutomationOperation(payload = {}) {
-  const result = await sendWarehousePrices({
+  const result = await queueAuthoritativePriceReprice({
+    productIds: Array.isArray(payload.productIds) ? payload.productIds : undefined,
     marketplace: payload.marketplace || "all",
     force: payload.force === true,
     onlyChanged: payload.onlyChanged !== false,
     refreshMarketplacePrices: true,
     livePriceMaster: true,
+    verify: payload.verify !== false,
     limit: cleanLimit(payload.limit, 1000, 50000),
     reason: payload.reason || "sales_automation_operation",
+    sourceEvent: "sales_automation_operation",
   });
   return {
     ok: result.ok !== false,
     ...result,
-    summary: `Sales automation processed ${result.selected || 0}; sent ${result.sent || result.readyToSend || 0}; skipped ${Array.isArray(result.skipped) ? result.skipped.length : 0}.`,
+    summary: `Sales automation queued ${result.queued || 0} SKU in ${result.queuedBatches || 0} batches.`,
   };
 }
 
@@ -22525,7 +23135,10 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
       if (queuedItems.length) {
         const nextRetryAt = nextOzonUnarchiveRetryAt();
         queueState = queueOzonUnarchiveItems(queueState, queuedItems, { nextRetryAt });
-        await writeOzonUnarchiveQueue(queueState);
+        await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: queuedItems });
+        rescheduleOzonUnarchiveQueueAutoSoon("daily_limit_queue").catch((error) => {
+          logger.warn("ozon unarchive queue reschedule failed", { detail: error?.message || String(error) });
+        });
         actions.push(...ozonUnarchiveQueuedActions(queuedItems, queueState, { nextRetryAt }));
       }
       let usedToday = effectiveDailyUsed;
@@ -22537,7 +23150,7 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
           usedToday += productIds.length;
           queueState = removeOzonUnarchiveQueueItems(queueState, chunk);
           setOzonUnarchiveDailyUsed(queueState, target, usedToday);
-          await writeOzonUnarchiveQueue(queueState);
+          await writeOzonUnarchiveQueueDelta(queueState, { removeProducts: chunk });
           actions.push(...chunk.map((item) => ({
             id: item.id,
             type: "unarchive",
@@ -22553,7 +23166,10 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
           if (/daily|суточ|лимит|limit|quota|auto.?archive|автоархив/i.test(detail)) {
             const nextRetryAt = nextOzonUnarchiveRetryAt();
             queueState = queueOzonUnarchiveItems(queueState, chunk, { nextRetryAt });
-            await writeOzonUnarchiveQueue(queueState);
+            await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: chunk });
+            rescheduleOzonUnarchiveQueueAutoSoon("api_limit_queue").catch((rescheduleError) => {
+              logger.warn("ozon unarchive queue reschedule failed", { detail: rescheduleError?.message || String(rescheduleError) });
+            });
             actions.push(...ozonUnarchiveQueuedActions(chunk, queueState, {
               warning: "ozon_unarchive_daily_limit_queued",
               nextRetryAt,
@@ -23426,6 +24042,16 @@ async function nextOzonUnarchiveQueueAutoDelayMs(fallbackMs = ozonUnarchiveQueue
   return fallbackMs;
 }
 
+async function rescheduleOzonUnarchiveQueueAutoSoon(reason = "queue_update") {
+  if (!ozonUnarchiveQueueAutoEnabled) return;
+  const delay = await nextOzonUnarchiveQueueAutoDelayMs();
+  scheduleOzonUnarchiveQueueAuto(delay);
+  logger.info("ozon unarchive queue auto rescheduled", {
+    reason,
+    nextAutoRunAt: ozonUnarchiveQueueAutoNextRunAt,
+  });
+}
+
 function scheduleOzonUnarchiveQueueAuto(delayMs = ozonUnarchiveQueueAutoIntervalMinutes * 60 * 1000) {
   if (!ozonUnarchiveQueueAutoEnabled) {
     ozonUnarchiveQueueAutoNextRunAt = null;
@@ -23443,6 +24069,7 @@ function scheduleOzonUnarchiveQueueAuto(delayMs = ozonUnarchiveQueueAutoInterval
           source: "ozon_unarchive_queue_auto",
           limit: ozonUnarchiveQueueBatchLimit,
           force: false,
+          queueRunId: crypto.randomUUID(),
         },
         { priority: 2 },
       );

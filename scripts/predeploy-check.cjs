@@ -2,6 +2,7 @@
 "use strict";
 
 const { spawnSync } = require("node:child_process");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
@@ -20,6 +21,10 @@ function run(command, args, options = {}) {
   }
 }
 
+run("node", ["--check", "server.js"]);
+for (const file of fs.readdirSync(path.join(root, "routes")).filter((name) => name.endsWith(".js")).sort()) {
+  run("node", ["--check", path.join("routes", file)]);
+}
 run("npx", ["prisma", "validate"]);
 run("npx", ["prisma", "migrate", "status"]);
 run("npx", ["prisma", "migrate", "deploy"]);

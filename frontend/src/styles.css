@@ -1810,6 +1810,11 @@ button:disabled {
   grid-template-columns: minmax(86px, .55fr) minmax(130px, .9fr) minmax(110px, .65fr) minmax(110px, .65fr) minmax(160px, 1.1fr) minmax(92px, .55fr);
 }
 
+.price-status-table .table-head,
+.price-status-table .table-row {
+  grid-template-columns: minmax(78px, .45fr) minmax(120px, .8fr) minmax(86px, .48fr) minmax(86px, .48fr) minmax(86px, .48fr) minmax(86px, .48fr) minmax(120px, .72fr) minmax(150px, .9fr) minmax(136px, .75fr);
+}
+
 .system-table .table-head,
 .system-table .table-row {
   grid-template-columns: minmax(150px, .7fr) minmax(110px, .5fr) minmax(220px, 1fr);

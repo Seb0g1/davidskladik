@@ -33,9 +33,15 @@ export function SystemPage() {
   const queues = asRecord(status.data?.queues);
   const priceRetry = asRecord(queues.priceRetry);
   const ozonQueue = asRecord(queues.ozonUnarchive);
+  const marketplaceQueue = asRecord(queues.marketplace);
+  const runtime = asRecord(status.data?.runtime || asRecord(components.runtime));
+  const runtimeMemory = asRecord(runtime.memory);
+  const salesAutomation = asRecord(status.data?.salesAutomation);
   const daily = asRecord(status.data?.dailySync);
   const operations = asRecord(status.data?.operations);
   const failed = Array.isArray(operations.failed) ? operations.failed : [];
+  const active = Array.isArray(operations.active) ? operations.active : [];
+  const slowRequests = Array.isArray(status.data?.slowRequests) ? status.data.slowRequests : [];
   return (
     <section className="page-section">
       <div className="section-title">
@@ -53,9 +59,15 @@ export function SystemPage() {
         <StatusCard label="PostgreSQL" value={asRecord(components.postgres).ok === false ? "error" : "ok"} tone={asRecord(components.postgres).ok === false ? "danger" : "success"} />
         <StatusCard label="Redis/BullMQ" value={asRecord(components.redis).ok === false ? "error" : "ok"} tone={asRecord(components.redis).ok === false ? "danger" : "success"} />
         <StatusCard label="PriceMaster" value={asRecord(components.pricemaster).ok === false ? "error" : "ok"} tone={asRecord(components.pricemaster).ok === false ? "danger" : "success"} />
+        <StatusCard label="Runtime" value={`${Number(runtimeMemory.heapUsedMb || 0)} MB`} detail={`uptime: ${Number(runtime.uptimeSec || 0)}s`} tone={Number(runtimeMemory.heapUsedMb || 0) > 1200 ? "warn" : "neutral"} />
+        <StatusCard label="BullMQ jobs" value={Number(marketplaceQueue.active || 0)} detail={`waiting: ${Number(marketplaceQueue.waiting || 0)} delayed: ${Number(marketplaceQueue.delayed || 0)}`} />
         <StatusCard label="Daily sync" value={text(daily.status) || "-"} detail={dateText(daily.lastRunAt)} />
+        <StatusCard label="Auto prices" value={Number(salesAutomation.total || 0)} detail={`queued: ${Number(salesAutomation.queued || 0)} verify: ${Number(salesAutomation.verificationPending || 0)}`} />
+        <StatusCard label="PM timeout" value={Number(salesAutomation.pmTimeout || 0)} tone={Number(salesAutomation.pmTimeout || 0) ? "warn" : "success"} />
         <StatusCard label="Retry цен" value={Number(priceRetry.total || 0)} />
         <StatusCard label="Ozon recovery" value={Number(ozonQueue.total || 0)} detail={`due: ${Number(ozonQueue.due || 0)}`} />
+        <StatusCard label="Active jobs" value={active.length} tone={active.length ? "warn" : "success"} />
+        <StatusCard label="Slow requests" value={slowRequests.length} tone={slowRequests.length ? "warn" : "success"} />
         <StatusCard label="Ошибки операций" value={failed.length} tone={failed.length ? "warn" : "success"} />
       </div>
       <div className="table-panel system-table">

@@ -6,6 +6,8 @@ import { MutationProductResponseSchema, SalesAutomationItemsSchema, SalesAutomat
 
 const text = (value: unknown) => String(value ?? "").trim();
 const numberValue = (value: unknown) => Number(value || 0) || 0;
+const asRecord = (value: unknown): Record<string, unknown> => (value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {});
+const itemValue = (item: Record<string, unknown>, key: string) => item[key] ?? asRecord(item.raw)[key];
 
 const money = (value: unknown) => {
   const number = Number(value || 0);
@@ -32,6 +34,14 @@ const reasonLabel = (reason: unknown) => {
     stock_only_manual_price_missing: "нужна ручная цена склада",
     no_pricemaster_link: "нет PM-привязки",
     not_ready: "поставщик не готов",
+    unchanged_verified: "цена уже проверена",
+    queued: "в очереди",
+    api_accepted: "API принял",
+    verification_pending: "ждем проверку",
+    verified: "проверено",
+    ozon_price_not_applied: "Ozon не применил цену",
+    ozon_price_delayed: "Ozon отложил цену",
+    pm_live_timeout: "PM timeout",
   };
   return labels[value] || value || "-";
 };
@@ -75,8 +85,9 @@ export function PricesPage() {
   const reasons = summary.data?.reasons || {};
   const reasonOptions = useMemo(() => Object.entries(reasons).sort((a, b) => b[1] - a[1]), [reasons]);
   const items = itemsQuery.data?.items || [];
-  const yandexIssues = items.filter((item) => text(item.marketplace) === "yandex" && !["ok", "unchanged"].includes(text(item.reason))).length;
-  const ozonIssues = items.filter((item) => text(item.marketplace) === "ozon" && !["ok", "unchanged"].includes(text(item.reason))).length;
+  const okReasons = ["ok", "unchanged", "unchanged_verified", "verified"];
+  const yandexIssues = items.filter((item) => text(item.marketplace) === "yandex" && !okReasons.includes(text(item.reason))).length;
+  const ozonIssues = items.filter((item) => text(item.marketplace) === "ozon" && !okReasons.includes(text(item.reason))).length;
 
   return (
     <section className="page-section price-control-page">
@@ -143,7 +154,7 @@ export function PricesPage() {
       {run.data ? (
         <div className="success-strip">
           {run.data.accepted
-            ? `Запуск поставлен в очередь: ${text((run.data.job as Record<string, unknown> | undefined)?.id || "") || "background job"}.`
+            ? `Пересчет поставлен в очередь: ${numberValue(run.data.queued)} SKU · ${numberValue(run.data.queuedBatches)} batch · intent ${text(run.data.priceIntentId) || "new"}.`
             : `Отправлено: ${numberValue(run.data.sent)} · Ozon ${numberValue(run.data.ozonSent)} · Yandex ${numberValue(run.data.yandexSent)} · ошибок ${numberValue(run.data.failed)}`}
         </div>
       ) : null}
@@ -158,17 +169,19 @@ export function PricesPage() {
         )) : <span className="muted-text">Причин пропуска пока нет.</span>}
       </div>
 
-      <div className="table-panel price-table">
+      <div className="table-panel price-table price-status-table">
         <div className="table-head">
-          <span>Маркет</span><span>Артикул</span><span>Текущая</span><span>Новая</span><span>Остаток</span><span>Причина</span><span>Обновлено</span>
+          <span>Маркет</span><span>Артикул</span><span>Текущая</span><span>Расчет</span><span>Запрос</span><span>Verified</span><span>Apply</span><span>Причина</span><span>Обновлено</span>
         </div>
         {items.map((item) => (
           <div className="table-row" key={`${text(item.marketplace)}-${text(item.productId || item.offerId)}-${text(item.target)}`}>
             <span data-label="Маркет"><Zap size={14} /> {text(item.marketplace)}</span>
             <span data-label="Артикул">{text(item.offerId)}</span>
             <span data-label="Текущая">{money(item.currentPrice ?? item.oldPrice)}</span>
-            <span data-label="Новая"><strong>{money(item.targetPrice ?? item.price)}</strong></span>
-            <span data-label="Остаток">{numberValue(item.targetStock) || "-"}</span>
+            <span data-label="Расчет"><strong>{money(item.targetPrice ?? item.price)}</strong></span>
+            <span data-label="Запрос">{money(itemValue(item, "lastRequestedPrice"))}</span>
+            <span data-label="Verified">{money(itemValue(item, "lastVerifiedPrice"))}</span>
+            <span data-label="Apply">{reasonLabel(itemValue(item, "priceApplyStatus"))}</span>
             <span data-label="Причина">{reasonLabel(item.reason)}</span>
             <span data-label="Обновлено">{formatDate(item.updatedAt || item.lastCalculatedAt)}</span>
           </div>

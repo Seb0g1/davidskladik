@@ -1296,7 +1296,13 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
         <button className="secondary-action" type="button" onClick={() => start.mutate("yandex-stock-sync")} disabled={start.isPending}>Отправить остаток</button>
         <button className="secondary-action" type="button" onClick={() => start.mutate("yandex-import-send")} disabled={start.isPending}>Отправить цену</button>
       </div>
-      {repair.data ? <div className="success-strip compact">Links {repair.data.linksSynced} · prices {repair.data.priceSent} · stock {repair.data.stockSent} · {repair.data.pending ? "ожидает восстановления" : "готово"}</div> : null}
+      {repair.data ? (
+        <div className="success-strip compact">
+          {repair.data.accepted
+            ? `Repair queued: ${String((repair.data.job as Record<string, unknown> | undefined)?.id || "background job")}`
+            : `Links ${repair.data.linksSynced} · prices ${repair.data.priceSent} · stock ${repair.data.stockSent} · ${repair.data.pending ? "ожидает восстановления" : "готово"}`}
+        </div>
+      ) : null}
       {start.error && <div className="inline-error">{errorMessage(start.error)}</div>}
       {repair.error && <div className="inline-error">{errorMessage(repair.error)}</div>}
     </section>
