@@ -171,7 +171,6 @@ const {
   writeOzonUnarchiveQueue,
   ozonUnarchiveQueuePath,
   ozonUnarchiveDateKey,
-  ozonUnarchiveDailyUsed,
   createSupplierPickingRows,
   normalizeSupplierTrustFactor,
   normalizeSupplierOrderCutoff,
@@ -3564,7 +3563,7 @@ test("bulk warehouse link delete removes grouped marketplace refs together", asy
   }
 });
 
-test("Ozon unarchive daily limit queues overflow and resumes when quota is available", async () => {
+test("Ozon unarchive does not enforce a local 100 item daily limit", async () => {
   const accountsBackup = await backupFile(marketplaceAccountsPath);
   const queueBackup = await backupFile(ozonUnarchiveQueuePath);
   const originalFetch = global.fetch;
@@ -3599,23 +3598,13 @@ test("Ozon unarchive daily limit queues overflow and resumes when quota is avail
     }));
 
     const firstRun = await unarchiveProductsOnMarketplaces(products);
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
     assert.equal(calls[0].body.product_id.length, 100);
-    assert.equal(firstRun.filter((item) => item.ok && !item.pending).length, 100);
-    assert.equal(firstRun.filter((item) => item.queuedByDailyLimit).length, 1);
-    assert.equal(firstRun.find((item) => item.queuedByDailyLimit).warning, "ozon_unarchive_daily_limit_queued");
+    assert.deepEqual(calls[1].body.product_id, [101]);
+    assert.equal(firstRun.filter((item) => item.ok && !item.pending).length, 101);
+    assert.equal(firstRun.filter((item) => item.queuedByDailyLimit).length, 0);
 
     let queue = await readOzonUnarchiveQueue();
-    assert.equal(queue.items.length, 1);
-    assert.equal(queue.items[0].id, "ozon-queue-101");
-
-    await writeOzonUnarchiveQueue({ ...queue, daily: {} });
-    const secondRun = await unarchiveProductsOnMarketplaces([products[100]]);
-    assert.equal(calls.length, 2);
-    assert.deepEqual(calls[1].body.product_id, [101]);
-    assert.equal(secondRun[0].ok, true);
-    assert.equal(secondRun[0].pending, undefined);
-    queue = await readOzonUnarchiveQueue();
     assert.equal(queue.items.length, 0);
 
     await writeOzonUnarchiveQueue({
@@ -3626,14 +3615,64 @@ test("Ozon unarchive daily limit queues overflow and resumes when quota is avail
         },
       },
     });
-    const forcedRun = await unarchiveProductsOnMarketplaces([products[100]], { forceOzonDailyLimit: true });
+    const secondRun = await unarchiveProductsOnMarketplaces([products[100]]);
     assert.equal(calls.length, 3);
     assert.deepEqual(calls[2].body.product_id, [101]);
-    assert.equal(forcedRun[0].ok, true);
+    assert.equal(secondRun[0].ok, true);
+    assert.equal(secondRun[0].pending, undefined);
     queue = await readOzonUnarchiveQueue();
-    assert.equal(ozonUnarchiveDailyUsed(queue, "ozon-test"), 1);
+    assert.equal(queue.items.length, 0);
   } finally {
     global.fetch = originalFetch;
+    await restoreFile(marketplaceAccountsPath, accountsBackup);
+    await restoreFile(ozonUnarchiveQueuePath, queueBackup);
+  }
+});
+
+test("Ozon unarchive queues only after Ozon returns a limit error", async () => {
+  const accountsBackup = await backupFile(marketplaceAccountsPath);
+  const queueBackup = await backupFile(ozonUnarchiveQueuePath);
+  const originalFetch = global.fetch;
+  const originalAttempts = process.env.OZON_REQUEST_MAX_ATTEMPTS;
+  process.env.OZON_REQUEST_MAX_ATTEMPTS = "1";
+  global.fetch = async () => new Response(JSON.stringify({ message: "daily limit exceeded" }), {
+    status: 429,
+    headers: { "content-type": "application/json" },
+  });
+
+  try {
+    await restoreFile(marketplaceAccountsPath, JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      accounts: [{
+        id: "ozon-test",
+        marketplace: "ozon",
+        name: "Ozon Test",
+        clientId: "client",
+        apiKey: "key",
+        syncEnabled: true,
+      }],
+    }, null, 2));
+    await writeOzonUnarchiveQueue({ items: [], daily: {} });
+
+    const [result] = await unarchiveProductsOnMarketplaces([{
+      id: "ozon-api-limit-1",
+      marketplace: "ozon",
+      target: "ozon-test",
+      productId: "7001",
+      offerId: "OZ-LIMIT-1",
+    }]);
+
+    assert.equal(result.ok, true);
+    assert.equal(result.pending, true);
+    assert.equal(result.queuedByDailyLimit, true);
+    assert.equal(result.warning, "ozon_unarchive_daily_limit_queued");
+    const queue = await readOzonUnarchiveQueue();
+    assert.equal(queue.items.length, 1);
+    assert.equal(queue.items[0].id, "ozon-api-limit-1");
+  } finally {
+    global.fetch = originalFetch;
+    if (originalAttempts === undefined) delete process.env.OZON_REQUEST_MAX_ATTEMPTS;
+    else process.env.OZON_REQUEST_MAX_ATTEMPTS = originalAttempts;
     await restoreFile(marketplaceAccountsPath, accountsBackup);
     await restoreFile(ozonUnarchiveQueuePath, queueBackup);
   }
@@ -3830,7 +3869,7 @@ test("Ozon unarchive verification requeues still archived products", async () =>
   }
 });
 
-test("Ozon unarchive queue processor skips future rows and exhausted daily limits", async () => {
+test("Ozon unarchive queue processor skips future rows", async () => {
   const queueBackup = await backupFile(ozonUnarchiveQueuePath);
   try {
     await writeOzonUnarchiveQueue({
@@ -3845,24 +3884,6 @@ test("Ozon unarchive queue processor skips future rows and exhausted daily limit
     });
     const futureResult = await processOzonUnarchiveQueue({ source: "smoke_future", limit: 10 });
     assert.equal(futureResult.selected, 0);
-    assert.equal((await readOzonUnarchiveQueue()).items.length, 1);
-
-    await writeOzonUnarchiveQueue({
-      items: [{
-        id: "limit-row",
-        productId: "1002",
-        offerId: "LIMIT-1",
-        target: "ozon-test",
-        nextRetryAt: new Date(Date.now() - 60 * 1000).toISOString(),
-      }],
-      daily: {
-        [ozonUnarchiveDateKey()]: {
-          "ozon-test": 100,
-        },
-      },
-    });
-    const limitedResult = await processOzonUnarchiveQueue({ source: "smoke_limit", limit: 10 });
-    assert.equal(limitedResult.selected, 0);
     assert.equal((await readOzonUnarchiveQueue()).items.length, 1);
   } finally {
     await restoreFile(ozonUnarchiveQueuePath, queueBackup);

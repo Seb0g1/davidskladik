@@ -134,8 +134,11 @@ const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 10000) || 10000));
 const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
 const yandexStockCampaignIds = new Set(["128820967"]);
-const ozonUnarchiveDailyLimit = Math.max(1, Math.min(10000, Number(process.env.OZON_UNARCHIVE_DAILY_LIMIT || 100) || 100));
-const ozonUnarchiveQueueBatchLimit = Math.max(1, Math.min(1000, Number(process.env.OZON_UNARCHIVE_QUEUE_BATCH_LIMIT || ozonUnarchiveDailyLimit) || ozonUnarchiveDailyLimit));
+const configuredOzonUnarchiveDailyLimit = Number(process.env.OZON_UNARCHIVE_DAILY_LIMIT || 0) || 0;
+const ozonUnarchiveDailyLimit = configuredOzonUnarchiveDailyLimit > 0
+  ? Math.max(1, Math.min(10000, configuredOzonUnarchiveDailyLimit))
+  : Infinity;
+const ozonUnarchiveQueueBatchLimit = Math.max(1, Math.min(1000, Number(process.env.OZON_UNARCHIVE_QUEUE_BATCH_LIMIT || 500) || 500));
 const ozonUnarchiveQueueAutoEnabled = process.env.OZON_UNARCHIVE_QUEUE_AUTO_ENABLED !== "false";
 const ozonUnarchiveQueueAutoIntervalMinutes = Math.max(5, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INTERVAL_MINUTES || 30) || 30);
 const ozonUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 180) || 180);
@@ -8401,7 +8404,7 @@ function setOzonUnarchiveDailyUsed(queue = {}, target = "", used = 0, date = new
   return queue;
 }
 
-function queueOzonUnarchiveItems(queue = {}, products = [], { nextRetryAt = nextOzonUnarchiveRetryAt(), warning = "ozon_unarchive_daily_limit_queued", error = "", attempted = false } = {}) {
+function queueOzonUnarchiveItems(queue = {}, products = [], { nextRetryAt = nextOzonUnarchiveRetryAt(), warning = "pending", error = "", attempted = false } = {}) {
   const normalizedQueue = normalizeOzonUnarchiveQueue(queue);
   const byKey = new Map(normalizedQueue.items.map((item) => [ozonUnarchiveQueueKey(item), item]));
   const now = new Date().toISOString();
@@ -8442,6 +8445,7 @@ function removeOzonUnarchiveQueueItems(queue = {}, products = []) {
 
 function ozonUnarchiveQueuedActions(products = [], queue = {}, { warning = "ozon_unarchive_daily_limit_queued", nextRetryAt = nextOzonUnarchiveRetryAt() } = {}) {
   const normalizedQueue = normalizeOzonUnarchiveQueue(queue);
+  const dailyLimit = Number.isFinite(ozonUnarchiveDailyLimit) ? ozonUnarchiveDailyLimit : null;
   return (Array.isArray(products) ? products : []).map((item) => ({
     id: item.id,
     warehouseProductId: item.id,
@@ -8454,7 +8458,7 @@ function ozonUnarchiveQueuedActions(products = [], queue = {}, { warning = "ozon
     warning,
     queuedByDailyLimit: true,
     nextRetryAt,
-    dailyLimit: ozonUnarchiveDailyLimit,
+    dailyLimit,
     queueSize: normalizedQueue.items.length,
   }));
 }
@@ -8462,7 +8466,7 @@ function ozonUnarchiveQueuedActions(products = [], queue = {}, { warning = "ozon
 function ozonUnarchiveQueuePublic(queue = {}, { limit = 1000 } = {}) {
   const normalized = normalizeOzonUnarchiveQueue(queue);
   const now = Date.now();
-  const dailyLimit = ozonUnarchiveDailyLimit;
+  const dailyLimit = Number.isFinite(ozonUnarchiveDailyLimit) ? ozonUnarchiveDailyLimit : null;
   const targets = new Map();
   const items = normalized.items
     .filter((item) => item.status !== "done")
@@ -8474,7 +8478,7 @@ function ozonUnarchiveQueuePublic(queue = {}, { limit = 1000 } = {}) {
         target,
         dailyLimit,
         dailyUsed: ozonUnarchiveDailyUsed(normalized, target),
-        availableToday: Math.max(0, dailyLimit - ozonUnarchiveDailyUsed(normalized, target)),
+        availableToday: dailyLimit === null ? null : Math.max(0, dailyLimit - ozonUnarchiveDailyUsed(normalized, target)),
         due: 0,
         future: 0,
         total: 0,
@@ -8491,7 +8495,7 @@ function ozonUnarchiveQueuePublic(queue = {}, { limit = 1000 } = {}) {
         due,
         dailyLimit,
         dailyUsed: ozonUnarchiveDailyUsed(normalized, target),
-        availableToday: Math.max(0, dailyLimit - ozonUnarchiveDailyUsed(normalized, target)),
+        availableToday: dailyLimit === null ? null : Math.max(0, dailyLimit - ozonUnarchiveDailyUsed(normalized, target)),
       };
     })
     .sort((a, b) => {
@@ -8512,7 +8516,7 @@ function ozonUnarchiveQueuePublic(queue = {}, { limit = 1000 } = {}) {
     future: items.filter((item) => !item.due).length,
     verificationPending: Number(warnings.ozon_unarchive_verify_pending || 0),
     warningCounts: warnings,
-    availableToday: Array.from(targets.values()).reduce((sum, item) => sum + item.availableToday, 0),
+    availableToday: dailyLimit === null ? null : Array.from(targets.values()).reduce((sum, item) => sum + item.availableToday, 0),
     nextRetryAt: items.filter((item) => !item.due).map((item) => item.nextRetryAt).filter(Boolean).sort()[0] || null,
     targets: Array.from(targets.values()),
     items: items.slice(0, cleanLimit(limit, 1000, 5000)),
@@ -14190,7 +14194,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
     for (const item of publicQueue.items || []) {
       if (!item.due) continue;
       const target = cleanText(item.target) || "default";
-      const available = force ? normalizedLimit : Math.max(0, Number(item.availableToday || 0) || 0);
+      const available = normalizedLimit;
       const taken = perTargetTaken.get(target) || 0;
       if (taken >= available) continue;
       dueItems.push(item);
@@ -24387,22 +24391,8 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
           productId: row.productId,
           ozonProductId: row.productId,
         }));
-      const forceDailyLimit = options.forceOzonDailyLimit === true;
-      const dailyUsed = ozonUnarchiveDailyUsed(queueState, target);
-      const effectiveDailyUsed = forceDailyLimit ? 0 : dailyUsed;
-      const remainingToday = Math.max(0, ozonUnarchiveDailyLimit - effectiveDailyUsed);
-      const runnableItems = resolvedItems.slice(0, remainingToday);
-      const queuedItems = resolvedItems.slice(remainingToday);
-      if (queuedItems.length) {
-        const nextRetryAt = nextOzonUnarchiveRetryAt();
-        queueState = queueOzonUnarchiveItems(queueState, queuedItems, { nextRetryAt, attempted: true });
-        await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: queuedItems });
-        rescheduleOzonUnarchiveQueueAutoSoon("daily_limit_queue").catch((error) => {
-          logger.warn("ozon unarchive queue reschedule failed", { detail: error?.message || String(error) });
-        });
-        actions.push(...ozonUnarchiveQueuedActions(queuedItems, queueState, { nextRetryAt }));
-      }
-      let usedToday = effectiveDailyUsed;
+      const runnableItems = resolvedItems;
+      let usedToday = ozonUnarchiveDailyUsed(queueState, target);
       for (const chunk of chunkArray(runnableItems, 100)) {
         const productIds = chunk.map((item) => Number(ozonNumericProductId(item.ozonProductId || item.productId))).filter((id) => id > 0);
         if (!productIds.length) {
@@ -24441,7 +24431,7 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
             offerId: item.offerId,
             ozonProductId: ozonNumericProductId(item.ozonProductId || item.productId),
             ok: true,
-            dailyLimit: ozonUnarchiveDailyLimit,
+            dailyLimit: Number.isFinite(ozonUnarchiveDailyLimit) ? ozonUnarchiveDailyLimit : null,
             dailyUsed: usedToday,
             queueSize: queueState.items.length,
           })));
@@ -25000,9 +24990,8 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
       const retryAtMs = item.nextRetryAt ? new Date(item.nextRetryAt).getTime() : 0;
       if (retryAtMs && Number.isFinite(retryAtMs) && retryAtMs > nowMs) continue;
       const target = cleanText(item.target) || "default";
-      const remainingToday = Math.max(0, ozonUnarchiveDailyLimit - ozonUnarchiveDailyUsed(queueState, target));
       const taken = perTargetTaken.get(target) || 0;
-      if (taken >= remainingToday) continue;
+      if (taken >= ozonUnarchiveQueueBatchLimit) continue;
       queuedIds.push(id);
       perTargetTaken.set(target, taken + 1);
       if (queuedIds.length >= ozonUnarchiveQueueBatchLimit) break;
@@ -25485,7 +25474,7 @@ function scheduleAutoSync(delayMs = 10_000) {
 async function nextOzonUnarchiveQueueAutoDelayMs(fallbackMs = ozonUnarchiveQueueAutoIntervalMinutes * 60 * 1000) {
   try {
     const queue = ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 5000 });
-    if (queue.due > 0 && queue.availableToday > 0) return 1000;
+    if (queue.due > 0) return 1000;
     const nextMs = queue.nextRetryAt ? new Date(queue.nextRetryAt).getTime() - Date.now() : 0;
     if (Number.isFinite(nextMs) && nextMs > 0) return Math.min(fallbackMs, Math.max(30_000, nextMs));
   } catch (error) {
