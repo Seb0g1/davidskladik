@@ -14325,16 +14325,31 @@ function enqueueOzonUnarchiveQueueProcess({ request, source, limit, force }) {
         source,
         queueRunId,
         selected: 0,
-        error: "queue_start_timeout",
+        warning: "queue_start_timeout_inline_fallback",
         at: new Date().toISOString(),
       };
-      logger.warn("ozon queue process did not start in time", { source, queueRunId });
+      logger.warn("ozon queue process did not start in time, running inline fallback", { source, queueRunId });
+      processOzonUnarchiveQueue({
+        source: `${source}_fallback`,
+        limit,
+        force,
+        queueRunId,
+      }).catch((error) => {
+        ozonUnarchiveQueueAutoLastResult = {
+          source,
+          queueRunId,
+          selected: 0,
+          error: error?.message || String(error),
+          at: new Date().toISOString(),
+        };
+        logger.warn("ozon queue inline fallback failed", { source, queueRunId, detail: error?.message || String(error) });
+      });
     }
   }, 5 * 60 * 1000).unref?.();
   setTimeout(() => {
     queueMarketplaceJob("ozon-unarchive-queue-process", { source, limit, force, queueRunId }, { priority: 1 })
       .then((result) => {
-        if (result && typeof result === "object" && Object.prototype.hasOwnProperty.call(result, "selected") && !result.skipped) {
+        if (request && result && typeof result === "object" && Object.prototype.hasOwnProperty.call(result, "selected") && !result.skipped) {
           appendAudit(request, "ozon.unarchive_queue.process", {
             selected: result.selected || 0,
             productIds: result.productIds || [],
@@ -25500,16 +25515,12 @@ function scheduleOzonUnarchiveQueueAuto(delayMs = ozonUnarchiveQueueAutoInterval
   ozonUnarchiveQueueAutoNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   ozonUnarchiveQueueAutoTimer = setTimeout(async () => {
     try {
-      await queueMarketplaceJob(
-        "ozon-unarchive-queue-process",
-        {
-          source: "ozon_unarchive_queue_auto",
-          limit: ozonUnarchiveQueueBatchLimit,
-          force: false,
-          queueRunId: crypto.randomUUID(),
-        },
-        { priority: 2 },
-      );
+      const accepted = enqueueOzonUnarchiveQueueProcess({
+        source: "ozon_unarchive_queue_auto",
+        limit: ozonUnarchiveQueueBatchLimit,
+        force: false,
+      });
+      if (!accepted) logger.info("ozon unarchive queue auto skipped", { reason: "already_running_or_queued" });
     } catch (error) {
       logger.warn("ozon unarchive queue auto tick failed", { detail: error?.message || String(error) });
     } finally {

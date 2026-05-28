@@ -3869,6 +3869,86 @@ test("Ozon unarchive queue processor skips future rows and exhausted daily limit
   }
 });
 
+test("Ozon unarchive queue processor sends due rows without manual retry", async () => {
+  const accountsBackup = await backupFile(marketplaceAccountsPath);
+  const queueBackup = await backupFile(ozonUnarchiveQueuePath);
+  const warehouseBackup = await backupFile(warehousePath);
+  const originalFetch = global.fetch;
+  const calls = [];
+  global.fetch = async (url, options = {}) => {
+    const body = JSON.parse(options.body || "{}");
+    calls.push({ url: String(url), body });
+    if (String(url).includes("/v3/product/info/list")) {
+      return new Response(JSON.stringify({
+        items: [{
+          product_id: 909001,
+          offer_id: "QUEUE-DUE-1",
+          visibility: "VISIBLE",
+          status: { state: "ACTIVE" },
+        }],
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ result: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  try {
+    await restoreFile(marketplaceAccountsPath, JSON.stringify({
+      updatedAt: new Date().toISOString(),
+      accounts: [{
+        id: "ozon-test",
+        marketplace: "ozon",
+        name: "Ozon Test",
+        clientId: "client",
+        apiKey: "key",
+        syncEnabled: true,
+      }],
+    }, null, 2));
+    await writeWarehouse({
+      products: [{
+        id: "queue-due-product",
+        marketplace: "ozon",
+        target: "ozon-test",
+        offerId: "QUEUE-DUE-1",
+        productId: "909001",
+        name: "Queue due product",
+        marketplaceState: { code: "archived", archived: true, stock: 0 },
+        links: [],
+      }],
+      suppliers: [],
+      updatedAt: new Date().toISOString(),
+    });
+    await writeOzonUnarchiveQueue({
+      items: [{
+        id: "queue-due-product",
+        warehouseProductId: "queue-due-product",
+        productId: "909001",
+        ozonProductId: "909001",
+        offerId: "QUEUE-DUE-1",
+        target: "ozon-test",
+        nextRetryAt: new Date(Date.now() - 60 * 1000).toISOString(),
+      }],
+      daily: {},
+    });
+
+    const result = await processOzonUnarchiveQueue({ source: "smoke_due", limit: 10 });
+    assert.equal(result.selected, 1);
+    assert.equal(calls.some((call) => String(call.url).includes("/v1/product/unarchive")), true);
+    assert.equal(calls.some((call) => String(call.url).includes("/v2/products/stocks")), true);
+    assert.equal((await readOzonUnarchiveQueue()).items.length, 0);
+  } finally {
+    global.fetch = originalFetch;
+    await restoreFile(marketplaceAccountsPath, accountsBackup);
+    await restoreFile(ozonUnarchiveQueuePath, queueBackup);
+    await restoreFile(warehousePath, warehouseBackup);
+  }
+});
+
 test("sync-group repairs divergent PriceMaster links across marketplace siblings", async () => {
   const agent = request.agent(app);
   const suffix = Date.now();
