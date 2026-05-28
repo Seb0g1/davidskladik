@@ -75,7 +75,7 @@ export function SystemPage() {
         <StatusCard
           label="Ozon recovery"
           value={numberValue(ozonQueue.total)}
-          detail={`due: ${numberValue(ozonQueue.due)} verify: ${numberValue(ozonQueue.verificationPending)} limit: ${numberValue(ozonQueue.availableToday)}`}
+          detail={`due: ${numberValue(ozonQueue.due)} verify: ${numberValue(ozonQueue.verificationPending)} limit: ${ozonQueue.dailyLimit == null ? "off" : numberValue(ozonQueue.availableToday)}`}
           tone={numberValue(ozonQueue.verificationPending) || numberValue(ozonQueue.due) ? "warn" : "success"}
         />
         <StatusCard label="Slow requests" value={slowRequests.length} detail={`threshold: ${numberValue(slowEndpoints.thresholdMs)} ms`} tone={slowRequests.length ? "warn" : "success"} />

@@ -16,6 +16,14 @@ function numberValue(value: unknown) {
   return Number(value || 0) || 0;
 }
 
+function hasLocalLimit(value: unknown) {
+  return value !== null && value !== undefined && Number.isFinite(Number(value));
+}
+
+function availableLimitText(data: Record<string, unknown> | undefined) {
+  return hasLocalLimit(data?.dailyLimit) ? String(numberValue(data?.availableToday)) : "без локального лимита";
+}
+
 function lastResultText(value: unknown) {
   if (!value || typeof value !== "object") return "пока не запускалась";
   const row = value as Record<string, unknown>;
@@ -30,9 +38,10 @@ function lastResultText(value: unknown) {
 
 function queueAttemptLabel(data: Record<string, unknown> | undefined) {
   const due = numberValue(data?.due);
+  const unlimited = !hasLocalLimit(data?.dailyLimit);
   const availableToday = numberValue(data?.availableToday);
   const verificationPending = numberValue(data?.verificationPending);
-  if (due > 0 && availableToday > 0) return "сейчас";
+  if (due > 0 && (unlimited || availableToday > 0)) return "сейчас";
   if (verificationPending > 0) return "ждет проверку Ozon";
   if (due > 0) return "ждет новый дневной лимит Ozon";
   return formatDate(data?.nextAutoRunAt || data?.nextRetryAt);
@@ -55,7 +64,7 @@ function itemStatusLabel(item: Record<string, unknown>) {
   const warning = text(item.warning);
   if (warning) return warningLabel(warning);
   if (item.due) {
-    return numberValue(item.availableToday) > 0 ? "готов к разархиву" : "ждет лимит Ozon";
+    return !hasLocalLimit(item.dailyLimit) || numberValue(item.availableToday) > 0 ? "готов к разархиву" : "ждет лимит Ozon";
   }
   return warningLabel(item.status || "pending");
 }
@@ -64,7 +73,7 @@ function itemWhenLabel(item: Record<string, unknown>) {
   const warning = text(item.warning);
   if (warning === "ozon_unarchive_verify_pending") return formatDate(item.nextRetryAt);
   if (item.due) {
-    return numberValue(item.availableToday) > 0 ? "сейчас" : "после сброса лимита";
+    return !hasLocalLimit(item.dailyLimit) || numberValue(item.availableToday) > 0 ? "сейчас" : "после сброса лимита";
   }
   return formatDate(item.nextRetryAt);
 }
@@ -100,7 +109,7 @@ export function RecoveryQueuePage() {
         <div><span>Всего в очереди</span><strong>{data?.total ?? 0}</strong></div>
         <div><span>Готовы к попытке</span><strong>{data?.due ?? 0}</strong></div>
         <div><span>Ждут проверки Ozon</span><strong>{data?.verificationPending ?? 0}</strong></div>
-        <div><span>Осталось лимита</span><strong>{data?.availableToday ?? 0}</strong></div>
+        <div><span>Осталось лимита</span><strong>{availableLimitText(data)}</strong></div>
         <div><span>Следующая попытка</span><strong>{queueAttemptLabel(data)}</strong></div>
       </div>
       <div className="info-strip success">
