@@ -22031,7 +22031,9 @@ async function processSupplierCartAutoGenerate({ source = "scheduler" } = {}) {
       supplierCartAutoLastResult = { ok: true, skipped: true, reason: "disabled", at: new Date().toISOString() };
       return { ...supplierCartAutoLastResult, ...supplierCartAutomationPublic() };
     }
-    const result = await generateSupplierCartDraft({ marketplace: "all", limit: Number(process.env.SUPPLIER_CART_AUTO_LIMIT || 300) || 300 }, { session: { username: "system", role: "admin" } });
+    const systemRequest = { session: { username: "system", role: "admin" } };
+    const result = await generateSupplierCartDraft({ marketplace: "all", limit: Number(process.env.SUPPLIER_CART_AUTO_LIMIT || 300) || 300 }, systemRequest);
+    const commit = await insertSupplierCartRowsIntoPriceMaster(result.rows || [], systemRequest);
     supplierCartAutoLastResult = {
       ok: true,
       source,
@@ -22040,9 +22042,12 @@ async function processSupplierCartAutoGenerate({ source = "scheduler" } = {}) {
       ready: result.ready,
       skipped: result.skipped,
       alreadyCommitted: result.alreadyCommitted,
+      inserted: commit.inserted.length,
+      docIds: commit.docIds,
+      pickingCreated: commit.pickingCreated?.length || 0,
       at: new Date().toISOString(),
     };
-    logger.info("supplier cart auto draft generated", supplierCartAutoLastResult);
+    logger.info("supplier cart auto draft generated and committed", supplierCartAutoLastResult);
     return { ...supplierCartAutoLastResult, ...supplierCartAutomationPublic() };
   } catch (error) {
     supplierCartAutoLastResult = { ok: false, source, error: error?.message || String(error), at: new Date().toISOString() };
@@ -23287,12 +23292,19 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
   try {
     const key = cleanText(request.params.key || "");
     const status = cleanText(request.body?.status).toLowerCase();
-    if (!["open", "picked", "missing"].includes(status)) {
+    if (!["picked", "missing"].includes(status)) {
       return response.status(400).json({ error: "Unsupported picking status.", code: "supplier_picking_status_invalid" });
     }
     const state = await readSupplierPickingState();
     const current = state.rows[key] ? normalizeSupplierPickingRow(state.rows[key]) : null;
     if (!current) return response.status(404).json({ error: "Picking row not found.", code: "supplier_picking_not_found" });
+    if (current.status !== "open") {
+      return response.status(409).json({
+        error: "Picking row is already finalized.",
+        code: "supplier_picking_finalized",
+        row: current,
+      });
+    }
     const now = new Date();
     const username = requestUsername(request);
     const nextRow = normalizeSupplierPickingRow({
@@ -23304,14 +23316,6 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         missingAt: now.toISOString(),
         missingReason: cleanText(request.body?.reason || "employee_missing"),
         nextRetryAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-      } : {}),
-      ...(status === "open" ? {
-        pickedBy: "",
-        pickedAt: null,
-        missingBy: "",
-        missingAt: null,
-        missingReason: "",
-        nextRetryAt: null,
       } : {}),
     });
     state.rows[key] = nextRow;
@@ -23338,9 +23342,6 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         entityId: blockKey,
         newValue: cartState.supplierBlocks[blockKey],
       });
-    } else if (status === "open" && cartState.supplierBlocks?.[blockKey]?.sourcePickingKey === current.key) {
-      delete cartState.supplierBlocks[blockKey];
-      await writeSupplierCartState(cartState);
     }
 
     let financeOrder = null;

@@ -219,13 +219,12 @@ export function PickingListPage() {
                   </div>
                   {row.status === "missing" ? <small className="danger-text">Поставщик пропущен для этого SKU до {compactDate(row.nextRetryAt)}. Автокорзина попробует другого поставщика.</small> : null}
                   <div className="picking-actions">
-                    <button className="primary-action success-action" type="button" disabled={updateMutation.isPending || row.status === "picked"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "picked" })}>
+                    <button className="primary-action success-action" type="button" disabled={updateMutation.isPending || row.status !== "open"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "picked" })}>
                       <Check size={16} /> Собрал
                     </button>
-                    <button className="secondary-action danger-action" type="button" disabled={updateMutation.isPending || row.status === "missing"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "missing" })}>
+                    <button className="secondary-action danger-action" type="button" disabled={updateMutation.isPending || row.status !== "open"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "missing" })}>
                       <X size={16} /> Не было
                     </button>
-                    {row.status !== "open" ? <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>Вернуть</button> : null}
                   </div>
                 </div>
               ))}

@@ -42,7 +42,7 @@ export function SupplierCartPage() {
     <>
       <PageHeader
         title="Автокорзина"
-        subtitle="Заказы Ozon/Yandex автоматически собираются в черновик PriceMaster по расписанию. Отправка в PriceMaster остается ручным подтверждением."
+        subtitle="Заказы Ozon/Yandex автоматически собираются и отправляются в корзину PriceMaster по расписанию."
         action={<a className="secondary-action" href="/app/operations"><RefreshCw size={16} /> Операции</a>}
       />
       <section className="table-panel supplier-cart-schedule">
@@ -63,7 +63,7 @@ export function SupplierCartPage() {
         </div>
         {last ? (
           <div className="success-strip">
-            Последний черновик: всего {Number(last.total || 0)}, готово {Number(last.ready || 0)}, пропущено {Number(last.skipped || 0)}.
+            Последний запуск: всего {Number(last.total || 0)}, готово {Number(last.ready || 0)}, добавлено в PriceMaster {Number(last.inserted || 0)}, создано строк сборки {Number(last.pickingCreated || 0)}, пропущено {Number(last.skipped || 0)}.
           </div>
         ) : null}
       </section>
