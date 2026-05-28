@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Loader2, RefreshCw, X } from "lucide-react";
+import { Check, Copy, Loader2, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageHeader } from "../components/PageHeader";
-import { SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema } from "../types";
+import { SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema } from "../types";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
 type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
@@ -51,6 +51,12 @@ export function PickingListPage() {
   const [paymentDrafts, setPaymentDrafts] = useState<Record<string, string>>({});
   const [paymentNotes, setPaymentNotes] = useState<Record<string, string>>({});
   const queryClient = useQueryClient();
+  const sessionQuery = useQuery({
+    queryKey: ["session"],
+    queryFn: () => fetchJson("/api/session", z.object({ role: z.coerce.string().optional().nullable() }).passthrough()),
+    staleTime: 60_000,
+  });
+  const isAdmin = sessionQuery.data?.role === "admin";
   const listQuery = useQuery({
     queryKey: ["supplier-picking-list", status, supplier, q],
     queryFn: () => {
@@ -68,6 +74,16 @@ export function PickingListPage() {
   const updateMutation = useMutation({
     mutationFn: ({ key, nextStatus }: { key: string; nextStatus: string }) =>
       fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({ status: nextStatus })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+  });
+  const cancelCartMutation = useMutation({
+    mutationFn: (key: string) =>
+      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/cancel-cart`, SupplierCartCancelSchema, mutationBody({})),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
@@ -154,6 +170,7 @@ export function PickingListPage() {
 
       {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
       {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}
+      {cancelCartMutation.error ? <div className="inline-error">{errorMessage(cancelCartMutation.error)}</div> : null}
       {paymentMutation.error ? <div className="inline-error">{errorMessage(paymentMutation.error)}</div> : null}
 
       <div className="picking-groups">
@@ -225,6 +242,8 @@ export function PickingListPage() {
                     <button className="secondary-action danger-action" type="button" disabled={updateMutation.isPending || row.status !== "open"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "missing" })}>
                       <X size={16} /> Не было
                     </button>
+                    {isAdmin && row.status !== "open" ? <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}><RotateCcw size={16} /> Вернуть</button> : null}
+                    {isAdmin && row.requestRowId ? <button className="secondary-action danger-action" type="button" disabled={cancelCartMutation.isPending} onClick={() => cancelCartMutation.mutate(row.key)}><Trash2 size={16} /> Отменить автокорзину</button> : null}
                   </div>
                 </div>
               ))}

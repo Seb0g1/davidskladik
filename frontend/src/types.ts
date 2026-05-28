@@ -552,6 +552,14 @@ export const SupplierPickingListSchema = z.object({
   summary: z.record(z.string(), z.unknown()).optional().default({}),
 }).passthrough();
 
+export const SupplierCartCancelSchema = z.object({
+  ok: z.boolean().optional(),
+  cancelled: z.boolean().optional().default(false),
+  key: z.coerce.string().optional().default(""),
+  sourceCartKey: z.coerce.string().optional().default(""),
+  priceMaster: z.record(z.string(), z.unknown()).optional().default({}),
+}).passthrough();
+
 export const SupplierPickingInvoiceSchema = z.object({
   ok: z.boolean().optional(),
   period: z.coerce.string().optional().default("30d"),

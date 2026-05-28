@@ -5069,15 +5069,11 @@ test("picked supplier row creates a finance purchase order", async () => {
     await agent
       .patch(`/api/supplier-picking-list/${encodeURIComponent(row.key)}`)
       .send({ status: "open" })
-      .expect(400);
-    await agent
-      .patch(`/api/supplier-picking-list/${encodeURIComponent(row.key)}`)
-      .send({ status: "missing" })
-      .expect(409);
-    const afterRejectedRollback = await agent
+      .expect(200);
+    const afterAdminRollback = await agent
       .get("/api/finance/orders?q=FIN-SKU-1&period=all")
       .expect(200);
-    assert.equal(afterRejectedRollback.body.orders.length, 1);
+    assert.equal(afterAdminRollback.body.orders.length, 0);
   } finally {
     await restoreFile(supplierPickingListPath, pickingBackup);
     await restoreFile(financeStatePath, financeBackup);

@@ -22222,6 +22222,151 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
   return { inserted, skipped: readyRows.length - inserted.length, docIds, pickingCreated };
 }
 
+function supplierCartSourceKeyForPickingRow(row = {}) {
+  const normalized = normalizeSupplierPickingRow(row);
+  return cleanText(normalized.replacementFor || normalized.key.replace(/\|retry:.+$/, ""));
+}
+
+async function deactivateSupplierBlockForPickingRow(row = {}, request = null) {
+  const normalized = normalizeSupplierPickingRow(row);
+  const blockKey = supplierBlockKey(normalized.offerId, normalized.partnerId);
+  if (!blockKey || blockKey === "|") return null;
+  const cartState = await readSupplierCartState();
+  let removed = null;
+  if (cartState.supplierBlocks?.[blockKey]) {
+    removed = cartState.supplierBlocks[blockKey];
+    delete cartState.supplierBlocks[blockKey];
+    await writeSupplierCartState(cartState);
+  }
+  if (shouldUsePostgresStorage()) {
+    try {
+      await getPrisma().supplierBlock.updateMany({
+        where: { blockKey, active: true },
+        data: {
+          active: false,
+          raw: {
+            ...(removed || {}),
+            cancelledBy: requestUsername(request),
+            cancelledAt: new Date().toISOString(),
+          },
+        },
+      });
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("supplier block deactivate failed", { detail: error?.message || String(error) });
+    }
+  }
+  return removed;
+}
+
+async function restoreSupplierCartProcessedForPickingRow(row = {}, request = null) {
+  const normalized = normalizeSupplierPickingRow(row);
+  const sourceKey = supplierCartSourceKeyForPickingRow(normalized);
+  if (!sourceKey) return null;
+  const cartState = await readSupplierCartState();
+  cartState.processed[sourceKey] = {
+    key: sourceKey,
+    marketplace: normalized.marketplace,
+    orderId: normalized.orderId,
+    postingNumber: normalized.postingNumber,
+    offerId: normalized.offerId,
+    quantity: normalized.quantity,
+    supplierName: normalized.supplierName,
+    partnerId: normalized.partnerId,
+    offerRowId: normalized.offerRowId,
+    trustFactor: normalized.trustFactor,
+    orderCutoffTime: normalized.orderCutoffTime,
+    reseller: normalized.reseller,
+    supplierScore: normalized.supplierScore,
+    requestDocId: normalized.requestDocId,
+    requestRowId: normalized.requestRowId,
+    committedAt: normalized.createdAt || new Date().toISOString(),
+    committedBy: requestUsername(request),
+  };
+  await writeSupplierCartState(cartState);
+  return cartState.processed[sourceKey];
+}
+
+async function removeSupplierCartProcessedForPickingRow(row = {}) {
+  const normalized = normalizeSupplierPickingRow(row);
+  const sourceKey = supplierCartSourceKeyForPickingRow(normalized);
+  const cartState = await readSupplierCartState();
+  if (sourceKey && cartState.processed?.[sourceKey]) delete cartState.processed[sourceKey];
+  if (cartState.draft?.rows?.length) {
+    cartState.draft.rows = cartState.draft.rows.map((draftRow) => {
+      const normalizedDraft = normalizeSupplierCartPreviewRow(draftRow);
+      if (normalizedDraft.key !== sourceKey) return normalizedDraft;
+      return normalizeSupplierCartPreviewRow({
+        ...normalizedDraft,
+        alreadyCommitted: false,
+        requestDocId: "",
+        requestRowId: "",
+      });
+    });
+    const rows = cartState.draft.rows;
+    cartState.draft.summary = {
+      ...(cartState.draft.summary || {}),
+      total: rows.length,
+      ready: rows.filter((item) => item.ready && !item.alreadyCommitted).length,
+      alreadyCommitted: rows.filter((item) => item.alreadyCommitted).length,
+      skipped: rows.filter((item) => !item.ready && !item.alreadyCommitted).length,
+    };
+  }
+  await writeSupplierCartState(cartState);
+  return sourceKey;
+}
+
+async function deleteSupplierPickingStateRow(key = "") {
+  const pickingKey = cleanText(key);
+  if (!pickingKey) return;
+  if (shouldUsePostgresStorage()) {
+    try {
+      await getPrisma().supplierPickingRow.deleteMany({ where: { pickingKey } });
+    } catch (error) {
+      if (!jsonFallbackEnabled()) throw error;
+      logger.warn("supplier picking postgres delete failed", { detail: error?.message || String(error) });
+    }
+  }
+}
+
+async function deleteSupplierCartPriceMasterRow(row = {}) {
+  const normalized = normalizeSupplierPickingRow(row);
+  const requestRowId = Number(normalized.requestRowId || 0);
+  const requestDocId = Number(normalized.requestDocId || 0);
+  if (!requestRowId) return { deletedRows: 0, deletedDoc: false, requestRowId: normalized.requestRowId, requestDocId: normalized.requestDocId };
+  const connection = await pool.getConnection();
+  let lockAcquired = false;
+  try {
+    const [lockRows] = await connection.query("SELECT GET_LOCK('davidsklad_supplier_cart', 10) AS locked");
+    lockAcquired = Number(lockRows?.[0]?.locked || 0) === 1;
+    if (!lockAcquired) {
+      const error = new Error("PriceMaster cart is busy. Try again in a few seconds.");
+      error.statusCode = 409;
+      throw error;
+    }
+    await connection.beginTransaction();
+    const [deleteResult] = await connection.query("DELETE FROM RequestRows WHERE RowID = ?", [requestRowId]);
+    let deletedDoc = false;
+    if (requestDocId) {
+      const [[remaining]] = await connection.query("SELECT COUNT(*) AS count FROM RequestRows WHERE DocID = ?", [requestDocId]);
+      if (Number(remaining?.count || 0) === 0) {
+        await connection.query("DELETE FROM RequestDocs WHERE DocID = ?", [requestDocId]);
+        deletedDoc = true;
+      }
+    }
+    await connection.commit();
+    return { deletedRows: Number(deleteResult?.affectedRows || 0), deletedDoc, requestRowId: String(requestRowId), requestDocId: requestDocId ? String(requestDocId) : "" };
+  } catch (error) {
+    try { await connection.rollback(); } catch (_rollbackError) {}
+    throw error;
+  } finally {
+    if (lockAcquired) {
+      try { await connection.query("SELECT RELEASE_LOCK('davidsklad_supplier_cart')"); } catch (_releaseError) {}
+    }
+    connection.release();
+  }
+}
+
 async function runSupplierCartPreviewOperation(payload = {}) {
   const result = await buildSupplierCartPreview(payload);
   return { ...result, ok: result.warnings.length === 0 || result.rows.length > 0 };
@@ -23292,13 +23437,17 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
   try {
     const key = cleanText(request.params.key || "");
     const status = cleanText(request.body?.status).toLowerCase();
-    if (!["picked", "missing"].includes(status)) {
+    const admin = isAdminSession(request.session);
+    if (!["open", "picked", "missing"].includes(status)) {
       return response.status(400).json({ error: "Unsupported picking status.", code: "supplier_picking_status_invalid" });
+    }
+    if (status === "open" && !admin) {
+      return response.status(403).json({ error: "Only admin can roll back picking rows.", code: "admin_required" });
     }
     const state = await readSupplierPickingState();
     const current = state.rows[key] ? normalizeSupplierPickingRow(state.rows[key]) : null;
     if (!current) return response.status(404).json({ error: "Picking row not found.", code: "supplier_picking_not_found" });
-    if (current.status !== "open") {
+    if (current.status !== "open" && status !== "open") {
       return response.status(409).json({
         error: "Picking row is already finalized.",
         code: "supplier_picking_finalized",
@@ -23316,6 +23465,14 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         missingAt: now.toISOString(),
         missingReason: cleanText(request.body?.reason || "employee_missing"),
         nextRetryAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      } : {}),
+      ...(status === "open" ? {
+        pickedBy: "",
+        pickedAt: null,
+        missingBy: "",
+        missingAt: null,
+        missingReason: "",
+        nextRetryAt: null,
       } : {}),
     });
     state.rows[key] = nextRow;
@@ -23342,6 +23499,9 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         entityId: blockKey,
         newValue: cartState.supplierBlocks[blockKey],
       });
+    } else if (status === "open") {
+      if (current.status === "missing") await deactivateSupplierBlockForPickingRow(current, request);
+      if (current.requestRowId || current.requestDocId) await restoreSupplierCartProcessedForPickingRow(current, request);
     }
 
     let financeOrder = null;
@@ -23363,6 +23523,39 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       supplierLedgerEntryId: supplierLedgerEntry?.id || null,
     });
     response.json({ ok: true, row: nextRow, financeOrder, supplierLedgerEntry });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/supplier-picking-list/:key/cancel-cart", requireAdmin, async (request, response, next) => {
+  try {
+    const key = cleanText(request.params.key || "");
+    const state = await readSupplierPickingState();
+    const current = state.rows[key] ? normalizeSupplierPickingRow(state.rows[key]) : null;
+    if (!current) return response.status(404).json({ error: "Picking row not found.", code: "supplier_picking_not_found" });
+
+    let financeRemoval = null;
+    let supplierLedgerEntry = null;
+    if (current.status === "picked") {
+      financeRemoval = await removeFinanceOrderForPickingRow(current);
+      supplierLedgerEntry = await voidSupplierLedgerDebtForPickingRow(current, request);
+    }
+    if (current.status === "missing") await deactivateSupplierBlockForPickingRow(current, request);
+
+    const priceMaster = await deleteSupplierCartPriceMasterRow(current);
+    const sourceCartKey = await removeSupplierCartProcessedForPickingRow(current);
+    delete state.rows[key];
+    await writeSupplierPickingState(state);
+    await deleteSupplierPickingStateRow(key);
+
+    await appendAudit(request, "supplier_cart.cancel_committed", {
+      entityType: "supplier_cart",
+      entityId: sourceCartKey || key,
+      oldValue: current,
+      newValue: { cancelled: true, priceMaster, financeRemoval, supplierLedgerEntry },
+    });
+    response.json({ ok: true, cancelled: true, key, sourceCartKey, priceMaster, financeRemoval, supplierLedgerEntry });
   } catch (error) {
     next(error);
   }
