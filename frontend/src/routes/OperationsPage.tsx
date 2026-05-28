@@ -288,7 +288,7 @@ export function SupplierCartPanel() {
           </div>
         </>
       ) : previewData ? <div className="soft-empty">Новых заказов для автокорзины не найдено.</div> : <div className="soft-empty">Утром после обновления прайсов нажмите “Сгенерировать корзину”: заказы сохранятся в черновик, и их можно будет спокойно отправить в PriceMaster позже.</div>}
-      {commitMutation.data ? <div className="success-strip">Добавлено в PriceMaster: {commitMutation.data.inserted}. Документы: {commitMutation.data.docIds.join(", ") || "-"}</div> : null}
+      {commitMutation.data ? <div className="success-strip">Добавлено в PriceMaster: {commitMutation.data.inserted}. Проверено в PM: {commitMutation.data.verifiedRows}. База: {commitMutation.data.priceMasterDb || "-"}. Документы: {commitMutation.data.docIds.join(", ") || "-"}</div> : null}
       {generateMutation.error && <div className="inline-error">{errorMessage(generateMutation.error)}</div>}
       {commitMutation.error && <div className="inline-error">{errorMessage(commitMutation.error)}</div>}
       <div className="section-title compact-title">

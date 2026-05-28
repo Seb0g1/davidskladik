@@ -500,6 +500,9 @@ export const SupplierCartCommitSchema = z.object({
   skipped: z.number().optional().default(0),
   pickingCreated: z.number().optional().default(0),
   docIds: z.array(z.union([z.string(), z.number()])).optional().default([]),
+  verifiedInPriceMaster: z.boolean().optional().default(false),
+  verifiedRows: z.number().optional().default(0),
+  priceMasterDb: z.coerce.string().optional().default(""),
   rows: z.array(SupplierCartRowSchema).optional().default([]),
 }).passthrough();
 
