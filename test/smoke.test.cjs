@@ -5340,4 +5340,8 @@ test("pm2 split entry files and immediate link activation hooks exist", async ()
   const ecosystem = await fs.readFile(path.join(root, "ecosystem.config.cjs"), "utf8");
   assert.match(ecosystem, /davidsklad-api/);
   assert.match(ecosystem, /davidsklad-worker/);
+  assert.match(ecosystem, /name: "davidsklad"/);
+  assert.match(ecosystem, /WAREHOUSE_WARM_ON_STARTUP: "false"/);
+  assert.match(ecosystem, /WAREHOUSE_FULL_MEMORY_LOAD_ENABLED: "false"/);
+  assert.match(ecosystem, /BACKGROUND_JOBS_ENABLED: "false"/);
 });

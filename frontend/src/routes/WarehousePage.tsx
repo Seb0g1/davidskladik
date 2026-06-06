@@ -10,7 +10,7 @@ import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
 import { ProductGroup, firstImage, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
 
-const pageSize = 80;
+const pageSize = 40;
 const mobileListMedia = "(max-width: 640px)";
 const studioPhotoPresets = [
   { id: "white-packshot", label: "White", prompt: "Clean white marketplace packshot, full perfume bottle visible from cap to base, centered, upright, not cropped, 10-15% margin on every side, remove any box or packaging." },

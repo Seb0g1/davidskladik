@@ -99,7 +99,12 @@ const {
 const sessionCookieName = "pm_session";
 const sessionTtlMs = 1000 * 60 * 60 * 12;
 const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || process.env.DEFAULT_AUTO_SYNC_MINUTES || 30);
-const autoSyncInitialDelaySeconds = Math.max(30, Number(process.env.AUTO_SYNC_INITIAL_DELAY_SECONDS || 120) || 120);
+const autoSyncInitialDelaySeconds = Math.max(30, Number(process.env.AUTO_SYNC_INITIAL_DELAY_SECONDS || 600) || 600);
+const warehouseWarmOnStartup = process.env.WAREHOUSE_WARM_ON_STARTUP === "true";
+const warehouseFullMemoryLoadEnabled = process.env.WAREHOUSE_FULL_MEMORY_LOAD_ENABLED === "true";
+const backgroundJobsEnabled = process.env.BACKGROUND_JOBS_ENABLED === "true";
+const warehouseInMemoryPageMax = Math.max(500, Math.min(50000, Number(process.env.WAREHOUSE_IN_MEMORY_PAGE_MAX || 5000) || 5000));
+const warehouseJsonMaxLoadBytes = Math.max(50_000_000, Number(process.env.WAREHOUSE_JSON_MAX_LOAD_BYTES || 300_000_000) || 300_000_000);
 const autoZeroStockOnNoSupplier = process.env.AUTO_ZERO_STOCK_ON_NO_SUPPLIER !== "false";
 const autoArchiveOnNoLinks = process.env.AUTO_ARCHIVE_ON_NO_LINKS === "true";
 const keepUnlinkedProductsSellable = process.env.KEEP_UNLINKED_PRODUCTS_SELLABLE !== "false";
@@ -280,6 +285,7 @@ let ozonUnarchiveQueueAutoLastRunAt = null;
 let ozonUnarchiveQueueAutoLastResult = null;
 let warehouseWritePromise = Promise.resolve();
 let warehouseMemoryCache = null;
+let warehouseMemoryLoadPromise = null;
 let warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
 let warehousePostgresHashCache = new Map();
 let warehousePostgresUpdatedAtCache = new Map();
@@ -310,7 +316,7 @@ const priceMasterSearchCache = new Map();
 const priceMasterSearchCacheTtlMs = Math.max(1000, Number(process.env.PRICEMASTER_SEARCH_CACHE_MS || 30000));
 const priceMasterSearchCacheMax = Math.max(100, Number(process.env.PRICEMASTER_SEARCH_CACHE_MAX || 1000));
 let warehousePostgresSummaryCache = null;
-const warehousePostgresSummaryCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_PAGE_SUMMARY_CACHE_MS || 15000));
+const warehousePostgresSummaryCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_PAGE_SUMMARY_CACHE_MS || 120000));
 let warehousePostgresSuppliersCache = null;
 let suppliersListCache = null;
 const suppliersListCacheTtlMs = Math.max(1000, Number(process.env.SUPPLIERS_LIST_CACHE_MS || 30000) || 30000);
@@ -319,8 +325,8 @@ const warehouseBrandListCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE
 let warehousePostgresDetailCache = new Map();
 const warehousePostgresDetailCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_DETAIL_CACHE_MS || 15000));
 const warehouseFastPageCache = new Map();
-const warehouseFastPageCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MS || 5000));
-const warehouseFastPageCacheMax = Math.max(20, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MAX || 200));
+const warehouseFastPageCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MS || 30000));
+const warehouseFastPageCacheMax = Math.max(10, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MAX || 30));
 const warehouseViewCache = new Map();
 const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
@@ -9356,6 +9362,13 @@ async function ensureWarehousePostgresBrandsBackfilled(prisma, { force = false }
 async function ensureWarehousePostgresLinksBackfilled(prisma) {
   if (warehousePostgresLinkBackfillDone) return { created: 0, skipped: true };
   if (warehousePostgresLinkBackfillPromise) return warehousePostgresLinkBackfillPromise;
+  const deferThreshold = Math.max(10000, Number(process.env.WAREHOUSE_LINK_BACKFILL_DEFER_THRESHOLD || 50000) || 50000);
+  const productCount = await prisma.warehouseProduct.count().catch(() => 0);
+  if (productCount > deferThreshold && process.env.WAREHOUSE_LINK_BACKFILL_DEFER !== "false") {
+    warehousePostgresLinkBackfillDone = true;
+    logger.warn("warehouse postgres link backfill deferred", { productCount, deferThreshold });
+    return { created: 0, skipped: true, deferred: true };
+  }
   warehousePostgresLinkBackfillPromise = (async () => {
     const productsWithRawLinksPromise = prisma.$queryRaw`
       SELECT id, raw
@@ -9463,8 +9476,21 @@ function markWarehousePostgresProductsWritten(products = []) {
   }
 }
 
+async function readWarehousePostgresStub(prisma) {
+  const suppliers = await prisma.managedSupplier.findMany({ orderBy: { name: "asc" } });
+  const meta = await getWarehouseMetaFast().catch(() => null);
+  return {
+    createdAt: meta?.createdAt || new Date().toISOString(),
+    updatedAt: meta?.updatedAt || null,
+    products: [],
+    suppliers: suppliers.map(supplierFromPostgres),
+    postgresOnly: true,
+  };
+}
+
 async function readWarehouseFromPostgres(prisma) {
   await ensureWarehousePostgresLinksBackfilled(prisma);
+  const startedAt = Date.now();
   const [products, suppliers] = await Promise.all([
     prisma.warehouseProduct.findMany({
       include: { links: true },
@@ -9472,6 +9498,11 @@ async function readWarehouseFromPostgres(prisma) {
     }),
     prisma.managedSupplier.findMany({ orderBy: { name: "asc" } }),
   ]);
+  logger.info("warehouse postgres full load complete", {
+    products: products.length,
+    suppliers: suppliers.length,
+    elapsedMs: Date.now() - startedAt,
+  });
   if (!products.length && !suppliers.length) return null;
   const updatedAtMs = Math.max(
     ...products.map((item) => item.updatedAt?.getTime() || 0),
@@ -9593,9 +9624,23 @@ function scheduleWarehousePostgresWrite(prisma, payload) {
   });
 }
 
-async function readWarehouse() {
-  if (warehouseMemoryCache) return warehouseMemoryCache;
+async function loadWarehouseMemory({ forceFull = false } = {}) {
+  if (warehouseMemoryCache) {
+    if (!warehouseMemoryCache.postgresOnly || forceFull) return warehouseMemoryCache;
+    warehouseMemoryCache = null;
+    warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
+  }
   if (shouldUsePostgresStorage()) {
+    if (!warehouseFullMemoryLoadEnabled) {
+      const stub = await readWarehousePostgresStub(getPrisma());
+      warehouseMemoryCache = stub;
+      if (forceFull) {
+        logger.warn("warehouse full memory load blocked on postgres", {
+          hint: "set WAREHOUSE_FULL_MEMORY_LOAD_ENABLED=true only on 32GB+ servers",
+        });
+      }
+      return warehouseMemoryCache;
+    }
     try {
       const warehouse = await readWarehouseFromPostgres(getPrisma());
       if (warehouse) {
@@ -9612,6 +9657,19 @@ async function readWarehouse() {
     }
   }
   try {
+    const jsonStat = await fs.stat(warehousePath).catch(() => null);
+    if (jsonStat?.size > warehouseJsonMaxLoadBytes) {
+      if (shouldUsePostgresStorage()) {
+        const stub = await readWarehousePostgresStub(getPrisma());
+        warehouseMemoryCache = stub;
+        logger.warn("warehouse json file too large for memory load, using postgres stub", {
+          bytes: jsonStat.size,
+          maxBytes: warehouseJsonMaxLoadBytes,
+        });
+        return warehouseMemoryCache;
+      }
+      throw new Error(`warehouse_json_too_large:${jsonStat.size}`);
+    }
     const warehouse = JSON.parse(await fs.readFile(warehousePath, "utf8"));
     const normalized = {
       createdAt: warehouse.createdAt || new Date().toISOString(),
@@ -9634,6 +9692,26 @@ async function readWarehouse() {
     }
     throw error;
   }
+}
+
+async function readWarehouse(options = {}) {
+  const forceFull = options?.forceFull === true;
+  if (warehouseMemoryCache) {
+    if (!warehouseMemoryCache.postgresOnly || forceFull) return warehouseMemoryCache;
+    warehouseMemoryCache = null;
+    warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
+  }
+  if (forceFull) return loadWarehouseMemory({ forceFull: true });
+  if (!warehouseMemoryLoadPromise) {
+    warehouseMemoryLoadPromise = loadWarehouseMemory({ forceFull: false }).finally(() => {
+      warehouseMemoryLoadPromise = null;
+    });
+  }
+  return warehouseMemoryLoadPromise;
+}
+
+async function readWarehouseFull() {
+  return readWarehouse({ forceFull: true });
 }
 
 async function writeWarehouseJsonPayload(payload) {
@@ -12316,9 +12394,17 @@ async function getWarehousePostgresSummary(prisma, rate) {
     warehousePostgresSummaryCache
     && warehousePostgresSummaryCache.key === cacheKey
     && Date.now() - warehousePostgresSummaryCache.at < warehousePostgresSummaryCacheTtlMs
+    && !warehousePostgresSummaryCache.value?.lightweight
   ) {
     return warehousePostgresSummaryCache.value;
   }
+  if (process.env.WAREHOUSE_FULL_SUMMARY_ENABLED !== "true") {
+    const light = await getWarehousePostgresSummaryLight(prisma, rate);
+    const value = { ...light, lightweight: false };
+    warehousePostgresSummaryCache = { key: cacheKey, at: Date.now(), value };
+    return value;
+  }
+  const scanLimit = Math.max(500, Math.min(20000, Number(process.env.WAREHOUSE_SUMMARY_LINKED_SCAN_LIMIT || 5000) || 5000));
   const [totalAll, ozonStateCounts, yandexStateCounts, linkedRows, suppliers] = await Promise.all([
     prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
     getOzonStateCountsFromPostgres(prisma),
@@ -12327,6 +12413,7 @@ async function getWarehousePostgresSummary(prisma, rate) {
       where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] },
       include: { links: true },
       orderBy: { updatedAt: "desc" },
+      take: scanLimit,
     }),
     getWarehousePostgresSuppliers(prisma),
   ]);
@@ -12345,6 +12432,8 @@ async function getWarehousePostgresSummary(prisma, rate) {
     counterStats,
     linkedArchived: linkedProducts
       .filter((product) => product.marketplace === "ozon" && Array.isArray(product.links) && product.links.length && product.marketplaceState?.code === "archived").length,
+    lightweight: false,
+    summarySampled: linkedRows.length >= scanLimit,
   };
   warehousePostgresSummaryCache = { key: cacheKey, at: Date.now(), value };
   return value;
@@ -12366,7 +12455,7 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
     prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] } }).catch(() => 0),
     getWarehousePostgresSuppliers(prisma),
   ]);
-  return {
+  const value = {
     totalAll,
     ozonStateCounts,
     yandexStateCounts,
@@ -12374,13 +12463,61 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
     counterStats: {
       ready: 0,
       changed: 0,
-      withoutSupplier: 0,
+      withoutSupplier: Math.max(0, Number(totalAll || 0) - Number(linkedProducts || 0)),
       linkedProducts,
       linkedNotReady: 0,
     },
     linkedArchived: 0,
     lightweight: true,
   };
+  const existing = warehousePostgresSummaryCache;
+  if (!existing || existing.key !== cacheKey || existing.value?.lightweight) {
+    warehousePostgresSummaryCache = { key: cacheKey, at: Date.now(), value };
+  }
+  return value;
+}
+
+function getCachedWarehousePostgresSummary(rate) {
+  const cacheKey = Number(rate || 0).toFixed(4);
+  if (
+    warehousePostgresSummaryCache
+    && warehousePostgresSummaryCache.key === cacheKey
+    && Date.now() - warehousePostgresSummaryCache.at < warehousePostgresSummaryCacheTtlMs
+  ) {
+    return warehousePostgresSummaryCache.value;
+  }
+  return null;
+}
+
+async function resolveWarehousePostgresSummaryForPage(prisma, rate, { preferLight = false } = {}) {
+  const cached = getCachedWarehousePostgresSummary(rate);
+  if (cached && !cached.lightweight) return cached;
+  if (preferLight) return getWarehousePostgresSummaryLight(prisma, rate);
+  return getWarehousePostgresSummary(prisma, rate);
+}
+
+let warehousePostgresSummaryWarmTimer = null;
+
+function scheduleWarehousePostgresSummaryWarm() {
+  if (process.env.WAREHOUSE_SUMMARY_WARM_ENABLED !== "true") return;
+  if (!shouldUsePostgresStorage()) return;
+  const intervalMs = Math.max(warehousePostgresSummaryCacheTtlMs, 60_000);
+  const warm = async () => {
+    try {
+      const prisma = getPrisma();
+      if (!prisma) return;
+      const startedAt = Date.now();
+      const appSettings = await readAppSettings();
+      const rate = Number(appSettings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95);
+      await getWarehousePostgresSummary(prisma, rate);
+      logger.info("warehouse postgres summary warmed", { elapsedMs: Date.now() - startedAt });
+    } catch (error) {
+      logger.warn("warehouse postgres summary warm failed", { detail: error?.message || String(error) });
+    }
+  };
+  setTimeout(() => { void warm(); }, Math.max(1000, Number(process.env.WAREHOUSE_SUMMARY_WARM_INITIAL_DELAY_MS || 8000)));
+  if (warehousePostgresSummaryWarmTimer) clearInterval(warehousePostgresSummaryWarmTimer);
+  warehousePostgresSummaryWarmTimer = setInterval(() => { void warm(); }, intervalMs);
 }
 
 async function buildFastWarehousePageFromPostgres({
@@ -12410,7 +12547,7 @@ async function buildFastWarehousePageFromPostgres({
   }
   const strictIdentitySearch = isWarehouseStrictIdentitySearch(filters);
   const needsInMemoryPage = needsComputedLinkFilter || strictIdentitySearch;
-  const preferLightSummary = Boolean(cleanText(filters.q || "")) && !needsComputedLinkFilter;
+  const preferLightPage = !needsComputedLinkFilter;
   const postgresFilters = {
     ...(needsComputedLinkFilter ? { ...filters, state: "all" } : filters),
     ...(brandIndexProductIds.length ? { brand: "" } : {}),
@@ -12423,14 +12560,14 @@ async function buildFastWarehousePageFromPostgres({
   const offset = (page - 1) * pageSize;
   pageTrace("postgres:before-query", traceStartedAt);
   const [summary, dbTotal, initialDbRows] = await Promise.all([
-    preferLightSummary ? getWarehousePostgresSummaryLight(prisma, rate) : getWarehousePostgresSummary(prisma, rate),
+    resolveWarehousePostgresSummaryForPage(prisma, rate, { preferLight: preferLightPage }),
     needsInMemoryPage ? Promise.resolve(0) : prisma.warehouseProduct.count({ where }),
     prisma.warehouseProduct.findMany({
       where: strictPrimaryWhere || where,
       include: { links: true },
       orderBy: warehousePagePostgresOrderBy(),
       skip: needsInMemoryPage ? 0 : offset,
-      take: needsInMemoryPage ? undefined : pageSize,
+      take: needsInMemoryPage ? warehouseInMemoryPageMax : pageSize,
     }),
   ]);
   pageTrace("postgres:after-query", traceStartedAt);
@@ -12440,6 +12577,7 @@ async function buildFastWarehousePageFromPostgres({
       where,
       include: { links: true },
       orderBy: warehousePagePostgresOrderBy(),
+      take: warehouseInMemoryPageMax,
     });
     pageTrace("postgres:after-strict-fallback-query", traceStartedAt);
   }
@@ -12481,7 +12619,7 @@ async function buildFastWarehousePageFromPostgres({
     products: pageProducts,
     suppliers: normalizedSuppliers,
   };
-  const built = preferLightSummary
+  const built = preferLightPage
     ? []
     : await buildFreshWarehouseProductsForWarehouse(
       pageWarehouse,
@@ -12500,7 +12638,7 @@ async function buildFastWarehousePageFromPostgres({
       selectedSupplier: item.selectedSupplier || null,
       noSupplierAutomation: item.noSupplierAutomation || {},
       marketplaceState: item.marketplaceState || {},
-      partial: preferLightSummary,
+      partial: preferLightPage,
     };
   });
   return {
@@ -12522,7 +12660,8 @@ async function buildFastWarehousePageFromPostgres({
     usdRate: rate,
     priceMaster: await getPriceMasterSnapshotMetaFast(),
     sourceError: "",
-    partial: preferLightSummary,
+    partial: preferLightPage || (needsInMemoryPage && siblingSourceProducts.length >= warehouseInMemoryPageMax),
+    inMemoryScanCapped: needsInMemoryPage && siblingSourceProducts.length >= warehouseInMemoryPageMax,
     noSupplierAlerts: [],
     page,
     pageSize,
@@ -18261,7 +18400,7 @@ async function markSalesAutomationPriceQueued(products = [], {
 }
 
 function enqueueMarketplaceJobAccepted(name, data = {}, { priority = 5 } = {}) {
-  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return Promise.resolve(null);
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled) return Promise.resolve(null);
   if (marketplaceQueue) {
     return marketplaceQueue.add(name, data, {
       jobId: marketplaceJobId(name, data),
@@ -19354,7 +19493,7 @@ function marketplaceJobId(name, data = {}) {
 }
 
 function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
-  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return Promise.resolve(null);
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled) return Promise.resolve(null);
   if (name === "auto-price-push" && !marketplaceQueueAutoPricePushEnabled) {
     return processMarketplaceJob(name, data).catch((error) => {
       logger.warn("inline auto price push failed", { detail: error?.message || String(error) });
@@ -19388,6 +19527,10 @@ function initMarketplaceQueue() {
     marketplaceQueue = new Queue("marketplace-tasks", { connection });
     if (isApiServer) {
       logger.info("marketplace queue producer ready", { serverRole });
+      return;
+    }
+    if (!backgroundJobsEnabled) {
+      logger.info("marketplace worker disabled until BACKGROUND_JOBS_ENABLED=true", { serverRole });
       return;
     }
     marketplaceWorker = new Worker(
@@ -26414,6 +26557,10 @@ app.use((error, request, response, _next) => {
 });
 
 function startBackgroundSchedulers() {
+  if (!backgroundJobsEnabled) {
+    logger.info("background schedulers disabled until BACKGROUND_JOBS_ENABLED=true");
+    return;
+  }
   scheduleDailySync();
   schedulePriceRetryProcessing(30_000);
   scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
@@ -26427,13 +26574,15 @@ async function startServer() {
 
   if (isWorkerServer) {
     startBackgroundSchedulers();
-    readWarehouse()
-      .then((warehouse) => {
-        logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length });
-      })
-      .catch((err) => {
-        logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) });
-      });
+    if (warehouseWarmOnStartup) {
+      readWarehouseFull()
+        .then((warehouse) => {
+          logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length });
+        })
+        .catch((err) => {
+          logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) });
+        });
+    }
     const workerHealthPort = Number(process.env.WORKER_HEALTH_PORT || 0) || 0;
     if (workerHealthPort > 0) {
       app.listen(workerHealthPort, () => {
@@ -26463,15 +26612,18 @@ async function startServer() {
     }
   });
 
-  readWarehouse()
-    .then((warehouse) => {
-      logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length });
-    })
-    .catch((err) => {
-      logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) });
-    });
+  if (warehouseWarmOnStartup && !isApiServer) {
+    readWarehouseFull()
+      .then((warehouse) => {
+        logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length });
+      })
+      .catch((err) => {
+        logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) });
+      });
+  }
 
   if (!isApiServer) startBackgroundSchedulers();
+  scheduleWarehousePostgresSummaryWarm();
 }
 
 async function shutdownForTests() {
@@ -26543,6 +26695,7 @@ module.exports = {
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
   readWarehouse,
+  readWarehouseFull,
   writeWarehouse,
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
