@@ -58,7 +58,7 @@ async function main() {
     const files = [
       "public/app-modern/index.html",
       "public/app-modern/assets/index-CzH8Z1Ju.css",
-      "public/app-modern/assets/index-B8cIbC9u.js",
+      "public/app-modern/assets/index-Dl17k25l.js",
     ];
     for (const rel of files) {
       await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
@@ -70,7 +70,7 @@ async function main() {
       "sleep 8",
       "pm2 list",
       "free -h | head -2",
-      "curl -sS -m 20 'http://127.0.0.1:3000/api/warehouse/products/page?page=1&pageSize=5' | node -e \"let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{const j=JSON.parse(s);const i=j.items?.[0];console.log(JSON.stringify({partial:j.partial,items:j.items?.length,first:{id:i?.id,selectedSupplier:!!i?.selectedSupplier,ready:i?.ready,links:(i?.links||[]).length}},null,2));});\"",
+      "curl -sS -m 30 'http://127.0.0.1:3000/api/warehouse/products/page?page=1&pageSize=40' | node -e \"let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{const j=JSON.parse(s);const linked=(j.items||[]).filter(i=>(i.links||[]).length>0);const withSupplier=linked.filter(i=>i.selectedSupplier||i.stockOnlyFallbackActive);console.log(JSON.stringify({partial:j.partial,items:j.items?.length,linked:linked.length,withSupplier:withSupplier.length,sample:withSupplier.slice(0,2).map(i=>({id:i.id,supplier:!!i.selectedSupplier,ready:i.ready}))},null,2));});\"",
     ].join(" && "));
   } finally {
     conn.end();

@@ -1368,7 +1368,11 @@ function DetailPanel({ selectedGroup, products, onClose, isAdmin, filteredOut = 
     );
   }
   const image = firstImage(primary);
-  const status = statusLabel(primary);
+  const detailGroup = useMemo(() => {
+    const grouped = groupProductsForList(products);
+    return grouped.find((group) => group.groupKey === selectedGroup) || grouped[0];
+  }, [products, selectedGroup]);
+  const status = detailGroup ? groupStatusLabel(detailGroup) : statusLabel(primary);
   const refreshDetail = () => void queryClient.invalidateQueries({ queryKey: groupQueryKey });
   const groupLinkCount = uniqueLinks(products).length;
 

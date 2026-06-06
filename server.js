@@ -12464,7 +12464,7 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
     counterStats: {
       ready: 0,
       changed: 0,
-      withoutSupplier: Math.max(0, Number(totalAll || 0) - Number(linkedProducts || 0)),
+      withoutSupplier: 0,
       linkedProducts,
       linkedNotReady: 0,
     },
@@ -12493,7 +12493,17 @@ function getCachedWarehousePostgresSummary(rate) {
 async function resolveWarehousePostgresSummaryForPage(prisma, rate, { preferLight = false } = {}) {
   const cached = getCachedWarehousePostgresSummary(rate);
   if (cached && !cached.lightweight) return cached;
-  if (preferLight) return getWarehousePostgresSummaryLight(prisma, rate);
+  if (preferLight) {
+    const light = await getWarehousePostgresSummaryLight(prisma, rate);
+    if (cached?.counterStats && !cached.lightweight) {
+      return {
+        ...light,
+        counterStats: cached.counterStats,
+        linkedArchived: cached.linkedArchived ?? light.linkedArchived,
+      };
+    }
+    return light;
+  }
   return getWarehousePostgresSummary(prisma, rate);
 }
 
@@ -12626,26 +12636,26 @@ async function buildFastWarehousePageFromPostgres({
     {
       refreshPrices: false,
       persistMutations: false,
-      livePriceMaster: preferLightPage,
-      batchPriceMaster: preferLightPage,
+      livePriceMaster: false,
+      batchPriceMaster: false,
       usdRate: rate,
-      priceMasterTimeoutMs: preferLightPage ? warehousePagePmTimeoutMs : undefined,
     },
   );
   pageTrace("postgres:after-build", traceStartedAt);
   const builtMap = new Map(built.map((product) => [product.id, product]));
   const items = pageWarehouse.products.map((product) => {
     const item = builtMap.get(product.id) || normalizeWarehouseProduct(product);
-    const enriched = Boolean(builtMap.has(product.id));
+    const links = Array.isArray(item.links) ? item.links : [];
+    const hasSupplier = Boolean(item.selectedSupplier) || Boolean(item.stockOnlyFallbackActive);
     return {
       ...item,
       autoPriceEnabled: item.autoPriceEnabled !== false,
-      links: Array.isArray(item.links) ? item.links : [],
+      links,
       suppliers: Array.isArray(item.suppliers) ? item.suppliers : [],
       selectedSupplier: item.selectedSupplier || null,
       noSupplierAutomation: item.noSupplierAutomation || {},
       marketplaceState: item.marketplaceState || {},
-      partial: preferLightPage && !enriched,
+      partial: links.length > 0 && !hasSupplier,
     };
   });
   return {
