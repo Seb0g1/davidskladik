@@ -56,6 +56,28 @@ export function marketplaceLabel(value?: string | null): string {
   return value || "Marketplace";
 }
 
+export function marketplaceRowLabel(product: Product): string {
+  const base = marketplaceLabel(product.marketplace);
+  const target = String(product.targetName || product.target || "").trim();
+  const offer = String(product.offerId || product.sku || "").trim();
+  if (target && target.toLowerCase() !== String(product.marketplace || "").toLowerCase()) {
+    return `${base} · ${target}`;
+  }
+  if (offer) return `${base} · ${offer}`;
+  return base;
+}
+
+export function groupMarketplaceLabels(products: Product[]): string[] {
+  const counts = new Map<string, number>();
+  for (const product of products) {
+    const label = marketplaceRowLabel(product);
+    counts.set(label, (counts.get(label) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([label, count]) => (count > 1 ? `${label} ×${count}` : label))
+    .sort((a, b) => a.localeCompare(b, "ru"));
+}
+
 export function preferredGroupPrimary(products: Product[]): Product {
   return [...products].sort((a, b) => {
     const aScore = (firstImage(a) ? 8 : 0) + (a.marketplace === "yandex" ? 4 : 0) + ((a.links || []).length ? 2 : 0) + (a.archived ? -2 : 0);
@@ -74,18 +96,21 @@ export function groupProductsForList(products: Product[]): ProductGroup[] {
   return Array.from(groups.entries()).map(([groupKey, groupProducts]) => {
     const productsSorted = [...groupProducts].sort((a, b) => String(a.marketplace || "").localeCompare(String(b.marketplace || "")));
     const links = uniqueLinks(productsSorted);
-    const marketplaces = Array.from(new Set(productsSorted.map((product) => marketplaceLabel(product.marketplace)).filter(Boolean))).sort();
+    const marketplaces = groupMarketplaceLabels(productsSorted);
     const statusSummary = productsSorted.reduce<ProductGroup["statusSummary"]>((summary, product) => {
       const stateCode = String(product.marketplaceState?.code || product.status || "").toLowerCase();
       const linked = (product.links || []).length > 0;
       const archived = Boolean(product.archived || stateCode.includes("archiv"));
-      const changed = Number(product.newPrice || product.targetPrice || 0) > 0 && Number(product.currentPrice || 0) !== Number(product.newPrice || product.targetPrice || 0);
+      const changed = Number(product.newPrice || product.targetPrice || product.nextPrice || 0) > 0
+        && Number(product.currentPrice || product.marketplacePrice || 0) !== Number(product.newPrice || product.targetPrice || product.nextPrice || 0);
+      const hasSupplier = Boolean(product.selectedSupplier) || Boolean(product.stockOnlyFallbackActive);
+      const sellable = Boolean(product.ready) || (hasSupplier && Number(product.targetStock || product.stock || 0) > 0);
       summary.total += 1;
       if (linked) summary.linked += 1;
       if (archived) summary.archived += 1;
-      if (linked && !archived) summary.ready += 1;
+      if (linked && !archived && sellable) summary.ready += 1;
       if (changed) summary.changed += 1;
-      if (linked && !product.selectedSupplier) summary.withoutSupplier += 1;
+      if (linked && !hasSupplier) summary.withoutSupplier += 1;
       return summary;
     }, { total: 0, linked: 0, archived: 0, ready: 0, changed: 0, withoutSupplier: 0 });
     return {
@@ -117,7 +142,10 @@ export function statusLabel(product: Product): { label: string; tone: string; ic
   const linked = (product.links || []).length > 0;
   if (product.archived || stateCode.includes("archiv")) return { label: "Архив", tone: "danger", icon: <Archive size={14} /> };
   if (!linked) return { label: "Нет привязки", tone: "warn", icon: <AlertCircle size={14} /> };
-  if (Number(product.newPrice || product.targetPrice || 0) > 0 && Number(product.currentPrice || 0) !== Number(product.newPrice || product.targetPrice || 0)) {
+  const hasSupplier = Boolean(product.selectedSupplier) || Boolean(product.stockOnlyFallbackActive);
+  if (!hasSupplier) return { label: "Нет поставщика", tone: "warn", icon: <AlertCircle size={14} /> };
+  if (Number(product.newPrice || product.targetPrice || product.nextPrice || 0) > 0
+    && Number(product.currentPrice || product.marketplacePrice || 0) !== Number(product.newPrice || product.targetPrice || product.nextPrice || 0)) {
     return { label: "Цена изменилась", tone: "info", icon: <RefreshCw size={14} /> };
   }
   return { label: "Готов к продаже", tone: "success", icon: <PackageCheck size={14} /> };

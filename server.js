@@ -125,6 +125,7 @@ const linkedActivationImmediateMaxScope = Math.max(
   Math.min(1000, Number(process.env.LINKED_ACTIVATION_IMMEDIATE_MAX_SCOPE || immediateAutoPushMaxScope) || immediateAutoPushMaxScope),
 );
 const warehouseFastPageBuildTimeoutMs = Math.max(5000, Number(process.env.WAREHOUSE_FAST_PAGE_BUILD_TIMEOUT_MS || 30000) || 30000);
+const warehousePagePmTimeoutMs = Math.max(2000, Number(process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 8000) || 8000);
 const linkedNoSupplierZeroGraceMs = Math.max(0, Number(process.env.LINKED_NO_SUPPLIER_ZERO_GRACE_MS || 120000) || 120000);
 const marketplaceQueueAutoPricePushEnabled = process.env.MARKETPLACE_QUEUE_AUTO_PRICE_PUSH_ENABLED !== "false";
 const immediateAutoPushDelayMs = Math.max(1200, Number(process.env.AUTO_PRICE_IMMEDIATE_DELAY_MS || 10000) || 10000);
@@ -12619,17 +12620,23 @@ async function buildFastWarehousePageFromPostgres({
     products: pageProducts,
     suppliers: normalizedSuppliers,
   };
-  const built = preferLightPage
-    ? []
-    : await buildFreshWarehouseProductsForWarehouse(
-      pageWarehouse,
-      pageWarehouse.products.map((product) => product.id),
-      { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
-    );
+  const built = await buildFreshWarehouseProductsForWarehouse(
+    pageWarehouse,
+    pageWarehouse.products.map((product) => product.id),
+    {
+      refreshPrices: false,
+      persistMutations: false,
+      livePriceMaster: preferLightPage,
+      batchPriceMaster: preferLightPage,
+      usdRate: rate,
+      priceMasterTimeoutMs: preferLightPage ? warehousePagePmTimeoutMs : undefined,
+    },
+  );
   pageTrace("postgres:after-build", traceStartedAt);
   const builtMap = new Map(built.map((product) => [product.id, product]));
   const items = pageWarehouse.products.map((product) => {
     const item = builtMap.get(product.id) || normalizeWarehouseProduct(product);
+    const enriched = Boolean(builtMap.has(product.id));
     return {
       ...item,
       autoPriceEnabled: item.autoPriceEnabled !== false,
@@ -12638,7 +12645,7 @@ async function buildFastWarehousePageFromPostgres({
       selectedSupplier: item.selectedSupplier || null,
       noSupplierAutomation: item.noSupplierAutomation || {},
       marketplaceState: item.marketplaceState || {},
-      partial: preferLightPage,
+      partial: preferLightPage && !enriched,
     };
   });
   return {
@@ -12660,7 +12667,7 @@ async function buildFastWarehousePageFromPostgres({
     usdRate: rate,
     priceMaster: await getPriceMasterSnapshotMetaFast(),
     sourceError: "",
-    partial: preferLightPage || (needsInMemoryPage && siblingSourceProducts.length >= warehouseInMemoryPageMax),
+    partial: items.some((item) => item.partial) || (needsInMemoryPage && siblingSourceProducts.length >= warehouseInMemoryPageMax),
     inMemoryScanCapped: needsInMemoryPage && siblingSourceProducts.length >= warehouseInMemoryPageMax,
     noSupplierAlerts: [],
     page,

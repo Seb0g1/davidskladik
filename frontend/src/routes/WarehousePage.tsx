@@ -8,7 +8,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
-import { ProductGroup, firstImage, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
+import { ProductGroup, firstImage, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, marketplaceRowLabel, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
 
 const pageSize = 40;
 const mobileListMedia = "(max-width: 640px)";
@@ -1161,7 +1161,7 @@ function MarketplaceRows({ products }: { products: Product[] }) {
           return (
             <div className="marketplace-row" key={product.id}>
               <div>
-                <strong>{marketplaceLabel(product.marketplace)}</strong>
+                <strong>{marketplaceRowLabel(product)}</strong>
                 <span>{product.offerId || product.sku || product.id}</span>
               </div>
               <span className={`pill ${status.tone}`}>{status.icon}{status.label}</span>
