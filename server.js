@@ -26854,6 +26854,7 @@ module.exports = {
   hydrateWarehouseProductsForIds,
   backgroundMarketplaceJobsBlocked,
   readWarehouseProductsFromPostgresByIds,
+  buildFreshWarehouseProducts,
   repairWarehouseProductSupplierSnapshot,
   stripStaleWarehouseSupplierSnapshot,
   resolveLightweightSelectedSupplier,
