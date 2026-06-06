@@ -5325,6 +5325,20 @@ test("no-supplier automation does not archive linked products while supplier is 
   assert.equal(oldResult.toArchive.length, 0);
 });
 
+test("linked activation runs immediately before background-job disable gate", async () => {
+  const root = path.join(__dirname, "..");
+  const serverSource = await fs.readFile(path.join(root, "server.js"), "utf8");
+  const start = serverSource.indexOf("async function queueLinkedProductActivation");
+  assert.ok(start >= 0);
+  const block = serverSource.slice(start, start + 5000);
+  const immediateIdx = block.indexOf("requestMeta.immediate === true");
+  const disabledIdx = block.indexOf("backgroundMarketplaceJobsBlocked()");
+  assert.ok(immediateIdx >= 0);
+  assert.ok(disabledIdx >= 0);
+  assert.ok(immediateIdx < disabledIdx);
+  assert.match(serverSource, /hydrateWarehouseProductsForIds/);
+});
+
 test("pm2 split entry files and immediate link activation hooks exist", async () => {
   const root = path.join(__dirname, "..");
   const serverSource = await fs.readFile(path.join(root, "server.js"), "utf8");

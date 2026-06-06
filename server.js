@@ -9715,6 +9715,112 @@ async function readWarehouseFull() {
   return readWarehouse({ forceFull: true });
 }
 
+function backgroundMarketplaceJobsBlocked() {
+  return process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled;
+}
+
+async function readWarehouseProductsFromPostgresByIds(productIds = []) {
+  const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : [productIds])
+    .map((id) => cleanText(id))
+    .filter(Boolean)));
+  if (!ids.length || !shouldUsePostgresStorage()) return [];
+  const prisma = getPrisma();
+  if (!prisma) return [];
+  const rows = await prisma.warehouseProduct.findMany({
+    where: { AND: [enabledWarehouseTargetWhere(), { id: { in: ids } }] },
+    include: { links: true },
+  });
+  return rows.map(productFromPostgres);
+}
+
+async function readWarehouseGroupSiblingsFromPostgres(seedProducts = []) {
+  const seeds = (Array.isArray(seedProducts) ? seedProducts : []).filter((product) => product?.id);
+  if (!seeds.length || !shouldUsePostgresStorage()) return seeds;
+  const prisma = getPrisma();
+  if (!prisma) return seeds;
+  const byId = new Map(seeds.map((product) => [String(product.id), product]));
+  const offerIds = Array.from(new Set(seeds.map((product) => cleanText(product.offerId)).filter(Boolean)));
+  const manualGroupIds = Array.from(new Set(seeds.map((product) => {
+    const raw = product?.raw && typeof product.raw === "object" && !Array.isArray(product.raw) ? product.raw : {};
+    return cleanText(raw.manualGroupId || raw.manual_group_id);
+  }).filter(Boolean)));
+  const baseWhere = enabledWarehouseTargetWhere();
+  const clauses = offerIds.map((offerId) => ({ offerId: { equals: offerId, mode: "insensitive" } }));
+  for (const manualGroupId of manualGroupIds) {
+    clauses.push({ raw: { path: ["manualGroupId"], equals: manualGroupId } });
+  }
+  if (!clauses.length) return Array.from(byId.values());
+  let rows = [];
+  try {
+    rows = await prisma.warehouseProduct.findMany({
+      where: { AND: [baseWhere, { OR: clauses }] },
+      include: { links: true },
+    });
+  } catch (error) {
+    if (!offerIds.length) return Array.from(byId.values());
+    logger.warn("warehouse postgres group sibling lookup failed, using offerId fallback", { detail: error?.message || String(error) });
+    rows = await prisma.warehouseProduct.findMany({
+      where: {
+        AND: [
+          baseWhere,
+          { OR: offerIds.map((offerId) => ({ offerId: { equals: offerId, mode: "insensitive" } })) },
+        ],
+      },
+      include: { links: true },
+    });
+  }
+  for (const row of rows) {
+    const product = productFromPostgres(row);
+    byId.set(String(product.id), product);
+  }
+  return Array.from(byId.values());
+}
+
+function mergeWarehouseProductsIntoMemory(products = [], { suppliers = null } = {}) {
+  const normalized = (Array.isArray(products) ? products : []).map(normalizeWarehouseProduct).filter((product) => product?.id);
+  if (!normalized.length) return warehouseMemoryCache || { products: [], suppliers: [] };
+  const existing = warehouseMemoryCache || { createdAt: new Date().toISOString(), updatedAt: null, products: [], suppliers: [] };
+  const byId = new Map((existing.products || []).map((product) => [String(product.id), product]));
+  for (const product of normalized) byId.set(String(product.id), product);
+  const payload = {
+    ...existing,
+    products: Array.from(byId.values()),
+    suppliers: Array.isArray(suppliers) && suppliers.length ? suppliers : (existing.suppliers || []),
+    postgresOnly: shouldUsePostgresStorage() && !warehouseFullMemoryLoadEnabled,
+  };
+  warehouseMemoryCache = payload;
+  warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
+  return payload;
+}
+
+async function hydrateWarehouseProductsForIds(productIds = [], { expandGroups = true } = {}) {
+  const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : [productIds])
+    .map((id) => cleanText(id))
+    .filter(Boolean)));
+  if (!ids.length) return [];
+  const warehouse = await readWarehouse();
+  const missingIds = ids.filter((id) => !(warehouse.products || []).some((product) => String(product.id) === id));
+  if (missingIds.length && shouldUsePostgresStorage()) {
+    const loaded = await readWarehouseProductsFromPostgresByIds(missingIds);
+    if (loaded.length) {
+      const suppliers = warehouse.suppliers?.length
+        ? warehouse.suppliers
+        : await getWarehousePostgresSuppliers(getPrisma()).catch(() => []);
+      mergeWarehouseProductsIntoMemory(loaded, { suppliers });
+    }
+  }
+  const refreshed = await readWarehouse();
+  const seeds = (refreshed.products || []).filter((product) => ids.includes(String(product.id)));
+  if (!expandGroups) return seeds;
+  if (shouldUsePostgresStorage()) {
+    const groupProducts = await readWarehouseGroupSiblingsFromPostgres(seeds.length ? seeds : await readWarehouseProductsFromPostgresByIds(ids));
+    if (groupProducts.length) mergeWarehouseProductsIntoMemory(groupProducts, { suppliers: refreshed.suppliers });
+    const finalWarehouse = await readWarehouse();
+    return expandWarehouseProductsToGroups(finalWarehouse.products || [], seeds.length ? seeds : groupProducts);
+  }
+  return expandWarehouseProductsToGroups(refreshed.products || [], seeds);
+}
+
 async function writeWarehouseJsonPayload(payload) {
   await fs.mkdir(dataDir, { recursive: true });
   const temporaryPath = `${warehousePath}.${process.pid}.${Date.now()}.tmp`;
@@ -9784,6 +9890,22 @@ async function writeWarehouseProductPatch(products = [], { reason = "warehouse_p
       return replacement;
     });
     warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
+  }
+  if (!changed && shouldUsePostgresStorage()) {
+    if (writeLinks) {
+      await replaceProductLinksInPostgres(getPrisma(), normalizedProducts);
+    } else {
+      const chunkSize = Math.max(25, Math.min(250, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 100) || 100));
+      const writeConcurrency = warehousePostgresWriteConcurrency();
+      for (const productChunk of chunkArray(normalizedProducts, chunkSize)) {
+        await runWithLimitedConcurrency(productChunk, writeConcurrency, async (product) => {
+          await upsertWarehouseProductPostgres(getPrisma(), product);
+        });
+        markWarehousePostgresProductsWritten(productChunk);
+      }
+    }
+    mergeWarehouseProductsIntoMemory(normalizedProducts);
+    return warehouseMemoryCache || warehouse;
   }
   if (!changed) return warehouseMemoryCache || warehouse;
   const payload = normalizeWarehousePayload(warehouse);
@@ -11827,6 +11949,7 @@ async function buildFreshWarehouseProducts(productIds = [], {
   usdRate,
   priceMasterTimeoutMs,
 } = {}) {
+  await hydrateWarehouseProductsForIds(productIds, { expandGroups: false });
   const warehouse = await readWarehouse();
   return buildFreshWarehouseProductsForWarehouse(warehouse, productIds, {
     refreshPrices,
@@ -17530,6 +17653,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       .filter(Boolean));
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для привязки." });
 
+    await hydrateWarehouseProductsForIds(Array.from(ids), { expandGroups: true });
     const initialWarehouse = await readWarehouse();
     const initialSeeds = (initialWarehouse.products || []).filter((product) => ids.has(String(product.id)));
     if (!initialSeeds.length) return response.status(404).json({ error: "Warehouse products not found." });
@@ -17728,6 +17852,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 app.post("/api/warehouse/products/:id/links", async (request, response, next) => {
   try {
     return await withWarehouseProductMutationLock([request.params.id], async () => {
+    await hydrateWarehouseProductsForIds([request.params.id], { expandGroups: true });
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
@@ -18150,6 +18275,8 @@ app.post("/api/warehouse/products/links/sync-group", async (request, response, n
       .map((id) => cleanText(id))
       .filter(Boolean);
     const groupKey = cleanText(request.body?.groupKey);
+    const hydrateIds = groupKey ? [] : productIds;
+    if (hydrateIds.length) await hydrateWarehouseProductsForIds(hydrateIds, { expandGroups: true });
     const initialWarehouse = await readWarehouse();
     const initialSeeds = groupKey
       ? warehouseProductsForGroupKey(initialWarehouse.products || [], groupKey)
@@ -18612,9 +18739,7 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
     priceMasterSearchCache.clear();
     invalidateWarehouseViewCache();
 
-    const warehouse = await readWarehouse();
-    const seeds = (warehouse.products || []).filter((product) => requestedIds.includes(String(product.id)));
-    const affectedProducts = expandWarehouseProductsToGroups(warehouse.products || [], seeds)
+    const affectedProducts = (await hydrateWarehouseProductsForIds(requestedIds, { expandGroups: true }))
       .filter((product) => product?.id);
     const affectedProductIds = Array.from(new Set(affectedProducts.map((product) => String(product.id))));
     const linkedAffectedIds = affectedProducts
@@ -18622,21 +18747,11 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
       .map((product) => String(product.id));
     const recoveryIds = affectedProductIds;
     const priceIds = linkedAffectedIds.length ? Array.from(new Set(linkedAffectedIds)) : affectedProductIds;
-
-    if (process.env.DISABLE_BACKGROUND_JOBS === "true") {
-      return {
-        activationQueued: false,
-        recoveryQueued: false,
-        priceIntentId: null,
-        affectedProductIds,
-        queued: 0,
-        queuedBatches: 0,
-        disabled: true,
-      };
-    }
+    const skipImmediateReplay = /(?:^|_)unchanged$/.test(normalizedSourceEvent);
 
     if (
-      requestMeta.immediate === true
+      !skipImmediateReplay
+      && requestMeta.immediate === true
       && affectedProductIds.length <= linkedActivationImmediateMaxScope
       && !isApiServer
     ) {
@@ -18659,6 +18774,18 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
         affectedProductIds,
         queued: 0,
         queuedBatches: 0,
+      };
+    }
+
+    if (backgroundMarketplaceJobsBlocked()) {
+      return {
+        activationQueued: false,
+        recoveryQueued: false,
+        priceIntentId: null,
+        affectedProductIds,
+        queued: 0,
+        queuedBatches: 0,
+        disabled: true,
       };
     }
 
@@ -25860,6 +25987,10 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     return { zeroStockSent: 0, archived: 0, errors: [], productStatuses };
   }
 
+  await hydrateWarehouseProductsForIds(
+    [...toZeroStock, ...toArchive].map((product) => product.id),
+    { expandGroups: false },
+  );
   const warehouse = await readWarehouse();
   const changedById = new Map();
   for (const action of allActions) {
@@ -25988,6 +26119,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   const stockActions = [...ozonFirstStockActions, ...ozonSecondStockActions, ...yandexStockActions];
   const unarchiveActions = [...ozonUnarchiveActions, ...yandexUnarchiveActions];
   const productStatuses = summarizeSupplierRecoveryProducts(recovered, stockActions, unarchiveActions);
+  await hydrateWarehouseProductsForIds(recovered.map((item) => item.id), { expandGroups: false });
   const warehouse = await readWarehouse();
   const now = new Date().toISOString();
   const recoveredIds = new Set(recovered.map((item) => String(item.id)));
@@ -26044,25 +26176,46 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   } else {
     await writeWarehouse(warehouse);
   }
-  const priceRefresh = await queueAuthoritativePriceReprice({
-    productIds: recovered.map((item) => item.id),
-    marketplace: "all",
-    reason: "supplier_recovery_price_refresh",
-    sourceEvent: cleanText(options.sourceEvent || source) || "supplier_recovery_price_refresh",
-    force: true,
-    onlyChanged: false,
-    refreshMarketplacePrices: true,
-    livePriceMaster: true,
-    verify: true,
-    priority: 2,
-  }).catch((error) => {
-    logger.warn("supplier recovery price refresh queue failed", {
-      source,
-      detail: error?.message || String(error),
-      products: recovered.length,
+  const recoveryPriceIds = recovered.map((item) => item.id);
+  const recoveryPriceEvent = cleanText(options.sourceEvent || source) || "supplier_recovery_price_refresh";
+  const priceRefresh = backgroundMarketplaceJobsBlocked()
+    ? await sendWarehousePrices({
+      productIds: recoveryPriceIds,
+      marketplace: "all",
+      reason: recoveryPriceEvent,
+      sourceEvent: recoveryPriceEvent,
+      force: true,
+      onlyChanged: false,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+    }).catch((error) => {
+      logger.warn("supplier recovery inline price refresh failed", {
+        source,
+        detail: error?.message || String(error),
+        products: recovered.length,
+      });
+      return { ok: false, accepted: false, sent: 0, failed: 0, skipped: [], priceIntentId: null, error: error?.message || String(error) };
+    })
+    : await queueAuthoritativePriceReprice({
+      productIds: recoveryPriceIds,
+      marketplace: "all",
+      reason: recoveryPriceEvent,
+      sourceEvent: recoveryPriceEvent,
+      force: true,
+      onlyChanged: false,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+      priority: 2,
+    }).catch((error) => {
+      logger.warn("supplier recovery price refresh queue failed", {
+        source,
+        detail: error?.message || String(error),
+        products: recovered.length,
+      });
+      return { ok: false, accepted: false, queued: 0, queuedBatches: 0, priceIntentId: null, error: error?.message || String(error) };
     });
-    return { ok: false, accepted: false, queued: 0, queuedBatches: 0, priceIntentId: null, error: error?.message || String(error) };
-  });
 
   const errors = [...stockActions, ...unarchiveActions]
     .filter((item) => !item.ok)
@@ -26698,6 +26851,9 @@ module.exports = {
   runLinkedProductActivationImmediate,
   queueLinkedProductActivation,
   warehouseLinkActivationRequestMeta,
+  hydrateWarehouseProductsForIds,
+  backgroundMarketplaceJobsBlocked,
+  readWarehouseProductsFromPostgresByIds,
   repairWarehouseProductSupplierSnapshot,
   stripStaleWarehouseSupplierSnapshot,
   resolveLightweightSelectedSupplier,
