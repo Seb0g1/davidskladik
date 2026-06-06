@@ -106,10 +106,21 @@ const keepUnlinkedProductsSellable = process.env.KEEP_UNLINKED_PRODUCTS_SELLABLE
 const autoRestoreOnSupplierReturn = process.env.AUTO_RESTORE_ON_SUPPLIER_RETURN !== "false";
 const bullmqEnabled = process.env.BULLMQ_ENABLED === "true";
 const redisUrl = cleanText(process.env.REDIS_URL);
+const serverRole = cleanText(process.env.SERVER_ROLE || "monolith").toLowerCase();
+const isApiServer = serverRole === "api";
+const isWorkerServer = serverRole === "worker";
+const isMonolithServer = !isApiServer && !isWorkerServer;
 const bullmqWorkerConcurrency = Math.max(1, Math.min(4, Number(process.env.BULLMQ_WORKER_CONCURRENCY || 1) || 1));
-const bullmqLockDurationMs = Math.max(60000, Number(process.env.BULLMQ_LOCK_DURATION_MS || 300000) || 300000);
-const bullmqStalledIntervalMs = Math.max(30000, Number(process.env.BULLMQ_STALLED_INTERVAL_MS || 60000) || 60000);
-const bullmqMaxStalledCount = Math.max(1, Number(process.env.BULLMQ_MAX_STALLED_COUNT || 1) || 1);
+const bullmqLockDurationMs = Math.max(120000, Number(process.env.BULLMQ_LOCK_DURATION_MS || 900000) || 900000);
+const bullmqStalledIntervalMs = Math.max(30000, Number(process.env.BULLMQ_STALLED_INTERVAL_MS || 120000) || 120000);
+const bullmqMaxStalledCount = Math.max(2, Number(process.env.BULLMQ_MAX_STALLED_COUNT || 3) || 3);
+const immediateAutoPushMaxScope = Math.max(1, Math.min(1000, Number(process.env.AUTO_PRICE_IMMEDIATE_MAX_SCOPE || 500) || 500));
+const linkedActivationImmediateMaxScope = Math.max(
+  1,
+  Math.min(1000, Number(process.env.LINKED_ACTIVATION_IMMEDIATE_MAX_SCOPE || immediateAutoPushMaxScope) || immediateAutoPushMaxScope),
+);
+const warehouseFastPageBuildTimeoutMs = Math.max(5000, Number(process.env.WAREHOUSE_FAST_PAGE_BUILD_TIMEOUT_MS || 30000) || 30000);
+const linkedNoSupplierZeroGraceMs = Math.max(0, Number(process.env.LINKED_NO_SUPPLIER_ZERO_GRACE_MS || 120000) || 120000);
 const marketplaceQueueAutoPricePushEnabled = process.env.MARKETPLACE_QUEUE_AUTO_PRICE_PUSH_ENABLED !== "false";
 const immediateAutoPushDelayMs = Math.max(1200, Number(process.env.AUTO_PRICE_IMMEDIATE_DELAY_MS || 10000) || 10000);
 const immediateAutoPushFollowupDelayMs = Math.max(1000, Number(process.env.AUTO_PRICE_IMMEDIATE_FOLLOWUP_DELAY_MS || immediateAutoPushDelayMs) || immediateAutoPushDelayMs);
@@ -3010,6 +3021,72 @@ function mergeWarehouseLinkForSave(existing = {}, incoming = {}, { now = new Dat
     updatedAt: now,
     updatedBy: username,
   });
+}
+
+function productHasSupplierLinks(product = {}) {
+  return Array.isArray(product.links) && product.links.length > 0;
+}
+
+function warehouseLinkActivationRequestMeta(productIds = [], requestMeta = {}) {
+  const ids = Array.isArray(productIds) ? productIds : [];
+  return {
+    ...requestMeta,
+    immediate: ids.length > 0 && ids.length <= linkedActivationImmediateMaxScope,
+  };
+}
+
+function stripStaleWarehouseSupplierSnapshot(raw = {}) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const next = { ...raw };
+  for (const key of [
+    "selectedSupplier",
+    "suppliers",
+    "priceFormula",
+    "ready",
+    "changed",
+    "nextPrice",
+    "fallbackSuppliers",
+    "selectedSupplierReason",
+    "priceSource",
+    "priceSelectionReason",
+  ]) {
+    delete next[key];
+  }
+  return next;
+}
+
+function repairWarehouseProductSupplierSnapshot(input = {}) {
+  const normalized = normalizeWarehouseProduct(input);
+  const links = Array.isArray(normalized.links) ? normalized.links : [];
+  if (!links.length) return { product: normalized, repaired: false, reason: "no_links" };
+  const raw = normalized.raw && typeof normalized.raw === "object" && !Array.isArray(normalized.raw)
+    ? normalized.raw
+    : {};
+  const hasStaleSnapshot = Boolean(
+    raw.selectedSupplier
+    || (Array.isArray(raw.suppliers) && raw.suppliers.length)
+    || raw.ready
+    || raw.priceFormula
+    || raw.nextPrice,
+  );
+  if (!hasStaleSnapshot) return { product: normalized, repaired: false, reason: "no_stale_snapshot" };
+  const cleanedRaw = stripStaleWarehouseSupplierSnapshot(raw);
+  return {
+    product: normalizeWarehouseProduct({
+      ...normalized,
+      ...cleanedRaw,
+      raw: cleanedRaw,
+      selectedSupplier: null,
+      suppliers: [],
+    }),
+    repaired: true,
+    reason: "stripped_stale_supplier_snapshot",
+  };
+}
+
+function resolveLightweightSelectedSupplier(product = {}, suppliers = []) {
+  const matches = Array.isArray(suppliers) ? suppliers : (Array.isArray(product.suppliers) ? product.suppliers : []);
+  return pickWarehouseSupplier(matches);
 }
 
 function compactWarehouseLinks(links = []) {
@@ -9024,7 +9101,7 @@ function productFromPostgres(row = {}) {
   const links = postgresLinksLoaded
     ? (postgresLinks.length > 0 || rowMarketplace !== "yandex" ? postgresLinks : rawLinks)
     : rawLinks;
-  return normalizeWarehouseProduct({
+  const { product } = repairWarehouseProductSupplierSnapshot(normalizeWarehouseProduct({
     ...raw,
     id: row.id,
     marketplace: row.marketplace,
@@ -9044,7 +9121,8 @@ function productFromPostgres(row = {}) {
     links,
     createdAt: row.createdAt ? row.createdAt.toISOString() : raw.createdAt,
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : raw.updatedAt,
-  });
+  }));
+  return product;
 }
 
 function warehouseProductPostgresUpdateData(data = {}) {
@@ -12902,14 +12980,12 @@ async function buildFastWarehousePage({
   const cached = getWarehouseFastPageCache(cacheParams);
   if (cached.value) return cached.value;
   let result = null;
-  if (shouldUsePostgresStorage()) {
-    const postgresPage = await buildFastWarehousePageFromPostgres({ page, pageSize, usdRate, filters });
-    if (postgresPage) {
-      setWarehouseFastPageCache(cached.key, postgresPage);
-      return postgresPage;
+  const buildCore = async () => {
+    if (shouldUsePostgresStorage()) {
+      const postgresPage = await buildFastWarehousePageFromPostgres({ page, pageSize, usdRate, filters });
+      if (postgresPage) return postgresPage;
     }
-  }
-  const warehouse = await readWarehouse();
+    const warehouse = await readWarehouse();
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
   const sourceProducts = Array.isArray(warehouse.products) ? warehouse.products : [];
@@ -12952,33 +13028,63 @@ async function buildFastWarehousePage({
   );
   const ozonStateCounts = warehouseStateCounter(enabledProducts, "ozon");
   const yandexStateCounts = warehouseStateCounter(enabledProducts, "yandex");
-  result = {
-    createdAt: warehouse.createdAt || null,
-    updatedAt: warehouse.updatedAt || null,
-    totalAll: enabledProducts.length,
-    ready: counterStats.ready,
-    changed: counterStats.changed,
-    withoutSupplier: counterStats.withoutSupplier,
-    linkedProducts: counterStats.linkedProducts,
-    linkedNotReady: counterStats.linkedNotReady,
-    linkedArchived: enabledProducts.filter((product) => product.marketplace === "ozon" && Array.isArray(product.links) && product.links.length && product.marketplaceState?.code === "archived").length,
-    ozonArchived: ozonStateCounts.archived,
-    ozonInactive: ozonStateCounts.inactive,
-    ozonOutOfStock: ozonStateCounts.outOfStock,
-    yandexArchived: yandexStateCounts.archived,
-    yandexInactive: yandexStateCounts.inactive,
-    yandexOutOfStock: yandexStateCounts.outOfStock,
-    usdRate: rate,
-    priceMaster: await getPriceMasterSnapshotMetaFast(),
-    sourceError: "",
-    noSupplierAlerts: [],
-    page,
-    pageSize,
-    total,
-    hasMore: offset + pageSlice.length < total,
-    items,
+    return {
+      createdAt: warehouse.createdAt || null,
+      updatedAt: warehouse.updatedAt || null,
+      totalAll: enabledProducts.length,
+      ready: counterStats.ready,
+      changed: counterStats.changed,
+      withoutSupplier: counterStats.withoutSupplier,
+      linkedProducts: counterStats.linkedProducts,
+      linkedNotReady: counterStats.linkedNotReady,
+      linkedArchived: enabledProducts.filter((product) => product.marketplace === "ozon" && Array.isArray(product.links) && product.links.length && product.marketplaceState?.code === "archived").length,
+      ozonArchived: ozonStateCounts.archived,
+      ozonInactive: ozonStateCounts.inactive,
+      ozonOutOfStock: ozonStateCounts.outOfStock,
+      yandexArchived: yandexStateCounts.archived,
+      yandexInactive: yandexStateCounts.inactive,
+      yandexOutOfStock: yandexStateCounts.outOfStock,
+      usdRate: rate,
+      priceMaster: await getPriceMasterSnapshotMetaFast(),
+      sourceError: "",
+      noSupplierAlerts: [],
+      page,
+      pageSize,
+      total,
+      hasMore: offset + pageSlice.length < total,
+      items,
+    };
   };
-  setWarehouseFastPageCache(cached.key, result);
+
+  try {
+    result = await Promise.race([
+      buildCore(),
+      promiseTimeout(warehouseFastPageBuildTimeoutMs, "warehouse_fast_page_build_timeout"),
+    ]);
+  } catch (error) {
+    if (error?.message === "warehouse_fast_page_build_timeout") {
+      logger.warn("warehouse fast page build timed out", {
+        timeoutMs: warehouseFastPageBuildTimeoutMs,
+        page,
+        pageSize,
+      });
+      if (cached.value) {
+        return { ...cached.value, partial: true, stale: true, sourceError: "warehouse_fast_page_build_timeout" };
+      }
+      return {
+        partial: true,
+        stale: false,
+        sourceError: "warehouse_fast_page_build_timeout",
+        page,
+        pageSize,
+        total: 0,
+        hasMore: false,
+        items: [],
+      };
+    }
+    throw error;
+  }
+  if (result) setWarehouseFastPageCache(cached.key, result);
   return result;
 }
 
@@ -17333,9 +17439,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       if (!alreadyApplied) return conflictResponse(response, blockingConflicts);
       const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, targetProducts, { usdRate });
       const activation = savedProducts.some((product) => (product.links || []).length)
-        ? await queueLinkedProductActivation(targetProducts.map((product) => product.id), "link_bulk_add_or_update_unchanged", {
+        ? await queueLinkedProductActivation(targetProducts.map((product) => product.id), "link_bulk_add_or_update_unchanged", warehouseLinkActivationRequestMeta(targetProducts.map((product) => product.id), {
           username: requestUsername(request),
-        })
+        }))
         : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: targetProducts.map((product) => product.id) };
       return response.json({
         ok: true,
@@ -17398,9 +17504,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     if (!updatedIds.length) {
       const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, targetProducts, { usdRate });
       const activation = savedProducts.some((product) => (product.links || []).length)
-        ? await queueLinkedProductActivation(targetProducts.map((product) => product.id), "link_bulk_add_or_update_unchanged", {
+        ? await queueLinkedProductActivation(targetProducts.map((product) => product.id), "link_bulk_add_or_update_unchanged", warehouseLinkActivationRequestMeta(targetProducts.map((product) => product.id), {
           username: requestUsername(request),
-        })
+        }))
         : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: targetProducts.map((product) => product.id) };
       return response.json({
         ok: true,
@@ -17422,9 +17528,9 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const updatedProducts = targetProducts;
     const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, updatedProducts, { usdRate });
     const expandedUpdatedIds = targetProducts.map((product) => product.id);
-    const activation = await queueLinkedProductActivation(expandedUpdatedIds, "link_bulk_add_or_update", {
+    const activation = await queueLinkedProductActivation(expandedUpdatedIds, "link_bulk_add_or_update", warehouseLinkActivationRequestMeta(expandedUpdatedIds, {
       username: requestUsername(request),
-    });
+    }));
     response.json({
       ok: true,
       changed: savedProducts.length || updatedIds.length,
@@ -17509,9 +17615,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product], { usdRate });
       const normalized = freshProduct || normalizeWarehouseProduct(product);
       const activation = (normalized.links || []).length
-        ? await queueLinkedProductActivation([product.id], "link_add_or_update_unchanged", {
+        ? await queueLinkedProductActivation([product.id], "link_add_or_update_unchanged", warehouseLinkActivationRequestMeta([product.id], {
           username: requestUsername(request),
-        })
+        }))
         : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: [product.id] };
       return response.json({ ok: true, product: normalized, links: normalized.links || [], persisted: "unchanged", unchanged: true, ...activation });
     }
@@ -17519,9 +17625,9 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     product.updatedAt = now;
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_save" });
     const [savedProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product], { usdRate });
-    const activation = await queueLinkedProductActivation([product.id], "link_add_or_update", {
+    const activation = await queueLinkedProductActivation([product.id], "link_add_or_update", warehouseLinkActivationRequestMeta([product.id], {
       username: requestUsername(request),
-    });
+    }));
     response.json({
       ok: true,
       product: savedProduct || normalizeWarehouseProduct(product),
@@ -17914,7 +18020,7 @@ app.post("/api/warehouse/products/links/sync-group", async (request, response, n
       }
       const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, targetProducts);
       const activation = responseProducts.some((product) => (product.links || []).length)
-        ? await queueLinkedProductActivation(expandedIds, changedProducts.length ? "link_sync_group" : "link_sync_group_unchanged", { username: requestUsername(request) })
+        ? await queueLinkedProductActivation(expandedIds, changedProducts.length ? "link_sync_group" : "link_sync_group_unchanged", warehouseLinkActivationRequestMeta(expandedIds, { username: requestUsername(request) }))
         : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: expandedIds };
       response.json({
         ok: true,
@@ -18244,6 +18350,91 @@ async function queueAuthoritativePriceReprice({
   return { ok: true, accepted: true, priceIntentId, queued: ids.length, queuedBatches: batches.length };
 }
 
+function pickImmediateLinkRecoveryCandidates(products = []) {
+  return (Array.isArray(products) ? products : []).filter((product) => {
+    if (!product?.id || !productHasSupplierLinks(product) || !product.selectedSupplier) return false;
+    return productLooksArchived(product)
+      || marketplaceProductNeedsSalesRecovery(product, { includeUnknown: true });
+  });
+}
+
+async function runLinkedProductActivationImmediate(productIds = [], sourceEvent = "link_change_immediate", requestMeta = {}) {
+  const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : []).map(cleanText).filter(Boolean)));
+  if (!ids.length) {
+    return {
+      activationQueued: false,
+      activationImmediate: true,
+      affectedProductIds: [],
+      ok: true,
+    };
+  }
+  const normalizedSourceEvent = cleanText(sourceEvent) || "link_change_immediate";
+  priceMasterLinkLookupCache.clear();
+  priceMasterSearchCache.clear();
+  invalidateWarehouseViewCache();
+
+  const products = await buildFreshWarehouseProducts(ids, {
+    refreshPrices: true,
+    livePriceMaster: true,
+    batchPriceMaster: true,
+    priceMasterTimeoutMs: autoPricePmTimeoutMs,
+  });
+  const withLinks = products.filter((product) => productHasSupplierLinks(product));
+  const withoutSupplier = withLinks.filter((product) => !product.selectedSupplier);
+  const withSupplier = withLinks.filter((product) => product.selectedSupplier);
+
+  let noSupplierResult = null;
+  if (withoutSupplier.length) {
+    noSupplierResult = await runNoSupplierMarketplaceAutomation(
+      { products: withoutSupplier },
+      { productIds: withoutSupplier.map((product) => product.id), includeNoLinks: false, source: "linked_activation_immediate" },
+    );
+  }
+
+  let recoveryResult = null;
+  const recoveryCandidates = pickImmediateLinkRecoveryCandidates(withSupplier);
+  if (recoveryCandidates.length) {
+    recoveryResult = await runSupplierRecoveryAutomation(
+      { products: recoveryCandidates },
+      {
+        productIds: recoveryCandidates.map((product) => product.id),
+        source: normalizedSourceEvent,
+        sourceEvent: normalizedSourceEvent,
+        force: true,
+      },
+    );
+  }
+
+  const priceIds = withSupplier.map((product) => product.id);
+  const priceResult = priceIds.length
+    ? await sendWarehousePrices({
+      productIds: priceIds,
+      force: true,
+      onlyChanged: false,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+      reason: normalizedSourceEvent,
+      sourceEvent: normalizedSourceEvent,
+      marketplace: "all",
+    })
+    : { sent: 0, failed: 0, skipped: [] };
+
+  return {
+    activationQueued: true,
+    activationImmediate: true,
+    activationPending: false,
+    recoveryQueued: false,
+    priceIntentId: priceResult.priceIntentId || null,
+    affectedProductIds: ids,
+    price: priceResult,
+    recovery: recoveryResult,
+    noSupplier: noSupplierResult,
+    ok: true,
+    requestedBy: requestMeta.username || requestMeta.user || "system",
+  };
+}
+
 async function queueLinkedProductActivation(productIds = [], sourceEvent = "link_change_activate_marketplace", requestMeta = {}) {
   const requestedIds = Array.from(new Set((Array.isArray(productIds) ? productIds : [])
     .map((id) => cleanText(id))
@@ -18285,6 +18476,33 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
         queued: 0,
         queuedBatches: 0,
         disabled: true,
+      };
+    }
+
+    if (
+      requestMeta.immediate === true
+      && affectedProductIds.length <= linkedActivationImmediateMaxScope
+      && !isApiServer
+    ) {
+      if (requestMeta.awaitImmediate === true) {
+        return await runLinkedProductActivationImmediate(affectedProductIds, normalizedSourceEvent, requestMeta);
+      }
+      void runLinkedProductActivationImmediate(affectedProductIds, normalizedSourceEvent, requestMeta).catch((error) => {
+        logger.warn("async linked product activation failed", {
+          sourceEvent: normalizedSourceEvent,
+          detail: error?.message || String(error),
+          count: affectedProductIds.length,
+        });
+      });
+      return {
+        activationQueued: true,
+        activationImmediate: true,
+        activationPending: true,
+        recoveryQueued: false,
+        priceIntentId: null,
+        affectedProductIds,
+        queued: 0,
+        queuedBatches: 0,
       };
     }
 
@@ -19162,12 +19380,16 @@ function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
 
 function initMarketplaceQueue() {
   if (!bullmqEnabled || !redisUrl) {
-    logger.info("marketplace queue disabled, using inline mode");
+    logger.info("marketplace queue disabled, using inline mode", { serverRole });
     return;
   }
   try {
     const connection = { url: redisUrl, maxRetriesPerRequest: null };
     marketplaceQueue = new Queue("marketplace-tasks", { connection });
+    if (isApiServer) {
+      logger.info("marketplace queue producer ready", { serverRole });
+      return;
+    }
     marketplaceWorker = new Worker(
       "marketplace-tasks",
       async (job) => processMarketplaceJob(job.name, job.data || {}),
@@ -25324,10 +25546,24 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
         return !key || !protectedOfferKeys.has(key);
       })
     : [];
+  const linkedNoSupplier = autoZeroStockOnNoSupplier
+    ? list.filter((product) => {
+        if (!product.hasLinks || product.selectedSupplier || product.noSupplierAutomation?.manualSellableAt) return false;
+        const key = marketplaceOfferAutomationKey(product);
+        if (key && protectedOfferKeys.has(key) && !product.hasLinks) return false;
+        const nowMs = options.now ? new Date(options.now).getTime() : Date.now();
+        const updatedMs = product.updatedAt ? new Date(product.updatedAt).getTime() : 0;
+        if (linkedNoSupplierZeroGraceMs > 0 && Number.isFinite(updatedMs) && updatedMs > 0 && nowMs - updatedMs < linkedNoSupplierZeroGraceMs) {
+          return false;
+        }
+        return !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product);
+      })
+    : [];
+  const noLinkZeroStock = autoZeroStockOnNoSupplier
+    ? noLinkProducts.filter((product) => !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product))
+    : [];
   return {
-    toZeroStock: autoZeroStockOnNoSupplier
-      ? noLinkProducts.filter((product) => !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product))
-      : [],
+    toZeroStock: [...linkedNoSupplier, ...noLinkZeroStock],
     toArchive: autoArchiveOnNoLinks
       ? noLinkProducts.filter(
           (product) =>
@@ -25472,7 +25708,15 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     product.noSupplierAutomation = product.noSupplierAutomation || { stockZeroAt: null, archivedAt: null, lastError: null };
     if (action.type === "zero_stock") product.lastStockSend = marketplaceCommandFromAction(action, product, now);
     if (action.type === "archive") product.lastArchiveSend = marketplaceCommandFromAction(action, product, now);
-    if (action.ok && action.type === "zero_stock") product.noSupplierAutomation.stockZeroAt = now;
+    if (action.ok && action.type === "zero_stock") {
+      product.noSupplierAutomation.stockZeroAt = now;
+      product.targetStock = 0;
+      product.marketplaceState = {
+        ...(product.marketplaceState || {}),
+        stock: 0,
+        code: product.marketplaceState?.code || "out_of_stock",
+      };
+    }
     if (action.ok && action.type === "archive") product.noSupplierAutomation.archivedAt = now;
     product.noSupplierAutomation.lastError = action.ok || action.skipped ? null : action.error;
     product.updatedAt = now;
@@ -25518,6 +25762,9 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   const products = Array.isArray(preview?.products) ? preview.products : [];
   let recovered = pickSupplierRecoveryCandidates(products, options);
   const source = options.source || (Array.isArray(options.productIds) && options.productIds.length ? "targeted" : "full");
+  const targetedIdSet = Array.isArray(options.productIds) && options.productIds.length
+    ? new Set(options.productIds.map((id) => String(id || "").trim()).filter(Boolean))
+    : null;
   let queuedOzonProducts = [];
   try {
     const queueState = await readOzonUnarchiveQueue();
@@ -25528,6 +25775,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
       if (item.status === "done") continue;
       const id = cleanText(item.id);
       if (!id) continue;
+      if (targetedIdSet && !targetedIdSet.has(id)) continue;
       const retryAtMs = item.nextRetryAt ? new Date(item.nextRetryAt).getTime() : 0;
       if (retryAtMs && Number.isFinite(retryAtMs) && retryAtMs > nowMs) continue;
       const target = cleanText(item.target) || "default";
@@ -25560,13 +25808,25 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     });
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [], source };
   }
-  const firstStockActions = await restoreStocksOnMarketplaces(recovered);
-  const unarchiveActions = await verifyMarketplaceUnarchiveActions(
-    recovered,
-    await unarchiveProductsOnMarketplaces(recovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),
-  );
-  const secondStockActions = await restoreStocksOnMarketplaces(recovered);
-  const stockActions = [...firstStockActions, ...secondStockActions];
+  const yandexRecovered = recovered.filter((product) => product.marketplace === "yandex");
+  const ozonRecovered = recovered.filter((product) => product.marketplace !== "yandex");
+  const ozonFirstStockActions = ozonRecovered.length ? await restoreStocksOnMarketplaces(ozonRecovered) : [];
+  const ozonUnarchiveActions = ozonRecovered.length
+    ? await verifyMarketplaceUnarchiveActions(
+      ozonRecovered,
+      await unarchiveProductsOnMarketplaces(ozonRecovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),
+    )
+    : [];
+  const ozonSecondStockActions = ozonRecovered.length ? await restoreStocksOnMarketplaces(ozonRecovered) : [];
+  const yandexUnarchiveActions = yandexRecovered.length
+    ? await verifyYandexUnarchiveActions(
+      yandexRecovered,
+      await unarchiveProductsOnMarketplaces(yandexRecovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),
+    )
+    : [];
+  const yandexStockActions = yandexRecovered.length ? await restoreStocksOnMarketplaces(yandexRecovered) : [];
+  const stockActions = [...ozonFirstStockActions, ...ozonSecondStockActions, ...yandexStockActions];
+  const unarchiveActions = [...ozonUnarchiveActions, ...yandexUnarchiveActions];
   const productStatuses = summarizeSupplierRecoveryProducts(recovered, stockActions, unarchiveActions);
   const warehouse = await readWarehouse();
   const now = new Date().toISOString();
@@ -26153,22 +26413,53 @@ app.use((error, request, response, _next) => {
   });
 });
 
+function startBackgroundSchedulers() {
+  scheduleDailySync();
+  schedulePriceRetryProcessing(30_000);
+  scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
+  scheduleSupplierCartAuto(180_000).catch((error) => logger.warn("supplier cart auto scheduler failed", { detail: error?.message || String(error) }));
+  scheduleAutoSync(autoSyncInitialDelaySeconds * 1000);
+}
+
 async function startServer() {
   initMarketplaceQueue();
   pruneUploadDirectory().catch((err) => logger.warn("initial upload prune failed", { detail: err?.message || String(err) }));
+
+  if (isWorkerServer) {
+    startBackgroundSchedulers();
+    readWarehouse()
+      .then((warehouse) => {
+        logger.info("warehouse cache warmed", { products: warehouse.products.length, suppliers: warehouse.suppliers.length });
+      })
+      .catch((err) => {
+        logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) });
+      });
+    const workerHealthPort = Number(process.env.WORKER_HEALTH_PORT || 0) || 0;
+    if (workerHealthPort > 0) {
+      app.listen(workerHealthPort, () => {
+        logger.info("worker health endpoint started", { port: workerHealthPort, healthPath: "/health" });
+      });
+    }
+    logger.info("worker started", { serverRole, bullmq: Boolean(marketplaceWorker) });
+    return;
+  }
+
   app.listen(port, () => {
     logger.info("server started", {
+      serverRole: isApiServer ? "api" : "monolith",
       port,
       url: `http://localhost:${port}`,
       healthPath: "/health",
       trustProxyHops: trustProxyHops || 0,
     });
-    logger.info("auto sync scheduler enabled", {
-      defaultEveryMinutes: Math.max(5, Number(autoSyncMinutes || 30) || 30),
-      initialDelaySeconds: autoSyncInitialDelaySeconds,
-    });
-    if (dailySyncEnabled) {
-      logger.info("daily sync enabled", { time: dailySyncTime, sendPrices: dailySyncSendPrices });
+    if (!isApiServer) {
+      logger.info("auto sync scheduler enabled", {
+        defaultEveryMinutes: Math.max(5, Number(autoSyncMinutes || 30) || 30),
+        initialDelaySeconds: autoSyncInitialDelaySeconds,
+      });
+      if (dailySyncEnabled) {
+        logger.info("daily sync enabled", { time: dailySyncTime, sendPrices: dailySyncSendPrices });
+      }
     }
   });
 
@@ -26180,11 +26471,7 @@ async function startServer() {
       logger.warn("warehouse cache warm failed", { detail: err?.message || String(err) });
     });
 
-  scheduleDailySync();
-  schedulePriceRetryProcessing(30_000);
-  scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
-  scheduleSupplierCartAuto(180_000).catch((error) => logger.warn("supplier cart auto scheduler failed", { detail: error?.message || String(error) }));
-  scheduleAutoSync(autoSyncInitialDelaySeconds * 1000);
+  if (!isApiServer) startBackgroundSchedulers();
 }
 
 async function shutdownForTests() {
@@ -26239,7 +26526,13 @@ module.exports = {
   summarizeSupplierRecoveryProducts,
   runNoSupplierMarketplaceAutomation,
   runSupplierRecoveryAutomation,
+  runLinkedProductActivationImmediate,
   queueLinkedProductActivation,
+  warehouseLinkActivationRequestMeta,
+  repairWarehouseProductSupplierSnapshot,
+  stripStaleWarehouseSupplierSnapshot,
+  resolveLightweightSelectedSupplier,
+  productHasSupplierLinks,
   queueAuthoritativePriceReprice,
   pickWarehouseSupplier,
   pickWarehouseStockOnlySupplier,

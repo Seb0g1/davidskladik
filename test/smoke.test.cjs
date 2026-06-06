@@ -4363,11 +4363,19 @@ test("background automation scope combines marketplace changes and PriceMaster d
   assert.deepEqual(withPriceMaster.productIds, ["marketplace-change", "pm-change"]);
 });
 
-test("automation does not zero linked product when supplier temporarily disappeared", () => {
+test("automation zeros linked product when supplier disappeared", () => {
   const { toZeroStock } = pickNoSupplierAutomationCandidates([
-    { id: "linked-no-supplier", hasLinks: true, selectedSupplier: null, noSupplierAutomation: {}, marketplaceState: { code: "active" } },
-  ]);
-  assert.equal(toZeroStock.length, 0);
+    {
+      id: "linked-no-supplier",
+      hasLinks: true,
+      selectedSupplier: null,
+      noSupplierAutomation: {},
+      marketplaceState: { code: "active", stock: 3 },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  ], { now: "2026-05-18T12:00:00.000Z" });
+  assert.equal(toZeroStock.length, 1);
+  assert.equal(toZeroStock[0].id, "linked-no-supplier");
 });
 
 test("automation does not zero manually restored linked product", () => {
@@ -4392,17 +4400,19 @@ test("automation does not archive linked product without supplier", () => {
   assert.equal(toArchive.length, 0);
 });
 
-test("automation does not re-queue stock=0 for linked product after prior zero", () => {
+test("automation re-zeros linked product when marketplace stock returned without supplier", () => {
   const product = {
     id: "stock-returned",
     hasLinks: true,
     selectedSupplier: null,
     noSupplierAutomation: { stockZeroAt: "2026-01-01T00:00:00.000Z" },
     marketplaceState: { stock: 2 },
+    updatedAt: "2026-01-01T00:00:00.000Z",
   };
   assert.equal(marketplaceHasPositiveStock(product), true);
-  const { toZeroStock } = pickNoSupplierAutomationCandidates([product], { includeNoLinks: true });
-  assert.equal(toZeroStock.length, 0);
+  const { toZeroStock } = pickNoSupplierAutomationCandidates([product], { includeNoLinks: true, now: "2026-05-18T12:00:00.000Z" });
+  assert.equal(toZeroStock.length, 1);
+  assert.equal(toZeroStock[0].id, "stock-returned");
 });
 
 test("automation protects unlinked duplicate offer when sibling is linked", () => {
@@ -5311,6 +5321,23 @@ test("no-supplier automation does not archive linked products while supplier is 
   assert.equal(freshResult.toArchive.length, 0);
 
   const oldResult = pickNoSupplierAutomationCandidates([old], { includeNoLinks: true, now });
-  assert.equal(oldResult.toZeroStock.length, 0);
+  assert.equal(oldResult.toZeroStock.length, 1);
   assert.equal(oldResult.toArchive.length, 0);
+});
+
+test("pm2 split entry files and immediate link activation hooks exist", async () => {
+  const root = path.join(__dirname, "..");
+  const serverSource = await fs.readFile(path.join(root, "server.js"), "utf8");
+  assert.match(serverSource, /SERVER_ROLE/);
+  assert.match(serverSource, /isApiServer/);
+  assert.match(serverSource, /isWorkerServer/);
+  assert.match(serverSource, /runLinkedProductActivationImmediate/);
+  assert.match(serverSource, /warehouseLinkActivationRequestMeta/);
+  assert.match(serverSource, /repairWarehouseProductSupplierSnapshot/);
+  await fs.access(path.join(root, "api-entry.js"));
+  await fs.access(path.join(root, "worker-entry.js"));
+  await fs.access(path.join(root, "ecosystem.config.cjs"));
+  const ecosystem = await fs.readFile(path.join(root, "ecosystem.config.cjs"), "utf8");
+  assert.match(ecosystem, /davidsklad-api/);
+  assert.match(ecosystem, /davidsklad-worker/);
 });
