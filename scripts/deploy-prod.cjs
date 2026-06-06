@@ -58,7 +58,7 @@ async function main() {
     const files = [
       "public/app-modern/index.html",
       "public/app-modern/assets/index-CzH8Z1Ju.css",
-      "public/app-modern/assets/index-Dl17k25l.js",
+      "public/app-modern/assets/index-CN5d-JyS.js",
     ];
     for (const rel of files) {
       await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);

@@ -1357,23 +1357,35 @@ function DetailPanel({ selectedGroup, products, onClose, isAdmin, filteredOut = 
     queryFn: () => fetchJson(`/api/warehouse/products/diagnostics?sku=${encodeURIComponent(primary?.offerId || "")}`, DiagnosticsSchema),
     enabled: diagnosticsOpen && Boolean(primary?.offerId),
   });
+  const detailGroup = useMemo(() => {
+    if (!products.length) return undefined;
+    const grouped = groupProductsForList(products);
+    return grouped.find((group) => group.groupKey === selectedGroup) || grouped[0];
+  }, [products, selectedGroup]);
+  const refreshDetail = () => void queryClient.invalidateQueries({ queryKey: groupQueryKey });
 
   if (!primary) {
     return (
-      <aside className="detail-panel empty-panel">
-        <PackageCheck size={28} />
-        <strong>Выберите товар</strong>
-        <span>Здесь откроются привязки, цены, остатки, AI-фото и диагностика.</span>
+      <aside className={`detail-panel ${selectedGroup ? "" : "empty-panel"}`}>
+        {selectedGroup ? (
+          <>
+            <Loader2 className="spin" size={28} />
+            <strong>Загружаю карточку...</strong>
+            <span>Привязки, цены и остатки появятся через секунду.</span>
+            <button className="mobile-close" type="button" onClick={onClose}><X size={18} /></button>
+          </>
+        ) : (
+          <>
+            <PackageCheck size={28} />
+            <strong>Выберите товар</strong>
+            <span>Здесь откроются привязки, цены, остатки, AI-фото и диагностика.</span>
+          </>
+        )}
       </aside>
     );
   }
   const image = firstImage(primary);
-  const detailGroup = useMemo(() => {
-    const grouped = groupProductsForList(products);
-    return grouped.find((group) => group.groupKey === selectedGroup) || grouped[0];
-  }, [products, selectedGroup]);
   const status = detailGroup ? groupStatusLabel(detailGroup) : statusLabel(primary);
-  const refreshDetail = () => void queryClient.invalidateQueries({ queryKey: groupQueryKey });
   const groupLinkCount = uniqueLinks(products).length;
 
   return (
