@@ -8,7 +8,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
-import { ProductGroup, firstImage, groupMarketplaceLabels, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, marketplaceRowLabel, marketplaceRowLabelsForProducts, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
+import { ProductGroup, firstImage, groupMarketplaceLabels, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, marketplaceRowLabel, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
 
 const pageSize = 40;
 const mobileListMedia = "(max-width: 640px)";
@@ -1109,7 +1109,20 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
 function MarketplaceRows({ products }: { products: Product[] }) {
   const groupLinkCount = uniqueLinks(products).length;
   const marketplaceBadges = groupMarketplaceLabels(products);
-  const marketplaceRows = marketplaceRowLabelsForProducts(products);
+  const marketplaceRows = useMemo(() => {
+    const grouped = new Map<string, Product[]>();
+    for (const product of products) {
+      const label = marketplaceRowLabel(product);
+      if (!grouped.has(label)) grouped.set(label, []);
+      grouped.get(label)?.push(product);
+    }
+    return Array.from(grouped.entries()).map(([label, items]) => ({
+      key: items.map((item) => item.id).sort().join("|"),
+      label: items.length > 1 ? `${label} ×${items.length}` : label,
+      product: preferredGroupPrimary(items),
+      items,
+    }));
+  }, [products]);
   return (
     <section className="detail-section">
       <div className="section-title">
@@ -1117,7 +1130,7 @@ function MarketplaceRows({ products }: { products: Product[] }) {
           <span>Marketplace</span>
           <h3>Строки карточки</h3>
         </div>
-        <span className="section-count">{marketplaceBadges.length || products.length}</span>
+        <span className="section-count">{marketplaceBadges.length || marketplaceRows.length}</span>
       </div>
       {marketplaceBadges.length ? (
         <div className="market-badges compact" aria-label="marketplaces-summary">
@@ -1125,8 +1138,9 @@ function MarketplaceRows({ products }: { products: Product[] }) {
         </div>
       ) : null}
       <div className="marketplace-rows">
-        {marketplaceRows.map(({ key, label, product }) => {
-          const status = statusLabel(product);
+        {marketplaceRows.map(({ key, label, product, items }) => {
+          const collapsedGroup = items.length > 1 ? groupProductsForList(items)[0] : undefined;
+          const status = collapsedGroup ? groupStatusLabel(collapsedGroup) : statusLabel(product);
           const stock = Number(product.targetStock || product.stock || 0);
           const changed = Number(product.newPrice || product.targetPrice || 0) > 0 && Number(product.currentPrice || 0) !== Number(product.newPrice || product.targetPrice || 0);
           const supplier = asRecord(product.selectedSupplier);
