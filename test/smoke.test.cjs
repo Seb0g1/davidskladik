@@ -5325,6 +5325,29 @@ test("no-supplier automation does not archive linked products while supplier is 
   assert.equal(oldResult.toArchive.length, 0);
 });
 
+test("warehouse target names resolve to account labels instead of generic Ozon", () => {
+  const {
+    resolveWarehouseProductTargetName,
+  } = require("../server.js");
+  assert.equal(
+    resolveWarehouseProductTargetName({ marketplace: "ozon", target: "ozon-shop-main", targetName: "Ozon" }),
+    "ozon-shop-main",
+  );
+  assert.equal(
+    resolveWarehouseProductTargetName({ marketplace: "yandex", target: "yandex-real", targetName: "Yandex" }),
+    "yandex-real",
+  );
+  assert.equal(
+    resolveWarehouseProductTargetName({
+      marketplace: "ozon",
+      target: "ozon",
+      targetName: "Ozon",
+      exports: { ozon: { targetName: "Кабинет А" } },
+    }),
+    "Кабинет А",
+  );
+});
+
 test("linked activation runs immediately before background-job disable gate", async () => {
   const root = path.join(__dirname, "..");
   const serverSource = await fs.readFile(path.join(root, "server.js"), "utf8");

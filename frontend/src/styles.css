@@ -450,6 +450,12 @@ button:disabled {
   overflow: hidden;
 }
 
+.market-badges.compact {
+  max-height: none;
+  overflow: visible;
+  margin-top: 6px;
+}
+
 .market-badge {
   min-height: 22px;
   padding: 2px 7px;

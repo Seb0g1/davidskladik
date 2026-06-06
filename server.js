@@ -1983,6 +1983,26 @@ function targetById(targetId) {
   return marketplaceTargets().find((target) => target.id === targetId) || null;
 }
 
+function isGenericMarketplaceTargetName(name, marketplace = "") {
+  const value = cleanText(name).toLowerCase();
+  if (!value) return true;
+  if (value === cleanText(marketplace).toLowerCase()) return true;
+  return value === "ozon" || value === "yandex" || value === "yandex market" || value === "marketplace";
+}
+
+function resolveWarehouseProductTargetName(input = {}) {
+  const target = cleanText(input.target || input.marketplace || "");
+  const marketplace = cleanText(input.marketplace || "").toLowerCase();
+  const exports = input.exports && typeof input.exports === "object" && !Array.isArray(input.exports) ? input.exports : {};
+  const exportState = exports[target] || exports[marketplace];
+  const exportName = cleanText(exportState?.targetName || "");
+  if (exportName && !isGenericMarketplaceTargetName(exportName, marketplace)) return exportName;
+  const meta = targetById(target);
+  if (meta?.name && !isGenericMarketplaceTargetName(meta.name, marketplace)) return meta.name;
+  if (target && !isGenericMarketplaceTargetName(target, marketplace)) return target;
+  return meta?.name || exportName || cleanText(input.targetName) || (marketplace === "yandex" ? "Yandex Market" : "Ozon");
+}
+
 function isWarehouseProductTargetEnabled(product = {}) {
   const marketplace = cleanText(product.marketplace || "").toLowerCase();
   if (!marketplace) return true;
@@ -2796,7 +2816,12 @@ function normalizeWarehouseProduct(input = {}) {
     id: cleanText(input.id) || crypto.randomUUID(),
     target: targetMeta.id,
     marketplace: targetMeta.marketplace,
-    targetName: targetMeta.name || (targetMeta.marketplace === "yandex" ? "Yandex Market" : "Ozon"),
+    targetName: resolveWarehouseProductTargetName({
+      target: targetMeta.id,
+      marketplace: targetMeta.marketplace,
+      targetName: cleanText(input.targetName) || targetMeta.name,
+      exports: input.exports,
+    }),
     offerId: cleanText(input.offerId || input.offer_id),
     productId: cleanText(input.productId || input.product_id),
     sku: cleanText(input.sku || input.productSku || input.fboSku || input.fbsSku),
@@ -26870,6 +26895,9 @@ module.exports = {
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
   supplierFromPostgres,
+  resolveWarehouseProductTargetName,
+  warehouseProductPageGroupKey,
+  buildWarehouseGroupDetailFromPostgres,
   readWarehouse,
   readWarehouseFull,
   writeWarehouse,

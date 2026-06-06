@@ -8,7 +8,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
-import { ProductGroup, firstImage, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, marketplaceRowLabel, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
+import { ProductGroup, firstImage, groupMarketplaceLabels, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, marketplaceRowLabel, marketplaceRowLabelsForProducts, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
 
 const pageSize = 40;
 const mobileListMedia = "(max-width: 640px)";
@@ -1108,6 +1108,8 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
 
 function MarketplaceRows({ products }: { products: Product[] }) {
   const groupLinkCount = uniqueLinks(products).length;
+  const marketplaceBadges = groupMarketplaceLabels(products);
+  const marketplaceRows = marketplaceRowLabelsForProducts(products);
   return (
     <section className="detail-section">
       <div className="section-title">
@@ -1115,10 +1117,15 @@ function MarketplaceRows({ products }: { products: Product[] }) {
           <span>Marketplace</span>
           <h3>Строки карточки</h3>
         </div>
-        <span className="section-count">{products.length}</span>
+        <span className="section-count">{marketplaceBadges.length || products.length}</span>
       </div>
+      {marketplaceBadges.length ? (
+        <div className="market-badges compact" aria-label="marketplaces-summary">
+          {marketplaceBadges.map((marketplace) => <span className="market-badge" key={marketplace}>{marketplace}</span>)}
+        </div>
+      ) : null}
       <div className="marketplace-rows">
-        {products.map((product) => {
+        {marketplaceRows.map(({ key, label, product }) => {
           const status = statusLabel(product);
           const stock = Number(product.targetStock || product.stock || 0);
           const changed = Number(product.newPrice || product.targetPrice || 0) > 0 && Number(product.currentPrice || 0) !== Number(product.newPrice || product.targetPrice || 0);
@@ -1159,9 +1166,9 @@ function MarketplaceRows({ products }: { products: Product[] }) {
             })
             .filter(Boolean);
           return (
-            <div className="marketplace-row" key={product.id}>
+            <div className="marketplace-row" key={key}>
               <div>
-                <strong>{marketplaceRowLabel(product)}</strong>
+                <strong>{label}</strong>
                 <span>{product.offerId || product.sku || product.id}</span>
               </div>
               <span className={`pill ${status.tone}`}>{status.icon}{status.label}</span>
@@ -1395,7 +1402,10 @@ function DetailPanel({ selectedGroup, products, onClose, isAdmin, filteredOut = 
         <div className="detail-title">
           <span className={`pill ${status.tone}`}>{status.icon}{status.label}</span>
           <h2>{primary.name || primary.offerId}</h2>
-          <p>{primary.offerId} · {primary.marketplace} · {primary.brand || "без бренда"}</p>
+          <p>{primary.offerId} · {primary.brand || "без бренда"}</p>
+          <div className="market-badges compact" aria-label="marketplaces">
+            {groupMarketplaceLabels(products).map((marketplace) => <span className="market-badge" key={marketplace}>{marketplace}</span>)}
+          </div>
           <CopyActions product={primary} />
         </div>
         <button className="mobile-close" type="button" onClick={onClose}><X size={18} /></button>

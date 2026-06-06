@@ -56,15 +56,51 @@ export function marketplaceLabel(value?: string | null): string {
   return value || "Marketplace";
 }
 
+function isGenericMarketplaceTargetName(name: string, marketplace = ""): boolean {
+  const value = String(name || "").trim().toLowerCase();
+  if (!value) return true;
+  if (value === String(marketplace || "").trim().toLowerCase()) return true;
+  return value === "ozon" || value === "yandex" || value === "yandex market" || value === "marketplace";
+}
+
+export function resolveMarketplaceTargetLabel(product: Product): string {
+  const raw = asRecord(product.raw);
+  const exports = asRecord(product.exports);
+  const marketplace = String(product.marketplace || "").trim();
+  const target = String(product.target || "").trim();
+  const exportName = String(
+    asRecord(exports[target])?.targetName
+    || asRecord(exports[marketplace])?.targetName
+    || "",
+  ).trim();
+  const targetName = String(product.targetName || raw.targetName || "").trim();
+  for (const candidate of [exportName, targetName, target]) {
+    if (candidate && !isGenericMarketplaceTargetName(candidate, marketplace)) return candidate;
+  }
+  return "";
+}
+
 export function marketplaceRowLabel(product: Product): string {
   const base = marketplaceLabel(product.marketplace);
-  const target = String(product.targetName || product.target || "").trim();
+  const account = resolveMarketplaceTargetLabel(product);
   const offer = String(product.offerId || product.sku || "").trim();
-  if (target && target.toLowerCase() !== String(product.marketplace || "").toLowerCase()) {
-    return `${base} · ${target}`;
-  }
+  if (account) return `${base} · ${account}`;
   if (offer) return `${base} · ${offer}`;
   return base;
+}
+
+export function marketplaceRowLabelsForProducts(products: Product[]): Array<{ key: string; label: string; product: Product }> {
+  const seen = new Map<string, number>();
+  return products.map((product) => {
+    const base = marketplaceRowLabel(product);
+    const next = (seen.get(base) || 0) + 1;
+    seen.set(base, next);
+    return {
+      key: String(product.id),
+      label: next > 1 ? `${base} #${next}` : base,
+      product,
+    };
+  });
 }
 
 export function groupMarketplaceLabels(products: Product[]): string[] {

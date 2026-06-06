@@ -57,8 +57,8 @@ async function main() {
     console.log("Deploying frontend bundle...");
     const files = [
       "public/app-modern/index.html",
-      "public/app-modern/assets/index-CzH8Z1Ju.css",
-      "public/app-modern/assets/index-CN5d-JyS.js",
+      "public/app-modern/assets/index-Dr3-HBhG.css",
+      "public/app-modern/assets/index-DKnMZ74-.js",
     ];
     for (const rel of files) {
       await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
