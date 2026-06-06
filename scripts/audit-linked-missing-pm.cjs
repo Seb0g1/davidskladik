@@ -4,9 +4,11 @@
 process.env.DISABLE_BACKGROUND_JOBS = process.env.DISABLE_BACKGROUND_JOBS || "true";
 
 const {
-  buildFreshWarehouseProducts,
+  buildFreshWarehouseProductsFromKnownProducts,
   pickNoSupplierAutomationCandidates,
   runNoSupplierMarketplaceAutomation,
+  productFromPostgres,
+  supplierFromPostgres,
 } = require("../server.js");
 const { getPrisma } = require("../lib/postgres.js");
 
@@ -33,20 +35,22 @@ async function main() {
     process.exit(1);
   }
 
-  const rows = await prisma.warehouseProduct.findMany({
-    where: { links: { some: {} } },
-    include: { links: true },
-    orderBy: { updatedAt: "desc" },
-    skip: options.offset,
-    take: options.limit,
-  });
-  const ids = rows.map((row) => row.id);
-  const built = await buildFreshWarehouseProducts(ids, {
-    persistMutations: false,
-    livePriceMaster: false,
-    batchPriceMaster: false,
-  });
-  const builtById = new Map(built.map((product) => [String(product.id), product]));
+  const [rows, supplierRows] = await Promise.all([
+    prisma.warehouseProduct.findMany({
+      where: { links: { some: {} } },
+      include: { links: true },
+      orderBy: { updatedAt: "desc" },
+      skip: options.offset,
+      take: options.limit,
+    }),
+    prisma.managedSupplier.findMany({ orderBy: { name: "asc" } }),
+  ]);
+  const products = rows.map(productFromPostgres);
+  const built = await buildFreshWarehouseProductsFromKnownProducts(
+    { suppliers: supplierRows.map(supplierFromPostgres) },
+    products,
+    { persistMutations: false, livePriceMaster: false, batchPriceMaster: false },
+  );
   const missingSupplier = built.filter((product) => (product.links || []).length > 0 && !product.selectedSupplier && !product.stockOnlyFallbackActive);
   const candidates = pickNoSupplierAutomationCandidates(missingSupplier, {
     includeNoLinks: false,
