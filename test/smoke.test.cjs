@@ -99,6 +99,7 @@ const {
   priceAffectingSettingsChanged,
   warehouseLinkIdentityKey,
   pickSafeArticlePriceMasterRow,
+  priceMasterRowMatchesLink,
   priceMasterArticleCandidateScore,
   productLinkPostgresIdentityKey,
   dedupeProductLinkRows,
@@ -2886,12 +2887,12 @@ test("pickWarehouseSupplier chooses the cheapest available calculated price", ()
   assert.equal(picked.partnerName, "Cheap");
 });
 
-test("pickWarehouseSupplier prefers cheapest effective final price", () => {
+test("pickWarehouseSupplier prefers cheapest supplier purchase price", () => {
   const picked = pickWarehouseSupplier([
-    { partnerName: "Raw cheap but final expensive", available: true, price: 10, calculatedPrice: 1700, effectiveFinalPrice: 4000, docDate: "2026-01-02" },
-    { partnerName: "Best final", available: true, price: 12, calculatedPrice: 2040, effectiveFinalPrice: 2500, docDate: "2026-01-01" },
+    { partnerName: "Cheapest purchase", available: true, price: 10, purchaseRubPrice: 950, calculatedPrice: 1700, effectiveFinalPrice: 4000, docDate: "2026-01-02" },
+    { partnerName: "Lower retail markup", available: true, price: 12, purchaseRubPrice: 1140, calculatedPrice: 2040, effectiveFinalPrice: 2500, docDate: "2026-01-01" },
   ]);
-  assert.equal(picked.partnerName, "Best final");
+  assert.equal(picked.partnerName, "Cheapest purchase");
 });
 
 test("pickWarehouseSupplier ignores stock-only suppliers for price", () => {
@@ -4642,6 +4643,26 @@ test("warehouse link identity keeps selected PriceMaster rows distinct from arti
   assert.match(b, /^article\|article:pm-77\|/);
 });
 
+test("priceMasterRowMatchesLink accepts snapshot rows with legacy RowID and NativeID fields", () => {
+  const link = {
+    matchType: "selected_row",
+    sourceRowId: "2163035",
+    partnerId: "116",
+    supplierName: "Давидгор",
+    keyword: "",
+  };
+  const legacyRow = {
+    RowID: "2163035",
+    NativeID: "GTT81",
+    NativeName: "Gritti Beyond the Wall Extrait De Parfum 100ml",
+    PartnerID: "116",
+    PartnerName: "Давидгор",
+    Active: 1,
+  };
+  assert.equal(priceMasterRowMatchesLink(legacyRow, link), true);
+  assert.equal(priceMasterRowMatchesLink({ rowId: "999" }, link), false);
+});
+
 test("duplicate PriceMaster article resolver prefers matching product name and volume", () => {
   const rows = [
     {
@@ -5398,14 +5419,14 @@ test("linked activation runs immediately before background-job disable gate", as
   assert.match(serverSource, /deferOzonUnarchive: true/);
 });
 
-test("pickWarehouseSupplier chooses cheapest effective final price", () => {
+test("pickWarehouseSupplier chooses cheapest supplier purchase price over retail", () => {
   const { pickWarehouseSupplier } = require("../server.js");
   const selected = pickWarehouseSupplier([
-    { available: true, priceEligible: true, stockOnly: false, effectiveFinalPrice: 1200, price: 10, docDate: "2026-01-01" },
-    { available: true, priceEligible: true, stockOnly: false, effectiveFinalPrice: 900, price: 8, docDate: "2026-01-02" },
-    { available: true, priceEligible: true, stockOnly: false, effectiveFinalPrice: 950, price: 9, docDate: "2026-01-03" },
+    { available: true, priceEligible: true, stockOnly: false, purchaseRubPrice: 1200, effectiveFinalPrice: 900, price: 10, docDate: "2026-01-01" },
+    { available: true, priceEligible: true, stockOnly: false, purchaseRubPrice: 800, effectiveFinalPrice: 1500, price: 8, docDate: "2026-01-02" },
+    { available: true, priceEligible: true, stockOnly: false, purchaseRubPrice: 950, effectiveFinalPrice: 950, price: 9, docDate: "2026-01-03" },
   ]);
-  assert.equal(selected.effectiveFinalPrice, 900);
+  assert.equal(selected.purchaseRubPrice, 800);
 });
 
 test("no-supplier automation can skip linked grace on immediate activation", () => {
@@ -5539,6 +5560,35 @@ test("marketplace jobs run inline when background worker disabled", async () => 
     serverSource.slice(serverSource.indexOf("async function ensureWarehousePostgresLinksBackfilled"), serverSource.indexOf("async function ensureWarehousePostgresLinksBackfilled") + 900),
     /deferred: true[\s\S]{0,120}warehousePostgresLinkBackfillDone = true/,
   );
+});
+
+test("linked product with inactive PriceMaster row is treated as missing supplier", () => {
+  const { pickNoSupplierAutomationCandidates } = require("../server.js");
+  const product = {
+    id: "ozon-inactive-pm",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "45352437",
+    hasLinks: true,
+    links: [{
+      id: "link-1",
+      article: "042668",
+      matchedCount: 1,
+      availableCount: 0,
+      missingInPriceMaster: true,
+      unavailableInPriceMaster: true,
+    }],
+    selectedSupplier: null,
+    stockOnlyFallbackActive: false,
+    marketplaceState: { code: "active", stock: 5 },
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const { toZeroStock } = pickNoSupplierAutomationCandidates([product], {
+    includeNoLinks: false,
+    skipLinkedGrace: true,
+    now: "2026-06-07T12:00:00.000Z",
+  });
+  assert.deepEqual(toZeroStock.map((item) => item.id), ["ozon-inactive-pm"]);
 });
 
 test("pm2 split entry files and immediate link activation hooks exist", async () => {

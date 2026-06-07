@@ -127,6 +127,11 @@ const linkedActivationImmediateMaxScope = Math.max(
 const warehouseFastPageBuildTimeoutMs = Math.max(5000, Number(process.env.WAREHOUSE_FAST_PAGE_BUILD_TIMEOUT_MS || 30000) || 30000);
 const warehousePagePmTimeoutMs = Math.max(2000, Number(process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 8000) || 8000);
 const linkedNoSupplierZeroGraceMs = Math.max(0, Number(process.env.LINKED_NO_SUPPLIER_ZERO_GRACE_MS || 120000) || 120000);
+const linkedNoSupplierZeroStockQueueCooldownMs = Math.max(
+  60_000,
+  Number(process.env.LINKED_NO_SUPPLIER_ZERO_STOCK_QUEUE_COOLDOWN_MS || 300000) || 300000,
+);
+const linkedNoSupplierZeroStockQueuedAt = new Map();
 const marketplaceQueueAutoPricePushEnabled = process.env.MARKETPLACE_QUEUE_AUTO_PRICE_PUSH_ENABLED !== "false";
 const immediateAutoPushDelayMs = Math.max(1200, Number(process.env.AUTO_PRICE_IMMEDIATE_DELAY_MS || 10000) || 10000);
 const immediateAutoPushFollowupDelayMs = Math.max(1000, Number(process.env.AUTO_PRICE_IMMEDIATE_FOLLOWUP_DELAY_MS || immediateAutoPushDelayMs) || immediateAutoPushDelayMs);
@@ -2437,6 +2442,21 @@ function publicPriceMasterCandidate(row = {}, productContext = {}) {
   };
 }
 
+function priceMasterSnapshotRowFields(row = {}) {
+  const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  return {
+    rowId: cleanText(row.rowId || raw.rowId || raw.RowID || row.id || row.ID),
+    article: cleanText(row.article || raw.article || raw.NativeID || raw.nativeId || raw.offerId),
+    name: cleanText(row.name || row.nativeName || raw.name || raw.NativeName || raw.nativeName),
+    partnerId: cleanText(row.partnerId || raw.partnerId || raw.PartnerID),
+    partnerName: cleanText(row.partnerName || raw.partnerName || raw.PartnerName),
+    docDate: row.docDate instanceof Date ? row.docDate.toISOString() : cleanText(row.docDate || raw.docDate || raw.DocDate),
+    price: row.price ?? raw.price ?? raw.NativePrice,
+    active: row.active !== false && row.Active !== false && row.Active !== 0,
+    ignored: Boolean(row.ignored || raw.ignored || raw.Ignored),
+  };
+}
+
 function pickSafeArticlePriceMasterRow(matches = [], productContext = {}) {
   const rows = (Array.isArray(matches) ? matches : []).filter(Boolean);
   if (rows.length <= 1) {
@@ -2465,21 +2485,25 @@ function pickSafeArticlePriceMasterRow(matches = [], productContext = {}) {
 }
 
 function priceMasterRowMatchesLink(row = {}, link = {}) {
+  const fields = priceMasterSnapshotRowFields(row);
   const supplierOk =
     !link.supplierName ||
-    normalizeSupplierName(row.partnerName) === normalizeSupplierName(link.supplierName);
-  const partnerOk = !link.partnerId || String(row.partnerId || "") === String(link.partnerId);
-  const keywordOk = includesKeyword(row.name, link.keyword);
+    normalizeSupplierName(fields.partnerName) === normalizeSupplierName(link.supplierName);
+  const partnerOk = link.matchType === "article"
+    ? true
+    : (!link.partnerId || String(fields.partnerId || "") === String(link.partnerId));
+  const keywordOk = includesKeyword(fields.name, link.keyword);
   if (!supplierOk || !partnerOk || !keywordOk) return false;
   if (link.matchType === "selected_row") {
-    if (link.sourceRowId && String(row.rowId || "") === String(link.sourceRowId)) return true;
-    if (link.exactName) return exactPriceMasterNameMatches(row.name, link.exactName);
+    if (link.sourceRowId && String(fields.rowId || "") === String(link.sourceRowId)) return true;
+    if (link.exactName) return exactPriceMasterNameMatches(fields.name, link.exactName);
     return false;
   }
   if (link.matchType === "exact_name") {
-    return exactPriceMasterNameMatches(row.name, link.exactName || link.article);
+    return exactPriceMasterNameMatches(fields.name, link.exactName || link.article);
   }
-  return true;
+  const article = cleanText(link.article).toLowerCase();
+  return Boolean(article && cleanText(fields.article).toLowerCase() === article);
 }
 
 function hasObjectData(value) {
@@ -3401,22 +3425,25 @@ function supplierImpactProductIds(warehouse = {}, ...suppliers) {
 
 function priceMasterChangedRowMatchesWarehouseLink(row = {}, link = {}) {
   if (!row || !link) return false;
+  const fields = priceMasterSnapshotRowFields(row);
   const supplierOk =
     !link.supplierName
-    || normalizeSupplierName(row.partnerName) === normalizeSupplierName(link.supplierName);
-  const partnerOk = !link.partnerId || String(row.partnerId || "") === String(link.partnerId);
-  const keywordOk = includesKeyword(row.name, link.keyword);
+    || normalizeSupplierName(fields.partnerName) === normalizeSupplierName(link.supplierName);
+  const partnerOk = link.matchType === "article"
+    ? true
+    : (!link.partnerId || String(fields.partnerId || "") === String(link.partnerId));
+  const keywordOk = includesKeyword(fields.name, link.keyword);
   if (!supplierOk || !partnerOk || !keywordOk) return false;
   if (link.matchType === "selected_row") {
-    if (link.sourceRowId && String(row.rowId || "") === String(link.sourceRowId)) return true;
-    if (link.exactName) return exactPriceMasterNameMatches(row.name, link.exactName);
+    if (link.sourceRowId && String(fields.rowId || "") === String(link.sourceRowId)) return true;
+    if (link.exactName) return exactPriceMasterNameMatches(fields.name, link.exactName);
     return false;
   }
   if (link.matchType === "exact_name") {
-    return exactPriceMasterNameMatches(row.name, link.exactName || link.article);
+    return exactPriceMasterNameMatches(fields.name, link.exactName || link.article);
   }
   const article = cleanText(link.article).toLowerCase();
-  return Boolean(article && cleanText(row.article).toLowerCase() === article);
+  return Boolean(article && cleanText(fields.article).toLowerCase() === article);
 }
 
 function priceMasterChangeImpactProductIds(warehouse = {}, changes = [], options = {}) {
@@ -11495,19 +11522,20 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
     const matches = candidateRows
       .filter((row) => priceMasterRowMatchesLink(row, link))
       .map((row) => {
-        const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
-        const pricingMeta = priceMasterSupplierPricingMeta(row, supplierMaps);
-        const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
-        const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate, priceCurrency);
+        const fields = priceMasterSnapshotRowFields(row);
+        const stoppedSupplier = stoppedMap.get(normalizeSupplierName(fields.partnerName));
+        const pricingMeta = priceMasterSupplierPricingMeta(fields, supplierMaps);
+        const priceCurrency = resolvePriceMasterRowCurrency(fields, link, supplierMaps);
+        const normalizedPrice = normalizePriceMasterPrice(fields.price, usdRate, priceCurrency);
         const price = stoppedSupplier ? 0 : normalizedPrice.price;
-        const active = stoppedSupplier ? false : Boolean(row.active);
+        const active = stoppedSupplier ? false : Boolean(fields.active);
         return {
           ...link,
-          rowId: row.rowId,
-          article: row.article,
-          name: row.name,
-          partnerId: row.partnerId,
-          partnerName: row.partnerName,
+          rowId: fields.rowId,
+          article: fields.article,
+          name: fields.name,
+          partnerId: fields.partnerId,
+          partnerName: fields.partnerName,
           price,
           priceCurrency,
           originalPrice: normalizedPrice.originalPrice,
@@ -11525,7 +11553,7 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
           orderCutoffTime: pricingMeta.orderCutoffTime,
           reseller: pricingMeta.reseller,
           available: active && (pricingMeta.stockOnly || price > 0),
-          docDate: row.docDate,
+          docDate: fields.docDate,
         };
       });
     map.set(link.id, matches);
@@ -11553,7 +11581,7 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
     conditions.push("BINARY TRIM(r.NativeID) = BINARY ?");
     params.push(link.article);
   }
-  if (link.partnerId) {
+  if (link.partnerId && link.matchType !== "article") {
     conditions.push("d.PartnerID = ?");
     params.push(Number(link.partnerId));
   }
@@ -11650,7 +11678,7 @@ async function findPriceMasterSnapshotRowsForLink(linkInput, usdRate, managedSup
   } else {
     and.push({ article: cleanText(link.article) });
   }
-  if (link.partnerId) and.push({ partnerId: cleanText(link.partnerId) });
+  if (link.partnerId && link.matchType !== "article") and.push({ partnerId: cleanText(link.partnerId) });
   if (!and.length) return [];
 
   const supplierMaps = managedSupplierMaps(managedSuppliers);
@@ -11883,6 +11911,17 @@ async function assertPriceMasterLinkExists(linkInput, usdRate, managedSuppliers 
   const link = normalizeWarehouseLink(linkInput);
   const matches = await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers, options);
   if (matches.length) return matches;
+  if (link.matchType === "selected_row" && link.sourceRowId) {
+    return [{
+      rowId: link.sourceRowId,
+      article: link.article,
+      name: link.exactName,
+      partnerId: link.partnerId,
+      partnerName: link.supplierName,
+      active: true,
+      priceSource: "explicit_row_selection",
+    }];
+  }
   const articleRows = await findPriceMasterRowsForLinkFast({ ...link, supplierName: "", partnerId: "", keyword: "" }, usdRate, managedSuppliers, options);
   const label = link.matchType === "article"
     ? `артикул "${link.article}" должен совпадать с PriceMaster точно`
@@ -11928,6 +11967,12 @@ async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSupplier
   if (!warehouseLinkHasMatchTarget(link)) return link;
   const productContext = options.productContext || options.product || {};
   const matches = await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers, options);
+  if (!matches.length && link.matchType === "selected_row" && link.sourceRowId) {
+    return normalizeWarehouseLink({
+      ...link,
+      resolvedBy: link.resolvedBy || "selected_row_explicit",
+    });
+  }
   if (matches.length) {
     const selection = link.matchType === "article"
       ? pickSafeArticlePriceMasterRow(matches, productContext)
@@ -11974,15 +12019,51 @@ async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSupplier
   return link;
 }
 
+function warehouseSupplierPurchaseRubPrice(supplier = {}, rate = 0) {
+  const preset = Number(supplier.purchaseRubPrice);
+  if (Number.isFinite(preset) && preset > 0) return preset;
+  const originalPrice = Number(supplier.originalPrice ?? NaN);
+  if (supplier.convertedFromRub && Number.isFinite(originalPrice) && originalPrice > 0) return originalPrice;
+  const usd = Number(supplier.price || 0);
+  if (!Number.isFinite(usd) || usd <= 0) return Number.MAX_SAFE_INTEGER;
+  const currency = cleanText(supplier.priceCurrency || supplier.currency || "USD").toUpperCase();
+  if (currency === "RUB" || currency === "RUR") return usd;
+  const fx = Number(rate || 0) > 0 ? Number(rate) : Number(process.env.DEFAULT_USD_RATE || 95);
+  return Number((usd * fx).toFixed(4));
+}
+
+function compareWarehouseSupplierPrices(a = {}, b = {}) {
+  const aPurchase = warehouseSupplierPurchaseRubPrice(a);
+  const bPurchase = warehouseSupplierPurchaseRubPrice(b);
+  const aHasPurchase = Number.isFinite(aPurchase) && aPurchase > 0 && aPurchase < Number.MAX_SAFE_INTEGER;
+  const bHasPurchase = Number.isFinite(bPurchase) && bPurchase > 0 && bPurchase < Number.MAX_SAFE_INTEGER;
+  if (aHasPurchase || bHasPurchase) {
+    const aComparable = aHasPurchase ? aPurchase : Number.MAX_SAFE_INTEGER;
+    const bComparable = bHasPurchase ? bPurchase : Number.MAX_SAFE_INTEGER;
+    if (aComparable !== bComparable) return aComparable - bComparable;
+  }
+  const aFinal = Number(a.effectiveFinalPrice);
+  const bFinal = Number(b.effectiveFinalPrice);
+  const aHasFinal = Number.isFinite(aFinal) && aFinal > 0;
+  const bHasFinal = Number.isFinite(bFinal) && bFinal > 0;
+  if (aHasFinal || bHasFinal) {
+    const aComparable = aHasFinal ? aFinal : Number.MAX_SAFE_INTEGER;
+    const bComparable = bHasFinal ? bFinal : Number.MAX_SAFE_INTEGER;
+    if (aComparable !== bComparable) return aComparable - bComparable;
+  }
+  const aCalculated = Number(a.calculatedPrice || 0);
+  const bCalculated = Number(b.calculatedPrice || 0);
+  if (aCalculated !== bCalculated) return aCalculated - bCalculated;
+  const aUsd = Number(a.price || 0);
+  const bUsd = Number(b.price || 0);
+  if (aUsd !== bUsd) return aUsd - bUsd;
+  return String(b.docDate || "").localeCompare(String(a.docDate || ""));
+}
+
 function pickWarehouseSupplier(matches) {
   return [...matches]
     .filter((match) => match.available && match.priceEligible !== false && match.stockOnly !== true)
-    .sort(
-      (a, b) =>
-        Number(a.effectiveFinalPrice || a.calculatedPrice || 0) - Number(b.effectiveFinalPrice || b.calculatedPrice || 0)
-        || Number(a.price || 0) - Number(b.price || 0)
-        || String(b.docDate).localeCompare(String(a.docDate)),
-    )[0] || null;
+    .sort(compareWarehouseSupplierPrices)[0] || null;
 }
 
 function pickWarehouseStockOnlySupplier(matches) {
@@ -12050,6 +12131,7 @@ function enrichSupplierPriceCandidates(suppliers = [], {
     });
     const markupCoefficient = Number(availabilityPolicy.markupCoefficient || baseMarkupCoefficient);
     const priceEligible = supplier.priceEligible !== false && supplier.stockOnly !== true;
+    const purchaseRubPrice = warehouseSupplierPurchaseRubPrice(supplier, rate);
     const effectiveFinalPrice = supplier.available && priceEligible
       ? calculateRubPrice(supplier.price, rate, markupCoefficient)
       : null;
@@ -12059,11 +12141,12 @@ function enrichSupplierPriceCandidates(suppliers = [], {
       markupCoefficient,
       effectiveMarkupCoefficient: markupCoefficient,
       availabilityRule: availabilityPolicy.rule,
+      purchaseRubPrice,
       prePolicyCalculatedPrice: Number(supplier.calculatedPrice || 0) || null,
       calculatedPrice: effectiveFinalPrice || supplier.calculatedPrice || null,
       effectiveFinalPrice,
       priceSelectionReason: effectiveFinalPrice
-        ? "cheapest_effective_final_price"
+        ? "cheapest_supplier_purchase_price"
         : (supplier.stockOnly || supplier.priceEligible === false ? "stock_only_excluded" : "not_available"),
     };
   });
@@ -12072,10 +12155,9 @@ function enrichSupplierPriceCandidates(suppliers = [], {
 function supplierAlternativesForDiagnostics(suppliers = [], limit = 5) {
   return [...(Array.isArray(suppliers) ? suppliers : [])]
     .sort((a, b) =>
-      Number(a.effectiveFinalPrice || a.calculatedPrice || Number.MAX_SAFE_INTEGER)
-      - Number(b.effectiveFinalPrice || b.calculatedPrice || Number.MAX_SAFE_INTEGER)
-      || Number(a.price || 0) - Number(b.price || 0)
-      || String(b.docDate).localeCompare(String(a.docDate)))
+      compareWarehouseSupplierPrices(a, b)
+      || Number(a.effectiveFinalPrice || a.calculatedPrice || Number.MAX_SAFE_INTEGER)
+      - Number(b.effectiveFinalPrice || b.calculatedPrice || Number.MAX_SAFE_INTEGER))
     .slice(0, Math.max(1, Number(limit || 5) || 5))
     .map((supplier) => ({
       partnerName: supplier.partnerName || supplier.supplierName || "",
@@ -12315,15 +12397,17 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     );
     const links = normalizedLinks.map((link) => {
       const matched = matchMap.get(link.id) || [];
+      const availableMatches = matched.filter((item) => item.available);
       return {
         ...link,
         matchedCount: matched.length,
-        availableCount: matched.filter((item) => item.available).length,
-        priceEligibleCount: matched.filter((item) => item.available && item.priceEligible !== false && item.stockOnly !== true).length,
-        stockOnlyCount: matched.filter((item) => item.available && (item.stockOnly === true || item.priceEligible === false)).length,
-        stockOnly: matched.some((item) => item.stockOnly === true || item.priceEligible === false),
-        priceEligible: matched.some((item) => item.priceEligible !== false && item.stockOnly !== true),
-        missingInPriceMaster: matched.length === 0,
+        availableCount: availableMatches.length,
+        priceEligibleCount: availableMatches.filter((item) => item.priceEligible !== false && item.stockOnly !== true).length,
+        stockOnlyCount: availableMatches.filter((item) => item.stockOnly === true || item.priceEligible === false).length,
+        stockOnly: availableMatches.some((item) => item.stockOnly === true || item.priceEligible === false),
+        priceEligible: availableMatches.some((item) => item.priceEligible !== false && item.stockOnly !== true),
+        missingInPriceMaster: availableMatches.length === 0,
+        unavailableInPriceMaster: matched.length > 0 && availableMatches.length === 0,
       };
     });
     const availableSupplierCount = rawSuppliers.filter((supplier) => supplier.available && supplier.priceEligible !== false && supplier.stockOnly !== true).length;
@@ -12441,9 +12525,9 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       stockOnlyManualPrices: normalizeStockOnlyManualPrices(product.stockOnlyManualPrices),
       stockOnlyAvailableSupplierCount,
       selectedSupplierReason: selectedSupplier
-        ? "Выбран доступный поставщик с минимальной рассчитанной ценой."
+        ? "Выбран доступный поставщик с минимальной закупочной ценой."
         : "Нет доступного поставщика.",
-      priceSelectionReason: selectedSupplier ? "cheapest_effective_final_price" : (stockOnlyFallbackActive ? "stock_only_fallback" : "no_supplier"),
+      priceSelectionReason: selectedSupplier ? "cheapest_supplier_purchase_price" : (stockOnlyFallbackActive ? "stock_only_fallback" : "no_supplier"),
       priceSource: stockOnlyFallbackActive ? "stock_only_manual" : (selectedSupplierWithPolicy?.priceSource || (sourceError ? "timeout" : "snapshot")),
       links,
       suppliers,
@@ -12575,15 +12659,17 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
     );
     const links = normalizedLinks.map((link) => {
       const matched = matchMap.get(link.id) || [];
+      const availableMatches = matched.filter((item) => item.available);
       return {
         ...link,
         matchedCount: matched.length,
-        availableCount: matched.filter((item) => item.available).length,
-        priceEligibleCount: matched.filter((item) => item.available && item.priceEligible !== false && item.stockOnly !== true).length,
-        stockOnlyCount: matched.filter((item) => item.available && (item.stockOnly === true || item.priceEligible === false)).length,
-        stockOnly: matched.some((item) => item.stockOnly === true || item.priceEligible === false),
-        priceEligible: matched.some((item) => item.priceEligible !== false && item.stockOnly !== true),
-        missingInPriceMaster: matched.length === 0,
+        availableCount: availableMatches.length,
+        priceEligibleCount: availableMatches.filter((item) => item.priceEligible !== false && item.stockOnly !== true).length,
+        stockOnlyCount: availableMatches.filter((item) => item.stockOnly === true || item.priceEligible === false).length,
+        stockOnly: availableMatches.some((item) => item.stockOnly === true || item.priceEligible === false),
+        priceEligible: availableMatches.some((item) => item.priceEligible !== false && item.stockOnly !== true),
+        missingInPriceMaster: availableMatches.length === 0,
+        unavailableInPriceMaster: matched.length > 0 && availableMatches.length === 0,
       };
     });
     const fallbackMarkup = product.marketplace === "ozon"
@@ -12701,9 +12787,9 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       stockOnlyManualPrices: normalizeStockOnlyManualPrices(product.stockOnlyManualPrices),
       stockOnlyAvailableSupplierCount,
       selectedSupplierReason: selectedSupplier
-        ? "Выбран доступный поставщик с минимальной расчётной ценой."
+        ? "Выбран доступный поставщик с минимальной закупочной ценой."
         : "Нет доступного поставщика.",
-      priceSelectionReason: selectedSupplier ? "cheapest_effective_final_price" : (stockOnlyFallbackActive ? "stock_only_fallback" : "no_supplier"),
+      priceSelectionReason: selectedSupplier ? "cheapest_supplier_purchase_price" : (stockOnlyFallbackActive ? "stock_only_fallback" : "no_supplier"),
       priceSource: stockOnlyFallbackActive ? "stock_only_manual" : (selectedSupplierWithPolicy?.priceSource || (priceMasterSourceError ? "timeout" : "snapshot")),
       links,
       suppliers,
@@ -13622,6 +13708,7 @@ async function buildFastWarehousePageFromPostgres({
       partial: links.length > 0 && !hasSupplier,
     };
   });
+  queueLinkedUnavailableSupplierZeroStock(built, { source: "warehouse_page" });
   return {
     createdAt: pageWarehouse.createdAt,
     updatedAt: pageWarehouse.updatedAt,
@@ -13677,6 +13764,7 @@ async function buildWarehouseProductDetailFromPostgres(productId, { usdRate } = 
       { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
     );
     const product = built[0] || warehouse.products[0];
+    queueLinkedUnavailableSupplierZeroStock(built, { source: "warehouse_product_detail" });
     return {
       createdAt: warehouse.createdAt,
       product: {
@@ -13687,7 +13775,7 @@ async function buildWarehouseProductDetailFromPostgres(productId, { usdRate } = 
         selectedSupplier: product.selectedSupplier || null,
         noSupplierAutomation: product.noSupplierAutomation || {},
         marketplaceState: product.marketplaceState || {},
-        partial: false,
+        partial: (product.links || []).length > 0 && !product.selectedSupplier && !product.stockOnlyFallbackActive,
       },
     };
   });
@@ -13801,7 +13889,12 @@ function warehouseProductDiagnosticSaleState(product = {}, contextProducts = [])
   }
   if (archived) return { code: "archived", label: "Архив", reason: "marketplace_card_archived" };
   if (!hasLinks) return { code: "no_links", label: "Нет привязки", reason: "no_pricemaster_links" };
-  if (!selectedSupplier) return { code: "no_supplier", label: "Нет поставщика", reason: "linked_but_supplier_not_selected" };
+  if (!selectedSupplier) {
+    if (marketplaceHasPositiveStock(product)) {
+      return { code: "no_supplier", label: "Нет поставщика", reason: "linked_without_supplier_marketplace_stock_positive" };
+    }
+    return { code: "no_supplier", label: "Нет поставщика", reason: "linked_but_supplier_not_selected" };
+  }
   if (!Number.isFinite(stock) || stock <= 0) return { code: "no_stock", label: "Нет остатка", reason: "target_stock_is_zero" };
   if (
     stock > 0
@@ -15646,6 +15739,28 @@ function enqueueOzonUnarchiveQueueProcess({ request, source, limit, force }) {
   }, 0);
   return true;
 }
+
+app.post("/api/ozon/unarchive-queue/rebuild", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = cleanLimit(request.body?.limit || request.query?.limit, 20000, 50000);
+    const result = await rebuildOzonUnarchiveQueue({
+      source: "ozon_unarchive_queue_rebuild_manual",
+      limit,
+    });
+    response.json({
+      ...result,
+      queue: ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 1000 }),
+      ...ozonUnarchiveQueueAutomationPublic(),
+    });
+    appendAudit(request, "ozon.unarchive_queue.rebuild", {
+      scanned: result.scanned,
+      queued: result.queued,
+      due: result.due,
+    }).catch((auditError) => logger.warn("ozon queue rebuild audit append failed", { detail: auditError?.message || String(auditError) }));
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.post("/api/ozon/unarchive-queue/process", requireAdmin, async (request, response, next) => {
   try {
@@ -26334,6 +26449,77 @@ async function restoreStocksOnMarketplaces(products = []) {
   return actions;
 }
 
+async function rebuildOzonUnarchiveQueue({ source = "ozon_unarchive_queue_rebuild", limit = 20000 } = {}) {
+  const max = Math.max(1, Math.min(50000, Math.round(Number(limit || 20000) || 20000)));
+  const prisma = getPrisma();
+  if (!prisma) throw new Error("postgres_not_configured");
+
+  const supplierRows = await prisma.managedSupplier.findMany({ orderBy: { name: "asc" } });
+  const suppliers = supplierRows.map(supplierFromPostgres);
+  const rows = await prisma.warehouseProduct.findMany({
+    where: {
+      AND: [
+        enabledWarehouseTargetWhere(),
+        { marketplace: "ozon" },
+        { links: { some: {} } },
+      ],
+    },
+    include: { links: true },
+    orderBy: { updatedAt: "desc" },
+    take: max,
+  });
+  const products = rows.map(productFromPostgres);
+  const built = await buildFreshWarehouseProductsFromKnownProducts(
+    { suppliers },
+    products,
+    { persistMutations: false, livePriceMaster: false, batchPriceMaster: false },
+  );
+  const candidates = built.filter((product) =>
+    product?.id
+    && product.hasLinks
+    && product.selectedSupplier
+    && productLooksArchived(product),
+  );
+
+  const existingQueue = await readOzonUnarchiveQueue();
+  const nextRetryAt = nextOzonUnarchiveRetryAt();
+  let queueState = normalizeOzonUnarchiveQueue({
+    updatedAt: existingQueue.updatedAt,
+    daily: existingQueue.daily || {},
+    items: [],
+  });
+  queueState = queueOzonUnarchiveItems(queueState, candidates, {
+    nextRetryAt,
+    warning: "queue_rebuilt",
+    attempted: false,
+  });
+  await writeOzonUnarchiveQueue(queueState);
+  await rescheduleOzonUnarchiveQueueAutoSoon(source).catch((error) => {
+    logger.warn("ozon unarchive queue reschedule after rebuild failed", { detail: error?.message || String(error) });
+  });
+
+  const publicQueue = ozonUnarchiveQueuePublic(queueState, { limit: 5000 });
+  const report = {
+    ok: true,
+    source,
+    scanned: built.length,
+    candidates: candidates.length,
+    queued: publicQueue.total,
+    due: publicQueue.due,
+    future: publicQueue.future,
+    sample: candidates.slice(0, 15).map((product) => ({
+      id: product.id,
+      offerId: product.offerId,
+      target: product.target,
+      supplier: product.selectedSupplier?.partnerName || null,
+      effectiveFinalPrice: product.selectedSupplier?.effectiveFinalPrice || product.selectedSupplier?.calculatedPrice || null,
+      supplierUsd: product.selectedSupplier?.price || null,
+    })),
+  };
+  logger.info("ozon unarchive queue rebuilt", report);
+  return report;
+}
+
 async function queueOzonUnarchiveForLinkedProducts(products = [], options = {}) {
   const archivedOzon = (Array.isArray(products) ? products : [])
     .filter((product) => product?.id && product.marketplace === "ozon" && productLooksArchived(product));
@@ -26850,6 +27036,32 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
   };
 }
 
+function queueLinkedUnavailableSupplierZeroStock(builtProducts = [], { source = "warehouse_view" } = {}) {
+  if (!autoZeroStockOnNoSupplier || !Array.isArray(builtProducts) || !builtProducts.length) return;
+  const { toZeroStock } = pickNoSupplierAutomationCandidates(builtProducts, {
+    includeNoLinks: false,
+    skipLinkedGrace: true,
+    now: new Date().toISOString(),
+  });
+  const productIds = [];
+  const now = Date.now();
+  for (const product of toZeroStock) {
+    if (!product?.id || !marketplaceHasPositiveStock(product)) continue;
+    const lastQueuedAt = linkedNoSupplierZeroStockQueuedAt.get(product.id) || 0;
+    if (now - lastQueuedAt < linkedNoSupplierZeroStockQueueCooldownMs) continue;
+    linkedNoSupplierZeroStockQueuedAt.set(product.id, now);
+    productIds.push(product.id);
+  }
+  if (!productIds.length) return;
+  void queueMarketplaceJob("no-supplier-automation", { productIds, source }, { priority: 1 }).catch((error) => {
+    logger.warn("linked unavailable supplier zero-stock queue failed", {
+      source,
+      count: productIds.length,
+      detail: error?.message || String(error),
+    });
+  });
+}
+
 function pickSupplierRecoveryCandidates(products = [], { productIds, force = false } = {}) {
   const idSet = Array.isArray(productIds) && productIds.length
     ? new Set(productIds.map((id) => String(id || "").trim()).filter(Boolean))
@@ -26977,14 +27189,31 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     return { zeroStockSent: 0, archived: 0, errors: [], productStatuses };
   }
 
-  await hydrateWarehouseProductsForIds(
+  const hydratedProducts = await hydrateWarehouseProductsForIds(
     [...toZeroStock, ...toArchive].map((product) => product.id),
     { expandGroups: false },
   );
+  const productSourceById = new Map();
+  for (const product of [...products, ...toZeroStock, ...toArchive, ...hydratedProducts]) {
+    if (!product?.id) continue;
+    productSourceById.set(String(product.id), normalizeWarehouseProduct(product));
+  }
+  if (shouldUsePostgresStorage()) {
+    const missingIds = [...new Set([...toZeroStock, ...toArchive].map((product) => String(product.id)))]
+      .filter((id) => !productSourceById.has(id));
+    if (missingIds.length) {
+      const loaded = await readWarehouseProductsFromPostgresByIds(missingIds);
+      for (const row of loaded) {
+        const product = productFromPostgres(row);
+        productSourceById.set(String(product.id), product);
+      }
+    }
+  }
   const warehouse = await readWarehouse();
   const changedById = new Map();
   for (const action of allActions) {
-    const product = warehouse.products.find((item) => item.id === action.id);
+    const product = productSourceById.get(String(action.id))
+      || warehouse.products.find((item) => item.id === action.id);
     if (!product) continue;
     product.noSupplierAutomation = product.noSupplierAutomation || { stockZeroAt: null, archivedAt: null, lastError: null };
     if (action.type === "zero_stock") product.lastStockSend = marketplaceCommandFromAction(action, product, now);
@@ -27004,9 +27233,9 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     changedById.set(product.id, product);
   }
   const changedProducts = Array.from(changedById.values());
-  if (source === "targeted" && changedProducts.length) {
+  if (changedProducts.length) {
     await writeWarehouseProductPatch(changedProducts, { reason: "no_supplier_automation" });
-  } else {
+  } else if ((warehouse.products || []).length) {
     await writeWarehouse(warehouse);
   }
 
@@ -27175,9 +27404,9 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     product.updatedAt = now;
     changedProducts.push(product);
   }
-  if (source === "targeted" && changedProducts.length) {
+  if (changedProducts.length) {
     await writeWarehouseProductPatch(changedProducts, { reason: "supplier_recovery_automation" });
-  } else {
+  } else if ((warehouse.products || []).length) {
     await writeWarehouse(warehouse);
   }
   const recoveryPriceIds = recovered.map((item) => item.id);
@@ -27885,6 +28114,7 @@ module.exports = {
   changedWarehouseProductIdsByAutomationFingerprint,
   backgroundAutomationProductIds,
   pickNoSupplierAutomationCandidates,
+  queueLinkedUnavailableSupplierZeroStock,
   pickSupplierRecoveryCandidates,
   summarizeSupplierRecoveryProducts,
   runNoSupplierMarketplaceAutomation,
@@ -27904,8 +28134,10 @@ module.exports = {
   resolveLightweightSelectedSupplier,
   productHasSupplierLinks,
   queueAuthoritativePriceReprice,
+  compareWarehouseSupplierPrices,
   pickWarehouseSupplier,
   pickWarehouseStockOnlySupplier,
+  rebuildOzonUnarchiveQueue,
   resolveWarehouseBrand,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
@@ -27949,6 +28181,8 @@ module.exports = {
   priceAffectingSettingsChanged,
   warehouseLinkIdentityKey,
   pickSafeArticlePriceMasterRow,
+  priceMasterRowMatchesLink,
+  priceMasterSnapshotRowFields,
   priceMasterArticleCandidateScore,
   warehouseLinkTargetKey,
   warehouseLinkSupplierSignature,
