@@ -1650,7 +1650,8 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
         </label>
       </section>
       <section className="summary-grid">
-        <Stat label="Найдено" value={pageQuery.data?.total || 0} />
+        <Stat label={pageQuery.data?.grouped ? "Карточек" : "Найдено"} value={pageQuery.data?.groupTotal || pageQuery.data?.total || 0} />
+        {pageQuery.data?.grouped && pageQuery.data?.rowTotal ? <Stat label="SKU" value={pageQuery.data.rowTotal} /> : null}
         <Stat label="Всего" value={pageQuery.data?.totalAll || 0} />
         <Stat label="Готовы" value={pageQuery.data?.ready || 0} />
         <Stat label="Изменения" value={pageQuery.data?.changed || 0} />

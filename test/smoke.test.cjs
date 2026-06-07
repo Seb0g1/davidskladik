@@ -141,6 +141,9 @@ const {
   isOpenAiRequestFormatError,
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
+  countWarehouseProductGroups,
+  isWeakYandexWarehouseCard,
+  patchYandexWarehouseProductFromOzonDonor,
   materializeYandexExportedProductsForWarehouse,
   marketplaceProductMarkupOverride,
   applyYandexPriceSendToWarehouse,
@@ -369,6 +372,38 @@ test("Ozon to Yandex import blocks forbidden names and small volumes", () => {
   assert.ok(ozonYandexImportBlockReasons({ name: "Отливант Creed Aventus 50 мл", ozon: { vendor: "Creed" } }).some((reason) => reason.includes("Отливант")));
   assert.ok(ozonYandexImportBlockReasons({ name: "Creed Aventus без коробки 100 мл", ozon: { vendor: "Creed" } }).some((reason) => reason.includes("без коробки")));
   assert.deepEqual(ozonYandexImportBlockReasons({ name: "Creed Aventus 20 мл", ozon: { vendor: "Creed" } }), []);
+});
+
+test("warehouse grouped counter and yandex media repair helpers", () => {
+  assert.equal(countWarehouseProductGroups([
+    { id: "ozon-1", marketplace: "ozon", offerId: "SKU-1", raw: { manualGroupId: "auto-pair-ozon-1" } },
+    { id: "yandex-1", marketplace: "yandex", offerId: "SKU-1", raw: { manualGroupId: "auto-pair-ozon-1", yandex: { extra: { sourceProductId: "ozon-1" } } } },
+    { id: "ozon-2", marketplace: "ozon", offerId: "SKU-2" },
+  ]), 2);
+
+  const weakYandex = normalizeWarehouseProduct({
+    id: "yandex-weak",
+    marketplace: "yandex",
+    offerId: "SKU-1",
+    yandex: { vendor: "", pictures: [] },
+  });
+  assert.equal(isWeakYandexWarehouseCard(weakYandex), true);
+
+  const patched = patchYandexWarehouseProductFromOzonDonor(weakYandex, normalizeWarehouseProduct({
+    id: "ozon-1",
+    marketplace: "ozon",
+    offerId: "SKU-1",
+    imageUrl: "https://example.test/ozon.jpg",
+    ozon: { vendor: "Creed", images: ["https://example.test/ozon.jpg"] },
+  }));
+  assert.equal(patched.yandex.vendor, "Creed");
+  assert.equal(patched.imageUrl, "https://example.test/ozon.jpg");
+
+  const cleanup = buildYandexCleanupCandidate({
+    offer: { offerId: "SMALL-1", name: "Sample 10 мл", vendor: "Brand" },
+  }, { id: "yandex", businessId: "biz-1" }, ["Brand"]);
+  assert.equal(cleanup.smallVolume, true);
+  assert.equal(cleanup.action, "delete");
 });
 
 test("Ozon to Yandex import blocks unsafe non-perfume and low quality cards", () => {

@@ -135,6 +135,7 @@ export const WarehousePageSchema = z.object({
   sourceError: z.string().optional().default(""),
   grouped: z.boolean().optional().default(false),
   rowTotal: z.number().optional().default(0),
+  groupTotal: z.number().optional().default(0),
   items: z.array(WarehousePageItemSchema).optional().default([]),
 }).passthrough();
 
