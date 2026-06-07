@@ -10512,9 +10512,15 @@ function scheduleWarehousePostgresWrite(prisma, payload) {
   });
 }
 
+function warehouseMemoryCacheIsHydratedStub(cache = null) {
+  return Boolean(cache?.postgresOnly && Array.isArray(cache.products) && cache.products.length > 0);
+}
+
 async function loadWarehouseMemory({ forceFull = false } = {}) {
   if (warehouseMemoryCache) {
-    if (!warehouseMemoryCache.postgresOnly || forceFull) return warehouseMemoryCache;
+    if (!warehouseMemoryCache.postgresOnly || forceFull || warehouseMemoryCacheIsHydratedStub(warehouseMemoryCache)) {
+      return warehouseMemoryCache;
+    }
     warehouseMemoryCache = null;
     warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
   }
@@ -10585,7 +10591,9 @@ async function loadWarehouseMemory({ forceFull = false } = {}) {
 async function readWarehouse(options = {}) {
   const forceFull = options?.forceFull === true;
   if (warehouseMemoryCache) {
-    if (!warehouseMemoryCache.postgresOnly || forceFull) return warehouseMemoryCache;
+    if (!warehouseMemoryCache.postgresOnly || forceFull || warehouseMemoryCacheIsHydratedStub(warehouseMemoryCache)) {
+      return warehouseMemoryCache;
+    }
     warehouseMemoryCache = null;
     warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
   }
@@ -10609,22 +10617,34 @@ function backgroundMarketplaceJobsBlocked() {
 async function findWarehouseProductById(productId = "") {
   const id = cleanText(productId);
   if (!id) return null;
+  const [hydrated] = await hydrateWarehouseProductsForIds([id], { expandGroups: false });
+  if (hydrated && String(hydrated.id) === id) return hydrated;
   const warehouse = await readWarehouse();
-  const cached = (warehouse.products || []).find((item) => item.id === id);
+  const cached = (warehouse.products || []).find((item) => String(item.id) === id);
   if (cached) return cached;
-  const [fromPostgres] = await readWarehouseProductsFromPostgresByIds([id]);
-  return fromPostgres || null;
+  let [fromPostgres] = await readWarehouseProductsFromPostgresByIds([id], { includeDisabledTargets: true });
+  if (!fromPostgres) {
+    [fromPostgres] = await readWarehouseProductsFromPostgresByIds([id]);
+  }
+  if (fromPostgres) {
+    mergeWarehouseProductsIntoMemory([fromPostgres]);
+    return fromPostgres;
+  }
+  return null;
 }
 
-async function readWarehouseProductsFromPostgresByIds(productIds = []) {
+async function readWarehouseProductsFromPostgresByIds(productIds = [], { includeDisabledTargets = false } = {}) {
   const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : [productIds])
     .map((id) => cleanText(id))
     .filter(Boolean)));
   if (!ids.length || !shouldUsePostgresStorage()) return [];
   const prisma = getPrisma();
   if (!prisma) return [];
+  const where = includeDisabledTargets
+    ? { id: { in: ids } }
+    : { AND: [enabledWarehouseTargetWhere(), { id: { in: ids } }] };
   const rows = await prisma.warehouseProduct.findMany({
-    where: { AND: [enabledWarehouseTargetWhere(), { id: { in: ids } }] },
+    where,
     include: { links: true },
   });
   return rows.map(productFromPostgres);
@@ -10698,7 +10718,10 @@ async function hydrateWarehouseProductsForIds(productIds = [], { expandGroups = 
   const warehouse = await readWarehouse();
   const missingIds = ids.filter((id) => !(warehouse.products || []).some((product) => String(product.id) === id));
   if (missingIds.length && shouldUsePostgresStorage()) {
-    const loaded = await readWarehouseProductsFromPostgresByIds(missingIds);
+    let loaded = await readWarehouseProductsFromPostgresByIds(missingIds, { includeDisabledTargets: true });
+    if (!loaded.length) {
+      loaded = await readWarehouseProductsFromPostgresByIds(missingIds);
+    }
     if (loaded.length) {
       const suppliers = warehouse.suppliers?.length
         ? warehouse.suppliers
@@ -18714,11 +18737,28 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       .filter(Boolean));
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для привязки." });
 
-    await hydrateWarehouseProductsForIds(Array.from(ids), { expandGroups: true });
+    const hydratedProducts = await hydrateWarehouseProductsForIds(Array.from(ids), { expandGroups: true });
+    let initialSeeds = hydratedProducts.filter((product) => ids.has(String(product.id)));
+    if (!initialSeeds.length) {
+      const initialWarehouse = await readWarehouse();
+      initialSeeds = (initialWarehouse.products || []).filter((product) => ids.has(String(product.id)));
+    }
+    if (!initialSeeds.length && shouldUsePostgresStorage()) {
+      initialSeeds = await readWarehouseProductsFromPostgresByIds(Array.from(ids), { includeDisabledTargets: true });
+      if (initialSeeds.length) mergeWarehouseProductsIntoMemory(initialSeeds);
+    }
+    if (!initialSeeds.length) {
+      return response.status(404).json({
+        error: "Warehouse product not found.",
+        code: "warehouse_product_not_found",
+        productIds: Array.from(ids),
+      });
+    }
     const initialWarehouse = await readWarehouse();
-    const initialSeeds = (initialWarehouse.products || []).filter((product) => ids.has(String(product.id)));
-    if (!initialSeeds.length) return response.status(404).json({ error: "Warehouse products not found." });
-    const expandedProductIds = expandWarehouseProductsToGroups(initialWarehouse.products || [], initialSeeds).map((product) => String(product.id));
+    const expandedProductIds = (hydratedProducts.length
+      ? hydratedProducts
+      : expandWarehouseProductsToGroups(initialWarehouse.products || [], initialSeeds))
+      .map((product) => String(product.id));
 
     return await withWarehouseProductMutationLock(expandedProductIds, async () => {
     const settings = await readAppSettings();
@@ -18913,10 +18953,16 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
 app.post("/api/warehouse/products/:id/links", async (request, response, next) => {
   try {
     return await withWarehouseProductMutationLock([request.params.id], async () => {
+    const product = await findWarehouseProductById(request.params.id);
+    if (!product) {
+      return response.status(404).json({
+        error: "Warehouse product not found.",
+        code: "warehouse_product_not_found",
+        productId: request.params.id,
+      });
+    }
     await hydrateWarehouseProductsForIds([request.params.id], { expandGroups: true });
     const warehouse = await readWarehouse();
-    const product = warehouse.products.find((item) => item.id === request.params.id);
-    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
     const conflict = productConflict(product, request.body?.expectedUpdatedAt);
     if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt });
@@ -28305,6 +28351,7 @@ module.exports = {
   nextOzonUnarchiveScheduledRunAt,
   warehouseLinkActivationRequestMeta,
   hydrateWarehouseProductsForIds,
+  warehouseMemoryCacheIsHydratedStub,
   backgroundMarketplaceJobsBlocked,
   readWarehouseProductsFromPostgresByIds,
   buildFreshWarehouseProducts,

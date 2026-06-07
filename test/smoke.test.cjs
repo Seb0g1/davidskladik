@@ -5621,6 +5621,13 @@ test("linked product with inactive PriceMaster row is treated as missing supplie
   assert.deepEqual(toZeroStock.map((item) => item.id), ["ozon-inactive-pm"]);
 });
 
+test("postgres hydrated warehouse cache is preserved across readWarehouse", () => {
+  const { warehouseMemoryCacheIsHydratedStub } = require("../server.js");
+  assert.equal(warehouseMemoryCacheIsHydratedStub({ postgresOnly: true, products: [{ id: "p1" }] }), true);
+  assert.equal(warehouseMemoryCacheIsHydratedStub({ postgresOnly: true, products: [] }), false);
+  assert.equal(warehouseMemoryCacheIsHydratedStub({ postgresOnly: false, products: [] }), false);
+});
+
 test("marketplace maintenance scheduler runs PM sync, marketplace sync and zero-stock checks", async () => {
   const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
   assert.match(serverSource, /runMarketplaceMaintenanceCycle/);
