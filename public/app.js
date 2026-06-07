@@ -929,8 +929,46 @@ function displayProductName(product) {
   return goodName || `Товар ${marketLabel(product)}`;
 }
 
-function productGroupKey(product) {
-  if (product.manualGroupId) return `manual:${product.manualGroupId}`;
+function extractYandexSourceProductIdForGroup(product) {
+  return String(
+    product?.yandex?.extra?.sourceProductId
+    || product?.raw?.yandex?.extra?.sourceProductId
+    || "",
+  ).trim();
+}
+
+function resolveProductPairOzonIdForGroup(product) {
+  const manualGroupId = String(product?.manualGroupId || product?.raw?.manualGroupId || "").trim().toLowerCase();
+  if (manualGroupId.startsWith("auto-pair-")) return manualGroupId.slice("auto-pair-".length);
+  if (String(product?.marketplace || "").trim().toLowerCase() === "yandex") {
+    return extractYandexSourceProductIdForGroup(product);
+  }
+  return "";
+}
+
+function buildWarehouseCatalogGroupContext(products) {
+  const ozonIdsReferencedByYandex = new Set();
+  for (const product of products || []) {
+    if (String(product?.marketplace || "").trim().toLowerCase() !== "yandex") continue;
+    const sourceId = extractYandexSourceProductIdForGroup(product);
+    if (sourceId) ozonIdsReferencedByYandex.add(sourceId.toLowerCase());
+  }
+  return { ozonIdsReferencedByYandex };
+}
+
+function productGroupKey(product, groupContext) {
+  const manualGroupId = String(product?.manualGroupId || product?.raw?.manualGroupId || "").trim().toLowerCase();
+  if (manualGroupId && !manualGroupId.startsWith("auto-pair-")) return `manual:${manualGroupId}`;
+
+  const marketplace = String(product?.marketplace || "").trim().toLowerCase();
+  const ozonId = String(product?.id || "").trim().toLowerCase();
+  if (marketplace === "ozon" && ozonId && groupContext?.ozonIdsReferencedByYandex?.has(ozonId)) {
+    return `pair:${ozonId}`;
+  }
+
+  const pairOzonId = resolveProductPairOzonIdForGroup(product);
+  if (pairOzonId) return `pair:${pairOzonId.toLowerCase()}`;
+
   const offer = String(product.offerId || "").trim().toLowerCase();
   if (offer) return `offer:${offer}`;
   return `name:${displayProductName(product).trim().toLowerCase()}`;
@@ -1051,9 +1089,10 @@ function setPendingLinkDrafts(key, links = []) {
 }
 
 function buildWarehouseGroups(products) {
+  const groupContext = buildWarehouseCatalogGroupContext(products);
   const map = new Map();
   for (const product of products) {
-    const key = productGroupKey(product);
+    const key = productGroupKey(product, groupContext);
     const group = map.get(key) || {
       key,
       offerId: product.offerId,

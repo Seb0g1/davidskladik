@@ -5552,7 +5552,7 @@ test("ozon yandex auto pair helpers resolve source product links", () => {
   assert.equal(extractYandexSourceProductId(yandex), "ozon-abc");
   const indexes = buildOzonProductLookupIndexes([ozon]);
   assert.equal(findOzonMatchForYandexProduct(yandex, indexes)?.id, "ozon-abc");
-  assert.equal(warehouseProductPageGroupKey(yandex), "manual:auto-pair-ozon-abc");
+  assert.equal(warehouseProductPageGroupKey(yandex), "pair:ozon-abc");
   const yandexByOffer = {
     id: "yandex-2",
     marketplace: "yandex",
@@ -5562,6 +5562,26 @@ test("ozon yandex auto pair helpers resolve source product links", () => {
   assert.equal(extractYandexSourceProductId(yandexByOffer), "");
   assert.equal(extractOzonIdFromAutoPairGroupId(yandexByOffer.manualGroupId), "ozon-abc");
   assert.equal(findOzonMatchForYandexProduct(yandexByOffer, indexes)?.id, "ozon-abc");
+  assert.equal(warehouseProductPageGroupKey(yandexByOffer), "pair:ozon-abc");
+  assert.equal(warehouseProductPageGroupKey(ozon), "offer:sku-9");
+  const {
+    buildWarehouseCatalogGroupContext,
+    expandWarehouseProductsToGroups,
+    buildWarehousePageProductGroups,
+  } = require("../server.js");
+  const yandexSibling = {
+    id: "yandex-3",
+    marketplace: "yandex",
+    offerId: "SKU-9",
+    yandex: { extra: { sourceProductId: "ozon-abc" } },
+  };
+  const grouped = buildWarehousePageProductGroups([ozon, yandexSibling]);
+  assert.equal(grouped.length, 1);
+  assert.equal(grouped[0].products.length, 2);
+  const expanded = expandWarehouseProductsToGroups([ozon, yandexSibling], [ozon]);
+  assert.equal(expanded.length, 2);
+  const context = buildWarehouseCatalogGroupContext([ozon, yandexSibling]);
+  assert.equal(warehouseProductPageGroupKey(ozon, context), "pair:ozon-abc");
   const { resolveWarehouseProductTargetName } = require("../server.js");
   assert.equal(
     resolveWarehouseProductTargetName({ target: "yandex-06c2112c", marketplace: "yandex" }),

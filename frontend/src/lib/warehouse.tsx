@@ -19,11 +19,56 @@ export type ProductGroup = {
   };
 };
 
-export function productGroupKey(product: Product): string {
+function extractYandexSourceProductId(product: Product): string {
+  const raw = asRecord(product.raw);
+  const yandex = asRecord(product.yandex);
+  const rawYandex = asRecord(raw.yandex);
+  return String(
+    yandex.extra?.sourceProductId
+    || rawYandex.extra?.sourceProductId
+    || "",
+  ).trim();
+}
+
+function resolveProductPairOzonId(product: Product): string {
   const raw = asRecord(product.raw);
   const manualGroupId = String(product.manualGroupId || raw.manualGroupId || raw.manual_group_id || "").trim().toLowerCase();
-  if (manualGroupId) return `manual:${manualGroupId}`;
-  return `offer:${String(product.offerId || product.sku || product.id).trim().toLowerCase()}`;
+  if (manualGroupId.startsWith("auto-pair-")) {
+    return manualGroupId.slice("auto-pair-".length);
+  }
+  if (String(product.marketplace || "").trim().toLowerCase() === "yandex") {
+    return extractYandexSourceProductId(product);
+  }
+  return "";
+}
+
+export function buildWarehouseCatalogGroupContext(products: Product[]) {
+  const ozonIdsReferencedByYandex = new Set<string>();
+  for (const product of products) {
+    if (String(product.marketplace || "").trim().toLowerCase() !== "yandex") continue;
+    const sourceId = extractYandexSourceProductId(product);
+    if (sourceId) ozonIdsReferencedByYandex.add(sourceId.toLowerCase());
+  }
+  return { ozonIdsReferencedByYandex };
+}
+
+export function productGroupKey(product: Product, groupContext?: ReturnType<typeof buildWarehouseCatalogGroupContext>): string {
+  const raw = asRecord(product.raw);
+  const manualGroupId = String(product.manualGroupId || raw.manualGroupId || raw.manual_group_id || "").trim().toLowerCase();
+  if (manualGroupId && !manualGroupId.startsWith("auto-pair-")) return `manual:${manualGroupId}`;
+
+  const marketplace = String(product.marketplace || "").trim().toLowerCase();
+  const ozonId = String(product.id || "").trim().toLowerCase();
+  if (marketplace === "ozon" && ozonId && groupContext?.ozonIdsReferencedByYandex.has(ozonId)) {
+    return `pair:${ozonId}`;
+  }
+
+  const pairOzonId = resolveProductPairOzonId(product);
+  if (pairOzonId) return `pair:${pairOzonId.toLowerCase()}`;
+
+  const offerId = String(product.offerId || product.sku || product.id).trim().toLowerCase();
+  if (offerId) return `offer:${offerId}`;
+  return "";
 }
 
 export function uniqueLinks(products: Product[]): ProductLink[] {
@@ -123,9 +168,10 @@ export function preferredGroupPrimary(products: Product[]): Product {
 }
 
 export function groupProductsForList(products: Product[]): ProductGroup[] {
+  const groupContext = buildWarehouseCatalogGroupContext(products);
   const groups = new Map<string, Product[]>();
   for (const product of products) {
-    const key = productGroupKey(product);
+    const key = productGroupKey(product, groupContext);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)?.push(product);
   }

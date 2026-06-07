@@ -5366,6 +5366,68 @@ function extractYandexSourceProductId(product = {}) {
   );
 }
 
+function resolveWarehouseProductPairOzonId(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const raw = normalized.raw && typeof normalized.raw === "object" && !Array.isArray(normalized.raw) ? normalized.raw : {};
+  const manualGroupId = cleanText(normalized.manualGroupId || raw.manualGroupId || raw.manual_group_id).toLowerCase();
+  if (manualGroupId.startsWith("auto-pair-")) {
+    return extractOzonIdFromAutoPairGroupId(manualGroupId);
+  }
+  if (cleanText(normalized.marketplace).toLowerCase() === "yandex") {
+    return extractYandexSourceProductId(normalized);
+  }
+  return "";
+}
+
+function buildWarehouseCatalogGroupContext(products = []) {
+  const ozonIdsReferencedByYandex = new Set();
+  for (const product of Array.isArray(products) ? products : []) {
+    const normalized = normalizeWarehouseProduct(product);
+    if (cleanText(normalized.marketplace).toLowerCase() !== "yandex") continue;
+    const sourceId = extractYandexSourceProductId(normalized);
+    if (sourceId) ozonIdsReferencedByYandex.add(sourceId.toLowerCase());
+  }
+  return { ozonIdsReferencedByYandex };
+}
+
+function warehouseProductSharesGroup(product = {}, groupContext = null, groupKeys = null, pairOzonIds = null) {
+  const normalized = normalizeWarehouseProduct(product);
+  const groupKey = warehouseProductPageGroupKey(normalized, groupContext);
+  if (groupKeys && groupKey && groupKeys.has(groupKey)) return true;
+  const pairId = resolveWarehouseProductPairOzonId(normalized);
+  if (pairId && pairOzonIds?.has(pairId.toLowerCase())) return true;
+  const marketplace = cleanText(normalized.marketplace).toLowerCase();
+  const productId = cleanText(normalized.id).toLowerCase();
+  if (marketplace === "ozon" && productId && pairOzonIds?.has(productId)) return true;
+  if (marketplace === "yandex") {
+    const sourceId = extractYandexSourceProductId(normalized);
+    if (sourceId && pairOzonIds?.has(sourceId.toLowerCase())) return true;
+  }
+  return false;
+}
+
+function collectWarehouseGroupExpansionKeys(seedProducts = [], groupContext = null) {
+  const groupKeys = new Set();
+  const pairOzonIds = new Set();
+  for (const seed of Array.isArray(seedProducts) ? seedProducts : []) {
+    const normalized = normalizeWarehouseProduct(seed);
+    const groupKey = warehouseProductPageGroupKey(normalized, groupContext);
+    if (groupKey) groupKeys.add(groupKey);
+    const pairId = resolveWarehouseProductPairOzonId(normalized);
+    if (pairId) {
+      const normalizedPairId = pairId.toLowerCase();
+      pairOzonIds.add(normalizedPairId);
+      groupKeys.add(`pair:${normalizedPairId}`);
+    }
+    if (cleanText(normalized.marketplace).toLowerCase() === "ozon" && normalized.id) {
+      const ozonId = cleanText(normalized.id).toLowerCase();
+      pairOzonIds.add(ozonId);
+      groupKeys.add(`pair:${ozonId}`);
+    }
+  }
+  return { groupKeys, pairOzonIds };
+}
+
 function buildOzonProductLookupIndexes(ozonProducts = []) {
   const byId = new Map();
   const byOffer = new Map();
@@ -10661,10 +10723,24 @@ async function readWarehouseGroupSiblingsFromPostgres(seedProducts = []) {
     const raw = product?.raw && typeof product.raw === "object" && !Array.isArray(product.raw) ? product.raw : {};
     return cleanText(raw.manualGroupId || raw.manual_group_id);
   }).filter(Boolean)));
+  const pairOzonIds = Array.from(new Set(seeds.map((product) => resolveWarehouseProductPairOzonId(product)).filter(Boolean)));
+  for (const seed of seeds) {
+    if (cleanText(seed.marketplace).toLowerCase() === "ozon" && seed.id) {
+      pairOzonIds.push(cleanText(seed.id));
+    }
+  }
+  const uniquePairOzonIds = Array.from(new Set(pairOzonIds.map((id) => cleanText(id)).filter(Boolean)));
   const baseWhere = enabledWarehouseTargetWhere();
   const clauses = offerIds.map((offerId) => ({ offerId: { equals: offerId, mode: "insensitive" } }));
   for (const manualGroupId of manualGroupIds) {
-    clauses.push({ raw: { path: ["manualGroupId"], equals: manualGroupId } });
+    if (!manualGroupId.startsWith("auto-pair-")) {
+      clauses.push({ raw: { path: ["manualGroupId"], equals: manualGroupId } });
+    }
+  }
+  for (const ozonId of uniquePairOzonIds) {
+    clauses.push({ marketplace: "ozon", id: ozonId });
+    clauses.push({ raw: { path: ["yandex", "extra", "sourceProductId"], equals: ozonId } });
+    clauses.push({ raw: { path: ["manualGroupId"], equals: `auto-pair-${ozonId}` } });
   }
   if (!clauses.length) return Array.from(byId.values());
   let rows = [];
@@ -13293,25 +13369,39 @@ function setWarehouseFastPageCache(key, value) {
   }
 }
 
-function warehouseProductPageGroupKey(product = {}) {
-  const raw = product.raw && typeof product.raw === "object" && !Array.isArray(product.raw) ? product.raw : {};
-  const manualGroupId = cleanText(product.manualGroupId || product.manual_group_id || raw.manualGroupId || raw.manual_group_id).toLowerCase();
-  if (manualGroupId) return `manual:${manualGroupId}`;
-  const offerId = cleanText(product.offerId || product.offer_id).toLowerCase();
+function warehouseProductPageGroupKey(product = {}, groupContext = null) {
+  const normalized = normalizeWarehouseProduct(product);
+  const raw = normalized.raw && typeof normalized.raw === "object" && !Array.isArray(normalized.raw) ? normalized.raw : {};
+  const manualGroupId = cleanText(normalized.manualGroupId || normalized.manual_group_id || raw.manualGroupId || raw.manual_group_id).toLowerCase();
+  if (manualGroupId && !manualGroupId.startsWith("auto-pair-")) return `manual:${manualGroupId}`;
+
+  const marketplace = cleanText(normalized.marketplace).toLowerCase();
+  const ozonId = cleanText(normalized.id).toLowerCase();
+  if (marketplace === "ozon" && ozonId && groupContext?.ozonIdsReferencedByYandex?.has(ozonId)) {
+    return `pair:${ozonId}`;
+  }
+
+  const pairOzonId = resolveWarehouseProductPairOzonId(normalized);
+  if (pairOzonId) return `pair:${pairOzonId.toLowerCase()}`;
+
+  const offerId = cleanText(normalized.offerId || normalized.offer_id).toLowerCase();
   if (offerId) return `offer:${offerId}`;
   return "";
 }
 
 function addWarehousePageGroupSiblings(sourceProducts = [], pageProducts = []) {
-  const groupKeys = new Set((pageProducts || []).map(warehouseProductPageGroupKey).filter(Boolean));
-  if (!groupKeys.size) return pageProducts || [];
+  const groupContext = buildWarehouseCatalogGroupContext([...(pageProducts || []), ...(sourceProducts || [])]);
+  const { groupKeys, pairOzonIds } = collectWarehouseGroupExpansionKeys(pageProducts || [], groupContext);
+  if (!groupKeys.size && !pairOzonIds.size) return pageProducts || [];
   const byId = new Map();
   for (const product of pageProducts || []) {
     if (product?.id) byId.set(String(product.id), product);
   }
   for (const product of sourceProducts || []) {
     if (!product?.id) continue;
-    if (groupKeys.has(warehouseProductPageGroupKey(product))) byId.set(String(product.id), product);
+    if (warehouseProductSharesGroup(product, groupContext, groupKeys, pairOzonIds)) {
+      byId.set(String(product.id), product);
+    }
   }
   return Array.from(byId.values());
 }
@@ -13319,13 +13409,15 @@ function addWarehousePageGroupSiblings(sourceProducts = [], pageProducts = []) {
 function expandWarehouseProductsToGroups(sourceProducts = [], seedProducts = []) {
   const seeds = Array.isArray(seedProducts) ? seedProducts : [];
   const seedIds = new Set(seeds.map((product) => String(product?.id || "")).filter(Boolean));
-  const groupKeys = new Set(seeds.map(warehouseProductPageGroupKey).filter(Boolean));
+  const groupContext = buildWarehouseCatalogGroupContext([...seeds, ...(Array.isArray(sourceProducts) ? sourceProducts : [])]);
+  const { groupKeys, pairOzonIds } = collectWarehouseGroupExpansionKeys(seeds, groupContext);
   const byId = new Map();
   for (const product of Array.isArray(sourceProducts) ? sourceProducts : []) {
     if (!product?.id) continue;
     const id = String(product.id);
-    const groupKey = warehouseProductPageGroupKey(product);
-    if (seedIds.has(id) || (groupKey && groupKeys.has(groupKey))) byId.set(id, product);
+    if (seedIds.has(id) || warehouseProductSharesGroup(product, groupContext, groupKeys, pairOzonIds)) {
+      byId.set(id, product);
+    }
   }
   return Array.from(byId.values());
 }
@@ -13333,8 +13425,9 @@ function expandWarehouseProductsToGroups(sourceProducts = [], seedProducts = [])
 function warehouseProductsForGroupKey(sourceProducts = [], groupKey = "") {
   const key = cleanText(groupKey);
   if (!key) return [];
+  const groupContext = buildWarehouseCatalogGroupContext(sourceProducts);
   return (Array.isArray(sourceProducts) ? sourceProducts : [])
-    .filter((product) => warehouseProductPageGroupKey(product) === key);
+    .filter((product) => warehouseProductPageGroupKey(product, groupContext) === key);
 }
 
 function syncWarehouseProductGroupLinks(products = [], { now = new Date().toISOString(), username = "system" } = {}) {
@@ -13370,10 +13463,11 @@ function syncWarehouseProductGroupLinks(products = [], { now = new Date().toISOS
 }
 
 function buildWarehousePageProductGroups(products = []) {
+  const groupContext = buildWarehouseCatalogGroupContext(products);
   const groups = new Map();
   for (const product of Array.isArray(products) ? products : []) {
     const normalized = normalizeWarehouseProduct(product);
-    const groupKey = warehouseProductPageGroupKey(normalized) || `id:${normalized.id}`;
+    const groupKey = warehouseProductPageGroupKey(normalized, groupContext) || `id:${normalized.id}`;
     if (!groups.has(groupKey)) {
       groups.set(groupKey, {
         groupKey,
@@ -14204,6 +14298,25 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
       });
       const crossRows = await fetchCrossMarketplaceSiblingRows(prisma, baseWhere, rows);
       rows = mergeWarehousePostgresRows(rows, crossRows);
+    } else if (kind === "pair") {
+      rows = await prisma.warehouseProduct.findMany({
+        where: {
+          AND: [
+            baseWhere,
+            {
+              OR: [
+                { marketplace: "ozon", id: value },
+                { raw: { path: ["yandex", "extra", "sourceProductId"], equals: value } },
+                { raw: { path: ["manualGroupId"], equals: `auto-pair-${value}` } },
+              ],
+            },
+          ],
+        },
+        include: { links: true },
+        orderBy: warehousePagePostgresOrderBy(),
+      });
+      const crossRows = await fetchCrossMarketplaceSiblingRows(prisma, baseWhere, rows);
+      rows = mergeWarehousePostgresRows(rows, crossRows);
     } else if (kind === "manual") {
       rows = await prisma.warehouseProduct.findMany({
         where: {
@@ -14221,7 +14334,8 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
           include: { links: true },
           orderBy: warehousePagePostgresOrderBy(),
         });
-        return candidates.filter((row) => warehouseProductPageGroupKey(productFromPostgres(row)) === groupKey);
+        const groupContext = buildWarehouseCatalogGroupContext(candidates.map(productFromPostgres));
+        return candidates.filter((row) => warehouseProductPageGroupKey(productFromPostgres(row), groupContext) === groupKey);
       });
     }
     if (!rows.length) return null;
@@ -14260,7 +14374,8 @@ async function buildWarehouseGroupDetail(groupKey, { usdRate, filters = {}, refr
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
   const enabledProducts = (Array.isArray(warehouse.products) ? warehouse.products : []).filter(isWarehouseProductTargetEnabled);
-  const products = enabledProducts.filter((product) => warehouseProductPageGroupKey(product) === groupKey);
+  const groupContext = buildWarehouseCatalogGroupContext(enabledProducts);
+  const products = enabledProducts.filter((product) => warehouseProductPageGroupKey(product, groupContext) === groupKey);
   if (!products.length) return null;
   const pageProducts = await enrichWeakOzonProductsForPage(products);
   const built = await buildFreshWarehouseProductsForWarehouse(
@@ -27786,6 +27901,17 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
     const startedAt = new Date().toISOString();
     try {
       const priceMaster = await runSync();
+      if (shouldUsePostgresStorage()) {
+        try {
+          const prisma = getPrisma();
+          if (prisma) {
+            await syncOzonManualGroupsFromYandexPostgres(prisma, { dryRun: false });
+            await backfillOzonYandexManualGroupsPostgres(prisma, { dryRun: false });
+          }
+        } catch (error) {
+          logger.warn("marketplace maintenance ozon yandex pair backfill failed", { detail: error?.message || String(error) });
+        }
+      }
       const warehouse = await buildWarehouseView({ sync: true });
       const automation = await runNoSupplierMarketplaceAutomation(warehouse, {
         includeNoLinks: false,
@@ -28379,6 +28505,9 @@ module.exports = {
   supplierFromPostgres,
   resolveWarehouseProductTargetName,
   warehouseProductPageGroupKey,
+  resolveWarehouseProductPairOzonId,
+  buildWarehouseCatalogGroupContext,
+  expandWarehouseProductsToGroups,
   buildWarehouseGroupDetailFromPostgres,
   readWarehouse,
   readWarehouseFull,
@@ -28391,7 +28520,6 @@ module.exports = {
   preferWarehousePrimaryIdentityMatches,
   buildWarehouseSkuDiagnostics,
   addWarehousePageGroupSiblings,
-  expandWarehouseProductsToGroups,
   syncWarehouseProductGroupLinks,
   buildWarehousePageProductGroups,
   linkedRecoveryCandidateProducts,
