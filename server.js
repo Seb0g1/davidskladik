@@ -10956,24 +10956,31 @@ async function readWarehouseGroupSiblingsFromPostgres(seedProducts = []) {
     clauses.push({ raw: { path: ["manualGroupId"], equals: `auto-pair-${ozonId}` } });
   }
   if (!clauses.length) return Array.from(byId.values());
+  const clauseChunkSize = Math.max(50, Math.min(8000, Number(process.env.WAREHOUSE_POSTGRES_OR_CHUNK || 4000) || 4000));
   let rows = [];
   try {
-    rows = await prisma.warehouseProduct.findMany({
-      where: { AND: [baseWhere, { OR: clauses }] },
-      include: { links: true },
-    });
+    for (const clauseChunk of chunkArray(clauses, clauseChunkSize)) {
+      const chunkRows = await prisma.warehouseProduct.findMany({
+        where: { AND: [baseWhere, { OR: clauseChunk }] },
+        include: { links: true },
+      });
+      rows.push(...chunkRows);
+    }
   } catch (error) {
     if (!offerIds.length) return Array.from(byId.values());
     logger.warn("warehouse postgres group sibling lookup failed, using offerId fallback", { detail: error?.message || String(error) });
-    rows = await prisma.warehouseProduct.findMany({
-      where: {
-        AND: [
-          baseWhere,
-          { OR: offerIds.map((offerId) => ({ offerId: { equals: offerId, mode: "insensitive" } })) },
-        ],
-      },
-      include: { links: true },
-    });
+    for (const offerChunk of chunkArray(offerIds, clauseChunkSize)) {
+      const chunkRows = await prisma.warehouseProduct.findMany({
+        where: {
+          AND: [
+            baseWhere,
+            { OR: offerChunk.map((offerId) => ({ offerId: { equals: offerId, mode: "insensitive" } })) },
+          ],
+        },
+        include: { links: true },
+      });
+      rows.push(...chunkRows);
+    }
   }
   for (const row of rows) {
     const product = productFromPostgres(row);
@@ -13538,12 +13545,88 @@ function warehousePagePostgresOrderBy() {
   return [
     { archived: "asc" },
     { status: "asc" },
+    { offerId: "asc" },
     { marketplace: "asc" },
     { target: "asc" },
     { name: "asc" },
-    { offerId: "asc" },
     { id: "asc" },
   ];
+}
+
+function warehousePageShouldUseLightBuild() {
+  return process.env.WAREHOUSE_PAGE_LIGHT_BUILD !== "false"
+    || Boolean(marketplaceMaintenanceRunning || manualWarehouseSyncPromise || dailySyncPromise);
+}
+
+function mapWarehousePageProductsLight(pageProducts = [], normalizedSuppliers = []) {
+  return (Array.isArray(pageProducts) ? pageProducts : []).map((product) => {
+    const item = normalizeWarehouseProduct(product);
+    const links = Array.isArray(item.links) ? item.links : [];
+    const hasSupplier = Boolean(item.selectedSupplier) || Boolean(item.stockOnlyFallbackActive);
+    return {
+      ...item,
+      autoPriceEnabled: item.autoPriceEnabled !== false,
+      links,
+      suppliers: Array.isArray(item.suppliers) ? item.suppliers : normalizedSuppliers,
+      selectedSupplier: item.selectedSupplier || null,
+      noSupplierAutomation: item.noSupplierAutomation || {},
+      marketplaceState: item.marketplaceState || {},
+      partial: links.length > 0 && !hasSupplier,
+    };
+  });
+}
+
+function mapServerWarehousePageGroup(group = {}) {
+  const products = Array.isArray(group.products) ? group.products.map(normalizeWarehouseProduct) : [];
+  const primary = products.find((product) => cleanText(product.marketplace).toLowerCase() === "ozon")
+    || products.find((product) => cleanText(product.marketplace).toLowerCase() === "yandex")
+    || products[0]
+    || null;
+  return {
+    ...group,
+    groupKey: group.groupKey || "",
+    primary,
+    products,
+    links: Array.isArray(group.links) ? group.links : [],
+    marketplaces: Array.isArray(group.marketplaces) ? group.marketplaces : [],
+    statusSummary: group.statusSummary || {
+      total: products.length,
+      linked: 0,
+      archived: 0,
+      ready: 0,
+      changed: 0,
+      withoutSupplier: 0,
+    },
+  };
+}
+
+async function buildFastWarehouseGroupPageFromPostgres({
+  page = 1,
+  pageSize = 60,
+  usdRate,
+  filters = {},
+} = {}) {
+  const basePage = await buildFastWarehousePageFromPostgres({
+    page,
+    pageSize,
+    usdRate,
+    filters: { ...filters, groupPage: false },
+  });
+  if (!basePage) return basePage;
+  const rawItems = Array.isArray(basePage.items) ? basePage.items : [];
+  if (!rawItems.length) return basePage;
+  const groups = buildWarehousePageProductGroups(rawItems).map(mapServerWarehousePageGroup);
+  const rowTotal = Number(basePage.total || 0);
+  const estimatedGroupTotal = Math.max(groups.length, Math.ceil(rowTotal / 1.6));
+  return {
+    ...basePage,
+    grouped: true,
+    rowTotal,
+    total: estimatedGroupTotal,
+    groups,
+    items: groups,
+    hasMore: (page * pageSize) < estimatedGroupTotal,
+  };
 }
 
 function warehouseFastPageCacheKey({ page = 1, pageSize = 60, usdRate, filters = {} } = {}) {
@@ -13558,6 +13641,7 @@ function warehouseFastPageCacheKey({ page = 1, pageSize = 60, usdRate, filters =
       marketplace: cleanText(filters.marketplace || "all"),
       state: cleanText(filters.state || "all"),
       brand: cleanText(filters.brand || "").toLowerCase(),
+      groupPage: Boolean(filters.groupPage),
     },
     storage: shouldUsePostgresStorage() ? "postgres" : "json",
   });
@@ -14073,35 +14157,41 @@ async function buildFastWarehousePageFromPostgres({
     products: pageProducts,
     suppliers: normalizedSuppliers,
   };
-  const built = await buildFreshWarehouseProductsForWarehouse(
-    pageWarehouse,
-    pageProducts.map((product) => product.id),
-    {
-      refreshPrices: false,
-      persistMutations: false,
-      livePriceMaster: false,
-      batchPriceMaster: false,
-      usdRate: rate,
-    },
-  );
-  pageTrace("postgres:after-build", traceStartedAt);
-  const builtMap = new Map(built.map((product) => [product.id, product]));
-  const items = pageWarehouse.products.map((product) => {
-    const item = builtMap.get(product.id) || normalizeWarehouseProduct(product);
-    const links = Array.isArray(item.links) ? item.links : [];
-    const hasSupplier = Boolean(item.selectedSupplier) || Boolean(item.stockOnlyFallbackActive);
-    return {
-      ...item,
-      autoPriceEnabled: item.autoPriceEnabled !== false,
-      links,
-      suppliers: Array.isArray(item.suppliers) ? item.suppliers : [],
-      selectedSupplier: item.selectedSupplier || null,
-      noSupplierAutomation: item.noSupplierAutomation || {},
-      marketplaceState: item.marketplaceState || {},
-      partial: links.length > 0 && !hasSupplier,
-    };
-  });
-  queueLinkedUnavailableSupplierZeroStock(built, { source: "warehouse_page" });
+  let items = [];
+  if (warehousePageShouldUseLightBuild()) {
+    pageTrace("postgres:after-light-build", traceStartedAt);
+    items = mapWarehousePageProductsLight(pageWarehouse.products, normalizedSuppliers);
+  } else {
+    const built = await buildFreshWarehouseProductsForWarehouse(
+      pageWarehouse,
+      pageProducts.map((product) => product.id),
+      {
+        refreshPrices: false,
+        persistMutations: false,
+        livePriceMaster: false,
+        batchPriceMaster: false,
+        usdRate: rate,
+      },
+    );
+    pageTrace("postgres:after-build", traceStartedAt);
+    const builtMap = new Map(built.map((product) => [product.id, product]));
+    items = pageWarehouse.products.map((product) => {
+      const item = builtMap.get(product.id) || normalizeWarehouseProduct(product);
+      const links = Array.isArray(item.links) ? item.links : [];
+      const hasSupplier = Boolean(item.selectedSupplier) || Boolean(item.stockOnlyFallbackActive);
+      return {
+        ...item,
+        autoPriceEnabled: item.autoPriceEnabled !== false,
+        links,
+        suppliers: Array.isArray(item.suppliers) ? item.suppliers : [],
+        selectedSupplier: item.selectedSupplier || null,
+        noSupplierAutomation: item.noSupplierAutomation || {},
+        marketplaceState: item.marketplaceState || {},
+        partial: links.length > 0 && !hasSupplier,
+      };
+    });
+    queueLinkedUnavailableSupplierZeroStock(built, { source: "warehouse_page" });
+  }
   return {
     createdAt: pageWarehouse.createdAt,
     updatedAt: pageWarehouse.updatedAt,
@@ -14624,7 +14714,9 @@ async function buildFastWarehousePage({
   let result = null;
   const buildCore = async () => {
     if (shouldUsePostgresStorage()) {
-      const postgresPage = await buildFastWarehousePageFromPostgres({ page, pageSize, usdRate, filters });
+      const postgresPage = filters.groupPage
+        ? await buildFastWarehouseGroupPageFromPostgres({ page, pageSize, usdRate, filters })
+        : await buildFastWarehousePageFromPostgres({ page, pageSize, usdRate, filters });
       if (postgresPage) return postgresPage;
     }
     const warehouse = await readWarehouse();
@@ -16336,16 +16428,35 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
           marketplace,
           state: stateCode,
           brand: brandFilter,
+          groupPage: grouped,
         },
       });
-      if (!fastPage.partial) queueChangedWarehousePrices(fastPage.items, "warehouse_page_detected_changed_prices");
+      if (fastPage.partial || fastPage.sourceError) {
+        logger.warn("warehouse page partial response", {
+          page,
+          pageSize,
+          grouped,
+          partial: Boolean(fastPage.partial),
+          stale: Boolean(fastPage.stale),
+          sourceError: cleanText(fastPage.sourceError || ""),
+          items: Array.isArray(fastPage.items) ? fastPage.items.length : 0,
+          total: Number(fastPage.total || 0),
+        });
+      }
+      if (!fastPage.partial) {
+        const priceRows = grouped
+          ? (fastPage.groups || fastPage.items || []).flatMap((group) => group.products || [])
+          : fastPage.items;
+        queueChangedWarehousePrices(priceRows, "warehouse_page_detected_changed_prices");
+      }
+      if (grouped && fastPage.grouped) return response.json(fastPage);
       if (grouped) {
-        const groups = buildWarehousePageProductGroups(fastPage.items);
+        const groups = buildWarehousePageProductGroups(fastPage.items).map(mapServerWarehousePageGroup);
         return response.json({
           ...fastPage,
           grouped: true,
           rowTotal: fastPage.total,
-          total: groups.length,
+          total: Math.max(groups.length, Math.ceil(Number(fastPage.total || 0) / 1.6)),
           groups,
           items: groups,
         });
@@ -28185,7 +28296,7 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
           logger.warn("marketplace maintenance ozon yandex pair backfill failed", { detail: error?.message || String(error) });
         }
       }
-      const warehouse = await buildWarehouseView({ sync: true });
+      const warehouse = await buildWarehouseView({ sync: false });
       const automation = await runNoSupplierMarketplaceAutomation(warehouse, {
         includeNoLinks: false,
         skipLinkedGrace: true,

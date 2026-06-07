@@ -94,6 +94,30 @@ export const ProductSchema = z.object({
   aiImages: z.array(AiImageSchema).optional().default([]),
 }).passthrough();
 
+export const ProductGroupPageItemSchema = z.object({
+  groupKey: z.coerce.string(),
+  offerId: z.coerce.string().optional().default(""),
+  manualGroupId: z.coerce.string().optional().default(""),
+  name: z.coerce.string().optional().default(""),
+  brand: z.coerce.string().optional().nullable(),
+  imageUrl: z.coerce.string().optional().nullable(),
+  marketplaces: z.array(z.coerce.string()).optional().default([]),
+  products: z.array(ProductSchema).optional().default([]),
+  links: z.array(LinkSchema).optional().default([]),
+  primary: ProductSchema.optional().nullable(),
+  statusSummary: z.object({
+    total: z.number().optional().default(0),
+    linked: z.number().optional().default(0),
+    archived: z.number().optional().default(0),
+    ready: z.number().optional().default(0),
+    changed: z.number().optional().default(0),
+    withoutSupplier: z.number().optional().default(0),
+    marketplaces: z.array(z.coerce.string()).optional().default([]),
+  }).passthrough().optional(),
+}).passthrough();
+
+export const WarehousePageItemSchema = z.union([ProductGroupPageItemSchema, ProductSchema]);
+
 export const WarehousePageSchema = z.object({
   page: z.number().optional().default(1),
   pageSize: z.number().optional().default(60),
@@ -109,7 +133,9 @@ export const WarehousePageSchema = z.object({
   usdRate: z.number().optional().nullable(),
   updatedAt: z.string().optional().nullable(),
   sourceError: z.string().optional().default(""),
-  items: z.array(ProductSchema).optional().default([]),
+  grouped: z.boolean().optional().default(false),
+  rowTotal: z.number().optional().default(0),
+  items: z.array(WarehousePageItemSchema).optional().default([]),
 }).passthrough();
 
 export const WarehouseBrandsSchema = z.object({
@@ -668,7 +694,17 @@ export const YandexQualityCandidatesSchema = z.object({
 
 export type Product = z.infer<typeof ProductSchema>;
 export type ProductLink = z.infer<typeof LinkSchema>;
+export type ProductGroupPageItem = z.infer<typeof ProductGroupPageItemSchema>;
+export type WarehousePageItem = z.infer<typeof WarehousePageItemSchema>;
 export type WarehousePage = z.infer<typeof WarehousePageSchema>;
+
+export function isProductGroupPageItem(item: WarehousePageItem): item is ProductGroupPageItem {
+  return typeof (item as ProductGroupPageItem).groupKey === "string" && Boolean((item as ProductGroupPageItem).groupKey);
+}
+
+export function isProductPageItem(item: WarehousePageItem): item is Product {
+  return typeof (item as Product).id === "string" && Boolean((item as Product).id);
+}
 export type GroupDetail = z.infer<typeof GroupDetailSchema>;
 export type AiImage = z.infer<typeof AiImageSchema>;
 export type PriceMasterSearchRow = z.infer<typeof PriceMasterSearchRowSchema>;

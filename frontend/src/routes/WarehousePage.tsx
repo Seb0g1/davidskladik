@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Bot, Check, ChevronRight, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
-import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
+import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
@@ -90,9 +90,30 @@ function buildPageUrl(filters: Filters) {
     linked: filters.linked,
     state: filters.state,
     autoOnly: String(filters.autoOnly),
+    grouped: "true",
   });
   if (filters.brand) params.set("brand", filters.brand);
   return `/api/warehouse/products/page?${params}`;
+}
+
+function mapServerPageGroup(item: ProductGroupPageItem): ProductGroup | null {
+  if (!item?.groupKey || !Array.isArray(item.products) || !item.products.length) return null;
+  const products = item.products;
+  return {
+    groupKey: item.groupKey,
+    primary: item.primary || preferredGroupPrimary(products),
+    products,
+    links: item.links?.length ? item.links : uniqueLinks(products),
+    marketplaces: item.marketplaces?.length ? item.marketplaces : groupMarketplaceLabels(products),
+    statusSummary: item.statusSummary || {
+      total: products.length,
+      linked: 0,
+      archived: 0,
+      ready: 0,
+      changed: 0,
+      withoutSupplier: 0,
+    },
+  };
 }
 
 function ProductGroupRow({ group, selected, onSelect }: { group: ProductGroup; selected: boolean; onSelect: () => void }) {
@@ -1322,7 +1343,7 @@ function GroupActions({ products, selectedGroup, onDone }: { products: Product[]
         `/api/warehouse/products/page?q=${encodeURIComponent(q)}&pageSize=20&page=1&grouped=false`,
         WarehousePageSchema,
       );
-      const ids = Array.from(new Set([...productIds, ...(result.items || []).map((item) => item.id).filter(Boolean)]));
+      const ids = Array.from(new Set([...productIds, ...(result.items || []).filter(isProductPageItem).map((item) => item.id).filter(Boolean)]));
       if (ids.length < 2) throw new Error("Не нашел вторую карточку для объединения.");
       const groupId = selectedGroup.startsWith("manual:") ? selectedGroup.slice(7) : `manual-${String(primaryOffer || Date.now()).trim().toLowerCase()}`;
       return groupMutation.mutateAsync({ productIds: ids, groupId });
@@ -1538,8 +1559,19 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     queryKey: ["warehouse", "page", effectiveFilters],
     queryFn: () => fetchJson(buildPageUrl(effectiveFilters), WarehousePageSchema),
   });
-  const rows = pageQuery.data?.items || [];
-  const groups = useMemo(() => groupProductsForList(rows), [rows]);
+  const rows = useMemo(
+    () => (pageQuery.data?.items || []).filter(isProductPageItem),
+    [pageQuery.data?.items],
+  );
+  const groups = useMemo(() => {
+    if (pageQuery.data?.grouped) {
+      return (pageQuery.data.items || [])
+        .filter(isProductGroupPageItem)
+        .map((item) => mapServerPageGroup(item))
+        .filter((group): group is ProductGroup => Boolean(group));
+    }
+    return groupProductsForList(rows);
+  }, [pageQuery.data, rows]);
   const selectedRowsOnPage = useMemo(() => groups.find((group) => group.groupKey === selectedGroup)?.products || [], [groups, selectedGroup]);
   const selectedFilteredOut = Boolean(selectedGroup && !pageQuery.isLoading && !groups.some((group) => group.groupKey === selectedGroup));
 

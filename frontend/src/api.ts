@@ -41,7 +41,25 @@ export async function fetchJson<T>(url: string, schema: z.ZodType<T>, init: Requ
     throw new ApiError(message, response.status, typeof payload === "object" && payload ? (payload as { code?: string }).code : undefined, payload);
   }
 
-  return schema.parse(payload);
+  try {
+    return schema.parse(payload);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const issues = error.issues.slice(0, 25).map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message,
+        code: issue.code,
+      }));
+      console.error("[api] schema validation failed", { url, issues });
+      throw new ApiError(
+        issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ") || "Ошибка валидации ответа",
+        response.status,
+        "schema_validation",
+        issues,
+      );
+    }
+    throw error;
+  }
 }
 
 export function mutationBody(input: unknown): RequestInit {

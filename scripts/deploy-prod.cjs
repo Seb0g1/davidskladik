@@ -77,19 +77,30 @@ async function main() {
     const files = [
       "public/app-modern/index.html",
       "public/app-modern/assets/index-Dr3-HBhG.css",
-      "public/app-modern/assets/index-BqFKxdLK.js",
+      "public/app-modern/assets/index-ZLrQ4Gka.js",
     ];
     for (const rel of files) {
       await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
     }
 
+    console.log("Deploying post-deploy check script...");
+    await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
+    await sftpPut(
+      conn,
+      path.join(root, "scripts/prod-post-deploy-check.cjs"),
+      `${remoteRoot}/scripts/prod-post-deploy-check.cjs`,
+    );
+
     await exec(conn, [
       `cd ${remoteRoot}`,
       "pm2 restart davidsklad --update-env",
-      "sleep 8",
+      "sleep 12",
       "pm2 list",
       "free -h | head -2",
-      "curl -sS -m 30 'http://127.0.0.1:3000/api/warehouse/products/page?page=1&pageSize=40' | node -e \"let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{const j=JSON.parse(s);const linked=(j.items||[]).filter(i=>(i.links||[]).length>0);const withSupplier=linked.filter(i=>i.selectedSupplier||i.stockOnlyFallbackActive);console.log(JSON.stringify({partial:j.partial,items:j.items?.length,linked:linked.length,withSupplier:withSupplier.length,sample:withSupplier.slice(0,2).map(i=>({id:i.id,supplier:!!i.selectedSupplier,ready:i.ready}))},null,2));});\"",
+      "echo '=== pm2 error log (last 40 lines) ==='",
+      "pm2 logs davidsklad --lines 40 --nostream --err || true",
+      "echo '=== post-deploy check ==='",
+      "node scripts/prod-post-deploy-check.cjs",
     ].join(" && "));
 
     if (withRepairLinked) {
