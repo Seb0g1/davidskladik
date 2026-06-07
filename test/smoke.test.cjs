@@ -5641,6 +5641,42 @@ test("linked product with inactive PriceMaster row is treated as missing supplie
   assert.deepEqual(toZeroStock.map((item) => item.id), ["ozon-inactive-pm"]);
 });
 
+test("linked warehouse catalog repair groups and syncs ozon yandex siblings", () => {
+  const {
+    collectWarehouseLinkRepairGroups,
+    applyOzonYandexPairGroupIds,
+    syncWarehouseProductGroupLinks,
+    warehouseGroupLinkSignature,
+  } = require("../server.js");
+  const ozon = {
+    id: "ozon-linked-1",
+    marketplace: "ozon",
+    offerId: "SKU-LINK-1",
+    links: [{ article: "PM-100", matchType: "article", partnerId: "p1", supplierName: "Supplier A" }],
+  };
+  const yandex = {
+    id: "yandex-linked-1",
+    marketplace: "yandex",
+    offerId: "SKU-LINK-1",
+    yandex: { extra: { sourceProductId: "ozon-linked-1" } },
+    links: [],
+  };
+  const groups = collectWarehouseLinkRepairGroups([ozon, yandex]);
+  assert.equal(groups.size, 1);
+  const products = Array.from(groups.values())[0];
+  assert.equal(products.length, 2);
+  const pairPatches = applyOzonYandexPairGroupIds(products);
+  assert.equal(pairPatches.length, 2);
+  const merged = Array.from(new Map([...products, ...pairPatches].map((product) => [product.id, product])).values());
+  const before = warehouseGroupLinkSignature(merged);
+  assert.equal(before.ok, false);
+  const syncResult = syncWarehouseProductGroupLinks(merged, { username: "smoke" });
+  assert.ok((syncResult.changedProducts || []).length >= 1);
+  const after = warehouseGroupLinkSignature(syncResult.products || merged);
+  assert.equal(after.ok, true);
+  assert.equal((after.products || []).every((row) => row.linkCount > 0), true);
+});
+
 test("postgres hydrated warehouse cache is preserved across readWarehouse", () => {
   const { warehouseMemoryCacheIsHydratedStub } = require("../server.js");
   assert.equal(warehouseMemoryCacheIsHydratedStub({ postgresOnly: true, products: [{ id: "p1" }] }), true);

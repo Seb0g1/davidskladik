@@ -14,6 +14,7 @@ if (!password) {
 const root = path.resolve(__dirname, "..");
 const remoteRoot = "/var/www/davidsklad/davidskladik";
 const withDedupe = process.argv.includes("--with-dedupe");
+const withRepairLinked = process.argv.includes("--repair-linked");
 
 function exec(conn, command) {
   return new Promise((resolve, reject) => {
@@ -76,7 +77,7 @@ async function main() {
     const files = [
       "public/app-modern/index.html",
       "public/app-modern/assets/index-Dr3-HBhG.css",
-      "public/app-modern/assets/index-C8uz9GYJ.js",
+      "public/app-modern/assets/index-BqFKxdLK.js",
     ];
     for (const rel of files) {
       await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
@@ -90,6 +91,17 @@ async function main() {
       "free -h | head -2",
       "curl -sS -m 30 'http://127.0.0.1:3000/api/warehouse/products/page?page=1&pageSize=40' | node -e \"let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{const j=JSON.parse(s);const linked=(j.items||[]).filter(i=>(i.links||[]).length>0);const withSupplier=linked.filter(i=>i.selectedSupplier||i.stockOnlyFallbackActive);console.log(JSON.stringify({partial:j.partial,items:j.items?.length,linked:linked.length,withSupplier:withSupplier.length,sample:withSupplier.slice(0,2).map(i=>({id:i.id,supplier:!!i.selectedSupplier,ready:i.ready}))},null,2));});\"",
     ].join(" && "));
+
+    if (withRepairLinked) {
+      console.log("Running linked warehouse catalog repair on server...");
+      await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
+      await sftpPut(
+        conn,
+        path.join(root, "scripts/repair-linked-warehouse-catalog.cjs"),
+        `${remoteRoot}/scripts/repair-linked-warehouse-catalog.cjs`,
+      );
+      await exec(conn, `cd ${remoteRoot} && node scripts/repair-linked-warehouse-catalog.cjs --apply`);
+    }
 
     if (withDedupe) {
       console.log("Running warehouse dedupe on server...");

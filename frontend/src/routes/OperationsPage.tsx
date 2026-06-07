@@ -361,7 +361,7 @@ export function OperationsPage() {
         <button className="secondary-action" onClick={() => startMutation.mutate("yandex-price-push")} disabled={startMutation.isPending}>Отправить новые цены Yandex</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("sales-automation-run")} disabled={startMutation.isPending}>Запустить автоматизацию продаж</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("brand-index-rebuild")} disabled={startMutation.isPending}>Пересобрать бренды</button>
-        <button className="secondary-action" onClick={() => startMutation.mutate("repair-pricemaster-group-links")} disabled={startMutation.isPending}>Синхронизировать PM группы</button>
+        <button className="secondary-action" onClick={() => startMutation.mutate("repair-pricemaster-group-links")} disabled={startMutation.isPending}>Починить привязки Ozon/Yandex</button>
         <button className="secondary-action" onClick={() => startMutation.mutate("health-deep")} disabled={startMutation.isPending}>Глубокий health</button>
       </section>
       {startMutation.error && <div className="inline-error">{errorMessage(startMutation.error)}</div>}

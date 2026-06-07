@@ -5476,53 +5476,266 @@ function ozonProductShouldMaterializeYandexSibling(product = {}, shop = {}, opti
   return Array.isArray(product.links) && product.links.length > 0;
 }
 
+function rememberOzonYandexPair(pairs, seen, ozon = {}, yandex = {}) {
+  const left = normalizeWarehouseProduct(ozon);
+  const right = normalizeWarehouseProduct(yandex);
+  if (!left.id || !right.id) return false;
+  const key = [String(left.id), String(right.id)].sort().join("|");
+  if (seen.has(key)) return false;
+  seen.add(key);
+  pairs.push([left, right]);
+  return true;
+}
+
+function collectOzonYandexPairsFromProducts(ozonProducts = [], yandexProducts = [], options = {}) {
+  const yandexByOffer = options.yandexByOffer instanceof Map ? options.yandexByOffer : new Map();
+  const ozonIndexes = options.ozonIndexes || buildOzonProductLookupIndexes(ozonProducts);
+  const pairs = [];
+  const seen = new Set();
+  for (const ozon of ozonProducts) {
+    const offerId = cleanText(ozon.offerId).toLowerCase();
+    if (offerId && yandexByOffer.has(offerId)) {
+      rememberOzonYandexPair(pairs, seen, ozon, yandexByOffer.get(offerId));
+    }
+  }
+  for (const yandex of yandexProducts) {
+    const ozon = findOzonMatchForYandexProduct(yandex, ozonIndexes);
+    if (ozon) rememberOzonYandexPair(pairs, seen, ozon, yandex);
+  }
+  return pairs;
+}
+
+function collectWarehouseLinkRepairGroups(products = []) {
+  const groupContext = buildWarehouseCatalogGroupContext(products);
+  const groups = new Map();
+  for (const product of Array.isArray(products) ? products : []) {
+    const normalized = normalizeWarehouseProduct(product);
+    const key = warehouseProductPageGroupKey(normalized, groupContext);
+    if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(normalized);
+  }
+  return groups;
+}
+
+function applyOzonYandexPairGroupIds(products = []) {
+  const list = Array.isArray(products) ? products.map(normalizeWarehouseProduct) : [];
+  const ozon = list.find((product) => cleanText(product.marketplace).toLowerCase() === "ozon");
+  const yandex = list.find((product) => cleanText(product.marketplace).toLowerCase() === "yandex");
+  if (!ozon || !yandex) return [];
+  const groupId = buildOzonYandexAutoPairGroupId(ozon);
+  if (!groupId) return [];
+  const patches = [];
+  for (const product of list) {
+    const raw = product.raw && typeof product.raw === "object" && !Array.isArray(product.raw) ? product.raw : {};
+    const current = cleanText(product.manualGroupId || raw.manualGroupId);
+    if (current !== groupId) patches.push(normalizeWarehouseProduct({ ...product, manualGroupId: groupId }));
+  }
+  return patches;
+}
+
 async function syncOzonYandexLinkPairsPostgres(prisma, { dryRun = false, batchSize = 500 } = {}) {
   const client = prisma || getPrisma();
   if (!client) return { ok: false, synced: 0, reason: "postgres_unavailable" };
-  const yandexRows = await client.warehouseProduct.findMany({
-    where: { marketplace: "yandex" },
-    include: { links: true },
-  });
-  const yandexByOffer = new Map();
-  for (const row of yandexRows) {
-    const offerId = cleanText(row.offerId).toLowerCase();
-    if (!offerId || yandexByOffer.has(offerId)) continue;
-    yandexByOffer.set(offerId, productFromPostgres(row));
-  }
-  let synced = 0;
-  let scanned = 0;
-  let cursorId = "";
-  const normalizedBatchSize = Math.max(50, Math.min(2000, Number(batchSize) || 500));
-  while (true) {
-    const ozonRows = await client.warehouseProduct.findMany({
-      where: { marketplace: "ozon", links: { some: {} } },
+  const [yandexRows, ozonRows] = await Promise.all([
+    client.warehouseProduct.findMany({
+      where: { marketplace: "yandex" },
       include: { links: true },
-      orderBy: { id: "asc" },
-      take: normalizedBatchSize,
-      ...(cursorId ? { skip: 1, cursor: { id: cursorId } } : {}),
-    });
-    if (!ozonRows.length) break;
-    cursorId = ozonRows[ozonRows.length - 1].id;
-    const updates = [];
-    for (const row of ozonRows) {
-      scanned += 1;
-      const ozon = productFromPostgres(row);
-      const offerId = cleanText(ozon.offerId).toLowerCase();
-      const yandex = yandexByOffer.get(offerId);
-      if (!yandex) continue;
-      const group = syncWarehouseProductGroupLinks([ozon, yandex], { username: "pair_sync" });
-      if (!group.changedProducts.length) continue;
-      synced += group.changedProducts.length;
-      updates.push(...group.changedProducts);
+    }),
+    client.warehouseProduct.findMany({
+      where: { marketplace: "ozon" },
+      include: { links: true },
+    }),
+  ]);
+  const yandexProducts = yandexRows.map(productFromPostgres);
+  const ozonProducts = ozonRows.map(productFromPostgres);
+  const yandexByOffer = new Map();
+  for (const yandex of yandexProducts) {
+    const offerId = cleanText(yandex.offerId).toLowerCase();
+    if (!offerId || yandexByOffer.has(offerId)) continue;
+    yandexByOffer.set(offerId, yandex);
+  }
+  const ozonIndexes = buildOzonProductLookupIndexes(ozonProducts);
+  const linkedOzon = ozonProducts.filter((product) => (product.links || []).length);
+  const linkedYandex = yandexProducts.filter((product) => (product.links || []).length);
+  const pairs = collectOzonYandexPairsFromProducts(linkedOzon, linkedYandex, { yandexByOffer, ozonIndexes });
+  let synced = 0;
+  let scanned = pairs.length;
+  const updates = [];
+  const normalizedBatchSize = Math.max(50, Math.min(2000, Number(batchSize) || 500));
+  for (const chunk of chunkArray(pairs, normalizedBatchSize)) {
+    for (const [ozon, yandex] of chunk) {
+      const groupProducts = [ozon, yandex];
+      const pairPatches = applyOzonYandexPairGroupIds(groupProducts);
+      const mergedProducts = Array.from(new Map(
+        [...groupProducts, ...pairPatches].map((product) => [String(product.id), product]),
+      ).values());
+      const group = syncWarehouseProductGroupLinks(mergedProducts, { username: "pair_sync" });
+      const changed = Array.from(new Map(
+        [...pairPatches, ...(group.changedProducts || [])].map((product) => [String(product.id), product]),
+      ).values());
+      if (!changed.length) continue;
+      synced += changed.length;
+      updates.push(...changed);
     }
     if (!dryRun && updates.length) {
-      await replaceProductLinksInPostgres(client, updates);
-      mergeWarehouseProductsIntoMemory(updates);
+      for (const writeChunk of chunkArray(updates.splice(0, updates.length), 100)) {
+        await replaceProductLinksInPostgres(client, writeChunk);
+        mergeWarehouseProductsIntoMemory(writeChunk);
+      }
     }
-    if (ozonRows.length < normalizedBatchSize) break;
   }
   if (!dryRun && synced > 0) invalidateWarehouseViewCache();
-  return { ok: true, dryRun, synced, scanned };
+  return { ok: true, dryRun, synced, scanned, pairs: pairs.length };
+}
+
+async function syncLinkedWarehouseGroupLinksPostgres(prisma, {
+  dryRun = false,
+  batchSize = 500,
+  limit = 0,
+  onProgress,
+} = {}) {
+  const client = prisma || getPrisma();
+  if (!client) return { ok: false, reason: "postgres_unavailable" };
+  const linkedRows = await client.warehouseProduct.findMany({
+    where: { links: { some: {} } },
+    select: { id: true },
+    orderBy: { id: "asc" },
+  });
+  let linkedIds = linkedRows.map((row) => cleanText(row.id)).filter(Boolean);
+  if (limit > 0) linkedIds = linkedIds.slice(0, limit);
+  const normalizedBatchSize = Math.max(50, Math.min(2000, Number(batchSize) || 500));
+  const processedGroupKeys = new Set();
+  const changedProducts = [];
+  let processedGroups = 0;
+  let repairedGroups = 0;
+  let skippedGroups = 0;
+
+  for (let index = 0; index < linkedIds.length; index += normalizedBatchSize) {
+    const idChunk = linkedIds.slice(index, index + normalizedBatchSize);
+    const seedRows = await client.warehouseProduct.findMany({
+      where: { id: { in: idChunk } },
+      include: { links: true },
+    });
+    const seeds = seedRows.map(productFromPostgres);
+    const siblings = await readWarehouseGroupSiblingsFromPostgres(seeds);
+    const allProducts = Array.from(new Map(
+      [...seeds, ...siblings].map((product) => [String(product.id), product]),
+    ).values());
+    const groups = collectWarehouseLinkRepairGroups(allProducts);
+
+    for (const [groupKey, products] of groups) {
+      if (processedGroupKeys.has(groupKey)) continue;
+      processedGroupKeys.add(groupKey);
+      processedGroups += 1;
+      const hasLinks = products.some((product) => (product.links || []).length > 0);
+      if (!hasLinks) {
+        skippedGroups += 1;
+        continue;
+      }
+      const before = warehouseGroupLinkSignature(products);
+      const pairPatches = applyOzonYandexPairGroupIds(products);
+      const mergedProducts = Array.from(new Map(
+        [...products, ...pairPatches].map((product) => [String(product.id), product]),
+      ).values());
+      const syncResult = syncWarehouseProductGroupLinks(mergedProducts, { username: "catalog_repair" });
+      const updates = Array.from(new Map(
+        [...pairPatches, ...(syncResult.changedProducts || [])].map((product) => [String(product.id), product]),
+      ).values());
+      const after = warehouseGroupLinkSignature(mergedProducts);
+      if (!updates.length && before.ok) {
+        skippedGroups += 1;
+        continue;
+      }
+      if (!updates.length && !before.ok) {
+        skippedGroups += 1;
+        continue;
+      }
+      repairedGroups += 1;
+      changedProducts.push(...updates);
+      logger.info("warehouse linked group repaired", {
+        groupKey,
+        productIds: products.map((product) => product.id),
+        beforeOk: before.ok,
+        afterOk: after.ok,
+        changed: updates.length,
+      });
+    }
+
+    await onProgress?.({
+      progress: 10 + ((index + idChunk.length) / Math.max(1, linkedIds.length)) * 85,
+      summary: `Checked ${Math.min(index + idChunk.length, linkedIds.length)} of ${linkedIds.length} linked products; repaired groups ${repairedGroups}.`,
+    });
+  }
+
+  const uniqueChanged = Array.from(new Map(changedProducts.map((product) => [String(product.id), product])).values());
+  if (!dryRun && uniqueChanged.length) {
+    for (const chunk of chunkArray(uniqueChanged, 100)) {
+      await replaceProductLinksInPostgres(client, chunk);
+      mergeWarehouseProductsIntoMemory(chunk);
+    }
+    await queueLinkedProductActivation(uniqueChanged.map((product) => product.id), "link_catalog_repair", { username: "catalog_repair" });
+    invalidateWarehouseViewCache();
+  }
+
+  return {
+    ok: true,
+    dryRun,
+    linkedProducts: linkedIds.length,
+    processedGroups,
+    repairedGroups,
+    skippedGroups,
+    changedProducts: uniqueChanged.length,
+    changedProductIds: uniqueChanged.map((product) => product.id),
+  };
+}
+
+async function repairLinkedWarehouseCatalogPostgres(prisma, {
+  dryRun = false,
+  batchSize = 500,
+  limit = 0,
+  onProgress,
+} = {}) {
+  const client = prisma || getPrisma();
+  if (!client) return { ok: false, reason: "postgres_unavailable" };
+
+  await onProgress?.({ progress: 5, summary: "Backfilling Ozon/Yandex pair groups..." });
+  const pairGroups = await backfillOzonYandexManualGroupsPostgres(client, { dryRun, batchSize });
+  const ozonGroups = await syncOzonManualGroupsFromYandexPostgres(client, { dryRun, batchSize });
+
+  await onProgress?.({ progress: 20, summary: "Syncing PriceMaster links across marketplace pairs..." });
+  const linkPairs = await syncOzonYandexLinkPairsPostgres(client, { dryRun, batchSize });
+
+  await onProgress?.({ progress: 35, summary: "Repairing linked warehouse catalog groups..." });
+  const linkSync = await syncLinkedWarehouseGroupLinksPostgres(client, { dryRun, batchSize, limit, onProgress: async (progress = {}) => {
+    await onProgress?.({
+      progress: 35 + (Number(progress.progress || 0) * 0.6),
+      summary: progress.summary || "Repairing linked warehouse catalog groups...",
+    });
+  } });
+
+  const summary = [
+    `Pairs grouped: ${pairGroups.updated || 0}`,
+    `Ozon groups synced: ${ozonGroups.updated || 0}`,
+    `Pair link sync: ${linkPairs.synced || 0}`,
+    `Catalog groups repaired: ${linkSync.repairedGroups || 0}`,
+    `Changed products: ${linkSync.changedProducts || 0}`,
+  ].join("; ");
+
+  return {
+    ok: true,
+    dryRun,
+    pairGroups,
+    ozonGroups,
+    linkPairs,
+    linkSync,
+    processedGroups: linkSync.processedGroups || 0,
+    repairedGroups: linkSync.repairedGroups || 0,
+    changedProducts: linkSync.changedProducts || 0,
+    changedProductIds: linkSync.changedProductIds || [],
+    skippedGroups: linkSync.skippedGroups || 0,
+    summary,
+  };
 }
 
 async function materializeYandexExportedProductsForPostgres(prisma, { dryRun = false, limit = 0, batchSize = 500 } = {}) {
@@ -18501,6 +18714,44 @@ app.post("/api/warehouse/products/enrich", async (request, response, next) => {
   }
 });
 
+app.post("/api/warehouse/catalog/repair-linked", requireAdmin, async (request, response, next) => {
+  try {
+    if (!shouldUsePostgresStorage()) {
+      return response.status(400).json({ error: "Postgres storage is required for linked catalog repair." });
+    }
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "Postgres is unavailable." });
+    const dryRun = request.body?.dryRun === true || request.query?.dryRun === "true";
+    const limit = Math.max(0, Math.min(100000, Number(request.body?.limit || request.query?.limit || 0) || 0));
+    const batchSize = Math.max(50, Math.min(2000, Number(request.body?.batchSize || request.query?.batchSize || 500) || 500));
+    const inline = request.body?.inline === true || request.query?.inline === "true";
+    if (!inline && !dryRun) {
+      const job = await upsertOperationJob({
+        id: crypto.randomUUID(),
+        type: "repair-pricemaster-group-links",
+        title: operationTitle("repair-pricemaster-group-links"),
+        status: "queued",
+        user: request.session?.username || "system",
+        role: request.session?.role || "admin",
+        payload: { limit, batchSize },
+        progress: 0,
+      });
+      startOperationJob(job);
+      return response.status(202).json({
+        ok: true,
+        accepted: true,
+        jobId: job.id,
+        statusUrl: `/api/operations/${job.id}`,
+        job: operationJobPublic(job),
+      });
+    }
+    const result = await repairLinkedWarehouseCatalogPostgres(prisma, { dryRun, limit, batchSize });
+    return response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/warehouse/products/repair-weak-ozon", async (request, response, next) => {
   try {
     const limit = Math.max(1, Math.min(1000, Number(request.body?.limit || 400) || 400));
@@ -24525,7 +24776,7 @@ function operationTitle(type = "") {
     "ozon-linked-unarchive": "Restore linked Ozon autoarchive",
     "restore-archived-stock": "Restore archived stock",
     "yandex-card-quality-ai-drafts": "Yandex card quality AI drafts",
-    "repair-pricemaster-group-links": "Repair PriceMaster group links",
+    "repair-pricemaster-group-links": "Полный ремонт привязок Ozon/Yandex",
     "marketplace-supplier-cart-preview": "Supplier cart preview",
     "marketplace-supplier-cart-commit": "Supplier cart commit",
     "ozon-unarchive-queue-process": "Process Ozon autoarchive queue",
@@ -25120,20 +25371,34 @@ async function runYandexCardQualityAiDraftOperation(payload = {}, options = {}) 
 }
 
 async function runPriceMasterGroupLinksRepairOperation(payload = {}, options = {}) {
-  const requestedLimit = Number(payload?.limit || 50000);
-  const limit = Math.max(1, Math.min(100000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 50000));
-  const warehouse = await readWarehouse();
-  const groups = new Map();
-  for (const product of (warehouse.products || [])) {
-    const groupKey = warehouseProductPageGroupKey(product);
-    if (!groupKey) continue;
-    if (!groups.has(groupKey)) groups.set(groupKey, []);
-    groups.get(groupKey).push(product);
+  const requestedLimit = Number(payload?.limit || 0);
+  const limit = Math.max(0, Math.min(100000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 0));
+  if (shouldUsePostgresStorage()) {
+    const prisma = getPrisma();
+    if (prisma) {
+      const result = await repairLinkedWarehouseCatalogPostgres(prisma, {
+        dryRun: false,
+        batchSize: Math.max(50, Math.min(2000, Number(payload?.batchSize) || 500)),
+        limit,
+        onProgress: options.onProgress,
+      });
+      return {
+        ...result,
+        processedGroups: result.processedGroups || result.linkSync?.processedGroups || 0,
+        repairedGroups: result.repairedGroups || result.linkSync?.repairedGroups || 0,
+        changedProducts: result.changedProducts || result.linkSync?.changedProducts || 0,
+        changedProductIds: result.changedProductIds || result.linkSync?.changedProductIds || [],
+        skippedGroups: result.skippedGroups || result.linkSync?.skippedGroups || 0,
+        groups: [],
+      };
+    }
   }
 
+  const warehouse = await readWarehouse();
+  const groups = collectWarehouseLinkRepairGroups(warehouse.products || []);
   const candidates = Array.from(groups.entries())
-    .filter(([, products]) => products.length > 1 && products.some((product) => (product.links || []).length))
-    .slice(0, limit);
+    .filter(([, products]) => products.some((product) => (product.links || []).length))
+    .slice(0, limit || 50000);
   const changedProducts = [];
   const changedIds = [];
   const repairedGroups = [];
@@ -25144,18 +25409,25 @@ async function runPriceMasterGroupLinksRepairOperation(payload = {}, options = {
   for (const [groupKey, products] of candidates) {
     processed += 1;
     const before = warehouseGroupLinkSignature(products);
-    if (before.ok) {
+    const pairPatches = applyOzonYandexPairGroupIds(products);
+    const mergedProducts = Array.from(new Map(
+      [...products, ...pairPatches].map((product) => [String(product.id), product]),
+    ).values());
+    if (before.ok && !pairPatches.length) {
       skippedGroups += 1;
     } else {
-      const syncResult = syncWarehouseProductGroupLinks(products, { now, username: "operation" });
-      if ((syncResult.changedProducts || []).length) {
-        changedProducts.push(...syncResult.changedProducts);
-        changedIds.push(...syncResult.changedProducts.map((product) => product.id));
+      const syncResult = syncWarehouseProductGroupLinks(mergedProducts, { now, username: "operation" });
+      const updates = Array.from(new Map(
+        [...pairPatches, ...(syncResult.changedProducts || [])].map((product) => [String(product.id), product]),
+      ).values());
+      if (updates.length) {
+        changedProducts.push(...updates);
+        changedIds.push(...updates.map((product) => product.id));
         repairedGroups.push({
           groupKey,
-          products: products.map((product) => product.id),
+          products: mergedProducts.map((product) => product.id),
           before,
-          after: warehouseGroupLinkSignature(products),
+          after: warehouseGroupLinkSignature(mergedProducts),
         });
       } else {
         skippedGroups += 1;
@@ -27907,6 +28179,7 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
           if (prisma) {
             await syncOzonManualGroupsFromYandexPostgres(prisma, { dryRun: false });
             await backfillOzonYandexManualGroupsPostgres(prisma, { dryRun: false });
+            await syncOzonYandexLinkPairsPostgres(prisma, { dryRun: false });
           }
         } catch (error) {
           logger.warn("marketplace maintenance ozon yandex pair backfill failed", { detail: error?.message || String(error) });
@@ -28585,6 +28858,11 @@ module.exports = {
   materializeYandexExportedProductsForWarehouse,
   materializeYandexExportedProductsForPostgres,
   syncOzonYandexLinkPairsPostgres,
+  repairLinkedWarehouseCatalogPostgres,
+  syncLinkedWarehouseGroupLinksPostgres,
+  collectWarehouseLinkRepairGroups,
+  applyOzonYandexPairGroupIds,
+  collectOzonYandexPairsFromProducts,
   backfillOzonYandexManualGroupsPostgres,
   syncOzonManualGroupsFromYandexPostgres,
   normalizeYandexWarehouseTargetsPostgres,
