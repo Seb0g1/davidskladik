@@ -147,6 +147,11 @@ const autoPricePmTimeoutRetryAttempts = Math.max(0, Math.min(5, Number(process.e
 const dailySyncTime = process.env.DAILY_SYNC_TIME || "11:00";
 const dailySyncEnabled = process.env.DAILY_SYNC_ENABLED !== "false";
 const dailySyncSendPrices = process.env.DAILY_SYNC_SEND_PRICES !== "false";
+const marketplaceMaintenanceHours = Math.max(
+  1,
+  Math.min(24, Number(process.env.MARKETPLACE_MAINTENANCE_HOURS || process.env.DEFAULT_MARKETPLACE_MAINTENANCE_HOURS || 6) || 6),
+);
+const marketplaceMaintenanceEnabled = process.env.MARKETPLACE_MAINTENANCE_ENABLED !== "false";
 const pmDbPoolSize = Math.max(1, Number(process.env.PM_DB_POOL_SIZE || 8) || 8);
 const pmDbConnectTimeoutMs = Math.max(1000, Number(process.env.PM_DB_CONNECT_TIMEOUT_MS || 10000) || 10000);
 const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CACHE_MS || 120000) || 120000);
@@ -285,6 +290,10 @@ let manualWarehouseSyncState = {
 let autoSyncTimer = null;
 let autoSyncRunning = false;
 let autoSyncNextRunAt = null;
+let marketplaceMaintenanceTimer = null;
+let marketplaceMaintenanceRunning = false;
+let marketplaceMaintenanceNextRunAt = null;
+let marketplaceMaintenancePromise = null;
 let ozonUnarchiveQueueAutoTimer = null;
 let ozonUnarchiveQueueAutoRunning = false;
 let ozonUnarchiveQueueProcessQueued = false;
@@ -2445,15 +2454,15 @@ function publicPriceMasterCandidate(row = {}, productContext = {}) {
 function priceMasterSnapshotRowFields(row = {}) {
   const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
   return {
-    rowId: cleanText(row.rowId || raw.rowId || raw.RowID || row.id || row.ID),
-    article: cleanText(row.article || raw.article || raw.NativeID || raw.nativeId || raw.offerId),
-    name: cleanText(row.name || row.nativeName || raw.name || raw.NativeName || raw.nativeName),
-    partnerId: cleanText(row.partnerId || raw.partnerId || raw.PartnerID),
-    partnerName: cleanText(row.partnerName || raw.partnerName || raw.PartnerName),
-    docDate: row.docDate instanceof Date ? row.docDate.toISOString() : cleanText(row.docDate || raw.docDate || raw.DocDate),
-    price: row.price ?? raw.price ?? raw.NativePrice,
+    rowId: cleanText(row.rowId || row.RowID || raw.rowId || raw.RowID || row.id || row.ID),
+    article: cleanText(row.article || row.NativeID || raw.article || raw.NativeID || raw.nativeId || raw.offerId),
+    name: cleanText(row.name || row.NativeName || row.nativeName || raw.name || raw.NativeName || raw.nativeName),
+    partnerId: cleanText(row.partnerId || row.PartnerID || raw.partnerId || raw.PartnerID),
+    partnerName: cleanText(row.partnerName || row.PartnerName || raw.partnerName || raw.PartnerName),
+    docDate: row.docDate instanceof Date ? row.docDate.toISOString() : cleanText(row.docDate || row.DocDate || raw.docDate || raw.DocDate),
+    price: row.price ?? row.NativePrice ?? raw.price ?? raw.NativePrice,
     active: row.active !== false && row.Active !== false && row.Active !== 0,
-    ignored: Boolean(row.ignored || raw.ignored || raw.Ignored),
+    ignored: Boolean(row.ignored || row.Ignored || raw.ignored || raw.Ignored),
   };
 }
 
@@ -8722,6 +8731,60 @@ async function buildOzonProductPreview({ limit = 200, search = "" } = {}) {
 
 function likeSearch(value) {
   return `%${String(value || "").trim()}%`;
+}
+
+function mapPriceMasterSearchResponseRow(row = {}, usdRate = 95) {
+  const priceCurrency = cleanText(row.priceCurrency || row.currency || row.sourceCurrency || "USD") || "USD";
+  const normalizedPrice = normalizePriceMasterPrice(row.price ?? row.NativePrice ?? 0, usdRate, priceCurrency);
+  const article = cleanText(row.article || row.NativeID || row.offerId || row.nativeId || "");
+  const name = cleanText(row.name || row.NativeName || row.nativeName || "");
+  const partnerName = cleanText(row.partnerName || row.PartnerName || row.supplierName || "");
+  const rowId = cleanText(row.rowId || row.RowID || row.id || "");
+  const price = normalizedPrice.price || Number(row.price || row.NativePrice || 0) || 0;
+  const active = row.active !== false && row.Active !== false && row.Active !== 0;
+  return {
+    id: rowId || `${article}:${partnerName}:${name}`,
+    rowId,
+    article,
+    supplierName: partnerName,
+    partnerId: cleanText(row.partnerId || row.PartnerID || ""),
+    keyword: name,
+    name,
+    price,
+    originalPrice: normalizedPrice.originalPrice,
+    currency: normalizedPrice.priceCurrency || priceCurrency,
+    priceCurrency: normalizedPrice.priceCurrency || priceCurrency,
+    available: row.available !== false && active && price > 0,
+    active,
+    updatedAt: row.docDate || row.DocDate || row.updatedAt || null,
+  };
+}
+
+function priceMasterSnapshotSearchHaystack(row = {}) {
+  const fields = priceMasterSnapshotRowFields(row);
+  return normalizeSearchText([fields.article, fields.name, fields.partnerName].join(" "));
+}
+
+function snapshotRowMatchesPriceMasterSearch(row = {}, { q = "", supplier = "" } = {}) {
+  const fields = priceMasterSnapshotRowFields(row);
+  const supplierLower = normalizeSearchText(supplier);
+  if (supplierLower && !normalizeSearchText(fields.partnerName).includes(supplierLower)) return false;
+  const search = normalizeSearchText(q);
+  if (!search) return true;
+  const source = priceMasterSnapshotSearchHaystack(row);
+  return search.split(" ").every((token) => source.includes(token));
+}
+
+function searchPriceMasterSnapshotJsonRows(rows = [], { q = "", supplier = "", limit = 100, usdRate = 95 } = {}) {
+  const unique = new Map();
+  for (const row of rows) {
+    if (!snapshotRowMatchesPriceMasterSearch(row, { q, supplier })) continue;
+    const mapped = mapPriceMasterSearchResponseRow(row, usdRate);
+    const key = [mapped.rowId, mapped.article, mapped.supplierName, mapped.name].join("|");
+    if (!unique.has(key)) unique.set(key, mapped);
+    if (unique.size >= limit) break;
+  }
+  return Array.from(unique.values());
 }
 
 async function readSnapshot() {
@@ -16282,90 +16345,85 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
     const limit = cleanLimit(request.query.limit, 30, 100);
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+    const cacheKey = `pricemaster-search:${q.toLowerCase()}:${supplier.toLowerCase()}:${limit}:${usdRate.toFixed(4)}`;
+    const cached = getPriceMasterSearchCache(cacheKey);
+    if (cached) return response.json(cached);
 
-    const mapRow = (row = {}) => {
-      const priceCurrency = cleanText(row.priceCurrency || row.currency || row.sourceCurrency || "USD") || "USD";
-      const normalizedPrice = normalizePriceMasterPrice(row.price ?? row.NativePrice ?? 0, usdRate, priceCurrency);
-      const article = cleanText(row.article || row.NativeID || row.offerId || row.nativeId || "");
-      const name = cleanText(row.name || row.NativeName || row.nativeName || "");
-      const partnerName = cleanText(row.partnerName || row.PartnerName || row.supplierName || "");
-      const rowId = cleanText(row.rowId || row.RowID || row.id || "");
-      return {
-        id: rowId || `${article}:${partnerName}:${name}`,
-        rowId,
-        article,
-        supplierName: partnerName,
-        partnerId: cleanText(row.partnerId || row.PartnerID || ""),
-        keyword: name,
-        name,
-        price: normalizedPrice.price || Number(row.price || row.NativePrice || 0) || 0,
-        originalPrice: normalizedPrice.originalPrice,
-        currency: normalizedPrice.priceCurrency || priceCurrency,
-        priceCurrency: normalizedPrice.priceCurrency || priceCurrency,
-        available: row.available !== false && row.active !== false && Number(normalizedPrice.price || row.price || row.NativePrice || 0) > 0,
-        active: row.active !== false,
-        updatedAt: row.docDate || row.DocDate || row.updatedAt || null,
-      };
-    };
+    let source = "live";
+    let rows = [];
 
-    const rows = [];
-    try {
-      const params = [];
-      const conditions = ["r.Ignored = 0", "r.Active = 1"];
-      if (q) {
-        conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
-        const like = likeSearch(q);
-        params.push(like, like, like, like);
+    const snapshotRows = await searchPriceMasterSnapshotOffers({
+      search: q,
+      partner: supplier,
+      limit,
+      usdRate,
+    });
+    if (snapshotRows?.length) {
+      source = "postgres_snapshot";
+      rows = snapshotRows.map((row) => mapPriceMasterSearchResponseRow(row, usdRate));
+    }
+
+    if (!rows.length) {
+      try {
+        const params = [];
+        const conditions = ["r.Ignored = 0"];
+        if (q) {
+          conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
+          const like = likeSearch(q);
+          params.push(like, like, like, like);
+        }
+        if (supplier) {
+          conditions.push("p.PartnerName LIKE ?");
+          params.push(likeSearch(supplier));
+        }
+        params.push(limit);
+        const [liveRows] = await pool.query(
+          `
+          SELECT
+            r.NativeID AS article,
+            r.NativeName AS name,
+            r.NativePrice AS price,
+            r.Active AS active,
+            r.RowID AS rowId,
+            d.DocDate AS docDate,
+            d.PartnerID AS partnerId,
+            p.PartnerName AS partnerName
+          FROM OfferRows r
+          JOIN OfferDocs d ON d.DocID = r.DocID
+          LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+          WHERE ${conditions.join(" AND ")}
+          ORDER BY d.DocDate DESC, r.RowID DESC
+          LIMIT ?
+          `,
+          params,
+        );
+        source = "live";
+        rows = liveRows.map((row) => mapPriceMasterSearchResponseRow(row, usdRate));
+      } catch (error) {
+        logger.warn("PriceMaster search live query failed, using json snapshot", { detail: error?.message || String(error) });
+        const indexes = await getPriceMasterSnapshotIndexes();
+        source = "json_snapshot";
+        rows = searchPriceMasterSnapshotJsonRows(indexes.rows || [], { q, supplier, limit, usdRate });
       }
-      if (supplier) {
-        conditions.push("p.PartnerName LIKE ?");
-        params.push(likeSearch(supplier));
-      }
-      params.push(limit);
-      const [liveRows] = await pool.query(
-        `
-        SELECT
-          r.NativeID AS article,
-          r.NativeName AS name,
-          r.NativePrice AS price,
-          r.Active AS active,
-          r.RowID AS rowId,
-          d.DocDate AS docDate,
-          d.PartnerID AS partnerId,
-          p.PartnerName AS partnerName
-        FROM OfferRows r
-        JOIN OfferDocs d ON d.DocID = r.DocID
-        LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
-        WHERE ${conditions.join(" AND ")}
-        ORDER BY d.DocDate DESC, r.RowID DESC
-        LIMIT ?
-        `,
-        params,
-      );
-      rows.push(...liveRows.map(mapRow));
-    } catch (error) {
-      logger.warn("PriceMaster search live query failed, using snapshot", { detail: error?.message || String(error) });
-      const qLower = q.toLowerCase();
-      const supplierLower = supplier.toLowerCase();
+    }
+
+    if (!rows.length && source !== "json_snapshot") {
       const indexes = await getPriceMasterSnapshotIndexes();
-      const candidates = [];
-      for (const row of indexes.rows || []) {
-        const mapped = mapRow(row);
-        const haystack = [mapped.article, mapped.name, mapped.keyword, mapped.supplierName].join(" ").toLowerCase();
-        if (qLower && !haystack.includes(qLower)) continue;
-        if (supplierLower && !mapped.supplierName.toLowerCase().includes(supplierLower)) continue;
-        candidates.push(mapped);
-        if (candidates.length >= limit) break;
+      const fallbackRows = searchPriceMasterSnapshotJsonRows(indexes.rows || [], { q, supplier, limit, usdRate });
+      if (fallbackRows.length) {
+        source = "json_snapshot";
+        rows = fallbackRows;
       }
-      rows.push(...candidates);
     }
 
-    const unique = new Map();
-    for (const row of rows) {
-      const key = [row.rowId, row.article, row.supplierName, row.keyword].join("|");
-      if (!unique.has(key)) unique.set(key, row);
-    }
-    response.json({ ok: true, rows: Array.from(unique.values()).slice(0, limit), total: unique.size });
+    const payload = {
+      ok: true,
+      rows: rows.slice(0, limit),
+      total: rows.length,
+      source,
+    };
+    setPriceMasterSearchCache(cacheKey, payload);
+    response.json(payload);
   } catch (error) {
     next(error);
   }
@@ -16403,6 +16461,12 @@ app.get("/api/live-status", async (_request, response, next) => {
       autoSync: {
         running: Boolean(autoSyncRunning),
         nextRunAt: autoSyncNextRunAt || null,
+      },
+      marketplaceMaintenance: {
+        enabled: marketplaceMaintenanceEnabled,
+        running: Boolean(marketplaceMaintenanceRunning),
+        everyHours: marketplaceMaintenanceHours,
+        nextRunAt: marketplaceMaintenanceNextRunAt || null,
       },
     });
   } catch (error) {
@@ -27663,6 +27727,86 @@ async function runAutoSyncCycle(trigger = "auto") {
   }
 }
 
+async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
+  if (marketplaceMaintenancePromise) return marketplaceMaintenancePromise;
+  if (manualWarehouseSyncPromise) {
+    logger.info("marketplace maintenance skipped: manual warehouse sync running");
+    return { status: "manual_sync_running" };
+  }
+  if (marketplaceMaintenanceRunning || autoSyncRunning) return { status: "already_running" };
+
+  marketplaceMaintenancePromise = (async () => {
+    marketplaceMaintenanceRunning = true;
+    const startedAt = new Date().toISOString();
+    try {
+      const priceMaster = await runSync();
+      const warehouse = await buildWarehouseView({ sync: true });
+      const automation = await runNoSupplierMarketplaceAutomation(warehouse, {
+        includeNoLinks: false,
+        skipLinkedGrace: true,
+        source: trigger,
+      });
+      const recovery = await runSupplierRecoveryAutomation(warehouse, { source: trigger });
+      const result = {
+        status: "ok",
+        trigger,
+        startedAt,
+        finishedAt: new Date().toISOString(),
+        priceMaster: {
+          items: priceMaster.items,
+          changes: priceMaster.changes,
+          updatedAt: priceMaster.createdAt,
+        },
+        warehouseTotal: warehouse.total,
+        marketplaceSyncChanged: warehouse.marketplaceSyncChanged || 0,
+        zeroStockSent: automation.zeroStockSent,
+        autoArchived: automation.archived,
+        recovered: recovery.recovered,
+      };
+      logger.info("marketplace maintenance complete", result);
+      if (automation.errors.length) {
+        logger.warn("marketplace maintenance no-supplier errors", {
+          count: automation.errors.length,
+          sample: automation.errors.slice(0, 10),
+        });
+      }
+      return result;
+    } catch (error) {
+      logger.error("marketplace maintenance failed", {
+        trigger,
+        detail: error?.message || String(error),
+        err: error,
+      });
+      throw error;
+    } finally {
+      marketplaceMaintenanceRunning = false;
+      marketplaceMaintenancePromise = null;
+    }
+  })();
+
+  return marketplaceMaintenancePromise;
+}
+
+function scheduleMarketplaceMaintenance(delayMs = null) {
+  if (!marketplaceMaintenanceEnabled) {
+    marketplaceMaintenanceNextRunAt = null;
+    return;
+  }
+  if (marketplaceMaintenanceTimer) clearTimeout(marketplaceMaintenanceTimer);
+  const intervalMs = marketplaceMaintenanceHours * 60 * 60 * 1000;
+  const normalizedDelay = Math.max(60_000, Number(delayMs ?? intervalMs) || intervalMs);
+  marketplaceMaintenanceNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
+  marketplaceMaintenanceTimer = setTimeout(async () => {
+    try {
+      await runMarketplaceMaintenanceCycle("scheduled_maintenance");
+    } catch (error) {
+      logger.error("scheduled marketplace maintenance failed", { detail: error?.message || String(error), err: error });
+    } finally {
+      scheduleMarketplaceMaintenance(intervalMs);
+    }
+  }, normalizedDelay);
+}
+
 async function runManualWarehouseSync(trigger = "manual_sync") {
   setManualWarehouseSyncProgress({
     percent: 8,
@@ -27935,6 +28079,26 @@ app.get("/api/warehouse/sync/status", requireAdmin, async (_request, response, n
   }
 });
 
+app.post("/api/marketplace/maintenance/run", requireAdmin, async (_request, response, next) => {
+  try {
+    const alreadyRunning = Boolean(marketplaceMaintenancePromise);
+    if (!alreadyRunning) {
+      runMarketplaceMaintenanceCycle("manual_maintenance").catch((error) => {
+        logger.error("manual marketplace maintenance failed", { detail: error?.message || String(error), err: error });
+      });
+    }
+    response.status(202).json({
+      ok: true,
+      started: !alreadyRunning,
+      running: true,
+      nextRunAt: marketplaceMaintenanceNextRunAt || null,
+      everyHours: marketplaceMaintenanceHours,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/warehouse/sync/run", requireAdmin, async (_request, response, next) => {
   try {
     const result = startManualWarehouseSync("manual");
@@ -27988,6 +28152,13 @@ app.use((error, request, response, _next) => {
 function startBackgroundSchedulers() {
   if (!backgroundJobsEnabled) {
     logger.info("background schedulers disabled until BACKGROUND_JOBS_ENABLED=true");
+    if (marketplaceMaintenanceEnabled) {
+      scheduleMarketplaceMaintenance(Math.max(120_000, Number(process.env.MARKETPLACE_MAINTENANCE_INITIAL_DELAY_MS || 300000) || 300000));
+      logger.info("marketplace maintenance scheduler enabled standalone", {
+        everyHours: marketplaceMaintenanceHours,
+        nextRunAt: marketplaceMaintenanceNextRunAt,
+      });
+    }
     if (ozonUnarchiveQueueAutoEnabled) {
       scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
       logger.info("ozon unarchive queue scheduler enabled standalone", {
@@ -28002,6 +28173,13 @@ function startBackgroundSchedulers() {
   scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
   scheduleSupplierCartAuto(180_000).catch((error) => logger.warn("supplier cart auto scheduler failed", { detail: error?.message || String(error) }));
   scheduleAutoSync(autoSyncInitialDelaySeconds * 1000);
+  if (marketplaceMaintenanceEnabled) {
+    scheduleMarketplaceMaintenance(Math.max(120_000, Number(process.env.MARKETPLACE_MAINTENANCE_INITIAL_DELAY_MS || 900000) || 900000));
+    logger.info("marketplace maintenance scheduler enabled", {
+      everyHours: marketplaceMaintenanceHours,
+      nextRunAt: marketplaceMaintenanceNextRunAt,
+    });
+  }
 }
 
 async function startServer() {
@@ -28070,6 +28248,7 @@ async function shutdownForTests() {
   for (const timer of [
     dailySyncTimer,
     autoSyncTimer,
+    marketplaceMaintenanceTimer,
     ozonUnarchiveQueueAutoTimer,
     immediateAutoPushTimer,
     priceRetryTimer,
@@ -28079,6 +28258,7 @@ async function shutdownForTests() {
   }
   dailySyncTimer = null;
   autoSyncTimer = null;
+  marketplaceMaintenanceTimer = null;
   ozonUnarchiveQueueAutoTimer = null;
   immediateAutoPushTimer = null;
   immediateAutoPushRunning = false;
@@ -28183,6 +28363,9 @@ module.exports = {
   pickSafeArticlePriceMasterRow,
   priceMasterRowMatchesLink,
   priceMasterSnapshotRowFields,
+  snapshotRowMatchesPriceMasterSearch,
+  searchPriceMasterSnapshotJsonRows,
+  runMarketplaceMaintenanceCycle,
   priceMasterArticleCandidateScore,
   warehouseLinkTargetKey,
   warehouseLinkSupplierSignature,

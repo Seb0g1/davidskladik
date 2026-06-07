@@ -100,6 +100,8 @@ const {
   warehouseLinkIdentityKey,
   pickSafeArticlePriceMasterRow,
   priceMasterRowMatchesLink,
+  snapshotRowMatchesPriceMasterSearch,
+  searchPriceMasterSnapshotJsonRows,
   priceMasterArticleCandidateScore,
   productLinkPostgresIdentityKey,
   dedupeProductLinkRows,
@@ -4643,6 +4645,34 @@ test("warehouse link identity keeps selected PriceMaster rows distinct from arti
   assert.match(b, /^article\|article:pm-77\|/);
 });
 
+test("PriceMaster snapshot search matches legacy RowID and tokenized query", () => {
+  const rows = [
+    {
+      RowID: "2163035",
+      NativeID: "GTT81",
+      NativeName: "Gritti Beyond the Wall Extrait De Parfum 100ml",
+      PartnerName: "Давидгор",
+      NativePrice: 124,
+      Active: 1,
+    },
+    {
+      rowId: "999",
+      article: "OTHER-1",
+      name: "Other product",
+      partnerName: "Other supplier",
+      price: 10,
+      active: true,
+    },
+  ];
+  assert.equal(snapshotRowMatchesPriceMasterSearch(rows[0], { q: "GTT81" }), true);
+  assert.equal(snapshotRowMatchesPriceMasterSearch(rows[0], { q: "gritti beyond" }), true);
+  assert.equal(snapshotRowMatchesPriceMasterSearch(rows[0], { q: "OTHER-1" }), false);
+  const found = searchPriceMasterSnapshotJsonRows(rows, { q: "GTT81", limit: 10, usdRate: 95 });
+  assert.equal(found.length, 1);
+  assert.equal(found[0].rowId, "2163035");
+  assert.equal(found[0].article, "GTT81");
+});
+
 test("priceMasterRowMatchesLink accepts snapshot rows with legacy RowID and NativeID fields", () => {
   const link = {
     matchType: "selected_row",
@@ -5589,6 +5619,15 @@ test("linked product with inactive PriceMaster row is treated as missing supplie
     now: "2026-06-07T12:00:00.000Z",
   });
   assert.deepEqual(toZeroStock.map((item) => item.id), ["ozon-inactive-pm"]);
+});
+
+test("marketplace maintenance scheduler runs PM sync, marketplace sync and zero-stock checks", async () => {
+  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  assert.match(serverSource, /runMarketplaceMaintenanceCycle/);
+  assert.match(serverSource, /scheduleMarketplaceMaintenance/);
+  assert.match(serverSource, /MARKETPLACE_MAINTENANCE_HOURS/);
+  assert.match(serverSource, /marketplace maintenance scheduler enabled standalone/);
+  assert.match(serverSource, /runNoSupplierMarketplaceAutomation\(warehouse/);
 });
 
 test("pm2 split entry files and immediate link activation hooks exist", async () => {
