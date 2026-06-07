@@ -5325,6 +5325,40 @@ test("no-supplier automation does not archive linked products while supplier is 
   assert.equal(oldResult.toArchive.length, 0);
 });
 
+test("yandex and ozon warehouse imports use deterministic product ids", () => {
+  const {
+    normalizeWarehouseProduct,
+    yandexWarehouseProductId,
+    ozonWarehouseProductId,
+    warehouseProductCanonicalId,
+    mergeProducts,
+  } = require("../server.js");
+  const shop = { id: "yandex-06c2112c", name: "Yandex test" };
+  const offerId = "VP50BP";
+  const yandex = normalizeWarehouseProduct({
+    target: shop.id,
+    marketplace: "yandex",
+    offerId,
+  });
+  assert.equal(yandex.id, yandexWarehouseProductId(shop, offerId));
+  assert.equal(
+    warehouseProductCanonicalId({ marketplace: "yandex", target: shop.id, offerId }),
+    yandexWarehouseProductId(shop, offerId),
+  );
+  const ozonAccount = { id: "ozon-shop-main" };
+  const ozon = normalizeWarehouseProduct({
+    target: ozonAccount.id,
+    marketplace: "ozon",
+    offerId: "SKU-100",
+  });
+  assert.equal(ozon.id, ozonWarehouseProductId(ozonAccount, "SKU-100"));
+  const merged = mergeProducts(
+    [{ id: "random-old-id", target: shop.id, marketplace: "yandex", offerId }],
+    [{ id: yandexWarehouseProductId(shop, offerId), target: shop.id, marketplace: "yandex", offerId }],
+  );
+  assert.equal(merged[0].id, yandexWarehouseProductId(shop, offerId));
+});
+
 test("warehouse target names resolve to account labels instead of generic Ozon", () => {
   const {
     resolveWarehouseProductTargetName,
@@ -5353,13 +5387,158 @@ test("linked activation runs immediately before background-job disable gate", as
   const serverSource = await fs.readFile(path.join(root, "server.js"), "utf8");
   const start = serverSource.indexOf("async function queueLinkedProductActivation");
   assert.ok(start >= 0);
-  const block = serverSource.slice(start, start + 5000);
+  const block = serverSource.slice(start, start + 7000);
   const immediateIdx = block.indexOf("requestMeta.immediate === true");
   const disabledIdx = block.indexOf("backgroundMarketplaceJobsBlocked()");
   assert.ok(immediateIdx >= 0);
   assert.ok(disabledIdx >= 0);
   assert.ok(immediateIdx < disabledIdx);
   assert.match(serverSource, /hydrateWarehouseProductsForIds/);
+  assert.match(serverSource, /fallbackImmediate: true/);
+  assert.match(serverSource, /deferOzonUnarchive: true/);
+});
+
+test("pickWarehouseSupplier chooses cheapest effective final price", () => {
+  const { pickWarehouseSupplier } = require("../server.js");
+  const selected = pickWarehouseSupplier([
+    { available: true, priceEligible: true, stockOnly: false, effectiveFinalPrice: 1200, price: 10, docDate: "2026-01-01" },
+    { available: true, priceEligible: true, stockOnly: false, effectiveFinalPrice: 900, price: 8, docDate: "2026-01-02" },
+    { available: true, priceEligible: true, stockOnly: false, effectiveFinalPrice: 950, price: 9, docDate: "2026-01-03" },
+  ]);
+  assert.equal(selected.effectiveFinalPrice, 900);
+});
+
+test("no-supplier automation can skip linked grace on immediate activation", () => {
+  const { pickNoSupplierAutomationCandidates } = require("../server.js");
+  const now = new Date("2026-06-05T12:00:00.000Z");
+  const product = {
+    id: "p1",
+    hasLinks: true,
+    selectedSupplier: null,
+    updatedAt: "2026-06-05T11:59:30.000Z",
+    marketplaceState: { code: "active" },
+    targetStock: 5,
+    stock: 5,
+  };
+  const withGrace = pickNoSupplierAutomationCandidates([product], { now: now.toISOString() });
+  assert.equal(withGrace.toZeroStock.length, 0);
+  const withoutGrace = pickNoSupplierAutomationCandidates([product], { now: now.toISOString(), skipLinkedGrace: true });
+  assert.equal(withoutGrace.toZeroStock.length, 1);
+});
+
+test("ozon unarchive schedule targets 03:00 moscow", () => {
+  const { nextOzonUnarchiveScheduledRunAt } = require("../server.js");
+  const before = nextOzonUnarchiveScheduledRunAt(new Date("2026-06-05T20:00:00.000Z"));
+  const moscowHour = new Date(before.getTime() + 3 * 60 * 60 * 1000).getUTCHours();
+  assert.equal(moscowHour, 3);
+  const after = nextOzonUnarchiveScheduledRunAt(new Date("2026-06-05T02:00:00.000Z"));
+  const afterMoscowHour = new Date(after.getTime() + 3 * 60 * 60 * 1000).getUTCHours();
+  assert.equal(afterMoscowHour, 3);
+});
+
+test("postgres page siblings ignore marketplace filter", async () => {
+  const root = path.join(__dirname, "..");
+  const serverSource = await fs.readFile(path.join(root, "server.js"), "utf8");
+  assert.match(serverSource, /function warehousePageSiblingWhere/);
+  assert.match(serverSource, /warehousePageSiblingWhere\(baseWhere\)/);
+});
+
+test("postgres yandex materialize and canonical id migration helpers exist", () => {
+  const {
+    materializeYandexExportedProductsForPostgres,
+    migrateWarehouseProductCanonicalIdsPostgres,
+    ozonProductHasYandexExport,
+    ozonProductShouldMaterializeYandexSibling,
+  } = require("../server.js");
+  assert.equal(typeof materializeYandexExportedProductsForPostgres, "function");
+  assert.equal(typeof migrateWarehouseProductCanonicalIdsPostgres, "function");
+  assert.equal(
+    ozonProductHasYandexExport({ exports: { yandex: { status: "sent" } } }, { id: "yandex-shop" }),
+    true,
+  );
+  assert.equal(
+    ozonProductHasYandexExport({ exports: { "yandex-shop": { status: "sent" } } }, { id: "yandex-shop" }),
+    true,
+  );
+  assert.equal(ozonProductHasYandexExport({ exports: {} }, { id: "yandex-shop" }), false);
+  assert.equal(
+    ozonProductShouldMaterializeYandexSibling(
+      { offerId: "SKU-1", links: [{ article: "A1", supplierName: "PM" }] },
+      { id: "yandex-shop" },
+      { yandexOfferIds: new Set() },
+    ),
+    true,
+  );
+  assert.equal(
+    ozonProductShouldMaterializeYandexSibling(
+      { offerId: "SKU-1", links: [] },
+      { id: "yandex-shop" },
+      { yandexOfferIds: new Set(["sku-1"]) },
+    ),
+    false,
+  );
+});
+
+test("ozon yandex auto pair helpers resolve source product links", () => {
+  const {
+    buildOzonYandexAutoPairGroupId,
+    extractOzonIdFromAutoPairGroupId,
+    extractYandexSourceProductId,
+    findOzonMatchForYandexProduct,
+    buildOzonProductLookupIndexes,
+    warehouseProductPageGroupKey,
+  } = require("../server.js");
+  const ozon = { id: "ozon-abc", marketplace: "ozon", offerId: "SKU-9", productId: "9001" };
+  assert.equal(buildOzonYandexAutoPairGroupId(ozon), "auto-pair-ozon-abc");
+  assert.equal(extractOzonIdFromAutoPairGroupId("auto-pair-ozon-abc"), "ozon-abc");
+  const yandex = {
+    id: "yandex-1",
+    marketplace: "yandex",
+    offerId: "OTHER",
+    yandex: { extra: { sourceProductId: "ozon-abc" } },
+    manualGroupId: "auto-pair-ozon-abc",
+  };
+  assert.equal(extractYandexSourceProductId(yandex), "ozon-abc");
+  const indexes = buildOzonProductLookupIndexes([ozon]);
+  assert.equal(findOzonMatchForYandexProduct(yandex, indexes)?.id, "ozon-abc");
+  assert.equal(warehouseProductPageGroupKey(yandex), "manual:auto-pair-ozon-abc");
+  const yandexByOffer = {
+    id: "yandex-2",
+    marketplace: "yandex",
+    offerId: "SKU-9",
+    manualGroupId: "auto-pair-ozon-abc",
+  };
+  assert.equal(extractYandexSourceProductId(yandexByOffer), "");
+  assert.equal(extractOzonIdFromAutoPairGroupId(yandexByOffer.manualGroupId), "ozon-abc");
+  assert.equal(findOzonMatchForYandexProduct(yandexByOffer, indexes)?.id, "ozon-abc");
+  const { resolveWarehouseProductTargetName } = require("../server.js");
+  assert.equal(
+    resolveWarehouseProductTargetName({ target: "yandex-06c2112c", marketplace: "yandex" }),
+    "Yandex Market",
+  );
+});
+
+test("yandex warehouse targets with legacy aliases stay visible in postgres catalog filter", () => {
+  const serverSource = require("node:fs").readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
+  assert.match(serverSource, /collectYandexWarehouseTargetAliases/);
+  assert.match(serverSource, /yandexShops\.length === 1/);
+  const { resolveWarehouseCanonicalTarget } = require("../server.js");
+  const shops = require("../server.js").getYandexShops?.({ includeSyncDisabled: true }) || [];
+  if (shops.length === 1) {
+    const shopId = shops[0].id;
+    assert.equal(resolveWarehouseCanonicalTarget({ marketplace: "yandex", target: "parfumerius" }), shopId);
+    assert.equal(resolveWarehouseCanonicalTarget({ marketplace: "yandex", target: shopId }), shopId);
+  }
+});
+
+test("marketplace jobs run inline when background worker disabled", async () => {
+  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  assert.match(serverSource, /function marketplaceJobsShouldRunInline/);
+  assert.match(serverSource, /ozon-unarchive-queue-process/);
+  assert.doesNotMatch(
+    serverSource.slice(serverSource.indexOf("async function ensureWarehousePostgresLinksBackfilled"), serverSource.indexOf("async function ensureWarehousePostgresLinksBackfilled") + 900),
+    /deferred: true[\s\S]{0,120}warehousePostgresLinkBackfillDone = true/,
+  );
 });
 
 test("pm2 split entry files and immediate link activation hooks exist", async () => {
@@ -5381,4 +5560,5 @@ test("pm2 split entry files and immediate link activation hooks exist", async ()
   assert.match(ecosystem, /WAREHOUSE_WARM_ON_STARTUP: "false"/);
   assert.match(ecosystem, /WAREHOUSE_FULL_MEMORY_LOAD_ENABLED: "false"/);
   assert.match(ecosystem, /BACKGROUND_JOBS_ENABLED: "false"/);
+  assert.match(serverSource, /ozon unarchive queue scheduler enabled standalone/);
 });

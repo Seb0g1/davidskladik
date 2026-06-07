@@ -13,6 +13,7 @@ if (!password) {
 
 const root = path.resolve(__dirname, "..");
 const remoteRoot = "/var/www/davidsklad/davidskladik";
+const withDedupe = process.argv.includes("--with-dedupe");
 
 function exec(conn, command) {
   return new Promise((resolve, reject) => {
@@ -47,6 +48,8 @@ async function main() {
       username: "root",
       password,
       readyTimeout: 60000,
+      keepaliveInterval: 10000,
+      keepaliveCountMax: 24,
     });
   });
 
@@ -54,11 +57,26 @@ async function main() {
     console.log("Deploying server.js...");
     await sftpPut(conn, path.join(root, "server.js"), `${remoteRoot}/server.js`);
 
+    if (withDedupe) {
+      console.log("Deploying dedupe script...");
+      await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
+      await sftpPut(
+        conn,
+        path.join(root, "scripts/dedupe-warehouse-products.cjs"),
+        `${remoteRoot}/scripts/dedupe-warehouse-products.cjs`,
+      );
+      await sftpPut(
+        conn,
+        path.join(root, "scripts/audit-marketplace-labels.cjs"),
+        `${remoteRoot}/scripts/audit-marketplace-labels.cjs`,
+      );
+    }
+
     console.log("Deploying frontend bundle...");
     const files = [
       "public/app-modern/index.html",
       "public/app-modern/assets/index-Dr3-HBhG.css",
-      "public/app-modern/assets/index-CJmThkNx.js",
+      "public/app-modern/assets/index-DbdHzAVU.js",
     ];
     for (const rel of files) {
       await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
@@ -72,6 +90,17 @@ async function main() {
       "free -h | head -2",
       "curl -sS -m 30 'http://127.0.0.1:3000/api/warehouse/products/page?page=1&pageSize=40' | node -e \"let s='';process.stdin.on('data',d=>s+=d);process.stdin.on('end',()=>{const j=JSON.parse(s);const linked=(j.items||[]).filter(i=>(i.links||[]).length>0);const withSupplier=linked.filter(i=>i.selectedSupplier||i.stockOnlyFallbackActive);console.log(JSON.stringify({partial:j.partial,items:j.items?.length,linked:linked.length,withSupplier:withSupplier.length,sample:withSupplier.slice(0,2).map(i=>({id:i.id,supplier:!!i.selectedSupplier,ready:i.ready}))},null,2));});\"",
     ].join(" && "));
+
+    if (withDedupe) {
+      console.log("Running warehouse dedupe on server...");
+      await exec(conn, [
+        `cd ${remoteRoot}`,
+        "node scripts/dedupe-warehouse-products.cjs --dry-run --limit=30",
+        "for pass in $(seq 1 25); do echo \"Dedupe apply pass $pass/25...\"; node scripts/dedupe-warehouse-products.cjs --apply --limit=3000 || exit 1; done",
+        "node scripts/dedupe-warehouse-products.cjs --dry-run --limit=100000",
+        "node scripts/audit-marketplace-labels.cjs --limit=400",
+      ].join(" && "));
+    }
   } finally {
     conn.end();
   }

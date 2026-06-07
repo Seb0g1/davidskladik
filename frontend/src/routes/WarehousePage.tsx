@@ -1106,9 +1106,42 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
   );
 }
 
-function MarketplaceRows({ products }: { products: Product[] }) {
+type MarketplaceBreakdownRow = {
+  productId?: string;
+  offerId?: string;
+  marketplace?: string;
+  targetName?: string;
+  statusCode?: string;
+  statusLabel?: string;
+  archived?: boolean;
+  changed?: boolean;
+  ready?: boolean;
+  currentPrice?: number | null;
+  targetPrice?: number | null;
+  targetStock?: number | null;
+  supplierName?: string;
+  supplierArticle?: string;
+  ozonMinPrice?: number | null;
+  ozonUnarchiveQueued?: boolean;
+  ozonUnarchiveNextRetryAt?: string;
+  lastPriceSendAt?: string;
+  stockOnlyFallback?: boolean;
+};
+
+function marketplaceStatusTone(code = "", archived = false): "success" | "warning" | "danger" | "neutral" {
+  if (archived || code === "archived") return "danger";
+  if (code === "active" || code === "ready") return "success";
+  if (code === "out_of_stock" || code === "inactive") return "warning";
+  return "neutral";
+}
+
+function MarketplaceRows({ products, breakdown = [] }: { products: Product[]; breakdown?: MarketplaceBreakdownRow[] }) {
   const groupLinkCount = uniqueLinks(products).length;
   const marketplaceBadges = groupMarketplaceLabels(products);
+  const breakdownByProductId = useMemo(
+    () => new Map(breakdown.map((row) => [String(row.productId || ""), row])),
+    [breakdown],
+  );
   const marketplaceRows = useMemo(() => {
     const grouped = new Map<string, Product[]>();
     for (const product of products) {
@@ -1121,8 +1154,9 @@ function MarketplaceRows({ products }: { products: Product[] }) {
       label: items.length > 1 ? `${label} ×${items.length}` : label,
       product: preferredGroupPrimary(items),
       items,
+      breakdown: breakdownByProductId.get(String(preferredGroupPrimary(items).id || "")),
     }));
-  }, [products]);
+  }, [products, breakdownByProductId]);
   return (
     <section className="detail-section">
       <div className="section-title">
@@ -1138,9 +1172,13 @@ function MarketplaceRows({ products }: { products: Product[] }) {
         </div>
       ) : null}
       <div className="marketplace-rows">
-        {marketplaceRows.map(({ key, label, product, items }) => {
+        {marketplaceRows.map(({ key, label, product, items, breakdown: rowBreakdown }) => {
           const collapsedGroup = items.length > 1 ? groupProductsForList(items)[0] : undefined;
           const status = collapsedGroup ? groupStatusLabel(collapsedGroup) : statusLabel(product);
+          const rowStatusCode = String(rowBreakdown?.statusCode || asRecord(product.marketplaceState).code || "");
+          const rowStatusLabel = String(rowBreakdown?.statusLabel || asRecord(product.marketplaceState).label || status.label);
+          const rowArchived = Boolean(rowBreakdown?.archived || product.archived || rowStatusCode === "archived");
+          const rowTone = marketplaceStatusTone(rowStatusCode, rowArchived);
           const stock = Number(product.targetStock || product.stock || 0);
           const changed = Number(product.newPrice || product.targetPrice || 0) > 0 && Number(product.currentPrice || 0) !== Number(product.newPrice || product.targetPrice || 0);
           const supplier = asRecord(product.selectedSupplier);
@@ -1156,7 +1194,8 @@ function MarketplaceRows({ products }: { products: Product[] }) {
           const stockOnlyFallback = Boolean(product.stockOnlyFallbackActive || formula.stockOnlyFallbackActive || supplier.stockOnly || supplier.priceEligible === false);
           const stockOnlyManualPrice = Number(formula.stockOnlyManualPrice || supplier.manualPrice || targetPrice || 0) || 0;
           const lastArchiveSend = asRecord(asRecord(product).lastArchiveSend);
-          const ozonUnarchiveQueued = Boolean(lastArchiveSend.queuedByDailyLimit || lastArchiveSend.warning === "ozon_unarchive_daily_limit_queued");
+          const ozonUnarchiveQueued = Boolean(rowBreakdown?.ozonUnarchiveQueued || lastArchiveSend.queuedByDailyLimit || lastArchiveSend.warning === "ozon_unarchive_daily_limit_queued" || lastArchiveSend.warning === "linked_activation_queued");
+          const ozonUnarchiveNextRetryAt = String(rowBreakdown?.ozonUnarchiveNextRetryAt || lastArchiveSend.nextRetryAt || "");
           const formulaParts = [
             stockOnlyFallback ? "Складской fallback · цена PM не используется" : "",
             supplier.supplierName ? `Поставщик: ${String(supplier.supplierName)}${supplier.article ? ` · ${String(supplier.article)}` : ""}` : "",
@@ -1185,14 +1224,15 @@ function MarketplaceRows({ products }: { products: Product[] }) {
                 <strong>{label}</strong>
                 <span>{product.offerId || product.sku || product.id}</span>
               </div>
-              <span className={`pill ${status.tone}`}>{status.icon}{status.label}</span>
+              <span className={`pill ${rowTone}`}>{status.icon}{rowStatusLabel || status.label}</span>
               <div>
                 <small>Цена</small>
-                <strong>{money(product.newPrice || product.targetPrice || product.currentPrice)}</strong>
+                <strong>{money(rowBreakdown?.targetPrice || product.newPrice || product.targetPrice || product.currentPrice)}</strong>
+                {rowBreakdown?.currentPrice ? <small>кабинет {money(rowBreakdown.currentPrice)}</small> : null}
               </div>
               <div>
                 <small>Остаток</small>
-                <strong>{stock || "-"}</strong>
+                <strong>{(rowBreakdown?.targetStock ?? stock) || "-"}</strong>
               </div>
               <div>
                 <small>Общие PM</small>
@@ -1200,7 +1240,13 @@ function MarketplaceRows({ products }: { products: Product[] }) {
               </div>
               <div className="marketplace-flags">
                 {alternativeParts.length ? <span className="formula-chip muted">Альтернативы: {alternativeParts.join(" / ")}</span> : null}
-                {ozonUnarchiveQueued && <span>Ожидает разархива Ozon{lastArchiveSend.nextRetryAt ? ` · ${compactDate(String(lastArchiveSend.nextRetryAt))}` : ""}</span>}
+                {rowBreakdown?.ozonMinPrice ? <span className="formula-chip muted">Мин. Ozon: {money(rowBreakdown.ozonMinPrice)}</span> : null}
+                {rowBreakdown?.lastPriceSendAt ? <span className="formula-chip muted">Цена отправлена: {compactDate(rowBreakdown.lastPriceSendAt)}</span> : null}
+                {ozonUnarchiveQueued && <span>Ожидает разархива Ozon{ozonUnarchiveNextRetryAt ? ` · ${compactDate(ozonUnarchiveNextRetryAt)}` : ""}</span>}
+                {rowArchived && product.marketplace === "yandex" && <span>В архиве Яндекс</span>}
+                {rowBreakdown?.changed && <span>Цена изменилась</span>}
+                {rowBreakdown?.ready && <span>Готов к продаже</span>}
+                {rowBreakdown?.stockOnlyFallback && <span>Складской fallback</span>}
                 {formulaParts.length ? formulaParts.map((part) => <span className="formula-chip" key={part}>{part}</span>) : <span className="formula-chip">PriceMaster не выбран</span>}
                 <span className="formula-chip muted">общие привязки, отдельный расчет цены</span>
                 {product.archived && <span>Архив</span>}
@@ -1368,7 +1414,7 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
   );
 }
 
-function DetailPanel({ selectedGroup, products, onClose, isAdmin, filteredOut = false }: { selectedGroup: string; products: Product[]; onClose: () => void; isAdmin: boolean; filteredOut?: boolean }) {
+function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin, filteredOut = false, loading = false }: { selectedGroup: string; products: Product[]; breakdown?: MarketplaceBreakdownRow[]; onClose: () => void; isAdmin: boolean; filteredOut?: boolean; loading?: boolean }) {
   const primary = products.length ? preferredGroupPrimary(products) : undefined;
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const groupQueryKey = ["warehouse", "group-detail", selectedGroup];
@@ -1385,7 +1431,7 @@ function DetailPanel({ selectedGroup, products, onClose, isAdmin, filteredOut = 
   }, [products, selectedGroup]);
   const refreshDetail = () => void queryClient.invalidateQueries({ queryKey: groupQueryKey });
 
-  if (!primary) {
+  if (!primary || loading) {
     return (
       <aside className={`detail-panel ${selectedGroup ? "" : "empty-panel"}`}>
         {selectedGroup ? (
@@ -1432,7 +1478,7 @@ function DetailPanel({ selectedGroup, products, onClose, isAdmin, filteredOut = 
         <Stat label="Привязки" value={groupLinkCount} />
       </div>
       <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} />
-      <MarketplaceRows products={products} />
+      <MarketplaceRows products={products} breakdown={breakdown} />
       {isAdmin ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}
       {isAdmin ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
       {isAdmin ? <AiImagesPanel product={primary} products={products} onSaved={refreshDetail} /> : null}
@@ -1499,10 +1545,14 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
 
   const detailQuery = useQuery({
     queryKey: ["warehouse", "group-detail", selectedGroup],
-    queryFn: () => fetchJson(`/api/warehouse/products/group-detail?group=${encodeURIComponent(selectedGroup)}&marketplace=${encodeURIComponent(filters.marketplace)}&state=${encodeURIComponent(filters.state)}`, GroupDetailSchema),
+    queryFn: () => fetchJson(`/api/warehouse/products/group-detail?group=${encodeURIComponent(selectedGroup)}&refreshPrices=true`, GroupDetailSchema),
     enabled: Boolean(selectedGroup),
+    staleTime: 30_000,
   });
-  const detailProducts = detailQuery.data?.products?.length ? detailQuery.data.products : selectedRowsOnPage;
+  const detailProducts = detailQuery.data?.products?.length
+    ? detailQuery.data.products
+    : (detailQuery.isLoading ? [] : selectedRowsOnPage);
+  const detailBreakdown = (detailQuery.data as { marketplacePriceBreakdown?: MarketplaceBreakdownRow[] } | undefined)?.marketplacePriceBreakdown || [];
   useEffect(() => {
     const media = window.matchMedia(mobileListMedia);
     const onChange = () => setIsMobileList(media.matches);
@@ -1597,7 +1647,15 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
             <button disabled={!pageQuery.data?.hasMore} onClick={() => setFilter("page", filters.page + 1)}>Дальше</button>
           </div>
         </div>
-        <DetailPanel selectedGroup={selectedGroup} products={detailProducts} onClose={() => setSelectedGroup("")} isAdmin={isAdmin} filteredOut={selectedFilteredOut && Boolean(detailProducts.length)} />
+        <DetailPanel
+          selectedGroup={selectedGroup}
+          products={detailProducts}
+          breakdown={detailBreakdown}
+          loading={detailQuery.isLoading && Boolean(selectedGroup)}
+          onClose={() => setSelectedGroup("")}
+          isAdmin={isAdmin}
+          filteredOut={selectedFilteredOut && Boolean(detailProducts.length)}
+        />
       </section>
     </>
   );

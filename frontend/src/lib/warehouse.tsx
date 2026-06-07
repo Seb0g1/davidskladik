@@ -21,7 +21,7 @@ export type ProductGroup = {
 
 export function productGroupKey(product: Product): string {
   const raw = asRecord(product.raw);
-  const manualGroupId = String(raw.manualGroupId || raw.manual_group_id || "").trim().toLowerCase();
+  const manualGroupId = String(product.manualGroupId || raw.manualGroupId || raw.manual_group_id || "").trim().toLowerCase();
   if (manualGroupId) return `manual:${manualGroupId}`;
   return `offer:${String(product.offerId || product.sku || product.id).trim().toLowerCase()}`;
 }

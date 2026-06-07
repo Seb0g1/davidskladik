@@ -151,11 +151,13 @@ const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 10000) || 10000));
 const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
 const yandexStockCampaignIds = new Set(["128820967"]);
-const configuredOzonUnarchiveDailyLimit = Number(process.env.OZON_UNARCHIVE_DAILY_LIMIT || 0) || 0;
+const configuredOzonUnarchiveDailyLimit = process.env.OZON_UNARCHIVE_DAILY_LIMIT === undefined
+  ? 100
+  : (Number(process.env.OZON_UNARCHIVE_DAILY_LIMIT) || 0);
 const ozonUnarchiveDailyLimit = configuredOzonUnarchiveDailyLimit > 0
   ? Math.max(1, Math.min(10000, configuredOzonUnarchiveDailyLimit))
   : Infinity;
-const ozonUnarchiveQueueBatchLimit = Math.max(1, Math.min(1000, Number(process.env.OZON_UNARCHIVE_QUEUE_BATCH_LIMIT || 500) || 500));
+const ozonUnarchiveQueueBatchLimit = Math.max(1, Math.min(1000, Number(process.env.OZON_UNARCHIVE_QUEUE_BATCH_LIMIT || 100) || 100));
 const ozonUnarchiveQueueAutoEnabled = process.env.OZON_UNARCHIVE_QUEUE_AUTO_ENABLED !== "false";
 const ozonUnarchiveQueueAutoIntervalMinutes = Math.max(5, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INTERVAL_MINUTES || 30) || 30);
 const ozonUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 180) || 180);
@@ -1990,6 +1992,14 @@ function isGenericMarketplaceTargetName(name, marketplace = "") {
   return value === "ozon" || value === "yandex" || value === "yandex market" || value === "marketplace";
 }
 
+function isOpaqueMarketplaceTargetId(target = "", marketplace = "") {
+  const value = cleanText(target).toLowerCase();
+  if (!value) return false;
+  if (value === "yandex" || value === "ozon") return true;
+  // Internal ids: yandex-06c2112c, ozon-ecdad851b0b1383068f320b7
+  return /^yandex-[0-9a-f]{8,}$/i.test(value) || /^ozon-[0-9a-f]{8,}$/i.test(value);
+}
+
 function resolveWarehouseProductTargetName(input = {}) {
   const target = cleanText(input.target || input.marketplace || "");
   const marketplace = cleanText(input.marketplace || "").toLowerCase();
@@ -1998,8 +2008,8 @@ function resolveWarehouseProductTargetName(input = {}) {
   const exportName = cleanText(exportState?.targetName || "");
   if (exportName && !isGenericMarketplaceTargetName(exportName, marketplace)) return exportName;
   const meta = targetById(target);
-  if (meta?.name && !isGenericMarketplaceTargetName(meta.name, marketplace)) return meta.name;
-  if (target && !isGenericMarketplaceTargetName(target, marketplace)) return target;
+  if (meta?.name && !isGenericMarketplaceTargetName(meta.name, marketplace) && !isOpaqueMarketplaceTargetId(meta.name, marketplace)) return meta.name;
+  if (target && !isGenericMarketplaceTargetName(target, marketplace) && !isOpaqueMarketplaceTargetId(target, marketplace)) return target;
   return meta?.name || exportName || cleanText(input.targetName) || (marketplace === "yandex" ? "Yandex Market" : "Ozon");
 }
 
@@ -2812,8 +2822,12 @@ function normalizeWarehouseProduct(input = {}) {
   const name = cleanText(input.name || ozonDraft.name || yandexDraft.name || input.offerId || input.offer_id);
   const rawMarkup = Number(input.markup || 0);
   const keepYandexMarkup = Boolean(input.markupSource === "manual" || input.yandex?.extra?.manualMarkup === true);
+  const offerId = cleanText(input.offerId || input.offer_id);
+  const resolvedId = cleanText(input.id)
+    || warehouseProductCanonicalId({ target: targetMeta.id, marketplace: targetMeta.marketplace, offerId })
+    || crypto.randomUUID();
   return {
-    id: cleanText(input.id) || crypto.randomUUID(),
+    id: resolvedId,
     target: targetMeta.id,
     marketplace: targetMeta.marketplace,
     targetName: resolveWarehouseProductTargetName({
@@ -2822,7 +2836,7 @@ function normalizeWarehouseProduct(input = {}) {
       targetName: cleanText(input.targetName) || targetMeta.name,
       exports: input.exports,
     }),
-    offerId: cleanText(input.offerId || input.offer_id),
+    offerId,
     productId: cleanText(input.productId || input.product_id),
     sku: cleanText(input.sku || input.productSku || input.fboSku || input.fbsSku),
     productUrl: cleanText(input.productUrl || input.product_url || input.url),
@@ -3210,11 +3224,16 @@ function marketplacePriceBreakdown(products = []) {
     const normalized = normalizeWarehouseProduct(product);
     const supplier = product.selectedSupplier || {};
     const formula = product.priceFormula || {};
+    const state = product.marketplaceState && typeof product.marketplaceState === "object" ? product.marketplaceState : {};
+    const lastPriceSend = product.marketplace === "ozon"
+      ? product.lastOzonPriceSend
+      : product.lastYandexPriceSend;
     return {
       productId: product.id || "",
       offerId: product.offerId || "",
       marketplace: normalized.marketplace || "",
       target: product.target || "",
+      targetName: resolveWarehouseProductTargetName(product),
       supplierName: supplier.supplierName || supplier.partnerName || supplier.name || "",
       supplierArticle: supplier.article || supplier.supplierArticle || "",
       markupCoefficient: Number(product.markupCoefficient || supplier.markupCoefficient || formula.markupCoefficient || 0) || null,
@@ -3226,6 +3245,17 @@ function marketplacePriceBreakdown(products = []) {
       targetPrice: Number(product.targetPrice || product.nextPrice || formula.targetPrice || 0) || null,
       currentPrice: Number(product.currentPrice || formula.currentPrice || 0) || null,
       targetStock: Number(product.targetStock || 0) || null,
+      statusCode: cleanText(state.code || product.status || state.state).toLowerCase(),
+      statusLabel: cleanText(state.label || state.stateName || product.status || ""),
+      archived: Boolean(product.archived || state.archived || state.code === "archived"),
+      changed: Boolean(product.changed),
+      ready: Boolean(product.ready),
+      stockOnlyFallback: Boolean(product.stockOnlyFallbackActive),
+      ozonMinPrice: product.marketplace === "ozon" ? (Number(product.ozonMinPrice || 0) || null) : null,
+      lastPriceSendAt: cleanText(lastPriceSend?.at || lastPriceSend?.requestedAt || lastPriceSend?.lastPriceRequestAt || ""),
+      lastPriceVerifiedAt: cleanText(lastPriceSend?.verifiedAt || lastPriceSend?.lastPriceVerifiedAt || ""),
+      ozonUnarchiveQueued: Boolean(product.lastArchiveSend?.queuedByDailyLimit || product.lastArchiveSend?.pending),
+      ozonUnarchiveNextRetryAt: cleanText(product.lastArchiveSend?.nextRetryAt || ""),
     };
   });
 }
@@ -5075,6 +5105,7 @@ function normalizeYandexWarehouseProduct(item = {}, shop) {
   const barcodes = offer.barcodes || item.offer?.barcodes || [];
 
   return normalizeWarehouseProduct({
+    id: yandexWarehouseProductId(shop, offerId),
     target: shop.id,
     marketplace: "yandex",
     targetName: shop.name || "Yandex Market",
@@ -5106,6 +5137,50 @@ function yandexWarehouseProductId(shop = {}, offerId = "") {
   return `yandex-${crypto.createHash("sha1").update(key).digest("hex").slice(0, 24)}`;
 }
 
+function ozonWarehouseProductId(account = {}, offerId = "") {
+  const key = `${cleanText(account.id || account.target || "ozon")}:${cleanText(offerId).toLowerCase()}`;
+  return `ozon-${crypto.createHash("sha1").update(key).digest("hex").slice(0, 24)}`;
+}
+
+function resolveWarehouseCanonicalTarget(input = {}) {
+  const marketplace = cleanText(input.marketplace || input.marketplace_id || "").toLowerCase();
+  const target = cleanText(input.target || input.marketplace || "ozon");
+  const normalizedTarget = target.toLowerCase();
+  if (marketplace === "yandex" || normalizedTarget === "yandex" || normalizedTarget.startsWith("yandex-")) {
+    const shop = getYandexShopByTarget(target);
+    if (shop?.id) return shop.id;
+  }
+  if (marketplace === "ozon" || normalizedTarget === "ozon" || normalizedTarget.startsWith("ozon-")) {
+    const account = getOzonAccountByTarget(target);
+    if (account?.id) return account.id;
+  }
+  return target;
+}
+
+function warehouseProductCanonicalId(input = {}) {
+  const target = resolveWarehouseCanonicalTarget(input);
+  const marketplace = cleanText(input.marketplace || input.marketplace_id || "").toLowerCase();
+  const normalizedTarget = target.toLowerCase();
+  const resolvedMarketplace = marketplace === "yandex" || normalizedTarget === "yandex" || normalizedTarget.startsWith("yandex-")
+    ? "yandex"
+    : "ozon";
+  const offerId = cleanText(input.offerId || input.offer_id);
+  if (!offerId) return cleanText(input.id) || "";
+  if (resolvedMarketplace === "yandex") return yandexWarehouseProductId({ id: target }, offerId);
+  if (resolvedMarketplace === "ozon") return ozonWarehouseProductId({ id: target }, offerId);
+  return cleanText(input.id) || "";
+}
+
+function pickWarehouseProductMergeId(current = null, imported = null) {
+  const target = cleanText(imported?.target || current?.target);
+  const marketplace = cleanText(imported?.marketplace || current?.marketplace);
+  const offerId = cleanText(imported?.offerId || current?.offerId);
+  const canonicalId = warehouseProductCanonicalId({ target, marketplace, offerId });
+  const candidates = [current?.id, imported?.id].filter(Boolean);
+  if (canonicalId && candidates.includes(canonicalId)) return canonicalId;
+  return current?.id || imported?.id || canonicalId || crypto.randomUUID();
+}
+
 function buildYandexWarehouseProductFromOzonExport(product = {}, shop = {}, exportState = {}) {
   const normalized = normalizeWarehouseProduct(product);
   const offerId = cleanText(normalized.offerId);
@@ -5131,6 +5206,7 @@ function buildYandexWarehouseProductFromOzonExport(product = {}, shop = {}, expo
       ...(Array.isArray(normalized.yandex?.pictures) ? normalized.yandex.pictures : []),
     ].map(cleanText).filter(Boolean)),
   ];
+  const pairGroupId = normalized.manualGroupId || buildOzonYandexAutoPairGroupId(normalized);
   return normalizeWarehouseProduct({
     id: yandexWarehouseProductId(shop, offerId),
     target: shop.id || "yandex",
@@ -5139,7 +5215,7 @@ function buildYandexWarehouseProductFromOzonExport(product = {}, shop = {}, expo
     offerId,
     productId: normalized.productId,
     sku: normalized.sku,
-    manualGroupId: normalized.manualGroupId,
+    manualGroupId: pairGroupId,
     name: normalized.name || normalized.ozon?.name || normalized.yandex?.name || offerId,
     keyword: normalized.keyword,
     imageUrl: normalized.imageUrl || firstImageUrl(pictures),
@@ -5220,6 +5296,670 @@ function materializeYandexExportedProductsForWarehouse(warehouse = {}) {
     warehouse: { ...warehouse, products: mergeProducts(products, additions) },
     added: additions.length,
   };
+}
+
+function ozonProductHasYandexExport(product = {}, shop = {}) {
+  const exports = product.exports && typeof product.exports === "object" ? product.exports : {};
+  if (exports.yandex?.status === "sent") return true;
+  const shopId = cleanText(shop.id);
+  if (shopId && exports[shopId]?.status === "sent") return true;
+  return Object.values(exports).some((entry) => entry?.status === "sent"
+    && /yandex/i.test(cleanText(entry.targetName || entry.marketplace || entry.target || shopId)));
+}
+
+function buildOzonYandexAutoPairGroupId(ozonProduct = {}) {
+  const ozonId = cleanText(ozonProduct.id);
+  return ozonId ? `auto-pair-${ozonId}` : "";
+}
+
+function extractOzonIdFromAutoPairGroupId(groupId = "") {
+  const normalized = cleanText(groupId);
+  if (!normalized.startsWith("auto-pair-")) return "";
+  return cleanText(normalized.slice("auto-pair-".length));
+}
+
+function extractYandexSourceProductId(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const raw = normalized.raw && typeof normalized.raw === "object" && !Array.isArray(normalized.raw) ? normalized.raw : {};
+  const yandex = normalized.yandex && typeof normalized.yandex === "object" ? normalized.yandex : {};
+  const rawYandex = raw.yandex && typeof raw.yandex === "object" ? raw.yandex : {};
+  return cleanText(
+    yandex.extra?.sourceProductId
+    || rawYandex.extra?.sourceProductId
+    || raw.yandex?.extra?.sourceProductId,
+  );
+}
+
+function buildOzonProductLookupIndexes(ozonProducts = []) {
+  const byId = new Map();
+  const byOffer = new Map();
+  const byProductId = new Map();
+  for (const product of Array.isArray(ozonProducts) ? ozonProducts : []) {
+    const normalized = normalizeWarehouseProduct(product);
+    if (!normalized.id) continue;
+    byId.set(String(normalized.id), normalized);
+    const offerId = cleanText(normalized.offerId).toLowerCase();
+    if (offerId && !byOffer.has(offerId)) byOffer.set(offerId, normalized);
+    const productId = cleanText(normalized.productId);
+    if (productId && !byProductId.has(productId)) byProductId.set(productId, normalized);
+  }
+  return { byId, byOffer, byProductId };
+}
+
+function findOzonMatchForYandexProduct(yandexProduct = {}, indexes = {}) {
+  const yandex = normalizeWarehouseProduct(yandexProduct);
+  const sourceId = extractYandexSourceProductId(yandex);
+  if (sourceId && indexes.byId?.get(sourceId)) return indexes.byId.get(sourceId);
+  const offerId = cleanText(yandex.offerId).toLowerCase();
+  if (offerId && indexes.byOffer?.get(offerId)) return indexes.byOffer.get(offerId);
+  const productId = cleanText(yandex.productId);
+  if (productId && indexes.byProductId?.get(productId)) return indexes.byProductId.get(productId);
+  return null;
+}
+
+function warehouseProductsShareAutoPairGroup(left = {}, right = {}) {
+  const leftGroup = cleanText(left.manualGroupId || left.raw?.manualGroupId).toLowerCase();
+  const rightGroup = cleanText(right.manualGroupId || right.raw?.manualGroupId).toLowerCase();
+  if (leftGroup && rightGroup && leftGroup === rightGroup) return true;
+  const leftOzon = cleanText(left.marketplace) === "ozon" ? left : right;
+  const rightYandex = cleanText(right.marketplace) === "yandex" ? right : left;
+  if (cleanText(leftOzon.marketplace) !== "ozon" || cleanText(rightYandex.marketplace) !== "yandex") return false;
+  return extractYandexSourceProductId(rightYandex) === cleanText(leftOzon.id);
+}
+
+function ozonProductShouldMaterializeYandexSibling(product = {}, shop = {}, options = {}) {
+  const offerId = cleanText(product.offerId).toLowerCase();
+  if (!offerId) return false;
+  const yandexOfferIds = options.yandexOfferIds instanceof Set ? options.yandexOfferIds : new Set();
+  if (yandexOfferIds.has(offerId)) return false;
+  if (ozonProductHasYandexExport(product, shop)) return true;
+  const yandexCache = options.yandexCacheOfferIds instanceof Set ? options.yandexCacheOfferIds : new Set();
+  if (yandexCache.has(offerId)) return true;
+  return Array.isArray(product.links) && product.links.length > 0;
+}
+
+async function syncOzonYandexLinkPairsPostgres(prisma, { dryRun = false, batchSize = 500 } = {}) {
+  const client = prisma || getPrisma();
+  if (!client) return { ok: false, synced: 0, reason: "postgres_unavailable" };
+  const yandexRows = await client.warehouseProduct.findMany({
+    where: { marketplace: "yandex" },
+    include: { links: true },
+  });
+  const yandexByOffer = new Map();
+  for (const row of yandexRows) {
+    const offerId = cleanText(row.offerId).toLowerCase();
+    if (!offerId || yandexByOffer.has(offerId)) continue;
+    yandexByOffer.set(offerId, productFromPostgres(row));
+  }
+  let synced = 0;
+  let scanned = 0;
+  let cursorId = "";
+  const normalizedBatchSize = Math.max(50, Math.min(2000, Number(batchSize) || 500));
+  while (true) {
+    const ozonRows = await client.warehouseProduct.findMany({
+      where: { marketplace: "ozon", links: { some: {} } },
+      include: { links: true },
+      orderBy: { id: "asc" },
+      take: normalizedBatchSize,
+      ...(cursorId ? { skip: 1, cursor: { id: cursorId } } : {}),
+    });
+    if (!ozonRows.length) break;
+    cursorId = ozonRows[ozonRows.length - 1].id;
+    const updates = [];
+    for (const row of ozonRows) {
+      scanned += 1;
+      const ozon = productFromPostgres(row);
+      const offerId = cleanText(ozon.offerId).toLowerCase();
+      const yandex = yandexByOffer.get(offerId);
+      if (!yandex) continue;
+      const group = syncWarehouseProductGroupLinks([ozon, yandex], { username: "pair_sync" });
+      if (!group.changedProducts.length) continue;
+      synced += group.changedProducts.length;
+      updates.push(...group.changedProducts);
+    }
+    if (!dryRun && updates.length) {
+      await replaceProductLinksInPostgres(client, updates);
+      mergeWarehouseProductsIntoMemory(updates);
+    }
+    if (ozonRows.length < normalizedBatchSize) break;
+  }
+  if (!dryRun && synced > 0) invalidateWarehouseViewCache();
+  return { ok: true, dryRun, synced, scanned };
+}
+
+async function materializeYandexExportedProductsForPostgres(prisma, { dryRun = false, limit = 0, batchSize = 500 } = {}) {
+  const client = prisma || getPrisma();
+  if (!client) return { ok: false, added: 0, scanned: 0, skipped: 0, reason: "postgres_unavailable" };
+  const shops = uniqueYandexShopsByBusiness();
+  if (!shops.length) return { ok: true, added: 0, scanned: 0, skipped: 0, reason: "no_yandex_shops" };
+
+  const shop = shops[0];
+  const yandexRows = await client.warehouseProduct.findMany({
+    where: { marketplace: "yandex" },
+    select: { target: true, offerId: true },
+  });
+  const existingKeys = new Set(yandexRows.map((row) => warehouseProductExactMergeKey({
+    target: row.target,
+    marketplace: "yandex",
+    offerId: row.offerId,
+  })));
+  const yandexOfferIds = new Set(yandexRows.map((row) => cleanText(row.offerId).toLowerCase()).filter(Boolean));
+  const yandexCacheOfferIds = await readYandexExistingOfferIdCache({ maxAgeMs: 7 * 24 * 60 * 60 * 1000 });
+
+  let added = 0;
+  let scanned = 0;
+  let skipped = 0;
+  let cursorId = "";
+  const normalizedBatchSize = Math.max(50, Math.min(2000, Number(batchSize) || 500));
+  const normalizedLimit = Math.max(0, Number(limit) || 0);
+
+  while (true) {
+    const ozonRows = await client.warehouseProduct.findMany({
+      where: { marketplace: "ozon" },
+      include: { links: true },
+      orderBy: { id: "asc" },
+      take: normalizedBatchSize,
+      ...(cursorId ? { skip: 1, cursor: { id: cursorId } } : {}),
+    });
+    if (!ozonRows.length) break;
+    cursorId = ozonRows[ozonRows.length - 1].id;
+
+    const additions = [];
+    const ozonPairPatches = [];
+    for (const row of ozonRows) {
+      scanned += 1;
+      const product = productFromPostgres(row);
+      if (!ozonProductShouldMaterializeYandexSibling(product, shop, { yandexOfferIds, yandexCacheOfferIds })) {
+        skipped += 1;
+        continue;
+      }
+      const exactKey = warehouseProductExactMergeKey({
+        target: shop.id,
+        marketplace: "yandex",
+        offerId: product.offerId,
+      });
+      if (existingKeys.has(exactKey)) {
+        skipped += 1;
+        continue;
+      }
+      const exports = product.exports || {};
+      const exportState = exports[shop.id] || exports.yandex || { status: "sent", targetName: shop.name || "Yandex Market" };
+      const pairGroupId = product.manualGroupId || buildOzonYandexAutoPairGroupId(product);
+      const yandexProduct = buildYandexWarehouseProductFromOzonExport(
+        { ...product, manualGroupId: pairGroupId },
+        shop,
+        exportState,
+      );
+      yandexProduct.links = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
+      additions.push(yandexProduct);
+      if (!cleanText(product.manualGroupId) && pairGroupId) {
+        ozonPairPatches.push(normalizeWarehouseProduct({ ...product, manualGroupId: pairGroupId }));
+      }
+      existingKeys.add(exactKey);
+      const offerKey = cleanText(product.offerId).toLowerCase();
+      if (offerKey) yandexOfferIds.add(offerKey);
+      added += 1;
+      if (normalizedLimit > 0 && added >= normalizedLimit) break;
+    }
+
+    if (!dryRun && (additions.length || ozonPairPatches.length)) {
+      const writes = [...additions, ...ozonPairPatches];
+      await replaceProductLinksInPostgres(client, writes);
+      mergeWarehouseProductsIntoMemory(writes);
+    }
+
+    if (normalizedLimit > 0 && added >= normalizedLimit) break;
+    if (ozonRows.length < normalizedBatchSize) break;
+  }
+
+  if (!dryRun && added > 0) invalidateWarehouseViewCache();
+  return { ok: true, dryRun, added, scanned, skipped, shopId: shop.id };
+}
+
+async function reassignWarehouseProductReferences(tx, fromIds = [], toId = "") {
+  const ids = (Array.isArray(fromIds) ? fromIds : []).filter((id) => id && id !== toId);
+  if (!ids.length || !toId) return;
+  await tx.priceHistory.updateMany({ where: { productId: { in: ids } }, data: { productId: toId } });
+  await tx.priceRetryQueueItem.updateMany({ where: { productId: { in: ids } }, data: { productId: toId } });
+  await tx.salesAutomationSkuState.updateMany({ where: { productId: { in: ids } }, data: { productId: toId } });
+  await tx.ozonUnarchiveQueueItem.updateMany({ where: { productId: { in: ids } }, data: { productId: toId } });
+  await tx.brandIndexItem.deleteMany({ where: { productId: { in: ids } } });
+}
+
+function warehouseProductsShareIdentity(left = {}, right = {}) {
+  return cleanText(left.marketplace).toLowerCase() === cleanText(right.marketplace).toLowerCase()
+    && cleanText(left.offerId).toLowerCase() === cleanText(right.offerId).toLowerCase()
+    && cleanText(left.target || left.marketplace) === cleanText(right.target || right.marketplace);
+}
+
+async function removeOrphanWarehouseProductPostgres(client, orphan = {}, canonical = {}) {
+  const orphanProduct = normalizeWarehouseProduct(orphan);
+  const canonicalProduct = normalizeWarehouseProduct(canonical);
+  const mergedLinks = buildCommonWarehouseGroupLinks([canonicalProduct, orphanProduct]);
+  const patchedCanonical = normalizeWarehouseProduct({ ...canonicalProduct, links: mergedLinks });
+  await client.$transaction(async (tx) => {
+    await reassignWarehouseProductReferences(tx, [orphanProduct.id], canonicalProduct.id);
+    await replaceProductLinksInPostgres(tx, patchedCanonical);
+    await tx.productLink.deleteMany({ where: { productId: orphanProduct.id } });
+    await tx.warehouseProduct.delete({ where: { id: orphanProduct.id } });
+  }, { timeout: 60_000 });
+}
+
+async function migrateWarehouseProductCanonicalIdsPostgres(prisma, { dryRun = true, limit = 5000 } = {}) {
+  const client = prisma || getPrisma();
+  if (!client) return { ok: false, migrated: 0, deleted: 0, scanned: 0, reason: "postgres_unavailable" };
+  const rows = await client.warehouseProduct.findMany({
+    include: { links: true },
+    orderBy: { updatedAt: "desc" },
+    take: Math.max(1, Math.min(50000, Number(limit) || 5000)),
+  });
+  let migrated = 0;
+  let deleted = 0;
+  let skipped = 0;
+  for (const row of rows) {
+    const product = productFromPostgres(row);
+    const canonicalId = warehouseProductCanonicalId(product);
+    if (!canonicalId || product.id === canonicalId) continue;
+    const conflictRow = await client.warehouseProduct.findUnique({
+      where: { id: canonicalId },
+      include: { links: true },
+    });
+    if (conflictRow) {
+      const conflict = productFromPostgres(conflictRow);
+      if (!warehouseProductsShareIdentity(product, conflict)) {
+        skipped += 1;
+        continue;
+      }
+      if (!dryRun) await removeOrphanWarehouseProductPostgres(client, product, conflict);
+      deleted += 1;
+      continue;
+    }
+    if (dryRun) {
+      migrated += 1;
+      continue;
+    }
+    const merged = normalizeWarehouseProduct({ ...product, id: canonicalId });
+    await client.$transaction(async (tx) => {
+      await upsertWarehouseProductPostgres(tx, merged);
+      await reassignWarehouseProductReferences(tx, [product.id], canonicalId);
+      await tx.productLink.deleteMany({ where: { productId: { in: [product.id, canonicalId] } } });
+      await tx.warehouseProduct.delete({ where: { id: product.id } });
+      await replaceProductLinksInPostgres(tx, merged);
+    }, { timeout: 60_000 });
+    migrated += 1;
+  }
+  if (!dryRun && (migrated > 0 || deleted > 0)) invalidateWarehouseViewCache();
+  return { ok: true, dryRun, migrated, deleted, skipped, scanned: rows.length };
+}
+
+async function fetchCrossMarketplaceSiblingRows(prisma, baseWhere, seedRows = []) {
+  const client = prisma || getPrisma();
+  if (!client || !Array.isArray(seedRows) || !seedRows.length) return [];
+  const siblingWhere = warehousePageSiblingWhere(baseWhere);
+  const seen = new Set(seedRows.map((row) => cleanText(row.id)).filter(Boolean));
+  const found = [];
+  const products = seedRows.map((row) => productFromPostgres(row));
+  const ozonIds = products.filter((product) => cleanText(product.marketplace) === "ozon").map((product) => cleanText(product.id)).filter(Boolean);
+  const sourceIds = products
+    .filter((product) => cleanText(product.marketplace) === "yandex")
+    .map((product) => extractYandexSourceProductId(product))
+    .filter(Boolean);
+  const productIds = Array.from(new Set(products.map((product) => cleanText(product.productId)).filter(Boolean)));
+
+  for (const chunk of chunkArray(ozonIds, 100)) {
+    if (!chunk.length) continue;
+    const rows = await client.warehouseProduct.findMany({
+      where: {
+        AND: [
+          siblingWhere,
+          { marketplace: "yandex" },
+          {
+            OR: chunk.map((ozonId) => ({
+              raw: { path: ["yandex", "extra", "sourceProductId"], equals: ozonId },
+            })),
+          },
+        ],
+      },
+      include: { links: true },
+    });
+    for (const row of rows) {
+      if (!seen.has(row.id)) {
+        seen.add(row.id);
+        found.push(row);
+      }
+    }
+  }
+
+  if (sourceIds.length) {
+    const ozonMatches = await client.warehouseProduct.findMany({
+      where: {
+        AND: [siblingWhere, { marketplace: "ozon" }, { id: { in: sourceIds } }],
+      },
+      include: { links: true },
+    });
+    for (const row of ozonMatches) {
+      if (!seen.has(row.id)) {
+        seen.add(row.id);
+        found.push(row);
+      }
+    }
+  }
+
+  if (productIds.length) {
+    const crossRows = await client.warehouseProduct.findMany({
+      where: {
+        AND: [siblingWhere, { productId: { in: productIds } }],
+      },
+      include: { links: true },
+    });
+    for (const row of crossRows) {
+      if (!seen.has(row.id)) {
+        seen.add(row.id);
+        found.push(row);
+      }
+    }
+  }
+
+  const manualGroupIds = Array.from(new Set(products
+    .map((product) => cleanText(product.manualGroupId || product.raw?.manualGroupId))
+    .filter((groupId) => groupId && groupId.startsWith("auto-pair-"))));
+  if (manualGroupIds.length) {
+    for (const chunk of chunkArray(manualGroupIds, 100)) {
+      const rows = await client.warehouseProduct.findMany({
+        where: {
+          AND: [
+            siblingWhere,
+            {
+              OR: chunk.map((groupId) => ({
+                raw: { path: ["manualGroupId"], equals: groupId },
+              })),
+            },
+          ],
+        },
+        include: { links: true },
+      });
+      for (const row of rows) {
+        if (!seen.has(row.id)) {
+          seen.add(row.id);
+          found.push(row);
+        }
+      }
+    }
+  }
+
+  return found;
+}
+
+async function backfillOzonYandexManualGroupsPostgres(prisma, { dryRun = true, batchSize = 500 } = {}) {
+  const client = prisma || getPrisma();
+  if (!client) return { ok: false, paired: 0, updated: 0, reason: "postgres_unavailable" };
+  const ozonRows = await client.warehouseProduct.findMany({
+    where: { marketplace: "ozon" },
+    include: { links: true },
+  });
+  const indexes = buildOzonProductLookupIndexes(ozonRows.map(productFromPostgres));
+  let paired = 0;
+  let updated = 0;
+  let scanned = 0;
+  let skipped = 0;
+  let cursorId = "";
+  const normalizedBatchSize = Math.max(50, Math.min(2000, Number(batchSize) || 500));
+  const patches = [];
+
+  while (true) {
+    const yandexRows = await client.warehouseProduct.findMany({
+      where: { marketplace: "yandex" },
+      include: { links: true },
+      orderBy: { id: "asc" },
+      take: normalizedBatchSize,
+      ...(cursorId ? { skip: 1, cursor: { id: cursorId } } : {}),
+    });
+    if (!yandexRows.length) break;
+    cursorId = yandexRows[yandexRows.length - 1].id;
+
+    for (const row of yandexRows) {
+      scanned += 1;
+      const yandex = productFromPostgres(row);
+      const ozon = findOzonMatchForYandexProduct(yandex, indexes);
+      if (!ozon) {
+        skipped += 1;
+        continue;
+      }
+      paired += 1;
+      const groupId = buildOzonYandexAutoPairGroupId(ozon);
+      if (!groupId) {
+        skipped += 1;
+        continue;
+      }
+      const yandexGroup = cleanText(yandex.manualGroupId || yandex.raw?.manualGroupId);
+      const ozonGroup = cleanText(ozon.manualGroupId || ozon.raw?.manualGroupId);
+      if (yandexGroup === groupId && ozonGroup === groupId) {
+        skipped += 1;
+        continue;
+      }
+      if (!dryRun) {
+        if (yandexGroup !== groupId) patches.push(normalizeWarehouseProduct({ ...yandex, manualGroupId: groupId }));
+        if (ozonGroup !== groupId) patches.push(normalizeWarehouseProduct({ ...ozon, manualGroupId: groupId }));
+      }
+      updated += 1;
+    }
+
+    if (!dryRun && patches.length) {
+      for (const chunk of chunkArray(patches.splice(0, patches.length), 100)) {
+        await replaceProductLinksInPostgres(client, chunk);
+        mergeWarehouseProductsIntoMemory(chunk);
+      }
+    }
+
+    if (yandexRows.length < normalizedBatchSize) break;
+  }
+
+  if (!dryRun && updated > 0) invalidateWarehouseViewCache();
+  return { ok: true, dryRun, paired, updated, skipped, scanned };
+}
+
+async function syncOzonManualGroupsFromYandexPostgres(prisma, { dryRun = true, batchSize = 500 } = {}) {
+  const client = prisma || getPrisma();
+  if (!client) return { ok: false, updated: 0, reason: "postgres_unavailable" };
+  const ozonRows = await client.warehouseProduct.findMany({
+    where: { marketplace: "ozon" },
+    include: { links: true },
+  });
+  const ozonIndexes = buildOzonProductLookupIndexes(ozonRows.map(productFromPostgres));
+  let updated = 0;
+  let scanned = 0;
+  let skipped = 0;
+  let skippedNoGroup = 0;
+  let skippedNoOzon = 0;
+  let skippedAlreadySynced = 0;
+  let cursorId = "";
+  const normalizedBatchSize = Math.max(50, Math.min(2000, Number(batchSize) || 500));
+  const pending = [];
+
+  while (true) {
+    const yandexRows = await client.warehouseProduct.findMany({
+      where: { marketplace: "yandex" },
+      include: { links: true },
+      orderBy: { id: "asc" },
+      take: normalizedBatchSize,
+      ...(cursorId ? { skip: 1, cursor: { id: cursorId } } : {}),
+    });
+    if (!yandexRows.length) break;
+    cursorId = yandexRows[yandexRows.length - 1].id;
+
+    for (const row of yandexRows) {
+      scanned += 1;
+      const yandex = productFromPostgres(row);
+      const groupId = cleanText(yandex.manualGroupId || yandex.raw?.manualGroupId);
+      if (!groupId.startsWith("auto-pair-")) {
+        skipped += 1;
+        skippedNoGroup += 1;
+        continue;
+      }
+      const ozonId = extractOzonIdFromAutoPairGroupId(groupId) || extractYandexSourceProductId(yandex);
+      let ozon = ozonId && ozonIndexes.byId?.get(ozonId) ? ozonIndexes.byId.get(ozonId) : null;
+      if (!ozon) ozon = findOzonMatchForYandexProduct(yandex, ozonIndexes);
+      if (!ozon) {
+        skipped += 1;
+        skippedNoOzon += 1;
+        continue;
+      }
+      if (cleanText(ozon.manualGroupId || ozon.raw?.manualGroupId) === groupId) {
+        skipped += 1;
+        skippedAlreadySynced += 1;
+        continue;
+      }
+      updated += 1;
+      if (!dryRun) pending.push(normalizeWarehouseProduct({ ...ozon, manualGroupId: groupId }));
+    }
+
+    if (!dryRun && pending.length) {
+      for (const chunk of chunkArray(pending.splice(0, pending.length), 100)) {
+        await replaceProductLinksInPostgres(client, chunk);
+        mergeWarehouseProductsIntoMemory(chunk);
+      }
+    }
+
+    if (yandexRows.length < normalizedBatchSize) break;
+  }
+
+  if (!dryRun && updated > 0) invalidateWarehouseViewCache();
+  return {
+    ok: true,
+    dryRun,
+    updated,
+    skipped,
+    scanned,
+    skippedNoGroup,
+    skippedNoOzon,
+    skippedAlreadySynced,
+  };
+}
+
+async function normalizeYandexWarehouseTargetsPostgres(prisma, { dryRun = true, batchSize = 500 } = {}) {
+  const client = prisma || getPrisma();
+  if (!client) return { ok: false, updated: 0, scanned: 0, reason: "postgres_unavailable" };
+  let updated = 0;
+  let scanned = 0;
+  let skipped = 0;
+  let cursorId = "";
+  const normalizedBatchSize = Math.max(50, Math.min(2000, Number(batchSize) || 500));
+  const pending = [];
+
+  while (true) {
+    const rows = await client.warehouseProduct.findMany({
+      where: { marketplace: "yandex" },
+      include: { links: true },
+      orderBy: { id: "asc" },
+      take: normalizedBatchSize,
+      ...(cursorId ? { skip: 1, cursor: { id: cursorId } } : {}),
+    });
+    if (!rows.length) break;
+    cursorId = rows[rows.length - 1].id;
+
+    for (const row of rows) {
+      scanned += 1;
+      const product = productFromPostgres(row);
+      const shop = getYandexShopByTarget(product.target);
+      if (!shop?.id || cleanText(product.target) === cleanText(shop.id)) {
+        skipped += 1;
+        continue;
+      }
+      updated += 1;
+      if (!dryRun) {
+        pending.push(normalizeWarehouseProduct({
+          ...product,
+          target: shop.id,
+          targetName: shop.name || product.targetName || "Yandex Market",
+        }));
+      }
+    }
+
+    if (!dryRun && pending.length) {
+      for (const chunk of chunkArray(pending.splice(0, pending.length), 100)) {
+        await replaceProductLinksInPostgres(client, chunk);
+        mergeWarehouseProductsIntoMemory(chunk);
+      }
+    }
+
+    if (rows.length < normalizedBatchSize) break;
+  }
+
+  if (!dryRun && updated > 0) invalidateWarehouseViewCache();
+  return { ok: true, dryRun, updated, skipped, scanned };
+}
+
+async function backfillUnpairedYandexAutoGroupsPostgres(prisma, { dryRun = true, batchSize = 500 } = {}) {
+  const client = prisma || getPrisma();
+  if (!client) return { ok: false, paired: 0, updated: 0, scanned: 0, reason: "postgres_unavailable" };
+  const ozonRows = await client.warehouseProduct.findMany({
+    where: { marketplace: "ozon" },
+    include: { links: true },
+  });
+  const ozonIndexes = buildOzonProductLookupIndexes(ozonRows.map(productFromPostgres));
+  let paired = 0;
+  let updated = 0;
+  let scanned = 0;
+  let skipped = 0;
+  let cursorId = "";
+  const normalizedBatchSize = Math.max(50, Math.min(2000, Number(batchSize) || 500));
+  const patches = [];
+
+  while (true) {
+    const yandexRows = await client.warehouseProduct.findMany({
+      where: { marketplace: "yandex" },
+      include: { links: true },
+      orderBy: { id: "asc" },
+      take: normalizedBatchSize,
+      ...(cursorId ? { skip: 1, cursor: { id: cursorId } } : {}),
+    });
+    if (!yandexRows.length) break;
+    cursorId = yandexRows[yandexRows.length - 1].id;
+
+    for (const row of yandexRows) {
+      scanned += 1;
+      const yandex = productFromPostgres(row);
+      const groupId = cleanText(yandex.manualGroupId || yandex.raw?.manualGroupId);
+      if (groupId.startsWith("auto-pair-")) {
+        skipped += 1;
+        continue;
+      }
+      const ozon = findOzonMatchForYandexProduct(yandex, ozonIndexes);
+      if (!ozon) {
+        skipped += 1;
+        continue;
+      }
+      paired += 1;
+      const pairGroupId = buildOzonYandexAutoPairGroupId(ozon);
+      if (!pairGroupId) {
+        skipped += 1;
+        continue;
+      }
+      const yandexGroup = cleanText(yandex.manualGroupId || yandex.raw?.manualGroupId);
+      const ozonGroup = cleanText(ozon.manualGroupId || ozon.raw?.manualGroupId);
+      if (yandexGroup === pairGroupId && ozonGroup === pairGroupId) {
+        skipped += 1;
+        continue;
+      }
+      if (!dryRun) {
+        if (yandexGroup !== pairGroupId) patches.push(normalizeWarehouseProduct({ ...yandex, manualGroupId: pairGroupId }));
+        if (ozonGroup !== pairGroupId) patches.push(normalizeWarehouseProduct({ ...ozon, manualGroupId: pairGroupId }));
+      }
+      updated += 1;
+    }
+
+    if (!dryRun && patches.length) {
+      for (const chunk of chunkArray(patches.splice(0, patches.length), 100)) {
+        await replaceProductLinksInPostgres(client, chunk);
+        mergeWarehouseProductsIntoMemory(chunk);
+      }
+    }
+
+    if (yandexRows.length < normalizedBatchSize) break;
+  }
+
+  if (!dryRun && updated > 0) invalidateWarehouseViewCache();
+  return { ok: true, dryRun, paired, updated, skipped, scanned };
 }
 
 async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY, options = {}) {
@@ -6253,8 +6993,16 @@ function normalizeAiImageStudioPresetList(input) {
   return selected.length ? selected.slice(0, 5) : aiImageStudioPresets.slice(0, 5);
 }
 
+function readOpenAiRelayEnv() {
+  return {
+    url: cleanText(process.env.OPENAI_RELAY_URL),
+    secret: cleanText(process.env.OPENAI_RELAY_SECRET),
+  };
+}
+
 function isOpenAiRelayConfigured() {
-  return Boolean(openaiRelayUrl && openaiRelaySecret);
+  const relay = readOpenAiRelayEnv();
+  return Boolean(relay.url && relay.secret);
 }
 
 function effectiveAiSettingsFromAppSettings(settings = {}) {
@@ -6300,13 +7048,14 @@ function isOpenAiDirectConfigured(aiSettings = {}) {
 }
 
 function assertOpenAiRelayEnvPair() {
-  if (openaiRelayUrl && !openaiRelaySecret) {
+  const relay = readOpenAiRelayEnv();
+  if (relay.url && !relay.secret) {
     const error = new Error("Задан OPENAI_RELAY_URL, но не задан OPENAI_RELAY_SECRET.");
     error.statusCode = 400;
     error.code = "openai_relay_secret_missing";
     throw error;
   }
-  if (!openaiRelayUrl && openaiRelaySecret) {
+  if (!relay.url && relay.secret) {
     const error = new Error("Задан OPENAI_RELAY_SECRET без OPENAI_RELAY_URL.");
     error.statusCode = 400;
     error.code = "openai_relay_url_missing";
@@ -6688,11 +7437,12 @@ async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType, 
     if (referenceImages.length) body.referenceImages = referenceImages;
     if (openAiImageSupportsInputFidelity(openaiImageModel)) body.input_fidelity = "high";
     if (openaiImageConfig && typeof openaiImageConfig === "object") body.image_config = openaiImageConfig;
-    const response = await fetch(openaiRelayUrl, {
+    const relay = readOpenAiRelayEnv();
+    const response = await fetch(relay.url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${openaiRelaySecret}`,
+        Authorization: `Bearer ${relay.secret}`,
       },
       body: JSON.stringify(body),
       signal: controller.signal,
@@ -8221,12 +8971,28 @@ function ozonUnarchiveDateKey(date = new Date()) {
   return new Date(ms + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
 }
 
-function nextOzonUnarchiveRetryAt(date = new Date()) {
+function nextOzonUnarchiveScheduledRunAt(date = new Date()) {
   const value = date instanceof Date ? date : new Date(date);
   const base = Number.isFinite(value.getTime()) ? value : new Date();
-  const moscow = new Date(base.getTime() + 3 * 60 * 60 * 1000);
-  moscow.setUTCHours(24, 5, 0, 0);
-  return new Date(moscow.getTime() - 3 * 60 * 60 * 1000).toISOString();
+  const moscowOffsetMs = 3 * 60 * 60 * 1000;
+  const moscowNow = new Date(base.getTime() + moscowOffsetMs);
+  const scheduledMoscow = new Date(Date.UTC(
+    moscowNow.getUTCFullYear(),
+    moscowNow.getUTCMonth(),
+    moscowNow.getUTCDate(),
+    3,
+    0,
+    0,
+    0,
+  ));
+  if (moscowNow.getTime() >= scheduledMoscow.getTime()) {
+    scheduledMoscow.setUTCDate(scheduledMoscow.getUTCDate() + 1);
+  }
+  return new Date(scheduledMoscow.getTime() - moscowOffsetMs);
+}
+
+function nextOzonUnarchiveRetryAt(date = new Date()) {
+  return nextOzonUnarchiveScheduledRunAt(date).toISOString();
 }
 
 function nextOzonUnarchiveVisibilityRetryAt(date = new Date()) {
@@ -9389,9 +10155,8 @@ async function ensureWarehousePostgresLinksBackfilled(prisma) {
   if (warehousePostgresLinkBackfillDone) return { created: 0, skipped: true };
   if (warehousePostgresLinkBackfillPromise) return warehousePostgresLinkBackfillPromise;
   const deferThreshold = Math.max(10000, Number(process.env.WAREHOUSE_LINK_BACKFILL_DEFER_THRESHOLD || 50000) || 50000);
-  const productCount = await prisma.warehouseProduct.count().catch(() => 0);
+  const productCount = await prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }).catch(() => 0);
   if (productCount > deferThreshold && process.env.WAREHOUSE_LINK_BACKFILL_DEFER !== "false") {
-    warehousePostgresLinkBackfillDone = true;
     logger.warn("warehouse postgres link backfill deferred", { productCount, deferThreshold });
     return { created: 0, skipped: true, deferred: true };
   }
@@ -9469,6 +10234,13 @@ async function ensureWarehousePostgresLinksBackfilled(prisma) {
   return warehousePostgresLinkBackfillPromise;
 }
 
+function kickWarehousePostgresLinksBackfill(prisma) {
+  if (!prisma || warehousePostgresLinkBackfillDone || warehousePostgresLinkBackfillPromise) return;
+  void ensureWarehousePostgresLinksBackfilled(prisma).catch((error) => {
+    logger.warn("warehouse postgres links backfill background failed", { detail: error?.message || String(error) });
+  });
+}
+
 function supplierFromPostgres(row = {}) {
   const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
   return normalizeManagedSupplier({
@@ -9515,7 +10287,7 @@ async function readWarehousePostgresStub(prisma) {
 }
 
 async function readWarehouseFromPostgres(prisma) {
-  await ensureWarehousePostgresLinksBackfilled(prisma);
+  kickWarehousePostgresLinksBackfill(prisma);
   const startedAt = Date.now();
   const [products, suppliers] = await Promise.all([
     prisma.warehouseProduct.findMany({
@@ -9742,6 +10514,16 @@ async function readWarehouseFull() {
 
 function backgroundMarketplaceJobsBlocked() {
   return process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled;
+}
+
+async function findWarehouseProductById(productId = "") {
+  const id = cleanText(productId);
+  if (!id) return null;
+  const warehouse = await readWarehouse();
+  const cached = (warehouse.products || []).find((item) => item.id === id);
+  if (cached) return cached;
+  const [fromPostgres] = await readWarehouseProductsFromPostgresByIds([id]);
+  return fromPostgres || null;
 }
 
 async function readWarehouseProductsFromPostgresByIds(productIds = []) {
@@ -10195,7 +10977,7 @@ function mergeProducts(existingProducts, importedProducts) {
     const merged = normalizeWarehouseProduct({
       ...current,
       ...importedNormalized,
-      id: current?.id || importedNormalized.id,
+      id: pickWarehouseProductMergeId(current, importedNormalized),
       name: preserveCurrentName ? current.name : importedNormalized.name,
       imageUrl: preserveCurrentImage ? current.imageUrl : importedNormalized.imageUrl,
       productUrl: preserveCurrentProductUrl ? current.productUrl : importedNormalized.productUrl,
@@ -10355,6 +11137,7 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
         const marketplaceState = pickOzonState(product, info, stockInfo);
         if (!hasInfo && !hasStock) marketplaceState.partial = true;
         return normalizeWarehouseProduct({
+          id: ozonWarehouseProductId(account, product.offer_id),
           target: account.id,
           marketplace: "ozon",
           targetName: account.name || "Ozon",
@@ -12133,6 +12916,17 @@ function warehousePageProductMatches(product = {}, filters = {}) {
   return true;
 }
 
+function collectYandexWarehouseTargetAliases() {
+  const aliases = new Set(["yandex"]);
+  for (const shop of getYandexShops({ includeSyncDisabled: true })) {
+    for (const value of [shop.id, shop.name, shop.businessId, shop.campaignId]) {
+      const alias = cleanText(value);
+      if (alias) aliases.add(alias);
+    }
+  }
+  return Array.from(aliases);
+}
+
 function enabledWarehouseTargetWhere() {
   const or = [];
   const ozonAccounts = getOzonAccounts();
@@ -12149,18 +12943,21 @@ function enabledWarehouseTargetWhere() {
   } else {
     or.push({ marketplace: "ozon" });
   }
-  const yandexTargetFilters = [
-    { target: "yandex" },
-    { target: { startsWith: "yandex" } },
-  ];
-  for (const shop of getYandexShops({ includeSyncDisabled: true })) {
-    yandexTargetFilters.push({ target: shop.id });
-  }
-  if (yandexTargetFilters.length) {
+  const yandexShops = getYandexShops({ includeSyncDisabled: true });
+  if (yandexShops.length === 1) {
+    or.push({ marketplace: "yandex" });
+  } else if (yandexShops.length) {
+    const yandexTargetFilters = [
+      { target: "yandex" },
+      { target: { startsWith: "yandex" } },
+      ...collectYandexWarehouseTargetAliases().map((alias) => ({ target: alias })),
+    ];
     or.push({
       marketplace: "yandex",
       OR: yandexTargetFilters,
     });
+  } else {
+    or.push({ marketplace: "yandex" });
   }
   return or.length ? { OR: or } : {};
 }
@@ -12502,13 +13299,30 @@ function mergeWarehousePostgresRows(...rowLists) {
   return Array.from(byId.values());
 }
 
+function warehousePageSiblingWhere(baseWhere = {}) {
+  const clauses = Array.isArray(baseWhere.AND) ? baseWhere.AND : [];
+  return {
+    AND: clauses.filter((clause) => !(clause && typeof clause === "object" && "marketplace" in clause)),
+  };
+}
+
 async function addWarehousePostgresPageGroupSiblings(prisma, baseWhere, pageRows = []) {
-  const offerIds = Array.from(new Set((pageRows || []).map((row) => cleanText(row.offerId)).filter(Boolean)));
-  if (!offerIds.length) return pageRows || [];
+  if (!pageRows?.length) return pageRows || [];
+  const crossSiblings = await fetchCrossMarketplaceSiblingRows(prisma, baseWhere, pageRows);
+  const pairedOfferIds = new Set();
+  for (const row of pageRows) {
+    const product = productFromPostgres(row);
+    const groupId = cleanText(product.manualGroupId || product.raw?.manualGroupId);
+    const offerId = cleanText(product.offerId).toLowerCase();
+    if (groupId.startsWith("auto-pair-") && offerId) pairedOfferIds.add(offerId);
+  }
+  const offerIds = Array.from(new Set((pageRows || []).map((row) => cleanText(row.offerId)).filter(Boolean)))
+    .filter((offerId) => !pairedOfferIds.has(offerId.toLowerCase()));
+  if (!offerIds.length) return mergeWarehousePostgresRows(pageRows, crossSiblings);
   const siblings = await prisma.warehouseProduct.findMany({
     where: {
       AND: [
-        baseWhere,
+        warehousePageSiblingWhere(baseWhere),
         {
           OR: offerIds.map((offerId) => ({
             offerId: { equals: offerId, mode: "insensitive" },
@@ -12519,7 +13333,7 @@ async function addWarehousePostgresPageGroupSiblings(prisma, baseWhere, pageRows
     include: { links: true },
     orderBy: warehousePagePostgresOrderBy(),
   });
-  return mergeWarehousePostgresRows(pageRows, siblings);
+  return mergeWarehousePostgresRows(pageRows, siblings, crossSiblings);
 }
 
 function marketplaceStateCodeFromPostgresRow(row = {}) {
@@ -12690,7 +13504,7 @@ async function buildFastWarehousePageFromPostgres({
   const prisma = getPrisma();
   if (!prisma) return null;
   pageTrace("postgres:start", traceStartedAt);
-  await ensureWarehousePostgresLinksBackfilled(prisma);
+  kickWarehousePostgresLinksBackfill(prisma);
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
   const linkedFilter = cleanText(filters.linked || "all");
@@ -12771,7 +13585,9 @@ async function buildFastWarehousePageFromPostgres({
     pageBaseCount = pageSlice.length;
     visibleProducts = strictIdentitySearch ? pageSlice : addWarehousePageGroupSiblings(siblingSourceProducts, pageSlice);
   }
-  const pageProducts = await enrichWeakOzonProductsForPage(visibleProducts);
+  const pageProducts = Array.from(new Map(
+    (await enrichWeakOzonProductsForPage(visibleProducts)).map((product) => [product.id, product]),
+  ).values());
   const pageWarehouse = {
     createdAt: dbRows[0]?.createdAt?.toISOString() || null,
     updatedAt: dbRows[0]?.updatedAt?.toISOString() || null,
@@ -12780,7 +13596,7 @@ async function buildFastWarehousePageFromPostgres({
   };
   const built = await buildFreshWarehouseProductsForWarehouse(
     pageWarehouse,
-    pageWarehouse.products.map((product) => product.id),
+    pageProducts.map((product) => product.id),
     {
       refreshPrices: false,
       persistMutations: false,
@@ -12839,7 +13655,7 @@ async function buildFastWarehousePageFromPostgres({
 async function buildWarehouseProductDetailFromPostgres(productId, { usdRate } = {}) {
   const prisma = getPrisma();
   if (!prisma) return null;
-  await ensureWarehousePostgresLinksBackfilled(prisma);
+  kickWarehousePostgresLinksBackfill(prisma);
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
   return warehousePostgresCachedDetail(`product:${productId}:${rate}`, async () => {
@@ -13189,15 +14005,15 @@ function warehouseGroupKeyParts(groupKey = "") {
   return { kind: cleanText(kind).toLowerCase(), value: cleanText(rest.join(":")).toLowerCase() };
 }
 
-async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filters = {} } = {}) {
+async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filters = {}, refreshPrices = false } = {}) {
   const prisma = getPrisma();
   if (!prisma) return null;
   const { kind, value } = warehouseGroupKeyParts(groupKey);
   if (!value) return null;
-  await ensureWarehousePostgresLinksBackfilled(prisma);
+  kickWarehousePostgresLinksBackfill(prisma);
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
-  const cacheKey = `group:${groupKey}:${rate}:all-marketplaces`;
+  const cacheKey = `group:${groupKey}:${rate}:all-marketplaces:${refreshPrices ? "live" : "stored"}`;
   return warehousePostgresCachedDetail(cacheKey, async () => {
     const baseWhere = warehousePagePostgresWhere({ marketplace: "all", state: "all", q: "", linked: "all", brand: "" });
     let rows = [];
@@ -13207,6 +14023,8 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
         include: { links: true },
         orderBy: warehousePagePostgresOrderBy(),
       });
+      const crossRows = await fetchCrossMarketplaceSiblingRows(prisma, baseWhere, rows);
+      rows = mergeWarehousePostgresRows(rows, crossRows);
     } else if (kind === "manual") {
       rows = await prisma.warehouseProduct.findMany({
         where: {
@@ -13234,7 +14052,14 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
     const built = await buildFreshWarehouseProductsForWarehouse(
       { products: pageProducts, suppliers: normalizedSuppliers },
       pageProducts.map((product) => product.id),
-      { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+      {
+        refreshPrices,
+        persistMutations: false,
+        livePriceMaster: refreshPrices,
+        batchPriceMaster: refreshPrices,
+        usdRate: rate,
+        priceMasterTimeoutMs: refreshPrices ? autoPricePmTimeoutMs : undefined,
+      },
     );
     const builtMap = new Map(built.map((product) => [product.id, product]));
     const detailProducts = pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product)));
@@ -13247,9 +14072,9 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
   });
 }
 
-async function buildWarehouseGroupDetail(groupKey, { usdRate, filters = {} } = {}) {
+async function buildWarehouseGroupDetail(groupKey, { usdRate, filters = {}, refreshPrices = false } = {}) {
   if (shouldUsePostgresStorage()) {
-    const postgresDetail = await buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filters });
+    const postgresDetail = await buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filters, refreshPrices });
     if (postgresDetail) return postgresDetail;
   }
   const warehouse = await readWarehouse();
@@ -13262,7 +14087,13 @@ async function buildWarehouseGroupDetail(groupKey, { usdRate, filters = {} } = {
   const built = await buildFreshWarehouseProductsForWarehouse(
     { ...warehouse, products: pageProducts },
     pageProducts.map((product) => product.id),
-    { livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+    {
+      refreshPrices,
+      livePriceMaster: refreshPrices,
+      batchPriceMaster: refreshPrices,
+      usdRate: rate,
+      priceMasterTimeoutMs: refreshPrices ? autoPricePmTimeoutMs : undefined,
+    },
   );
   const builtMap = new Map(built.map((product) => [product.id, product]));
   const detailProducts = pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product)));
@@ -14719,7 +15550,7 @@ function enqueueOzonUnarchiveQueueProcess({ request, source, limit, force }) {
   if (ozonUnarchiveQueueAutoRunning || ozonUnarchiveQueueProcessQueued) return false;
   const queuedAt = new Date().toISOString();
   const queueRunId = crypto.randomUUID();
-  const queuedThroughBullmq = Boolean(marketplaceQueue);
+  const queuedThroughBullmq = Boolean(marketplaceQueue) && !marketplaceJobsShouldRunInline("ozon-unarchive-queue-process");
   ozonUnarchiveQueueProcessQueued = true;
   ozonUnarchiveQueueAutoLastResult = {
     source,
@@ -14728,6 +15559,31 @@ function enqueueOzonUnarchiveQueueProcess({ request, source, limit, force }) {
     queued: true,
     at: queuedAt,
   };
+  if (!queuedThroughBullmq) {
+    queueMarketplaceJob("ozon-unarchive-queue-process", { source, limit, force, queueRunId }, { priority: 1 })
+      .then((result) => {
+        ozonUnarchiveQueueProcessQueued = false;
+        if (request && result && typeof result === "object" && Object.prototype.hasOwnProperty.call(result, "selected") && !result.skipped) {
+          appendAudit(request, "ozon.unarchive_queue.process", {
+            selected: result.selected || 0,
+            productIds: result.productIds || [],
+            result,
+          }).catch((auditError) => logger.warn("ozon queue audit append failed", { detail: auditError?.message || String(auditError) }));
+        }
+      })
+      .catch((error) => {
+        ozonUnarchiveQueueProcessQueued = false;
+        ozonUnarchiveQueueAutoLastResult = {
+          source,
+          queueRunId,
+          selected: 0,
+          error: error?.message || String(error),
+          at: new Date().toISOString(),
+        };
+        logger.warn("ozon queue inline process failed", { source, queueRunId, detail: error?.message || String(error) });
+      });
+    return true;
+  }
   setTimeout(() => {
     if (
       ozonUnarchiveQueueProcessQueued
@@ -14763,6 +15619,7 @@ function enqueueOzonUnarchiveQueueProcess({ request, source, limit, force }) {
   setTimeout(() => {
     queueMarketplaceJob("ozon-unarchive-queue-process", { source, limit, force, queueRunId }, { priority: 1 })
       .then((result) => {
+        ozonUnarchiveQueueProcessQueued = false;
         if (request && result && typeof result === "object" && Object.prototype.hasOwnProperty.call(result, "selected") && !result.skipped) {
           appendAudit(request, "ozon.unarchive_queue.process", {
             selected: result.selected || 0,
@@ -15033,10 +15890,12 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
 app.get("/api/warehouse/products/group-detail", async (request, response, next) => {
   try {
     const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
+    const refreshPrices = request.query.refreshPrices === "true" || request.query.live === "true";
     const group = cleanText(request.query.group || "");
     if (!group) return response.status(400).json({ error: "Укажите group." });
     const detail = await buildWarehouseGroupDetail(group, {
       usdRate,
+      refreshPrices,
       filters: {
         marketplace: cleanText(request.query.marketplace || "all"),
         state: cleanText(request.query.state || "all"),
@@ -16299,8 +17158,7 @@ async function runAiImageGenerationJob(jobInput, generation, requestContext = {}
 
 app.post("/api/warehouse/products/:id/premium-images/generate", async (request, response, next) => {
   try {
-    const warehouse = await readWarehouse();
-    const product = warehouse.products.find((item) => item.id === request.params.id);
+    const product = await findWarehouseProductById(request.params.id);
     if (!product) return response.status(404).json({ error: "Warehouse product not found.", code: "warehouse_product_not_found" });
     const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], updatedAt: product.updatedAt });
     const generation = await generatePremiumPerfumeImageDrafts(product, {
@@ -16339,9 +17197,8 @@ app.post("/api/warehouse/products/:id/premium-images/generate", async (request, 
 
 app.post("/api/warehouse/products/:id/ai-images/generate", async (request, response, next) => {
   try {
-    const warehouse = await readWarehouse();
-    const product = warehouse.products.find((item) => item.id === request.params.id);
-    if (!product) return response.status(404).json({ error: "РўРѕРІР°СЂ СЃРєР»Р°РґР° РЅРµ РЅР°Р№РґРµРЅ." });
+    const product = await findWarehouseProductById(request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден.", code: "warehouse_product_not_found" });
     const before = cloneAuditValue({ id: product.id, aiImages: product.aiImages || [], updatedAt: product.updatedAt });
     const generation = aiImageGenerationRequestFromBody(product, request.body);
     if (!generation.sourceImageUrl) {
@@ -18390,22 +19247,43 @@ function salesAutomationReason(value = "") {
   return map[reason] || reason || "ok";
 }
 
+async function resolveSalesAutomationProductIds(prisma, rows = []) {
+  const ids = Array.from(new Set((Array.isArray(rows) ? rows : [])
+    .map((row) => cleanText(row.productId || row.id))
+    .filter(Boolean)));
+  const valid = new Set();
+  if (!ids.length) return valid;
+  for (const chunk of chunkArray(ids, 500)) {
+    const found = await prisma.warehouseProduct.findMany({
+      where: { id: { in: chunk } },
+      select: { id: true },
+    });
+    for (const row of found) valid.add(row.id);
+  }
+  return valid;
+}
+
 async function upsertSalesAutomationSkuStates(rows = []) {
   if (!shouldUsePostgresStorage() || !rows.length) return { updated: 0, skipped: true };
   try {
     const prisma = getPrisma();
     let updated = 0;
+    let droppedMissingProduct = 0;
     for (const batch of chunkArray(rows, 250)) {
       const validBatch = batch.filter((row) => cleanText(row.offerId));
+      const validProductIds = await resolveSalesAutomationProductIds(prisma, validBatch);
       await prisma.$transaction(validBatch.map((row) => {
         const marketplace = cleanText(row.marketplace).toLowerCase() === "yandex" ? "yandex" : "ozon";
         const target = cleanText(row.target) || "default";
         const offerId = cleanText(row.offerId);
+        const rawProductId = cleanText(row.productId || row.id) || null;
+        const productId = rawProductId && validProductIds.has(rawProductId) ? rawProductId : null;
+        if (rawProductId && !productId) droppedMissingProduct += 1;
         updated += 1;
         return prisma.salesAutomationSkuState.upsert({
           where: { marketplace_target_offerId: { marketplace, target, offerId } },
           create: {
-            productId: cleanText(row.productId || row.id) || null,
+            productId,
             marketplace,
             target,
             offerId,
@@ -18423,7 +19301,7 @@ async function upsertSalesAutomationSkuStates(rows = []) {
             raw: row,
           },
           update: {
-            productId: cleanText(row.productId || row.id) || null,
+            productId,
             currentPrice: Number(row.currentPrice ?? row.oldPrice ?? 0) || null,
             targetPrice: Number(row.targetPrice ?? row.price ?? 0) || null,
             targetStock: Number(row.targetStock ?? row.stock ?? 0) || null,
@@ -18440,7 +19318,10 @@ async function upsertSalesAutomationSkuStates(rows = []) {
         });
       }));
     }
-    return { updated };
+    if (droppedMissingProduct) {
+      logger.warn("sales automation skipped stale product ids", { droppedMissingProduct });
+    }
+    return { updated, droppedMissingProduct };
   } catch (error) {
     if (!jsonFallbackEnabled()) throw error;
     logger.warn("sales automation state upsert failed", { detail: error?.message || String(error) });
@@ -18695,7 +19576,12 @@ async function runLinkedProductActivationImmediate(productIds = [], sourceEvent 
   if (withoutSupplier.length) {
     noSupplierResult = await runNoSupplierMarketplaceAutomation(
       { products: withoutSupplier },
-      { productIds: withoutSupplier.map((product) => product.id), includeNoLinks: false, source: "linked_activation_immediate" },
+      {
+        productIds: withoutSupplier.map((product) => product.id),
+        includeNoLinks: false,
+        source: "linked_activation_immediate",
+        skipLinkedGrace: true,
+      },
     );
   }
 
@@ -18709,6 +19595,7 @@ async function runLinkedProductActivationImmediate(productIds = [], sourceEvent 
         source: normalizedSourceEvent,
         sourceEvent: normalizedSourceEvent,
         force: true,
+        deferOzonUnarchive: true,
       },
     );
   }
@@ -18803,6 +19690,34 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
     }
 
     if (backgroundMarketplaceJobsBlocked()) {
+      if (
+        !skipImmediateReplay
+        && affectedProductIds.length <= linkedActivationImmediateMaxScope
+        && !isApiServer
+      ) {
+        if (requestMeta.awaitImmediate === true) {
+          return await runLinkedProductActivationImmediate(affectedProductIds, normalizedSourceEvent, requestMeta);
+        }
+        void runLinkedProductActivationImmediate(affectedProductIds, normalizedSourceEvent, requestMeta).catch((error) => {
+          logger.warn("async linked product activation failed (background disabled fallback)", {
+            sourceEvent: normalizedSourceEvent,
+            detail: error?.message || String(error),
+            count: affectedProductIds.length,
+          });
+        });
+        return {
+          activationQueued: true,
+          activationImmediate: true,
+          activationPending: true,
+          recoveryQueued: false,
+          priceIntentId: null,
+          affectedProductIds,
+          queued: 0,
+          queuedBatches: 0,
+          disabled: true,
+          fallbackImmediate: true,
+        };
+      }
       return {
         activationQueued: false,
         recoveryQueued: false,
@@ -19661,7 +20576,24 @@ function marketplaceJobId(name, data = {}) {
     .digest("hex");
 }
 
+function marketplaceJobsShouldRunInline(name = "") {
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled) {
+    return name === "auto-price-push"
+      || name === "ozon-unarchive-queue-process"
+      || name === "no-supplier-automation"
+      || name === "supplier-recovery-automation";
+  }
+  if (name === "auto-price-push" && !marketplaceQueueAutoPricePushEnabled) return true;
+  return !marketplaceQueue;
+}
+
 function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
+  if (marketplaceJobsShouldRunInline(name)) {
+    return processMarketplaceJob(name, data).catch((error) => {
+      logger.warn("inline marketplace job failed", { name, detail: error?.message || String(error) });
+      throw error;
+    });
+  }
   if (process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled) return Promise.resolve(null);
   if (name === "auto-price-push" && !marketplaceQueueAutoPricePushEnabled) {
     return processMarketplaceJob(name, data).catch((error) => {
@@ -25402,6 +26334,32 @@ async function restoreStocksOnMarketplaces(products = []) {
   return actions;
 }
 
+async function queueOzonUnarchiveForLinkedProducts(products = [], options = {}) {
+  const archivedOzon = (Array.isArray(products) ? products : [])
+    .filter((product) => product?.id && product.marketplace === "ozon" && productLooksArchived(product));
+  if (!archivedOzon.length) return [];
+  let queueState = await readOzonUnarchiveQueue();
+  const nextRetryAt = nextOzonUnarchiveRetryAt();
+  const warning = cleanText(options.warning) || "linked_activation_queued";
+  queueState = queueOzonUnarchiveItems(queueState, archivedOzon, { nextRetryAt, warning, attempted: false });
+  await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: archivedOzon });
+  rescheduleOzonUnarchiveQueueAutoSoon(options.source || "linked_activation").catch((error) => {
+    logger.warn("ozon unarchive queue reschedule failed", { detail: error?.message || String(error) });
+  });
+  return archivedOzon.map((item) => ({
+    id: item.id,
+    type: "unarchive",
+    target: item.target,
+    offerId: item.offerId,
+    ok: true,
+    pending: true,
+    queuedByDailyLimit: true,
+    warning,
+    nextRetryAt,
+    queueSize: queueState.items.length,
+  }));
+}
+
 async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
   const actions = [];
   const byTarget = new Map();
@@ -25865,7 +26823,13 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
         if (key && protectedOfferKeys.has(key) && !product.hasLinks) return false;
         const nowMs = options.now ? new Date(options.now).getTime() : Date.now();
         const updatedMs = product.updatedAt ? new Date(product.updatedAt).getTime() : 0;
-        if (linkedNoSupplierZeroGraceMs > 0 && Number.isFinite(updatedMs) && updatedMs > 0 && nowMs - updatedMs < linkedNoSupplierZeroGraceMs) {
+        if (
+          !options.skipLinkedGrace
+          && linkedNoSupplierZeroGraceMs > 0
+          && Number.isFinite(updatedMs)
+          && updatedMs > 0
+          && nowMs - updatedMs < linkedNoSupplierZeroGraceMs
+        ) {
           return false;
         }
         return !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product);
@@ -25982,6 +26946,7 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
   const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates(products, {
     includeNoLinks: Boolean(options.includeNoLinks),
     now,
+    skipLinkedGrace: options.skipLinkedGrace === true,
   });
   const source = options.source || (Array.isArray(options.productIds) && options.productIds.length ? "targeted" : "full");
 
@@ -26125,14 +27090,28 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [], source };
   }
   const yandexRecovered = recovered.filter((product) => product.marketplace === "yandex");
-  const ozonRecovered = recovered.filter((product) => product.marketplace !== "yandex");
+  let ozonRecovered = recovered.filter((product) => product.marketplace !== "yandex");
+  let ozonQueuedUnarchiveActions = [];
+  if (options.deferOzonUnarchive === true && ozonRecovered.length) {
+    const archivedOzon = ozonRecovered.filter((product) => productLooksArchived(product));
+    const activeOzon = ozonRecovered.filter((product) => !productLooksArchived(product));
+    if (archivedOzon.length) {
+      ozonQueuedUnarchiveActions = await queueOzonUnarchiveForLinkedProducts(archivedOzon, {
+        source: options.source || options.sourceEvent || "linked_activation",
+        warning: "linked_activation_queued",
+      });
+    }
+    ozonRecovered = activeOzon;
+  }
   const ozonFirstStockActions = ozonRecovered.length ? await restoreStocksOnMarketplaces(ozonRecovered) : [];
-  const ozonUnarchiveActions = ozonRecovered.length
-    ? await verifyMarketplaceUnarchiveActions(
-      ozonRecovered,
-      await unarchiveProductsOnMarketplaces(ozonRecovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),
-    )
-    : [];
+  const ozonUnarchiveActions = ozonQueuedUnarchiveActions.length
+    ? ozonQueuedUnarchiveActions
+    : (ozonRecovered.length
+      ? await verifyMarketplaceUnarchiveActions(
+        ozonRecovered,
+        await unarchiveProductsOnMarketplaces(ozonRecovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),
+      )
+      : []);
   const ozonSecondStockActions = ozonRecovered.length ? await restoreStocksOnMarketplaces(ozonRecovered) : [];
   const yandexUnarchiveActions = yandexRecovered.length
     ? await verifyYandexUnarchiveActions(
@@ -26492,9 +27471,30 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
   });
   const recovery = await runSupplierRecoveryAutomation(warehouse);
   setManualWarehouseSyncProgress({
+    percent: 92,
+    stage: "Yandex",
+    meta: "Материализую Yandex-строки для Ozon-экспортов.",
+    processed: Number(warehouse.total || 0),
+    total: Number(warehouse.total || 0),
+  });
+  let yandexMaterialize = { added: 0, scanned: 0, skipped: 0 };
+  if (shouldUsePostgresStorage()) {
+    try {
+      const prisma = getPrisma();
+      const pairSync = await syncOzonYandexLinkPairsPostgres(prisma, { dryRun: false });
+      const pairGroups = await backfillOzonYandexManualGroupsPostgres(prisma, { dryRun: false });
+      yandexMaterialize = await materializeYandexExportedProductsForPostgres(prisma, { dryRun: false });
+      yandexMaterialize.pairSync = pairSync;
+      yandexMaterialize.pairGroups = pairGroups;
+      logger.info("manual warehouse sync yandex materialize", yandexMaterialize);
+    } catch (error) {
+      logger.warn("manual warehouse sync yandex materialize failed", { detail: error?.message || String(error) });
+    }
+  }
+  setManualWarehouseSyncProgress({
     percent: 94,
     stage: "Финал",
-    meta: `Восстановлено товаров: ${formatRuNumber(recovery.recovered || 0)}. Сохраняю результат и обновляю интерфейс.`,
+    meta: `Восстановлено: ${formatRuNumber(recovery.recovered || 0)}. Yandex добавлено: ${formatRuNumber(yandexMaterialize.added || 0)}.`,
     processed: Number(warehouse.total || 0),
     total: Number(warehouse.total || 0),
   });
@@ -26502,6 +27502,7 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
     ok: true,
     trigger,
     priceMaster,
+    yandexMaterialize,
     warehouse: {
       total: warehouse.total,
       ready: warehouse.ready,
@@ -26614,6 +27615,10 @@ async function nextOzonUnarchiveQueueAutoDelayMs(fallbackMs = ozonUnarchiveQueue
   try {
     const queue = ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 5000 });
     if (queue.due > 0) return 1000;
+    const nextScheduledMs = nextOzonUnarchiveScheduledRunAt().getTime() - Date.now();
+    if (Number.isFinite(nextScheduledMs) && nextScheduledMs > 0) {
+      return Math.min(fallbackMs, Math.max(30_000, nextScheduledMs));
+    }
     const nextMs = queue.nextRetryAt ? new Date(queue.nextRetryAt).getTime() - Date.now() : 0;
     if (Number.isFinite(nextMs) && nextMs > 0) return Math.min(fallbackMs, Math.max(30_000, nextMs));
   } catch (error) {
@@ -26754,6 +27759,13 @@ app.use((error, request, response, _next) => {
 function startBackgroundSchedulers() {
   if (!backgroundJobsEnabled) {
     logger.info("background schedulers disabled until BACKGROUND_JOBS_ENABLED=true");
+    if (ozonUnarchiveQueueAutoEnabled) {
+      scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
+      logger.info("ozon unarchive queue scheduler enabled standalone", {
+        batchLimit: ozonUnarchiveQueueBatchLimit,
+        dailyLimit: Number.isFinite(ozonUnarchiveDailyLimit) ? ozonUnarchiveDailyLimit : null,
+      });
+    }
     return;
   }
   scheduleDailySync();
@@ -26819,6 +27831,10 @@ async function startServer() {
 
   if (!isApiServer) startBackgroundSchedulers();
   scheduleWarehousePostgresSummaryWarm();
+  if (shouldUsePostgresStorage()) {
+    const prisma = getPrisma();
+    if (prisma) kickWarehousePostgresLinksBackfill(prisma);
+  }
 }
 
 async function shutdownForTests() {
@@ -26875,6 +27891,8 @@ module.exports = {
   runSupplierRecoveryAutomation,
   runLinkedProductActivationImmediate,
   queueLinkedProductActivation,
+  queueOzonUnarchiveForLinkedProducts,
+  nextOzonUnarchiveScheduledRunAt,
   warehouseLinkActivationRequestMeta,
   hydrateWarehouseProductsForIds,
   backgroundMarketplaceJobsBlocked,
@@ -26891,6 +27909,11 @@ module.exports = {
   resolveWarehouseBrand,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
+  warehouseProductCanonicalId,
+  yandexWarehouseProductId,
+  ozonWarehouseProductId,
+  upsertWarehouseProductPostgres,
+  replaceProductLinksInPostgres,
   mergeProducts,
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
@@ -26968,6 +27991,22 @@ module.exports = {
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
   materializeYandexExportedProductsForWarehouse,
+  materializeYandexExportedProductsForPostgres,
+  syncOzonYandexLinkPairsPostgres,
+  backfillOzonYandexManualGroupsPostgres,
+  syncOzonManualGroupsFromYandexPostgres,
+  normalizeYandexWarehouseTargetsPostgres,
+  backfillUnpairedYandexAutoGroupsPostgres,
+  resolveWarehouseCanonicalTarget,
+  fetchCrossMarketplaceSiblingRows,
+  migrateWarehouseProductCanonicalIdsPostgres,
+  buildOzonYandexAutoPairGroupId,
+  extractOzonIdFromAutoPairGroupId,
+  extractYandexSourceProductId,
+  findOzonMatchForYandexProduct,
+  buildOzonProductLookupIndexes,
+  ozonProductHasYandexExport,
+  ozonProductShouldMaterializeYandexSibling,
   marketplaceProductMarkupOverride,
   applyYandexPriceSendToWarehouse,
   buildYandexPriceUpdateFromOzonProduct,
