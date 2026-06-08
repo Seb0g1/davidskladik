@@ -388,6 +388,10 @@ let priceRetryRunning = false;
 const slowRequestThresholdMs = Math.max(500, Number(process.env.SLOW_REQUEST_LOG_THRESHOLD_MS || 3000) || 3000);
 const recentSlowRequestsMax = Math.max(10, Math.min(200, Number(process.env.SLOW_REQUEST_RECENT_MAX || 50) || 50));
 const recentSlowRequests = [];
+let activeHttpRequests = 0;
+const httpLoadSlowRequestWindowMs = Math.max(10_000, Number(process.env.HTTP_LOAD_SLOW_REQUEST_WINDOW_MS || 90_000) || 90_000);
+const httpLoadSlowRequestThresholdMs = Math.max(1000, Number(process.env.HTTP_LOAD_SLOW_REQUEST_THRESHOLD_MS || 8000) || 8000);
+const httpLoadActiveRequestThreshold = Math.max(1, Number(process.env.HTTP_LOAD_ACTIVE_REQUEST_THRESHOLD || 2) || 2);
 const recentStateWarningsMax = Math.max(10, Math.min(200, Number(process.env.STATE_WARNING_RECENT_MAX || 50) || 50));
 const recentStateWarnings = [];
 let supplierCartAutoTimer = null;
@@ -533,8 +537,16 @@ function warehouseProductIndexFor(warehouse = {}) {
 app.use(express.json({ limit: "1mb" }));
 app.use(compression({ threshold: 1024 }));
 app.use((request, response, next) => {
+  activeHttpRequests += 1;
+  let released = false;
+  const releaseHttpSlot = () => {
+    if (released) return;
+    released = true;
+    activeHttpRequests = Math.max(0, activeHttpRequests - 1);
+  };
   const startedAt = process.hrtime.bigint();
   response.on("finish", () => {
+    releaseHttpSlot();
     const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
     if (elapsedMs < slowRequestThresholdMs && response.statusCode < 500) return;
     const entry = {
@@ -550,6 +562,7 @@ app.use((request, response, next) => {
       logger.warn("slow request", entry);
     }
   });
+  response.on("close", releaseHttpSlot);
   next();
 });
 
@@ -11559,11 +11572,28 @@ function serverUnderMemoryPressure() {
   return serverHeapPressureRatio() >= serverHeapPressureRatioLimit;
 }
 
+function serverUnderHttpLoad() {
+  if (activeHttpRequests >= httpLoadActiveRequestThreshold) return true;
+  const cutoff = Date.now() - httpLoadSlowRequestWindowMs;
+  return recentSlowRequests.some((entry) => {
+    const elapsedMs = Number(entry?.elapsedMs || 0);
+    const atMs = Date.parse(entry?.at || "");
+    return elapsedMs >= httpLoadSlowRequestThresholdMs && Number.isFinite(atMs) && atMs >= cutoff;
+  });
+}
+
 function heavyBackgroundWorkShouldDefer(reason = "") {
   if (serverUnderMemoryPressure()) {
     logger.warn("heavy background work deferred: memory pressure", {
       reason: cleanText(reason) || "unspecified",
       heapRatio: Number(serverHeapPressureRatio().toFixed(3)),
+    });
+    return true;
+  }
+  if (serverUnderHttpLoad()) {
+    logger.warn("heavy background work deferred: http load", {
+      reason: cleanText(reason) || "unspecified",
+      activeHttpRequests,
     });
     return true;
   }
@@ -14596,6 +14626,14 @@ async function resolveWarehouseGroupTotalForPage(prisma, filters = {}, { estimat
   const cacheKey = warehouseGroupCountCacheKey(filters);
   const cached = warehouseGroupCountCache.get(cacheKey);
   if (cached && Date.now() - cached.at < warehouseGroupCountCacheTtlMs) return cached.value;
+  if (serverUnderHttpLoad() || serverUnderMemoryPressure()) {
+    const fallback = estimatedGroupTotal > 0
+      ? estimatedGroupTotal
+      : getCachedWarehouseGroupTotal(filters);
+    if (fallback > 0) return fallback;
+    if (!warehouseGroupCountInflight.has(cacheKey)) kickWarehouseGroupCountRefresh(prisma, filters);
+    return estimatedGroupTotal > 0 ? estimatedGroupTotal : 0;
+  }
   if (cached?.value > 0) {
     kickWarehouseGroupCountRefresh(prisma, filters);
     return cached.value;
@@ -14655,7 +14693,7 @@ async function loadWarehouseCatalogPairingRows(prisma, select = {}, where = {}, 
 async function countWarehouseFilteredGroupTotal(prisma, filters = {}) {
   if (!prisma) return 0;
   if (cleanText(filters.q || "")) return 0;
-  if (serverUnderMemoryPressure()) {
+  if (serverUnderMemoryPressure() || serverUnderHttpLoad()) {
     const cachedEstimate = getCachedWarehouseGroupTotal(filters);
     if (cachedEstimate > 0) return cachedEstimate;
     return 0;
@@ -15208,6 +15246,7 @@ function scheduleWarehouseGroupCountWarm() {
   const intervalMs = Math.max(warehouseGroupCountCacheTtlMs, 60_000);
   const warm = async () => {
     try {
+      if (heavyBackgroundWorkShouldDefer("warehouse_group_count_warm")) return;
       const prisma = getPrisma();
       if (!prisma) return;
       const startedAt = Date.now();
