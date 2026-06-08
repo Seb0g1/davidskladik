@@ -131,7 +131,7 @@ async function main() {
       "pm2 delete davidsklad 2>/dev/null || true",
       "pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env || pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env",
       "pm2 save",
-      "sleep 14",
+      "sleep 25",
       "pm2 describe davidsklad-api | grep -E 'max memory|node args|status|restarts' || true",
       "pm2 describe davidsklad-worker | grep -E 'max memory|node args|status|restarts' || true",
       "pm2 list",

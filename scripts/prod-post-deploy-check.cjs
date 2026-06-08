@@ -40,9 +40,14 @@ function request(method, urlPath, body, { port = 3000, headers = {} } = {}) {
   });
 }
 
+function normalizeRequestOptions(options = {}) {
+  if (options.headers || options.port) return options;
+  return { headers: options };
+}
+
 async function timedRequest(method, urlPath, body, options = {}) {
   const startedAt = Date.now();
-  const response = await request(method, urlPath, body, options);
+  const response = await request(method, urlPath, body, normalizeRequestOptions(options));
   return { ...response, elapsedMs: Date.now() - startedAt };
 }
 
