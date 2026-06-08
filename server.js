@@ -124,7 +124,7 @@ const linkedActivationImmediateMaxScope = Math.max(
   1,
   Math.min(1000, Number(process.env.LINKED_ACTIVATION_IMMEDIATE_MAX_SCOPE || immediateAutoPushMaxScope) || immediateAutoPushMaxScope),
 );
-const warehouseFastPageBuildTimeoutMs = Math.max(5000, Number(process.env.WAREHOUSE_FAST_PAGE_BUILD_TIMEOUT_MS || 30000) || 30000);
+const warehouseFastPageBuildTimeoutMs = Math.max(5000, Number(process.env.WAREHOUSE_FAST_PAGE_BUILD_TIMEOUT_MS || 20000) || 20000);
 const warehousePagePmTimeoutMs = Math.max(2000, Number(process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 8000) || 8000);
 const linkedNoSupplierZeroGraceMs = Math.max(0, Number(process.env.LINKED_NO_SUPPLIER_ZERO_GRACE_MS || 120000) || 120000);
 const linkedNoSupplierZeroStockQueueCooldownMs = Math.max(
@@ -340,18 +340,27 @@ const suppliersListCacheTtlMs = Math.max(1000, Number(process.env.SUPPLIERS_LIST
 let warehouseBrandListCache = null;
 const warehouseBrandListCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_BRAND_LIST_CACHE_MS || 120000));
 let warehousePostgresDetailCache = new Map();
-const warehousePostgresDetailCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_DETAIL_CACHE_MS || 15000));
+const warehousePostgresDetailInflight = new Map();
+const warehousePostgresDetailCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_DETAIL_CACHE_MS || 45000));
 const warehouseFastPageCache = new Map();
 const warehouseFastPageInflight = new Map();
-const warehouseFastPageCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MS || 30000));
-const warehouseFastPageCacheMax = Math.max(10, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MAX || 30));
-const warehouseCatalogPairingContextCacheTtlMs = Math.max(5000, Number(process.env.WAREHOUSE_PAIRING_CONTEXT_CACHE_MS || 60000) || 60000);
+const warehouseFastPageCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MS || 60000));
+const warehouseFastPageCacheMax = Math.max(10, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MAX || 80));
+const warehouseCatalogPairingContextCacheTtlMs = Math.max(5000, Number(process.env.WAREHOUSE_PAIRING_CONTEXT_CACHE_MS || 300000) || 300000);
 let warehouseCatalogPairingContextCache = { at: 0, groupContext: null, pairingRows: null };
 const warehouseGroupCountCache = new Map();
 const warehouseGroupCountInflight = new Map();
 const warehouseGroupCountCacheTtlMs = Math.max(5000, Number(process.env.WAREHOUSE_GROUP_COUNT_CACHE_MS || 120000) || 120000);
 const warehouseGroupCountCacheMax = Math.max(5, Number(process.env.WAREHOUSE_GROUP_COUNT_CACHE_MAX || 20));
-const warehouseGroupCountWaitMs = Math.max(1000, Number(process.env.WAREHOUSE_GROUP_COUNT_WAIT_MS || 8000) || 8000);
+const warehouseGroupCountWaitMs = Math.max(1000, Number(process.env.WAREHOUSE_GROUP_COUNT_WAIT_MS || 4000) || 4000);
+const warehouseGroupCountMaxScanRows = Math.max(
+  0,
+  Number(process.env.WAREHOUSE_GROUP_COUNT_MAX_SCAN_ROWS || 12000) || 12000,
+);
+const serverHeapPressureRatioLimit = Math.max(
+  0.5,
+  Math.min(0.95, Number(process.env.SERVER_HEAP_PRESSURE_RATIO || 0.82) || 0.82),
+);
 const warehouseViewCache = new Map();
 const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
@@ -491,6 +500,7 @@ function invalidateWarehouseViewCache() {
   suppliersListCache = null;
   warehouseBrandListCache = null;
   warehousePostgresDetailCache.clear();
+  warehousePostgresDetailInflight.clear();
   warehouseFastPageCache.clear();
   warehouseGroupCountCache.clear();
   warehouseGroupCountInflight.clear();
@@ -2512,6 +2522,28 @@ function supplierUsesRubPriceMasterPricing(supplier = null, row = {}) {
   return Boolean(partnerName && priceMasterRubSupplierNameSet().has(partnerName));
 }
 
+let stockOnlySupplierNamesCache = { at: 0, names: null };
+function stockOnlySupplierNameSet() {
+  const now = Date.now();
+  if (stockOnlySupplierNamesCache.names && now - stockOnlySupplierNamesCache.at < 60_000) {
+    return stockOnlySupplierNamesCache.names;
+  }
+  const builtins = ["наш склад", "nash sklad", "our warehouse", "own stock"];
+  const fromEnv = String(process.env.PRICEMASTER_STOCK_ONLY_SUPPLIER_NAMES || "")
+    .split(/[,;|]/)
+    .map((value) => normalizeSupplierName(value))
+    .filter(Boolean);
+  const names = new Set([...builtins, ...fromEnv]);
+  stockOnlySupplierNamesCache = { at: now, names };
+  return names;
+}
+
+function supplierUsesStockOnlyPricing(supplier = null, row = {}) {
+  if (normalizeSupplierPricingMode(supplier || {}) === "stock_only") return true;
+  const partnerName = normalizeSupplierName(supplier?.name || row.partnerName || "");
+  return Boolean(partnerName && stockOnlySupplierNameSet().has(partnerName));
+}
+
 function inferPriceMasterRowCurrency(row = {}, supplier = null, usdRate = 95) {
   const rawPrice = Number(row.price ?? row.NativePrice ?? 0);
   if (!Number.isFinite(rawPrice) || rawPrice <= 0) return "";
@@ -3373,9 +3405,12 @@ function normalizeSupplierPricingMode(input = {}) {
     || raw.priceMode
     || raw.price_mode
   ).toLowerCase().replace(/[-\s]+/g, "_");
-  return ["stock_only", "stockonly", "inventory_only", "no_price", "stock_fallback"].includes(value)
-    ? "stock_only"
-    : "normal";
+  if (["stock_only", "stockonly", "inventory_only", "no_price", "stock_fallback"].includes(value)) {
+    return "stock_only";
+  }
+  const name = normalizeSupplierName(input.name || raw.name || "");
+  if (name && stockOnlySupplierNameSet().has(name)) return "stock_only";
+  return "normal";
 }
 
 function normalizeSupplierTrustFactor(value, fallback = 100) {
@@ -3919,6 +3954,21 @@ function isOzonOldPriceLessError(error) {
   return combined.includes("old price is less than price")
     || (combined.includes("old_price") && combined.includes("less") && combined.includes("price"))
     || (combined.includes("old price") && combined.includes("less") && combined.includes("price"));
+}
+
+function isOzonPriceDiscountQuarantineError(error) {
+  const message = String(error?.message || error?.detail || "").toLowerCase();
+  const ozonMessage = String(error?.ozon?.message || error?.ozon?.error || "").toLowerCase();
+  const combined = `${message} ${ozonMessage}`;
+  return combined.includes("скидк")
+    || combined.includes("discount")
+    || combined.includes("90%")
+    || combined.includes("карантин")
+    || combined.includes("quarantine");
+}
+
+function needsOzonOldPriceEscalation(error) {
+  return isOzonOldPriceLessError(error) || isOzonPriceDiscountQuarantineError(error);
 }
 
 function getOzonPriceBatchSize() {
@@ -10494,7 +10544,7 @@ function priceRetryDelayMs(attempts = 1, error = null) {
   if (isOzonPerItemPriceLimitError(error)) {
     return Math.max(3_600_000, Number(process.env.OZON_PRICE_ITEM_LIMIT_RETRY_MS || 3_900_000) || 3_900_000);
   }
-  if (isOzonOldPriceLessError(error)) {
+  if (needsOzonOldPriceEscalation(error)) {
     return Math.max(5_000, Number(process.env.OZON_OLD_PRICE_RETRY_MS || 15_000) || 15_000);
   }
   const base = Math.max(30_000, Number(process.env.OZON_PRICE_RETRY_BASE_DELAY_MS || 180_000) || 180_000);
@@ -10508,12 +10558,13 @@ function buildPriceRetryItem(item = {}, error = null, now = new Date()) {
   const delayMs = priceRetryDelayMs(attempts, error);
   const nextRetryAt = new Date(now.getTime() + delayMs).toISOString();
   const delayedByLimit = isOzonPerItemPriceLimitError(error);
-  const oldPriceAdjusted = isOzonOldPriceLessError(error);
+  const oldPriceAdjusted = needsOzonOldPriceEscalation(error);
   const price = roundPrice(item.price);
+  const cabinetPrice = roundPrice(item.oldPrice ?? item.cabinetPrice ?? 0);
   return {
     ...item,
     error: error?.message || item.error || "retry_failed",
-    oldPrice: oldPriceAdjusted ? resolveOzonOldPrice(price, item) : item.oldPrice,
+    oldPrice: oldPriceAdjusted ? resolveOzonOldPrice(price, { ...item, oldPrice: Math.max(cabinetPrice, item.oldPrice || 0) }) : item.oldPrice,
     forceOldPrice: oldPriceAdjusted ? true : item.forceOldPrice,
     queueKey: priceRetryQueueKey(item),
     status: delayedByLimit ? "delayed" : (oldPriceAdjusted ? "pending" : "failed"),
@@ -10982,10 +11033,16 @@ function warehousePostgresCachedDetail(key, build) {
   if (!cacheKey) return build();
   const cached = warehousePostgresDetailCache.get(cacheKey);
   if (cached && Date.now() - cached.at < warehousePostgresDetailCacheTtlMs) return cloneAuditValue(cached.value);
-  return Promise.resolve(build()).then((value) => {
+  const inflight = warehousePostgresDetailInflight.get(cacheKey);
+  if (inflight) return inflight;
+  const promise = Promise.resolve(build()).then((value) => {
     if (value) warehousePostgresDetailCache.set(cacheKey, { at: Date.now(), value: cloneAuditValue(value) });
     return value;
+  }).finally(() => {
+    warehousePostgresDetailInflight.delete(cacheKey);
   });
+  warehousePostgresDetailInflight.set(cacheKey, promise);
+  return promise;
 }
 
 async function getWarehouseBrandListFromPostgres(prisma) {
@@ -11482,6 +11539,43 @@ async function readWarehouseFull() {
 
 function backgroundMarketplaceJobsBlocked() {
   return process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled;
+}
+
+function serverHeapLimitBytes() {
+  const fromEnv = Number(process.env.SERVER_HEAP_LIMIT_BYTES || 0);
+  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
+  const match = String(process.env.NODE_OPTIONS || "").match(/--max-old-space-size=(\d+)/);
+  if (match) return Number(match[1]) * 1024 * 1024;
+  return 2 * 1024 * 1024 * 1024;
+}
+
+function serverHeapPressureRatio() {
+  const limit = serverHeapLimitBytes();
+  if (!limit) return 0;
+  return process.memoryUsage().heapUsed / limit;
+}
+
+function serverUnderMemoryPressure() {
+  return serverHeapPressureRatio() >= serverHeapPressureRatioLimit;
+}
+
+function heavyBackgroundWorkShouldDefer(reason = "") {
+  if (serverUnderMemoryPressure()) {
+    logger.warn("heavy background work deferred: memory pressure", {
+      reason: cleanText(reason) || "unspecified",
+      heapRatio: Number(serverHeapPressureRatio().toFixed(3)),
+    });
+    return true;
+  }
+  if (marketplaceMaintenanceRunning || autoSyncRunning || manualWarehouseSyncPromise || dailySyncPromise) {
+    return true;
+  }
+  return false;
+}
+
+function autoSyncShouldImportMarketplaces(trigger = "auto") {
+  const normalized = cleanText(trigger).toLowerCase();
+  return normalized === "manual" || normalized === "daily" || normalized === "full";
 }
 
 async function findWarehouseProductById(productId = "") {
@@ -12462,8 +12556,8 @@ function findManagedSupplierForPriceMasterRow(row = {}, maps = managedSupplierMa
 
 function priceMasterSupplierPricingMeta(row = {}, maps = managedSupplierMaps()) {
   const supplier = findManagedSupplierForPriceMasterRow(row, maps);
-  const pricingMode = normalizeSupplierPricingMode(supplier || {});
-  const stockOnly = pricingMode === "stock_only";
+  const stockOnly = supplierUsesStockOnlyPricing(supplier, row);
+  const pricingMode = stockOnly ? "stock_only" : normalizeSupplierPricingMode(supplier || {});
   return {
     managedSupplier: supplier || null,
     pricingMode,
@@ -14483,6 +14577,7 @@ function getCachedWarehouseGroupTotal(filters = {}) {
 
 function kickWarehouseGroupCountRefresh(prisma, filters = {}) {
   if (!prisma || cleanText(filters.q || "")) return;
+  if (serverUnderMemoryPressure()) return;
   const cacheKey = warehouseGroupCountCacheKey(filters);
   if (warehouseGroupCountInflight.has(cacheKey)) return;
   const refreshPromise = countWarehouseFilteredGroupTotal(prisma, filters)
@@ -14532,8 +14627,12 @@ async function resolveWarehouseGroupTotalForPage(prisma, filters = {}, { estimat
   }
 }
 
-async function loadWarehouseCatalogPairingRows(prisma, select = {}, where = {}) {
+async function loadWarehouseCatalogPairingRows(prisma, select = {}, where = {}, options = {}) {
   const batchSize = Math.max(1000, Math.min(10000, Number(process.env.WAREHOUSE_GROUP_COUNT_BATCH_SIZE || 5000) || 5000));
+  const configuredMaxRows = Math.max(0, Number(options.maxRows ?? warehouseGroupCountMaxScanRows) || 0);
+  const maxRows = serverUnderMemoryPressure()
+    ? Math.min(configuredMaxRows || batchSize, batchSize)
+    : configuredMaxRows;
   const rows = [];
   let cursorId = "";
   while (true) {
@@ -14547,6 +14646,7 @@ async function loadWarehouseCatalogPairingRows(prisma, select = {}, where = {}) 
     if (!batch.length) break;
     cursorId = batch[batch.length - 1].id;
     rows.push(...batch);
+    if (maxRows > 0 && rows.length >= maxRows) break;
     if (batch.length < batchSize) break;
   }
   return rows;
@@ -14555,6 +14655,11 @@ async function loadWarehouseCatalogPairingRows(prisma, select = {}, where = {}) 
 async function countWarehouseFilteredGroupTotal(prisma, filters = {}) {
   if (!prisma) return 0;
   if (cleanText(filters.q || "")) return 0;
+  if (serverUnderMemoryPressure()) {
+    const cachedEstimate = getCachedWarehouseGroupTotal(filters);
+    if (cachedEstimate > 0) return cachedEstimate;
+    return 0;
+  }
   const cacheKey = warehouseGroupCountCacheKey(filters);
   const cached = warehouseGroupCountCache.get(cacheKey);
   if (cached && Date.now() - cached.at < warehouseGroupCountCacheTtlMs) return cached.value;
@@ -21753,13 +21858,19 @@ async function sendWarehousePrices({
       });
       continue;
     }
+    const lastOzonSend = product.marketplace === "ozon" ? product.lastOzonPriceSend : null;
+    const quarantineRelease = lastOzonSend
+      ? needsOzonOldPriceEscalation({ message: lastOzonSend.detail || lastOzonSend.error || "" })
+      : false;
+    const cabinetPrice = roundPrice(product.currentPrice || 0);
     const priceItem = {
       id: product.id,
       productId: product.id,
       target: product.target,
       offerId: product.offerId,
       price: product.nextPrice,
-      oldPrice: product.currentPrice,
+      oldPrice: cabinetPrice,
+      forceOldPrice: quarantineRelease || undefined,
       markup: product.markupCoefficient,
       supplier: product.selectedSupplier,
       marketplace: product.marketplace,
@@ -21963,7 +22074,7 @@ async function sendWarehousePrices({
     const success = successIds.has(item.id);
     const failedEntryForItem = failed.find((entry) => entry.id === item.id);
     const delayedByLimitForItem = failedEntryForItem ? isOzonPerItemPriceLimitError({ message: failedEntryForItem.error }) : false;
-    const oldPriceAdjustedForItem = failedEntryForItem ? isOzonOldPriceLessError({ message: failedEntryForItem.error }) : false;
+    const oldPriceAdjustedForItem = failedEntryForItem ? needsOzonOldPriceEscalation({ message: failedEntryForItem.error }) : false;
     const ozonVerification = item.marketplace === "ozon" ? ozonVerifiedById.get(String(item.id)) : null;
     const verificationNotApplied = failedEntryForItem?.errorCode === "ozon_price_not_applied";
     const sendStatus = success ? "success" : (delayedByLimitForItem ? "delayed" : (oldPriceAdjustedForItem ? "pending" : "failed"));
@@ -22742,7 +22853,7 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
       for (const entry of ozonItems) {
         const error = failedOfferIds.get(String(entry.payload.offer_id)) || verificationFailedOfferIds.get(String(entry.payload.offer_id));
         const delayed = error ? isOzonPerItemPriceLimitError(error) : false;
-        const oldPriceAdjusted = error ? isOzonOldPriceLessError(error) : false;
+        const oldPriceAdjusted = error ? needsOzonOldPriceEscalation(error) : false;
         historyRows.push({
           productId: entry.item.productId || entry.item.id,
           marketplace: "ozon",
@@ -29340,10 +29451,13 @@ async function runAutoSyncCycle(trigger = "auto") {
     return { status: "manual_sync_running" };
   }
   if (autoSyncRunning) return { status: "already_running" };
+  if (heavyBackgroundWorkShouldDefer(`auto_sync:${trigger}`)) {
+    return { status: "deferred_under_load" };
+  }
   autoSyncRunning = true;
   try {
     const result = await runSync();
-    const warehouse = await buildWarehouseView({ sync: true });
+    const warehouse = await buildWarehouseView({ sync: autoSyncShouldImportMarketplaces(trigger) });
     const backgroundAutomation = await runTargetedBackgroundSupplierAutomations(result, warehouse);
     const automation = backgroundAutomation.automation;
     const recovery = backgroundAutomation.recovery;
@@ -29384,6 +29498,9 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
     return { status: "manual_sync_running" };
   }
   if (marketplaceMaintenanceRunning || autoSyncRunning) return { status: "already_running" };
+  if (heavyBackgroundWorkShouldDefer(`marketplace_maintenance:${trigger}`)) {
+    return { status: "deferred_under_load" };
+  }
 
   marketplaceMaintenancePromise = (async () => {
     marketplaceMaintenanceRunning = true;
@@ -29644,7 +29761,12 @@ function scheduleAutoSync(delayMs = 10_000) {
       const settings = await readAppSettings();
       const config = settings.automation || defaultAppSettings().automation;
       if (config.autoSyncEnabled !== false) {
-        await runAutoSyncCycle("interval");
+        const cycle = await runAutoSyncCycle("interval");
+        if (cycle?.status === "deferred_under_load") {
+          logger.info("auto sync deferred under load, retrying soon", { nextRetryMs: 120_000 });
+          scheduleAutoSync(120_000);
+          return;
+        }
       } else {
         logger.info("auto sync skipped: disabled in settings");
       }
@@ -29994,6 +30116,8 @@ module.exports = {
   compareWarehouseSupplierPrices,
   pickWarehouseSupplier,
   pickWarehouseStockOnlySupplier,
+  priceMasterSupplierPricingMeta,
+  supplierUsesStockOnlyPricing,
   rebuildOzonUnarchiveQueue,
   resolveWarehouseBrand,
   warehouseBrandMatches,
@@ -30067,6 +30191,14 @@ module.exports = {
   isOzonResourceExhaustedError,
   isOzonPerItemPriceLimitError,
   isOzonOldPriceLessError,
+  isOzonPriceDiscountQuarantineError,
+  needsOzonOldPriceEscalation,
+  resolveOzonOldPrice,
+  sendWarehousePrices,
+  processPriceRetryQueue,
+  readPriceRetryQueue,
+  writePriceRetryQueue,
+  priceRetryQueueKey,
   isExpectedMarketplaceArchiveBlock,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,

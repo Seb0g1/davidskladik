@@ -72,6 +72,8 @@ const {
   runSupplierRecoveryAutomation,
   pickWarehouseSupplier,
   pickWarehouseStockOnlySupplier,
+  priceMasterSupplierPricingMeta,
+  supplierUsesStockOnlyPricing,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
   mergeProducts,
@@ -3080,6 +3082,18 @@ test("pickWarehouseSupplier prefers cheapest supplier purchase price", () => {
   assert.equal(picked.partnerName, "Cheapest purchase");
 });
 
+test("Наш Склад is always stock-only and never used for price", () => {
+  assert.equal(supplierUsesStockOnlyPricing(null, { partnerName: "Наш Склад" }), true);
+  const meta = priceMasterSupplierPricingMeta({ partnerName: "Наш Склад", price: 5000, active: true });
+  assert.equal(meta.stockOnly, true);
+  assert.equal(meta.priceEligible, false);
+  const picked = pickWarehouseSupplier([
+    { partnerName: "Наш Склад", available: true, price: 5000, calculatedPrice: 8500, docDate: "2026-01-01", stockOnly: true, priceEligible: false },
+    { partnerName: "Авангард", available: true, price: 90, calculatedPrice: 12636, docDate: "2026-01-02", priceEligible: true },
+  ]);
+  assert.equal(picked.partnerName, "Авангард");
+});
+
 test("pickWarehouseSupplier ignores stock-only suppliers for price", () => {
   const picked = pickWarehouseSupplier([
     { partnerName: "Own stock", available: true, price: 1, calculatedPrice: 78, docDate: "2026-01-03", stockOnly: true, priceEligible: false },
@@ -5875,6 +5889,15 @@ test("marketplace maintenance scheduler runs PM sync, marketplace sync and zero-
   assert.match(serverSource, /MARKETPLACE_MAINTENANCE_HOURS/);
   assert.match(serverSource, /marketplace maintenance scheduler enabled standalone/);
   assert.match(serverSource, /runNoSupplierMarketplaceAutomation\(warehouse/);
+  assert.match(serverSource, /heavyBackgroundWorkShouldDefer/);
+  assert.match(serverSource, /serverUnderMemoryPressure/);
+});
+
+test("interval auto sync avoids full marketplace import to prevent OOM", async () => {
+  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  assert.match(serverSource, /autoSyncShouldImportMarketplaces/);
+  assert.match(serverSource, /buildWarehouseView\(\{ sync: autoSyncShouldImportMarketplaces\(trigger\) \}\)/);
+  assert.match(serverSource, /runAutoSyncCycle\("interval"\)/);
 });
 
 test("pm2 split entry files and immediate link activation hooks exist", async () => {

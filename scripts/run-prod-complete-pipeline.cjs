@@ -91,7 +91,7 @@ async function main() {
     ["backfill ozon-yandex pair groups", `cd ${remoteRoot} && node scripts/backfill-ozon-yandex-pair-groups.cjs ${mode}`],
     ["sync ozon-yandex link pairs", `cd ${remoteRoot} && node scripts/sync-ozon-yandex-link-pairs-postgres.cjs ${mode}`],
     ["delete yandex <20ml", `cd ${remoteRoot} && (test ! -f data/delete-yandex-small-volume.lock && node scripts/delete-yandex-small-volume.cjs ${mode} || echo "skip delete: lock exists")`],
-    ["repair yandex photo/brand/dims", `cd ${remoteRoot} && node scripts/repair-yandex-media-from-ozon.cjs ${apply ? "--apply --push" : "--dry-run"}`],
+    ["repair yandex photo/brand/dims", `cd ${remoteRoot} && (test ! -f data/repair-yandex-media-from-ozon.lock && node scripts/repair-yandex-media-from-ozon.cjs ${apply ? "--apply --push" : "--dry-run"} || echo "skip repair-yandex: lock exists")`],
     ["audit after", `cd ${remoteRoot} && node scripts/audit-auto-pair-full.cjs && node scripts/audit-warehouse-catalog-health.cjs --limit=50000 && node scripts/prod-catalog-pair-check.cjs && node scripts/audit-marketplace-labels.cjs --limit=200`],
   ];
 

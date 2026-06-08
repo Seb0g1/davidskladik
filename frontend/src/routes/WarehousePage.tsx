@@ -1559,7 +1559,8 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     queryKey: ["warehouse", "page", effectiveFilters],
     queryFn: () => fetchJson(buildPageUrl(effectiveFilters), WarehousePageSchema),
     placeholderData: (previousData) => previousData,
-    staleTime: 15_000,
+    staleTime: 30_000,
+    gcTime: 120_000,
   });
   const rows = useMemo(
     () => (pageQuery.data?.items || []).filter(isProductPageItem),
@@ -1581,7 +1582,8 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     queryKey: ["warehouse", "group-detail", selectedGroup],
     queryFn: () => fetchJson(`/api/warehouse/products/group-detail?group=${encodeURIComponent(selectedGroup)}`, GroupDetailSchema),
     enabled: Boolean(selectedGroup),
-    staleTime: 30_000,
+    staleTime: 60_000,
+    gcTime: 180_000,
   });
   const detailProducts = detailQuery.data?.products?.length
     ? detailQuery.data.products

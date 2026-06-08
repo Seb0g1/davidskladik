@@ -45,47 +45,22 @@ async function main() {
       username: "root",
       password,
       readyTimeout: 60000,
+      keepaliveInterval: 10000,
+      keepaliveCountMax: 24,
     });
   });
   try {
-    console.log("=== kill stuck maintenance scripts ===");
     await exec(conn, [
-      "pkill -9 -f 'node scripts/delete-yandex-small-volume' || true",
       "pkill -9 -f 'node scripts/repair-yandex-media-from-ozon' || true",
-      "pkill -f 'node scripts/repair-linked-warehouse-catalog' || true",
-      "pkill -f 'node scripts/audit-warehouse-catalog-health' || true",
-      "pkill -f 'node scripts/run-prod-complete-pipeline' || true",
-      "rm -f /var/www/davidsklad/davidskladik/data/delete-yandex-small-volume.lock /var/www/davidsklad/davidskladik/data/repair-yandex-media-from-ozon.lock || true",
-      "sleep 2",
-      "ps aux | grep -E 'node scripts/(delete|repair-yandex|repair-linked|audit-warehouse|run-prod)' | grep -v grep || echo 'no stuck scripts'",
+      "pkill -9 -f 'node scripts/delete-yandex-small-volume' || true",
     ].join(" && "));
-
-    console.log("=== deploy server + frontend ===");
-    await exec(conn, `mkdir -p ${remoteRoot}/scripts ${remoteRoot}/public/app-modern/assets`);
-    for (const rel of [
-      "server.js",
-      "scripts/delete-yandex-small-volume.cjs",
-      "scripts/repair-yandex-media-from-ozon.cjs",
-      "scripts/run-prod-complete-pipeline.cjs",
-      "scripts/prod-post-deploy-check.cjs",
-      "public/app-modern/index.html",
-      "public/app-modern/assets/index-Dr3-HBhG.css",
-      "public/app-modern/assets/index-Cx8c83Z1.js",
-    ]) {
+    await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
+    for (const rel of ["server.js", "scripts/fix-ozon-quarantine-prices.cjs"]) {
       await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
     }
-
-    console.log("=== restart pm2 ===");
-    await exec(conn, [
-      `cd ${remoteRoot}`,
-      "pm2 restart davidsklad --update-env",
-      "sleep 15",
-      "pm2 list",
-      "free -h | head -2",
-    ].join(" && "));
-
-    console.log("=== health check ===");
-    await exec(conn, `cd ${remoteRoot} && node scripts/prod-post-deploy-check.cjs`);
+    await exec(conn, `cd ${remoteRoot} && pm2 restart davidsklad --update-env && sleep 12`);
+    console.log("\n=== fix quarantine + repush prices ===\n");
+    await exec(conn, `cd ${remoteRoot} && node scripts/fix-ozon-quarantine-prices.cjs`);
   } finally {
     conn.end();
   }

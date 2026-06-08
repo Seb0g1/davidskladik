@@ -45,46 +45,51 @@ async function main() {
       username: "root",
       password,
       readyTimeout: 60000,
+      keepaliveInterval: 10000,
+      keepaliveCountMax: 24,
     });
   });
   try {
-    console.log("=== kill stuck maintenance scripts ===");
+    console.log("=== EMERGENCY: kill all heavy scripts ===");
     await exec(conn, [
-      "pkill -9 -f 'node scripts/delete-yandex-small-volume' || true",
+      "pkill -9 -f 'node scripts/fix-ozon-quarantine-prices' || true",
+      "pkill -9 -f 'node scripts/audit-and-repush-prices-remote' || true",
       "pkill -9 -f 'node scripts/repair-yandex-media-from-ozon' || true",
-      "pkill -f 'node scripts/repair-linked-warehouse-catalog' || true",
-      "pkill -f 'node scripts/audit-warehouse-catalog-health' || true",
-      "pkill -f 'node scripts/run-prod-complete-pipeline' || true",
-      "rm -f /var/www/davidsklad/davidskladik/data/delete-yandex-small-volume.lock /var/www/davidsklad/davidskladik/data/repair-yandex-media-from-ozon.lock || true",
+      "pkill -9 -f 'node scripts/delete-yandex-small-volume' || true",
+      "pkill -9 -f 'node scripts/repair-linked-warehouse-catalog' || true",
+      "pkill -9 -f 'node scripts/audit-warehouse-catalog-health' || true",
+      "pkill -9 -f 'node scripts/run-prod-complete-pipeline' || true",
+      "rm -f data/delete-yandex-small-volume.lock data/repair-yandex-media-from-ozon.lock || true",
       "sleep 2",
-      "ps aux | grep -E 'node scripts/(delete|repair-yandex|repair-linked|audit-warehouse|run-prod)' | grep -v grep || echo 'no stuck scripts'",
+      "echo '--- processes after kill ---'",
+      "ps aux --sort=-%cpu | head -8",
+      "free -h | head -2",
     ].join(" && "));
 
-    console.log("=== deploy server + frontend ===");
-    await exec(conn, `mkdir -p ${remoteRoot}/scripts ${remoteRoot}/public/app-modern/assets`);
+    console.log("=== deploy server.js + locks ===");
+    await exec(conn, `mkdir -p ${remoteRoot}/scripts ${remoteRoot}/data`);
     for (const rel of [
       "server.js",
-      "scripts/delete-yandex-small-volume.cjs",
       "scripts/repair-yandex-media-from-ozon.cjs",
+      "scripts/delete-yandex-small-volume.cjs",
       "scripts/run-prod-complete-pipeline.cjs",
       "scripts/prod-post-deploy-check.cjs",
-      "public/app-modern/index.html",
-      "public/app-modern/assets/index-Dr3-HBhG.css",
-      "public/app-modern/assets/index-Cx8c83Z1.js",
     ]) {
-      await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
+      const local = path.join(root, rel);
+      if (fs.existsSync(local)) await sftpPut(conn, local, `${remoteRoot}/${rel}`);
     }
 
     console.log("=== restart pm2 ===");
     await exec(conn, [
       `cd ${remoteRoot}`,
       "pm2 restart davidsklad --update-env",
-      "sleep 15",
+      "sleep 12",
       "pm2 list",
-      "free -h | head -2",
+      "curl -s -o /dev/null -w 'health_local:%{http_code} %{time_total}s\\n' --max-time 10 http://127.0.0.1:3000/api/live-status || true",
+      "curl -s -o /dev/null -w 'login_page:%{http_code} %{time_total}s\\n' --max-time 10 http://127.0.0.1:3000/login.html || true",
     ].join(" && "));
 
-    console.log("=== health check ===");
+    console.log("=== post-deploy check ===");
     await exec(conn, `cd ${remoteRoot} && node scripts/prod-post-deploy-check.cjs`);
   } finally {
     conn.end();
