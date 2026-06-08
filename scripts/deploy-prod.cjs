@@ -18,6 +18,30 @@ const withDedupe = process.argv.includes("--with-dedupe");
 const withRepairLinked = process.argv.includes("--repair-linked");
 const skipLocalChecks = process.argv.includes("--skip-local-checks");
 
+const deployFiles = [
+  "server.js",
+  "api-entry.js",
+  "worker-entry.js",
+  "ecosystem.config.cjs",
+  "package.json",
+  "package-lock.json",
+  "routes/auth-session.js",
+  "routes/marketplaces.js",
+  "routes/operations.js",
+  "routes/settings.js",
+  "routes/static-app.js",
+  "routes/system-media.js",
+  "routes/users.js",
+  "lib/logger.js",
+  "lib/postgres.js",
+  "lib/static-app.js",
+  "scripts/prod-post-deploy-check.cjs",
+  "scripts/prod-alert-on-failure.cjs",
+  "scripts/inspect-bullmq-failed-jobs.cjs",
+  "scripts/setup-prod-monitoring.cjs",
+  "scripts/run-prod-bullmq-triage.cjs",
+];
+
 function exec(conn, command) {
   return new Promise((resolve, reject) => {
     conn.exec(command, (err, stream) => {
@@ -29,18 +53,29 @@ function exec(conn, command) {
   });
 }
 
-function sftpPut(conn, localPath, remotePath) {
+function openSftp(conn) {
   return new Promise((resolve, reject) => {
-    conn.sftp((err, sftp) => {
-      if (err) return reject(err);
-      const read = fs.createReadStream(localPath);
-      const write = sftp.createWriteStream(remotePath);
-      write.on("close", resolve);
-      write.on("error", reject);
-      read.on("error", reject);
-      read.pipe(write);
-    });
+    conn.sftp((err, sftp) => (err ? reject(err) : resolve(sftp)));
   });
+}
+
+function sftpPut(sftp, localPath, remotePath) {
+  return new Promise((resolve, reject) => {
+    const read = fs.createReadStream(localPath);
+    const write = sftp.createWriteStream(remotePath);
+    write.on("close", resolve);
+    write.on("error", reject);
+    read.on("error", reject);
+    read.pipe(write);
+  });
+}
+
+async function uploadRelativeFiles(conn, sftp, relativeFiles) {
+  for (const rel of relativeFiles) {
+    const local = path.join(root, rel);
+    if (!fs.existsSync(local)) throw new Error(`Missing deploy file: ${rel}`);
+    await sftpPut(sftp, local, `${remoteRoot}/${rel.replace(/\\/g, "/")}`);
+  }
 }
 
 function readFrontendBundleFiles() {
@@ -90,44 +125,30 @@ async function main() {
   });
 
   try {
-    console.log("Deploying server + api/worker entries + ecosystem...");
-    for (const rel of ["server.js", "api-entry.js", "worker-entry.js", "ecosystem.config.cjs"]) {
-      await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
+    const remoteDirs = new Set([`${remoteRoot}/scripts`, `${remoteRoot}/routes`, `${remoteRoot}/lib`, `${remoteRoot}/public/app-modern/assets`]);
+    for (const rel of [...deployFiles, ...readFrontendBundleFiles()]) {
+      remoteDirs.add(path.posix.dirname(`${remoteRoot}/${rel.replace(/\\/g, "/")}`));
     }
+    await exec(conn, `mkdir -p ${Array.from(remoteDirs).join(" ")}`);
+    const sftp = await openSftp(conn);
+
+    console.log("Deploying backend manifest...");
+    await uploadRelativeFiles(conn, sftp, deployFiles);
 
     if (withDedupe) {
       console.log("Deploying dedupe script...");
-      await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
-      await sftpPut(
-        conn,
-        path.join(root, "scripts/dedupe-warehouse-products.cjs"),
-        `${remoteRoot}/scripts/dedupe-warehouse-products.cjs`,
-      );
-      await sftpPut(
-        conn,
-        path.join(root, "scripts/audit-marketplace-labels.cjs"),
-        `${remoteRoot}/scripts/audit-marketplace-labels.cjs`,
-      );
+      await uploadRelativeFiles(conn, sftp, [
+        "scripts/dedupe-warehouse-products.cjs",
+        "scripts/audit-marketplace-labels.cjs",
+      ]);
     }
 
     console.log("Deploying frontend bundle...");
-    const files = readFrontendBundleFiles();
-    for (const rel of files) {
-      const local = path.join(root, rel);
-      if (!fs.existsSync(local)) throw new Error(`Missing build asset: ${rel}`);
-      await sftpPut(conn, local, `${remoteRoot}/${rel}`);
-    }
-
-    console.log("Deploying post-deploy check script...");
-    await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
-    await sftpPut(
-      conn,
-      path.join(root, "scripts/prod-post-deploy-check.cjs"),
-      `${remoteRoot}/scripts/prod-post-deploy-check.cjs`,
-    );
+    await uploadRelativeFiles(conn, sftp, readFrontendBundleFiles());
 
     await exec(conn, [
       `cd ${remoteRoot}`,
+      "npm ci --omit=dev",
       "pm2 delete davidsklad 2>/dev/null || true",
       "pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env || pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env",
       "pm2 save",
@@ -147,8 +168,9 @@ async function main() {
     if (withRepairLinked) {
       console.log("Running linked warehouse catalog repair on server...");
       await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
+      const repairSftp = await openSftp(conn);
       await sftpPut(
-        conn,
+        repairSftp,
         path.join(root, "scripts/repair-linked-warehouse-catalog.cjs"),
         `${remoteRoot}/scripts/repair-linked-warehouse-catalog.cjs`,
       );

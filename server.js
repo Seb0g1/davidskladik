@@ -1302,6 +1302,20 @@ async function collectHealthDetails({ deep = false } = {}) {
   const ok = required.every((component) => component.ok !== false);
   const memory = process.memoryUsage();
   const heapLimit = serverHeapLimitBytes();
+  const bullmq = deep ? await marketplaceQueueCounts().catch((error) => ({
+    enabled: bullmqEnabled,
+    mode: "bullmq",
+    ok: false,
+    error: error?.message || String(error),
+  })) : null;
+  const queue = {
+    enabled: bullmqEnabled && Boolean(redisUrl),
+    degraded: bullmqEnabled && Boolean(redisUrl) && (!marketplaceQueue || bullmq?.ok === false),
+    producerReady: marketplaceJobsCanEnqueue(),
+    consumerReady: Boolean(marketplaceWorker),
+    counts: bullmq?.counts || components.redis?.counts || components.redis?.jobs || null,
+    error: bullmq?.error || components.redis?.error || null,
+  };
   return {
     ok,
     service: "magic-vibes-warehouse",
@@ -1315,6 +1329,8 @@ async function collectHealthDetails({ deep = false } = {}) {
     },
     activeHttpRequests,
     recentSlowRequests: recentSlowRequests.slice(-10),
+    bullmq,
+    queue,
     components,
   };
 }
@@ -18415,13 +18431,19 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
 
 app.get("/api/live-status", async (_request, response, next) => {
   try {
-    const [warehouseMeta, dailySync, priceMaster] = await Promise.all([
+    const [warehouseMeta, dailySync, priceMaster, queueStatus] = await Promise.all([
       getWarehouseMetaFast(),
       getDailySyncStatus().catch((error) => ({ error: error?.message || String(error) })),
       getPriceMasterSnapshotMetaFast().catch((error) => {
         logger.warn("live status PriceMaster meta failed", { detail: error?.message || String(error) });
         return { syncId: null, updatedAt: null, items: 0, changes: 0, error: error?.message || String(error) };
       }),
+      marketplaceQueueCounts().catch((error) => ({
+        enabled: bullmqEnabled,
+        mode: "bullmq",
+        ok: false,
+        error: error?.message || String(error),
+      })),
     ]);
     response.json({
       ok: true,
@@ -18451,6 +18473,14 @@ app.get("/api/live-status", async (_request, response, next) => {
         running: Boolean(marketplaceMaintenanceRunning),
         everyHours: marketplaceMaintenanceHours,
         nextRunAt: marketplaceMaintenanceNextRunAt || null,
+      },
+      queue: {
+        enabled: bullmqEnabled && Boolean(redisUrl),
+        degraded: bullmqEnabled && Boolean(redisUrl) && (!marketplaceQueue || queueStatus?.ok === false),
+        producerReady: marketplaceJobsCanEnqueue(),
+        consumerReady: Boolean(marketplaceWorker),
+        counts: queueStatus?.counts || null,
+        error: queueStatus?.error || null,
       },
     });
   } catch (error) {
@@ -21714,13 +21744,17 @@ function enqueueMarketplaceJobAccepted(name, data = {}, { priority = 5 } = {}) {
       removeOnComplete: name === "auto-price-push" || name === "ozon-unarchive-queue-process" ? true : 2000,
       removeOnFail: 2000,
     }).catch((error) => {
-      logger.warn("queue add failed, scheduling inline background mode", { name, detail: error?.message || String(error) });
+      const queueError = error?.message || String(error);
+      logger.warn("queue add failed", { name, detail: queueError, serverRole });
+      if (isApiServer) {
+        return { accepted: false, inlineBackground: false, queueError, queueUnavailable: true };
+      }
       setTimeout(() => {
         processMarketplaceJob(name, data).catch((jobError) => {
           logger.warn("background marketplace job failed", { name, detail: jobError?.message || String(jobError) });
         });
       }, 0).unref?.();
-      return { accepted: true, inlineBackground: true, queueError: error?.message || String(error) };
+      return { accepted: true, inlineBackground: true, queueError };
     });
   }
   if (!backgroundJobsEnabled || isApiServer) return Promise.resolve(null);
@@ -21946,6 +21980,20 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
       };
     }
 
+    if (!marketplaceJobsCanEnqueue() && isApiServer) {
+      return {
+        activationQueued: false,
+        recoveryQueued: false,
+        priceIntentId: null,
+        affectedProductIds,
+        queued: 0,
+        queuedBatches: 0,
+        queueUnavailable: true,
+        error: "background_queue_unavailable",
+        message: "Фоновая очередь недоступна. Привязка сохранена, но цена и остаток не отправятся автоматически.",
+      };
+    }
+
     if (!marketplaceJobsCanEnqueue() && backgroundMarketplaceJobsBlocked()) {
       if (
         !skipImmediateReplay
@@ -22030,16 +22078,33 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
       priority: 1,
     });
     const recoveryResult = await recoveryQueue;
+    const activationAccepted = Boolean(recoveryResult?.accepted || priceQueue.accepted);
+    const queueError = recoveryResult?.queueError || recoveryResult?.error || priceQueue.queueError || null;
+
+    if (!activationAccepted && isApiServer) {
+      return {
+        activationQueued: false,
+        recoveryQueued: false,
+        priceIntentId: priceQueue.priceIntentId || null,
+        affectedProductIds,
+        queued: priceQueue.queued || 0,
+        queuedBatches: priceQueue.queuedBatches || 0,
+        queueUnavailable: true,
+        error: "background_queue_unavailable",
+        message: "Фоновая очередь недоступна. Привязка сохранена, но цена и остаток не отправятся автоматически.",
+        recoveryQueueError: queueError,
+      };
+    }
 
     return {
-      activationQueued: Boolean(recoveryResult?.accepted || priceQueue.accepted),
+      activationQueued: activationAccepted,
       recoveryQueued: Boolean(recoveryResult?.accepted),
       priceIntentId: priceQueue.priceIntentId || null,
       affectedProductIds,
       queued: priceQueue.queued || 0,
       queuedBatches: priceQueue.queuedBatches || 0,
       recoveryInlineBackground: Boolean(recoveryResult?.inlineBackground),
-      recoveryQueueError: recoveryResult?.error || recoveryResult?.queueError || null,
+      recoveryQueueError: queueError,
     };
   } catch (error) {
     logger.warn("linked product activation failed", {

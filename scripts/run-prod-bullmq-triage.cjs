@@ -13,7 +13,9 @@ if (!password) {
 
 const root = path.resolve(__dirname, "..");
 const remoteRoot = "/var/www/davidsklad/davidskladik";
-const cronLine = "*/5 * * * * cd /var/www/davidsklad/davidskladik && /usr/bin/node scripts/prod-post-deploy-check.cjs >> /var/log/davidsklad-health.log 2>&1 || /usr/bin/node scripts/prod-alert-on-failure.cjs prod-post-deploy-check >> /var/log/davidsklad-health.log 2>&1";
+const withRetry = process.argv.includes("--retry");
+const withRemove = process.argv.includes("--remove-failed");
+const limit = process.argv.find((arg) => arg.startsWith("--limit="))?.split("=")[1] || "120";
 
 function exec(conn, command) {
   return new Promise((resolve, reject) => {
@@ -50,25 +52,13 @@ async function main() {
   });
   try {
     await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
-    for (const rel of [
-      "scripts/prod-post-deploy-check.cjs",
-      "scripts/prod-alert-on-failure.cjs",
-      "scripts/inspect-bullmq-failed-jobs.cjs",
-    ]) {
-      await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
-    }
-
-    await exec(conn, [
-      "touch /var/log/davidsklad-health.log",
-      `(crontab -l 2>/dev/null | grep -v 'prod-post-deploy-check.cjs'; echo '${cronLine}') | crontab -`,
-      "crontab -l | grep prod-post-deploy-check || true",
-      "pm2 install pm2-logrotate || true",
-      "pm2 set pm2-logrotate:max_size 50M || true",
-      "pm2 set pm2-logrotate:retain 14 || true",
-      "pm2 set pm2-logrotate:compress true || true",
-      "pm2 save || true",
-    ].join(" && "));
-    console.log("Monitoring cron + pm2-logrotate configured.");
+    await sftpPut(
+      conn,
+      path.join(root, "scripts/inspect-bullmq-failed-jobs.cjs"),
+      `${remoteRoot}/scripts/inspect-bullmq-failed-jobs.cjs`,
+    );
+    const flags = [withRetry ? "--retry" : "", withRemove ? "--remove-failed" : ""].filter(Boolean).join(" ");
+    await exec(conn, `cd ${remoteRoot} && node scripts/inspect-bullmq-failed-jobs.cjs --limit=${limit} ${flags}`.trim());
   } finally {
     conn.end();
   }

@@ -1,5 +1,7 @@
 # Merge checklist: codex/restore-4dfc0cb → main
 
+**Soak начат:** 2026-06-08 (после split api+worker deploy). Merge не раньше **2026-06-10..11**.
+
 ## Перед merge (48–72 ч на проде)
 
 - [ ] `pm2 list` — только `davidsklad-api` + `davidsklad-worker`, без `davidsklad`

@@ -5974,6 +5974,16 @@ test("api producer enqueues marketplace jobs when BullMQ queue exists", () => {
   );
   assert.match(activationBlock, /!marketplaceJobsCanEnqueue\(\) && backgroundMarketplaceJobsBlocked\(\)/);
   assert.match(serverSource, /if \(isApiServer\) return false;/);
+  assert.match(serverSource, /queueUnavailable: true/);
+  assert.match(enqueueBlock, /if \(isApiServer\)/);
+});
+
+test("prod post-deploy checks redis queue and worker consumer", async () => {
+  const checkSource = await fs.readFile(path.join(__dirname, "..", "scripts/prod-post-deploy-check.cjs"), "utf8");
+  assert.match(checkSource, /components\?\.redis\?\.ok === false/);
+  assert.match(checkSource, /queue\?\.consumerReady !== true/);
+  assert.match(checkSource, /bullmqFailedMax/);
+  assert.match(checkSource, /fetchUnlinkedGrouped/);
 });
 
 test("worker role starts background schedulers without api HTTP port", async () => {

@@ -7,6 +7,7 @@ const { Queue } = require("bullmq");
 
 const redisUrl = String(process.env.REDIS_URL || "").trim();
 const shouldRetry = process.argv.includes("--retry");
+const shouldRemove = process.argv.includes("--remove-failed");
 const limit = Math.max(1, Math.min(500, Number(process.argv.find((arg) => arg.startsWith("--limit="))?.split("=")[1] || 50) || 50));
 
 async function main() {
@@ -33,7 +34,18 @@ async function main() {
     })),
   }, null, 2));
 
-  if (shouldRetry && failed.length) {
+  if (shouldRemove && failed.length) {
+    let removed = 0;
+    for (const job of failed) {
+      try {
+        await job.remove();
+        removed += 1;
+      } catch (error) {
+        console.warn(`remove failed for ${job.id}: ${error.message}`);
+      }
+    }
+    console.log(`Removed ${removed}/${failed.length} failed jobs (no retry)`);
+  } else if (shouldRetry && failed.length) {
     let retried = 0;
     for (const job of failed) {
       try {

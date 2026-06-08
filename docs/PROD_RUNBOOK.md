@@ -37,19 +37,21 @@ node scripts/deploy-prod.cjs
 | Симптом | Действие |
 |---------|----------|
 | 502 / таймаут login | `run-prod-emergency-recover.cjs`, проверить `pm2 list` |
-| Привязка не срабатывает | Redis up? `BULLMQ_ENABLED=true` на api, worker online |
+| Привязка не срабатывает | `redis-cli ping`, `pm2 logs davidsklad-worker`, `/api/live-status` → `queue.degraded`, `inspect-bullmq-failed-jobs.cjs` |
 | Каталог «Без привязок» медленный | Cold до 15 с допустимо; Ctrl+F5 после deploy |
 | Старый UI после deploy | Ctrl+F5 (cache-bust в `index.html`) |
 
 ## Мониторинг
 
 ```bash
-# на сервере (cron каждые 5 мин)
-node scripts/prod-post-deploy-check.cjs
+# на сервере (cron каждые 5 мин, с алертом при fail)
+node scripts/prod-post-deploy-check.cjs || node scripts/prod-alert-on-failure.cjs prod-post-deploy-check
 
-# установка cron + pm2-logrotate
+# установка cron + pm2-logrotate (с локальной машины)
 node scripts/setup-prod-monitoring.cjs
 ```
+
+Опционально Telegram: `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID` в `.env` на сервере — алерт после 2 подряд fail (debounce 15 мин).
 
 Алерт: 3 slow requests > 10 s за 5 мин или login > 5 s (см. `/api/health?deep=true`).
 

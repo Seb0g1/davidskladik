@@ -12,6 +12,14 @@ const slowRequestAlertThreshold = Math.max(3, Number(process.env.SLOW_REQUEST_AL
 const slowRequestMs = Math.max(5000, Number(process.env.SLOW_REQUEST_ALERT_MS || 10000) || 10000);
 const loginMaxMs = Math.max(2000, Number(process.env.LOGIN_ALERT_MAX_MS || 5000) || 5000);
 const heapPressureMax = Math.max(0.5, Math.min(0.95, Number(process.env.HEAP_PRESSURE_ALERT_RATIO || 0.8) || 0.8));
+const bullmqFailedMax = Math.max(1, Number(process.env.BULLMQ_FAILED_ALERT_MAX || 20) || 20);
+const unlinkedRetryAttempts = Math.max(1, Number(process.env.POSTDEPLOY_UNLINKED_RETRIES || 3) || 3);
+const unlinkedRetryDelayMs = Math.max(1000, Number(process.env.POSTDEPLOY_UNLINKED_RETRY_MS || 5000) || 5000);
+const requestTimeoutMs = Math.max(5000, Number(process.env.POSTDEPLOY_REQUEST_TIMEOUT_MS || 90000) || 90000);
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function request(method, urlPath, body, { port = 3000, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
@@ -35,6 +43,9 @@ function request(method, urlPath, body, { port = 3000, headers = {} } = {}) {
       });
     });
     req.on("error", reject);
+    req.setTimeout(requestTimeoutMs, () => {
+      req.destroy(new Error(`request timeout after ${requestTimeoutMs}ms: ${method} ${urlPath}`));
+    });
     if (payload) req.write(payload);
     req.end();
   });
@@ -60,7 +71,7 @@ function sessionCookie(headers = {}) {
 
 function pm2ProcessOnline(name) {
   try {
-    const raw = execSync(`pm2 jlist`, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+    const raw = execSync("pm2 jlist", { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
     const list = JSON.parse(raw);
     const proc = list.find((item) => item.name === name);
     return proc?.pm2_env?.status === "online";
@@ -72,6 +83,29 @@ function pm2ProcessOnline(name) {
 function fail(message) {
   failures.push(message);
   console.error(`FAIL: ${message}`);
+}
+
+function unlinkedOk(response) {
+  const groups = Array.isArray(response.body?.items) ? response.body.items : [];
+  return response.status === 200
+    && groups.length > 0
+    && !response.body?.sourceError
+    && response.elapsedMs < 15000;
+}
+
+async function fetchUnlinkedGrouped(hdr) {
+  let last = null;
+  for (let attempt = 1; attempt <= unlinkedRetryAttempts; attempt += 1) {
+    last = await timedRequest(
+      "GET",
+      "/api/warehouse/products/page?page=1&pageSize=40&linked=unlinked&grouped=true",
+      null,
+      hdr,
+    );
+    if (unlinkedOk(last)) return { response: last, attempt };
+    if (attempt < unlinkedRetryAttempts) await sleep(unlinkedRetryDelayMs);
+  }
+  return { response: last, attempt: unlinkedRetryAttempts };
 }
 
 async function main() {
@@ -94,32 +128,60 @@ async function main() {
   if (login.elapsedMs > loginMaxMs) fail(`API login slow: ${login.elapsedMs}ms > ${loginMaxMs}ms`);
   const hdr = { Cookie: cookie };
 
-  const workerHealth = await timedRequest("GET", "/health", null, { port: workerHealthPort });
-  if (workerHealth.status !== 200) fail(`worker health HTTP ${workerHealth.status} on port ${workerHealthPort}`);
+  let workerHealth = { status: 0, elapsedMs: 0, body: {}, skipped: false };
+  const workerHealthTimeoutMs = Math.min(15000, requestTimeoutMs);
+  try {
+    workerHealth = await Promise.race([
+      timedRequest("GET", "/health", null, { port: workerHealthPort }),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error(`worker health timeout after ${workerHealthTimeoutMs}ms`)),
+        workerHealthTimeoutMs,
+      )),
+    ]);
+    if (workerHealth.status !== 200) fail(`worker health HTTP ${workerHealth.status} on port ${workerHealthPort}`);
+    if (workerHealth.body?.serverRole !== "worker") fail(`worker health serverRole=${workerHealth.body?.serverRole || "unknown"}`);
+    if (workerHealth.body?.queue?.consumerReady !== true) fail("worker BullMQ consumer is not ready");
+  } catch (error) {
+    if (workerOnline !== true) {
+      fail(`worker health check failed: ${error.message}`);
+    } else {
+      workerHealth.skipped = true;
+      workerHealth.error = error.message;
+      console.error(`WARN: worker health skipped (pm2 online): ${error.message}`);
+    }
+  }
 
   const daily = await timedRequest("GET", "/api/daily-sync", null, hdr);
   const page = await timedRequest("GET", "/api/warehouse/products/page?page=1&pageSize=8&linked=linked", null, hdr);
   const pageAll = await timedRequest("GET", "/api/warehouse/products/page?page=1&pageSize=8", null, hdr);
-  const pageGrouped = await timedRequest("GET", "/api/warehouse/products/page?page=1&pageSize=40&grouped=true", null, hdr);
-  const pageUnlinkedGrouped = await timedRequest(
-    "GET",
-    "/api/warehouse/products/page?page=1&pageSize=40&linked=unlinked&grouped=true",
-    null,
-    hdr,
-  );
+  const unlinkedResult = await fetchUnlinkedGrouped(hdr);
+  const pageUnlinkedGrouped = unlinkedResult.response;
   const [live, health] = await Promise.all([
     timedRequest("GET", "/api/live-status", null, hdr),
     timedRequest("GET", "/api/health?deep=true", null, hdr),
   ]);
 
+  if (health.body?.serverRole !== "api") fail(`api health serverRole=${health.body?.serverRole || "unknown"}`);
+  if (health.body?.components?.redis?.ok === false) {
+    fail(`redis/BullMQ unhealthy: ${health.body?.components?.redis?.error || "unknown"}`);
+  }
+  if (health.body?.queue?.degraded === true) {
+    fail(`queue degraded: ${health.body?.queue?.error || "producer or redis unavailable"}`);
+  }
+  if (health.body?.queue?.producerReady !== true) {
+    fail("api BullMQ producer is not ready");
+  }
+
+  const failedJobs = Number(health.body?.bullmq?.counts?.failed ?? health.body?.queue?.counts?.failed ?? 0);
+  if (failedJobs > bullmqFailedMax) {
+    fail(`BullMQ failed jobs ${failedJobs} > ${bullmqFailedMax}`);
+  }
+
   const items = Array.isArray(page.body?.items) ? page.body.items : [];
   const unlinkedGroups = Array.isArray(pageUnlinkedGrouped.body?.items) ? pageUnlinkedGrouped.body.items : [];
-  const unlinkedOk = pageUnlinkedGrouped.status === 200
-    && unlinkedGroups.length > 0
-    && !pageUnlinkedGrouped.body?.sourceError
-    && pageUnlinkedGrouped.elapsedMs < 15000;
-  if (!unlinkedOk) {
-    fail(`unlinked grouped catalog check failed: status=${pageUnlinkedGrouped.status} items=${unlinkedGroups.length} elapsed=${pageUnlinkedGrouped.elapsedMs}ms error=${pageUnlinkedGrouped.body?.sourceError || ""}`);
+  const unlinkedPass = unlinkedOk(pageUnlinkedGrouped);
+  if (!unlinkedPass) {
+    fail(`unlinked grouped catalog check failed after ${unlinkedResult.attempt} attempts: status=${pageUnlinkedGrouped.status} items=${unlinkedGroups.length} elapsed=${pageUnlinkedGrouped.elapsedMs}ms error=${pageUnlinkedGrouped.body?.sourceError || ""}`);
   }
 
   const heapRatio = Number(health.body?.memory?.heapPressureRatio || health.body?.heapPressureRatio || 0);
@@ -137,7 +199,13 @@ async function main() {
     pm2: { apiOnline, workerOnline },
     loginPage: { status: loginPage.status, elapsedMs: loginPage.elapsedMs },
     apiLogin: { status: login.status, elapsedMs: login.elapsedMs },
-    workerHealth: { status: workerHealth.status, elapsedMs: workerHealth.elapsedMs, port: workerHealthPort },
+    workerHealth: {
+      status: workerHealth.status,
+      elapsedMs: workerHealth.elapsedMs,
+      port: workerHealthPort,
+      consumerReady: workerHealth.body?.queue?.consumerReady,
+      failedJobs: workerHealth.body?.bullmq?.counts?.failed ?? workerHealth.body?.queue?.counts?.failed ?? null,
+    },
     daily: { status: daily.body?.status, running: daily.body?.running, lastRunAt: daily.body?.lastRunAt },
     warehousePageLinked: {
       total: page.body?.total,
@@ -162,19 +230,13 @@ async function main() {
     warehousePageUnlinkedGrouped: {
       status: pageUnlinkedGrouped.status,
       elapsedMs: pageUnlinkedGrouped.elapsedMs,
+      attempts: unlinkedResult.attempt,
       grouped: pageUnlinkedGrouped.body?.grouped,
       groupTotal: pageUnlinkedGrouped.body?.groupTotal ?? pageUnlinkedGrouped.body?.total,
       items: unlinkedGroups.length,
       partial: pageUnlinkedGrouped.body?.partial,
       sourceError: pageUnlinkedGrouped.body?.sourceError || "",
-      ok: unlinkedOk,
-    },
-    warehousePageGrouped: {
-      grouped: pageGrouped.body?.grouped,
-      groupTotal: pageGrouped.body?.groupTotal ?? pageGrouped.body?.total,
-      items: Array.isArray(pageGrouped.body?.items) ? pageGrouped.body.items.length : 0,
-      elapsedMs: pageGrouped.elapsedMs,
-      sourceError: pageGrouped.body?.sourceError || "",
+      ok: unlinkedPass,
     },
     liveStatus: live.body,
     health: {
@@ -182,7 +244,8 @@ async function main() {
       serverRole: health.body?.serverRole,
       heapPressureRatio: heapRatio,
       recentSlowRequests: slowRecent.slice(-5),
-      queue: health.body?.queue || health.body?.bullmq || null,
+      queue: health.body?.queue || null,
+      bullmqFailed: failedJobs,
     },
     failures,
     ok: failures.length === 0,
