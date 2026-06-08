@@ -88,6 +88,8 @@ async function main() {
       const multi = groups.filter((group) => Array.isArray(group.products) && group.products.length > 1);
       return {
         grouped: pageGrouped.body?.grouped,
+        groupTotal: pageGrouped.body?.groupTotal ?? pageGrouped.body?.total,
+        rowTotal: pageGrouped.body?.rowTotal ?? pageAll.body?.total,
         total: pageGrouped.body?.total,
         items: groups.length,
         partial: pageGrouped.body?.partial,
@@ -98,6 +100,10 @@ async function main() {
           marketplaces: group.marketplaces,
           offerId: group.offerId,
           products: (group.products || []).map((product) => product.marketplace),
+          links: (group.links || []).length,
+          withoutSupplier: group.statusSummary?.withoutSupplier || 0,
+          primarySupplier: group.primary?.selectedSupplier?.supplierName || group.primary?.selectedSupplier?.partnerName || null,
+          primaryPrice: group.primary?.nextPrice || group.primary?.targetPrice || group.primary?.marketplacePrice || null,
         })),
       };
     })(),

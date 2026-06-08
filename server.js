@@ -342,11 +342,16 @@ const warehouseBrandListCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE
 let warehousePostgresDetailCache = new Map();
 const warehousePostgresDetailCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_DETAIL_CACHE_MS || 15000));
 const warehouseFastPageCache = new Map();
+const warehouseFastPageInflight = new Map();
 const warehouseFastPageCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MS || 30000));
 const warehouseFastPageCacheMax = Math.max(10, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MAX || 30));
+const warehouseCatalogPairingContextCacheTtlMs = Math.max(5000, Number(process.env.WAREHOUSE_PAIRING_CONTEXT_CACHE_MS || 60000) || 60000);
+let warehouseCatalogPairingContextCache = { at: 0, groupContext: null, pairingRows: null };
 const warehouseGroupCountCache = new Map();
-const warehouseGroupCountCacheTtlMs = Math.max(5000, Number(process.env.WAREHOUSE_GROUP_COUNT_CACHE_MS || 60000));
+const warehouseGroupCountInflight = new Map();
+const warehouseGroupCountCacheTtlMs = Math.max(5000, Number(process.env.WAREHOUSE_GROUP_COUNT_CACHE_MS || 120000) || 120000);
 const warehouseGroupCountCacheMax = Math.max(5, Number(process.env.WAREHOUSE_GROUP_COUNT_CACHE_MAX || 20));
+const warehouseGroupCountWaitMs = Math.max(1000, Number(process.env.WAREHOUSE_GROUP_COUNT_WAIT_MS || 8000) || 8000);
 const warehouseViewCache = new Map();
 const warehouseViewBuilds = new Map();
 let lastWarehouseViewSnapshot = null;
@@ -487,6 +492,9 @@ function invalidateWarehouseViewCache() {
   warehouseBrandListCache = null;
   warehousePostgresDetailCache.clear();
   warehouseFastPageCache.clear();
+  warehouseGroupCountCache.clear();
+  warehouseGroupCountInflight.clear();
+  warehouseCatalogPairingContextCache = { at: 0, groupContext: null, pairingRows: null };
 }
 
 function rememberStateWarning(source, error, extra = {}) {
@@ -2456,6 +2464,10 @@ function publicPriceMasterCandidate(row = {}, productContext = {}) {
 
 function priceMasterSnapshotRowFields(row = {}) {
   const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  const currency = cleanText(
+    row.currency || row.priceCurrency || row.sourceCurrency
+    || raw.currency || raw.priceCurrency || raw.Currency,
+  ).toUpperCase();
   return {
     rowId: cleanText(row.rowId || row.RowID || raw.rowId || raw.RowID || row.id || row.ID),
     article: cleanText(row.article || row.NativeID || raw.article || raw.NativeID || raw.nativeId || raw.offerId),
@@ -2464,9 +2476,52 @@ function priceMasterSnapshotRowFields(row = {}) {
     partnerName: cleanText(row.partnerName || row.PartnerName || raw.partnerName || raw.PartnerName),
     docDate: row.docDate instanceof Date ? row.docDate.toISOString() : cleanText(row.docDate || row.DocDate || raw.docDate || raw.DocDate),
     price: row.price ?? row.NativePrice ?? raw.price ?? raw.NativePrice,
+    currency: currency === "RUB" || currency === "RUR" ? "RUB" : (currency === "USD" ? "USD" : ""),
     active: row.active !== false && row.Active !== false && row.Active !== 0,
     ignored: Boolean(row.ignored || row.Ignored || raw.ignored || raw.Ignored),
   };
+}
+
+function priceMasterRowExplicitCurrency(row = {}) {
+  const fields = row.currency ? row : priceMasterSnapshotRowFields(row);
+  const mode = cleanText(fields.currency || fields.priceCurrency || fields.sourceCurrency).toUpperCase();
+  if (mode === "RUB" || mode === "RUR") return "RUB";
+  if (mode === "USD") return "USD";
+  return "";
+}
+
+let priceMasterRubSupplierNamesCache = { at: 0, names: null };
+function priceMasterRubSupplierNameSet() {
+  const now = Date.now();
+  if (priceMasterRubSupplierNamesCache.names && now - priceMasterRubSupplierNamesCache.at < 60_000) {
+    return priceMasterRubSupplierNamesCache.names;
+  }
+  const builtins = ["иванна", "инна", "inna", "ivanna"];
+  const fromEnv = String(process.env.PRICEMASTER_RUB_SUPPLIER_NAMES || "")
+    .split(/[,;|]/)
+    .map((value) => normalizeSupplierName(value))
+    .filter(Boolean);
+  const names = new Set([...builtins, ...fromEnv]);
+  priceMasterRubSupplierNamesCache = { at: now, names };
+  return names;
+}
+
+function supplierUsesRubPriceMasterPricing(supplier = null, row = {}) {
+  if (cleanText(supplier?.priceCurrency).toUpperCase() === "RUB") return true;
+  const partnerName = normalizeSupplierName(supplier?.name || row.partnerName || "");
+  return Boolean(partnerName && priceMasterRubSupplierNameSet().has(partnerName));
+}
+
+function inferPriceMasterRowCurrency(row = {}, supplier = null, usdRate = 95) {
+  const rawPrice = Number(row.price ?? row.NativePrice ?? 0);
+  if (!Number.isFinite(rawPrice) || rawPrice <= 0) return "";
+  const rate = Number(usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+  const usdCeiling = Math.max(200, Number(process.env.PRICEMASTER_USD_PRICE_CEILING || 500) || 500);
+  if (supplierUsesRubPriceMasterPricing(supplier, row)) return "RUB";
+  if (rawPrice <= usdCeiling) return "";
+  const impliedUsd = rawPrice / rate;
+  if (impliedUsd > 0 && impliedUsd <= usdCeiling) return "RUB";
+  return "";
 }
 
 function pickSafeArticlePriceMasterRow(matches = [], productContext = {}) {
@@ -4665,6 +4720,21 @@ async function sendYandexOfferMappings(shop, offers = []) {
   for (const offer of Array.isArray(offers) ? offers : []) {
     const normalizedOfferId = cleanText(offer.offerId).toLowerCase();
     if (!normalizedOfferId) continue;
+    const volumeCheck = assessYandexSmallVolume([
+      offer.name,
+      offer.description,
+      offer.vendor,
+    ].map(cleanText).filter(Boolean).join(" "));
+    if (volumeCheck.blocked) {
+      results.push({
+        offerId: cleanText(offer.offerId),
+        ok: false,
+        error: "yandex_small_volume_blocked",
+        minVolumeMl: volumeCheck.minVolumeMl,
+        reason: volumeCheck.reason,
+      });
+      continue;
+    }
     deduped.set(normalizedOfferId, { ...offer, offerId: cleanText(offer.offerId) });
   }
   const prepared = Array.from(deduped.values());
@@ -4914,7 +4984,7 @@ async function sendYandexPricesFromOzonProducts(products = [], options = {}) {
   const shops = Array.isArray(options.shops) && options.shops.length
     ? options.shops
     : uniqueYandexShopsByBusiness();
-  const sourceProducts = Array.isArray(products) ? products : [];
+  const sourceProducts = (Array.isArray(products) ? products : []).filter((product) => !isYandexSmallVolumeBlocked(product));
   const sourceWarehouse = options.warehouse || (await readWarehouse().catch((error) => {
     logger.warn("read warehouse before yandex price send failed", { detail: error?.message || String(error) });
     return { products: [] };
@@ -5304,18 +5374,102 @@ function buildYandexWarehouseProductFromOzonExport(product = {}, shop = {}, expo
   });
 }
 
+function extractBrandHintFromProductName(name = "") {
+  const text = cleanText(name);
+  if (!text) return "";
+  const beforeDigits = text.split(/\d/)[0].trim();
+  const tokens = beforeDigits.match(/[A-Za-zА-Яа-я][A-Za-zА-Яа-я'&.-]+/g) || [];
+  const stop = new Set(["парфюмерная", "вода", "духи", "edp", "edt", "п/у", "туалетная", "парфюм", "spray", "tester"]);
+  const brandTokens = [];
+  for (const token of tokens) {
+    const lower = token.toLowerCase();
+    if (stop.has(lower)) break;
+    brandTokens.push(token);
+    if (brandTokens.length >= 3) break;
+  }
+  return brandTokens.join(" ").trim();
+}
+
+function resolveYandexVendorFromProduct(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const ozon = normalized.ozon || {};
+  const yandex = normalized.yandex || {};
+  return cleanText(
+    yandex.vendor
+    || ozon.vendor
+    || normalized.brand
+    || resolveWarehouseBrand(normalized)
+    || resolveWarehouseBrand({ ...normalized, ozon, yandex })
+    || extractBrandHintFromProductName(yandex.name || normalized.name || ozon.name),
+  );
+}
+
+function resolveYandexWeightDimensionsFromProduct(product = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  const ozon = normalized.ozon || {};
+  const extra = parseJsonField(normalized.yandex?.extra, {});
+  const cached = extra.weightDimensions && typeof extra.weightDimensions === "object" ? extra.weightDimensions : null;
+  if (cached && Number(cached.length) > 0 && Number(cached.width) > 0 && Number(cached.height) > 0 && Number(cached.weight) > 0) {
+    return {
+      length: Number(cached.length),
+      width: Number(cached.width),
+      height: Number(cached.height),
+      weight: Number(cached.weight),
+    };
+  }
+
+  const dimsMm = [
+    Number(ozon.depth || 0),
+    Number(ozon.width || 0),
+    Number(ozon.height || 0),
+  ].filter((value) => Number.isFinite(value) && value > 0);
+  const weightG = Number(ozon.weight || 0);
+  if (dimsMm.length === 3 && weightG > 0) {
+    const sorted = dimsMm.sort((a, b) => b - a);
+    return {
+      length: Number((sorted[0] / 10).toFixed(2)),
+      width: Number((sorted[1] / 10).toFixed(2)),
+      height: Number((sorted[2] / 10).toFixed(2)),
+      weight: Number((weightG / 1000).toFixed(3)),
+    };
+  }
+
+  const volumes = extractOzonYandexImportVolumesMl(
+    [normalized.name, ozon.name, normalized.offerId].filter(Boolean).join(" "),
+  );
+  const volumeMl = volumes.length ? Math.max(...volumes) : 100;
+  const heightCm = Math.max(6, Math.min(22, Number((volumeMl / 10).toFixed(1))));
+  const weightKg = Math.max(0.12, Math.min(1.5, Number((volumeMl * 0.004 + 0.08).toFixed(3))));
+  return {
+    length: 12,
+    width: 8,
+    height: heightCm,
+    weight: weightKg,
+  };
+}
+
 function isWeakYandexWarehouseCard(product = {}) {
   const normalized = normalizeWarehouseProduct(product);
   if (cleanText(normalized.marketplace).toLowerCase() !== "yandex") return false;
-  const pictures = Array.from(new Set([
-    cleanText(normalized.imageUrl),
-    ...splitList(normalized.yandex?.pictures),
-    ...splitList(normalized.yandex?.images),
-  ].filter(Boolean)));
-  const vendor = cleanText(normalized.yandex?.vendor || normalized.brand || resolveWarehouseBrand(normalized));
+  const built = buildYandexOfferMapping(normalized);
+  const pictures = Array.isArray(built.offer?.pictures) ? built.offer.pictures : [];
+  const vendor = resolveYandexVendorFromProduct(normalized);
+  const dims = built.offer?.weightDimensions || {};
   const missingPhoto = !pictures.length;
   const missingBrand = !vendor || vendor.toLowerCase() === "без бренда";
-  return missingPhoto || missingBrand;
+  const missingDims = !(Number(dims.length) > 0 && Number(dims.width) > 0 && Number(dims.height) > 0 && Number(dims.weight) > 0);
+  return missingPhoto || missingBrand || missingDims;
+}
+
+function yandexOfferRepairSignature(built = {}) {
+  const offer = built.offer || {};
+  return JSON.stringify({
+    vendor: cleanText(offer.vendor),
+    pictures: Array.isArray(offer.pictures) ? offer.pictures : [],
+    weightDimensions: offer.weightDimensions || null,
+    name: cleanText(offer.name),
+    description: cleanText(offer.description),
+  });
 }
 
 function patchYandexWarehouseProductFromOzonDonor(yandexProduct = {}, ozonDonor = {}) {
@@ -5328,17 +5482,20 @@ function patchYandexWarehouseProductFromOzonDonor(yandexProduct = {}, ozonDonor 
     ...splitList(ozon.ozon?.primaryImage),
     ...splitList(ozon.ozon?.images),
   ].filter(Boolean)));
-  const vendor = cleanText(
-    yandex.yandex?.vendor
-    || ozon.ozon?.vendor
-    || ozon.brand
-    || resolveWarehouseBrand(ozon)
-    || yandex.brand,
-  );
+  const mergedForVendor = normalizeWarehouseProduct({
+    ...yandex,
+    ozon: { ...(yandex.ozon || {}), ...(ozon.ozon || {}) },
+    name: yandex.name || ozon.name,
+  });
+  const vendor = resolveYandexVendorFromProduct(mergedForVendor);
   const description = cleanText(
     yandex.yandex?.description
     || ozon.ozon?.description
+    || ozon.name
     || yandex.name,
+  );
+  const weightDimensions = resolveYandexWeightDimensionsFromProduct(
+    normalizeWarehouseProduct({ ...yandex, ozon: ozon.ozon || ozon, name: yandex.name || ozon.name }),
   );
   const now = new Date().toISOString();
   return normalizeWarehouseProduct({
@@ -5351,6 +5508,12 @@ function patchYandexWarehouseProductFromOzonDonor(yandexProduct = {}, ozonDonor 
       pictures,
       description: description || yandex.yandex?.description,
       name: cleanText(yandex.yandex?.name || yandex.name || ozon.name || ozon.ozon?.name),
+      extra: {
+        ...parseJsonField(yandex.yandex?.extra, {}),
+        weightDimensions,
+        repairedFromOzonAt: now,
+        repairedFromOzonId: ozon.id || "",
+      },
     },
     updatedAt: now,
   });
@@ -5383,6 +5546,8 @@ async function repairWeakYandexCardsFromOzonPostgres(prisma, {
   limit = 0,
   pushToYandex = false,
   batchSize = 50,
+  offerIds = [],
+  forcePush = false,
 } = {}) {
   if (!prisma) throw new Error("Postgres prisma client is required");
   const maxItems = Math.max(1, Math.min(50000, Number(limit || 0) || 50000));
@@ -5398,34 +5563,88 @@ async function repairWeakYandexCardsFromOzonPostgres(prisma, {
       take: 50000,
     }),
   ]);
-  const yandexProducts = yandexRows.map(productFromPostgres);
+  const offerIdFilter = new Set(
+    (Array.isArray(offerIds) ? offerIds : [])
+      .map((value) => cleanText(value).toLowerCase())
+      .filter(Boolean),
+  );
+  const yandexProducts = yandexRows
+    .map(productFromPostgres)
+    .filter((product) => !offerIdFilter.size || offerIdFilter.has(cleanText(product.offerId).toLowerCase()));
   const ozonProducts = ozonRows.map(productFromPostgres);
   const indexes = buildOzonDonorIndexes(ozonProducts);
-  const candidates = yandexProducts.filter((product) => isWeakYandexWarehouseCard(product));
+  const candidates = yandexProducts.filter((product) => (
+    forcePush || offerIdFilter.size || isWeakYandexWarehouseCard(product)
+  ));
   const changedProducts = [];
+  const pushOnlyProducts = [];
   const pushResults = [];
   const skipped = [];
 
   for (const yandexProduct of candidates) {
-    const donor = resolveOzonDonorForYandexProduct(yandexProduct, indexes);
+    const smallVolumeCheck = assessYandexSmallVolume(yandexProduct);
+    if (smallVolumeCheck.blocked) {
+      skipped.push({
+        id: yandexProduct.id,
+        offerId: yandexProduct.offerId,
+        reason: "small_volume_blocked",
+        minVolumeMl: smallVolumeCheck.minVolumeMl,
+      });
+      continue;
+    }
+    let donor = resolveOzonDonorForYandexProduct(yandexProduct, indexes);
     if (!donor) {
       skipped.push({ id: yandexProduct.id, offerId: yandexProduct.offerId, reason: "ozon_donor_not_found" });
       continue;
     }
-    const beforePhoto = Boolean(yandexProduct.imageUrl || yandexProduct.yandex?.pictures?.length);
-    const beforeVendor = cleanText(yandexProduct.yandex?.vendor || yandexProduct.brand);
+    const donorSmallVolumeCheck = assessYandexSmallVolume(donor);
+    if (donorSmallVolumeCheck.blocked) {
+      skipped.push({
+        id: yandexProduct.id,
+        offerId: yandexProduct.offerId,
+        reason: "donor_small_volume_blocked",
+        minVolumeMl: donorSmallVolumeCheck.minVolumeMl,
+      });
+      continue;
+    }
+    if (ozonDonorNeedsApiRefresh(donor)) {
+      try {
+        donor = await refreshOzonWarehouseDonorFromApi(donor);
+        if (!dryRun) {
+          await upsertWarehouseProductPostgres(prisma, donor);
+          if (Array.isArray(donor.links) && donor.links.length) {
+            await replaceProductLinksInPostgres(prisma, donor.id, donor.links);
+          }
+        }
+        indexes.byId.set(String(donor.id), donor);
+        const offerKey = cleanText(donor.offerId).toLowerCase();
+        if (offerKey) indexes.byOfferId.set(offerKey, donor);
+      } catch (error) {
+        logger.warn("yandex repair ozon donor refresh failed", {
+          offerId: yandexProduct.offerId,
+          donorId: donor.id,
+          detail: error?.message || String(error),
+        });
+      }
+    }
+    const beforeBuilt = buildYandexOfferMapping(normalizeWarehouseProduct(yandexProduct));
     const patched = patchYandexWarehouseProductFromOzonDonor(yandexProduct, donor);
-    const afterPhoto = Boolean(patched.imageUrl || patched.yandex?.pictures?.length);
-    const afterVendor = cleanText(patched.yandex?.vendor || patched.brand);
-    if (beforePhoto === afterPhoto && beforeVendor === afterVendor) {
+    const afterBuilt = buildYandexOfferMapping(patched);
+    if (yandexOfferRepairSignature(beforeBuilt) === yandexOfferRepairSignature(afterBuilt)) {
+      if (forcePush || offerIdFilter.size) {
+        pushOnlyProducts.push(patched);
+        continue;
+      }
       skipped.push({ id: yandexProduct.id, offerId: yandexProduct.offerId, reason: "no_changes" });
       continue;
     }
     changedProducts.push(patched);
   }
 
-  if (!dryRun && changedProducts.length) {
-    for (const chunk of chunkArray(changedProducts, Math.max(10, batchSize))) {
+  const productsToPersist = changedProducts;
+  const productsToPush = [...changedProducts, ...pushOnlyProducts];
+  if (!dryRun && productsToPersist.length) {
+    for (const chunk of chunkArray(productsToPersist, Math.max(10, batchSize))) {
       await runWithLimitedConcurrency(chunk, 5, async (product) => {
         await upsertWarehouseProductPostgres(prisma, product);
         if (Array.isArray(product.links) && product.links.length) {
@@ -5433,17 +5652,10 @@ async function repairWeakYandexCardsFromOzonPostgres(prisma, {
         }
       });
     }
-    if (pushToYandex) {
-      for (const product of changedProducts) {
-        const needsImage = Boolean(product.yandex?.pictures?.length);
-        const needsContent = Boolean(product.yandex?.vendor);
-        if (needsImage) {
-          pushResults.push(await sendApprovedYandexProductContent(product, { mode: "image", pictures: product.yandex.pictures }));
-        }
-        if (needsContent) {
-          pushResults.push(await sendApprovedYandexProductContent(product, { mode: "content" }));
-        }
-      }
+  }
+  if (!dryRun && pushToYandex && productsToPush.length) {
+    for (const product of productsToPush) {
+      pushResults.push(await sendApprovedYandexProductCardRepair(product));
     }
   }
 
@@ -5451,9 +5663,12 @@ async function repairWeakYandexCardsFromOzonPostgres(prisma, {
     ok: true,
     dryRun,
     pushToYandex,
+    forcePush,
+    offerIds: Array.from(offerIdFilter),
     scannedYandex: yandexProducts.length,
     weakCandidates: candidates.length,
     changed: changedProducts.length,
+    pushOnly: pushOnlyProducts.length,
     skipped: skipped.length,
     pushed: pushResults.filter((item) => item?.ok).length,
     pushFailed: pushResults.filter((item) => item && !item.ok).length,
@@ -5533,6 +5748,7 @@ function materializeYandexExportedProductsForWarehouse(warehouse = {}) {
     const normalized = normalizeWarehouseProduct(product);
     if (normalized.marketplace !== "ozon") continue;
     if (!normalized.offerId) continue;
+    if (isYandexSmallVolumeBlocked(normalized)) continue;
     const exports = normalized.exports || {};
     const yandexSent = exports.yandex?.status === "sent";
     const matchingShops = shops.filter((shop) => exports[shop.id]?.status === "sent");
@@ -5601,13 +5817,24 @@ function resolveWarehouseProductPairOzonId(product = {}) {
 
 function buildWarehouseCatalogGroupContext(products = []) {
   const ozonIdsReferencedByYandex = new Set();
+  const offerIdMarketplaces = new Map();
   for (const product of Array.isArray(products) ? products : []) {
     const normalized = normalizeWarehouseProduct(product);
-    if (cleanText(normalized.marketplace).toLowerCase() !== "yandex") continue;
+    const marketplace = cleanText(normalized.marketplace).toLowerCase();
+    const offerId = cleanText(normalized.offerId || normalized.offer_id).toLowerCase();
+    if (offerId) {
+      if (!offerIdMarketplaces.has(offerId)) offerIdMarketplaces.set(offerId, new Set());
+      if (marketplace) offerIdMarketplaces.get(offerId).add(marketplace);
+    }
+    if (marketplace !== "yandex") continue;
     const sourceId = extractYandexSourceProductId(normalized);
     if (sourceId) ozonIdsReferencedByYandex.add(sourceId.toLowerCase());
   }
-  return { ozonIdsReferencedByYandex };
+  const pairedOfferIds = new Set();
+  for (const [offerId, marketplaces] of offerIdMarketplaces) {
+    if (marketplaces.has("ozon") && marketplaces.has("yandex")) pairedOfferIds.add(offerId);
+  }
+  return { ozonIdsReferencedByYandex, pairedOfferIds };
 }
 
 function warehouseProductSharesGroup(product = {}, groupContext = null, groupKeys = null, pairOzonIds = null) {
@@ -5686,6 +5913,7 @@ function warehouseProductsShareAutoPairGroup(left = {}, right = {}) {
 }
 
 function ozonProductShouldMaterializeYandexSibling(product = {}, shop = {}, options = {}) {
+  if (isYandexSmallVolumeBlocked(product)) return false;
   const offerId = cleanText(product.offerId).toLowerCase();
   if (!offerId) return false;
   const yandexOfferIds = options.yandexOfferIds instanceof Set ? options.yandexOfferIds : new Set();
@@ -8187,40 +8415,46 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
 }
 
 function buildYandexOfferMapping(product, overrides = {}) {
-  const ozon = product.ozon || {};
+  const normalized = normalizeWarehouseProduct(product);
+  const ozon = normalized.ozon || {};
   const yandex = {
-    ...(product.yandex || {}),
+    ...(normalized.yandex || {}),
     ...(overrides.yandex || {}),
   };
   const pictures = Array.from(
     new Set([
+      cleanText(normalized.imageUrl),
       ...splitList(yandex.pictures),
       ...splitList(yandex.images),
       ...splitList(ozon.primaryImage),
       ...splitList(ozon.images),
-    ]),
+    ].filter(Boolean)),
   );
   const barcodes = Array.from(new Set([...splitList(yandex.barcodes), ...splitList(ozon.barcode), ...splitList(ozon.barcodes)]));
   const price = Number(
     overrides.price ||
       yandex.price ||
-      product.targetPrice ||
-      product.nextPrice ||
-      product.marketplacePrice ||
+      normalized.targetPrice ||
+      normalized.nextPrice ||
+      normalized.marketplacePrice ||
       ozon.price ||
       0,
   );
   const extra = parseJsonField(yandex.extra, {});
+  const { weightDimensions: _cachedDims, ...extraRest } = extra;
+  const weightDimensions = resolveYandexWeightDimensionsFromProduct(normalized);
+  const vendor = resolveYandexVendorFromProduct(normalized) || "Без бренда";
   const offer = compactObject({
-    offerId: cleanText(overrides.offerId || yandex.offerId || product.offerId),
-    name: cleanText(overrides.name || yandex.name || ozon.name || product.name),
+    offerId: cleanText(overrides.offerId || yandex.offerId || normalized.offerId),
+    name: cleanText(overrides.name || yandex.name || ozon.name || normalized.name),
     marketCategoryId: Number(yandex.marketCategoryId || ozon.marketCategoryId || ozon.categoryId || 0) || undefined,
     pictures,
-    vendor: cleanText(yandex.vendor || ozon.vendor || "Без бренда"),
-    description: cleanText(yandex.description || ozon.description || product.name),
+    vendor,
+    description: cleanText(yandex.description || ozon.description || normalized.name),
     barcodes,
+    weightDimensions,
     basicPrice: price > 0 ? { value: roundPrice(price), currencyId: "RUR" } : undefined,
-    ...extra,
+    ...extraRest,
   });
 
   const missing = [];
@@ -8228,8 +8462,11 @@ function buildYandexOfferMapping(product, overrides = {}) {
   if (!offer.name) missing.push("name");
   if (!offer.marketCategoryId) missing.push("marketCategoryId");
   if (!offer.pictures?.length) missing.push("pictures");
-  if (!offer.vendor) missing.push("vendor");
+  if (!offer.vendor || offer.vendor.toLowerCase() === "без бренда") missing.push("vendor");
   if (!offer.description) missing.push("description");
+  if (!(Number(offer.weightDimensions?.length) > 0 && Number(offer.weightDimensions?.weight) > 0)) {
+    missing.push("weightDimensions");
+  }
 
   return { offer, missing, ready: missing.length === 0 };
 }
@@ -8238,6 +8475,10 @@ async function sendApprovedYandexProductContent(product = {}, options = {}) {
   const normalized = normalizeWarehouseProduct(product);
   if (cleanText(normalized.marketplace).toLowerCase() !== "yandex") {
     return { ok: true, skipped: true, reason: "not_yandex" };
+  }
+  const smallVolumeCheck = assessYandexSmallVolume(normalized);
+  if (smallVolumeCheck.blocked) {
+    return { ok: false, error: "yandex_small_volume_blocked", ...smallVolumeCheck };
   }
   const shop = getYandexShopByTarget(normalized.target);
   if (!shop) return { ok: false, error: "yandex_shop_not_found" };
@@ -8294,6 +8535,78 @@ async function sendApprovedYandexProductContent(product = {}, options = {}) {
     result,
   };
   logger.info("approved yandex product content sent", sent);
+  return sent;
+}
+
+async function sendApprovedYandexProductCardRepair(product = {}, options = {}) {
+  const normalized = normalizeWarehouseProduct(product);
+  if (cleanText(normalized.marketplace).toLowerCase() !== "yandex") {
+    return { ok: true, skipped: true, reason: "not_yandex" };
+  }
+  const smallVolumeCheck = assessYandexSmallVolume(normalized);
+  if (smallVolumeCheck.blocked) {
+    return { ok: false, error: "yandex_small_volume_blocked", ...smallVolumeCheck };
+  }
+  const shop = getYandexShopByTarget(normalized.target);
+  if (!shop) return { ok: false, error: "yandex_shop_not_found" };
+  if (!shop.apiKey || !shop.businessId) {
+    return { ok: false, error: "yandex_shop_not_configured", target: shop.id || normalized.target };
+  }
+
+  const built = buildYandexOfferMapping(normalized);
+  const vendor = cleanText(built.offer?.vendor);
+  const partialOffer = compactObject({
+    offerId: built.offer?.offerId || normalized.offerId,
+    name: built.offer?.name,
+    marketCategoryId: built.offer?.marketCategoryId,
+    vendor: vendor && vendor.toLowerCase() !== "без бренда" ? vendor : undefined,
+    description: built.offer?.description,
+    pictures: built.offer?.pictures?.length ? built.offer.pictures : undefined,
+    weightDimensions: built.offer?.weightDimensions,
+    barcodes: built.offer?.barcodes?.length ? built.offer.barcodes : undefined,
+  });
+  const missing = [];
+  if (!partialOffer.offerId) missing.push("offerId");
+  if (!partialOffer.weightDimensions) missing.push("weightDimensions");
+  if (missing.length) {
+    return {
+      ok: false,
+      error: `yandex_card_repair_not_ready: ${missing.join(", ")}`,
+      mode: "card_repair",
+      missing,
+      target: shop.id,
+      offerId: partialOffer.offerId || normalized.offerId,
+      builtMissing: built.missing,
+    };
+  }
+
+  const [result] = await sendYandexOfferMappings(shop, [partialOffer]);
+  if (!result?.ok) {
+    const failed = {
+      ok: false,
+      error: result?.error || "yandex_card_repair_failed",
+      mode: "card_repair",
+      target: shop.id,
+      businessId: shop.businessId,
+      offerId: partialOffer.offerId,
+      result,
+    };
+    logger.warn("approved yandex product card repair failed", failed);
+    return failed;
+  }
+  const sent = {
+    ok: true,
+    mode: "card_repair",
+    target: shop.id,
+    businessId: shop.businessId,
+    offerId: partialOffer.offerId,
+    fields: Object.keys(partialOffer).filter((key) => key !== "offerId"),
+    vendor: partialOffer.vendor || "",
+    pictures: partialOffer.pictures?.length || 0,
+    weightDimensions: partialOffer.weightDimensions,
+    result,
+  };
+  logger.info("approved yandex product card repair sent", sent);
   return sent;
 }
 
@@ -8530,16 +8843,75 @@ async function generateAiProductContentDraft(product = {}, options = {}) {
   return draft;
 }
 
+const YANDEX_MIN_VOLUME_ML = 20;
+
 function extractOzonYandexImportVolumesMl(name = "") {
-  const text = cleanText(name).replace(",", ".");
+  const raw = cleanText(name);
+  if (!raw) return [];
+  const text = raw.replace(/(\d),(\d)/g, "$1.$2");
   const volumes = [];
-  const pattern = /(\d+(?:\.\d+)?)\s*(?:мл|ml)(?![a-zа-я])/giu;
-  let match;
-  while ((match = pattern.exec(text))) {
-    const value = Number(match[1]);
-    if (Number.isFinite(value)) volumes.push(value);
+  const seen = new Set();
+  const add = (value) => {
+    const number = Number(value);
+    if (!Number.isFinite(number) || number <= 0) return;
+    const key = String(number);
+    if (seen.has(key)) return;
+    seen.add(key);
+    volumes.push(number);
+  };
+  const mlSuffix = "(?:мл|ml)(?![a-zа-яё])";
+  const patterns = [
+    new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${mlSuffix}`, "giu"),
+    new RegExp(`(\\d+(?:\\.\\d+)?)${mlSuffix}`, "giu"),
+    new RegExp(`(\\d+)\\s*[xх×]\\s*(\\d+(?:\\.\\d+)?)\\s*${mlSuffix}`, "giu"),
+    /travel\s*set/iu,
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(text))) {
+      if (/travel\s*set/i.test(pattern.source)) {
+        add(10);
+        continue;
+      }
+      if (pattern.source.includes("[xх×]")) add(match[2]);
+      else add(match[1]);
+    }
   }
   return volumes;
+}
+
+function collectYandexVolumeSearchText(product = {}) {
+  if (typeof product === "string") return cleanText(product);
+  const normalized = normalizeWarehouseProduct(product);
+  return [
+    normalized.name,
+    normalized.offerId,
+    normalized.ozon?.name,
+    normalized.ozon?.description,
+    normalized.yandex?.name,
+    normalized.yandex?.description,
+    flattenAttributeText(normalized.ozon?.attributes),
+    flattenAttributeText(normalized.yandex?.attributes),
+  ].map(cleanText).filter(Boolean).join(" ");
+}
+
+function assessYandexSmallVolume(productOrText = {}) {
+  const searchText = collectYandexVolumeSearchText(productOrText);
+  const volumesMl = extractOzonYandexImportVolumesMl(searchText);
+  const minVolumeMl = volumesMl.length ? Math.min(...volumesMl) : null;
+  const blocked = minVolumeMl !== null && minVolumeMl < YANDEX_MIN_VOLUME_ML;
+  const smallVolumes = volumesMl.filter((value) => value < YANDEX_MIN_VOLUME_ML);
+  return {
+    blocked,
+    minVolumeMl,
+    volumesMl,
+    searchText,
+    reason: blocked ? `Объем меньше ${YANDEX_MIN_VOLUME_ML} мл: ${smallVolumes.join(", ")} мл` : "",
+  };
+}
+
+function isYandexSmallVolumeBlocked(productOrText = {}) {
+  return assessYandexSmallVolume(productOrText).blocked;
 }
 
 function ozonYandexImportBlockReasons(product = {}) {
@@ -8557,11 +8929,12 @@ function ozonYandexImportBlockReasons(product = {}) {
   }
   if (lower.includes("отливант")) reasons.push("Название содержит «Отливант»");
   if (/без\s+коробк/iu.test(lower)) reasons.push("Название содержит «без коробки»");
-  const smallVolumes = extractOzonYandexImportVolumesMl(name).filter((value) => value < 20);
-  if (smallVolumes.length) reasons.push(`Объем меньше 20 мл: ${smallVolumes.join(", ")} мл`);
-  const volumes = extractOzonYandexImportVolumesMl(name);
+  const volumeText = collectYandexVolumeSearchText(product);
+  const smallVolumeCheck = assessYandexSmallVolume(volumeText);
+  if (smallVolumeCheck.blocked) reasons.push(smallVolumeCheck.reason);
+  const volumes = extractOzonYandexImportVolumesMl(volumeText);
   if (!volumes.length) reasons.push("В названии нет объема в мл");
-  const hugeVolumes = extractOzonYandexImportVolumesMl(name).filter((value) => value > 500);
+  const hugeVolumes = extractOzonYandexImportVolumesMl(volumeText).filter((value) => value > 500);
   if (hugeVolumes.length || /\d+\s+\d{3}\s*(?:мл|ml)(?![a-zа-я])/iu.test(name)) {
     reasons.push(`Подозрительный объем${hugeVolumes.length ? `: ${hugeVolumes.join(", ")} мл` : ""}`);
   }
@@ -8691,9 +9064,10 @@ function buildYandexCleanupCandidate(item = {}, shop = {}, protectedBrandsInput 
     const normalizedBrand = normalizeBrandSearchText(brand);
     return normalizedBrand && searchText.includes(normalizedBrand);
   });
-  const volumesMl = extractOzonYandexImportVolumesMl(searchableTextRaw);
-  const minVolumeMl = volumesMl.length ? Math.min(...volumesMl) : null;
-  const smallVolume = minVolumeMl !== null && minVolumeMl < 20;
+  const volumeAssessment = assessYandexSmallVolume(searchableTextRaw);
+  const volumesMl = volumeAssessment.volumesMl;
+  const minVolumeMl = volumeAssessment.minVolumeMl;
+  const smallVolume = volumeAssessment.blocked;
   const protectedByBrand = matchedBrands.length > 0 && !smallVolume;
   return {
     id: `${shop.businessId || shop.id || "yandex"}:${offerId}`,
@@ -9039,6 +9413,7 @@ async function sendYandexStocksFromOzonProducts(products = [], options = {}) {
     warnings.push(yandexMissingStockCampaignWarning(missingCampaignShops.length));
   }
   const rows = (Array.isArray(products) ? products : [])
+    .filter((product) => !isYandexSmallVolumeBlocked(product))
     .map((product) => ({
       id: product.id,
       offerId: cleanText(product.offerId || product.offer_id),
@@ -9228,8 +9603,8 @@ function likeSearch(value) {
   return `%${String(value || "").trim()}%`;
 }
 
-function mapPriceMasterSearchResponseRow(row = {}, usdRate = 95) {
-  const priceCurrency = cleanText(row.priceCurrency || row.currency || row.sourceCurrency || "USD") || "USD";
+function mapPriceMasterSearchResponseRow(row = {}, usdRate = 95, supplierMaps = managedSupplierMaps()) {
+  const priceCurrency = resolvePriceMasterRowCurrency(row, {}, supplierMaps, usdRate);
   const normalizedPrice = normalizePriceMasterPrice(row.price ?? row.NativePrice ?? 0, usdRate, priceCurrency);
   const article = cleanText(row.article || row.NativeID || row.offerId || row.nativeId || "");
   const name = cleanText(row.name || row.NativeName || row.nativeName || "");
@@ -11926,8 +12301,36 @@ function applyOzonInfoToWarehouseProduct(product, info = {}, account = {}, stock
       images: info.images || product.ozon?.images || [],
       images360: info.images360 || product.ozon?.images360 || [],
       colorImage: firstImageUrl(info.color_image) || product.ozon?.colorImage || "",
+      depth: Number(info.depth || product.ozon?.depth || 0) || undefined,
+      width: Number(info.width || product.ozon?.width || 0) || undefined,
+      height: Number(info.height || product.ozon?.height || 0) || undefined,
+      weight: Number(info.weight || product.ozon?.weight || 0) || undefined,
+      dimensionUnit: cleanText(info.dimension_unit || info.dimensionUnit || product.ozon?.dimensionUnit || "mm"),
+      weightUnit: cleanText(info.weight_unit || info.weightUnit || product.ozon?.weightUnit || "g"),
     },
   });
+}
+
+function ozonDonorNeedsApiRefresh(donor = {}) {
+  const normalized = normalizeWarehouseProduct(donor);
+  const pictures = [
+    cleanText(normalized.imageUrl),
+    cleanText(normalized.ozon?.primaryImage),
+    ...splitList(normalized.ozon?.images),
+  ].filter(Boolean);
+  return !pictures.length
+    || isWeakProductName(normalized.name, normalized.offerId)
+    || !(Number(normalized.ozon?.depth) > 0 && Number(normalized.ozon?.weight) > 0);
+}
+
+async function refreshOzonWarehouseDonorFromApi(donor = {}) {
+  const normalized = normalizeWarehouseProduct(donor);
+  const account = getOzonAccountByTarget(normalized.target);
+  if (!account || !normalized.offerId) return normalized;
+  const infoMap = await getOzonProductInfoMap([normalized.offerId], account, { continueOnError: true });
+  const info = infoMap.get(normalized.offerId) || {};
+  if (!Object.keys(info).length) return normalized;
+  return applyOzonInfoToWarehouseProduct(normalized, info, account, {}, {});
 }
 
 async function enrichWarehouseProducts(productIds = []) {
@@ -12097,9 +12500,19 @@ function supplierCartOrderScore(row = {}, now = new Date()) {
   return price * (1 + trustPenalty + resellerPenalty) + cutoffPenalty;
 }
 
-function resolvePriceMasterRowCurrency(row = {}, link = {}, maps = managedSupplierMaps()) {
+function resolvePriceMasterRowCurrency(row = {}, link = {}, maps = managedSupplierMaps(), usdRate = Number(process.env.DEFAULT_USD_RATE || 95) || 95) {
   const supplier = findManagedSupplierForPriceMasterRow(row, maps);
-  return supplier?.priceCurrency || link.priceCurrency || "USD";
+  const explicit = priceMasterRowExplicitCurrency(row);
+  if (explicit) return explicit;
+  if (supplierUsesRubPriceMasterPricing(supplier, row)) return "RUB";
+  if (cleanText(supplier?.priceCurrency).toUpperCase() === "RUB") return "RUB";
+  const inferred = inferPriceMasterRowCurrency(row, supplier, usdRate);
+  if (inferred) return inferred;
+  const linkCurrency = cleanText(link.priceCurrency || "").toUpperCase();
+  if (linkCurrency === "RUB" || linkCurrency === "RUR") return "RUB";
+  if (supplier?.priceCurrency) return supplier.priceCurrency;
+  if (linkCurrency === "USD") return "USD";
+  return "USD";
 }
 
 async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate) {
@@ -12127,7 +12540,7 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
         const fields = priceMasterSnapshotRowFields(row);
         const stoppedSupplier = stoppedMap.get(normalizeSupplierName(fields.partnerName));
         const pricingMeta = priceMasterSupplierPricingMeta(fields, supplierMaps);
-        const priceCurrency = resolvePriceMasterRowCurrency(fields, link, supplierMaps);
+        const priceCurrency = resolvePriceMasterRowCurrency(fields, link, supplierMaps, usdRate);
         const normalizedPrice = normalizePriceMasterPrice(fields.price, usdRate, priceCurrency);
         const price = stoppedSupplier ? 0 : normalizedPrice.price;
         const active = stoppedSupplier ? false : Boolean(fields.active);
@@ -12211,7 +12624,7 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
   return rows
     .filter((row) => priceMasterRowMatchesLink(row, link))
     .map((row) => {
-      const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
+      const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps, usdRate);
       const pricingMeta = priceMasterSupplierPricingMeta(row, supplierMaps);
       const priceData = normalizePriceMasterPrice(row.price, usdRate, priceCurrency);
       return {
@@ -12234,6 +12647,7 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
 
 function priceMasterSnapshotLinkRow(row = {}, link = {}, usdRate, supplierMaps = managedSupplierMaps()) {
   const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  const rowCurrency = cleanText(row.currency || raw.currency || raw.priceCurrency).toUpperCase();
   const base = {
     article: cleanText(row.article || raw.article || raw.NativeID || raw.offerId || ""),
     name: cleanText(row.nativeName || raw.name || raw.NativeName || ""),
@@ -12244,8 +12658,9 @@ function priceMasterSnapshotLinkRow(row = {}, link = {}, usdRate, supplierMaps =
     docDate: row.docDate instanceof Date ? row.docDate.toISOString() : cleanText(row.docDate || raw.docDate || raw.DocDate || ""),
     partnerId: cleanText(row.partnerId || raw.partnerId || raw.PartnerID || ""),
     partnerName: cleanText(row.partnerName || raw.partnerName || raw.PartnerName || raw.name || ""),
+    currency: rowCurrency === "RUB" || rowCurrency === "RUR" ? "RUB" : (rowCurrency === "USD" ? "USD" : ""),
   };
-  const priceCurrency = resolvePriceMasterRowCurrency(base, link, supplierMaps);
+  const priceCurrency = resolvePriceMasterRowCurrency(base, link, supplierMaps, usdRate);
   const pricingMeta = priceMasterSupplierPricingMeta(base, supplierMaps);
   const priceData = normalizePriceMasterPrice(base.price, usdRate, priceCurrency);
   return {
@@ -12473,7 +12888,7 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
       .map((row) => {
         const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
         const pricingMeta = priceMasterSupplierPricingMeta(row, supplierMaps);
-        const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps);
+        const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps, usdRate);
         const normalizedPrice = normalizePriceMasterPrice(row.price, usdRate, priceCurrency);
         const price = stoppedSupplier ? 0 : normalizedPrice.price;
         const active = stoppedSupplier ? false : Boolean(row.active);
@@ -12696,14 +13111,16 @@ function resolveMarkupCoefficient({ productMarkup, marketplace, supplierUsdPrice
 
 function resolveAvailabilityPolicy({ marketplace, availableSupplierCount = 0, baseMarkup = 0, appSettings } = {}) {
   const count = Math.max(0, Number(availableSupplierCount || 0));
-  const rules = Array.isArray(appSettings?.availabilityRules) ? appSettings.availabilityRules : [];
+  let rules = Array.isArray(appSettings?.availabilityRules) ? appSettings.availabilityRules : [];
+  if (!rules.length) rules = defaultAppSettings().availabilityRules;
   const scopedRules = rules.filter((rule) => !rule.marketplace || rule.marketplace === "all" || rule.marketplace === marketplace);
   const sorted = [...scopedRules].sort((a, b) => Number(b.minAvailableSuppliers || 0) - Number(a.minAvailableSuppliers || 0));
   const matched = sorted.find((rule) => count >= Number(rule.minAvailableSuppliers || 0)) || null;
   const base = Number(baseMarkup || 0);
   const delta = Number(matched?.coefficientDelta || 0);
   const markupCoefficient = base > 0 ? Math.max(0.0001, Number((base + delta).toFixed(4))) : base;
-  const targetStock = matched ? Math.max(0, Math.round(Number(matched.targetStock || 0))) : null;
+  const policyStock = matched ? Math.max(0, Math.round(Number(matched.targetStock || 0))) : null;
+  const targetStock = policyStock && policyStock > 0 ? policyStock : (count > 0 ? 3 : null);
   return {
     rule: matched,
     baseMarkup: base,
@@ -12711,6 +13128,18 @@ function resolveAvailabilityPolicy({ marketplace, availableSupplierCount = 0, ba
     markupCoefficient,
     targetStock,
   };
+}
+
+function resolveWarehouseTargetStock(availabilityPolicy = {}, {
+  selectedSupplierWithPolicy = null,
+  availableSupplierCount = 0,
+  stockOnlyAvailableSupplierCount = 0,
+} = {}) {
+  const policyStock = Number(availabilityPolicy?.targetStock);
+  if (Number.isFinite(policyStock) && policyStock > 0) return policyStock;
+  const supplierCount = Math.max(0, Number(availableSupplierCount || 0)) + Math.max(0, Number(stockOnlyAvailableSupplierCount || 0));
+  if (selectedSupplierWithPolicy || supplierCount > 0) return 3;
+  return null;
 }
 
 function enrichSupplierPriceCandidates(suppliers = [], {
@@ -13137,7 +13566,11 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       availableSupplierCount,
       availabilityRule: availabilityPolicy.rule,
       targetStock: selectedSupplierWithPolicy
-        ? availabilityPolicy.targetStock
+        ? resolveWarehouseTargetStock(availabilityPolicy, {
+          selectedSupplierWithPolicy,
+          availableSupplierCount,
+          stockOnlyAvailableSupplierCount,
+        })
         : (product.marketplace === "yandex" ? Number(product.targetStock || 0) || null : null),
       hasLinks: links.length > 0,
       autoArchiveCandidate: links.length === 0,
@@ -13399,7 +13832,11 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       availableSupplierCount,
       availabilityRule: availabilityPolicy.rule,
       targetStock: selectedSupplierWithPolicy
-        ? availabilityPolicy.targetStock
+        ? resolveWarehouseTargetStock(availabilityPolicy, {
+          selectedSupplierWithPolicy,
+          availableSupplierCount,
+          stockOnlyAvailableSupplierCount,
+        })
         : (product.marketplace === "yandex" ? Number(product.targetStock || 0) || null : null),
       hasLinks: links.length > 0,
       autoArchiveCandidate: links.length === 0,
@@ -13778,27 +14215,187 @@ function warehousePageShouldUseLightBuild() {
     || Boolean(marketplaceMaintenanceRunning || manualWarehouseSyncPromise || dailySyncPromise);
 }
 
+function mapWarehousePageItemFromProduct(product = {}) {
+  const item = normalizeWarehouseProduct(product);
+  const links = Array.isArray(item.links) ? item.links : [];
+  const selectedSupplier = product.selectedSupplier || null;
+  const stockOnlyFallbackActive = Boolean(product.stockOnlyFallbackActive);
+  const hasSupplier = Boolean(selectedSupplier) || stockOnlyFallbackActive;
+  return {
+    ...item,
+    autoPriceEnabled: item.autoPriceEnabled !== false,
+    links,
+    suppliers: Array.isArray(product.suppliers) ? product.suppliers : [],
+    selectedSupplier,
+    stockOnlyFallbackActive,
+    nextPrice: Number(product.nextPrice ?? product.newPrice ?? item.targetPrice ?? 0) || null,
+    newPrice: Number(product.newPrice ?? product.nextPrice ?? 0) || null,
+    targetPrice: Number(product.targetPrice ?? item.targetPrice ?? 0) || null,
+    ready: Boolean(product.ready),
+    changed: Boolean(product.changed),
+    supplierCount: Number(product.supplierCount ?? item.supplierCount ?? 0),
+    availableSupplierCount: Number(product.availableSupplierCount ?? item.availableSupplierCount ?? 0),
+    priceSource: product.priceSource || null,
+    priceSelectionReason: product.priceSelectionReason || null,
+    noSupplierAutomation: item.noSupplierAutomation || {},
+    marketplaceState: item.marketplaceState || {},
+    targetStock: Number.isFinite(Number(product.targetStock))
+      ? Number(product.targetStock)
+      : (Number.isFinite(Number(product.priceFormula?.targetStock)) ? Number(product.priceFormula.targetStock) : item.targetStock),
+    partial: Boolean(product.partial) || (links.length > 0 && !hasSupplier),
+  };
+}
+
 function mapWarehousePageProductsLight(pageProducts = [], normalizedSuppliers = []) {
   return (Array.isArray(pageProducts) ? pageProducts : []).map((product) => {
-    const item = normalizeWarehouseProduct(product);
-    const links = Array.isArray(item.links) ? item.links : [];
-    const hasSupplier = Boolean(item.selectedSupplier) || Boolean(item.stockOnlyFallbackActive);
+    const item = mapWarehousePageItemFromProduct(product);
     return {
       ...item,
-      autoPriceEnabled: item.autoPriceEnabled !== false,
-      links,
-      suppliers: Array.isArray(item.suppliers) ? item.suppliers : normalizedSuppliers,
-      selectedSupplier: item.selectedSupplier || null,
-      noSupplierAutomation: item.noSupplierAutomation || {},
-      marketplaceState: item.marketplaceState || {},
-      partial: links.length > 0 && !hasSupplier,
+      suppliers: Array.isArray(item.suppliers) && item.suppliers.length ? item.suppliers : normalizedSuppliers,
     };
   });
 }
 
+function applyGroupLinkInheritanceForPage(products = []) {
+  const normalized = (Array.isArray(products) ? products : []).map(normalizeWarehouseProduct);
+  if (!normalized.length) return normalized;
+  const groupContext = buildWarehouseCatalogGroupContext(normalized);
+  const donorsByKey = new Map();
+  for (const product of normalized) {
+    const links = compactWarehouseLinks(product.links || []);
+    if (!links.length) continue;
+    const key = warehouseProductPageGroupKey(product, groupContext) || `id:${product.id}`;
+    const existing = donorsByKey.get(key);
+    if (!existing || compactWarehouseLinks(existing.links || []).length < links.length) {
+      donorsByKey.set(key, normalizeWarehouseProduct({ ...product, links }));
+    }
+  }
+  return normalized.map((product) => {
+    const links = compactWarehouseLinks(product.links || []);
+    if (links.length) return product;
+    const key = warehouseProductPageGroupKey(product, groupContext) || `id:${product.id}`;
+    const donor = donorsByKey.get(key);
+    if (!donor?.links?.length) return product;
+    return normalizeWarehouseProduct({ ...product, links: donor.links });
+  });
+}
+
+function displaySupplierFromProductLinks(product = {}) {
+  if (product?.selectedSupplier) return product.selectedSupplier;
+  const link = compactWarehouseLinks(product?.links || [])[0];
+  if (!link) return null;
+  const supplierName = cleanText(link.supplierName || link.name || "");
+  const article = cleanText(link.article || link.supplierArticle || "");
+  if (!supplierName && !article) return null;
+  return {
+    supplierName,
+    article,
+    partnerId: link.partnerId || "",
+    price: link.price ?? link.calculatedPrice ?? null,
+    displayOnly: true,
+  };
+}
+
+function propagateGroupSupplierContextForPage(products = []) {
+  const originals = Array.isArray(products) ? products.map((product) => ({ ...product })) : [];
+  if (!originals.length) return originals;
+  const normalized = originals.map(normalizeWarehouseProduct);
+  const groupContext = buildWarehouseCatalogGroupContext(normalized);
+  const donorsByKey = new Map();
+  const donorScore = (product = {}) => {
+    if (product.selectedSupplier || product.stockOnlyFallbackActive) return 3;
+    if (displaySupplierFromProductLinks(product)) return 2;
+    if (Number(product.nextPrice || product.targetPrice || 0) > 0) return 2;
+    if (compactWarehouseLinks(product.links || []).length) return 1;
+    return 0;
+  };
+  for (const product of originals) {
+    const score = donorScore(product);
+    if (!score) continue;
+    const key = warehouseProductPageGroupKey(normalizeWarehouseProduct(product), groupContext) || `id:${product.id}`;
+    const prev = donorsByKey.get(key);
+    if (!prev || donorScore(prev) < score) donorsByKey.set(key, product);
+  }
+  return originals.map((product) => {
+    if (product.selectedSupplier || product.stockOnlyFallbackActive) return product;
+    const links = compactWarehouseLinks(product.links || []);
+    if (!links.length) return product;
+    const key = warehouseProductPageGroupKey(normalizeWarehouseProduct(product), groupContext) || `id:${product.id}`;
+    const donor = donorsByKey.get(key);
+    if (!donor || !donorScore(donor)) return product;
+    const donorTargetStock = Number(donor.targetStock ?? donor.priceFormula?.targetStock ?? 0);
+    const productTargetStock = Number(product.targetStock ?? product.priceFormula?.targetStock ?? 0);
+    return {
+      ...product,
+      selectedSupplier: donor.selectedSupplier || displaySupplierFromProductLinks(donor) || null,
+      stockOnlyFallbackActive: Boolean(donor.stockOnlyFallbackActive),
+      nextPrice: Number(product.nextPrice || donor.nextPrice || 0) || product.nextPrice,
+      targetPrice: Number(product.targetPrice || donor.targetPrice || 0) || product.targetPrice,
+      targetStock: productTargetStock > 0 ? productTargetStock : (donorTargetStock > 0 ? donorTargetStock : product.targetStock),
+      priceFormula: product.priceFormula || donor.priceFormula,
+      supplierCount: Number(donor.supplierCount || product.supplierCount || 0),
+      availableSupplierCount: Number(donor.availableSupplierCount || product.availableSupplierCount || 0),
+      priceSource: product.priceSource || donor.priceSource,
+      priceSelectionReason: product.priceSelectionReason || donor.priceSelectionReason,
+      status: product.status || donor.status,
+      ready: Boolean(product.ready || donor.ready || (donor.selectedSupplier && donorTargetStock > 0)),
+    };
+  });
+}
+
+function warehousePageShouldUseLightEnrich(filters = {}) {
+  const linked = cleanText(filters.linked || "all");
+  if (linked === "ready" || linked === "changed" || linked === "linked_archived") return false;
+  return true;
+}
+
+function enrichWarehousePageProductsLight(pageWarehouse = {}) {
+  const warehouse = {
+    ...(pageWarehouse || {}),
+    products: applyGroupLinkInheritanceForPage(Array.isArray(pageWarehouse?.products) ? pageWarehouse.products : []),
+    suppliers: Array.isArray(pageWarehouse?.suppliers) ? pageWarehouse.suppliers : [],
+  };
+  const propagated = propagateGroupSupplierContextForPage(warehouse.products);
+  return propagated.map((product) => mapWarehousePageItemFromProduct(product));
+}
+
+async function enrichWarehousePageProductsForDisplay(pageWarehouse = {}, { usdRate = 95, traceStartedAt = 0, traceLabel = "postgres:after-build" } = {}) {
+  const warehouse = {
+    ...(pageWarehouse || {}),
+    products: applyGroupLinkInheritanceForPage(Array.isArray(pageWarehouse?.products) ? pageWarehouse.products : []),
+    suppliers: Array.isArray(pageWarehouse?.suppliers) ? pageWarehouse.suppliers : [],
+  };
+  const linkedIds = warehouse.products
+    .filter((product) => compactWarehouseLinks(product.links || []).length > 0)
+    .map((product) => product.id);
+  let builtMap = new Map();
+  if (linkedIds.length) {
+    const built = await buildFreshWarehouseProductsForWarehouse(
+      warehouse,
+      linkedIds,
+      {
+        refreshPrices: false,
+        persistMutations: false,
+        livePriceMaster: false,
+        batchPriceMaster: false,
+        usdRate,
+      },
+    );
+    if (traceStartedAt) pageTrace(traceLabel, traceStartedAt);
+    builtMap = new Map(built.map((product) => [product.id, product]));
+    queueLinkedUnavailableSupplierZeroStock(built, { source: "warehouse_page" });
+  }
+  const enrichedProducts = propagateGroupSupplierContextForPage(
+    warehouse.products.map((product) => builtMap.get(product.id) || product),
+  );
+  return enrichedProducts.map((product) => mapWarehousePageItemFromProduct(product));
+}
+
 function mapServerWarehousePageGroup(group = {}) {
-  const products = Array.isArray(group.products) ? group.products.map(normalizeWarehouseProduct) : [];
-  const primary = products.find((product) => cleanText(product.marketplace).toLowerCase() === "ozon")
+  const products = Array.isArray(group.products) ? group.products.map(mapWarehousePageItemFromProduct) : [];
+  const primary = products.find((product) => product.selectedSupplier)
+    || products.find((product) => Number(product.nextPrice || product.targetPrice || 0) > 0)
+    || products.find((product) => cleanText(product.marketplace).toLowerCase() === "ozon")
     || products.find((product) => cleanText(product.marketplace).toLowerCase() === "yandex")
     || products[0]
     || null;
@@ -13834,19 +14431,130 @@ function warehouseGroupCountCacheKey(filters = {}) {
   });
 }
 
-function countWarehouseProductGroups(products = []) {
-  const groupContext = buildWarehouseCatalogGroupContext(products);
+function countWarehouseProductGroups(products = [], groupContext = null) {
+  const context = groupContext || buildWarehouseCatalogGroupContext(products);
   const keys = new Set();
   for (const product of Array.isArray(products) ? products : []) {
     const normalized = normalizeWarehouseProduct(product);
-    const groupKey = warehouseProductPageGroupKey(normalized, groupContext) || `id:${normalized.id}`;
+    const groupKey = warehouseProductPageGroupKey(normalized, context) || `id:${normalized.id}`;
     keys.add(groupKey);
   }
   return keys.size;
 }
 
+async function getWarehouseCatalogPairingGroupContext(prisma) {
+  if (!prisma) return buildWarehouseCatalogGroupContext([]);
+  const now = Date.now();
+  if (
+    warehouseCatalogPairingContextCache.groupContext
+    && now - warehouseCatalogPairingContextCache.at < warehouseCatalogPairingContextCacheTtlMs
+  ) {
+    return warehouseCatalogPairingContextCache.groupContext;
+  }
+  const select = {
+    id: true,
+    offerId: true,
+    marketplace: true,
+    target: true,
+    raw: true,
+    brand: true,
+  };
+  const pairingRows = await loadWarehouseCatalogPairingRows(prisma, select);
+  const groupContext = buildWarehouseCatalogGroupContext(pairingRows.map((row) => productFromPostgres({ ...row, links: [] })));
+  warehouseCatalogPairingContextCache = { at: now, groupContext, pairingRows };
+  return groupContext;
+}
+
+function warehouseGroupCountUsesFullCatalogScan(filters = {}) {
+  if (cleanText(filters.q || "")) return false;
+  if (Boolean(filters.autoOnly)) return false;
+  if (cleanText(filters.brand || "")) return false;
+  if (cleanText(filters.marketplace || "all") !== "all") return false;
+  if (cleanText(filters.state || "all") !== "all") return false;
+  return cleanText(filters.linked || "all") === "all";
+}
+
+function getCachedWarehouseGroupTotal(filters = {}) {
+  const cacheKey = warehouseGroupCountCacheKey(filters);
+  const cached = warehouseGroupCountCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < warehouseGroupCountCacheTtlMs) return cached.value;
+  return cached?.value > 0 ? cached.value : 0;
+}
+
+function kickWarehouseGroupCountRefresh(prisma, filters = {}) {
+  if (!prisma || cleanText(filters.q || "")) return;
+  const cacheKey = warehouseGroupCountCacheKey(filters);
+  if (warehouseGroupCountInflight.has(cacheKey)) return;
+  const refreshPromise = countWarehouseFilteredGroupTotal(prisma, filters)
+    .catch((error) => {
+      logger.warn("warehouse grouped total background refresh failed", { detail: error?.message || String(error) });
+      return 0;
+    })
+    .finally(() => {
+      warehouseGroupCountInflight.delete(cacheKey);
+    });
+  warehouseGroupCountInflight.set(cacheKey, refreshPromise);
+}
+
+async function resolveWarehouseGroupTotalForPage(prisma, filters = {}, { estimatedGroupTotal = 0 } = {}) {
+  if (!prisma || cleanText(filters.q || "")) return estimatedGroupTotal;
+  const cacheKey = warehouseGroupCountCacheKey(filters);
+  const cached = warehouseGroupCountCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < warehouseGroupCountCacheTtlMs) return cached.value;
+  if (cached?.value > 0) {
+    kickWarehouseGroupCountRefresh(prisma, filters);
+    return cached.value;
+  }
+  let inflight = warehouseGroupCountInflight.get(cacheKey);
+  if (!inflight) {
+    inflight = countWarehouseFilteredGroupTotal(prisma, filters)
+      .catch((error) => {
+        logger.warn("warehouse grouped total count failed, using estimate", { detail: error?.message || String(error) });
+        return 0;
+      })
+      .finally(() => {
+        warehouseGroupCountInflight.delete(cacheKey);
+      });
+    warehouseGroupCountInflight.set(cacheKey, inflight);
+  }
+  try {
+    const value = await Promise.race([
+      inflight,
+      promiseTimeout(warehouseGroupCountWaitMs, "warehouse_group_count_wait_timeout"),
+    ]);
+    return value > 0 ? value : (estimatedGroupTotal > 0 ? estimatedGroupTotal : getCachedWarehouseGroupTotal(filters));
+  } catch (error) {
+    if (error?.message === "warehouse_group_count_wait_timeout") {
+      kickWarehouseGroupCountRefresh(prisma, filters);
+      return estimatedGroupTotal > 0 ? estimatedGroupTotal : getCachedWarehouseGroupTotal(filters);
+    }
+    throw error;
+  }
+}
+
+async function loadWarehouseCatalogPairingRows(prisma, select = {}, where = {}) {
+  const batchSize = Math.max(1000, Math.min(10000, Number(process.env.WAREHOUSE_GROUP_COUNT_BATCH_SIZE || 5000) || 5000));
+  const rows = [];
+  let cursorId = "";
+  while (true) {
+    const batch = await prisma.warehouseProduct.findMany({
+      where,
+      select,
+      orderBy: { id: "asc" },
+      take: batchSize,
+      ...(cursorId ? { skip: 1, cursor: { id: cursorId } } : {}),
+    });
+    if (!batch.length) break;
+    cursorId = batch[batch.length - 1].id;
+    rows.push(...batch);
+    if (batch.length < batchSize) break;
+  }
+  return rows;
+}
+
 async function countWarehouseFilteredGroupTotal(prisma, filters = {}) {
   if (!prisma) return 0;
+  if (cleanText(filters.q || "")) return 0;
   const cacheKey = warehouseGroupCountCacheKey(filters);
   const cached = warehouseGroupCountCache.get(cacheKey);
   if (cached && Date.now() - cached.at < warehouseGroupCountCacheTtlMs) return cached.value;
@@ -13866,33 +14574,33 @@ async function countWarehouseFilteredGroupTotal(prisma, filters = {}) {
   const where = warehousePagePostgresWhere(postgresFilters);
   if (brandIndexProductIds.length) where.AND.push({ id: { in: brandIndexProductIds } });
 
-  const scanLimit = Math.max(1000, Math.min(50000, Number(process.env.WAREHOUSE_GROUP_COUNT_SCAN_LIMIT || 50000) || 50000));
-  const rows = await prisma.warehouseProduct.findMany({
-    where,
-    select: {
-      id: true,
-      offerId: true,
-      marketplace: true,
-      target: true,
-      raw: true,
-      manualGroupId: true,
-      brand: true,
-    },
-    take: scanLimit,
-  });
-  let products = rows.map((row) => normalizeWarehouseProduct({
-    id: row.id,
-    offerId: row.offerId,
-    marketplace: row.marketplace,
-    target: row.target,
-    brand: row.brand,
-    manualGroupId: row.manualGroupId,
-    raw: row.raw,
-  }));
+  const select = {
+    id: true,
+    offerId: true,
+    marketplace: true,
+    target: true,
+    raw: true,
+    brand: true,
+  };
+  let groupContext;
+  let filteredRows;
+  if (warehouseGroupCountUsesFullCatalogScan(filters)) {
+    groupContext = await getWarehouseCatalogPairingGroupContext(prisma);
+    const pairingCache = warehouseCatalogPairingContextCache;
+    filteredRows = Array.isArray(pairingCache.pairingRows)
+      ? pairingCache.pairingRows
+      : await loadWarehouseCatalogPairingRows(prisma, select, where);
+  } else {
+    [groupContext, filteredRows] = await Promise.all([
+      getWarehouseCatalogPairingGroupContext(prisma),
+      loadWarehouseCatalogPairingRows(prisma, select, where),
+    ]);
+  }
+  let products = filteredRows.map((row) => productFromPostgres({ ...row, links: [] }));
   if (needsComputedLinkFilter || isWarehouseStrictIdentitySearch(filters)) {
     products = products.filter((product) => warehousePageProductMatches(product, filters));
   }
-  const value = countWarehouseProductGroups(products);
+  const value = countWarehouseProductGroups(products, groupContext);
   warehouseGroupCountCache.set(cacheKey, { at: Date.now(), value });
   if (warehouseGroupCountCache.size > warehouseGroupCountCacheMax) {
     const oldestKey = warehouseGroupCountCache.keys().next().value;
@@ -13907,6 +14615,8 @@ async function buildFastWarehouseGroupPageFromPostgres({
   usdRate,
   filters = {},
 } = {}) {
+  const prisma = getPrisma();
+  const hasSearchQuery = Boolean(cleanText(filters.q || ""));
   const basePage = await buildFastWarehousePageFromPostgres({
     page,
     pageSize,
@@ -13915,18 +14625,28 @@ async function buildFastWarehouseGroupPageFromPostgres({
   });
   if (!basePage) return basePage;
   const rawItems = Array.isArray(basePage.items) ? basePage.items : [];
-  if (!rawItems.length) return basePage;
-  const groups = buildWarehousePageProductGroups(rawItems).map(mapServerWarehousePageGroup);
+  const groups = rawItems.length ? buildWarehousePageProductGroups(rawItems).map(mapServerWarehousePageGroup) : [];
   const rowTotal = Number(basePage.total || 0);
-  const prisma = getPrisma();
-  let groupTotal = 0;
-  try {
-    groupTotal = prisma ? await countWarehouseFilteredGroupTotal(prisma, filters) : 0;
-  } catch (error) {
-    logger.warn("warehouse grouped total count failed, using estimate", { detail: error?.message || String(error) });
-  }
   const estimatedGroupTotal = Math.max(groups.length, Math.ceil(rowTotal / 1.6));
-  const total = groupTotal > 0 ? groupTotal : estimatedGroupTotal;
+  if (!rawItems.length) {
+    const groupTotal = hasSearchQuery
+      ? 0
+      : await resolveWarehouseGroupTotalForPage(prisma, filters, { estimatedGroupTotal: 0 });
+    return {
+      ...basePage,
+      grouped: true,
+      rowTotal,
+      groupTotal: groupTotal > 0 ? groupTotal : 0,
+      total: groupTotal > 0 ? groupTotal : 0,
+      groups: [],
+      items: [],
+    };
+  }
+  const groupTotal = hasSearchQuery
+    ? estimatedGroupTotal
+    : await resolveWarehouseGroupTotalForPage(prisma, filters, { estimatedGroupTotal });
+  const total = hasSearchQuery ? estimatedGroupTotal : (groupTotal > 0 ? groupTotal : estimatedGroupTotal);
+  const groupCountPending = !hasSearchQuery && groupTotal === estimatedGroupTotal && !getCachedWarehouseGroupTotal(filters);
   return {
     ...basePage,
     grouped: true,
@@ -13936,6 +14656,8 @@ async function buildFastWarehouseGroupPageFromPostgres({
     groups,
     items: groups,
     hasMore: (page * pageSize) < rowTotal,
+    partial: Boolean(basePage.partial) || groupCountPending,
+    groupCountPending,
   };
 }
 
@@ -13982,6 +14704,9 @@ function warehouseProductPageGroupKey(product = {}, groupContext = null) {
   const manualGroupId = cleanText(normalized.manualGroupId || normalized.manual_group_id || raw.manualGroupId || raw.manual_group_id).toLowerCase();
   if (manualGroupId && !manualGroupId.startsWith("auto-pair-")) return `manual:${manualGroupId}`;
 
+  const offerId = cleanText(normalized.offerId || normalized.offer_id).toLowerCase();
+  if (offerId && groupContext?.pairedOfferIds?.has(offerId)) return `offer:${offerId}`;
+
   const marketplace = cleanText(normalized.marketplace).toLowerCase();
   const ozonId = cleanText(normalized.id).toLowerCase();
   if (marketplace === "ozon" && ozonId && groupContext?.ozonIdsReferencedByYandex?.has(ozonId)) {
@@ -13991,7 +14716,6 @@ function warehouseProductPageGroupKey(product = {}, groupContext = null) {
   const pairOzonId = resolveWarehouseProductPairOzonId(normalized);
   if (pairOzonId) return `pair:${pairOzonId.toLowerCase()}`;
 
-  const offerId = cleanText(normalized.offerId || normalized.offer_id).toLowerCase();
   if (offerId) return `offer:${offerId}`;
   return "";
 }
@@ -14073,7 +14797,7 @@ function buildWarehousePageProductGroups(products = []) {
   const groupContext = buildWarehouseCatalogGroupContext(products);
   const groups = new Map();
   for (const product of Array.isArray(products) ? products : []) {
-    const normalized = normalizeWarehouseProduct(product);
+    const normalized = mapWarehousePageItemFromProduct(product);
     const groupKey = warehouseProductPageGroupKey(normalized, groupContext) || `id:${normalized.id}`;
     if (!groups.has(groupKey)) {
       groups.set(groupKey, {
@@ -14112,8 +14836,12 @@ function buildWarehousePageProductGroups(products = []) {
     }
     const stateCode = cleanText(normalized.marketplaceState?.code || normalized.status).toLowerCase();
     const archived = Boolean(normalized.archived || stateCode.includes("archiv"));
-    const linked = Array.isArray(normalized.links) && normalized.links.length > 0;
-    const ready = linked && !archived && Number(normalized.targetStock || normalized.stock || 0) > 0;
+    const linked = (Array.isArray(normalized.links) && normalized.links.length > 0) || group.links.length > 0;
+    const hasSupplier = Boolean(normalized.selectedSupplier)
+      || Boolean(normalized.stockOnlyFallbackActive)
+      || Boolean(displaySupplierFromProductLinks(normalized));
+    const sellable = hasSupplier && Number(normalized.targetStock || normalized.stock || normalized.marketplaceState?.stock || 0) > 0;
+    const ready = linked && !archived && sellable;
     const changed = Number(normalized.nextPrice || normalized.newPrice || normalized.targetPrice || 0) > 0
       && Number(normalized.marketplacePrice || normalized.currentPrice || 0) !== Number(normalized.nextPrice || normalized.newPrice || normalized.targetPrice || 0);
     group.statusSummary.total += 1;
@@ -14121,7 +14849,7 @@ function buildWarehousePageProductGroups(products = []) {
     if (archived) group.statusSummary.archived += 1;
     if (ready) group.statusSummary.ready += 1;
     if (changed) group.statusSummary.changed += 1;
-    if (!normalized.selectedSupplier && linked) group.statusSummary.withoutSupplier += 1;
+    if (!hasSupplier && linked) group.statusSummary.withoutSupplier += 1;
     group.statusSummary.marketplaces = group.marketplaces;
   }
   return Array.from(groups.values()).map((group) => ({
@@ -14136,17 +14864,18 @@ function linkedRecoveryCandidateProducts(products = [], limit = 30000) {
   const rows = (Array.isArray(products) ? products : [])
     .filter((product) => product?.id)
     .map(normalizeWarehouseProduct);
+  const groupContext = buildWarehouseCatalogGroupContext(rows);
   const linkedByGroup = new Map();
   for (const product of rows) {
     if (!Array.isArray(product.links) || !product.links.length) continue;
-    const groupKey = warehouseProductPageGroupKey(product) || `id:${product.id}`;
+    const groupKey = warehouseProductPageGroupKey(product, groupContext) || `id:${product.id}`;
     if (!linkedByGroup.has(groupKey)) linkedByGroup.set(groupKey, product);
   }
   if (!linkedByGroup.size) return [];
 
   const byId = new Map();
   for (const product of rows) {
-    const groupKey = warehouseProductPageGroupKey(product) || `id:${product.id}`;
+    const groupKey = warehouseProductPageGroupKey(product, groupContext) || `id:${product.id}`;
     const donor = linkedByGroup.get(groupKey);
     if (!donor) continue;
     const links = Array.isArray(product.links) && product.links.length
@@ -14366,6 +15095,35 @@ function scheduleWarehousePostgresSummaryWarm() {
   warehousePostgresSummaryWarmTimer = setInterval(() => { void warm(); }, intervalMs);
 }
 
+let warehouseGroupCountWarmTimer = null;
+
+function scheduleWarehouseGroupCountWarm() {
+  if (process.env.WAREHOUSE_GROUP_COUNT_WARM_ENABLED === "false") return;
+  if (!shouldUsePostgresStorage()) return;
+  const intervalMs = Math.max(warehouseGroupCountCacheTtlMs, 60_000);
+  const warm = async () => {
+    try {
+      const prisma = getPrisma();
+      if (!prisma) return;
+      const startedAt = Date.now();
+      await countWarehouseFilteredGroupTotal(prisma, {
+        q: "",
+        autoOnly: false,
+        linked: "all",
+        marketplace: "all",
+        state: "all",
+        brand: "",
+      });
+      logger.info("warehouse group count warmed", { elapsedMs: Date.now() - startedAt });
+    } catch (error) {
+      logger.warn("warehouse group count warm failed", { detail: error?.message || String(error) });
+    }
+  };
+  setTimeout(() => { void warm(); }, Math.max(1000, Number(process.env.WAREHOUSE_GROUP_COUNT_WARM_INITIAL_DELAY_MS || 5000)));
+  if (warehouseGroupCountWarmTimer) clearInterval(warehouseGroupCountWarmTimer);
+  warehouseGroupCountWarmTimer = setInterval(() => { void warm(); }, intervalMs);
+}
+
 async function buildFastWarehousePageFromPostgres({
   page = 1,
   pageSize = 60,
@@ -14467,41 +15225,13 @@ async function buildFastWarehousePageFromPostgres({
     products: pageProducts,
     suppliers: normalizedSuppliers,
   };
-  let items = [];
-  if (warehousePageShouldUseLightBuild()) {
-    pageTrace("postgres:after-light-build", traceStartedAt);
-    items = mapWarehousePageProductsLight(pageWarehouse.products, normalizedSuppliers);
-  } else {
-    const built = await buildFreshWarehouseProductsForWarehouse(
-      pageWarehouse,
-      pageProducts.map((product) => product.id),
-      {
-        refreshPrices: false,
-        persistMutations: false,
-        livePriceMaster: false,
-        batchPriceMaster: false,
-        usdRate: rate,
-      },
-    );
-    pageTrace("postgres:after-build", traceStartedAt);
-    const builtMap = new Map(built.map((product) => [product.id, product]));
-    items = pageWarehouse.products.map((product) => {
-      const item = builtMap.get(product.id) || normalizeWarehouseProduct(product);
-      const links = Array.isArray(item.links) ? item.links : [];
-      const hasSupplier = Boolean(item.selectedSupplier) || Boolean(item.stockOnlyFallbackActive);
-      return {
-        ...item,
-        autoPriceEnabled: item.autoPriceEnabled !== false,
-        links,
-        suppliers: Array.isArray(item.suppliers) ? item.suppliers : [],
-        selectedSupplier: item.selectedSupplier || null,
-        noSupplierAutomation: item.noSupplierAutomation || {},
-        marketplaceState: item.marketplaceState || {},
-        partial: links.length > 0 && !hasSupplier,
-      };
+  const items = warehousePageShouldUseLightEnrich(filters)
+    ? enrichWarehousePageProductsLight(pageWarehouse)
+    : await enrichWarehousePageProductsForDisplay(pageWarehouse, {
+      usdRate: rate,
+      traceStartedAt,
+      traceLabel: warehousePageShouldUseLightBuild() ? "postgres:after-light-enrich" : "postgres:after-build",
     });
-    queueLinkedUnavailableSupplierZeroStock(built, { source: "warehouse_page" });
-  }
   return {
     createdAt: pageWarehouse.createdAt,
     updatedAt: pageWarehouse.updatedAt,
@@ -14953,7 +15683,7 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
     }
     if (!rows.length) return null;
     const normalizedSuppliers = await getWarehousePostgresSuppliers(prisma);
-    const products = rows.map(productFromPostgres);
+    const products = applyGroupLinkInheritanceForPage(rows.map(productFromPostgres));
     const pageProducts = await enrichWeakOzonProductsForPage(products);
     const built = await buildFreshWarehouseProductsForWarehouse(
       { products: pageProducts, suppliers: normalizedSuppliers },
@@ -15021,6 +15751,20 @@ async function buildFastWarehousePage({
   const cacheParams = { page, pageSize, usdRate, filters };
   const cached = getWarehouseFastPageCache(cacheParams);
   if (cached.value) return cached.value;
+  const inflight = warehouseFastPageInflight.get(cached.key);
+  if (inflight) {
+    try {
+      return await Promise.race([
+        inflight,
+        promiseTimeout(warehouseFastPageBuildTimeoutMs, "warehouse_fast_page_build_timeout"),
+      ]);
+    } catch (error) {
+      if (error?.message === "warehouse_fast_page_build_timeout" && cached.value) {
+        return { ...cached.value, partial: true, stale: true, sourceError: "warehouse_fast_page_build_timeout" };
+      }
+      throw error;
+    }
+  }
   let result = null;
   const buildCore = async () => {
     if (shouldUsePostgresStorage()) {
@@ -15100,20 +15844,33 @@ async function buildFastWarehousePage({
     };
   };
 
+  const buildPromise = (async () => {
+    try {
+      result = await Promise.race([
+        buildCore(),
+        promiseTimeout(warehouseFastPageBuildTimeoutMs, "warehouse_fast_page_build_timeout"),
+      ]);
+      if (result) setWarehouseFastPageCache(cached.key, result);
+      return result;
+    } finally {
+      warehouseFastPageInflight.delete(cached.key);
+    }
+  })();
+  warehouseFastPageInflight.set(cached.key, buildPromise);
   try {
-    result = await Promise.race([
-      buildCore(),
-      promiseTimeout(warehouseFastPageBuildTimeoutMs, "warehouse_fast_page_build_timeout"),
-    ]);
+    return await buildPromise;
   } catch (error) {
     if (error?.message === "warehouse_fast_page_build_timeout") {
       logger.warn("warehouse fast page build timed out", {
         timeoutMs: warehouseFastPageBuildTimeoutMs,
         page,
         pageSize,
+        q: cleanText(filters.q || "").slice(0, 32),
+        grouped: Boolean(filters.groupPage),
       });
-      if (cached.value) {
-        return { ...cached.value, partial: true, stale: true, sourceError: "warehouse_fast_page_build_timeout" };
+      const staleCached = getWarehouseFastPageCache(cacheParams);
+      if (staleCached.value) {
+        return { ...staleCached.value, partial: true, stale: true, sourceError: "warehouse_fast_page_build_timeout" };
       }
       return {
         partial: true,
@@ -15128,8 +15885,6 @@ async function buildFastWarehousePage({
     }
     throw error;
   }
-  if (result) setWarehouseFastPageCache(cached.key, result);
-  return result;
 }
 
 async function appendHistory(syncResult) {
@@ -19882,9 +20637,16 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
   if (!refs.length) return response.status(400).json({ error: "No PriceMaster links selected for delete." });
 
   const requestedIds = new Set(refs.map((ref) => String(ref.productId)));
+  const hydratedProducts = await hydrateWarehouseProductsForIds(Array.from(requestedIds), { expandGroups: true });
+  let initialSeeds = hydratedProducts.filter((product) => requestedIds.has(String(product.id)));
+  if (!initialSeeds.length) {
+    initialSeeds = await readWarehouseProductsFromPostgresByIds(Array.from(requestedIds), { includeDisabledTargets: true });
+    if (initialSeeds.length) mergeWarehouseProductsIntoMemory(initialSeeds);
+  }
   const initialWarehouse = await readWarehouse();
-  const initialSeeds = (initialWarehouse.products || []).filter((product) => requestedIds.has(String(product.id)));
-  const expandedProductIds = expandWarehouseProductsToGroups(initialWarehouse.products || [], initialSeeds)
+  const expandedProductIds = (hydratedProducts.length
+    ? hydratedProducts
+    : expandWarehouseProductsToGroups(initialWarehouse.products || [], initialSeeds))
     .map((product) => String(product.id));
   if (!expandedProductIds.length) {
     return response.json({ ok: true, changed: 0, products: [], persisted: "already_deleted", alreadyDeleted: true, deletedRefs: [], alreadyDeletedRefs: refs });
@@ -19892,16 +20654,24 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
 
   return await withWarehouseProductMutationLock(expandedProductIds, async () => {
     const warehouse = await readWarehouse();
-    const seedProducts = (warehouse.products || []).filter((product) => requestedIds.has(String(product.id)));
-    const targetProducts = expandWarehouseProductsToGroups(warehouse.products || [], seedProducts);
+    let seedProducts = (warehouse.products || []).filter((product) => requestedIds.has(String(product.id)));
+    if (!seedProducts.length && initialSeeds.length) seedProducts = initialSeeds;
+    const targetProducts = expandWarehouseProductsToGroups(
+      [...(warehouse.products || []), ...initialSeeds],
+      seedProducts.length ? seedProducts : initialSeeds,
+    );
     const targetIds = new Set(targetProducts.map((product) => String(product.id)));
     const deleteKeys = new Set();
     const deletedRefs = [];
     const alreadyDeletedRefs = [];
     const conflicts = [];
+    const lookupProducts = new Map();
+    for (const product of [...(warehouse.products || []), ...initialSeeds, ...targetProducts]) {
+      if (product?.id) lookupProducts.set(String(product.id), product);
+    }
 
     for (const ref of refs) {
-      const product = warehouse.products.find((item) => String(item.id) === String(ref.productId));
+      const product = lookupProducts.get(String(ref.productId));
       if (!product) {
         alreadyDeletedRefs.push(ref);
         continue;
@@ -19952,19 +20722,36 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
 
     const changedProducts = [];
     const oldValues = [];
-    for (const product of warehouse.products) {
-      if (!targetIds.has(String(product.id))) continue;
+    const mutationSources = new Map();
+    for (const product of [...(warehouse.products || []), ...targetProducts]) {
+      if (product?.id) mutationSources.set(String(product.id), product);
+    }
+    for (const productId of targetIds) {
+      let product = mutationSources.get(String(productId));
+      if (!product && shouldUsePostgresStorage()) {
+        [product] = await readWarehouseProductsFromPostgresByIds([productId], { includeDisabledTargets: true });
+        if (product) mutationSources.set(String(productId), product);
+      }
+      if (!product) continue;
       const previousLinks = Array.isArray(product.links) ? product.links : [];
       const nextLinks = compactWarehouseLinks(previousLinks.filter((link) => !deleteKeys.has(warehouseLinkTargetKey(link))));
       if (warehouseProductLinkDetailsSignature({ ...product, links: nextLinks }) === warehouseProductLinkDetailsSignature(product)) continue;
       oldValues.push(cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt }));
-      product.links = nextLinks;
-      product.updatedAt = new Date().toISOString();
-      changedProducts.push(product);
+      const updatedProduct = normalizeWarehouseProduct({
+        ...product,
+        links: nextLinks,
+        updatedAt: new Date().toISOString(),
+      });
+      mutationSources.set(String(productId), updatedProduct);
+      changedProducts.push(updatedProduct);
+      const memoryIndex = (warehouse.products || []).findIndex((item) => String(item.id) === String(productId));
+      if (memoryIndex >= 0) warehouse.products[memoryIndex] = updatedProduct;
     }
 
+    const responseTargetProducts = targetProducts.map((product) => mutationSources.get(String(product.id)) || product);
+
     if (!changedProducts.length) {
-      const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, targetProducts);
+      const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, responseTargetProducts);
       return response.json({
         ok: true,
         changed: 0,
@@ -19981,7 +20768,7 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
 
     await writeWarehouseProductPatch(changedProducts, { reason: "warehouse_links_group_delete" });
     const changedIds = changedProducts.map((product) => product.id);
-    const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, targetProducts);
+    const responseProducts = await buildWarehouseLinkMutationResponseProducts(warehouse, responseTargetProducts);
     const idsWithRemainingLinks = responseProducts.filter((product) => (product.links || []).length).map((product) => product.id);
     const activation = idsWithRemainingLinks.length
       ? await queueLinkedProductActivation(idsWithRemainingLinks, "link_delete", { username: requestUsername(request) })
@@ -26888,6 +27675,15 @@ app.post("/api/warehouse/products/:id/export", async (request, response, next) =
       const shop = getYandexShopByTarget(targetMeta.id || targetId);
       if (!shop) return response.status(400).json({ error: "Кабинет Yandex Market не найден. Добавьте его в настройках." });
 
+      const smallVolumeCheck = assessYandexSmallVolume(product);
+      if (smallVolumeCheck.blocked) {
+        return response.status(400).json({
+          error: smallVolumeCheck.reason,
+          blocked: true,
+          minVolumeMl: smallVolumeCheck.minVolumeMl,
+        });
+      }
+
       const built = buildYandexOfferMapping(product, request.body);
       if (!built.ready) {
         return response.status(400).json({ error: "Не хватает обязательных полей Yandex Market.", missing: built.missing });
@@ -28726,6 +29522,17 @@ async function runManualWarehouseSync(trigger = "manual_sync") {
       yandexMaterialize.pairSync = pairSync;
       yandexMaterialize.pairGroups = pairGroups;
       logger.info("manual warehouse sync yandex materialize", yandexMaterialize);
+      try {
+        const smallVolumeCleanup = await deleteYandexSmallVolumeOffers({ dryRun: false, limit: 5000 });
+        yandexMaterialize.smallVolumeCleanup = {
+          planned: smallVolumeCleanup.planned || 0,
+          deleted: smallVolumeCleanup.deleted || 0,
+          failed: smallVolumeCleanup.failed || 0,
+        };
+        logger.info("manual warehouse sync yandex small volume cleanup", yandexMaterialize.smallVolumeCleanup);
+      } catch (cleanupError) {
+        logger.warn("manual warehouse sync yandex small volume cleanup failed", { detail: cleanupError?.message || String(cleanupError) });
+      }
     } catch (error) {
       logger.warn("manual warehouse sync yandex materialize failed", { detail: error?.message || String(error) });
     }
@@ -29104,6 +29911,7 @@ async function startServer() {
 
   if (!isApiServer) startBackgroundSchedulers();
   scheduleWarehousePostgresSummaryWarm();
+  scheduleWarehouseGroupCountWarm();
   if (shouldUsePostgresStorage()) {
     const prisma = getPrisma();
     if (prisma) kickWarehousePostgresLinksBackfill(prisma);
@@ -29153,6 +29961,8 @@ module.exports = {
   normalizeManagedSupplier,
   normalizePriceMasterSnapshotItemForPostgres,
   resolvePriceMasterRowCurrency,
+  calculateRubPrice,
+  managedSupplierMaps,
   normalizePriceMasterPrice,
   supplierImpactProductIds,
   priceMasterChangeImpactProductIds,
@@ -29260,7 +30070,11 @@ module.exports = {
   isExpectedMarketplaceArchiveBlock,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,
+  YANDEX_MIN_VOLUME_ML,
   extractOzonYandexImportVolumesMl,
+  collectYandexVolumeSearchText,
+  assessYandexSmallVolume,
+  isYandexSmallVolumeBlocked,
   ozonYandexImportBlockReasons,
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
@@ -29268,6 +30082,10 @@ module.exports = {
   applyAiContentDraftToProduct,
   buildYandexOfferMapping,
   sendApprovedYandexProductContent,
+  sendApprovedYandexProductCardRepair,
+  getYandexOfferCardsContentStatus,
+  resolveYandexWeightDimensionsFromProduct,
+  resolveYandexVendorFromProduct,
   shouldPreferCompatibleOpenAiChatRequest,
   isCodexSaleAiProvider,
   effectiveOpenAiImageModel,
@@ -29322,6 +30140,10 @@ module.exports = {
   patchYandexWarehouseProductFromOzonDonor,
   repairWeakYandexCardsFromOzonPostgres,
   countWarehouseProductGroups,
+  warehouseGroupCountUsesFullCatalogScan,
+  applyGroupLinkInheritanceForPage,
+  propagateGroupSupplierContextForPage,
+  enrichWarehousePageProductsForDisplay,
   sendYandexStocksFromOzonProducts,
   getYandexShopByTarget,
   priceRetryQueueKey,

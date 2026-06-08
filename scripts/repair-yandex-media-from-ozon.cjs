@@ -9,7 +9,12 @@ const { repairWeakYandexCardsFromOzonPostgres } = require("../server.js");
 const dryRun = process.argv.includes("--dry-run");
 const apply = process.argv.includes("--apply");
 const push = process.argv.includes("--push");
+const forcePush = process.argv.includes("--force-push");
 const limitArg = process.argv.find((arg) => arg.startsWith("--limit="));
+const offerArg = process.argv.find((arg) => arg.startsWith("--offer="));
+const offerIds = offerArg
+  ? offerArg.split("=")[1].split(",").map((value) => value.trim()).filter(Boolean)
+  : process.argv.slice(2).filter((arg) => !arg.startsWith("--") && arg);
 const limit = limitArg ? Number(limitArg.split("=")[1]) : 0;
 
 async function main() {
@@ -20,6 +25,8 @@ async function main() {
     const result = await repairWeakYandexCardsFromOzonPostgres(prisma, {
       dryRun: dryRun || !apply,
       pushToYandex: apply && push,
+      forcePush: forcePush || offerIds.length > 0,
+      offerIds,
       limit: Number.isFinite(limit) && limit > 0 ? Math.round(limit) : 0,
       batchSize: 50,
     });

@@ -5,6 +5,8 @@ require("dotenv").config();
 
 const { PrismaClient } = require("@prisma/client");
 const {
+  buildWarehouseCatalogGroupContext,
+  countWarehouseProductGroups,
   productFromPostgres,
   warehouseProductPageGroupKey,
   warehouseProductCanonicalId,
@@ -43,9 +45,11 @@ async function run() {
       take: limit,
     });
     const products = rows.map(productFromPostgres);
+    const groupContext = buildWarehouseCatalogGroupContext(products);
+    const catalogGroupTotal = countWarehouseProductGroups(products);
     const groups = new Map();
     for (const product of products) {
-      const key = warehouseProductPageGroupKey(product);
+      const key = warehouseProductPageGroupKey(product, groupContext);
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(product);
     }
@@ -92,6 +96,7 @@ async function run() {
         linked: linkedCount,
         duplicateOfferGroups: duplicateGroups[0]?.cnt || 0,
       },
+      catalogGroupTotal,
       sampleGroups: {
         total: groups.size,
         ozonYandexPairs,

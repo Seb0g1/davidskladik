@@ -44,18 +44,32 @@ function resolveProductPairOzonId(product: Product): string {
 
 export function buildWarehouseCatalogGroupContext(products: Product[]) {
   const ozonIdsReferencedByYandex = new Set<string>();
+  const offerIdMarketplaces = new Map<string, Set<string>>();
   for (const product of products) {
-    if (String(product.marketplace || "").trim().toLowerCase() !== "yandex") continue;
+    const marketplace = String(product.marketplace || "").trim().toLowerCase();
+    const offerId = String(product.offerId || product.sku || "").trim().toLowerCase();
+    if (offerId) {
+      if (!offerIdMarketplaces.has(offerId)) offerIdMarketplaces.set(offerId, new Set());
+      if (marketplace) offerIdMarketplaces.get(offerId)?.add(marketplace);
+    }
+    if (marketplace !== "yandex") continue;
     const sourceId = extractYandexSourceProductId(product);
     if (sourceId) ozonIdsReferencedByYandex.add(sourceId.toLowerCase());
   }
-  return { ozonIdsReferencedByYandex };
+  const pairedOfferIds = new Set<string>();
+  for (const [offerId, marketplaces] of offerIdMarketplaces) {
+    if (marketplaces.has("ozon") && marketplaces.has("yandex")) pairedOfferIds.add(offerId);
+  }
+  return { ozonIdsReferencedByYandex, pairedOfferIds };
 }
 
 export function productGroupKey(product: Product, groupContext?: ReturnType<typeof buildWarehouseCatalogGroupContext>): string {
   const raw = asRecord(product.raw);
   const manualGroupId = String(product.manualGroupId || raw.manualGroupId || raw.manual_group_id || "").trim().toLowerCase();
   if (manualGroupId && !manualGroupId.startsWith("auto-pair-")) return `manual:${manualGroupId}`;
+
+  const offerId = String(product.offerId || product.sku || product.id).trim().toLowerCase();
+  if (offerId && groupContext?.pairedOfferIds?.has(offerId)) return `offer:${offerId}`;
 
   const marketplace = String(product.marketplace || "").trim().toLowerCase();
   const ozonId = String(product.id || "").trim().toLowerCase();
@@ -66,7 +80,6 @@ export function productGroupKey(product: Product, groupContext?: ReturnType<type
   const pairOzonId = resolveProductPairOzonId(product);
   if (pairOzonId) return `pair:${pairOzonId.toLowerCase()}`;
 
-  const offerId = String(product.offerId || product.sku || product.id).trim().toLowerCase();
   if (offerId) return `offer:${offerId}`;
   return "";
 }
@@ -235,16 +248,17 @@ export function statusLabel(product: Product): { label: string; tone: string; ic
 
 export function groupStatusLabel(group: ProductGroup): { label: string; tone: string; icon: ReactNode } {
   const { statusSummary } = group;
+  const anyHasSupplier = group.products.some((product) => Boolean(product.selectedSupplier) || Boolean(product.stockOnlyFallbackActive));
   if (statusSummary.archived > 0) return { label: `Архив ${statusSummary.archived}/${statusSummary.total}`, tone: "danger", icon: <Archive size={14} /> };
   if (!statusSummary.linked) return { label: "Нет привязки", tone: "warn", icon: <AlertCircle size={14} /> };
   if (statusSummary.changed > 0) return { label: `Цена изм. ${statusSummary.changed}`, tone: "info", icon: <RefreshCw size={14} /> };
-  if (statusSummary.withoutSupplier > 0) return { label: `Нет пост. ${statusSummary.withoutSupplier}`, tone: "warn", icon: <AlertCircle size={14} /> };
+  if (!anyHasSupplier && statusSummary.withoutSupplier > 0) return { label: `Нет пост. ${statusSummary.withoutSupplier}`, tone: "warn", icon: <AlertCircle size={14} /> };
   return { label: `Готовы ${statusSummary.ready}/${statusSummary.total}`, tone: "success", icon: <PackageCheck size={14} /> };
 }
 
 export function groupPrice(group: ProductGroup): number {
   const prices = group.products
-    .map((product) => Number(product.newPrice || product.targetPrice || product.currentPrice || 0))
+    .map((product) => Number(product.newPrice || product.nextPrice || product.targetPrice || product.currentPrice || 0))
     .filter((price) => Number.isFinite(price) && price > 0);
   return prices.length ? Math.min(...prices) : 0;
 }

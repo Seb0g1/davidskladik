@@ -59,6 +59,8 @@ const {
   normalizePriceMasterSnapshotItemForPostgres,
   resolvePriceMasterRowCurrency,
   normalizePriceMasterPrice,
+  calculateRubPrice,
+  managedSupplierMaps,
   supplierImpactProductIds,
   priceMasterChangeImpactProductIds,
   changedWarehouseProductIdsByAutomationFingerprint,
@@ -125,7 +127,12 @@ const {
   isExpectedMarketplaceArchiveBlock,
   extractOzonPriceResponseFailures,
   buildPriceRetryItem,
+  YANDEX_MIN_VOLUME_ML,
   extractOzonYandexImportVolumesMl,
+  collectYandexVolumeSearchText,
+  assessYandexSmallVolume,
+  isYandexSmallVolumeBlocked,
+  ozonProductShouldMaterializeYandexSibling,
   ozonYandexImportBlockReasons,
   buildOzonYandexImportCandidate,
   summarizeOzonYandexImportPreview,
@@ -142,6 +149,7 @@ const {
   getLocalYandexExportedOfferIdSet,
   buildYandexWarehouseProductFromOzonExport,
   countWarehouseProductGroups,
+  warehouseGroupCountUsesFullCatalogScan,
   isWeakYandexWarehouseCard,
   patchYandexWarehouseProductFromOzonDonor,
   materializeYandexExportedProductsForWarehouse,
@@ -365,8 +373,31 @@ test("GET /health deep exposes operational component details", async () => {
 });
 
 test("Ozon to Yandex import blocks forbidden names and small volumes", () => {
+  assert.equal(YANDEX_MIN_VOLUME_ML, 20);
   assert.deepEqual(extractOzonYandexImportVolumesMl("Ex Nihilo Blue 7,5 мл"), [7.5]);
   assert.deepEqual(extractOzonYandexImportVolumesMl("Парфюмерная вода 20 ml"), [20]);
+  assert.deepEqual(extractOzonYandexImportVolumesMl("Sample 1.8мл"), [1.8]);
+  assert.deepEqual(extractOzonYandexImportVolumesMl("Travel 2ml"), [2]);
+  assert.deepEqual(extractOzonYandexImportVolumesMl("Набор 3x7ml"), [7]);
+  assert.deepEqual(extractOzonYandexImportVolumesMl("2,5мл"), [2.5]);
+  assert.deepEqual(extractOzonYandexImportVolumesMl("10мл"), [10]);
+
+  assert.equal(assessYandexSmallVolume("Creed 7 ml").blocked, true);
+  assert.equal(assessYandexSmallVolume("Creed 20 ml").blocked, false);
+  assert.equal(isYandexSmallVolumeBlocked({
+    name: "Hidden volume",
+    ozon: { attributes: [{ name: "Объем", value: "15 мл" }] },
+  }), true);
+  assert.equal(ozonProductShouldMaterializeYandexSibling({
+    offerId: "SMALL-1",
+    name: "Sample 10 мл",
+    exports: { yandex: { status: "sent" } },
+  }), false);
+  assert.equal(ozonProductShouldMaterializeYandexSibling({
+    offerId: "OK-1",
+    name: "Sample 50 мл",
+    exports: { yandex: { status: "sent" } },
+  }), true);
 
   assert.ok(ozonYandexImportBlockReasons({ name: "Ex Nihilo 15 мл", ozon: { vendor: "Ex Nihilo" } }).some((reason) => reason.includes("20 мл")));
   assert.ok(ozonYandexImportBlockReasons({ name: "Отливант Creed Aventus 50 мл", ozon: { vendor: "Creed" } }).some((reason) => reason.includes("Отливант")));
@@ -375,11 +406,90 @@ test("Ozon to Yandex import blocks forbidden names and small volumes", () => {
 });
 
 test("warehouse grouped counter and yandex media repair helpers", () => {
+  assert.equal(warehouseGroupCountUsesFullCatalogScan({ q: "", linked: "all", marketplace: "all", state: "all" }), true);
+  assert.equal(warehouseGroupCountUsesFullCatalogScan({ q: "VILHELM", linked: "all", marketplace: "all", state: "all" }), false);
+  assert.equal(warehouseGroupCountUsesFullCatalogScan({ q: "", linked: "ready", marketplace: "all", state: "all" }), false);
   assert.equal(countWarehouseProductGroups([
     { id: "ozon-1", marketplace: "ozon", offerId: "SKU-1", raw: { manualGroupId: "auto-pair-ozon-1" } },
     { id: "yandex-1", marketplace: "yandex", offerId: "SKU-1", raw: { manualGroupId: "auto-pair-ozon-1", yandex: { extra: { sourceProductId: "ozon-1" } } } },
     { id: "ozon-2", marketplace: "ozon", offerId: "SKU-2" },
   ]), 2);
+  assert.equal(countWarehouseProductGroups([
+    { id: "ozon-1", marketplace: "ozon", offerId: "SKU-1", raw: { manualGroupId: "auto-pair-ozon-1" } },
+    { id: "yandex-1", marketplace: "yandex", offerId: "SKU-1" },
+    { id: "ozon-2", marketplace: "ozon", offerId: "SKU-2" },
+  ]), 2);
+
+  const { applyGroupLinkInheritanceForPage, propagateGroupSupplierContextForPage } = require("../server.js");
+  const inherited = applyGroupLinkInheritanceForPage([
+    { id: "ozon-1", marketplace: "ozon", offerId: "SKU-1", links: [{ id: "l1", article: "PM-1", supplierName: "Supplier A" }] },
+    { id: "yandex-1", marketplace: "yandex", offerId: "SKU-1", links: [] },
+  ]);
+  assert.equal(inherited.find((item) => item.id === "yandex-1")?.links?.length, 1);
+
+  const propagated = propagateGroupSupplierContextForPage([
+    {
+      id: "ozon-1",
+      marketplace: "ozon",
+      offerId: "SKU-2",
+      links: [{ id: "l1", article: "PM-2", supplierName: "Supplier B" }],
+      selectedSupplier: { article: "PM-2", supplierName: "Supplier B", price: 1200 },
+      targetPrice: 2500,
+      nextPrice: 2500,
+    },
+    {
+      id: "yandex-1",
+      marketplace: "yandex",
+      offerId: "SKU-2",
+      links: [{ id: "l1", article: "PM-2", supplierName: "Supplier B" }],
+      selectedSupplier: null,
+      targetPrice: 0,
+    },
+  ]);
+  const yandexSibling = propagated.find((item) => item.id === "yandex-1");
+  assert.equal(yandexSibling?.selectedSupplier?.article, "PM-2");
+  assert.equal(yandexSibling?.targetPrice, 2500);
+
+  const propagatedFromLinks = propagateGroupSupplierContextForPage([
+    {
+      id: "ozon-link",
+      marketplace: "ozon",
+      offerId: "SKU-3",
+      links: [{ id: "l3", article: "PM-3", supplierName: "Supplier C", price: 900 }],
+      selectedSupplier: null,
+      nextPrice: 1800,
+    },
+    {
+      id: "yandex-link",
+      marketplace: "yandex",
+      offerId: "SKU-3",
+      links: [{ id: "l3", article: "PM-3", supplierName: "Supplier C", price: 900 }],
+      selectedSupplier: null,
+    },
+  ]);
+  const yandexFromLinks = propagatedFromLinks.find((item) => item.id === "yandex-link");
+  assert.equal(yandexFromLinks?.selectedSupplier?.supplierName, "Supplier C");
+  assert.equal(yandexFromLinks?.nextPrice, 1800);
+
+  const propagatedStock = propagateGroupSupplierContextForPage([
+    {
+      id: "ozon-stock",
+      marketplace: "ozon",
+      offerId: "SKU-4",
+      links: [{ id: "l4", article: "PM-4", supplierName: "Supplier D" }],
+      selectedSupplier: { article: "PM-4", supplierName: "Supplier D", price: 500 },
+      targetStock: 3,
+    },
+    {
+      id: "yandex-stock",
+      marketplace: "yandex",
+      offerId: "SKU-4",
+      links: [{ id: "l4b", article: "PM-4", supplierName: "Supplier D" }],
+      selectedSupplier: null,
+      targetStock: 0,
+    },
+  ]);
+  assert.equal(propagatedStock.find((item) => item.id === "yandex-stock")?.targetStock, 3);
 
   const weakYandex = normalizeWarehouseProduct({
     id: "yandex-weak",
@@ -398,6 +508,10 @@ test("warehouse grouped counter and yandex media repair helpers", () => {
   }));
   assert.equal(patched.yandex.vendor, "Creed");
   assert.equal(patched.imageUrl, "https://example.test/ozon.jpg");
+  assert.ok(Number(patched.yandex.extra?.weightDimensions?.weight) > 0);
+  const repairedOffer = buildYandexOfferMapping(patched).offer;
+  assert.ok(repairedOffer.weightDimensions?.length > 0);
+  assert.ok(repairedOffer.pictures?.length > 0);
 
   const cleanup = buildYandexCleanupCandidate({
     offer: { offerId: "SMALL-1", name: "Sample 10 мл", vendor: "Brand" },
@@ -2836,6 +2950,16 @@ test("resolveAvailabilityPolicy keeps base markup and small stock for few suppli
   assert.equal(policy.targetStock, 3);
 });
 
+test("resolveAvailabilityPolicy falls back to stock 3 when rules are empty", () => {
+  const policy = resolveAvailabilityPolicy({
+    marketplace: "ozon",
+    availableSupplierCount: 2,
+    baseMarkup: 1.7,
+    appSettings: { availabilityRules: [] },
+  });
+  assert.equal(policy.targetStock, 3);
+});
+
 test("normalizePriceMasterPrice converts explicitly ruble values to USD", () => {
   const value = normalizePriceMasterPrice(9500, 95, "RUB");
   assert.equal(value.sourceCurrency, "RUB");
@@ -2913,6 +3037,30 @@ test("resolvePriceMasterRowCurrency prefers supplier fixed currency", () => {
     },
   );
   assert.equal(currency, "RUB");
+});
+
+test("resolvePriceMasterRowCurrency treats Иванна ruble quotes as RUB", () => {
+  const currency = resolvePriceMasterRowCurrency(
+    { partnerName: "Иванна", price: 12800 },
+    { priceCurrency: "USD" },
+    managedSupplierMaps(),
+    95,
+  );
+  assert.equal(currency, "RUB");
+  const normalized = normalizePriceMasterPrice(12800, 95, currency);
+  assert.ok(Math.abs(normalized.price - (12800 / 95)) < 0.01);
+  assert.ok(calculateRubPrice(normalized.price, 95, 1.7) < 25000);
+});
+
+test("resolvePriceMasterRowCurrency keeps dollar suppliers unchanged", () => {
+  const currency = resolvePriceMasterRowCurrency(
+    { partnerName: "Avangard", price: 128 },
+    {},
+    managedSupplierMaps(),
+    95,
+  );
+  assert.equal(currency, "USD");
+  assert.equal(normalizePriceMasterPrice(128, 95, currency).price, 128);
 });
 
 test("pickWarehouseSupplier chooses the cheapest available calculated price", () => {
@@ -5616,7 +5764,8 @@ test("ozon yandex auto pair helpers resolve source product links", () => {
   const expanded = expandWarehouseProductsToGroups([ozon, yandexSibling], [ozon]);
   assert.equal(expanded.length, 2);
   const context = buildWarehouseCatalogGroupContext([ozon, yandexSibling]);
-  assert.equal(warehouseProductPageGroupKey(ozon, context), "pair:ozon-abc");
+  assert.equal(warehouseProductPageGroupKey(ozon, context), "offer:sku-9");
+  assert.equal(warehouseProductPageGroupKey(yandexSibling, context), "offer:sku-9");
   const { resolveWarehouseProductTargetName } = require("../server.js");
   assert.equal(
     resolveWarehouseProductTargetName({ target: "yandex-06c2112c", marketplace: "yandex" }),

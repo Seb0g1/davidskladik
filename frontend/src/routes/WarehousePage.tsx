@@ -1523,7 +1523,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const [filters, setFilters] = useState<Filters>(() => readFilters());
   const [selectedGroup, setSelectedGroup] = useState(() => selectedGroupFromPath());
   const [isMobileList, setIsMobileList] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileListMedia).matches);
-  const debouncedQ = useDebounced(filters.q, 250);
+  const debouncedQ = useDebounced(filters.q, 450);
   const effectiveFilters = { ...filters, q: debouncedQ };
   const parentRef = useRef<HTMLDivElement>(null);
   const brandsQuery = useQuery({
@@ -1558,6 +1558,8 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const pageQuery = useQuery({
     queryKey: ["warehouse", "page", effectiveFilters],
     queryFn: () => fetchJson(buildPageUrl(effectiveFilters), WarehousePageSchema),
+    placeholderData: (previousData) => previousData,
+    staleTime: 15_000,
   });
   const rows = useMemo(
     () => (pageQuery.data?.items || []).filter(isProductPageItem),
@@ -1577,7 +1579,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
 
   const detailQuery = useQuery({
     queryKey: ["warehouse", "group-detail", selectedGroup],
-    queryFn: () => fetchJson(`/api/warehouse/products/group-detail?group=${encodeURIComponent(selectedGroup)}&refreshPrices=true`, GroupDetailSchema),
+    queryFn: () => fetchJson(`/api/warehouse/products/group-detail?group=${encodeURIComponent(selectedGroup)}`, GroupDetailSchema),
     enabled: Boolean(selectedGroup),
     staleTime: 30_000,
   });
