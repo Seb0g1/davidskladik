@@ -13,6 +13,13 @@ if (!password) {
 
 const root = path.resolve(__dirname, "..");
 const remoteRoot = "/var/www/davidsklad/davidskladik";
+const remoteScript = "run-prod-linked-full-reprice-remote.cjs";
+
+const uploadFiles = [
+  "server.js",
+  "scripts/fix-ozon-quarantine-prices.cjs",
+  "scripts/run-prod-linked-full-reprice-remote.cjs",
+];
 
 function exec(conn, command) {
   return new Promise((resolve, reject) => {
@@ -37,7 +44,7 @@ function sftpPut(conn, localPath, remotePath) {
   });
 }
 
-async function main() {
+async function withConn(run) {
   const conn = new Client();
   await new Promise((resolve, reject) => {
     conn.on("ready", resolve).on("error", reject).connect({
@@ -50,24 +57,27 @@ async function main() {
     });
   });
   try {
-    await exec(conn, [
-      "pkill -9 -f 'node scripts/run-all-sync-remote' || true",
-      "pkill -9 -f 'node scripts/audit-and-repush-prices-remote' || true",
-      "pkill -9 -f 'node scripts/fix-ozon-quarantine-prices' || true",
-      "pkill -9 -f 'node scripts/repair-yandex-media-from-ozon' || true",
-      "pkill -9 -f 'node scripts/delete-yandex-small-volume' || true",
-    ].join(" && "));
-    await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
-    for (const rel of ["server.js", "scripts/fix-ozon-quarantine-prices.cjs"]) {
-      await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
-    }
-    console.log("\n=== reload api+worker with staged quarantine fix ===\n");
-    await exec(conn, `cd ${remoteRoot} && pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env && sleep 10`);
-    console.log("\n=== fix quarantine + repush prices ===\n");
-    await exec(conn, `cd ${remoteRoot} && NODE_OPTIONS='--max-old-space-size=4096' node scripts/fix-ozon-quarantine-prices.cjs`);
+    return await run(conn);
   } finally {
     conn.end();
   }
+}
+
+async function main() {
+  await withConn(async (conn) => {
+    await exec(conn, [
+      "pkill -9 -f 'node scripts/run-all-sync-remote' || true",
+      "pkill -9 -f 'node scripts/run-prod-linked-full-reprice-remote' || true",
+      "pkill -9 -f 'node scripts/fix-ozon-quarantine-prices' || true",
+    ].join(" && "));
+    await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
+    for (const rel of uploadFiles) {
+      await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
+    }
+    await exec(conn, `cd ${remoteRoot} && pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env && sleep 12`);
+    console.log("\n=== linked full reprice + quarantine release ===\n");
+    await exec(conn, `cd ${remoteRoot} && NODE_OPTIONS='--max-old-space-size=4096' node scripts/${remoteScript}`);
+  });
 }
 
 main().catch((error) => {

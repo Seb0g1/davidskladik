@@ -60,6 +60,7 @@ const {
   resolvePriceMasterRowCurrency,
   normalizePriceMasterPrice,
   calculateRubPrice,
+  warehouseSupplierPurchaseRubPrice,
   managedSupplierMaps,
   supplierImpactProductIds,
   priceMasterChangeImpactProductIds,
@@ -2993,11 +2994,11 @@ test("resolveAvailabilityPolicy falls back to stock 3 when rules are empty", () 
   assert.equal(policy.targetStock, 3);
 });
 
-test("normalizePriceMasterPrice converts explicitly ruble values to USD", () => {
+test("normalizePriceMasterPrice keeps ruble values native without USD conversion", () => {
   const value = normalizePriceMasterPrice(9500, 95, "RUB");
   assert.equal(value.sourceCurrency, "RUB");
   assert.equal(value.convertedFromRub, true);
-  assert.equal(value.price, 100);
+  assert.equal(value.price, 9500);
   assert.equal(value.originalPrice, 9500);
 });
 
@@ -3081,8 +3082,21 @@ test("resolvePriceMasterRowCurrency treats Иванна ruble quotes as RUB", ()
   );
   assert.equal(currency, "RUB");
   const normalized = normalizePriceMasterPrice(12800, 95, currency);
-  assert.ok(Math.abs(normalized.price - (12800 / 95)) < 0.01);
-  assert.ok(calculateRubPrice(normalized.price, 95, 1.7) < 25000);
+  assert.equal(normalized.price, 12800);
+  assert.equal(calculateRubPrice(normalized.price, 95, 1.7, normalized), 21760);
+});
+
+test("Инна retail price uses markup only without USD rate conversion", () => {
+  const row = {
+    partnerName: "Инна",
+    price: 53,
+    originalPrice: 53,
+    sourceCurrency: "RUB",
+    priceCurrency: "RUB",
+    convertedFromRub: true,
+  };
+  assert.equal(calculateRubPrice(row.price, 95, 11.9, row), 631);
+  assert.equal(warehouseSupplierPurchaseRubPrice(row, 95), 53);
 });
 
 test("resolvePriceMasterRowCurrency keeps dollar suppliers unchanged", () => {
@@ -3115,6 +3129,8 @@ test("pickWarehouseSupplier prefers cheapest supplier purchase price", () => {
 
 test("Наш Склад is always stock-only and never used for price", () => {
   assert.equal(supplierUsesStockOnlyPricing(null, { partnerName: "Наш Склад" }), true);
+  assert.equal(supplierUsesStockOnlyPricing(null, { partnerName: "Наш склад (остатки)" }), true);
+  assert.equal(supplierUsesStockOnlyPricing(null, { partnerName: "Поставщик Наш склад" }), true);
   const meta = priceMasterSupplierPricingMeta({ partnerName: "Наш Склад", price: 5000, active: true });
   assert.equal(meta.stockOnly, true);
   assert.equal(meta.priceEligible, false);
@@ -3123,6 +3139,11 @@ test("Наш Склад is always stock-only and never used for price", () => {
     { partnerName: "Авангард", available: true, price: 90, calculatedPrice: 12636, docDate: "2026-01-02", priceEligible: true },
   ]);
   assert.equal(picked.partnerName, "Авангард");
+  const pickedUnsafeFlags = pickWarehouseSupplier([
+    { partnerName: "Наш склад", available: true, price: 5000, calculatedPrice: 8500, docDate: "2026-01-01", priceEligible: true, stockOnly: false },
+    { partnerName: "Авангард", available: true, price: 90, calculatedPrice: 12636, docDate: "2026-01-02", priceEligible: true },
+  ]);
+  assert.equal(pickedUnsafeFlags.partnerName, "Авангард");
 });
 
 test("pickWarehouseSupplier ignores stock-only suppliers for price", () => {
@@ -5991,4 +6012,18 @@ test("worker role starts background schedulers without api HTTP port", async () 
   assert.match(serverSource, /if \(isWorkerServer\) \{/);
   assert.match(serverSource, /startBackgroundSchedulers\(\)/);
   assert.match(serverSource, /WORKER_HEALTH_PORT/);
+});
+
+test("authoritative reprice loads linked products from postgres when warehouse memory is stub", async () => {
+  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  assert.match(serverSource, /async function readLinkedProductsForReprice/);
+  assert.match(serverSource, /const products = await readLinkedProductsForReprice/);
+});
+
+test("Ozon discount quarantine uses staged price steps under 90% drop limit", () => {
+  const { planOzonQuarantinePriceSteps, computeOzonQuarantineNextPrice, resolveOzonOldPrice } = require("../server.js");
+  assert.deepEqual(planOzonQuarantinePriceSteps(45700, 1346), [5027, 1346]);
+  assert.equal(computeOzonQuarantineNextPrice(5027, 1346), 1346);
+  assert.deepEqual(planOzonQuarantinePriceSteps(1200, 1100), [1100]);
+  assert.ok(resolveOzonOldPrice(54, {}) >= 69);
 });

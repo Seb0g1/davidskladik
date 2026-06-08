@@ -12,10 +12,21 @@ const {
   processPriceRetryQueue,
   readPriceRetryQueue,
   writePriceRetryQueue,
+  isOzonPriceDiscountQuarantineError,
   needsOzonOldPriceEscalation,
   resolveOzonOldPrice,
+  planOzonQuarantinePriceSteps,
+  computeOzonQuarantineNextPrice,
+  roundPrice,
+  buildOzonPricePayload,
+  getOzonAccountByTarget,
+  sendOzonPricePayloadChunks,
   priceRetryQueueKey,
 } = require("../server.js");
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function loadFailedStates() {
   const prisma = getPrisma();
@@ -30,33 +41,41 @@ async function loadFailedStates() {
   });
 }
 
+function isQuarantineRow(row = {}) {
+  const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  const lastError = String(row.lastError || raw.detail || raw.error || "");
+  return needsOzonOldPriceEscalation({ message: lastError }) || lastError.toLowerCase().includes("скидк");
+}
+
 async function prepareRetryQueueForQuarantine(rows = []) {
   const queue = await readPriceRetryQueue().catch(() => ({ items: [] }));
   const existing = new Map((queue.items || []).map((item) => [priceRetryQueueKey(item), item]));
   const now = new Date().toISOString();
   let added = 0;
   for (const row of rows) {
+    if (!isQuarantineRow(row)) continue;
     const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
-    const lastError = String(row.lastError || raw.detail || raw.error || "");
-    if (!needsOzonOldPriceEscalation({ message: lastError }) && !lastError.toLowerCase().includes("скидк")) continue;
-    const targetPrice = Number(row.targetPrice || raw.lastRequestedPrice || raw.requestedPrice || 0);
-    const cabinetPrice = Number(row.currentPrice || raw.cabinetPriceAtSend || raw.currentPrice || 0);
+    const targetPrice = roundPrice(row.targetPrice || raw.lastRequestedPrice || raw.requestedPrice || 0);
+    const cabinetPrice = roundPrice(row.currentPrice || raw.cabinetPriceAtSend || raw.currentPrice || 0);
     if (!row.productId || !targetPrice) continue;
+    const stepPrice = computeOzonQuarantineNextPrice(cabinetPrice, targetPrice);
     const item = {
       id: row.productId,
       productId: row.productId,
       marketplace: "ozon",
       target: row.target,
       offerId: row.offerId,
-      price: targetPrice,
-      oldPrice: Math.max(cabinetPrice, resolveOzonOldPrice(targetPrice, { oldPrice: cabinetPrice })),
+      price: stepPrice,
+      finalTargetPrice: targetPrice,
+      cabinetPrice,
+      oldPrice: resolveOzonOldPrice(stepPrice, {}),
       forceOldPrice: true,
-      retryReason: "ozon_price_quarantine_release",
+      retryReason: "ozon_quarantine_step",
       status: "pending",
       queuedAt: now,
       nextRetryAt: now,
       attempts: 0,
-      error: lastError,
+      error: String(row.lastError || raw.detail || raw.error || ""),
     };
     existing.set(priceRetryQueueKey(item), item);
     added += 1;
@@ -66,10 +85,59 @@ async function prepareRetryQueueForQuarantine(rows = []) {
   return { added, total: items.length };
 }
 
+async function releaseDiscountQuarantineStaged(rows = []) {
+  const account = getOzonAccountByTarget("ozon");
+  const stepDelayMs = Math.max(1500, Number(process.env.OZON_QUARANTINE_STEP_DELAY_MS || 2500) || 2500);
+  const outcomes = [];
+
+  for (const row of rows) {
+    const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+    const cabinet = roundPrice(row.currentPrice || raw.cabinetPriceAtSend || 0);
+    const target = roundPrice(row.targetPrice || raw.lastRequestedPrice || 0);
+    const steps = planOzonQuarantinePriceSteps(cabinet, target);
+    const stepResults = [];
+    let ok = true;
+
+    for (const stepPrice of steps) {
+      const payload = buildOzonPricePayload({
+        offerId: row.offerId,
+        price: stepPrice,
+        forceOldPrice: true,
+        oldPrice: resolveOzonOldPrice(stepPrice, {}),
+      });
+      const sent = await sendOzonPricePayloadChunks(account, [payload]);
+      const fail = sent.failed[0];
+      if (fail) {
+        ok = false;
+        stepResults.push({
+          stepPrice,
+          ok: false,
+          error: fail.error?.message || "send_failed",
+        });
+        break;
+      }
+      stepResults.push({ stepPrice, ok: true });
+      if (stepPrice !== steps[steps.length - 1]) await sleep(stepDelayMs);
+    }
+
+    outcomes.push({
+      offerId: row.offerId,
+      productId: row.productId,
+      cabinet,
+      target,
+      steps,
+      ok,
+      stepResults,
+    });
+  }
+
+  return outcomes;
+}
+
 async function main() {
   const rows = await loadFailedStates();
-  const quarantine = rows.filter((row) => needsOzonOldPriceEscalation({ message: row.lastError || "" })
-    || String(row.lastError || "").toLowerCase().includes("скидк"));
+  const quarantine = rows.filter(isQuarantineRow);
+  const discountQuarantine = quarantine.filter((row) => isOzonPriceDiscountQuarantineError({ message: row.lastError || "" }));
   const allIds = Array.from(new Set(rows.map((row) => String(row.productId || "").trim()).filter(Boolean)));
   const quarantineIds = Array.from(new Set(quarantine.map((row) => String(row.productId || "").trim()).filter(Boolean)));
 
@@ -77,11 +145,13 @@ async function main() {
     phase: "audit",
     failedOzon: rows.length,
     quarantine: quarantine.length,
+    discountQuarantine: discountQuarantine.length,
     quarantineSamples: quarantine.slice(0, 8).map((row) => ({
       offerId: row.offerId,
       productId: row.productId,
       targetPrice: row.targetPrice,
       currentPrice: row.currentPrice,
+      plannedSteps: planOzonQuarantinePriceSteps(row.currentPrice, row.targetPrice),
       lastError: String(row.lastError || "").slice(0, 120),
     })),
   }, null, 2));
@@ -89,30 +159,45 @@ async function main() {
   const queuePrep = await prepareRetryQueueForQuarantine(quarantine);
   console.log(JSON.stringify({ phase: "retry_queue_prepared", ...queuePrep }, null, 2));
 
-  const retryPass = await processPriceRetryQueue({ respectNextRetryAt: false, limit: 1000, trigger: "quarantine_release" });
-  console.log(JSON.stringify({ phase: "retry_queue_processed", ...retryPass }, null, 2));
-
-  if (quarantineIds.length) {
-    const quarantinePush = await sendWarehousePrices({
-      productIds: quarantineIds,
-      force: true,
-      onlyChanged: false,
-      refreshMarketplacePrices: true,
-      livePriceMaster: true,
-      verify: true,
-      marketplace: "ozon",
-      reason: "ozon_quarantine_release",
-      sourceEvent: "ozon_quarantine_release",
-    });
+  if (discountQuarantine.length) {
     console.log(JSON.stringify({
-      phase: "quarantine_push",
-      selected: quarantinePush.selected,
-      sent: quarantinePush.sent,
-      failed: quarantinePush.failed,
-      queued: quarantinePush.queued,
-      failedSamples: (quarantinePush.failedItems || []).slice(0, 10),
+      phase: "staged_quarantine_release_start",
+      count: discountQuarantine.length,
     }, null, 2));
+    const staged = await releaseDiscountQuarantineStaged(discountQuarantine);
+    const succeededIds = staged.filter((item) => item.ok).map((item) => item.productId).filter(Boolean);
+    console.log(JSON.stringify({
+      phase: "staged_quarantine_release",
+      total: staged.length,
+      ok: staged.filter((item) => item.ok).length,
+      failed: staged.filter((item) => !item.ok).length,
+      samples: staged.slice(0, 8),
+    }, null, 2));
+
+    if (succeededIds.length) {
+      const refresh = await sendWarehousePrices({
+        productIds: succeededIds,
+        force: false,
+        onlyChanged: false,
+        refreshMarketplacePrices: true,
+        livePriceMaster: false,
+        verify: true,
+        marketplace: "ozon",
+        reason: "quarantine_state_refresh",
+        sourceEvent: "quarantine_state_refresh",
+      });
+      console.log(JSON.stringify({
+        phase: "quarantine_state_refresh",
+        productIds: succeededIds.length,
+        sent: refresh.sent,
+        failed: refresh.failed,
+        skipped: refresh.skipped,
+      }, null, 2));
+    }
   }
+
+  const retryPass = await processPriceRetryQueue({ respectNextRetryAt: false, limit: 200, trigger: "quarantine_release" });
+  console.log(JSON.stringify({ phase: "retry_queue_processed", ...retryPass }, null, 2));
 
   const maxRepush = Math.max(10, Math.min(80, Number(process.env.QUARANTINE_FIX_MAX_REPUSH || 40) || 40));
   const repushIds = allIds.filter((id) => !quarantineIds.includes(id)).slice(0, maxRepush);
@@ -138,8 +223,7 @@ async function main() {
   }
 
   const after = await loadFailedStates();
-  const afterQuarantine = after.filter((row) => needsOzonOldPriceEscalation({ message: row.lastError || "" })
-    || String(row.lastError || "").toLowerCase().includes("скидк"));
+  const afterQuarantine = after.filter(isQuarantineRow);
   console.log(JSON.stringify({
     phase: "after",
     failedOzon: after.length,
@@ -147,6 +231,7 @@ async function main() {
     quarantineRemainingSamples: afterQuarantine.slice(0, 8).map((row) => ({
       offerId: row.offerId,
       targetPrice: row.targetPrice,
+      currentPrice: row.currentPrice,
       lastError: String(row.lastError || "").slice(0, 120),
     })),
   }, null, 2));

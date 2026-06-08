@@ -1695,9 +1695,45 @@ function resolveOzonOldPrice(price, item = {}) {
   const currentPrice = roundPrice(price);
   if (!currentPrice) return 0;
   const markupPct = Math.max(0, Number(process.env.OZON_OLD_PRICE_MARKUP_PCT || 20) || 20);
+  const lowPriceMax = Math.max(100, Number(process.env.OZON_LOW_PRICE_MAX_RUB || 400) || 400);
+  const lowPriceMinDiscountPct = Math.max(20, Number(process.env.OZON_LOW_PRICE_MIN_DISCOUNT_PCT || 21) || 21);
   const markupOldPrice = roundPrice(currentPrice * (1 + markupPct / 100));
+  const lowPriceMinOld = currentPrice <= lowPriceMax
+    ? Math.ceil(currentPrice / (1 - lowPriceMinDiscountPct / 100))
+    : 0;
   const requestedOldPrice = roundPrice(item.oldPrice ?? item.old_price ?? item.oldPriceRub ?? 0);
-  return Math.max(currentPrice + 1, markupOldPrice, requestedOldPrice);
+  return Math.max(currentPrice + 1, markupOldPrice, lowPriceMinOld, requestedOldPrice);
+}
+
+function getOzonMaxPriceDropRatioPerStep() {
+  return Math.max(0.105, Math.min(0.25, Number(process.env.OZON_MAX_PRICE_DROP_RATIO_PER_STEP || 0.11) || 0.11));
+}
+
+function computeOzonQuarantineNextPrice(cabinetPrice, targetPrice) {
+  const cabinet = roundPrice(cabinetPrice);
+  const target = roundPrice(targetPrice);
+  if (!cabinet || !target) return target;
+  if (target >= cabinet) return target;
+  const minNext = Math.ceil(cabinet * getOzonMaxPriceDropRatioPerStep());
+  return minNext <= target ? target : minNext;
+}
+
+function planOzonQuarantinePriceSteps(cabinetPrice, targetPrice, { maxSteps = 24 } = {}) {
+  const target = roundPrice(targetPrice);
+  let current = roundPrice(cabinetPrice);
+  if (!target) return [];
+  if (!current || target >= current) return [target];
+  const steps = [];
+  while (steps.length < maxSteps && current > target) {
+    const next = computeOzonQuarantineNextPrice(current, target);
+    if (!next || next >= current) break;
+    steps.push(next);
+    current = next;
+  }
+  if (!steps.length || steps[steps.length - 1] !== target) {
+    if (computeOzonQuarantineNextPrice(current, target) === target) steps.push(target);
+  }
+  return steps;
 }
 
 function normalizeMarketplaceAccount(input = {}, current = {}) {
@@ -2132,21 +2168,36 @@ function isWarehouseProductTargetEnabled(product = {}) {
   ));
 }
 
-function calculateRubPrice(usdPrice, usdRate, markupCoefficient) {
-  return roundPrice(Number(usdPrice || 0) * Number(usdRate || 0) * Number(markupCoefficient || 0));
+function supplierPriceIsRubNative(supplier = {}) {
+  if (supplier.convertedFromRub === true) return true;
+  const currency = cleanText(supplier.priceCurrency || supplier.currency || supplier.sourceCurrency).toUpperCase();
+  if (currency === "RUB" || currency === "RUR") return true;
+  return supplierUsesRubPriceMasterPricing(null, supplier);
+}
+
+function calculateRubPrice(basePrice, usdRate, markupCoefficient, context = null) {
+  const markup = Number(markupCoefficient || 0);
+  const ctx = context && typeof context === "object" ? context : {};
+  const rubNative = ctx.rubNative === true || supplierPriceIsRubNative(ctx);
+  const price = Number(basePrice || 0);
+  if (rubNative) {
+    const rubBase = Number(ctx.originalPrice ?? ctx.purchaseRubPrice ?? price);
+    return roundPrice(rubBase * markup);
+  }
+  return roundPrice(price * Number(usdRate || 0) * markup);
 }
 
 function normalizePriceMasterPrice(rawPrice, usdRate, currency = "USD") {
   const originalPrice = Number(rawPrice || 0);
-  const rate = Number(usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
   const mode = cleanText(currency || "USD").toUpperCase();
   const isRub = mode === "RUB" || mode === "RUR";
-  const price = isRub && rate > 0 ? originalPrice / rate : originalPrice;
+  const price = originalPrice;
   return {
     price: Number(Number(price || 0).toFixed(4)),
     originalPrice,
     sourceCurrency: isRub ? "RUB" : "USD",
     convertedFromRub: Boolean(isRub),
+    priceCurrency: isRub ? "RUB" : "USD",
   };
 }
 
@@ -2585,8 +2636,13 @@ function priceMasterRubSupplierNameSet() {
 
 function supplierUsesRubPriceMasterPricing(supplier = null, row = {}) {
   if (cleanText(supplier?.priceCurrency).toUpperCase() === "RUB") return true;
-  const partnerName = normalizeSupplierName(supplier?.name || row.partnerName || "");
-  return Boolean(partnerName && priceMasterRubSupplierNameSet().has(partnerName));
+  const partnerName = normalizeSupplierName(supplier?.name || row.partnerName || row.supplierName || "");
+  if (!partnerName) return false;
+  if (priceMasterRubSupplierNameSet().has(partnerName)) return true;
+  return partnerName.includes("инна")
+    || partnerName.includes("иванна")
+    || partnerName.includes("inna")
+    || partnerName.includes("ivanna");
 }
 
 let stockOnlySupplierNamesCache = { at: 0, names: null };
@@ -2607,8 +2663,12 @@ function stockOnlySupplierNameSet() {
 
 function supplierUsesStockOnlyPricing(supplier = null, row = {}) {
   if (normalizeSupplierPricingMode(supplier || {}) === "stock_only") return true;
-  const partnerName = normalizeSupplierName(supplier?.name || row.partnerName || "");
-  return Boolean(partnerName && stockOnlySupplierNameSet().has(partnerName));
+  const partnerName = normalizeSupplierName(supplier?.name || row.partnerName || row.supplierName || "");
+  if (!partnerName) return false;
+  if (stockOnlySupplierNameSet().has(partnerName)) return true;
+  return partnerName.includes("наш склад")
+    || partnerName.includes("nash sklad")
+    || partnerName.includes("our warehouse");
 }
 
 function inferPriceMasterRowCurrency(row = {}, supplier = null, usdRate = 95) {
@@ -5005,7 +5065,7 @@ async function buildYandexPriceOverrideLookup(products = [], shops = [], warehou
           return {
             ...match,
             markupCoefficient,
-            calculatedPrice: calculateRubPrice(match.price, rate, markupCoefficient),
+            calculatedPrice: calculateRubPrice(match.price, rate, markupCoefficient, match),
           };
         }));
       const availableSupplierCount = suppliers.filter((supplier) => supplier.available).length;
@@ -5018,7 +5078,7 @@ async function buildYandexPriceOverrideLookup(products = [], shops = [], warehou
           appSettings,
         });
         const markupCoefficient = Number(availabilityPolicy.markupCoefficient || selectedSupplier.markupCoefficient || 0);
-        const price = calculateRubPrice(selectedSupplier.price, rate, markupCoefficient);
+        const price = calculateRubPrice(selectedSupplier.price, rate, markupCoefficient, selectedSupplier);
         if (price > 0) {
           overrides.set(lookupKey, {
             price,
@@ -10625,13 +10685,25 @@ function buildPriceRetryItem(item = {}, error = null, now = new Date()) {
   const delayMs = priceRetryDelayMs(attempts, error);
   const nextRetryAt = new Date(now.getTime() + delayMs).toISOString();
   const delayedByLimit = isOzonPerItemPriceLimitError(error);
-  const oldPriceAdjusted = needsOzonOldPriceEscalation(error);
-  const price = roundPrice(item.price);
-  const cabinetPrice = roundPrice(item.oldPrice ?? item.cabinetPrice ?? 0);
+  const discountQuarantine = isOzonPriceDiscountQuarantineError(error);
+  const oldPriceLess = isOzonOldPriceLessError(error);
+  const oldPriceAdjusted = oldPriceLess || discountQuarantine;
+  const targetPrice = roundPrice(item.finalTargetPrice ?? item.targetPrice ?? item.price);
+  const cabinetPrice = roundPrice(item.cabinetPrice ?? item.oldPrice ?? 0);
+  const stepPrice = discountQuarantine
+    ? computeOzonQuarantineNextPrice(cabinetPrice || roundPrice(item.price), targetPrice)
+    : roundPrice(item.price);
+  const price = stepPrice || targetPrice;
+  const stagedQuarantine = discountQuarantine && price > targetPrice;
   return {
     ...item,
+    price,
+    finalTargetPrice: targetPrice,
+    cabinetPrice: cabinetPrice || item.cabinetPrice,
     error: error?.message || item.error || "retry_failed",
-    oldPrice: oldPriceAdjusted ? resolveOzonOldPrice(price, { ...item, oldPrice: Math.max(cabinetPrice, item.oldPrice || 0) }) : item.oldPrice,
+    oldPrice: oldPriceLess
+      ? resolveOzonOldPrice(price, { ...item, oldPrice: Math.max(cabinetPrice, item.oldPrice || 0) })
+      : resolveOzonOldPrice(price, item),
     forceOldPrice: oldPriceAdjusted ? true : item.forceOldPrice,
     queueKey: priceRetryQueueKey(item),
     status: delayedByLimit ? "delayed" : (oldPriceAdjusted ? "pending" : "failed"),
@@ -10639,7 +10711,9 @@ function buildPriceRetryItem(item = {}, error = null, now = new Date()) {
     lastAttemptAt: now.toISOString(),
     attempts,
     nextRetryAt,
-    retryReason: delayedByLimit ? "ozon_per_item_price_limit" : (oldPriceAdjusted ? "ozon_old_price_adjusted" : "send_failed"),
+    retryReason: delayedByLimit
+      ? "ozon_per_item_price_limit"
+      : (stagedQuarantine ? "ozon_quarantine_step" : (oldPriceLess ? "ozon_old_price_adjusted" : "send_failed")),
   };
 }
 
@@ -13281,6 +13355,10 @@ async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSupplier
 function warehouseSupplierPurchaseRubPrice(supplier = {}, rate = 0) {
   const preset = Number(supplier.purchaseRubPrice);
   if (Number.isFinite(preset) && preset > 0) return preset;
+  if (supplierPriceIsRubNative(supplier)) {
+    const rubBase = Number(supplier.originalPrice ?? supplier.price ?? 0);
+    if (Number.isFinite(rubBase) && rubBase > 0) return rubBase;
+  }
   const originalPrice = Number(supplier.originalPrice ?? NaN);
   if (supplier.convertedFromRub && Number.isFinite(originalPrice) && originalPrice > 0) return originalPrice;
   const usd = Number(supplier.price || 0);
@@ -13321,7 +13399,10 @@ function compareWarehouseSupplierPrices(a = {}, b = {}) {
 
 function pickWarehouseSupplier(matches) {
   return [...matches]
-    .filter((match) => match.available && match.priceEligible !== false && match.stockOnly !== true)
+    .filter((match) => match.available
+      && match.priceEligible !== false
+      && match.stockOnly !== true
+      && !supplierUsesStockOnlyPricing(null, match))
     .sort(compareWarehouseSupplierPrices)[0] || null;
 }
 
@@ -13406,7 +13487,7 @@ function enrichSupplierPriceCandidates(suppliers = [], {
     const priceEligible = supplier.priceEligible !== false && supplier.stockOnly !== true;
     const purchaseRubPrice = warehouseSupplierPurchaseRubPrice(supplier, rate);
     const effectiveFinalPrice = supplier.available && priceEligible
-      ? calculateRubPrice(supplier.price, rate, markupCoefficient)
+      ? calculateRubPrice(supplier.price, rate, markupCoefficient, supplier)
       : null;
     return {
       ...supplier,
@@ -13665,6 +13746,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
               },
             },
           }),
+          match,
         ),
       })),
     );
@@ -13715,8 +13797,8 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
           baseMarkupCoefficient,
           markupCoefficient,
           availabilityRule: availabilityPolicy.rule,
-          calculatedPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient)),
-          effectiveFinalPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient)),
+          calculatedPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient, selectedSupplier)),
+          effectiveFinalPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient, selectedSupplier)),
         }
       : (stockOnlySupplier
           ? {
@@ -13729,7 +13811,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
             }
           : null);
     const rawNextPrice = selectedSupplier && selectedSupplierWithPolicy
-      ? Number(selectedSupplierWithPolicy.calculatedPrice || calculateRubPrice(selectedSupplierWithPolicy.price, rate, markupCoefficient))
+      ? Number(selectedSupplierWithPolicy.calculatedPrice || calculateRubPrice(selectedSupplierWithPolicy.price, rate, markupCoefficient, selectedSupplierWithPolicy))
       : (stockOnlyManualPrice || 0);
     const minAuto = Number(product.autoPriceMin || 0);
     const maxAuto = Number(product.autoPriceMax || 0);
@@ -13930,7 +14012,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         return {
           ...match,
           markupCoefficient,
-          calculatedPrice: calculateRubPrice(match.price, rate, markupCoefficient),
+          calculatedPrice: calculateRubPrice(match.price, rate, markupCoefficient, match),
         };
       }),
     );
@@ -13981,8 +14063,8 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
           baseMarkupCoefficient,
           markupCoefficient,
           availabilityRule: availabilityPolicy.rule,
-          calculatedPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient)),
-          effectiveFinalPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient)),
+          calculatedPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient, selectedSupplier)),
+          effectiveFinalPrice: Number(selectedSupplier.effectiveFinalPrice || calculateRubPrice(selectedSupplier.price, rate, markupCoefficient, selectedSupplier)),
         }
       : (stockOnlySupplier
           ? {
@@ -13995,7 +14077,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
             }
           : null);
     const rawNextPrice = selectedSupplier && selectedSupplierWithPolicy
-      ? Number(selectedSupplierWithPolicy.calculatedPrice || calculateRubPrice(selectedSupplierWithPolicy.price, rate, markupCoefficient))
+      ? Number(selectedSupplierWithPolicy.calculatedPrice || calculateRubPrice(selectedSupplierWithPolicy.price, rate, markupCoefficient, selectedSupplierWithPolicy))
       : (stockOnlyManualPrice || 0);
     const minAuto = Number(product.autoPriceMin || 0);
     const maxAuto = Number(product.autoPriceMax || 0);
@@ -21697,6 +21779,37 @@ function linkedWarehouseProductsForReprice(warehouse = {}, { productIds, marketp
   return normalizedLimit > 0 ? rows.slice(0, normalizedLimit) : rows;
 }
 
+async function readLinkedProductsForReprice({ productIds, marketplace = "all", limit = 0 } = {}) {
+  const warehouse = await readWarehouse();
+  const fromMemory = linkedWarehouseProductsForReprice(warehouse, { productIds, marketplace, limit });
+  if (fromMemory.length || !shouldUsePostgresStorage()) return fromMemory;
+  const prisma = getPrisma();
+  if (!prisma) return fromMemory;
+  const idSet = Array.isArray(productIds) && productIds.length
+    ? productIds.map((id) => cleanText(id)).filter(Boolean)
+    : null;
+  const marketplaceFilter = cleanText(marketplace || "all").toLowerCase();
+  const normalizedLimit = Math.max(0, Math.round(Number(limit || 0) || 0));
+  const where = {
+    AND: [
+      enabledWarehouseTargetWhere(),
+      { links: { some: {} } },
+      idSet?.length ? { id: { in: idSet } } : {},
+      marketplaceFilter !== "all" ? { marketplace: marketplaceFilter } : {},
+    ].filter((item) => Object.keys(item || {}).length),
+  };
+  const rows = await prisma.warehouseProduct.findMany({
+    where,
+    include: { links: true },
+    orderBy: { updatedAt: "desc" },
+    ...(normalizedLimit > 0 ? { take: normalizedLimit } : {}),
+  });
+  return rows
+    .map(productFromPostgres)
+    .filter((product) => Array.isArray(product.links) && product.links.length)
+    .filter((product) => isWarehouseProductTargetEnabled(product));
+}
+
 async function markSalesAutomationPriceQueued(products = [], {
   priceIntentId,
   reason = "queued",
@@ -21786,8 +21899,7 @@ async function queueAuthoritativePriceReprice({
   priceMasterLinkLookupCache.clear();
   priceMasterSearchCache.clear();
   invalidateWarehouseViewCache();
-  const warehouse = await readWarehouse();
-  const products = linkedWarehouseProductsForReprice(warehouse, { productIds, marketplace, limit });
+  const products = await readLinkedProductsForReprice({ productIds, marketplace, limit });
   const ids = products.map((product) => String(product.id)).filter(Boolean);
   const priceIntentId = crypto.randomUUID();
   if (!ids.length) {
@@ -22277,17 +22389,23 @@ async function sendWarehousePrices({
       continue;
     }
     const lastOzonSend = product.marketplace === "ozon" ? product.lastOzonPriceSend : null;
-    const quarantineRelease = lastOzonSend
-      ? needsOzonOldPriceEscalation({ message: lastOzonSend.detail || lastOzonSend.error || "" })
-      : false;
+    const lastOzonError = lastOzonSend ? (lastOzonSend.detail || lastOzonSend.error || "") : "";
+    const quarantineRelease = lastOzonSend ? needsOzonOldPriceEscalation({ message: lastOzonError }) : false;
+    const discountQuarantine = lastOzonSend ? isOzonPriceDiscountQuarantineError({ message: lastOzonError }) : false;
     const cabinetPrice = roundPrice(product.currentPrice || 0);
+    const finalTargetPrice = roundPrice(product.nextPrice);
+    const stepPrice = discountQuarantine && cabinetPrice > finalTargetPrice
+      ? computeOzonQuarantineNextPrice(cabinetPrice, finalTargetPrice)
+      : finalTargetPrice;
     const priceItem = {
       id: product.id,
       productId: product.id,
       target: product.target,
       offerId: product.offerId,
-      price: product.nextPrice,
-      oldPrice: cabinetPrice,
+      price: stepPrice,
+      finalTargetPrice: discountQuarantine && stepPrice > finalTargetPrice ? finalTargetPrice : undefined,
+      cabinetPrice: discountQuarantine ? cabinetPrice : undefined,
+      oldPrice: discountQuarantine ? resolveOzonOldPrice(stepPrice, {}) : cabinetPrice,
       forceOldPrice: quarantineRelease || undefined,
       markup: product.markupCoefficient,
       supplier: product.selectedSupplier,
@@ -23293,6 +23411,30 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
       failed.push(...ozonItems
         .filter((entry) => verificationFailedOfferIdSet.has(String(entry.payload.offer_id)))
         .map((entry) => buildPriceRetryItem(entry.item, verificationFailedOfferIds.get(String(entry.payload.offer_id)), now)));
+      const stagedFollowUps = [];
+      for (const entry of ozonItems) {
+        const offerId = String(entry.payload.offer_id || "");
+        if (failedOfferIdSet.has(offerId) || verificationFailedOfferIdSet.has(offerId)) continue;
+        const finalTarget = roundPrice(entry.item.finalTargetPrice ?? entry.item.targetPrice ?? 0);
+        const sentPrice = roundPrice(entry.item.price);
+        if (!finalTarget || sentPrice <= finalTarget) continue;
+        const nextStep = computeOzonQuarantineNextPrice(sentPrice, finalTarget);
+        stagedFollowUps.push({
+          ...entry.item,
+          price: nextStep,
+          finalTargetPrice: finalTarget,
+          cabinetPrice: sentPrice,
+          oldPrice: resolveOzonOldPrice(nextStep, {}),
+          forceOldPrice: true,
+          status: "pending",
+          attempts: 0,
+          queuedAt: entry.item.queuedAt || now.toISOString(),
+          nextRetryAt: new Date(now.getTime() + priceRetryDelayMs(1, { message: "скидк" })).toISOString(),
+          retryReason: "ozon_quarantine_step",
+          error: "",
+        });
+      }
+      if (stagedFollowUps.length) failed.push(...stagedFollowUps);
     }
 
     for (const shop of getYandexShops()) {
@@ -30569,6 +30711,8 @@ module.exports = {
   normalizePriceMasterSnapshotItemForPostgres,
   resolvePriceMasterRowCurrency,
   calculateRubPrice,
+  warehouseSupplierPurchaseRubPrice,
+  supplierUsesRubPriceMasterPricing,
   managedSupplierMaps,
   normalizePriceMasterPrice,
   supplierImpactProductIds,
@@ -30680,6 +30824,12 @@ module.exports = {
   isOzonPriceDiscountQuarantineError,
   needsOzonOldPriceEscalation,
   resolveOzonOldPrice,
+  getOzonMaxPriceDropRatioPerStep,
+  computeOzonQuarantineNextPrice,
+  planOzonQuarantinePriceSteps,
+  roundPrice,
+  getOzonAccountByTarget,
+  sendOzonPricePayloadChunks,
   sendWarehousePrices,
   processPriceRetryQueue,
   readPriceRetryQueue,
