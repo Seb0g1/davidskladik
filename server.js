@@ -103,7 +103,9 @@ const autoSyncInitialDelaySeconds = Math.max(30, Number(process.env.AUTO_SYNC_IN
 const warehouseWarmOnStartup = process.env.WAREHOUSE_WARM_ON_STARTUP === "true";
 const warehouseFullMemoryLoadEnabled = process.env.WAREHOUSE_FULL_MEMORY_LOAD_ENABLED === "true";
 const backgroundJobsEnabled = process.env.BACKGROUND_JOBS_ENABLED === "true";
-const warehouseInMemoryPageMax = Math.max(500, Math.min(50000, Number(process.env.WAREHOUSE_IN_MEMORY_PAGE_MAX || 5000) || 5000));
+const warehouseInMemoryPageMax = Math.max(500, Math.min(50000, Number(process.env.WAREHOUSE_IN_MEMORY_PAGE_MAX || 1500) || 1500));
+const warehousePageBuildMaxConcurrent = Math.max(1, Number(process.env.WAREHOUSE_PAGE_BUILD_MAX_CONCURRENT || 2) || 2);
+const warehousePageBuildAcquireTimeoutMs = Math.max(1000, Number(process.env.WAREHOUSE_PAGE_BUILD_ACQUIRE_TIMEOUT_MS || 5000) || 5000);
 const warehouseJsonMaxLoadBytes = Math.max(50_000_000, Number(process.env.WAREHOUSE_JSON_MAX_LOAD_BYTES || 300_000_000) || 300_000_000);
 const autoZeroStockOnNoSupplier = process.env.AUTO_ZERO_STOCK_ON_NO_SUPPLIER !== "false";
 const autoArchiveOnNoLinks = process.env.AUTO_ARCHIVE_ON_NO_LINKS === "true";
@@ -152,6 +154,23 @@ const marketplaceMaintenanceHours = Math.max(
   Math.min(24, Number(process.env.MARKETPLACE_MAINTENANCE_HOURS || process.env.DEFAULT_MARKETPLACE_MAINTENANCE_HOURS || 6) || 6),
 );
 const marketplaceMaintenanceEnabled = process.env.MARKETPLACE_MAINTENANCE_ENABLED !== "false";
+const marketplaceMaintenanceMinUptimeSec = Math.max(
+  60,
+  Number(process.env.MARKETPLACE_MAINTENANCE_MIN_UPTIME_SEC || 1800) || 1800,
+);
+const marketplaceMaintenanceDeferRetryMs = Math.max(
+  60_000,
+  Number(process.env.MARKETPLACE_MAINTENANCE_DEFER_RETRY_MS || 900000) || 900000,
+);
+const marketplaceMaintenancePairBackfillEnabled = process.env.MARKETPLACE_MAINTENANCE_PAIR_BACKFILL_ENABLED === "true";
+const marketplaceMaintenanceLinkedScanLimit = Math.max(
+  500,
+  Math.min(10000, Number(process.env.MARKETPLACE_MAINTENANCE_LINKED_SCAN_LIMIT || 3000) || 3000),
+);
+const marketplaceMaintenanceRecentSlowWindowMs = Math.max(
+  30_000,
+  Number(process.env.MARKETPLACE_MAINTENANCE_RECENT_SLOW_WINDOW_MS || 120000) || 120000,
+);
 const pmDbPoolSize = Math.max(1, Number(process.env.PM_DB_POOL_SIZE || 8) || 8);
 const pmDbConnectTimeoutMs = Math.max(1000, Number(process.env.PM_DB_CONNECT_TIMEOUT_MS || 10000) || 10000);
 const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CACHE_MS || 120000) || 120000);
@@ -344,6 +363,8 @@ const warehousePostgresDetailInflight = new Map();
 const warehousePostgresDetailCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_DETAIL_CACHE_MS || 45000));
 const warehouseFastPageCache = new Map();
 const warehouseFastPageInflight = new Map();
+let warehousePageBuildActive = 0;
+const warehousePageBuildWaiters = [];
 const warehouseFastPageCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MS || 60000));
 const warehouseFastPageCacheMax = Math.max(10, Number(process.env.WAREHOUSE_FAST_PAGE_CACHE_MAX || 80));
 const warehouseCatalogPairingContextCacheTtlMs = Math.max(5000, Number(process.env.WAREHOUSE_PAIRING_CONTEXT_CACHE_MS || 300000) || 300000);
@@ -11582,6 +11603,43 @@ function serverUnderHttpLoad() {
   });
 }
 
+function serverHasRecentSlowHttpActivity() {
+  const cutoff = Date.now() - marketplaceMaintenanceRecentSlowWindowMs;
+  return recentSlowRequests.some((entry) => {
+    const elapsedMs = Number(entry?.elapsedMs || 0);
+    const atMs = Date.parse(entry?.at || "");
+    return elapsedMs >= slowRequestThresholdMs && Number.isFinite(atMs) && atMs >= cutoff;
+  });
+}
+
+function marketplaceMaintenanceShouldDefer(trigger = "") {
+  if (process.uptime() < marketplaceMaintenanceMinUptimeSec) {
+    logger.warn("marketplace maintenance deferred: process uptime", {
+      trigger: cleanText(trigger) || "maintenance",
+      uptimeSec: Math.round(process.uptime()),
+      minUptimeSec: marketplaceMaintenanceMinUptimeSec,
+    });
+    return { defer: true, status: "deferred_uptime" };
+  }
+  if (activeHttpRequests > 0) {
+    logger.warn("marketplace maintenance deferred: active http requests", {
+      trigger: cleanText(trigger) || "maintenance",
+      activeHttpRequests,
+    });
+    return { defer: true, status: "deferred_active_http" };
+  }
+  if (serverHasRecentSlowHttpActivity()) {
+    logger.warn("marketplace maintenance deferred: recent slow http", {
+      trigger: cleanText(trigger) || "maintenance",
+    });
+    return { defer: true, status: "deferred_recent_slow_http" };
+  }
+  if (heavyBackgroundWorkShouldDefer(`marketplace_maintenance:${trigger}`)) {
+    return { defer: true, status: "deferred_under_load" };
+  }
+  return { defer: false, status: "ok" };
+}
+
 function heavyBackgroundWorkShouldDefer(reason = "") {
   if (serverUnderMemoryPressure()) {
     logger.warn("heavy background work deferred: memory pressure", {
@@ -14598,6 +14656,144 @@ function warehouseGroupCountUsesFullCatalogScan(filters = {}) {
   return cleanText(filters.linked || "all") === "all";
 }
 
+function warehouseGroupCountUsesSqlFastPath(filters = {}) {
+  const linked = cleanText(filters.linked || "all");
+  if (linked !== "linked" && linked !== "unlinked") return false;
+  if (cleanText(filters.q || "")) return false;
+  if (Boolean(filters.autoOnly)) return false;
+  if (cleanText(filters.brand || "")) return false;
+  if (cleanText(filters.marketplace || "all") !== "all") return false;
+  if (cleanText(filters.state || "all") !== "all") return false;
+  return true;
+}
+
+function buildEnabledWarehouseProductsSql(alias = "w") {
+  const { Prisma } = require("@prisma/client");
+  const col = (field) => Prisma.raw(`${alias}.${field}`);
+  const parts = [];
+  const ozonAccounts = getOzonAccounts();
+  if (ozonAccounts.length) {
+    for (const account of ozonAccounts) {
+      const targetId = cleanText(account.id);
+      parts.push(Prisma.sql`(${col("marketplace")} = 'ozon' AND (${col("target")} = ${targetId} OR ${col("target")} = 'ozon'))`);
+    }
+  } else {
+    parts.push(Prisma.sql`${col("marketplace")} = 'ozon'`);
+  }
+  const yandexShops = getYandexShops({ includeSyncDisabled: true });
+  if (yandexShops.length <= 1) {
+    parts.push(Prisma.sql`${col("marketplace")} = 'yandex'`);
+  } else {
+    parts.push(Prisma.sql`${col("marketplace")} = 'yandex'`);
+  }
+  return parts.length === 1 ? parts[0] : Prisma.sql`(${Prisma.join(parts, " OR ")})`;
+}
+
+function warehouseGroupCountLinkSql(filters = {}) {
+  const { Prisma } = require("@prisma/client");
+  const linked = cleanText(filters.linked || "all");
+  if (linked === "unlinked") {
+    return Prisma.sql`NOT EXISTS (SELECT 1 FROM "product_links" pl WHERE pl."product_id" = w.id)`;
+  }
+  if (linked === "linked") {
+    return Prisma.sql`EXISTS (SELECT 1 FROM "product_links" pl WHERE pl."product_id" = w.id)`;
+  }
+  return null;
+}
+
+async function countWarehouseGroupTotalPostgresSql(prisma, filters = {}) {
+  if (!prisma || !warehouseGroupCountUsesSqlFastPath(filters)) return 0;
+  const linkClause = warehouseGroupCountLinkSql(filters);
+  if (!linkClause) return 0;
+  try {
+    const enabledClause = buildEnabledWarehouseProductsSql("w");
+    const rows = await prisma.$queryRaw`
+      SELECT COUNT(DISTINCT LOWER(w.offer_id))::int AS cnt
+      FROM warehouse_products w
+      WHERE ${enabledClause}
+        AND ${linkClause}
+    `;
+    return Math.max(0, Number(rows[0]?.cnt || 0));
+  } catch (error) {
+    logger.warn("warehouse group count sql fast-path failed, using batched fallback", {
+      detail: error?.message || String(error),
+      linked: cleanText(filters.linked || "all"),
+    });
+    const where = warehousePagePostgresWhere(filters);
+    const distinctOffers = new Set();
+    const batchSize = Math.max(1000, Number(process.env.WAREHOUSE_GROUP_COUNT_BATCH_SIZE || 5000) || 5000);
+    let cursorId = "";
+    while (true) {
+      const batch = await prisma.warehouseProduct.findMany({
+        where,
+        select: { id: true, offerId: true },
+        orderBy: { id: "asc" },
+        take: batchSize,
+        ...(cursorId ? { skip: 1, cursor: { id: cursorId } } : {}),
+      });
+      if (!batch.length) break;
+      for (const row of batch) {
+        const offerId = cleanText(row.offerId).toLowerCase();
+        if (offerId) distinctOffers.add(offerId);
+      }
+      cursorId = batch[batch.length - 1].id;
+      if (batch.length < batchSize) break;
+    }
+    return distinctOffers.size;
+  }
+}
+
+function warehousePostgresWhereRequiresUnlinkedOnly(baseWhere = {}) {
+  const and = Array.isArray(baseWhere.AND) ? baseWhere.AND : [];
+  return and.some((clause) => clause && typeof clause === "object" && clause.links && clause.links.none !== undefined);
+}
+
+function resolveWarehouseGroupTotalEstimate(prisma, filters = {}, { estimatedGroupTotal = 0 } = {}) {
+  if (cleanText(filters.q || "")) {
+    return { groupTotal: estimatedGroupTotal, groupCountPending: false };
+  }
+  const cached = getCachedWarehouseGroupTotal(filters);
+  if (cached > 0) {
+    return { groupTotal: cached, groupCountPending: false };
+  }
+  if (prisma && !warehouseGroupCountInflight.has(warehouseGroupCountCacheKey(filters))) {
+    kickWarehouseGroupCountRefresh(prisma, filters);
+  }
+  return {
+    groupTotal: estimatedGroupTotal > 0 ? estimatedGroupTotal : 0,
+    groupCountPending: Boolean(prisma),
+  };
+}
+
+async function acquireWarehousePageBuildSlot() {
+  if (warehousePageBuildActive < warehousePageBuildMaxConcurrent) {
+    warehousePageBuildActive += 1;
+    return true;
+  }
+  return new Promise((resolve) => {
+    const entry = { resolve: null };
+    const timer = setTimeout(() => {
+      const index = warehousePageBuildWaiters.indexOf(entry);
+      if (index >= 0) warehousePageBuildWaiters.splice(index, 1);
+      entry.resolve(false);
+    }, warehousePageBuildAcquireTimeoutMs);
+    entry.resolve = (granted) => {
+      clearTimeout(timer);
+      resolve(granted);
+    };
+    warehousePageBuildWaiters.push(entry);
+  });
+}
+
+function releaseWarehousePageBuildSlot() {
+  warehousePageBuildActive = Math.max(0, warehousePageBuildActive - 1);
+  while (warehousePageBuildWaiters.length && warehousePageBuildActive < warehousePageBuildMaxConcurrent) {
+    const next = warehousePageBuildWaiters.shift();
+    warehousePageBuildActive += 1;
+    next.resolve(true);
+  }
+}
+
 function getCachedWarehouseGroupTotal(filters = {}) {
   const cacheKey = warehouseGroupCountCacheKey(filters);
   const cached = warehouseGroupCountCache.get(cacheKey);
@@ -14702,6 +14898,16 @@ async function countWarehouseFilteredGroupTotal(prisma, filters = {}) {
   const cached = warehouseGroupCountCache.get(cacheKey);
   if (cached && Date.now() - cached.at < warehouseGroupCountCacheTtlMs) return cached.value;
 
+  if (warehouseGroupCountUsesSqlFastPath(filters)) {
+    const value = await countWarehouseGroupTotalPostgresSql(prisma, filters);
+    warehouseGroupCountCache.set(cacheKey, { at: Date.now(), value });
+    if (warehouseGroupCountCache.size > warehouseGroupCountCacheMax) {
+      const oldestKey = warehouseGroupCountCache.keys().next().value;
+      if (oldestKey) warehouseGroupCountCache.delete(oldestKey);
+    }
+    return value;
+  }
+
   const linkedFilter = cleanText(filters.linked || "all");
   const needsComputedLinkFilter = linkedFilter === "ready" || linkedFilter === "changed" || linkedFilter === "linked_archived";
   const brandFilter = cleanText(filters.brand || "");
@@ -14734,10 +14940,10 @@ async function countWarehouseFilteredGroupTotal(prisma, filters = {}) {
       ? pairingCache.pairingRows
       : await loadWarehouseCatalogPairingRows(prisma, select, where);
   } else {
-    [groupContext, filteredRows] = await Promise.all([
-      getWarehouseCatalogPairingGroupContext(prisma),
-      loadWarehouseCatalogPairingRows(prisma, select, where),
-    ]);
+    filteredRows = await loadWarehouseCatalogPairingRows(prisma, select, where);
+    groupContext = buildWarehouseCatalogGroupContext(
+      filteredRows.map((row) => productFromPostgres({ ...row, links: [] })),
+    );
   }
   let products = filteredRows.map((row) => productFromPostgres({ ...row, links: [] }));
   if (needsComputedLinkFilter || isWarehouseStrictIdentitySearch(filters)) {
@@ -14772,9 +14978,9 @@ async function buildFastWarehouseGroupPageFromPostgres({
   const rowTotal = Number(basePage.total || 0);
   const estimatedGroupTotal = Math.max(groups.length, Math.ceil(rowTotal / 1.6));
   if (!rawItems.length) {
-    const groupTotal = hasSearchQuery
-      ? 0
-      : await resolveWarehouseGroupTotalForPage(prisma, filters, { estimatedGroupTotal: 0 });
+    const { groupTotal, groupCountPending } = hasSearchQuery
+      ? { groupTotal: 0, groupCountPending: false }
+      : resolveWarehouseGroupTotalEstimate(prisma, filters, { estimatedGroupTotal: 0 });
     return {
       ...basePage,
       grouped: true,
@@ -14783,13 +14989,13 @@ async function buildFastWarehouseGroupPageFromPostgres({
       total: groupTotal > 0 ? groupTotal : 0,
       groups: [],
       items: [],
+      groupCountPending,
     };
   }
-  const groupTotal = hasSearchQuery
-    ? estimatedGroupTotal
-    : await resolveWarehouseGroupTotalForPage(prisma, filters, { estimatedGroupTotal });
+  const { groupTotal, groupCountPending } = hasSearchQuery
+    ? { groupTotal: estimatedGroupTotal, groupCountPending: false }
+    : resolveWarehouseGroupTotalEstimate(prisma, filters, { estimatedGroupTotal });
   const total = hasSearchQuery ? estimatedGroupTotal : (groupTotal > 0 ? groupTotal : estimatedGroupTotal);
-  const groupCountPending = !hasSearchQuery && groupTotal === estimatedGroupTotal && !getCachedWarehouseGroupTotal(filters);
   return {
     ...basePage,
     grouped: true,
@@ -14799,7 +15005,7 @@ async function buildFastWarehouseGroupPageFromPostgres({
     groups,
     items: groups,
     hasMore: (page * pageSize) < rowTotal,
-    partial: Boolean(basePage.partial) || groupCountPending,
+    partial: Boolean(basePage.partial),
     groupCountPending,
   };
 }
@@ -15053,6 +15259,7 @@ function warehousePageSiblingWhere(baseWhere = {}) {
 
 async function addWarehousePostgresPageGroupSiblings(prisma, baseWhere, pageRows = []) {
   if (!pageRows?.length) return pageRows || [];
+  if (warehousePostgresWhereRequiresUnlinkedOnly(baseWhere)) return pageRows;
   const crossSiblings = await fetchCrossMarketplaceSiblingRows(prisma, baseWhere, pageRows);
   const pairedOfferIds = new Set();
   for (const row of pageRows) {
@@ -15338,11 +15545,13 @@ async function buildFastWarehousePageFromPostgres({
   const siblingSourceProducts = dbRows.map(productFromPostgres);
   let allProducts = sortWarehouseProductsForSearch(siblingSourceProducts, filters);
   if (needsComputedLinkFilter) {
-    allProducts = await buildFreshWarehouseProductsForWarehouse(
-      { products: allProducts, suppliers: normalizedSuppliers },
-      allProducts.map((product) => product.id),
-      { livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
-    );
+    if (!serverUnderHttpLoad() && !serverUnderMemoryPressure()) {
+      allProducts = await buildFreshWarehouseProductsForWarehouse(
+        { products: allProducts, suppliers: normalizedSuppliers },
+        allProducts.map((product) => product.id),
+        { livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+      );
+    }
   }
   if (needsInMemoryPage) {
     allProducts = sortWarehouseProductsForSearch(
@@ -15395,7 +15604,9 @@ async function buildFastWarehousePageFromPostgres({
     usdRate: rate,
     priceMaster: await getPriceMasterSnapshotMetaFast(),
     sourceError: "",
-    partial: items.some((item) => item.partial) || (needsInMemoryPage && siblingSourceProducts.length >= warehouseInMemoryPageMax),
+    partial: items.some((item) => item.partial)
+      || (needsInMemoryPage && siblingSourceProducts.length >= warehouseInMemoryPageMax)
+      || (needsComputedLinkFilter && (serverUnderHttpLoad() || serverUnderMemoryPressure())),
     inMemoryScanCapped: needsInMemoryPage && siblingSourceProducts.length >= warehouseInMemoryPageMax,
     noSupplierAlerts: [],
     page,
@@ -15989,6 +16200,23 @@ async function buildFastWarehousePage({
   };
 
   const buildPromise = (async () => {
+    const slotGranted = await acquireWarehousePageBuildSlot();
+    if (!slotGranted) {
+      const staleCached = getWarehouseFastPageCache(cacheParams);
+      if (staleCached.value) {
+        return { ...staleCached.value, partial: true, stale: true, sourceError: "warehouse_page_build_slot_timeout" };
+      }
+      return {
+        partial: true,
+        stale: false,
+        sourceError: "warehouse_page_build_slot_timeout",
+        page,
+        pageSize,
+        total: 0,
+        hasMore: false,
+        items: [],
+      };
+    }
     try {
       result = await Promise.race([
         buildCore(),
@@ -15997,6 +16225,7 @@ async function buildFastWarehousePage({
       if (result) setWarehouseFastPageCache(cached.key, result);
       return result;
     } finally {
+      releaseWarehousePageBuildSlot();
       warehouseFastPageInflight.delete(cached.key);
     }
   })();
@@ -29530,6 +29759,47 @@ async function runAutoSyncCycle(trigger = "auto") {
   }
 }
 
+async function buildMaintenanceWarehouseScope() {
+  if (shouldUsePostgresStorage()) {
+    const prisma = getPrisma();
+    if (prisma) {
+      const appSettings = await readAppSettings();
+      const rate = Number(appSettings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95);
+      const [summary, rows, suppliers] = await Promise.all([
+        getWarehousePostgresSummaryLight(prisma, rate),
+        prisma.warehouseProduct.findMany({
+          where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] },
+          include: { links: true },
+          orderBy: { updatedAt: "desc" },
+          take: marketplaceMaintenanceLinkedScanLimit,
+        }),
+        getWarehousePostgresSuppliers(prisma),
+      ]);
+      const seedProducts = rows.map(productFromPostgres);
+      const built = seedProducts.length
+        ? await buildFreshWarehouseProductsForWarehouse(
+          { products: seedProducts, suppliers },
+          seedProducts.map((product) => product.id),
+          { livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+        )
+        : [];
+      return {
+        products: built,
+        suppliers,
+        total: summary.totalAll,
+        ready: summary.counterStats?.ready || 0,
+        changed: summary.counterStats?.changed || 0,
+        withoutSupplier: summary.counterStats?.withoutSupplier || 0,
+        marketplaceSyncChanged: 0,
+        marketplaceSyncChangedProductIds: [],
+        maintenanceScopeSampled: seedProducts.length >= marketplaceMaintenanceLinkedScanLimit,
+        maintenanceLinkedScanLimit: marketplaceMaintenanceLinkedScanLimit,
+      };
+    }
+  }
+  return buildWarehouseView({ sync: false });
+}
+
 async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
   if (marketplaceMaintenancePromise) return marketplaceMaintenancePromise;
   if (manualWarehouseSyncPromise) {
@@ -29537,8 +29807,9 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
     return { status: "manual_sync_running" };
   }
   if (marketplaceMaintenanceRunning || autoSyncRunning) return { status: "already_running" };
-  if (heavyBackgroundWorkShouldDefer(`marketplace_maintenance:${trigger}`)) {
-    return { status: "deferred_under_load" };
+  const deferState = marketplaceMaintenanceShouldDefer(trigger);
+  if (deferState.defer) {
+    return { status: deferState.status };
   }
 
   marketplaceMaintenancePromise = (async () => {
@@ -29546,7 +29817,7 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
     const startedAt = new Date().toISOString();
     try {
       const priceMaster = await runSync();
-      if (shouldUsePostgresStorage()) {
+      if (shouldUsePostgresStorage() && marketplaceMaintenancePairBackfillEnabled) {
         try {
           const prisma = getPrisma();
           if (prisma) {
@@ -29558,7 +29829,9 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
           logger.warn("marketplace maintenance ozon yandex pair backfill failed", { detail: error?.message || String(error) });
         }
       }
-      const warehouse = await buildWarehouseView({ sync: false });
+      const warehouse = isMonolithServer
+        ? await buildMaintenanceWarehouseScope()
+        : await buildWarehouseView({ sync: false });
       const automation = await runNoSupplierMarketplaceAutomation(warehouse, {
         includeNoLinks: false,
         skipLinkedGrace: true,
@@ -29576,6 +29849,7 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
           updatedAt: priceMaster.createdAt,
         },
         warehouseTotal: warehouse.total,
+        maintenanceScopeSampled: Boolean(warehouse.maintenanceScopeSampled),
         marketplaceSyncChanged: warehouse.marketplaceSyncChanged || 0,
         zeroStockSent: automation.zeroStockSent,
         autoArchived: automation.archived,
@@ -29615,12 +29889,16 @@ function scheduleMarketplaceMaintenance(delayMs = null) {
   const normalizedDelay = Math.max(60_000, Number(delayMs ?? intervalMs) || intervalMs);
   marketplaceMaintenanceNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   marketplaceMaintenanceTimer = setTimeout(async () => {
+    let nextDelayMs = intervalMs;
     try {
-      await runMarketplaceMaintenanceCycle("scheduled_maintenance");
+      const result = await runMarketplaceMaintenanceCycle("scheduled_maintenance");
+      if (result?.status && String(result.status).startsWith("deferred_")) {
+        nextDelayMs = marketplaceMaintenanceDeferRetryMs;
+      }
     } catch (error) {
       logger.error("scheduled marketplace maintenance failed", { detail: error?.message || String(error), err: error });
     } finally {
-      scheduleMarketplaceMaintenance(intervalMs);
+      scheduleMarketplaceMaintenance(nextDelayMs);
     }
   }, normalizedDelay);
 }
@@ -30312,6 +30590,9 @@ module.exports = {
   repairWeakYandexCardsFromOzonPostgres,
   countWarehouseProductGroups,
   warehouseGroupCountUsesFullCatalogScan,
+  warehouseGroupCountUsesSqlFastPath,
+  countWarehouseGroupTotalPostgresSql,
+  warehousePostgresWhereRequiresUnlinkedOnly,
   applyGroupLinkInheritanceForPage,
   propagateGroupSupplierContextForPage,
   enrichWarehousePageProductsForDisplay,

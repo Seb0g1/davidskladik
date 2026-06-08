@@ -152,6 +152,8 @@ const {
   buildYandexWarehouseProductFromOzonExport,
   countWarehouseProductGroups,
   warehouseGroupCountUsesFullCatalogScan,
+  warehouseGroupCountUsesSqlFastPath,
+  warehousePostgresWhereRequiresUnlinkedOnly,
   isWeakYandexWarehouseCard,
   patchYandexWarehouseProductFromOzonDonor,
   materializeYandexExportedProductsForWarehouse,
@@ -411,6 +413,18 @@ test("warehouse grouped counter and yandex media repair helpers", () => {
   assert.equal(warehouseGroupCountUsesFullCatalogScan({ q: "", linked: "all", marketplace: "all", state: "all" }), true);
   assert.equal(warehouseGroupCountUsesFullCatalogScan({ q: "VILHELM", linked: "all", marketplace: "all", state: "all" }), false);
   assert.equal(warehouseGroupCountUsesFullCatalogScan({ q: "", linked: "ready", marketplace: "all", state: "all" }), false);
+  assert.equal(warehouseGroupCountUsesSqlFastPath({ q: "", linked: "unlinked", marketplace: "all", state: "all" }), true);
+  assert.equal(warehouseGroupCountUsesSqlFastPath({ q: "", linked: "linked", marketplace: "all", state: "all" }), true);
+  assert.equal(warehouseGroupCountUsesSqlFastPath({ q: "", linked: "ready", marketplace: "all", state: "all" }), false);
+  assert.equal(warehouseGroupCountUsesSqlFastPath({ q: "SKU", linked: "unlinked", marketplace: "all", state: "all" }), false);
+  assert.equal(
+    warehousePostgresWhereRequiresUnlinkedOnly(warehousePagePostgresWhere({ linked: "unlinked" })),
+    true,
+  );
+  assert.equal(
+    warehousePostgresWhereRequiresUnlinkedOnly(warehousePagePostgresWhere({ linked: "linked" })),
+    false,
+  );
   assert.equal(countWarehouseProductGroups([
     { id: "ozon-1", marketplace: "ozon", offerId: "SKU-1", raw: { manualGroupId: "auto-pair-ozon-1" } },
     { id: "yandex-1", marketplace: "yandex", offerId: "SKU-1", raw: { manualGroupId: "auto-pair-ozon-1", yandex: { extra: { sourceProductId: "ozon-1" } } } },

@@ -32,6 +32,12 @@ function request(method, urlPath, body, headers = {}) {
   });
 }
 
+async function timedRequest(method, urlPath, body, headers = {}) {
+  const startedAt = Date.now();
+  const response = await request(method, urlPath, body, headers);
+  return { ...response, elapsedMs: Date.now() - startedAt };
+}
+
 function sessionCookie(headers = {}) {
   const setCookie = headers["set-cookie"] || [];
   const list = Array.isArray(setCookie) ? setCookie : [setCookie];
@@ -48,13 +54,19 @@ async function main() {
   if (!cookie) throw new Error(`Login failed: HTTP ${login.status}`);
   const hdr = { Cookie: cookie };
 
-  const [daily, page, pageAll, pageGrouped, live, health] = await Promise.all([
-    request("GET", "/api/daily-sync", null, hdr),
-    request("GET", "/api/warehouse/products/page?page=1&pageSize=8&linked=linked", null, hdr),
-    request("GET", "/api/warehouse/products/page?page=1&pageSize=8", null, hdr),
-    request("GET", "/api/warehouse/products/page?page=1&pageSize=40&grouped=true", null, hdr),
-    request("GET", "/api/live-status", null, hdr),
-    request("GET", "/api/health", null, hdr),
+  const daily = await timedRequest("GET", "/api/daily-sync", null, hdr);
+  const page = await timedRequest("GET", "/api/warehouse/products/page?page=1&pageSize=8&linked=linked", null, hdr);
+  const pageAll = await timedRequest("GET", "/api/warehouse/products/page?page=1&pageSize=8", null, hdr);
+  const pageGrouped = await timedRequest("GET", "/api/warehouse/products/page?page=1&pageSize=40&grouped=true", null, hdr);
+  const pageUnlinkedGrouped = await timedRequest(
+    "GET",
+    "/api/warehouse/products/page?page=1&pageSize=40&linked=unlinked&grouped=true",
+    null,
+    hdr,
+  );
+  const [live, health] = await Promise.all([
+    timedRequest("GET", "/api/live-status", null, hdr),
+    timedRequest("GET", "/api/health", null, hdr),
   ]);
 
   const items = Array.isArray(page.body?.items) ? page.body.items : [];
@@ -64,6 +76,7 @@ async function main() {
       total: page.body?.total,
       items: items.length,
       partial: page.body?.partial,
+      elapsedMs: page.elapsedMs,
       linkedProducts: page.body?.linkedProducts,
       sample: items.slice(0, 4).map((item) => ({
         id: item.id,
@@ -77,12 +90,32 @@ async function main() {
       total: pageAll.body?.total,
       items: Array.isArray(pageAll.body?.items) ? pageAll.body.items.length : 0,
       partial: pageAll.body?.partial,
+      elapsedMs: pageAll.elapsedMs,
       sample: (pageAll.body?.items || []).slice(0, 4).map((item) => ({
         offerId: item.offerId,
         marketplace: item.marketplace,
         links: (item.links || []).length,
       })),
     },
+    warehousePageUnlinkedGrouped: (() => {
+      const groups = Array.isArray(pageUnlinkedGrouped.body?.items) ? pageUnlinkedGrouped.body.items : [];
+      return {
+        status: pageUnlinkedGrouped.status,
+        elapsedMs: pageUnlinkedGrouped.elapsedMs,
+        grouped: pageUnlinkedGrouped.body?.grouped,
+        groupTotal: pageUnlinkedGrouped.body?.groupTotal ?? pageUnlinkedGrouped.body?.total,
+        rowTotal: pageUnlinkedGrouped.body?.rowTotal,
+        total: pageUnlinkedGrouped.body?.total,
+        items: groups.length,
+        partial: pageUnlinkedGrouped.body?.partial,
+        groupCountPending: pageUnlinkedGrouped.body?.groupCountPending,
+        sourceError: pageUnlinkedGrouped.body?.sourceError || "",
+        ok: pageUnlinkedGrouped.status === 200
+          && groups.length > 0
+          && !pageUnlinkedGrouped.body?.sourceError
+          && pageUnlinkedGrouped.elapsedMs < 8000,
+      };
+    })(),
     warehousePageGrouped: (() => {
       const groups = Array.isArray(pageGrouped.body?.items) ? pageGrouped.body.items : [];
       const multi = groups.filter((group) => Array.isArray(group.products) && group.products.length > 1);
@@ -93,6 +126,7 @@ async function main() {
         total: pageGrouped.body?.total,
         items: groups.length,
         partial: pageGrouped.body?.partial,
+        elapsedMs: pageGrouped.elapsedMs,
         sourceError: pageGrouped.body?.sourceError || "",
         multiMarketplace: multi.length,
         sample: multi.slice(0, 5).map((group) => ({

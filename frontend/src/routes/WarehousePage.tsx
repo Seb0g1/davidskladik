@@ -1558,7 +1558,11 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const pageQuery = useQuery({
     queryKey: ["warehouse", "page", effectiveFilters],
     queryFn: () => fetchJson(buildPageUrl(effectiveFilters), WarehousePageSchema),
-    placeholderData: (previousData) => previousData,
+    placeholderData: (previousData, previousQuery) => {
+      const prevFilters = previousQuery?.queryKey?.[2] as Filters | undefined;
+      if (prevFilters?.linked !== effectiveFilters.linked) return undefined;
+      return previousData;
+    },
     staleTime: 30_000,
     gcTime: 120_000,
   });
@@ -1604,6 +1608,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   });
   const setFilter = (key: keyof Filters, value: string | boolean | number) => {
     setFilters((current) => ({ ...current, [key]: value, page: key === "page" ? Number(value) : 1 }));
+    if (key === "linked") setSelectedGroup("");
   };
 
   return (
