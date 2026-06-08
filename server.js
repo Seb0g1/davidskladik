@@ -163,6 +163,7 @@ const marketplaceMaintenanceDeferRetryMs = Math.max(
   Number(process.env.MARKETPLACE_MAINTENANCE_DEFER_RETRY_MS || 900000) || 900000,
 );
 const marketplaceMaintenancePairBackfillEnabled = process.env.MARKETPLACE_MAINTENANCE_PAIR_BACKFILL_ENABLED === "true";
+const marketplaceMaintenancePmSyncEnabled = process.env.MARKETPLACE_MAINTENANCE_PM_SYNC_ENABLED === "true";
 const marketplaceMaintenanceLinkedScanLimit = Math.max(
   500,
   Math.min(10000, Number(process.env.MARKETPLACE_MAINTENANCE_LINKED_SCAN_LIMIT || 3000) || 3000),
@@ -1299,7 +1300,23 @@ async function collectHealthDetails({ deep = false } = {}) {
     components.redis.enabled ? components.redis : null,
   ].filter(Boolean);
   const ok = required.every((component) => component.ok !== false);
-  return { ok, service: "magic-vibes-warehouse", version: buildVersion, time: new Date().toISOString(), components };
+  const memory = process.memoryUsage();
+  const heapLimit = serverHeapLimitBytes();
+  return {
+    ok,
+    service: "magic-vibes-warehouse",
+    serverRole,
+    version: buildVersion,
+    time: new Date().toISOString(),
+    memory: {
+      heapUsedMb: Math.round(memory.heapUsed / 1024 / 1024),
+      heapLimitMb: Math.round(heapLimit / 1024 / 1024),
+      heapPressureRatio: heapLimit ? memory.heapUsed / heapLimit : 0,
+    },
+    activeHttpRequests,
+    recentSlowRequests: recentSlowRequests.slice(-10),
+    components,
+  };
 }
 
 app.get("/health", async (request, response) => {
@@ -10781,8 +10798,15 @@ async function readPriceHistory({ productId, offerId, marketplace, status, dateF
   };
 }
 
+function priceRetryAutoSchedulerEnabled() {
+  if (process.env.PRICE_RETRY_AUTO_ENABLED === "false") return false;
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return false;
+  if (!backgroundJobsEnabled) return false;
+  return true;
+}
+
 function schedulePriceRetryProcessing(delayMs = null) {
-  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return;
+  if (!priceRetryAutoSchedulerEnabled()) return;
   if (priceRetryTimer) return;
   const waitMs = Math.max(5_000, Number(delayMs ?? process.env.OZON_PRICE_RETRY_POLL_MS ?? 60_000) || 60_000);
   priceRetryTimer = setTimeout(async () => {
@@ -10815,6 +10839,7 @@ function schedulePriceRetryProcessing(delayMs = null) {
 }
 
 function schedulePriceRetryItems(items = []) {
+  if (!priceRetryAutoSchedulerEnabled()) return;
   const retryItems = Array.isArray(items) ? items : [];
   if (!retryItems.length) return;
   const nextAt = Math.min(...retryItems
@@ -11062,11 +11087,26 @@ async function getWarehousePostgresSuppliers(prisma) {
   return normalized;
 }
 
+function warehousePostgresDetailCachePeek(key) {
+  const cacheKey = cleanText(key);
+  if (!cacheKey) return null;
+  const cached = warehousePostgresDetailCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < warehousePostgresDetailCacheTtlMs) return cloneAuditValue(cached.value);
+  return null;
+}
+
+async function peekWarehouseGroupDetailCached(groupKey, { usdRate, refreshPrices = false } = {}) {
+  const appSettings = await readAppSettings();
+  const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
+  const cacheKey = `group:${groupKey}:${rate}:all-marketplaces:${refreshPrices ? "live" : "stored"}`;
+  return warehousePostgresDetailCachePeek(cacheKey);
+}
+
 function warehousePostgresCachedDetail(key, build) {
   const cacheKey = cleanText(key);
   if (!cacheKey) return build();
-  const cached = warehousePostgresDetailCache.get(cacheKey);
-  if (cached && Date.now() - cached.at < warehousePostgresDetailCacheTtlMs) return cloneAuditValue(cached.value);
+  const cached = warehousePostgresDetailCachePeek(cacheKey);
+  if (cached) return cached;
   const inflight = warehousePostgresDetailInflight.get(cacheKey);
   if (inflight) return inflight;
   const promise = Promise.resolve(build()).then((value) => {
@@ -11573,6 +11613,10 @@ async function readWarehouseFull() {
 
 function backgroundMarketplaceJobsBlocked() {
   return process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled;
+}
+
+function marketplaceJobsCanEnqueue() {
+  return process.env.DISABLE_BACKGROUND_JOBS !== "true" && Boolean(marketplaceQueue);
 }
 
 function serverHeapLimitBytes() {
@@ -14573,6 +14617,42 @@ async function enrichWarehousePageProductsForDisplay(pageWarehouse = {}, { usdRa
   return enrichedProducts.map((product) => mapWarehousePageItemFromProduct(product));
 }
 
+async function buildWarehouseDetailProductsFromPageWarehouse(pageWarehouse = {}, { refreshPrices = false, usdRate = 95 } = {}) {
+  const warehouse = {
+    ...(pageWarehouse || {}),
+    products: applyGroupLinkInheritanceForPage(Array.isArray(pageWarehouse?.products) ? pageWarehouse.products : []),
+    suppliers: Array.isArray(pageWarehouse?.suppliers) ? pageWarehouse.suppliers : [],
+  };
+  let pageProducts = warehouse.products;
+  if (refreshPrices) {
+    pageProducts = await enrichWeakOzonProductsForPage(warehouse.products);
+  }
+  const linkedIds = pageProducts
+    .filter((product) => compactWarehouseLinks(product.links || []).length > 0)
+    .map((product) => product.id);
+  let builtMap = new Map();
+  if (linkedIds.length) {
+    const built = await buildFreshWarehouseProductsForWarehouse(
+      { products: pageProducts, suppliers: warehouse.suppliers },
+      linkedIds,
+      {
+        refreshPrices,
+        persistMutations: false,
+        livePriceMaster: refreshPrices,
+        batchPriceMaster: refreshPrices,
+        usdRate,
+        priceMasterTimeoutMs: refreshPrices ? autoPricePmTimeoutMs : undefined,
+      },
+    );
+    builtMap = new Map(built.map((product) => [product.id, product]));
+    queueLinkedUnavailableSupplierZeroStock(built, { source: "warehouse_group_detail" });
+  }
+  const enrichedProducts = propagateGroupSupplierContextForPage(
+    pageProducts.map((product) => builtMap.get(product.id) || product),
+  );
+  return enrichedProducts.map((product) => normalizeWarehouseDetailProduct(product));
+}
+
 function mapServerWarehousePageGroup(group = {}) {
   const products = Array.isArray(group.products) ? group.products.map(mapWarehousePageItemFromProduct) : [];
   const primary = products.find((product) => product.selectedSupplier)
@@ -15449,6 +15529,7 @@ let warehouseGroupCountWarmTimer = null;
 
 function scheduleWarehouseGroupCountWarm() {
   if (process.env.WAREHOUSE_GROUP_COUNT_WARM_ENABLED === "false") return;
+  if (isMonolithServer && process.env.WAREHOUSE_GROUP_COUNT_WARM_ENABLED !== "true") return;
   if (!shouldUsePostgresStorage()) return;
   const intervalMs = Math.max(warehouseGroupCountCacheTtlMs, 60_000);
   const warm = async () => {
@@ -15981,7 +16062,7 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
   if (!prisma) return null;
   const { kind, value } = warehouseGroupKeyParts(groupKey);
   if (!value) return null;
-  kickWarehousePostgresLinksBackfill(prisma);
+  void kickWarehousePostgresLinksBackfill(prisma);
   const appSettings = await readAppSettings();
   const rate = Number(appSettings.fixedUsdRate || usdRate || process.env.DEFAULT_USD_RATE || 95);
   const cacheKey = `group:${groupKey}:${rate}:all-marketplaces:${refreshPrices ? "live" : "stored"}`;
@@ -16038,22 +16119,10 @@ async function buildWarehouseGroupDetailFromPostgres(groupKey, { usdRate, filter
     }
     if (!rows.length) return null;
     const normalizedSuppliers = await getWarehousePostgresSuppliers(prisma);
-    const products = applyGroupLinkInheritanceForPage(rows.map(productFromPostgres));
-    const pageProducts = await enrichWeakOzonProductsForPage(products);
-    const built = await buildFreshWarehouseProductsForWarehouse(
-      { products: pageProducts, suppliers: normalizedSuppliers },
-      pageProducts.map((product) => product.id),
-      {
-        refreshPrices,
-        persistMutations: false,
-        livePriceMaster: refreshPrices,
-        batchPriceMaster: refreshPrices,
-        usdRate: rate,
-        priceMasterTimeoutMs: refreshPrices ? autoPricePmTimeoutMs : undefined,
-      },
+    const detailProducts = await buildWarehouseDetailProductsFromPageWarehouse(
+      { products: rows.map(productFromPostgres), suppliers: normalizedSuppliers },
+      { refreshPrices, usdRate: rate },
     );
-    const builtMap = new Map(built.map((product) => [product.id, product]));
-    const detailProducts = pageProducts.map((product) => normalizeWarehouseDetailProduct(builtMap.get(product.id) || normalizeWarehouseProduct(product)));
     return {
       products: detailProducts,
       suppliers: normalizedSuppliers,
@@ -17966,11 +18035,24 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
 });
 
 app.get("/api/warehouse/products/group-detail", async (request, response, next) => {
+  let slotHeld = false;
   try {
     const usdRate = request.query.usdRate ? Number(request.query.usdRate) : undefined;
     const refreshPrices = request.query.refreshPrices === "true" || request.query.live === "true";
     const group = cleanText(request.query.group || "");
     if (!group) return response.status(400).json({ error: "Укажите group." });
+    if (!refreshPrices && shouldUsePostgresStorage()) {
+      const cachedDetail = await peekWarehouseGroupDetailCached(group, { usdRate, refreshPrices });
+      if (cachedDetail) return response.json(cachedDetail);
+    }
+    const slotGranted = await acquireWarehousePageBuildSlot();
+    if (!slotGranted) {
+      return response.status(503).json({
+        error: "Сервер занят загрузкой каталога. Повторите через секунду.",
+        retryAfterMs: 1500,
+      });
+    }
+    slotHeld = true;
     const detail = await buildWarehouseGroupDetail(group, {
       usdRate,
       refreshPrices,
@@ -17983,6 +18065,8 @@ app.get("/api/warehouse/products/group-detail", async (request, response, next) 
     response.json(detail);
   } catch (error) {
     next(error);
+  } finally {
+    if (slotHeld) releaseWarehousePageBuildSlot();
   }
 });
 
@@ -21622,7 +21706,7 @@ async function markSalesAutomationPriceQueued(products = [], {
 }
 
 function enqueueMarketplaceJobAccepted(name, data = {}, { priority = 5 } = {}) {
-  if (process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled) return Promise.resolve(null);
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return Promise.resolve(null);
   if (marketplaceQueue) {
     return marketplaceQueue.add(name, data, {
       jobId: marketplaceJobId(name, data),
@@ -21639,6 +21723,7 @@ function enqueueMarketplaceJobAccepted(name, data = {}, { priority = 5 } = {}) {
       return { accepted: true, inlineBackground: true, queueError: error?.message || String(error) };
     });
   }
+  if (!backgroundJobsEnabled || isApiServer) return Promise.resolve(null);
   setTimeout(() => {
     processMarketplaceJob(name, data).catch((error) => {
       logger.warn("background marketplace job failed", { name, detail: error?.message || String(error) });
@@ -21861,7 +21946,7 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
       };
     }
 
-    if (backgroundMarketplaceJobsBlocked()) {
+    if (!marketplaceJobsCanEnqueue() && backgroundMarketplaceJobsBlocked()) {
       if (
         !skipImmediateReplay
         && affectedProductIds.length <= linkedActivationImmediateMaxScope
@@ -22755,6 +22840,8 @@ function marketplaceJobId(name, data = {}) {
 }
 
 function marketplaceJobsShouldRunInline(name = "") {
+  if (isApiServer) return false;
+  if (marketplaceQueue && marketplaceJobsCanEnqueue()) return false;
   if (process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled) {
     return name === "auto-price-push"
       || name === "ozon-unarchive-queue-process"
@@ -22772,7 +22859,8 @@ function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
       throw error;
     });
   }
-  if (process.env.DISABLE_BACKGROUND_JOBS === "true" || !backgroundJobsEnabled) return Promise.resolve(null);
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true") return Promise.resolve(null);
+  if (!marketplaceQueue && !backgroundJobsEnabled) return Promise.resolve(null);
   if (name === "auto-price-push" && !marketplaceQueueAutoPricePushEnabled) {
     return processMarketplaceJob(name, data).catch((error) => {
       logger.warn("inline auto price push failed", { detail: error?.message || String(error) });
@@ -29816,7 +29904,9 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
     marketplaceMaintenanceRunning = true;
     const startedAt = new Date().toISOString();
     try {
-      const priceMaster = await runSync();
+      const priceMaster = (isMonolithServer && !marketplaceMaintenancePmSyncEnabled)
+        ? await getPriceMasterSnapshotMeta()
+        : await runSync();
       if (shouldUsePostgresStorage() && marketplaceMaintenancePairBackfillEnabled) {
         try {
           const prisma = getPrisma();
@@ -29832,12 +29922,17 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
       const warehouse = isMonolithServer
         ? await buildMaintenanceWarehouseScope()
         : await buildWarehouseView({ sync: false });
-      const automation = await runNoSupplierMarketplaceAutomation(warehouse, {
-        includeNoLinks: false,
-        skipLinkedGrace: true,
-        source: trigger,
-      });
-      const recovery = await runSupplierRecoveryAutomation(warehouse, { source: trigger });
+      const maintenanceAutomationEnabled = process.env.MARKETPLACE_MAINTENANCE_AUTOMATION_ENABLED === "true";
+      const automation = maintenanceAutomationEnabled
+        ? await runNoSupplierMarketplaceAutomation(warehouse, {
+          includeNoLinks: false,
+          skipLinkedGrace: true,
+          source: trigger,
+        })
+        : { zeroStockSent: 0, archived: 0, errors: [], reason: "maintenance_automation_disabled" };
+      const recovery = (maintenanceAutomationEnabled && !isMonolithServer)
+        ? await runSupplierRecoveryAutomation(warehouse, { source: trigger })
+        : { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [], reason: "maintenance_recovery_disabled" };
       const result = {
         status: "ok",
         trigger,
@@ -29846,7 +29941,7 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
         priceMaster: {
           items: priceMaster.items,
           changes: priceMaster.changes,
-          updatedAt: priceMaster.createdAt,
+          updatedAt: priceMaster.createdAt || priceMaster.updatedAt || null,
         },
         warehouseTotal: warehouse.total,
         maintenanceScopeSampled: Boolean(warehouse.maintenanceScopeSampled),
@@ -29879,6 +29974,14 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
   return marketplaceMaintenancePromise;
 }
 
+function marketplaceMaintenanceStartupDelayMs(requestedDelayMs = null) {
+  const intervalMs = marketplaceMaintenanceHours * 60 * 60 * 1000;
+  const requested = Math.max(60_000, Number(requestedDelayMs ?? intervalMs) || intervalMs);
+  const minUptimeMs = marketplaceMaintenanceMinUptimeSec * 1000;
+  const remainingUptimeMs = Math.max(0, minUptimeMs - (process.uptime() * 1000));
+  return Math.max(requested, remainingUptimeMs);
+}
+
 function scheduleMarketplaceMaintenance(delayMs = null) {
   if (!marketplaceMaintenanceEnabled) {
     marketplaceMaintenanceNextRunAt = null;
@@ -29886,7 +29989,7 @@ function scheduleMarketplaceMaintenance(delayMs = null) {
   }
   if (marketplaceMaintenanceTimer) clearTimeout(marketplaceMaintenanceTimer);
   const intervalMs = marketplaceMaintenanceHours * 60 * 60 * 1000;
-  const normalizedDelay = Math.max(60_000, Number(delayMs ?? intervalMs) || intervalMs);
+  const normalizedDelay = marketplaceMaintenanceStartupDelayMs(delayMs ?? intervalMs);
   marketplaceMaintenanceNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   marketplaceMaintenanceTimer = setTimeout(async () => {
     let nextDelayMs = intervalMs;
@@ -30422,6 +30525,7 @@ module.exports = {
   hydrateWarehouseProductsForIds,
   warehouseMemoryCacheIsHydratedStub,
   backgroundMarketplaceJobsBlocked,
+  marketplaceJobsCanEnqueue,
   readWarehouseProductsFromPostgresByIds,
   buildFreshWarehouseProducts,
   buildFreshWarehouseProductsFromKnownProducts,
@@ -30596,6 +30700,7 @@ module.exports = {
   applyGroupLinkInheritanceForPage,
   propagateGroupSupplierContextForPage,
   enrichWarehousePageProductsForDisplay,
+  buildWarehouseDetailProductsFromPageWarehouse,
   sendYandexStocksFromOzonProducts,
   getYandexShopByTarget,
   priceRetryQueueKey,

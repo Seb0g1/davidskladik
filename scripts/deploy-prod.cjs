@@ -3,6 +3,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { execSync } = require("node:child_process");
 const { Client } = require("ssh2");
 
 const password = process.env.DEPLOY_PASSWORD;
@@ -15,6 +16,7 @@ const root = path.resolve(__dirname, "..");
 const remoteRoot = "/var/www/davidsklad/davidskladik";
 const withDedupe = process.argv.includes("--with-dedupe");
 const withRepairLinked = process.argv.includes("--repair-linked");
+const skipLocalChecks = process.argv.includes("--skip-local-checks");
 
 function exec(conn, command) {
   return new Promise((resolve, reject) => {
@@ -41,7 +43,40 @@ function sftpPut(conn, localPath, remotePath) {
   });
 }
 
+function readFrontendBundleFiles() {
+  const indexHtml = fs.readFileSync(path.join(root, "public/app-modern/index.html"), "utf8");
+  const assets = [];
+  for (const match of indexHtml.matchAll(/\/app-modern\/(assets\/[^"']+)/g)) {
+    assets.push(`public/app-modern/${match[1]}`);
+  }
+  return ["public/app-modern/index.html", ...Array.from(new Set(assets))];
+}
+
+function runLocalPreDeploy() {
+  if (skipLocalChecks) {
+    console.log("Skipping local npm test + build (--skip-local-checks)");
+    return;
+  }
+  console.log("Running npm test...");
+  execSync("npm test", { cwd: root, stdio: "inherit" });
+  console.log("Running npm run build...");
+  execSync("npm run build", { cwd: root, stdio: "inherit" });
+}
+
+function tagProdRelease() {
+  const tag = `prod-${new Date().toISOString().slice(0, 10)}`;
+  try {
+    execSync(`git tag -f ${tag}`, { cwd: root, stdio: "inherit" });
+    console.log(`Tagged ${tag} (local rollback marker)`);
+  } catch (error) {
+    console.warn(`Could not create tag ${tag}: ${error.message}`);
+  }
+}
+
 async function main() {
+  runLocalPreDeploy();
+  tagProdRelease();
+
   const conn = new Client();
   await new Promise((resolve, reject) => {
     conn.on("ready", resolve).on("error", reject).connect({
@@ -55,8 +90,10 @@ async function main() {
   });
 
   try {
-    console.log("Deploying server.js...");
-    await sftpPut(conn, path.join(root, "server.js"), `${remoteRoot}/server.js`);
+    console.log("Deploying server + api/worker entries + ecosystem...");
+    for (const rel of ["server.js", "api-entry.js", "worker-entry.js", "ecosystem.config.cjs"]) {
+      await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
+    }
 
     if (withDedupe) {
       console.log("Deploying dedupe script...");
@@ -74,13 +111,11 @@ async function main() {
     }
 
     console.log("Deploying frontend bundle...");
-    const files = [
-      "public/app-modern/index.html",
-      "public/app-modern/assets/index-Dr3-HBhG.css",
-      "public/app-modern/assets/index-NHtlqMhu.js",
-    ];
+    const files = readFrontendBundleFiles();
     for (const rel of files) {
-      await sftpPut(conn, path.join(root, rel), `${remoteRoot}/${rel}`);
+      const local = path.join(root, rel);
+      if (!fs.existsSync(local)) throw new Error(`Missing build asset: ${rel}`);
+      await sftpPut(conn, local, `${remoteRoot}/${rel}`);
     }
 
     console.log("Deploying post-deploy check script...");
@@ -93,13 +128,19 @@ async function main() {
 
     await exec(conn, [
       `cd ${remoteRoot}`,
-      "pm2 restart davidsklad --update-env",
-      "sleep 12",
+      "pm2 delete davidsklad 2>/dev/null || true",
+      "pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env || pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env",
+      "pm2 save",
+      "sleep 14",
+      "pm2 describe davidsklad-api | grep -E 'max memory|node args|status|restarts' || true",
+      "pm2 describe davidsklad-worker | grep -E 'max memory|node args|status|restarts' || true",
       "pm2 list",
       "free -h | head -2",
-      "echo '=== pm2 error log (last 40 lines) ==='",
-      "pm2 logs davidsklad --lines 40 --nostream --err || true",
-      "echo '=== post-deploy check ==='",
+      "echo '=== pm2 error log api (last 25 lines) ==='",
+      "pm2 logs davidsklad-api --lines 25 --nostream --err || true",
+      "echo '=== pm2 error log worker (last 25 lines) ==='",
+      "pm2 logs davidsklad-worker --lines 25 --nostream --err || true",
+      "echo '=== post-deploy check (blocking) ==='",
       "node scripts/prod-post-deploy-check.cjs",
     ].join(" && "));
 

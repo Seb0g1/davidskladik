@@ -188,3 +188,16 @@ DAILY_SYNC_TIME=11:00
 При синхронизации склад подтягивает существующие товары Ozon и Yandex Market. Для ссылок Ozon используется только публичный `productId`, `sku` или сохраненный `productUrl`; если публичного идентификатора нет, ссылка на поиск больше не показывается.
 
 Страница `/product.html` поддерживает кнопку «Обновить цены» и параметр `?refreshPrices=1` (или `?refresh=1`) для принудительного запроса актуальных цен с маркетплейсов при открытии.
+
+## Production (davidsklad.ru)
+
+На сервере 16 GB RAM приложение работает в режиме **api + worker** (см. `ecosystem.config.cjs`):
+
+- **davidsklad-api** — только HTTP, `BACKGROUND_JOBS_ENABLED=false`, BullMQ producer
+- **davidsklad-worker** — фоновые задачи и BullMQ consumer
+
+Деплой: `DEPLOY_PASSWORD=... node scripts/deploy-prod.cjs` (локально `npm test` + `npm run build`).
+
+Аварийное восстановление: `node scripts/run-prod-emergency-recover.cjs`.
+
+Подробный runbook: [docs/PROD_RUNBOOK.md](docs/PROD_RUNBOOK.md).

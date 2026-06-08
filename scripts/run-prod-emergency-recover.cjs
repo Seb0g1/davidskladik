@@ -66,10 +66,13 @@ async function main() {
       "free -h | head -2",
     ].join(" && "));
 
-    console.log("=== deploy server.js + locks ===");
+    console.log("=== deploy server.js + api/worker + locks ===");
     await exec(conn, `mkdir -p ${remoteRoot}/scripts ${remoteRoot}/data`);
     for (const rel of [
       "server.js",
+      "api-entry.js",
+      "worker-entry.js",
+      "ecosystem.config.cjs",
       "scripts/repair-yandex-media-from-ozon.cjs",
       "scripts/delete-yandex-small-volume.cjs",
       "scripts/run-prod-complete-pipeline.cjs",
@@ -79,17 +82,20 @@ async function main() {
       if (fs.existsSync(local)) await sftpPut(conn, local, `${remoteRoot}/${rel}`);
     }
 
-    console.log("=== restart pm2 ===");
+    console.log("=== restart pm2 api+worker ===");
     await exec(conn, [
       `cd ${remoteRoot}`,
-      "pm2 restart davidsklad --update-env",
-      "sleep 12",
+      "pm2 delete davidsklad 2>/dev/null || true",
+      "pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env || pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env",
+      "pm2 save",
+      "sleep 14",
       "pm2 list",
-      "curl -s -o /dev/null -w 'health_local:%{http_code} %{time_total}s\\n' --max-time 10 http://127.0.0.1:3000/api/live-status || true",
+      "curl -s -o /dev/null -w 'health_api:%{http_code} %{time_total}s\\n' --max-time 10 http://127.0.0.1:3000/api/live-status || true",
+      "curl -s -o /dev/null -w 'worker_health:%{http_code} %{time_total}s\\n' --max-time 10 http://127.0.0.1:3001/health || true",
       "curl -s -o /dev/null -w 'login_page:%{http_code} %{time_total}s\\n' --max-time 10 http://127.0.0.1:3000/login.html || true",
     ].join(" && "));
 
-    console.log("=== post-deploy check ===");
+    console.log("=== post-deploy check (blocking) ===");
     await exec(conn, `cd ${remoteRoot} && node scripts/prod-post-deploy-check.cjs`);
   } finally {
     conn.end();

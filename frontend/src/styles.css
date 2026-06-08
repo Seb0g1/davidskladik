@@ -546,6 +546,12 @@ button:disabled {
   align-items: center;
 }
 
+.detail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .detail-image {
   width: 132px;
   height: 132px;

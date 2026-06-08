@@ -1435,7 +1435,7 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
   );
 }
 
-function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin, filteredOut = false, loading = false }: { selectedGroup: string; products: Product[]; breakdown?: MarketplaceBreakdownRow[]; onClose: () => void; isAdmin: boolean; filteredOut?: boolean; loading?: boolean }) {
+function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin, filteredOut = false, loading = false, refreshing = false }: { selectedGroup: string; products: Product[]; breakdown?: MarketplaceBreakdownRow[]; onClose: () => void; isAdmin: boolean; filteredOut?: boolean; loading?: boolean; refreshing?: boolean }) {
   const primary = products.length ? preferredGroupPrimary(products) : undefined;
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const groupQueryKey = ["warehouse", "group-detail", selectedGroup];
@@ -1452,10 +1452,10 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
   }, [products, selectedGroup]);
   const refreshDetail = () => void queryClient.invalidateQueries({ queryKey: groupQueryKey });
 
-  if (!primary || loading) {
+  if (!primary) {
     return (
       <aside className={`detail-panel ${selectedGroup ? "" : "empty-panel"}`}>
-        {selectedGroup ? (
+        {selectedGroup && loading ? (
           <>
             <Loader2 className="spin" size={28} />
             <strong>Загружаю карточку...</strong>
@@ -1489,7 +1489,10 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
           </div>
           <CopyActions product={primary} />
         </div>
-        <button className="mobile-close" type="button" onClick={onClose}><X size={18} /></button>
+        <div className="detail-head-actions">
+          {refreshing ? <Loader2 className="spin" size={16} aria-label="Обновляю карточку" /> : null}
+          <button className="mobile-close" type="button" onClick={onClose}><X size={18} /></button>
+        </div>
       </div>
       {filteredOut ? <div className="warning-strip compact">Карточка скрыта текущими фильтрами, но открыта для проверки.</div> : null}
       <div className="stats-grid">
@@ -1520,6 +1523,7 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
 }
 
 export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
+  const queryClient = useQueryClient();
   const [filters, setFilters] = useState<Filters>(() => readFilters());
   const [selectedGroup, setSelectedGroup] = useState(() => selectedGroupFromPath());
   const [isMobileList, setIsMobileList] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileListMedia).matches);
@@ -1531,7 +1535,6 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     queryFn: () => fetchJson("/api/warehouse/brands", WarehouseBrandsSchema),
     staleTime: 10 * 60_000,
   });
-  const queryClient = useQueryClient();
   const refreshBrands = useMutation({
     mutationFn: () => fetchJson("/api/warehouse/brands/rebuild-index", BrandIndexStatusSchema, mutationBody({ limit: 100000 })),
     onSuccess: () => {
@@ -1588,11 +1591,15 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     enabled: Boolean(selectedGroup),
     staleTime: 60_000,
     gcTime: 180_000,
+    retry: 2,
+    retryDelay: (attempt) => Math.min(1500 * (attempt + 1), 4000),
   });
   const detailProducts = detailQuery.data?.products?.length
     ? detailQuery.data.products
-    : (detailQuery.isLoading ? [] : selectedRowsOnPage);
+    : selectedRowsOnPage;
   const detailBreakdown = (detailQuery.data as { marketplacePriceBreakdown?: MarketplaceBreakdownRow[] } | undefined)?.marketplacePriceBreakdown || [];
+  const detailLoading = !detailProducts.length && detailQuery.isFetching && Boolean(selectedGroup);
+  const detailRefreshing = Boolean(detailProducts.length && detailQuery.isFetching && selectedGroup);
   useEffect(() => {
     const media = window.matchMedia(mobileListMedia);
     const onChange = () => setIsMobileList(media.matches);
@@ -1693,7 +1700,8 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           selectedGroup={selectedGroup}
           products={detailProducts}
           breakdown={detailBreakdown}
-          loading={detailQuery.isLoading && Boolean(selectedGroup)}
+          loading={detailLoading}
+          refreshing={detailRefreshing}
           onClose={() => setSelectedGroup("")}
           isAdmin={isAdmin}
           filteredOut={selectedFilteredOut && Boolean(detailProducts.length)}

@@ -436,6 +436,9 @@ test("warehouse grouped counter and yandex media repair helpers", () => {
     { id: "ozon-2", marketplace: "ozon", offerId: "SKU-2" },
   ]), 2);
 
+  const { buildWarehouseDetailProductsFromPageWarehouse } = require("../server.js");
+  assert.equal(typeof buildWarehouseDetailProductsFromPageWarehouse, "function");
+
   const { applyGroupLinkInheritanceForPage, propagateGroupSupplierContextForPage } = require("../server.js");
   const inherited = applyGroupLinkInheritanceForPage([
     { id: "ozon-1", marketplace: "ozon", offerId: "SKU-1", links: [{ id: "l1", article: "PM-1", supplierName: "Supplier A" }] },
@@ -534,6 +537,20 @@ test("warehouse grouped counter and yandex media repair helpers", () => {
   }, { id: "yandex", businessId: "biz-1" }, ["Brand"]);
   assert.equal(cleanup.smallVolume, true);
   assert.equal(cleanup.action, "delete");
+});
+
+test("warehouse group detail light enrich skips unlinked PriceMaster batch", async () => {
+  const { buildWarehouseDetailProductsFromPageWarehouse } = require("../server.js");
+  const detail = await buildWarehouseDetailProductsFromPageWarehouse({
+    products: [
+      { id: "ozon-unlinked", marketplace: "ozon", offerId: "SKU-U1", links: [] },
+      { id: "yandex-unlinked", marketplace: "yandex", offerId: "SKU-U1", links: [] },
+    ],
+    suppliers: [],
+  }, { refreshPrices: false, usdRate: 95 });
+  assert.equal(detail.length, 2);
+  assert.equal(detail[0].offerId, "SKU-U1");
+  assert.deepEqual(detail[0].links, []);
 });
 
 test("Ozon to Yandex import blocks unsafe non-perfume and low quality cards", () => {
@@ -5929,9 +5946,39 @@ test("pm2 split entry files and immediate link activation hooks exist", async ()
   const ecosystem = await fs.readFile(path.join(root, "ecosystem.config.cjs"), "utf8");
   assert.match(ecosystem, /davidsklad-api/);
   assert.match(ecosystem, /davidsklad-worker/);
-  assert.match(ecosystem, /name: "davidsklad"/);
+  assert.doesNotMatch(ecosystem, /name: "davidsklad"/);
+  assert.match(ecosystem, /max-old-space-size=3072/);
+  assert.match(ecosystem, /max-old-space-size=5120/);
+  assert.match(ecosystem, /max_memory_restart: "4096M"/);
+  assert.match(ecosystem, /max_memory_restart: "6144M"/);
   assert.match(ecosystem, /WAREHOUSE_WARM_ON_STARTUP: "false"/);
   assert.match(ecosystem, /WAREHOUSE_FULL_MEMORY_LOAD_ENABLED: "false"/);
-  assert.match(ecosystem, /BACKGROUND_JOBS_ENABLED: "false"/);
+  assert.match(ecosystem, /BULLMQ_ENABLED: "true"/);
+  assert.match(serverSource, /marketplaceJobsCanEnqueue/);
   assert.match(serverSource, /ozon unarchive queue scheduler enabled standalone/);
+});
+
+test("api producer enqueues marketplace jobs when BullMQ queue exists", () => {
+  const { marketplaceJobsCanEnqueue } = require("../server.js");
+  assert.equal(typeof marketplaceJobsCanEnqueue, "function");
+  const serverSource = require("node:fs").readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
+  const enqueueBlock = serverSource.slice(
+    serverSource.indexOf("function enqueueMarketplaceJobAccepted"),
+    serverSource.indexOf("function enqueueMarketplaceJobAccepted") + 1200,
+  );
+  assert.match(enqueueBlock, /if \(marketplaceQueue\)/);
+  assert.doesNotMatch(enqueueBlock, /!backgroundJobsEnabled\) return Promise\.resolve\(null\)/);
+  const activationBlock = serverSource.slice(
+    serverSource.indexOf("async function queueLinkedProductActivation"),
+    serverSource.indexOf("async function queueLinkedProductActivation") + 4500,
+  );
+  assert.match(activationBlock, /!marketplaceJobsCanEnqueue\(\) && backgroundMarketplaceJobsBlocked\(\)/);
+  assert.match(serverSource, /if \(isApiServer\) return false;/);
+});
+
+test("worker role starts background schedulers without api HTTP port", async () => {
+  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  assert.match(serverSource, /if \(isWorkerServer\) \{/);
+  assert.match(serverSource, /startBackgroundSchedulers\(\)/);
+  assert.match(serverSource, /WORKER_HEALTH_PORT/);
 });

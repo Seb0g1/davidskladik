@@ -18,6 +18,9 @@ const mode = apply ? "--apply" : "--dry-run";
 
 const deployFiles = [
   "server.js",
+  "api-entry.js",
+  "worker-entry.js",
+  "ecosystem.config.cjs",
   "scripts/backfill-ozon-yandex-pair-groups.cjs",
   "scripts/sync-ozon-yandex-link-pairs-postgres.cjs",
   "scripts/delete-yandex-small-volume.cjs",
@@ -85,7 +88,7 @@ async function main() {
   });
 
   const steps = [
-    ["restart pm2", `cd ${remoteRoot} && pm2 restart davidsklad --update-env && sleep 10`],
+    ["restart pm2", `cd ${remoteRoot} && pm2 delete davidsklad 2>/dev/null || true && pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env && sleep 12`],
     ["post-deploy check", `cd ${remoteRoot} && node scripts/prod-post-deploy-check.cjs`],
     ["audit before", `cd ${remoteRoot} && node scripts/audit-auto-pair-full.cjs && node scripts/audit-warehouse-catalog-health.cjs --limit=50000 && node scripts/prod-catalog-pair-check.cjs`],
     ["backfill ozon-yandex pair groups", `cd ${remoteRoot} && node scripts/backfill-ozon-yandex-pair-groups.cjs ${mode}`],
