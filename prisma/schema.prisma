@@ -70,6 +70,7 @@ model WarehouseProduct {
   targetStock      Int?        @map("target_stock")
   status           String?
   archived         Boolean     @default(false)
+  everHadLinks     Boolean     @default(false) @map("ever_had_links")
   raw              Json?
   createdAt        DateTime    @default(now()) @map("created_at")
   updatedAt        DateTime    @updatedAt @map("updated_at")

@@ -17,6 +17,7 @@ const remoteScript = "run-prod-linked-full-reprice-remote.cjs";
 
 const uploadFiles = [
   "server.js",
+  "ecosystem.config.cjs",
   "scripts/fix-ozon-quarantine-prices.cjs",
   "scripts/run-prod-linked-full-reprice-remote.cjs",
 ];
@@ -69,6 +70,8 @@ async function main() {
       "pkill -9 -f 'node scripts/run-all-sync-remote' || true",
       "pkill -9 -f 'node scripts/run-prod-linked-full-reprice-remote' || true",
       "pkill -9 -f 'node scripts/fix-ozon-quarantine-prices' || true",
+      "pkill -9 -f 'node scripts/audit-and-repush-prices-remote' || true",
+      "pkill -9 -f 'node scripts/run-prod-linked-full-reprice.cjs' || true",
     ].join(" && "));
     await exec(conn, `mkdir -p ${remoteRoot}/scripts`);
     for (const rel of uploadFiles) {

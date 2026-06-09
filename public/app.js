@@ -3129,7 +3129,13 @@ function renderSuppliers() {
                 <span class="supplier-source-badge ${supplier.source === "pricemaster" ? "supplier-source-badge--pm" : "supplier-source-badge--local"}">
                   ${supplier.source === "pricemaster" ? "из PriceMaster" : "локальный"}
                 </span>
-                <span class="supplier-source-badge">${supplier.priceCurrency === "RUB" ? "PriceMaster: RUB" : "PriceMaster: USD"}</span>
+                <label class="supplier-source-badge supplier-currency-inline">
+                  Закупка
+                  <select class="supplier-currency-select" data-supplier-id="${escapeHtml(supplier.id)}">
+                    <option value="USD" ${supplier.priceCurrency === "RUB" ? "" : "selected"}>USD</option>
+                    <option value="RUB" ${supplier.priceCurrency === "RUB" ? "selected" : ""}>RUB</option>
+                  </select>
+                </label>
                 <span class="supplier-source-badge">товаров: ${formatNumber(supplier.impactProductCount || 0)}</span>
               </h3>
               <p>${supplier.note ? escapeHtml(supplier.note) : "Без заметки"}</p>
@@ -5128,6 +5134,26 @@ elements.supplierBoard.addEventListener("submit", async (event) => {
     form.querySelector("button[type='submit']").textContent = "Добавить артикул";
     await loadSuppliers({ silent: true });
     queueWarehouseRefresh();
+  } catch (error) {
+    elements.supplierStatus.textContent = error.message;
+  }
+});
+
+elements.supplierBoard.addEventListener("change", async (event) => {
+  const select = event.target.closest(".supplier-currency-select");
+  if (!select) return;
+  const supplierId = select.dataset.supplierId;
+  if (!supplierId) return;
+  try {
+    elements.supplierStatus.textContent = "Сохраняю валюту поставщика...";
+    await api(`/api/suppliers/${encodeURIComponent(supplierId)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ priceCurrency: select.value }),
+    });
+    await loadSuppliers({ silent: true });
+    queueWarehouseRefresh();
+    elements.supplierStatus.textContent = "Валюта поставщика сохранена. Цены пересчитаются автоматически.";
   } catch (error) {
     elements.supplierStatus.textContent = error.message;
   }

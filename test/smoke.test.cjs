@@ -5,6 +5,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { promisify } = require("node:util");
 const request = require("supertest");
+const { readServerSource } = require("../server/source");
 
 const execFileAsync = promisify(execFile);
 
@@ -74,6 +75,7 @@ const {
   pickWarehouseSupplier,
   pickWarehouseStockOnlySupplier,
   priceMasterSupplierPricingMeta,
+  supplierUsesRubPriceMasterPricing,
   supplierUsesStockOnlyPricing,
   warehouseBrandMatches,
   normalizeWarehouseProduct,
@@ -191,10 +193,13 @@ const {
   ozonUnarchiveQueuePath,
   ozonUnarchiveDateKey,
   createSupplierPickingRows,
+  normalizeSupplierPickingRow,
+  compareSupplierPickingRows,
   normalizeSupplierTrustFactor,
   normalizeSupplierOrderCutoff,
   supplierOrderCutoffPassed,
   supplierCartOrderScore,
+  selectSupplierCartSupplierFromMatches,
   shutdownForTests,
 } = require("../server.js");
 const postgres = require("../lib/postgres.js");
@@ -307,7 +312,7 @@ test("modern copy name action keeps only latin letters and digits", async () => 
 });
 
 test("Codex Sale AI config supports env key aliases and image presets", async () => {
-  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  const serverSource = readServerSource();
   const settingsSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "routes", "SettingsPage.tsx"), "utf8");
   assert.match(serverSource, /CODEX_LB_API_KEY/);
   assert.match(serverSource, /CODEX_SALE_API_KEY/);
@@ -2723,6 +2728,21 @@ test("resolveMarkupCoefficient applies threshold >= 20 USD", () => {
   assert.equal(value, 2.8);
 });
 
+test("resolveMarkupCoefficient converts RUB supplier price before USD thresholds", () => {
+  const value = resolveMarkupCoefficient({
+    productMarkup: 0,
+    marketplace: "ozon",
+    supplierUsdPrice: 900,
+    supplierPriceCurrency: "RUB",
+    usdRate: 100,
+    appSettings: {
+      defaultMarkups: { ozon: 1.7, yandex: 1.6 },
+      markupRules: [{ minUsd: 900, coefficient: 1.4 }],
+    },
+  });
+  assert.equal(value, 1.7);
+});
+
 test("resolveMarkupCoefficient uses Yandex defaults and Yandex-scoped rules", () => {
   const value = resolveMarkupCoefficient({
     productMarkup: 0,
@@ -3061,29 +3081,53 @@ test("normalizePriceMasterSnapshotItemForPostgres keeps rows without supplier ar
   assert.equal(row.partnerId, "32277");
 });
 
-test("resolvePriceMasterRowCurrency prefers supplier fixed currency", () => {
-  const currency = resolvePriceMasterRowCurrency(
-    { partnerId: "88", partnerName: "Supplier" },
+test("resolvePriceMasterRowCurrency uses managed supplier priceCurrency setting", () => {
+  const rubMaps = {
+    byPartnerId: new Map([["88", { name: "Supplier", priceCurrency: "RUB" }]]),
+    byName: new Map(),
+  };
+  assert.equal(resolvePriceMasterRowCurrency(
+    { partnerId: "88", partnerName: "Supplier", currency: "USD", price: 128 },
     { priceCurrency: "USD" },
-    {
-      byPartnerId: new Map([["88", { priceCurrency: "RUB" }]]),
-      byName: new Map(),
-    },
-  );
-  assert.equal(currency, "RUB");
+    rubMaps,
+  ), "RUB");
+  const usdMaps = {
+    byPartnerId: new Map([["88", { name: "Supplier", priceCurrency: "USD" }]]),
+    byName: new Map(),
+  };
+  assert.equal(resolvePriceMasterRowCurrency(
+    { partnerId: "88", partnerName: "Supplier", currency: "RUB", price: 5000 },
+    { priceCurrency: "RUB" },
+    usdMaps,
+  ), "USD");
+  assert.equal(resolvePriceMasterRowCurrency(
+    { partnerName: "Инна", price: 53 },
+    {},
+    managedSupplierMaps(),
+  ), "RUB");
 });
 
-test("resolvePriceMasterRowCurrency treats Иванна ruble quotes as RUB", () => {
+test("supplierUsesRubPriceMasterPricing matches INNA only, not IVANNA", () => {
+  assert.equal(supplierUsesRubPriceMasterPricing(null, { partnerName: "Инна" }), true);
+  assert.equal(supplierUsesRubPriceMasterPricing(null, { partnerName: "Inna" }), true);
+  assert.equal(supplierUsesRubPriceMasterPricing(null, { partnerName: "Иванна" }), false);
+  assert.equal(supplierUsesRubPriceMasterPricing(null, { partnerName: "Ivanna" }), false);
+  assert.equal(supplierUsesRubPriceMasterPricing({ name: "Avangard", priceCurrency: "RUB" }), true);
+  assert.equal(supplierUsesRubPriceMasterPricing({ name: "Avangard", priceCurrency: "USD" }), false);
+});
+
+test("resolvePriceMasterRowCurrency treats Иванна as USD with rate conversion", () => {
   const currency = resolvePriceMasterRowCurrency(
-    { partnerName: "Иванна", price: 12800 },
+    { partnerName: "Иванна", price: 128 },
     { priceCurrency: "USD" },
     managedSupplierMaps(),
     95,
   );
-  assert.equal(currency, "RUB");
-  const normalized = normalizePriceMasterPrice(12800, 95, currency);
-  assert.equal(normalized.price, 12800);
-  assert.equal(calculateRubPrice(normalized.price, 95, 1.7, normalized), 21760);
+  assert.equal(currency, "USD");
+  const normalized = normalizePriceMasterPrice(128, 95, currency);
+  assert.equal(normalized.price, 128);
+  assert.equal(calculateRubPrice(normalized.price, 95, 1.7, normalized), 20672);
+  assert.equal(warehouseSupplierPurchaseRubPrice({ ...normalized, partnerName: "Иванна" }, 95), 12160);
 });
 
 test("Инна retail price uses markup only without USD rate conversion", () => {
@@ -3158,6 +3202,90 @@ test("pickWarehouseSupplier ignores stock-only suppliers for price", () => {
   assert.equal(fallback.partnerName, "Own stock");
 });
 
+test("warehouseProductUsesStockOnlyPricing blocks all price push paths", () => {
+  const { warehouseProductUsesStockOnlyPricing } = require("../server.js");
+  assert.equal(warehouseProductUsesStockOnlyPricing({
+    stockOnlyFallbackActive: true,
+    selectedSupplier: { partnerName: "Авангард", priceEligible: true },
+    nextPrice: 9000,
+  }), true);
+  assert.equal(warehouseProductUsesStockOnlyPricing({
+    stockOnlyFallbackActive: false,
+    selectedSupplier: { partnerName: "Наш Склад", price: 1 },
+    nextPrice: 5000,
+  }), true);
+  assert.equal(warehouseProductUsesStockOnlyPricing({
+    selectedSupplier: { partnerName: "Авангард", priceEligible: true },
+    nextPrice: 2500,
+  }), false);
+});
+
+test("propagateGroupSupplierContextForPage does not copy stock-only donor prices", () => {
+  const { propagateGroupSupplierContextForPage } = require("../server.js");
+  const propagated = propagateGroupSupplierContextForPage([
+    {
+      id: "ozon-stock-only",
+      marketplace: "ozon",
+      offerId: "SKU-NS",
+      links: [{ id: "l5", article: "PM-5", supplierName: "Наш Склад" }],
+      selectedSupplier: { partnerName: "Наш Склад", price: 1 },
+      stockOnlyFallbackActive: true,
+      nextPrice: 7800,
+      targetPrice: 7800,
+      targetStock: 2,
+    },
+    {
+      id: "yandex-stock-only",
+      marketplace: "yandex",
+      offerId: "SKU-NS",
+      links: [{ id: "l5b", article: "PM-5", supplierName: "Наш Склад" }],
+      selectedSupplier: null,
+      nextPrice: 0,
+      targetPrice: 0,
+      targetStock: 0,
+    },
+  ]);
+  const sibling = propagated.find((item) => item.id === "yandex-stock-only");
+  assert.equal(sibling?.selectedSupplier, null);
+  assert.equal(sibling?.nextPrice, 0);
+  assert.equal(sibling?.targetPrice, 0);
+  assert.equal(sibling?.targetStock, 2);
+});
+
+test("stockOnlyManualPriceForProduct prefers marketplace-scoped manual prices", () => {
+  const { stockOnlyManualPriceForProduct, normalizeStockOnlyManualPrices } = require("../server.js");
+  assert.deepEqual(normalizeStockOnlyManualPrices({ default: 100, ozon: 200, yandex: 300 }), {
+    default: 100,
+    ozon: 200,
+    yandex: 300,
+  });
+  assert.equal(stockOnlyManualPriceForProduct({
+    marketplace: "ozon",
+    stockOnlyManualPrices: { default: 100, ozon: 250, yandex: 300 },
+  }), 250);
+  assert.equal(stockOnlyManualPriceForProduct({
+    marketplace: "yandex",
+    stockOnlyManualPrices: { default: 100, ozon: 250, yandex: 310 },
+  }), 310);
+  assert.equal(stockOnlyManualPriceForProduct({
+    marketplace: "wildberries",
+    stockOnlyManualPrices: { default: 150, ozon: 250 },
+  }), 150);
+  assert.equal(stockOnlyManualPriceForProduct({
+    marketplace: "ozon",
+    stockOnlyManualPrices: { default: 400 },
+  }), 400);
+});
+
+test("applyWarehouseNextPriceLimits enforces Ozon min price after auto bounds", () => {
+  const { applyWarehouseNextPriceLimits } = require("../server.js");
+  assert.equal(applyWarehouseNextPriceLimits(900, { autoPriceMin: 1000, autoPriceMax: 5000, ozonMinPrice: 1200 }), 1200);
+  assert.equal(applyWarehouseNextPriceLimits(1500, { autoPriceMin: 1000, autoPriceMax: 5000, ozonMinPrice: 1200 }), 1500);
+  assert.equal(applyWarehouseNextPriceLimits(800, { autoPriceMin: 0, autoPriceMax: 0, ozonMinPrice: 900 }), 900);
+  assert.equal(applyWarehouseNextPriceLimits(0, { ozonMinPrice: 900 }), 0);
+  assert.equal(applyWarehouseNextPriceLimits(6000, { autoPriceMin: 1000, autoPriceMax: 5000, ozonMinPrice: 1200 }), 5000);
+});
+
 test("supplier cart scoring respects trust, reseller flag and Moscow cutoff", () => {
   assert.equal(normalizeSupplierTrustFactor(120), 100);
   assert.equal(normalizeSupplierTrustFactor(-5), 0);
@@ -3170,6 +3298,47 @@ test("supplier cart scoring respects trust, reseller flag and Moscow cutoff", ()
   const late = supplierCartOrderScore({ price: 100, trustFactor: 100, orderCutoffTime: "13:00" }, new Date("2026-05-25T11:30:00.000Z"));
   assert.ok(trusted < reseller);
   assert.ok(late > reseller);
+});
+
+test("selectSupplierCartSupplierFromMatches prefers regular suppliers over stock-only", () => {
+  const now = new Date("2026-05-25T08:00:00.000Z");
+  const matches = new Map([
+    ["link-1", [
+      { partnerId: "stock", partnerName: "Наш склад", available: true, active: true, price: 1, docDate: "2026-01-03", stockOnly: true, priceEligible: false },
+      { partnerId: "real", partnerName: "Авангард", available: true, active: true, price: 90, docDate: "2026-01-02", priceEligible: true, trustFactor: 100, orderCutoffTime: "15:00" },
+    ]],
+  ]);
+  const result = selectSupplierCartSupplierFromMatches(matches, new Set(), now);
+  assert.equal(result.selected?.partnerName, "Авангард");
+  assert.equal(result.stockOnlyFallback, false);
+});
+
+test("selectSupplierCartSupplierFromMatches falls back to stock-only when no regular supplier", () => {
+  const now = new Date("2026-05-25T08:00:00.000Z");
+  const matches = new Map([
+    ["link-1", [
+      { partnerId: "stock", partnerName: "Наш склад", available: true, active: true, price: 0, docDate: "2026-01-03", stockOnly: true, priceEligible: false },
+    ]],
+  ]);
+  const result = selectSupplierCartSupplierFromMatches(matches, new Set(), now);
+  assert.equal(result.selected?.partnerName, "Наш склад");
+  assert.equal(result.stockOnlyFallback, true);
+  assert.equal(result.skipReason, "stock_only_fallback");
+});
+
+test("selectSupplierCartSupplierFromMatches uses stock-only after supplier block", () => {
+  const now = new Date("2026-05-25T08:00:00.000Z");
+  const matches = new Map([
+    ["link-1", [
+      { partnerId: "real", partnerName: "Авангард", available: true, active: true, price: 90, docDate: "2026-01-02", priceEligible: true, trustFactor: 100, orderCutoffTime: "15:00" },
+      { partnerId: "stock", partnerName: "Наш склад", available: true, active: true, price: 0, docDate: "2026-01-03", stockOnly: true, priceEligible: false },
+    ]],
+  ]);
+  const result = selectSupplierCartSupplierFromMatches(matches, new Set(["real"]), now);
+  assert.equal(result.selected?.partnerName, "Наш склад");
+  assert.equal(result.stockOnlyFallback, true);
+  assert.equal(result.skipReason, "stock_only_fallback_after_supplier_blocked");
+  assert.equal(result.blockedAvailable, 1);
 });
 
 test("warehouse brand filter falls back to marketplace product data", () => {
@@ -3827,6 +3996,7 @@ test("Ozon unarchive does not enforce a local 100 item daily limit", async () =>
       headers: { "content-type": "application/json" },
     });
   };
+  const unarchiveCalls = () => calls.filter((call) => String(call.url).includes("/v1/product/unarchive"));
 
   try {
     await restoreFile(marketplaceAccountsPath, JSON.stringify({
@@ -3850,9 +4020,9 @@ test("Ozon unarchive does not enforce a local 100 item daily limit", async () =>
     }));
 
     const firstRun = await unarchiveProductsOnMarketplaces(products);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0].body.product_id.length, 100);
-    assert.deepEqual(calls[1].body.product_id, [101]);
+    assert.equal(unarchiveCalls().length, 2);
+    assert.equal(unarchiveCalls()[0].body.product_id.length, 100);
+    assert.deepEqual(unarchiveCalls()[1].body.product_id, [101]);
     assert.equal(firstRun.filter((item) => item.ok && !item.pending).length, 101);
     assert.equal(firstRun.filter((item) => item.queuedByDailyLimit).length, 0);
 
@@ -3868,8 +4038,8 @@ test("Ozon unarchive does not enforce a local 100 item daily limit", async () =>
       },
     });
     const secondRun = await unarchiveProductsOnMarketplaces([products[100]]);
-    assert.equal(calls.length, 3);
-    assert.deepEqual(calls[2].body.product_id, [101]);
+    assert.equal(unarchiveCalls().length, 3);
+    assert.deepEqual(unarchiveCalls()[2].body.product_id, [101]);
     assert.equal(secondRun[0].ok, true);
     assert.equal(secondRun[0].pending, undefined);
     queue = await readOzonUnarchiveQueue();
@@ -4454,6 +4624,39 @@ test("targeted automation keeps unlinked products sellable by default", () => {
     {
       id: "nolinks-targeted",
       hasLinks: false,
+      everHadLinks: false,
+      selectedSupplier: null,
+      noSupplierAutomation: {},
+      marketplaceState: { code: "active", stock: 3 },
+    },
+  ], { includeNoLinks: true });
+  assert.equal(toZeroStock.length, 0);
+  assert.equal(toArchive.length, 0);
+});
+
+test("automation zeros formerly linked product after all links removed", () => {
+  const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates([
+    {
+      id: "was-linked-now-bare",
+      hasLinks: false,
+      everHadLinks: true,
+      selectedSupplier: null,
+      noSupplierAutomation: {},
+      marketplaceState: { code: "active", stock: 3 },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  ], { includeNoLinks: true, now: "2026-05-18T12:00:00.000Z" });
+  assert.equal(toZeroStock.length, 1);
+  assert.equal(toZeroStock[0].id, "was-linked-now-bare");
+  assert.equal(toArchive.length, 0);
+});
+
+test("automation never zeros product that was never linked", () => {
+  const { toZeroStock, toArchive } = pickNoSupplierAutomationCandidates([
+    {
+      id: "never-linked",
+      hasLinks: false,
+      everHadLinks: false,
       selectedSupplier: null,
       noSupplierAutomation: {},
       marketplaceState: { code: "active", stock: 3 },
@@ -4684,6 +4887,7 @@ test("automation protects unlinked duplicate offer when sibling is linked", () =
     target: "yandex-real",
     offerId: "DUP-SKU-1",
     hasLinks: false,
+    everHadLinks: false,
     selectedSupplier: null,
     noSupplierAutomation: {},
     marketplaceState: { code: "active", stock: 3 },
@@ -5333,9 +5537,20 @@ test("supplier recovery treats delayed Yandex unarchive visibility as pending, n
   assert.equal(stillArchivedStatus.warning, "still_archived_after_unarchive");
 });
 
+test("compareSupplierPickingRows sorts by supplier then product", () => {
+  const rows = [
+    normalizeSupplierPickingRow({ key: "b", supplierName: "Бета", productName: "Яблоко" }),
+    normalizeSupplierPickingRow({ key: "a", supplierName: "Альфа", productName: "Банан" }),
+    normalizeSupplierPickingRow({ key: "c", supplierName: "Альфа", productName: "Абрикос" }),
+  ];
+  rows.sort(compareSupplierPickingRows);
+  assert.deepEqual(rows.map((row) => row.key), ["c", "a", "b"]);
+});
+
 test("picked supplier row creates a finance purchase order", async () => {
   const pickingBackup = await backupFile(supplierPickingListPath);
   const financeBackup = await backupFile(financeStatePath);
+  const warehouseBackup = await backupFile(personalWarehousePath);
   const agent = request.agent(app);
   await agent
     .post("/api/login")
@@ -5344,11 +5559,52 @@ test("picked supplier row creates a finance purchase order", async () => {
 
   try {
     await restoreFile(supplierPickingListPath, JSON.stringify({ rows: {}, invoices: [] }, null, 2));
-    await restoreFile(financeStatePath, JSON.stringify({ orders: [], expenses: [] }, null, 2));
+    await restoreFile(financeStatePath, JSON.stringify({
+      orders: [{
+        id: "manual-unlinked-finance",
+        marketplace: "ozon",
+        orderId: "ORDER-UNLINKED",
+        offerId: "UNLINKED-SKU",
+        productName: "Unlinked order",
+        quantity: 1,
+        saleAmount: 1111,
+        payoutAmount: 1111,
+        purchaseCost: 100,
+        profitAmount: 1011,
+        source: "manual",
+        status: "open",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }],
+      expenses: [],
+    }, null, 2));
+    await writeWarehouse({
+      products: [{
+        id: "warehouse-finance-linked",
+        marketplace: "ozon",
+        target: "ozon-test",
+        offerId: "FIN-SKU-1",
+        name: "Finance Test Perfume",
+        links: [{ id: "finance-link", article: "FIN-SKU-1", supplierName: "Finance Supplier", partnerId: "supplier-finance", priceCurrency: "RUB" }],
+        everHadLinks: true,
+        targetStock: 5,
+        marketplaceState: { stock: 0, code: "active" },
+      }, {
+        id: "warehouse-finance-unlinked",
+        marketplace: "ozon",
+        target: "ozon-test",
+        offerId: "UNLINKED-SKU",
+        name: "Unlinked order",
+        links: [],
+        everHadLinks: false,
+      }],
+      suppliers: [],
+    });
     const [row] = await createSupplierPickingRows([{
       key: "finance-picking-test",
       marketplace: "ozon",
       accountName: "Ozon Test",
+      warehouseProductId: "warehouse-finance-linked",
       orderId: "ORDER-FIN-1",
       postingNumber: "POST-FIN-1",
       offerId: "FIN-SKU-1",
@@ -5358,6 +5614,7 @@ test("picked supplier row creates a finance purchase order", async () => {
       partnerId: "supplier-finance",
       price: 950,
       priceCurrency: "RUB",
+      raw: { product: { price: "7290.00" } },
       ready: true,
     }], { session: { username: "admin", role: "admin" } });
 
@@ -5368,13 +5625,31 @@ test("picked supplier row creates a finance purchase order", async () => {
     assert.equal(picked.body.financeOrder.offerId, "FIN-SKU-1");
     assert.equal(picked.body.financeOrder.supplierName, "Finance Supplier");
     assert.equal(picked.body.financeOrder.purchaseCost, 1900);
+    assert.equal(picked.body.financeOrder.saleAmount, 14580);
+    assert.equal(picked.body.financeOrder.payoutAmount, 14580);
+    assert.equal(picked.body.financeOrder.profitAmount, 12680);
 
     const orders = await agent
       .get("/api/finance/orders?q=FIN-SKU-1&period=all")
       .expect(200);
+    assert.equal(orders.body.linkedOnly, true);
     assert.equal(orders.body.orders.length, 1);
     assert.equal(orders.body.orders[0].source, "supplier_picking");
     assert.equal(orders.body.orders[0].purchaseCost, 1900);
+    assert.equal(orders.body.orders[0].saleAmount, 14580);
+
+    const allOrders = await agent
+      .get("/api/finance/orders?period=all&linkedOnly=false")
+      .expect(200);
+    assert.equal(allOrders.body.linkedOnly, false);
+    assert.equal(allOrders.body.total, 2);
+
+    const summary = await agent
+      .get("/api/finance/summary?period=all")
+      .expect(200);
+    assert.equal(summary.body.linkedOnly, true);
+    assert.equal(summary.body.summary.orders, 1);
+    assert.equal(summary.body.summary.orderIncome, 14580);
 
     await agent
       .patch(`/api/supplier-picking-list/${encodeURIComponent(row.key)}`)
@@ -5387,6 +5662,9 @@ test("picked supplier row creates a finance purchase order", async () => {
   } finally {
     await restoreFile(supplierPickingListPath, pickingBackup);
     await restoreFile(financeStatePath, financeBackup);
+    if (warehouseBackup) await writeWarehouse(JSON.parse(warehouseBackup));
+    else await writeWarehouse({ products: [], suppliers: [] });
+    await restoreFile(personalWarehousePath, warehouseBackup);
   }
 });
 
@@ -5684,7 +5962,7 @@ test("warehouse target names resolve to account labels instead of generic Ozon",
 
 test("linked activation runs immediately before background-job disable gate", async () => {
   const root = path.join(__dirname, "..");
-  const serverSource = await fs.readFile(path.join(root, "server.js"), "utf8");
+  const serverSource = readServerSource();
   const start = serverSource.indexOf("async function queueLinkedProductActivation");
   assert.ok(start >= 0);
   const block = serverSource.slice(start, start + 7000);
@@ -5738,7 +6016,7 @@ test("ozon unarchive schedule targets 03:00 moscow", () => {
 
 test("postgres page siblings ignore marketplace filter", async () => {
   const root = path.join(__dirname, "..");
-  const serverSource = await fs.readFile(path.join(root, "server.js"), "utf8");
+  const serverSource = readServerSource();
   assert.match(serverSource, /function warehousePageSiblingWhere/);
   assert.match(serverSource, /warehousePageSiblingWhere\(baseWhere\)/);
 });
@@ -5840,7 +6118,7 @@ test("ozon yandex auto pair helpers resolve source product links", () => {
 });
 
 test("yandex warehouse targets with legacy aliases stay visible in postgres catalog filter", () => {
-  const serverSource = require("node:fs").readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
+  const serverSource = readServerSource();
   assert.match(serverSource, /collectYandexWarehouseTargetAliases/);
   assert.match(serverSource, /yandexShops\.length === 1/);
   const { resolveWarehouseCanonicalTarget } = require("../server.js");
@@ -5853,7 +6131,7 @@ test("yandex warehouse targets with legacy aliases stay visible in postgres cata
 });
 
 test("marketplace jobs run inline when background worker disabled", async () => {
-  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  const serverSource = readServerSource();
   assert.match(serverSource, /function marketplaceJobsShouldRunInline/);
   assert.match(serverSource, /ozon-unarchive-queue-process/);
   assert.doesNotMatch(
@@ -5935,7 +6213,7 @@ test("postgres hydrated warehouse cache is preserved across readWarehouse", () =
 });
 
 test("marketplace maintenance scheduler runs PM sync, marketplace sync and zero-stock checks", async () => {
-  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  const serverSource = readServerSource();
   assert.match(serverSource, /runMarketplaceMaintenanceCycle/);
   assert.match(serverSource, /scheduleMarketplaceMaintenance/);
   assert.match(serverSource, /MARKETPLACE_MAINTENANCE_HOURS/);
@@ -5946,7 +6224,7 @@ test("marketplace maintenance scheduler runs PM sync, marketplace sync and zero-
 });
 
 test("interval auto sync avoids full marketplace import to prevent OOM", async () => {
-  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  const serverSource = readServerSource();
   assert.match(serverSource, /autoSyncShouldImportMarketplaces/);
   assert.match(serverSource, /buildWarehouseView\(\{ sync: autoSyncShouldImportMarketplaces\(trigger\) \}\)/);
   assert.match(serverSource, /runAutoSyncCycle\("interval"\)/);
@@ -5954,7 +6232,7 @@ test("interval auto sync avoids full marketplace import to prevent OOM", async (
 
 test("pm2 split entry files and immediate link activation hooks exist", async () => {
   const root = path.join(__dirname, "..");
-  const serverSource = await fs.readFile(path.join(root, "server.js"), "utf8");
+  const serverSource = readServerSource();
   assert.match(serverSource, /SERVER_ROLE/);
   assert.match(serverSource, /isApiServer/);
   assert.match(serverSource, /isWorkerServer/);
@@ -5982,7 +6260,7 @@ test("pm2 split entry files and immediate link activation hooks exist", async ()
 test("api producer enqueues marketplace jobs when BullMQ queue exists", () => {
   const { marketplaceJobsCanEnqueue } = require("../server.js");
   assert.equal(typeof marketplaceJobsCanEnqueue, "function");
-  const serverSource = require("node:fs").readFileSync(path.join(__dirname, "..", "server.js"), "utf8");
+  const serverSource = readServerSource();
   const enqueueBlock = serverSource.slice(
     serverSource.indexOf("function enqueueMarketplaceJobAccepted"),
     serverSource.indexOf("function enqueueMarketplaceJobAccepted") + 1200,
@@ -6008,14 +6286,14 @@ test("prod post-deploy checks redis queue and worker consumer", async () => {
 });
 
 test("worker role starts background schedulers without api HTTP port", async () => {
-  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  const serverSource = readServerSource();
   assert.match(serverSource, /if \(isWorkerServer\) \{/);
   assert.match(serverSource, /startBackgroundSchedulers\(\)/);
   assert.match(serverSource, /WORKER_HEALTH_PORT/);
 });
 
 test("authoritative reprice loads linked products from postgres when warehouse memory is stub", async () => {
-  const serverSource = await fs.readFile(path.join(__dirname, "..", "server.js"), "utf8");
+  const serverSource = readServerSource();
   assert.match(serverSource, /async function readLinkedProductsForReprice/);
   assert.match(serverSource, /const products = await readLinkedProductsForReprice/);
 });

@@ -35,6 +35,7 @@ function SummaryCard({ label, value }: { label: string; value: string | number }
 export function FinancePage() {
   const queryClient = useQueryClient();
   const [period, setPeriod] = useState("30d");
+  const [linkedOnly, setLinkedOnly] = useState(true);
   const [form, setForm] = useState({
     supplierName: "",
     partnerId: "",
@@ -46,12 +47,12 @@ export function FinancePage() {
   });
   const [orderDrafts, setOrderDrafts] = useState<Record<string, Record<string, string>>>({});
   const summary = useQuery({
-    queryKey: ["finance", "summary", period],
-    queryFn: () => fetchJson(`/api/finance/summary?period=${encodeURIComponent(period)}`, FinanceSummarySchema),
+    queryKey: ["finance", "summary", period, linkedOnly],
+    queryFn: () => fetchJson(`/api/finance/summary?period=${encodeURIComponent(period)}&linkedOnly=${linkedOnly ? "true" : "false"}`, FinanceSummarySchema),
   });
   const orders = useQuery({
-    queryKey: ["finance", "orders", period],
-    queryFn: () => fetchJson(`/api/finance/orders?period=${encodeURIComponent(period)}&limit=200`, FinanceOrdersSchema),
+    queryKey: ["finance", "orders", period, linkedOnly],
+    queryFn: () => fetchJson(`/api/finance/orders?period=${encodeURIComponent(period)}&limit=200&linkedOnly=${linkedOnly ? "true" : "false"}`, FinanceOrdersSchema),
   });
   const expenses = useQuery({
     queryKey: ["finance", "expenses", period],
@@ -96,6 +97,10 @@ export function FinancePage() {
               <option value="90d">90 дней</option>
               <option value="all">Все</option>
             </select>
+            <label className="toggle-row">
+              <input type="checkbox" checked={linkedOnly} onChange={(event) => setLinkedOnly(event.target.checked)} />
+              Только связанные со складом
+            </label>
             <button className="secondary-action" type="button" onClick={refresh}>
               <RefreshCw size={16} /> Обновить
             </button>
@@ -104,6 +109,7 @@ export function FinancePage() {
       />
       <div className="summary-grid">
         <SummaryCard label="Чистая прибыль" value={money(s.netProfit)} />
+        <SummaryCard label="Выручка МП" value={money(s.orderIncome)} />
         <SummaryCard label="Прибыль по заказам" value={money(s.orderProfit)} />
         <SummaryCard label="Ручные закупки" value={money(s.manualExpenses)} />
         <SummaryCard label="Заказов" value={Number(s.orders || 0)} />

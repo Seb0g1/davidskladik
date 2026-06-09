@@ -501,6 +501,7 @@ export const SupplierCartRowSchema = z.object({
   supplierScore: z.number().optional().default(0),
   ready: z.boolean().optional().default(false),
   alreadyCommitted: z.boolean().optional().default(false),
+  stockOnlyFallback: z.boolean().optional().default(false),
   skipReason: z.coerce.string().optional().default(""),
   requestDocId: z.coerce.string().optional().default(""),
   requestRowId: z.coerce.string().optional().default(""),

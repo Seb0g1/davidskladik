@@ -1,0 +1,156 @@
+function requestErrorTitle(error, request) {
+  if (error instanceof multer.MulterError) return "Не удалось загрузить изображение";
+  const pathName = cleanText(request?.path).toLowerCase();
+  const code = cleanText(error?.code).toLowerCase();
+  if (
+    pathName.includes("/ai/")
+    || pathName.includes("/ai-")
+    || pathName.includes("/settings/ai")
+    || code.startsWith("openai")
+  ) return "AI запрос не выполнен";
+  if (pathName.includes("pricemaster")) return "Не удалось выполнить запрос к Price Master";
+  if (pathName.includes("ozon") || pathName.includes("yandex") || pathName.includes("marketplace")) {
+    return "Не удалось выполнить запрос к маркетплейсу";
+  }
+  return "Не удалось выполнить запрос";
+}
+
+app.post("/api/sync", async (_request, response, next) => {
+  try {
+    response.json(await runSync());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/daily-sync", async (_request, response, next) => {
+  try {
+    response.json(await getDailySyncStatus());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/daily-sync/run", requireAdmin, async (_request, response, next) => {
+  try {
+    const alreadyRunning = Boolean(dailySyncPromise);
+    if (!alreadyRunning) {
+      runDailyRefresh("manual").catch((error) => {
+        logger.error("manual daily sync background failed", { detail: error?.code || error?.message || String(error), err: error });
+      });
+    }
+    const status = await getDailySyncStatus();
+    response.status(202).json({
+      ok: true,
+      started: !alreadyRunning,
+      running: true,
+      status: status.status === "running" ? status : { ...status, status: "running", trigger: "manual" },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/warehouse/sync/status", requireAdmin, async (_request, response, next) => {
+  try {
+    response.json(getManualWarehouseSyncStatus());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/marketplace/maintenance/run", requireAdmin, async (_request, response, next) => {
+  try {
+    const alreadyRunning = Boolean(marketplaceMaintenancePromise);
+    if (!alreadyRunning) {
+      runMarketplaceMaintenanceCycle("manual_maintenance").catch((error) => {
+        logger.error("manual marketplace maintenance failed", { detail: error?.message || String(error), err: error });
+      });
+    }
+    response.status(202).json({
+      ok: true,
+      started: !alreadyRunning,
+      running: true,
+      nextRunAt: marketplaceMaintenanceNextRunAt || null,
+      everyHours: marketplaceMaintenanceHours,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/warehouse/sync/run", requireAdmin, async (_request, response, next) => {
+  try {
+    const result = startManualWarehouseSync("manual");
+    response.status(202).json({
+      ok: true,
+      started: result.started,
+      running: true,
+      status: result.status,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.use((error, request, response, _next) => {
+  logger.error("request error", {
+    path: request.path,
+    method: request.method,
+    detail: error.statusCode ? error.message : (error.code || error.message),
+    code: error.code || null,
+    matches: error.matches || undefined,
+    err: error,
+  });
+  const uploadError = error instanceof multer.MulterError;
+  response.status(uploadError ? 400 : error.statusCode || 500).json({
+    error: requestErrorTitle(error, request),
+    detail: error.statusCode ? error.message : (error.code || error.message),
+    code: error.code || null,
+    matches: error.matches || undefined,
+    ozon: error.ozon,
+  });
+});
+
+function startBackgroundSchedulers() {
+  if (!backgroundJobsEnabled) {
+    logger.info("background schedulers disabled until BACKGROUND_JOBS_ENABLED=true");
+    if (marketplaceMaintenanceEnabled) {
+      scheduleMarketplaceMaintenance(Math.max(120_000, Number(process.env.MARKETPLACE_MAINTENANCE_INITIAL_DELAY_MS || 300000) || 300000));
+      logger.info("marketplace maintenance scheduler enabled standalone", {
+        everyHours: marketplaceMaintenanceHours,
+        nextRunAt: marketplaceMaintenanceNextRunAt,
+      });
+    }
+    if (ozonUnarchiveQueueAutoEnabled) {
+      scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
+      logger.info("ozon unarchive queue scheduler enabled standalone", {
+        batchLimit: ozonUnarchiveQueueBatchLimit,
+        dailyLimit: Number.isFinite(ozonUnarchiveDailyLimit) ? ozonUnarchiveDailyLimit : null,
+      });
+    }
+    if (yandexUnarchiveQueueAutoEnabled) {
+      scheduleYandexUnarchiveQueueAuto(yandexUnarchiveQueueAutoInitialDelaySeconds * 1000);
+      logger.info("yandex unarchive queue scheduler enabled standalone", {
+        batchLimit: yandexUnarchiveQueueBatchLimit,
+      });
+    }
+    return;
+  }
+  scheduleDailySync();
+  schedulePriceRetryProcessing(30_000);
+  scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
+  if (yandexUnarchiveQueueAutoEnabled) {
+    scheduleYandexUnarchiveQueueAuto(yandexUnarchiveQueueAutoInitialDelaySeconds * 1000);
+  }
+  scheduleSupplierCartAuto(180_000).catch((error) => logger.warn("supplier cart auto scheduler failed", { detail: error?.message || String(error) }));
+  scheduleAutoSync(autoSyncInitialDelaySeconds * 1000);
+  if (marketplaceMaintenanceEnabled) {
+    scheduleMarketplaceMaintenance(Math.max(120_000, Number(process.env.MARKETPLACE_MAINTENANCE_INITIAL_DELAY_MS || 900000) || 900000));
+    logger.info("marketplace maintenance scheduler enabled", {
+      everyHours: marketplaceMaintenanceHours,
+      nextRunAt: marketplaceMaintenanceNextRunAt,
+    });
+  }
+}
+

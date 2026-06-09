@@ -182,18 +182,20 @@ export function PickingListPage() {
           const total = currentGroupTotal(supplierRows);
           return (
           <article className="picking-supplier-card" key={supplierName}>
-            <div className="picking-supplier-head">
-              <div>
-                <span>Поставщик</span>
-                <h3>{supplierName}</h3>
+            <div className="picking-supplier-toolbar">
+              <div className="picking-supplier-head">
+                <div>
+                  <span>Поставщик</span>
+                  <h3>{supplierName}</h3>
+                </div>
+                <strong>{supplierRows.length}</strong>
               </div>
-              <strong>{supplierRows.length}</strong>
-            </div>
-            <div className="summary-grid compact-summary supplier-ledger-strip">
-              <DiagnosticValue label={balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(balance)} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
-              <DiagnosticValue label="Собрано в долг" value={moneySigned(-Number(ledger.debtTotal || 0))} />
-              <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0))} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
-              <DiagnosticValue label="Текущая сборка" value={moneySigned(total)} />
+              <div className="summary-grid compact-summary supplier-ledger-strip">
+                <DiagnosticValue label={balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(balance)} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
+                <DiagnosticValue label="Собрано в долг" value={moneySigned(-Number(ledger.debtTotal || 0))} />
+                <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0))} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
+                <DiagnosticValue label="Текущая сборка" value={moneySigned(total)} />
+              </div>
             </div>
             <div className="settings-form-row supplier-payment-row">
               <input
@@ -228,10 +230,10 @@ export function PickingListPage() {
                   <div className="meta-grid">
                     <span>Кол-во: {row.quantity}</span>
                     <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
-                    <span>Доверие: {row.trustFactor}/100</span>
-                    <span>{row.orderCutoffTime ? `Заказы до ${row.orderCutoffTime}` : "Без дедлайна"}</span>
-                    {row.reseller ? <span>Перекупщик</span> : null}
-                    <span>Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
+                    <span className="picking-meta-secondary">Доверие: {row.trustFactor}/100</span>
+                    <span className="picking-meta-secondary">{row.orderCutoffTime ? `Заказы до ${row.orderCutoffTime}` : "Без дедлайна"}</span>
+                    {row.reseller ? <span className="picking-meta-secondary">Перекупщик</span> : null}
+                    <span className="picking-meta-secondary">Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
                     <span>Статус: {statusLabel(row.status)}</span>
                   </div>
                   {row.status === "missing" ? <small className="danger-text">Поставщик пропущен для этого SKU до {compactDate(row.nextRetryAt)}. Автокорзина попробует другого поставщика.</small> : null}

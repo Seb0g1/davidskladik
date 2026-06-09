@@ -78,6 +78,8 @@ async function postJson(cookie, urlPath, body) {
 
 async function waitForPricePush(cookie, maxMinutes = 240) {
   const deadline = Date.now() + maxMinutes * 60 * 1000;
+  const stallMs = Math.max(120000, Number(process.env.REPRICE_WAIT_STALL_MS || 300000) || 300000);
+  let idleSince = 0;
   while (Date.now() < deadline) {
     const live = await getJson(cookie, "/api/live-status");
     const push = live?.automation?.pricePush || {};
@@ -85,17 +87,23 @@ async function waitForPricePush(cookie, maxMinutes = 240) {
     const counts = queue.counts || {};
     const waiting = Number(counts.waiting || 0);
     const active = Number(counts.active || 0);
+    const pendingScope = Number(push.pendingScope || 0);
+    const pushIdle = !push.running && !push.scheduled && pendingScope === 0 && waiting === 0;
     console.log(
-      `[price-push] running=${Boolean(push.running)} pending=${push.pendingScope || 0}`
-      + ` scheduled=${Boolean(push.scheduled)} bullmq waiting=${waiting} active=${active}`,
+      `[price-push] running=${Boolean(push.running)} pending=${pendingScope}`
+      + ` scheduled=${Boolean(push.scheduled)} bullmq waiting=${waiting} active=${active}`
+      + ` pushIdle=${pushIdle}`,
     );
-    if (
-      !push.running
-      && !push.scheduled
-      && Number(push.pendingScope || 0) === 0
-      && waiting === 0
-      && active === 0
-    ) return live;
+    if (pushIdle && active === 0) return live;
+    if (pushIdle && active > 0) {
+      if (!idleSince) idleSince = Date.now();
+      if (Date.now() - idleSince >= stallMs) {
+        console.log(`[price-push] queue idle with active=${active} for ${stallMs}ms — continuing`);
+        return live;
+      }
+    } else {
+      idleSince = 0;
+    }
     await sleep(15000);
   }
   throw new Error("price push wait timeout");
@@ -124,10 +132,10 @@ async function main() {
   console.log(JSON.stringify(pm, null, 2));
   await sleep(3000);
 
-  console.log("\n=== Linked products: full reprice (Ozon + Yandex, force, live PM) ===");
+  console.log("\n=== Linked products: reprice (Ozon + Yandex, linked only, no force) ===");
   const reprice = await postJson(cookie, "/api/sales-automation/run", {
-    force: true,
-    onlyChanged: false,
+    force: false,
+    onlyChanged: true,
     marketplace: "all",
     verify: true,
     limit: 50000,

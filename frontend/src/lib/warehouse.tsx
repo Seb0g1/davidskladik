@@ -23,9 +23,11 @@ function extractYandexSourceProductId(product: Product): string {
   const raw = asRecord(product.raw);
   const yandex = asRecord(product.yandex);
   const rawYandex = asRecord(raw.yandex);
+  const yandexExtra = asRecord(yandex.extra);
+  const rawYandexExtra = asRecord(rawYandex.extra);
   return String(
-    yandex.extra?.sourceProductId
-    || rawYandex.extra?.sourceProductId
+    yandexExtra.sourceProductId
+    || rawYandexExtra.sourceProductId
     || "",
   ).trim();
 }

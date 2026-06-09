@@ -282,10 +282,10 @@ export function SuppliersPage() {
             <label>Название<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
             <label>Заметка<input value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} /></label>
             <label>Причина остановки<input value={form.stopReason} onChange={(event) => setForm({ ...form, stopReason: event.target.value })} /></label>
-            <label>Валюта цены
+            <label>Валюта закупки в PriceMaster
               <select value={form.priceCurrency} onChange={(event) => setForm({ ...form, priceCurrency: event.target.value })}>
-                <option value="USD">USD</option>
-                <option value="RUB">RUB</option>
+                <option value="USD">Доллары (USD) — цена × курс × наценка</option>
+                <option value="RUB">Рубли (RUB) — цена × наценка</option>
               </select>
             </label>
             <div className="row-actions">
@@ -337,7 +337,17 @@ export function SuppliersPage() {
                   </div>
 
                   <div className="supplier-badge-row">
-                    <span>{String(raw.priceCurrency || "USD")}</span>
+                    <label className="supplier-currency-inline">
+                      <span>Закупка</span>
+                      <select
+                        value={String(raw.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD"}
+                        disabled={patchSupplier.isPending}
+                        onChange={(event) => patchSupplier.mutate({ id, patch: { priceCurrency: event.target.value } })}
+                      >
+                        <option value="USD">USD</option>
+                        <option value="RUB">RUB</option>
+                      </select>
+                    </label>
                     <span>товаров {supplier.impactProductCount || 0}</span>
                     <span>доверие {supplier.trustFactor ?? 100}</span>
                     {supplier.orderCutoffTime ? <span>до {supplier.orderCutoffTime}</span> : null}

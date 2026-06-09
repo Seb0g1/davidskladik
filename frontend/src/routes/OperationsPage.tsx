@@ -278,8 +278,10 @@ export function SupplierCartPanel() {
                     <span>Доверие: {row.trustFactor ?? 100}/100</span>
                     <span>{row.orderCutoffTime ? `Заказы до ${row.orderCutoffTime}` : "Без дедлайна"}</span>
                     {row.reseller ? <span>Перекупщик</span> : null}
+                    {row.stockOnlyFallback ? <span>Складской fallback</span> : null}
                   </div>
                   {row.alreadyCommitted ? <small>Уже в заявке PriceMaster: Doc {row.requestDocId}, Row {row.requestRowId}</small> : null}
+                  {row.stockOnlyFallback ? <small>Заказ уйдёт через «Наш склад» — цена в PriceMaster будет 0, остаток со склада.</small> : null}
                   {row.skipReason === "supplier_cutoff_passed_no_alternative" ? <small className="danger-text">Все подходящие поставщики уже закрыли прием заказов на сегодня.</small> : null}
                   {!row.ready && !row.alreadyCommitted ? <small className="danger-text">Причина: {row.skipReason || "не готово"}</small> : null}
                 </article>
