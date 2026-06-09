@@ -133,6 +133,17 @@ async function runAutoSyncCycle(trigger = "auto") {
     const automation = backgroundAutomation.automation;
     const recovery = backgroundAutomation.recovery;
     const autoPricePush = await sendPriceMasterDeltaWarehousePrices(result, warehouse);
+    const stockReconcileEnabled = process.env.AUTO_SYNC_STOCK_RECONCILE_ENABLED !== "false";
+    const stockReconcileMaxProducts = Math.max(
+      1,
+      Number(process.env.AUTO_SYNC_STOCK_RECONCILE_MAX_PRODUCTS || 15000) || 15000,
+    );
+    const stockReconcileProducts = stockReconcileEnabled
+      ? pickTargetStockSendProducts(warehouse.products || []).slice(0, stockReconcileMaxProducts)
+      : [];
+    const stockReconcile = stockReconcileProducts.length
+      ? await sendTargetStocksToMarketplace(stockReconcileProducts)
+      : [];
     logger.info("auto sync complete", {
       trigger,
       items: result.items,
@@ -152,11 +163,15 @@ async function runAutoSyncCycle(trigger = "auto") {
       autoPriceSent: autoPricePush.sent || 0,
       autoPriceFailed: autoPricePush.failed || 0,
       autoPriceSkipped: Array.isArray(autoPricePush.skipped) ? autoPricePush.skipped.length : 0,
+      stockReconcileEnabled,
+      stockReconcileScope: stockReconcileProducts.length,
+      stockReconcileSent: stockReconcile.filter((item) => item.ok).length,
+      stockReconcileFailed: stockReconcile.filter((item) => !item.ok).length,
     });
     if (automation.errors.length) {
       logger.warn("no-supplier automation errors", { count: automation.errors.length, sample: automation.errors.slice(0, 10) });
     }
-    return { status: "ok", result, warehouse, automation, recovery, autoPricePush, automationScope: backgroundAutomation.scope };
+    return { status: "ok", result, warehouse, automation, recovery, autoPricePush, stockReconcile, automationScope: backgroundAutomation.scope };
   } finally {
     autoSyncRunning = false;
   }
@@ -332,4 +347,3 @@ function scheduleMarketplaceMaintenance(delayMs = null) {
     }
   }, normalizedDelay);
 }
-
