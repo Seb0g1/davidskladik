@@ -32,12 +32,16 @@ app.post("/api/ozon-yandex-import/repair-yandex-content", requireAdmin, async (r
       if (page.length < 1000) break;
     }
 
+    const repairPictures = request.body?.repairPictures !== false;
     const candidates = yandexProducts.filter((product) => {
       const normalized = normalizeWarehouseProduct(product);
       const missingVendor = repairVendor && !cleanText(normalized.yandex?.vendor);
       const dims = normalized.yandex?.extra?.weightDimensions;
       const missingDims = repairDimensions && !(Number(dims?.length) > 0 && Number(dims?.weight) > 0);
-      return missingVendor || missingDims;
+      const missingPictures = repairPictures
+        && !splitList(normalized.yandex?.pictures).length
+        && !splitList(normalized.yandex?.images).length;
+      return missingVendor || missingDims || missingPictures;
     });
 
     if (dryRun) {
@@ -67,9 +71,44 @@ app.post("/api/ozon-yandex-import/repair-yandex-content", requireAdmin, async (r
     const batchByShop = new Map();
     let skipped = 0;
 
+    // Photo fallback: yandex rows created from exports often have no images of their own —
+    // borrow them from the Ozon sibling with the same offerId (images is a light column).
+    const ozonImagesByOfferId = new Map();
+    {
+      let ozonCursor = null;
+      while (true) {
+        const page = await prisma.warehouseProduct.findMany({
+          where: { marketplace: "ozon" },
+          select: { id: true, offerId: true, images: true },
+          orderBy: { id: "asc" },
+          take: 2000,
+          ...(ozonCursor ? { cursor: { id: ozonCursor }, skip: 1 } : {}),
+        });
+        if (!page.length) break;
+        ozonCursor = page[page.length - 1].id;
+        for (const row of page) {
+          const key = cleanText(row.offerId).toLowerCase();
+          const images = Array.isArray(row.images) ? row.images.filter(Boolean) : [];
+          if (key && images.length && !ozonImagesByOfferId.has(key)) ozonImagesByOfferId.set(key, images);
+        }
+        if (page.length < 2000) break;
+      }
+    }
+
     for (const product of candidates) {
       const normalized = normalizeWarehouseProduct(product);
-      const built = buildYandexOfferMapping(normalized);
+      const ownPictures = [
+        cleanText(normalized.imageUrl),
+        ...splitList(normalized.yandex?.pictures),
+        ...splitList(normalized.yandex?.images),
+      ].filter(Boolean);
+      const fallbackPictures = ownPictures.length
+        ? []
+        : (ozonImagesByOfferId.get(cleanText(normalized.offerId).toLowerCase()) || []);
+      const built = buildYandexOfferMapping(
+        normalized,
+        fallbackPictures.length ? { yandex: { pictures: fallbackPictures } } : {},
+      );
       const vendor = cleanText(built.offer?.vendor);
       if (!vendor || vendor === "Без бренда") {
         skipped += 1;
@@ -82,13 +121,9 @@ app.post("/api/ozon-yandex-import/repair-yandex-content", requireAdmin, async (r
         continue;
       }
       if (!batchByShop.has(shop.id)) batchByShop.set(shop.id, { shop, offers: [] });
-      batchByShop.get(shop.id).offers.push(compactObject({
-        offerId: built.offer?.offerId || normalized.offerId,
-        name: built.offer?.name,
-        vendor: built.offer?.vendor,
-        description: built.offer?.description,
-        weightDimensions: built.offer?.weightDimensions,
-      }));
+      // Send the FULL built offer: pictures, barcodes, marketCategoryId and basicPrice
+      // included — sending a partial payload left created cards without photos and price.
+      batchByShop.get(shop.id).offers.push(built.offer);
     }
 
     const results = [];
