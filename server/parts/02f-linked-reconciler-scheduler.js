@@ -51,6 +51,20 @@ async function refreshOzonMarketplaceStateForProducts(products = []) {
   return updatedById;
 }
 
+function mergeYandexLiveMarketplaceState(previous = {}, liveState = {}) {
+  const state = liveState && typeof liveState === "object" ? liveState : {};
+  const current = normalizeMarketplaceState(previous || {});
+  return normalizeMarketplaceState({
+    stock: current.stock,
+    present: current.present,
+    reserved: current.reserved,
+    warehouses: current.warehouses,
+    hasStocks: current.hasStocks,
+    ...state,
+    archived: state.archived !== undefined ? state.archived : state.code === "archived",
+  });
+}
+
 async function refreshYandexMarketplaceStateForProducts(products = []) {
   const candidates = (Array.isArray(products) ? products : [])
     .filter((product) => product?.marketplace === "yandex" && product.offerId && product.target);
@@ -79,7 +93,7 @@ async function refreshYandexMarketplaceStateForProducts(products = []) {
         if (!state) continue;
         updatedById.set(product.id, normalizeWarehouseProduct({
           ...product,
-          marketplaceState: { ...(product.marketplaceState || {}), ...state },
+          marketplaceState: mergeYandexLiveMarketplaceState(product.marketplaceState, state),
         }));
       }
     } catch (error) {

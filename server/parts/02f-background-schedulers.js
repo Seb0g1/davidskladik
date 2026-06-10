@@ -50,7 +50,7 @@ async function rescheduleOzonUnarchiveQueueAutoSoon(reason = "queue_update") {
   });
 }
 
-function rescheduleYandexUnarchiveQueueAutoSoon(reason = "queue_update") {
+async function rescheduleYandexUnarchiveQueueAutoSoon(reason = "queue_update") {
   if (!yandexUnarchiveQueueAutoEnabled) return;
   scheduleYandexUnarchiveQueueAuto(Math.min(yandexUnarchiveQueueAutoIntervalMinutes, 5) * 60 * 1000);
   logger.info("yandex unarchive queue auto rescheduled", {

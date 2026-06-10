@@ -130,12 +130,15 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
       product.noSupplierAutomation.lastError = status.error;
     }
     if (sellableIds.has(productId)) {
+      const restoredStock = restoredStockById.get(productId)
+        || Math.max(1, Math.round(Number(product.targetStock || product.marketplaceState?.stock || 1)));
+      product.targetStock = restoredStock;
       product.marketplaceState = {
         ...(product.marketplaceState || {}),
         code: "active",
         status: "active",
         archived: false,
-        stock: restoredStockById.get(productId) || Math.max(1, Math.round(Number(product.marketplaceState?.stock || 1))),
+        stock: restoredStock,
       };
       product.status = "active";
       product.archived = false;
@@ -241,4 +244,3 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     source,
   };
 }
-
