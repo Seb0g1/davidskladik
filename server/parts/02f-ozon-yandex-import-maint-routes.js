@@ -9,10 +9,28 @@ app.post("/api/ozon-yandex-import/repair-yandex-content", requireAdmin, async (r
     const repairVendor = request.body?.repairVendor !== false;
     const repairDimensions = request.body?.repairDimensions !== false;
 
-    const warehouse = await readWarehouse();
-    const yandexProducts = (warehouse.products || [])
-      .filter((product) => product.marketplace === "yandex" && cleanText(product.offerId))
-      .slice(0, limit);
+    // Page through Postgres directly — readWarehouse() does not return products in PG mode.
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "Postgres недоступен." });
+    const yandexProducts = [];
+    let cursorId = null;
+    while (yandexProducts.length < limit) {
+      const page = await prisma.warehouseProduct.findMany({
+        where: { marketplace: "yandex" },
+        select: { id: true, raw: true },
+        orderBy: { id: "asc" },
+        take: 1000,
+        ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+      });
+      if (!page.length) break;
+      cursorId = page[page.length - 1].id;
+      for (const row of page) {
+        const product = row.raw && typeof row.raw === "object" ? row.raw : null;
+        if (product && cleanText(product.offerId)) yandexProducts.push(product);
+        if (yandexProducts.length >= limit) break;
+      }
+      if (page.length < 1000) break;
+    }
 
     const candidates = yandexProducts.filter((product) => {
       const normalized = normalizeWarehouseProduct(product);
