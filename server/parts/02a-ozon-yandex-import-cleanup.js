@@ -221,7 +221,10 @@ function buildYandexCleanupCandidate(item = {}, shop = {}, protectedBrandsInput 
   const volumesMl = volumeAssessment.volumesMl;
   const minVolumeMl = volumeAssessment.minVolumeMl;
   const smallVolume = volumeAssessment.blocked;
-  const protectedByBrand = matchedBrands.length > 0 && !smallVolume;
+  const lowerName = name.toLowerCase();
+  const hasBlockedKeyword = lowerName.includes("отливант") || lowerName.includes("тестер");
+  const forceDelete = smallVolume || hasBlockedKeyword;
+  const protectedByBrand = matchedBrands.length > 0 && !forceDelete;
   return {
     id: `${shop.businessId || shop.id || "yandex"}:${offerId}`,
     shopId: shop.id || "yandex",
@@ -236,6 +239,7 @@ function buildYandexCleanupCandidate(item = {}, shop = {}, protectedBrandsInput 
     matchedBrands,
     minVolumeMl,
     smallVolume,
+    hasBlockedKeyword,
     protected: protectedByBrand,
     action: protectedByBrand ? "keep" : "delete",
   };

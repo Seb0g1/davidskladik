@@ -11,6 +11,14 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
   }
   let recovered = pickSupplierRecoveryCandidates(products, options);
+  // Products archived by no-supplier automation have targetStock=0; give them stock=1 so
+  // restoreStocksOnMarketplaces succeeds and sellable=true gets set (which sets manualSellableAt,
+  // preventing the no-supplier automation from re-zeroing them on the next cycle).
+  recovered = recovered.map((product) =>
+    !product.selectedSupplier && !(Number(product.targetStock) > 0)
+      ? { ...product, targetStock: 1 }
+      : product,
+  );
   const targetedIdSet = Array.isArray(options.productIds) && options.productIds.length
     ? new Set(options.productIds.map((id) => String(id || "").trim()).filter(Boolean))
     : null;

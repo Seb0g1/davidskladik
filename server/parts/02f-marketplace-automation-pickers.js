@@ -123,7 +123,10 @@ function pickSupplierRecoveryCandidates(products = [], { productIds, force = fal
     : null;
   return (Array.isArray(products) ? products : []).filter((product) => {
     if (idSet && !idSet.has(String(product.id))) return false;
-    if (!product.hasLinks || !product.selectedSupplier) return false;
+    if (!product.hasLinks) return false;
+    // Allow recovery for products archived by automation even without a supplier —
+    // they get unarchived with minimum stock=1 and manualSellableAt set to prevent re-zeroing.
+    if (!product.selectedSupplier && !product.noSupplierAutomation?.archivedAt) return false;
     if (force) return true;
     const needsRecovery = marketplaceProductNeedsSalesRecovery(product, { includeUnknown: true });
     if (

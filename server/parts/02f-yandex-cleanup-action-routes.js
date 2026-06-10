@@ -1,3 +1,54 @@
+// Targeted delete: removes only products matching keyword (Тестер/Отливант) or volume <20ml.
+// Safer than the general /delete endpoint — no protectedBrands list needed.
+app.post("/api/yandex-cleanup/delete-filtered", async (request, response, next) => {
+  try {
+    const dryRun = request.body?.dryRun !== false;
+    if (!dryRun && request.body?.confirmed !== true) {
+      return response.status(400).json({ error: "Передайте confirmed:true для удаления." });
+    }
+    const preview = await buildYandexCleanupPreview({ protectedBrands: [], limit: 50000 });
+    const toDelete = (preview.rows || []).filter((row) => row.hasBlockedKeyword || row.smallVolume);
+    const limitedToDelete = toDelete.slice(0, yandexCleanupDeleteLimit);
+    const summary = {
+      total: (preview.rows || []).length,
+      toDelete: toDelete.length,
+      plannedNow: limitedToDelete.length,
+      skippedByLimit: Math.max(0, toDelete.length - limitedToDelete.length),
+    };
+    if (dryRun) {
+      return response.json({
+        ok: true,
+        dryRun: true,
+        generatedAt: new Date().toISOString(),
+        summary,
+        rows: toDelete,
+        warnings: preview.warnings || [],
+      });
+    }
+    const results = await deleteYandexCleanupRows(limitedToDelete);
+    const deleted = results.filter((item) => item.ok).length;
+    const failedRows = results.filter((item) => !item.ok);
+    await appendAudit(request, "yandex.cleanup.delete_filtered", {
+      entityType: "yandex_cleanup",
+      entityId: "business_catalog",
+      summary,
+      deleted,
+      failed: failedRows.length,
+    });
+    response.json({
+      ok: failedRows.length === 0,
+      generatedAt: new Date().toISOString(),
+      summary,
+      deleted,
+      failed: failedRows.length,
+      warnings: preview.warnings || [],
+      results,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/yandex-cleanup/archive", async (request, response, next) => {
   try {
     response.status(410).json({ error: "Архивация отключена. Используйте удаление: /api/yandex-cleanup/delete." });
