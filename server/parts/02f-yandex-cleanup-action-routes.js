@@ -75,7 +75,10 @@ app.post("/api/yandex-cleanup/delete-filtered-local", async (request, response, 
       const lowerName = name.toLowerCase();
       const hasBlockedKeyword = lowerName.includes("отливант") || lowerName.includes("тестер");
       const volumeAssessment = assessYandexSmallVolume(name);
-      const smallVolume = volumeAssessment.blocked;
+      // Delete only when the LARGEST mentioned volume is under 20ml — "50 мл + 10 мл"
+      // sets must not be deleted because of the bundled sampler.
+      const volumes = Array.isArray(volumeAssessment.volumesMl) ? volumeAssessment.volumesMl : [];
+      const smallVolume = volumes.length > 0 && Math.max(...volumes) < YANDEX_MIN_VOLUME_ML;
       if (!hasBlockedKeyword && !smallVolume) continue;
       toDelete.push({
         action: "delete",
@@ -86,6 +89,7 @@ app.post("/api/yandex-cleanup/delete-filtered-local", async (request, response, 
         hasBlockedKeyword,
         smallVolume,
         minVolumeMl: volumeAssessment.minVolumeMl,
+        maxVolumeMl: volumes.length ? Math.max(...volumes) : null,
       });
     }
     const limitedToDelete = toDelete.slice(0, yandexCleanupDeleteLimit);
