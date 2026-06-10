@@ -85,15 +85,7 @@ function yandexStockShops(shops = null) {
     && shop.businessId
     && shop.campaignId
   ));
-  const allowed = expanded.filter((shop) => yandexStockCampaignIds.has(String(shop.campaignId)));
-  const skipped = expanded.filter((shop) => !yandexStockCampaignIds.has(String(shop.campaignId)));
-  if (skipped.length) {
-    logger.warn("yandex stock campaign skipped", {
-      allowedCampaignIds: Array.from(yandexStockCampaignIds),
-      skippedCampaignIds: [...new Set(skipped.map((shop) => String(shop.campaignId)))],
-    });
-  }
-  return allowed;
+  return expanded.filter((shop) => yandexStockCampaignIds.has(String(shop.campaignId)));
 }
 
 function parseYandexCampaignIds(value) {
@@ -106,4 +98,3 @@ function parseYandexCampaignIds(value) {
 function yandexMissingStockCampaignWarning(count) {
   return `Yandex: ${count} магазин(ов) без campaignId пропущены для остатков. Добавьте Campaign ID в кабинетах маркетплейсов.`;
 }
-

@@ -182,7 +182,12 @@ const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 10000) || 10000));
 const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
-const yandexStockCampaignIds = new Set(["128820967"]);
+const yandexStockCampaignIds = new Set(
+  String(process.env.YANDEX_STOCK_CAMPAIGN_IDS || "128820967")
+    .split(/[\s,;]+/)
+    .map((value) => cleanText(value))
+    .filter(Boolean),
+);
 const configuredOzonUnarchiveDailyLimit = process.env.OZON_UNARCHIVE_DAILY_LIMIT === undefined
   ? 100
   : (Number(process.env.OZON_UNARCHIVE_DAILY_LIMIT) || 0);
