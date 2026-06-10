@@ -6239,6 +6239,8 @@ test("linked reconciler keeps linked products fresh without daily full import", 
   assert.match(serverSource, /queueAuthoritativePriceReprice\(\{\s*productIds: ids/);
   assert.match(serverSource, /sendTargetStocksToMarketplace\(stockProducts\)/);
   assert.match(serverSource, /daily sync skipping full marketplace import/);
+  assert.match(serverSource, /code: "worker_only"/);
+  assert.match(serverSource, /serverRole/);
   assert.match(ecosystem, /LINKED_RECONCILER_ENABLED: "true"/);
   assert.match(ecosystem, /DAILY_FULL_IMPORT_ENABLED: "false"/);
 });

@@ -50,6 +50,7 @@ async function getLinkedReconcilerStatus() {
     enabled: linkedReconcilerEnabled,
     running: linkedReconcilerRunning,
     nextRunAt: linkedReconcilerNextRunAt,
+    serverRole,
     batchSize: linkedReconcilerBatchSize,
     intervalMinutes: linkedReconcilerIntervalMinutes,
     maxProductsPerTick: linkedReconcilerMaxProductsPerTick,

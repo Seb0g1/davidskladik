@@ -89,6 +89,20 @@ app.get("/api/marketplace/reconciler/status", requireAdmin, async (_request, res
 
 app.post("/api/marketplace/reconciler/run", requireAdmin, async (_request, response, next) => {
   try {
+    if (isApiServer) {
+      return response.status(409).json({
+        ok: false,
+        code: "worker_only",
+        error: "Linked reconciler runs only in the worker process.",
+      });
+    }
+    if (!linkedReconcilerEnabled) {
+      return response.status(409).json({
+        ok: false,
+        code: "linked_reconciler_disabled",
+        error: "Linked reconciler is disabled for this process.",
+      });
+    }
     const alreadyRunning = linkedReconcilerRunning;
     if (!alreadyRunning) {
       runLinkedReconcilerBatch("manual").catch((error) => {
@@ -191,4 +205,3 @@ function startBackgroundSchedulers() {
     });
   }
 }
-
