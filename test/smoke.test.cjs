@@ -6230,6 +6230,19 @@ test("interval auto sync avoids full marketplace import to prevent OOM", async (
   assert.match(serverSource, /runAutoSyncCycle\("interval"\)/);
 });
 
+test("linked reconciler keeps linked products fresh without daily full import", async () => {
+  const root = path.join(__dirname, "..");
+  const serverSource = readServerSource();
+  const ecosystem = await fs.readFile(path.join(root, "ecosystem.config.cjs"), "utf8");
+  assert.match(serverSource, /runLinkedReconcilerBatch/);
+  assert.match(serverSource, /refreshMarketplaceStateForProducts/);
+  assert.match(serverSource, /queueAuthoritativePriceReprice\(\{\s*productIds: ids/);
+  assert.match(serverSource, /sendTargetStocksToMarketplace\(stockProducts\)/);
+  assert.match(serverSource, /daily sync skipping full marketplace import/);
+  assert.match(ecosystem, /LINKED_RECONCILER_ENABLED: "true"/);
+  assert.match(ecosystem, /DAILY_FULL_IMPORT_ENABLED: "false"/);
+});
+
 test("pm2 split entry files and immediate link activation hooks exist", async () => {
   const root = path.join(__dirname, "..");
   const serverSource = readServerSource();

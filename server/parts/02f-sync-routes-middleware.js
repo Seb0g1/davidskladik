@@ -79,6 +79,35 @@ app.post("/api/marketplace/maintenance/run", requireAdmin, async (_request, resp
   }
 });
 
+app.get("/api/marketplace/reconciler/status", requireAdmin, async (_request, response, next) => {
+  try {
+    response.json(await getLinkedReconcilerStatus());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/marketplace/reconciler/run", requireAdmin, async (_request, response, next) => {
+  try {
+    const alreadyRunning = linkedReconcilerRunning;
+    if (!alreadyRunning) {
+      runLinkedReconcilerBatch("manual").catch((error) => {
+        logger.error("manual linked reconciler failed", { detail: error?.message || String(error), err: error });
+      });
+    }
+    response.status(202).json({
+      ok: true,
+      started: !alreadyRunning,
+      running: true,
+      enabled: linkedReconcilerEnabled,
+      nextRunAt: linkedReconcilerNextRunAt || null,
+      intervalMinutes: linkedReconcilerIntervalMinutes,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/warehouse/sync/run", requireAdmin, async (_request, response, next) => {
   try {
     const result = startManualWarehouseSync("manual");
@@ -150,6 +179,15 @@ function startBackgroundSchedulers() {
     logger.info("marketplace maintenance scheduler enabled", {
       everyHours: marketplaceMaintenanceHours,
       nextRunAt: marketplaceMaintenanceNextRunAt,
+    });
+  }
+  if (linkedReconcilerEnabled) {
+    scheduleLinkedReconciler(linkedReconcilerInitialDelaySeconds * 1000);
+    logger.info("linked reconciler scheduler enabled", {
+      batchSize: linkedReconcilerBatchSize,
+      intervalMinutes: linkedReconcilerIntervalMinutes,
+      maxProductsPerTick: linkedReconcilerMaxProductsPerTick,
+      nextRunAt: linkedReconcilerNextRunAt,
     });
   }
 }

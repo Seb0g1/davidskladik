@@ -23,7 +23,20 @@ async function runDailyRefresh(trigger = "manual") {
 
     try {
       const priceMaster = await runSync();
-      const warehouse = await buildWarehouseView({ sync: true });
+      // Daily sync must stay lightweight. The heavy marketplace import is still available
+      // via /api/warehouse/sync/run, while daily/manual-daily uses the rolling reconciler.
+      let fullImport = dailyFullImportEnabled;
+      let fullImportSkippedReason = null;
+      if (fullImport && dailyFullImportDeferUnderLoad && heavyBackgroundWorkShouldDefer("daily_full_import")) {
+        fullImport = false;
+        fullImportSkippedReason = "deferred_under_load";
+      } else if (!dailyFullImportEnabled) {
+        fullImportSkippedReason = "full_import_disabled";
+      }
+      if (fullImportSkippedReason) {
+        logger.info("daily sync skipping full marketplace import", { trigger, reason: fullImportSkippedReason });
+      }
+      const warehouse = await buildWarehouseView({ sync: fullImport });
       const backgroundAutomation = trigger === "manual"
         ? {
             automation: await runNoSupplierMarketplaceAutomation(warehouse),

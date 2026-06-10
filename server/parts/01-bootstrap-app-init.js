@@ -74,6 +74,7 @@ const historyPath = path.join(dataDir, "history.jsonl");
 const exchangeRatePath = path.join(dataDir, "exchange-rate.json");
 const warehousePath = path.join(dataDir, "personal-warehouse.json");
 const dailySyncPath = path.join(dataDir, "daily-sync.json");
+const linkedReconcilerStatePath = path.join(dataDir, "linked-reconciler-state.json");
 const marketplaceAccountsPath = path.join(dataDir, "marketplace-accounts.json");
 const auditLogPath = path.join(dataDir, "audit-log.jsonl");
 const appSettingsPath = path.join(dataDir, "app-settings.json");
@@ -174,6 +175,20 @@ const marketplaceMaintenanceRecentSlowWindowMs = Math.max(
   30_000,
   Number(process.env.MARKETPLACE_MAINTENANCE_RECENT_SLOW_WINDOW_MS || 120000) || 120000,
 );
+// Rolling linked-product reconciler (worker-only). Off by default; the worker env enables it.
+const linkedReconcilerEnabled = process.env.LINKED_RECONCILER_ENABLED === "true";
+const linkedReconcilerBatchSize = Math.max(10, Math.min(1000, Number(process.env.LINKED_RECONCILER_BATCH_SIZE || 100) || 100));
+const linkedReconcilerIntervalMinutes = Math.max(1, Number(process.env.LINKED_RECONCILER_INTERVAL_MINUTES || 10) || 10);
+const linkedReconcilerMaxProductsPerTick = Math.max(
+  linkedReconcilerBatchSize,
+  Math.min(5000, Number(process.env.LINKED_RECONCILER_MAX_PRODUCTS_PER_TICK || 300) || 300),
+);
+const linkedReconcilerInitialDelaySeconds = Math.max(30, Number(process.env.LINKED_RECONCILER_INITIAL_DELAY_SECONDS || 420) || 420);
+const linkedReconcilerDeferRetryMs = Math.max(60_000, Number(process.env.LINKED_RECONCILER_DEFER_RETRY_MS || 300000) || 300000);
+const linkedReconcilerSendTargetStock = process.env.LINKED_RECONCILER_SEND_TARGET_STOCK !== "false";
+// Daily full marketplace import controls (the heavy buildWarehouseView({sync:true}) path).
+const dailyFullImportEnabled = process.env.DAILY_FULL_IMPORT_ENABLED !== "false";
+const dailyFullImportDeferUnderLoad = process.env.DAILY_FULL_IMPORT_DEFER_UNDER_LOAD !== "false";
 const pmDbPoolSize = Math.max(1, Number(process.env.PM_DB_POOL_SIZE || 8) || 8);
 const pmDbConnectTimeoutMs = Math.max(1000, Number(process.env.PM_DB_CONNECT_TIMEOUT_MS || 10000) || 10000);
 const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CACHE_MS || 120000) || 120000);
