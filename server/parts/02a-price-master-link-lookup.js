@@ -93,7 +93,10 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
   const map = new Map();
   if (specialLinks.length) {
     for (const link of specialLinks) {
-      map.set(link.id, await findPriceMasterRowsForLink(link, usdRate, managedSuppliers));
+      map.set(link.id, await findPriceMasterRowsForLinkFast(link, usdRate, managedSuppliers, {
+        timeoutMs,
+        cacheEmpty: false,
+      }));
     }
   }
   if (!articleLinks.length) return map;
@@ -282,4 +285,3 @@ async function resolvePriceMasterLinkForSave(linkInput, usdRate, managedSupplier
 
   return link;
 }
-
