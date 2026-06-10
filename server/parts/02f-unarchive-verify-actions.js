@@ -110,7 +110,7 @@ async function verifyOzonUnarchiveActions(products = [], actions = [], options =
         attempted: true,
       });
       await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: retryProducts });
-      rescheduleOzonUnarchiveQueueAutoSoon("visibility_pending").catch((error) => {
+      Promise.resolve(rescheduleOzonUnarchiveQueueAutoSoon("visibility_pending")).catch((error) => {
         logger.warn("ozon unarchive queue reschedule failed", { detail: error?.message || String(error) });
       });
     } catch (error) {
@@ -245,7 +245,7 @@ async function verifyYandexUnarchiveActions(products = [], actions = [], options
           attempted: true,
         });
         await writeYandexUnarchiveQueue(updated);
-        rescheduleYandexUnarchiveQueueAutoSoon("verify_pending").catch((error) => {
+        Promise.resolve(rescheduleYandexUnarchiveQueueAutoSoon("verify_pending")).catch((error) => {
           logger.warn("yandex unarchive queue reschedule failed", { detail: error?.message || String(error) });
         });
       }
