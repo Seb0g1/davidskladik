@@ -60,6 +60,9 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
   const linkedNoSupplier = autoZeroStockOnNoSupplier
     ? list.filter((product) => {
         if (!product.hasLinks || product.selectedSupplier || product.noSupplierAutomation?.manualSellableAt) return false;
+        // Skip products already archived by this automation — recovery automation handles them.
+        // Without this check, no-supplier automation re-archives right after recovery queues an unarchive.
+        if (product.noSupplierAutomation?.archivedAt) return false;
         const key = marketplaceOfferAutomationKey(product);
         if (key && protectedOfferKeys.has(key) && !product.hasLinks) return false;
         const nowMs = options.now ? new Date(options.now).getTime() : Date.now();

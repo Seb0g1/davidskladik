@@ -347,6 +347,39 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
   }
 }
 
+// Dedicated recovery pass for archived+linked Yandex products.
+// The rolling reconciler cursor walks products alphabetically (ozon- before yandex-), so
+// it takes hours to reach Yandex products after a restart. This pass runs after every normal
+// reconciler tick and immediately processes up to 2 batches of archived Yandex products.
+async function runArchivedYandexLinkedRecoveryPass() {
+  if (linkedReconcilerRunning) return { status: "already_running" };
+  const prisma = getPrisma();
+  if (!prisma) return { status: "no_db" };
+  const rows = await prisma.warehouseProduct.findMany({
+    where: { marketplace: "yandex", archived: true, links: { some: {} } },
+    include: { links: true },
+    orderBy: { id: "asc" },
+    take: linkedReconcilerBatchSize * 2,
+  }).catch(() => []);
+  if (!rows.length) return { status: "ok", products: 0, recovered: 0, unarchived: 0 };
+  linkedReconcilerRunning = true;
+  try {
+    const products = rows.map(productFromPostgres);
+    const result = await processLinkedReconcilerBatch(products);
+    logger.info("yandex_archived_recovery_complete", {
+      products: result.products,
+      recovered: result.recovered,
+      unarchived: result.unarchived,
+    });
+    return result;
+  } catch (error) {
+    logger.warn("yandex archived recovery pass failed", { detail: error?.message || String(error) });
+    return { status: "error", error: error?.message };
+  } finally {
+    linkedReconcilerRunning = false;
+  }
+}
+
 function scheduleLinkedReconciler(delayMs = null) {
   if (!linkedReconcilerEnabled) {
     linkedReconcilerNextRunAt = null;
@@ -363,6 +396,11 @@ function scheduleLinkedReconciler(delayMs = null) {
       if (result?.status && String(result.status).startsWith("deferred_")) {
         nextDelayMs = linkedReconcilerDeferRetryMs;
       }
+      // After the normal rolling pass, run a dedicated Yandex archived recovery pass so
+      // archived Yandex products are processed every tick regardless of cursor position.
+      await runArchivedYandexLinkedRecoveryPass().catch((error) => {
+        logger.warn("yandex archived recovery pass error", { detail: error?.message || String(error) });
+      });
     } catch (error) {
       logger.error("linked reconciler tick failed", { detail: error?.message || String(error), err: error });
     } finally {
