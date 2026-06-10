@@ -60,26 +60,26 @@ app.post("/api/yandex-cleanup/delete-filtered-local", async (request, response, 
     }
     const prisma = getPrisma();
     if (!prisma) return response.status(503).json({ error: "Postgres недоступен." });
+    // Lightweight select: no raw JSON, no links — pulling 50k full rows hangs the API.
     const rows = await prisma.warehouseProduct.findMany({
       where: { marketplace: "yandex" },
-      include: { links: true },
+      select: { id: true, offerId: true, target: true, name: true },
       take: 50000,
     });
     const toDelete = [];
     for (const row of rows) {
-      const product = productFromPostgres(row);
-      const offerId = cleanText(product.offerId);
-      const shopId = cleanText(product.target);
+      const offerId = cleanText(row.offerId);
+      const shopId = cleanText(row.target);
       if (!offerId || !shopId) continue;
-      const name = cleanText(product.name || product.yandex?.name || offerId);
+      const name = cleanText(row.name || offerId);
       const lowerName = name.toLowerCase();
       const hasBlockedKeyword = lowerName.includes("отливант") || lowerName.includes("тестер");
-      const volumeAssessment = assessYandexSmallVolume(collectYandexVolumeSearchText(product));
+      const volumeAssessment = assessYandexSmallVolume(name);
       const smallVolume = volumeAssessment.blocked;
       if (!hasBlockedKeyword && !smallVolume) continue;
       toDelete.push({
         action: "delete",
-        id: product.id,
+        id: row.id,
         offerId,
         shopId,
         name,
