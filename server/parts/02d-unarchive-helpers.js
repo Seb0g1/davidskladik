@@ -1,3 +1,117 @@
+async function resolveOzonUnarchiveQueueProducts(dueItems = []) {
+  const items = Array.isArray(dueItems) ? dueItems : [];
+  const directIds = Array.from(new Set(items
+    .map((item) => cleanText(item.warehouseProductId || item.id))
+    .filter(Boolean)));
+  const resolved = new Set();
+  const directFound = new Set();
+  const rewrites = new Map();
+  let fallbackWarehouse = null;
+  const rewriteKey = (item) => ozonUnarchiveQueueKey(item) || `${cleanText(item.target)}:${cleanText(item.id)}:${cleanText(item.offerId)}`;
+  const addResolved = (id, item = {}, product = {}) => {
+    const productId = cleanText(id);
+    if (!productId) return;
+    resolved.add(productId);
+    const queuedId = cleanText(item.warehouseProductId || item.id);
+    if (queuedId && queuedId !== productId) {
+      rewrites.set(rewriteKey(item), {
+        item,
+        product: {
+          id: productId,
+          warehouseProductId: productId,
+          marketplace: "ozon",
+          target: cleanText(product.target || item.target),
+          offerId: cleanText(product.offerId || item.offerId),
+          productId: cleanText(product.productId || item.productId || item.ozonProductId),
+          ozonProductId: cleanText(product.productId || item.ozonProductId || item.productId),
+        },
+      });
+    }
+  };
+
+  if (directIds.length && shouldUsePostgresStorage() && getPrisma()) {
+    const rows = await getPrisma().warehouseProduct.findMany({
+      where: { id: { in: directIds } },
+      select: { id: true },
+    });
+    for (const row of rows) {
+      const id = cleanText(row.id);
+      if (id) {
+        addResolved(id);
+        directFound.add(id);
+      }
+    }
+  } else {
+    fallbackWarehouse = await readWarehouse();
+    const existingById = new Map((fallbackWarehouse.products || [])
+      .map((product) => [cleanText(product.id), product])
+      .filter(([id]) => id));
+    for (const id of directIds) {
+      if (!existingById.has(id)) continue;
+      addResolved(id, {}, existingById.get(id));
+      directFound.add(id);
+    }
+  }
+
+  const unresolved = items.filter((item) => {
+    const id = cleanText(item.warehouseProductId || item.id);
+    return !id || !directFound.has(id);
+  });
+  const offerIds = Array.from(new Set(unresolved.map((item) => cleanText(item.offerId)).filter(Boolean)));
+  if (!offerIds.length) return { ids: Array.from(resolved), rewrites: Array.from(rewrites.values()) };
+
+  const targets = Array.from(new Set(unresolved.map((item) => cleanText(item.target)).filter(Boolean)));
+  const matchKey = (target, offerId) => `${cleanText(target).toLowerCase()}:${cleanText(offerId).toLowerCase()}`;
+  const wanted = new Map();
+  for (const item of unresolved) {
+    const key = matchKey(item.target, item.offerId);
+    if (key !== ":" && !wanted.has(key)) wanted.set(key, item);
+  }
+
+  if (shouldUsePostgresStorage() && getPrisma()) {
+    for (const chunk of chunkArray(offerIds, 500)) {
+      const rows = await getPrisma().warehouseProduct.findMany({
+        where: {
+          marketplace: "ozon",
+          offerId: { in: chunk },
+          ...(targets.length ? { target: { in: targets } } : {}),
+        },
+        select: { id: true, offerId: true, target: true, productId: true },
+      });
+      for (const row of rows) {
+        const key = matchKey(row.target, row.offerId);
+        if (wanted.has(key)) addResolved(cleanText(row.id), wanted.get(key), row);
+      }
+    }
+    return { ids: Array.from(resolved).filter(Boolean), rewrites: Array.from(rewrites.values()) };
+  }
+
+  const warehouse = fallbackWarehouse || await readWarehouse();
+  for (const product of warehouse.products || []) {
+    if (cleanText(product.marketplace).toLowerCase() !== "ozon") continue;
+    const key = matchKey(product.target, product.offerId);
+    if (wanted.has(key) && product.id) addResolved(String(product.id), wanted.get(key), product);
+  }
+  return { ids: Array.from(resolved).filter(Boolean), rewrites: Array.from(rewrites.values()) };
+}
+
+async function rewriteResolvedOzonUnarchiveQueueItems(rewrites = []) {
+  const items = Array.isArray(rewrites) ? rewrites : [];
+  if (!items.length) return;
+  let queue = await readOzonUnarchiveQueue();
+  queue = removeOzonUnarchiveQueueItems(queue, items.map((item) => item.item));
+  queue = queueOzonUnarchiveItems(
+    queue,
+    items.map((item) => item.product),
+    {
+      nextRetryAt: new Date(Date.now() - 1000).toISOString(),
+      warning: "resolved_legacy_queue_id",
+      attempted: false,
+    },
+  );
+  await writeOzonUnarchiveQueue(queue);
+}
+
 async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarchiveQueueBatchLimit, force = false, queueRunId = "" } = {}) {
   if (ozonUnarchiveQueueAutoRunning) {
     return {
@@ -29,22 +143,9 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       perTargetTaken.set(target, taken + 1);
       if (dueItems.length >= normalizedLimit) break;
     }
-    let ids = dueItems.map((item) => cleanText(item.warehouseProductId || item.id)).filter(Boolean);
-    const dueWithoutWarehouseId = dueItems.filter((item) => !cleanText(item.warehouseProductId || item.id) && cleanText(item.offerId));
-    if (dueWithoutWarehouseId.length) {
-      const warehouse = await readWarehouse();
-      for (const item of dueWithoutWarehouseId) {
-        const offerId = cleanText(item.offerId).toLowerCase();
-        const target = cleanText(item.target).toLowerCase();
-        const match = (warehouse.products || []).find((product) =>
-          cleanText(product.marketplace).toLowerCase() === "ozon"
-          && cleanText(product.offerId).toLowerCase() === offerId
-          && (!target || cleanText(product.target).toLowerCase() === target)
-        );
-        if (match?.id) ids.push(String(match.id));
-      }
-    }
-    ids = Array.from(new Set(ids));
+    const resolution = await resolveOzonUnarchiveQueueProducts(dueItems);
+    const ids = resolution.ids;
+    await rewriteResolvedOzonUnarchiveQueueItems(resolution.rewrites);
     if (!ids.length) {
       const empty = {
         ok: true,
@@ -248,4 +349,3 @@ function enqueueYandexUnarchiveQueueProcess({ source, limit } = {}) {
     });
   return true;
 }
-

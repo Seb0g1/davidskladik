@@ -4382,16 +4382,16 @@ test("Ozon unarchive queue processor sends due rows without manual retry", async
         offerId: "QUEUE-DUE-1",
         productId: "909001",
         name: "Queue due product",
+        stockOnlyManualPrices: { default: 1000 },
         marketplaceState: { code: "archived", archived: true, stock: 0 },
-        links: [],
+        links: [{ id: "stock-link", supplierName: "Наш склад", article: "QUEUE-DUE-1" }],
       }],
       suppliers: [],
       updatedAt: new Date().toISOString(),
     });
     await writeOzonUnarchiveQueue({
       items: [{
-        id: "queue-due-product",
-        warehouseProductId: "queue-due-product",
+        id: "483848fb-4c9c-4375-8ea0-532d1ae7dbab",
         productId: "909001",
         ozonProductId: "909001",
         offerId: "QUEUE-DUE-1",
@@ -4403,6 +4403,7 @@ test("Ozon unarchive queue processor sends due rows without manual retry", async
 
     const result = await processOzonUnarchiveQueue({ source: "smoke_due", limit: 10 });
     assert.equal(result.selected, 1);
+    assert.deepEqual(result.productIds, ["queue-due-product"]);
     assert.equal(calls.some((call) => String(call.url).includes("/v1/product/unarchive")), true);
     assert.equal(calls.some((call) => String(call.url).includes("/v2/products/stocks")), true);
     assert.equal((await readOzonUnarchiveQueue()).items.length, 0);
