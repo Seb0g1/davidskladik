@@ -50,11 +50,15 @@ function assessYandexSmallVolume(productOrText = {}) {
   const searchText = collectYandexVolumeSearchText(productOrText);
   const volumesMl = extractOzonYandexImportVolumesMl(searchText);
   const minVolumeMl = volumesMl.length ? Math.min(...volumesMl) : null;
-  const blocked = minVolumeMl !== null && minVolumeMl < YANDEX_MIN_VOLUME_ML;
+  const maxVolumeMl = volumesMl.length ? Math.max(...volumesMl) : null;
+  // Block by the LARGEST volume: "50 мл + 10 мл" sets are full products with a bundled
+  // sampler and must not be blocked/deleted because of the 10ml part.
+  const blocked = maxVolumeMl !== null && maxVolumeMl < YANDEX_MIN_VOLUME_ML;
   const smallVolumes = volumesMl.filter((value) => value < YANDEX_MIN_VOLUME_ML);
   return {
     blocked,
     minVolumeMl,
+    maxVolumeMl,
     volumesMl,
     searchText,
     reason: blocked ? `Объем меньше ${YANDEX_MIN_VOLUME_ML} мл: ${smallVolumes.join(", ")} мл` : "",
