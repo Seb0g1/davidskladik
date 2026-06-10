@@ -163,14 +163,28 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
     persistMutations: true,
   });
 
-  // Refresh live marketplace archive/stock state, then rebuild so the freshly-applied
-  // state (archived flag, stock) is reflected in the products we hand to automations.
-  await refreshMarketplaceStateForProducts(products);
-  products = await buildFreshWarehouseProducts(ids, {
+  // Refresh live marketplace archive/stock state.
+  // CRITICAL: capture the return value — it contains fresh archived/stock data even when
+  // the internal DB-persist step fails (persist errors are caught-and-logged inside).
+  const refreshed = await refreshMarketplaceStateForProducts(products);
+  const liveStateById = new Map(
+    (Array.isArray(refreshed) ? refreshed : [])
+      .filter((p) => p?.id)
+      .map((p) => [String(p.id), p.marketplaceState]),
+  );
+
+  // Rebuild with live PriceMaster to get fresh supplier prices, then overlay the live
+  // marketplace state captured above so archived/stock flags are always current regardless
+  // of whether the DB persist inside refreshMarketplaceStateForProducts succeeded.
+  const rebuilt = await buildFreshWarehouseProducts(ids, {
     livePriceMaster: true,
     refreshPrices: false,
     batchPriceMaster: true,
     persistMutations: true,
+  });
+  products = rebuilt.map((p) => {
+    const liveState = liveStateById.get(String(p.id));
+    return liveState ? { ...p, marketplaceState: liveState } : p;
   });
 
   // Supplier recovery: unarchive (Yandex immediate / Ozon queued on quota), restore stock,
@@ -187,21 +201,57 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
     { productIds: ids, includeNoLinks: false, source: "linked_reconciler" },
   );
 
-  const priceRefresh = await queueAuthoritativePriceReprice({
-    productIds: ids,
-    marketplace: "all",
-    reason: "linked_reconciler",
-    sourceEvent: "linked_reconciler",
-    force: false,
-    onlyChanged: true,
-    refreshMarketplacePrices: true,
-    livePriceMaster: true,
-    verify: true,
-    priority: 2,
-  }).catch((error) => {
-    logger.warn("linked reconciler price queue failed", { detail: error?.message || String(error), products: ids.length });
-    return { queued: 0, queuedBatches: 0, error: error?.message || String(error) };
-  });
+  // Products in archive that have a linked supplier need force:true so the price is sent
+  // the moment they are unarchived, not just when it drifts from the stale marketplace value.
+  const archivedLinkedIds = products
+    .filter((p) => productLooksArchived(p) && p.hasLinks && p.selectedSupplier && !warehouseProductUsesStockOnlyPricing(p))
+    .map((p) => p.id);
+  const normalPriceIds = ids.filter((id) => !archivedLinkedIds.includes(id));
+
+  let priceQueued = 0;
+  let priceQueuedBatches = 0;
+
+  // Force-send price for archived+linked products (price must arrive on unarchive).
+  if (archivedLinkedIds.length) {
+    const forcedRefresh = await queueAuthoritativePriceReprice({
+      productIds: archivedLinkedIds,
+      marketplace: "all",
+      reason: "linked_reconciler_archive_force",
+      sourceEvent: "linked_reconciler",
+      force: true,
+      onlyChanged: false,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+      priority: 1,
+    }).catch((error) => {
+      logger.warn("linked reconciler archive force price queue failed", { detail: error?.message || String(error), products: archivedLinkedIds.length });
+      return { queued: 0, queuedBatches: 0 };
+    });
+    priceQueued += forcedRefresh.queued || 0;
+    priceQueuedBatches += forcedRefresh.queuedBatches || 0;
+  }
+
+  // Normal changed-price detection for active linked products.
+  if (normalPriceIds.length) {
+    const priceRefresh = await queueAuthoritativePriceReprice({
+      productIds: normalPriceIds,
+      marketplace: "all",
+      reason: "linked_reconciler",
+      sourceEvent: "linked_reconciler",
+      force: false,
+      onlyChanged: true,
+      refreshMarketplacePrices: true,
+      livePriceMaster: true,
+      verify: true,
+      priority: 2,
+    }).catch((error) => {
+      logger.warn("linked reconciler price queue failed", { detail: error?.message || String(error), products: normalPriceIds.length });
+      return { queued: 0, queuedBatches: 0 };
+    });
+    priceQueued += priceRefresh.queued || 0;
+    priceQueuedBatches += priceRefresh.queuedBatches || 0;
+  }
 
   // Replenish target stock for sellable products whose marketplace stock drifted
   // (e.g. depleted by same-day orders while still in stock at the supplier).
@@ -220,8 +270,9 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
     unarchived: recovery.unarchived || 0,
     zeroStockSent: automation.zeroStockSent || 0,
     stockSent,
-    priceQueued: priceRefresh.queued || 0,
-    priceQueuedBatches: priceRefresh.queuedBatches || 0,
+    archivedLinked: archivedLinkedIds.length,
+    priceQueued,
+    priceQueuedBatches,
   };
 }
 
