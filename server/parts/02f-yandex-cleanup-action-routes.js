@@ -49,6 +49,110 @@ app.post("/api/yandex-cleanup/delete-filtered", async (request, response, next) 
   }
 });
 
+// Fast variant of delete-filtered: builds the candidate list from the local DB instead of
+// paging the whole Yandex catalog through the partner API (which takes 10+ minutes and can
+// stall the API process). Same filter: keyword Тестер/Отливант or volume < 20ml.
+app.post("/api/yandex-cleanup/delete-filtered-local", async (request, response, next) => {
+  try {
+    const dryRun = request.body?.dryRun !== false;
+    if (!dryRun && request.body?.confirmed !== true) {
+      return response.status(400).json({ error: "Передайте confirmed:true для удаления." });
+    }
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "Postgres недоступен." });
+    const rows = await prisma.warehouseProduct.findMany({
+      where: { marketplace: "yandex" },
+      include: { links: true },
+      take: 50000,
+    });
+    const toDelete = [];
+    for (const row of rows) {
+      const product = productFromPostgres(row);
+      const offerId = cleanText(product.offerId);
+      const shopId = cleanText(product.target);
+      if (!offerId || !shopId) continue;
+      const name = cleanText(product.name || product.yandex?.name || offerId);
+      const lowerName = name.toLowerCase();
+      const hasBlockedKeyword = lowerName.includes("отливант") || lowerName.includes("тестер");
+      const volumeAssessment = assessYandexSmallVolume(collectYandexVolumeSearchText(product));
+      const smallVolume = volumeAssessment.blocked;
+      if (!hasBlockedKeyword && !smallVolume) continue;
+      toDelete.push({
+        action: "delete",
+        id: product.id,
+        offerId,
+        shopId,
+        name,
+        hasBlockedKeyword,
+        smallVolume,
+        minVolumeMl: volumeAssessment.minVolumeMl,
+      });
+    }
+    const limitedToDelete = toDelete.slice(0, yandexCleanupDeleteLimit);
+    const summary = {
+      total: rows.length,
+      toDelete: toDelete.length,
+      byKeyword: toDelete.filter((r) => r.hasBlockedKeyword).length,
+      bySmallVolume: toDelete.filter((r) => r.smallVolume).length,
+      plannedNow: limitedToDelete.length,
+      skippedByLimit: Math.max(0, toDelete.length - yandexCleanupDeleteLimit),
+    };
+    if (dryRun) {
+      return response.json({
+        ok: true,
+        dryRun: true,
+        generatedAt: new Date().toISOString(),
+        summary,
+        rows: toDelete.slice(0, 500),
+      });
+    }
+    const results = await deleteYandexCleanupRows(limitedToDelete);
+    const deleted = results.filter((item) => item.ok).length;
+    const failedRows = results.filter((item) => !item.ok);
+    // Remove successfully deleted offers from the local DB too, so price/stock automation
+    // stops targeting products that no longer exist on Yandex.
+    const okOfferIds = new Set(results.filter((item) => item.ok).map((item) => cleanText(item.offerId)).filter(Boolean));
+    const okProductIds = limitedToDelete.filter((r) => okOfferIds.has(r.offerId)).map((r) => r.id).filter(Boolean);
+    let localDeleted = 0;
+    let localArchived = 0;
+    if (okProductIds.length) {
+      try {
+        await prisma.productLink.deleteMany({ where: { productId: { in: okProductIds } } }).catch(() => {});
+        const res = await prisma.warehouseProduct.deleteMany({ where: { id: { in: okProductIds } } });
+        localDeleted = res.count || 0;
+      } catch (error) {
+        logger.warn("yandex cleanup local delete failed, archiving instead", { detail: error?.message || String(error) });
+        const res = await prisma.warehouseProduct.updateMany({
+          where: { id: { in: okProductIds } },
+          data: { archived: true },
+        }).catch(() => ({ count: 0 }));
+        localArchived = res.count || 0;
+      }
+    }
+    await appendAudit(request, "yandex.cleanup.delete_filtered_local", {
+      entityType: "yandex_cleanup",
+      entityId: "business_catalog",
+      summary,
+      deleted,
+      failed: failedRows.length,
+      localDeleted,
+      localArchived,
+    });
+    response.json({
+      ok: failedRows.length === 0,
+      generatedAt: new Date().toISOString(),
+      summary,
+      deleted,
+      failed: failedRows.length,
+      localDeleted,
+      localArchived,
+      failedSample: failedRows.slice(0, 30),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/yandex-cleanup/archive", async (request, response, next) => {
   try {
     response.status(410).json({ error: "Архивация отключена. Используйте удаление: /api/yandex-cleanup/delete." });
