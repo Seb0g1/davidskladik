@@ -53,9 +53,15 @@ function warehousePagePostgresWhere(filters = {}) {
   if (linked === "ready") and.push({ links: { some: {} } });
   if (linked === "unlinked") and.push({ links: { none: {} } });
   if (linked === "changed") and.push({ links: { some: {} } });
-  if (linked === "linked_archived") and.push({ links: { some: {} } }, { marketplace: "ozon" });
+  if (linked === "linked_archived") and.push({ links: { some: {} } }, { OR: [{ archived: true }, { status: "archived" }] });
   const stateCode = cleanText(filters.state || "all");
-  if (stateCode !== "all") and.push({ status: stateCode });
+  if (stateCode !== "all") {
+    if (stateCode === "archived") {
+      and.push({ OR: [{ archived: true }, { status: "archived" }] });
+    } else {
+      and.push({ status: stateCode });
+    }
+  }
   const brandFilter = cleanText(filters.brand || "");
   if (brandFilter) {
     and.push({
@@ -94,4 +100,3 @@ function warehousePagePostgresWhere(filters = {}) {
   }
   return { AND: and.filter((item) => Object.keys(item || {}).length) };
 }
-

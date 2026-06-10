@@ -431,6 +431,12 @@ test("warehouse grouped counter and yandex media repair helpers", () => {
     warehousePostgresWhereRequiresUnlinkedOnly(warehousePagePostgresWhere({ linked: "linked" })),
     false,
   );
+  const linkedArchivedWhere = warehousePagePostgresWhere({ linked: "linked_archived" });
+  assert.ok((linkedArchivedWhere.AND || []).some((item) => item.links?.some));
+  assert.ok((linkedArchivedWhere.AND || []).some((item) => item.OR?.some((entry) => entry.archived === true)));
+  assert.equal((linkedArchivedWhere.AND || []).some((item) => item.marketplace === "ozon"), false);
+  const archivedStateWhere = warehousePagePostgresWhere({ state: "archived" });
+  assert.ok((archivedStateWhere.AND || []).some((item) => item.OR?.some((entry) => entry.archived === true)));
   assert.equal(countWarehouseProductGroups([
     { id: "ozon-1", marketplace: "ozon", offerId: "SKU-1", raw: { manualGroupId: "auto-pair-ozon-1" } },
     { id: "yandex-1", marketplace: "yandex", offerId: "SKU-1", raw: { manualGroupId: "auto-pair-ozon-1", yandex: { extra: { sourceProductId: "ozon-1" } } } },
@@ -2061,6 +2067,20 @@ test("warehouse page link filters support ready, changed, and linked Ozon archiv
     ready: false,
     changed: false,
   };
+  const yandexArchived = {
+    ...normalizeWarehouseProduct({
+      id: "yandex-archived",
+      target: "yandex-06c2112c",
+      marketplace: "yandex",
+      offerId: "DIC01",
+      ready: false,
+      changed: false,
+      links: [{ id: "l4", article: "A4", supplierName: "Supplier" }],
+      marketplaceState: { code: "absent", archived: true },
+    }),
+    ready: false,
+    changed: false,
+  };
   const unlinkedArchived = normalizeWarehouseProduct({
     id: "unlinked-archived",
     target: "ozon",
@@ -2074,6 +2094,8 @@ test("warehouse page link filters support ready, changed, and linked Ozon archiv
   assert.equal(warehousePageProductMatches(changed, { linked: "changed" }), true);
   assert.equal(warehousePageProductMatches(ready, { linked: "changed" }), false);
   assert.equal(warehousePageProductMatches(archived, { linked: "linked_archived" }), true);
+  assert.equal(warehousePageProductMatches(yandexArchived, { linked: "linked_archived" }), true);
+  assert.equal(warehousePageProductMatches(yandexArchived, { state: "archived" }), true);
   assert.equal(warehousePageProductMatches(unlinkedArchived, { linked: "linked_archived" }), false);
 });
 
