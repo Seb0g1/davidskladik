@@ -271,8 +271,8 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     ready: products.filter((product) => product.ready).length,
     changed: products.filter((product) => product.changed).length,
     withoutSupplier: products.filter((product) => !product.selectedSupplier && Number(product.supplierCount || 0) > 0).length,
-    linkedArchived: products.filter((product) => product.hasLinks && product.marketplace === "ozon" && product.marketplaceState?.code === "archived").length,
-    ozonArchived: products.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "archived").length,
+    linkedArchived: products.filter((product) => product.hasLinks && productLooksArchived(product)).length,
+    ozonArchived: products.filter((product) => product.marketplace === "ozon" && productLooksArchived(product)).length,
     ozonInactive: products.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "inactive").length,
     ozonOutOfStock: products.filter((product) => product.marketplace === "ozon" && product.marketplaceState?.code === "out_of_stock").length,
     noSupplierAlerts: buildNoSupplierAlerts(products, { limit: 12 }),
@@ -291,4 +291,3 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     marketplaceSyncChanged: marketplaceSyncChangedProductIds.length,
   };
 }
-

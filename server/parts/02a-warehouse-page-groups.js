@@ -137,8 +137,7 @@ function buildWarehousePageProductGroups(products = []) {
         group.links.push(link);
       }
     }
-    const stateCode = cleanText(normalized.marketplaceState?.code || normalized.status).toLowerCase();
-    const archived = Boolean(normalized.archived || stateCode.includes("archiv"));
+    const archived = Boolean(productLooksArchived(normalized));
     const linked = (Array.isArray(normalized.links) && normalized.links.length > 0) || group.links.length > 0;
     const hasSupplier = Boolean(normalized.selectedSupplier)
       || Boolean(normalized.stockOnlyFallbackActive)

@@ -32,14 +32,19 @@ function warehousePageProductMatches(product = {}, filters = {}) {
   if (linked === "ready" && (!hasLinks || !product.ready)) return false;
   if (linked === "unlinked" && hasLinks) return false;
   if (linked === "changed" && (!hasLinks || !product.changed)) return false;
-  if (linked === "linked_archived" && (!hasLinks || cleanText(product.marketplace) !== "ozon" || cleanText(product.marketplaceState?.code) !== "archived")) return false;
+  if (linked === "linked_archived" && (!hasLinks || !productLooksArchived(product))) return false;
   const marketplace = cleanText(filters.marketplace || "all");
   if (marketplace !== "all" && cleanText(product.marketplace) !== marketplace) return false;
   const stateCode = cleanText(filters.state || "all");
-  if (stateCode !== "all" && cleanText(product.marketplaceState?.code) !== stateCode) return false;
+  if (stateCode !== "all") {
+    if (stateCode === "archived") {
+      if (!productLooksArchived(product)) return false;
+    } else if (cleanText(product.marketplaceState?.code) !== stateCode) {
+      return false;
+    }
+  }
   const brandFilter = cleanText(filters.brand || "");
   if (brandFilter && !warehouseBrandMatches(product, brandFilter)) return false;
   if (filters.autoOnly && product.autoPriceEnabled === false) return false;
   return true;
 }
-

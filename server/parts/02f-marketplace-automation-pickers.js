@@ -37,7 +37,7 @@ function pickTargetStockSendProducts(products = []) {
 function marketplaceProductNeedsSalesRecovery(product = {}, { includeUnknown = true } = {}) {
   const state = product.marketplaceState || {};
   const code = cleanText(state.code || product.status).toLowerCase();
-  const archived = Boolean(product.archived || state.archived || code === "archived");
+  const archived = Boolean(productLooksArchived(product));
   if (archived || code === "out_of_stock" || code === "inactive") return true;
   if (includeUnknown && (!code || code === "unknown" || state.partial)) return true;
   const targetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
@@ -85,8 +85,7 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
       ? noLinkProducts.filter(
           (product) =>
             !product.everHadLinks
-            && !product.noSupplierAutomation?.archivedAt
-            && product.marketplaceState?.code !== "archived",
+            && !productLooksArchived(product),
         )
       : [],
   };
@@ -207,4 +206,3 @@ function summarizeSupplierRecoveryProducts(products = [], stockActions = [], una
     };
   });
 }
-

@@ -56,7 +56,7 @@ async function getWarehousePostgresSummary(prisma, rate) {
     normalizedSuppliers,
     counterStats,
     linkedArchived: linkedProducts
-      .filter((product) => product.marketplace === "ozon" && Array.isArray(product.links) && product.links.length && product.marketplaceState?.code === "archived").length,
+      .filter((product) => Array.isArray(product.links) && product.links.length && productLooksArchived(product)).length,
     lightweight: false,
     summarySampled: linkedRows.length >= scanLimit,
   };
@@ -73,11 +73,20 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
   ) {
     return warehousePostgresSummaryCache.value;
   }
-  const [totalAll, ozonStateCounts, yandexStateCounts, linkedProducts, normalizedSuppliers] = await Promise.all([
+  const [totalAll, ozonStateCounts, yandexStateCounts, linkedProducts, linkedArchived, normalizedSuppliers] = await Promise.all([
     prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
     getOzonStateCountsFromPostgres(prisma),
     getMarketplaceStateCountsFromPostgres(prisma, "yandex"),
     prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] } }).catch(() => 0),
+    prisma.warehouseProduct.count({
+      where: {
+        AND: [
+          enabledWarehouseTargetWhere(),
+          { links: { some: {} } },
+          { OR: [{ archived: true }, { status: "archived" }] },
+        ],
+      },
+    }).catch(() => 0),
     getWarehousePostgresSuppliers(prisma),
   ]);
   const value = {
@@ -92,7 +101,7 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
       linkedProducts,
       linkedNotReady: 0,
     },
-    linkedArchived: 0,
+    linkedArchived,
     lightweight: true,
   };
   const existing = warehousePostgresSummaryCache;
@@ -113,4 +122,3 @@ function getCachedWarehousePostgresSummary(rate) {
   }
   return null;
 }
-

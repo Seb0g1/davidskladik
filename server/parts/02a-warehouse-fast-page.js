@@ -81,7 +81,7 @@ async function buildFastWarehousePage({
       withoutSupplier: counterStats.withoutSupplier,
       linkedProducts: counterStats.linkedProducts,
       linkedNotReady: counterStats.linkedNotReady,
-      linkedArchived: enabledProducts.filter((product) => product.marketplace === "ozon" && Array.isArray(product.links) && product.links.length && product.marketplaceState?.code === "archived").length,
+      linkedArchived: enabledProducts.filter((product) => Array.isArray(product.links) && product.links.length && productLooksArchived(product)).length,
       ozonArchived: ozonStateCounts.archived,
       ozonInactive: ozonStateCounts.inactive,
       ozonOutOfStock: ozonStateCounts.outOfStock,
