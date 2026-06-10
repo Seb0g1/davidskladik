@@ -13,19 +13,17 @@ function extractOzonYandexImportVolumesMl(name = "") {
     volumes.push(number);
   };
   const mlSuffix = "(?:мл|ml)(?![a-zа-яё])";
+  // travel-set handled outside the exec loop: a non-global regex inside while(exec)
+  // never advances lastIndex and spins the event loop forever (froze api+worker).
+  if (/travel\s*set/iu.test(text)) add(10);
   const patterns = [
     new RegExp(`(\\d+(?:\\.\\d+)?)\\s*${mlSuffix}`, "giu"),
     new RegExp(`(\\d+(?:\\.\\d+)?)${mlSuffix}`, "giu"),
     new RegExp(`(\\d+)\\s*[xх×]\\s*(\\d+(?:\\.\\d+)?)\\s*${mlSuffix}`, "giu"),
-    /travel\s*set/iu,
   ];
   for (const pattern of patterns) {
     let match;
     while ((match = pattern.exec(text))) {
-      if (/travel\s*set/i.test(pattern.source)) {
-        add(10);
-        continue;
-      }
       if (pattern.source.includes("[xх×]")) add(match[2]);
       else add(match[1]);
     }
