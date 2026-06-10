@@ -264,6 +264,19 @@ async function processYandexUnarchiveQueue({ source = "manual", limit = yandexUn
     }
     const products = await buildFreshWarehouseProducts(ids, { refreshPrices: false, livePriceMaster: false, batchPriceMaster: false });
     const yandexProducts = products.filter((product) => product.marketplace === "yandex" && productLooksArchived(product));
+    // Products that are no longer archived in our DB were already processed (optimistically updated
+    // after a prior unarchive command). Remove them from the queue so they don't loop forever.
+    const alreadyActiveProducts = products.filter((product) => product.marketplace === "yandex" && !productLooksArchived(product));
+    if (alreadyActiveProducts.length) {
+      await writeYandexUnarchiveQueueDelta(await readYandexUnarchiveQueue(), { removeProducts: alreadyActiveProducts }).catch((error) => {
+        logger.warn("yandex unarchive queue stale cleanup failed", { detail: error?.message || String(error) });
+      });
+      if (alreadyActiveProducts.length) {
+        await restoreStocksOnMarketplaces(alreadyActiveProducts).catch((error) => {
+          logger.warn("yandex unarchive queue stale stock restore failed", { detail: error?.message || String(error) });
+        });
+      }
+    }
     const actions = yandexProducts.length
       ? await verifyYandexUnarchiveActions(
         yandexProducts,
