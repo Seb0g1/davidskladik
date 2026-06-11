@@ -195,6 +195,14 @@ function startBackgroundSchedulers() {
       nextRunAt: marketplaceMaintenanceNextRunAt,
     });
   }
+  if (ozonYandexAutoImportEnabled) {
+    scheduleOzonYandexAutoImport(20 * 60 * 1000);
+    logger.info("ozon yandex auto import scheduler enabled", {
+      everyHours: ozonYandexAutoImportIntervalHours,
+      perRun: ozonYandexAutoImportPerRunLimit,
+      nextRunAt: ozonYandexAutoImportNextRunAt,
+    });
+  }
   if (linkedReconcilerEnabled) {
     scheduleLinkedReconciler(linkedReconcilerInitialDelaySeconds * 1000);
     logger.info("linked reconciler scheduler enabled", {

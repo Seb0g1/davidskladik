@@ -148,6 +148,17 @@ app.post("/api/ozon-yandex-import/repair-yandex-content", requireAdmin, async (r
   }
 });
 
+// Manual trigger for the Postgres-backed auto import (also runs on schedule).
+app.post("/api/ozon-yandex-import/auto-run", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = Math.max(1, Math.min(5000, Number(request.body?.limit || 0) || ozonYandexAutoImportPerRunLimit));
+    const result = await runOzonYandexAutoImport({ limit, source: "manual" });
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/ozon-yandex-import/archive-blocked", async (request, response, next) => {
   try {
     if (request.body?.confirmed !== true) {

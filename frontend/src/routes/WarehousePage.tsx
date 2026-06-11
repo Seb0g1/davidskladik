@@ -1272,6 +1272,7 @@ function MarketplaceRows({ products, breakdown = [] }: { products: Product[]; br
                 <span className="formula-chip muted">общие привязки, отдельный расчет цены</span>
                 {product.archived && <span>Архив</span>}
                 {changed && <span>Цена ждет</span>}
+                <EtaChips productId={String(product.id)} archived={rowArchived} changed={changed} />
                 {!product.selectedSupplier && (product.links || []).length > 0 && <span>Поставщик не выбран</span>}
               </div>
             </div>
@@ -1279,6 +1280,46 @@ function MarketplaceRows({ products, breakdown = [] }: { products: Product[]; br
         })}
       </div>
     </section>
+  );
+}
+
+function formatEtaSeconds(seconds: number): string {
+  if (seconds <= 30) return "вот-вот";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `~${minutes} мин`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `~${hours} ч ${minutes % 60 ? `${minutes % 60} мин` : ""}`.trim();
+  return `~${Math.round(hours / 24)} дн`;
+}
+
+function EtaChips({ productId, archived, changed }: { productId: string; archived: boolean; changed: boolean }) {
+  const [eta, setEta] = useState<{ priceEtaAt?: string; unarchiveEtaAt?: string | null } | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/warehouse/products/${encodeURIComponent(productId)}/eta`, { credentials: "same-origin" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => { if (alive && data?.ok) setEta(data); })
+      .catch(() => {});
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [productId]);
+  if (!eta) return null;
+  const priceSeconds = eta.priceEtaAt ? Math.max(0, Math.round((new Date(eta.priceEtaAt).getTime() - now) / 1000)) : null;
+  const unarchiveSeconds = eta.unarchiveEtaAt ? Math.max(0, Math.round((new Date(eta.unarchiveEtaAt).getTime() - now) / 1000)) : null;
+  return (
+    <>
+      {changed && priceSeconds !== null && (
+        <span className="formula-chip muted" title="Когда реконсайлер дойдет до товара и отправит цену">
+          ⏱ Цена обновится {formatEtaSeconds(priceSeconds)}
+        </span>
+      )}
+      {archived && unarchiveSeconds !== null && (
+        <span className="formula-chip" title="Оценка времени выхода из архива">
+          ⏱ Разархив {formatEtaSeconds(unarchiveSeconds)}
+        </span>
+      )}
+    </>
   );
 }
 
