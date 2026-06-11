@@ -78,7 +78,7 @@ app.get("/api/reviews", requireAdmin, async (request, response, next) => {
       for (const account of getOzonAccounts()) {
         try {
           const data = await ozonRequest("/v1/review/list", {
-            limit,
+            limit: Math.max(20, Math.min(100, limit)),
             sort_dir: "DESC",
             ...(onlyUnanswered ? { status: "UNPROCESSED" } : {}),
           }, account);

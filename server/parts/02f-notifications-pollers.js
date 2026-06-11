@@ -75,7 +75,7 @@ async function pollOzonChatNotifications(state) {
     const key = `ozon-chats:${account.id}`;
     if (notifySourceShouldSkip(key)) continue;
     try {
-      const data = await ozonRequest("/v2/chat/list", {
+      const data = await ozonRequest("/v3/chat/list", {
         filter: { unread_only: true },
         limit: 50,
       }, account);
@@ -83,7 +83,7 @@ async function pollOzonChatNotifications(state) {
       for (const entry of chats) {
         const chat = entry.chat || entry;
         const chatId = cleanText(chat.chat_id || chat.chatId || entry.chat_id);
-        const lastMessageId = cleanText(entry.last_message_id || chat.last_message_id || "");
+        const lastMessageId = cleanText(entry.last_message_id || chat.last_message_id || chat.last_message_unread_id || "");
         if (!chatId || !lastMessageId) continue;
         await insertAppNotification({
           type: "chat",
