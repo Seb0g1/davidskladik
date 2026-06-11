@@ -40,10 +40,10 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
       .filter(([key, value]) => key && value));
 
     // Partition: products that must not be on Yandex at all get their local yandex row
-    // deleted (no wasted API calls); products absent on Yandex get a card CREATED via
-    // offer mapping instead of a pointless unarchive; the rest are bulk-unarchived.
+    // deleted (no wasted API calls). Everything else goes through unarchive FIRST — the
+    // local "absent" state can be stale, so absence is decided by the live Yandex answer,
+    // not by our cached marketplaceState.
     const toDelete = [];
-    const toCreate = [];
     const toUnarchive = [];
     for (const product of products) {
       if (!cleanText(product.target) || !cleanText(product.offerId)) continue;
@@ -58,10 +58,7 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
         toDelete.push(product);
         continue;
       }
-      const stateCode = cleanText(product.marketplaceState?.code).toLowerCase();
-      const stateRaw = cleanText(product.marketplaceState?.state).toUpperCase();
-      if (stateCode === "absent" || stateRaw === "ABSENT") toCreate.push(product);
-      else toUnarchive.push(product);
+      toUnarchive.push(product);
     }
 
     // 1. Drop local yandex rows for <20ml / Тестер / Отливант — they were deleted from
@@ -90,31 +87,63 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
 
     const okIds = new Set();
     const failed = [];
+    let createdCount = 0;
 
-    // 2. Create cards for products absent on Yandex (full offer payload).
-    for (const [target, items] of groupByTarget(toCreate).entries()) {
-      const shop = getYandexShopByTarget(target);
-      if (!shop) continue;
-      const offers = items
-        .map((product) => buildYandexOfferMapping(product).offer)
-        .filter((offer) => offer?.offerId);
-      const results = await sendYandexOfferMappings(shop, offers).catch(() => []);
-      const okOffers = new Set(results.filter((item) => item.ok).map((item) => cleanText(item.offerId)));
-      for (const item of items) {
-        if (okOffers.has(cleanText(item.offerId))) okIds.add(String(item.id));
-        else failed.push(item.offerId);
-      }
-    }
-
-    // 3. Bulk unarchive for products that really exist in the Yandex archive.
     for (const [target, items] of groupByTarget(toUnarchive).entries()) {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
+
+      // 2. Unarchive first — works for everything that actually sits in the Yandex archive.
       const results = await sendYandexOfferArchiveState(shop, items.map((item) => item.offerId), false);
       const okOffers = new Set(results.filter((item) => item.ok).map((item) => cleanText(item.offerId)));
+      const unresolved = [];
       for (const item of items) {
         if (okOffers.has(cleanText(item.offerId))) okIds.add(String(item.id));
-        else failed.push(item.offerId);
+        else unresolved.push(item);
+      }
+      if (!unresolved.length) continue;
+
+      // 3. For failures ask Yandex what it actually knows about these offers:
+      //    - present & not archived -> just fix the local flag
+      //    - truly missing -> create the card with the full offer payload
+      let liveByOffer = new Map();
+      try {
+        const mappings = await getYandexOfferMappingsByOfferIds(shop, unresolved.map((item) => item.offerId));
+        for (const mapping of mappings) {
+          const offerId = cleanText(yandexOfferIdFromMapping(mapping)).toLowerCase();
+          if (!offerId) continue;
+          const offer = pickYandexOfferFromMapping(mapping);
+          const state = pickYandexState(mapping, offer);
+          liveByOffer.set(offerId, state);
+        }
+      } catch (error) {
+        logger.warn("yandex fast unarchive live state check failed", { target, detail: error?.message || String(error) });
+      }
+      const missing = [];
+      for (const item of unresolved) {
+        const state = liveByOffer.get(cleanText(item.offerId).toLowerCase());
+        if (state && state.code !== "archived" && !state.archived) {
+          okIds.add(String(item.id)); // exists and active on Yandex, only our flag was stale
+        } else if (!state) {
+          missing.push(item);
+        } else {
+          failed.push(item.offerId); // exists, still archived, unarchive rejected
+        }
+      }
+      if (missing.length) {
+        const offers = missing
+          .map((product) => buildYandexOfferMapping(product).offer)
+          .filter((offer) => offer?.offerId);
+        const createResults = await sendYandexOfferMappings(shop, offers).catch(() => []);
+        const createdOffers = new Set(createResults.filter((item) => item.ok).map((item) => cleanText(item.offerId)));
+        for (const item of missing) {
+          if (createdOffers.has(cleanText(item.offerId))) {
+            okIds.add(String(item.id));
+            createdCount += 1;
+          } else {
+            failed.push(item.offerId);
+          }
+        }
       }
     }
 
@@ -179,14 +208,14 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
       source,
       products: products.length,
       unarchived: okIds.size,
-      created: toCreate.length,
+      created: createdCount,
       locallyDeleted,
       failed: failed.length,
       stockSent: stockActions.filter((item) => item.ok).length,
       priceQueued: priceRefresh.queued || 0,
       elapsedMs: Date.now() - startedAt,
     });
-    return { status: "ok", products: products.length, unarchived: okIds.size, created: toCreate.length, locallyDeleted, failed: failed.length };
+    return { status: "ok", products: products.length, unarchived: okIds.size, created: createdCount, locallyDeleted, failed: failed.length };
   } catch (error) {
     logger.warn("yandex fast unarchive failed", { detail: error?.message || String(error) });
     return { status: "error", error: error?.message || String(error) };
