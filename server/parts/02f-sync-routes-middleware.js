@@ -195,6 +195,12 @@ function startBackgroundSchedulers() {
       nextRunAt: marketplaceMaintenanceNextRunAt,
     });
   }
+  if (notifyPollEnabled) {
+    scheduleNotificationPolling(60_000);
+    logger.info("notification polling enabled", {
+      intervalSeconds: Math.round(notifyPollIntervalMs / 1000),
+    });
+  }
   if (stockSweepEnabled) {
     scheduleStockSweep(90_000);
     logger.info("stock sweep scheduler enabled", {

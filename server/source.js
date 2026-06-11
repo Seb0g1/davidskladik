@@ -214,6 +214,8 @@ const partFiles = [
   "02f-price-sweep.js",
   "02f-stock-sweep.js",
   "02f-yandex-fast-unarchive.js",
+  "02f-notifications-core.js",
+  "02f-notifications-pollers.js",
   "02f-product-eta-route.js",
   "02f-supplier-export-routes.js",
   "03-lifecycle-start.js",

@@ -1,6 +1,7 @@
 import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, CirclePlay, ClipboardList, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Truck } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { WarehousePage } from "./routes/WarehousePage";
+import { NotificationsBell } from "./components/NotificationsBell";
 import { OperationsPage } from "./routes/OperationsPage";
 import { SettingsPage } from "./routes/SettingsPage";
 import { AiDraftsPage } from "./routes/AiDraftsPage";
@@ -93,6 +94,7 @@ function AppShell() {
             <h1>ДавидСклад</h1>
           </div>
         </div>
+        <NotificationsBell />
         <nav>
           {visibleNavItems.map((item) => (
             <a key={item.route} className={route === item.route ? "is-active" : ""} href={item.href} onClick={(event) => navigate(event, item.href)}>

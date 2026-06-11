@@ -6,6 +6,47 @@ import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResp
 import { PageHeader } from "../components/PageHeader";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
+import { readNotificationSoundSettings, writeNotificationSoundSettings, playNotificationSound, NotificationSoundSettings } from "../components/NotificationsBell";
+
+
+function NotificationSettingsPanel() {
+  const [settings, setSettings] = useState<NotificationSoundSettings>(() => readNotificationSoundSettings());
+  const update = (next: NotificationSoundSettings) => {
+    setSettings(next);
+    writeNotificationSoundSettings(next);
+  };
+  const typeLabels: Array<[string, string]> = [["order", "Заказы"], ["chat", "Чаты"], ["review", "Отзывы"], ["question", "Вопросы"]];
+  return (
+    <section className="settings-panel">
+      <div className="section-title"><div><span>Уведомления</span><h3>Звук и события</h3></div></div>
+      <label className="settings-toggle">
+        <input type="checkbox" checked={settings.enabled} onChange={(event) => update({ ...settings, enabled: event.target.checked })} />
+        Звук и тосты включены
+      </label>
+      <div className="settings-form-row">
+        <select value={settings.sound} onChange={(event) => update({ ...settings, sound: event.target.value as NotificationSoundSettings["sound"] })}>
+          <option value="ding">Динь</option>
+          <option value="chime">Перелив</option>
+          <option value="pop">Поп</option>
+        </select>
+        <button className="secondary-action" type="button" onClick={() => playNotificationSound(settings.sound)}>Проба звука</button>
+      </div>
+      <div className="settings-form-row" style={{ flexWrap: "wrap", gap: 12 }}>
+        {typeLabels.map(([type, label]) => (
+          <label className="settings-toggle" key={type}>
+            <input
+              type="checkbox"
+              checked={settings.types[type] !== false}
+              onChange={(event) => update({ ...settings, types: { ...settings.types, [type]: event.target.checked } })}
+            />
+            {label}
+          </label>
+        ))}
+      </div>
+      <div className="info-strip compact">Настройки хранятся в браузере: на каждом рабочем месте можно выбрать свой звук.</div>
+    </section>
+  );
+}
 
 type MarkupRuleDraft = {
   marketplace: string;
@@ -347,6 +388,7 @@ function UsersSettingsPanel() {
   };
   return (
     <>
+    <NotificationSettingsPanel />
     <section className="settings-panel settings-panel-wide">
       <div className="section-title"><div><span>Доступ</span><h3>Сотрудники и роли</h3></div></div>
       <div className="settings-form-row">
