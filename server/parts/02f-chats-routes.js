@@ -62,7 +62,7 @@ app.get("/api/chats", requireAdmin, async (request, response, next) => {
       for (const account of getOzonAccounts()) {
         try {
           const data = await ozonRequest("/v3/chat/list", {
-            limit: 100,
+            limit: 500,
             filter: unreadOnly ? { unread_only: true } : {},
           }, account);
           const rows = data?.chats || data?.result?.chats || [];
@@ -79,8 +79,16 @@ app.get("/api/chats", requireAdmin, async (request, response, next) => {
         if (!shop.businessId || seenBusinesses.has(String(shop.businessId))) continue;
         seenBusinesses.add(String(shop.businessId));
         try {
-          const data = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/chats?limit=20`, {});
-          const rows = data?.result?.chats || [];
+          const rows = [];
+          let pageToken = "";
+          for (let pageIndex = 0; pageIndex < 10; pageIndex += 1) {
+            const tokenPart = pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : "";
+            const data = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/chats?limit=20${tokenPart}`, {});
+            const batch = data?.result?.chats || [];
+            rows.push(...batch);
+            pageToken = cleanText(data?.result?.paging?.nextPageToken || "");
+            if (!batch.length || !pageToken) break;
+          }
           chats.push(...rows
             .map((chat) => normalizeYandexChat(chat, shop))
             .filter((chat) => !unreadOnly || chat.unreadCount > 0));
@@ -90,11 +98,35 @@ app.get("/api/chats", requireAdmin, async (request, response, next) => {
       }
     }
 
+    // Enrich: yandex chats reference an order — show the ordered product right in the list.
+    const prisma = getPrisma();
+    if (prisma) {
+      const orderIdOf = (chat) => (chat.title.match(/№(\d+)/) || [])[1];
+      const orderIds = Array.from(new Set(chats
+        .filter((chat) => chat.marketplace === "yandex")
+        .map(orderIdOf)
+        .filter(Boolean)));
+      if (orderIds.length) {
+        const orders = await prisma.financeOrder.findMany({
+          where: { marketplace: "yandex", orderId: { in: orderIds } },
+          select: { orderId: true, productName: true },
+        }).catch(() => []);
+        const productByOrder = new Map();
+        for (const order of orders) {
+          if (order.productName && !productByOrder.has(order.orderId)) productByOrder.set(order.orderId, order.productName);
+        }
+        for (const chat of chats) {
+          if (chat.marketplace !== "yandex") continue;
+          const productName = productByOrder.get(orderIdOf(chat) || "");
+          if (productName) chat.subtitle = String(productName).slice(0, 70);
+        }
+      }
+    }
     chats.sort((a, b) => {
       if ((b.unreadCount > 0) !== (a.unreadCount > 0)) return b.unreadCount > 0 ? 1 : -1;
       return cleanText(b.lastMessageAt).localeCompare(cleanText(a.lastMessageAt));
     });
-    response.json({ ok: true, rows: chats.slice(0, 200), warnings });
+    response.json({ ok: true, rows: chats.slice(0, 400), warnings });
   } catch (error) {
     next(error);
   }
@@ -146,7 +178,25 @@ app.get("/api/chats/history", requireAdmin, async (request, response, next) => {
         void ozonRequest("/v2/chat/read", { chat_id: chatId, from_message_id: Number(lastId) || lastId }, account)
           .catch(() => {});
       }
-      return response.json({ ok: true, rows });
+      // Context: customers reference the posting number in messages — resolve it to the
+      // ordered product so the operator sees what the chat is about.
+      let context = null;
+      const postingMatch = rows.map((row) => (row.text || "").match(/(\d{7,10}-\d{3,5})(?:-\d+)?/)).find(Boolean);
+      if (postingMatch) {
+        const prismaContext = getPrisma();
+        const order = prismaContext
+          ? await prismaContext.financeOrder.findFirst({
+            where: { postingNumber: { startsWith: postingMatch[1] } },
+            select: { postingNumber: true, productName: true, offerId: true },
+          }).catch(() => null)
+          : null;
+        context = {
+          postingNumber: order?.postingNumber || postingMatch[0],
+          productName: order?.productName || "",
+          offerId: order?.offerId || "",
+        };
+      }
+      return response.json({ ok: true, rows, context });
     }
 
     if (marketplace === "yandex") {

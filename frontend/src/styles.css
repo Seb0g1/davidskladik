@@ -3315,3 +3315,5 @@ button:disabled {
 .chat-input-row { display: flex; gap: 8px; align-items: flex-end; }
 .chat-input-row textarea { flex: 1; resize: vertical; }
 @media (max-width: 900px) { .chats-layout { grid-template-columns: 1fr; } }
+
+.chat-subtitle { color: #9fd29f; font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

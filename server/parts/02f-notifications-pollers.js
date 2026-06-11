@@ -59,6 +59,7 @@ async function pollOzonOrderNotifications(state) {
           title: `Новый заказ Ozon ${cleanText(posting.posting_number)}`,
           body: products.slice(0, 5).join(", "),
           url: "/app/finance",
+          eventAt: createdAt || null,
         });
       }
       state[key] = { since: maxSeen };
@@ -185,6 +186,7 @@ async function pollYandexOrderNotifications(state) {
           title: `Новый заказ Яндекс №${id}`,
           body: items.slice(0, 5).join(", "),
           url: "/app/finance",
+          eventAt: order.creationDate ? new Date(order.creationDate.split(" ")[0].split("-").reverse().join("-")).toISOString() : null,
         });
       }
       state[key] = { lastOrderId: maxId };
@@ -215,6 +217,7 @@ async function pollYandexReviewNotifications(state) {
           marketplace: "yandex",
           externalId: id,
           title: `Новый отзыв Яндекс · ${Number(feedback.statistics?.rating || 0)}★`,
+          eventAt: cleanText(feedback.createdAt) || null,
           body: cleanText(feedback.description?.advantages || feedback.description?.comment || "").slice(0, 200),
           url: "/app/warehouse",
         });

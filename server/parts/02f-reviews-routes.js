@@ -70,7 +70,7 @@ app.get("/api/reviews", requireAdmin, async (request, response, next) => {
   try {
     const marketplace = cleanText(request.query.marketplace || "all").toLowerCase();
     const onlyUnanswered = String(request.query.unanswered ?? "false") === "true";
-    const limit = Math.max(1, Math.min(100, Number(request.query.limit || 50) || 50));
+    const limit = Math.max(1, Math.min(300, Number(request.query.limit || 100) || 100));
     const reviews = [];
     const warnings = [];
 
@@ -96,18 +96,48 @@ app.get("/api/reviews", requireAdmin, async (request, response, next) => {
         if (!shop.businessId || seenBusinesses.has(String(shop.businessId))) continue;
         seenBusinesses.add(String(shop.businessId));
         try {
-          const data = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/goods-feedback?limit=${limit}`,
-            onlyUnanswered ? { reactionStatus: "NEED_REACTION" } : {});
-          const rows = data?.result?.feedbacks || [];
-          reviews.push(...rows.map((feedback) => normalizeYandexReview(feedback, shop)));
+          let pageToken = "";
+          const rows = [];
+          for (let pageIndex = 0; pageIndex < 15 && rows.length < limit; pageIndex += 1) {
+            const tokenPart = pageToken ? `&page_token=${encodeURIComponent(pageToken)}` : "";
+            const data = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/goods-feedback?limit=20${tokenPart}`,
+              onlyUnanswered ? { reactionStatus: "NEED_REACTION" } : {});
+            const batch = data?.result?.feedbacks || [];
+            rows.push(...batch);
+            pageToken = cleanText(data?.result?.paging?.nextPageToken || "");
+            if (!batch.length || !pageToken) break;
+          }
+          reviews.push(...rows.slice(0, limit).map((feedback) => normalizeYandexReview(feedback, shop)));
         } catch (error) {
           warnings.push(`Yandex ${shop.id}: ${error?.message || "ошибка"}`);
         }
       }
     }
 
+    // Product names: yandex feedbacks carry only offerId/modelId — resolve via our DB.
+    const prisma = getPrisma();
+    if (prisma) {
+      const missingNames = reviews.filter((review) => !review.productName && review.offerId);
+      const offerIds = Array.from(new Set(missingNames.map((review) => review.offerId)));
+      if (offerIds.length) {
+        const products = await prisma.warehouseProduct.findMany({
+          where: { offerId: { in: offerIds } },
+          select: { offerId: true, name: true },
+        }).catch(() => []);
+        const nameByOffer = new Map();
+        for (const product of products) {
+          const key = cleanText(product.offerId);
+          const name = cleanText(product.name);
+          if (key && name && name !== key && !nameByOffer.has(key)) nameByOffer.set(key, name);
+        }
+        for (const review of missingNames) {
+          review.productName = nameByOffer.get(review.offerId) || review.productName;
+        }
+      }
+    }
+
     reviews.sort((a, b) => cleanText(b.createdAt).localeCompare(cleanText(a.createdAt)));
-    response.json({ ok: true, rows: reviews.slice(0, limit * 2), warnings });
+    response.json({ ok: true, rows: reviews.slice(0, limit), warnings });
   } catch (error) {
     next(error);
   }

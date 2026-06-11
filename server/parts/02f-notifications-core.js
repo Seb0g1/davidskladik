@@ -33,12 +33,14 @@ async function ensureNotificationsTable() {
   return true;
 }
 
-async function insertAppNotification({ type, marketplace, title, body = "", externalId = "", url = "" }) {
+async function insertAppNotification({ type, marketplace, title, body = "", externalId = "", url = "", eventAt = null }) {
   const prisma = getPrisma();
   if (!prisma || !(await ensureNotificationsTable())) return false;
+  const eventDate = eventAt ? new Date(eventAt) : null;
+  const createdAt = eventDate && Number.isFinite(eventDate.getTime()) ? eventDate.toISOString() : new Date().toISOString();
   const rows = await prisma.$queryRawUnsafe(
-    `INSERT INTO app_notifications (type, marketplace, title, body, external_id, url)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO app_notifications (type, marketplace, title, body, external_id, url, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::timestamptz)
      ON CONFLICT (type, marketplace, COALESCE(external_id, '')) DO NOTHING
      RETURNING id`,
     cleanText(type) || "info",
@@ -47,6 +49,7 @@ async function insertAppNotification({ type, marketplace, title, body = "", exte
     cleanText(body).slice(0, 1000),
     cleanText(externalId).slice(0, 200),
     cleanText(url).slice(0, 500),
+    createdAt,
   );
   return rows.length > 0;
 }
@@ -59,7 +62,7 @@ app.get("/api/notifications", async (request, response, next) => {
     const rows = await prisma.$queryRawUnsafe(
       `SELECT id::text, type, marketplace, title, body, external_id AS "externalId", url,
               read_at AS "readAt", created_at AS "createdAt"
-       FROM app_notifications ORDER BY id DESC LIMIT ${limit}`,
+       FROM app_notifications ORDER BY created_at DESC, id DESC LIMIT ${limit}`,
     );
     const unreadRows = await prisma.$queryRawUnsafe(
       "SELECT COUNT(*)::int AS n FROM app_notifications WHERE read_at IS NULL",

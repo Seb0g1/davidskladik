@@ -1,18 +1,57 @@
 // Customer questions (Ozon only — Yandex has no questions API).
 // List: POST /v1/question/list, answer: POST /v1/question/answer/create.
 
+// SKU -> product name cache (Ozon question/review payloads carry only the SKU).
+const ozonSkuNameCache = new Map();
+async function resolveOzonSkuNames(skus = [], account) {
+  const result = new Map();
+  const missing = [];
+  for (const sku of new Set(skus.map((value) => cleanText(value)).filter(Boolean))) {
+    const cached = ozonSkuNameCache.get(sku);
+    if (cached && Date.now() - cached.at < 30 * 60_000) result.set(sku, cached.name);
+    else missing.push(sku);
+  }
+  for (const chunk of chunkArray(missing, 100)) {
+    try {
+      const data = await ozonRequest("/v3/product/info/list", { sku: chunk.map((value) => Number(value) || value) }, account);
+      for (const item of data?.items || data?.result?.items || []) {
+        const sku = cleanText(item.sku || (item.sources || []).find((sourceItem) => sourceItem.sku)?.sku);
+        const name = cleanText(item.name);
+        if (!name) continue;
+        for (const key of [sku, cleanText(item.id)]) {
+          if (!key) continue;
+          ozonSkuNameCache.set(key, { name, at: Date.now() });
+          result.set(key, name);
+        }
+      }
+    } catch {
+      /* name enrichment is best-effort */
+    }
+  }
+  return result;
+}
+
 app.get("/api/questions", requireAdmin, async (request, response, next) => {
   try {
     const onlyNew = String(request.query.unanswered ?? "true") !== "false";
-    const limit = Math.max(1, Math.min(100, Number(request.query.limit || 50) || 50));
+    const limit = Math.max(1, Math.min(500, Number(request.query.limit || 100) || 100));
     const questions = [];
     const warnings = [];
     for (const account of getOzonAccounts()) {
       try {
-        const data = await ozonRequest("/v1/question/list", {
-          filter: onlyNew ? { status: "NEW" } : {},
-        }, account);
-        const rows = data?.questions || data?.result?.questions || [];
+        const rows = [];
+        let lastId = "";
+        for (let pageIndex = 0; pageIndex < 10 && rows.length < limit; pageIndex += 1) {
+          const data = await ozonRequest("/v1/question/list", {
+            filter: onlyNew ? { status: "NEW" } : {},
+            ...(lastId ? { last_id: lastId } : {}),
+          }, account);
+          const batch = data?.questions || data?.result?.questions || [];
+          rows.push(...batch);
+          lastId = cleanText(data?.last_id || data?.result?.last_id || "");
+          if (!batch.length || !lastId) break;
+        }
+        const nameBySku = await resolveOzonSkuNames(rows.map((question) => question.sku), account);
         for (const question of rows.slice(0, limit)) {
           questions.push({
             id: `ozon:${cleanText(question.id)}`,
@@ -20,7 +59,7 @@ app.get("/api/questions", requireAdmin, async (request, response, next) => {
             target: account.id || "ozon",
             externalId: cleanText(question.id),
             sku: cleanText(question.sku),
-            productName: cleanText(question.product_name || question.product_title || ""),
+            productName: cleanText(question.product_name || question.product_title || "") || nameBySku.get(cleanText(question.sku)) || "",
             productUrl: cleanText(question.product_url || ""),
             text: cleanText(question.text || ""),
             authorName: cleanText(question.author_name || ""),

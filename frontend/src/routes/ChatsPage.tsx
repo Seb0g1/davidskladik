@@ -8,6 +8,7 @@ type ChatRow = {
   target: string;
   chatId: string;
   title: string;
+  subtitle?: string;
   type?: string;
   status?: string;
   unreadCount: number;
@@ -23,6 +24,8 @@ type ChatMessage = {
 };
 
 type ChatTemplate = { id: string; title: string; text: string };
+
+type ChatContext = { postingNumber?: string; productName?: string; offerId?: string } | null;
 
 const EMOJI_ROW = ["🙏", "😊", "✨", "👍", "🤝", "📦", "🚚", "❤️"];
 
@@ -68,7 +71,7 @@ export function ChatsPage() {
   const historyQuery = useQuery({
     queryKey: ["chat-history", selected?.id],
     enabled: Boolean(selected),
-    queryFn: () => apiJson<{ rows: ChatMessage[] }>(
+    queryFn: () => apiJson<{ rows: ChatMessage[]; context?: ChatContext }>(
       `/api/chats/history?marketplace=${selected!.marketplace}&target=${encodeURIComponent(selected!.target)}&chatId=${encodeURIComponent(selected!.chatId)}`,
     ),
     refetchInterval: 15_000,
@@ -134,6 +137,7 @@ export function ChatsPage() {
             >
               <span className={`market-badge market-${chat.marketplace}`}>{chat.marketplace === "ozon" ? "Ozon" : "Яндекс"}</span>
               <strong>{chat.title}</strong>
+              {chat.subtitle ? <small className="chat-subtitle">{chat.subtitle}</small> : null}
               <small>{chatTime(chat.lastMessageAt)}</small>
               {chat.unreadCount ? <span className="notify-badge chat-unread">{chat.unreadCount}</span> : null}
             </button>
@@ -149,6 +153,13 @@ export function ChatsPage() {
               <div className="chat-thread-head">
                 <span className={`market-badge market-${selected.marketplace}`}>{selected.marketplace === "ozon" ? "Ozon" : "Яндекс"}</span>
                 <strong>{selected.title}</strong>
+                {selected.subtitle ? <small className="chat-subtitle">{selected.subtitle}</small> : null}
+                {historyQuery.data?.context?.postingNumber ? (
+                  <small className="chat-subtitle">
+                    Отправление {historyQuery.data.context.postingNumber}
+                    {historyQuery.data.context.productName ? ` · ${historyQuery.data.context.productName}` : ""}
+                  </small>
+                ) : null}
                 {historyQuery.isFetching ? <Loader2 className="spin" size={14} /> : null}
               </div>
               <div className="chat-messages">
