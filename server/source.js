@@ -210,6 +210,8 @@ const partFiles = [
   "02f-ozon-yandex-import-maint-routes.js",
   "02f-yandex-cleanup-preview-history-routes.js",
   "02f-yandex-cleanup-action-routes.js",
+  "02f-ozon-yandex-auto-import.js",
+  "02f-product-eta-route.js",
   "02f-supplier-export-routes.js",
   "03-lifecycle-start.js",
   "03-lifecycle-shutdown.js",
