@@ -195,6 +195,14 @@ function startBackgroundSchedulers() {
       nextRunAt: marketplaceMaintenanceNextRunAt,
     });
   }
+  if (stockSweepEnabled) {
+    scheduleStockSweep(90_000);
+    logger.info("stock sweep scheduler enabled", {
+      intervalSeconds: Math.round(stockSweepIntervalMs / 1000),
+      batchLimit: stockSweepBatchLimit,
+      defaultTarget: linkedDefaultTargetStock,
+    });
+  }
   if (priceSweepEnabled) {
     schedulePriceSweep(60_000);
     logger.info("price sweep scheduler enabled", {

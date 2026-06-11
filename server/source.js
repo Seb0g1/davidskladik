@@ -212,6 +212,7 @@ const partFiles = [
   "02f-yandex-cleanup-action-routes.js",
   "02f-ozon-yandex-auto-import.js",
   "02f-price-sweep.js",
+  "02f-stock-sweep.js",
   "02f-yandex-fast-unarchive.js",
   "02f-product-eta-route.js",
   "02f-supplier-export-routes.js",
