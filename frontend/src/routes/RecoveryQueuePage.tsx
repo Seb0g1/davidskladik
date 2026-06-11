@@ -2,6 +2,46 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Clock3, Loader2, RefreshCcw } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
 import { OzonUnarchiveQueueSchema } from "../types";
+import { useEffect, useState } from "react";
+
+type YandexFastStatus = {
+  ok?: boolean;
+  enabled?: boolean;
+  running?: boolean;
+  intervalSeconds?: number;
+  nextRunAt?: string | null;
+  lastRunAt?: string | null;
+  archivedLinked?: number | null;
+  lastResult?: {
+    at?: string;
+    products?: number;
+    unarchived?: number;
+    created?: number;
+    locallyDeleted?: number;
+    failed?: number;
+    failedSample?: string[];
+    stockSent?: number;
+    priceQueued?: number;
+  } | null;
+};
+
+function useYandexFastStatus() {
+  const [status, setStatus] = useState<YandexFastStatus | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      fetch("/api/yandex/fast-unarchive/status", { credentials: "same-origin" })
+        .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+        .then((data) => { if (alive) { setStatus(data); setError(""); } })
+        .catch((err) => { if (alive) setError(String(err?.message || err)); });
+    };
+    load();
+    const timer = window.setInterval(load, 30_000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, []);
+  return { status, error };
+}
 
 const text = (value: unknown) => String(value ?? "").trim();
 
@@ -78,6 +118,45 @@ function itemWhenLabel(item: Record<string, unknown>) {
   return formatDate(item.nextRetryAt);
 }
 
+function YandexFastBlock() {
+  const { status, error } = useYandexFastStatus();
+  const last = status?.lastResult;
+  return (
+    <>
+      <div className="section-title">
+        <div>
+          <span>Yandex архив</span>
+          <h3>Быстрый разархив Яндекса</h3>
+        </div>
+      </div>
+      {error ? <div className="inline-error">{error}</div> : null}
+      <div className="summary-grid">
+        <div><span>В архиве (привязанные)</span><strong>{status?.archivedLinked ?? "…"}</strong></div>
+        <div><span>Проход</span><strong>{status?.enabled ? (status?.running ? "идет" : `каждые ${status?.intervalSeconds ?? 60} c`) : "выключен"}</strong></div>
+        <div><span>Следующий</span><strong>{formatDate(status?.nextRunAt)}</strong></div>
+        <div><span>Последний</span><strong>{formatDate(status?.lastRunAt)}</strong></div>
+        <div>
+          <span>Последний результат</span>
+          <strong>
+            {last
+              ? `разархив ${numberValue(last.unarchived)} · создано ${numberValue(last.created)} · удалено ${numberValue(last.locallyDeleted)} · остатки ${numberValue(last.stockSent)} · отказы ${numberValue(last.failed)}`
+              : "архив пуст"}
+          </strong>
+        </div>
+      </div>
+      {last?.failed && last.failedSample?.length ? (
+        <div className="info-strip">
+          <Clock3 size={18} />
+          <div>
+            <strong>Яндекс отказал по {last.failed} товарам.</strong>
+            <span>Артикулы: {last.failedSample.slice(0, 15).join(", ")}{last.failed > 15 ? "…" : ""}</span>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 export function RecoveryQueuePage() {
   const queryClient = useQueryClient();
   const queue = useQuery({
@@ -105,6 +184,7 @@ export function RecoveryQueuePage() {
           {process.isPending || data?.autoRunning ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Запустить сейчас
         </button>
       </div>
+      <YandexFastBlock />
       <div className="summary-grid">
         <div><span>Всего в очереди</span><strong>{data?.total ?? 0}</strong></div>
         <div><span>Готовы к попытке</span><strong>{data?.due ?? 0}</strong></div>

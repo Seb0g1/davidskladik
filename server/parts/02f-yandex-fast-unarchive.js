@@ -9,6 +9,8 @@ const yandexFastUnarchiveEnabled = process.env.YANDEX_FAST_UNARCHIVE_ENABLED !==
 const yandexFastUnarchiveIntervalMs = Math.max(20_000, Number(process.env.YANDEX_FAST_UNARCHIVE_INTERVAL_SECONDS || 60) * 1000 || 60_000);
 let yandexFastUnarchiveTimer = null;
 let yandexFastUnarchiveRunning = false;
+let yandexFastUnarchiveLastResult = null;
+let yandexFastUnarchiveLastRunAt = null;
 
 async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
   if (yandexFastUnarchiveRunning) return { status: "already_running" };
@@ -22,7 +24,10 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
       include: { links: true },
       take: 9000, // stay inside the 10k/min Medium limit per pass
     });
-    if (!rows.length) return { status: "ok", products: 0, unarchived: 0 };
+    if (!rows.length) {
+      yandexFastUnarchiveLastRunAt = new Date().toISOString();
+      return { status: "ok", products: 0, unarchived: 0 };
+    }
 
     const products = rows.map(productFromPostgres);
 
@@ -204,6 +209,19 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
       return { queued: 0 };
     });
 
+    yandexFastUnarchiveLastRunAt = new Date().toISOString();
+    yandexFastUnarchiveLastResult = {
+      at: yandexFastUnarchiveLastRunAt,
+      products: products.length,
+      unarchived: okIds.size,
+      created: createdCount,
+      locallyDeleted,
+      failed: failed.length,
+      failedSample: failed.slice(0, 30),
+      stockSent: stockActions.filter((item) => item.ok).length,
+      priceQueued: priceRefresh.queued || 0,
+      elapsedMs: Date.now() - startedAt,
+    };
     logger.info("yandex_fast_unarchive_complete", {
       source,
       products: products.length,
@@ -243,3 +261,27 @@ function scheduleYandexFastUnarchive(delayMs = yandexFastUnarchiveIntervalMs) {
   }, normalizedDelay);
   yandexFastUnarchiveTimer.unref?.();
 }
+
+// Read-only status for the Recovery page: yandex archived backlog + fast-pass state.
+app.get("/api/yandex/fast-unarchive/status", requireAdmin, async (_request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    const archivedLinked = prisma
+      ? await prisma.warehouseProduct.count({
+        where: { marketplace: "yandex", archived: true, links: { some: {} } },
+      }).catch(() => null)
+      : null;
+    response.json({
+      ok: true,
+      enabled: yandexFastUnarchiveEnabled,
+      running: yandexFastUnarchiveRunning,
+      intervalSeconds: Math.round(yandexFastUnarchiveIntervalMs / 1000),
+      nextRunAt: yandexFastUnarchiveNextRunAt || null,
+      lastRunAt: yandexFastUnarchiveLastRunAt,
+      archivedLinked,
+      lastResult: yandexFastUnarchiveLastResult,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
