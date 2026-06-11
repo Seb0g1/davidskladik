@@ -195,6 +195,13 @@ function startBackgroundSchedulers() {
       nextRunAt: marketplaceMaintenanceNextRunAt,
     });
   }
+  if (yandexFastUnarchiveEnabled) {
+    scheduleYandexFastUnarchive(45_000);
+    logger.info("yandex fast unarchive scheduler enabled", {
+      intervalSeconds: Math.round(yandexFastUnarchiveIntervalMs / 1000),
+      nextRunAt: yandexFastUnarchiveNextRunAt,
+    });
+  }
   if (ozonYandexAutoImportEnabled) {
     scheduleOzonYandexAutoImport(20 * 60 * 1000);
     logger.info("ozon yandex auto import scheduler enabled", {

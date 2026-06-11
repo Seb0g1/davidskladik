@@ -78,6 +78,7 @@ let marketplaceMaintenancePromise = null;
 let linkedReconcilerTimer = null;
 let linkedReconcilerRunning = false;
 let linkedReconcilerNextRunAt = null;
+let yandexFastUnarchiveNextRunAt = null;
 let ozonUnarchiveQueueAutoTimer = null;
 let ozonUnarchiveQueueAutoRunning = false;
 let yandexUnarchiveQueueAutoTimer = null;

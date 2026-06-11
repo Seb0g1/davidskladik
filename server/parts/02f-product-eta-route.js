@@ -43,9 +43,10 @@ app.get("/api/warehouse/products/:id/eta", async (request, response, next) => {
     let unarchiveNote = null;
     if (product.archived) {
       if (product.marketplace === "yandex") {
-        // Dedicated yandex recovery pass runs right after every reconciler tick.
-        unarchiveEtaMs = Math.max(0, nextRunAtMs - Date.now()) + 60_000;
-        unarchiveNote = "yandex_recovery_pass";
+        // Fast bulk unarchive pass runs every minute (Medium: 10k offers/min).
+        const fastAtMs = yandexFastUnarchiveNextRunAt ? new Date(yandexFastUnarchiveNextRunAt).getTime() : Date.now() + 60_000;
+        unarchiveEtaMs = Math.max(0, fastAtMs - Date.now()) + 15_000;
+        unarchiveNote = "yandex_fast_unarchive";
       } else {
         try {
           const queue = await readOzonUnarchiveQueue();
