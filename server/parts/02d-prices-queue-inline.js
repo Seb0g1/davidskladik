@@ -122,6 +122,14 @@ function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
       removeOnFail: 2000,
     });
     if (name === "auto-price-push") {
+      // force jobs (recovery/unarchive/verify-retry) must never be dropped by the cap —
+      // otherwise recovered products stay with stale marketplace prices.
+      if (data?.force === true) {
+        return addJob().catch((error) => {
+          logger.warn("queue add failed, falling back to inline mode", { name, detail: error?.message || String(error) });
+          return processMarketplaceJob(name, data);
+        });
+      }
       return marketplaceQueuePriceBacklogExceeded().then((exceeded) => {
         if (exceeded) {
           logger.warn("auto price push skipped: queue backlog limit", {
