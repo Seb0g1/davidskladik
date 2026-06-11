@@ -67,7 +67,7 @@
         },
       }))).catch((error) => logger.warn("sales automation ozon accepted update failed", { detail: error?.message || String(error) }));
     }
-    if (acceptedOzonItems.length && verify !== false) {
+    if (acceptedOzonItems.length && verify !== false && ozonPriceVerifyDeferred !== true) {
       const verification = await verifyOzonPriceApplied(account, acceptedOzonItems, { priceIntentId, sentAt });
       for (const entry of verification.verified) {
         ozonVerifiedById.set(String(entry.item.id), entry);
@@ -80,12 +80,17 @@
         verificationAttempts: entry.verificationAttempts,
       })));
     } else {
+      // Accepted-by-API counts as success for the pipeline; real verification runs in the
+      // background and force-requeues prices Ozon did not apply (see scheduleDeferred...).
       for (const entry of acceptedOzonItems) ozonVerifiedById.set(String(entry.item.id), {
         ...entry,
         verifiedPrice: roundPrice(entry.item.price),
         verifiedAt: sentAt,
         verificationAttempts: 0,
       });
+      if (acceptedOzonItems.length && verify !== false && ozonPriceVerifyDeferred === true) {
+        scheduleDeferredOzonPriceVerification(account, acceptedOzonItems, { priceIntentId, sentAt });
+      }
     }
     failed.push(...ozonItems
       .filter((entry) => failedOfferIds.has(String(entry.payload.offer_id)))

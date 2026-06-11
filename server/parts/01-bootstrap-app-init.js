@@ -226,6 +226,8 @@ const ozonUnarchiveVerifyAttempts = Math.max(1, Math.min(10, Number(process.env.
 const ozonUnarchiveVisibilityRetryMinutes = Math.max(5, Number(process.env.OZON_UNARCHIVE_VISIBILITY_RETRY_MINUTES || ozonUnarchiveQueueAutoIntervalMinutes) || ozonUnarchiveQueueAutoIntervalMinutes);
 const ozonPriceVerifyDelayMs = Math.max(0, Number(process.env.OZON_PRICE_VERIFY_DELAY_MS || 30000) || 30000);
 const ozonPriceVerifyAttempts = Math.max(1, Math.min(10, Number(process.env.OZON_PRICE_VERIFY_ATTEMPTS || 5) || 5));
+// Deferred verification: pipeline does not block on Ozon applying prices (default on).
+const ozonPriceVerifyDeferred = process.env.OZON_PRICE_VERIFY_DEFERRED !== "false";
 const ozonPriceVerifyToleranceRub = Math.max(0, Number(process.env.OZON_PRICE_VERIFY_TOLERANCE_RUB || 0) || 0);
 const stateWriteTransactionTimeoutMs = Math.max(10000, Number(process.env.STATE_WRITE_TRANSACTION_TIMEOUT_MS || 30000) || 30000);
 const stateWriteTransactionMaxWaitMs = Math.max(5000, Number(process.env.STATE_WRITE_TRANSACTION_MAX_WAIT_MS || 10000) || 10000);

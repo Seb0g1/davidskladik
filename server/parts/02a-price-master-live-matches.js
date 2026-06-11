@@ -197,39 +197,49 @@ async function getLivePriceMasterMatchesForLinks(links, managedSuppliers = [], u
   if (!normalizedLinks.length) return new Map();
   const stoppedMap = stoppedSupplierMap(managedSuppliers);
   const map = new Map();
-  for (const link of normalizedLinks) {
-    const rows = await findPriceMasterRowsForLink(link, usdRate, managedSuppliers);
-    map.set(link.id, rows.map((row) => {
-      const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
-      const price = stoppedSupplier ? 0 : row.price;
-      const active = stoppedSupplier ? false : Boolean(row.active);
-      return {
-        ...link,
-        rowId: row.rowId,
-        article: row.article,
-        name: row.name,
-        partnerId: row.partnerId,
-        partnerName: row.partnerName,
-        price,
-        priceCurrency: row.priceCurrency,
-        originalPrice: row.originalPrice,
-        sourceCurrency: row.sourceCurrency,
-        convertedFromRub: row.convertedFromRub,
-        priceSource: "live",
-        active,
-        stopped: Boolean(stoppedSupplier),
-        stopReason: stoppedSupplier?.note || null,
-        pricingMode: row.pricingMode,
-        stockOnly: row.stockOnly,
-        priceEligible: row.priceEligible,
-        stockEligible: row.stockEligible,
-        trustFactor: row.trustFactor,
-        orderCutoffTime: row.orderCutoffTime,
-        reseller: row.reseller,
-        available: active && (row.stockOnly || price > 0),
-        docDate: row.docDate,
-      };
-    }));
+  const mapRow = (link) => (row) => {
+    const stoppedSupplier = stoppedMap.get(normalizeSupplierName(row.partnerName));
+    const price = stoppedSupplier ? 0 : row.price;
+    const active = stoppedSupplier ? false : Boolean(row.active);
+    return {
+      ...link,
+      rowId: row.rowId,
+      article: row.article,
+      name: row.name,
+      partnerId: row.partnerId,
+      partnerName: row.partnerName,
+      price,
+      priceCurrency: row.priceCurrency,
+      originalPrice: row.originalPrice,
+      sourceCurrency: row.sourceCurrency,
+      convertedFromRub: row.convertedFromRub,
+      priceSource: "live",
+      active,
+      stopped: Boolean(stoppedSupplier),
+      stopReason: stoppedSupplier?.note || null,
+      pricingMode: row.pricingMode,
+      stockOnly: row.stockOnly,
+      priceEligible: row.priceEligible,
+      stockEligible: row.stockEligible,
+      trustFactor: row.trustFactor,
+      orderCutoffTime: row.orderCutoffTime,
+      reseller: row.reseller,
+      available: active && (row.stockOnly || price > 0),
+      docDate: row.docDate,
+    };
+  };
+  // Parallel lookups with a small pool: the serial per-link version cost 60-90s per
+  // 1000 products (one local MySQL query per link, awaited one by one).
+  const lookupConcurrency = Math.max(1, Math.min(32, Number(process.env.PM_LIVE_LOOKUP_CONCURRENCY || 12) || 12));
+  for (let offset = 0; offset < normalizedLinks.length; offset += lookupConcurrency) {
+    const slice = normalizedLinks.slice(offset, offset + lookupConcurrency);
+    const sliceRows = await Promise.all(slice.map(async (link) => ({
+      link,
+      rows: await findPriceMasterRowsForLink(link, usdRate, managedSuppliers),
+    })));
+    for (const { link, rows } of sliceRows) {
+      map.set(link.id, rows.map(mapRow(link)));
+    }
   }
   return map;
 }

@@ -109,3 +109,61 @@ async function verifyOzonPriceApplied(account, entries = [], { priceIntentId = "
   }
   return { verified, failed };
 }
+
+// Deferred (background) price verification: the send pipeline no longer blocks 10-30s per
+// batch waiting for Ozon to apply prices. Runs after a delay, updates sku states, and
+// force-requeues prices that did not apply so they are pushed again automatically.
+let deferredOzonVerifyInFlight = 0;
+function scheduleDeferredOzonPriceVerification(account, entries = [], { priceIntentId = "", sentAt = new Date().toISOString() } = {}) {
+  if (!entries.length) return;
+  const maxInFlight = Math.max(1, Number(process.env.OZON_PRICE_VERIFY_MAX_INFLIGHT || 5) || 5);
+  if (deferredOzonVerifyInFlight >= maxInFlight) {
+    logger.warn("deferred ozon price verification skipped: too many in flight", {
+      inFlight: deferredOzonVerifyInFlight,
+      items: entries.length,
+    });
+    return;
+  }
+  deferredOzonVerifyInFlight += 1;
+  const timer = setTimeout(async () => {
+    try {
+      const { verified, failed } = await verifyOzonPriceApplied(account, entries, { priceIntentId, sentAt });
+      if (verified.length) {
+        await upsertSalesAutomationSkuStates(verified.map((entry) => ({
+          ...entry.item,
+          productId: entry.item.productId || entry.item.id,
+          priceStatus: "success",
+          priceApplyStatus: "verified",
+          lastVerifiedPrice: entry.verifiedPrice,
+          lastPriceVerifiedAt: entry.verifiedAt,
+          priceIntentId,
+        }))).catch((error) => logger.warn("deferred verify state update failed", { detail: error?.message || String(error) }));
+      }
+      if (failed.length) {
+        const failedIds = failed.map((entry) => entry.item?.id).filter(Boolean);
+        logger.warn("deferred ozon price verification: prices not applied, requeueing", {
+          account: account?.id || "ozon",
+          failed: failed.length,
+          sample: failedIds.slice(0, 10),
+        });
+        await queueAuthoritativePriceReprice({
+          productIds: failedIds,
+          marketplace: "ozon",
+          reason: "ozon_price_verify_retry",
+          sourceEvent: "ozon_price_verify_retry",
+          force: true,
+          onlyChanged: false,
+          refreshMarketplacePrices: true,
+          livePriceMaster: true,
+          verify: true,
+          priority: 3,
+        }).catch((error) => logger.warn("deferred verify requeue failed", { detail: error?.message || String(error) }));
+      }
+    } catch (error) {
+      logger.warn("deferred ozon price verification failed", { detail: error?.message || String(error) });
+    } finally {
+      deferredOzonVerifyInFlight -= 1;
+    }
+  }, Math.max(1000, ozonPriceVerifyDelayMs));
+  timer.unref?.();
+}
