@@ -215,7 +215,8 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
         sourceEvent: normalizedSourceEvent,
         requestedBy: requestMeta.username || requestMeta.user || "system",
       },
-      { priority: 1 },
+      // Below price pushes: bulk recovery jobs must not starve auto-price-push (prio 1-2).
+      { priority: 4 },
     ).catch((error) => {
       logger.warn("linked product activation recovery queue failed", {
         sourceEvent: normalizedSourceEvent,

@@ -55,23 +55,32 @@ async function cleanStaleMarketplacePriceJobs() {
   try {
     const states = ["prioritized", "waiting", "delayed"];
     const jobs = await marketplaceQueue.getJobs(states, 0, 20000);
-    const priceJobs = jobs
-      .filter((job) => job && job.name === "auto-price-push")
-      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
-    const keep = new Set();
-    for (const job of priceJobs) {
-      const age = now - Number(job.timestamp || 0);
-      if (age <= marketplaceQueuePriceJobMaxAgeMs && keep.size < marketplaceQueueMaxPriceBacklog) {
-        keep.add(job.id);
-        continue;
+    // Per-type caps: stale duplicates of these jobs pile up by the hundreds and starve
+    // everything else; the schedulers re-cover their work anyway.
+    const caps = {
+      "auto-price-push": marketplaceQueueMaxPriceBacklog,
+      "supplier-recovery-automation": 100,
+      "ozon-unarchive-queue-process": 20,
+      "no-supplier-automation": 100,
+    };
+    for (const [name, cap] of Object.entries(caps)) {
+      const typeJobs = jobs
+        .filter((job) => job && job.name === name)
+        .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+      let kept = 0;
+      for (const job of typeJobs) {
+        const age = now - Number(job.timestamp || 0);
+        if (age <= marketplaceQueuePriceJobMaxAgeMs && kept < cap) {
+          kept += 1;
+          continue;
+        }
+        await job.remove().catch(() => {});
+        removed += 1;
       }
-      await job.remove().catch(() => {});
-      removed += 1;
     }
     if (removed > 0) {
       logger.info("marketplace queue stale price jobs cleaned", {
-        total: priceJobs.length,
-        kept: keep.size,
+        total: jobs.length,
         removed,
         maxBacklog: marketplaceQueueMaxPriceBacklog,
         maxAgeMs: marketplaceQueuePriceJobMaxAgeMs,
