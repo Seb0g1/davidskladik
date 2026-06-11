@@ -84,6 +84,31 @@ function isFinanceOrderLinked(order = {}, warehouse = {}) {
   });
 }
 
+// Postgres-backed linked check: readWarehouse() only holds a recent in-memory subset in
+// PG mode, which made linkedOnly drop almost every marketplace-synced order.
+async function filterFinanceOrdersByLinkedPg(orders = []) {
+  const rows = Array.isArray(orders) ? orders : [];
+  const prisma = getPrisma();
+  if (!prisma || !rows.length) return rows;
+  const offerIds = Array.from(new Set(rows.map((order) => cleanText(order.offerId)).filter(Boolean)));
+  if (!offerIds.length) return [];
+  const linkedRows = await prisma.warehouseProduct.findMany({
+    where: { offerId: { in: offerIds }, links: { some: {} } },
+    select: { offerId: true, marketplace: true },
+  }).catch(() => []);
+  const linkedKeys = new Set();
+  for (const row of linkedRows) {
+    const offer = cleanText(row.offerId).toLowerCase();
+    linkedKeys.add(offer); // any marketplace counts: the group shares the link
+    linkedKeys.add(`${cleanText(row.marketplace).toLowerCase()}|${offer}`);
+  }
+  return rows.filter((order) => {
+    const offer = cleanText(order.offerId).toLowerCase();
+    if (!offer) return false;
+    return linkedKeys.has(offer);
+  });
+}
+
 function filterFinanceOrdersByLinked(orders = [], warehouse = {}, linkedOnly = true) {
   const rows = Array.isArray(orders) ? orders : [];
   if (!linkedOnly) return rows;

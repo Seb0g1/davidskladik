@@ -64,8 +64,7 @@ async function listFinanceOrders({ period = "30d", q = "", limit = 200, linkedOn
       ]);
       let orders = rows.map(financeOrderFromPostgres);
       if (shouldFilterLinked) {
-        const warehouse = await readWarehouse();
-        orders = filterFinanceOrdersByLinked(orders, warehouse, true);
+        orders = await filterFinanceOrdersByLinkedPg(orders);
       }
       return { source: "postgres", total: shouldFilterLinked ? orders.length : unfilteredTotal, orders: orders.slice(0, normalizedLimit), linkedOnly: shouldFilterLinked };
     } catch (error) {
