@@ -76,10 +76,25 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
       }
     }
 
+    // Linking UX: cheapest rows first, testers ALWAYS at the bottom (so a tester can't be
+    // linked by accident), inactive rows after active within each group.
+    const isTesterRow = (row) => /тестер|tester/iu.test(cleanText(row?.name || ""));
+    const rubPrice = (row) => {
+      const price = Number(row?.price || 0) || 0;
+      return cleanText(row?.priceCurrency || row?.currency).toUpperCase() === "USD" ? price * usdRate : price;
+    };
+    const sortedRows = rows
+      .map((row) => ({ ...row, isTester: isTesterRow(row) }))
+      .sort((a, b) => {
+        if (a.isTester !== b.isTester) return a.isTester ? 1 : -1;
+        if (Boolean(a.active) !== Boolean(b.active)) return a.active ? -1 : 1;
+        return rubPrice(a) - rubPrice(b);
+      });
+
     const payload = {
       ok: true,
-      rows: rows.slice(0, limit),
-      total: rows.length,
+      rows: sortedRows.slice(0, limit),
+      total: sortedRows.length,
       source,
     };
     setPriceMasterSearchCache(cacheKey, payload);

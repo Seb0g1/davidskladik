@@ -643,9 +643,9 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
               const rowDraft = draftFromSearchRow(row);
               const alreadySelected = draftKeys.has(linkPrimarySignature(rowDraft));
               return (
-              <button className={`pm-result${alreadySelected ? " is-selected" : ""}`} type="button" key={`${row.id}-${row.article}-${row.supplierName}`} onClick={() => addDraft(rowDraft)}>
+              <button className={`pm-result${alreadySelected ? " is-selected" : ""}${row.isTester ? " pm-result-tester" : ""}`} type="button" key={`${row.id}-${row.article}-${row.supplierName}`} onClick={() => addDraft(rowDraft)}>
                 <div className="pm-result-head">
-                  <strong>{row.article || "без артикула"}</strong>
+                  <strong>{row.article || "без артикула"}{row.isTester ? <span className="pm-tester-badge">Тестер</span> : null}</strong>
                   <span>{alreadySelected ? "уже в черновике" : "выбрать точную строку"}</span>
                 </div>
                 <span className="pm-result-title">{row.name || row.keyword || "без названия"}</span>
