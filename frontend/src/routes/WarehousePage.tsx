@@ -1707,7 +1707,13 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           Только автопрайс
         </label>
       </section>
-      <section className="summary-grid">
+      {pageQuery.isFetching ? (
+        <div className="catalog-loading-bar" role="status" aria-label="Каталог обновляется">
+          <div className="catalog-loading-bar-fill" />
+          <span>Обновляю каталог…</span>
+        </div>
+      ) : null}
+      <section className={`summary-grid${pageQuery.isFetching ? " is-loading" : ""}`}>
         <Stat label={pageQuery.data?.grouped ? "Карточек" : "Найдено"} value={pageQuery.data?.groupTotal || pageQuery.data?.total || 0} />
         {pageQuery.data?.grouped && pageQuery.data?.rowTotal ? <Stat label="SKU" value={pageQuery.data.rowTotal} /> : null}
         <Stat label="Всего" value={pageQuery.data?.totalAll || 0} />
@@ -1715,7 +1721,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
         <Stat label="Изменения" value={pageQuery.data?.changed || 0} />
         <Stat label="Без поставщика" value={pageQuery.data?.withoutSupplier || 0} />
       </section>
-      <section className={`workspace ${selectedGroup ? "detail-open" : ""}`}>
+      <section className={`workspace ${selectedGroup ? "detail-open" : ""}${pageQuery.isFetching ? " is-loading" : ""}`}>
         <div className="list-panel">
           {pageQuery.error && <div className="inline-error">{errorMessage(pageQuery.error)}</div>}
           <div ref={parentRef} className="virtual-list">

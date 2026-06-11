@@ -3329,3 +3329,28 @@ button:disabled {
 .settings-hub-card:hover { background: rgba(50, 80, 150, 0.5); border-color: #5b8cff; }
 .settings-hub-card strong { font-size: 14px; }
 .settings-hub-card small { color: #93a4c8; font-size: 12px; }
+
+/* Catalog loading indicator: visible bar while filters/search are being applied */
+.catalog-loading-bar {
+  position: sticky; top: 0; z-index: 40;
+  display: flex; align-items: center; gap: 10px;
+  margin: 6px 0; padding: 6px 12px; border-radius: 10px;
+  background: rgba(40, 70, 140, 0.35); border: 1px solid rgba(91, 140, 255, 0.45);
+  color: #cfe0ff; font-size: 12px;
+  overflow: hidden;
+}
+.catalog-loading-bar-fill {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 35%;
+  background: linear-gradient(90deg, transparent, rgba(91, 140, 255, 0.35), transparent);
+  animation: catalogLoadingSlide 1.1s linear infinite;
+}
+.catalog-loading-bar span { position: relative; display: inline-flex; align-items: center; gap: 8px; }
+.catalog-loading-bar span::before {
+  content: ""; width: 12px; height: 12px; border-radius: 50%;
+  border: 2px solid rgba(91, 140, 255, 0.35); border-top-color: #5b8cff;
+  animation: catalogLoadingSpin 0.8s linear infinite;
+}
+@keyframes catalogLoadingSlide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+@keyframes catalogLoadingSpin { to { transform: rotate(360deg); } }
+.summary-grid.is-loading, .workspace.is-loading .list-panel { opacity: 0.55; transition: opacity 0.2s; }
+.workspace.is-loading .list-panel { pointer-events: none; }
