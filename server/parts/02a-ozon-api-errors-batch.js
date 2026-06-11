@@ -82,16 +82,35 @@ function getOzonPriceBatchBackoffMs() {
   return Math.max(500, Number(process.env.OZON_PRICE_BATCH_BACKOFF_MS || 2500) || 2500);
 }
 
+// Limited-concurrency pool with paced start times. The previous strictly-serial promise
+// chain meant every Ozon request waited for the previous response + interval, capping the
+// whole app at ~1-2 requests/sec — imports, syncs and verification all shared that lane.
+let ozonActiveRequests = 0;
+const ozonRequestWaiters = [];
 function enqueueOzonRequest(task) {
   const minIntervalMs = Math.max(0, Number(process.env.OZON_REQUEST_MIN_INTERVAL_MS || 450) || 450);
-  const run = async () => {
-    const waitMs = Math.max(0, ozonLastRequestAt + minIntervalMs - Date.now());
-    if (waitMs > 0) await sleep(waitMs);
-    ozonLastRequestAt = Date.now();
-    return task();
-  };
-  const queued = ozonRequestChain.then(run, run);
-  ozonRequestChain = queued.catch(() => {});
-  return queued;
+  const maxConcurrent = Math.max(1, Math.min(12, Number(process.env.OZON_REQUEST_CONCURRENCY || 4) || 4));
+  return new Promise((resolve, reject) => {
+    const attempt = async () => {
+      if (ozonActiveRequests >= maxConcurrent) {
+        ozonRequestWaiters.push(attempt);
+        return;
+      }
+      ozonActiveRequests += 1;
+      try {
+        const waitMs = Math.max(0, ozonLastRequestAt + minIntervalMs - Date.now());
+        if (waitMs > 0) await sleep(waitMs);
+        ozonLastRequestAt = Date.now();
+        resolve(await task());
+      } catch (error) {
+        reject(error);
+      } finally {
+        ozonActiveRequests -= 1;
+        const next = ozonRequestWaiters.shift();
+        if (next) next();
+      }
+    };
+    attempt();
+  });
 }
 

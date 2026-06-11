@@ -35,36 +35,21 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
           total: products.length,
         });
         if (infoOfferIds.length) {
-          infoMap = await getOzonProductInfoMap(infoOfferIds, account, {
-            continueOnError: true,
-            onProgress: (progress) => options.onProgress?.({
-              percent: 32 + Math.round((progress.processed / Math.max(1, progress.total)) * 16),
-              stage: progress.stage,
-              meta: `Загружаю названия и фото Ozon: ${formatRuNumber(progress.processed)} из ${formatRuNumber(progress.total)}.`,
-              processed: progress.processed,
-              total: progress.total,
+          // Independent detail maps load in parallel; the request pool paces the API calls.
+          [infoMap, stockMap, priceMap] = await Promise.all([
+            getOzonProductInfoMap(infoOfferIds, account, {
+              continueOnError: true,
+              onProgress: (progress) => options.onProgress?.({
+                percent: 32 + Math.round((progress.processed / Math.max(1, progress.total)) * 38),
+                stage: progress.stage,
+                meta: `Загружаю детали Ozon: ${formatRuNumber(progress.processed)} из ${formatRuNumber(progress.total)}.`,
+                processed: progress.processed,
+                total: progress.total,
+              }),
             }),
-          });
-          stockMap = await getOzonStockMap(infoOfferIds, account, {
-            continueOnError: true,
-            onProgress: (progress) => options.onProgress?.({
-              percent: 48 + Math.round((progress.processed / Math.max(1, progress.total)) * 12),
-              stage: progress.stage,
-              meta: `Загружаю остатки Ozon: ${formatRuNumber(progress.processed)} из ${formatRuNumber(progress.total)}.`,
-              processed: progress.processed,
-              total: progress.total,
-            }),
-          });
-          priceMap = await getOzonPriceMap(infoOfferIds, account, {
-            continueOnError: true,
-            onProgress: (progress) => options.onProgress?.({
-              percent: 60 + Math.round((progress.processed / Math.max(1, progress.total)) * 10),
-              stage: progress.stage,
-              meta: `Загружаю цены Ozon: ${formatRuNumber(progress.processed)} из ${formatRuNumber(progress.total)}.`,
-              processed: progress.processed,
-              total: progress.total,
-            }),
-          });
+            getOzonStockMap(infoOfferIds, account, { continueOnError: true }),
+            getOzonPriceMap(infoOfferIds, account, { continueOnError: true }),
+          ]);
           const detailOfferSet = new Set(infoOfferIds.map(ozonOfferMapKey));
           const missingProductIds = products
             .filter((product) => detailOfferSet.has(ozonOfferMapKey(product.offer_id || product.offerId)))
