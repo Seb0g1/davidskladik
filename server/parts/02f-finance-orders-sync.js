@@ -64,6 +64,19 @@ async function financeSupplierCostForOffer(marketplace, offerId, quantity) {
     supplier = candidate;
     if (cleanText(row.marketplace) === cleanText(marketplace)) break;
   }
+  if (!supplier) {
+    // Fallback: the sales automation state stores the supplier used on the last price send.
+    const stateRows = await prisma.$queryRawUnsafe(
+      `SELECT raw FROM sales_automation_sku_states
+       WHERE offer_id = $1 AND raw -> 'selectedSupplier' IS NOT NULL
+       ORDER BY updated_at DESC LIMIT 1`,
+      cleanText(offerId),
+    ).catch(() => []);
+    const stateSupplier = stateRows[0]?.raw?.selectedSupplier;
+    if (stateSupplier && typeof stateSupplier === "object" && Number(stateSupplier.price ?? stateSupplier.supplierPrice) > 0) {
+      supplier = stateSupplier;
+    }
+  }
   if (!supplier || typeof supplier !== "object") return { purchaseCost: null, supplierName: "", partnerId: "" };
   const purchaseCost = await financePurchaseCostRubFromPicking({
     price: supplier.price ?? supplier.supplierPrice,
