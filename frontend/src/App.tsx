@@ -1,8 +1,9 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, CirclePlay, ClipboardList, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Truck , Star } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, CirclePlay, ClipboardList, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Truck , Star, HelpCircle } from "lucide-react";
 import { ReactNode, useEffect, useState } from "react";
 import { WarehousePage } from "./routes/WarehousePage";
 import { NotificationsBell } from "./components/NotificationsBell";
 import { ReviewsPage } from "./routes/ReviewsPage";
+import { QuestionsPage } from "./routes/QuestionsPage";
 import { OperationsPage } from "./routes/OperationsPage";
 import { SettingsPage } from "./routes/SettingsPage";
 import { AiDraftsPage } from "./routes/AiDraftsPage";
@@ -16,7 +17,7 @@ import { ProblemProductsPage } from "./routes/ProblemProductsPage";
 import { FinancePage } from "./routes/FinancePage";
 import { SuppliersPage } from "./routes/SuppliersPage";
 
-type AppRoute = "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "settings" | "system" | "ai-drafts" | "no-supplier";
+type AppRoute = "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "settings" | "system" | "ai-drafts" | "no-supplier";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -27,6 +28,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
   { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
   { route: "reviews", href: "/app/reviews", label: "Отзывы", icon: <Star size={16} /> },
+  { route: "questions", href: "/app/questions", label: "Вопросы", icon: <HelpCircle size={16} /> },
   { route: "prices", href: "/app/prices", label: "Цены", icon: <BadgeDollarSign size={16} /> },
   { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} /> },
   { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} /> },
@@ -44,6 +46,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/supplier-cart")) return "supplier-cart";
   if (path.startsWith("/app/recovery-queue")) return "recovery-queue";
   if (path.startsWith("/app/reviews")) return "reviews";
+  if (path.startsWith("/app/questions")) return "questions";
   if (path.startsWith("/app/prices")) return "prices";
   if (path.startsWith("/app/problem-products")) return "problem-products";
   if (path.startsWith("/app/finance")) return "finance";
@@ -84,7 +87,7 @@ function AppShell() {
   const isAdmin = session?.role === "admin";
   const canUseStaffRoutes = session?.role === "manager" || isAdmin;
   const canUseAdminRoutes = session === null ? false : isAdmin;
-  const headerRoutes = new Set<AppRoute>(isAdmin ? ["warehouse", "picking-list", "suppliers", "supplier-cart", "reviews", "settings"] : ["warehouse", "picking-list"]);
+  const headerRoutes = new Set<AppRoute>(isAdmin ? ["warehouse", "picking-list", "suppliers", "supplier-cart", "reviews", "questions", "settings"] : ["warehouse", "picking-list"]);
   const visibleNavItems = navItems.filter((item) => headerRoutes.has(item.route));
   const accessDenied = (route !== "warehouse" && route !== "picking-list" && !canUseAdminRoutes) || (route === "picking-list" && !canUseStaffRoutes);
   return (
@@ -120,6 +123,7 @@ function AppShell() {
       {!accessDenied && route === "supplier-cart" ? <SupplierCartPage /> : null}
       {!accessDenied && route === "recovery-queue" ? <RecoveryQueuePage /> : null}
       {!accessDenied && route === "reviews" ? <ReviewsPage /> : null}
+      {!accessDenied && route === "questions" ? <QuestionsPage /> : null}
       {!accessDenied && route === "prices" ? <PricesPage /> : null}
       {!accessDenied && route === "problem-products" ? <ProblemProductsPage /> : null}
       {!accessDenied && route === "finance" ? <FinancePage /> : null}

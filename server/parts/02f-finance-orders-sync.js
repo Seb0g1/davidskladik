@@ -164,6 +164,20 @@ async function syncYandexFinanceOrders() {
       for (let page = 1; page <= 10; page += 1) {
         const data = await yandexRequest(shop, "GET", `/v2/campaigns/${shop.campaignId}/orders?pageSize=50&page=${page}&fromDate=${dd}-${mm}-${yyyy}`);
         const orders = data?.orders || [];
+        // Commissions: stats/orders returns per-order commissions (Yandex fee types summed).
+        const feesByOrderId = new Map();
+        const orderIds = orders.map((order) => Number(order.id)).filter(Boolean);
+        if (orderIds.length) {
+          try {
+            const stats = await yandexRequest(shop, "POST", `/v2/campaigns/${shop.campaignId}/stats/orders`, { orders: orderIds });
+            for (const statOrder of stats?.result?.orders || []) {
+              const total = (statOrder.commissions || []).reduce((sum, fee) => sum + (Number(fee.actual ?? fee.predicted ?? 0) || 0), 0);
+              feesByOrderId.set(Number(statOrder.id), normalizeFinanceMoney(total, 0));
+            }
+          } catch (error) {
+            logger.warn("finance yandex stats failed", { shop: shop.id, detail: error?.message || String(error) });
+          }
+        }
         for (const order of orders) {
           const status = cleanText(order.status).toUpperCase();
           if (["CANCELLED", "RETURNED", "UNPAID"].includes(status)) continue;
@@ -172,6 +186,13 @@ async function syncYandexFinanceOrders() {
             const unitPrice = Number(item.price ?? item.buyerPrice ?? item.priceBeforeDiscount ?? 0) || 0;
             const saleAmount = normalizeFinanceMoney(unitPrice * quantity, 0);
             const subsidyTotal = (item.subsidies || []).reduce((sum, subsidy) => sum + (Number(subsidy.amount || 0) || 0), 0);
+            // Distribute the order-level commission across items by sale share.
+            const orderSaleTotal = (order.items || []).reduce((sum, line) => {
+              const lineQty = Math.max(1, Number(line.count || 1) || 1);
+              return sum + (Number(line.price ?? line.buyerPrice ?? 0) || 0) * lineQty;
+            }, 0) || saleAmount || 1;
+            const orderFee = feesByOrderId.get(Number(order.id)) || 0;
+            const feesAmount = normalizeFinanceMoney(orderFee * (saleAmount / orderSaleTotal), 0);
             const payoutAmount = normalizeFinanceMoney(saleAmount + subsidyTotal, 0);
             const cost = await financeSupplierCostForOffer("yandex", item.offerId, quantity);
             const ok = await financeUpsertMarketplaceOrder(normalizeFinanceOrder({
@@ -184,7 +205,7 @@ async function syncYandexFinanceOrders() {
               quantity,
               saleAmount,
               payoutAmount,
-              feesAmount: 0,
+              feesAmount,
               purchaseCost: cost.purchaseCost,
               supplierName: cost.supplierName,
               partnerId: cost.partnerId,
