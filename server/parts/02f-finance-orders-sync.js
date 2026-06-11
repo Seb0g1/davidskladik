@@ -50,11 +50,20 @@ async function financeUpsertMarketplaceOrder(financeOrder) {
 async function financeSupplierCostForOffer(marketplace, offerId, quantity) {
   const prisma = getPrisma();
   if (!prisma) return { purchaseCost: null, supplierName: "", partnerId: "" };
-  const row = await prisma.warehouseProduct.findFirst({
-    where: { marketplace, offerId: cleanText(offerId) },
-    select: { raw: true },
-  }).catch(() => null);
-  const supplier = row?.raw && typeof row.raw === "object" ? row.raw.selectedSupplier : null;
+  // The selected supplier snapshot often lives only on the Ozon sibling (links are shared
+  // per group), so look across all marketplaces and prefer the requested one.
+  const rows = await prisma.warehouseProduct.findMany({
+    where: { offerId: cleanText(offerId) },
+    select: { marketplace: true, raw: true },
+  }).catch(() => []);
+  const pickSupplier = (row) => (row?.raw && typeof row.raw === "object" ? row.raw.selectedSupplier : null);
+  let supplier = null;
+  for (const row of rows) {
+    const candidate = pickSupplier(row);
+    if (!candidate || typeof candidate !== "object" || !(Number(candidate.price ?? candidate.supplierPrice) > 0)) continue;
+    supplier = candidate;
+    if (cleanText(row.marketplace) === cleanText(marketplace)) break;
+  }
   if (!supplier || typeof supplier !== "object") return { purchaseCost: null, supplierName: "", partnerId: "" };
   const purchaseCost = await financePurchaseCostRubFromPicking({
     price: supplier.price ?? supplier.supplierPrice,
