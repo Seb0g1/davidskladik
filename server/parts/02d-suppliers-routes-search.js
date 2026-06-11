@@ -95,17 +95,33 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
       }
     }
 
-    // Linking UX: cheapest rows first, testers ALWAYS at the bottom (so a tester can't be
-    // linked by accident), inactive rows after active within each group.
-    const isTesterRow = (row) => /тестер|tester/iu.test(cleanText(row?.name || ""));
+    // Linking UX: cheapest rows first; testers AND otlivants ALWAYS at the bottom (so they
+    // can't be linked by accident), inactive rows after active within each group.
+    // Tester markers per business: TEST, TESTEP, tester, TESTOR, Testr, -tst, тест, Тестер.
+    const rowMarker = (row) => {
+      const name = cleanText(row?.name || "").toLowerCase();
+      if (name.includes("отливант")) return "otlivant";
+      if (
+        name.includes("тест") // тест, тестер, тестep…
+        || name.includes("test") // test, tester, testor, testep, testr…
+        || name.includes("-tst")
+        || /(^|[^a-z0-9])tst([^a-z0-9]|$)/u.test(name)
+      ) return "tester";
+      return null;
+    };
     const rubPrice = (row) => {
       const price = Number(row?.price || 0) || 0;
       return cleanText(row?.priceCurrency || row?.currency).toUpperCase() === "USD" ? price * usdRate : price;
     };
     const sortedRows = rows
-      .map((row) => ({ ...row, isTester: isTesterRow(row) }))
+      .map((row) => {
+        const marker = rowMarker(row);
+        return { ...row, isTester: marker === "tester", isOtlivant: marker === "otlivant" };
+      })
       .sort((a, b) => {
-        if (a.isTester !== b.isTester) return a.isTester ? 1 : -1;
+        const aSink = a.isTester || a.isOtlivant;
+        const bSink = b.isTester || b.isOtlivant;
+        if (aSink !== bSink) return aSink ? 1 : -1;
         if (Boolean(a.active) !== Boolean(b.active)) return a.active ? -1 : 1;
         return rubPrice(a) - rubPrice(b);
       });

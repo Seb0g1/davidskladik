@@ -643,9 +643,9 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
               const rowDraft = draftFromSearchRow(row);
               const alreadySelected = draftKeys.has(linkPrimarySignature(rowDraft));
               return (
-              <button className={`pm-result${alreadySelected ? " is-selected" : ""}${row.isTester ? " pm-result-tester" : ""}`} type="button" key={`${row.id}-${row.article}-${row.supplierName}`} onClick={() => addDraft(rowDraft)}>
+              <button className={`pm-result${alreadySelected ? " is-selected" : ""}${row.isTester || row.isOtlivant ? " pm-result-tester" : ""}`} type="button" key={`${row.id}-${row.article}-${row.supplierName}`} onClick={() => addDraft(rowDraft)}>
                 <div className="pm-result-head">
-                  <strong>{row.article || "без артикула"}{row.isTester ? <span className="pm-tester-badge">Тестер</span> : null}</strong>
+                  <strong>{row.article || "без артикула"}{row.isTester ? <span className="pm-tester-badge">Тестер</span> : null}{row.isOtlivant ? <span className="pm-tester-badge">Отливант</span> : null}</strong>
                   <span>{alreadySelected ? "уже в черновике" : "выбрать точную строку"}</span>
                 </div>
                 <span className="pm-result-title">{row.name || row.keyword || "без названия"}</span>
@@ -1219,7 +1219,7 @@ function MarketplaceRows({ products, breakdown = [] }: { products: Product[]; br
           const ozonUnarchiveNextRetryAt = String(rowBreakdown?.ozonUnarchiveNextRetryAt || lastArchiveSend.nextRetryAt || "");
           const formulaParts = [
             stockOnlyFallback ? "Складской fallback · цена PM не используется" : "",
-            supplier.supplierName ? `Поставщик: ${String(supplier.supplierName)}${supplier.article ? ` · ${String(supplier.article)}` : ""}` : "",
+            supplier.supplierName ? `Поставщик: ${String(supplier.supplierName)}${supplier.article ? ` · ${String(supplier.article)}` : ""}${supplier.name || supplier.nativeName || supplier.exactName ? ` · ${String(supplier.name || supplier.nativeName || supplier.exactName)}` : ""}` : "",
             markupCoefficient ? `Коэф.: ${markupCoefficient}${baseMarkupCoefficient && baseMarkupCoefficient !== markupCoefficient ? ` (база ${baseMarkupCoefficient})` : ""}` : "",
             usdRate ? `Курс: ${usdRate}` : "",
             supplierPrice && !stockOnlyFallback ? `PM: ${supplierPrice} ${supplierCurrency || "USD"}` : "",
@@ -1232,11 +1232,12 @@ function MarketplaceRows({ products, breakdown = [] }: { products: Product[]; br
             .slice(0, 5)
             .map((alt) => {
               const name = String(alt.partnerName || alt.supplierName || "").trim();
+              const pmRowName = String(alt.name || alt.nativeName || alt.exactName || "").trim();
               const finalPrice = Number(alt.effectiveFinalPrice || alt.calculatedPrice || 0) || 0;
               const rawPrice = Number(alt.price || 0) || 0;
               const currency = String(alt.priceCurrency || alt.sourceCurrency || "USD");
               const excluded = String(alt.exclusionReason || "").trim();
-              return [name, finalPrice ? money(finalPrice) : "", rawPrice ? `PM ${rawPrice} ${currency}` : "", excluded ? `не выбран: ${excluded}` : ""].filter(Boolean).join(" · ");
+              return [name, pmRowName, finalPrice ? money(finalPrice) : "", rawPrice ? `PM ${rawPrice} ${currency}` : "", excluded ? `не выбран: ${excluded}` : ""].filter(Boolean).join(" · ");
             })
             .filter(Boolean);
           return (

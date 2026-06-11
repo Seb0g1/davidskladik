@@ -227,6 +227,7 @@ export const PriceMasterSearchRowSchema = z.object({
   priceCurrency: z.coerce.string().optional().default("USD"),
   available: z.boolean().optional().default(false),
   isTester: z.boolean().optional().default(false),
+  isOtlivant: z.boolean().optional().default(false),
   updatedAt: z.coerce.string().optional().nullable(),
 }).passthrough();
 

@@ -169,6 +169,7 @@ function supplierAlternativesForDiagnostics(suppliers = [], limit = 5) {
       supplierName: supplier.supplierName || supplier.partnerName || "",
       partnerId: supplier.partnerId || "",
       article: supplier.article || "",
+      name: supplier.name || supplier.nativeName || supplier.keyword || "",
       rowId: supplier.rowId || "",
       available: Boolean(supplier.available),
       active: supplier.active !== false,

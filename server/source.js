@@ -218,6 +218,7 @@ const partFiles = [
   "02f-notifications-pollers.js",
   "02f-finance-orders-sync.js",
   "02f-reviews-routes.js",
+  "02f-ozon-name-backfill.js",
   "02f-product-eta-route.js",
   "02f-supplier-export-routes.js",
   "03-lifecycle-start.js",
