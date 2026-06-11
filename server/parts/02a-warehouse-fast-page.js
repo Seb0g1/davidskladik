@@ -123,7 +123,9 @@ async function buildFastWarehousePage({
         buildCore(),
         promiseTimeout(warehouseFastPageBuildTimeoutMs, "warehouse_fast_page_build_timeout"),
       ]);
-      if (result) setWarehouseFastPageCache(cached.key, result);
+      // Never cache partial/empty fallbacks: a cached empty page makes the catalog look
+      // dead (instant 0-item responses) long after the load spike has passed.
+      if (result && !result.partial && !result.sourceError) setWarehouseFastPageCache(cached.key, result);
       return result;
     } finally {
       releaseWarehousePageBuildSlot();
