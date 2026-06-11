@@ -215,7 +215,7 @@ const ozonUnarchiveQueueAutoIntervalMinutes = Math.max(5, Number(process.env.OZO
 const ozonUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 180) || 180);
 const yandexUnarchiveQueueAutoEnabled = process.env.YANDEX_UNARCHIVE_QUEUE_AUTO_ENABLED !== "false";
 const yandexUnarchiveQueueBatchLimit = Math.max(1, Math.min(500, Number(process.env.YANDEX_UNARCHIVE_QUEUE_BATCH_LIMIT || 200) || 200));
-const yandexUnarchiveQueueAutoIntervalMinutes = Math.max(5, Number(process.env.YANDEX_UNARCHIVE_QUEUE_AUTO_INTERVAL_MINUTES || 15) || 15);
+const yandexUnarchiveQueueAutoIntervalMinutes = Math.max(1, Number(process.env.YANDEX_UNARCHIVE_QUEUE_AUTO_INTERVAL_MINUTES || 15) || 15);
 const yandexUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.YANDEX_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 120) || 120);
 const yandexUnarchiveMaxAttempts = Math.max(1, Number(process.env.YANDEX_UNARCHIVE_MAX_ATTEMPTS || 8) || 8);
 const yandexUnarchiveRetryMinutes = [1, 5, 15, 60, 240, 1440];

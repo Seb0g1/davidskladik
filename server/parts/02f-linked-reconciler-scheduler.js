@@ -355,23 +355,39 @@ async function runArchivedYandexLinkedRecoveryPass() {
   if (linkedReconcilerRunning) return { status: "already_running" };
   const prisma = getPrisma();
   if (!prisma) return { status: "no_db" };
-  const rows = await prisma.warehouseProduct.findMany({
-    where: { marketplace: "yandex", archived: true, links: { some: {} } },
-    include: { links: true },
-    orderBy: { id: "asc" },
-    take: linkedReconcilerBatchSize * 2,
-  }).catch(() => []);
-  if (!rows.length) return { status: "ok", products: 0, recovered: 0, unarchived: 0 };
   linkedReconcilerRunning = true;
+  // Drain mode: Yandex has no unarchive daily limit, so keep pulling batches until the
+  // archived backlog is empty (bounded per tick to keep the event loop responsive).
+  const maxBatches = Math.max(1, Number(process.env.YANDEX_RECOVERY_MAX_BATCHES_PER_TICK || 6) || 6);
+  const totals = { products: 0, recovered: 0, unarchived: 0, batches: 0 };
   try {
-    const products = rows.map(productFromPostgres);
-    const result = await processLinkedReconcilerBatch(products);
-    logger.info("yandex_archived_recovery_complete", {
-      products: result.products,
-      recovered: result.recovered,
-      unarchived: result.unarchived,
-    });
-    return result;
+    let lastId = null;
+    for (let batch = 0; batch < maxBatches; batch += 1) {
+      const rows = await prisma.warehouseProduct.findMany({
+        where: {
+          marketplace: "yandex",
+          archived: true,
+          links: { some: {} },
+          ...(lastId ? { id: { gt: lastId } } : {}),
+        },
+        include: { links: true },
+        orderBy: { id: "asc" },
+        take: linkedReconcilerBatchSize * 2,
+      }).catch(() => []);
+      if (!rows.length) break;
+      lastId = String(rows[rows.length - 1].id);
+      const products = rows.map(productFromPostgres);
+      const result = await processLinkedReconcilerBatch(products);
+      totals.batches += 1;
+      totals.products += result.products || 0;
+      totals.recovered += result.recovered || 0;
+      totals.unarchived += result.unarchived || 0;
+      if (rows.length < linkedReconcilerBatchSize * 2) break;
+    }
+    if (totals.products > 0) {
+      logger.info("yandex_archived_recovery_complete", totals);
+    }
+    return { status: "ok", ...totals };
   } catch (error) {
     logger.warn("yandex archived recovery pass failed", { detail: error?.message || String(error) });
     return { status: "error", error: error?.message };
