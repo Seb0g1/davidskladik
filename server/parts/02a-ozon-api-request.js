@@ -22,6 +22,8 @@ async function ozonRequest(pathname, body, account = null) {
             "Content-Type": "application/json",
           },
           body: JSON.stringify(body || {}),
+          // Without a timeout one hung request blocks the global serial Ozon queue forever.
+          signal: AbortSignal.timeout(Math.max(5000, Number(process.env.OZON_REQUEST_TIMEOUT_MS || 60000) || 60000)),
         });
 
         const text = await response.text();
