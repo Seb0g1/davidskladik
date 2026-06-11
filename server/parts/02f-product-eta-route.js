@@ -36,7 +36,19 @@ app.get("/api/warehouse/products/:id/eta", async (request, response, next) => {
     }
     const ticksAway = Math.floor(ahead / perTick);
     const nextRunAtMs = linkedReconcilerNextRunAt ? new Date(linkedReconcilerNextRunAt).getTime() : Date.now() + tickMs;
-    const priceEtaMs = Math.max(0, nextRunAtMs - Date.now()) + ticksAway * tickMs;
+    let priceEtaMs = Math.max(0, nextRunAtMs - Date.now()) + ticksAway * tickMs;
+    // Changed prices are picked up by the fast price sweep (every ~2 min), not the cursor.
+    const priceColumns = await prisma.warehouseProduct.findUnique({
+      where: { id: productId },
+      select: { currentPrice: true, targetPrice: true },
+    }).catch(() => null);
+    const priceDiffers = priceColumns
+      && Number(priceColumns.targetPrice || 0) > 0
+      && Number(priceColumns.currentPrice || 0) !== Number(priceColumns.targetPrice || 0);
+    if (priceDiffers && typeof priceSweepNextRunAt === "string" && priceSweepNextRunAt) {
+      const sweepMs = Math.max(0, new Date(priceSweepNextRunAt).getTime() - Date.now()) + 30_000;
+      priceEtaMs = Math.min(priceEtaMs, sweepMs);
+    }
 
     // Unarchive ETA.
     let unarchiveEtaMs = null;

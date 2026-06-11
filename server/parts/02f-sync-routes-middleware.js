@@ -195,6 +195,13 @@ function startBackgroundSchedulers() {
       nextRunAt: marketplaceMaintenanceNextRunAt,
     });
   }
+  if (priceSweepEnabled) {
+    schedulePriceSweep(60_000);
+    logger.info("price sweep scheduler enabled", {
+      intervalSeconds: Math.round(priceSweepIntervalMs / 1000),
+      batchLimit: priceSweepBatchLimit,
+    });
+  }
   if (yandexFastUnarchiveEnabled) {
     scheduleYandexFastUnarchive(45_000);
     logger.info("yandex fast unarchive scheduler enabled", {
