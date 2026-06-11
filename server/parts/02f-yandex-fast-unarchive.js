@@ -26,6 +26,19 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
 
     const products = rows.map(productFromPostgres);
 
+    // Yandex rows often carry only the offerId as name; pull Ozon sibling names so the
+    // volume/keyword block check sees the real product name.
+    const offerKeys = products.map((product) => cleanText(product.offerId)).filter(Boolean);
+    const ozonNameRows = offerKeys.length
+      ? await prisma.warehouseProduct.findMany({
+        where: { marketplace: "ozon", offerId: { in: offerKeys } },
+        select: { offerId: true, name: true },
+      }).catch(() => [])
+      : [];
+    const ozonNameByOffer = new Map(ozonNameRows
+      .map((row) => [cleanText(row.offerId).toLowerCase(), cleanText(row.name)])
+      .filter(([key, value]) => key && value));
+
     // Partition: products that must not be on Yandex at all get their local yandex row
     // deleted (no wasted API calls); products absent on Yandex get a card CREATED via
     // offer mapping instead of a pointless unarchive; the rest are bulk-unarchived.
@@ -34,7 +47,10 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
     const toUnarchive = [];
     for (const product of products) {
       if (!cleanText(product.target) || !cleanText(product.offerId)) continue;
-      const name = cleanText(product.name || product.yandex?.name || product.offerId);
+      let name = cleanText(product.name || product.yandex?.name || product.offerId);
+      if (!name || name === cleanText(product.offerId)) {
+        name = ozonNameByOffer.get(cleanText(product.offerId).toLowerCase()) || name;
+      }
       const lowerName = name.toLowerCase();
       const hasBlockedKeyword = lowerName.includes("отливант") || lowerName.includes("тестер");
       const volumeAssessment = assessYandexSmallVolume(name);

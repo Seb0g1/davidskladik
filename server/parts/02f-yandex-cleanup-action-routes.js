@@ -66,12 +66,25 @@ app.post("/api/yandex-cleanup/delete-filtered-local", async (request, response, 
       select: { id: true, offerId: true, target: true, name: true },
       take: 50000,
     });
+    // Yandex rows created from exports often store only the offerId as name; the real
+    // name (with volume) lives on the Ozon sibling — use it as assessment fallback.
+    const ozonNameRows = await prisma.warehouseProduct.findMany({
+      where: { marketplace: "ozon" },
+      select: { offerId: true, name: true },
+      take: 50000,
+    });
+    const ozonNameByOffer = new Map(ozonNameRows
+      .map((row) => [cleanText(row.offerId).toLowerCase(), cleanText(row.name)])
+      .filter(([key, value]) => key && value));
     const toDelete = [];
     for (const row of rows) {
       const offerId = cleanText(row.offerId);
       const shopId = cleanText(row.target);
       if (!offerId || !shopId) continue;
-      const name = cleanText(row.name || offerId);
+      let name = cleanText(row.name || offerId);
+      if (!name || name === offerId) {
+        name = ozonNameByOffer.get(offerId.toLowerCase()) || name;
+      }
       const lowerName = name.toLowerCase();
       const hasBlockedKeyword = lowerName.includes("отливант") || lowerName.includes("тестер");
       const volumeAssessment = assessYandexSmallVolume(name);
