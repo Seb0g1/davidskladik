@@ -195,6 +195,13 @@ function startBackgroundSchedulers() {
       nextRunAt: marketplaceMaintenanceNextRunAt,
     });
   }
+  if (financeOrdersSyncEnabled) {
+    scheduleFinanceOrdersSync(3 * 60_000);
+    logger.info("finance orders sync scheduler enabled", {
+      intervalMinutes: Math.round(financeOrdersSyncIntervalMs / 60000),
+      lookbackDays: financeOrdersLookbackDays,
+    });
+  }
   if (notifyPollEnabled) {
     scheduleNotificationPolling(60_000);
     logger.info("notification polling enabled", {
