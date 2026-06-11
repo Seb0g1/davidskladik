@@ -2,72 +2,91 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
   try {
     const q = cleanText(request.query.q || request.query.search || "");
     const supplier = cleanText(request.query.supplier || "");
-    const limit = cleanLimit(request.query.limit, 30, 100);
+    const limit = cleanLimit(request.query.limit, 50, 300);
     const settings = await readAppSettings();
     const usdRate = Number(settings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
     const cacheKey = `pricemaster-search:${q.toLowerCase()}:${supplier.toLowerCase()}:${limit}:${usdRate.toFixed(4)}`;
     const cached = getPriceMasterSearchCache(cacheKey);
     if (cached) return response.json(cached);
 
+    // Live PriceMaster is the source of truth — query it FIRST so the linking dialog
+    // sees every current offer. The snapshot only supplements (it lags syncs and hides
+    // inactive rows, which used to make articles "lose" suppliers in the search).
     let source = "live";
     let rows = [];
+    let liveOk = false;
 
+    try {
+      const params = [];
+      const conditions = ["r.Ignored = 0"];
+      if (q) {
+        conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
+        const like = likeSearch(q);
+        params.push(like, like, like, like);
+      }
+      if (supplier) {
+        conditions.push("p.PartnerName LIKE ?");
+        params.push(likeSearch(supplier));
+      }
+      // Extra headroom: the same partner posts the same article in many docs; after the
+      // per-partner dedup below a bare LIMIT would crowd out other suppliers.
+      params.push(limit * 5);
+      const [liveRows] = await pool.query(
+        `
+        SELECT
+          r.NativeID AS article,
+          r.NativeName AS name,
+          r.NativePrice AS price,
+          r.Active AS active,
+          r.RowID AS rowId,
+          d.DocDate AS docDate,
+          d.PartnerID AS partnerId,
+          p.PartnerName AS partnerName
+        FROM OfferRows r
+        JOIN OfferDocs d ON d.DocID = r.DocID
+        LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY d.DocDate DESC, r.RowID DESC
+        LIMIT ?
+        `,
+        params,
+      );
+      // Keep only the newest row per partner+article+name (docs repeat daily).
+      const seenOffer = new Set();
+      for (const row of liveRows) {
+        const offerKey = `${cleanText(row.partnerId)}|${cleanText(row.article).toLowerCase()}|${cleanText(row.name).toLowerCase()}`;
+        if (seenOffer.has(offerKey)) continue;
+        seenOffer.add(offerKey);
+        rows.push(mapPriceMasterSearchResponseRow(row, usdRate));
+      }
+      liveOk = true;
+    } catch (error) {
+      logger.warn("PriceMaster search live query failed, using snapshot", { detail: error?.message || String(error) });
+    }
+
+    // Supplement with snapshot rows the live answer didn't contain (e.g. live briefly
+    // unavailable rows), and use it as the full fallback when live is down.
     const snapshotRows = await searchPriceMasterSnapshotOffers({
       search: q,
       partner: supplier,
-      limit,
+      limit: limit * 2,
       usdRate,
     });
     if (snapshotRows?.length) {
-      source = "postgres_snapshot";
-      rows = snapshotRows.map((row) => mapPriceMasterSearchResponseRow(row, usdRate));
+      const seenRowIds = new Set(rows.map((row) => cleanText(row.rowId)));
+      const seenOfferKeys = new Set(rows.map((row) => `${cleanText(row.partnerId)}|${cleanText(row.article).toLowerCase()}|${cleanText(row.name).toLowerCase()}`));
+      for (const snapshotRow of snapshotRows) {
+        const mapped = mapPriceMasterSearchResponseRow(snapshotRow, usdRate);
+        const offerKey = `${cleanText(mapped.partnerId)}|${cleanText(mapped.article).toLowerCase()}|${cleanText(mapped.name).toLowerCase()}`;
+        if (seenRowIds.has(cleanText(mapped.rowId)) || seenOfferKeys.has(offerKey)) continue;
+        seenRowIds.add(cleanText(mapped.rowId));
+        seenOfferKeys.add(offerKey);
+        rows.push(mapped);
+      }
+      source = liveOk ? "live+snapshot" : "postgres_snapshot";
     }
 
     if (!rows.length) {
-      try {
-        const params = [];
-        const conditions = ["r.Ignored = 0"];
-        if (q) {
-          conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
-          const like = likeSearch(q);
-          params.push(like, like, like, like);
-        }
-        if (supplier) {
-          conditions.push("p.PartnerName LIKE ?");
-          params.push(likeSearch(supplier));
-        }
-        params.push(limit);
-        const [liveRows] = await pool.query(
-          `
-          SELECT
-            r.NativeID AS article,
-            r.NativeName AS name,
-            r.NativePrice AS price,
-            r.Active AS active,
-            r.RowID AS rowId,
-            d.DocDate AS docDate,
-            d.PartnerID AS partnerId,
-            p.PartnerName AS partnerName
-          FROM OfferRows r
-          JOIN OfferDocs d ON d.DocID = r.DocID
-          LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
-          WHERE ${conditions.join(" AND ")}
-          ORDER BY d.DocDate DESC, r.RowID DESC
-          LIMIT ?
-          `,
-          params,
-        );
-        source = "live";
-        rows = liveRows.map((row) => mapPriceMasterSearchResponseRow(row, usdRate));
-      } catch (error) {
-        logger.warn("PriceMaster search live query failed, using json snapshot", { detail: error?.message || String(error) });
-        const indexes = await getPriceMasterSnapshotIndexes();
-        source = "json_snapshot";
-        rows = searchPriceMasterSnapshotJsonRows(indexes.rows || [], { q, supplier, limit, usdRate });
-      }
-    }
-
-    if (!rows.length && source !== "json_snapshot") {
       const indexes = await getPriceMasterSnapshotIndexes();
       const fallbackRows = searchPriceMasterSnapshotJsonRows(indexes.rows || [], { q, supplier, limit, usdRate });
       if (fallbackRows.length) {
