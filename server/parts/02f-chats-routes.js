@@ -61,11 +61,20 @@ app.get("/api/chats", requireAdmin, async (request, response, next) => {
     if (marketplace === "all" || marketplace === "ozon") {
       for (const account of getOzonAccounts()) {
         try {
-          const data = await ozonRequest("/v3/chat/list", {
-            limit: 500,
-            filter: unreadOnly ? { unread_only: true } : {},
-          }, account);
-          const rows = data?.chats || data?.result?.chats || [];
+          const rows = [];
+          let cursor = "";
+          for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
+            const data = await ozonRequest("/v3/chat/list", {
+              limit: 100,
+              ...(cursor ? { cursor } : {}),
+              filter: unreadOnly ? { unread_only: true } : {},
+            }, account);
+            const batch = data?.chats || data?.result?.chats || [];
+            rows.push(...batch);
+            cursor = cleanText(data?.cursor || data?.result?.cursor || "");
+            const hasNext = data?.has_next ?? data?.result?.has_next;
+            if (!batch.length || !cursor || hasNext === false) break;
+          }
           chats.push(...rows.map((entry) => normalizeOzonChat(entry, account)));
         } catch (error) {
           warnings.push(`Ozon ${account.id}: ${error?.message || "ошибка"}`);
