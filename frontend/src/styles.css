@@ -3260,3 +3260,28 @@ button:disabled {
   animation: notifyToastIn 0.25s ease-out;
 }
 @keyframes notifyToastIn { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* Reviews page */
+.reviews-grid { display: flex; flex-direction: column; gap: 12px; margin: 14px 0; }
+.review-card {
+  background: rgba(20, 32, 60, 0.6); border: 1px solid rgba(120, 160, 255, 0.18);
+  border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px;
+}
+.review-card.needs-reply { border-color: rgba(255, 176, 32, 0.4); }
+.review-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.review-product { font-size: 13px; }
+.review-author { color: #93a4c8; }
+.review-card p { margin: 2px 0; font-size: 13px; color: #d7e2fa; }
+.review-stars { display: inline-flex; gap: 1px; }
+.review-actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+.review-reply-box { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; border-top: 1px dashed rgba(120,160,255,0.2); padding-top: 10px; }
+.review-reply-box textarea { width: 100%; resize: vertical; }
+.emoji-row { display: flex; gap: 4px; flex-wrap: wrap; }
+.emoji-row button { background: rgba(60, 90, 160, 0.25); border: 1px solid rgba(120,160,255,0.2); border-radius: 8px; padding: 3px 7px; cursor: pointer; font-size: 15px; }
+.emoji-row button:hover { background: rgba(60, 90, 160, 0.5); }
+.template-list { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+.template-chip { display: inline-flex; align-items: center; gap: 8px; background: rgba(40, 60, 110, 0.4); border: 1px solid rgba(120,160,255,0.25); border-radius: 999px; padding: 4px 12px; font-size: 12px; }
+.template-chip button { background: none; border: none; color: #ff8095; cursor: pointer; display: inline-flex; }
+.filters-row { display: flex; gap: 14px; align-items: center; margin: 10px 0; }
+.market-badge.market-ozon { color: #6db3ff; }
+.market-badge.market-yandex { color: #ffd25e; }
