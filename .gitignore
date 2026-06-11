@@ -62,3 +62,9 @@ scripts/_tmp-*.cjs
 .vibe/
 .windsurf/
 .zencoder/
+check_brands*.py
+check_logs.py
+check_recovery.py
+deploy_update.py
+run_ops.py
+trigger_reconciler.py
