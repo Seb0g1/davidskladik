@@ -7,6 +7,7 @@ type ChatRow = {
   marketplace: string;
   target: string;
   chatId: string;
+  orderId?: string;
   title: string;
   subtitle?: string;
   type?: string;
@@ -25,7 +26,7 @@ type ChatMessage = {
 
 type ChatTemplate = { id: string; title: string; text: string };
 
-type ChatContext = { postingNumber?: string; productName?: string; offerId?: string } | null;
+type ChatContext = { postingNumber?: string; orderId?: string; buyerName?: string; productName?: string; offerId?: string } | null;
 
 const EMOJI_ROW = ["🙏", "😊", "✨", "👍", "🤝", "📦", "🚚", "❤️"];
 
@@ -72,7 +73,7 @@ export function ChatsPage() {
     queryKey: ["chat-history", selected?.id],
     enabled: Boolean(selected),
     queryFn: () => apiJson<{ rows: ChatMessage[]; context?: ChatContext }>(
-      `/api/chats/history?marketplace=${selected!.marketplace}&target=${encodeURIComponent(selected!.target)}&chatId=${encodeURIComponent(selected!.chatId)}`,
+      `/api/chats/history?marketplace=${selected!.marketplace}&target=${encodeURIComponent(selected!.target)}&chatId=${encodeURIComponent(selected!.chatId)}${selected!.orderId ? `&orderId=${encodeURIComponent(selected!.orderId)}` : ""}`,
     ),
     refetchInterval: 15_000,
   });
@@ -154,11 +155,17 @@ export function ChatsPage() {
                 <span className={`market-badge market-${selected.marketplace}`}>{selected.marketplace === "ozon" ? "Ozon" : "Яндекс"}</span>
                 <strong>{selected.title}</strong>
                 {selected.subtitle ? <small className="chat-subtitle">{selected.subtitle}</small> : null}
+                {historyQuery.data?.context?.buyerName ? (
+                  <strong className="chat-buyer">{historyQuery.data.context.buyerName}</strong>
+                ) : null}
                 {historyQuery.data?.context?.postingNumber ? (
                   <small className="chat-subtitle">
                     Отправление {historyQuery.data.context.postingNumber}
                     {historyQuery.data.context.productName ? ` · ${historyQuery.data.context.productName}` : ""}
                   </small>
+                ) : null}
+                {!historyQuery.data?.context?.postingNumber && historyQuery.data?.context?.productName && !selected.subtitle ? (
+                  <small className="chat-subtitle">{historyQuery.data.context.productName}</small>
                 ) : null}
                 {historyQuery.isFetching ? <Loader2 className="spin" size={14} /> : null}
               </div>
@@ -166,7 +173,7 @@ export function ChatsPage() {
                 {messages.map((message) => (
                   <div className={`chat-bubble${message.isSeller ? " mine" : ""}`} key={message.id}>
                     <p>{message.text || "(вложение)"}</p>
-                    <small>{chatTime(message.createdAt)}{message.isSeller ? " · вы" : ""}</small>
+                    <small>{message.author && !message.isSeller ? `${message.author} · ` : ""}{chatTime(message.createdAt)}{message.isSeller ? " · вы" : ""}</small>
                   </div>
                 ))}
                 {!messages.length && !historyQuery.isFetching ? <div className="empty-state">Сообщений нет.</div> : null}

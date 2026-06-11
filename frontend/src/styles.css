@@ -3317,3 +3317,5 @@ button:disabled {
 @media (max-width: 900px) { .chats-layout { grid-template-columns: 1fr; } }
 
 .chat-subtitle { color: #9fd29f; font-size: 11px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.chat-buyer { color: #ffd25e; font-size: 13px; }

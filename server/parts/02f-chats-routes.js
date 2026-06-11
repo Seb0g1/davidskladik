@@ -21,18 +21,27 @@ async function writeChatTemplates(templates) {
   await fs.writeFile(chatTemplatesPath, JSON.stringify(templates, null, 2), "utf8");
 }
 
+function ozonChatTitle(chatType, chatId) {
+  const type = cleanText(chatType).toLowerCase();
+  if (type.includes("support")) return "Поддержка Ozon";
+  if (type.includes("notification") || type.includes("news") || type.includes("system")) return "Новости Ozon";
+  if (type.includes("courier") || type.includes("driver")) return "Курьер Ozon";
+  return `Покупатель · ${cleanText(chatId).slice(0, 8)}`;
+}
+
 function normalizeOzonChat(entry = {}, account = {}) {
   const chat = entry.chat && typeof entry.chat === "object" ? entry.chat : entry;
+  const chatId = cleanText(chat.chat_id || entry.chat_id);
   return {
-    id: `ozon:${cleanText(chat.chat_id || entry.chat_id)}`,
+    id: `ozon:${chatId}`,
     marketplace: "ozon",
     target: account.id || "ozon",
-    chatId: cleanText(chat.chat_id || entry.chat_id),
+    chatId,
     type: cleanText(chat.chat_type || ""),
     status: cleanText(chat.chat_status || ""),
     unreadCount: Number(entry.unread_count ?? chat.unread_count ?? 0) || 0,
     lastMessageAt: cleanText(chat.last_message_at || entry.last_message_at || chat.created_at || ""),
-    title: cleanText(chat.chat_type) === "Seller_Support" ? "Поддержка Ozon" : `Покупатель · ${cleanText(chat.chat_id || entry.chat_id).slice(0, 8)}`,
+    title: ozonChatTitle(chat.chat_type, chatId),
   };
 }
 
@@ -42,6 +51,7 @@ function normalizeYandexChat(chat = {}, shop = {}) {
     id: `yandex:${cleanText(chat.chatId || chat.id)}`,
     marketplace: "yandex",
     target: shop.id || "yandex",
+    orderId,
     chatId: cleanText(chat.chatId || chat.id),
     type: cleanText(chat.type || ""),
     status: cleanText(chat.status || ""),
@@ -141,12 +151,22 @@ app.get("/api/chats", requireAdmin, async (request, response, next) => {
   }
 });
 
+function ozonChatAuthorLabel(userType) {
+  const type = cleanText(userType).toLowerCase();
+  if (type === "seller") return "Вы";
+  if (type === "customer") return "Покупатель";
+  if (type === "courier") return "Курьер";
+  if (["crm", "support", "system"].includes(type)) return "Ozon";
+  return cleanText(userType) || "Покупатель";
+}
+
 function normalizeOzonChatMessage(message = {}) {
   const data = Array.isArray(message.data) ? message.data.join("\n") : cleanText(message.data || "");
+  const userType = cleanText(message.user?.type || message.user_type || "");
   return {
     id: cleanText(message.message_id || message.id),
-    author: cleanText(message.user?.type || message.user_type || ""),
-    isSeller: ["seller", "Seller"].includes(cleanText(message.user?.type || message.user_type)),
+    author: ozonChatAuthorLabel(userType),
+    isSeller: userType.toLowerCase() === "seller",
     text: data || cleanText(message.text || ""),
     createdAt: cleanText(message.created_at || ""),
     isRead: message.is_read !== false,
@@ -154,10 +174,15 @@ function normalizeOzonChatMessage(message = {}) {
 }
 
 function normalizeYandexChatMessage(message = {}) {
-  const sender = cleanText(message.sender || "");
+  const sender = cleanText(message.sender || "").toUpperCase();
+  const authorLabel = sender === "PARTNER" ? "Вы"
+    : sender === "CUSTOMER" ? "Покупатель"
+    : sender === "MARKET" ? "Яндекс Маркет"
+    : sender === "SUPPORT" ? "Поддержка"
+    : (cleanText(message.sender) || "Покупатель");
   return {
     id: cleanText(message.messageId || message.id),
-    author: sender,
+    author: authorLabel,
     isSeller: sender === "PARTNER",
     text: cleanText(message.message || message.text || ""),
     createdAt: cleanText(message.createdAt || ""),
@@ -214,7 +239,25 @@ app.get("/api/chats/history", requireAdmin, async (request, response, next) => {
       const data = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/chats/history?chatId=${encodeURIComponent(chatId)}&limit=100`, {});
       const rows = (data?.result?.messages || []).map(normalizeYandexChatMessage);
       rows.sort((a, b) => cleanText(a.createdAt).localeCompare(cleanText(b.createdAt)));
-      return response.json({ ok: true, rows });
+      // Buyer name: order details expose the buyer for DBS orders.
+      let context = null;
+      const orderId = cleanText(request.query.orderId);
+      if (orderId && shop.campaignId) {
+        try {
+          const orderData = await yandexRequest(shop, "GET", `/v2/campaigns/${shop.campaignId}/orders/${encodeURIComponent(orderId)}`);
+          const buyer = orderData?.order?.buyer || {};
+          const buyerName = [buyer.lastName, buyer.firstName, buyer.middleName].map(cleanText).filter(Boolean).join(" ");
+          const item = (orderData?.order?.items || [])[0] || {};
+          context = {
+            orderId,
+            buyerName,
+            productName: cleanText(item.offerName || ""),
+          };
+        } catch {
+          context = { orderId, buyerName: "", productName: "" };
+        }
+      }
+      return response.json({ ok: true, rows, context });
     }
 
     response.status(400).json({ error: "marketplace должен быть ozon или yandex." });
