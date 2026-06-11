@@ -25,17 +25,73 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
     if (!rows.length) return { status: "ok", products: 0, unarchived: 0 };
 
     const products = rows.map(productFromPostgres);
-    const byTarget = new Map();
+
+    // Partition: products that must not be on Yandex at all get their local yandex row
+    // deleted (no wasted API calls); products absent on Yandex get a card CREATED via
+    // offer mapping instead of a pointless unarchive; the rest are bulk-unarchived.
+    const toDelete = [];
+    const toCreate = [];
+    const toUnarchive = [];
     for (const product of products) {
-      const target = cleanText(product.target);
-      if (!target || !cleanText(product.offerId)) continue;
-      if (!byTarget.has(target)) byTarget.set(target, []);
-      byTarget.get(target).push(product);
+      if (!cleanText(product.target) || !cleanText(product.offerId)) continue;
+      const name = cleanText(product.name || product.yandex?.name || product.offerId);
+      const lowerName = name.toLowerCase();
+      const hasBlockedKeyword = lowerName.includes("отливант") || lowerName.includes("тестер");
+      const volumeAssessment = assessYandexSmallVolume(name);
+      if (hasBlockedKeyword || volumeAssessment.blocked) {
+        toDelete.push(product);
+        continue;
+      }
+      const stateCode = cleanText(product.marketplaceState?.code).toLowerCase();
+      const stateRaw = cleanText(product.marketplaceState?.state).toUpperCase();
+      if (stateCode === "absent" || stateRaw === "ABSENT") toCreate.push(product);
+      else toUnarchive.push(product);
     }
+
+    // 1. Drop local yandex rows for <20ml / Тестер / Отливант — they were deleted from
+    // Yandex (or never existed) and only waste recovery cycles and API budget.
+    let locallyDeleted = 0;
+    if (toDelete.length) {
+      const deleteIds = toDelete.map((product) => String(product.id));
+      await prisma.productLink.deleteMany({ where: { productId: { in: deleteIds } } }).catch(() => {});
+      const res = await prisma.warehouseProduct.deleteMany({ where: { id: { in: deleteIds } } }).catch(() => ({ count: 0 }));
+      locallyDeleted = res.count || 0;
+      logger.info("yandex fast unarchive: removed blocked local yandex rows", {
+        removed: locallyDeleted,
+        sample: toDelete.slice(0, 5).map((product) => product.offerId),
+      });
+    }
+
+    const groupByTarget = (list) => {
+      const map = new Map();
+      for (const product of list) {
+        const target = cleanText(product.target);
+        if (!map.has(target)) map.set(target, []);
+        map.get(target).push(product);
+      }
+      return map;
+    };
 
     const okIds = new Set();
     const failed = [];
-    for (const [target, items] of byTarget.entries()) {
+
+    // 2. Create cards for products absent on Yandex (full offer payload).
+    for (const [target, items] of groupByTarget(toCreate).entries()) {
+      const shop = getYandexShopByTarget(target);
+      if (!shop) continue;
+      const offers = items
+        .map((product) => buildYandexOfferMapping(product).offer)
+        .filter((offer) => offer?.offerId);
+      const results = await sendYandexOfferMappings(shop, offers).catch(() => []);
+      const okOffers = new Set(results.filter((item) => item.ok).map((item) => cleanText(item.offerId)));
+      for (const item of items) {
+        if (okOffers.has(cleanText(item.offerId))) okIds.add(String(item.id));
+        else failed.push(item.offerId);
+      }
+    }
+
+    // 3. Bulk unarchive for products that really exist in the Yandex archive.
+    for (const [target, items] of groupByTarget(toUnarchive).entries()) {
       const shop = getYandexShopByTarget(target);
       if (!shop) continue;
       const results = await sendYandexOfferArchiveState(shop, items.map((item) => item.offerId), false);
@@ -107,12 +163,14 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
       source,
       products: products.length,
       unarchived: okIds.size,
+      created: toCreate.length,
+      locallyDeleted,
       failed: failed.length,
       stockSent: stockActions.filter((item) => item.ok).length,
       priceQueued: priceRefresh.queued || 0,
       elapsedMs: Date.now() - startedAt,
     });
-    return { status: "ok", products: products.length, unarchived: okIds.size, failed: failed.length };
+    return { status: "ok", products: products.length, unarchived: okIds.size, created: toCreate.length, locallyDeleted, failed: failed.length };
   } catch (error) {
     logger.warn("yandex fast unarchive failed", { detail: error?.message || String(error) });
     return { status: "error", error: error?.message || String(error) };
