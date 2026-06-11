@@ -9,6 +9,34 @@ import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common"
 import { readNotificationSoundSettings, writeNotificationSoundSettings, playNotificationSound, NotificationSoundSettings } from "../components/NotificationsBell";
 
 
+
+function SettingsHubPanel() {
+  const sections: Array<{ href: string; title: string; note: string }> = [
+    { href: "/app/suppliers", title: "Поставщики", note: "Стоп-склады, активность, импорт из PriceMaster" },
+    { href: "/app/prices", title: "Цены", note: "Коэффициенты, правила наценки, отправка" },
+    { href: "/app/operations", title: "Операции", note: "Журнал операций и запуски" },
+    { href: "/app/no-supplier", title: "Ошибки наличия", note: "Товары без доступного поставщика" },
+    { href: "/app/problem-products", title: "Проблемные товары", note: "Ошибки карточек и низкие оценки" },
+    { href: "/app/recovery-queue", title: "Восстановление", note: "Очередь разархива Ozon + Яндекс" },
+    { href: "/app/system", title: "Система", note: "Диагностика, фоновые процессы" },
+    { href: "/app/ai-drafts", title: "AI", note: "Черновики контента и AI-фото" },
+    { href: "/app/finance", title: "Финансы", note: "Заказы, себестоимость, прибыль" },
+  ];
+  return (
+    <section className="settings-panel settings-panel-wide">
+      <div className="section-title"><div><span>Разделы</span><h3>Все настройки и операции</h3></div></div>
+      <div className="settings-hub-grid">
+        {sections.map((section) => (
+          <a className="settings-hub-card" key={section.href} href={section.href}>
+            <strong>{section.title}</strong>
+            <small>{section.note}</small>
+          </a>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function NotificationSettingsPanel() {
   const [settings, setSettings] = useState<NotificationSoundSettings>(() => readNotificationSoundSettings());
   const update = (next: NotificationSoundSettings) => {
@@ -388,6 +416,7 @@ function UsersSettingsPanel() {
   };
   return (
     <>
+    <SettingsHubPanel />
     <NotificationSettingsPanel />
     <section className="settings-panel settings-panel-wide">
       <div className="section-title"><div><span>Доступ</span><h3>Сотрудники и роли</h3></div></div>
