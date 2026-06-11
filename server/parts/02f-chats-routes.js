@@ -79,7 +79,7 @@ app.get("/api/chats", requireAdmin, async (request, response, next) => {
         if (!shop.businessId || seenBusinesses.has(String(shop.businessId))) continue;
         seenBusinesses.add(String(shop.businessId));
         try {
-          const data = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/chats?limit=100`, {});
+          const data = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/chats?limit=20`, {});
           const rows = data?.result?.chats || [];
           chats.push(...rows
             .map((chat) => normalizeYandexChat(chat, shop))
