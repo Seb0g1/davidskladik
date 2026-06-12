@@ -6299,3 +6299,18 @@ label.settings-toggle {
 }
 .brand-combo-option:hover, .brand-combo-option.is-active { background: rgba(59, 109, 255, 0.25); color: #fff; }
 .brand-combo-empty { padding: 10px; color: var(--muted); font-size: 12px; text-align: center; }
+
+/* ===== Import page ===== */
+.import-table .import-row { display: grid; grid-template-columns: 44px minmax(220px, 1.6fr) minmax(120px, 0.8fr) minmax(110px, 0.8fr) minmax(150px, 1fr); align-items: center; gap: 10px; }
+.import-table .table-row { padding: 8px 12px; border-bottom: 1px solid rgba(120,160,255,0.08); }
+.import-table .table-row.is-selected { background: rgba(59, 109, 255, 0.1); }
+.checkbox-btn { background: none; border: none; color: #8fb3ff; cursor: pointer; display: inline-flex; padding: 2px; }
+.checkbox-btn:disabled { color: #45557a; cursor: not-allowed; }
+.import-product { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.import-product img { width: 34px; height: 34px; border-radius: 8px; object-fit: cover; background: #0c1426; flex: none; }
+.import-noimg { width: 34px; height: 34px; border-radius: 8px; background: rgba(120,160,255,0.1); flex: none; }
+.import-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pager { display: flex; align-items: center; gap: 14px; justify-content: center; margin-top: 12px; color: var(--muted); }
+.pill.ok { color: #3ddc97; border: 1px solid rgba(61,220,151,0.35); background: rgba(61,220,151,0.12); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+.pill.warn { color: #ffb020; border: 1px solid rgba(255,176,32,0.35); background: rgba(255,176,32,0.12); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+.pill.muted { color: #93a4c8; border: 1px solid rgba(120,160,255,0.18); border-radius: 999px; padding: 2px 10px; font-size: 12px; }

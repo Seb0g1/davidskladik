@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, Home, LogOut, Menu, PackageCheck, RefreshCcw, Search, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, UserCircle } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, Home, LogOut, Menu, PackageCheck, RefreshCcw, Search, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, UserCircle, Upload } from "lucide-react";
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { WarehousePage } from "./routes/WarehousePage";
 import { NotificationsBell } from "./components/NotificationsBell";
@@ -7,6 +7,7 @@ import { DashboardPage } from "./routes/DashboardPage";
 import { ReviewsPage } from "./routes/ReviewsPage";
 import { QuestionsPage } from "./routes/QuestionsPage";
 import { ChatsPage } from "./routes/ChatsPage";
+import { ImportPage } from "./routes/ImportPage";
 import { OperationsPage } from "./routes/OperationsPage";
 import { SettingsPage } from "./routes/SettingsPage";
 import { AiDraftsPage } from "./routes/AiDraftsPage";
@@ -21,7 +22,7 @@ import { FinancePage } from "./routes/FinancePage";
 import { SuppliersPage } from "./routes/SuppliersPage";
 import { StatisticsPage } from "./routes/StatisticsPage";
 
-type AppRoute = "dashboard" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier";
+type AppRoute = "dashboard" | "import" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -31,6 +32,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "picking-list", href: "/app/picking-list", label: "Сборка", icon: <ClipboardList size={16} /> },
   { route: "reviews", href: "/app/reviews", label: "Отзывы", icon: <Star size={16} /> },
   { route: "chats", href: "/app/chats", label: "Чаты", icon: <MessageCircle size={16} /> },
+  { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Upload size={16} /> },
   { route: "statistics", href: "/app/statistics", label: "Статистика", icon: <BarChart3 size={16} /> },
   { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
   { route: "questions", href: "/app/questions", label: "Вопросы", icon: <HelpCircle size={16} /> },
@@ -56,6 +58,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/reviews")) return "reviews";
   if (path.startsWith("/app/questions")) return "questions";
   if (path.startsWith("/app/chats")) return "chats";
+  if (path.startsWith("/app/import")) return "import";
   if (path.startsWith("/app/prices")) return "prices";
   if (path.startsWith("/app/problem-products")) return "problem-products";
   if (path.startsWith("/app/finance")) return "finance";
@@ -150,7 +153,7 @@ function AppShell() {
   const isAdmin = session?.role === "admin";
   const canUseStaffRoutes = session?.role === "manager" || isAdmin;
   const canUseAdminRoutes = sessionReady ? isAdmin : false;
-  const headerRoutes = new Set<AppRoute>(isAdmin ? ["dashboard", "warehouse", "suppliers", "picking-list", "reviews", "chats", "statistics", "settings", "questions", "prices", "operations", "supplier-cart", "recovery-queue", "problem-products", "finance", "system", "ai-drafts", "no-supplier"] : ["warehouse", "picking-list"]);
+  const headerRoutes = new Set<AppRoute>(isAdmin ? ["dashboard", "warehouse", "suppliers", "picking-list", "reviews", "chats", "statistics", "settings", "questions", "prices", "operations", "supplier-cart", "recovery-queue", "problem-products", "finance", "system", "ai-drafts", "no-supplier", "import"] : ["warehouse", "picking-list"]);
   const visibleNavItems = navItems.filter((item) => headerRoutes.has(item.route));
   useEffect(() => {
     activeNavRef.current?.scrollIntoView({ block: "nearest" });
@@ -240,6 +243,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "reviews" ? <ReviewsPage /> : null}
       {sessionReady && !accessDenied && route === "questions" ? <QuestionsPage /> : null}
       {sessionReady && !accessDenied && route === "chats" ? <ChatsPage /> : null}
+      {sessionReady && !accessDenied && route === "import" ? <ImportPage /> : null}
       {sessionReady && !accessDenied && route === "prices" ? <PricesPage /> : null}
       {sessionReady && !accessDenied && route === "problem-products" ? <ProblemProductsPage /> : null}
       {sessionReady && !accessDenied && route === "finance" ? <FinancePage /> : null}

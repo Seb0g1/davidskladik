@@ -14,6 +14,62 @@ let ozonYandexAutoImportTimer = null;
 let ozonYandexAutoImportRunning = false;
 let ozonYandexAutoImportNextRunAt = null;
 
+// Shared export pipeline: create Yandex cards for the given Ozon products, then send
+// prices + stocks and persist local yandex rows. Used by both the scheduled auto-import
+// and the manual import page. `products` are normalized warehouse products.
+async function exportOzonProductsToYandex(products = [], shops = null, { reason = "ozon_yandex_import" } = {}) {
+  const targetShops = Array.isArray(shops) && shops.length ? shops : uniqueYandexShopsByBusiness();
+  const offers = (Array.isArray(products) ? products : [])
+    .map((product) => buildYandexOfferMapping(product).offer)
+    .filter((offer) => offer?.offerId);
+  if (!offers.length || !targetShops.length) {
+    return { sentOfferIds: new Set(), exportedProducts: [], failed: 0, results: [], priceStage: { sent: 0 }, stockStage: { sent: 0 } };
+  }
+
+  const cardResults = [];
+  for (const shop of targetShops) {
+    const sent = await sendYandexOfferMappings(shop, offers);
+    cardResults.push(...sent.map((item) => ({ ...item, target: shop.id })));
+  }
+  const sentOfferIds = new Set(cardResults
+    .filter((item) => item.ok)
+    .map((item) => cleanText(item.offerId).toLowerCase())
+    .filter(Boolean));
+  const exportedProducts = products.filter((product) => sentOfferIds.has(cleanText(product.offerId).toLowerCase()));
+
+  const priceStage = exportedProducts.length
+    ? await sendYandexPricesFromOzonProducts(exportedProducts, { shops: targetShops, existingOfferIds: sentOfferIds })
+    : { sent: 0, failed: 0 };
+  const stockStage = exportedProducts.length
+    ? await sendYandexStocksForExportedOzonProducts(exportedProducts, { shops: targetShops, existingOfferIds: sentOfferIds })
+    : { sent: 0, failed: 0 };
+
+  const now = new Date().toISOString();
+  const yandexProducts = [];
+  for (const product of exportedProducts) {
+    for (const shop of targetShops) {
+      yandexProducts.push(buildYandexWarehouseProductFromOzonExport(product, shop, {
+        status: "sent",
+        targetName: shop.name || shop.id,
+        sentAt: now,
+      }));
+    }
+  }
+  if (yandexProducts.length) {
+    await writeWarehouseProductPatch(yandexProducts, { reason })
+      .catch((error) => logger.warn("ozon yandex export persist failed", { detail: error?.message || String(error) }));
+  }
+
+  return {
+    sentOfferIds,
+    exportedProducts,
+    failed: cardResults.filter((item) => !item.ok).length,
+    results: cardResults,
+    priceStage,
+    stockStage,
+  };
+}
+
 async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit, source = "auto" } = {}) {
   if (ozonYandexAutoImportRunning) return { status: "already_running" };
   const prisma = getPrisma();
@@ -70,46 +126,11 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
       return { status: "ok", sent: 0, scanned, skippedExisting, skippedBlocked };
     }
 
-    const offers = selected
-      .map((product) => buildYandexOfferMapping(product).offer)
-      .filter((offer) => offer?.offerId);
-
-    const cardResults = [];
-    for (const shop of shops) {
-      const sent = await sendYandexOfferMappings(shop, offers);
-      cardResults.push(...sent.map((item) => ({ ...item, target: shop.id })));
-    }
-    const sentOfferIds = new Set(cardResults
-      .filter((item) => item.ok)
-      .map((item) => cleanText(item.offerId).toLowerCase())
-      .filter(Boolean));
-    const exportedProducts = selected.filter((product) => sentOfferIds.has(cleanText(product.offerId).toLowerCase()));
-
-    const priceStage = exportedProducts.length
-      ? await sendYandexPricesFromOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds })
-      : { sent: 0, failed: 0 };
-    const stockStage = exportedProducts.length
-      ? await sendYandexStocksForExportedOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds })
-      : { sent: 0, failed: 0 };
-
-    // Persist local yandex rows so the catalog, reconciler and price automation see them.
-    const now = new Date().toISOString();
-    const yandexProducts = [];
-    for (const product of exportedProducts) {
-      for (const shop of shops) {
-        yandexProducts.push(buildYandexWarehouseProductFromOzonExport(product, shop, {
-          status: "sent",
-          targetName: shop.name || shop.id,
-          sentAt: now,
-        }));
-      }
-    }
-    if (yandexProducts.length) {
-      await writeWarehouseProductPatch(yandexProducts, { reason: "ozon_yandex_auto_import" })
-        .catch((error) => logger.warn("ozon yandex auto import persist failed", { detail: error?.message || String(error) }));
-    }
-
-    const failed = cardResults.filter((item) => !item.ok).length;
+    const exportResult = await exportOzonProductsToYandex(selected, shops, { reason: "ozon_yandex_auto_import" });
+    const sentOfferIds = exportResult.sentOfferIds;
+    const priceStage = exportResult.priceStage;
+    const stockStage = exportResult.stockStage;
+    const failed = exportResult.failed;
     logger.info("ozon_yandex_auto_import_complete", {
       source,
       scanned,
