@@ -38,6 +38,72 @@ button, input, select {
   font: inherit;
 }
 
+/* Native <option> popups don't inherit CSS custom properties, so the
+   theme palette is duplicated here as literal values per [data-theme]. */
+select option,
+select optgroup {
+  background-color: #0b1728 !important;
+  color: #edf5ff !important;
+}
+
+select option:disabled {
+  color: #8da1bf !important;
+}
+
+select option:checked,
+select option:hover,
+select option:focus {
+  background-color: rgba(10, 132, 255, 0.35) !important;
+  color: #edf5ff !important;
+}
+
+[data-theme="pink"] select option:checked,
+[data-theme="pink"] select option:hover,
+[data-theme="pink"] select option:focus {
+  background-color: rgba(255, 92, 168, 0.35) !important;
+}
+
+[data-theme="red"] select option:checked,
+[data-theme="red"] select option:hover,
+[data-theme="red"] select option:focus {
+  background-color: rgba(255, 86, 86, 0.35) !important;
+}
+
+[data-theme="yellow"] select option:checked,
+[data-theme="yellow"] select option:hover,
+[data-theme="yellow"] select option:focus {
+  background-color: rgba(245, 188, 36, 0.35) !important;
+}
+
+[data-theme="green"] select option:checked,
+[data-theme="green"] select option:hover,
+[data-theme="green"] select option:focus {
+  background-color: rgba(49, 208, 123, 0.35) !important;
+}
+
+[data-theme="violet"] select option:checked,
+[data-theme="violet"] select option:hover,
+[data-theme="violet"] select option:focus {
+  background-color: rgba(155, 134, 255, 0.35) !important;
+}
+
+[data-theme="white"] select option,
+[data-theme="white"] select optgroup {
+  background-color: #ffffff !important;
+  color: #122035 !important;
+}
+
+[data-theme="white"] select option:disabled {
+  color: #5b6b85 !important;
+}
+
+[data-theme="white"] select option:checked,
+[data-theme="white"] select option:hover,
+[data-theme="white"] select option:focus {
+  background-color: rgba(10, 132, 255, 0.35) !important;
+  color: #122035 !important;
+}
+
 button {
   cursor: pointer;
 }
