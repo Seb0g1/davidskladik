@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, HelpCircle, Loader2, MessageSquareReply, RefreshCw } from "lucide-react";
+import { AlertCircle, BookOpen, HelpCircle, Loader2, MessageSquareReply, RefreshCw } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
+import { TemplatesDrawer } from "../components/TemplatesDrawer";
 
 type QuestionRow = {
   id: string;
@@ -18,6 +19,8 @@ type QuestionRow = {
   answersCount?: number;
 };
 
+type QuestionTemplate = { id: string; title: string; text: string };
+
 const EMOJI_ROW = ["🙏", "😊", "✨", "👍", "🤝", "💬"];
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -31,7 +34,7 @@ async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-function QuestionCard({ question, onReplied }: { question: QuestionRow; onReplied: () => void }) {
+function QuestionCard({ question, templates, onReplied }: { question: QuestionRow; templates: QuestionTemplate[]; onReplied: () => void }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const reply = useMutation({
@@ -59,6 +62,16 @@ function QuestionCard({ question, onReplied }: { question: QuestionRow; onReplie
       </div>
       {open ? (
         <div className="review-reply-box">
+          {templates.length ? (
+            <select defaultValue="" onChange={(event) => {
+              const template = templates.find((item) => item.id === event.target.value);
+              if (template) setText((current) => (current ? `${current}\n${template.text}` : template.text));
+              event.target.value = "";
+            }}>
+              <option value="" disabled>Вставить шаблон…</option>
+              {templates.map((template) => <option key={template.id} value={template.id}>{template.title}</option>)}
+            </select>
+          ) : null}
           <div className="emoji-row">
             {EMOJI_ROW.map((emoji) => (
               <button key={emoji} type="button" onClick={() => setText((current) => current + emoji)}>{emoji}</button>
@@ -78,21 +91,32 @@ function QuestionCard({ question, onReplied }: { question: QuestionRow; onReplie
 export function QuestionsPage() {
   const queryClient = useQueryClient();
   const [unanswered, setUnanswered] = useState(true);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const questionsQuery = useQuery({
     queryKey: ["questions", unanswered],
     queryFn: () => apiJson<{ rows: QuestionRow[]; warnings: string[] }>(`/api/questions?unanswered=${unanswered}&limit=50`),
     refetchInterval: 120_000,
   });
+  const templatesQuery = useQuery({
+    queryKey: ["question-templates"],
+    queryFn: () => apiJson<{ templates: QuestionTemplate[] }>("/api/questions/templates"),
+  });
   const rows = questionsQuery.data?.rows || [];
+  const templates = templatesQuery.data?.templates || [];
   return (
     <section className="page-section questions-page">
       <PageHeader
         title="Вопросы по товарам"
         subtitle="Отвечай на вопросы покупателей по товарам на Ozon."
         action={(
-          <button className="secondary-action" type="button" onClick={() => questionsQuery.refetch()}>
-            {questionsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
-          </button>
+          <div className="row-actions">
+            <button className="secondary-action" type="button" onClick={() => setTemplatesOpen(true)}>
+              <BookOpen size={16} /> Шаблоны
+            </button>
+            <button className="secondary-action" type="button" onClick={() => questionsQuery.refetch()}>
+              {questionsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+            </button>
+          </div>
         )}
       />
       <section className="dashboard-metrics">
@@ -112,10 +136,19 @@ export function QuestionsPage() {
       {questionsQuery.error ? <div className="inline-error">{String((questionsQuery.error as Error).message)}</div> : null}
       <div className="reviews-grid">
         {rows.map((question) => (
-          <QuestionCard key={question.id} question={question} onReplied={() => void queryClient.invalidateQueries({ queryKey: ["questions"] })} />
+          <QuestionCard key={question.id} question={question} templates={templates} onReplied={() => void queryClient.invalidateQueries({ queryKey: ["questions"] })} />
         ))}
         {!rows.length && !questionsQuery.isFetching ? <div className="empty-state">Вопросов по фильтру нет.</div> : null}
       </div>
+      <TemplatesDrawer
+        open={templatesOpen}
+        onClose={() => setTemplatesOpen(false)}
+        title="Ответы на вопросы"
+        description="Готовые тексты для быстрого ответа на вопросы покупателей."
+        apiBase="/api/questions/templates"
+        queryKey={["question-templates"]}
+        templates={templates}
+      />
     </section>
   );
 }

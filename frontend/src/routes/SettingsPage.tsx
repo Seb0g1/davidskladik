@@ -59,7 +59,7 @@ function NotificationSettingsPanel() {
         </select>
         <button className="secondary-action" type="button" onClick={() => playNotificationSound(settings.sound)}>Проба звука</button>
       </div>
-      <div className="settings-form-row" style={{ flexWrap: "wrap", gap: 12 }}>
+      <div className="settings-toggle-row">
         {typeLabels.map(([type, label]) => (
           <label className="settings-toggle" key={type}>
             <input

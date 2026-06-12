@@ -2,6 +2,7 @@ import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, Chevr
 import { ReactNode, useEffect, useRef, useState } from "react";
 import { WarehousePage } from "./routes/WarehousePage";
 import { NotificationsBell } from "./components/NotificationsBell";
+import { ThemeSwitcher } from "./components/ThemeSwitcher";
 import { DashboardPage } from "./routes/DashboardPage";
 import { ReviewsPage } from "./routes/ReviewsPage";
 import { QuestionsPage } from "./routes/QuestionsPage";
@@ -194,6 +195,7 @@ function AppShell() {
           <kbd>Ctrl + /</kbd>
         </form>
         <div className="topbar-actions">
+          <ThemeSwitcher />
           <NotificationsBell />
           <div className="topbar-user">
             <UserCircle size={30} />

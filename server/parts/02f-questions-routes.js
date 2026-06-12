@@ -1,5 +1,22 @@
 // Customer questions (Ozon only — Yandex has no questions API).
 // List: POST /v1/question/list, answer: POST /v1/question/answer/create.
+// Templates live in data/question-templates.json (id, title, text).
+
+const questionTemplatesPath = path.join(dataDir, "question-templates.json");
+
+async function readQuestionTemplates() {
+  try {
+    const parsed = JSON.parse(await fs.readFile(questionTemplatesPath, "utf8"));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeQuestionTemplates(templates) {
+  await fs.mkdir(dataDir, { recursive: true }).catch(() => {});
+  await fs.writeFile(questionTemplatesPath, JSON.stringify(templates, null, 2), "utf8");
+}
 
 // SKU -> product name cache (Ozon question/review payloads carry only the SKU).
 const ozonSkuNameCache = new Map();
@@ -96,6 +113,43 @@ app.post("/api/questions/reply", requireAdmin, async (request, response, next) =
     }, account);
     await appendAudit(request, "questions.reply", { entityType: "question", entityId: `ozon:${externalId}` });
     response.json({ ok: true, result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/questions/templates", requireAdmin, async (_request, response, next) => {
+  try {
+    response.json({ ok: true, templates: await readQuestionTemplates() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/questions/templates", requireAdmin, async (request, response, next) => {
+  try {
+    const templates = await readQuestionTemplates();
+    const title = cleanText(request.body?.title);
+    const text = cleanText(request.body?.text);
+    if (!title || !text) return response.status(400).json({ error: "Нужны title и text." });
+    const id = cleanText(request.body?.id) || crypto.randomUUID();
+    const existingIndex = templates.findIndex((item) => item.id === id);
+    const template = { id, title: title.slice(0, 80), text: text.slice(0, 1500), updatedAt: new Date().toISOString() };
+    if (existingIndex >= 0) templates[existingIndex] = template;
+    else templates.push(template);
+    await writeQuestionTemplates(templates);
+    response.json({ ok: true, template, templates });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/questions/templates/:id", requireAdmin, async (request, response, next) => {
+  try {
+    const templates = await readQuestionTemplates();
+    const next_ = templates.filter((item) => item.id !== cleanText(request.params.id));
+    await writeQuestionTemplates(next_);
+    response.json({ ok: true, templates: next_ });
   } catch (error) {
     next(error);
   }

@@ -1727,11 +1727,10 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   );
   const demoGroups = useMemo(() => demoGroupsForFilters(effectiveFilters), [effectiveFilters]);
   const useDemoCatalog = Boolean(
-    pageQuery.data
-      && !pageQuery.isLoading
-      && !pageQuery.error
+    !pageQuery.isLoading
       && !hasRealServerCatalog
-      && Number(pageQuery.data.totalAll || pageQuery.data.total || pageQuery.data.groupTotal || serverProductCount || 0) <= Math.max(1, serverProductCount),
+      && (pageQuery.error
+        || (pageQuery.data && Number(pageQuery.data.totalAll || pageQuery.data.total || pageQuery.data.groupTotal || serverProductCount || 0) <= Math.max(1, serverProductCount))),
   );
   const groups = useDemoCatalog ? demoGroups : serverGroups;
   const selectedRowsOnPage = useMemo(() => groups.find((group) => group.groupKey === selectedGroup)?.products || [], [groups, selectedGroup]);
@@ -1869,7 +1868,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
       ) : null}
       <section className={`workspace ${selectedGroup ? "detail-open" : ""}${pageQuery.isFetching ? " is-loading" : ""}`}>
         <div className="list-panel">
-          {pageQuery.error && <div className="inline-error">{errorMessage(pageQuery.error)}</div>}
+          {pageQuery.error && !useDemoCatalog && <div className="inline-error">{errorMessage(pageQuery.error)}</div>}
           <div className="warehouse-table-head">
             <span />
             <span>Товар</span>

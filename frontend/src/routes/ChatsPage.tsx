@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, Loader2, MessageCircle, RefreshCw, Send } from "lucide-react";
+import { BellRing, BookOpen, Loader2, MessageCircle, RefreshCw, Send } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
+import { TemplatesDrawer } from "../components/TemplatesDrawer";
 
 type ChatRow = {
   id: string;
@@ -60,6 +61,7 @@ export function ChatsPage() {
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [selected, setSelected] = useState<ChatRow | null>(null);
   const [text, setText] = useState("");
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const chatsQuery = useQuery({
@@ -107,9 +109,14 @@ export function ChatsPage() {
         title="Чаты"
         subtitle="Переписка с покупателями на Ozon и Яндекс.Маркете в одном месте."
         action={(
-          <button className="secondary-action" type="button" onClick={() => chatsQuery.refetch()}>
-            {chatsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
-          </button>
+          <div className="row-actions">
+            <button className="secondary-action" type="button" onClick={() => setTemplatesOpen(true)}>
+              <BookOpen size={16} /> Шаблоны
+            </button>
+            <button className="secondary-action" type="button" onClick={() => chatsQuery.refetch()}>
+              {chatsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+            </button>
+          </div>
         )}
       />
       <section className="dashboard-metrics">
@@ -217,6 +224,16 @@ export function ChatsPage() {
           )}
         </div>
       </div>
+      <TemplatesDrawer
+        open={templatesOpen}
+        onClose={() => setTemplatesOpen(false)}
+        title="Ответы в чатах"
+        description="Готовые тексты для быстрых ответов покупателям."
+        apiBase="/api/chats/templates"
+        queryKey={["chat-templates"]}
+        templates={templates}
+        onInsert={selected ? (value) => setText((current) => (current ? `${current}\n${value}` : value)) : undefined}
+      />
     </section>
   );
 }
