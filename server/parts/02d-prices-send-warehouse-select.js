@@ -208,22 +208,31 @@ async function sendWarehousePrices({
     // normal patch path. Without this the price sweep re-selects the same thousands of
     // products forever and the UI shows "цена ждёт" for prices that are actually live.
     try {
-      if (shouldUsePostgresStorage()) {
+      const prisma = getPrisma();
+      if (prisma && shouldUsePostgresStorage()) {
         const unchangedIds = new Set(skipped
           .filter((item) => item.reason === "unchanged_verified")
           .map((item) => String(item.id || item.productId))
           .filter(Boolean));
-        const reconciledProducts = [];
+        const updates = [];
         for (const product of selected) {
           if (!unchangedIds.has(String(product.id))) continue;
           const target = roundPrice(Number(product.nextPrice || product.targetPrice || 0));
-          if (!(target > 0)) continue;
-          if (roundPrice(Number(product.marketplacePrice || 0)) === target) continue;
-          reconciledProducts.push({ ...product, marketplacePrice: target, currentPrice: target });
+          if (target > 0) updates.push({ id: String(product.id), target });
         }
-        if (reconciledProducts.length) {
-          await writeWarehouseProductPatch(reconciledProducts, { reason: "price_unchanged_reconcile", writeLinks: false });
-          logger.info("price current_price reconciled to target (already live)", { count: reconciledProducts.length, reason: cleanText(reason) || "" });
+        if (updates.length) {
+          // Set BOTH the column AND raw.marketplacePrice (the column is re-derived from
+          // raw.marketplacePrice on every product write), so the reconcile survives the
+          // next reconciler/stock patch instead of reverting to the stale value.
+          await Promise.all(updates.map(({ id, target }) =>
+            prisma.$executeRawUnsafe(
+              `UPDATE warehouse_products
+               SET current_price = $1,
+                   raw = jsonb_set(COALESCE(raw, '{}'::jsonb), '{marketplacePrice}', to_jsonb($1::int), true)
+               WHERE id = $2`,
+              target, id,
+            ).catch(() => null)));
+          logger.info("price current_price reconciled to target (already live)", { count: updates.length, reason: cleanText(reason) || "" });
         }
       }
     } catch (error) {
