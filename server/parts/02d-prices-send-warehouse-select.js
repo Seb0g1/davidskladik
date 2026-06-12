@@ -221,13 +221,17 @@ async function sendWarehousePrices({
           if (target > 0) updates.push({ id: String(product.id), target });
         }
         if (updates.length) {
-          // Set BOTH the column AND raw.marketplacePrice (the column is re-derived from
+          // Set the column AND raw.marketplacePrice (the column is re-derived from
           // raw.marketplacePrice on every product write), so the reconcile survives the
-          // next reconciler/stock patch instead of reverting to the stale value.
+          // next reconciler/stock patch instead of reverting to the stale value. Also
+          // align target_price with the verified-live value — otherwise current_price
+          // <> target_price stays true forever and price_sweep re-selects these SKUs
+          // on every cycle even though nothing actually needs to change.
           await Promise.all(updates.map(({ id, target }) =>
             prisma.$executeRawUnsafe(
               `UPDATE warehouse_products
                SET current_price = $1,
+                   target_price = $1,
                    raw = jsonb_set(COALESCE(raw, '{}'::jsonb), '{marketplacePrice}', to_jsonb($1::int), true)
                WHERE id = $2`,
               target, id,
