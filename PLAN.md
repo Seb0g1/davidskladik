@@ -75,7 +75,8 @@
 
 > Контекст уже известен: monolith `server/parts/*.js` (manifest в `server/source.js` — РЕГИСТРИРОВАТЬ новые части!), фронт `frontend/src`, деплой `git pull && node server/assemble.js && pm2 restart davidsklad-api davidsklad-worker`. Сервер root@81.17.154.153.
 
-## A. Яндекс-фильтрация товаров: «без коробки» убрать, наборы разрешить [маленькая-средняя]
+## A. ✅ ГОТОВО: Яндекс-фильтрация — «без коробки» удалено, наборы разрешены
+_Удалено 1609 (вкл. 27 «без коробки»); наборы выгружены (Яндекс 232→295). Хелперы isYandexSetProduct/isYandexNoBoxProduct в 02a-ozon-yandex-import-cleanup.js._
 Файлы: `02a-ozon-yandex-import-cleanup.js` (`ozonYandexImportBlockReasons`, `assessYandexSmallVolume`, `buildYandexCleanupCandidate`), `02f-yandex-fast-unarchive.js` (партиционирование delete/unarchive), `02f-yandex-cleanup-action-routes.js` (delete-filtered-local).
 
 1. **«Без коробки» не должно быть на Яндексе.** Сейчас `/без\s+коробк/` блокируется только на ИМПОРТЕ (`ozonYandexImportBlockReasons`), но уже выгруженные не удаляются. Нужно:
