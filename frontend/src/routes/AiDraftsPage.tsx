@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, ImagePlus, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, Bot, ImagePlus, Loader2, RefreshCw } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
 import { AiDraftsSchema, AiImagesResponseSchema, MutationProductResponseSchema, YandexQualityCandidatesSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -44,17 +44,17 @@ export function AiDraftsPage() {
   const drafts = draftsQuery.data?.drafts || [];
   const candidates = candidatesQuery.data?.products || [];
   return (
-    <>
+    <section className="page-section ai-drafts-page">
       <PageHeader title="AI drafts" subtitle="Карточки качества ниже порога, генерация текста и 5 фото, ручная отправка на маркетплейс." action={<button className="secondary-action" onClick={() => { candidatesQuery.refetch(); draftsQuery.refetch(); }}><RefreshCw size={16} /> Обновить</button>} />
       <section className="control-grid">
         <label>Статус<select value={status} onChange={(event) => setStatus(event.target.value)}><option value="pending">На проверке</option><option value="approved">Одобрено</option><option value="rejected">Отклонено</option><option value="">Все</option></select></label>
         <label>Качество до<input type="number" value={threshold} onChange={(event) => setThreshold(numberValue(event.target.value, 40))} /></label>
         <label>Лимит проверки<input type="number" value={limit} onChange={(event) => setLimit(numberValue(event.target.value, 300))} /></label>
       </section>
-      <section className="summary-grid three">
-        <Stat label="Проверено" value={candidatesQuery.data?.checked || 0} />
-        <Stat label="Ниже порога" value={candidatesQuery.data?.total || 0} />
-        <Stat label="Черновики" value={draftsQuery.data?.total || 0} />
+      <section className="dashboard-metrics">
+        <Stat label="Проверено" value={candidatesQuery.data?.checked || 0} tone="accent" icon={<Bot size={18} />} />
+        <Stat label="Ниже порога" value={candidatesQuery.data?.total || 0} tone={candidatesQuery.data?.total ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+        <Stat label="Черновики" value={draftsQuery.data?.total || 0} tone="success" icon={<ImagePlus size={18} />} />
       </section>
       {generate.isPending && (
         <div className="progress-line"><span style={{ width: "58%" }} />Генерация текста и 5 фото через image endpoint...</div>
@@ -113,6 +113,6 @@ export function AiDraftsPage() {
         </div>
         {!draftsQuery.isLoading && !drafts.length && <div className="soft-empty">Черновиков пока нет.</div>}
       </section>
-    </>
+    </section>
   );
 }

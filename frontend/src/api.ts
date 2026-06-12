@@ -30,7 +30,11 @@ export async function fetchJson<T>(url: string, schema: z.ZodType<T>, init: Requ
     : await response.text().catch(() => "");
 
   if (response.status === 401) {
-    window.location.href = "/login.html";
+    if (import.meta.env.DEV) {
+      console.warn("401: войди через /login.html (dev-режим не редиректит)");
+    } else {
+      window.location.href = "/login.html";
+    }
     throw new ApiError("Требуется вход", response.status, "unauthorized", payload);
   }
 

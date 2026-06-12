@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, BadgeDollarSign, CheckCircle2, Loader2, RefreshCcw, Send, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { fetchJson, mutationBody } from "../api";
+import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 import { MutationProductResponseSchema, SalesAutomationItemsSchema, SalesAutomationSummarySchema } from "../types";
 
 const text = (value: unknown) => String(value ?? "").trim();
@@ -106,15 +108,15 @@ export function PricesPage() {
 
   return (
     <section className="page-section price-control-page">
-      <div className="section-title">
-        <div>
-          <span>Sales automation</span>
-          <h2>Автоматизация цен и остатков</h2>
-        </div>
-        <button className="secondary-action" type="button" onClick={() => { void summary.refetch(); void itemsQuery.refetch(); }} disabled={summary.isFetching || itemsQuery.isFetching}>
-          {summary.isFetching || itemsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Обновить контроль
-        </button>
-      </div>
+      <PageHeader
+        title="Цены и остатки"
+        subtitle="Автоматизация цен и остатков Ozon/Yandex: что отправлено, что в retry и что требует внимания."
+        action={(
+          <button className="secondary-action" type="button" onClick={() => { void summary.refetch(); void itemsQuery.refetch(); }} disabled={summary.isFetching || itemsQuery.isFetching}>
+            {summary.isFetching || itemsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Обновить контроль
+          </button>
+        )}
+      />
 
       <div className="price-automation-hero">
         <div>
@@ -131,12 +133,12 @@ export function PricesPage() {
         </div>
       </div>
 
-      <div className="summary-grid price-summary-grid">
-        <div><span>SKU под контролем</span><strong>{summary.data?.total ?? 0}</strong></div>
-        <div><span>Retry цен</span><strong>{summary.data?.retryTotal ?? 0}</strong></div>
-        <div><span>Ozon autoarchive</span><strong>{summary.data?.ozonUnarchiveQueued ?? 0}</strong></div>
-        <div><span>Проблем Ozon / Yandex</span><strong>{ozonIssues} / {yandexIssues}</strong></div>
-      </div>
+      <section className="dashboard-metrics">
+        <Stat label="SKU под контролем" value={summary.data?.total ?? 0} tone="accent" icon={<BadgeDollarSign size={18} />} />
+        <Stat label="Retry цен" value={summary.data?.retryTotal ?? 0} tone={summary.data?.retryTotal ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+        <Stat label="Ozon autoarchive" value={summary.data?.ozonUnarchiveQueued ?? 0} tone={summary.data?.ozonUnarchiveQueued ? "warn" : "success"} icon={<Zap size={18} />} />
+        <Stat label="Проблем Ozon / Yandex" value={`${ozonIssues} / ${yandexIssues}`} tone={ozonIssues || yandexIssues ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+      </section>
 
       <div className="control-grid price-controls">
         <label>

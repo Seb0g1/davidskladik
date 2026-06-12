@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { HelpCircle, Loader2, MessageSquareReply, RefreshCw } from "lucide-react";
+import { AlertCircle, HelpCircle, Loader2, MessageSquareReply, RefreshCw } from "lucide-react";
+import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 
 type QuestionRow = {
   id: string;
@@ -83,20 +85,20 @@ export function QuestionsPage() {
   });
   const rows = questionsQuery.data?.rows || [];
   return (
-    <section className="page-section">
-      <div className="section-title">
-        <div>
-          <span>Покупатели</span>
-          <h2>Вопросы по товарам</h2>
-        </div>
-        <button className="secondary-action" type="button" onClick={() => questionsQuery.refetch()}>
-          {questionsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
-        </button>
-      </div>
-      <div className="summary-grid">
-        <div><span>Показано</span><strong>{rows.length}</strong></div>
-        <div><span>Ждут ответа</span><strong>{rows.filter((row) => row.needsAnswer).length}</strong></div>
-      </div>
+    <section className="page-section questions-page">
+      <PageHeader
+        title="Вопросы по товарам"
+        subtitle="Отвечай на вопросы покупателей по товарам на Ozon."
+        action={(
+          <button className="secondary-action" type="button" onClick={() => questionsQuery.refetch()}>
+            {questionsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+          </button>
+        )}
+      />
+      <section className="dashboard-metrics">
+        <Stat label="Показано" value={rows.length} tone="accent" icon={<HelpCircle size={18} />} />
+        <Stat label="Ждут ответа" value={rows.filter((row) => row.needsAnswer).length} tone={rows.some((row) => row.needsAnswer) ? "warn" : "success"} icon={<AlertCircle size={18} />} />
+      </section>
       <div className="filters-row">
         <label className="settings-toggle">
           <input type="checkbox" checked={unanswered} onChange={(event) => setUnanswered(event.target.checked)} />

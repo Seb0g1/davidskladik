@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Bot, Check, ChevronRight, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
+import { Bot, Check, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -9,6 +9,7 @@ import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
 import { ProductGroup, firstImage, groupMarketplaceLabels, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, marketplaceRowLabel, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
+import { demoWarehouseProducts, isDemoWarehouseProduct } from "../demoWarehouse";
 
 const pageSize = 40;
 const mobileListMedia = "(max-width: 640px)";
@@ -96,6 +97,75 @@ function buildPageUrl(filters: Filters) {
   return `/api/warehouse/products/page?${params}`;
 }
 
+function isDiagnosticWarehouseProduct(product?: Product): boolean {
+  const id = String(product?.id || "").toLowerCase();
+  const offerId = String(product?.offerId || product?.sku || "").toLowerCase();
+  return id.startsWith("diag-") || offerId === "stale-stock-1";
+}
+
+function groupHasRealProduct(group: ProductGroup): boolean {
+  return group.products.some((product) => !isDiagnosticWarehouseProduct(product) && !isDemoWarehouseProduct(product));
+}
+
+function demoProductMatchesFilters(product: Product, filters: Filters): boolean {
+  const q = filters.q.trim().toLowerCase();
+  if (q) {
+    const haystack = [
+      product.name,
+      product.brand,
+      product.offerId,
+      product.sku,
+      product.barcode,
+      product.links?.map((link) => [link.article, link.supplierName, link.exactName].join(" ")).join(" "),
+    ].filter(Boolean).join(" ").toLowerCase();
+    if (!haystack.includes(q)) return false;
+  }
+  if (filters.marketplace !== "all" && String(product.marketplace || "").toLowerCase() !== filters.marketplace) return false;
+  if (filters.brand && !String(product.brand || "").toLowerCase().includes(filters.brand.trim().toLowerCase())) return false;
+  if (filters.autoOnly && !product.autoPriceEnabled) return false;
+  if (filters.state === "archived" && !product.archived) return false;
+  if (filters.state === "inactive" && String(product.marketplaceState?.code || product.status || "").toLowerCase() !== "inactive") return false;
+  if (filters.state === "out_of_stock" && Number(product.targetStock ?? product.stock ?? 0) > 0) return false;
+  if (filters.linked === "linked" && !(product.links || []).length) return false;
+  if (filters.linked === "unlinked" && (product.links || []).length) return false;
+  if (filters.linked === "changed") {
+    const changed = Number(product.newPrice || product.targetPrice || 0) > 0
+      && Number(product.currentPrice || 0) !== Number(product.newPrice || product.targetPrice || 0);
+    if (!changed) return false;
+  }
+  if (filters.linked === "linked_archived" && !((product.links || []).length && product.archived)) return false;
+  return true;
+}
+
+function demoGroupsForFilters(filters: Filters): ProductGroup[] {
+  return groupProductsForList(demoWarehouseProducts.filter((product) => demoProductMatchesFilters(product, filters)));
+}
+
+function buildDemoBreakdown(products: Product[]): MarketplaceBreakdownRow[] {
+  return products.map((product) => {
+    const state = asRecord(product.marketplaceState);
+    const changed = Number(product.newPrice || product.targetPrice || 0) > 0
+      && Number(product.currentPrice || 0) !== Number(product.newPrice || product.targetPrice || 0);
+    return {
+      productId: product.id,
+      offerId: product.offerId,
+      marketplace: product.marketplace,
+      targetName: String(product.targetName || marketplaceLabel(product.marketplace)),
+      statusCode: String(state.code || product.status || "active"),
+      statusLabel: String(state.label || "Активен"),
+      archived: Boolean(product.archived),
+      changed,
+      ready: Boolean((product.links || []).length && product.selectedSupplier && Number(product.targetStock || product.stock || 0) > 0),
+      currentPrice: Number(product.currentPrice || 0),
+      targetPrice: Number(product.newPrice || product.targetPrice || 0),
+      targetStock: Number(product.targetStock || product.stock || 0),
+      stockOnlyFallback: Boolean(product.stockOnlyFallbackActive),
+      lastPriceSendAt: String((product as Record<string, unknown>).lastPriceSendAt || ""),
+      ozonMinPrice: String(product.marketplace || "").toLowerCase() === "ozon" ? Math.max(0, Number(product.targetPrice || 0) - 450) : undefined,
+    };
+  });
+}
+
 function mapServerPageGroup(item: ProductGroupPageItem): ProductGroup | null {
   if (!item?.groupKey || !Array.isArray(item.products) || !item.products.length) return null;
   const products = item.products;
@@ -116,38 +186,49 @@ function mapServerPageGroup(item: ProductGroupPageItem): ProductGroup | null {
   };
 }
 
+function productSupplierName(product: Product, group: ProductGroup): string {
+  const selected = asRecord(product.selectedSupplier);
+  const selectedName = String(selected.name || selected.supplierName || selected.partnerName || "").trim();
+  if (selectedName) return selectedName;
+  const productSupplier = product.suppliers?.find((supplier) => supplier.name)?.name;
+  if (productSupplier) return productSupplier;
+  const linkSupplier = group.links.find((link) => link.supplierName)?.supplierName;
+  return linkSupplier || "—";
+}
+
 function ProductGroupRow({ group, selected, onSelect }: { group: ProductGroup; selected: boolean; onSelect: () => void }) {
   const primary = group.primary;
   const status = groupStatusLabel(group);
   const image = firstImage(primary);
   const offer = primary.offerId || primary.sku || primary.id;
+  const stock = primary.targetStock ?? primary.stock;
+  const supplier = productSupplierName(primary, group);
   return (
     <button className={`product-row group-row ${selected ? "is-selected" : ""}`} type="button" onClick={onSelect}>
-      <div className="product-thumb">
-        {image ? <img src={image} alt="" loading="lazy" /> : <PackageCheck size={20} />}
-      </div>
-      <div className="product-main">
-        <div className="product-title-line">
-          <strong>{offer}</strong>
-          <span className={`pill ${status.tone}`}>{status.icon}{status.label}</span>
+      <span className="row-check" aria-hidden="true" />
+      <div className="product-cell">
+        <div className="product-thumb">
+          {image ? <img src={image} alt="" loading="lazy" /> : <PackageCheck size={20} />}
         </div>
-        <div className="product-name">{primary.name || "Без названия"}</div>
-        <div className="market-badges" aria-label="marketplaces">
-          {group.marketplaces.map((marketplace) => <span className="market-badge" key={marketplace}>{marketplace}</span>)}
-          <span className="market-badge muted">{group.products.length} стр.</span>
-          <span className="market-badge muted">{group.links.length} прив.</span>
-        </div>
-        <div className="product-meta">
-          <span>{primary.brand || "без бренда"}</span>
-          <span>готовы {group.statusSummary.ready}/{group.statusSummary.total}</span>
-          <span>архив {group.statusSummary.archived}</span>
+        <div className="product-main">
+          <div className="product-title-line">
+            <strong>{primary.name || "Без названия"}</strong>
+          </div>
+          <div className="product-meta">
+            <span>{primary.brand || "без бренда"}</span>
+            <span>{group.products.length} стр.</span>
+            <span>{group.links.length} прив.</span>
+          </div>
         </div>
       </div>
-      <div className="product-price">
-        <strong>{money(groupPrice(group))}</strong>
-        <span>мин. по группе</span>
+      <span className="warehouse-sku">{offer}</span>
+      <div className="warehouse-marketplaces" aria-label="marketplaces">
+        {group.marketplaces.map((marketplace) => <span className="market-badge" key={marketplace}>{marketplace}</span>)}
       </div>
-      <ChevronRight className="row-chevron" size={18} />
+      <span className={`warehouse-stock ${Number(stock || 0) <= 0 ? "is-empty" : ""}`}>{stock ?? "—"}{stock === undefined || stock === null ? "" : " шт"}</span>
+      <span className="warehouse-supplier">{supplier}</span>
+      <span className="warehouse-price">{money(groupPrice(group))}</span>
+      <span className={`warehouse-status pill ${status.tone}`}>{status.icon}{status.label}</span>
     </button>
   );
 }
@@ -309,7 +390,7 @@ function linkTitleText(link: ProductLink): string {
   return link.exactName || link.keyword || link.article || link.supplierArticle || "PriceMaster строка";
 }
 
-function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () => void }) {
+function LinksPanel({ products, onSaved, readOnly = false }: { products: Product[]; onSaved: () => void; readOnly?: boolean }) {
   const queryClient = useQueryClient();
   const productIds = products.map((item) => item.id).filter(Boolean);
   const uniqueGroupLinks = useMemo(() => uniqueLinks(products), [products]);
@@ -402,7 +483,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
       `/api/pricemaster/search?q=${encodeURIComponent(debouncedSearch)}&limit=100`,
       PriceMasterSearchSchema,
     ),
-    enabled: debouncedSearch.trim().length >= 2,
+    enabled: !readOnly && debouncedSearch.trim().length >= 2,
     staleTime: 30_000,
   });
 
@@ -516,6 +597,12 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
         <span className="section-count">{uniqueGroupLinks.length}</span>
       </div>
 
+      {readOnly ? (
+        <div className="info-strip compact demo-readonly-strip">
+          Демо-режим: привязки, поставщики и цены показаны как пример. Сохранение и удаление здесь отключены.
+        </div>
+      ) : null}
+
       <div className="pm-link-summary">
         <div>
           <strong>{uniqueGroupLinks.length}</strong>
@@ -534,7 +621,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
       <div className={groupLinksSynced ? "success-strip compact" : "warning-strip compact"}>
         <span>{groupLinksSynced ? "Привязки группы синхронизированы" : "Есть расхождение Ozon/Yandex по PriceMaster-привязкам"}</span>
         {!groupLinksSynced ? (
-          <button className="secondary-action" type="button" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending}>
+          <button className="secondary-action" type="button" onClick={() => syncMutation.mutate()} disabled={readOnly || syncMutation.isPending}>
             {syncMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Синхронизировать группу
           </button>
         ) : null}
@@ -546,10 +633,10 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
           <span>Если обычных поставщиков нет, товар можно оставить в продаже по этой цене. Цена складского PriceMaster-поставщика не используется.</span>
         </div>
         <div className="stock-only-price-grid">
-          <label>База группы<input type="number" min="0" value={String(manualPrices.default ?? "")} onChange={(event) => setManualPrices((current) => ({ ...current, default: event.target.value }))} /></label>
-          <label>Ozon<input type="number" min="0" value={String(manualPrices.ozon ?? "")} onChange={(event) => setManualPrices((current) => ({ ...current, ozon: event.target.value }))} /></label>
-          <label>Yandex<input type="number" min="0" value={String(manualPrices.yandex ?? "")} onChange={(event) => setManualPrices((current) => ({ ...current, yandex: event.target.value }))} /></label>
-          <button className="secondary-action" type="button" onClick={() => manualPricesMutation.mutate()} disabled={manualPricesMutation.isPending}>
+          <label>База группы<input type="number" min="0" value={String(manualPrices.default ?? "")} onChange={(event) => setManualPrices((current) => ({ ...current, default: event.target.value }))} disabled={readOnly} /></label>
+          <label>Ozon<input type="number" min="0" value={String(manualPrices.ozon ?? "")} onChange={(event) => setManualPrices((current) => ({ ...current, ozon: event.target.value }))} disabled={readOnly} /></label>
+          <label>Yandex<input type="number" min="0" value={String(manualPrices.yandex ?? "")} onChange={(event) => setManualPrices((current) => ({ ...current, yandex: event.target.value }))} disabled={readOnly} /></label>
+          <button className="secondary-action" type="button" onClick={() => manualPricesMutation.mutate()} disabled={readOnly || manualPricesMutation.isPending}>
             {manualPricesMutation.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить цену
           </button>
         </div>
@@ -566,7 +653,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
           <button className="secondary-action" type="button" onClick={() => copyPlainText(savedSupplierList.join("\n"))} disabled={!savedSupplierList.length}>
             <Copy size={16} /> Скопировать поставщиков
           </button>
-          <button className="secondary-action danger" type="button" onClick={() => bulkDeleteMutation.mutate()} disabled={!selectedLinkIds.length || bulkDeleteMutation.isPending}>
+          <button className="secondary-action danger" type="button" onClick={() => bulkDeleteMutation.mutate()} disabled={readOnly || !selectedLinkIds.length || bulkDeleteMutation.isPending}>
             {bulkDeleteMutation.isPending ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Удалить выбранные {selectedLinkIds.length || ""}
           </button>
       </div>
@@ -577,6 +664,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
             <label className="pm-link-select" title="Выбрать привязку">
               <input
                 type="checkbox"
+                disabled={readOnly}
                 checked={selectedLinkIds.includes(linkSelectionKey(link))}
                 onChange={(event) => setSelectedLinkIds((ids) => event.target.checked
                   ? Array.from(new Set([...ids, linkSelectionKey(link)]))
@@ -615,7 +703,7 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
                 </span>
               </div>
             </div>
-            <button className="icon-action danger" type="button" onClick={() => deleteMutation.mutate(link)} title="Удалить привязку">
+            <button className="icon-action danger" type="button" onClick={() => deleteMutation.mutate(link)} title="Удалить привязку" disabled={readOnly}>
               <Trash2 size={16} />
             </button>
           </div>
@@ -625,12 +713,12 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
       <div className="draft-box">
         <div className="section-subtitle">Найти строку PriceMaster</div>
         <div className="draft-grid single-field">
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Артикул, название или штрихкод" />
+          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Артикул, название или штрихкод" disabled={readOnly} />
         </div>
         {searchQuery.data?.rows.length ? (
           <div className="pm-search-actions">
             <span>Найдено: {searchQuery.data.rows.length}</span>
-            <button className="secondary-action" type="button" onClick={addAllSearchRows}>
+            <button className="secondary-action" type="button" onClick={addAllSearchRows} disabled={readOnly}>
               <Check size={16} /> Выбрать все найденные
             </button>
           </div>
@@ -661,21 +749,21 @@ function LinksPanel({ products, onSaved }: { products: Product[]; onSaved: () =>
           Лучше выбирать строку из поиска: тогда сохраняется rowId, partnerId и точное название PriceMaster. Ручная привязка нужна только как запасной вариант.
         </div>
         <div className="draft-grid manual-link-grid">
-          <input value={draft.article} onChange={(event) => setDraft({ ...draft, article: event.target.value })} placeholder="Артикул PriceMaster" />
-          <input value={draft.keyword} onChange={(event) => setDraft({ ...draft, keyword: event.target.value })} placeholder="Ключевое слово" />
-          <select value={draft.priceCurrency} onChange={(event) => setDraft({ ...draft, priceCurrency: event.target.value })}>
+          <input value={draft.article} onChange={(event) => setDraft({ ...draft, article: event.target.value })} placeholder="Артикул PriceMaster" disabled={readOnly} />
+          <input value={draft.keyword} onChange={(event) => setDraft({ ...draft, keyword: event.target.value })} placeholder="Ключевое слово" disabled={readOnly} />
+          <select value={draft.priceCurrency} onChange={(event) => setDraft({ ...draft, priceCurrency: event.target.value })} disabled={readOnly}>
             <option value="USD">USD</option>
             <option value="RUB">RUB</option>
           </select>
         </div>
         <div className="draft-actions">
-          <button className="secondary-action" type="button" onClick={() => addDraft(draft)}>
+          <button className="secondary-action" type="button" onClick={() => addDraft(draft)} disabled={readOnly}>
             <Link2 size={16} /> Добавить в черновик
           </button>
-          <button className="secondary-action" type="button" onClick={() => { setDrafts([]); setDraft(emptyLinkDraft(draft.priceCurrency)); }} disabled={!pendingDrafts.length}>
+          <button className="secondary-action" type="button" onClick={() => { setDrafts([]); setDraft(emptyLinkDraft(draft.priceCurrency)); }} disabled={readOnly || !pendingDrafts.length}>
             <X size={16} /> Очистить черновик
           </button>
-          <button className="primary-action" disabled={!pendingDrafts.length || saveMutation.isPending} type="button" onClick={() => saveMutation.mutate()}>
+          <button className="primary-action" disabled={readOnly || !pendingDrafts.length || saveMutation.isPending} type="button" onClick={() => saveMutation.mutate()}>
             {saveMutation.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить {pendingDrafts.length} привязок
           </button>
         </div>
@@ -1477,7 +1565,7 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
   );
 }
 
-function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin, filteredOut = false, loading = false, refreshing = false }: { selectedGroup: string; products: Product[]; breakdown?: MarketplaceBreakdownRow[]; onClose: () => void; isAdmin: boolean; filteredOut?: boolean; loading?: boolean; refreshing?: boolean }) {
+function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin, filteredOut = false, loading = false, refreshing = false, demoMode = false }: { selectedGroup: string; products: Product[]; breakdown?: MarketplaceBreakdownRow[]; onClose: () => void; isAdmin: boolean; filteredOut?: boolean; loading?: boolean; refreshing?: boolean; demoMode?: boolean }) {
   const primary = products.length ? preferredGroupPrimary(products) : undefined;
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const groupQueryKey = ["warehouse", "group-detail", selectedGroup];
@@ -1543,12 +1631,12 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
         <Stat label="Остаток" value={primary.targetStock || primary.stock || "-"} />
         <Stat label="Привязки" value={groupLinkCount} />
       </div>
-      <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} />
+      <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} readOnly={demoMode} />
       <MarketplaceRows products={products} breakdown={breakdown} />
-      {isAdmin ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}
-      {isAdmin ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
-      {isAdmin ? <AiImagesPanel product={primary} products={products} onSaved={refreshDetail} /> : null}
-      {isAdmin ? <section className="detail-section">
+      {isAdmin && !demoMode ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}
+      {isAdmin && !demoMode ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
+      {isAdmin && !demoMode ? <AiImagesPanel product={primary} products={products} onSaved={refreshDetail} /> : null}
+      {isAdmin && !demoMode ? <section className="detail-section">
         <div className="section-title">
           <div>
             <span>Диагностика</span>
@@ -1560,6 +1648,11 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
         </div>
         {diagnosticsOpen && <DiagnosticsPanel data={diagnostics.data} error={diagnostics.error} loading={diagnostics.isLoading} />}
       </section> : null}
+      {demoMode ? (
+        <div className="info-strip compact demo-readonly-strip">
+          Демо-карточка: синхронизация, AI-фото и диагностика недоступны для примера — здесь показана только структура карточки.
+        </div>
+      ) : null}
     </aside>
   );
 }
@@ -1615,7 +1708,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     () => (pageQuery.data?.items || []).filter(isProductPageItem),
     [pageQuery.data?.items],
   );
-  const groups = useMemo(() => {
+  const serverGroups = useMemo(() => {
     if (pageQuery.data?.grouped) {
       return (pageQuery.data.items || [])
         .filter(isProductGroupPageItem)
@@ -1624,13 +1717,31 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     }
     return groupProductsForList(rows);
   }, [pageQuery.data, rows]);
+  const serverProductCount = useMemo(
+    () => serverGroups.reduce((sum, group) => sum + group.products.length, 0),
+    [serverGroups],
+  );
+  const hasRealServerCatalog = useMemo(
+    () => serverGroups.some(groupHasRealProduct),
+    [serverGroups],
+  );
+  const demoGroups = useMemo(() => demoGroupsForFilters(effectiveFilters), [effectiveFilters]);
+  const useDemoCatalog = Boolean(
+    pageQuery.data
+      && !pageQuery.isLoading
+      && !pageQuery.error
+      && !hasRealServerCatalog
+      && Number(pageQuery.data.totalAll || pageQuery.data.total || pageQuery.data.groupTotal || serverProductCount || 0) <= Math.max(1, serverProductCount),
+  );
+  const groups = useDemoCatalog ? demoGroups : serverGroups;
   const selectedRowsOnPage = useMemo(() => groups.find((group) => group.groupKey === selectedGroup)?.products || [], [groups, selectedGroup]);
+  const selectedIsDemoGroup = Boolean(useDemoCatalog && groups.some((group) => group.groupKey === selectedGroup));
   const selectedFilteredOut = Boolean(selectedGroup && !pageQuery.isLoading && !groups.some((group) => group.groupKey === selectedGroup));
 
   const detailQuery = useQuery({
     queryKey: ["warehouse", "group-detail", selectedGroup],
     queryFn: () => fetchJson(`/api/warehouse/products/group-detail?group=${encodeURIComponent(selectedGroup)}`, GroupDetailSchema),
-    enabled: Boolean(selectedGroup),
+    enabled: Boolean(selectedGroup) && !selectedIsDemoGroup,
     staleTime: 60_000,
     gcTime: 180_000,
     retry: 2,
@@ -1639,9 +1750,35 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const detailProducts = detailQuery.data?.products?.length
     ? detailQuery.data.products
     : selectedRowsOnPage;
-  const detailBreakdown = (detailQuery.data as { marketplacePriceBreakdown?: MarketplaceBreakdownRow[] } | undefined)?.marketplacePriceBreakdown || [];
+  const detailBreakdown = useDemoCatalog
+    ? buildDemoBreakdown(detailProducts)
+    : (detailQuery.data as { marketplacePriceBreakdown?: MarketplaceBreakdownRow[] } | undefined)?.marketplacePriceBreakdown || [];
   const detailLoading = !detailProducts.length && detailQuery.isFetching && Boolean(selectedGroup);
   const detailRefreshing = Boolean(detailProducts.length && detailQuery.isFetching && selectedGroup);
+  const catalogStats = useMemo(() => {
+    if (!useDemoCatalog) return null;
+    const products = groups.flatMap((group) => group.products);
+    const ready = groups.filter((group) => group.statusSummary.ready > 0).length;
+    const changed = groups.filter((group) => group.statusSummary.changed > 0).length;
+    const withoutSupplier = groups.filter((group) => group.statusSummary.withoutSupplier > 0).length;
+    return {
+      groupTotal: groups.length,
+      total: groups.length,
+      rowTotal: products.length,
+      totalAll: groups.length,
+      ready,
+      changed,
+      withoutSupplier,
+    };
+  }, [groups, useDemoCatalog]);
+  useEffect(() => {
+    if (!useDemoCatalog) return;
+    const firstGroup = groups[0]?.groupKey || "";
+    if (!firstGroup) return;
+    if (!selectedGroup || !groups.some((group) => group.groupKey === selectedGroup)) {
+      setSelectedGroup(firstGroup);
+    }
+  }, [groups, selectedGroup, useDemoCatalog]);
   useEffect(() => {
     const media = window.matchMedia(mobileListMedia);
     const onChange = () => setIsMobileList(media.matches);
@@ -1652,7 +1789,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const virtualizer = useVirtualizer({
     count: groups.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => (isMobileList ? 272 : 174),
+    estimateSize: () => (isMobileList ? 272 : 78),
     overscan: 8,
   });
   const setFilter = (key: keyof Filters, value: string | boolean | number) => {
@@ -1714,16 +1851,35 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
         </div>
       ) : null}
       <section className={`summary-grid${pageQuery.isFetching ? " is-loading" : ""}`}>
-        <Stat label={pageQuery.data?.grouped ? "Карточек" : "Найдено"} value={pageQuery.data?.groupTotal || pageQuery.data?.total || 0} />
-        {pageQuery.data?.grouped && pageQuery.data?.rowTotal ? <Stat label="SKU" value={pageQuery.data.rowTotal} /> : null}
-        <Stat label="Всего" value={pageQuery.data?.totalAll || 0} />
-        <Stat label="Готовы" value={pageQuery.data?.ready || 0} />
-        <Stat label="Изменения" value={pageQuery.data?.changed || 0} />
-        <Stat label="Без поставщика" value={pageQuery.data?.withoutSupplier || 0} />
+        <Stat label={pageQuery.data?.grouped ? "Карточек" : "Найдено"} value={catalogStats?.groupTotal ?? (pageQuery.data?.groupTotal || pageQuery.data?.total || 0)} tone="accent" icon={<PackageCheck size={18} />} />
+        {(catalogStats || (pageQuery.data?.grouped && pageQuery.data?.rowTotal)) ? <Stat label="SKU" value={catalogStats?.rowTotal ?? pageQuery.data?.rowTotal ?? 0} icon={<Copy size={18} />} /> : null}
+        <Stat label="Всего" value={catalogStats?.totalAll ?? (pageQuery.data?.totalAll || 0)} icon={<Search size={18} />} />
+        <Stat label="Готовы" value={catalogStats?.ready ?? (pageQuery.data?.ready || 0)} tone="success" icon={<Check size={18} />} />
+        <Stat label="Изменения" value={catalogStats?.changed ?? (pageQuery.data?.changed || 0)} tone="warn" icon={<RefreshCw size={18} />} />
+        <Stat label="Без поставщика" value={catalogStats?.withoutSupplier ?? (pageQuery.data?.withoutSupplier || 0)} icon={<Link2 size={18} />} />
       </section>
+      {useDemoCatalog ? (
+        <div className="demo-catalog-strip">
+          <Sparkles size={16} />
+          <div>
+            <strong>Демо-витрина каталога</strong>
+            <span>Реальный каталог пустой, поэтому показываю {groups.length} карточек и {groups.reduce((sum, group) => sum + group.products.length, 0)} SKU для оценки таблицы и карточки товара.</span>
+          </div>
+        </div>
+      ) : null}
       <section className={`workspace ${selectedGroup ? "detail-open" : ""}${pageQuery.isFetching ? " is-loading" : ""}`}>
         <div className="list-panel">
           {pageQuery.error && <div className="inline-error">{errorMessage(pageQuery.error)}</div>}
+          <div className="warehouse-table-head">
+            <span />
+            <span>Товар</span>
+            <span>Артикул / SKU</span>
+            <span>Маркетплейсы</span>
+            <span>Остаток</span>
+            <span>Поставщик</span>
+            <span>Цена</span>
+            <span>Статус</span>
+          </div>
           <div ref={parentRef} className="virtual-list">
             <div style={{ height: `${virtualizer.getTotalSize()}px`, position: "relative" }}>
               {virtualizer.getVirtualItems().map((virtualRow) => {
@@ -1753,6 +1909,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           onClose={() => setSelectedGroup("")}
           isAdmin={isAdmin}
           filteredOut={selectedFilteredOut && Boolean(detailProducts.length)}
+          demoMode={selectedIsDemoGroup}
         />
       </section>
     </>

@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Copy, Loader2, RefreshCw, RotateCcw, Trash2, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ClipboardList, Copy, Loader2, RefreshCw, RotateCcw, Trash2, Truck, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 import { SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema } from "../types";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
@@ -140,12 +141,12 @@ export function PickingListPage() {
         action={<button className="secondary-action" type="button" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>{listQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить</button>}
       />
 
-      <div className="summary-grid picking-summary">
-        <DiagnosticValue label="К сборке" value={numberValue(summary.open)} tone={numberValue(summary.open) ? "warn" : ""} />
-        <DiagnosticValue label="Собрано" value={numberValue(summary.picked)} tone="success" />
-        <DiagnosticValue label="Не было" value={numberValue(summary.missing)} tone={numberValue(summary.missing) ? "danger" : ""} />
-        <DiagnosticValue label="Поставщиков" value={numberValue(summary.suppliers)} />
-      </div>
+      <section className="dashboard-metrics">
+        <Stat label="К сборке" value={numberValue(summary.open)} tone={numberValue(summary.open) ? "warn" : "success"} icon={<ClipboardList size={18} />} />
+        <Stat label="Собрано" value={numberValue(summary.picked)} tone="success" icon={<CheckCircle2 size={18} />} />
+        <Stat label="Не было" value={numberValue(summary.missing)} tone={numberValue(summary.missing) ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+        <Stat label="Поставщиков" value={numberValue(summary.suppliers)} tone="accent" icon={<Truck size={18} />} />
+      </section>
 
       <div className="control-grid compact-controls">
         <label>Статус

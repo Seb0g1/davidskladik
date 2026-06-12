@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, RefreshCw } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
 import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartPreviewSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyPlainText, errorMessage, numberValue } from "../lib/common";
 
@@ -345,9 +346,18 @@ export function OperationsPage() {
   });
   const jobs = jobsQuery.data?.jobs || [];
   const selectedJob = selectedJobId || String(jobs[0]?.id || "");
+  const runningCount = jobs.filter((job) => job.status === "running").length;
+  const queuedCount = jobs.filter((job) => job.status === "queued").length;
+  const failedCount = jobs.filter((job) => job.status === "failed").length;
   return (
-    <>
+    <section className="page-section operations-page">
       <PageHeader title="Операции" subtitle="Массовые задачи, прогресс, частичные ошибки и быстрый повтор через очередь." action={<button className="secondary-action" onClick={() => jobsQuery.refetch()}><RefreshCw size={16} /> Обновить</button>} />
+      <section className="dashboard-metrics">
+        <Stat label="Всего задач" value={jobs.length} tone="accent" icon={<ListChecks size={18} />} />
+        <Stat label="В работе" value={runningCount} tone={runningCount ? "warn" : "success"} icon={<Loader2 size={18} />} />
+        <Stat label="В очереди" value={queuedCount} tone={queuedCount ? "warn" : "success"} icon={<Clock3 size={18} />} />
+        <Stat label="Ошибки" value={failedCount} tone={failedCount ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+      </section>
       <section className="control-grid">
         <label>Лимит товаров<input type="number" value={limit} onChange={(event) => setLimit(numberValue(event.target.value, 30000))} /></label>
         <label>Лимит отправки<input type="number" value={sendLimit} onChange={(event) => setSendLimit(numberValue(event.target.value, 5000))} /></label>
@@ -394,6 +404,6 @@ export function OperationsPage() {
         {!jobsQuery.isLoading && !jobs.length && <div className="soft-empty">Задач пока нет.</div>}
       </section>
       {selectedJob ? <OperationDetailPanel jobId={selectedJob} /> : null}
-    </>
+    </section>
   );
 }

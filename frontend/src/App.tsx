@@ -1,7 +1,8 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, CirclePlay, ClipboardList, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Truck , Star, HelpCircle, MessageCircle } from "lucide-react";
-import { ReactNode, useEffect, useState } from "react";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, Home, LogOut, Menu, PackageCheck, RefreshCcw, Search, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, UserCircle } from "lucide-react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { WarehousePage } from "./routes/WarehousePage";
 import { NotificationsBell } from "./components/NotificationsBell";
+import { DashboardPage } from "./routes/DashboardPage";
 import { ReviewsPage } from "./routes/ReviewsPage";
 import { QuestionsPage } from "./routes/QuestionsPage";
 import { ChatsPage } from "./routes/ChatsPage";
@@ -17,24 +18,27 @@ import { PickingListPage } from "./routes/PickingListPage";
 import { ProblemProductsPage } from "./routes/ProblemProductsPage";
 import { FinancePage } from "./routes/FinancePage";
 import { SuppliersPage } from "./routes/SuppliersPage";
+import { StatisticsPage } from "./routes/StatisticsPage";
 
-type AppRoute = "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "settings" | "system" | "ai-drafts" | "no-supplier";
+type AppRoute = "dashboard" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
-  { route: "warehouse", href: "/app/warehouse", label: "Каталог", icon: <PackageCheck size={16} /> },
-  { route: "picking-list", href: "/app/picking-list", label: "Сборка", icon: <ClipboardList size={16} /> },
+  { route: "dashboard", href: "/app/dashboard", label: "Дашборд", icon: <Home size={16} /> },
+  { route: "warehouse", href: "/app/warehouse", label: "Склад", icon: <PackageCheck size={16} /> },
   { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} /> },
+  { route: "picking-list", href: "/app/picking-list", label: "Сборка", icon: <ClipboardList size={16} /> },
+  { route: "reviews", href: "/app/reviews", label: "Отзывы", icon: <Star size={16} /> },
+  { route: "chats", href: "/app/chats", label: "Чаты", icon: <MessageCircle size={16} /> },
+  { route: "statistics", href: "/app/statistics", label: "Статистика", icon: <BarChart3 size={16} /> },
+  { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
+  { route: "questions", href: "/app/questions", label: "Вопросы", icon: <HelpCircle size={16} /> },
+  { route: "prices", href: "/app/prices", label: "Цены", icon: <BadgeDollarSign size={16} /> },
   { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} /> },
   { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
   { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
-  { route: "reviews", href: "/app/reviews", label: "Отзывы", icon: <Star size={16} /> },
-  { route: "questions", href: "/app/questions", label: "Вопросы", icon: <HelpCircle size={16} /> },
-  { route: "chats", href: "/app/chats", label: "Чаты", icon: <MessageCircle size={16} /> },
-  { route: "prices", href: "/app/prices", label: "Цены", icon: <BadgeDollarSign size={16} /> },
   { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} /> },
   { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} /> },
-  { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
   { route: "system", href: "/app/system", label: "Система", icon: <Activity size={16} /> },
   { route: "ai-drafts", href: "/app/ai-drafts", label: "AI drafts", icon: <Sparkles size={16} /> },
   { route: "no-supplier", href: "/app/no-supplier", label: "Ошибки наличия", icon: <AlertCircle size={16} /> },
@@ -42,6 +46,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
 
 function currentRoute(): AppRoute {
   const path = window.location.pathname;
+  if (path.startsWith("/app/dashboard")) return "dashboard";
   if (path.startsWith("/app/picking-list")) return "picking-list";
   if (path.startsWith("/app/suppliers")) return "suppliers";
   if (path.startsWith("/app/operations")) return "operations";
@@ -53,6 +58,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/prices")) return "prices";
   if (path.startsWith("/app/problem-products")) return "problem-products";
   if (path.startsWith("/app/finance")) return "finance";
+  if (path.startsWith("/app/statistics")) return "statistics";
   if (path.startsWith("/app/settings")) return "settings";
   if (path.startsWith("/app/system")) return "system";
   if (path.startsWith("/app/ai-drafts")) return "ai-drafts";
@@ -63,10 +69,45 @@ function currentRoute(): AppRoute {
 function AppShell() {
   const [route, setRoute] = useState<AppRoute>(() => currentRoute());
   const [session, setSession] = useState<SessionState | null>(null);
+  const [globalSearch, setGlobalSearch] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarCompact, setSidebarCompact] = useState(false);
+  const [isMobileNav, setIsMobileNav] = useState(() => window.matchMedia("(max-width: 980px)").matches);
+  const activeNavRef = useRef<HTMLAnchorElement | null>(null);
+  const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
-    const onPop = () => setRoute(currentRoute());
+    const onPop = () => {
+      setRoute(currentRoute());
+      setSidebarOpen(false);
+    };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setSidebarOpen(false);
+        if (document.activeElement === globalSearchInputRef.current) globalSearchInputRef.current?.blur();
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key === "/") {
+        event.preventDefault();
+        setSidebarOpen(false);
+        globalSearchInputRef.current?.focus();
+        globalSearchInputRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 980px)");
+    const sync = () => {
+      setIsMobileNav(media.matches);
+      if (!media.matches) setSidebarOpen(false);
+    };
+    sync();
+    media.addEventListener("change", sync);
+    return () => media.removeEventListener("change", sync);
   }, []);
   useEffect(() => {
     let active = true;
@@ -86,33 +127,101 @@ function AppShell() {
     event.preventDefault();
     window.history.pushState(null, "", href);
     setRoute(currentRoute());
+    setSidebarOpen(false);
   };
+  const submitGlobalSearch = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const q = globalSearch.trim();
+    if (!q) return;
+    window.history.pushState(null, "", `/app/warehouse?q=${encodeURIComponent(q)}`);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    setRoute("warehouse");
+    setSidebarOpen(false);
+  };
+  const toggleNavigation = () => {
+    if (isMobileNav) {
+      setSidebarOpen((value) => !value);
+      return;
+    }
+    setSidebarCompact((value) => !value);
+  };
+  const sessionReady = session !== null;
   const isAdmin = session?.role === "admin";
   const canUseStaffRoutes = session?.role === "manager" || isAdmin;
-  const canUseAdminRoutes = session === null ? false : isAdmin;
-  const headerRoutes = new Set<AppRoute>(isAdmin ? ["warehouse", "picking-list", "suppliers", "supplier-cart", "reviews", "questions", "chats", "settings"] : ["warehouse", "picking-list"]);
+  const canUseAdminRoutes = sessionReady ? isAdmin : false;
+  const headerRoutes = new Set<AppRoute>(isAdmin ? ["dashboard", "warehouse", "suppliers", "picking-list", "reviews", "chats", "statistics", "settings", "questions", "prices", "operations", "supplier-cart", "recovery-queue", "problem-products", "finance", "system", "ai-drafts", "no-supplier"] : ["warehouse", "picking-list"]);
   const visibleNavItems = navItems.filter((item) => headerRoutes.has(item.route));
-  const accessDenied = (route !== "warehouse" && route !== "picking-list" && !canUseAdminRoutes) || (route === "picking-list" && !canUseStaffRoutes);
+  useEffect(() => {
+    activeNavRef.current?.scrollIntoView({ block: "nearest" });
+  }, [route, visibleNavItems.length]);
+  const accessDenied = sessionReady && ((route !== "warehouse" && route !== "picking-list" && !canUseAdminRoutes) || (route === "picking-list" && !canUseStaffRoutes));
+  const roleLabel = !sessionReady ? "Загрузка" : (isAdmin ? "Администратор" : (session?.role === "manager" ? "Менеджер" : "Сотрудник"));
+  const navExpanded = isMobileNav ? sidebarOpen : !sidebarCompact;
   return (
-    <main className="app-shell">
-      <header className="topbar">
+    <main className={`app-shell with-sidebar${sidebarOpen ? " sidebar-open" : ""}${sidebarCompact ? " sidebar-compact" : ""}`}>
+      <aside className="side-nav" aria-label="Основная навигация">
         <div className="brand-lockup">
-          <img className="brand-logo" src="/logo1.png" alt="Magic Vibe" />
+          <span className="brand-mark" aria-hidden="true">D</span>
           <div>
-            <span className="eyebrow">Рабочий интерфейс</span>
-            <h1>ДавидСклад</h1>
+            <h1>David<span>Sklad</span></h1>
           </div>
         </div>
-        <NotificationsBell />
-        <nav>
+        <div className="side-role-chip">
+          <span className="role-dot" />
+          {roleLabel}
+        </div>
+        <nav className="side-nav-links">
           {visibleNavItems.map((item) => (
-            <a key={item.route} className={route === item.route ? "is-active" : ""} href={item.href} onClick={(event) => navigate(event, item.href)}>
+            <a key={item.route} ref={route === item.route ? activeNavRef : undefined} className={route === item.route ? "is-active" : ""} href={item.href} onClick={(event) => navigate(event, item.href)}>
               {item.icon}{item.label}
             </a>
           ))}
         </nav>
+        <div className="side-user-card">
+          <span>Статистика пользователя</span>
+          <strong>{session?.username || roleLabel}</strong>
+          <small>Сегодня: каталог, привязки и сборка</small>
+        </div>
+        <a className="side-logout" href="/login.html"><LogOut size={16} /> Выйти</a>
+      </aside>
+      <button className="sidebar-backdrop" type="button" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)} />
+      <div className="app-content">
+      <header className="topbar content-topbar">
+        <button className="topbar-menu" type="button" aria-label={navExpanded ? "Свернуть меню" : "Открыть меню"} aria-expanded={navExpanded} onClick={toggleNavigation}><Menu size={22} /></button>
+        <form className="global-search" onSubmit={submitGlobalSearch}>
+          <Search size={17} />
+          <input ref={globalSearchInputRef} value={globalSearch} onChange={(event) => setGlobalSearch(event.target.value)} placeholder="Поиск по товарам, SKU, артикулу или штрихкоду" />
+          <kbd>Ctrl + /</kbd>
+        </form>
+        <div className="topbar-actions">
+          <NotificationsBell />
+          <div className="topbar-user">
+            <UserCircle size={30} />
+            <span>{roleLabel}</span>
+            <ChevronDown size={15} />
+          </div>
+        </div>
       </header>
-      {accessDenied ? (
+      {!sessionReady ? (
+        <section className="app-loading-screen" aria-live="polite" aria-label="ДавидСклад загружается">
+          <div className="premium-loader" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+          <div>
+            <span className="eyebrow">DavidSklad</span>
+            <h2>Подготавливаю рабочее пространство</h2>
+            <p>Проверяю сессию, собираю навигацию и поднимаю свежие данные склада.</p>
+          </div>
+          <div className="premium-skeleton-grid" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </div>
+        </section>
+      ) : null}
+      {sessionReady && accessDenied ? (
         <section className="access-denied-panel">
           <AlertCircle size={24} />
           <strong>Нет доступа</strong>
@@ -120,22 +229,25 @@ function AppShell() {
           <a href="/app/warehouse" onClick={(event) => navigate(event, "/app/warehouse")}>Вернуться в каталог</a>
         </section>
       ) : null}
-      {!accessDenied && route === "operations" ? <OperationsPage /> : null}
-      {!accessDenied && route === "picking-list" ? <PickingListPage /> : null}
-      {!accessDenied && route === "suppliers" ? <SuppliersPage /> : null}
-      {!accessDenied && route === "supplier-cart" ? <SupplierCartPage /> : null}
-      {!accessDenied && route === "recovery-queue" ? <RecoveryQueuePage /> : null}
-      {!accessDenied && route === "reviews" ? <ReviewsPage /> : null}
-      {!accessDenied && route === "questions" ? <QuestionsPage /> : null}
-      {!accessDenied && route === "chats" ? <ChatsPage /> : null}
-      {!accessDenied && route === "prices" ? <PricesPage /> : null}
-      {!accessDenied && route === "problem-products" ? <ProblemProductsPage /> : null}
-      {!accessDenied && route === "finance" ? <FinancePage /> : null}
-      {!accessDenied && route === "settings" ? <SettingsPage /> : null}
-      {!accessDenied && route === "system" ? <SystemPage /> : null}
-      {!accessDenied && route === "ai-drafts" ? <AiDraftsPage /> : null}
-      {!accessDenied && route === "no-supplier" ? <NoSupplierPage /> : null}
-      {route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
+      {sessionReady && !accessDenied && route === "dashboard" ? <DashboardPage /> : null}
+      {sessionReady && !accessDenied && route === "operations" ? <OperationsPage /> : null}
+      {sessionReady && !accessDenied && route === "picking-list" ? <PickingListPage /> : null}
+      {sessionReady && !accessDenied && route === "suppliers" ? <SuppliersPage /> : null}
+      {sessionReady && !accessDenied && route === "supplier-cart" ? <SupplierCartPage /> : null}
+      {sessionReady && !accessDenied && route === "recovery-queue" ? <RecoveryQueuePage /> : null}
+      {sessionReady && !accessDenied && route === "reviews" ? <ReviewsPage /> : null}
+      {sessionReady && !accessDenied && route === "questions" ? <QuestionsPage /> : null}
+      {sessionReady && !accessDenied && route === "chats" ? <ChatsPage /> : null}
+      {sessionReady && !accessDenied && route === "prices" ? <PricesPage /> : null}
+      {sessionReady && !accessDenied && route === "problem-products" ? <ProblemProductsPage /> : null}
+      {sessionReady && !accessDenied && route === "finance" ? <FinancePage /> : null}
+      {sessionReady && !accessDenied && route === "statistics" ? <StatisticsPage /> : null}
+      {sessionReady && !accessDenied && route === "settings" ? <SettingsPage /> : null}
+      {sessionReady && !accessDenied && route === "system" ? <SystemPage /> : null}
+      {sessionReady && !accessDenied && route === "ai-drafts" ? <AiDraftsPage /> : null}
+      {sessionReady && !accessDenied && route === "no-supplier" ? <NoSupplierPage /> : null}
+      {sessionReady && route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
+      </div>
     </main>
   );
 }

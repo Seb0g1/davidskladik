@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Clock3, Loader2, RefreshCcw } from "lucide-react";
+import { Archive, CheckCircle2, Clock3, Hourglass, ListChecks, Loader2, RefreshCcw } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
+import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 import { OzonUnarchiveQueueSchema } from "../types";
 import { useEffect, useState } from "react";
 
@@ -118,8 +120,7 @@ function itemWhenLabel(item: Record<string, unknown>) {
   return formatDate(item.nextRetryAt);
 }
 
-function YandexFastBlock() {
-  const { status, error } = useYandexFastStatus();
+function YandexFastBlock({ status, error }: { status: YandexFastStatus | null; error: string }) {
   const last = status?.lastResult;
   return (
     <>
@@ -170,21 +171,28 @@ export function RecoveryQueuePage() {
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
     },
   });
+  const yandexFast = useYandexFastStatus();
   const data = queue.data;
   const items = data?.items || [];
   const visibleItems = items.slice(0, 200);
   return (
     <section className="page-section">
-      <div className="section-title">
-        <div>
-          <span>Ozon autoarchive</span>
-          <h2>Очередь восстановления</h2>
-        </div>
-        <button className="primary-action" type="button" onClick={() => process.mutate()} disabled={process.isPending || queue.isLoading || data?.autoRunning}>
-          {process.isPending || data?.autoRunning ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Запустить сейчас
-        </button>
-      </div>
-      <YandexFastBlock />
+      <PageHeader
+        title="Очередь восстановления"
+        subtitle="Ozon autoarchive и быстрый разархив Яндекса: что в очереди, что готово к попытке и что ждет лимит."
+        action={(
+          <button className="primary-action" type="button" onClick={() => process.mutate()} disabled={process.isPending || queue.isLoading || data?.autoRunning}>
+            {process.isPending || data?.autoRunning ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Запустить сейчас
+          </button>
+        )}
+      />
+      <section className="dashboard-metrics">
+        <Stat label="Всего в очереди" value={data?.total ?? 0} tone="accent" icon={<ListChecks size={18} />} />
+        <Stat label="Готовы к попытке" value={data?.due ?? 0} tone={data?.due ? "warn" : "success"} icon={<Hourglass size={18} />} />
+        <Stat label="Ждут проверки Ozon" value={data?.verificationPending ?? 0} tone={data?.verificationPending ? "warn" : "success"} icon={<Clock3 size={18} />} />
+        <Stat label="В архиве Яндекс" value={yandexFast.status?.archivedLinked ?? "…"} tone="accent" icon={<Archive size={18} />} />
+      </section>
+      <YandexFastBlock status={yandexFast.status} error={yandexFast.error} />
       <div className="summary-grid">
         <div><span>Всего в очереди</span><strong>{data?.total ?? 0}</strong></div>
         <div><span>Готовы к попытке</span><strong>{data?.due ?? 0}</strong></div>

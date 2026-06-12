@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, MessageCircle, RefreshCw, Send } from "lucide-react";
+import { BellRing, Loader2, MessageCircle, RefreshCw, Send } from "lucide-react";
+import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 
 type ChatRow = {
   id: string;
@@ -101,19 +103,19 @@ export function ChatsPage() {
 
   return (
     <section className="page-section chats-page">
-      <div className="section-title">
-        <div>
-          <span>Покупатели</span>
-          <h2>Чаты</h2>
-        </div>
-        <button className="secondary-action" type="button" onClick={() => chatsQuery.refetch()}>
-          {chatsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
-        </button>
-      </div>
-      <div className="summary-grid">
-        <div><span>Чатов</span><strong>{rows.length}</strong></div>
-        <div><span>Непрочитанных</span><strong>{unreadTotal}</strong></div>
-      </div>
+      <PageHeader
+        title="Чаты"
+        subtitle="Переписка с покупателями на Ozon и Яндекс.Маркете в одном месте."
+        action={(
+          <button className="secondary-action" type="button" onClick={() => chatsQuery.refetch()}>
+            {chatsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+          </button>
+        )}
+      />
+      <section className="dashboard-metrics">
+        <Stat label="Чатов" value={rows.length} tone="accent" icon={<MessageCircle size={18} />} />
+        <Stat label="Непрочитанных" value={unreadTotal} tone={unreadTotal ? "warn" : "success"} icon={<BellRing size={18} />} />
+      </section>
       <div className="filters-row">
         <select value={marketplace} onChange={(event) => { setMarketplace(event.target.value); setSelected(null); }}>
           <option value="all">Оба маркетплейса</option>

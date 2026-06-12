@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Edit3, Loader2, Plus, RefreshCw, Search, Trash2, Truck, UserX, X } from "lucide-react";
+import { Boxes, CheckCircle2, Edit3, Loader2, Package, Plus, RefreshCw, Search, Trash2, Truck, UserX, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 import { SupplierLedgerPaymentSchema, SupplierSchema, SuppliersResponseSchema } from "../types";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
 
@@ -242,7 +243,7 @@ export function SuppliersPage() {
   const anyError = suppliersQuery.error || refreshMutation.error || saveSupplier.error || patchSupplier.error || deleteSupplier.error || saveArticle.error || deleteArticle.error || paySupplier.error;
 
   return (
-    <>
+    <section className="page-section suppliers-page">
       <PageHeader
         title="Поставщики"
         subtitle="Полная карточка поставщика из legacy: импорт из PriceMaster, валюта, остановка, возврат, статьи и влияние на товары."
@@ -253,11 +254,11 @@ export function SuppliersPage() {
         )}
       />
 
-      <section className="summary-grid supplier-summary-grid">
-        <DiagnosticValue label="Активных" value={activeCount} tone={activeCount ? "success" : ""} />
-        <DiagnosticValue label="Остановлено" value={inactiveCount} tone={inactiveCount ? "warn" : ""} />
-        <DiagnosticValue label="Артикулов" value={articleCount} />
-        <DiagnosticValue label="Связанных товаров" value={affectedCount} />
+      <section className="dashboard-metrics">
+        <Stat label="Активных" value={activeCount} tone={activeCount ? "success" : ""} icon={<Truck size={18} />} />
+        <Stat label="Остановлено" value={inactiveCount} tone={inactiveCount ? "warn" : "success"} icon={<UserX size={18} />} />
+        <Stat label="Артикулов" value={articleCount} tone="accent" icon={<Boxes size={18} />} />
+        <Stat label="Связанных товаров" value={affectedCount} tone="accent" icon={<Package size={18} />} />
       </section>
 
       {sync.ok === true || sync.error ? (
@@ -474,6 +475,6 @@ export function SuppliersPage() {
       ) : null}
 
       {anyError ? <div className="inline-error">{errorMessage(anyError)}</div> : null}
-    </>
+    </section>
   );
 }

@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, Loader2, PackageSearch, RefreshCw } from "lucide-react";
 import { fetchJson } from "../api";
 import { NoSupplierSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -9,12 +9,12 @@ export function NoSupplierPage() {
   const query = useQuery({ queryKey: ["no-supplier"], queryFn: () => fetchJson("/api/warehouse/no-supplier", NoSupplierSchema) });
   const alerts = query.data?.alerts || [];
   return (
-    <>
+    <section className="page-section no-supplier-page">
       <PageHeader title="Ошибки наличия" subtitle="Товары с привязками, у которых сейчас нет активного поставщика или есть риск некорректного остатка." action={<button className="secondary-action" onClick={() => query.refetch()}><RefreshCw size={16} /> Обновить</button>} />
-      <section className="summary-grid three">
-        <Stat label="Всего товаров" value={query.data?.total || 0} />
-        <Stat label="Без поставщика" value={query.data?.withoutSupplier || 0} />
-        <Stat label="В списке" value={alerts.length} />
+      <section className="dashboard-metrics">
+        <Stat label="Всего товаров" value={query.data?.total || 0} tone="accent" icon={<PackageSearch size={18} />} />
+        <Stat label="Без поставщика" value={query.data?.withoutSupplier || 0} tone={query.data?.withoutSupplier ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+        <Stat label="В списке" value={alerts.length} tone="accent" icon={<PackageSearch size={18} />} />
       </section>
       <section className="table-panel">
         {query.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю ошибки...</div>}
@@ -29,6 +29,6 @@ export function NoSupplierPage() {
         ))}
         {!query.isLoading && !alerts.length && <div className="soft-empty">Ошибок наличия нет.</div>}
       </section>
-    </>
+    </section>
   );
 }

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Loader2, Plus, RefreshCw } from "lucide-react";
+import { Check, CreditCard, Loader2, Package, Plus, RefreshCw, ShoppingCart, TrendingUp } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { FinanceExpenseCreateSchema, FinanceExpensesSchema, FinanceOrderSchema, FinanceOrdersSchema, FinanceSummarySchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 import { errorMessage } from "../lib/common";
 
 const money = (value: unknown) => {
@@ -107,15 +108,18 @@ export function FinancePage() {
           </div>
         )}
       />
+      <section className="dashboard-metrics">
+        <Stat label="Чистая прибыль" value={money(s.netProfit)} tone={Number(s.netProfit || 0) >= 0 ? "success" : "warn"} icon={<TrendingUp size={18} />} />
+        <Stat label="Выручка МП" value={money(s.orderIncome)} tone="accent" icon={<ShoppingCart size={18} />} />
+        <Stat label="Заказов" value={Number(s.orders || 0)} tone="accent" icon={<Package size={18} />} />
+        <Stat label="Долг поставщикам" value={money(s.supplierDebt)} tone={Number(s.supplierDebt || 0) > 0 ? "warn" : "success"} icon={<CreditCard size={18} />} />
+      </section>
+
       <div className="summary-grid">
-        <SummaryCard label="Чистая прибыль" value={money(s.netProfit)} />
-        <SummaryCard label="Выручка МП" value={money(s.orderIncome)} />
         <SummaryCard label="Прибыль по заказам" value={money(s.orderProfit)} />
         <SummaryCard label="Ручные закупки" value={money(s.manualExpenses)} />
-        <SummaryCard label="Заказов" value={Number(s.orders || 0)} />
         <SummaryCard label="Закупочная цена" value={money(s.purchaseCost)} />
         <SummaryCard label="Комиссии/налоги" value={money(Number(s.fees || 0) + Number(s.tax || 0))} />
-        <SummaryCard label="Долг поставщикам" value={money(s.supplierDebt)} />
         <SummaryCard label="Оплачено поставщикам" value={money(s.supplierPaid)} />
       </div>
 
@@ -137,7 +141,7 @@ export function FinancePage() {
         {createExpense.isSuccess ? <div className="success-strip">Закупка добавлена в финансы и историю поставщика.</div> : null}
       </section>
 
-      <div className="table-panel price-table">
+      <div className="table-panel price-table finance-orders-table">
         <div className="table-head"><span>Дата</span><span>Заказ/SKU</span><span>Товар</span><span>Поставщик</span><span>Закупка</span><span>Прибыль</span></div>
         {(orders.data?.orders || []).map((order) => {
           const draft = orderDrafts[order.id] || {};
@@ -174,7 +178,7 @@ export function FinancePage() {
         {!orders.data?.orders?.length && !orders.isLoading ? <div className="empty-state">Заказов за выбранный период пока нет.</div> : null}
       </div>
 
-      <div className="table-panel price-table">
+      <div className="table-panel price-table finance-expenses-table">
         <div className="table-head"><span>Дата</span><span>SKU</span><span>Товар</span><span>Поставщик</span><span>Кол-во</span><span>Сумма</span></div>
         {(expenses.data?.expenses || []).map((expense) => (
           <div className="table-row" key={expense.id}>

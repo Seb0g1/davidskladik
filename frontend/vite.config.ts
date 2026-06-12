@@ -16,6 +16,11 @@ export default defineConfig({
     proxy: {
       "/api": "http://127.0.0.1:3000",
       "/uploads": "http://127.0.0.1:3000",
+      "/login.html": "http://127.0.0.1:3000",
+      "/login.js": "http://127.0.0.1:3000",
+      "/styles.css": "http://127.0.0.1:3000",
+      "/logo1.png": "http://127.0.0.1:3000",
+      "/health": "http://127.0.0.1:3000",
     },
   },
 });

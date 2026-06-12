@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, RefreshCcw, Wrench } from "lucide-react";
 import { useMemo, useState } from "react";
 import { fetchJson, mutationBody } from "../api";
+import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 import { ProblemProductsSchema, ProductRepairSchema } from "../types";
 
 const text = (value: unknown) => String(value ?? "").trim();
@@ -57,22 +59,22 @@ export function ProblemProductsPage() {
 
   return (
     <section className="page-section problem-products-page">
-      <div className="section-title">
-        <div>
-          <span>Problem products</span>
-          <h2>Проблемные товары</h2>
-        </div>
-        <button className="secondary-action" type="button" onClick={() => query.refetch()} disabled={query.isFetching}>
-          {query.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Обновить
-        </button>
-      </div>
+      <PageHeader
+        title="Проблемные товары"
+        subtitle="Единая диагностика SKU: отсутствие поставщика, цены, фото, бренда и ошибки автоматизации."
+        action={(
+          <button className="secondary-action" type="button" onClick={() => query.refetch()} disabled={query.isFetching}>
+            {query.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Обновить
+          </button>
+        )}
+      />
 
-      <div className="summary-grid">
-        <div><span>Всего проблем</span><strong>{query.data?.total ?? 0}</strong></div>
+      <section className="dashboard-metrics">
+        <Stat label="Всего проблем" value={query.data?.total ?? 0} tone={query.data?.total ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
         {categories.slice(0, 3).map(([key, count]) => (
-          <div key={key}><span>{label(key)}</span><strong>{Number(count)}</strong></div>
+          <Stat key={key} label={label(key)} value={Number(count)} tone="accent" icon={<AlertTriangle size={18} />} />
         ))}
-      </div>
+      </section>
 
       <div className="control-grid">
         <label>

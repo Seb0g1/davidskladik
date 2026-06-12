@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Clock3, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, CalendarClock, Clock3, Database, ListChecks, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 import { SupplierCartPanel } from "./OperationsPage";
 
 const SupplierCartScheduleSchema = z.object({
@@ -104,12 +105,18 @@ export function SupplierCartPage() {
   const dryRun = rollbackDryRun.data?.before;
   const pm = dryRun?.pm || {};
   return (
-    <>
+    <section className="page-section supplier-cart-page">
       <PageHeader
         title="Автокорзина"
         subtitle="Заказы Ozon/Yandex автоматически собираются и отправляются в корзину PriceMaster по расписанию."
         action={<a className="secondary-action" href="/app/operations"><RefreshCw size={16} /> Операции</a>}
       />
+      <section className="dashboard-metrics">
+        <Stat label="Авторежим" value={settings.autoEnabled !== false ? "включено" : "выключено"} tone={settings.autoEnabled !== false ? "success" : "warn"} icon={<Clock3 size={18} />} />
+        <Stat label="Следующий запуск" value={formatDate(schedule.data?.nextAutoRunAt)} tone="accent" icon={<CalendarClock size={18} />} />
+        <Stat label="Документы ДавидСклад" value={pmStatus.data?.davidskladDocs?.length || 0} tone="accent" icon={<Database size={18} />} />
+        <Stat label="Строки PM" value={pmStatus.data?.latestRows?.length || 0} tone="accent" icon={<ListChecks size={18} />} />
+      </section>
       <section className="table-panel supplier-cart-schedule">
         <div className="section-title">
           <div>
@@ -162,6 +169,6 @@ export function SupplierCartPage() {
         {rollbackApply.error ? <div className="inline-error">{String(rollbackApply.error)}</div> : null}
       </section>
       <SupplierCartPanel />
-    </>
+    </section>
   );
 }

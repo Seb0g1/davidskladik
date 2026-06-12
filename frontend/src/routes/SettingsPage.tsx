@@ -415,7 +415,7 @@ function UsersSettingsPanel() {
     ));
   };
   return (
-    <>
+    <div className="settings-stack">
     <SettingsHubPanel />
     <NotificationSettingsPanel />
     <section className="settings-panel settings-panel-wide">
@@ -511,7 +511,7 @@ function UsersSettingsPanel() {
       ))}
       {statsQuery.error && <div className="inline-error">{errorMessage(statsQuery.error)}</div>}
     </section>
-    </>
+    </div>
   );
 }
 

@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2, MessageSquareReply, Plus, RefreshCw, Save, Star, Trash2 } from "lucide-react";
+import { AlertCircle, Loader2, MessageSquareReply, Plus, RefreshCw, Star, Trash2 } from "lucide-react";
+import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 
 type ReviewRow = {
   id: string;
@@ -168,21 +170,21 @@ export function ReviewsPage() {
   }), [rows]);
 
   return (
-    <section className="page-section">
-      <div className="section-title">
-        <div>
-          <span>Покупатели</span>
-          <h2>Отзывы</h2>
-        </div>
-        <button className="secondary-action" type="button" onClick={() => reviewsQuery.refetch()}>
-          {reviewsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
-        </button>
-      </div>
-      <div className="summary-grid">
-        <div><span>Показано</span><strong>{counters.total}</strong></div>
-        <div><span>Ждут ответа</span><strong>{counters.needsReply}</strong></div>
-        <div><span>Средняя оценка</span><strong>{counters.avg}</strong></div>
-      </div>
+    <section className="page-section reviews-page">
+      <PageHeader
+        title="Отзывы"
+        subtitle="Отвечай покупателям на Ozon и Яндекс.Маркете и держи рейтинг товаров высоким."
+        action={(
+          <button className="secondary-action" type="button" onClick={() => reviewsQuery.refetch()}>
+            {reviewsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+          </button>
+        )}
+      />
+      <section className="dashboard-metrics">
+        <Stat label="Показано" value={counters.total} tone="accent" icon={<Star size={18} />} />
+        <Stat label="Ждут ответа" value={counters.needsReply} tone={counters.needsReply ? "warn" : "success"} icon={<AlertCircle size={18} />} />
+        <Stat label="Средняя оценка" value={counters.avg} tone="success" icon={<Star size={18} />} />
+      </section>
       <div className="filters-row">
         <select value={marketplace} onChange={(event) => setMarketplace(event.target.value)}>
           <option value="all">Оба маркетплейса</option>

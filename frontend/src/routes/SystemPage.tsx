@@ -1,6 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertCircle, Database, RefreshCcw } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, Database, HeartPulse, ListChecks, RefreshCcw, RotateCcw } from "lucide-react";
 import { fetchJson } from "../api";
+import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 import { SystemStatusSchema } from "../types";
 
 const asRecord = (value: unknown): Record<string, unknown> => value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -50,17 +52,23 @@ export function SystemPage() {
   const postgresTables = asRecord(status.data?.postgresTables || asRecord(components.postgresTables));
   const missingTables = Array.isArray(postgresTables.missing) ? postgresTables.missing.map(String) : [];
   return (
-    <section className="page-section">
-      <div className="section-title">
-        <div>
-          <span>System dashboard</span>
-          <h2>Состояние ДавидСклад</h2>
-        </div>
-        <button className="secondary-action" type="button" onClick={() => status.refetch()} disabled={status.isFetching}>
-          <RefreshCcw size={16} /> Обновить
-        </button>
-      </div>
+    <section className="page-section system-page">
+      <PageHeader
+        title="Состояние ДавидСклад"
+        subtitle="Health, очереди, кэши и технический статус системы в реальном времени."
+        action={(
+          <button className="secondary-action" type="button" onClick={() => status.refetch()} disabled={status.isFetching}>
+            <RefreshCcw size={16} /> Обновить
+          </button>
+        )}
+      />
       {status.error ? <div className="inline-error">{String((status.error as Error).message || status.error)}</div> : null}
+      <section className="dashboard-metrics">
+        <Stat label="Health" value={status.data?.ok ? "ok" : "check"} tone={status.data?.ok ? "success" : "warn"} icon={<HeartPulse size={18} />} />
+        <Stat label="Активные задачи" value={active.length} tone={active.length ? "warn" : "success"} icon={<ListChecks size={18} />} />
+        <Stat label="Ошибки операций" value={failed.length} tone={failed.length ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+        <Stat label="Retry цен" value={Number(priceRetry.total || 0)} tone={Number(priceRetry.total || 0) ? "warn" : "success"} icon={<RotateCcw size={18} />} />
+      </section>
       <div className="summary-grid">
         <StatusCard label="Health" value={status.data?.ok ? "green" : "check"} tone={status.data?.ok ? "success" : "warn"} detail={dateText(status.data?.time)} />
         <StatusCard label="PostgreSQL" value={asRecord(components.postgres).ok === false ? "error" : "ok"} tone={asRecord(components.postgres).ok === false ? "danger" : "success"} detail={missingTables.length ? `missing: ${missingTables.length}` : "tables ok"} />
