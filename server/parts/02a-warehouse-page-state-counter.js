@@ -58,7 +58,12 @@ async function warehouseStateCounterFromPostgres(prisma, marketplace) {
   return { archived, inactive, outOfStock };
 }
 
-function warehousePagePostgresOrderBy() {
+function warehousePagePostgresOrderBy(sort = "") {
+  const mode = cleanText(sort).toLowerCase();
+  if (mode === "recent" || mode === "updated") return [{ updatedAt: "desc" }, { id: "asc" }];
+  if (mode === "alpha" || mode === "name") return [{ name: "asc" }, { id: "asc" }];
+  if (mode === "price_desc") return [{ targetPrice: "desc" }, { id: "asc" }];
+  if (mode === "price_asc") return [{ targetPrice: "asc" }, { id: "asc" }];
   return [
     { archived: "asc" },
     { status: "asc" },

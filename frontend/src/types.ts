@@ -719,6 +719,7 @@ export type Filters = {
   linked: string;
   state: string;
   brand: string;
+  sort: string;
   autoOnly: boolean;
   page: number;
 };

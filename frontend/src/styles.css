@@ -6190,3 +6190,46 @@ label.settings-toggle {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ===== Restyled catalog toolbar (rounded fields, custom select chevron) ===== */
+.toolbar { grid-template-columns: minmax(240px, 1.4fr) repeat(5, minmax(132px, auto)) auto; }
+.search-box {
+  border-radius: 12px;
+  border-color: rgba(120, 160, 255, 0.22);
+  background: linear-gradient(180deg, rgba(24, 38, 70, 0.7), rgba(16, 26, 50, 0.8));
+}
+.search-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18); }
+.toolbar select,
+.toolbar .brand-filter,
+.brand-combo-input {
+  border-radius: 12px;
+  border-color: rgba(120, 160, 255, 0.22);
+  background: linear-gradient(180deg, rgba(24, 38, 70, 0.65), rgba(16, 26, 50, 0.78));
+  font-size: 13px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.toolbar select { appearance: none; -webkit-appearance: none; padding-right: 30px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238fb3ff' stroke-width='2.5'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 11px center;
+}
+.toolbar select:hover, .brand-combo-input:hover { border-color: rgba(120, 160, 255, 0.4); }
+.toolbar select:focus, .brand-combo-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18); }
+.sort-select { color: #cfe0ff; }
+
+/* Custom brand picker (replaces the native datalist dropdown) */
+.brand-combo { position: relative; min-width: 0; }
+.brand-combo-input { width: 100%; min-height: 42px; padding: 0 11px; color: var(--text); outline: none; border: 1px solid rgba(120,160,255,0.22); }
+.brand-combo-meta { color: var(--muted); font-size: 10px; line-height: 1; margin-top: 3px; display: flex; align-items: center; gap: 6px; }
+.brand-combo-pop {
+  position: absolute; z-index: 50; top: 46px; left: 0; right: 0;
+  max-height: 320px; overflow-y: auto;
+  background: #0f1830; border: 1px solid rgba(120, 160, 255, 0.3);
+  border-radius: 12px; box-shadow: 0 18px 50px rgba(0,0,0,0.5); padding: 4px;
+}
+.brand-combo-option {
+  display: block; width: 100%; text-align: left;
+  padding: 8px 10px; border-radius: 8px; border: none; background: none;
+  color: #cfe0ff; font-size: 13px; cursor: pointer;
+}
+.brand-combo-option:hover, .brand-combo-option.is-active { background: rgba(59, 109, 255, 0.25); color: #fff; }
+.brand-combo-empty { padding: 10px; color: var(--muted); font-size: 12px; text-align: center; }

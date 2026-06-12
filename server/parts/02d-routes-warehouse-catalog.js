@@ -54,6 +54,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
     const marketplace = cleanText(request.query.marketplace || "all");
     const stateCode = cleanText(request.query.state || "all");
     const brandFilter = cleanText(request.query.brand || "");
+    const sortMode = cleanText(request.query.sort || "");
     const grouped = parseBooleanSetting(request.query.grouped, false);
 
     if (shouldUsePostgresStorage() && !sync && !refreshPrices) {
@@ -68,6 +69,7 @@ app.get("/api/warehouse/products/page", async (request, response, next) => {
           marketplace,
           state: stateCode,
           brand: brandFilter,
+          sort: sortMode,
           groupPage: grouped,
         },
       });

@@ -43,7 +43,7 @@ async function buildFastWarehousePageFromPostgres({
     prisma.warehouseProduct.findMany({
       where: strictPrimaryWhere || where,
       include: { links: true },
-      orderBy: warehousePagePostgresOrderBy(),
+      orderBy: warehousePagePostgresOrderBy(filters.sort),
       skip: needsInMemoryPage ? 0 : offset,
       take: needsInMemoryPage ? warehouseInMemoryPageMax : pageSize,
     }),
@@ -54,7 +54,7 @@ async function buildFastWarehousePageFromPostgres({
     dbRows = await prisma.warehouseProduct.findMany({
       where,
       include: { links: true },
-      orderBy: warehousePagePostgresOrderBy(),
+      orderBy: warehousePagePostgresOrderBy(filters.sort),
       take: warehouseInMemoryPageMax,
     });
     pageTrace("postgres:after-strict-fallback-query", traceStartedAt);

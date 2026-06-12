@@ -62,6 +62,7 @@ function warehouseFastPageCacheKey({ page = 1, pageSize = 60, usdRate, filters =
       marketplace: cleanText(filters.marketplace || "all"),
       state: cleanText(filters.state || "all"),
       brand: cleanText(filters.brand || "").toLowerCase(),
+      sort: cleanText(filters.sort || ""),
       groupPage: Boolean(filters.groupPage),
     },
     storage: shouldUsePostgresStorage() ? "postgres" : "json",

@@ -5,6 +5,7 @@ import { Bot, Check, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, S
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { BrandPicker } from "../components/BrandPicker";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
@@ -56,6 +57,7 @@ function readFilters(): Filters {
     linked: params.get("linked") || "all",
     state: params.get("state") || "all",
     brand: params.get("brand") || "",
+    sort: params.get("sort") || "",
     autoOnly: params.get("autoOnly") === "true",
     page: Math.max(1, Number(params.get("page") || 1) || 1),
   };
@@ -74,6 +76,7 @@ function writeWarehouseLocation(filters: Filters, selectedGroup: string, replace
   if (filters.linked !== "all") params.set("linked", filters.linked);
   if (filters.state !== "all") params.set("state", filters.state);
   if (filters.brand) params.set("brand", filters.brand);
+  if (filters.sort) params.set("sort", filters.sort);
   if (filters.autoOnly) params.set("autoOnly", "true");
   if (filters.page > 1) params.set("page", String(filters.page));
   const path = selectedGroup ? `/app/warehouse/${encodeURIComponent(selectedGroup)}` : "/app/warehouse";
@@ -94,6 +97,7 @@ function buildPageUrl(filters: Filters) {
     grouped: "true",
   });
   if (filters.brand) params.set("brand", filters.brand);
+  if (filters.sort) params.set("sort", filters.sort);
   return `/api/warehouse/products/page?${params}`;
 }
 
@@ -1826,18 +1830,22 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           <option value="inactive">Неактивные</option>
           <option value="out_of_stock">Нет остатка</option>
         </select>
-        <label className="brand-filter-wrap">
-          <input className="brand-filter" list="warehouse-brand-list" value={filters.brand} onChange={(event) => setFilter("brand", event.target.value)} placeholder="Бренд" />
-          <datalist id="warehouse-brand-list">
-            {brandOptions.map((brand) => <option value={brand} key={brand} />)}
-          </datalist>
-          <span>{brandsQuery.isLoading ? "загружаю бренды" : `${brandOptions.length} брендов`}</span>
-          {isAdmin ? (
-            <button className="icon-action" type="button" title="Обновить список брендов" onClick={() => refreshBrands.mutate()} disabled={refreshBrands.isPending}>
-              {refreshBrands.isPending ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
-            </button>
-          ) : null}
-        </label>
+        <select className="sort-select" value={filters.sort} onChange={(event) => setFilter("sort", event.target.value)} title="Сортировка">
+          <option value="">По умолчанию</option>
+          <option value="recent">Недавнее изменение</option>
+          <option value="alpha">По алфавиту</option>
+          <option value="price_desc">Цена: дороже</option>
+          <option value="price_asc">Цена: дешевле</option>
+        </select>
+        <BrandPicker
+          value={filters.brand}
+          options={brandOptions}
+          loading={brandsQuery.isLoading}
+          onChange={(brand) => setFilter("brand", brand)}
+          onRefresh={() => refreshBrands.mutate()}
+          refreshing={refreshBrands.isPending}
+          canRefresh={isAdmin}
+        />
         <label className="toggle-filter">
           <input type="checkbox" checked={filters.autoOnly} onChange={(event) => setFilter("autoOnly", event.target.checked)} />
           Только автопрайс
