@@ -57,9 +57,13 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
         name = ozonNameByOffer.get(cleanText(product.offerId).toLowerCase()) || name;
       }
       const lowerName = name.toLowerCase();
-      const hasBlockedKeyword = lowerName.includes("отливант") || lowerName.includes("тестер");
+      const hasBlockedKeyword = lowerName.includes("отливант")
+        || lowerName.includes("тестер")
+        || isYandexNoBoxProduct(name);
+      // Named sets ("Парфюмерный набор" …) are sellable even with a small bundled item.
       const volumeAssessment = assessYandexSmallVolume(name);
-      if (hasBlockedKeyword || volumeAssessment.blocked) {
+      const smallVolume = volumeAssessment.blocked && !isYandexSetProduct(name);
+      if (hasBlockedKeyword || smallVolume) {
         toDelete.push(product);
         continue;
       }

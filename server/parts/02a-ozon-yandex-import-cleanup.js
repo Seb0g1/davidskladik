@@ -1,3 +1,22 @@
+// Sets/kits are sellable on Yandex even when a bundled item is under 20ml ("Парфюмерный
+// набор 100 мл + 10 мл", "набор кремов", "набор средств"). The whitelist OVERRIDES the
+// small-volume block. "Без коробки" must NOT be on Yandex at all (delete + import block).
+const YANDEX_SET_KEYWORDS = ["парфюмерный набор", "подарочный набор", "набор средств", "набор кремов", "набор косметики", "набор миниатюр", "gift set", " набор "];
+const YANDEX_NO_BOX_RE = /без\s+коробк/iu;
+
+function isYandexSetProduct(textOrProduct = {}) {
+  const text = (typeof textOrProduct === "string" ? textOrProduct : collectYandexVolumeSearchText(textOrProduct)).toLowerCase();
+  if (!text) return false;
+  // Pad with spaces so " набор " word-boundary check works at string ends too.
+  const padded = ` ${text} `;
+  return YANDEX_SET_KEYWORDS.some((keyword) => padded.includes(keyword));
+}
+
+function isYandexNoBoxProduct(textOrProduct = {}) {
+  const text = typeof textOrProduct === "string" ? textOrProduct : collectYandexVolumeSearchText(textOrProduct);
+  return YANDEX_NO_BOX_RE.test(text || "");
+}
+
 function extractOzonYandexImportVolumesMl(name = "") {
   const raw = cleanText(name);
   if (!raw) return [];
@@ -52,8 +71,10 @@ function assessYandexSmallVolume(productOrText = {}) {
   const minVolumeMl = volumesMl.length ? Math.min(...volumesMl) : null;
   const maxVolumeMl = volumesMl.length ? Math.max(...volumesMl) : null;
   // Block by the LARGEST volume: "50 мл + 10 мл" sets are full products with a bundled
-  // sampler and must not be blocked/deleted because of the 10ml part.
-  const blocked = maxVolumeMl !== null && maxVolumeMl < YANDEX_MIN_VOLUME_ML;
+  // sampler and must not be blocked/deleted because of the 10ml part. Named sets
+  // ("Парфюмерный набор", "набор кремов" …) are always allowed regardless of volume.
+  const isSet = isYandexSetProduct(searchText);
+  const blocked = !isSet && maxVolumeMl !== null && maxVolumeMl < YANDEX_MIN_VOLUME_ML;
   const smallVolumes = volumesMl.filter((value) => value < YANDEX_MIN_VOLUME_ML);
   return {
     blocked,
@@ -222,9 +243,13 @@ function buildYandexCleanupCandidate(item = {}, shop = {}, protectedBrandsInput 
   const volumeAssessment = assessYandexSmallVolume(searchableTextRaw);
   const volumesMl = volumeAssessment.volumesMl;
   const minVolumeMl = volumeAssessment.minVolumeMl;
-  const smallVolume = volumeAssessment.blocked;
+  // Named sets stay even with small parts; "без коробки" must be removed from Yandex.
+  const isSet = isYandexSetProduct(searchableTextRaw);
+  const smallVolume = volumeAssessment.blocked && !isSet;
   const lowerName = name.toLowerCase();
-  const hasBlockedKeyword = lowerName.includes("отливант") || lowerName.includes("тестер");
+  const hasBlockedKeyword = lowerName.includes("отливант")
+    || lowerName.includes("тестер")
+    || isYandexNoBoxProduct(searchableTextRaw);
   const forceDelete = smallVolume || hasBlockedKeyword;
   const protectedByBrand = matchedBrands.length > 0 && !forceDelete;
   return {
