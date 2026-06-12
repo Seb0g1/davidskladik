@@ -221,18 +221,25 @@ async function sendWarehousePrices({
           if (target > 0) updates.push({ id: String(product.id), target });
         }
         if (updates.length) {
-          // Set the column AND raw.marketplacePrice (the column is re-derived from
-          // raw.marketplacePrice on every product write), so the reconcile survives the
-          // next reconciler/stock patch instead of reverting to the stale value. Also
-          // align target_price with the verified-live value — otherwise current_price
-          // <> target_price stays true forever and price_sweep re-selects these SKUs
-          // on every cycle even though nothing actually needs to change.
+          // Set BOTH columns AND ALL raw price fields to the SAME verified value, plus a
+          // priceVerifiedAt timestamp. Columns are re-derived from raw.* on every product
+          // write, so a partial reconcile (e.g. only raw.marketplacePrice) gets clobbered
+          // by the next rebuild's freshly-recomputed raw.nextPrice/targetPrice — leaving
+          // current_price <> target_price true again and price_sweep re-selecting these
+          // SKUs forever. priceVerifiedAt lets price_sweep skip recently-verified SKUs
+          // even if the columns cosmetically diverge again before the next reconciler pass.
           await Promise.all(updates.map(({ id, target }) =>
             prisma.$executeRawUnsafe(
               `UPDATE warehouse_products
                SET current_price = $1,
                    target_price = $1,
-                   raw = jsonb_set(COALESCE(raw, '{}'::jsonb), '{marketplacePrice}', to_jsonb($1::int), true)
+                   raw = COALESCE(raw, '{}'::jsonb) || jsonb_build_object(
+                     'marketplacePrice', $1::int,
+                     'currentPrice', $1::int,
+                     'nextPrice', $1::int,
+                     'targetPrice', $1::int,
+                     'priceVerifiedAt', to_jsonb(now())
+                   )
                WHERE id = $2`,
               target, id,
             ).catch(() => null)));

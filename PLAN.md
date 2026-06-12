@@ -96,13 +96,19 @@ _PG-маршруты candidates(поиск по артикулу+флаги)/ref
 Фронт: новая страница `/app/import` (в сайдбаре): кнопка «Обновить с Ozon» (рефреш), поиск по артикулу/имени, таблица с чекбоксами (мультивыбор + «выбрать все на странице»), статус каждого (готов/заблокирован-причина/уже на Яндексе), кнопка «Импортировать выбранные (N)». После импорта — тосты результата, строки помечаются «отправлено».
 Критерий: добавил товар на Ozon → на странице «Обновить» → нашёл по артикулу → выбрал несколько → «Импортировать» → появились на Яндексе с ценой по коэффициенту и остатком. (Авто-импорт каждые 6ч остаётся как фон, страница — для ручного «прямо сейчас».)
 
-## C. Детерминизм цены (КОРЕНЬ «вечно устаревших» цен) [средняя, ВАЖНО]
+## C. 🔶 Детерминизм цены (КОРЕНЬ «вечно устаревших» цен) [ЧАСТИЧНО СДЕЛАНО, ЖДЁТ ДЕПЛОЯ — код в git]
 Диагноз (подтверждён): расчётная `nextPrice` колеблется между двумя значениями (напр. DIC12 6708/7086), потому что выбор поставщика и/или курс USD различаются между билдами (live PriceMaster vs snapshot, альтернативные поставщики Кирилл 43 USD / коте 50 USD). Колонки `current_price` (из `raw.marketplacePrice`) и `target_price` (из `raw.nextPrice`) выводятся из разных raw-полей → `current<>target` истинно всегда → price_sweep крутит 5800+ товаров вхолостую вечно (582+ «reconciled» без эффекта).
 Задачи:
 1. Сделать выбор поставщика и курса ДЕТЕРМИНИРОВАННЫМ: один источник истины (snapshot ИЛИ live, не вперемешку), стабильная сортировка альтернатив (по цене, при равенстве — по rowId), фиксированный курс из настроек на момент пересчёта. Файлы: `02a-supplier-pricing-normalize.js`, `02a-price-master-warehouse-helpers.js` (`supplierAlternativesForDiagnostics`/выбор), `02d-prices-send-warehouse-select.js`.
 2. Стабилизировать `current_price`/`target_price`: при `unchanged_verified` писать ОБА столбца и ВСЕ raw-поля (`marketplacePrice=nextPrice=targetPrice=currentPrice`) одним значением, чтобы будущие патчи не рассогласовывали (мой текущий reconcile в `02d-prices-send-warehouse-select.js` неполный — он не фиксит raw.nextPrice/targetPrice).
 3. Добавить «verified-cooldown»: после `unchanged_verified` ставить `raw.priceVerifiedAt`, и в `02f-price-sweep.js` SQL ИСКЛЮЧАТЬ товары с свежим `priceVerifiedAt` (например <6ч) — чтобы свип перестал молотить даже если столбцы косметически разойдутся.
 Критерий: счётчик stale (yandex/ozon) реально ПАДАЕТ к ~0 и держится; price_sweep выбирает только реально изменившиеся; DIC12 стабильно current==target.
+
+Реализовано:
+- #1 (частично): финальный тайбрейк в `compareWarehouseSupplierPrices` (`02a-price-master-warehouse-helpers.js`) сменён с `docDate` (нестабилен между live/snapshot фетчами одной и той же строки) на `rowId` (стабильный PK PriceMaster-строки) — устраняет флип выбора поставщика при равных ценах. Курс USD проверен: во всех repricing-путях (`02d-prices-send-warehouse-select.js`, `02f-linked-reconciler-scheduler.js`, `queueAuthoritativePriceReprice`) используется `batchPriceMaster:true` → `appSettings.fixedUsdRate || DEFAULT_USD_RATE`, без обращения к живому курсу — уже детерминирован.
+- #2 (сделано): при `unchanged_verified` `02d-prices-send-warehouse-select.js` теперь пишет ОБА столбца (`current_price`, `target_price`) И все raw-поля одним значением (`raw.marketplacePrice=currentPrice=nextPrice=targetPrice`) через `jsonb_build_object` merge — следующий ребилд больше не находит расходящиеся raw.nextPrice/targetPrice.
+- #3 (сделано): тот же reconcile пишет `raw.priceVerifiedAt=now()`; `02f-price-sweep.js` SQL исключает товары с `priceVerifiedAt` свежее `PRICE_SWEEP_VERIFIED_COOLDOWN_HOURS` (default 6ч), даже если current_price/target_price снова расходятся косметически.
+- После деплоя проверить: счётчик stale падает и держится; в логах `price current_price reconciled to target` для прежних "вечных" SKU (напр. DIC12) больше не повторяется на каждом цикле.
 
 ## D. Прочие улучшения (предложения)
 1. **Дашборд** (главная для ADMIN): сводка — продажи за сегодня/неделю (из finance), прибыль, топ-поставщики, очередь цен, архив-бэклог, непрочитанные чаты/вопросы/отзывы. Сейчас «Статистика» пустует.

@@ -40,7 +40,12 @@ function compareWarehouseSupplierPrices(a = {}, b = {}) {
   const aUsd = Number(a.price || 0);
   const bUsd = Number(b.price || 0);
   if (aUsd !== bUsd) return aUsd - bUsd;
-  return String(b.docDate || "").localeCompare(String(a.docDate || ""));
+  // Final tiebreak must be a stable identifier, not docDate: docDate can differ between a
+  // live PriceMaster fetch and a snapshot/previous fetch for the SAME row (re-touched rows),
+  // which flips the "cheapest" pick between two equal-priced suppliers from build to build
+  // and causes nextPrice to oscillate forever. rowId is the PriceMaster row primary key and
+  // is stable across snapshot/live fetches.
+  return String(a.rowId || "").localeCompare(String(b.rowId || ""));
 }
 
 function pickWarehouseSupplier(matches) {
