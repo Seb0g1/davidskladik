@@ -368,6 +368,82 @@ export const FinanceSummarySchema = z.object({
   updatedAt: z.coerce.string().optional().nullable(),
 }).passthrough();
 
+export const DashboardSummarySchema = z.object({
+  ok: z.boolean().optional(),
+  updatedAt: z.coerce.string().optional().nullable(),
+  salesToday: z.object({
+    orders: z.number().optional().default(0),
+    income: z.number().optional().default(0),
+    profit: z.number().optional().default(0),
+  }).optional().default({ orders: 0, income: 0, profit: 0 }),
+  salesWeek: z.object({
+    orders: z.number().optional().default(0),
+    income: z.number().optional().default(0),
+    profit: z.number().optional().default(0),
+  }).optional().default({ orders: 0, income: 0, profit: 0 }),
+  topSuppliers: z.array(z.object({
+    supplierName: z.coerce.string().optional().default(""),
+    orders: z.number().optional().default(0),
+    income: z.number().optional().default(0),
+    profit: z.number().optional().default(0),
+  })).optional().default([]),
+  priceQueue: z.number().optional().default(0),
+  archiveBacklog: z.object({
+    yandex: z.number().optional().default(0),
+    ozon: z.number().optional().default(0),
+    ozonDue: z.number().optional().default(0),
+  }).optional().default({ yandex: 0, ozon: 0, ozonDue: 0 }),
+  notifications: z.object({
+    unread: z.number().optional().default(0),
+    byType: z.record(z.string(), z.number()).optional().default({}),
+  }).optional().default({ unread: 0, byType: {} }),
+}).passthrough();
+
+export const LiveStatusSchema = z.object({
+  ok: z.boolean().optional(),
+  now: z.coerce.string().optional().nullable(),
+  warehouse: z.object({
+    updatedAt: z.coerce.string().optional().nullable(),
+    createdAt: z.coerce.string().optional().nullable(),
+    products: z.number().optional().default(0),
+    suppliers: z.number().optional().default(0),
+    source: z.coerce.string().optional().nullable(),
+  }).optional().default({ products: 0, suppliers: 0 }),
+  priceMaster: z.object({
+    syncId: z.coerce.string().optional().nullable(),
+    updatedAt: z.coerce.string().optional().nullable(),
+    items: z.number().optional().default(0),
+    changes: z.number().optional().default(0),
+    error: z.coerce.string().optional().nullable(),
+  }).optional().default({ items: 0, changes: 0 }),
+  dailySync: z.object({
+    updatedAt: z.coerce.string().optional().nullable(),
+    status: z.coerce.string().optional().default("idle"),
+    running: z.boolean().optional().default(false),
+    lastRunAt: z.coerce.string().optional().nullable(),
+    nextRunAt: z.coerce.string().optional().nullable(),
+    error: z.coerce.string().optional().nullable(),
+  }).optional().default({ status: "idle", running: false }),
+  autoSync: z.object({
+    running: z.boolean().optional().default(false),
+    nextRunAt: z.coerce.string().optional().nullable(),
+  }).optional().default({ running: false }),
+  marketplaceMaintenance: z.object({
+    enabled: z.boolean().optional().default(false),
+    running: z.boolean().optional().default(false),
+    everyHours: z.number().optional().nullable(),
+    nextRunAt: z.coerce.string().optional().nullable(),
+  }).optional().default({ enabled: false, running: false }),
+  queue: z.object({
+    enabled: z.boolean().optional().default(false),
+    degraded: z.boolean().optional().default(false),
+    producerReady: z.boolean().optional().default(false),
+    consumerReady: z.boolean().optional().default(false),
+    counts: z.record(z.string(), z.number()).optional().nullable(),
+    error: z.coerce.string().optional().nullable(),
+  }).optional().default({ enabled: false, degraded: false, producerReady: false, consumerReady: false }),
+}).passthrough();
+
 export const FinanceOrderSchema = z.object({
   id: z.coerce.string(),
   marketplace: z.coerce.string().optional().default(""),

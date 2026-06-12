@@ -175,6 +175,7 @@ const partFiles = [
   "02d-finance-orders-storage.js",
   "02d-finance-list-query.js",
   "02d-prices-finance-routes-api.js",
+  "02d-dashboard-summary.js",
   "02d-ozon-yandex-import.js",
   "02d-operation-jobs-storage.js",
   "02d-supplier-cart-state.js",

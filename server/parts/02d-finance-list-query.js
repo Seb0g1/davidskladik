@@ -1,17 +1,26 @@
+function financePeriodStartDate(period = "30d") {
+  const normalized = cleanText(period || "30d").toLowerCase();
+  if (normalized === "today") {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    return start;
+  }
+  const days = normalized === "7d" ? 7 : normalized === "90d" ? 90 : 30;
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+}
+
 function financePeriodWhere(period = "30d", field = "createdAt") {
   const normalized = cleanText(period || "30d").toLowerCase();
   if (normalized === "all") return {};
-  const days = normalized === "7d" ? 7 : normalized === "90d" ? 90 : 30;
-  return { [field]: { gte: new Date(Date.now() - days * 24 * 60 * 60 * 1000) } };
+  return { [field]: { gte: financePeriodStartDate(period) } };
 }
 
 function financeRowMatchesPeriod(row = {}, period = "30d", field = "createdAt") {
   const normalized = cleanText(period || "30d").toLowerCase();
   if (normalized === "all") return true;
-  const days = normalized === "7d" ? 7 : normalized === "90d" ? 90 : 30;
   const date = toDateOrNull(row[field] || row.createdAt);
   if (!date) return false;
-  return date.getTime() >= Date.now() - days * 24 * 60 * 60 * 1000;
+  return date.getTime() >= financePeriodStartDate(period).getTime();
 }
 
 function financeSummaryFromRows(orders = [], expenses = []) {

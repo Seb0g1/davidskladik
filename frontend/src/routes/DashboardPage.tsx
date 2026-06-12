@@ -1,9 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, CheckCircle2, ClipboardList, PackageCheck, RefreshCw, ShoppingCart, Star, Truck } from "lucide-react";
+import { AlertTriangle, Archive, CheckCircle2, ClipboardList, HelpCircle, MessageCircle, PackageCheck, RefreshCw, ShoppingCart, Star, TrendingUp, Truck } from "lucide-react";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
-import { FinanceSummarySchema, OperationsSchema, SalesAutomationSummarySchema, SupplierPickingListSchema, SuppliersResponseSchema, WarehousePageSchema } from "../types";
+import { DashboardSummarySchema, FinanceSummarySchema, OperationsSchema, SalesAutomationSummarySchema, SupplierPickingListSchema, SuppliersResponseSchema, WarehousePageSchema } from "../types";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
 
 const warehouseUrl = "/api/warehouse/products/page?page=1&pageSize=8&q=&marketplace=all&linked=all&state=all&autoOnly=false&grouped=true";
@@ -58,13 +58,22 @@ export function DashboardPage() {
     queryFn: () => fetchJson("/api/operations?limit=8", OperationsSchema),
     refetchInterval: 5000,
   });
+  const summary = useQuery({
+    queryKey: ["dashboard", "summary"],
+    queryFn: () => fetchJson("/api/dashboard/summary", DashboardSummarySchema),
+  });
 
   const supplierList = suppliers.data?.suppliers || [];
   const activeSuppliers = supplierList.filter(supplierActive).length;
   const financeSummary = asRecord(finance.data?.summary);
   const jobs = operations.data?.jobs || [];
   const rows = picking.data?.rows || [];
-  const error = warehouse.error || suppliers.error || picking.error || finance.error || sales.error || operations.error;
+  const salesToday = summary.data?.salesToday || { orders: 0, income: 0, profit: 0 };
+  const salesWeek = summary.data?.salesWeek || { orders: 0, income: 0, profit: 0 };
+  const topSuppliers = summary.data?.topSuppliers || [];
+  const archiveBacklog = summary.data?.archiveBacklog || { yandex: 0, ozon: 0, ozonDue: 0 };
+  const notifications = summary.data?.notifications || { unread: 0, byType: {} };
+  const error = warehouse.error || suppliers.error || picking.error || finance.error || sales.error || operations.error || summary.error;
   const refresh = () => {
     void warehouse.refetch();
     void suppliers.refetch();
@@ -72,6 +81,7 @@ export function DashboardPage() {
     void finance.refetch();
     void sales.refetch();
     void operations.refetch();
+    void summary.refetch();
   };
 
   return (
@@ -85,6 +95,7 @@ export function DashboardPage() {
       <section className="dashboard-metrics">
         <Stat label="Активных товаров" value={warehouse.data?.groupTotal || warehouse.data?.total || 0} tone="accent" icon={<PackageCheck size={18} />} trend={<MiniTrend />} delta="+5.3% к вчера" />
         <Stat label="Готовы к продаже" value={warehouse.data?.ready || 0} tone="success" icon={<CheckCircle2 size={18} />} trend={<MiniTrend tone="success" />} delta="+8% к вчера" />
+        <Stat label="Продажи сегодня" value={money(salesToday.income)} tone="success" icon={<TrendingUp size={18} />} trend={<MiniTrend tone="success" />} delta={`${salesToday.orders} заказ(ов), прибыль ${money(salesToday.profit)}`} />
         <Stat label="Очередь сборки" value={picking.data?.total || rows.length || 0} icon={<ClipboardList size={18} />} trend={<MiniTrend />} delta="в работе" />
         <Stat label="Нужны действия" value={warehouse.data?.withoutSupplier || sales.data?.retryTotal || 0} tone="warn" icon={<AlertTriangle size={18} />} trend={<MiniTrend tone="warn" />} delta="проверить" />
       </section>
@@ -173,6 +184,55 @@ export function DashboardPage() {
               <span>Автоматизация <b>{sales.data?.autoEnabled ? "активна" : "выключена"}</b></span>
               <span>Повторов цены <b>{sales.data?.retryTotal || 0}</b></span>
               <span>Восстановление Ozon <b>{sales.data?.ozonUnarchiveQueued || 0}</b></span>
+            </div>
+          </section>
+
+          <section className="dashboard-summary-card">
+            <div className="section-title compact-title">
+              <div><span>Продажи</span><h3>За неделю</h3></div>
+              <TrendingUp size={18} />
+            </div>
+            <div className="dashboard-money">
+              <strong>{money(salesWeek.profit)}</strong>
+              <span>чистая прибыль за 7 дней</span>
+            </div>
+            <div className="dashboard-kpis">
+              <span>Заказов <b>{salesWeek.orders}</b></span>
+              <span>Выручка <b>{money(salesWeek.income)}</b></span>
+            </div>
+            {topSuppliers.length ? (
+              <div className="dashboard-kpis">
+                {topSuppliers.slice(0, 5).map((supplier) => (
+                  <span key={supplier.supplierName}>
+                    {supplier.supplierName} <b>{money(supplier.profit)}</b>
+                  </span>
+                ))}
+              </div>
+            ) : <div className="soft-empty">Нет продаж за неделю.</div>}
+          </section>
+
+          <section className="dashboard-summary-card">
+            <div className="section-title compact-title">
+              <div><span>Очередь и архив</span><h3>Требует внимания</h3></div>
+              <Archive size={18} />
+            </div>
+            <div className="dashboard-kpis">
+              <span>Очередь цен <b>{summary.data?.priceQueue ?? 0}</b></span>
+              <span>Архив Яндекс (привязано) <b>{archiveBacklog.yandex}</b></span>
+              <span>Очередь восстановления Ozon <b>{archiveBacklog.ozon}</b> (готово {archiveBacklog.ozonDue})</span>
+            </div>
+          </section>
+
+          <section className="dashboard-summary-card">
+            <div className="section-title compact-title">
+              <div><span>Уведомления</span><h3>Непрочитанные</h3></div>
+              <Star size={18} />
+            </div>
+            <div className="dashboard-kpis">
+              <span><MessageCircle size={14} /> Чаты <b>{notifications.byType.chat || 0}</b></span>
+              <span><HelpCircle size={14} /> Вопросы <b>{notifications.byType.question || 0}</b></span>
+              <span><Star size={14} /> Отзывы <b>{notifications.byType.review || 0}</b></span>
+              <span>Всего <b>{notifications.unread}</b></span>
             </div>
           </section>
         </aside>
