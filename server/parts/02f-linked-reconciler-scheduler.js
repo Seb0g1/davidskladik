@@ -89,8 +89,12 @@ async function refreshYandexMarketplaceStateForProducts(products = []) {
         stateByOfferId.set(offerId, pickYandexState(item, offer));
       }
       for (const product of items) {
-        const state = stateByOfferId.get(cleanText(product.offerId).toLowerCase());
-        if (!state) continue;
+        // If the offerId is absent from the response entirely (no error), the offer
+        // no longer exists in the business's Yandex catalog at all. Treat it the
+        // same as "archived" so it stops showing as a live Yandex listing and gets
+        // picked up by the yandex-fast-unarchive recovery/recreate job.
+        const state = stateByOfferId.get(cleanText(product.offerId).toLowerCase())
+          || { code: "archived", label: "Удалён на Яндексе", stateName: "Отсутствует в каталоге ЯМ" };
         updatedById.set(product.id, normalizeWarehouseProduct({
           ...product,
           marketplaceState: mergeYandexLiveMarketplaceState(product.marketplaceState, state),
