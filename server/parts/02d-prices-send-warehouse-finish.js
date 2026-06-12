@@ -36,6 +36,10 @@
     if (success) {
       const sentPrice = verifiedPrice || roundPrice(item.price);
       product.marketplacePrice = sentPrice;
+      // Keep the cached cabinet price in sync: the postgres column maps from
+      // raw.currentPrice FIRST (marketplacePrice is only a fallback), so without this
+      // the column stays stale and the sweep re-sends the same prices forever.
+      product.currentPrice = sentPrice;
       if (item.marketplace === "ozon") {
         product.ozon = {
           ...(product.ozon || {}),
