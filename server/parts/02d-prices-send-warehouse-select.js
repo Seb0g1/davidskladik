@@ -200,6 +200,33 @@ async function sendWarehousePrices({
       sourceEvent: sourceEvent || reason,
       repriceAttempt,
     });
+
+    // Reconcile the cached current_price column for products the build confirmed are
+    // already at target on the marketplace ("unchanged_verified"). Without this the column
+    // stays stale forever, so the price sweep keeps re-selecting the same thousands of
+    // products every cycle and the UI shows "цена ждёт" for prices that are actually live.
+    try {
+      const prisma = getPrisma();
+      if (prisma && shouldUsePostgresStorage()) {
+        const reconciledById = new Map();
+        const unchangedIds = new Set(skipped
+          .filter((item) => item.reason === "unchanged_verified")
+          .map((item) => String(item.id || item.productId))
+          .filter(Boolean));
+        for (const product of selected) {
+          if (!unchangedIds.has(String(product.id))) continue;
+          const target = roundPrice(Number(product.nextPrice || product.targetPrice || 0));
+          if (target > 0) reconciledById.set(String(product.id), target);
+        }
+        if (reconciledById.size) {
+          await Promise.all(Array.from(reconciledById.entries()).map(([id, price]) =>
+            prisma.warehouseProduct.update({ where: { id }, data: { currentPrice: price } }).catch(() => null)));
+          logger.info("price current_price reconciled to target (already live)", { count: reconciledById.size, reason: cleanText(reason) || "" });
+        }
+      }
+    } catch (error) {
+      logger.warn("current_price reconcile failed", { detail: error?.message || String(error) });
+    }
   }
 
   if (!dryRun && items.length) {
