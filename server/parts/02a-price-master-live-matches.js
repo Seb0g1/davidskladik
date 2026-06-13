@@ -11,6 +11,13 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
     let candidateRows = [];
     if (link.matchType === "article") {
       candidateRows = snapshotIndexes.byArticle.get(link.article) || [];
+    } else if (link.matchType === "selected_row" && link.article) {
+      // Self-heal: a pinned row gets deactivated when the supplier re-uploads its offer
+      // (new RowID, same partner+article). Select by article so the current active row is a
+      // candidate; priceMasterRowMatchesLink + partnerId/supplier scoping keep it correct.
+      candidateRows = snapshotIndexes.byArticle.get(link.article)
+        || snapshotIndexes.byRowId.get(cleanText(link.sourceRowId))
+        || [];
     } else if (link.matchType === "selected_row" && link.sourceRowId) {
       candidateRows = snapshotIndexes.byRowId.get(cleanText(link.sourceRowId)) || [];
     } else {
@@ -66,7 +73,12 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
   const supplierMaps = managedSupplierMaps(managedSuppliers);
   const conditions = ["r.Ignored = 0"];
   const params = [];
-  if (link.matchType === "selected_row" && link.sourceRowId) {
+  if (link.matchType === "selected_row" && link.article) {
+    // Self-heal pinned links: match the supplier's current rows for this article (scoped to
+    // partner below) instead of the pinned RowID, which the supplier's re-upload deactivated.
+    conditions.push("BINARY TRIM(r.NativeID) = BINARY ?");
+    params.push(link.article);
+  } else if (link.matchType === "selected_row" && link.sourceRowId) {
     conditions.push("r.RowID = ?");
     params.push(Number(link.sourceRowId));
   } else if (link.matchType === "selected_row" || link.matchType === "exact_name") {
@@ -170,7 +182,11 @@ async function findPriceMasterSnapshotRowsForLink(linkInput, usdRate, managedSup
   if (!warehouseLinkHasMatchTarget(link)) return [];
 
   const and = [];
-  if (link.matchType === "selected_row" && link.sourceRowId) {
+  if (link.matchType === "selected_row" && link.article) {
+    // Self-heal pinned links (see findPriceMasterRowsForLink): match by article + partner so
+    // a re-uploaded supplier's current active row replaces the deactivated pinned row.
+    and.push({ article: cleanText(link.article) });
+  } else if (link.matchType === "selected_row" && link.sourceRowId) {
     and.push({ rowId: cleanText(link.sourceRowId) });
   } else if (link.matchType === "selected_row" || link.matchType === "exact_name") {
     const exactName = cleanText(link.exactName || link.article);
