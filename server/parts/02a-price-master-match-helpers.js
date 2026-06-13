@@ -276,7 +276,16 @@ function priceMasterRowMatchesLink(row = {}, link = {}) {
   if (!supplierOk || !partnerOk || !keywordOk) return false;
   if (link.matchType === "selected_row") {
     if (link.sourceRowId && String(fields.rowId || "") === String(link.sourceRowId)) return true;
-    if (link.exactName) return exactPriceMasterNameMatches(fields.name, link.exactName);
+    if (link.exactName && exactPriceMasterNameMatches(fields.name, link.exactName)) return true;
+    // Staleness fallback: when a supplier re-uploads an offer, PriceMaster deactivates the
+    // pinned row (sourceRowId) and creates a NEW active row with a different RowID and
+    // slightly different NativeName for the SAME supplier+article. Without this, the product
+    // loses its supplier ("not_available") and goes to stock 0 with no price/markup even
+    // though the supplier is in stock. supplierOk + partnerOk above already scope this to the
+    // same supplier (name) AND same partnerId, so an article fall-through cannot leak to a
+    // different supplier — at worst it follows the same supplier's current row for the article.
+    const pinnedArticle = cleanText(link.article).toLowerCase();
+    if (pinnedArticle && cleanText(fields.article).toLowerCase() === pinnedArticle) return true;
     return false;
   }
   if (link.matchType === "exact_name") {
