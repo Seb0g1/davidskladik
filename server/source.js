@@ -215,6 +215,7 @@ const partFiles = [
   "02f-ozon-yandex-import-page-routes.js",
   "02f-price-sweep.js",
   "02f-stock-sweep.js",
+  "02f-zero-stock-sweep.js",
   "02f-yandex-fast-unarchive.js",
   "02f-notifications-core.js",
   "02f-notifications-pollers.js",

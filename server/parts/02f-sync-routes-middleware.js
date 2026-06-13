@@ -216,6 +216,13 @@ function startBackgroundSchedulers() {
       defaultTarget: linkedDefaultTargetStock,
     });
   }
+  if (zeroStockSweepEnabled && autoZeroStockOnNoSupplier) {
+    scheduleZeroStockSweep(120_000);
+    logger.info("zero stock sweep scheduler enabled", {
+      intervalSeconds: Math.round(zeroStockSweepIntervalMs / 1000),
+      batchLimit: zeroStockSweepBatchLimit,
+    });
+  }
   if (priceSweepEnabled) {
     schedulePriceSweep(60_000);
     logger.info("price sweep scheduler enabled", {
