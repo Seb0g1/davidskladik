@@ -24,14 +24,16 @@ async function runStockSweep({ source = "schedule" } = {}) {
   if (!prisma || !shouldUsePostgresStorage()) return { status: "postgres_disabled" };
   stockSweepRunning = true;
   try {
-    // Candidates: linked, not archived, supplier selected, and either no target yet or
-    // live stock below target. JSON fields are extracted in SQL to keep the scan cheap.
+    // Candidates: linked, not archived, and either no target yet or live stock below target.
+    // NOTE: `selectedSupplier` is a computed price-build field — it is NEVER persisted to
+    // raw, so we must NOT filter on `raw->'selectedSupplier'` here (that predicate matched
+    // zero rows and silently disabled this sweep entirely). The supplier is resolved below
+    // by a fresh build; products whose supplier vanished get filtered out there (and are
+    // zeroed by the no-supplier automation instead).
     const rows = await prisma.$queryRawUnsafe(`
       SELECT p.id
       FROM warehouse_products p
       WHERE p.archived = false
-        AND p.raw -> 'selectedSupplier' IS NOT NULL
-        AND p.raw ->> 'selectedSupplier' <> 'null'
         AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
         AND (
           COALESCE(p.target_stock, 0) <= 0
@@ -55,13 +57,16 @@ async function runStockSweep({ source = "schedule" } = {}) {
     }
     if (!candidateIds.length) return { status: "ok", candidates: rows.length, sent: 0, cooldown: true };
 
-    const productRows = await prisma.warehouseProduct.findMany({
-      where: { id: { in: candidateIds } },
-      include: { links: true },
-    });
+    // Resolve the supplier with a fresh build (snapshot pricing, not live) — productFromPostgres
+    // alone does NOT populate selectedSupplier. Products whose supplier disappeared come back
+    // without selectedSupplier and are dropped here (no-supplier automation zeroes those).
+    const builtProducts = await buildFreshWarehouseProducts(candidateIds, { livePriceMaster: false })
+      .catch((error) => {
+        logger.warn("stock sweep build failed", { detail: error?.message || String(error) });
+        return [];
+      });
     const now = new Date().toISOString();
-    const products = productRows
-      .map(productFromPostgres)
+    const products = builtProducts
       .filter((product) => product?.selectedSupplier && product.hasLinks)
       .map((product) => ({
         ...product,
