@@ -209,7 +209,7 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
       .filter((product) => !(product.links || []).length && product.everHadLinks)
       .map((product) => product.id);
     if (automationIds.length) {
-      queueMarketplaceJob("no-supplier-automation", { productIds: automationIds }, { priority: 1 });
+      queueMarketplaceJob("no-supplier-automation", { productIds: automationIds }, { priority: QUEUE_PRIORITY.RECOVERY });
     }
   });
 }

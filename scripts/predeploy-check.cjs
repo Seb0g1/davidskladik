@@ -31,5 +31,8 @@ run("npx", ["prisma", "migrate", "deploy"]);
 run("npx", ["prisma", "generate"]);
 run("node", ["scripts/migrate-json-state-to-postgres.cjs"]);
 run("node", ["scripts/ops-diagnose.cjs", "--json", "--deep", "--log-lines=80"]);
+// PLAN-HARDENING.md 2.2: surface .env / ecosystem.config.cjs divergence at deploy time
+// without blocking the deploy on it (--warn-only).
+run("node", ["scripts/check-env-ecosystem-divergence.cjs", "--warn-only"]);
 
 process.stdout.write("\npredeploy-check complete\n");

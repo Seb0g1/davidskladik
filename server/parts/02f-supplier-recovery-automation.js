@@ -190,7 +190,7 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
       refreshMarketplacePrices: true,
       livePriceMaster: true,
       verify: true,
-      priority: 2,
+      priority: QUEUE_PRIORITY.PRICE_BACKGROUND,
     }).catch((error) => {
       logger.warn("supplier recovery price refresh queue failed", {
         source,

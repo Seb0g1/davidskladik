@@ -172,18 +172,7 @@ function warehouseLinkActivationRequestMeta(productIds = [], requestMeta = {}) {
 function stripStaleWarehouseSupplierSnapshot(raw = {}) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
   const next = { ...raw };
-  for (const key of [
-    "selectedSupplier",
-    "suppliers",
-    "priceFormula",
-    "ready",
-    "changed",
-    "nextPrice",
-    "fallbackSuppliers",
-    "selectedSupplierReason",
-    "priceSource",
-    "priceSelectionReason",
-  ]) {
+  for (const key of COMPUTED_WAREHOUSE_PRODUCT_FIELDS) {
     delete next[key];
   }
   return next;

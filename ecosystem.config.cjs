@@ -1,7 +1,7 @@
 /**
- * PM2 production config (16 GB RAM) — api + worker split.
+ * PM2 production config (16 GB RAM) — api + worker + health-watchdog.
  *
- * Запуск: cd /var/www/davidsklad/davidskladik && pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker
+ * Запуск: cd /var/www/davidsklad/davidskladik && pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker,davidsklad-health-watchdog
  * REDIS_URL и секреты берутся из .env на сервере.
  */
 const sharedStabilityEnv = {
@@ -106,6 +106,24 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         ...workerOnlyEnv,
+      },
+    },
+    {
+      // PLAN-HARDENING.md 2.1: polls /health on the api + worker ports every
+      // HEALTH_WATCHDOG_INTERVAL_MS (default 45s) and `pm2 restart`s a process that
+      // fails HEALTH_WATCHDOG_FAILURE_THRESHOLD (default 3) checks in a row — pm2 alone
+      // does not restart a process whose event loop is pinned (status stays "online").
+      name: "davidsklad-health-watchdog",
+      script: "scripts/health-watchdog.cjs",
+      args: "--loop",
+      cwd: __dirname,
+      instances: 1,
+      exec_mode: "fork",
+      autorestart: true,
+      watch: false,
+      max_memory_restart: "256M",
+      env: {
+        NODE_ENV: "production",
       },
     },
   ],

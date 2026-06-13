@@ -1,4 +1,5 @@
 async function startServer() {
+  logEffectiveRuntimeConfig();
   initMarketplaceQueue();
   pruneUploadDirectory().catch((err) => logger.warn("initial upload prune failed", { detail: err?.message || String(err) }));
 

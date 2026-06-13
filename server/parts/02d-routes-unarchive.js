@@ -24,7 +24,7 @@ function enqueueOzonUnarchiveQueueProcess({ request, source, limit, force }) {
     at: queuedAt,
   };
   if (!queuedThroughBullmq) {
-    queueMarketplaceJob("ozon-unarchive-queue-process", { source, limit, force, queueRunId }, { priority: 3 })
+    queueMarketplaceJob("ozon-unarchive-queue-process", { source, limit, force, queueRunId }, { priority: QUEUE_PRIORITY.UNARCHIVE })
       .then((result) => {
         ozonUnarchiveQueueProcessQueued = false;
         if (request && result && typeof result === "object" && Object.prototype.hasOwnProperty.call(result, "selected") && !result.skipped) {
@@ -81,7 +81,7 @@ function enqueueOzonUnarchiveQueueProcess({ request, source, limit, force }) {
     }
   }, 5 * 60 * 1000).unref?.();
   setTimeout(() => {
-    queueMarketplaceJob("ozon-unarchive-queue-process", { source, limit, force, queueRunId }, { priority: 3 })
+    queueMarketplaceJob("ozon-unarchive-queue-process", { source, limit, force, queueRunId }, { priority: QUEUE_PRIORITY.UNARCHIVE })
       .then((result) => {
         ozonUnarchiveQueueProcessQueued = false;
         if (request && result && typeof result === "object" && Object.prototype.hasOwnProperty.call(result, "selected") && !result.skipped) {

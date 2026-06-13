@@ -86,7 +86,7 @@ app.post("/api/warehouse/products/links/delete", async (request, response, next)
         oldValue: oldValues,
         newValue: responseProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
       }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
-      queueMarketplaceJob("no-supplier-automation", { productIds: changedIds }, { priority: 1 });
+      queueMarketplaceJob("no-supplier-automation", { productIds: changedIds }, { priority: QUEUE_PRIORITY.RECOVERY });
       if (idsWithRemainingLinks.length) await queueLinkedProductActivation(idsWithRemainingLinks, "link_delete", { username: requestUsername(request) });
     });
   } catch (error) {
@@ -146,7 +146,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
       oldValue: before,
       newValue: { id: responseProduct.id, links: responseProduct.links || [], updatedAt: responseProduct.updatedAt },
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
-    queueMarketplaceJob("no-supplier-automation", { productIds: [request.params.productId] }, { priority: 1 });
+    queueMarketplaceJob("no-supplier-automation", { productIds: [request.params.productId] }, { priority: QUEUE_PRIORITY.RECOVERY });
     if ((responseProduct.links || []).length) await queueLinkedProductActivation([request.params.productId], "link_delete", { username: requestUsername(request) });
     });
   } catch (error) {

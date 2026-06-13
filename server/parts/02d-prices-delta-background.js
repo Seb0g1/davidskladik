@@ -45,7 +45,7 @@ async function sendPriceMasterDeltaWarehousePrices(priceMaster = {}, warehouse =
       refreshMarketplacePrices: true,
       livePriceMaster: true,
       verify: true,
-      priority: 2,
+      priority: QUEUE_PRIORITY.PRICE_BACKGROUND,
     });
     logger.info("PriceMaster delta price push queued full reconcile", {
       reason: delta.reason,
@@ -75,7 +75,7 @@ async function sendPriceMasterDeltaWarehousePrices(priceMaster = {}, warehouse =
     refreshMarketplacePrices: true,
     livePriceMaster: true,
     verify: true,
-    priority: 1,
+    priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
   });
   return {
     sent: 0,

@@ -92,8 +92,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
           username: requestUsername(request),
         }))
         : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: targetProducts.map((product) => product.id) };
-      invalidateWarehouseViewCache();
-      return response.json({
+      return withWarehouseMutation(async () => response.json({
         ok: true,
         changed: savedProducts.length || targetProducts.length,
         products: savedProducts,
@@ -103,7 +102,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
         marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
         ...activation,
-      });
+      }));
     }
     // baseLinks are already resolved AND existence-validated by resolvePriceMasterLinkForSave
     // above; a second live PriceMaster round-trip per link here only doubled the save latency
@@ -155,8 +154,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
           username: requestUsername(request),
         }))
         : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: targetProducts.map((product) => product.id) };
-      invalidateWarehouseViewCache();
-      return response.json({
+      return withWarehouseMutation(async () => response.json({
         ok: true,
         changed: 0,
         products: savedProducts,
@@ -166,9 +164,15 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
         marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
         ...activation,
-      });
+      }));
     }
 
+    // withWarehouseMutation invalidates AFTER the PG link write + activation settle. Earlier
+    // invalidations run before the commit, so a concurrent catalog poll during the
+    // (multi-second) save can repopulate warehouseFastPageCache with pre-link rows and serve
+    // them stale for ~45s — that's why the page kept showing the product as "not linked"
+    // right after saving (PLAN-HARDENING.md 1.4).
+    await withWarehouseMutation(async () => {
     await writeWarehouseProductPatch(
       warehouse.products.filter((product) => updatedIds.includes(product.id)),
       { reason: "warehouse_links_bulk_save" },
@@ -179,11 +183,6 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const activation = await queueLinkedProductActivation(expandedUpdatedIds, "link_bulk_add_or_update", warehouseLinkActivationRequestMeta(expandedUpdatedIds, {
       username: requestUsername(request),
     }));
-    // Final invalidation AFTER the PG link write + activation. The earlier invalidations run
-    // before the commit, so a concurrent catalog poll during the (multi-second) save can
-    // repopulate warehouseFastPageCache with pre-link rows and serve them stale for ~45s —
-    // that's why the page kept showing the product as "not linked" right after saving.
-    invalidateWarehouseViewCache();
     response.json({
       ok: true,
       changed: savedProducts.length || updatedIds.length,
@@ -216,6 +215,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       oldValue: oldValues,
       newValue: savedProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
+    });
     });
   } catch (error) {
     next(error);
@@ -286,6 +286,12 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       product.everHadLinks = true;
     }
     product.updatedAt = now;
+    // withWarehouseMutation invalidates AFTER the patch write + activation settle, so an
+    // immediate GET of the warehouse page reflects the new link (PLAN-HARDENING.md 1.4) —
+    // writeWarehouseProductPatch alone is not enough, since queueLinkedProductActivation
+    // can still take long enough for a concurrent poll to repopulate the page cache with
+    // pre-link rows.
+    await withWarehouseMutation(async () => {
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_save" });
     const [savedProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product], { usdRate });
     const activation = await queueLinkedProductActivation([product.id], "link_add_or_update", warehouseLinkActivationRequestMeta([product.id], {
@@ -312,6 +318,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       oldValue: before,
       newValue: { id: savedProduct?.id || product.id, links: (savedProduct || product).links || [], updatedAt: (savedProduct || product).updatedAt },
     }).catch((auditError) => logger.warn("link audit append failed", { detail: auditError?.message || String(auditError) }));
+    });
     });
   } catch (error) {
     next(error);

@@ -48,7 +48,7 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
       refreshMarketplacePrices: true,
       livePriceMaster: true,
       verify: true,
-      priority: 1,
+      priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
     }).catch((error) => logger.warn("product patch reprice queue failed", { detail: error?.message || String(error), productId: product.id }));
   } catch (error) {
     next(error);
@@ -122,7 +122,7 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
       refreshMarketplacePrices: true,
       livePriceMaster: true,
       verify: true,
-      priority: 1,
+      priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
     }).catch((error) => logger.warn("bulk markup reprice queue failed", { detail: error?.message || String(error), count: ids.size }));
   } catch (error) {
     next(error);
@@ -174,7 +174,7 @@ app.patch("/api/warehouse/products/auto-price/bulk", async (request, response, n
         refreshMarketplacePrices: true,
         livePriceMaster: true,
         verify: true,
-        priority: 1,
+        priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
       }).catch((error) => logger.warn("bulk auto-price enable reprice queue failed", { detail: error?.message || String(error), count: ids.size }));
     }
   } catch (error) {

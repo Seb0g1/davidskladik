@@ -40,6 +40,13 @@
       // raw.currentPrice FIRST (marketplacePrice is only a fallback), so without this
       // the column stays stale and the sweep re-sends the same prices forever.
       product.currentPrice = sentPrice;
+      // Also advance targetPrice to the price we just sent: productToPostgresData derives
+      // the target_price column from normalized.targetPrice (nextPrice is a computed,
+      // non-persisted field — see lib/computed-product-fields.js), so without this the
+      // column stays at its pre-send value while current_price jumps to sentPrice. That
+      // makes current_price <> target_price true again right after a successful send,
+      // and price_sweep re-queues the same SKU forever (price oscillation bug class).
+      product.targetPrice = sentPrice;
       if (item.marketplace === "ozon") {
         product.ozon = {
           ...(product.ozon || {}),

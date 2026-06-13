@@ -97,7 +97,7 @@ async function flushImmediateAutoPricePush() {
         livePriceMaster: true,
         verify: true,
         limit: batch.limit,
-        priority: 1,
+        priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
       })
       : await enqueueMarketplaceJobAccepted(
         "auto-price-push",
@@ -117,7 +117,7 @@ async function flushImmediateAutoPricePush() {
           verify: true,
           limit: batch.limit,
         },
-        { priority: 1 },
+        { priority: QUEUE_PRIORITY.PRICE_IMMEDIATE },
       );
     handedToQueue = queuedMode && result && typeof result === "object" && !("sent" in result);
     if (result && typeof result === "object" && "sent" in result) {

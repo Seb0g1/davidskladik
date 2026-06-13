@@ -108,7 +108,34 @@ async function marketplaceQueuePriceBacklogExceeded() {
   }
 }
 
-function queueMarketplaceJob(name, data = {}, { priority = 5 } = {}) {
+// PLAN-HARDENING.md 1.3: surface how long the oldest pending "auto-price-push" job has
+// been waiting. If recovery/unarchive jobs ever starved price pushes despite the
+// priority contract (e.g. a misconfigured caller), this metric (and its alert) is the
+// signal that catches it.
+let marketplaceQueueOldestPriceJobCache = { ageMs: 0, checkedAt: 0 };
+
+async function oldestPendingPriceJobAgeMs() {
+  if (!marketplaceQueue) return 0;
+  const now = Date.now();
+  if (now - marketplaceQueueOldestPriceJobCache.checkedAt < 30_000) {
+    return marketplaceQueueOldestPriceJobCache.ageMs;
+  }
+  try {
+    const jobs = await marketplaceQueue.getJobs(["prioritized", "waiting", "delayed"], 0, 20000);
+    let oldestAgeMs = 0;
+    for (const job of jobs) {
+      if (!job || job.name !== "auto-price-push") continue;
+      const age = now - Number(job.timestamp || now);
+      if (age > oldestAgeMs) oldestAgeMs = age;
+    }
+    marketplaceQueueOldestPriceJobCache = { ageMs: oldestAgeMs, checkedAt: now };
+    return oldestAgeMs;
+  } catch {
+    return marketplaceQueueOldestPriceJobCache.ageMs;
+  }
+}
+
+function queueMarketplaceJob(name, data = {}, { priority = QUEUE_PRIORITY.DEFAULT } = {}) {
   if (marketplaceJobsShouldRunInline(name)) {
     return processMarketplaceJob(name, data).catch((error) => {
       logger.warn("inline marketplace job failed", { name, detail: error?.message || String(error) });

@@ -73,6 +73,7 @@ export function DashboardPage() {
   const topSuppliers = summary.data?.topSuppliers || [];
   const archiveBacklog = summary.data?.archiveBacklog || { yandex: 0, ozon: 0, ozonDue: 0 };
   const notifications = summary.data?.notifications || { unread: 0, byType: {} };
+  const priceHealth = summary.data?.priceHealth || { stalePriceLinked: 0, staleHours: 1, alertThreshold: 50, alert: false, oldestPriceJobAgeMs: 0, oldestPriceJobAlertThresholdMs: 10 * 60_000, oldestPriceJobAlert: false };
   const error = warehouse.error || suppliers.error || picking.error || finance.error || sales.error || operations.error || summary.error;
   const refresh = () => {
     void warehouse.refetch();
@@ -220,6 +221,12 @@ export function DashboardPage() {
               <span>Очередь цен <b>{summary.data?.priceQueue ?? 0}</b></span>
               <span>Архив Яндекс (привязано) <b>{archiveBacklog.yandex}</b></span>
               <span>Очередь восстановления Ozon <b>{archiveBacklog.ozon}</b> (готово {archiveBacklog.ozonDue})</span>
+              <span className={priceHealth.alert ? "dashboard-kpi-alert" : undefined}>
+                Цены не сходятся &gt;{priceHealth.staleHours} ч <b>{priceHealth.stalePriceLinked}</b>
+              </span>
+              <span className={priceHealth.oldestPriceJobAlert ? "dashboard-kpi-alert" : undefined}>
+                Старейшая задача цены <b>{Math.round(priceHealth.oldestPriceJobAgeMs / 60000)} мин</b>
+              </span>
             </div>
           </section>
 

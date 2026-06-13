@@ -13,7 +13,7 @@ function schedulePmTimeoutRepriceRetry(productIds = [], options = {}) {
       onlyChanged: false,
       verify: true,
       repriceAttempt: attempt + 1,
-      priority: 2,
+      priority: QUEUE_PRIORITY.PRICE_BACKGROUND,
     }).catch((error) => logger.warn("pm timeout reprice retry failed", { detail: error?.message || String(error), count: ids.length }));
   }, autoPricePmTimeoutRetryMs).unref?.();
 }

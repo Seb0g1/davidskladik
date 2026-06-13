@@ -189,6 +189,9 @@ const httpLoadSlowRequestThresholdMs = Math.max(1000, Number(process.env.HTTP_LO
 const httpLoadActiveRequestThreshold = Math.max(1, Number(process.env.HTTP_LOAD_ACTIVE_REQUEST_THRESHOLD || 2) || 2);
 const recentStateWarningsMax = Math.max(10, Math.min(200, Number(process.env.STATE_WARNING_RECENT_MAX || 50) || 50));
 const recentStateWarnings = [];
+const eventLoopHeartbeatIntervalMs = Math.max(1000, Number(process.env.EVENT_LOOP_HEARTBEAT_INTERVAL_MS || 15_000) || 15_000);
+const eventLoopHeartbeatMaxAgeMs = Math.max(eventLoopHeartbeatIntervalMs, Number(process.env.EVENT_LOOP_HEARTBEAT_MAX_AGE_MS || 90_000) || 90_000);
+let eventLoopHeartbeatAt = Date.now();
 let supplierCartAutoTimer = null;
 let supplierCartAutoRunning = false;
 let supplierCartAutoNextRunAt = null;
@@ -306,6 +309,22 @@ function invalidateWarehouseViewCache() {
   warehouseCatalogPairingContextCache = { at: 0, groupContext: null, pairingRows: null };
 }
 
+// PLAN-HARDENING.md 1.4: warehouse view caches must be invalidated AFTER a mutation
+// commits — and after any follow-up work it queues (link activation, recovery, etc.) —
+// not before. Invalidating early leaves a window where a concurrent catalog read
+// repopulates warehouseFastPageCache with pre-mutation data and serves it stale for up
+// to warehouseFastPageCacheTtlMs (the "save a link, page still shows it as not linked"
+// bug). Any warehouse mutation (route handler or core write helper) should wrap its
+// work in withWarehouseMutation instead of calling invalidateWarehouseViewCache
+// directly — see scripts/check-warehouse-cache-invalidation.cjs.
+async function withWarehouseMutation(fn) {
+  try {
+    return await fn();
+  } finally {
+    invalidateWarehouseViewCache();
+  }
+}
+
 function rememberStateWarning(source, error, extra = {}) {
   const entry = {
     at: new Date().toISOString(),
@@ -318,6 +337,36 @@ function rememberStateWarning(source, error, extra = {}) {
   return entry;
 }
 
+// PLAN-HARDENING.md 2.1: a setInterval tick only fires if the event loop keeps turning,
+// so a stale heartbeat means the process is wedged (e.g. a non-global regex driving a
+// while-loop's .exec() call and spinning forever — see check-regex-exec-global-flag.cjs
+// and the incident note in 02a-ozon-yandex-import-cleanup.js). /health exposes this so the
+// external watchdog (scripts/health-watchdog.cjs) can `pm2 restart` a process that pm2
+// itself still reports as "online".
+function touchEventLoopHeartbeat() {
+  eventLoopHeartbeatAt = Date.now();
+}
+
+function isEventLoopHeartbeatHealthy(ageMs, maxAgeMs = eventLoopHeartbeatMaxAgeMs) {
+  return Number(ageMs) < maxAgeMs;
+}
+
+function eventLoopHeartbeatStatus() {
+  const ageMs = Date.now() - eventLoopHeartbeatAt;
+  return {
+    lastAt: new Date(eventLoopHeartbeatAt).toISOString(),
+    ageMs,
+    maxAgeMs: eventLoopHeartbeatMaxAgeMs,
+    healthy: isEventLoopHeartbeatHealthy(ageMs, eventLoopHeartbeatMaxAgeMs),
+  };
+}
+
+function startEventLoopHeartbeat() {
+  const timer = setInterval(touchEventLoopHeartbeat, eventLoopHeartbeatIntervalMs);
+  if (typeof timer.unref === "function") timer.unref();
+  return timer;
+}
+
 function warehouseProductIndexFor(warehouse = {}) {
   const products = Array.isArray(warehouse.products) ? warehouse.products : [];
   if (warehouseMemoryProductIndexCache.products === products) return warehouseMemoryProductIndexCache.byId;
@@ -328,3 +377,5 @@ function warehouseProductIndexFor(warehouse = {}) {
   warehouseMemoryProductIndexCache = { products, byId };
   return byId;
 }
+
+startEventLoopHeartbeat();

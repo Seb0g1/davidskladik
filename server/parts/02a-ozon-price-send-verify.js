@@ -156,7 +156,7 @@ function scheduleDeferredOzonPriceVerification(account, entries = [], { priceInt
           refreshMarketplacePrices: true,
           livePriceMaster: true,
           verify: true,
-          priority: 3,
+          priority: QUEUE_PRIORITY.PRICE_BACKGROUND,
         }).catch((error) => logger.warn("deferred verify requeue failed", { detail: error?.message || String(error) }));
       }
     } catch (error) {

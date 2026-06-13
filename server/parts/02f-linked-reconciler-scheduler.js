@@ -227,7 +227,7 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
       refreshMarketplacePrices: true,
       livePriceMaster: true,
       verify: true,
-      priority: 1,
+      priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
     }).catch((error) => {
       logger.warn("linked reconciler archive force price queue failed", { detail: error?.message || String(error), products: archivedLinkedIds.length });
       return { queued: 0, queuedBatches: 0 };
@@ -248,7 +248,7 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
       refreshMarketplacePrices: true,
       livePriceMaster: true,
       verify: true,
-      priority: 2,
+      priority: QUEUE_PRIORITY.PRICE_BACKGROUND,
     }).catch((error) => {
       logger.warn("linked reconciler price queue failed", { detail: error?.message || String(error), products: normalPriceIds.length });
       return { queued: 0, queuedBatches: 0 };

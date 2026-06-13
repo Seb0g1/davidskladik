@@ -1,4 +1,4 @@
-function enqueueMarketplaceJobAccepted(name, data = {}, { priority = 5 } = {}) {
+function enqueueMarketplaceJobAccepted(name, data = {}, { priority = QUEUE_PRIORITY.DEFAULT } = {}) {
   if (process.env.DISABLE_BACKGROUND_JOBS === "true") return Promise.resolve(null);
   if (marketplaceQueue) {
     return marketplaceQueue.add(name, data, {
@@ -40,7 +40,7 @@ async function queueAuthoritativePriceReprice({
   livePriceMaster = true,
   verify = true,
   limit = 0,
-  priority = 1,
+  priority = QUEUE_PRIORITY.PRICE_IMMEDIATE,
   repriceAttempt = 0,
 } = {}) {
   if (process.env.DISABLE_BACKGROUND_JOBS === "true") {

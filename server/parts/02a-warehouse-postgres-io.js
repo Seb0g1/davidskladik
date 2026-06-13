@@ -176,23 +176,26 @@ function normalizeWarehousePayload(warehouse) {
 }
 
 async function writeWarehouse(warehouse, { writePostgres = true } = {}) {
-  invalidateWarehouseViewCache();
-  warehouseWritePromise = warehouseWritePromise.then(async () => {
-    const materialized = materializeYandexExportedProductsForWarehouse(warehouse);
-    const payload = normalizeWarehousePayload(materialized.warehouse);
-    if (materialized.added > 0) {
-      logger.info("materialized yandex exported products into warehouse", { added: materialized.added });
-    }
-    warehouseMemoryCache = payload;
-    if (writePostgres && shouldUsePostgresStorage()) {
-      scheduleWarehousePostgresWrite(getPrisma(), payload);
-    } else if (!shouldUsePostgresStorage()) {
-      refreshWarehouseHashCache(payload);
-    }
-    await writeWarehouseJsonPayload(payload);
-    return payload;
+  // PLAN-HARDENING.md 1.4: invalidate AFTER the write commits (via withWarehouseMutation),
+  // not before — see withWarehouseMutation in 01-bootstrap-helpers.js.
+  return withWarehouseMutation(async () => {
+    warehouseWritePromise = warehouseWritePromise.then(async () => {
+      const materialized = materializeYandexExportedProductsForWarehouse(warehouse);
+      const payload = normalizeWarehousePayload(materialized.warehouse);
+      if (materialized.added > 0) {
+        logger.info("materialized yandex exported products into warehouse", { added: materialized.added });
+      }
+      warehouseMemoryCache = payload;
+      if (writePostgres && shouldUsePostgresStorage()) {
+        scheduleWarehousePostgresWrite(getPrisma(), payload);
+      } else if (!shouldUsePostgresStorage()) {
+        refreshWarehouseHashCache(payload);
+      }
+      await writeWarehouseJsonPayload(payload);
+      return payload;
+    });
+    return warehouseWritePromise;
   });
-  return warehouseWritePromise;
 }
 
 async function writeWarehouseProductPatch(products = [], { reason = "warehouse_product_patch", writeLinks = true } = {}) {
@@ -200,7 +203,9 @@ async function writeWarehouseProductPatch(products = [], { reason = "warehouse_p
     .filter((product) => product && product.id)
     .map(normalizeWarehouseProduct);
   if (!normalizedProducts.length) return null;
-  invalidateWarehouseViewCache();
+  // PLAN-HARDENING.md 1.4: invalidate AFTER the write commits (via withWarehouseMutation),
+  // not before — see withWarehouseMutation in 01-bootstrap-helpers.js.
+  return withWarehouseMutation(async () => {
   const warehouse = await readWarehouse();
   const byId = new Map(normalizedProducts.map((product) => [String(product.id), product]));
   let changed = 0;
@@ -260,6 +265,7 @@ async function writeWarehouseProductPatch(products = [], { reason = "warehouse_p
     logger.warn("warehouse product patch JSON fallback write failed", { reason, detail: error?.message || String(error) });
   });
   return payload;
+  });
 }
 
 function writeWarehouseInBackground(warehouse, reason = "warehouse_background_write") {

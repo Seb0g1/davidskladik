@@ -63,7 +63,11 @@ function pickWarehouseStockOnlySupplier(matches) {
     .sort(
       (a, b) =>
         String(b.docDate).localeCompare(String(a.docDate))
-        || String(a.partnerName || a.supplierName || "").localeCompare(String(b.partnerName || b.supplierName || "")),
+        || String(a.partnerName || a.supplierName || "").localeCompare(String(b.partnerName || b.supplierName || ""))
+        // Same rationale as compareWarehouseSupplierPrices: docDate/partnerName ties must
+        // resolve to a stable winner across rebuilds, or selectedSupplier (and thus the
+        // diagnostics shown to users) flips nondeterministically between equal candidates.
+        || String(a.rowId || "").localeCompare(String(b.rowId || "")),
     )[0] || null;
 }
 

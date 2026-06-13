@@ -206,7 +206,7 @@ app.post("/api/sales-automation/run", requireAdmin, async (request, response, ne
       livePriceMaster: true,
       verify: request.body?.verify !== false,
       limit: productIds?.length ? 0 : cleanLimit(request.body?.limit, 1000, 50000),
-      priority: 1,
+      priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
     });
     response.status(202).json({ ok: true, accepted: true, statusUrl: "/api/sales-automation/items", ...result });
   } catch (error) {

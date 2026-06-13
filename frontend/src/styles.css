@@ -4603,6 +4603,15 @@ textarea {
   white-space: nowrap;
 }
 
+.dashboard-kpi-alert {
+  background: rgba(220, 38, 38, 0.16) !important;
+  color: #dc2626;
+}
+
+.dashboard-kpi-alert b {
+  color: #dc2626;
+}
+
 .statistics-layout {
   grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
 }

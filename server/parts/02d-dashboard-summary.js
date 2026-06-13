@@ -1,5 +1,17 @@
 // Aggregated data for the admin dashboard (PLAN.md item D.1): sales today/week, profit,
 // top suppliers, price queue size, archive backlog, unread chats/questions/reviews.
+
+// A linked, non-archived product whose current_price still differs from target_price an
+// hour after price_sweep should have reconciled it (sweep runs every ~2 min, see
+// 02f-price-sweep.js) means the push is stuck (repeated failure, oscillation, etc.) — not
+// just "queued". Alert if too many SKUs are stuck like this.
+const stalePriceLinkedHours = Math.max(0, Number(process.env.STALE_PRICE_LINKED_HOURS || 1) || 1);
+const stalePriceLinkedAlertThreshold = Math.max(0, Number(process.env.STALE_PRICE_LINKED_ALERT_THRESHOLD || 50) || 50);
+
+// PLAN-HARDENING.md 1.3: alert if the oldest pending "auto-price-push" job has been
+// waiting longer than this — a sign that recovery/unarchive jobs are starving price
+// pushes despite the QUEUE_PRIORITY contract (see lib/queue-priorities.js).
+const priceQueueOldestJobAlertMs = Math.max(60_000, Number(process.env.PRICE_QUEUE_OLDEST_JOB_ALERT_MS || 10 * 60_000) || 10 * 60_000);
 function topSuppliersFromFinanceOrders(orders = [], limit = 5) {
   const byName = new Map();
   for (const order of orders) {
@@ -26,7 +38,7 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
     const prisma = getPrisma();
     const usePg = Boolean(prisma) && shouldUsePostgresStorage();
 
-    const [todayResult, weekResult, weekExpensesResult, priceQueueCount, archivedLinkedYandex, ozonQueue, unreadByTypeRows] = await Promise.all([
+    const [todayResult, weekResult, weekExpensesResult, priceQueueCount, archivedLinkedYandex, ozonQueue, unreadByTypeRows, stalePriceLinkedCount, oldestPriceJobAgeMs] = await Promise.all([
       listFinanceOrders({ period: "today", limit: 2000, linkedOnly: true }),
       listFinanceOrders({ period: "7d", limit: 2000, linkedOnly: true }),
       listFinanceExpenses({ period: "7d", limit: 2000 }),
@@ -44,6 +56,18 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
             : []))
           .catch(() => [])
         : Promise.resolve([]),
+      usePg
+        ? prisma.$queryRawUnsafe(`
+            SELECT COUNT(*)::int AS n
+            FROM warehouse_products p
+            WHERE p.archived = false
+              AND p.target_price IS NOT NULL AND p.target_price > 0
+              AND (p.current_price IS NULL OR p.current_price <> p.target_price)
+              AND p.updated_at < now() - interval '${stalePriceLinkedHours} hours'
+              AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
+          `).then((rows) => Number(rows?.[0]?.n || 0)).catch(() => 0)
+        : Promise.resolve(0),
+      oldestPendingPriceJobAgeMs().catch(() => 0),
     ]);
 
     const today = financeSummaryFromRows(todayResult.orders, []);
@@ -75,6 +99,15 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
       notifications: {
         unread: unreadTotal,
         byType: unreadByType,
+      },
+      priceHealth: {
+        stalePriceLinked: Number(stalePriceLinkedCount || 0),
+        staleHours: stalePriceLinkedHours,
+        alertThreshold: stalePriceLinkedAlertThreshold,
+        alert: Number(stalePriceLinkedCount || 0) > stalePriceLinkedAlertThreshold,
+        oldestPriceJobAgeMs: Number(oldestPriceJobAgeMs || 0),
+        oldestPriceJobAlertThresholdMs: priceQueueOldestJobAlertMs,
+        oldestPriceJobAlert: Number(oldestPriceJobAgeMs || 0) > priceQueueOldestJobAlertMs,
       },
     });
   } catch (error) {

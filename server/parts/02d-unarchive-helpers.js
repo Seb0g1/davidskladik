@@ -348,7 +348,7 @@ function enqueueYandexUnarchiveQueueProcess({ source, limit } = {}) {
     queued: true,
     at: new Date().toISOString(),
   };
-  queueMarketplaceJob("yandex-unarchive-queue-process", { source, limit, queueRunId }, { priority: 1 })
+  queueMarketplaceJob("yandex-unarchive-queue-process", { source, limit, queueRunId }, { priority: QUEUE_PRIORITY.UNARCHIVE })
     .catch((error) => {
       yandexUnarchiveQueueProcessQueued = false;
       yandexUnarchiveQueueAutoLastResult = {

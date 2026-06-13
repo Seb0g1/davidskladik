@@ -207,7 +207,7 @@ async function runFastYandexBulkUnarchive({ source = "schedule" } = {}) {
       refreshMarketplacePrices: false,
       livePriceMaster: true,
       verify: true,
-      priority: 1,
+      priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
     }).catch((error) => {
       logger.warn("yandex fast unarchive price queue failed", { detail: error?.message || String(error) });
       return { queued: 0 };

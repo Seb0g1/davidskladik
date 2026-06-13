@@ -111,7 +111,7 @@ function queueLinkedUnavailableSupplierZeroStock(builtProducts = [], { source = 
     productIds.push(product.id);
   }
   if (!productIds.length) return;
-  void queueMarketplaceJob("no-supplier-automation", { productIds, source }, { priority: 1 }).catch((error) => {
+  void queueMarketplaceJob("no-supplier-automation", { productIds, source }, { priority: QUEUE_PRIORITY.RECOVERY }).catch((error) => {
     logger.warn("linked unavailable supplier zero-stock queue failed", {
       source,
       count: productIds.length,

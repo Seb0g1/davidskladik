@@ -216,7 +216,7 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
         requestedBy: requestMeta.username || requestMeta.user || "system",
       },
       // Below price pushes: bulk recovery jobs must not starve auto-price-push (prio 1-2).
-      { priority: 4 },
+      { priority: QUEUE_PRIORITY.UNARCHIVE },
     ).catch((error) => {
       logger.warn("linked product activation recovery queue failed", {
         sourceEvent: normalizedSourceEvent,
@@ -236,7 +236,7 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
       refreshMarketplacePrices: true,
       livePriceMaster: true,
       verify: true,
-      priority: 1,
+      priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
     });
     const recoveryResult = await recoveryQueue;
     const activationAccepted = Boolean(recoveryResult?.accepted || priceQueue.accepted);

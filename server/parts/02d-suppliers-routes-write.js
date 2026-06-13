@@ -35,7 +35,7 @@ app.post("/api/suppliers", async (request, response, next) => {
       refreshMarketplacePrices: true,
       livePriceMaster: true,
       verify: true,
-      priority: 2,
+      priority: QUEUE_PRIORITY.PRICE_BACKGROUND,
     }).catch((error) => logger.warn("supplier save reprice queue failed", { detail: error?.message || String(error) }));
   } catch (error) {
     next(error);
@@ -98,7 +98,7 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
     response.json({ ok: true, warehouse: saved });
     const affectedProductIds = supplierImpactProductIds(warehouse, before, supplier);
     if (affectedProductIds.length) {
-      queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds }, { priority: 1 });
+      queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds }, { priority: QUEUE_PRIORITY.RECOVERY });
       queueLinkedProductActivation(affectedProductIds, "supplier_update", {
         username: requestUsername(request),
       }).catch((error) => logger.warn("supplier update activation failed", { detail: error?.message || String(error) }));
@@ -113,7 +113,7 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
           refreshMarketplacePrices: true,
           livePriceMaster: true,
           verify: true,
-          priority: 1,
+          priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
         }).catch((error) => logger.warn("supplier currency reprice queue failed", { detail: error?.message || String(error) }));
       }
     }
@@ -127,7 +127,7 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
         refreshMarketplacePrices: true,
         livePriceMaster: true,
         verify: true,
-        priority: 2,
+        priority: QUEUE_PRIORITY.PRICE_BACKGROUND,
       }).catch((error) => logger.warn("supplier update reprice queue failed", { detail: error?.message || String(error) }));
     }
   } catch (error) {
@@ -145,7 +145,7 @@ app.delete("/api/suppliers/:id", async (request, response, next) => {
     await appendAudit(request, "supplier.delete", { id: request.params.id, oldValue: before });
     response.json({ ok: true, warehouse: saved });
     if (affectedProductIds.length) {
-      queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds }, { priority: 1 });
+      queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds }, { priority: QUEUE_PRIORITY.RECOVERY });
     }
   } catch (error) {
     next(error);
@@ -178,7 +178,7 @@ app.post("/api/suppliers/:id/articles", async (request, response, next) => {
       refreshMarketplacePrices: true,
       livePriceMaster: true,
       verify: true,
-      priority: 2,
+      priority: QUEUE_PRIORITY.PRICE_BACKGROUND,
     }).catch((error) => logger.warn("supplier article reprice queue failed", { detail: error?.message || String(error) }));
   } catch (error) {
     next(error);
@@ -194,7 +194,7 @@ app.delete("/api/suppliers/:supplierId/articles/:articleId", async (request, res
     supplier.articles = (supplier.articles || []).filter((article) => article.id !== request.params.articleId);
     response.json({ ok: true, warehouse: await writeWarehouse(warehouse) });
     await appendAudit(request, "supplier.article.delete", { supplierId: supplier.id, articleId: request.params.articleId, oldValue: before });
-    queueMarketplaceJob("no-supplier-automation", {}, { priority: 1 });
+    queueMarketplaceJob("no-supplier-automation", {}, { priority: QUEUE_PRIORITY.RECOVERY });
   } catch (error) {
     next(error);
   }

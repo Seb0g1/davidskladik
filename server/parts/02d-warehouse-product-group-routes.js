@@ -24,7 +24,7 @@ app.patch("/api/warehouse/products/auto-price/all", async (request, response, ne
         refreshMarketplacePrices: true,
         livePriceMaster: true,
         verify: true,
-        priority: 2,
+        priority: QUEUE_PRIORITY.PRICE_BACKGROUND,
       }).catch((error) => logger.warn("all auto-price enable reprice queue failed", { detail: error?.message || String(error) }));
     }
   } catch (error) {

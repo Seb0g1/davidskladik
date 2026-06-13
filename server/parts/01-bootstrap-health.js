@@ -148,11 +148,13 @@ async function collectHealthDetails({ deep = false } = {}) {
     }
   }
 
+  const liveness = eventLoopHeartbeatStatus();
   const required = [
     components.postgres.enabled ? components.postgres : null,
     components.postgres.enabled ? components.postgresTables : null,
     components.pricemaster.configured ? components.pricemaster : null,
     components.redis.enabled ? components.redis : null,
+    { ok: liveness.healthy },
   ].filter(Boolean);
   const ok = required.every((component) => component.ok !== false);
   const memory = process.memoryUsage();
@@ -184,6 +186,7 @@ async function collectHealthDetails({ deep = false } = {}) {
     },
     activeHttpRequests,
     recentSlowRequests: recentSlowRequests.slice(-10),
+    liveness,
     bullmq,
     queue,
     components,

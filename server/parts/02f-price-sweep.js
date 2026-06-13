@@ -68,7 +68,7 @@ async function runChangedPriceSweep({ source = "schedule" } = {}) {
       refreshMarketplacePrices: false,
       livePriceMaster: true,
       verify: true,
-      priority: 2,
+      priority: QUEUE_PRIORITY.PRICE_BACKGROUND,
     }).catch((error) => {
       logger.warn("price sweep queue failed", { detail: error?.message || String(error) });
       return { queued: 0 };

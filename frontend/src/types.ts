@@ -397,6 +397,23 @@ export const DashboardSummarySchema = z.object({
     unread: z.number().optional().default(0),
     byType: z.record(z.string(), z.number()).optional().default({}),
   }).optional().default({ unread: 0, byType: {} }),
+  priceHealth: z.object({
+    stalePriceLinked: z.number().optional().default(0),
+    staleHours: z.number().optional().default(1),
+    alertThreshold: z.number().optional().default(50),
+    alert: z.boolean().optional().default(false),
+    oldestPriceJobAgeMs: z.number().optional().default(0),
+    oldestPriceJobAlertThresholdMs: z.number().optional().default(10 * 60_000),
+    oldestPriceJobAlert: z.boolean().optional().default(false),
+  }).optional().default({
+    stalePriceLinked: 0,
+    staleHours: 1,
+    alertThreshold: 50,
+    alert: false,
+    oldestPriceJobAgeMs: 0,
+    oldestPriceJobAlertThresholdMs: 10 * 60_000,
+    oldestPriceJobAlert: false,
+  }),
 }).passthrough();
 
 export const LiveStatusSchema = z.object({

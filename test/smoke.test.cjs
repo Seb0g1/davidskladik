@@ -82,6 +82,7 @@ const {
   mergeProducts,
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
+  productToPostgresData,
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
   warehousePagePostgresWhere,
@@ -272,18 +273,18 @@ test("modern UI uses role-gating, logo branding, and group-level PM counts", asy
   assert.match(appSource, /\/api\/session/);
   assert.match(appSource, /visibleNavItems/);
   assert.match(appSource, /headerRoutes/);
-  assert.match(appSource, /"warehouse", "picking-list", "suppliers", "supplier-cart", "settings"/);
+  assert.match(appSource, /\["warehouse", "picking-list"\]/);
   assert.match(appSource, /\/app\/suppliers/);
-  assert.match(appSource, /brand-logo/);
+  assert.match(appSource, /brand-mark/);
   assert.match(appSource, /WarehousePage isAdmin=\{isAdmin\}/);
   assert.match(warehouseSource, /WarehousePage\(\{ isAdmin = true \}/);
   assert.match(warehouseSource, /const groupLinkCount = uniqueLinks\(products\)\.length/);
-  assert.match(warehouseSource, /isAdmin \? <GroupActions/);
-  assert.match(warehouseSource, /isAdmin \? <QuickActions/);
-  assert.match(warehouseSource, /isAdmin \? <AiImagesPanel/);
-  assert.match(warehouseSource, /isAdmin \? <section className="detail-section">/);
+  assert.match(warehouseSource, /isAdmin && !demoMode \? <GroupActions/);
+  assert.match(warehouseSource, /isAdmin && !demoMode \? <QuickActions/);
+  assert.match(warehouseSource, /isAdmin && !demoMode \? <AiImagesPanel/);
+  assert.match(warehouseSource, /isAdmin && !demoMode \? <section className="detail-section">/);
   assert.match(warehouseSource, /\/api\/warehouse\/brands/);
-  assert.match(warehouseSource, /datalist id="warehouse-brand-list"/);
+  assert.match(warehouseSource, /BrandPicker/);
   assert.match(warehouseSource, /\/ai-assistant/);
   assert.match(warehouseSource, /studioPhotoPresets/);
   assert.match(typesSource, /WarehouseBrandsSchema/);
@@ -3222,6 +3223,350 @@ test("pickWarehouseSupplier ignores stock-only suppliers for price", () => {
     { partnerName: "Own stock", available: true, price: 1, calculatedPrice: 78, docDate: "2026-01-03", stockOnly: true, priceEligible: false },
   ]);
   assert.equal(fallback.partnerName, "Own stock");
+});
+
+test("pickWarehouseSupplier tie-break by rowId is stable regardless of input order (nextPrice oscillation regression)", () => {
+  // Two suppliers with an identical purchase price (e.g. PriceMaster re-sorted between
+  // fetches): without a deterministic final tiebreak, the "cheapest" pick flips between
+  // rebuilds and nextPrice oscillates (e.g. DIC12 6708<->7086).
+  const supplierA = { partnerName: "Supplier A", available: true, price: 70.6, purchaseRubPrice: 6708, calculatedPrice: 6708, effectiveFinalPrice: 6708, docDate: "2026-01-05", rowId: "100" };
+  const supplierB = { partnerName: "Supplier B", available: true, price: 70.6, purchaseRubPrice: 6708, calculatedPrice: 6708, effectiveFinalPrice: 6708, docDate: "2026-01-04", rowId: "200" };
+  const pickedForward = pickWarehouseSupplier([supplierA, supplierB]);
+  const pickedReversed = pickWarehouseSupplier([supplierB, supplierA]);
+  assert.equal(pickedForward.rowId, pickedReversed.rowId);
+  assert.equal(pickedForward.rowId, "100");
+});
+
+test("pickWarehouseStockOnlySupplier tie-break by rowId is stable regardless of input order", () => {
+  // Same docDate and partnerName for both candidates: only rowId can break the tie, so the
+  // displayed selectedSupplier (and any derived stock-only manual price) must not flip
+  // between rebuilds depending on array order.
+  const supplierA = { partnerName: "Наш Склад", available: true, stockOnly: true, priceEligible: false, docDate: "2026-01-05", rowId: "100" };
+  const supplierB = { partnerName: "Наш Склад", available: true, stockOnly: true, priceEligible: false, docDate: "2026-01-05", rowId: "200" };
+  const pickedForward = pickWarehouseStockOnlySupplier([supplierA, supplierB]);
+  const pickedReversed = pickWarehouseStockOnlySupplier([supplierB, supplierA]);
+  assert.equal(pickedForward.rowId, pickedReversed.rowId);
+  assert.equal(pickedForward.rowId, "100");
+});
+
+test("productToPostgresData keeps current_price and target_price in sync after a price send updates all price fields", () => {
+  // Regression for the price oscillation bug class: productToPostgresData derives
+  // target_price from normalized.targetPrice, NOT from the computed-only nextPrice field
+  // (see lib/computed-product-fields.js). 02d-prices-send-warehouse-finish.js must set
+  // marketplacePrice, currentPrice, AND targetPrice to the same sentPrice on success, or
+  // current_price <> target_price stays true and price_sweep re-queues the SKU forever.
+  const sentPrice = 6708;
+  const productAfterSend = normalizeWarehouseProduct({
+    id: "price-sync-1",
+    marketplace: "ozon",
+    target: "ozon",
+    offerId: "PRICE-SYNC-1",
+    marketplacePrice: 7086,
+    currentPrice: 7086,
+    targetPrice: 7086,
+  });
+  productAfterSend.marketplacePrice = sentPrice;
+  productAfterSend.currentPrice = sentPrice;
+  productAfterSend.targetPrice = sentPrice;
+  const data = productToPostgresData(productAfterSend);
+  assert.equal(data.currentPrice, sentPrice);
+  assert.equal(data.targetPrice, sentPrice);
+});
+
+test("QUEUE_PRIORITY enum encodes price < recovery < unarchive (lower number = processed first in BullMQ)", () => {
+  const { QUEUE_PRIORITY } = require("../lib/queue-priorities");
+  assert.ok(QUEUE_PRIORITY.PRICE_IMMEDIATE < QUEUE_PRIORITY.PRICE_BACKGROUND);
+  assert.ok(QUEUE_PRIORITY.PRICE_BACKGROUND < QUEUE_PRIORITY.RECOVERY);
+  assert.ok(QUEUE_PRIORITY.RECOVERY <= QUEUE_PRIORITY.UNARCHIVE);
+});
+
+test("marketplace queue priority ordering: a price push enqueued after a recovery/unarchive backlog is not starved", () => {
+  // Simulates BullMQ's "prioritized" ordering: jobs are dispatched by ascending
+  // priority (lower number = sooner), then FIFO (insertion order) within the same
+  // priority — mirroring marketplaceQueue.add(name, data, { priority }) without
+  // requiring a real Redis-backed queue. Regression for PLAN-HARDENING.md 1.3
+  // ("recovery starves price"): a price push must never queue behind a backlog of
+  // recovery/unarchive jobs that were enqueued earlier.
+  const { QUEUE_PRIORITY } = require("../lib/queue-priorities");
+
+  function sortByBullmqOrder(jobs) {
+    return [...jobs].sort((a, b) => a.priority - b.priority || a.seq - b.seq);
+  }
+
+  let seq = 0;
+  const jobs = [];
+  for (let i = 0; i < 50; i++) jobs.push({ name: "no-supplier-automation", priority: QUEUE_PRIORITY.RECOVERY, seq: seq++ });
+  for (let i = 0; i < 10; i++) jobs.push({ name: "yandex-unarchive-queue-process", priority: QUEUE_PRIORITY.UNARCHIVE, seq: seq++ });
+  const priceJob = { name: "auto-price-push", priority: QUEUE_PRIORITY.PRICE_IMMEDIATE, seq: seq++ };
+  jobs.push(priceJob);
+
+  const processingOrder = sortByBullmqOrder(jobs);
+  const pricePosition = processingOrder.indexOf(priceJob);
+
+  // The price push must be dispatched first, ahead of the 60-job recovery/unarchive
+  // backlog that was already waiting.
+  assert.equal(pricePosition, 0);
+
+  // With concurrency=N, it must land in the very first worker batch (zero wait).
+  const concurrency = 5;
+  assert.equal(Math.floor(pricePosition / concurrency), 0);
+});
+
+test("withWarehouseMutation invalidates warehouseFastPageCache after the mutation resolves, not before (PLAN-HARDENING.md 1.4)", async () => {
+  // Regression for "save a link, page still shows it as not linked": the warehouse page
+  // cache must stay populated while a mutation is in flight (so the early-invalidation
+  // race can't make a concurrent reader repopulate it with pre-mutation data), and must
+  // be cleared only once the mutation (and its response) has fully resolved.
+  const { withWarehouseMutation, getWarehouseFastPageCache, setWarehouseFastPageCache, warehouseFastPageCacheKey } = require("../server.js");
+  const params = { page: 1, pageSize: 60, filters: { q: "plan-hardening-1-4-smoke" } };
+  const key = warehouseFastPageCacheKey(params);
+  setWarehouseFastPageCache(key, { page: 1, pageSize: 60, total: 1, items: [{ id: "smoke-product", links: [] }] });
+  assert.ok(getWarehouseFastPageCache(params).value, "cache should be populated before the mutation");
+
+  let cacheDuringMutation;
+  await withWarehouseMutation(async () => {
+    cacheDuringMutation = getWarehouseFastPageCache(params).value;
+  });
+
+  assert.ok(cacheDuringMutation, "cache must still be populated while the mutation runs (no early invalidation)");
+  assert.equal(getWarehouseFastPageCache(params).value, null, "cache must be cleared once the mutation resolves");
+});
+
+test("warehouse link-save routes and core write helpers invalidate the page cache via withWarehouseMutation, after the write (PLAN-HARDENING.md 1.4)", () => {
+  const serverSource = readServerSource();
+
+  // Core IO chokepoints: invalidate after the write commits, not as the first statement.
+  assert.match(serverSource, /async function writeWarehouse\(warehouse, \{ writePostgres = true \} = \{\}\) \{[\s\S]{0,400}?return withWarehouseMutation\(async \(\) => \{\s*warehouseWritePromise/);
+  assert.match(serverSource, /if \(!normalizedProducts\.length\) return null;[\s\S]{0,400}?return withWarehouseMutation\(async \(\) => \{\s*const warehouse = await readWarehouse\(\);/);
+
+  // Single link-save route: writeWarehouseProductPatch + activation + response are wrapped
+  // so an immediate GET reflects the new link, even if activation takes a while.
+  assert.match(serverSource, /await withWarehouseMutation\(async \(\) => \{\s*await writeWarehouseProductPatch\(\[product\], \{ reason: "warehouse_link_save" \}\);/);
+
+  // Bulk link-save route: same wrapper for the "written" response path.
+  assert.match(serverSource, /await withWarehouseMutation\(async \(\) => \{\s*await writeWarehouseProductPatch\(\s*warehouse\.products\.filter/);
+});
+
+test("buildFastWarehousePage never caches partial/empty fallback results (PLAN-HARDENING.md 1.4)", () => {
+  // A cached empty/partial page makes the catalog look dead (instant 0-item responses)
+  // long after the underlying load spike or timeout has passed — lock the existing guard.
+  const serverSource = readServerSource();
+  assert.match(serverSource, /if \(result && !result\.partial && !result\.sourceError\) setWarehouseFastPageCache\(cached\.key, result\);/);
+});
+
+test("event-loop heartbeat: /health reports a fresh, healthy liveness timestamp (PLAN-HARDENING.md 2.1)", async () => {
+  // PM2 won't restart a process whose event loop is pinned (status stays "online"). The
+  // heartbeat only advances via setInterval, so a pinned event loop shows up here as a
+  // growing liveness.ageMs even if /health itself somehow still answers.
+  const { touchEventLoopHeartbeat, isEventLoopHeartbeatHealthy, eventLoopHeartbeatStatus } = require("../server.js");
+
+  touchEventLoopHeartbeat();
+  const status = eventLoopHeartbeatStatus();
+  assert.equal(typeof status.lastAt, "string");
+  assert.ok(status.ageMs >= 0 && status.ageMs < 1000, `expected a fresh heartbeat, got ageMs=${status.ageMs}`);
+  assert.ok(status.maxAgeMs >= 90_000, `expected the 90s default max age, got ${status.maxAgeMs}`);
+  assert.equal(status.healthy, true);
+
+  // Boundary checks on the pure classifier the watchdog relies on.
+  assert.equal(isEventLoopHeartbeatHealthy(status.maxAgeMs - 1, status.maxAgeMs), true);
+  assert.equal(isEventLoopHeartbeatHealthy(status.maxAgeMs, status.maxAgeMs), false);
+  assert.equal(isEventLoopHeartbeatHealthy(status.maxAgeMs + 1, status.maxAgeMs), false);
+
+  const res = await request(app).get("/health").expect(200);
+  assert.equal(res.body.liveness.healthy, true);
+  assert.ok(res.body.liveness.ageMs < 1000, `expected a fresh /health liveness, got ageMs=${res.body.liveness.ageMs}`);
+});
+
+test("health-watchdog: classifies /health probes and decides when to pm2 restart (PLAN-HARDENING.md 2.1)", () => {
+  const { evaluateHealthResponse, nextConsecutiveFailures, shouldRestart } = require("../scripts/health-watchdog.cjs");
+
+  // Healthy response: ok=true and a fresh liveness heartbeat.
+  const healthy = evaluateHealthResponse({ status: 200, body: { ok: true, liveness: { healthy: true, ageMs: 100, maxAgeMs: 90000 } }, error: null });
+  assert.deepEqual(healthy, { healthy: true, reasons: [] });
+
+  // Request-level failure (timeout/connection refused).
+  const timedOut = evaluateHealthResponse({ status: 0, body: null, error: "timeout after 8000ms" });
+  assert.equal(timedOut.healthy, false);
+  assert.match(timedOut.reasons[0], /request error/);
+
+  // /health responds, but the event-loop heartbeat is stale: the process is wedged even
+  // though it can still answer this one request.
+  const staleHeartbeat = evaluateHealthResponse({
+    status: 200,
+    body: { ok: true, liveness: { healthy: false, ageMs: 120000, maxAgeMs: 90000 } },
+    error: null,
+  });
+  assert.equal(staleHeartbeat.healthy, false);
+  assert.match(staleHeartbeat.reasons[0], /event loop heartbeat stale/);
+
+  // Consecutive-failure counter resets on a healthy check and accumulates on failures.
+  let state = {};
+  state["davidsklad-api"] = { consecutiveFailures: nextConsecutiveFailures(state, "davidsklad-api", false) };
+  assert.equal(state["davidsklad-api"].consecutiveFailures, 1);
+  state["davidsklad-api"] = { consecutiveFailures: nextConsecutiveFailures(state, "davidsklad-api", false) };
+  assert.equal(state["davidsklad-api"].consecutiveFailures, 2);
+  state["davidsklad-api"] = { consecutiveFailures: nextConsecutiveFailures(state, "davidsklad-api", true) };
+  assert.equal(state["davidsklad-api"].consecutiveFailures, 0);
+
+  // Restart only once the failure threshold (default 3) is reached.
+  assert.equal(shouldRestart(2, 3), false);
+  assert.equal(shouldRestart(3, 3), true);
+});
+
+test("ecosystem.config.cjs runs a health-watchdog process targeting the api + worker health ports (PLAN-HARDENING.md 2.1)", async () => {
+  const ecosystemSource = await fs.readFile(path.join(__dirname, "..", "ecosystem.config.cjs"), "utf8");
+  assert.match(ecosystemSource, /name:\s*"davidsklad-health-watchdog"/);
+  assert.match(ecosystemSource, /script:\s*"scripts\/health-watchdog\.cjs"/);
+  assert.match(ecosystemSource, /args:\s*"--loop"/);
+});
+
+test("regex-exec lint catches while(...exec(...)) loops on non-global regexes (PLAN-HARDENING.md 2.1)", () => {
+  // PLAN-HARDENING.md 2.1 third bullet: `while (re.exec(text))` without "g" never
+  // advances lastIndex and spins forever — this previously froze api+worker (see
+  // 02a-ozon-yandex-import-cleanup.js). Exercise the detector against fixtures so the
+  // logic itself is covered, then assert the real source is currently clean.
+  const { scanSourceForExecLoopViolations } = require("../scripts/check-regex-exec-global-flag.cjs");
+
+  const literalWithoutG = scanSourceForExecLoopViolations(`
+    const re = /\\d+/;
+    let m;
+    while ((m = re.exec(text))) { use(m); }
+  `);
+  assert.equal(literalWithoutG.violations.length, 1);
+  assert.equal(literalWithoutG.violations[0].flags, "");
+
+  const literalWithG = scanSourceForExecLoopViolations(`
+    const re = /\\d+/g;
+    let m;
+    while ((m = re.exec(text))) { use(m); }
+  `);
+  assert.equal(literalWithG.violations.length, 0);
+  assert.equal(literalWithG.warnings.length, 0);
+
+  const inlineLiteralWithoutG = scanSourceForExecLoopViolations(`
+    let m;
+    while ((m = /\\d+/.exec(text))) { use(m); }
+  `);
+  assert.equal(inlineLiteralWithoutG.violations.length, 1);
+
+  // Mirrors the real fixed pattern: an array of new RegExp(..., "giu") iterated via
+  // for...of, with `pattern` bound as the exec target.
+  const arrayOfRegexesWithG = scanSourceForExecLoopViolations(`
+    const suffix = "ml";
+    const patterns = [
+      new RegExp(\`(\\\\d+(?:\\\\.\\\\d+)?)\\\\s*\${suffix}\`, "giu"),
+      new RegExp(\`(\\\\d+)\${suffix}\`, "giu"),
+    ];
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.exec(text))) { use(match); }
+    }
+  `);
+  assert.equal(arrayOfRegexesWithG.violations.length, 0);
+  assert.equal(arrayOfRegexesWithG.warnings.length, 0);
+
+  const arrayOfRegexesWithoutG = scanSourceForExecLoopViolations(`
+    const patterns = [
+      new RegExp("\\\\d+", "i"),
+    ];
+    for (const pattern of patterns) {
+      let match;
+      while ((match = pattern.exec(text))) { use(match); }
+    }
+  `);
+  assert.equal(arrayOfRegexesWithoutG.violations.length, 1);
+
+  // A regex that can't be statically traced is a warning, not a hard failure.
+  const unverifiable = scanSourceForExecLoopViolations(`
+    const re = getRegexFromSomewhere();
+    let m;
+    while ((m = re.exec(text))) { use(m); }
+  `);
+  assert.equal(unverifiable.violations.length, 0);
+  assert.equal(unverifiable.warnings.length, 1);
+
+  // The real codebase must currently be clean (lint:regex-exec gates pretest on this).
+  const partsDir = path.join(__dirname, "..", "server", "parts");
+  let realViolations = [];
+  for (const file of require("fs").readdirSync(partsDir)) {
+    if (!file.endsWith(".js")) continue;
+    const source = require("fs").readFileSync(path.join(partsDir, file), "utf8");
+    realViolations = realViolations.concat(scanSourceForExecLoopViolations(source).violations.map((v) => ({ file, ...v })));
+  }
+  assert.deepEqual(realViolations, []);
+});
+
+test("runtime config keys: ecosystem.config.cjs is the source of truth for effective config (PLAN-HARDENING.md 2.2)", () => {
+  // ecosystem.config.cjs sets these on the PM2 process before dotenv loads .env, and
+  // dotenv does not override an already-set process.env value — so this list is what
+  // actually takes effect, regardless of what .env says.
+  const { runtimeConfigKeys, ecosystemEnvByApp, effectiveRuntimeConfigSnapshot, IGNORED_KEYS } = require("../lib/runtime-config-keys");
+
+  const keys = runtimeConfigKeys();
+  assert.ok(keys.includes("AUTO_SYNC_MINUTES"));
+  assert.ok(keys.includes("WAREHOUSE_PAGE_BUILD_MAX_CONCURRENT"));
+  assert.ok(keys.includes("LINKED_RECONCILER_INTERVAL_MINUTES"));
+  // Per-app fields that intentionally differ by design, not tunables to compare.
+  for (const ignored of IGNORED_KEYS) assert.ok(!keys.includes(ignored), `${ignored} should not be a tracked runtime config key`);
+
+  const byApp = ecosystemEnvByApp();
+  assert.ok(byApp["davidsklad-api"]);
+  assert.ok(byApp["davidsklad-worker"]);
+  assert.equal(byApp["davidsklad-worker"].BULLMQ_WORKER_CONCURRENCY, "1");
+
+  // Snapshot reflects whatever is in process.env right now (the value actually in
+  // effect for this process), falling back to null when a key isn't set at all.
+  const snapshot = effectiveRuntimeConfigSnapshot({ AUTO_SYNC_MINUTES: "42" });
+  assert.equal(snapshot.AUTO_SYNC_MINUTES, "42");
+  assert.equal(snapshot.WAREHOUSE_PAGE_BUILD_MAX_CONCURRENT, null);
+});
+
+test("startup logs the effective runtime config so .env/ecosystem.config.cjs drift is visible immediately (PLAN-HARDENING.md 2.2)", () => {
+  const { logEffectiveRuntimeConfig } = require("../server.js");
+  assert.equal(typeof logEffectiveRuntimeConfig, "function");
+
+  const serverSource = readServerSource();
+  assert.match(serverSource, /logEffectiveRuntimeConfig\(\);/);
+  assert.match(serverSource, /logger\.info\("effective runtime config", \{ serverRole, \.\.\.effectiveRuntimeConfigSnapshot\(\) \}\)/);
+});
+
+test("check-env-ecosystem-divergence: warns when .env and ecosystem.config.cjs disagree on a tracked key (PLAN-HARDENING.md 2.2)", () => {
+  // Pure comparison, exercised with fixtures — the real .env is gitignored/secret and
+  // (by design) is expected to diverge from ecosystem.config.cjs for some keys, since
+  // PM2 deliberately sets different values per-app (api vs worker).
+  const { findEnvEcosystemDivergences } = require("../lib/runtime-config-keys");
+
+  const byApp = {
+    "davidsklad-api": { AUTO_SYNC_MINUTES: "180", WAREHOUSE_PAGE_BUILD_MAX_CONCURRENT: "2" },
+    "davidsklad-worker": { AUTO_SYNC_MINUTES: "20" },
+  };
+  const keys = ["AUTO_SYNC_MINUTES", "WAREHOUSE_PAGE_BUILD_MAX_CONCURRENT", "UNRELATED_KEY"];
+
+  // .env's AUTO_SYNC_MINUTES differs from both apps; WAREHOUSE_PAGE_BUILD_MAX_CONCURRENT
+  // matches; UNRELATED_KEY isn't in ecosystem.config.cjs at all so it's not flagged.
+  const divergences = findEnvEcosystemDivergences(
+    { AUTO_SYNC_MINUTES: "30", WAREHOUSE_PAGE_BUILD_MAX_CONCURRENT: "2", UNRELATED_KEY: "x" },
+    keys,
+    byApp,
+  );
+  assert.deepEqual(divergences, [
+    { key: "AUTO_SYNC_MINUTES", app: "davidsklad-api", envValue: "30", ecosystemValue: "180" },
+    { key: "AUTO_SYNC_MINUTES", app: "davidsklad-worker", envValue: "30", ecosystemValue: "20" },
+  ]);
+
+  // No .env entry for a key -> nothing to compare, not a divergence.
+  assert.deepEqual(findEnvEcosystemDivergences({}, keys, byApp), []);
+
+  // Matching values -> clean.
+  assert.deepEqual(
+    findEnvEcosystemDivergences({ AUTO_SYNC_MINUTES: "180", WAREHOUSE_PAGE_BUILD_MAX_CONCURRENT: "2" }, keys, { "davidsklad-api": byApp["davidsklad-api"] }),
+    [],
+  );
+});
+
+test("predeploy-check surfaces .env/ecosystem.config.cjs divergence without blocking deploy (PLAN-HARDENING.md 2.2)", async () => {
+  const predeploySource = await fs.readFile(path.join(__dirname, "..", "scripts", "predeploy-check.cjs"), "utf8");
+  assert.match(predeploySource, /check-env-ecosystem-divergence\.cjs.*--warn-only/);
 });
 
 test("warehouseProductUsesStockOnlyPricing blocks all price push paths", () => {
