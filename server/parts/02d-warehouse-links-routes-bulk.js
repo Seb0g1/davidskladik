@@ -92,6 +92,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
           username: requestUsername(request),
         }))
         : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: targetProducts.map((product) => product.id) };
+      invalidateWarehouseViewCache();
       return response.json({
         ok: true,
         changed: savedProducts.length || targetProducts.length,
@@ -104,14 +105,10 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
         ...activation,
       });
     }
+    // baseLinks are already resolved AND existence-validated by resolvePriceMasterLinkForSave
+    // above; a second live PriceMaster round-trip per link here only doubled the save latency
+    // ("привязка долгая") without catching anything new.
     const failedLinks = [];
-    for (const [index, linkToValidate] of baseLinks.entries()) {
-      try {
-        await assertPriceMasterLinkExists(linkToValidate, usdRate, warehouse.suppliers, linkSaveLookupOptions);
-      } catch (error) {
-        failedLinks.push(priceMasterLinkValidationFailure(error, linkToValidate, index));
-      }
-    }
     if (failedLinks.length) {
       return response.status(400).json({
         error: `PriceMaster validation failed for ${failedLinks.length} link(s). Nothing was saved.`,
@@ -158,6 +155,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
           username: requestUsername(request),
         }))
         : { activationQueued: false, recoveryQueued: false, priceIntentId: null, affectedProductIds: targetProducts.map((product) => product.id) };
+      invalidateWarehouseViewCache();
       return response.json({
         ok: true,
         changed: 0,
@@ -181,6 +179,11 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const activation = await queueLinkedProductActivation(expandedUpdatedIds, "link_bulk_add_or_update", warehouseLinkActivationRequestMeta(expandedUpdatedIds, {
       username: requestUsername(request),
     }));
+    // Final invalidation AFTER the PG link write + activation. The earlier invalidations run
+    // before the commit, so a concurrent catalog poll during the (multi-second) save can
+    // repopulate warehouseFastPageCache with pre-link rows and serve them stale for ~45s —
+    // that's why the page kept showing the product as "not linked" right after saving.
+    invalidateWarehouseViewCache();
     response.json({
       ok: true,
       changed: savedProducts.length || updatedIds.length,

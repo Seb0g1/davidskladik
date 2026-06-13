@@ -51,13 +51,18 @@ async function pollOzonOrderNotifications(state) {
       for (const posting of postings) {
         const createdAt = cleanText(posting.in_process_at || posting.created_at);
         if (createdAt && createdAt > maxSeen) maxSeen = createdAt;
-        const products = (posting.products || []).map((item) => cleanText(item.offer_id)).filter(Boolean);
+        const items = (posting.products || []).map((item) => {
+          const name = cleanText(item.name) || cleanText(item.offer_id);
+          const qty = Math.max(1, Number(item.quantity || 1) || 1);
+          return `${name} ×${qty}`;
+        }).filter(Boolean);
+        const totalQty = (posting.products || []).reduce((sum, item) => sum + (Number(item.quantity || 1) || 1), 0);
         await insertAppNotification({
           type: "order",
           marketplace: "ozon",
           externalId: cleanText(posting.posting_number),
-          title: `Новый заказ Ozon ${cleanText(posting.posting_number)}`,
-          body: products.slice(0, 5).join(", "),
+          title: `Новый заказ Ozon № ${cleanText(posting.posting_number)} · ${totalQty} шт`,
+          body: items.slice(0, 5).join(" · "),
           url: "/app/finance",
           eventAt: createdAt || null,
         });
@@ -178,13 +183,18 @@ async function pollYandexOrderNotifications(state) {
         if (!id) continue;
         if (id > maxId) maxId = id;
         if (lastSeenId && id <= lastSeenId) continue;
-        const items = (order.items || []).map((item) => cleanText(item.offerName || item.offerId)).filter(Boolean);
+        const items = (order.items || []).map((item) => {
+          const name = cleanText(item.offerName) || cleanText(item.offerId);
+          const qty = Math.max(1, Number(item.count || 1) || 1);
+          return `${name} ×${qty}`;
+        }).filter(Boolean);
+        const totalQty = (order.items || []).reduce((sum, item) => sum + (Number(item.count || 1) || 1), 0);
         await insertAppNotification({
           type: "order",
           marketplace: "yandex",
           externalId: String(id),
-          title: `Новый заказ Яндекс №${id}`,
-          body: items.slice(0, 5).join(", "),
+          title: `Новый заказ Яндекс № ${id} · ${totalQty} шт`,
+          body: items.slice(0, 5).join(" · "),
           url: "/app/finance",
           eventAt: order.creationDate ? new Date(order.creationDate.split(" ")[0].split("-").reverse().join("-")).toISOString() : null,
         });
