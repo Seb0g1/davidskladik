@@ -4,6 +4,7 @@ import { CheckSquare, Download, Loader2, Percent, RefreshCw, Save, Search, Squar
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SuppliersResponseSchema, SyncStatusSchema, UsersResponseSchema, UsersStatsResponseSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
 import { readNotificationSoundSettings, writeNotificationSoundSettings, playNotificationSound, NotificationSoundSettings } from "../components/NotificationsBell";
@@ -52,11 +53,16 @@ function NotificationSettingsPanel() {
         Звук и тосты включены
       </label>
       <div className="settings-form-row">
-        <select value={settings.sound} onChange={(event) => update({ ...settings, sound: event.target.value as NotificationSoundSettings["sound"] })}>
-          <option value="ding">Динь</option>
-          <option value="chime">Перелив</option>
-          <option value="pop">Поп</option>
-        </select>
+        <SelectField
+          ariaLabel="Звук уведомления"
+          value={settings.sound}
+          onChange={(next) => update({ ...settings, sound: next as NotificationSoundSettings["sound"] })}
+          options={[
+            { value: "ding", label: "Динь" },
+            { value: "chime", label: "Перелив" },
+            { value: "pop", label: "Поп" },
+          ]}
+        />
         <button className="secondary-action" type="button" onClick={() => playNotificationSound(settings.sound)}>Проба звука</button>
       </div>
       <div className="settings-toggle-row">
@@ -423,10 +429,15 @@ function UsersSettingsPanel() {
       <div className="settings-form-row">
         <input placeholder="Логин" value={form.username} onChange={(event) => setForm({ ...form, username: event.target.value })} />
         <input placeholder="Пароль минимум 6 символов" type="password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })} />
-        <select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value })}>
-          <option value="manager">manager</option>
-          <option value="admin">admin</option>
-        </select>
+        <SelectField
+          ariaLabel="Роль"
+          value={form.role}
+          onChange={(next) => setForm({ ...form, role: next })}
+          options={[
+            { value: "manager", label: "manager" },
+            { value: "admin", label: "admin" },
+          ]}
+        />
         <button className="primary-action" type="button" disabled={createUser.isPending || !form.username || form.password.length < 6} onClick={() => createUser.mutate()}>Добавить</button>
       </div>
       {usersQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю сотрудников...</div>}
@@ -458,12 +469,17 @@ function UsersSettingsPanel() {
       <div className="section-title">
         <div><span>PriceMaster</span><h3>Статистика привязок</h3></div>
         <div className="row-actions">
-          <select value={statsPeriod} onChange={(event) => setStatsPeriod(event.target.value)}>
-            <option value="7d">7 дней</option>
-            <option value="30d">30 дней</option>
-            <option value="90d">90 дней</option>
-            <option value="all">Все</option>
-          </select>
+          <SelectField
+            ariaLabel="Период"
+            value={statsPeriod}
+            onChange={setStatsPeriod}
+            options={[
+              { value: "7d", label: "7 дней" },
+              { value: "30d", label: "30 дней" },
+              { value: "90d", label: "90 дней" },
+              { value: "all", label: "Все" },
+            ]}
+          />
           <button className="secondary-action" type="button" onClick={() => statsQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
         </div>
       </div>
@@ -820,15 +836,25 @@ export function SettingsPage() {
           </div>
           <p className="settings-hint">Меняет базовые коэффициенты и гибкие правила, а не цены напрямую. Ручные наценки в карточках товаров не трогаются.</p>
           <div className="settings-rule-row">
-            <select value={adjustMarketplace} onChange={(event) => setAdjustMarketplace(event.target.value)}>
-              <option value="all">Ozon + Yandex</option>
-              <option value="ozon">Ozon</option>
-              <option value="yandex">Yandex Market</option>
-            </select>
-            <select value={adjustDirection} onChange={(event) => setAdjustDirection(event.target.value)}>
-              <option value="decrease">Снизить</option>
-              <option value="increase">Поднять</option>
-            </select>
+            <SelectField
+              ariaLabel="Маркетплейс"
+              value={adjustMarketplace}
+              onChange={setAdjustMarketplace}
+              options={[
+                { value: "all", label: "Ozon + Yandex" },
+                { value: "ozon", label: "Ozon" },
+                { value: "yandex", label: "Yandex Market" },
+              ]}
+            />
+            <SelectField
+              ariaLabel="Направление"
+              value={adjustDirection}
+              onChange={setAdjustDirection}
+              options={[
+                { value: "decrease", label: "Снизить" },
+                { value: "increase", label: "Поднять" },
+              ]}
+            />
             <input type="number" min="0.01" max="90" step="0.01" value={String(adjustPercent)} onChange={(event) => setAdjustPercent(numberValue(event.target.value, 0))} />
             <span className="settings-hint">%</span>
           </div>
@@ -873,11 +899,16 @@ export function SettingsPage() {
             <div className="settings-rule-head"><span>Маркетплейс</span><span>От цены, USD</span><span>Коэффициент</span><span></span></div>
             {markupRules.map((rule, index) => (
               <div className="settings-rule-row" key={`markup-${index}`}>
-                <select value={rule.marketplace} onChange={(event) => updateMarkupRule(index, { marketplace: event.target.value })}>
-                  <option value="all">Все</option>
-                  <option value="ozon">Ozon</option>
-                  <option value="yandex">Yandex Market</option>
-                </select>
+                <SelectField
+                  ariaLabel="Маркетплейс правила"
+                  value={rule.marketplace}
+                  onChange={(next) => updateMarkupRule(index, { marketplace: next })}
+                  options={[
+                    { value: "all", label: "Все" },
+                    { value: "ozon", label: "Ozon" },
+                    { value: "yandex", label: "Yandex Market" },
+                  ]}
+                />
                 <input type="number" min="0" step="0.0001" value={String(rule.minUsd)} onChange={(event) => updateMarkupRule(index, { minUsd: numberValue(event.target.value) })} />
                 <input type="number" min="0.0001" step="0.0001" value={String(rule.coefficient)} onChange={(event) => updateMarkupRule(index, { coefficient: numberValue(event.target.value, 1) })} />
                 <button className="icon-action danger" type="button" title="Удалить правило" onClick={() => setMarkupRules(markupRules.filter((_, ruleIndex) => ruleIndex !== index))}><Trash2 size={15} /></button>
@@ -897,11 +928,16 @@ export function SettingsPage() {
             <div className="settings-rule-head"><span>Маркетплейс</span><span>Поставщиков от</span><span>Поправка</span><span>Остаток</span><span></span></div>
             {availabilityRules.map((rule, index) => (
               <div className="settings-rule-row" key={`availability-${index}`}>
-                <select value={rule.marketplace} onChange={(event) => updateAvailabilityRule(index, { marketplace: event.target.value })}>
-                  <option value="all">Все</option>
-                  <option value="ozon">Ozon</option>
-                  <option value="yandex">Yandex Market</option>
-                </select>
+                <SelectField
+                  ariaLabel="Маркетплейс правила"
+                  value={rule.marketplace}
+                  onChange={(next) => updateAvailabilityRule(index, { marketplace: next })}
+                  options={[
+                    { value: "all", label: "Все" },
+                    { value: "ozon", label: "Ozon" },
+                    { value: "yandex", label: "Yandex Market" },
+                  ]}
+                />
                 <input type="number" min="0" step="1" value={String(rule.minAvailableSuppliers)} onChange={(event) => updateAvailabilityRule(index, { minAvailableSuppliers: Math.round(numberValue(event.target.value, 1)) })} />
                 <input type="number" step="0.0001" value={String(rule.coefficientDelta)} onChange={(event) => updateAvailabilityRule(index, { coefficientDelta: numberValue(event.target.value) })} />
                 <input type="number" min="0" step="1" value={String(rule.targetStock)} onChange={(event) => updateAvailabilityRule(index, { targetStock: Math.round(numberValue(event.target.value, 3)) })} />
