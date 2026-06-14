@@ -18,13 +18,10 @@
 - ЭТАП 2.4 — `scripts/pg-backup.sh` (ежедневный `pg_dump -Fc`, ротация 7 дней) + cron на проде 03:30.
 - ЭТАП 4 — дашборд: `priceHealth`/`stockHealth`/`sweepHealth`; cross-process heartbeat свипов (`02f-sweep-heartbeat.js`, детектор «застывший свип»); периодический алерт-монитор в Telegram (`02f-health-alert-monitor.js`, кулдаун по ключу, no-op без токена).
 - ЭТАП 5.1 — кастомные `BrandPicker` + `SelectField`; на `SelectField` переведены ВСЕ value-bound фильтры (каталог, Цены, Сборка, Статистика, Финансы, AI-drafts, Проблемные, Чаты, Отзывы, Операции, Поставщики).
-- ЭТАП 3 — линты в `pretest`, юнит-тесты чистых функций (supplier-выбор, heartbeat-staleness, health-alerts, conflict-lock), 252 теста зелёные.
+- ЭТАП 3 — линты в `pretest`, юнит-тесты чистых функций (supplier-выбор, heartbeat-staleness, health-alerts, conflict-lock) + **контрактные тесты лимитов МП** (Yandex chats/goods-feedback ≤20, Ozon price-batch ≤1000), 254 теста зелёные.
+- ЭТАП 4 (алерты) — `health-watchdog` шлёт Telegram на **первом** инциденте (флаг `--immediate` в `prod-alert-on-failure.cjs`, дебаунс сохранён); креды Telegram на проде боевые (`telegram:true`).
 
 **Осталось (по приоритету):**
-
-_Высокий — закрывает оставшиеся баг-классы:_
-- [ ] ЭТАП 3 — контрактные тесты лимитов маркетплейсов (Yandex chats/reviews/feedback ≤20, Ozon ≤100/req): мок, падающий при превышении.
-- [ ] ЭТАП 4 — алерты Telegram на зависание процесса завязать на `health-watchdog` (сейчас он только рестартит + best-effort алерт); подтвердить, что креды Telegram боевые.
 
 _Средний — наблюдаемость и UX:_
 - [ ] ЭТАП 4 — структурный лог-аудит: единый формат ошибок + еженедельный авто-отчёт топ-N классов ошибок из логов.
