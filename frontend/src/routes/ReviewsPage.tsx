@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, BookOpen, Loader2, MessageSquareReply, RefreshCw, Star } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { TemplatesDrawer } from "../components/TemplatesDrawer";
 
@@ -154,11 +155,16 @@ export function ReviewsPage() {
         <Stat label="Средняя оценка" value={counters.avg} tone="success" icon={<Star size={18} />} />
       </section>
       <div className="filters-row">
-        <select value={marketplace} onChange={(event) => setMarketplace(event.target.value)}>
-          <option value="all">Оба маркетплейса</option>
-          <option value="ozon">Ozon</option>
-          <option value="yandex">Яндекс</option>
-        </select>
+        <SelectField
+          ariaLabel="Маркетплейс"
+          value={marketplace}
+          onChange={setMarketplace}
+          options={[
+            { value: "all", label: "Оба маркетплейса" },
+            { value: "ozon", label: "Ozon" },
+            { value: "yandex", label: "Яндекс" },
+          ]}
+        />
         <label className="settings-toggle">
           <input type="checkbox" checked={unanswered} onChange={(event) => setUnanswered(event.target.checked)} />
           Только без ответа

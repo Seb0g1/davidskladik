@@ -5,6 +5,7 @@ import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema } from "../types";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
@@ -150,19 +151,29 @@ export function PickingListPage() {
 
       <div className="control-grid compact-controls">
         <label>Статус
-          <select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="open">К сборке</option>
-            <option value="picked">Собрано</option>
-            <option value="missing">Не было</option>
-            <option value="reordered">Перезаказано</option>
-            <option value="all">Все</option>
-          </select>
+          <SelectField
+            ariaLabel="Статус сборки"
+            value={status}
+            onChange={setStatus}
+            options={[
+              { value: "open", label: "К сборке" },
+              { value: "picked", label: "Собрано" },
+              { value: "missing", label: "Не было" },
+              { value: "reordered", label: "Перезаказано" },
+              { value: "all", label: "Все" },
+            ]}
+          />
         </label>
         <label>Поставщик
-          <select value={supplier} onChange={(event) => setSupplier(event.target.value)}>
-            <option value="">Все поставщики</option>
-            {suppliers.map((item) => <option value={item} key={item}>{item}</option>)}
-          </select>
+          <SelectField
+            ariaLabel="Поставщик"
+            value={supplier}
+            onChange={setSupplier}
+            options={[
+              { value: "", label: "Все поставщики" },
+              ...suppliers.map((item) => ({ value: String(item), label: String(item) })),
+            ]}
+          />
         </label>
         <label>Поиск
           <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="SKU, товар, заказ" />
@@ -264,11 +275,16 @@ export function PickingListPage() {
             <h3>Собранные позиции</h3>
           </div>
           <div className="supplier-cart-actions">
-            <select value={period} onChange={(event) => setPeriod(event.target.value)}>
-              <option value="7d">7 дней</option>
-              <option value="30d">30 дней</option>
-              <option value="all">Все</option>
-            </select>
+            <SelectField
+              ariaLabel="Период"
+              value={period}
+              onChange={setPeriod}
+              options={[
+                { value: "7d", label: "7 дней" },
+                { value: "30d", label: "30 дней" },
+                { value: "all", label: "Все" },
+              ]}
+            />
             <button className="secondary-action" type="button" onClick={copyInvoice} disabled={!invoiceRows.length}><Copy size={16} /> {copied ? "Скопировано" : "Скопировать"}</button>
           </div>
         </div>

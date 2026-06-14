@@ -4,6 +4,7 @@ import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, RefreshCw } from "luc
 import { fetchJson, mutationBody } from "../api";
 import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartPreviewSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyPlainText, errorMessage, numberValue } from "../lib/common";
@@ -225,11 +226,16 @@ export function SupplierCartPanel() {
       </div>
       <div className="control-grid compact-controls">
         <label>Маркетплейс
-          <select value={marketplace} onChange={(event) => setMarketplace(event.target.value)}>
-            <option value="all">Ozon + Yandex</option>
-            <option value="ozon">Ozon</option>
-            <option value="yandex">Yandex</option>
-          </select>
+          <SelectField
+            ariaLabel="Маркетплейс"
+            value={marketplace}
+            onChange={setMarketplace}
+            options={[
+              { value: "all", label: "Ozon + Yandex" },
+              { value: "ozon", label: "Ozon" },
+              { value: "yandex", label: "Yandex" },
+            ]}
+          />
         </label>
         <label>Лимит строк
           <input type="number" value={limit} onChange={(event) => setLimit(numberValue(event.target.value, 100))} />

@@ -3,6 +3,7 @@ import { AlertTriangle, BadgeDollarSign, CheckCircle2, Loader2, RefreshCcw, Send
 import { useMemo, useState } from "react";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { MutationProductResponseSchema, SalesAutomationItemsSchema, SalesAutomationSummarySchema } from "../types";
 
@@ -143,32 +144,45 @@ export function PricesPage() {
       <div className="control-grid price-controls">
         <label>
           Маркетплейс
-          <select value={marketplace} onChange={(event) => setMarketplace(event.target.value)}>
-            <option value="all">Ozon + Yandex</option>
-            <option value="ozon">Только Ozon</option>
-            <option value="yandex">Только Yandex</option>
-          </select>
+          <SelectField
+            ariaLabel="Маркетплейс"
+            value={marketplace}
+            onChange={setMarketplace}
+            options={[
+              { value: "all", label: "Ozon + Yandex" },
+              { value: "ozon", label: "Только Ozon" },
+              { value: "yandex", label: "Только Yandex" },
+            ]}
+          />
         </label>
         <label>
           Причина
-          <select value={reason} onChange={(event) => setReason(event.target.value)}>
-            <option value="all">Все причины</option>
-            {reasonOptions.map(([key, count]) => (
-              <option value={key} key={key}>{reasonLabel(key)} · {count}</option>
-            ))}
-          </select>
+          <SelectField
+            ariaLabel="Причина"
+            value={reason}
+            onChange={setReason}
+            options={[
+              { value: "all", label: "Все причины" },
+              ...reasonOptions.map(([key, count]) => ({ value: String(key), label: `${reasonLabel(key)} · ${count}` })),
+            ]}
+          />
         </label>
         <label>
           Apply
-          <select value={applyStatus} onChange={(event) => setApplyStatus(event.target.value)}>
-            <option value="all">Все статусы</option>
-            <option value="queued">В очереди</option>
-            <option value="verification_pending">Ждем проверку</option>
-            <option value="verified">Verified Ozon</option>
-            <option value="api_accepted">API accepted</option>
-            <option value="ozon_price_not_applied">Ozon не применил</option>
-            <option value="ozon_price_delayed">Ozon отложил</option>
-          </select>
+          <SelectField
+            ariaLabel="Apply статус"
+            value={applyStatus}
+            onChange={setApplyStatus}
+            options={[
+              { value: "all", label: "Все статусы" },
+              { value: "queued", label: "В очереди" },
+              { value: "verification_pending", label: "Ждем проверку" },
+              { value: "verified", label: "Verified Ozon" },
+              { value: "api_accepted", label: "API accepted" },
+              { value: "ozon_price_not_applied", label: "Ozon не применил" },
+              { value: "ozon_price_delayed", label: "Ozon отложил" },
+            ]}
+          />
         </label>
         <button className="primary-action danger-action" type="button" onClick={() => run.mutate({ marketplace, force: true, onlyChanged: false, reason: "sales_automation_reprice_selected" })} disabled={run.isPending}>
           {run.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Пересчитать выбранное
