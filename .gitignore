@@ -72,3 +72,6 @@ tunnel.py
 bad/
 designm.jpg
 scripts/__pycache__/
+test-results/
+playwright-report/
+.playwright/

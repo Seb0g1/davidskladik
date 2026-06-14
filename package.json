@@ -38,6 +38,8 @@
     "frontend:dev": "vite --config frontend/vite.config.ts",
     "frontend:build": "vite build --config frontend/vite.config.ts",
     "frontend:check": "tsc -p frontend/tsconfig.json --noEmit",
+    "test:visual": "playwright test",
+    "test:visual:update": "playwright test --update-snapshots",
     "smoke:ui": "node scripts/smoke-modern-ui.cjs",
     "build": "npm run frontend:build",
     "relay:openai": "node scripts/openai-relay-server.cjs",
@@ -68,6 +70,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.2",
