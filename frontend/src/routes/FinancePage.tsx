@@ -5,6 +5,7 @@ import { fetchJson, mutationBody, patchBody } from "../api";
 import { FinanceExpenseCreateSchema, FinanceExpensesSchema, FinanceOrderSchema, FinanceOrdersSchema, FinanceSummarySchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
+import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { errorMessage } from "../lib/common";
 
@@ -181,6 +182,7 @@ export function FinancePage() {
           </div>
           );
         })}
+        {!orders.data?.orders?.length && orders.isLoading ? <ListSkeleton rows={6} /> : null}
         {!orders.data?.orders?.length && !orders.isLoading ? <div className="empty-state">Заказов за выбранный период пока нет.</div> : null}
       </div>
 

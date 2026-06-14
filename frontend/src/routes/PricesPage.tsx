@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
+import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { MutationProductResponseSchema, SalesAutomationItemsSchema, SalesAutomationSummarySchema } from "../types";
 
@@ -251,6 +252,7 @@ export function PricesPage() {
             <span data-label="Проверено">{formatDate(itemValue(item, "lastPriceVerifiedAt") || item.updatedAt || item.lastCalculatedAt)}</span>
           </div>
         ))}
+        {itemsQuery.isLoading && !items.length ? <ListSkeleton rows={8} /> : null}
         {!items.length && !itemsQuery.isLoading ? <div className="empty-state">Сейчас нет строк по выбранному фильтру. Автоматизация продолжает работать в фоне.</div> : null}
       </div>
     </section>

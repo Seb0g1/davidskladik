@@ -6390,6 +6390,8 @@ label.settings-toggle {
 .catalog-skeleton { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
 .catalog-skeleton-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid rgba(120,160,255,0.08); border-radius: 12px; }
 .catalog-skeleton-lines { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.list-skeleton { display: flex; flex-direction: column; gap: 8px; padding: 8px 0; }
+.list-skeleton-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid rgba(120,160,255,0.08); border-radius: 10px; }
 
 /* ===== Import page ===== */
 .import-table .import-row { display: grid; grid-template-columns: 44px minmax(220px, 1.6fr) minmax(120px, 0.8fr) minmax(110px, 0.8fr) minmax(150px, 1fr); align-items: center; gap: 10px; }

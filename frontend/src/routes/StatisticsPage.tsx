@@ -4,6 +4,7 @@ import { BarChart3, RefreshCw, Users } from "lucide-react";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
+import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { FinanceSummarySchema, SupplierPickingListSchema, UsersStatsResponseSchema, WarehousePageSchema } from "../types";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
@@ -105,7 +106,7 @@ export function StatisticsPage() {
               <span data-label="Последнее">{row.lastActionAt ? compactDate(row.lastActionAt) : "-"}</span>
             </div>
           ))}
-          {users.isLoading ? <div className="soft-empty"><RefreshCw className="spin" size={16} /> Загружаю статистику...</div> : null}
+          {users.isLoading ? <ListSkeleton rows={6} /> : null}
           {!users.isLoading && !sortedRows.length ? <div className="soft-empty">Нет действий за выбранный период.</div> : null}
         </div>
 

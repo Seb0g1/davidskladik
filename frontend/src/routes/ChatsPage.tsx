@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellRing, BookOpen, Loader2, MessageCircle, RefreshCw, Send } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
+import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { TemplatesDrawer } from "../components/TemplatesDrawer";
 
@@ -158,6 +159,7 @@ export function ChatsPage() {
               {chat.unreadCount ? <span className="notify-badge chat-unread">{chat.unreadCount}</span> : null}
             </button>
           ))}
+          {chatsQuery.isFetching && !rows.length ? <ListSkeleton rows={7} /> : null}
           {!rows.length && !chatsQuery.isFetching ? <div className="empty-state">Чатов нет.</div> : null}
         </div>
 

@@ -6,6 +6,7 @@ import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
+import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema } from "../types";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
@@ -265,6 +266,7 @@ export function PickingListPage() {
           </article>
           );
         })}
+        {listQuery.isLoading && !grouped.length ? <ListSkeleton rows={8} /> : null}
         {!grouped.length && !listQuery.isLoading ? <div className="empty-state">Строк для выбранного фильтра нет.</div> : null}
       </div>
 

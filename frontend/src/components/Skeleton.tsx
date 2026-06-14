@@ -16,6 +16,20 @@ export function Skeleton({
   return <span className={`skeleton ${className}`.trim()} style={{ width, height, borderRadius: radius }} aria-hidden="true" />;
 }
 
+// Generic list/table placeholder for pages whose loading state was a bare spinner + text.
+export function ListSkeleton({ rows = 6 }: { rows?: number }) {
+  return (
+    <div className="list-skeleton" role="status" aria-busy="true" aria-label="Загрузка">
+      {Array.from({ length: rows }).map((_, index) => (
+        <div className="list-skeleton-row" key={index}>
+          <Skeleton width={`${48 + ((index * 9) % 34)}%`} height={13} />
+          <Skeleton width={64} height={20} radius={999} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Mirrors the catalog product-group rows so the page does not jump when data arrives.
 export function CatalogSkeleton({ rows = 8 }: { rows?: number }) {
   return (
