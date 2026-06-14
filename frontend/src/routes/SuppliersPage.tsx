@@ -5,6 +5,7 @@ import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { SupplierLedgerPaymentSchema, SupplierSchema, SuppliersResponseSchema } from "../types";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
@@ -284,10 +285,15 @@ export function SuppliersPage() {
             <label>Заметка<input value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} /></label>
             <label>Причина остановки<input value={form.stopReason} onChange={(event) => setForm({ ...form, stopReason: event.target.value })} /></label>
             <label>Валюта закупки в PriceMaster
-              <select value={form.priceCurrency} onChange={(event) => setForm({ ...form, priceCurrency: event.target.value })}>
-                <option value="USD">Доллары (USD) — цена × курс × наценка</option>
-                <option value="RUB">Рубли (RUB) — цена × наценка</option>
-              </select>
+              <SelectField
+                ariaLabel="Валюта поставщика"
+                value={form.priceCurrency}
+                onChange={(next) => setForm({ ...form, priceCurrency: next })}
+                options={[
+                  { value: "USD", label: "Доллары (USD) — цена × курс × наценка" },
+                  { value: "RUB", label: "Рубли (RUB) — цена × наценка" },
+                ]}
+              />
             </label>
             <div className="row-actions">
               <button className="primary-action" type="submit" disabled={saveSupplier.isPending || !form.name.trim()}>
@@ -340,14 +346,16 @@ export function SuppliersPage() {
                   <div className="supplier-badge-row">
                     <label className="supplier-currency-inline">
                       <span>Закупка</span>
-                      <select
+                      <SelectField
+                        ariaLabel="Валюта закупки"
                         value={String(raw.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD"}
                         disabled={patchSupplier.isPending}
-                        onChange={(event) => patchSupplier.mutate({ id, patch: { priceCurrency: event.target.value } })}
-                      >
-                        <option value="USD">USD</option>
-                        <option value="RUB">RUB</option>
-                      </select>
+                        onChange={(next) => patchSupplier.mutate({ id, patch: { priceCurrency: next } })}
+                        options={[
+                          { value: "USD", label: "USD" },
+                          { value: "RUB", label: "RUB" },
+                        ]}
+                      />
                     </label>
                     <span>товаров {supplier.impactProductCount || 0}</span>
                     <span>доверие {supplier.trustFactor ?? 100}</span>
