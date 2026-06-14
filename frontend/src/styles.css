@@ -6407,3 +6407,21 @@ label.settings-toggle {
 .pill.ok { color: #3ddc97; border: 1px solid rgba(61,220,151,0.35); background: rgba(61,220,151,0.12); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
 .pill.warn { color: #ffb020; border: 1px solid rgba(255,176,32,0.35); background: rgba(255,176,32,0.12); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
 .pill.muted { color: #93a4c8; border: 1px solid rgba(120,160,255,0.18); border-radius: 999px; padding: 2px 10px; font-size: 12px; }
+
+/* Accessibility: visible keyboard focus (PLAN-HARDENING.md 5.3).
+   :focus-visible only matches keyboard/programmatic focus, not mouse clicks, so the UI
+   stays clean for pointer users while keyboard users always get a ring. !important enforces
+   this baseline over the many element-specific `outline: none` rules above. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible,
+[role="button"]:focus-visible,
+.select-field-trigger:focus-visible,
+.brand-combo-input:focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 2px !important;
+  border-radius: 6px;
+}
