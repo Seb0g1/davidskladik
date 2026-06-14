@@ -3240,6 +3240,22 @@ test("pickWarehouseSupplier tie-break by rowId is stable regardless of input ord
   assert.equal(pickedForward.rowId, "100");
 });
 
+test("productConflict ignores background updatedAt churn but flags a newer user edit", () => {
+  const { productConflict } = require("../server.js");
+  const loadedAt = "2026-06-14T10:00:00.000Z";
+  const links = [{ article: "478", supplierName: "Сорин", matchType: "selected_row", sourceRowId: "1" }];
+  // Background sweep bumped updatedAt AFTER the client loaded, but no user edit (userUpdatedAt
+  // still null) and links unchanged -> NOT a conflict (this was the false 409).
+  const bg = { id: "p1", updatedAt: "2026-06-14T10:05:00.000Z", userUpdatedAt: null, links };
+  assert.equal(productConflict(bg, { expectedUpdatedAt: loadedAt, expectedLinksSignature: "" }), null);
+  // Another USER edited after load (userUpdatedAt newer than what we loaded) -> conflict.
+  const userEdited = { id: "p1", offerId: "o1", updatedAt: "2026-06-14T10:06:00.000Z", userUpdatedAt: "2026-06-14T10:06:00.000Z", links };
+  assert.ok(productConflict(userEdited, { expectedUpdatedAt: loadedAt }));
+  // We hold the latest user edit (userUpdatedAt == what we loaded) -> no conflict.
+  const sameUser = { id: "p1", updatedAt: loadedAt, userUpdatedAt: loadedAt, links };
+  assert.equal(productConflict(sameUser, { expectedUpdatedAt: loadedAt }), null);
+});
+
 test("evaluateHealthAlerts only fires for breached thresholds (PLAN-HARDENING.md 4)", () => {
   const { evaluateHealthAlerts } = require("../server.js");
   const thresholds = { stalePriceLinked: 50, staleHours: 1, oldestPriceJobMs: 600000, linkedSoldBelowTarget: 1000 };

@@ -30,6 +30,11 @@ app.post("/api/warehouse/products", async (request, response, next) => {
       warehouse.products.push(input);
     }
 
+    // Creating/saving a product is a user action — stamp userUpdatedAt so optimistic locking
+    // can later distinguish a real concurrent user edit from background sweep churn.
+    const userStampedProduct = index >= 0 ? warehouse.products[index] : input;
+    userStampedProduct.userUpdatedAt = userStampedProduct.updatedAt || new Date().toISOString();
+
     await writeWarehouse(warehouse);
     const product = index >= 0 ? warehouse.products[index] : input;
     const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product]);

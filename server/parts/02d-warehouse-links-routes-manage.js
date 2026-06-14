@@ -49,6 +49,7 @@ app.post("/api/warehouse/products/links/delete", async (request, response, next)
         oldValues.push(cloneAuditValue({ id: product.id, links: product.links || [], updatedAt: product.updatedAt }));
         product.links = compactWarehouseLinks(previousLinks.filter((link) => !linkIds.has(String(link.id))));
         product.updatedAt = new Date().toISOString();
+        product.userUpdatedAt = product.updatedAt;
         changedProducts.push(product);
         changedIds.push(product.id);
         deletedRefs.push(...productRefs);
@@ -124,6 +125,7 @@ app.delete("/api/warehouse/products/:productId/links/:linkId", async (request, r
     product.links = previousLinks.filter((link) => String(link.id) !== String(request.params.linkId));
     product.links = compactWarehouseLinks(product.links);
     product.updatedAt = new Date().toISOString();
+    product.userUpdatedAt = product.updatedAt;
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_delete" });
     const [savedProduct] = product.links.length ? await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product]) : [];
     const responseProduct = savedProduct || {

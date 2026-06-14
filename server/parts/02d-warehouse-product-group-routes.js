@@ -8,6 +8,7 @@ app.patch("/api/warehouse/products/auto-price/all", async (request, response, ne
       if (Boolean(product.autoPriceEnabled !== false) === enabled) continue;
       product.autoPriceEnabled = enabled;
       product.updatedAt = new Date().toISOString();
+      product.userUpdatedAt = product.updatedAt;
       changed += 1;
       changedIds.push(product.id);
     }
@@ -47,6 +48,7 @@ app.patch("/api/warehouse/products/group", async (request, response, next) => {
         oldValues.push(cloneAuditValue({ id: product.id, stockOnlyManualPrices: product.stockOnlyManualPrices || null, updatedAt: product.updatedAt }));
         product.stockOnlyManualPrices = prices;
         product.updatedAt = now;
+        product.userUpdatedAt = product.updatedAt;
       }
       if (productsToChange.length) {
         await writeWarehouseProductPatch(productsToChange, { reason: "warehouse_stock_only_manual_prices", writeLinks: false });
@@ -69,6 +71,7 @@ app.patch("/api/warehouse/products/group", async (request, response, next) => {
       oldValues.push(cloneAuditValue({ id: product.id, manualGroupId: product.manualGroupId, updatedAt: product.updatedAt }));
       product.manualGroupId = groupId;
       product.updatedAt = new Date().toISOString();
+      product.userUpdatedAt = product.updatedAt;
       changed += 1;
       changedIds.push(product.id);
     }
@@ -101,6 +104,7 @@ app.patch("/api/warehouse/products/ungroup", async (request, response, next) => 
       oldValues.push(cloneAuditValue({ id: product.id, manualGroupId: product.manualGroupId, updatedAt: product.updatedAt }));
       product.manualGroupId = "";
       product.updatedAt = new Date().toISOString();
+      product.userUpdatedAt = product.updatedAt;
       changed += 1;
       changedIds.push(product.id);
     }

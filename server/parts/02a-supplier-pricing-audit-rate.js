@@ -6,6 +6,23 @@ function requestUsername(request) {
   return cleanText(request?.session?.username || "system") || "system";
 }
 
+// Returns null (no conflict) unless ANOTHER USER changed the card since the client loaded it.
+// Background automation (price/stock sweeps, reconciler) bumps `updatedAt` constantly, which
+// used to trip a false "изменено другим пользователем" 409. We now key the check on
+// `userUpdatedAt` (bumped only by user edits): a conflict exists only when the product's
+// userUpdatedAt is STRICTLY NEWER than the updatedAt the client loaded. Products with no
+// userUpdatedAt yet (never user-edited) fall back to the old exact-updatedAt match so brand
+// new cards still get basic protection, but only when the client also sent a links signature
+// that no longer matches (i.e. a real divergence), otherwise background churn is ignored.
+function warehouseUserEditIsNewer(product, expected) {
+  const userUpdatedAt = cleanText(product?.userUpdatedAt || "");
+  if (!userUpdatedAt) return null; // unknown — let caller decide via fallback
+  const a = new Date(userUpdatedAt).getTime();
+  const b = new Date(expected).getTime();
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return cleanText(product?.updatedAt || "") !== expected;
+  return a > b;
+}
+
 function productConflict(product, expectedUpdatedAt) {
   const expected = typeof expectedUpdatedAt === "object" && expectedUpdatedAt !== null
     ? cleanText(expectedUpdatedAt.expectedUpdatedAt || expectedUpdatedAt.updatedAt || "")
@@ -14,9 +31,18 @@ function productConflict(product, expectedUpdatedAt) {
     ? cleanText(expectedUpdatedAt.expectedLinksSignature || expectedUpdatedAt.linksSignature || "")
     : "";
   if (!expected) return null;
-  if (cleanText(product?.updatedAt || "") === expected) return null;
   const currentLinksSignature = warehouseProductLinksSignature(product);
-  if (expectedLinksSignature && expectedLinksSignature === currentLinksSignature) return null;
+  // Primary rule: only a newer USER edit is a real conflict (ignores background updatedAt churn).
+  const userNewer = warehouseUserEditIsNewer(product, expected);
+  if (userNewer === false) return null;
+  if (userNewer === null) {
+    // No userUpdatedAt recorded yet: ignore pure background churn — only flag a conflict when
+    // the links actually diverged from what the client expected.
+    if (cleanText(product?.updatedAt || "") === expected) return null;
+    if (!expectedLinksSignature || expectedLinksSignature === currentLinksSignature) return null;
+  } else if (expectedLinksSignature && expectedLinksSignature === currentLinksSignature) {
+    return null;
+  }
   return {
     id: product.id,
     offerId: product.offerId || product.ozon?.offerId || product.yandex?.offerId || "",

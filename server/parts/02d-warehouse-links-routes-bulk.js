@@ -134,6 +134,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       product.autoPriceEnabled = true;
       if (commonLinks.length) product.everHadLinks = true;
       product.updatedAt = now;
+      product.userUpdatedAt = now;
       updatedIds.push(product.id);
     }
 
@@ -286,6 +287,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       product.everHadLinks = true;
     }
     product.updatedAt = now;
+    product.userUpdatedAt = now;
     // withWarehouseMutation invalidates AFTER the patch write + activation settle, so an
     // immediate GET of the warehouse page reflects the new link (PLAN-HARDENING.md 1.4) —
     // writeWarehouseProductPatch alone is not enough, since queueLinkedProductActivation

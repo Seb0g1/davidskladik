@@ -3,14 +3,11 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
-    const expectedUpdatedAt = cleanText(request.body.expectedUpdatedAt || "");
-    if (expectedUpdatedAt && cleanText(product.updatedAt || "") !== expectedUpdatedAt) {
-      return response.status(409).json({
-        error: "Конфликт обновления: карточка уже изменена другим пользователем.",
-        code: "warehouse_product_conflict",
-        currentUpdatedAt: product.updatedAt || null,
-      });
-    }
+    const conflict = productConflict(product, {
+      expectedUpdatedAt: request.body.expectedUpdatedAt,
+      expectedLinksSignature: request.body.expectedLinksSignature || request.body.linksSignature,
+    });
+    if (conflict) return conflictResponse(response, [conflict]);
     const before = cloneAuditValue(product);
 
     if (request.body.markup !== undefined) {
@@ -28,6 +25,7 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
     }
     if (request.body.keyword !== undefined) product.keyword = cleanText(request.body.keyword);
     product.updatedAt = new Date().toISOString();
+    product.userUpdatedAt = product.updatedAt;
 
     await writeWarehouseProductPatch([product], { reason: "warehouse_product_update", writeLinks: false });
     const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product]);
@@ -67,27 +65,11 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
     if (!Number.isFinite(markup) || markup <= 0) return response.status(400).json({ error: "Укажите наценку больше нуля." });
 
     const warehouse = await readWarehouse();
-    const conflicts = [];
-    for (const product of warehouse.products) {
-      if (!ids.has(product.id)) continue;
-      const expectedUpdatedAt = optimisticLocks.get(product.id);
-      if (!expectedUpdatedAt) continue;
-      if (cleanText(product.updatedAt || "") !== expectedUpdatedAt) {
-        conflicts.push({
-          id: product.id,
-          offerId: product.offerId || "",
-          expectedUpdatedAt,
-          currentUpdatedAt: product.updatedAt || null,
-        });
-      }
-    }
-    if (conflicts.length) {
-      return response.status(409).json({
-        error: "Конфликт обновления: часть карточек уже изменена другим пользователем.",
-        code: "warehouse_bulk_conflict",
-        conflicts,
-      });
-    }
+    const conflicts = collectProductConflicts(
+      warehouse.products.filter((product) => ids.has(product.id) && optimisticLocks.has(product.id)),
+      optimisticLocks,
+    );
+    if (conflicts.length) return conflictResponse(response, conflicts);
     let changed = 0;
     const changedIds = [];
     const oldValues = [];
@@ -96,6 +78,7 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
       oldValues.push(cloneAuditValue({ id: product.id, markup: product.markup, updatedAt: product.updatedAt }));
       product.markup = markup;
       product.updatedAt = new Date().toISOString();
+      product.userUpdatedAt = product.updatedAt;
       changed += 1;
       changedIds.push(product.id);
     }
@@ -147,6 +130,7 @@ app.patch("/api/warehouse/products/auto-price/bulk", async (request, response, n
       oldValues.push(cloneAuditValue({ id: product.id, autoPriceEnabled: product.autoPriceEnabled, updatedAt: product.updatedAt }));
       product.autoPriceEnabled = enabled;
       product.updatedAt = new Date().toISOString();
+      product.userUpdatedAt = product.updatedAt;
       changed += 1;
       changedIds.push(product.id);
     }

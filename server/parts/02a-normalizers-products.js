@@ -91,6 +91,10 @@ function normalizeWarehouseProduct(input = {}) {
     },
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: input.updatedAt || new Date().toISOString(),
+    // Bumped ONLY by user-initiated edits (link save, product patch, group ops) — never by
+    // background automation. Optimistic-locking compares this, so price/stock sweeps bumping
+    // updatedAt no longer raise a false "изменено другим пользователем" conflict.
+    userUpdatedAt: input.userUpdatedAt || null,
     links,
     everHadLinks,
   };
