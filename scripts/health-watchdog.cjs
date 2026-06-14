@@ -109,7 +109,10 @@ function restartProcess(name) {
 
 function alert(message) {
   try {
-    execFileSync("node", [path.join(__dirname, "prod-alert-on-failure.cjs"), message], { stdio: "inherit" });
+    // --immediate: the watchdog only calls this after FAILURE_THRESHOLD consecutive failures
+    // AND a restart, so the incident is already confirmed — alert on the first one (debounced),
+    // don't wait for a second consecutive failure inside prod-alert-on-failure.cjs.
+    execFileSync("node", [path.join(__dirname, "prod-alert-on-failure.cjs"), "--immediate", message], { stdio: "inherit" });
   } catch {
     // best effort; the incident is already recorded on disk.
   }

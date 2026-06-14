@@ -315,6 +315,34 @@ test("modern copy name action keeps only latin letters and digits", async () => 
   assert.equal(sanitize("12 Parfumeurs Le Charmeur Парфюмерная вода 100 мл"), "12 Parfumeurs Le Charmeur 100");
 });
 
+test("Yandex Medium-API list requests stay within the <=20 page limit (contract; regression for limit>20 -> 400)", () => {
+  // The Yandex businesses chats list and goods-feedback list reject limit > 20 with HTTP 400.
+  // We paginate with page tokens instead. Lock the URL literals so a future bump to e.g. 50
+  // (a natural "load more at once" change) fails here, not in production.
+  const source = readServerSource();
+  const listPatterns = [
+    /businesses\/\$\{[^}]+\}\/chats\?limit=(\d+)/g,
+    /businesses\/\$\{[^}]+\}\/goods-feedback\?limit=(\d+)/g,
+  ];
+  let checked = 0;
+  for (const re of listPatterns) {
+    let match;
+    while ((match = re.exec(source)) !== null) {
+      checked += 1;
+      assert.ok(Number(match[1]) <= 20, `Yandex list request uses limit=${match[1]} (>20) — API returns 400`);
+    }
+  }
+  assert.ok(checked >= 2, `expected to find the Yandex chats + goods-feedback list requests, found ${checked}`);
+});
+
+test("Ozon price batch size is clamped to the <=1000/request API ceiling (contract)", () => {
+  // Ozon /v1/product/import/prices rejects > 1000 prices per request. The batch-size getter
+  // must keep the Math.min(1000, ...) clamp so OZON_PRICE_BATCH_SIZE can be tuned up without
+  // ever exceeding the API ceiling.
+  const source = readServerSource();
+  assert.match(source, /Math\.min\(1000,[\s\S]{0,80}?OZON_PRICE_BATCH_SIZE/);
+});
+
 test("Codex Sale AI config supports env key aliases and image presets", async () => {
   const serverSource = readServerSource();
   const settingsSource = await fs.readFile(path.join(__dirname, "..", "frontend", "src", "routes", "SettingsPage.tsx"), "utf8");

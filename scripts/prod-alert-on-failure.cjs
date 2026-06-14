@@ -10,7 +10,12 @@ require("dotenv").config();
 const root = path.resolve(__dirname, "..");
 const alertPath = path.join(root, "data", "last-prod-alert.json");
 const debounceMs = Math.max(60_000, Number(process.env.PROD_ALERT_DEBOUNCE_MS || 900000) || 900000);
-const failures = process.argv.slice(2).filter(Boolean);
+const rawArgs = process.argv.slice(2).filter(Boolean);
+// --immediate: the caller (e.g. health-watchdog) already confirmed the incident and acted on
+// it (restart), so don't require a second consecutive failure before alerting. Debounce still
+// applies so repeated restarts can't spam.
+const immediate = rawArgs.includes("--immediate");
+const failures = rawArgs.filter((arg) => !arg.startsWith("--"));
 
 function readState() {
   try {
@@ -69,7 +74,7 @@ async function main() {
 
   process.stderr.write(`${message}\n`);
 
-  if (next.consecutiveFailures >= 2 && now - next.lastAlertAt >= debounceMs) {
+  if ((immediate || next.consecutiveFailures >= 2) && now - next.lastAlertAt >= debounceMs) {
     const sent = await sendTelegram(message);
     if (sent) {
       next.lastAlertAt = now;
