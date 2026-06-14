@@ -15,13 +15,13 @@
 - ЭТАП 2.3 — `check-source-manifest` (каждый part зарегистрирован).
 - ЭТАП 2.4 — `scripts/pg-backup.sh` (ежедневный `pg_dump -Fc`, ротация 7 дней) + cron на проде 03:30.
 - ЭТАП 4 — дашборд: `priceHealth`/`stockHealth`/`sweepHealth`; cross-process heartbeat свипов (`02f-sweep-heartbeat.js`, детектор «застывший свип»); периодический алерт-монитор в Telegram (`02f-health-alert-monitor.js`, кулдаун по ключу, no-op без токена).
-- ЭТАП 5.1 — кастомные `BrandPicker` + `SelectField` (фильтры каталога: маркетплейс/привязки/статус/сортировка больше не нативные `<select>`).
+- ЭТАП 5.1 — кастомные `BrandPicker` + `SelectField`; на `SelectField` переведены ВСЕ value-bound фильтры (каталог, Цены, Сборка, Статистика, Финансы, AI-drafts, Проблемные, Чаты, Отзывы, Операции, Поставщики). Остались только нативные `<select>` в uncontrolled-формах (LinkEditCard `name=`, SettingsPage) и placeholder-экшен-пикерах шаблонов.
 - ЭТАП 3 — линты в `pretest`, юнит-тесты чистых функций (supplier-выбор, heartbeat-staleness, health-alerts), 251 тест зелёные.
 
 **Осталось:**
 - ЭТАП 3 — контрактные тесты лимитов маркетплейсов (Yandex ≤20, Ozon ≤100).
 - ЭТАП 4 — структурный лог-аудит + еженедельный авто-отчёт топ-классов ошибок.
-- ЭТАП 5.1 — мигрировать оставшиеся нативные `<select>` (Settings/Prices/Operations/… ) на `SelectField`; скелетоны загрузки.
+- ЭТАП 5.1 — скелетоны загрузки (loading) для таблиц/страниц; опц. перевод uncontrolled-форм (SettingsPage/LinkEditCard) на `SelectField` с form-state.
 - ЭТАП 5.2–5.4 — ревизия UX под сайдбар, доступность/адаптив, визуальные снапшот-тесты.
 - ЭТАП 2.4 — еженедельная проверка восстановления бэкапа на стейдже.
 - ЭТАП 6 — чеклист деплоя (док), ротация утёкшего root-пароля, Definition of Done.
