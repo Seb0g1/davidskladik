@@ -230,6 +230,14 @@ function startBackgroundSchedulers() {
       batchLimit: priceSweepBatchLimit,
     });
   }
+  if (healthAlertEnabled) {
+    scheduleHealthAlertMonitor(150_000);
+    logger.info("health alert monitor enabled", {
+      intervalSeconds: Math.round(healthAlertIntervalMs / 1000),
+      cooldownMinutes: Math.round(healthAlertCooldownMs / 60000),
+      telegram: healthAlertTelegramConfigured(),
+    });
+  }
   if (yandexFastUnarchiveEnabled) {
     scheduleYandexFastUnarchive(45_000);
     logger.info("yandex fast unarchive scheduler enabled", {

@@ -3240,6 +3240,19 @@ test("pickWarehouseSupplier tie-break by rowId is stable regardless of input ord
   assert.equal(pickedForward.rowId, "100");
 });
 
+test("evaluateHealthAlerts only fires for breached thresholds (PLAN-HARDENING.md 4)", () => {
+  const { evaluateHealthAlerts } = require("../server.js");
+  const thresholds = { stalePriceLinked: 50, staleHours: 1, oldestPriceJobMs: 600000, linkedSoldBelowTarget: 1000 };
+  // All within limits -> no alerts.
+  assert.equal(evaluateHealthAlerts({ stalePriceLinked: 10, oldestPriceJobAgeMs: 1000, linkedSoldBelowTarget: 100, staleSweeps: [] }, thresholds).length, 0);
+  // Each breach raises exactly its own alert key.
+  const keys = (m) => evaluateHealthAlerts(m, thresholds).map((a) => a.key);
+  assert.deepEqual(keys({ stalePriceLinked: 999 }), ["stale_price_linked"]);
+  assert.deepEqual(keys({ oldestPriceJobAgeMs: 999999 }), ["price_queue_starved"]);
+  assert.deepEqual(keys({ linkedSoldBelowTarget: 5000 }), ["sold_below_target"]);
+  assert.ok(keys({ staleSweeps: ["price_sweep"] })[0].startsWith("stale_sweeps:"));
+});
+
 test("sweepHeartbeatStaleness flags a sweep that missed >2.5 intervals, not a fresh one (PLAN-HARDENING.md 4)", () => {
   const { sweepHeartbeatStaleness } = require("../server.js");
   const now = Date.parse("2026-06-14T12:00:00.000Z");

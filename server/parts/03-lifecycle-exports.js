@@ -4,6 +4,7 @@ module.exports = {
   recordSweepHeartbeat,
   readSweepHeartbeats,
   sweepHeartbeatStaleness,
+  evaluateHealthAlerts,
   shutdownForTests,
   collectHealthDetails,
   resolveMarkupCoefficient,
