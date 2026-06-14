@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { BarChart3, RefreshCw, Users } from "lucide-react";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { FinanceSummarySchema, SupplierPickingListSchema, UsersStatsResponseSchema, WarehousePageSchema } from "../types";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
@@ -55,12 +56,17 @@ export function StatisticsPage() {
         subtitle="Работа сотрудников, привязки PriceMaster, сборка и финансовый результат."
         action={(
           <div className="row-actions">
-            <select value={period} onChange={(event) => setPeriod(event.target.value)}>
-              <option value="7d">7 дней</option>
-              <option value="30d">30 дней</option>
-              <option value="90d">90 дней</option>
-              <option value="all">Все</option>
-            </select>
+            <SelectField
+              ariaLabel="Период"
+              value={period}
+              onChange={setPeriod}
+              options={[
+                { value: "7d", label: "7 дней" },
+                { value: "30d", label: "30 дней" },
+                { value: "90d", label: "90 дней" },
+                { value: "all", label: "Все" },
+              ]}
+            />
             <button className="secondary-action" type="button" onClick={refresh}><RefreshCw size={16} /> Обновить</button>
           </div>
         )}

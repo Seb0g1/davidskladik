@@ -3,6 +3,7 @@ import { AlertTriangle, Loader2, RefreshCcw, Wrench } from "lucide-react";
 import { useMemo, useState } from "react";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { ProblemProductsSchema, ProductRepairSchema } from "../types";
 
@@ -79,10 +80,15 @@ export function ProblemProductsPage() {
       <div className="control-grid">
         <label>
           Категория
-          <select value={category} onChange={(event) => setCategory(event.target.value)}>
-            <option value="all">Все проблемы</option>
-            {categories.map(([key, count]) => <option key={key} value={key}>{label(key)} · {Number(count)}</option>)}
-          </select>
+          <SelectField
+            ariaLabel="Категория проблемы"
+            value={category}
+            onChange={setCategory}
+            options={[
+              { value: "all", label: "Все проблемы" },
+              ...categories.map(([key, count]) => ({ value: String(key), label: `${label(key)} · ${Number(count)}` })),
+            ]}
+          />
         </label>
         <button className="primary-action" type="button" disabled={!selected.size || repair.isPending} onClick={() => repair.mutate()}>
           {repair.isPending ? <Loader2 className="spin" size={16} /> : <Wrench size={16} />} Починить выбранные ({selected.size})

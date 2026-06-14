@@ -4,6 +4,7 @@ import { Check, CreditCard, Loader2, Package, Plus, RefreshCw, ShoppingCart, Tre
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { FinanceExpenseCreateSchema, FinanceExpensesSchema, FinanceOrderSchema, FinanceOrdersSchema, FinanceSummarySchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { errorMessage } from "../lib/common";
 
@@ -92,12 +93,17 @@ export function FinancePage() {
         subtitle="Заказы, закупки, ручные расходы и чистая прибыль по ДавидСкладу."
         action={(
           <div className="row-actions">
-            <select value={period} onChange={(event) => setPeriod(event.target.value)}>
-              <option value="7d">7 дней</option>
-              <option value="30d">30 дней</option>
-              <option value="90d">90 дней</option>
-              <option value="all">Все</option>
-            </select>
+            <SelectField
+              ariaLabel="Период"
+              value={period}
+              onChange={setPeriod}
+              options={[
+                { value: "7d", label: "7 дней" },
+                { value: "30d", label: "30 дней" },
+                { value: "90d", label: "90 дней" },
+                { value: "all", label: "Все" },
+              ]}
+            />
             <label className="toggle-row">
               <input type="checkbox" checked={linkedOnly} onChange={(event) => setLinkedOnly(event.target.checked)} />
               Только связанные со складом
