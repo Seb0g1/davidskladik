@@ -27,8 +27,13 @@ async function getOzonStockMap(offerIds, account = null, options = {}) {
       if (!offerId) continue;
       const stocks = Array.isArray(item.stocks) ? item.stocks : [];
       const warehouses = stocks.map(normalizeOzonStockWarehouse).filter(Boolean);
-      const present = warehouses.reduce((sum, stock) => sum + Number(stock.present || 0), 0);
-      const reserved = warehouses.reduce((sum, stock) => sum + Number(stock.reserved || 0), 0);
+      // Sum present/reserved from the RAW stocks array, not from `warehouses`: the
+      // /v4/product/info/stocks response keys stock by `type` (fbs/rfbs/fbo) with an EMPTY
+      // `warehouse_ids`, so normalizeOzonStockWarehouse drops every entry (it needs a
+      // warehouse id/name) and the warehouse-based sum was always 0 → FBS products were
+      // wrongly reported out_of_stock (e.g. #YV005928# had fbs present=5 but read as 0).
+      const present = stocks.reduce((sum, stock) => sum + Math.max(0, Number(stock.present || 0)), 0);
+      const reserved = stocks.reduce((sum, stock) => sum + Math.max(0, Number(stock.reserved || 0)), 0);
       const total = Number.isFinite(Number(item.stock)) ? Number(item.stock) : Math.max(0, present - reserved);
       setOzonOfferMapValue(map, offerId, { ...item, present, reserved, stock: total, warehouses });
     }

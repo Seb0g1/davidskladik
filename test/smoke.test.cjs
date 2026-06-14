@@ -972,6 +972,16 @@ test("Ozon to Yandex stock sync uses Ozon stock from state and warehouses", () =
   assert.equal(pickOzonProductStockForYandex({ marketplaceState: { visibility: "ARCHIVED", stock: 4 } }), 0);
 });
 
+test("Ozon stock map sums present/reserved from the raw type-keyed stocks, not warehouse-normalized (FBS out_of_stock regression)", () => {
+  // /v4/product/info/stocks keys stock by type (fbs/rfbs/fbo) with empty warehouse_ids, so a
+  // warehouse-based sum drops everything and FBS products (e.g. #YV005928#) read as 0/out_of_stock.
+  const source = readServerSource();
+  assert.match(source, /const present = stocks\.reduce\(\(sum, stock\) => sum \+ Math\.max\(0, Number\(stock\.present \|\| 0\)\), 0\)/);
+  assert.match(source, /const reserved = stocks\.reduce\(\(sum, stock\) => sum \+ Math\.max\(0, Number\(stock\.reserved \|\| 0\)\), 0\)/);
+  // Guard against reverting to the broken warehouse-based present sum.
+  assert.doesNotMatch(source, /const present = warehouses\.reduce/);
+});
+
 test("Yandex stock update payload uses campaign stock format", () => {
   assert.deepEqual(buildYandexStockUpdatePayload([
     { offerId: "SKU-1", stock: 3 },
