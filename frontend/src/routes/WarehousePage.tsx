@@ -650,11 +650,16 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
 
       <div className="pm-link-toolbar">
           <input value={linkFilter} onChange={(event) => setLinkFilter(event.target.value)} placeholder="Фильтр сохраненных поставщиков: поставщик, артикул или название" />
-          <select value={linkKind} onChange={(event) => setLinkKind(event.target.value as "all" | "normal" | "stock_only")}>
-            <option value="all">Все связи</option>
-            <option value="normal">Обычные</option>
-            <option value="stock_only">Складские</option>
-          </select>
+          <SelectField
+            ariaLabel="Тип связи"
+            value={linkKind}
+            onChange={(next) => setLinkKind(next as "all" | "normal" | "stock_only")}
+            options={[
+              { value: "all", label: "Все связи" },
+              { value: "normal", label: "Обычные" },
+              { value: "stock_only", label: "Складские" },
+            ]}
+          />
           <button className="secondary-action" type="button" onClick={() => copyPlainText(savedSupplierList.join("\n"))} disabled={!savedSupplierList.length}>
             <Copy size={16} /> Скопировать поставщиков
           </button>
@@ -756,10 +761,16 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
         <div className="draft-grid manual-link-grid">
           <input value={draft.article} onChange={(event) => setDraft({ ...draft, article: event.target.value })} placeholder="Артикул PriceMaster" disabled={readOnly} />
           <input value={draft.keyword} onChange={(event) => setDraft({ ...draft, keyword: event.target.value })} placeholder="Ключевое слово" disabled={readOnly} />
-          <select value={draft.priceCurrency} onChange={(event) => setDraft({ ...draft, priceCurrency: event.target.value })} disabled={readOnly}>
-            <option value="USD">USD</option>
-            <option value="RUB">RUB</option>
-          </select>
+          <SelectField
+            ariaLabel="Валюта"
+            value={draft.priceCurrency}
+            onChange={(next) => setDraft({ ...draft, priceCurrency: next })}
+            disabled={readOnly}
+            options={[
+              { value: "USD", label: "USD" },
+              { value: "RUB", label: "RUB" },
+            ]}
+          />
         </div>
         <div className="draft-actions">
           <button className="secondary-action" type="button" onClick={() => addDraft(draft)} disabled={readOnly}>

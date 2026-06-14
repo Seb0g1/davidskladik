@@ -13,6 +13,7 @@ export function SelectField({
   title,
   className = "",
   ariaLabel,
+  disabled = false,
 }: {
   value: string;
   options: SelectOption[];
@@ -20,6 +21,7 @@ export function SelectField({
   title?: string;
   className?: string;
   ariaLabel?: string;
+  disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -48,16 +50,18 @@ export function SelectField({
   };
 
   return (
-    <div className={`select-field${open ? " is-open" : ""} ${className}`.trim()} ref={wrapRef}>
+    <div className={`select-field${open ? " is-open" : ""}${disabled ? " is-disabled" : ""} ${className}`.trim()} ref={wrapRef}>
       <button
         type="button"
         className="select-field-trigger"
         title={title}
+        disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={ariaLabel || title}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => { if (!disabled) setOpen((value) => !value); }}
         onKeyDown={(event) => {
+          if (disabled) return;
           if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); setActive((index) => Math.min(options.length - 1, index + 1)); }
           else if (event.key === "ArrowUp") { event.preventDefault(); setOpen(true); setActive((index) => Math.max(0, index - 1)); }
           else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); if (open && options[active]) choose(options[active].value); else setOpen(true); }

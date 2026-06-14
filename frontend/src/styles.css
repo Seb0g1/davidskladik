@@ -6376,6 +6376,7 @@ label.settings-toggle {
 .select-field-option:hover, .select-field-option.is-active { background: rgba(59, 109, 255, 0.25); color: #fff; }
 .select-field-option.is-selected { color: #fff; }
 .select-field-option svg { color: var(--accent); flex: none; }
+.select-field.is-disabled .select-field-trigger { opacity: 0.5; cursor: not-allowed; }
 
 /* ===== Import page ===== */
 .import-table .import-row { display: grid; grid-template-columns: 44px minmax(220px, 1.6fr) minmax(120px, 0.8fr) minmax(110px, 0.8fr) minmax(150px, 1fr); align-items: center; gap: 10px; }
