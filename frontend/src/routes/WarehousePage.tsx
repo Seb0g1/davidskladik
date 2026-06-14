@@ -6,6 +6,7 @@ import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { BrandPicker } from "../components/BrandPicker";
+import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
@@ -1812,31 +1813,53 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           <Search size={18} />
           <input value={filters.q} onChange={(event) => setFilter("q", event.target.value)} placeholder="Поиск: 41059, CC-AASH5001, НФ-00004538" />
         </label>
-        <select value={filters.marketplace} onChange={(event) => setFilter("marketplace", event.target.value)}>
-          <option value="all">Все маркетплейсы</option>
-          <option value="ozon">Ozon</option>
-          <option value="yandex">Yandex</option>
-        </select>
-        <select value={filters.linked} onChange={(event) => setFilter("linked", event.target.value)}>
-          <option value="all">Все привязки</option>
-          <option value="linked">С привязками</option>
-          <option value="unlinked">Без привязок</option>
-          <option value="changed">Цена изменилась</option>
-          <option value="linked_archived">Привязанные в архиве</option>
-        </select>
-        <select value={filters.state} onChange={(event) => setFilter("state", event.target.value)}>
-          <option value="all">Все статусы</option>
-          <option value="archived">Архив</option>
-          <option value="inactive">Неактивные</option>
-          <option value="out_of_stock">Нет остатка</option>
-        </select>
-        <select className="sort-select" value={filters.sort} onChange={(event) => setFilter("sort", event.target.value)} title="Сортировка">
-          <option value="">По умолчанию</option>
-          <option value="recent">Недавнее изменение</option>
-          <option value="alpha">По алфавиту</option>
-          <option value="price_desc">Цена: дороже</option>
-          <option value="price_asc">Цена: дешевле</option>
-        </select>
+        <SelectField
+          ariaLabel="Маркетплейс"
+          value={filters.marketplace}
+          onChange={(next) => setFilter("marketplace", next)}
+          options={[
+            { value: "all", label: "Все маркетплейсы" },
+            { value: "ozon", label: "Ozon" },
+            { value: "yandex", label: "Yandex" },
+          ]}
+        />
+        <SelectField
+          ariaLabel="Привязки"
+          value={filters.linked}
+          onChange={(next) => setFilter("linked", next)}
+          options={[
+            { value: "all", label: "Все привязки" },
+            { value: "linked", label: "С привязками" },
+            { value: "unlinked", label: "Без привязок" },
+            { value: "changed", label: "Цена изменилась" },
+            { value: "linked_archived", label: "Привязанные в архиве" },
+          ]}
+        />
+        <SelectField
+          ariaLabel="Статус"
+          value={filters.state}
+          onChange={(next) => setFilter("state", next)}
+          options={[
+            { value: "all", label: "Все статусы" },
+            { value: "archived", label: "Архив" },
+            { value: "inactive", label: "Неактивные" },
+            { value: "out_of_stock", label: "Нет остатка" },
+          ]}
+        />
+        <SelectField
+          className="sort-select"
+          title="Сортировка"
+          ariaLabel="Сортировка"
+          value={filters.sort}
+          onChange={(next) => setFilter("sort", next)}
+          options={[
+            { value: "", label: "По умолчанию" },
+            { value: "recent", label: "Недавнее изменение" },
+            { value: "alpha", label: "По алфавиту" },
+            { value: "price_desc", label: "Цена: дороже" },
+            { value: "price_asc", label: "Цена: дешевле" },
+          ]}
+        />
         <BrandPicker
           value={filters.brand}
           options={brandOptions}
