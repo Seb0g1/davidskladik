@@ -114,11 +114,14 @@ function scheduleStockSweep(delayMs = stockSweepIntervalMs) {
   const normalizedDelay = Math.max(15_000, Number(delayMs) || stockSweepIntervalMs);
   stockSweepNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   stockSweepTimer = setTimeout(async () => {
+    let result = null;
     try {
-      await runStockSweep({ source: "schedule" });
+      result = await runStockSweep({ source: "schedule" });
     } catch (error) {
       logger.warn("stock sweep tick failed", { detail: error?.message || String(error) });
+      result = { status: "error", error: error?.message || String(error) };
     } finally {
+      await recordSweepHeartbeat("stock_sweep", { status: result?.status || "unknown", intervalMs: stockSweepIntervalMs, detail: result || {} }).catch(() => {});
       scheduleStockSweep(stockSweepIntervalMs);
     }
   }, normalizedDelay);

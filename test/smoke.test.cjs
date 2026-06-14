@@ -3237,6 +3237,22 @@ test("pickWarehouseSupplier tie-break by rowId is stable regardless of input ord
   assert.equal(pickedForward.rowId, "100");
 });
 
+test("sweepHeartbeatStaleness flags a sweep that missed >2.5 intervals, not a fresh one (PLAN-HARDENING.md 4)", () => {
+  const { sweepHeartbeatStaleness } = require("../server.js");
+  const now = Date.parse("2026-06-14T12:00:00.000Z");
+  const intervalMs = 180_000; // stock sweep cadence
+  // Fresh: ran 1 interval ago -> healthy.
+  const fresh = sweepHeartbeatStaleness({ intervalMs, lastRunAt: new Date(now - intervalMs).toISOString() }, { now });
+  assert.equal(fresh.stale, false);
+  // Stalled: ran 3 intervals ago (> 2.5x) -> stale.
+  const stalled = sweepHeartbeatStaleness({ intervalMs, lastRunAt: new Date(now - intervalMs * 3).toISOString() }, { now });
+  assert.equal(stalled.stale, true);
+  // Never ran (no heartbeat row yet) -> stale with null age.
+  const never = sweepHeartbeatStaleness({ intervalMs, lastRunAt: null }, { now });
+  assert.equal(never.stale, true);
+  assert.equal(never.ageMs, null);
+});
+
 test("pickWarehouseStockOnlySupplier tie-break by rowId is stable regardless of input order", () => {
   // Same docDate and partnerName for both candidates: only rowId can break the tie, so the
   // displayed selectedSupplier (and any derived stock-only manual price) must not flip
@@ -3512,7 +3528,7 @@ test("runtime config keys: ecosystem.config.cjs is the source of truth for effec
   const byApp = ecosystemEnvByApp();
   assert.ok(byApp["davidsklad-api"]);
   assert.ok(byApp["davidsklad-worker"]);
-  assert.equal(byApp["davidsklad-worker"].BULLMQ_WORKER_CONCURRENCY, "1");
+  assert.equal(byApp["davidsklad-worker"].BULLMQ_WORKER_CONCURRENCY, "3");
 
   // Snapshot reflects whatever is in process.env right now (the value actually in
   // effect for this process), falling back to null when a key isn't set at all.

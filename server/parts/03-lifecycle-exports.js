@@ -1,6 +1,9 @@
 module.exports = {
   app,
   startServer,
+  recordSweepHeartbeat,
+  readSweepHeartbeats,
+  sweepHeartbeatStaleness,
   shutdownForTests,
   collectHealthDetails,
   resolveMarkupCoefficient,

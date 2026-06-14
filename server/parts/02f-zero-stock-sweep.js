@@ -111,11 +111,14 @@ function scheduleZeroStockSweep(delayMs = zeroStockSweepIntervalMs) {
   const normalizedDelay = Math.max(15_000, Number(delayMs) || zeroStockSweepIntervalMs);
   zeroStockSweepNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   zeroStockSweepTimer = setTimeout(async () => {
+    let result = null;
     try {
-      await runZeroStockSweep({ source: "schedule" });
+      result = await runZeroStockSweep({ source: "schedule" });
     } catch (error) {
       logger.warn("zero stock sweep tick failed", { detail: error?.message || String(error) });
+      result = { status: "error", error: error?.message || String(error) };
     } finally {
+      await recordSweepHeartbeat("zero_stock_sweep", { status: result?.status || "unknown", intervalMs: zeroStockSweepIntervalMs, detail: result || {} }).catch(() => {});
       scheduleZeroStockSweep(zeroStockSweepIntervalMs);
     }
   }, normalizedDelay);

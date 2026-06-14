@@ -97,11 +97,14 @@ function schedulePriceSweep(delayMs = priceSweepIntervalMs) {
   const normalizedDelay = Math.max(10_000, Number(delayMs) || priceSweepIntervalMs);
   priceSweepNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   priceSweepTimer = setTimeout(async () => {
+    let result = null;
     try {
-      await runChangedPriceSweep({ source: "schedule" });
+      result = await runChangedPriceSweep({ source: "schedule" });
     } catch (error) {
       logger.warn("price sweep tick failed", { detail: error?.message || String(error) });
+      result = { status: "error", error: error?.message || String(error) };
     } finally {
+      await recordSweepHeartbeat("price_sweep", { status: result?.status || "unknown", intervalMs: priceSweepIntervalMs, detail: result || {} }).catch(() => {});
       schedulePriceSweep(priceSweepIntervalMs);
     }
   }, normalizedDelay);

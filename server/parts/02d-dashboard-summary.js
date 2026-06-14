@@ -38,7 +38,7 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
     const prisma = getPrisma();
     const usePg = Boolean(prisma) && shouldUsePostgresStorage();
 
-    const [todayResult, weekResult, weekExpensesResult, priceQueueCount, archivedLinkedYandex, ozonQueue, unreadByTypeRows, stalePriceLinkedCount, oldestPriceJobAgeMs] = await Promise.all([
+    const [todayResult, weekResult, weekExpensesResult, priceQueueCount, archivedLinkedYandex, ozonQueue, unreadByTypeRows, stalePriceLinkedCount, oldestPriceJobAgeMs, linkedSoldBelowTarget, sweepHeartbeats] = await Promise.all([
       listFinanceOrders({ period: "today", limit: 2000, linkedOnly: true }),
       listFinanceOrders({ period: "7d", limit: 2000, linkedOnly: true }),
       listFinanceExpenses({ period: "7d", limit: 2000 }),
@@ -68,6 +68,17 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
           `).then((rows) => Number(rows?.[0]?.n || 0)).catch(() => 0)
         : Promise.resolve(0),
       oldestPendingPriceJobAgeMs().catch(() => 0),
+      usePg
+        ? prisma.$queryRawUnsafe(`
+            SELECT COUNT(*)::int AS n
+            FROM warehouse_products p
+            WHERE p.archived = false
+              AND COALESCE(p.target_stock, 0) > 0
+              AND COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) < p.target_stock
+              AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
+          `).then((rows) => Number(rows?.[0]?.n || 0)).catch(() => 0)
+        : Promise.resolve(0),
+      readSweepHeartbeats().catch(() => []),
     ]);
 
     const today = financeSummaryFromRows(todayResult.orders, []);
@@ -108,6 +119,14 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
         oldestPriceJobAgeMs: Number(oldestPriceJobAgeMs || 0),
         oldestPriceJobAlertThresholdMs: priceQueueOldestJobAlertMs,
         oldestPriceJobAlert: Number(oldestPriceJobAgeMs || 0) > priceQueueOldestJobAlertMs,
+      },
+      stockHealth: {
+        linkedSoldBelowTarget: Number(linkedSoldBelowTarget || 0),
+      },
+      sweepHealth: {
+        sweeps: Array.isArray(sweepHeartbeats) ? sweepHeartbeats : [],
+        staleSweeps: (Array.isArray(sweepHeartbeats) ? sweepHeartbeats : []).filter((s) => s.stale).map((s) => s.name),
+        alert: (Array.isArray(sweepHeartbeats) ? sweepHeartbeats : []).some((s) => s.stale),
       },
     });
   } catch (error) {
