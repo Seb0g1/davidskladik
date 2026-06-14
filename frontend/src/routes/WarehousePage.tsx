@@ -7,6 +7,7 @@ import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSc
 import { PageHeader } from "../components/PageHeader";
 import { BrandPicker } from "../components/BrandPicker";
 import { SelectField } from "../components/SelectField";
+import { CatalogSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
@@ -1932,7 +1933,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
                 );
               })}
             </div>
-            {pageQuery.isLoading && <div className="list-loading"><Loader2 className="spin" /> Загружаю каталог...</div>}
+            {pageQuery.isLoading && <CatalogSkeleton rows={8} />}
             {!pageQuery.isLoading && !groups.length && <div className="list-loading">Ничего не найдено.</div>}
           </div>
           <div className="pager">

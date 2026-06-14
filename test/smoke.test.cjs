@@ -287,6 +287,9 @@ test("modern UI uses role-gating, logo branding, and group-level PM counts", asy
   assert.match(warehouseSource, /BrandPicker/);
   // Warehouse toolbar filters use the custom SelectField, not native <select> (PLAN-HARDENING 5.1).
   assert.match(warehouseSource, /import \{ SelectField \} from "\.\.\/components\/SelectField"/);
+  // Catalog initial load shows a skeleton, not a bare spinner + "Загружаю…" (PLAN-HARDENING 5.1).
+  assert.match(warehouseSource, /pageQuery\.isLoading && <CatalogSkeleton/);
+  assert.match(stylesSource, /\.catalog-skeleton/);
   assert.doesNotMatch(warehouseSource.split("</PageHeader>").pop() || warehouseSource, /<select value=\{filters\./);
   assert.match(warehouseSource, /\/ai-assistant/);
   assert.match(warehouseSource, /studioPhotoPresets/);
