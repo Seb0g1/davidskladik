@@ -138,6 +138,8 @@ module.exports = {
   warehouseLinkHasMatchTarget,
   pickOzonCabinetListedPrice,
   getOzonPriceMap,
+  getOzonStockMap,
+  refreshMarketplaceStateForProducts,
   normalizeOzonPriceDetails,
   getYandexPriceMap,
   shouldSkipWarehousePriceSend,
