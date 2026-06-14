@@ -145,6 +145,10 @@ app.use((error, request, response, _next) => {
     matches: error.matches || undefined,
     err: error,
   });
+  // Audit only genuine server-side failures, not 4xx client/validation errors (would be noise).
+  if (!error.statusCode || error.statusCode >= 500) {
+    recordErrorEvent({ source: `http ${request.method} ${request.path}`, message: error.message, code: error.code || "" });
+  }
   const uploadError = error instanceof multer.MulterError;
   response.status(uploadError ? 400 : error.statusCode || 500).json({
     error: requestErrorTitle(error, request),
@@ -236,6 +240,13 @@ function startBackgroundSchedulers() {
       intervalSeconds: Math.round(healthAlertIntervalMs / 1000),
       cooldownMinutes: Math.round(healthAlertCooldownMs / 60000),
       telegram: healthAlertTelegramConfigured(),
+    });
+  }
+  if (errorAuditEnabled) {
+    scheduleErrorAuditDigest(10 * 60_000);
+    logger.info("error audit digest enabled", {
+      everyHours: Math.round(errorAuditDigestIntervalMs / 3_600_000),
+      retentionDays: errorAuditRetentionDays,
     });
   }
   if (yandexFastUnarchiveEnabled) {

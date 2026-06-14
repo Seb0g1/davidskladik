@@ -221,6 +221,7 @@ const partFiles = [
   "02f-zero-stock-sweep.js",
   "02f-sweep-heartbeat.js",
   "02f-health-alert-monitor.js",
+  "02f-error-audit.js",
   "02f-yandex-fast-unarchive.js",
   "02f-notifications-core.js",
   "02f-notifications-pollers.js",

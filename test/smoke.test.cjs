@@ -3287,6 +3287,21 @@ test("productConflict ignores background updatedAt churn but flags a newer user 
   assert.equal(productConflict(sameUser, { expectedUpdatedAt: loadedAt }), null);
 });
 
+test("classifyErrorMessage collapses variable parts so the same error shape clusters (PLAN-HARDENING.md 4)", () => {
+  const { classifyErrorMessage } = require("../server.js");
+  // Same shape, different ids/numbers/quotes -> one class.
+  const a = classifyErrorMessage('warehouse product 6b122ef19e95c74875e2eab4 not found for offer "0003803"');
+  const b = classifyErrorMessage('warehouse product 15b59c4e8950351640878f9b not found for offer "НФ-99"');
+  assert.equal(a, b);
+  assert.ok(a.includes("<hex>") && a.includes("<str>"), `expected normalized tokens, got: ${a}`);
+  // UUIDs and urls collapse too.
+  assert.equal(
+    classifyErrorMessage("queue e5d27772-5839-4725-8b4d-365c7b44d87f failed at https://api.x/y"),
+    classifyErrorMessage("queue 11111111-2222-3333-4444-555555555555 failed at https://api.z/w"),
+  );
+  assert.equal(classifyErrorMessage(""), "unknown");
+});
+
 test("evaluateHealthAlerts only fires for breached thresholds (PLAN-HARDENING.md 4)", () => {
   const { evaluateHealthAlerts } = require("../server.js");
   const thresholds = { stalePriceLinked: 50, staleHours: 1, oldestPriceJobMs: 600000, linkedSoldBelowTarget: 1000 };

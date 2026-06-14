@@ -334,6 +334,9 @@ function rememberStateWarning(source, error, extra = {}) {
   };
   recentStateWarnings.push(entry);
   while (recentStateWarnings.length > recentStateWarningsMax) recentStateWarnings.shift();
+  if (typeof recordErrorEvent === "function") {
+    recordErrorEvent({ source: entry.source, message: entry.detail, code: extra.code || "" });
+  }
   return entry;
 }
 
