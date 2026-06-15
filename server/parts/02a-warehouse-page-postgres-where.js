@@ -14,7 +14,9 @@ function isDuplicateMarkerName(name) {
 // Prisma where fragment excluding duplicate-marker products (null names are kept).
 function duplicateNameExclusionWhere() {
   if (!duplicateCatalogExcludeEnabled) return {};
-  return { OR: [{ name: null }, { name: { not: { contains: DUPLICATE_MARKER_NAME, mode: "insensitive" } } }] };
+  // Top-level NOT (the field-level `name: { not: { contains } }` form is invalid Prisma —
+  // "Argument `name` is missing"). The `name: null` branch keeps products without a name.
+  return { OR: [{ name: null }, { NOT: { name: { contains: DUPLICATE_MARKER_NAME, mode: "insensitive" } } }] };
 }
 
 // Raw-SQL fragment for the same exclusion, for the sweeps that query warehouse_products directly.
