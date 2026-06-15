@@ -71,6 +71,14 @@ function evaluateHealthAlerts(metrics = {}, thresholds = {}) {
   if (soldBelow > Number(thresholds.linkedSoldBelowTarget || 0)) {
     alerts.push({ key: "sold_below_target", message: `⚠️ Остатки: ${soldBelow} привязанных SKU ниже целевого остатка (порог ${thresholds.linkedSoldBelowTarget}). Возможно, дозаказ не успевает.` });
   }
+  const stateMismatches = Number(metrics.marketplaceStateMismatches || 0);
+  if (stateMismatches > Number(thresholds.marketplaceStateMismatch || 0)) {
+    alerts.push({ key: "marketplace_state_mismatch", message: `⚠️ Расхождения с МП: за последний цикл сверки у ${stateMismatches} товаров наш статус не совпал с реальным на Ozon/Yandex (порог ${thresholds.marketplaceStateMismatch}).` });
+  }
+  const errorSpikes = Array.isArray(metrics.errorSpikes) ? metrics.errorSpikes : [];
+  for (const spike of errorSpikes) {
+    alerts.push({ key: `error_spike:${spike.class}`, message: `⚠️ Всплеск ошибок: «${spike.class}» — ${spike.count}× за последние ${spike.windowMinutes} мин (порог ${thresholds.errorSpike}).` });
+  }
   return alerts;
 }
 
@@ -80,7 +88,7 @@ async function runHealthAlertCheck({ source = "schedule" } = {}) {
   if (!prisma || !shouldUsePostgresStorage()) return { status: "postgres_disabled" };
   healthAlertRunning = true;
   try {
-    const [stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, sweeps] = await Promise.all([
+    const [stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, sweeps, reconcilerState, errorSpikes] = await Promise.all([
       prisma.$queryRawUnsafe(`
         SELECT COUNT(*)::int AS n FROM warehouse_products p
         WHERE p.archived = false AND p.target_price IS NOT NULL AND p.target_price > 0
@@ -96,14 +104,19 @@ async function runHealthAlertCheck({ source = "schedule" } = {}) {
           AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
       `).then((rows) => Number(rows?.[0]?.n || 0)).catch(() => 0),
       readSweepHeartbeats().catch(() => []),
+      readLinkedReconcilerState().catch(() => null),
+      readErrorSpikes().catch(() => []),
     ]);
     const staleSweeps = (sweeps || []).filter((s) => s.stale).map((s) => s.name);
-    const metrics = { stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, staleSweeps };
+    const marketplaceStateMismatches = Number(reconcilerState?.lastCycleStateMismatches || 0);
+    const metrics = { stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, staleSweeps, marketplaceStateMismatches, errorSpikes };
     const thresholds = {
       stalePriceLinked: stalePriceLinkedAlertThreshold,
       staleHours: stalePriceLinkedHours,
       oldestPriceJobMs: priceQueueOldestJobAlertMs,
       linkedSoldBelowTarget: linkedSoldBelowTargetAlertThreshold,
+      marketplaceStateMismatch: marketplaceStateMismatchAlertThreshold,
+      errorSpike: errorSpikeAlertThreshold,
     };
     const alerts = evaluateHealthAlerts(metrics, thresholds);
     logger.info("health_alert_check", { source, ...metrics, breached: alerts.map((a) => a.key) });

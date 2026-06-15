@@ -8,6 +8,9 @@ function defaultLinkedReconcilerState() {
     lastBatchAt: null,
     lastError: null,
     updatedAt: null,
+    cycleStateMismatches: 0,
+    lastCycleStateMismatches: 0,
+    lastCycleMismatchAt: null,
   };
 }
 

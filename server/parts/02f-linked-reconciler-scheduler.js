@@ -155,6 +155,27 @@ async function loadNextLinkedReconcilerBatch(state = {}) {
   return { products, nextCursorId, cycleComplete, postgres: true };
 }
 
+// Compare the marketplaceState.code our DB had for each product (before this batch's live
+// refresh) against the code the live refresh just produced. A mismatch means our stored
+// state had drifted from the marketplace truth — this is the "Детектор расхождений с МП"
+// signal surfaced on the dashboard (PLAN-HARDENING.md "Высокий": marketplace-data-correctness).
+function countMarketplaceStateMismatches(beforeProducts = [], afterProducts = []) {
+  const beforeCodeById = new Map(
+    (Array.isArray(beforeProducts) ? beforeProducts : [])
+      .filter((product) => product?.id)
+      .map((product) => [String(product.id), product.marketplaceState?.code || null]),
+  );
+  const productIds = [];
+  for (const product of (Array.isArray(afterProducts) ? afterProducts : [])) {
+    if (!product?.id) continue;
+    const id = String(product.id);
+    if (!beforeCodeById.has(id)) continue;
+    const afterCode = product.marketplaceState?.code || null;
+    if (beforeCodeById.get(id) !== afterCode) productIds.push(id);
+  }
+  return { count: productIds.length, productIds };
+}
+
 async function processLinkedReconcilerBatch(seedProducts = []) {
   const ids = Array.from(new Set(seedProducts.map((product) => cleanText(product.id)).filter(Boolean)));
   if (!ids.length) return { products: 0, recovered: 0, unarchived: 0, zeroStockSent: 0, stockSent: 0, priceQueued: 0 };
@@ -171,6 +192,7 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
   // CRITICAL: capture the return value — it contains fresh archived/stock data even when
   // the internal DB-persist step fails (persist errors are caught-and-logged inside).
   const refreshed = await refreshMarketplaceStateForProducts(products);
+  const stateMismatches = countMarketplaceStateMismatches(products, refreshed);
   const liveStateById = new Map(
     (Array.isArray(refreshed) ? refreshed : [])
       .filter((p) => p?.id)
@@ -277,6 +299,7 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
     archivedLinked: archivedLinkedIds.length,
     priceQueued,
     priceQueuedBatches,
+    stateMismatches: stateMismatches.count,
   };
 }
 
@@ -293,7 +316,7 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
   linkedReconcilerRunning = true;
   const startedAt = new Date().toISOString();
   const maxBatches = Math.max(1, Math.ceil(linkedReconcilerMaxProductsPerTick / linkedReconcilerBatchSize));
-  const totals = { batches: 0, products: 0, recovered: 0, unarchived: 0, zeroStockSent: 0, stockSent: 0, priceQueued: 0, priceQueuedBatches: 0, cyclesCompleted: 0 };
+  const totals = { batches: 0, products: 0, recovered: 0, unarchived: 0, zeroStockSent: 0, stockSent: 0, priceQueued: 0, priceQueuedBatches: 0, cyclesCompleted: 0, stateMismatches: 0 };
   let lastError = null;
   try {
     for (let batch = 0; batch < maxBatches; batch += 1) {
@@ -302,9 +325,10 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
       const { products, nextCursorId, cycleComplete, postgres } = await loadNextLinkedReconcilerBatch(state);
       if (!postgres) break;
 
+      let result = null;
       if (products.length) {
         try {
-          const result = await processLinkedReconcilerBatch(products);
+          result = await processLinkedReconcilerBatch(products);
           totals.batches += 1;
           totals.products += result.products;
           totals.recovered += result.recovered;
@@ -313,11 +337,14 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
           totals.stockSent += result.stockSent;
           totals.priceQueued += result.priceQueued || 0;
           totals.priceQueuedBatches += result.priceQueuedBatches || 0;
+          totals.stateMismatches += result.stateMismatches || 0;
         } catch (error) {
           lastError = error?.message || String(error);
           logger.warn("linked reconciler batch failed", { trigger, detail: lastError });
         }
       }
+
+      const cycleStateMismatches = Number(state.cycleStateMismatches || 0) + (result?.stateMismatches || 0);
 
       if (cycleComplete) {
         await writeLinkedReconcilerState({
@@ -328,6 +355,9 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
           processedTotal: Number(state.processedTotal || 0) + products.length,
           lastBatchAt: new Date().toISOString(),
           lastError,
+          cycleStateMismatches: 0,
+          lastCycleStateMismatches: cycleStateMismatches,
+          lastCycleMismatchAt: new Date().toISOString(),
         });
         totals.cyclesCompleted += 1;
         break; // finished a full pass; next tick starts a new cycle
@@ -341,6 +371,7 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
         processedTotal: Number(state.processedTotal || 0) + products.length,
         lastBatchAt: new Date().toISOString(),
         lastError,
+        cycleStateMismatches,
       });
     }
 

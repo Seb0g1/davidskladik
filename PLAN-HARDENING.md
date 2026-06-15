@@ -3,9 +3,9 @@
 Цель: не «чинить баги по одному», а закрыть **классы** ошибок так, чтобы они физически
 не могли повторяться — за счёт инвариантов, тестов, мониторинга и единого дизайна.
 
-## Статус реализации (обновлено 2026-06-15)
+## Статус реализации (обновлено 2026-06-15, сессия 2)
 
-**Сделано и задеплоено (256 тестов зелёные):**
+**Сделано и задеплоено (261 тест зелёный):**
 - ЭТАП 1.1 — модуль `lib/computed-product-fields.js` + линт `check-computed-field-sql`; мёртвый stock-sweep починен (резолв supplier через build).
 - ЭТАП 1.2 — детерминированный тай-брейк по `rowId` + синк всех полей цены при записи + тесты на осцилляцию `nextPrice`.
 - ЭТАП 1.3 — `lib/queue-priorities.js` (enum) + линт `check-queue-priority-literals`; метрика «возраст старейшей price-задачи» в дашборде.
@@ -13,6 +13,8 @@
 - ЭТАП 1.5 — оптимистичная блокировка `userUpdatedAt`: фоновые свипы больше не дают ложный 409; конфликт только при реальной правке другого пользователя.
 - ЭТАП 1.6 — **самовосстановление приколотых PriceMaster-привязок** (`selected_row`) при перезаливе поставщика — резолв по article+partner во всех 3 путях матчинга.
 - ЭТАП 1.7 — **корректное чтение остатков Ozon FBS**: `/v4 stocks` тип-ключевые (fbs/rfbs/fbo, пустой `warehouse_ids`) — сумма из сырого `stocks[]`, а не из выброшенных «складов». Чинило ложное «нет в наличии» у ~7.5к товаров; регресс-тест. (см. память `ozon-fbs-stock-type-keyed`)
+- ЭТАП 1.7b — **`pickOzonState`: `visibility === "EMPTY_STOCK"` больше не форсит `out_of_stock`** при наличии собственного остатка (`stock<=0 && !hasStocks` — единственное условие); + аудит остальных чтений Ozon/Yandex стока на тот же класс (без новых находок). 257 тестов зелёные.
+- ЭТАП 1.7c — **Детектор расхождений с МП**: rolling-реконсайлер считает `countMarketplaceStateMismatches` (наш `marketplaceState.code` до/после живого рефреша Ozon/Yandex), копит в `linked-reconciler-state`, отдаёт в `/api/dashboard/summary` как `marketplaceHealth` и алертит в Telegram при превышении `MARKETPLACE_STATE_MISMATCH_ALERT_THRESHOLD`.
 - ЭТАП 1.x — быстрый zero-stock sweep (анти-перепродажа); обогащённые уведомления о заказах; ускорение/авто-рефреш сохранения привязки.
 - ЭТАП 2.1 — `health-watchdog` + liveness-heartbeat + линт `check-regex-exec-global-flag`; Telegram-алерт на **первом** инциденте (`--immediate`).
 - ЭТАП 2.2 — `lib/runtime-config-keys.js`, лог эффективного конфига на старте, `check-env-ecosystem-divergence`; прод-тюнинг в git.
@@ -22,24 +24,25 @@
 - ЭТАП 4 — дашборд `priceHealth`/`stockHealth`/`sweepHealth`; cross-process heartbeat свипов; алерт-монитор Telegram; **структурный лог-аудит** (`classifyErrorMessage` + `error_events` + `/api/dashboard/error-report` + еженедельный дайджест).
 - ЭТАП 5.1 — `BrandPicker` + `SelectField` на ВСЕХ value-bound фильтрах (11 страниц + SettingsPage); скелетоны загрузки (`CatalogSkeleton`/`ListSkeleton`) на 6 страницах.
 - ЭТАП 5.3 — глобальный keyboard-фокус (`:focus-visible`, WCAG 2.4.7).
-- ЭТАП 5.4 — инфра Playwright-снапшотов (`playwright.config.ts`, `e2e/`, эталоны с суффиксом ОС) + снапшоты тулбара/дропдауна каталога.
+- ЭТАП 5.4 — инфра Playwright-снапшотов (`playwright.config.ts`, `e2e/`, эталоны с суффиксом ОС) + снапшоты тулбара/дропдауна каталога + дашборда (мок API).
+- ЭТАП 5.5 (UI-фиксы по фидбеку) — (1) дропдаун цветовой темы расширен до 320px, все 7 тем влезают без обрезки; (2) уведомления: длинный текст заказа переносится (`overflow-wrap`), не клипается за границы, ширина дропдауна/тоста responsive; (3) **«Здоровье системы → Воркер» больше не ложно «обработчик недоступен»** — `consumerReady` теперь считается через Redis `marketplaceQueue.getWorkers()` (видит воркер-процесс из api-процесса), а не через process-local `marketplaceWorker` (всегда null в api).
 - ЭТАП 6 — `DEPLOY.md` (чеклист деплоя/отката).
 
 **Осталось — чтобы было «всё стабильно» (по приоритету):**
 
 _Высокий — корректность данных МП (класс «доверяем форме ответа API»):_
-- [ ] **Аудит остальных чтений Ozon/Yandex** на тот же класс, что и FBS-сток: где код суммирует/фильтрует по полю, которое API может отдать иначе (пустые массивы, тип-ключи, новые поля). Кандидаты: `getOzonProductInfoMap` (visibility/state), Yandex stock/price парсинг.
-- [ ] **`visibility === "EMPTY_STOCK"` в `pickOzonState`** — не помечать `out_of_stock`, если по факту есть остаток (FBS-товары Ozon отдаёт EMPTY_STOCK при наличии на складе продавца). Сейчас спасает то, что сток читается верно, но логика хрупкая — сделать `out_of_stock` только при `stock<=0 && !hasStocks`.
-- [ ] **Детектор расхождений с МП** в дашборд: товары, где наш `marketplaceState.code` ≠ фактическому статусу на Ozon/Yandex (периодическая сверка выборки) + алерт при всплеске.
-- [ ] **Контрактные тесты ответов МП** на фикстурах: сохранить реальные сэмплы `/v4/product/info/stocks`, `/v5/.../prices`, Yandex — и гнать парсеры против них (ловит смену формы API).
+- [x] **Аудит остальных чтений Ozon/Yandex** на тот же класс, что и FBS-сток: проверены `getOzonProductInfoMap`/`pickOzonState`, `marketplaceHasPositiveStock`, `pickOzonProductStockForYandex`, `pickYandexState`. Все читают уже исправленные агрегаты `stock`/`present`/`warehouses` или защищены multi-fallback путями — отдельных type-keyed/empty-array расхождений не найдено за пределами уже исправленного FBS-стока.
+- [x] **`visibility === "EMPTY_STOCK"` в `pickOzonState`** — больше не помечает `out_of_stock` сам по себе (Ozon шлёт EMPTY_STOCK для FBS/rfbs даже когда у продавца есть остаток на своём складе). Теперь `out_of_stock` только при `stock<=0 && !hasStocks`; regression-тест на оба случая.
+- [x] **Детектор расхождений с МП** в дашборд: каждый прогон rolling-реконсайлера (`02f-linked-reconciler-scheduler.js`) теперь считает `countMarketplaceStateMismatches` — товары, у которых `marketplaceState.code` ДО живого рефреша ≠ коду ПОСЛЕ (наша БД разошлась с реальным статусом на Ozon/Yandex). Счётчик копится в `linked-reconciler-state` (`cycleStateMismatches`/`lastCycleStateMismatches`/`lastCycleMismatchAt`), отдаётся в `/api/dashboard/summary` как `marketplaceHealth` (с `alertThreshold`/`alert`), и алертится в Telegram через `evaluateHealthAlerts`/`02f-health-alert-monitor.js` (новый порог `MARKETPLACE_STATE_MISMATCH_ALERT_THRESHOLD`, по умолчанию 20). 261 тест зелёный.
+- [x] **Контрактные тесты ответов МП** на фикстурах: `test/fixtures/ozon-product-info-stocks.v4.json` (type-keyed fbs/fbo/rfbs + empty stocks), `ozon-product-info-prices.v5.json`, `yandex-offer-mappings.json` — гоняем `getOzonStockMap`/`getOzonPriceMap`/`normalizeYandexWarehouseProduct`/`pickYandexState`/`pickOzonState` против них (3 новых теста, 260 всего).
 
 _Средний — наблюдаемость и UX:_
-- [ ] ЭТАП 5.2 — оптимистичный отклик + тихий рефетч на остальных мутациях (delete/sync) — закрепить паттерн `refreshAfterMutation` везде.
-- [ ] ЭТАП 4 — алерты лог-дайджеста по росту конкретного класса ошибок (не только еженедельно, но и при всплеске).
-- [ ] ЭТАП 5.4 — расширить визуальные снапшоты на админ-страницы через мок API (`page.route`).
+- [x] ЭТАП 5.2 — паттерн `refreshAfterMutation` вынесен в общий `refreshWarehouseAfterMutation` (`frontend/src/lib/common.ts`) и закреплён на оставшихся мутациях `WarehousePage`: `groupMutation`/`ungroupMutation` теперь делают тот же оптимистичный патч + тихий рефетч каталога и group-detail, что и delete/sync-мутации; `DetailPanel.refreshDetail` (используется после repair/recovery/sync quick actions и merge) расширен с узкого `group-detail` на весь префикс `["warehouse"]`, чтобы каталог тоже подхватывал серверные изменения без явного релоада. `npx tsc -p frontend/tsconfig.json --noEmit` чисто.
+- [x] ЭТАП 4 — **алерт по всплеску конкретного класса ошибок**: `readErrorSpikes` (`02f-error-audit.js`) находит классы `error_events` с count > `ERROR_SPIKE_ALERT_THRESHOLD` (по умолчанию 20) за последние `ERROR_SPIKE_WINDOW_MINUTES` (по умолчанию 15) — проверяется на каждом тике `02f-health-alert-monitor.js` (раз в `HEALTH_ALERT_INTERVAL_SECONDS`, по умолчанию 5 мин), с тем же per-key cooldown в Telegram, что и остальные health-алерты; еженедельный дайджест (`runErrorAuditDigest`) остаётся отдельно.
+- [x] ЭТАП 5.4 — **визуальные снапшоты админ-страниц через мок API**: `e2e/admin-dashboard.spec.ts` снимает `/app/dashboard` (доступен только роли admin, тянет ~7 эндпоинтов) — весь `**/api/**` мокается через `page.route` пустым `{}` (все поля схем дашборда имеют дефолты → детерминированный «все нули» рендер, одинаковый в loading/loaded), `/api/session` отдаёт `role: "admin"`, SSE `/api/notifications/stream` — `route.abort()`. Переход на `/app/dashboard` — клик по сайдбар-ссылке (SPA `pushState`), т.к. dev-сервер Vite отдаёт SPA только под `/app-modern/`. Эталоны `dashboard-metrics-win32.png` и `dashboard-side-summary-win32.png` в `e2e/__screenshots__`.
 
 _Низкий — полировка и процесс:_
-- [ ] ЭТАП 5.3 — аудит контраста WCAG AA, навигация по таблицам с клавиатуры, адаптив на узких экранах.
+- [x] ЭТАП 5.3 — **аудит контраста WCAG AA, навигация по таблицам с клавиатуры, адаптив на узких экранах**: посчитаны контрасты основной палитры (`--text`/`--muted`/`--blue`/`--accent-strong` и т.д. на `--bg`/`--panel`) — все ≥4.5:1 (AA) на тёмной теме, кроме двух найденных и исправленных мест: (1) `.primary-action` (белый текст на `#147be8`, ~4.2:1) → `#0f6ed1`, ~5:1; (2) тема `[data-theme="white"]` — `--accent-strong`/`--blue`/`--accent-rgb` (`#0a84ff`, ~3.65:1 на белых панелях) → `#0a6cd4`/`10,108,212`, ~5.1:1. Навигация с клавиатуры: все «строки таблиц» во всех 13 страницах с `.table-row`/`.job-row` — обычные `<button>`/`<a>`/инпуты в DOM-порядке (нет `onClick` на `<div>/<article>`, кроме backdrop модалки с реальной кнопкой-закрытием и авто-исчезающего toast) — уже доступны через Tab/Enter; видимый `:focus-visible` закреплён ранее. Адаптив: каталог (`/app-modern/`) проверен на 1280/980/768/480/360px — без горизонтального переполнения (`scrollWidth === clientWidth` на всех ширинах), media-запросы для сайдбара/таблиц уже покрывают эти breakpoints. 261 тест зелёный, визуальные снапшоты (4) без регрессий.
 - [ ] ЭТАП 2.4 — еженедельный drill восстановления бэкапа (нужен стейдж).
 - [ ] ЭТАП 6 — **ротация утёкшего root-пароля** (делает пользователь); «Definition of Done» для фич.
 

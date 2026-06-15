@@ -261,8 +261,14 @@ async function marketplaceQueueCounts() {
   if (!bullmqEnabled || !redisUrl) return { enabled: false, mode: "inline", ok: true };
   if (!marketplaceQueue) return { enabled: true, mode: "bullmq", ok: false, error: "queue_not_initialized" };
   try {
-    const counts = await healthTimeout(marketplaceQueue.getJobCounts("waiting", "active", "delayed", "failed", "paused", "completed"));
-    return { enabled: true, mode: "bullmq", ok: true, counts };
+    // getWorkers() lists consumers connected to the queue THROUGH REDIS, so the api process
+    // can see the worker process's consumer — `marketplaceWorker` is process-local and is
+    // always null in the api process (false "обработчик недоступен").
+    const [counts, workers] = await Promise.all([
+      healthTimeout(marketplaceQueue.getJobCounts("waiting", "active", "delayed", "failed", "paused", "completed")),
+      healthTimeout(marketplaceQueue.getWorkers()).catch(() => []),
+    ]);
+    return { enabled: true, mode: "bullmq", ok: true, counts, workers: Array.isArray(workers) ? workers.length : 0 };
   } catch (error) {
     return { enabled: true, mode: "bullmq", ok: false, error: error?.message || String(error) };
   }

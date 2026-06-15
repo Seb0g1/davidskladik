@@ -124,6 +124,12 @@ const {
   canIgnoreStaleLinkSaveConflict,
   warehouseLinkHasMatchTarget,
   pickOzonCabinetListedPrice,
+  pickOzonState,
+  getOzonStockMap,
+  getOzonPriceMap,
+  normalizeOzonPriceDetails,
+  normalizeYandexWarehouseProduct,
+  pickYandexState,
   shouldSkipWarehousePriceSend,
   isDuplicatePriceHistoryEntry,
   buildOzonPricePayload,
@@ -980,6 +986,110 @@ test("Ozon stock map sums present/reserved from the raw type-keyed stocks, not w
   assert.match(source, /const reserved = stocks\.reduce\(\(sum, stock\) => sum \+ Math\.max\(0, Number\(stock\.reserved \|\| 0\)\), 0\)/);
   // Guard against reverting to the broken warehouse-based present sum.
   assert.doesNotMatch(source, /const present = warehouses\.reduce/);
+});
+
+test("Ozon EMPTY_STOCK visibility does not override a positive seller stock reading (out_of_stock regression)", () => {
+  // Ozon flags visibility=EMPTY_STOCK based on its own cross-dock stock, not the seller's
+  // FBS/rfbs stock. If our reading shows present stock, the product must stay active.
+  const positiveStockInfo = { stock: 5, present: 5, reserved: 0, warehouses: [] };
+  const state = pickOzonState({}, { visibility: "EMPTY_STOCK" }, positiveStockInfo);
+  assert.equal(state.code, "active");
+
+  // When our reading also shows no stock and no fbs-stocks flag, EMPTY_STOCK products
+  // (and any other visibility) are still reported out_of_stock.
+  const zeroStockInfo = { stock: 0, present: 0, reserved: 0, warehouses: [] };
+  assert.equal(pickOzonState({}, { visibility: "EMPTY_STOCK" }, zeroStockInfo).code, "out_of_stock");
+  assert.equal(pickOzonState({}, { visibility: "VISIBLE" }, zeroStockInfo).code, "out_of_stock");
+
+  // has_fbs_stocks=true on the product itself is enough to avoid out_of_stock even at stock=0.
+  const flaggedProduct = { has_fbs_stocks: true };
+  assert.equal(pickOzonState(flaggedProduct, { visibility: "EMPTY_STOCK" }, zeroStockInfo).code, "active");
+});
+
+test("Ozon /v4/product/info/stocks fixture: type-keyed FBS/FBO stocks parse into correct sums (contract)", async () => {
+  // Saved sample of the real API shape (stocks keyed by type, empty warehouse_ids for
+  // FBS/rfbs). Guards against the API changing shape in a way our parser misses.
+  const originalFetch = global.fetch;
+  const fixture = JSON.parse(await fs.readFile(path.join(__dirname, "fixtures", "ozon-product-info-stocks.v4.json"), "utf8"));
+  global.fetch = async (url) => {
+    assert.match(String(url), /\/v4\/product\/info\/stocks$/);
+    return new Response(JSON.stringify(fixture), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const account = { id: "ozon-contract-test", clientId: "client", apiKey: "key" };
+    const stockMap = await getOzonStockMap(["YV005928", "FBO-ONLY-1", "ZERO-STOCK-1", "NO-STOCKS-AT-ALL"], account);
+
+    const fbs = stockMap.get("YV005928");
+    assert.equal(fbs.present, 5);
+    assert.equal(fbs.reserved, 1);
+    assert.equal(fbs.stock, 4);
+    assert.equal(fbs.warehouses.length, 0, "type-keyed stocks carry no warehouse id/name");
+    assert.equal(pickOzonState({}, { visibility: "EMPTY_STOCK" }, fbs).code, "active");
+
+    const fbo = stockMap.get("FBO-ONLY-1");
+    assert.equal(fbo.present, 12);
+    assert.equal(fbo.reserved, 2);
+    assert.equal(fbo.stock, 10);
+
+    const zero = stockMap.get("ZERO-STOCK-1");
+    assert.equal(zero.stock, 0);
+    assert.equal(pickOzonState({}, { visibility: "VISIBLE" }, zero).code, "out_of_stock");
+
+    const empty = stockMap.get("NO-STOCKS-AT-ALL");
+    assert.equal(empty.stock, 0);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("Ozon /v5/product/info/prices fixture: price fields normalize to cabinet listed price (contract)", async () => {
+  const originalFetch = global.fetch;
+  const fixture = JSON.parse(await fs.readFile(path.join(__dirname, "fixtures", "ozon-product-info-prices.v5.json"), "utf8"));
+  global.fetch = async (url) => {
+    assert.match(String(url), /\/v5\/product\/info\/prices$/);
+    return new Response(JSON.stringify(fixture), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const account = { id: "ozon-contract-test", clientId: "client", apiKey: "key" };
+    const priceMap = await getOzonPriceMap(["YV005928", "FBO-ONLY-1"], account);
+
+    const details = normalizeOzonPriceDetails(priceMap.get("YV005928"));
+    assert.equal(details.currentPrice, 7086);
+    assert.equal(details.marketingSellerPrice, 6708);
+    assert.equal(details.minPrice, 5000);
+    assert.equal(pickOzonCabinetListedPrice(details), 6708);
+
+    // marketing_seller_price="0" must not win over the real current price.
+    const fboDetails = normalizeOzonPriceDetails(priceMap.get("FBO-ONLY-1"));
+    assert.equal(fboDetails.currentPrice, 1500);
+    assert.equal(pickOzonCabinetListedPrice(fboDetails), 1500);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test("Yandex offer-mappings fixture: availability/campaignStatus parse into marketplaceState (contract)", async () => {
+  const fixture = JSON.parse(await fs.readFile(path.join(__dirname, "fixtures", "yandex-offer-mappings.json"), "utf8"));
+  const mappings = fixture.result.offerMappings;
+  const shop = { id: "yandex-main", name: "Yandex Main", businessId: "171782339" };
+
+  const active = normalizeYandexWarehouseProduct(mappings[0], shop);
+  assert.equal(active.offerId, "SKU-YA-1");
+  assert.equal(active.marketplacePrice, 1990);
+  assert.equal(active.marketplaceState.code, "active");
+
+  const disabledAutomatically = normalizeYandexWarehouseProduct(mappings[1], shop);
+  assert.equal(disabledAutomatically.marketplaceState.code, "inactive");
+
+  const zeroPrice = normalizeYandexWarehouseProduct(mappings[2], shop);
+  assert.equal(zeroPrice.marketplaceState.code, "out_of_stock");
+
+  const archived = normalizeYandexWarehouseProduct(mappings[3], shop);
+  assert.equal(archived.marketplaceState.code, "archived");
+
+  // pickYandexState is exercised directly too, in case a future shape change drops the
+  // offer wrapper that normalizeYandexWarehouseProduct unwraps.
+  assert.equal(pickYandexState(mappings[1], mappings[1].offer).code, "inactive");
 });
 
 test("Yandex stock update payload uses campaign stock format", () => {
@@ -3314,15 +3424,45 @@ test("classifyErrorMessage collapses variable parts so the same error shape clus
 
 test("evaluateHealthAlerts only fires for breached thresholds (PLAN-HARDENING.md 4)", () => {
   const { evaluateHealthAlerts } = require("../server.js");
-  const thresholds = { stalePriceLinked: 50, staleHours: 1, oldestPriceJobMs: 600000, linkedSoldBelowTarget: 1000 };
+  const thresholds = { stalePriceLinked: 50, staleHours: 1, oldestPriceJobMs: 600000, linkedSoldBelowTarget: 1000, marketplaceStateMismatch: 20, errorSpike: 20 };
   // All within limits -> no alerts.
-  assert.equal(evaluateHealthAlerts({ stalePriceLinked: 10, oldestPriceJobAgeMs: 1000, linkedSoldBelowTarget: 100, staleSweeps: [] }, thresholds).length, 0);
+  assert.equal(evaluateHealthAlerts({ stalePriceLinked: 10, oldestPriceJobAgeMs: 1000, linkedSoldBelowTarget: 100, staleSweeps: [], marketplaceStateMismatches: 0, errorSpikes: [] }, thresholds).length, 0);
   // Each breach raises exactly its own alert key.
   const keys = (m) => evaluateHealthAlerts(m, thresholds).map((a) => a.key);
   assert.deepEqual(keys({ stalePriceLinked: 999 }), ["stale_price_linked"]);
   assert.deepEqual(keys({ oldestPriceJobAgeMs: 999999 }), ["price_queue_starved"]);
   assert.deepEqual(keys({ linkedSoldBelowTarget: 5000 }), ["sold_below_target"]);
   assert.ok(keys({ staleSweeps: ["price_sweep"] })[0].startsWith("stale_sweeps:"));
+  assert.deepEqual(keys({ marketplaceStateMismatches: 21 }), ["marketplace_state_mismatch"]);
+  // Error spikes: one alert per breached class, already filtered by readErrorSpikes' HAVING clause
+  // (evaluateHealthAlerts trusts the list, it does not re-check the threshold itself).
+  assert.deepEqual(
+    keys({ errorSpikes: [{ class: "ozon api request failed", count: 25, windowMinutes: 15 }, { class: "yandex 5xx", count: 30, windowMinutes: 15 }] }),
+    ["error_spike:ozon api request failed", "error_spike:yandex 5xx"],
+  );
+});
+
+test("countMarketplaceStateMismatches counts products whose marketplaceState.code changed after a live refresh (Детектор расхождений с МП)", () => {
+  const { countMarketplaceStateMismatches } = require("../server.js");
+  const before = [
+    { id: "p1", marketplaceState: { code: "active" } },
+    { id: "p2", marketplaceState: { code: "out_of_stock" } },
+    { id: "p3", marketplaceState: { code: "active" } },
+    { id: "p4", marketplaceState: { code: "archived" } },
+  ];
+  const after = [
+    { id: "p1", marketplaceState: { code: "active" } }, // unchanged
+    { id: "p2", marketplaceState: { code: "active" } }, // drifted: was out_of_stock, now active
+    { id: "p3", marketplaceState: { code: "archived" } }, // drifted: was active, now archived
+    { id: "p4", marketplaceState: { code: "archived" } }, // unchanged
+    { id: "p5", marketplaceState: { code: "active" } }, // not present "before" -> not counted
+  ];
+  const result = countMarketplaceStateMismatches(before, after);
+  assert.equal(result.count, 2);
+  assert.deepEqual(result.productIds.sort(), ["p2", "p3"]);
+
+  // Empty input is safe.
+  assert.deepEqual(countMarketplaceStateMismatches([], []), { count: 0, productIds: [] });
 });
 
 test("sweepHeartbeatStaleness flags a sweep that missed >2.5 intervals, not a fresh one (PLAN-HARDENING.md 4)", () => {

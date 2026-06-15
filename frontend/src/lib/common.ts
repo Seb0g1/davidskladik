@@ -33,6 +33,17 @@ export function updateCachedProducts(queryClient: QueryClient, payload?: Mutatio
   });
 }
 
+// Shared "optimistic patch + silent refetch" pattern for warehouse mutations
+// (PLAN-HARDENING.md 5.2): apply the mutation response to the cached list immediately so the
+// UI updates without waiting for a refetch, then invalidate both the catalog list and the
+// group-detail panel so they pick up any server-side side effects (links, group membership,
+// recomputed fields) on their next render.
+export function refreshWarehouseAfterMutation(queryClient: QueryClient, payload?: MutationPayload | null) {
+  if (payload) updateCachedProducts(queryClient, payload);
+  void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+  void queryClient.invalidateQueries({ queryKey: ["warehouse", "group-detail"] });
+}
+
 export function errorMessage(error: unknown): string {
   if (!error) return "";
   if (error instanceof ApiError) {

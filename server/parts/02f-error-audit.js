@@ -13,6 +13,11 @@ const errorAuditDigestIntervalMs = Math.max(60 * 60_000, Number(process.env.ERRO
 let errorAuditDigestTimer = null;
 let errorAuditTableReady = false;
 
+// PLAN-HARDENING.md 4: in addition to the weekly digest, flag a *spike* of a single error
+// class within a short recent window — checked every health-alert tick (02f-health-alert-monitor.js).
+const errorSpikeWindowMinutes = Math.max(1, Number(process.env.ERROR_SPIKE_WINDOW_MINUTES || 15) || 15);
+const errorSpikeAlertThreshold = Math.max(1, Number(process.env.ERROR_SPIKE_ALERT_THRESHOLD || 20) || 20);
+
 // Pure: collapse the variable parts of a message so the same error shape clusters into one
 // class. Unit-tested — keep deterministic.
 function classifyErrorMessage(message) {
@@ -100,6 +105,32 @@ async function readErrorReport({ days = 7, limit = 15 } = {}) {
   } catch (error) {
     logger.warn("error report read failed", { detail: error?.message || String(error) });
     return { days, total: 0, classes: [] };
+  }
+}
+
+// Classes whose count in the last `windowMinutes` exceeds `threshold` — a sudden burst of
+// one error class, independent of the weekly total (which a burst might not move much).
+async function readErrorSpikes({ windowMinutes = errorSpikeWindowMinutes, threshold = errorSpikeAlertThreshold, limit = 5 } = {}) {
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) return [];
+  try {
+    if (!(await ensureErrorEventsTable())) return [];
+    const windowMins = Math.max(1, Math.round(Number(windowMinutes) || errorSpikeWindowMinutes));
+    const minCount = Math.max(1, Math.round(Number(threshold) || errorSpikeAlertThreshold));
+    const topLimit = Math.max(1, Math.min(20, Math.round(Number(limit) || 5)));
+    const rows = await prisma.$queryRawUnsafe(`
+      SELECT class, COUNT(*)::int AS count
+      FROM error_events
+      WHERE created_at > now() - interval '${windowMins} minutes'
+      GROUP BY class
+      HAVING COUNT(*) > ${minCount}
+      ORDER BY count DESC
+      LIMIT ${topLimit}
+    `);
+    return (rows || []).map((row) => ({ class: row.class, count: Number(row.count || 0), windowMinutes: windowMins }));
+  } catch (error) {
+    logger.warn("error spike read failed", { detail: error?.message || String(error) });
+    return [];
   }
 }
 

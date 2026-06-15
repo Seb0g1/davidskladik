@@ -12,6 +12,12 @@ const stalePriceLinkedAlertThreshold = Math.max(0, Number(process.env.STALE_PRIC
 // waiting longer than this — a sign that recovery/unarchive jobs are starving price
 // pushes despite the QUEUE_PRIORITY contract (see lib/queue-priorities.js).
 const priceQueueOldestJobAlertMs = Math.max(60_000, Number(process.env.PRICE_QUEUE_OLDEST_JOB_ALERT_MS || 10 * 60_000) || 10 * 60_000);
+
+// PLAN-HARDENING.md "Высокий": Детектор расхождений с МП — the rolling linked reconciler
+// (02f-linked-reconciler-scheduler.js) compares our stored marketplaceState.code against
+// the live Ozon/Yandex state on every product it refreshes. Alert if the last completed
+// reconciler cycle found more drifted products than this.
+const marketplaceStateMismatchAlertThreshold = Math.max(0, Number(process.env.MARKETPLACE_STATE_MISMATCH_ALERT_THRESHOLD || 20) || 20);
 function topSuppliersFromFinanceOrders(orders = [], limit = 5) {
   const byName = new Map();
   for (const order of orders) {
@@ -38,7 +44,7 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
     const prisma = getPrisma();
     const usePg = Boolean(prisma) && shouldUsePostgresStorage();
 
-    const [todayResult, weekResult, weekExpensesResult, priceQueueCount, archivedLinkedYandex, ozonQueue, unreadByTypeRows, stalePriceLinkedCount, oldestPriceJobAgeMs, linkedSoldBelowTarget, sweepHeartbeats] = await Promise.all([
+    const [todayResult, weekResult, weekExpensesResult, priceQueueCount, archivedLinkedYandex, ozonQueue, unreadByTypeRows, stalePriceLinkedCount, oldestPriceJobAgeMs, linkedSoldBelowTarget, sweepHeartbeats, reconcilerState] = await Promise.all([
       listFinanceOrders({ period: "today", limit: 2000, linkedOnly: true }),
       listFinanceOrders({ period: "7d", limit: 2000, linkedOnly: true }),
       listFinanceExpenses({ period: "7d", limit: 2000 }),
@@ -79,6 +85,7 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
           `).then((rows) => Number(rows?.[0]?.n || 0)).catch(() => 0)
         : Promise.resolve(0),
       readSweepHeartbeats().catch(() => []),
+      readLinkedReconcilerState().catch(() => null),
     ]);
 
     const today = financeSummaryFromRows(todayResult.orders, []);
@@ -127,6 +134,13 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
         sweeps: Array.isArray(sweepHeartbeats) ? sweepHeartbeats : [],
         staleSweeps: (Array.isArray(sweepHeartbeats) ? sweepHeartbeats : []).filter((s) => s.stale).map((s) => s.name),
         alert: (Array.isArray(sweepHeartbeats) ? sweepHeartbeats : []).some((s) => s.stale),
+      },
+      marketplaceHealth: {
+        lastCycleMismatches: Number(reconcilerState?.lastCycleStateMismatches || 0),
+        lastCycleMismatchAt: reconcilerState?.lastCycleMismatchAt || null,
+        cycleMismatchesSoFar: Number(reconcilerState?.cycleStateMismatches || 0),
+        alertThreshold: marketplaceStateMismatchAlertThreshold,
+        alert: Number(reconcilerState?.lastCycleStateMismatches || 0) > marketplaceStateMismatchAlertThreshold,
       },
     });
   } catch (error) {

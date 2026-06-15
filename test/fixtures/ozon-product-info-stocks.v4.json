@@ -1,0 +1,35 @@
+{
+  "items": [
+    {
+      "offer_id": "YV005928",
+      "product_id": 123456789,
+      "stocks": [
+        { "type": "fbs", "present": 5, "reserved": 1, "warehouse_ids": [] },
+        { "type": "fbo", "present": 0, "reserved": 0, "warehouse_ids": [] },
+        { "type": "rfbs", "present": 0, "reserved": 0, "warehouse_ids": [] }
+      ]
+    },
+    {
+      "offer_id": "FBO-ONLY-1",
+      "product_id": 223456789,
+      "stocks": [
+        { "type": "fbo", "present": 12, "reserved": 2, "warehouse_ids": [] },
+        { "type": "fbs", "present": 0, "reserved": 0, "warehouse_ids": [] }
+      ]
+    },
+    {
+      "offer_id": "ZERO-STOCK-1",
+      "product_id": 323456789,
+      "stocks": [
+        { "type": "fbs", "present": 0, "reserved": 0, "warehouse_ids": [] },
+        { "type": "fbo", "present": 0, "reserved": 0, "warehouse_ids": [] }
+      ]
+    },
+    {
+      "offer_id": "NO-STOCKS-AT-ALL",
+      "product_id": 423456789,
+      "stocks": []
+    }
+  ],
+  "total": 4
+}

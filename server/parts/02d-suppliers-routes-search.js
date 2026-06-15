@@ -188,7 +188,7 @@ app.get("/api/live-status", async (_request, response, next) => {
         enabled: bullmqEnabled && Boolean(redisUrl),
         degraded: bullmqEnabled && Boolean(redisUrl) && (!marketplaceQueue || queueStatus?.ok === false),
         producerReady: marketplaceJobsCanEnqueue(),
-        consumerReady: Boolean(marketplaceWorker),
+        consumerReady: Boolean(marketplaceWorker) || Number(queueStatus?.workers || 0) > 0,
         counts: queueStatus?.counts || null,
         error: queueStatus?.error || null,
       },

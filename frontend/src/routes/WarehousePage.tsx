@@ -10,7 +10,7 @@ import { SelectField } from "../components/SelectField";
 import { CatalogSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
-import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, numberValue, updateCachedProducts, useDebounced } from "../lib/common";
+import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, type MutationPayload, numberValue, refreshWarehouseAfterMutation, updateCachedProducts, useDebounced } from "../lib/common";
 import { ProductGroup, firstImage, groupMarketplaceLabels, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, marketplaceRowLabel, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
 import { demoWarehouseProducts, isDemoWarehouseProduct } from "../demoWarehouse";
 
@@ -476,9 +476,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
   const groupLinksSynced = products.length <= 1
     || (new Set(groupLinkSignatures).size <= 1 && new Set(groupLinkCounts).size <= 1);
   const refreshAfterMutation = (payload?: unknown) => {
-    if (payload) updateCachedProducts(queryClient, payload);
-    void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
-    void queryClient.invalidateQueries({ queryKey: ["warehouse", "group-detail"] });
+    refreshWarehouseAfterMutation(queryClient, payload as MutationPayload | null | undefined);
     void queryClient.invalidateQueries({ queryKey: ["warehouse", "diagnostics"] });
     onSaved();
   };
@@ -1463,8 +1461,7 @@ function GroupActions({ products, selectedGroup, onDone }: { products: Product[]
       patchBody({ productIds: ids, groupId, optimisticLocks }),
     ),
     onSuccess: (payload) => {
-      updateCachedProducts(queryClient, payload);
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      refreshWarehouseAfterMutation(queryClient, payload);
       onDone();
     },
   });
@@ -1476,8 +1473,7 @@ function GroupActions({ products, selectedGroup, onDone }: { products: Product[]
       patchBody({ productIds, optimisticLocks }),
     ),
     onSuccess: (payload) => {
-      updateCachedProducts(queryClient, payload);
-      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      refreshWarehouseAfterMutation(queryClient, payload);
       onDone();
     },
   });
@@ -1585,7 +1581,6 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
 function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin, filteredOut = false, loading = false, refreshing = false, demoMode = false }: { selectedGroup: string; products: Product[]; breakdown?: MarketplaceBreakdownRow[]; onClose: () => void; isAdmin: boolean; filteredOut?: boolean; loading?: boolean; refreshing?: boolean; demoMode?: boolean }) {
   const primary = products.length ? preferredGroupPrimary(products) : undefined;
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
-  const groupQueryKey = ["warehouse", "group-detail", selectedGroup];
   const queryClient = useQueryClient();
   const diagnostics = useQuery({
     queryKey: ["warehouse", "diagnostics", primary?.offerId],
@@ -1597,7 +1592,11 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
     const grouped = groupProductsForList(products);
     return grouped.find((group) => group.groupKey === selectedGroup) || grouped[0];
   }, [products, selectedGroup]);
-  const refreshDetail = () => void queryClient.invalidateQueries({ queryKey: groupQueryKey });
+  // Invalidating the "warehouse" prefix covers both the catalog list (["warehouse","page",...])
+  // and this group's detail query (["warehouse","group-detail",selectedGroup]) — a silent
+  // refetch so quick actions (repair/recovery/group/ungroup) reflect server-side changes
+  // without an explicit reload (PLAN-HARDENING.md 5.2).
+  const refreshDetail = () => void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
 
   if (!primary) {
     return (

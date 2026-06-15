@@ -62,7 +62,10 @@ function pickOzonState(product = {}, info = {}, stockInfo = {}) {
   if (archived) {
     return normalizeMarketplaceState({ code: "archived", label: "В архиве Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
   }
-  if (visibility === "EMPTY_STOCK" || (!hasStocks && stock <= 0)) {
+  // Ozon reports visibility=EMPTY_STOCK for FBS/rfbs products even when the seller's own
+  // stock is positive (it reflects Ozon's cross-dock stock, not ours) — don't let that alone
+  // flip a product to out_of_stock; trust our own stock/hasStocks reading instead.
+  if (!hasStocks && stock <= 0) {
     return normalizeMarketplaceState({ code: "out_of_stock", label: "Нет в наличии Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
   }
   if (["INVISIBLE", "DISABLED", "REMOVED_FROM_SALE", "BANNED", "NOT_MODERATED", "STATE_FAILED", "MODERATION_BLOCK"].includes(visibility)

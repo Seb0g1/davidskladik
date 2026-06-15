@@ -169,7 +169,7 @@ async function collectHealthDetails({ deep = false } = {}) {
     enabled: bullmqEnabled && Boolean(redisUrl),
     degraded: bullmqEnabled && Boolean(redisUrl) && (!marketplaceQueue || bullmq?.ok === false),
     producerReady: marketplaceJobsCanEnqueue(),
-    consumerReady: Boolean(marketplaceWorker),
+    consumerReady: Boolean(marketplaceWorker) || Number(bullmq?.workers || 0) > 0,
     counts: bullmq?.counts || components.redis?.counts || components.redis?.jobs || null,
     error: bullmq?.error || components.redis?.error || null,
   };
