@@ -36,6 +36,7 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
       SELECT p.id
       FROM warehouse_products p
       WHERE p.archived = false
+        AND ${duplicateNameSqlExclusion("p")}
         AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
         AND COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) > 0
       ORDER BY p.updated_at DESC

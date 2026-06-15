@@ -38,6 +38,7 @@ async function runChangedPriceSweep({ source = "schedule" } = {}) {
           p.raw->>'priceVerifiedAt' IS NULL
           OR (p.raw->>'priceVerifiedAt')::timestamptz < now() - interval '${priceSweepVerifiedCooldownHours} hours'
         )
+        AND ${duplicateNameSqlExclusion("p")}
         AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
       ORDER BY p.updated_at DESC
       LIMIT ${priceSweepBatchLimit * 3}

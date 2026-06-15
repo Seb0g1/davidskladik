@@ -34,6 +34,7 @@ async function runStockSweep({ source = "schedule" } = {}) {
       SELECT p.id
       FROM warehouse_products p
       WHERE p.archived = false
+        AND ${duplicateNameSqlExclusion("p")}
         AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
         AND (
           COALESCE(p.target_stock, 0) <= 0

@@ -3407,6 +3407,18 @@ test("productConflict ignores background updatedAt churn but flags a newer user 
   assert.equal(productConflict(sameUser, { expectedUpdatedAt: loadedAt }), null);
 });
 
+test("isDuplicateMarkerName flags Ozon 'дубль' duplicate listings (case-insensitive), excludes them from catalog/sweeps", () => {
+  const { isDuplicateMarkerName, duplicateNameSqlExclusion } = require("../server.js");
+  assert.equal(isDuplicateMarkerName("Дубль93"), true);
+  assert.equal(isDuplicateMarkerName("ДуБЛЬ57"), true);
+  assert.equal(isDuplicateMarkerName("Дубль 111"), true);
+  assert.equal(isDuplicateMarkerName("Etro Ambra 100 мл туалетная вода унисекс"), false);
+  assert.equal(isDuplicateMarkerName(""), false);
+  // SQL fragment keeps null names and excludes the marker; never empty (valid in AND chains).
+  const sql = duplicateNameSqlExclusion("p");
+  assert.match(sql, /p\.name IS NULL OR p\.name NOT ILIKE/);
+});
+
 test("classifyErrorMessage collapses variable parts so the same error shape clusters (PLAN-HARDENING.md 4)", () => {
   const { classifyErrorMessage } = require("../server.js");
   // Same shape, different ids/numbers/quotes -> one class.

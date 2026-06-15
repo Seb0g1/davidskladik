@@ -8,6 +8,8 @@ module.exports = {
   classifyErrorMessage,
   recordErrorEvent,
   readErrorReport,
+  isDuplicateMarkerName,
+  duplicateNameSqlExclusion,
   readErrorSpikes,
   shutdownForTests,
   collectHealthDetails,
