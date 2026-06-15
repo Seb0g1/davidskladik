@@ -619,6 +619,18 @@ test("Ozon to Yandex import blocks unsafe non-perfume and low quality cards", ()
   assert.deepEqual(ozonYandexImportBlockReasons({ name: "Creed Aventus 100 мл", ozon: { vendor: "Creed" }, marketplaceState: { code: "archived", archived: true } }), []);
 });
 
+test("manual import (operator picked the product) bypasses soft heuristics but keeps hard/business blocks", () => {
+  // Soft heuristics that block in auto mode are dropped in manual mode (operator chose it):
+  for (const name of ["Creed Aventus", "помада", "щзхщц", "парфюмерная вода для мужчин"]) {
+    assert.ok(ozonYandexImportBlockReasons({ name, ozon: { vendor: "Magic" } }).length > 0, `${name} should block in auto mode`);
+    assert.deepEqual(ozonYandexImportBlockReasons({ name, ozon: { vendor: "Magic" } }, { manual: true }), [], `${name} should pass in manual mode`);
+  }
+  // Hard/business blocks still apply in manual mode:
+  assert.ok(ozonYandexImportBlockReasons({ name: "Tom Ford Oud Wood отливант 5 мл", ozon: { vendor: "Tom Ford" } }, { manual: true }).some((r) => r.includes("Отливант")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "Dior Sauvage 10 мл", ozon: { vendor: "Dior" } }, { manual: true }).some((r) => r.includes("меньше 20")));
+  assert.ok(ozonYandexImportBlockReasons({ name: "Chanel No 5 без коробки 100 мл", ozon: { vendor: "Chanel" } }, { manual: true }).some((r) => r.includes("без коробки")));
+});
+
 test("Ozon to Yandex import candidate exposes eligibility summary", () => {
   const ready = buildOzonYandexImportCandidate(normalizeWarehouseProduct({
     id: "ozon-ready",

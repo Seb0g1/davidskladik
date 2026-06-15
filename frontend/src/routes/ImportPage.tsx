@@ -141,7 +141,16 @@ export function ImportPage() {
       </div>
 
       {sendSelected.data ? (
-        <div className="info-strip success">Импортировано: {sendSelected.data.sent}{sendSelected.data.failed ? ` · ошибок: ${sendSelected.data.failed}` : ""}{sendSelected.data.skipped?.length ? ` · пропущено: ${sendSelected.data.skipped.length}` : ""}</div>
+        <div className={`info-strip ${sendSelected.data.sent ? "success" : "warn"}`}>
+          <div>Импортировано: {sendSelected.data.sent}{sendSelected.data.failed ? ` · ошибок: ${sendSelected.data.failed}` : ""}{sendSelected.data.skipped?.length ? ` · пропущено: ${sendSelected.data.skipped.length}` : ""}</div>
+          {sendSelected.data.skipped?.length ? (
+            <ul className="import-skipped">
+              {(sendSelected.data.skipped as Array<{ offerId?: string; reasons?: string[] }>).slice(0, 20).map((row, index) => (
+                <li key={row.offerId || index}><b>{row.offerId || "—"}</b>: {(row.reasons || []).join("; ") || "не готов к выгрузке"}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
       ) : null}
       {sendSelected.error ? <div className="inline-error">{String((sendSelected.error as Error).message)}</div> : null}
       {candidatesQuery.error ? <div className="inline-error">{String((candidatesQuery.error as Error).message)}</div> : null}

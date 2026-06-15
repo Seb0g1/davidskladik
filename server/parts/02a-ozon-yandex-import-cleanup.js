@@ -90,7 +90,14 @@ function isYandexSmallVolumeBlocked(productOrText = {}) {
   return assessYandexSmallVolume(productOrText).blocked;
 }
 
-function ozonYandexImportBlockReasons(product = {}) {
+// `manual: true` (operator explicitly picked this product on the import page) keeps only the
+// HARD/business blocks (inactive, отливант, «без коробки», объём <20мл, подозрительный объём)
+// and skips the SOFT quality heuristics (нет объёма в названии, неподходящая категория по
+// ключевому слову, слишком общее/подозрительное название) — those are auto-import guards, but
+// when the operator deliberately selects a product we trust the choice. The technical
+// readiness check (vendor/category/required fields via buildYandexOfferMapping.ready) still
+// applies, so an offer Yandex would reject is still not sent.
+function ozonYandexImportBlockReasons(product = {}, { manual = false } = {}) {
   const name = cleanText(product.name || product.ozon?.name || product.offerId);
   const lower = name.toLowerCase();
   const reasons = [];
@@ -109,7 +116,7 @@ function ozonYandexImportBlockReasons(product = {}) {
   const smallVolumeCheck = assessYandexSmallVolume(volumeText);
   if (smallVolumeCheck.blocked) reasons.push(smallVolumeCheck.reason);
   const volumes = extractOzonYandexImportVolumesMl(volumeText);
-  if (!volumes.length) reasons.push("В названии нет объема в мл");
+  if (!manual && !volumes.length) reasons.push("В названии нет объема в мл");
   const hugeVolumes = extractOzonYandexImportVolumesMl(volumeText).filter((value) => value > 500);
   if (hugeVolumes.length || /\d+\s+\d{3}\s*(?:мл|ml)(?![a-zа-я])/iu.test(name)) {
     reasons.push(`Подозрительный объем${hugeVolumes.length ? `: ${hugeVolumes.join(", ")} мл` : ""}`);
@@ -129,20 +136,20 @@ function ozonYandexImportBlockReasons(product = {}) {
     "дезодорант",
   ];
   const matchedCategory = blockedCategories.find((word) => lower.includes(word));
-  if (matchedCategory) reasons.push("Категория не подходит для импорта парфюмерии");
+  if (!manual && matchedCategory) reasons.push("Категория не подходит для импорта парфюмерии");
   const genericNames = [
     "парфюмерная вода",
     "парфюмерная вода для мужчин",
     "туалетная вода",
     "духи",
   ];
-  if ((!vendor || vendorLower.includes("без бренда")) && genericNames.some((genericName) => lower === genericName || lower.startsWith(`${genericName} `))) {
+  if (!manual && (!vendor || vendorLower.includes("без бренда")) && genericNames.some((genericName) => lower === genericName || lower.startsWith(`${genericName} `))) {
     reasons.push("Слишком общее название без бренда");
   }
   const meaningfulWords = name.match(/[a-zа-яё]{3,}/giu) || [];
   const wordsWithVowels = meaningfulWords.filter((word) => /[aeiouyаеёиоуыэюя]/iu.test(word));
   const alphaCount = (name.match(/[a-zа-яё]/giu) || []).length;
-  if (name.length < 10 || alphaCount < 3 || (meaningfulWords.length > 0 && wordsWithVowels.length === 0)) {
+  if (!manual && (name.length < 10 || alphaCount < 3 || (meaningfulWords.length > 0 && wordsWithVowels.length === 0))) {
     reasons.push("Подозрительное название товара");
   }
   return reasons;
@@ -152,7 +159,7 @@ function buildOzonYandexImportCandidate(product = {}, options = {}) {
   const normalized = normalizeWarehouseProduct(product);
   const ozon = normalized.ozon || {};
   const built = buildYandexOfferMapping(normalized);
-  const blockReasons = ozonYandexImportBlockReasons(normalized);
+  const blockReasons = ozonYandexImportBlockReasons(normalized, { manual: options.manual === true });
   const missing = Array.isArray(built.missing) ? built.missing : [];
   const yandexExistingOfferIds = options.yandexExistingOfferIds instanceof Set ? options.yandexExistingOfferIds : new Set();
   const offerIdKey = cleanText(normalized.offerId).toLowerCase();

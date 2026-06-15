@@ -99,7 +99,10 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
 
     const mapped = rows.map((row) => {
       const product = row.raw && typeof row.raw === "object" ? normalizeWarehouseProduct(row.raw) : normalizeWarehouseProduct(row);
-      const candidate = buildOzonYandexImportCandidate(product, { yandexExistingOfferIds: existingOfferIds });
+      // This page IS manual operator import — use manual leniency (only hard/business blocks +
+      // technical readiness), so soft heuristics don't make products unselectable here. Matches
+      // the send-selected route, which also runs in manual mode.
+      const candidate = buildOzonYandexImportCandidate(product, { yandexExistingOfferIds: existingOfferIds, manual: true });
       return {
         id: row.id,
         offerId: candidate.offerId || row.offerId,
@@ -162,9 +165,14 @@ app.post("/api/ozon-yandex-import/send-selected", requireAdmin, async (request, 
     const skipped = [];
     for (const row of rows) {
       const product = row.raw && typeof row.raw === "object" ? normalizeWarehouseProduct(row.raw) : normalizeWarehouseProduct(row);
-      const candidate = buildOzonYandexImportCandidate(product);
+      // manual: operator explicitly selected this product, so only the hard/business blocks
+      // and the technical readiness check apply (soft quality heuristics are bypassed).
+      const candidate = buildOzonYandexImportCandidate(product, { manual: true });
       if (candidate.blockReasons?.length || !candidate.yandexReady) {
-        skipped.push({ offerId: candidate.offerId || row.offerId, reasons: candidate.blockReasons || ["not_ready"] });
+        const reasons = candidate.blockReasons?.length
+          ? candidate.blockReasons
+          : [`Карточка не готова к выгрузке (не хватает: ${(candidate.missing || []).join(", ") || "обязательных полей"})`];
+        skipped.push({ offerId: candidate.offerId || row.offerId, reasons });
         continue;
       }
       products.push(product);
