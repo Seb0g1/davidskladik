@@ -32,13 +32,20 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
     // tell from SQL whether the supplier is gone (selectedSupplier is a computed field, never
     // persisted) — the rebuild below resolves that and the automation zeroes only the ones
     // that truly have no supplier.
+    // Candidate carries stock if EITHER the live marketplace stock OR the target stock (what
+    // the catalog shows as «Остаток» and what we push) is > 0. Keying only on marketplaceState
+    // missed no-supplier products whose marketplace stock was already zeroed but whose
+    // target_stock was never reset — they kept showing «Остаток N» in the catalog forever.
     const rows = await prisma.$queryRawUnsafe(`
       SELECT p.id
       FROM warehouse_products p
       WHERE p.archived = false
         AND ${duplicateNameSqlExclusion("p")}
         AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
-        AND COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) > 0
+        AND (
+          COALESCE(p.target_stock, 0) > 0
+          OR COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) > 0
+        )
       ORDER BY p.updated_at DESC
       LIMIT ${zeroStockSweepBatchLimit * 4}
     `);
@@ -64,11 +71,14 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
         return [];
       });
     // Only products that lost their supplier but still carry stock are worth handing over.
+    // "Carries stock" = live marketplace stock OR a positive target_stock (catalog «Остаток»),
+    // so a product whose marketplace stock is already 0 but whose target_stock is still > 0
+    // gets its target reset to 0 too.
     const noSupplierWithStock = products.filter((product) =>
       product?.hasLinks
       && !product.selectedSupplier
       && !product.noSupplierAutomation?.manualSellableAt
-      && marketplaceHasPositiveStock(product));
+      && (marketplaceHasPositiveStock(product) || Number(product.targetStock || 0) > 0));
     if (!noSupplierWithStock.length) {
       return { status: "ok", candidates: rows.length, selected: candidateIds.length, zeroed: 0 };
     }
