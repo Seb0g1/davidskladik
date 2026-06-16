@@ -71,9 +71,13 @@ function evaluateHealthAlerts(metrics = {}, thresholds = {}) {
   if (soldBelow > Number(thresholds.linkedSoldBelowTarget || 0)) {
     alerts.push({ key: "sold_below_target", message: `⚠️ Остатки: ${soldBelow} привязанных SKU ниже целевого остатка (порог ${thresholds.linkedSoldBelowTarget}). Возможно, дозаказ не успевает.` });
   }
-  const stateMismatches = Number(metrics.marketplaceStateMismatches || 0);
-  if (stateMismatches > Number(thresholds.marketplaceStateMismatch || 0)) {
-    alerts.push({ key: "marketplace_state_mismatch", message: `⚠️ Расхождения с МП: за последний цикл сверки у ${stateMismatches} товаров наш статус не совпал с реальным на Ozon/Yandex (порог ${thresholds.marketplaceStateMismatch}).` });
+  // Only the ACTIONABLE direction is alerted: products we had as «нет в наличии/архив/неактивен»
+  // that the marketplace actually sells (lost sales). The opposite (active -> out_of_stock) is
+  // normal stock depletion the reconciler corrects each cycle and used to false-alarm (e.g. 177
+  // over a full ~14k cycle is ~1%). Total churn stays in the dashboard as info only.
+  const wronglyHidden = Number(metrics.marketplaceWronglyHidden || 0);
+  if (wronglyHidden > Number(thresholds.marketplaceWronglyHidden || 0)) {
+    alerts.push({ key: "marketplace_wrongly_hidden", message: `⚠️ Скрытые продаваемые: за последний цикл сверки ${wronglyHidden} товаров были у нас «нет в наличии/архив», а на Ozon/Yandex продаются (порог ${thresholds.marketplaceWronglyHidden}). Возможна потеря продаж.` });
   }
   const errorSpikes = Array.isArray(metrics.errorSpikes) ? metrics.errorSpikes : [];
   for (const spike of errorSpikes) {
@@ -109,13 +113,14 @@ async function runHealthAlertCheck({ source = "schedule" } = {}) {
     ]);
     const staleSweeps = (sweeps || []).filter((s) => s.stale).map((s) => s.name);
     const marketplaceStateMismatches = Number(reconcilerState?.lastCycleStateMismatches || 0);
-    const metrics = { stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, staleSweeps, marketplaceStateMismatches, errorSpikes };
+    const marketplaceWronglyHidden = Number(reconcilerState?.lastCycleWronglyHidden || 0);
+    const metrics = { stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, staleSweeps, marketplaceStateMismatches, marketplaceWronglyHidden, errorSpikes };
     const thresholds = {
       stalePriceLinked: stalePriceLinkedAlertThreshold,
       staleHours: stalePriceLinkedHours,
       oldestPriceJobMs: priceQueueOldestJobAlertMs,
       linkedSoldBelowTarget: linkedSoldBelowTargetAlertThreshold,
-      marketplaceStateMismatch: marketplaceStateMismatchAlertThreshold,
+      marketplaceWronglyHidden: marketplaceStateMismatchAlertThreshold,
       errorSpike: errorSpikeAlertThreshold,
     };
     const alerts = evaluateHealthAlerts(metrics, thresholds);

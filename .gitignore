@@ -75,3 +75,5 @@ scripts/__pycache__/
 test-results/
 playwright-report/
 .playwright/
+._*
+*.zip

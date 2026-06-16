@@ -3448,16 +3448,18 @@ test("classifyErrorMessage collapses variable parts so the same error shape clus
 
 test("evaluateHealthAlerts only fires for breached thresholds (PLAN-HARDENING.md 4)", () => {
   const { evaluateHealthAlerts } = require("../server.js");
-  const thresholds = { stalePriceLinked: 50, staleHours: 1, oldestPriceJobMs: 600000, linkedSoldBelowTarget: 1000, marketplaceStateMismatch: 20, errorSpike: 20 };
+  const thresholds = { stalePriceLinked: 50, staleHours: 1, oldestPriceJobMs: 600000, linkedSoldBelowTarget: 1000, marketplaceWronglyHidden: 20, errorSpike: 20 };
   // All within limits -> no alerts.
-  assert.equal(evaluateHealthAlerts({ stalePriceLinked: 10, oldestPriceJobAgeMs: 1000, linkedSoldBelowTarget: 100, staleSweeps: [], marketplaceStateMismatches: 0, errorSpikes: [] }, thresholds).length, 0);
+  assert.equal(evaluateHealthAlerts({ stalePriceLinked: 10, oldestPriceJobAgeMs: 1000, linkedSoldBelowTarget: 100, staleSweeps: [], marketplaceWronglyHidden: 0, errorSpikes: [] }, thresholds).length, 0);
   // Each breach raises exactly its own alert key.
   const keys = (m) => evaluateHealthAlerts(m, thresholds).map((a) => a.key);
   assert.deepEqual(keys({ stalePriceLinked: 999 }), ["stale_price_linked"]);
   assert.deepEqual(keys({ oldestPriceJobAgeMs: 999999 }), ["price_queue_starved"]);
   assert.deepEqual(keys({ linkedSoldBelowTarget: 5000 }), ["sold_below_target"]);
   assert.ok(keys({ staleSweeps: ["price_sweep"] })[0].startsWith("stale_sweeps:"));
-  assert.deepEqual(keys({ marketplaceStateMismatches: 21 }), ["marketplace_state_mismatch"]);
+  assert.deepEqual(keys({ marketplaceWronglyHidden: 21 }), ["marketplace_wrongly_hidden"]);
+  // The benign churn direction (active -> out_of_stock) is NOT alerted, only wronglyHidden is.
+  assert.deepEqual(keys({ marketplaceStateMismatches: 999, marketplaceWronglyHidden: 0 }), []);
   // Error spikes: one alert per breached class, already filtered by readErrorSpikes' HAVING clause
   // (evaluateHealthAlerts trusts the list, it does not re-check the threshold itself).
   assert.deepEqual(
@@ -3484,9 +3486,12 @@ test("countMarketplaceStateMismatches counts products whose marketplaceState.cod
   const result = countMarketplaceStateMismatches(before, after);
   assert.equal(result.count, 2);
   assert.deepEqual(result.productIds.sort(), ["p2", "p3"]);
+  // Only p2 (was out_of_stock, now active) is "wrongly hidden"; p3 (active -> archived) is benign.
+  assert.equal(result.wronglyHidden, 1);
+  assert.deepEqual(result.wronglyHiddenIds, ["p2"]);
 
   // Empty input is safe.
-  assert.deepEqual(countMarketplaceStateMismatches([], []), { count: 0, productIds: [] });
+  assert.deepEqual(countMarketplaceStateMismatches([], []), { count: 0, productIds: [], wronglyHidden: 0, wronglyHiddenIds: [] });
 });
 
 test("sweepHeartbeatStaleness flags a sweep that missed >2.5 intervals, not a fresh one (PLAN-HARDENING.md 4)", () => {

@@ -10,6 +10,8 @@ function defaultLinkedReconcilerState() {
     updatedAt: null,
     cycleStateMismatches: 0,
     lastCycleStateMismatches: 0,
+    cycleWronglyHidden: 0,
+    lastCycleWronglyHidden: 0,
     lastCycleMismatchAt: null,
   };
 }

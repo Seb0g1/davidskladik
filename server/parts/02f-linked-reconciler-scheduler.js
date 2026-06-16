@@ -166,14 +166,23 @@ function countMarketplaceStateMismatches(beforeProducts = [], afterProducts = []
       .map((product) => [String(product.id), product.marketplaceState?.code || null]),
   );
   const productIds = [];
+  // wronglyHidden = the ACTIONABLE subset: our DB had the product as non-active (out_of_stock/
+  // archived/inactive) but the live marketplace says it's active — i.e. we were hiding a
+  // sellable product (lost sales). The opposite direction (active -> out_of_stock) is just
+  // normal stock depletion the reconciler is catching up on, so it's tracked but not alerted.
+  const wronglyHiddenIds = [];
   for (const product of (Array.isArray(afterProducts) ? afterProducts : [])) {
     if (!product?.id) continue;
     const id = String(product.id);
     if (!beforeCodeById.has(id)) continue;
+    const beforeCode = beforeCodeById.get(id);
     const afterCode = product.marketplaceState?.code || null;
-    if (beforeCodeById.get(id) !== afterCode) productIds.push(id);
+    if (beforeCode !== afterCode) {
+      productIds.push(id);
+      if (beforeCode !== "active" && afterCode === "active") wronglyHiddenIds.push(id);
+    }
   }
-  return { count: productIds.length, productIds };
+  return { count: productIds.length, productIds, wronglyHidden: wronglyHiddenIds.length, wronglyHiddenIds };
 }
 
 async function processLinkedReconcilerBatch(seedProducts = []) {
@@ -300,6 +309,7 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
     priceQueued,
     priceQueuedBatches,
     stateMismatches: stateMismatches.count,
+    wronglyHidden: stateMismatches.wronglyHidden,
   };
 }
 
@@ -316,7 +326,7 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
   linkedReconcilerRunning = true;
   const startedAt = new Date().toISOString();
   const maxBatches = Math.max(1, Math.ceil(linkedReconcilerMaxProductsPerTick / linkedReconcilerBatchSize));
-  const totals = { batches: 0, products: 0, recovered: 0, unarchived: 0, zeroStockSent: 0, stockSent: 0, priceQueued: 0, priceQueuedBatches: 0, cyclesCompleted: 0, stateMismatches: 0 };
+  const totals = { batches: 0, products: 0, recovered: 0, unarchived: 0, zeroStockSent: 0, stockSent: 0, priceQueued: 0, priceQueuedBatches: 0, cyclesCompleted: 0, stateMismatches: 0, wronglyHidden: 0 };
   let lastError = null;
   try {
     for (let batch = 0; batch < maxBatches; batch += 1) {
@@ -338,6 +348,7 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
           totals.priceQueued += result.priceQueued || 0;
           totals.priceQueuedBatches += result.priceQueuedBatches || 0;
           totals.stateMismatches += result.stateMismatches || 0;
+          totals.wronglyHidden += result.wronglyHidden || 0;
         } catch (error) {
           lastError = error?.message || String(error);
           logger.warn("linked reconciler batch failed", { trigger, detail: lastError });
@@ -345,6 +356,7 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
       }
 
       const cycleStateMismatches = Number(state.cycleStateMismatches || 0) + (result?.stateMismatches || 0);
+      const cycleWronglyHidden = Number(state.cycleWronglyHidden || 0) + (result?.wronglyHidden || 0);
 
       if (cycleComplete) {
         await writeLinkedReconcilerState({
@@ -357,6 +369,8 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
           lastError,
           cycleStateMismatches: 0,
           lastCycleStateMismatches: cycleStateMismatches,
+          cycleWronglyHidden: 0,
+          lastCycleWronglyHidden: cycleWronglyHidden,
           lastCycleMismatchAt: new Date().toISOString(),
         });
         totals.cyclesCompleted += 1;
@@ -372,6 +386,7 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
         lastBatchAt: new Date().toISOString(),
         lastError,
         cycleStateMismatches,
+        cycleWronglyHidden,
       });
     }
 

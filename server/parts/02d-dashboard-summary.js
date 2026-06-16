@@ -136,11 +136,15 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
         alert: (Array.isArray(sweepHeartbeats) ? sweepHeartbeats : []).some((s) => s.stale),
       },
       marketplaceHealth: {
+        // total churn (info; mostly active -> out_of_stock depletion the reconciler corrects)
         lastCycleMismatches: Number(reconcilerState?.lastCycleStateMismatches || 0),
         lastCycleMismatchAt: reconcilerState?.lastCycleMismatchAt || null,
         cycleMismatchesSoFar: Number(reconcilerState?.cycleStateMismatches || 0),
+        // actionable: we hid products the marketplace actually sells (lost sales) — this is what alerts
+        lastCycleWronglyHidden: Number(reconcilerState?.lastCycleWronglyHidden || 0),
+        cycleWronglyHiddenSoFar: Number(reconcilerState?.cycleWronglyHidden || 0),
         alertThreshold: marketplaceStateMismatchAlertThreshold,
-        alert: Number(reconcilerState?.lastCycleStateMismatches || 0) > marketplaceStateMismatchAlertThreshold,
+        alert: Number(reconcilerState?.lastCycleWronglyHidden || 0) > marketplaceStateMismatchAlertThreshold,
       },
     });
   } catch (error) {
