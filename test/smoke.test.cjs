@@ -3580,6 +3580,16 @@ test("marketplace queue priority ordering: a price push enqueued after a recover
   assert.equal(Math.floor(pricePosition / concurrency), 0);
 });
 
+test("link delete keys removal off the server warehouseLinkTargetKey, not the frontend ref key", () => {
+  // Regression for «удалить поставщика не работает»: deleteWarehouseGroupLinkRefs removes links
+  // by filtering on warehouseLinkTargetKey(link) (server format), so deleteKeys MUST hold that
+  // key. The frontend ref.linkTargetKey is a different signature (linkPrimarySignature) and
+  // never equals it — adding it instead matched the link but never filtered it out (no-op delete).
+  const source = readServerSource();
+  assert.match(source, /deleteKeys\.add\(warehouseLinkTargetKey\(link\)\)/);
+  assert.doesNotMatch(source, /deleteKeys\.add\(ref\.linkTargetKey \|\| warehouseLinkTargetKey\(link\)\)/);
+});
+
 test("withWarehouseMutation invalidates warehouseFastPageCache after the mutation resolves, not before (PLAN-HARDENING.md 1.4)", async () => {
   // Regression for "save a link, page still shows it as not linked": the warehouse page
   // cache must stay populated while a mutation is in flight (so the early-invalidation

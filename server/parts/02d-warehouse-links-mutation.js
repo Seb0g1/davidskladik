@@ -112,7 +112,14 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
         conflicts.push(conflict);
         continue;
       }
-      deleteKeys.add(ref.linkTargetKey || warehouseLinkTargetKey(link));
+      // Removal below (and across group siblings) filters links by the SERVER-computed
+      // warehouseLinkTargetKey, so deleteKeys must hold that exact key. The frontend's
+      // ref.linkTargetKey is a DIFFERENT signature format (linkPrimarySignature) and never
+      // equals it — using it here matched the link but then never filtered it out, so
+      // "удалить поставщика" reported success while the link stayed. Always key off the
+      // matched link's own server target key.
+      deleteKeys.add(warehouseLinkTargetKey(link));
+      if (ref.linkTargetKey) deleteKeys.add(ref.linkTargetKey);
       deletedRefs.push(ref);
     }
 
