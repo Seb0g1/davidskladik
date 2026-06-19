@@ -87,7 +87,7 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
     // We must compute candidate flags in JS (block reasons, build readiness), so when
     // onlyEligible is set we scan a bounded window and filter; otherwise we page directly.
     const total = await prisma.warehouseProduct.count({ where });
-    const scanTake = onlyEligible ? Math.min(2000, total) : pageSize;
+    const scanTake = onlyEligible ? Math.min(50000, total) : pageSize;
     const skip = onlyEligible ? 0 : (page - 1) * pageSize;
     const rows = await prisma.warehouseProduct.findMany({
       where,
@@ -157,14 +157,14 @@ app.post("/api/ozon-yandex-import/send-selected", requireAdmin, async (request, 
           ...(offerIds.length ? [{ offerId: { in: offerIds } }] : []),
         ],
       },
-      select: { id: true, offerId: true, raw: true },
+      include: { links: true },
       take: 2000,
     });
 
     const products = [];
     const skipped = [];
     for (const row of rows) {
-      const product = row.raw && typeof row.raw === "object" ? normalizeWarehouseProduct(row.raw) : normalizeWarehouseProduct(row);
+      const product = productFromPostgres(row);
       // manual: operator explicitly selected this product, so only the hard/business blocks
       // and the technical readiness check apply (soft quality heuristics are bypassed).
       const candidate = buildOzonYandexImportCandidate(product, { manual: true });

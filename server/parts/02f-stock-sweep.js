@@ -35,7 +35,10 @@ async function runStockSweep({ source = "schedule" } = {}) {
       FROM warehouse_products p
       WHERE p.archived = false
         AND ${duplicateNameSqlExclusion("p")}
-        AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
+        AND (
+          EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
+          OR (p.marketplace = 'yandex' AND jsonb_array_length(COALESCE(p.raw->'links', '[]'::jsonb)) > 0)
+        )
         AND (
           COALESCE(p.target_stock, 0) <= 0
           OR COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) < p.target_stock

@@ -93,7 +93,7 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
     while (selected.length < limit) {
       const page = await prisma.warehouseProduct.findMany({
         where: { marketplace: "ozon", archived: false },
-        select: { id: true, offerId: true, raw: true },
+        include: { links: true },
         orderBy: { id: "asc" },
         take: 1000,
         ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
@@ -108,7 +108,7 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
           skippedExisting += 1;
           continue;
         }
-        const product = row.raw && typeof row.raw === "object" ? normalizeWarehouseProduct(row.raw) : null;
+        const product = productFromPostgres(row);
         if (!product) continue;
         const candidate = buildOzonYandexImportCandidate(product, { yandexExistingOfferIds: existingOfferIds });
         if (candidate.blockReasons?.length || !candidate.yandexReady || !candidate.eligible) {

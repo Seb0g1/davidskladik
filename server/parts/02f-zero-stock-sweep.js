@@ -41,7 +41,10 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
       FROM warehouse_products p
       WHERE p.archived = false
         AND ${duplicateNameSqlExclusion("p")}
-        AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
+        AND (
+          EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
+          OR (p.marketplace = 'yandex' AND jsonb_array_length(COALESCE(p.raw->'links', '[]'::jsonb)) > 0)
+        )
         AND (
           COALESCE(p.target_stock, 0) > 0
           OR COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) > 0
@@ -74,11 +77,16 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
     // "Carries stock" = live marketplace stock OR a positive target_stock (catalog «Остаток»),
     // so a product whose marketplace stock is already 0 but whose target_stock is still > 0
     // gets its target reset to 0 too.
-    const noSupplierWithStock = products.filter((product) =>
-      product?.hasLinks
-      && !product.selectedSupplier
-      && !product.noSupplierAutomation?.manualSellableAt
-      && (marketplaceHasPositiveStock(product) || Number(product.targetStock || 0) > 0));
+    // manualSellableAt expires after 48 h — long enough for unarchive/recovery to settle,
+    // but short enough that a product whose supplier truly vanished again gets zeroed.
+    const manualSellableTtlMs = 48 * 60 * 60 * 1000;
+    const noSupplierWithStock = products.filter((product) => {
+      if (!product?.hasLinks || product.selectedSupplier) return false;
+      if (!marketplaceHasPositiveStock(product) && Number(product.targetStock || 0) <= 0) return false;
+      const manualAt = product.noSupplierAutomation?.manualSellableAt;
+      if (manualAt && nowMs - new Date(manualAt).getTime() < manualSellableTtlMs) return false;
+      return true;
+    });
     if (!noSupplierWithStock.length) {
       return { status: "ok", candidates: rows.length, selected: candidateIds.length, zeroed: 0 };
     }

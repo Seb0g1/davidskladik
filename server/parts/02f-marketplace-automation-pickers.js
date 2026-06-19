@@ -57,15 +57,20 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
         return !key || !protectedOfferKeys.has(key);
       })
     : [];
+  // manualSellableAt expires after 48 h — long enough for unarchive/recovery to settle,
+  // but short enough that a product whose supplier truly vanished again gets zeroed.
+  const manualSellableTtlMs = 48 * 60 * 60 * 1000;
   const linkedNoSupplier = autoZeroStockOnNoSupplier
     ? list.filter((product) => {
-        if (!product.hasLinks || product.selectedSupplier || product.noSupplierAutomation?.manualSellableAt) return false;
+        if (!product.hasLinks || product.selectedSupplier) return false;
+        const nowMs = options.now ? new Date(options.now).getTime() : Date.now();
+        const manualAt = product.noSupplierAutomation?.manualSellableAt;
+        if (manualAt && nowMs - new Date(manualAt).getTime() < manualSellableTtlMs) return false;
         // Skip products already archived by this automation — recovery automation handles them.
         // Without this check, no-supplier automation re-archives right after recovery queues an unarchive.
         if (product.noSupplierAutomation?.archivedAt) return false;
         const key = marketplaceOfferAutomationKey(product);
         if (key && protectedOfferKeys.has(key) && !product.hasLinks) return false;
-        const nowMs = options.now ? new Date(options.now).getTime() : Date.now();
         const updatedMs = product.updatedAt ? new Date(product.updatedAt).getTime() : 0;
         if (
           !options.skipLinkedGrace
