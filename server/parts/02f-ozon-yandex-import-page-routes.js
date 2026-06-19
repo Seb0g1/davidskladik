@@ -149,17 +149,21 @@ app.post("/api/ozon-yandex-import/send-selected", requireAdmin, async (request, 
     const shops = uniqueYandexShopsByBusiness();
     if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
 
-    const rows = await prisma.warehouseProduct.findMany({
-      where: {
-        marketplace: "ozon",
-        OR: [
-          ...(ids.length ? [{ id: { in: ids } }] : []),
-          ...(offerIds.length ? [{ offerId: { in: offerIds } }] : []),
-        ],
-      },
-      include: { links: true },
-      take: 2000,
-    });
+    const [yandexRows, rows] = await Promise.all([
+      prisma.warehouseProduct.findMany({ where: { marketplace: "yandex" }, select: { offerId: true } }),
+      prisma.warehouseProduct.findMany({
+        where: {
+          marketplace: "ozon",
+          OR: [
+            ...(ids.length ? [{ id: { in: ids } }] : []),
+            ...(offerIds.length ? [{ offerId: { in: offerIds } }] : []),
+          ],
+        },
+        include: { links: true },
+        take: 2000,
+      }),
+    ]);
+    const existingYandexOfferIds = new Set(yandexRows.map((row) => cleanText(row.offerId).toLowerCase()).filter(Boolean));
 
     const products = [];
     const skipped = [];
@@ -167,7 +171,11 @@ app.post("/api/ozon-yandex-import/send-selected", requireAdmin, async (request, 
       const product = productFromPostgres(row);
       // manual: operator explicitly selected this product, so only the hard/business blocks
       // and the technical readiness check apply (soft quality heuristics are bypassed).
-      const candidate = buildOzonYandexImportCandidate(product, { manual: true });
+      const candidate = buildOzonYandexImportCandidate(product, { yandexExistingOfferIds: existingYandexOfferIds, manual: true });
+      if (candidate.existingInYandex) {
+        skipped.push({ offerId: candidate.offerId || row.offerId, reasons: ["Уже существует на Yandex Market"] });
+        continue;
+      }
       if (candidate.blockReasons?.length || !candidate.yandexReady) {
         const reasons = candidate.blockReasons?.length
           ? candidate.blockReasons

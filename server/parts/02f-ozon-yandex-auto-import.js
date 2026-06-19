@@ -47,11 +47,13 @@ async function exportOzonProductsToYandex(products = [], shops = null, { reason 
   const now = new Date().toISOString();
   const yandexProducts = [];
   for (const product of exportedProducts) {
+    const offerPrice = Number(buildYandexOfferMapping(product).offer?.basicPrice?.value) || 0;
     for (const shop of targetShops) {
       yandexProducts.push(buildYandexWarehouseProductFromOzonExport(product, shop, {
         status: "sent",
         targetName: shop.name || shop.id,
         sentAt: now,
+        price: offerPrice > 0 ? offerPrice : undefined,
       }));
     }
   }
