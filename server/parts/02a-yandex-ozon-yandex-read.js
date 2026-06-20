@@ -86,12 +86,29 @@ async function sendYandexOfferMappings(shop, offers = []) {
   for (const chunk of chunkArray(prepared, 100)) {
     if (!chunk.length) continue;
     try {
-      await yandexRequest(
+      const apiResult = await yandexRequest(
         shop,
         "POST",
         `/v2/businesses/${shop.businessId}/offer-mappings/update`,
         { offerMappings: chunk.map((offer) => ({ offer })) },
       );
+      const withPictures = chunk.filter((o) => Array.isArray(o.pictures) && o.pictures.length > 0).length;
+      if (withPictures < chunk.length) {
+        logger.warn("yandex offer mappings: some offers sent without pictures", {
+          shop: shop.id,
+          total: chunk.length,
+          withPictures,
+          withoutPictures: chunk.length - withPictures,
+          offerIds: chunk.filter((o) => !o.pictures?.length).map((o) => o.offerId).slice(0, 10),
+        });
+      }
+      const rejected = Array.isArray(apiResult?.result?.rejectedOffers) ? apiResult.result.rejectedOffers : [];
+      if (rejected.length) {
+        logger.warn("yandex offer mappings: rejected offers in response", {
+          shop: shop.id,
+          rejected: rejected.slice(0, 10),
+        });
+      }
       results.push(...chunk.map((offer) => ({ offerId: offer.offerId, ok: true })));
     } catch (error) {
       const detail = error?.message || "yandex_import_failed";
