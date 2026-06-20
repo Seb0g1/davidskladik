@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Bot, Check, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
+import { Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -1533,6 +1533,72 @@ function GroupActions({ products, selectedGroup, onDone }: { products: Product[]
   );
 }
 
+const z_snooze = { object: (v: unknown): v is { snoozedUntil: string; days: number } => Boolean(v && typeof v === "object" && "snoozedUntil" in (v as object)) };
+
+function SnoozeSection({ primary, onDone }: { primary: Product; onDone: () => void }) {
+  const queryClient = useQueryClient();
+  const [days, setDays] = useState(5);
+  const snooze = z_snooze.object(primary.snooze) ? primary.snooze : null;
+
+  const snoozeMutation = useMutation({
+    mutationFn: (d: number) => fetchJson(
+      `/api/warehouse/products/${encodeURIComponent(primary.id)}/snooze`,
+      MutationProductResponseSchema,
+      { method: "POST", body: JSON.stringify({ days: d }), headers: { "Content-Type": "application/json" } },
+    ),
+    onSuccess: (payload) => { refreshWarehouseAfterMutation(queryClient, payload); onDone(); },
+  });
+
+  const unsnoozeMutation = useMutation({
+    mutationFn: () => fetchJson(
+      `/api/warehouse/products/${encodeURIComponent(primary.id)}/snooze`,
+      MutationProductResponseSchema,
+      { method: "DELETE" },
+    ),
+    onSuccess: (payload) => { refreshWarehouseAfterMutation(queryClient, payload); onDone(); },
+  });
+
+  const isBusy = snoozeMutation.isPending || unsnoozeMutation.isPending;
+  const snoozedUntilDate = snooze ? new Date(snooze.snoozedUntil) : null;
+  const daysLeft = snoozedUntilDate ? Math.max(0, Math.ceil((snoozedUntilDate.getTime() - Date.now()) / 86_400_000)) : 0;
+
+  return (
+    <section className="detail-section">
+      <div className="section-title">
+        <div>
+          <span>Отложить товар</span>
+          <h3>Временно убрать с маркетплейса</h3>
+        </div>
+      </div>
+      {snooze ? (
+        <div className="snooze-status">
+          <Clock size={14} />
+          <span>Отложен на {daysLeft} {daysLeft === 1 ? "день" : daysLeft < 5 ? "дня" : "дней"} · до {snoozedUntilDate?.toLocaleDateString("ru-RU")}</span>
+          <button className="secondary-action compact" type="button" disabled={isBusy} onClick={() => unsnoozeMutation.mutate()}>
+            {unsnoozeMutation.isPending ? <Loader2 className="spin" size={14} /> : <X size={14} />} Снять
+          </button>
+        </div>
+      ) : (
+        <div className="snooze-form">
+          <span className="snooze-label">Отложить на</span>
+          <div className="snooze-days">
+            {[3, 5, 7, 14].map((d) => (
+              <button key={d} type="button" className={`snooze-day-chip${days === d ? " is-active" : ""}`} onClick={() => setDays(d)}>{d}д</button>
+            ))}
+          </div>
+          <button className="secondary-action compact" type="button" disabled={isBusy} onClick={() => snoozeMutation.mutate(days)}>
+            {snoozeMutation.isPending ? <Loader2 className="spin" size={14} /> : <Clock size={14} />} Отложить на {days} дней
+          </button>
+        </div>
+      )}
+      {(snoozeMutation.error || unsnoozeMutation.error) && (
+        <div className="inline-error">{errorMessage(snoozeMutation.error || unsnoozeMutation.error)}</div>
+      )}
+      <small className="snooze-hint">Через {snooze ? daysLeft : days} {(snooze ? daysLeft : days) === 1 ? "день" : "дней"} система проверит прайс поставщика и вернёт товар автоматически.</small>
+    </section>
+  );
+}
+
 function QuickActions({ primary, products, onDone }: { primary: Product; products: Product[]; onDone: () => void }) {
   const start = useMutation({
     mutationFn: (type: string) => fetchJson("/api/operations", OperationCreateSchema, mutationBody({
@@ -1550,31 +1616,34 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
     onSuccess: onDone,
   });
   return (
-    <section className="detail-section">
-      <div className="section-title">
-        <div>
-          <span>Быстрые действия</span>
-          <h3>Остаток, цена, восстановление</h3>
+    <>
+      <SnoozeSection primary={primary} onDone={onDone} />
+      <section className="detail-section">
+        <div className="section-title">
+          <div>
+            <span>Быстрые действия</span>
+            <h3>Остаток, цена, восстановление</h3>
+          </div>
         </div>
-      </div>
-      <div className="quick-actions">
-        <button className="primary-action" type="button" onClick={() => repair.mutate()} disabled={repair.isPending}>
-          {repair.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Проверить и починить товар
-        </button>
-        <button className="secondary-action" type="button" onClick={() => start.mutate("linked-supplier-recovery")} disabled={start.isPending}>Восстановить товар</button>
-        <button className="secondary-action" type="button" onClick={() => start.mutate("yandex-stock-sync")} disabled={start.isPending}>Отправить остаток</button>
-        <button className="secondary-action" type="button" onClick={() => start.mutate("yandex-import-send")} disabled={start.isPending}>Отправить цену</button>
-      </div>
-      {repair.data ? (
-        <div className="success-strip compact">
-          {repair.data.accepted
-            ? `Repair queued: ${String((repair.data.job as Record<string, unknown> | undefined)?.id || "background job")}`
-            : `Links ${repair.data.linksSynced} · prices ${repair.data.priceSent} · stock ${repair.data.stockSent} · ${repair.data.pending ? "ожидает восстановления" : "готово"}`}
+        <div className="quick-actions">
+          <button className="primary-action" type="button" onClick={() => repair.mutate()} disabled={repair.isPending}>
+            {repair.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Проверить и починить товар
+          </button>
+          <button className="secondary-action" type="button" onClick={() => start.mutate("linked-supplier-recovery")} disabled={start.isPending}>Восстановить товар</button>
+          <button className="secondary-action" type="button" onClick={() => start.mutate("yandex-stock-sync")} disabled={start.isPending}>Отправить остаток</button>
+          <button className="secondary-action" type="button" onClick={() => start.mutate("yandex-import-send")} disabled={start.isPending}>Отправить цену</button>
         </div>
-      ) : null}
-      {start.error && <div className="inline-error">{errorMessage(start.error)}</div>}
-      {repair.error && <div className="inline-error">{errorMessage(repair.error)}</div>}
-    </section>
+        {repair.data ? (
+          <div className="success-strip compact">
+            {repair.data.accepted
+              ? `Repair queued: ${String((repair.data.job as Record<string, unknown> | undefined)?.id || "background job")}`
+              : `Links ${repair.data.linksSynced} · prices ${repair.data.priceSent} · stock ${repair.data.stockSent} · ${repair.data.pending ? "ожидает восстановления" : "готово"}`}
+          </div>
+        ) : null}
+        {start.error && <div className="inline-error">{errorMessage(start.error)}</div>}
+        {repair.error && <div className="inline-error">{errorMessage(repair.error)}</div>}
+      </section>
+    </>
   );
 }
 

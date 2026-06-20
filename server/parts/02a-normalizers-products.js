@@ -89,6 +89,9 @@ function normalizeWarehouseProduct(input = {}) {
       manualSellableAt: input.noSupplierAutomation?.manualSellableAt || null,
       lastError: input.noSupplierAutomation?.lastError || null,
     },
+    snooze: (input.snooze && cleanText(input.snooze.snoozedUntil))
+      ? { snoozedAt: cleanText(input.snooze.snoozedAt) || null, snoozedUntil: cleanText(input.snooze.snoozedUntil), days: Math.max(1, Number(input.snooze.days || 5) || 5) }
+      : null,
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: input.updatedAt || new Date().toISOString(),
     // Bumped ONLY by user-initiated edits (link save, product patch, group ops) — never by

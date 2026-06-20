@@ -2070,6 +2070,23 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.snooze-status {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-radius: 8px;
+  background: rgba(255, 176, 32, 0.1); border: 1px solid rgba(255, 176, 32, 0.3);
+  color: #ffb020; font-size: 13px;
+}
+.snooze-status span { flex: 1; }
+.snooze-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.snooze-label { font-size: 13px; color: var(--text-soft); }
+.snooze-days { display: flex; gap: 4px; }
+.snooze-day-chip {
+  padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  border: 1px solid rgba(120, 160, 255, 0.25); background: rgba(30, 45, 70, 0.6); color: var(--text-soft);
+}
+.snooze-day-chip.is-active { border-color: rgba(120, 160, 255, 0.6); background: rgba(60, 100, 200, 0.25); color: var(--text); }
+.snooze-hint { display: block; margin-top: 6px; color: var(--text-soft); font-size: 11px; }
+
 .toggle-row {
   display: inline-flex;
   align-items: center;

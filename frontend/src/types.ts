@@ -91,6 +91,7 @@ export const ProductSchema = z.object({
   stockOnlyManualPrices: z.record(z.string(), z.unknown()).optional().default({}),
   stockOnlyAvailableSupplierCount: z.number().optional().default(0),
   noSupplierAutomation: z.record(z.string(), z.unknown()).optional().default({}),
+  snooze: z.object({ snoozedAt: z.string().nullable().optional(), snoozedUntil: z.string(), days: z.number() }).nullable().optional(),
   aiImages: z.array(AiImageSchema).optional().default([]),
 }).passthrough();
 

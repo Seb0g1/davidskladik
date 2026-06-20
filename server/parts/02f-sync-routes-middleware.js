@@ -227,6 +227,12 @@ function startBackgroundSchedulers() {
       batchLimit: zeroStockSweepBatchLimit,
     });
   }
+  if (snoozeSweepEnabled) {
+    scheduleSnoozeSweep(5 * 60_000);
+    logger.info("snooze sweep scheduler enabled", {
+      intervalSeconds: Math.round(snoozeSweepIntervalMs / 1000),
+    });
+  }
   if (priceSweepEnabled) {
     schedulePriceSweep(60_000);
     logger.info("price sweep scheduler enabled", {
