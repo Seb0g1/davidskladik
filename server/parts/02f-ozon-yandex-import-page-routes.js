@@ -67,6 +67,7 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
     const page = Math.max(1, Number(request.query.page || 1) || 1);
     const pageSize = Math.max(1, Math.min(100, Number(request.query.pageSize || 40) || 40));
     const onlyEligible = String(request.query.onlyEligible || "") === "true";
+    const brand = cleanText(request.query.brand || "");
 
     const { Prisma } = require("@prisma/client");
 
@@ -85,6 +86,7 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
         { productId: { contains: q, mode: "insensitive" } },
       ];
     }
+    if (brand) where.brand = { contains: brand, mode: "insensitive" };
 
     // When showing only eligible candidates, use a SQL anti-join to skip Ozon products
     // already on Yandex before JS evaluation — with 10K+ products this drops response
@@ -97,6 +99,9 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
       const qFilter = q
         ? Prisma.sql`AND (LOWER(wp.offer_id) LIKE ${`%${q.toLowerCase()}%`} OR LOWER(wp.name) LIKE ${`%${q.toLowerCase()}%`})`
         : Prisma.empty;
+      const brandFilter = brand
+        ? Prisma.sql`AND LOWER(wp.brand) LIKE ${`%${brand.toLowerCase()}%`}`
+        : Prisma.empty;
       const rawRows = await prisma.$queryRaw`
         SELECT wp.id, wp.offer_id as "offerId", wp.name, wp.raw
         FROM warehouse_products wp
@@ -107,6 +112,7 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
               AND LOWER(yp.offer_id) = LOWER(wp.offer_id)
           )
           ${qFilter}
+          ${brandFilter}
         ORDER BY wp.updated_at DESC
         LIMIT ${scanLimit}
       `;
@@ -160,6 +166,49 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
       scanCapped,
       items,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Returns IDs of all eligible (not yet on Yandex) Ozon candidates for a given brand.
+// Used by "Select all by brand" UI action.
+app.get("/api/ozon-yandex-import/candidates/eligible-ids", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma || !shouldUsePostgresStorage()) return response.status(503).json({ error: "Postgres недоступен." });
+    const brand = cleanText(request.query.brand || "");
+    if (!brand) return response.json({ ids: [], eligible: 0, total: 0 });
+
+    const { Prisma } = require("@prisma/client");
+    const brandLike = `%${brand.toLowerCase()}%`;
+    const rawRows = await prisma.$queryRaw`
+      SELECT wp.id, wp.offer_id as "offerId", wp.name, wp.raw
+      FROM warehouse_products wp
+      WHERE wp.marketplace = 'ozon' AND wp.archived = false
+        AND NOT EXISTS (
+          SELECT 1 FROM warehouse_products yp
+          WHERE yp.marketplace = 'yandex' AND LOWER(yp.offer_id) = LOWER(wp.offer_id)
+        )
+        AND LOWER(wp.brand) LIKE ${brandLike}
+      ORDER BY wp.updated_at DESC
+      LIMIT 5000
+    `;
+
+    const yandexRows = await prisma.warehouseProduct.findMany({
+      where: { marketplace: "yandex" },
+      select: { offerId: true },
+    });
+    const existingOfferIds = new Set(yandexRows.map((row) => cleanText(row.offerId).toLowerCase()).filter(Boolean));
+
+    const ids = [];
+    for (const row of rawRows) {
+      const product = row.raw && typeof row.raw === "object" ? normalizeWarehouseProduct(row.raw) : normalizeWarehouseProduct(row);
+      const candidate = buildOzonYandexImportCandidate(product, { yandexExistingOfferIds: existingOfferIds, manual: true });
+      if (candidate.eligible) ids.push(row.id);
+    }
+
+    response.json({ ids, eligible: ids.length, total: rawRows.length });
   } catch (error) {
     next(error);
   }

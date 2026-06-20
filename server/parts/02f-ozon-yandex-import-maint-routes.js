@@ -148,6 +148,123 @@ app.post("/api/ozon-yandex-import/repair-yandex-content", requireAdmin, async (r
   }
 });
 
+// Sync names (and vendor/description) from Ozon products to their Yandex counterparts
+// where the stored name differs. Sends a content-mode partial update to the Yandex API.
+app.post("/api/ozon-yandex-import/sync-names", requireAdmin, async (request, response, next) => {
+  try {
+    const dryRun = request.body?.dryRun === true;
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "Postgres недоступен." });
+
+    const { Prisma } = require("@prisma/client");
+    // JOIN yandex products with their ozon siblings; compare stored names.
+    const mismatches = await prisma.$queryRaw`
+      SELECT
+        yp.id          AS "yandexId",
+        yp.offer_id    AS "offerId",
+        yp.name        AS "yandexName",
+        yp.raw         AS "yandexRaw",
+        op.name        AS "ozonName",
+        op.raw         AS "ozonRaw"
+      FROM warehouse_products yp
+      JOIN warehouse_products op
+        ON op.marketplace = 'ozon'
+       AND LOWER(op.offer_id) = LOWER(yp.offer_id)
+       AND op.archived = false
+      WHERE yp.marketplace = 'yandex'
+        AND LOWER(TRIM(yp.name)) != LOWER(TRIM(op.name))
+      LIMIT 5000
+    `;
+
+    if (dryRun) {
+      return response.json({
+        ok: true,
+        dryRun: true,
+        mismatched: mismatches.length,
+        sample: mismatches.slice(0, 20).map((r) => ({
+          offerId: r.offerId,
+          yandexName: r.yandexName,
+          ozonName: r.ozonName,
+        })),
+      });
+    }
+
+    const shops = uniqueYandexShopsByBusiness();
+    if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
+
+    const batchByShop = new Map();
+    const updateIds = [];
+
+    for (const row of mismatches) {
+      const yandexProduct = normalizeWarehouseProduct(
+        row.yandexRaw && typeof row.yandexRaw === "object" ? row.yandexRaw : { offerId: row.offerId },
+      );
+      const ozonProduct = normalizeWarehouseProduct(
+        row.ozonRaw && typeof row.ozonRaw === "object" ? row.ozonRaw : { offerId: row.offerId },
+      );
+      const newName = cleanText(ozonProduct.name || ozonProduct.ozon?.name || row.ozonName);
+      if (!newName) continue;
+
+      const target = cleanText(yandexProduct.target);
+      const shop = shops.find((s) => s.id === target) || shops[0];
+      if (!shop) continue;
+
+      // Build full offer from the yandex product but override name/vendor/description
+      // from the Ozon product so all text content stays in sync.
+      const built = buildYandexOfferMapping(yandexProduct, { name: newName });
+
+      if (!batchByShop.has(shop.id)) batchByShop.set(shop.id, { shop, offers: [] });
+      batchByShop.get(shop.id).offers.push(compactObject({
+        offerId: cleanText(row.offerId),
+        name: newName,
+        vendor: built.offer?.vendor,
+        description: built.offer?.description,
+      }));
+      updateIds.push({ id: row.yandexId, name: newName });
+    }
+
+    const results = [];
+    for (const { shop, offers } of batchByShop.values()) {
+      const sent = await sendYandexOfferMappings(shop, offers);
+      results.push(...sent.map((item) => ({ ...item, target: shop.id })));
+    }
+
+    const sentCount = results.filter((item) => item.ok).length;
+    const failedCount = results.filter((item) => !item.ok).length;
+
+    // Update local DB names for successfully synced products.
+    const sentOfferIds = new Set(results.filter((item) => item.ok).map((item) => cleanText(item.offerId).toLowerCase()));
+    const toUpdate = updateIds.filter((u) => {
+      const offerId = cleanText(
+        mismatches.find((m) => m.yandexId === u.id)?.offerId || "",
+      ).toLowerCase();
+      return sentOfferIds.has(offerId);
+    });
+    if (toUpdate.length) {
+      await Promise.all(
+        toUpdate.map(({ id, name }) =>
+          prisma.warehouseProduct.update({ where: { id }, data: { name, updatedAt: new Date() } }).catch(() => null),
+        ),
+      );
+    }
+
+    logger.info("ozon_yandex_sync_names_done", {
+      mismatched: mismatches.length,
+      sent: sentCount,
+      failed: failedCount,
+    });
+    response.json({
+      ok: failedCount === 0,
+      mismatched: mismatches.length,
+      sent: sentCount,
+      failed: failedCount,
+      errors: results.filter((item) => !item.ok).slice(0, 20),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Manual trigger for the Postgres-backed auto import (also runs on schedule).
 app.post("/api/ozon-yandex-import/auto-run", requireAdmin, async (request, response, next) => {
   try {

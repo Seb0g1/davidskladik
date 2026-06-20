@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckSquare, Download, Loader2, RefreshCw, Search, Square, Upload } from "lucide-react";
+import { CheckSquare, Download, Loader2, RefreshCw, Search, Square, Upload, Tag, ArrowLeftRight } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 
@@ -18,6 +18,8 @@ type Candidate = {
 };
 
 type CandidatesResponse = { ok: boolean; page: number; pageSize: number; total: number; scanCapped?: boolean; items: Candidate[]; };
+type EligibleIdsResponse = { ids: string[]; eligible: number; total: number };
+type SyncNamesResponse = { ok: boolean; mismatched: number; sent: number; failed: number; dryRun?: boolean; sample?: { offerId: string; yandexName: string; ozonName: string }[]; errors?: unknown[] };
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -45,9 +47,12 @@ export function ImportPage() {
   const queryClient = useQueryClient();
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
+  const [brandInput, setBrandInput] = useState("");
+  const [brandFilter, setBrandFilter] = useState("");
   const [page, setPage] = useState(1);
   const [onlyEligible, setOnlyEligible] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [syncNamesResult, setSyncNamesResult] = useState<SyncNamesResponse | null>(null);
   const prevRefreshRunning = useRef(false);
 
   useEffect(() => {
@@ -55,10 +60,15 @@ export function ImportPage() {
     return () => window.clearTimeout(timer);
   }, [query]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => { setBrandFilter(brandInput.trim()); setPage(1); }, 400);
+    return () => window.clearTimeout(timer);
+  }, [brandInput]);
+
   const candidatesQuery = useQuery({
-    queryKey: ["import-candidates", debounced, page, onlyEligible],
+    queryKey: ["import-candidates", debounced, brandFilter, page, onlyEligible],
     queryFn: () => apiJson<CandidatesResponse>(
-      `/api/ozon-yandex-import/candidates?q=${encodeURIComponent(debounced)}&page=${page}&pageSize=40&onlyEligible=${onlyEligible}`,
+      `/api/ozon-yandex-import/candidates?q=${encodeURIComponent(debounced)}&brand=${encodeURIComponent(brandFilter)}&page=${page}&pageSize=40&onlyEligible=${onlyEligible}`,
     ),
   });
   const refreshStatus = useQuery({
@@ -81,11 +91,46 @@ export function ImportPage() {
       void queryClient.invalidateQueries({ queryKey: ["import-candidates"] });
     },
   });
+  const selectByBrand = useMutation({
+    mutationFn: (brand: string) => apiJson<EligibleIdsResponse>(
+      `/api/ozon-yandex-import/candidates/eligible-ids?brand=${encodeURIComponent(brand)}`,
+    ),
+    onSuccess: (data) => {
+      setSelected((current) => {
+        const next = new Set(current);
+        data.ids.forEach((id) => next.add(id));
+        return next;
+      });
+    },
+  });
+  const syncNames = useMutation({
+    mutationFn: () => apiJson<SyncNamesResponse>("/api/ozon-yandex-import/sync-names", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+    onSuccess: (data) => {
+      setSyncNamesResult(data);
+      void queryClient.invalidateQueries({ queryKey: ["import-candidates"] });
+    },
+  });
 
   const items = candidatesQuery.data?.items || [];
   const total = candidatesQuery.data?.total || 0;
   const eligibleOnPage = useMemo(() => items.filter((item) => item.eligible && !item.existsOnYandex), [items]);
   const allPageSelected = eligibleOnPage.length > 0 && eligibleOnPage.every((item) => selected.has(item.id));
+
+  const uniqueBrands = useMemo(() => {
+    const seen = new Set<string>();
+    const brands: string[] = [];
+    for (const item of items) {
+      const v = item.vendor?.trim();
+      if (v && !seen.has(v.toLowerCase())) {
+        seen.add(v.toLowerCase());
+        brands.push(v);
+      }
+    }
+    return brands.slice(0, 12);
+  }, [items]);
 
   const toggle = (id: string) => {
     setSelected((current) => {
@@ -120,6 +165,9 @@ export function ImportPage() {
         subtitle="Перенос товаров с Ozon на Яндекс.Маркет: обнови список, найди по артикулу, выбери и импортируй."
         action={(
           <div className="row-actions">
+            <button className="secondary-action" type="button" disabled={syncNames.isPending} onClick={() => syncNames.mutate()} title="Найти товары где название на Ozon отличается от Яндекс и исправить">
+              {syncNames.isPending ? <Loader2 className="spin" size={16} /> : <ArrowLeftRight size={16} />} Синхронизировать названия
+            </button>
             <button className="secondary-action" type="button" disabled={refreshing} onClick={() => refresh.mutate()}>
               {refreshing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить с Ozon
             </button>
@@ -147,16 +195,70 @@ export function ImportPage() {
         </div>
       ) : null}
 
+      {syncNamesResult ? (
+        <div className={`info-strip ${syncNamesResult.ok ? "success" : "warn"}`}>
+          <div>
+            Синхронизация названий: расхождений {syncNamesResult.mismatched}
+            {" · "}обновлено {syncNamesResult.sent}
+            {syncNamesResult.failed ? ` · ошибок: ${syncNamesResult.failed}` : ""}
+          </div>
+          {syncNamesResult.errors && syncNamesResult.errors.length > 0 ? (
+            <ul className="import-skipped">
+              {(syncNamesResult.errors as Array<{ offerId?: string; error?: string }>).slice(0, 10).map((e, i) => (
+                <li key={e.offerId || i}><b>{e.offerId || "—"}</b>: {e.error || "ошибка"}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+      ) : null}
+      {syncNames.error ? <div className="inline-error">{String((syncNames.error as Error).message)}</div> : null}
+
       <div className="filters-row">
         <label className="search-box">
           <Search size={16} />
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Поиск по артикулу или названию" />
+        </label>
+        <label className="search-box">
+          <Tag size={16} />
+          <input value={brandInput} onChange={(event) => setBrandInput(event.target.value)} placeholder="Фильтр по бренду" />
         </label>
         <label className="settings-toggle">
           <input type="checkbox" checked={onlyEligible} onChange={(event) => { setOnlyEligible(event.target.checked); setPage(1); }} />
           Только готовые к импорту
         </label>
       </div>
+
+      {uniqueBrands.length > 0 ? (
+        <div className="brand-chips">
+          {uniqueBrands.map((b) => (
+            <button
+              key={b}
+              type="button"
+              className={`brand-chip${brandFilter.toLowerCase() === b.toLowerCase() ? " active" : ""}`}
+              onClick={() => {
+                const same = brandFilter.toLowerCase() === b.toLowerCase();
+                setBrandInput(same ? "" : b);
+                setBrandFilter(same ? "" : b);
+              }}
+            >
+              {b}
+            </button>
+          ))}
+          {brandFilter ? (
+            <button
+              type="button"
+              className="brand-chip select-all"
+              disabled={selectByBrand.isPending}
+              onClick={() => selectByBrand.mutate(brandFilter)}
+              title={`Выбрать все готовые товары бренда «${brandFilter}» по всем страницам`}
+            >
+              {selectByBrand.isPending ? <Loader2 className="spin" size={12} /> : <CheckSquare size={12} />}
+              {" "}Выбрать все «{brandFilter}»
+              {selectByBrand.data ? ` (${selectByBrand.data.eligible})` : ""}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
 
       {sendSelected.data ? (
         <div className={`info-strip ${sendSelected.data.sent ? "success" : "warn"}`}>
@@ -201,7 +303,17 @@ export function ImportPage() {
                 <span className="import-name">{item.name || item.offerId}</span>
               </span>
               <span data-label="Артикул">{item.offerId}</span>
-              <span data-label="Бренд">{item.vendor || "—"}</span>
+              <span data-label="Бренд">
+                {item.vendor ? (
+                  <button
+                    type="button"
+                    className="brand-chip inline"
+                    onClick={() => { setBrandInput(item.vendor!); setBrandFilter(item.vendor!); setPage(1); }}
+                  >
+                    {item.vendor}
+                  </button>
+                ) : "—"}
+              </span>
               <span data-label="Статус"><span className={`pill ${status.tone}`}>{status.text}</span></span>
             </div>
           );
