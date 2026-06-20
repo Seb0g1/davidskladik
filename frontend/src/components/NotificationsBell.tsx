@@ -86,7 +86,9 @@ export function NotificationsBell() {
   const [unread, setUnread] = useState(0);
   const [open, setOpen] = useState(false);
   const [toast, setToast] = useState<NotificationRow | null>(null);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; right: number } | null>(null);
+  const bellRef = useRef<HTMLButtonElement | null>(null);
+  const dropdownRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = () => {
     fetch("/api/notifications?limit=30", { credentials: "same-origin" })
@@ -97,6 +99,16 @@ export function NotificationsBell() {
         setUnread(Number(data.unread || 0));
       })
       .catch(() => {});
+  };
+
+  const openDropdown = () => {
+    if (!bellRef.current) return;
+    const rect = bellRef.current.getBoundingClientRect();
+    setDropdownPos({
+      top: rect.bottom + 8,
+      right: window.innerWidth - rect.right,
+    });
+    setOpen(true);
   };
 
   useEffect(() => {
@@ -118,7 +130,10 @@ export function NotificationsBell() {
     });
     const fallback = window.setInterval(refresh, 60_000);
     const onDocClick = (event: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      const inBell = bellRef.current?.contains(target);
+      const inDropdown = dropdownRef.current?.contains(target);
+      if (!inBell && !inDropdown) setOpen(false);
     };
     document.addEventListener("click", onDocClick);
     return () => {
@@ -138,13 +153,23 @@ export function NotificationsBell() {
   };
 
   return (
-    <div className="notify-wrap" ref={wrapRef}>
-      <button className="notify-bell" type="button" onClick={() => setOpen((value) => !value)} title="Уведомления">
+    <div className="notify-wrap">
+      <button
+        className="notify-bell"
+        type="button"
+        ref={bellRef}
+        onClick={() => (open ? setOpen(false) : openDropdown())}
+        title="Уведомления"
+      >
         <Bell size={18} />
         {unread > 0 ? <span className="notify-badge">{unread > 99 ? "99+" : unread}</span> : null}
       </button>
-      {open ? (
-        <div className="notify-dropdown">
+      {open && dropdownPos ? createPortal(
+        <div
+          className="notify-dropdown"
+          ref={dropdownRef}
+          style={{ position: "fixed", top: dropdownPos.top, right: dropdownPos.right }}
+        >
           <div className="notify-head">
             <strong>Уведомления</strong>
             <button type="button" onClick={markAllRead} title="Отметить все прочитанными">
@@ -161,7 +186,8 @@ export function NotificationsBell() {
               </div>
             )) : <div className="notify-empty">Пока тихо.</div>}
           </div>
-        </div>
+        </div>,
+        document.body,
       ) : null}
       {toast ? createPortal(
         <div className="notify-toast" onClick={() => setToast(null)}>

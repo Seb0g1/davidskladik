@@ -2070,22 +2070,29 @@ button:disabled {
   flex-wrap: wrap;
 }
 
-.snooze-status {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding: 8px 12px; border-radius: 8px;
-  background: rgba(255, 176, 32, 0.1); border: 1px solid rgba(255, 176, 32, 0.3);
-  color: #ffb020; font-size: 13px;
+.snooze-active-btn { color: #ffb020 !important; }
+.snooze-popup {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 300;
+  background: var(--panel-alt, #1a2235);
+  border: 1px solid rgba(120, 160, 255, 0.25);
+  border-radius: 10px;
+  padding: 10px;
+  min-width: 170px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
 }
-.snooze-status span { flex: 1; }
-.snooze-form { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.snooze-label { font-size: 13px; color: var(--text-soft); }
+.snooze-popup-actions { display: flex; gap: 6px; align-items: center; }
 .snooze-days { display: flex; gap: 4px; }
 .snooze-day-chip {
   padding: 4px 10px; border-radius: 6px; font-size: 12px; cursor: pointer;
   border: 1px solid rgba(120, 160, 255, 0.25); background: rgba(30, 45, 70, 0.6); color: var(--text-soft);
 }
 .snooze-day-chip.is-active { border-color: rgba(120, 160, 255, 0.6); background: rgba(60, 100, 200, 0.25); color: var(--text); }
-.snooze-hint { display: block; margin-top: 6px; color: var(--text-soft); font-size: 11px; }
 
 .toggle-row {
   display: inline-flex;
@@ -3376,7 +3383,7 @@ button:disabled {
   display: inline-flex; align-items: center; justify-content: center;
 }
 .notify-dropdown {
-  position: absolute; right: 0; top: 46px; width: 360px; max-height: 480px; z-index: 60;
+  width: min(360px, calc(100vw - 28px)); max-height: 480px; z-index: 9000;
   background: #0f1830; border: 1px solid rgba(120, 160, 255, 0.25); border-radius: 14px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; overflow: hidden;
 }
