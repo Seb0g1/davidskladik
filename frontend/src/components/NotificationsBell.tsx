@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Bell, CheckCheck, MessageCircle, Package, Star, HelpCircle } from "lucide-react";
 
 type NotificationRow = {
@@ -162,12 +163,13 @@ export function NotificationsBell() {
           </div>
         </div>
       ) : null}
-      {toast ? (
+      {toast ? createPortal(
         <div className="notify-toast" onClick={() => setToast(null)}>
           <span className={`notify-type notify-type-${toast.type}`}>{typeIcon(toast.type)} {typeLabel(toast.type)}</span>
           <strong>{toast.title}</strong>
           {toast.body ? <small>{toast.body}</small> : null}
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );
