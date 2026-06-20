@@ -1,66 +1,83 @@
-// Snooze: temporarily hide a product from marketplace for N days, then auto-reactivate
-// when the supplier has it back in their price list.
+// Snooze a specific supplier link for N days — excludes that link from supplier selection.
+// When all links are snoozed, the product has no selectedSupplier and stock is zeroed immediately.
+// After N days the snooze sweep checks if the supplier is back and queues recovery if so.
 //
-// POST /api/warehouse/products/:id/snooze  { days: 5 }
-//   → sets raw.snooze, zeroes targetStock, sends stock=0 to marketplace
-//
-// DELETE /api/warehouse/products/:id/snooze
-//   → clears snooze, queues supplier recovery
+// POST /api/warehouse/products/:id/links/:linkId/snooze  { days: 5 }
+// DELETE /api/warehouse/products/:id/links/:linkId/snooze
 
 const SNOOZE_DEFAULT_DAYS = 5;
 const SNOOZE_MAX_DAYS = 60;
 
-app.post("/api/warehouse/products/:id/snooze", async (request, response, next) => {
+app.post("/api/warehouse/products/:id/links/:linkId/snooze", async (request, response, next) => {
   try {
-    const warehouse = await readWarehouse();
-    const product = warehouse.products.find((item) => item.id === request.params.id);
+    const productId = cleanText(request.params.id);
+    const linkId = cleanText(request.params.linkId);
+    if (!productId || !linkId) return response.status(400).json({ error: "Не указан ID товара или привязки." });
+
+    const [product] = await readWarehouseProductsFromPostgresByIds([productId]);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+
+    const linkIndex = (product.links || []).findIndex((l) => l.id === linkId);
+    if (linkIndex < 0) return response.status(404).json({ error: "Привязка не найдена." });
 
     const days = Math.max(1, Math.min(SNOOZE_MAX_DAYS, Number(request.body.days || SNOOZE_DEFAULT_DAYS) || SNOOZE_DEFAULT_DAYS));
     const now = new Date().toISOString();
     const snoozedUntil = new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
 
-    product.snooze = { snoozedAt: now, snoozedUntil, days };
-    product.targetStock = 0;
-    product.updatedAt = now;
-    product.userUpdatedAt = now;
+    const updatedLinks = product.links.map((link, i) =>
+      i === linkIndex ? { ...link, snooze: { snoozedAt: now, snoozedUntil, days } } : link,
+    );
+    const updatedProduct = { ...product, links: updatedLinks, updatedAt: now, userUpdatedAt: now };
 
-    await writeWarehouseProductPatch([product], { reason: "snooze", writeLinks: false });
+    await writeWarehouseProductPatch([updatedProduct], { reason: "snooze_link", writeLinks: true });
 
-    // Zero marketplace stock immediately (best-effort — stock sweep is excluded for snoozed products)
-    const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product]).catch(() => []);
-    const target = freshProduct || product;
-    if (target.offerId && target.target) {
-      sendZeroStocksToMarketplace([target]).catch((error) => {
-        logger.warn("snooze zero-stock send failed", { productId: product.id, detail: error?.message || String(error) });
+    const warehouse = await readWarehouse();
+    const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [updatedProduct]).catch(() => [updatedProduct]);
+    const target = freshProduct || updatedProduct;
+
+    // If no supplier remains after snooze (all links snoozed), zero stock immediately
+    if (!target.selectedSupplier && target.hasLinks) {
+      const patched = { ...target, targetStock: 0 };
+      await writeWarehouseProductPatch([patched], { reason: "snooze_link_zero", writeLinks: false });
+      sendZeroStocksToMarketplace([patched]).catch((error) => {
+        logger.warn("snooze link zero-stock send failed", { productId, linkId, detail: error?.message || String(error) });
       });
     }
 
-    await appendAudit(request, "warehouse.product.snooze", { productId: product.id, offerId: product.offerId, days, snoozedUntil });
-    response.json({ ok: true, product: normalizeWarehouseProduct(product) });
+    await appendAudit(request, "warehouse.link.snooze", { productId, linkId, days, snoozedUntil });
+    response.json({ ok: true, product: normalizeWarehouseProduct(target) });
   } catch (error) {
     next(error);
   }
 });
 
-app.delete("/api/warehouse/products/:id/snooze", async (request, response, next) => {
+app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, response, next) => {
   try {
-    const warehouse = await readWarehouse();
-    const product = warehouse.products.find((item) => item.id === request.params.id);
+    const productId = cleanText(request.params.id);
+    const linkId = cleanText(request.params.linkId);
+    if (!productId || !linkId) return response.status(400).json({ error: "Не указан ID товара или привязки." });
+
+    const [product] = await readWarehouseProductsFromPostgresByIds([productId]);
     if (!product) return response.status(404).json({ error: "Товар склада не найден." });
 
-    product.snooze = null;
-    product.updatedAt = new Date().toISOString();
-    product.userUpdatedAt = product.updatedAt;
+    const linkIndex = (product.links || []).findIndex((l) => l.id === linkId);
+    if (linkIndex < 0) return response.status(404).json({ error: "Привязка не найдена." });
 
-    await writeWarehouseProductPatch([product], { reason: "snooze_cancel", writeLinks: false });
-    await appendAudit(request, "warehouse.product.snooze_cancel", { productId: product.id, offerId: product.offerId });
+    const now = new Date().toISOString();
+    const updatedLinks = product.links.map((link, i) => {
+      if (i !== linkIndex) return link;
+      const { snooze: _removed, ...rest } = link;
+      return rest;
+    });
+    const updatedProduct = { ...product, links: updatedLinks, updatedAt: now, userUpdatedAt: now };
 
-    // Queue recovery so the product comes back to marketplace quickly
-    queueMarketplaceJob("linked-supplier-recovery", { productIds: [product.id], source: "snooze_cancel" }, { priority: QUEUE_PRIORITY.RECOVERY })
-      .catch((error) => logger.warn("snooze cancel recovery queue failed", { productId: product.id, detail: error?.message || String(error) }));
+    await writeWarehouseProductPatch([updatedProduct], { reason: "snooze_link_cancel", writeLinks: true });
+    await appendAudit(request, "warehouse.link.snooze_cancel", { productId, linkId });
 
-    response.json({ ok: true, product: normalizeWarehouseProduct(product) });
+    queueMarketplaceJob("linked-supplier-recovery", { productIds: [productId], source: "snooze_cancel" }, { priority: QUEUE_PRIORITY.RECOVERY })
+      .catch((error) => logger.warn("snooze cancel recovery queue failed", { productId, detail: error?.message || String(error) }));
+
+    response.json({ ok: true, product: normalizeWarehouseProduct(updatedProduct) });
   } catch (error) {
     next(error);
   }

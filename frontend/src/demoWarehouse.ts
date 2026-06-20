@@ -140,6 +140,7 @@ function product(input: {
     },
     priceSource: "PriceMaster demo",
     lastPriceSendAt: "2026-06-10T10:15:00.000Z",
+    hasSnoozedLinks: false,
   } as Product;
 }
 

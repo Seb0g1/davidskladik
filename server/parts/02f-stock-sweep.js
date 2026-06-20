@@ -40,10 +40,6 @@ async function runStockSweep({ source = "schedule" } = {}) {
           OR (p.marketplace = 'yandex' AND jsonb_array_length(COALESCE(p.raw->'links', '[]'::jsonb)) > 0)
         )
         AND (
-          p.raw->'snooze' IS NULL
-          OR (p.raw->'snooze'->>'snoozedUntil')::timestamptz <= now()
-        )
-        AND (
           COALESCE(p.target_stock, 0) <= 0
           OR COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) < p.target_stock
         )

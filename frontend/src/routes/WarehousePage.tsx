@@ -712,6 +712,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
                 </span>
               </div>
             </div>
+            {!readOnly && link.id && <SnoozeLink productId={link.productId || products[0]?.id || ""} link={link} onDone={refreshAfterMutation} />}
             <button className="icon-action danger" type="button" onClick={() => deleteMutation.mutate(link)} title="Удалить привязку" disabled={readOnly}>
               <Trash2 size={16} />
             </button>
@@ -1533,25 +1534,23 @@ function GroupActions({ products, selectedGroup, onDone }: { products: Product[]
   );
 }
 
-const z_snooze = { object: (v: unknown): v is { snoozedUntil: string; days: number } => Boolean(v && typeof v === "object" && "snoozedUntil" in (v as object)) };
-
-function SnoozeSection({ primary, onDone }: { primary: Product; onDone: () => void }) {
+function SnoozeLink({ productId, link, onDone }: { productId: string; link: ProductLink; onDone: () => void }) {
   const queryClient = useQueryClient();
   const [days, setDays] = useState(5);
-  const snooze = z_snooze.object(primary.snooze) ? primary.snooze : null;
+  const [open, setOpen] = useState(false);
+  const snooze = link.snooze && link.snooze.snoozedUntil ? link.snooze : null;
 
   const snoozeMutation = useMutation({
     mutationFn: (d: number) => fetchJson(
-      `/api/warehouse/products/${encodeURIComponent(primary.id)}/snooze`,
+      `/api/warehouse/products/${encodeURIComponent(productId)}/links/${encodeURIComponent(link.id)}/snooze`,
       MutationProductResponseSchema,
       { method: "POST", body: JSON.stringify({ days: d }), headers: { "Content-Type": "application/json" } },
     ),
-    onSuccess: (payload) => { refreshWarehouseAfterMutation(queryClient, payload); onDone(); },
+    onSuccess: (payload) => { refreshWarehouseAfterMutation(queryClient, payload); setOpen(false); onDone(); },
   });
-
   const unsnoozeMutation = useMutation({
     mutationFn: () => fetchJson(
-      `/api/warehouse/products/${encodeURIComponent(primary.id)}/snooze`,
+      `/api/warehouse/products/${encodeURIComponent(productId)}/links/${encodeURIComponent(link.id)}/snooze`,
       MutationProductResponseSchema,
       { method: "DELETE" },
     ),
@@ -1562,40 +1561,37 @@ function SnoozeSection({ primary, onDone }: { primary: Product; onDone: () => vo
   const snoozedUntilDate = snooze ? new Date(snooze.snoozedUntil) : null;
   const daysLeft = snoozedUntilDate ? Math.max(0, Math.ceil((snoozedUntilDate.getTime() - Date.now()) / 86_400_000)) : 0;
 
-  return (
-    <section className="detail-section">
-      <div className="section-title">
-        <div>
-          <span>Отложить товар</span>
-          <h3>Временно убрать с маркетплейса</h3>
-        </div>
+  if (snooze) {
+    return (
+      <div className="snooze-status">
+        <Clock size={13} />
+        <span>до {snoozedUntilDate?.toLocaleDateString("ru-RU")} ({daysLeft}д)</span>
+        <button className="icon-action" type="button" disabled={isBusy} title="Снять отложение" onClick={() => unsnoozeMutation.mutate()}>
+          {unsnoozeMutation.isPending ? <Loader2 className="spin" size={13} /> : <X size={13} />}
+        </button>
       </div>
-      {snooze ? (
-        <div className="snooze-status">
-          <Clock size={14} />
-          <span>Отложен на {daysLeft} {daysLeft === 1 ? "день" : daysLeft < 5 ? "дня" : "дней"} · до {snoozedUntilDate?.toLocaleDateString("ru-RU")}</span>
-          <button className="secondary-action compact" type="button" disabled={isBusy} onClick={() => unsnoozeMutation.mutate()}>
-            {unsnoozeMutation.isPending ? <Loader2 className="spin" size={14} /> : <X size={14} />} Снять
-          </button>
-        </div>
-      ) : (
-        <div className="snooze-form">
-          <span className="snooze-label">Отложить на</span>
-          <div className="snooze-days">
-            {[3, 5, 7, 14].map((d) => (
-              <button key={d} type="button" className={`snooze-day-chip${days === d ? " is-active" : ""}`} onClick={() => setDays(d)}>{d}д</button>
-            ))}
-          </div>
-          <button className="secondary-action compact" type="button" disabled={isBusy} onClick={() => snoozeMutation.mutate(days)}>
-            {snoozeMutation.isPending ? <Loader2 className="spin" size={14} /> : <Clock size={14} />} Отложить на {days} дней
-          </button>
-        </div>
-      )}
-      {(snoozeMutation.error || unsnoozeMutation.error) && (
-        <div className="inline-error">{errorMessage(snoozeMutation.error || unsnoozeMutation.error)}</div>
-      )}
-      <small className="snooze-hint">Через {snooze ? daysLeft : days} {(snooze ? daysLeft : days) === 1 ? "день" : "дней"} система проверит прайс поставщика и вернёт товар автоматически.</small>
-    </section>
+    );
+  }
+  if (!open) {
+    return (
+      <button className="icon-action" type="button" title="Отложить поставщика" onClick={() => setOpen(true)}>
+        <Clock size={13} />
+      </button>
+    );
+  }
+  return (
+    <div className="snooze-form compact">
+      <div className="snooze-days">
+        {[3, 5, 7, 14].map((d) => (
+          <button key={d} type="button" className={`snooze-day-chip${days === d ? " is-active" : ""}`} onClick={() => setDays(d)}>{d}д</button>
+        ))}
+      </div>
+      <button className="secondary-action compact" type="button" disabled={isBusy} onClick={() => snoozeMutation.mutate(days)}>
+        {snoozeMutation.isPending ? <Loader2 className="spin" size={13} /> : <Clock size={13} />} Отложить
+      </button>
+      <button className="icon-action" type="button" onClick={() => setOpen(false)}><X size={13} /></button>
+      {snoozeMutation.error && <div className="inline-error">{errorMessage(snoozeMutation.error)}</div>}
+    </div>
   );
 }
 
@@ -1616,12 +1612,10 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
     onSuccess: onDone,
   });
   return (
-    <>
-      <SnoozeSection primary={primary} onDone={onDone} />
-      <section className="detail-section">
-        <div className="section-title">
-          <div>
-            <span>Быстрые действия</span>
+    <section className="detail-section">
+      <div className="section-title">
+        <div>
+          <span>Быстрые действия</span>
             <h3>Остаток, цена, восстановление</h3>
           </div>
         </div>
@@ -1640,10 +1634,9 @@ function QuickActions({ primary, products, onDone }: { primary: Product; product
               : `Links ${repair.data.linksSynced} · prices ${repair.data.priceSent} · stock ${repair.data.stockSent} · ${repair.data.pending ? "ожидает восстановления" : "готово"}`}
           </div>
         ) : null}
-        {start.error && <div className="inline-error">{errorMessage(start.error)}</div>}
-        {repair.error && <div className="inline-error">{errorMessage(repair.error)}</div>}
-      </section>
-    </>
+      {start.error && <div className="inline-error">{errorMessage(start.error)}</div>}
+      {repair.error && <div className="inline-error">{errorMessage(repair.error)}</div>}
+    </section>
   );
 }
 

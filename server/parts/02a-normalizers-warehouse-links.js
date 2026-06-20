@@ -31,6 +31,9 @@ function normalizeWarehouseLink(input = {}) {
     resolvedPriceMasterRow: input.resolvedPriceMasterRow && typeof input.resolvedPriceMasterRow === "object"
       ? cloneAuditValue(input.resolvedPriceMasterRow)
       : null,
+    snooze: (input.snooze && cleanText(input.snooze.snoozedUntil))
+      ? { snoozedAt: cleanText(input.snooze.snoozedAt) || null, snoozedUntil: cleanText(input.snooze.snoozedUntil), days: Math.max(1, Number(input.snooze.days || 5) || 5) }
+      : null,
   };
 }
 

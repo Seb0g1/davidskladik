@@ -66,8 +66,10 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
   const products = warehouse.products.filter(isWarehouseProductTargetEnabled).map((product) => {
     const productMarkupOverride = marketplaceProductMarkupOverride(product);
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
-    const rawSuppliers = normalizedLinks.flatMap((link) =>
-      (matchMap.get(link.id) || []).map((match) => ({
+    const buildNow = new Date();
+    const rawSuppliers = normalizedLinks.flatMap((link) => {
+      if (link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > buildNow) return [];
+      return (matchMap.get(link.id) || []).map((match) => ({
         ...match,
         markupCoefficient: resolveMarkupCoefficient({
           productMarkup: productMarkupOverride,
@@ -102,8 +104,9 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
           }),
           match,
         ),
-      })),
-    );
+      }));
+    });
+    const hasSnoozedLinks = normalizedLinks.some((link) => link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > buildNow);
     const links = normalizedLinks.map((link) => {
       const matched = matchMap.get(link.id) || [];
       const availableMatches = matched.filter((item) => item.available);
@@ -232,6 +235,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
       supplierAlternatives: supplierAlternativesForDiagnostics(suppliers, 5),
       stockOnlyManualPriceMissing: Boolean(stockOnlyFallbackActive && !stockOnlyManualPrice),
       stockOnlyManualPrices: normalizeStockOnlyManualPrices(product.stockOnlyManualPrices),
+      hasSnoozedLinks,
       stockOnlyAvailableSupplierCount,
       selectedSupplierReason: selectedSupplier
         ? "Выбран доступный поставщик с минимальной закупочной ценой."

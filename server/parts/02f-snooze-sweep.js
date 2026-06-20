@@ -1,5 +1,5 @@
-// Snooze sweep: check products with expired snooze and reactivate those whose
-// supplier is back in the price list. Runs every SNOOZE_SWEEP_INTERVAL_SECONDS (default 30 min).
+// Snooze sweep: find links with expired snoozes and reactivate the product
+// when its supplier is back in the price list. Runs every SNOOZE_SWEEP_INTERVAL_SECONDS.
 
 const snoozeSweepEnabled = process.env.SNOOZE_SWEEP_ENABLED !== "false";
 const snoozeSweepIntervalMs = Math.max(5 * 60_000, Number(process.env.SNOOZE_SWEEP_INTERVAL_SECONDS || 1800) * 1000 || 30 * 60_000);
@@ -13,45 +13,44 @@ async function runSnoozeSweep({ source = "schedule" } = {}) {
   if (!prisma || !shouldUsePostgresStorage()) return { status: "postgres_disabled" };
   snoozeSweepRunning = true;
   try {
-    // Find products whose snooze has expired
+    // Find ProductLink rows with expired snoozes
     const rows = await prisma.$queryRawUnsafe(`
-      SELECT id
-      FROM warehouse_products
+      SELECT DISTINCT "productId"
+      FROM "ProductLink"
       WHERE raw->'snooze' IS NOT NULL
         AND (raw->'snooze'->>'snoozedUntil')::timestamptz <= now()
       LIMIT 200
     `);
     if (!rows.length) return { status: "ok", expired: 0, reactivated: 0 };
 
-    const expiredIds = rows.map((row) => String(row.id));
-    const builtProducts = await buildFreshWarehouseProducts(expiredIds, { livePriceMaster: false }).catch((error) => {
+    const expiredProductIds = rows.map((row) => String(row.productId));
+    const products = await readWarehouseProductsFromPostgresByIds(expiredProductIds);
+    if (!products.length) return { status: "ok", expired: expiredProductIds.length, reactivated: 0 };
+
+    // Clear expired snoozes from links
+    const now = new Date().toISOString();
+    const nowMs = Date.now();
+    const updatedProducts = products.map((product) => ({
+      ...product,
+      updatedAt: now,
+      links: (product.links || []).map((link) => {
+        const snoozedUntil = link.snooze?.snoozedUntil;
+        if (!snoozedUntil || new Date(snoozedUntil).getTime() > nowMs) return link;
+        const { snooze: _removed, ...rest } = link;
+        return rest;
+      }),
+    }));
+
+    await writeWarehouseProductPatch(updatedProducts, { reason: "snooze_expired", writeLinks: true });
+
+    // Rebuild to see which products now have a supplier
+    const warehouse = await readWarehouse();
+    const builtProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, updatedProducts).catch((error) => {
       logger.warn("snooze sweep build failed", { detail: error?.message || String(error) });
-      return [];
+      return updatedProducts;
     });
 
-    const now = new Date().toISOString();
-    const toReactivate = [];
-    const toClear = [];
-
-    for (const product of builtProducts) {
-      // Clear snooze regardless of supplier availability
-      product.snooze = null;
-      product.updatedAt = now;
-
-      if (product.selectedSupplier && product.hasLinks) {
-        // Supplier is back — restore stock
-        product.targetStock = Math.max(linkedDefaultSnoozedTargetStock, Number(product.targetStock || 0) || 0);
-        toReactivate.push(product);
-      } else {
-        toClear.push(product);
-      }
-    }
-
-    const allChanged = [...toReactivate, ...toClear];
-    if (allChanged.length) {
-      await writeWarehouseProductPatch(allChanged, { reason: "snooze_expired", writeLinks: false });
-    }
-
+    const toReactivate = builtProducts.filter((product) => product.selectedSupplier && product.hasLinks);
     if (toReactivate.length) {
       const productIds = toReactivate.map((product) => product.id).filter(Boolean);
       queueMarketplaceJob("linked-supplier-recovery", { productIds, source: "snooze_sweep" }, { priority: QUEUE_PRIORITY.RECOVERY })
@@ -60,11 +59,11 @@ async function runSnoozeSweep({ source = "schedule" } = {}) {
 
     logger.info("snooze_sweep_complete", {
       source,
-      expired: expiredIds.length,
+      expiredProducts: expiredProductIds.length,
       reactivated: toReactivate.length,
-      cleared: toClear.length,
+      noSupplier: builtProducts.length - toReactivate.length,
     });
-    return { status: "ok", expired: expiredIds.length, reactivated: toReactivate.length, cleared: toClear.length };
+    return { status: "ok", expired: expiredProductIds.length, reactivated: toReactivate.length };
   } catch (error) {
     logger.warn("snooze sweep failed", { detail: error?.message || String(error) });
     return { status: "error", error: error?.message || String(error) };

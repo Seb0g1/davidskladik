@@ -22,6 +22,7 @@ export const LinkSchema = z.object({
   createdBy: z.coerce.string().optional().nullable(),
   updatedAt: z.coerce.string().optional().nullable(),
   createdAt: z.coerce.string().optional().nullable(),
+  snooze: z.object({ snoozedAt: z.string().nullable().optional(), snoozedUntil: z.string(), days: z.number() }).nullable().optional(),
 }).passthrough();
 
 export const SupplierSchema = z.object({
@@ -91,7 +92,7 @@ export const ProductSchema = z.object({
   stockOnlyManualPrices: z.record(z.string(), z.unknown()).optional().default({}),
   stockOnlyAvailableSupplierCount: z.number().optional().default(0),
   noSupplierAutomation: z.record(z.string(), z.unknown()).optional().default({}),
-  snooze: z.object({ snoozedAt: z.string().nullable().optional(), snoozedUntil: z.string(), days: z.number() }).nullable().optional(),
+  hasSnoozedLinks: z.boolean().optional().default(false),
   aiImages: z.array(AiImageSchema).optional().default([]),
 }).passthrough();
 

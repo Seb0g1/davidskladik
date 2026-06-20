@@ -54,8 +54,7 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
     ? list.filter((product) => {
         if (product.hasLinks || product.noSupplierAutomation?.manualSellableAt || !product.everHadLinks) return false;
         const nowMs = options.now ? new Date(options.now).getTime() : Date.now();
-        const snoozedUntil = product.snooze?.snoozedUntil;
-        if (snoozedUntil && new Date(snoozedUntil).getTime() > nowMs) return false;
+        if (product.hasSnoozedLinks) return false;
         const key = marketplaceOfferAutomationKey(product);
         return !key || !protectedOfferKeys.has(key);
       })
@@ -67,8 +66,7 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
     ? list.filter((product) => {
         if (!product.hasLinks || product.selectedSupplier) return false;
         const nowMs = options.now ? new Date(options.now).getTime() : Date.now();
-        const snoozedUntil = product.snooze?.snoozedUntil;
-        if (snoozedUntil && new Date(snoozedUntil).getTime() > nowMs) return false;
+        if (product.hasSnoozedLinks) return false;
         const manualAt = product.noSupplierAutomation?.manualSellableAt;
         if (manualAt && nowMs - new Date(manualAt).getTime() < manualSellableTtlMs) return false;
         // Skip products already archived by this automation — recovery automation handles them.

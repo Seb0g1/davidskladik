@@ -62,8 +62,10 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
   return productsToBuild.map((product) => {
     const productMarkupOverride = marketplaceProductMarkupOverride(product);
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
-    const rawSuppliers = normalizedLinks.flatMap((link) =>
-      (matchMap.get(link.id) || []).map((match) => {
+    const buildNow = new Date();
+    const rawSuppliers = normalizedLinks.flatMap((link) => {
+      if (link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > buildNow) return [];
+      return (matchMap.get(link.id) || []).map((match) => {
         const markupCoefficient = resolveMarkupCoefficient({
           productMarkup: productMarkupOverride,
           marketplace: product.marketplace,
@@ -77,8 +79,9 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
           markupCoefficient,
           calculatedPrice: calculateRubPrice(match.price, rate, markupCoefficient, match),
         };
-      }),
-    );
+      });
+    });
+    const hasSnoozedLinks = normalizedLinks.some((link) => link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > buildNow);
     const links = normalizedLinks.map((link) => {
       const matched = matchMap.get(link.id) || [];
       const availableMatches = matched.filter((item) => item.available);
@@ -207,6 +210,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       supplierAlternatives: supplierAlternativesForDiagnostics(suppliers, 5),
       stockOnlyManualPriceMissing: Boolean(stockOnlyFallbackActive && !stockOnlyManualPrice),
       stockOnlyManualPrices: normalizeStockOnlyManualPrices(product.stockOnlyManualPrices),
+      hasSnoozedLinks,
       stockOnlyAvailableSupplierCount,
       selectedSupplierReason: selectedSupplier
         ? "Выбран доступный поставщик с минимальной закупочной ценой."
