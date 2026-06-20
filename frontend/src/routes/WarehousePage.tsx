@@ -1561,36 +1561,33 @@ function SnoozeLink({ productId, link, onDone }: { productId: string; link: Prod
   const snoozedUntilDate = snooze ? new Date(snooze.snoozedUntil) : null;
   const daysLeft = snoozedUntilDate ? Math.max(0, Math.ceil((snoozedUntilDate.getTime() - Date.now()) / 86_400_000)) : 0;
 
-  if (snooze) {
-    return (
-      <div className="snooze-status">
-        <Clock size={13} />
-        <span>до {snoozedUntilDate?.toLocaleDateString("ru-RU")} ({daysLeft}д)</span>
-        <button className="icon-action" type="button" disabled={isBusy} title="Снять отложение" onClick={() => unsnoozeMutation.mutate()}>
-          {unsnoozeMutation.isPending ? <Loader2 className="spin" size={13} /> : <X size={13} />}
-        </button>
-      </div>
-    );
-  }
-  if (!open) {
-    return (
-      <button className="icon-action" type="button" title="Отложить поставщика" onClick={() => setOpen(true)}>
-        <Clock size={13} />
-      </button>
-    );
-  }
   return (
-    <div className="snooze-form compact">
-      <div className="snooze-days">
-        {[3, 5, 7, 14].map((d) => (
-          <button key={d} type="button" className={`snooze-day-chip${days === d ? " is-active" : ""}`} onClick={() => setDays(d)}>{d}д</button>
-        ))}
-      </div>
-      <button className="secondary-action compact" type="button" disabled={isBusy} onClick={() => snoozeMutation.mutate(days)}>
-        {snoozeMutation.isPending ? <Loader2 className="spin" size={13} /> : <Clock size={13} />} Отложить
+    <div style={{ position: "relative" }}>
+      <button
+        className={`icon-action${snooze ? " snooze-active-btn" : ""}`}
+        type="button"
+        disabled={isBusy}
+        title={snooze ? `Отложен до ${snoozedUntilDate?.toLocaleDateString("ru-RU")} (${daysLeft}д). Нажмите чтобы снять.` : "Отложить поставщика"}
+        onClick={() => snooze ? unsnoozeMutation.mutate() : setOpen((v) => !v)}
+      >
+        {(snoozeMutation.isPending || unsnoozeMutation.isPending) ? <Loader2 className="spin" size={13} /> : <Clock size={13} />}
       </button>
-      <button className="icon-action" type="button" onClick={() => setOpen(false)}><X size={13} /></button>
-      {snoozeMutation.error && <div className="inline-error">{errorMessage(snoozeMutation.error)}</div>}
+      {open && !snooze && (
+        <div className="snooze-popup">
+          <div className="snooze-days">
+            {[3, 5, 7, 14].map((d) => (
+              <button key={d} type="button" className={`snooze-day-chip${days === d ? " is-active" : ""}`} onClick={() => setDays(d)}>{d}д</button>
+            ))}
+          </div>
+          <div className="snooze-popup-actions">
+            <button className="secondary-action compact" type="button" disabled={isBusy} onClick={() => snoozeMutation.mutate(days)}>
+              Отложить {days}д
+            </button>
+            <button className="icon-action" type="button" onClick={() => setOpen(false)}><X size={13} /></button>
+          </div>
+          {snoozeMutation.error && <div className="inline-error" style={{ fontSize: 11 }}>{errorMessage(snoozeMutation.error)}</div>}
+        </div>
+      )}
     </div>
   );
 }

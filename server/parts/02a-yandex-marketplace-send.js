@@ -31,7 +31,7 @@ function buildYandexOfferMapping(product, overrides = {}) {
   const offer = compactObject({
     offerId: cleanText(overrides.offerId || yandex.offerId || normalized.offerId),
     name: cleanText(overrides.name || yandex.name || ozon.name || normalized.name),
-    marketCategoryId: Number(yandex.marketCategoryId || ozon.marketCategoryId || ozon.categoryId || 0) || undefined,
+    marketCategoryId: Number(yandex.marketCategoryId || ozon.marketCategoryId || 0) || undefined,
     pictures,
     vendor,
     description: cleanText(yandex.description || ozon.description || normalized.name),
@@ -44,7 +44,6 @@ function buildYandexOfferMapping(product, overrides = {}) {
   const missing = [];
   if (!offer.offerId) missing.push("offerId");
   if (!offer.name) missing.push("name");
-  if (!offer.marketCategoryId) missing.push("marketCategoryId");
   if (!offer.pictures?.length) missing.push("pictures");
   if (!offer.vendor || offer.vendor.toLowerCase() === "без бренда") missing.push("vendor");
   if (!offer.description) missing.push("description");

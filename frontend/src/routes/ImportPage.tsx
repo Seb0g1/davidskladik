@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckSquare, Download, Loader2, RefreshCw, Search, Square, Upload } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
@@ -14,9 +14,10 @@ type Candidate = {
   existsOnYandex: boolean;
   yandexReady: boolean;
   blockReasons: string[];
+  missing?: string[];
 };
 
-type CandidatesResponse = { ok: boolean; page: number; pageSize: number; total: number; scanCapped?: boolean; items: Candidate[] };
+type CandidatesResponse = { ok: boolean; page: number; pageSize: number; total: number; scanCapped?: boolean; items: Candidate[]; };
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -33,7 +34,10 @@ function statusLabel(item: Candidate): { text: string; tone: string } {
   if (item.existsOnYandex) return { text: "уже на Яндексе", tone: "muted" };
   if (item.eligible) return { text: "готов к импорту", tone: "ok" };
   if (item.blockReasons.length) return { text: item.blockReasons[0], tone: "warn" };
-  if (!item.yandexReady) return { text: "нет данных для карточки", tone: "warn" };
+  if (!item.yandexReady) {
+    const detail = item.missing?.length ? `: нет ${item.missing.join(", ")}` : "";
+    return { text: `нет данных для карточки${detail}`, tone: "warn" };
+  }
   return { text: "—", tone: "muted" };
 }
 
@@ -44,6 +48,7 @@ export function ImportPage() {
   const [page, setPage] = useState(1);
   const [onlyEligible, setOnlyEligible] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const prevRefreshRunning = useRef(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { setDebounced(query.trim()); setPage(1); }, 400);
@@ -98,7 +103,15 @@ export function ImportPage() {
     });
   };
 
-  const refreshing = refresh.isPending || refreshStatus.data?.running;
+  const isRunning = Boolean(refreshStatus.data?.running);
+  useEffect(() => {
+    if (prevRefreshRunning.current && !isRunning) {
+      void queryClient.invalidateQueries({ queryKey: ["import-candidates"] });
+    }
+    prevRefreshRunning.current = isRunning;
+  }, [isRunning, queryClient]);
+
+  const refreshing = refresh.isPending || isRunning;
 
   return (
     <section className="page-section import-page">
@@ -121,6 +134,11 @@ export function ImportPage() {
         <Stat label="Выбрано" value={selected.size} tone={selected.size ? "warn" : "success"} icon={<CheckSquare size={18} />} />
       </section>
 
+      {candidatesQuery.data?.scanCapped ? (
+        <div className="info-strip warn compact">
+          Показаны первые 50 000 товаров. Используй поиск, чтобы найти конкретный артикул.
+        </div>
+      ) : null}
       {refreshStatus.data?.lastResult?.at ? (
         <div className="info-strip compact">
           Последнее обновление каталога Ozon: {new Date(refreshStatus.data.lastResult.at).toLocaleString("ru-RU")}

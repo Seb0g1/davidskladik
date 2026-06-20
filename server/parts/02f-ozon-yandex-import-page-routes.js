@@ -113,6 +113,7 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
         existsOnYandex: Boolean(candidate.existingInYandex),
         yandexReady: Boolean(candidate.yandexReady),
         blockReasons: candidate.blockReasons || [],
+        missing: Array.isArray(candidate.missing) ? candidate.missing : [],
       };
     });
 
