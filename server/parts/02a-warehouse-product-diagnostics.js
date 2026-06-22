@@ -174,6 +174,11 @@ function publicWarehouseDiagnosticProduct(product = {}, contextProducts = []) {
       sourceRowId: link.sourceRowId || "",
       updatedAt: link.updatedAt || "",
       updatedBy: link.updatedBy || "",
+      matchedCount: Number(link.matchedCount ?? 0),
+      availableCount: Number(link.availableCount ?? 0),
+      available: link.availableCount > 0,
+      missingInPriceMaster: Boolean(link.missingInPriceMaster),
+      unavailableInPriceMaster: Boolean(link.unavailableInPriceMaster),
     })),
   };
 }
