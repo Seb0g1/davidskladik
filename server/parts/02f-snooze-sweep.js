@@ -53,7 +53,7 @@ async function runSnoozeSweep({ source = "schedule" } = {}) {
     const toReactivate = builtProducts.filter((product) => product.selectedSupplier && product.hasLinks);
     if (toReactivate.length) {
       const productIds = toReactivate.map((product) => product.id).filter(Boolean);
-      queueMarketplaceJob("linked-supplier-recovery", { productIds, source: "snooze_sweep" }, { priority: QUEUE_PRIORITY.RECOVERY })
+      queueLinkedProductActivation(productIds, "snooze_sweep")
         .catch((error) => logger.warn("snooze sweep recovery queue failed", { count: productIds.length, detail: error?.message || String(error) }));
     }
 

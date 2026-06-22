@@ -74,7 +74,7 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
     await writeWarehouseProductPatch([updatedProduct], { reason: "snooze_link_cancel", writeLinks: true });
     await appendAudit(request, "warehouse.link.snooze_cancel", { productId, linkId });
 
-    queueMarketplaceJob("linked-supplier-recovery", { productIds: [productId], source: "snooze_cancel" }, { priority: QUEUE_PRIORITY.RECOVERY })
+    queueLinkedProductActivation([productId], "snooze_cancel", { username: requestUsername(request) })
       .catch((error) => logger.warn("snooze cancel recovery queue failed", { productId, detail: error?.message || String(error) }));
 
     response.json({ ok: true, product: normalizeWarehouseProduct(updatedProduct) });

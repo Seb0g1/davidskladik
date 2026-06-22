@@ -98,10 +98,12 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
     response.json({ ok: true, warehouse: saved });
     const affectedProductIds = supplierImpactProductIds(warehouse, before, supplier);
     if (affectedProductIds.length) {
-      queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds }, { priority: QUEUE_PRIORITY.RECOVERY });
-      queueLinkedProductActivation(affectedProductIds, "supplier_update", {
-        username: requestUsername(request),
-      }).catch((error) => logger.warn("supplier update activation failed", { detail: error?.message || String(error) }));
+      queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds, skipLinkedGrace: Boolean(supplier.stopped) }, { priority: QUEUE_PRIORITY.RECOVERY });
+      if (!supplier.stopped) {
+        queueLinkedProductActivation(affectedProductIds, "supplier_update", {
+          username: requestUsername(request),
+        }).catch((error) => logger.warn("supplier update activation failed", { detail: error?.message || String(error) }));
+      }
       if (priceCurrencyChanged) {
         queueAuthoritativePriceReprice({
           productIds: affectedProductIds,

@@ -5493,7 +5493,7 @@ test("automation does not zero manually restored linked product", () => {
       noSupplierAutomation: { manualSellableAt: "2026-05-18T12:00:00.000Z" },
       marketplaceState: { code: "active", stock: 3 },
     },
-  ]);
+  ], { now: "2026-05-18T13:00:00.000Z" });
   assert.equal(toZeroStock.length, 0);
   assert.equal(toArchive.length, 0);
 });

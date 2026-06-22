@@ -30,6 +30,7 @@ async function processMarketplaceJob(name, data = {}) {
         productIds,
         includeNoLinks: true,
         source: "targeted",
+        skipLinkedGrace: data.skipLinkedGrace === true,
       });
     }
     const preview = await buildWarehouseView({ sync: true });
