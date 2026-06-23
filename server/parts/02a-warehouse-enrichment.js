@@ -194,11 +194,16 @@ async function enrichWeakOzonProductsForPage(products = []) {
 }
 
 function stoppedSupplierMap(suppliers = []) {
-  return new Map(
-    suppliers
-      .filter((supplier) => supplier.stopped && supplier.name)
-      .map((supplier) => [normalizeSupplierName(supplier.name), supplier]),
-  );
+  const map = new Map();
+  for (const supplier of suppliers || []) {
+    if (!supplier.stopped || !supplier.name) continue;
+    const key = normalizeSupplierName(supplier.name);
+    map.set(key, supplier);
+    // Also index by legal-form-stripped key so "Авангард" matches "ООО Авангард" and vice versa.
+    const stripped = stripSupplierLegalFormPrefix(key);
+    if (stripped !== key) map.set(stripped, supplier);
+  }
+  return map;
 }
 
 function managedSupplierMaps(suppliers = []) {
@@ -206,15 +211,25 @@ function managedSupplierMaps(suppliers = []) {
   const byPartnerId = new Map();
   for (const supplier of suppliers || []) {
     const normalized = normalizeManagedSupplier(supplier);
-    if (normalized.name) byName.set(normalizeSupplierName(normalized.name), normalized);
     if (normalized.partnerId) byPartnerId.set(String(normalized.partnerId), normalized);
+    if (normalized.name) {
+      const key = normalizeSupplierName(normalized.name);
+      byName.set(key, normalized);
+      // Also index by stripped key for legal-form-tolerant lookup.
+      const stripped = stripSupplierLegalFormPrefix(key);
+      if (stripped !== key) byName.set(stripped, normalized);
+    }
   }
   return { byName, byPartnerId };
 }
 
 function findManagedSupplierForPriceMasterRow(row = {}, maps = managedSupplierMaps(), link = {}) {
-  return maps.byPartnerId.get(String(row.partnerId || link.partnerId || ""))
-    || maps.byName.get(normalizeSupplierName(row.partnerName || link.supplierName || ""))
+  const byId = maps.byPartnerId.get(String(row.partnerId || link.partnerId || ""));
+  if (byId) return byId;
+  const partnerName = row.partnerName || link.supplierName || "";
+  const key = normalizeSupplierName(partnerName);
+  return maps.byName.get(key)
+    || maps.byName.get(stripSupplierLegalFormPrefix(key))
     || null;
 }
 

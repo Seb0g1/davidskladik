@@ -264,11 +264,33 @@ function pickSafeArticlePriceMasterRow(matches = [], productContext = {}) {
   return { row: best.row, resolvedBy: "product_name_score", candidates };
 }
 
+// Common Russian legal-form prefixes (ООО, ИП, АО …) stored with a trailing space so the
+// strip works on the result of normalizeSupplierName() which is already lowercased.
+const PM_SUPPLIER_LEGAL_PREFIXES = ["ооо ", "ип ", "ао ", "зао ", "пао ", "гк ", "тд ", "оао ", "нпо "];
+
+function stripSupplierLegalFormPrefix(normalized = "") {
+  for (const prefix of PM_SUPPLIER_LEGAL_PREFIXES) {
+    if (normalized.startsWith(prefix) && normalized.length > prefix.length) {
+      return normalized.slice(prefix.length).trim();
+    }
+  }
+  return normalized;
+}
+
+// Fuzzy supplier name comparison: considers "Авангард" equal to "ООО Авангард" but NOT to
+// "Авангард Ростов" (different company). partnerId is a stronger anchor — this is only a
+// last-resort fallback for links whose supplierName was saved before PM added/removed a legal
+// form prefix.
+function supplierNamesMatch(partnerName = "", linkSupplierName = "") {
+  const a = normalizeSupplierName(partnerName);
+  const b = normalizeSupplierName(linkSupplierName);
+  if (a === b) return true;
+  return stripSupplierLegalFormPrefix(a) === stripSupplierLegalFormPrefix(b);
+}
+
 function priceMasterRowMatchesLink(row = {}, link = {}) {
   const fields = priceMasterSnapshotRowFields(row);
-  const supplierOk =
-    !link.supplierName ||
-    normalizeSupplierName(fields.partnerName) === normalizeSupplierName(link.supplierName);
+  const supplierOk = !link.supplierName || supplierNamesMatch(fields.partnerName, link.supplierName);
   const partnerOk = link.matchType === "article"
     ? true
     : (!link.partnerId || String(fields.partnerId || "") === String(link.partnerId));
