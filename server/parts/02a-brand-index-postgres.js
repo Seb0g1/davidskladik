@@ -6,14 +6,21 @@ async function rebuildWarehouseBrandIndexPostgres(prisma, { limit = 0 } = {}) {
     select: { id: true, marketplace: true, target: true, offerId: true, productId: true, name: true, brand: true, raw: true },
     ...(effectiveLimit > 0 ? { take: effectiveLimit, orderBy: [{ updatedAt: "desc" }] } : {}),
   });
+  // Build all index rows before the transaction so heavy computation stays outside the DB lock.
+  const allData = rows.flatMap((row) => warehouseBrandIndexRowsForProduct(productFromPostgres({ ...row, links: [] })));
   let indexed = 0;
-  await prisma.brandIndexItem.deleteMany({});
-  for (const batch of chunkArray(rows, 500)) {
-    const data = batch.flatMap((row) => warehouseBrandIndexRowsForProduct(productFromPostgres({ ...row, links: [] })));
-    if (!data.length) continue;
-    const result = await prisma.brandIndexItem.createMany({ data, skipDuplicates: true });
-    indexed += result.count || 0;
-  }
+  // Wrap delete+insert in a single transaction so concurrent brand-filter queries never see
+  // a partially-rebuilt (or empty) index between deleteMany and the last createMany batch.
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.brandIndexItem.deleteMany({});
+      for (const batch of chunkArray(allData, 500)) {
+        const result = await tx.brandIndexItem.createMany({ data: batch, skipDuplicates: true });
+        indexed += result.count || 0;
+      }
+    },
+    { timeout: 60000 },
+  );
   warehouseBrandListCache = null;
   return { ok: true, scanned: rows.length, indexed };
 }

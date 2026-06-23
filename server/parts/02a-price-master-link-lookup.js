@@ -100,12 +100,18 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
     }
   }
   if (!articleLinks.length) return map;
-  const articles = Array.from(new Set(articleLinks.map((link) => link.article))).slice(0, 500);
-  const placeholders = articles.map(() => "?").join(",");
+  // De-duplicate articles but do NOT slice — send all articles in batches of 500 to avoid
+  // MySQL parameter limits. Previously .slice(0, 500) silently dropped products whose article
+  // fell outside the first 500, causing them to show selectedSupplier=null and get zeroed.
+  const articles = Array.from(new Set(articleLinks.map((link) => link.article)));
   const stoppedMap = stoppedSupplierMap(managedSuppliers);
   const supplierMaps = managedSupplierMaps(managedSuppliers);
-  const [rows] = await pool.query({
-    sql: `
+  const queryTimeout = Math.max(250, Number(timeoutMs || process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 1500));
+  const rowsByArticle = new Map();
+  for (const batch of chunkArray(articles, 500)) {
+    const placeholders = batch.map(() => "?").join(",");
+    const [batchRows] = await pool.query({
+      sql: `
     SELECT
       r.NativeID AS article,
       r.NativeName AS name,
@@ -123,14 +129,14 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
     ORDER BY d.DocDate DESC, r.RowID DESC
     LIMIT 5000
     `,
-    values: articles,
-    timeout: Math.max(250, Number(timeoutMs || process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 1500)),
-  });
-  const rowsByArticle = new Map();
-  for (const row of rows || []) {
-    const article = cleanText(row.article);
-    if (!rowsByArticle.has(article)) rowsByArticle.set(article, []);
-    rowsByArticle.get(article).push(row);
+      values: batch,
+      timeout: queryTimeout,
+    });
+    for (const row of batchRows || []) {
+      const article = cleanText(row.article);
+      if (!rowsByArticle.has(article)) rowsByArticle.set(article, []);
+      rowsByArticle.get(article).push(row);
+    }
   }
   for (const link of articleLinks) {
     const matches = (rowsByArticle.get(link.article) || [])

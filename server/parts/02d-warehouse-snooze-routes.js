@@ -77,7 +77,12 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
     queueLinkedProductActivation([productId], "snooze_cancel", { username: requestUsername(request) })
       .catch((error) => logger.warn("snooze cancel recovery queue failed", { productId, detail: error?.message || String(error) }));
 
-    response.json({ ok: true, product: normalizeWarehouseProduct(updatedProduct) });
+    // Optimistically clear stockZeroAt in the response so the UI immediately shows that recovery
+    // is in progress, rather than keeping the "stock zeroed" state until the async job finishes.
+    const displayProduct = updatedProduct.noSupplierAutomation?.stockZeroAt
+      ? { ...updatedProduct, noSupplierAutomation: { ...(updatedProduct.noSupplierAutomation || {}), stockZeroAt: null } }
+      : updatedProduct;
+    response.json({ ok: true, product: normalizeWarehouseProduct(displayProduct) });
   } catch (error) {
     next(error);
   }

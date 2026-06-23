@@ -88,7 +88,13 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
         await unarchiveProductsOnMarketplaces(ozonRecovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),
       )
       : []);
-  const ozonSecondStockActions = ozonRecovered.length ? await restoreStocksOnMarketplaces(ozonRecovered) : [];
+  // Second stock send is only needed for products that were actually unarchived (the marketplace
+  // sets stock to 0 on archive, so a post-unarchive send is required to restore it). Products
+  // that were never archived already had stock set by ozonFirstStockActions — sending twice
+  // wastes rate-limit quota and can cause Ozon API throttling.
+  const unarchiveSuccessIds = new Set(ozonUnarchiveActions.filter((a) => a.ok && !a.pending).map((a) => String(a.id)));
+  const toSecondStockOzon = ozonRecovered.filter((p) => unarchiveSuccessIds.has(String(p.id)));
+  const ozonSecondStockActions = toSecondStockOzon.length ? await restoreStocksOnMarketplaces(toSecondStockOzon) : [];
   const yandexUnarchiveActions = yandexRecovered.length
     ? await verifyYandexUnarchiveActions(
       yandexRecovered,
@@ -118,8 +124,17 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   const restoredStockById = new Map(stockActions
     .filter((item) => item.ok)
     .map((item) => [String(item.id), Math.max(1, Math.round(Number(item.stock || 1)))]));
+  // queuedOzonProducts are built fresh via buildFreshWarehouseProducts and may not be present in
+  // warehouse.products (the in-memory warehouse only knows products it has seen before). Merge them
+  // into a combined lookup so their noSupplierAutomation state gets written to DB after recovery.
+  const warehouseProductsById = new Map(warehouse.products.map((p) => [String(p.id), p]));
+  for (const product of queuedOzonProducts) {
+    if (product?.id && !warehouseProductsById.has(String(product.id))) {
+      warehouseProductsById.set(String(product.id), product);
+    }
+  }
   const changedProducts = [];
-  for (const product of warehouse.products) {
+  for (const product of warehouseProductsById.values()) {
     const productId = String(product.id);
     if (!recoveredIds.has(productId)) continue;
     product.noSupplierAutomation = product.noSupplierAutomation || {};

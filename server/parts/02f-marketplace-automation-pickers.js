@@ -95,11 +95,16 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
     : [];
   return {
     toZeroStock: [...linkedNoSupplier, ...noLinkZeroStock],
+    // noLinkProducts already guarantees product.everHadLinks === true (the filter above excludes
+    // products that never had links). The old `!product.everHadLinks` condition was always false
+    // for every item in the list, making toArchive permanently empty.
+    // Archive only after stock is already zeroed by automation — never archive while stock > 0.
     toArchive: autoArchiveOnNoLinks
       ? noLinkProducts.filter(
           (product) =>
-            !product.everHadLinks
-            && !productLooksArchived(product),
+            !productLooksArchived(product)
+            && !marketplaceHasPositiveStock(product)
+            && Boolean(product.noSupplierAutomation?.stockZeroAt),
         )
       : [],
   };
