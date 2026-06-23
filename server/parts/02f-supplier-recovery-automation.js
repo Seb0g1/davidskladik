@@ -11,12 +11,14 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [] };
   }
   let recovered = pickSupplierRecoveryCandidates(products, options);
-  // Products archived by no-supplier automation have targetStock=0; give them stock=1 so
-  // restoreStocksOnMarketplaces succeeds and sellable=true gets set (which sets manualSellableAt,
-  // preventing the no-supplier automation from re-zeroing them on the next cycle).
+  const defaultStock = Math.max(1, Number(process.env.LINKED_DEFAULT_TARGET_STOCK || 5) || 5);
+  // Products that were zero-stocked by automation (targetStock=0) need a valid stock before the
+  // API send. Products without a supplier get minimum stock=1 (unarchive minimum); products with
+  // an active supplier (e.g. recovering from a supplier stop or snooze cancel) get the configured
+  // default (typically 5) so the marketplace immediately shows the correct selling quantity.
   recovered = recovered.map((product) =>
-    !product.selectedSupplier && !(Number(product.targetStock) > 0)
-      ? { ...product, targetStock: 1 }
+    !(Number(product.targetStock) > 0)
+      ? { ...product, targetStock: product.selectedSupplier ? defaultStock : 1 }
       : product,
   );
   const targetedIdSet = Array.isArray(options.productIds) && options.productIds.length

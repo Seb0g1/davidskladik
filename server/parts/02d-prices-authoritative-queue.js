@@ -95,8 +95,13 @@ async function queueAuthoritativePriceReprice({
 function pickImmediateLinkRecoveryCandidates(products = []) {
   return (Array.isArray(products) ? products : []).filter((product) => {
     if (!product?.id || !productHasSupplierLinks(product) || !product.selectedSupplier) return false;
-    return productLooksArchived(product)
-      || marketplaceProductNeedsSalesRecovery(product, { includeUnknown: true });
+    if (productLooksArchived(product) || marketplaceProductNeedsSalesRecovery(product, { includeUnknown: true })) return true;
+    // Zero stock with an active supplier means a prior deactivation left stock at 0 while the
+    // marketplace code stayed "active" (Ozon/Yandex don't flip code on zero-stock without archive).
+    // Restore immediately so the user doesn't have to wait for the next scheduled stock sweep.
+    const marketplaceStock = Math.round(Number(product.marketplaceState?.stock || 0));
+    const targetStock = Math.round(Number(product.targetStock || 0));
+    return marketplaceStock <= 0 || targetStock <= 0;
   });
 }
 

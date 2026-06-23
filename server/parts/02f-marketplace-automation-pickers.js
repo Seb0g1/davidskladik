@@ -143,6 +143,10 @@ function pickSupplierRecoveryCandidates(products = [], { productIds, force = fal
   return (Array.isArray(products) ? products : []).filter((product) => {
     if (idSet && !idSet.has(String(product.id))) return false;
     if (!product.hasLinks) return false;
+    // Never recover a product whose only remaining supplier is snoozed — the snooze handler
+    // already zeroed stock and the user explicitly asked for a temporary pause. A leftover
+    // archivedAt from a prior automation cycle must not override this decision.
+    if (product.hasSnoozedLinks && !product.selectedSupplier) return false;
     // Allow recovery for products archived by automation even without a supplier —
     // they get unarchived with minimum stock=1 and manualSellableAt set to prevent re-zeroing.
     if (!product.selectedSupplier && !product.noSupplierAutomation?.archivedAt) return false;
