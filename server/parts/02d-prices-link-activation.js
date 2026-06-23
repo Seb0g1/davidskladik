@@ -51,6 +51,29 @@ async function runLinkedProductActivationImmediate(productIds = [], sourceEvent 
     );
   }
 
+  // For stock-only products (no price, supplier provides availability only) that have
+  // no marketplace stock yet, send stock directly. These are excluded from priceIds below and
+  // may not be caught by pickImmediateLinkRecoveryCandidates when marketplaceState.stock is
+  // absent or positive-but-stale. This is a targeted fast path: recovery automation handles
+  // the general case, but stock-only products need a dedicated stock push on link save.
+  const stockOnlyNeedsStock = withSupplier.filter(
+    (product) => warehouseProductUsesStockOnlyPricing(product)
+      && !productLooksArchived(product)
+      && !product.hasSnoozedLinks
+      && !marketplaceHasPositiveStock(product)
+      && !recoveryCandidates.some((c) => String(c.id) === String(product.id)),
+  );
+  if (stockOnlyNeedsStock.length) {
+    const defaultStock = Math.max(1, Number(process.env.LINKED_DEFAULT_TARGET_STOCK || 5) || 5);
+    const toSend = stockOnlyNeedsStock.map((p) => ({
+      ...p,
+      targetStock: Math.max(defaultStock, Math.round(Number(p.targetStock || 0)) || defaultStock),
+    }));
+    await restoreStocksOnMarketplaces(toSend).catch((err) => {
+      logger.warn("link_activation stock-only direct restore failed", { sourceEvent: normalizedSourceEvent, detail: err?.message || String(err) });
+    });
+  }
+
   const priceIds = withSupplier.filter((product) => !warehouseProductUsesStockOnlyPricing(product)).map((product) => product.id);
   const priceResult = priceIds.length
     ? await sendWarehousePrices({
