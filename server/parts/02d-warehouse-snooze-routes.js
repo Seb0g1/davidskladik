@@ -35,11 +35,19 @@ app.post("/api/warehouse/products/:id/links/:linkId/snooze", async (request, res
     const [freshProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [updatedProduct]).catch(() => [updatedProduct]);
     const target = freshProduct || updatedProduct;
 
-    // If no supplier remains after snooze (all links snoozed), zero stock immediately
+    // If no supplier remains after snooze (all links snoozed), zero stock immediately.
+    // Expand to group siblings so all marketplace variants (Ozon + Yandex) get zeroed —
+    // the siblings share the same physical product and should not keep selling independently.
     if (!target.selectedSupplier && target.hasLinks) {
       const patched = { ...target, targetStock: 0 };
-      await writeWarehouseProductPatch([patched], { reason: "snooze_link_zero", writeLinks: false });
-      sendZeroStocksToMarketplace([patched]).catch((error) => {
+      const groupProducts = await hydrateWarehouseProductsForIds([productId], { expandGroups: true });
+      const siblingsToZero = groupProducts
+        .filter((p) => String(p.id) !== String(productId))
+        .map((p) => ({ ...p, targetStock: 0 }));
+      const allToZero = [patched, ...siblingsToZero];
+      const toWrite = siblingsToZero.length ? allToZero : [patched];
+      await writeWarehouseProductPatch(toWrite, { reason: "snooze_link_zero", writeLinks: false });
+      sendZeroStocksToMarketplace(allToZero).catch((error) => {
         logger.warn("snooze link zero-stock send failed", { productId, linkId, detail: error?.message || String(error) });
       });
     }
@@ -74,7 +82,7 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
     await writeWarehouseProductPatch([updatedProduct], { reason: "snooze_link_cancel", writeLinks: true });
     await appendAudit(request, "warehouse.link.snooze_cancel", { productId, linkId });
 
-    queueLinkedProductActivation([productId], "snooze_cancel", { username: requestUsername(request) })
+    queueLinkedProductActivation([productId], "snooze_cancel", warehouseLinkActivationRequestMeta([productId], { username: requestUsername(request) }))
       .catch((error) => logger.warn("snooze cancel recovery queue failed", { productId, detail: error?.message || String(error) }));
 
     // Optimistically clear stockZeroAt in the response so the UI immediately shows that recovery
