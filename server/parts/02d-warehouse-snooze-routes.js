@@ -111,15 +111,36 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
 
     await appendAudit(request, "warehouse.link.snooze_cancel", { productId, linkId });
 
-    queueLinkedProductActivation([productId], "snooze_cancel", warehouseLinkActivationRequestMeta([productId], { username: requestUsername(request) }))
-      .catch((error) => logger.warn("snooze cancel recovery queue failed", { productId, detail: error?.message || String(error) }));
-
     // Optimistically clear stockZeroAt in the response so the UI immediately shows that recovery
     // is in progress, rather than keeping the "stock zeroed" state until the async job finishes.
     const displayProduct = updatedProduct.noSupplierAutomation?.stockZeroAt
       ? { ...updatedProduct, noSupplierAutomation: { ...(updatedProduct.noSupplierAutomation || {}), stockZeroAt: null } }
       : updatedProduct;
     response.json({ ok: true, product: normalizeWarehouseProduct(displayProduct) });
+
+    // Fire-and-forget: send stock=defaultStock to ALL group members (Ozon + Yandex) immediately,
+    // without waiting for the BullMQ worker. Mirrors snooze-apply's sendZeroStocksToMarketplace.
+    // The BullMQ job below handles full recovery (DB state, price push, archived products).
+    const allGroupIds = [productId, ...siblingsToUnsnooze.map((p) => String(p.id))];
+    void buildFreshWarehouseProducts(allGroupIds, { livePriceMaster: true })
+      .then(async (freshProducts) => {
+        const defaultStock = Math.max(1, Number(process.env.LINKED_DEFAULT_TARGET_STOCK || 5) || 5);
+        const toRestore = freshProducts
+          .filter((p) => p?.selectedSupplier && !p.hasSnoozedLinks)
+          .map((p) => ({
+            ...p,
+            targetStock: Math.max(defaultStock, Math.round(Number(p.targetStock || 0)) || defaultStock),
+          }));
+        if (!toRestore.length) return;
+        await restoreStocksOnMarketplaces(toRestore);
+      })
+      .catch((err) => logger.warn("snooze_cancel direct stock restore failed", {
+        productId,
+        detail: err?.message || String(err),
+      }));
+
+    queueLinkedProductActivation([productId], "snooze_cancel", warehouseLinkActivationRequestMeta([productId], { username: requestUsername(request) }))
+      .catch((error) => logger.warn("snooze cancel recovery queue failed", { productId, detail: error?.message || String(error) }));
   } catch (error) {
     next(error);
   }
