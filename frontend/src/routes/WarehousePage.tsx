@@ -1954,9 +1954,9 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
         <Stat label={pageQuery.data?.grouped ? "Карточек" : "Найдено"} value={catalogStats?.groupTotal ?? (pageQuery.data?.groupTotal || pageQuery.data?.total || 0)} tone="accent" icon={<PackageCheck size={18} />} />
         {(catalogStats || (pageQuery.data?.grouped && pageQuery.data?.rowTotal)) ? <Stat label="SKU" value={catalogStats?.rowTotal ?? pageQuery.data?.rowTotal ?? 0} icon={<Copy size={18} />} /> : null}
         <Stat label="Всего" value={catalogStats?.totalAll ?? (pageQuery.data?.totalAll || 0)} icon={<Search size={18} />} />
-        <Stat label="Готовы" value={catalogStats?.ready ?? (pageQuery.data?.ready || 0)} tone="success" icon={<Check size={18} />} />
-        <Stat label="Изменения" value={catalogStats?.changed ?? (pageQuery.data?.changed || 0)} tone="warn" icon={<RefreshCw size={18} />} />
-        <Stat label="Без поставщика" value={catalogStats?.withoutSupplier ?? (pageQuery.data?.withoutSupplier || 0)} icon={<Link2 size={18} />} />
+        <Stat label="Готовы" value={catalogStats?.ready ?? (pageQuery.data != null ? (pageQuery.data?.ready ?? 0) : undefined)} tone="success" icon={<Check size={18} />} />
+        <Stat label="Изменения" value={catalogStats?.changed ?? (pageQuery.data != null ? (pageQuery.data?.changed ?? 0) : undefined)} tone="warn" icon={<RefreshCw size={18} />} />
+        <Stat label="Без поставщика" value={catalogStats?.withoutSupplier ?? (pageQuery.data != null ? (pageQuery.data?.withoutSupplier ?? 0) : undefined)} icon={<Link2 size={18} />} />
       </section>
       {useDemoCatalog ? (
         <div className="demo-catalog-strip">

@@ -246,7 +246,7 @@ function summarizeWarehouseCounterStats({ totalProducts = 0, linkedProducts = []
     linkedProducts: linkedCount,
     ready,
     changed,
-    withoutSupplier: Math.max(0, Number(totalProducts || 0) - linkedCount),
+    withoutSupplier: built.filter((product) => !product.selectedSupplier).length + Math.max(0, Number(totalProducts || 0) - linkedCount),
     linkedNotReady: Math.max(0, linkedCount - ready),
   };
 }

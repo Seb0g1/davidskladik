@@ -2178,8 +2178,10 @@ test("warehouse summary counters use linked product stats, not page-sized snapsh
     totalProducts: 5,
     linkedProducts: [{ id: "p1" }, { id: "p2" }, { id: "p3" }],
     builtLinkedProducts: [
-      { id: "p1", ready: true, changed: true },
-      { id: "p2", ready: true, changed: false },
+      // p1 and p2 are ready — they have an active selectedSupplier
+      { id: "p1", ready: true, changed: true, selectedSupplier: { article: "A1", name: "Supplier" } },
+      { id: "p2", ready: true, changed: false, selectedSupplier: { article: "A2", name: "Supplier" } },
+      // p3 is linked but PM row is inactive — no selectedSupplier
       { id: "p3", ready: false, changed: false },
     ],
   });
@@ -2187,7 +2189,8 @@ test("warehouse summary counters use linked product stats, not page-sized snapsh
   assert.equal(stats.linkedProducts, 3);
   assert.equal(stats.ready, 2);
   assert.equal(stats.changed, 1);
-  assert.equal(stats.withoutSupplier, 2);
+  // withoutSupplier = linked with no active supplier (p3=1) + totally unlinked (5-3=2) = 3
+  assert.equal(stats.withoutSupplier, 3);
   assert.equal(stats.linkedNotReady, 1);
 });
 
