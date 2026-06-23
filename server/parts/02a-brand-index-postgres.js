@@ -1,10 +1,10 @@
-async function rebuildWarehouseBrandIndexPostgres(prisma, { limit = 100000 } = {}) {
+async function rebuildWarehouseBrandIndexPostgres(prisma, { limit = 0 } = {}) {
   if (!prisma?.brandIndexItem) return { ok: false, skipped: true, reason: "brand_index_model_missing" };
+  const effectiveLimit = Number(process.env.WAREHOUSE_BRAND_INDEX_REBUILD_LIMIT || limit || 0) || 0;
   const rows = await prisma.warehouseProduct.findMany({
     where: enabledWarehouseTargetWhere(),
     select: { id: true, marketplace: true, target: true, offerId: true, productId: true, name: true, brand: true, raw: true },
-    take: Math.max(100, Math.min(200000, Number(limit || 100000) || 100000)),
-    orderBy: [{ updatedAt: "desc" }],
+    ...(effectiveLimit > 0 ? { take: effectiveLimit, orderBy: [{ updatedAt: "desc" }] } : {}),
   });
   let indexed = 0;
   await prisma.brandIndexItem.deleteMany({});
@@ -27,7 +27,7 @@ async function brandIndexProductIdsForFilterPostgres(prisma, brandFilter = "") {
     take: 50000,
   });
   if (!rows.length) {
-    await rebuildWarehouseBrandIndexPostgres(prisma, { limit: Number(process.env.WAREHOUSE_BRAND_INDEX_REBUILD_LIMIT || 100000) || 100000 });
+    await rebuildWarehouseBrandIndexPostgres(prisma);
     rows = await prisma.brandIndexItem.findMany({
       where: { normalizedBrand: { contains: normalizedBrand, mode: "insensitive" } },
       select: { productId: true },

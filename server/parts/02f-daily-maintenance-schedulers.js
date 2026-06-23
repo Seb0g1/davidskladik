@@ -262,6 +262,14 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
           logger.warn("marketplace maintenance ozon yandex pair backfill failed", { detail: error?.message || String(error) });
         }
       }
+      if (shouldUsePostgresStorage()) {
+        try {
+          const prisma = getPrisma();
+          if (prisma) await rebuildWarehouseBrandIndexPostgres(prisma);
+        } catch (error) {
+          logger.warn("marketplace maintenance brand index rebuild failed", { detail: error?.message || String(error) });
+        }
+      }
       const warehouse = isMonolithServer
         ? await buildMaintenanceWarehouseScope()
         : await buildWarehouseView({ sync: false });

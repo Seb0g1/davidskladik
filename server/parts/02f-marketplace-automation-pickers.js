@@ -66,7 +66,10 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
     ? list.filter((product) => {
         if (!product.hasLinks || product.selectedSupplier) return false;
         const nowMs = options.now ? new Date(options.now).getTime() : Date.now();
-        if (product.hasSnoozedLinks) return false;
+        // Skip snoozed products only when marketplace stock is already 0 — if the snooze
+        // route's API call failed the marketplace may still show positive stock; in that
+        // case the automation acts as a retry so the stock actually gets zeroed.
+        if (product.hasSnoozedLinks && !marketplaceHasPositiveStock(product)) return false;
         const manualAt = product.noSupplierAutomation?.manualSellableAt;
         if (manualAt && nowMs - new Date(manualAt).getTime() < manualSellableTtlMs) return false;
         // Skip products already archived by this automation — recovery automation handles them.

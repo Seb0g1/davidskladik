@@ -40,7 +40,11 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
     { expandGroups: false },
   );
   const productSourceById = new Map();
-  for (const product of [...products, ...toZeroStock, ...toArchive, ...hydratedProducts]) {
+  // DB data first (base): preserves persisted fields not present in fresh builds.
+  // Fresh builds are added last so their computed fields (selectedSupplier=null,
+  // targetStock, etc.) take precedence — preventing stale DB values from being
+  // written back and causing "active supplier but stock 0" in the catalog.
+  for (const product of hydratedProducts) {
     if (!product?.id) continue;
     productSourceById.set(String(product.id), normalizeWarehouseProduct(product));
   }
@@ -54,6 +58,10 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
         productSourceById.set(String(product.id), product);
       }
     }
+  }
+  for (const product of [...products, ...toZeroStock, ...toArchive]) {
+    if (!product?.id) continue;
+    productSourceById.set(String(product.id), normalizeWarehouseProduct(product));
   }
   const warehouse = await readWarehouse();
   const changedById = new Map();

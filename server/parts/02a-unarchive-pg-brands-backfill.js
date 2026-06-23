@@ -11,7 +11,6 @@ async function getWarehouseBrandListFromPostgres(prisma) {
         select: { normalizedBrand: true, displayBrand: true },
         distinct: ["normalizedBrand"],
         orderBy: { displayBrand: "asc" },
-        take: 10000,
       });
       if (rows.length) {
         const brands = rows.map((row) => cleanText(row.displayBrand)).filter(Boolean).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
@@ -51,8 +50,12 @@ async function getWarehouseBrandListFromPostgres(prisma) {
 
 function resolveWarehouseBrandFromPostgresRow(row = {}) {
   const raw = row.raw && typeof row.raw === "object" && !Array.isArray(row.raw) ? row.raw : {};
+  // Keep `raw` as an explicit field so resolveWarehouseBrandCandidates can access
+  // product.raw?.vendor / product.raw?.brand and extractBrandFromNestedAttributes(product.raw).
+  // Without it, { ...raw } spreads the contents but product.raw becomes raw.raw (undefined).
   return resolveWarehouseBrand({
     ...raw,
+    raw,
     id: row.id,
     marketplace: row.marketplace,
     target: row.target,
@@ -109,6 +112,14 @@ async function ensureWarehousePostgresBrandsBackfilled(prisma, { force = false }
         scanned: rows.length,
         updated,
         complete: warehousePostgresBrandBackfillDone,
+      });
+    }
+    // If brand column was updated for any products, rebuild the brand index in the background
+    // so the new brands appear in the dropdown and filter immediately, without waiting for the
+    // next maintenance cycle.
+    if (updated > 0) {
+      rebuildWarehouseBrandIndexPostgres(prisma).catch((error) => {
+        logger.warn("brand index rebuild after backfill failed", { detail: error?.message || String(error) });
       });
     }
     return { updated, scanned: rows.length, skipped: false, complete: warehousePostgresBrandBackfillDone };

@@ -31,7 +31,11 @@ async function buildFastWarehousePageFromPostgres({
     ...(brandIndexProductIds.length ? { brand: "" } : {}),
   };
   const where = warehousePagePostgresWhere(postgresFilters);
-  if (brandIndexProductIds.length) where.AND.push({ id: { in: brandIndexProductIds } });
+  if (brandIndexProductIds.length) {
+    // Union brand index IDs with direct brand/name column match so products not yet
+    // re-indexed (or with brand only in their name) are still found.
+    where.AND.push({ OR: [{ id: { in: brandIndexProductIds } }, { brand: { contains: brandFilter, mode: "insensitive" } }, { name: { contains: brandFilter, mode: "insensitive" } }] });
+  }
   const strictPrimaryWhere = strictIdentitySearch
     ? warehousePagePostgresPrimaryIdentityWhere(postgresFilters)
     : null;
