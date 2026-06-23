@@ -30,7 +30,7 @@ function pickTargetStockSendProducts(products = []) {
     )
     .map((product) => ({
       ...product,
-      targetStock: Math.max(1, Math.round(Number(product.targetStock || 0))),
+      targetStock: Math.round(Number(product.targetStock || 0)),
     }));
 }
 

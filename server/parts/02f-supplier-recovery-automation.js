@@ -82,9 +82,12 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
     ozonRecovered = activeOzon;
   }
   const ozonFirstStockActions = ozonRecovered.length ? await restoreStocksOnMarketplaces(ozonRecovered) : [];
+  // When deferring, archived products are already queued via ozonQueuedUnarchiveActions.
+  // Active products (ozonRecovered after the deferOzonUnarchive split) only need stock restoration
+  // (done above) — attempting to unarchive them would waste Ozon API quota for a no-op.
   const ozonUnarchiveActions = ozonQueuedUnarchiveActions.length
     ? ozonQueuedUnarchiveActions
-    : (ozonRecovered.length
+    : (!options.deferOzonUnarchive && ozonRecovered.length
       ? await verifyMarketplaceUnarchiveActions(
         ozonRecovered,
         await unarchiveProductsOnMarketplaces(ozonRecovered, { forceOzonDailyLimit: options.forceOzonDailyLimit === true }),

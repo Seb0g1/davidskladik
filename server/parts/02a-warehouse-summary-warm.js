@@ -18,7 +18,8 @@ async function resolveWarehousePostgresSummaryForPage(prisma, rate, { preferLigh
 let warehousePostgresSummaryWarmTimer = null;
 
 function scheduleWarehousePostgresSummaryWarm() {
-  if (process.env.WAREHOUSE_SUMMARY_WARM_ENABLED !== "true") return;
+  if (process.env.WAREHOUSE_SUMMARY_WARM_ENABLED === "false") return;
+  if (isMonolithServer && process.env.WAREHOUSE_SUMMARY_WARM_ENABLED !== "true") return;
   if (!shouldUsePostgresStorage()) return;
   const intervalMs = Math.max(warehousePostgresSummaryCacheTtlMs, 60_000);
   const warm = async () => {
