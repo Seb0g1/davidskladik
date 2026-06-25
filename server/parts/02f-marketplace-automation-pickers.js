@@ -87,11 +87,14 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
         ) {
           return false;
         }
-        return !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product);
+        // Also re-trigger when stockZeroAt is set but targetStock in DB is still > 0 —
+        // this fixes the case where the marketplace API call succeeded but the DB write of
+        // targetStock=0 failed, leaving the catalog showing «Остаток N» forever.
+        return !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product) || Number(product.targetStock || 0) > 0;
       })
     : [];
   const noLinkZeroStock = autoZeroStockOnNoSupplier
-    ? noLinkProducts.filter((product) => !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product))
+    ? noLinkProducts.filter((product) => !product.noSupplierAutomation?.stockZeroAt || marketplaceHasPositiveStock(product) || Number(product.targetStock || 0) > 0)
     : [];
   return {
     toZeroStock: [...linkedNoSupplier, ...noLinkZeroStock],
