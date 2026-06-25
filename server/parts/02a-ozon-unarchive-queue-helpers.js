@@ -112,7 +112,7 @@ async function writeOzonUnarchiveDailyState(daily = {}) {
     updatedAt: new Date().toISOString(),
     daily: daily && typeof daily === "object" ? daily : {},
   };
-  const tmpPath = `${ozonUnarchiveDailyStatePath}.tmp`;
+  const tmpPath = `${ozonUnarchiveDailyStatePath}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
   await fs.rename(tmpPath, ozonUnarchiveDailyStatePath);
 }
