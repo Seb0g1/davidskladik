@@ -26,7 +26,7 @@ app.post("/api/sync", async (_request, response, next) => {
 app.get("/api/pricemaster/offer-docs-schema", requireAdmin, async (_request, response, next) => {
   try {
     const col = await discoverOfferDocsActiveColumn();
-    response.json({ activeColumn: col || null, found: Boolean(col) });
+    response.json({ activeColumn: col || null, found: Boolean(col), filterSuffix: offerDocsActiveFilterSuffix || null });
   } catch (error) {
     next(error);
   }

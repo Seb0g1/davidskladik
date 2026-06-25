@@ -72,7 +72,7 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
   if (!link.article && !link.exactName && !link.sourceRowId) return [];
   const supplierMaps = managedSupplierMaps(managedSuppliers);
   const conditions = ["r.Ignored = 0"];
-  if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn} != 0`);
+  if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`);
   const params = [];
   if (link.matchType === "selected_row" && link.article) {
     // Self-heal pinned links: match the supplier's current rows for this article (scoped to

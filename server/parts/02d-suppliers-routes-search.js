@@ -19,7 +19,7 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
     try {
       const params = [];
       const conditions = ["r.Ignored = 0"];
-      if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn} != 0`);
+      if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`);
       if (q) {
         conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
         const like = likeSearch(q);

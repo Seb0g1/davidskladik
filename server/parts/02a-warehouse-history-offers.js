@@ -46,25 +46,45 @@ function offerKey(row) {
 }
 
 let offerDocsActiveColumn = null;
+let offerDocsActiveFilterSuffix = null; // " = 0" for lock-type columns, " != 0" for active-type
 
 async function discoverOfferDocsActiveColumn() {
   if (offerDocsActiveColumn !== null) return offerDocsActiveColumn;
   let connection;
   try {
     connection = await pool.getConnection();
-    const [cols] = await connection.query(
+    // Inactive/lock columns: Locked=1 means inactive, so condition is "= 0"
+    const [lockCols] = await connection.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'OfferDocs'
+       AND COLUMN_NAME IN ('Locked', 'IsLocked', 'Disabled', 'IsDisabled')
+       ORDER BY ORDINAL_POSITION LIMIT 1`,
+    );
+    if (lockCols.length) {
+      offerDocsActiveColumn = String(lockCols[0].COLUMN_NAME);
+      offerDocsActiveFilterSuffix = " = 0";
+      logger.info("OfferDocs active column discovery", { found: true, column: offerDocsActiveColumn, type: "lock_flag" });
+      return offerDocsActiveColumn;
+    }
+    // Active columns: Active=1 means active, so condition is "!= 0"
+    const [activeCols] = await connection.query(
       `SELECT COLUMN_NAME FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'OfferDocs'
        AND COLUMN_NAME IN ('Active', 'IsActive', 'IsCurrent', 'Enabled', 'IsEnabled')
        ORDER BY ORDINAL_POSITION LIMIT 1`,
     );
-    offerDocsActiveColumn = cols.length ? String(cols[0].COLUMN_NAME) : "";
-    logger.info("OfferDocs active column discovery", {
-      found: Boolean(offerDocsActiveColumn),
-      column: offerDocsActiveColumn || null,
-    });
+    if (activeCols.length) {
+      offerDocsActiveColumn = String(activeCols[0].COLUMN_NAME);
+      offerDocsActiveFilterSuffix = " != 0";
+      logger.info("OfferDocs active column discovery", { found: true, column: offerDocsActiveColumn, type: "active_flag" });
+      return offerDocsActiveColumn;
+    }
+    offerDocsActiveColumn = "";
+    offerDocsActiveFilterSuffix = "";
+    logger.info("OfferDocs active column discovery", { found: false });
   } catch (error) {
     offerDocsActiveColumn = "";
+    offerDocsActiveFilterSuffix = "";
     logger.warn("OfferDocs schema discovery failed", { detail: error?.message || String(error) });
   } finally {
     if (connection) connection.release();
@@ -75,8 +95,9 @@ async function discoverOfferDocsActiveColumn() {
 async function getCurrentOffers(connection) {
   await discoverOfferDocsActiveColumn();
   const col = offerDocsActiveColumn;
-  const latestDocsWhere = col ? `WHERE ${col} != 0` : "";
-  const latestDocIdsAnd = col ? `AND d.${col} != 0` : "";
+  const suffix = offerDocsActiveFilterSuffix;
+  const latestDocsWhere = col ? `WHERE ${col}${suffix}` : "";
+  const latestDocIdsAnd = col ? `AND d.${col}${suffix}` : "";
 
   const [rows] = await connection.query(`
     WITH latest_docs AS (
