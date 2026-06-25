@@ -45,11 +45,44 @@ function offerKey(row) {
   return `${row.partnerId}:${identity}`;
 }
 
+let offerDocsActiveColumn = null;
+
+async function discoverOfferDocsActiveColumn() {
+  if (offerDocsActiveColumn !== null) return offerDocsActiveColumn;
+  let connection;
+  try {
+    connection = await pool.getConnection();
+    const [cols] = await connection.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'OfferDocs'
+       AND COLUMN_NAME IN ('Active', 'IsActive', 'IsCurrent', 'Enabled', 'IsEnabled')
+       ORDER BY ORDINAL_POSITION LIMIT 1`,
+    );
+    offerDocsActiveColumn = cols.length ? String(cols[0].COLUMN_NAME) : "";
+    logger.info("OfferDocs active column discovery", {
+      found: Boolean(offerDocsActiveColumn),
+      column: offerDocsActiveColumn || null,
+    });
+  } catch (error) {
+    offerDocsActiveColumn = "";
+    logger.warn("OfferDocs schema discovery failed", { detail: error?.message || String(error) });
+  } finally {
+    if (connection) connection.release();
+  }
+  return offerDocsActiveColumn;
+}
+
 async function getCurrentOffers(connection) {
+  await discoverOfferDocsActiveColumn();
+  const col = offerDocsActiveColumn;
+  const latestDocsWhere = col ? `WHERE ${col} != 0` : "";
+  const latestDocIdsAnd = col ? `AND d.${col} != 0` : "";
+
   const [rows] = await connection.query(`
     WITH latest_docs AS (
       SELECT PartnerID, MAX(DocDate) AS LatestDocDate
       FROM OfferDocs
+      ${latestDocsWhere}
       GROUP BY PartnerID
     ),
     latest_doc_ids AS (
@@ -58,6 +91,7 @@ async function getCurrentOffers(connection) {
       JOIN latest_docs l
         ON l.PartnerID = d.PartnerID
        AND l.LatestDocDate = d.DocDate
+      ${latestDocIdsAnd}
       GROUP BY d.PartnerID
     )
     SELECT

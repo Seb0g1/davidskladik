@@ -23,6 +23,15 @@ app.post("/api/sync", async (_request, response, next) => {
   }
 });
 
+app.get("/api/pricemaster/offer-docs-schema", requireAdmin, async (_request, response, next) => {
+  try {
+    const col = await discoverOfferDocsActiveColumn();
+    response.json({ activeColumn: col || null, found: Boolean(col) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/daily-sync", async (_request, response, next) => {
   try {
     response.json(await getDailySyncStatus());
@@ -184,6 +193,7 @@ function startBackgroundSchedulers() {
     }
     return;
   }
+  discoverOfferDocsActiveColumn().catch((error) => logger.warn("OfferDocs schema warmup failed", { detail: error?.message || String(error) }));
   scheduleDailySync();
   schedulePriceRetryProcessing(30_000);
   scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
