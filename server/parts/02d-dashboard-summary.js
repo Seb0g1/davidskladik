@@ -17,7 +17,7 @@ const priceQueueOldestJobAlertMs = Math.max(60_000, Number(process.env.PRICE_QUE
 // (02f-linked-reconciler-scheduler.js) compares our stored marketplaceState.code against
 // the live Ozon/Yandex state on every product it refreshes. Alert if the last completed
 // reconciler cycle found more drifted products than this.
-const marketplaceStateMismatchAlertThreshold = Math.max(0, Number(process.env.MARKETPLACE_STATE_MISMATCH_ALERT_THRESHOLD || 20) || 20);
+const marketplaceStateMismatchAlertThreshold = Math.max(0, Number(process.env.MARKETPLACE_STATE_MISMATCH_ALERT_THRESHOLD || 60) || 60);
 function topSuppliersFromFinanceOrders(orders = [], limit = 5) {
   const byName = new Map();
   for (const order of orders) {
