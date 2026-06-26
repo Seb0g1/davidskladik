@@ -15,8 +15,8 @@ async function runSnoozeSweep({ source = "schedule" } = {}) {
   try {
     // Find ProductLink rows with expired snoozes
     const rows = await prisma.$queryRawUnsafe(`
-      SELECT DISTINCT "productId"
-      FROM "ProductLink"
+      SELECT DISTINCT product_id AS "productId"
+      FROM product_links
       WHERE raw->'snooze' IS NOT NULL
         AND (raw->'snooze'->>'snoozedUntil')::timestamptz <= now()
       LIMIT 200

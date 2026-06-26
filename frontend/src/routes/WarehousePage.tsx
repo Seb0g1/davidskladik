@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -194,12 +194,25 @@ function mapServerPageGroup(item: ProductGroupPageItem): ProductGroup | null {
 
 function productSupplierName(product: Product, group: ProductGroup): string {
   const selected = asRecord(product.selectedSupplier);
-  const selectedName = String(selected.name || selected.supplierName || selected.partnerName || "").trim();
+  // Prefer company name (partnerName/supplierName) over PM row name (name) to avoid showing
+  // the PM product description as the supplier name in the list.
+  const selectedName = String(selected.partnerName || selected.supplierName || selected.name || "").trim();
   if (selectedName) return selectedName;
   const productSupplier = product.suppliers?.find((supplier) => supplier.name)?.name;
   if (productSupplier) return productSupplier;
   const linkSupplier = group.links.find((link) => link.supplierName)?.supplierName;
   return linkSupplier || "—";
+}
+
+function supplierPmRowName(product: Product): string {
+  const selected = asRecord(product.selectedSupplier);
+  return String(selected.name || "").trim();
+}
+
+function hasPmNameMismatch(product: Product): boolean {
+  const pmName = supplierPmRowName(product).toLowerCase();
+  const productName = String(product.name || "").trim().toLowerCase();
+  return Boolean(pmName && productName && pmName !== productName);
 }
 
 function ProductGroupRow({ group, selected, onSelect }: { group: ProductGroup; selected: boolean; onSelect: () => void }) {
@@ -209,6 +222,8 @@ function ProductGroupRow({ group, selected, onSelect }: { group: ProductGroup; s
   const offer = primary.offerId || primary.sku || primary.id;
   const stock = primary.targetStock ?? primary.stock;
   const supplier = productSupplierName(primary, group);
+  const pmMismatch = hasPmNameMismatch(primary);
+  const pmRowName = pmMismatch ? supplierPmRowName(primary) : "";
   return (
     <button className={`product-row group-row ${selected ? "is-selected" : ""}`} type="button" onClick={onSelect}>
       <span className="row-check" aria-hidden="true" />
@@ -232,7 +247,10 @@ function ProductGroupRow({ group, selected, onSelect }: { group: ProductGroup; s
         {group.marketplaces.map((marketplace) => <span className="market-badge" key={marketplace}>{marketplace}</span>)}
       </div>
       <span className={`warehouse-stock ${Number(stock || 0) <= 0 ? "is-empty" : ""}`}>{stock ?? "—"}{stock === undefined || stock === null ? "" : " шт"}</span>
-      <span className="warehouse-supplier">{supplier}</span>
+      <span className="warehouse-supplier">
+        {supplier}
+        {pmMismatch && <span className="pm-name-mismatch-icon" title={`Название в PM отличается: ${pmRowName}`}><AlertTriangle size={12} /></span>}
+      </span>
       <span className="warehouse-price">{money(groupPrice(group))}</span>
       <span className={`warehouse-status pill ${status.tone}`}>{status.icon}{status.label}</span>
     </button>
@@ -1173,6 +1191,9 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
         const saleState = asRecord(item.saleState);
         const formula = asRecord(item.priceFormula);
         const selectedSupplier = asRecord(item.selectedSupplier);
+        const supplierPmRowName = String(selectedSupplier.name || "").trim();
+        const itemProductName = String(item.name || "").trim();
+        const supplierPmNameMismatch = Boolean(supplierPmRowName && itemProductName && supplierPmRowName.toLowerCase() !== itemProductName.toLowerCase());
         const formulaText = [
           item.marketplace ? String(item.marketplace) : "",
           selectedSupplier.price ? `${String(selectedSupplier.price)} ${String(selectedSupplier.currency || "USD")}` : "",
@@ -1200,7 +1221,7 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
               <DiagnosticValue label="Цена" value={money(item.targetPrice || item.currentPrice)} />
             </div>
             <div className="diagnostic-lines">
-              <span><b>Поставщик:</b> {supplierText(item.selectedSupplier)}</span>
+              <span><b>Поставщик:</b> {supplierText(item.selectedSupplier)}{supplierPmNameMismatch && <span className="pm-name-mismatch-hint"> · PM: {supplierPmRowName}</span>}</span>
               {formulaText && <span><b>Формула цены:</b> {formulaText}</span>}
               <div className="diagnostic-pm-links">
                 <b>PriceMaster:</b>

@@ -31,7 +31,7 @@ async function runStockSweep({ source = "schedule" } = {}) {
     // by a fresh build; products whose supplier vanished get filtered out there (and are
     // zeroed by the no-supplier automation instead).
     const rows = await prisma.$queryRawUnsafe(`
-      SELECT p.id
+      SELECT p.id, p.target_stock
       FROM warehouse_products p
       WHERE p.archived = false
         AND ${duplicateNameSqlExclusion("p")}
@@ -55,7 +55,14 @@ async function runStockSweep({ source = "schedule" } = {}) {
     const candidateIds = [];
     for (const row of rows) {
       const id = String(row.id);
-      if (stockSweepRecentlySent.has(id)) continue;
+      const cached = stockSweepRecentlySent.get(id);
+      if (cached) {
+        // Cooldown only applies when the DB target stock matches what we last sent.
+        // If it changed (e.g. recovery bumped it from 0 to 5), clear the entry and resend.
+        const dbTarget = Math.round(Number(row.target_stock || 0));
+        if (Math.round(Number(cached.stock || 0)) === dbTarget) continue;
+        stockSweepRecentlySent.delete(id);
+      }
       candidateIds.push(id);
       if (candidateIds.length >= stockSweepBatchLimit) break;
     }

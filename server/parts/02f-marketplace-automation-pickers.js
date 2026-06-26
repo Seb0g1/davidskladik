@@ -72,9 +72,6 @@ function pickNoSupplierAutomationCandidates(products = [], options = {}) {
         if (product.hasSnoozedLinks && !marketplaceHasPositiveStock(product)) return false;
         const manualAt = product.noSupplierAutomation?.manualSellableAt;
         if (manualAt && nowMs - new Date(manualAt).getTime() < manualSellableTtlMs) return false;
-        // Skip products already archived by this automation — recovery automation handles them.
-        // Without this check, no-supplier automation re-archives right after recovery queues an unarchive.
-        if (product.noSupplierAutomation?.archivedAt) return false;
         const key = marketplaceOfferAutomationKey(product);
         if (key && protectedOfferKeys.has(key) && !product.hasLinks) return false;
         const updatedMs = product.updatedAt ? new Date(product.updatedAt).getTime() : 0;
@@ -146,13 +143,10 @@ function pickSupplierRecoveryCandidates(products = [], { productIds, force = fal
   return (Array.isArray(products) ? products : []).filter((product) => {
     if (idSet && !idSet.has(String(product.id))) return false;
     if (!product.hasLinks) return false;
-    // Never recover a product whose only remaining supplier is snoozed — the snooze handler
-    // already zeroed stock and the user explicitly asked for a temporary pause. A leftover
-    // archivedAt from a prior automation cycle must not override this decision.
-    if (product.hasSnoozedLinks && !product.selectedSupplier) return false;
-    // Allow recovery for products archived by automation even without a supplier —
-    // they get unarchived with minimum stock=1 and manualSellableAt set to prevent re-zeroing.
-    if (!product.selectedSupplier && !product.noSupplierAutomation?.archivedAt) return false;
+    // Never recover a product that has no active supplier — no-supplier automation handles
+    // zero-stocking these; recovery would only re-open orders that can't be fulfilled.
+    // This also covers the snoozed-links case: snoozed links produce no selectedSupplier.
+    if (!product.selectedSupplier) return false;
     if (force) return true;
     const needsRecovery = marketplaceProductNeedsSalesRecovery(product, { includeUnknown: true });
     if (

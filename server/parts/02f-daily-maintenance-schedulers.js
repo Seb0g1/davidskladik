@@ -39,8 +39,8 @@ async function runDailyRefresh(trigger = "manual") {
       const warehouse = await buildWarehouseView({ sync: fullImport });
       const backgroundAutomation = trigger === "manual"
         ? {
-            automation: await runNoSupplierMarketplaceAutomation(warehouse),
             recovery: await runSupplierRecoveryAutomation(warehouse),
+            automation: await runNoSupplierMarketplaceAutomation(warehouse),
             scope: { mode: "full", productIds: null, marketplaceChanged: warehouse.marketplaceSyncChanged || 0 },
           }
         : await runTargetedBackgroundSupplierAutomations(priceMaster, warehouse);

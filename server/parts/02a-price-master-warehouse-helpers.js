@@ -121,7 +121,7 @@ function resolveWarehouseTargetStock(availabilityPolicy = {}, {
   const policyStock = Number(availabilityPolicy?.targetStock);
   if (Number.isFinite(policyStock) && policyStock > 0) return policyStock;
   const supplierCount = Math.max(0, Number(availableSupplierCount || 0)) + Math.max(0, Number(stockOnlyAvailableSupplierCount || 0));
-  if (selectedSupplierWithPolicy || supplierCount > 0) return 3;
+  if (selectedSupplierWithPolicy || supplierCount > 0) return Math.max(1, Number(process.env.LINKED_DEFAULT_TARGET_STOCK || 5) || 5);
   return null;
 }
 

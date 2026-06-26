@@ -4324,6 +4324,23 @@ textarea {
   white-space: nowrap;
 }
 
+.warehouse-supplier {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.pm-name-mismatch-icon {
+  flex-shrink: 0;
+  color: #f59e0b;
+  vertical-align: middle;
+}
+
+.pm-name-mismatch-hint {
+  color: #f59e0b;
+  font-size: 11px;
+}
+
 .product-title-line strong {
   display: block;
   font-size: 13px;

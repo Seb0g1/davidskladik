@@ -21,6 +21,13 @@ function pickArchivedStockRestoreCandidates(products = [], { marketplace = "all"
       if (marketplaceFilter !== "all" && productMarketplace !== marketplaceFilter) return false;
       if (!cleanText(product.offerId || product.offer_id)) return false;
       if (productMarketplace === "ozon" && !Number(product.productId || product.product_id || 0)) return false;
+      // Skip products that were zeroed by no-supplier automation and not explicitly archived by us.
+      // Restoring them would only generate unfulfillable orders while manualSellableAt blocks re-zeroing for 48h.
+      if (
+        Array.isArray(product.links) && product.links.length > 0
+        && product.noSupplierAutomation?.stockZeroAt
+        && !product.noSupplierAutomation?.archivedAt
+      ) return false;
       return productLooksArchived(product);
     })
     .slice(0, max);

@@ -40,7 +40,7 @@ function mapPriceMasterSearchResponseRow(row = {}, usdRate = 95, supplierMaps = 
   const partnerName = cleanText(row.partnerName || row.PartnerName || row.supplierName || "");
   const rowId = cleanText(row.rowId || row.RowID || row.id || "");
   const price = normalizedPrice.price || Number(row.price || row.NativePrice || 0) || 0;
-  const active = row.active !== false && row.Active !== false && row.Active !== 0;
+  const active = row.active !== false && row.active !== 0 && row.Active !== false && row.Active !== 0;
   return {
     id: rowId || `${article}:${partnerName}:${name}`,
     rowId,
