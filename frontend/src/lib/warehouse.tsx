@@ -200,7 +200,7 @@ export function groupProductsForList(products: Product[]): ProductGroup[] {
       const archived = Boolean(product.archived || stateCode.includes("archiv"));
       const changed = Number(product.newPrice || product.targetPrice || product.nextPrice || 0) > 0
         && Number(product.currentPrice || product.marketplacePrice || 0) !== Number(product.newPrice || product.targetPrice || product.nextPrice || 0);
-      const hasSupplier = Boolean(product.selectedSupplier && !asRecord(product.selectedSupplier).displayOnly) || Boolean(product.stockOnlyFallbackActive);
+      const hasSupplier = Boolean(product.stockOnlyFallbackActive) || Boolean(product.selectedSupplier && (!asRecord(product.selectedSupplier).displayOnly || Number(product.targetStock || product.stock || 0) > 0));
       const sellable = Boolean(product.ready) || (hasSupplier && Number(product.targetStock || product.stock || 0) > 0);
       summary.total += 1;
       if (linked) summary.linked += 1;
@@ -239,7 +239,7 @@ export function statusLabel(product: Product): { label: string; tone: string; ic
   const linked = (product.links || []).length > 0;
   if (product.archived || stateCode.includes("archiv")) return { label: "Архив", tone: "danger", icon: <Archive size={14} /> };
   if (!linked) return { label: "Нет привязки", tone: "warn", icon: <AlertCircle size={14} /> };
-  const hasSupplier = Boolean(product.selectedSupplier && !asRecord(product.selectedSupplier).displayOnly) || Boolean(product.stockOnlyFallbackActive);
+  const hasSupplier = Boolean(product.stockOnlyFallbackActive) || Boolean(product.selectedSupplier && (!asRecord(product.selectedSupplier).displayOnly || Number(product.targetStock || product.stock || 0) > 0));
   if (!hasSupplier) return { label: "Нет поставщика", tone: "warn", icon: <AlertCircle size={14} /> };
   if (Number(product.newPrice || product.targetPrice || product.nextPrice || 0) > 0
     && Number(product.currentPrice || product.marketplacePrice || 0) !== Number(product.newPrice || product.targetPrice || product.nextPrice || 0)) {
@@ -250,7 +250,7 @@ export function statusLabel(product: Product): { label: string; tone: string; ic
 
 export function groupStatusLabel(group: ProductGroup): { label: string; tone: string; icon: ReactNode } {
   const { statusSummary } = group;
-  const anyHasSupplier = group.products.some((product) => Boolean(product.selectedSupplier && !asRecord(product.selectedSupplier).displayOnly) || Boolean(product.stockOnlyFallbackActive));
+  const anyHasSupplier = group.products.some((product) => Boolean(product.stockOnlyFallbackActive) || Boolean(product.selectedSupplier && (!asRecord(product.selectedSupplier).displayOnly || Number(product.targetStock || product.stock || 0) > 0)));
   if (statusSummary.archived > 0) return { label: `Архив ${statusSummary.archived}/${statusSummary.total}`, tone: "danger", icon: <Archive size={14} /> };
   if (!statusSummary.linked) return { label: "Нет привязки", tone: "warn", icon: <AlertCircle size={14} /> };
   if (statusSummary.changed > 0) return { label: `Цена изм. ${statusSummary.changed}`, tone: "info", icon: <RefreshCw size={14} /> };
