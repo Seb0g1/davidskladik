@@ -226,14 +226,29 @@ app.get("/api/warehouse/products/:id/detail", async (request, response, next) =>
 
 app.get("/api/warehouse/no-supplier", async (request, response, next) => {
   try {
-    const sync = request.query.sync === "true";
-    const refreshPrices = request.query.refreshPrices === "true";
-    const data = await buildWarehouseViewCached({ sync, refreshPrices });
+    const prisma = getPrisma();
+    if (!prisma) return response.json({ total: 0, withoutSupplier: 0, alerts: [] });
+    const appSettings = await readAppSettings();
+    const rate = Number(appSettings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95);
+    const [suppliers, dbRows] = await Promise.all([
+      getWarehousePostgresSuppliers(prisma),
+      prisma.warehouseProduct.findMany({
+        where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] },
+        include: { links: true },
+        take: 2000,
+      }),
+    ]);
+    const products = dbRows.map(productFromPostgres);
+    const built = await buildFreshWarehouseProductsForWarehouse(
+      { products, suppliers },
+      products.map((p) => p.id),
+      { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
+    );
+    const noSupplier = built.filter((p) => !p.selectedSupplier && !p.stockOnlyFallbackActive);
     response.json({
-      createdAt: data.createdAt,
-      total: data.total,
-      withoutSupplier: data.withoutSupplier,
-      alerts: buildNoSupplierAlerts(data.products, { limit: Number.POSITIVE_INFINITY }),
+      total: built.length,
+      withoutSupplier: noSupplier.length,
+      alerts: buildNoSupplierAlerts(built, { limit: Number.POSITIVE_INFINITY }),
     });
   } catch (error) {
     next(error);
