@@ -57,6 +57,18 @@ async function runChangedPriceSweep({ source = "schedule" } = {}) {
       priceSweepRecentlyQueued.set(id, { price, at: nowMs });
       if (productIds.length >= priceSweepBatchLimit) break;
     }
+    // Reconcile stale unchanged_verified entries where warehouse_products is already synced.
+    // These accumulate when the reconcile ran but salesAutomationSkuState was never reset.
+    await prisma.$executeRawUnsafe(`
+      UPDATE sales_automation_sku_states s
+      SET reason = 'ok', price_status = 'success', updated_at = now()
+      FROM warehouse_products p
+      WHERE s.product_id = p.id
+        AND s.reason = 'unchanged_verified'
+        AND p.current_price IS NOT NULL AND p.target_price IS NOT NULL
+        AND p.current_price = p.target_price
+    `).catch(() => null);
+
     if (!productIds.length) return { status: "ok", queued: 0, candidates: rows.length };
 
     const refresh = await queueAuthoritativePriceReprice({

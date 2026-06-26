@@ -243,6 +243,13 @@ async function sendWarehousePrices({
                WHERE id = $2`,
               target, id,
             ).catch(() => null)));
+          const reconciledIds = updates.map(({ id }) => id);
+          await prisma.$executeRawUnsafe(
+            `UPDATE sales_automation_sku_states
+             SET reason = 'ok', price_status = 'success', updated_at = now()
+             WHERE product_id = ANY($1::text[]) AND reason = 'unchanged_verified'`,
+            reconciledIds,
+          ).catch(() => null);
           logger.info("price current_price reconciled to target (already live)", { count: updates.length, reason: cleanText(reason) || "" });
         }
       }
