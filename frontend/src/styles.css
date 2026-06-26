@@ -3598,6 +3598,15 @@ button:disabled {
 .chat-bubble.mine { align-self: flex-end; background: rgba(50, 130, 90, 0.4); border-radius: 14px 14px 4px 14px; }
 .chat-bubble p { margin: 0 0 3px; font-size: 13px; white-space: pre-wrap; }
 .chat-bubble small { color: var(--muted-soft); font-size: 10px; }
+.chat-text { font-size: 13px; line-height: 1.55; margin: 0 0 3px; word-break: break-word; }
+.chat-text strong { font-weight: 600; color: #fff; }
+.chat-link { color: #7ab8f5; text-decoration: underline; word-break: break-all; font-size: 13px; }
+.chat-link:hover { color: #a8d0ff; }
+.chat-video-wrap { margin: 6px 0; }
+.chat-video { max-width: 100%; max-height: 320px; border-radius: 8px; display: block; background: #000; }
+.chat-image { max-width: 100%; max-height: 280px; border-radius: 8px; display: block; margin: 6px 0; }
+.chat-file-link { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: #7ab8f5; text-decoration: underline; margin: 4px 0; }
+.chat-empty-att { margin: 0 0 3px; font-size: 12px; color: var(--muted-soft); }
 .chat-composer { border-top: 1px solid var(--line); padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .chat-input-row { display: flex; gap: 8px; align-items: flex-end; }
 .chat-input-row textarea { flex: 1; min-height: 44px; padding: 10px 12px; font-size: 13px; line-height: 1.5; resize: vertical; }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BellRing, BookOpen, Loader2, MessageCircle, RefreshCw, Send } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
@@ -21,11 +21,14 @@ type ChatRow = {
   lastMessageAt?: string;
 };
 
+type ChatAttachment = { type: "video" | "image" | "file"; url: string; name?: string; previewUrl?: string };
+
 type ChatMessage = {
   id: string;
   author?: string;
   isSeller?: boolean;
   text: string;
+  attachments?: ChatAttachment[];
   createdAt?: string;
 };
 
@@ -34,6 +37,49 @@ type ChatTemplate = { id: string; title: string; text: string };
 type ChatContext = { postingNumber?: string; orderId?: string; buyerName?: string; productName?: string; offerId?: string } | null;
 
 const EMOJI_ROW = ["🙏", "😊", "✨", "👍", "🤝", "📦", "🚚", "❤️"];
+
+function decodeSafe(s: string): string {
+  try { return decodeURIComponent(s.replace(/\+/g, " ")); } catch { return s; }
+}
+
+function isVideoUrl(url: string): boolean {
+  return /\.(mp4|mov|webm|avi|m4v)(\?|#|$)/i.test(url);
+}
+
+function renderChatMarkdown(text: string): ReactNode {
+  if (!text) return null;
+  const nodes: ReactNode[] = [];
+  const lines = text.split("\n");
+  const re = /\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\(([^)\n]+)\)/g;
+  lines.forEach((line, li) => {
+    if (li > 0) nodes.push(<br key={`br${li}`} />);
+    let last = 0;
+    let ki = 0;
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(line)) !== null) {
+      if (m.index > last) nodes.push(<span key={`${li}_${ki++}`}>{line.slice(last, m.index)}</span>);
+      if (m[1] !== undefined) {
+        nodes.push(<strong key={`${li}_${ki++}`}>{m[1]}</strong>);
+      } else {
+        const linkText = decodeSafe(m[2]);
+        const url = m[3];
+        if (isVideoUrl(url)) {
+          nodes.push(
+            <div key={`${li}_${ki++}`} className="chat-video-wrap">
+              <video controls src={url} className="chat-video" />
+            </div>,
+          );
+        } else {
+          nodes.push(<a key={`${li}_${ki++}`} href={url} target="_blank" rel="noopener noreferrer" className="chat-link">{linkText}</a>);
+        }
+      }
+      last = m.index + m[0].length;
+    }
+    if (last < line.length) nodes.push(<span key={`${li}_${ki++}`}>{line.slice(last)}</span>);
+  });
+  return <>{nodes}</>;
+}
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -189,7 +235,21 @@ export function ChatsPage() {
               <div className="chat-messages">
                 {messages.map((message) => (
                   <div className={`chat-bubble${message.isSeller ? " mine" : ""}`} key={message.id}>
-                    <p>{message.text || "(вложение)"}</p>
+                    {message.text ? <div className="chat-text">{renderChatMarkdown(message.text)}</div> : null}
+                    {(message.attachments || []).map((att, i) => (
+                      att.type === "video" ? (
+                        <div key={i} className="chat-video-wrap">
+                          <video controls src={att.url} poster={att.previewUrl} className="chat-video" />
+                        </div>
+                      ) : att.type === "image" ? (
+                        <img key={i} src={att.url} alt="вложение" className="chat-image" />
+                      ) : (
+                        <a key={i} href={att.url} target="_blank" rel="noopener noreferrer" className="chat-file-link">
+                          📎 {att.name || "Файл"}
+                        </a>
+                      )
+                    ))}
+                    {!message.text && !(message.attachments || []).length ? <p className="chat-empty-att">(вложение)</p> : null}
                     <small>{message.author && !message.isSeller ? `${message.author} · ` : ""}{chatTime(message.createdAt)}{message.isSeller ? " · вы" : ""}</small>
                   </div>
                 ))}

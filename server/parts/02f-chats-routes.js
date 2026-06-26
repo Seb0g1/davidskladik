@@ -161,13 +161,35 @@ function ozonChatAuthorLabel(userType) {
 }
 
 function normalizeOzonChatMessage(message = {}) {
-  const data = Array.isArray(message.data) ? message.data.join("\n") : cleanText(message.data || "");
+  let text = "";
+  const attachments = [];
+  if (Array.isArray(message.data)) {
+    for (const item of message.data) {
+      if (typeof item === "string") {
+        text += (text ? "\n" : "") + item;
+      } else if (item && typeof item === "object") {
+        const t = cleanText(item.type || "").toLowerCase();
+        if (!t || t === "text") {
+          text += (text ? "\n" : "") + cleanText(item.text || item.content || "");
+        } else if (t === "video") {
+          attachments.push({ type: "video", url: cleanText(item.url || item.uri || ""), previewUrl: cleanText(item.preview_url || "") });
+        } else if (t === "image") {
+          attachments.push({ type: "image", url: cleanText(item.url || item.uri || "") });
+        } else if (t === "file") {
+          attachments.push({ type: "file", url: cleanText(item.url || item.uri || ""), name: cleanText(item.name || item.file_name || "") });
+        }
+      }
+    }
+  } else {
+    text = cleanText(message.data || "");
+  }
   const userType = cleanText(message.user?.type || message.user_type || "");
   return {
     id: cleanText(message.message_id || message.id),
     author: ozonChatAuthorLabel(userType),
     isSeller: userType.toLowerCase() === "seller",
-    text: data || cleanText(message.text || ""),
+    text: text || cleanText(message.text || ""),
+    attachments,
     createdAt: cleanText(message.created_at || ""),
     isRead: message.is_read !== false,
   };
@@ -185,6 +207,7 @@ function normalizeYandexChatMessage(message = {}) {
     author: authorLabel,
     isSeller: sender === "PARTNER",
     text: cleanText(message.message || message.text || ""),
+    attachments: [],
     createdAt: cleanText(message.createdAt || ""),
     isRead: true,
   };
