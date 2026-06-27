@@ -95,7 +95,9 @@ function calculateRubPrice(basePrice, usdRate, markupCoefficient, context = null
   const price = Number(basePrice || 0);
   if (rubNative) {
     const rubBase = Number(ctx.originalPrice ?? ctx.purchaseRubPrice ?? price);
-    return roundPrice(rubBase * markup);
+    const defaultRate = Number(process.env.DEFAULT_USD_RATE || 95) || 95;
+    const rate = Number(usdRate || 0) > 0 ? Number(usdRate) : defaultRate;
+    return roundPrice((rubBase / defaultRate) * rate * markup);
   }
   return roundPrice(price * Number(usdRate || 0) * markup);
 }
