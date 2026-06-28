@@ -49,9 +49,14 @@ app.post("/api/warehouse/products/:id/links/:linkId/snooze", async (request, res
         .map((p) => ({
           ...p,
           targetStock: 0,
-          links: (p.links || []).map((link) =>
-            link.id === linkId ? { ...link, snooze: snoozeData } : link,
-          ),
+          // Snooze ALL sibling links (not just matching by link.id) because sibling products
+          // (Ozon/Yandex variants) have their own link IDs that differ from the snoozed product's
+          // linkId. Without this, hasSnoozedLinks stays false on the sibling and the stock sweep
+          // restores it to targetStock=5 within 3 minutes. Preserve user-initiated snoozes.
+          links: (p.links || []).map((link) => {
+            if (link.snooze && !link.snooze.groupSnoozedByLinkId) return link;
+            return { ...link, snooze: { ...snoozeData, groupSnoozedByLinkId: linkId } };
+          }),
         }));
       const allToZero = [patched, ...siblingsToZero];
       const toWrite = siblingsToZero.length ? allToZero : [patched];
@@ -99,12 +104,12 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
         ...p,
         updatedAt: now,
         links: (p.links || []).map((link) => {
-          if (link.id !== linkId || !link.snooze) return link;
+          if (!link.snooze || link.snooze.groupSnoozedByLinkId !== linkId) return link;
           const { snooze: _removed, ...rest } = link;
           return rest;
         }),
       }))
-      .filter((p) => (p.links || []).some((link) => link.id === linkId));
+      .filter((p) => (p.links || []).some((link) => link.snooze?.groupSnoozedByLinkId === linkId));
     if (siblingsToUnsnooze.length) {
       await writeWarehouseProductPatch(siblingsToUnsnooze, { reason: "snooze_link_cancel_siblings", writeLinks: true });
     }
