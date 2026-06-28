@@ -274,7 +274,7 @@ async function buildFreshWarehouseProducts(productIds = [], {
   usdRate,
   priceMasterTimeoutMs,
 } = {}) {
-  await hydrateWarehouseProductsForIds(productIds, { expandGroups: false });
+  await hydrateWarehouseProductsForIds(productIds, { expandGroups: false, forceRefresh: true });
   const warehouse = await readWarehouse();
   return buildFreshWarehouseProductsForWarehouse(warehouse, productIds, {
     refreshPrices,

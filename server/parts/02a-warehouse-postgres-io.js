@@ -120,13 +120,19 @@ function mergeWarehouseProductsIntoMemory(products = [], { suppliers = null } = 
   return payload;
 }
 
-async function hydrateWarehouseProductsForIds(productIds = [], { expandGroups = true } = {}) {
+async function hydrateWarehouseProductsForIds(productIds = [], { expandGroups = true, forceRefresh = false } = {}) {
   const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : [productIds])
     .map((id) => cleanText(id))
     .filter(Boolean)));
   if (!ids.length) return [];
   const warehouse = await readWarehouse();
-  const missingIds = ids.filter((id) => !(warehouse.products || []).some((product) => String(product.id) === id));
+  // forceRefresh: reload ALL requested IDs from Postgres, not just missing ones.
+  // Required in the worker process which has a separate in-memory cache: after the API
+  // process writes a change (e.g. snooze removal), the worker cache is stale and
+  // hydrateWarehouseProductsForIds must go to Postgres to get the updated state.
+  const missingIds = forceRefresh
+    ? ids
+    : ids.filter((id) => !(warehouse.products || []).some((product) => String(product.id) === id));
   if (missingIds.length && shouldUsePostgresStorage()) {
     let loaded = await readWarehouseProductsFromPostgresByIds(missingIds, { includeDisabledTargets: true });
     if (!loaded.length) {
