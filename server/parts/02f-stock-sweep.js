@@ -97,10 +97,22 @@ async function runStockSweep({ source = "schedule" } = {}) {
       });
     const sentOk = actions.filter((item) => item.ok).length;
     const sentOkIds = new Set(actions.filter((item) => item.ok).map((item) => String(item.id)));
+    const nfaCleared = [];
     for (const product of products) {
       if (sentOkIds.has(String(product.id))) {
         stockSweepRecentlySent.set(String(product.id), { stock: product.targetStock, at: nowMs });
+        // Clear stale stockZeroAt so recovery automation doesn't re-process an already-active product.
+        if (product.noSupplierAutomation?.stockZeroAt) {
+          nfaCleared.push({
+            ...product,
+            noSupplierAutomation: { ...product.noSupplierAutomation, stockZeroAt: null },
+          });
+        }
       }
+    }
+    if (nfaCleared.length) {
+      await writeWarehouseProductPatch(nfaCleared, { reason: "stock_sweep_nsa_clear", writeLinks: false })
+        .catch((error) => logger.warn("stock sweep nsa clear failed", { detail: error?.message || String(error) }));
     }
     logger.info("stock_sweep_complete", {
       source,
