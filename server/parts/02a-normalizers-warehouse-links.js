@@ -32,7 +32,12 @@ function normalizeWarehouseLink(input = {}) {
       ? cloneAuditValue(input.resolvedPriceMasterRow)
       : null,
     snooze: (input.snooze && cleanText(input.snooze.snoozedUntil))
-      ? { snoozedAt: cleanText(input.snooze.snoozedAt) || null, snoozedUntil: cleanText(input.snooze.snoozedUntil), days: Math.max(1, Number(input.snooze.days || 5) || 5) }
+      ? {
+        snoozedAt: cleanText(input.snooze.snoozedAt) || null,
+        snoozedUntil: cleanText(input.snooze.snoozedUntil),
+        days: Math.max(1, Number(input.snooze.days || 5) || 5),
+        ...(cleanText(input.snooze.groupSnoozedByLinkId) ? { groupSnoozedByLinkId: cleanText(input.snooze.groupSnoozedByLinkId) } : {}),
+      }
       : null,
   };
 }

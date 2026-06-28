@@ -85,31 +85,44 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
     const linkIndex = (product.links || []).findIndex((l) => l.id === linkId);
     if (linkIndex < 0) return response.status(404).json({ error: "Привязка не найдена." });
 
+    const defaultStock = Math.max(1, Number(process.env.LINKED_DEFAULT_TARGET_STOCK || 5) || 5);
     const now = new Date().toISOString();
     const updatedLinks = product.links.map((link, i) => {
       if (i !== linkIndex) return link;
       const { snooze: _removed, ...rest } = link;
       return rest;
     });
-    const updatedProduct = { ...product, links: updatedLinks, updatedAt: now, userUpdatedAt: now };
+    // Reset targetStock to default so the stock sweep SQL picks this product up immediately
+    // (COALESCE(target_stock,0) <= 0 OR marketplace_stock < target_stock) and the cooldown
+    // bypass works correctly even if a pre-snooze cached entry exists.
+    const updatedProduct = { ...product, links: updatedLinks, updatedAt: now, userUpdatedAt: now, targetStock: defaultStock };
 
     await writeWarehouseProductPatch([updatedProduct], { reason: "snooze_link_cancel", writeLinks: true });
 
-    // Also remove the snooze from sibling products' matching link (copied when snooze was applied)
-    // so they regain selectedSupplier and are included in the recovery triggered below.
+    // Remove the snooze from sibling products so they regain selectedSupplier and are included
+    // in the recovery triggered below. Handles both new snoozes (groupSnoozedByLinkId present
+    // in Postgres after normalizer fix) and legacy snoozes (no groupSnoozedByLinkId, written
+    // before normalizeWarehouseLink was fixed to preserve the marker).
     const siblingGroupProducts = await hydrateWarehouseProductsForIds([productId], { expandGroups: true });
+    const allGroupIds = Array.from(new Set(siblingGroupProducts.map((p) => String(p.id))));
     const siblingsToUnsnooze = siblingGroupProducts
       .filter((p) => String(p.id) !== String(productId))
-      .map((p) => ({
-        ...p,
-        updatedAt: now,
-        links: (p.links || []).map((link) => {
-          if (!link.snooze || link.snooze.groupSnoozedByLinkId !== linkId) return link;
+      .map((p) => {
+        let removedSnooze = false;
+        const newLinks = (p.links || []).map((link) => {
+          if (!link.snooze?.snoozedUntil) return link;
+          // Preserve snoozes from a different group (different groupSnoozedByLinkId).
+          if (link.snooze.groupSnoozedByLinkId && link.snooze.groupSnoozedByLinkId !== linkId) return link;
+          // Remove: matches this group's linkId, OR legacy snooze without a marker (written
+          // before the normalizer preserved groupSnoozedByLinkId — treat as group-propagated).
+          removedSnooze = true;
           const { snooze: _removed, ...rest } = link;
           return rest;
-        }),
-      }))
-      .filter((p) => (p.links || []).some((link) => link.snooze?.groupSnoozedByLinkId === linkId));
+        });
+        if (!removedSnooze) return null;
+        return { ...p, updatedAt: now, targetStock: defaultStock, links: newLinks };
+      })
+      .filter(Boolean);
     if (siblingsToUnsnooze.length) {
       await writeWarehouseProductPatch(siblingsToUnsnooze, { reason: "snooze_link_cancel_siblings", writeLinks: true });
     }
@@ -124,12 +137,11 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
     response.json({ ok: true, product: normalizeWarehouseProduct(displayProduct) });
 
     // Fire-and-forget: send stock=defaultStock to ALL group members (Ozon + Yandex) immediately,
-    // without waiting for the BullMQ worker. Mirrors snooze-apply's sendZeroStocksToMarketplace.
+    // without waiting for the BullMQ worker. Uses snapshot PM (livePriceMaster: false) for speed
+    // and reliability — live PM queries can time out and silently prevent stock restoration.
     // The BullMQ job below handles full recovery (DB state, price push, archived products).
-    const allGroupIds = [productId, ...siblingsToUnsnooze.map((p) => String(p.id))];
-    void buildFreshWarehouseProducts(allGroupIds, { livePriceMaster: true })
+    void buildFreshWarehouseProducts(allGroupIds, { livePriceMaster: false })
       .then(async (freshProducts) => {
-        const defaultStock = Math.max(1, Number(process.env.LINKED_DEFAULT_TARGET_STOCK || 5) || 5);
         const toRestore = freshProducts
           .filter((p) => p?.selectedSupplier && !p.hasSnoozedLinks)
           .map((p) => ({
