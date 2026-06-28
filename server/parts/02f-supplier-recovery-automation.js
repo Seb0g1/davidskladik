@@ -110,7 +110,8 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
   const stockActions = [...ozonFirstStockActions, ...ozonSecondStockActions, ...yandexStockActions];
   const unarchiveActions = [...ozonUnarchiveActions, ...yandexUnarchiveActions];
   const productStatuses = summarizeSupplierRecoveryProducts(recovered, stockActions, unarchiveActions);
-  await hydrateWarehouseProductsForIds(recovered.map((item) => item.id), { expandGroups: false });
+  // forceRefresh: re-read from Postgres so we see any snoozes written since the recovery build.
+  await hydrateWarehouseProductsForIds(recovered.map((item) => item.id), { expandGroups: false, forceRefresh: true });
   const warehouse = await readWarehouse();
   const now = new Date().toISOString();
   const recoveredIds = new Set(recovered.map((item) => String(item.id)));
@@ -158,18 +159,27 @@ async function runSupplierRecoveryAutomation(preview, options = {}) {
       product.noSupplierAutomation.lastError = status.error;
     }
     if (sellableIds.has(productId)) {
-      const restoredStock = restoredStockById.get(productId)
-        || Math.max(1, Math.round(Number(product.targetStock || product.marketplaceState?.stock || 1)));
-      product.targetStock = restoredStock;
-      product.marketplaceState = {
-        ...(product.marketplaceState || {}),
-        code: "active",
-        status: "active",
-        archived: false,
-        stock: restoredStock,
-      };
-      product.status = "active";
-      product.archived = false;
+      // After forceRefresh above, product.links reflects the current Postgres state.
+      // If the product was re-snoozed since this recovery job started, skip the targetStock
+      // write — the snooze handler already wrote targetStock=0 and we must not overwrite it.
+      const nowTs = new Date(now);
+      const currentlySnoozed = (product.links || []).some(
+        (link) => link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > nowTs,
+      );
+      if (!currentlySnoozed) {
+        const restoredStock = restoredStockById.get(productId)
+          || Math.max(1, Math.round(Number(product.targetStock || product.marketplaceState?.stock || 1)));
+        product.targetStock = restoredStock;
+        product.marketplaceState = {
+          ...(product.marketplaceState || {}),
+          code: "active",
+          status: "active",
+          archived: false,
+          stock: restoredStock,
+        };
+        product.status = "active";
+        product.archived = false;
+      }
     }
     product.updatedAt = now;
     changedProducts.push(product);

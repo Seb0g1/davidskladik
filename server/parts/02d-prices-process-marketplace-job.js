@@ -48,7 +48,25 @@ async function processMarketplaceJob(name, data = {}) {
         batchPriceMaster: data.livePriceMaster !== false,
         priceMasterTimeoutMs: Number(data.priceMasterTimeoutMs || 0) || autoPricePmTimeoutMs,
       });
-      return runSupplierRecoveryAutomation({ products }, {
+      // Guard against race: live PM build takes 2-5s during which the API process may have
+      // written a new snooze to Postgres (e.g. user immediately re-snoozed after unsnooze).
+      // Re-read link state from Postgres and exclude products that are currently snoozed so we
+      // don't send stock=5 to a marketplace that should be at 0.
+      const pgProducts = await readWarehouseProductsFromPostgresByIds(productIds).catch(() => []);
+      const pgById = new Map(pgProducts.map((p) => [String(p.id), p]));
+      const nowTs = new Date();
+      const eligible = products.filter((p) => {
+        const pg = pgById.get(String(p.id));
+        if (!pg) return true;
+        return !(pg.links || []).some(
+          (link) => link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > nowTs,
+        );
+      });
+      if (!eligible.length) {
+        logger.info("supplier_recovery_skipped_all_snoozed", { source, count: productIds.length });
+        return { recovered: 0, restoredStocks: 0, unarchived: 0, errors: [], source };
+      }
+      return runSupplierRecoveryAutomation({ products: eligible }, {
         productIds,
         source,
         sourceEvent: data.sourceEvent || source,
