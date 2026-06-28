@@ -104,7 +104,6 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
     // in Postgres after normalizer fix) and legacy snoozes (no groupSnoozedByLinkId, written
     // before normalizeWarehouseLink was fixed to preserve the marker).
     const siblingGroupProducts = await hydrateWarehouseProductsForIds([productId], { expandGroups: true });
-    const allGroupIds = Array.from(new Set(siblingGroupProducts.map((p) => String(p.id))));
     const siblingsToUnsnooze = siblingGroupProducts
       .filter((p) => String(p.id) !== String(productId))
       .map((p) => {
@@ -136,20 +135,24 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
       : updatedProduct;
     response.json({ ok: true, product: normalizeWarehouseProduct(displayProduct) });
 
-    // Fire-and-forget: send stock=defaultStock to ALL group members (Ozon + Yandex) immediately,
-    // without waiting for the BullMQ worker. Uses snapshot PM (livePriceMaster: false) for speed
-    // and reliability — live PM queries can time out and silently prevent stock restoration.
-    // The BullMQ job below handles full recovery (DB state, price push, archived products).
-    void buildFreshWarehouseProducts(allGroupIds, { livePriceMaster: false })
-      .then(async (freshProducts) => {
-        const toRestore = freshProducts
-          .filter((p) => p?.selectedSupplier && !p.hasSnoozedLinks)
-          .map((p) => ({
-            ...p,
-            targetStock: Math.max(defaultStock, Math.round(Number(p.targetStock || 0)) || defaultStock),
-          }));
-        if (!toRestore.length) return;
-        await restoreStocksOnMarketplaces(toRestore);
+    // Direct stock restore — symmetric with the snooze POST which calls sendZeroStocksToMarketplace
+    // without any PM lookup. We know these products had suppliers (they were snoozed), so we can
+    // restore stock immediately using the already-known offerId/target/marketplace fields.
+    // The BullMQ job below handles full recovery (unarchive, price push, DB state propagation).
+    const directRestoreProducts = [
+      { ...updatedProduct, targetStock: defaultStock },
+      ...siblingsToUnsnooze.map((p) => ({ ...p, targetStock: defaultStock })),
+    ];
+    void restoreStocksOnMarketplaces(directRestoreProducts)
+      .then((actions) => {
+        const failed = actions.filter((a) => !a.ok);
+        if (failed.length) {
+          logger.warn("snooze_cancel direct stock restore partial failure", {
+            productId,
+            linkId,
+            failed: failed.map((a) => ({ id: a.id, error: a.error })),
+          });
+        }
       })
       .catch((err) => logger.warn("snooze_cancel direct stock restore failed", {
         productId,
