@@ -92,10 +92,18 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
       const { snooze: _removed, ...rest } = link;
       return rest;
     });
-    // Reset targetStock to default so the stock sweep SQL picks this product up immediately
-    // (COALESCE(target_stock,0) <= 0 OR marketplace_stock < target_stock) and the cooldown
-    // bypass works correctly even if a pre-snooze cached entry exists.
-    const updatedProduct = { ...product, links: updatedLinks, updatedAt: now, userUpdatedAt: now, targetStock: defaultStock };
+    // Reset targetStock and clear automation state so the stock sweep and recovery job treat
+    // this product as needing a fresh restore (not blocked by prior stockZeroAt/archivedAt state).
+    const updatedProduct = {
+      ...product,
+      links: updatedLinks,
+      updatedAt: now,
+      userUpdatedAt: now,
+      targetStock: defaultStock,
+      noSupplierAutomation: product.noSupplierAutomation
+        ? { ...product.noSupplierAutomation, stockZeroAt: null, archivedAt: null }
+        : null,
+    };
 
     await writeWarehouseProductPatch([updatedProduct], { reason: "snooze_link_cancel", writeLinks: true });
 
@@ -119,7 +127,15 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
           return rest;
         });
         if (!removedSnooze) return null;
-        return { ...p, updatedAt: now, targetStock: defaultStock, links: newLinks };
+        return {
+          ...p,
+          updatedAt: now,
+          targetStock: defaultStock,
+          links: newLinks,
+          noSupplierAutomation: p.noSupplierAutomation
+            ? { ...p.noSupplierAutomation, stockZeroAt: null, archivedAt: null }
+            : null,
+        };
       })
       .filter(Boolean);
     if (siblingsToUnsnooze.length) {
@@ -128,12 +144,7 @@ app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, r
 
     await appendAudit(request, "warehouse.link.snooze_cancel", { productId, linkId });
 
-    // Optimistically clear stockZeroAt in the response so the UI immediately shows that recovery
-    // is in progress, rather than keeping the "stock zeroed" state until the async job finishes.
-    const displayProduct = updatedProduct.noSupplierAutomation?.stockZeroAt
-      ? { ...updatedProduct, noSupplierAutomation: { ...(updatedProduct.noSupplierAutomation || {}), stockZeroAt: null } }
-      : updatedProduct;
-    response.json({ ok: true, product: normalizeWarehouseProduct(displayProduct) });
+    response.json({ ok: true, product: normalizeWarehouseProduct(updatedProduct) });
 
     // Direct stock restore — symmetric with the snooze POST which calls sendZeroStocksToMarketplace
     // without any PM lookup. We know these products had suppliers (they were snoozed), so we can

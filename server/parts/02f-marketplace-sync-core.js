@@ -313,6 +313,12 @@ async function restoreStocksOnMarketplaces(products = []) {
         actions.push(...items.map((item) => ({ id: item.id, type: "restore_stock", target: shop.id, ok: false, error: "yandex_stock_campaign_not_configured" })));
         continue;
       }
+      const archivedItems = items.filter((item) => productLooksArchived(item));
+      if (archivedItems.length) {
+        await unarchiveProductsOnMarketplaces(archivedItems).catch((err) =>
+          logger.warn("restore_stocks_unarchive_failed", { count: archivedItems.length, detail: err?.message || String(err) }),
+        );
+      }
       for (const stockShop of stockShops) {
         for (const chunk of chunkArray(items, 100)) {
           try {

@@ -78,7 +78,7 @@ async function runStockSweep({ source = "schedule" } = {}) {
       });
     const now = new Date().toISOString();
     const products = builtProducts
-      .filter((product) => product?.selectedSupplier && product.hasLinks)
+      .filter((product) => product?.selectedSupplier && product.hasLinks && !product.hasSnoozedLinks)
       .map((product) => ({
         ...product,
         targetStock: Math.max(linkedDefaultTargetStock, Math.round(Number(product.targetStock || 0)) || 0),
@@ -96,8 +96,11 @@ async function runStockSweep({ source = "schedule" } = {}) {
         return [];
       });
     const sentOk = actions.filter((item) => item.ok).length;
+    const sentOkIds = new Set(actions.filter((item) => item.ok).map((item) => String(item.id)));
     for (const product of products) {
-      stockSweepRecentlySent.set(String(product.id), { stock: product.targetStock, at: nowMs });
+      if (sentOkIds.has(String(product.id))) {
+        stockSweepRecentlySent.set(String(product.id), { stock: product.targetStock, at: nowMs });
+      }
     }
     logger.info("stock_sweep_complete", {
       source,
