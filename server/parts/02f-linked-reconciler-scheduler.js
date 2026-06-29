@@ -195,6 +195,7 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
     refreshPrices: true,
     batchPriceMaster: true,
     persistMutations: true,
+    priceMasterTimeoutMs: autoPricePmTimeoutMs,
   });
 
   // Refresh live marketplace archive/stock state.
@@ -216,6 +217,7 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
     refreshPrices: false,
     batchPriceMaster: true,
     persistMutations: true,
+    priceMasterTimeoutMs: autoPricePmTimeoutMs,
   });
   products = rebuilt.map((p) => {
     const liveState = liveStateById.get(String(p.id));

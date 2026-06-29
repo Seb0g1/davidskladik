@@ -121,7 +121,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       supplierLedgerEntry = await upsertSupplierLedgerDebtFromPickingRow(nextRow, financeOrder, request);
       if (nextRow.warehouseProductId) {
         const productIds = [nextRow.warehouseProductId];
-        const freshProducts = await buildFreshWarehouseProducts(productIds, { livePriceMaster: true, batchPriceMaster: true })
+        const freshProducts = await buildFreshWarehouseProducts(productIds, { livePriceMaster: true, batchPriceMaster: true, priceMasterTimeoutMs: autoPricePmTimeoutMs })
           .catch((error) => {
             logger.warn("supplier picking stock restore build failed", { detail: error?.message || String(error), productIds });
             return [];

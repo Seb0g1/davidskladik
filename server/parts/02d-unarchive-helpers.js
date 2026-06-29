@@ -185,7 +185,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       };
       return { ...empty, ...ozonUnarchiveQueueAutomationPublic() };
     }
-    const products = await buildFreshWarehouseProducts(ids, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true });
+    const products = await buildFreshWarehouseProducts(ids, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true, priceMasterTimeoutMs: autoPricePmTimeoutMs });
     const result = await runSupplierRecoveryAutomation({ products }, {
       productIds: ids,
       source,

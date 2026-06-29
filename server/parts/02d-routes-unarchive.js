@@ -197,7 +197,7 @@ async function repairWarehouseProductGroup(productId, request = null) {
       livePriceMaster: true,
       marketplace: "all",
     });
-    const freshProducts = await buildFreshWarehouseProducts(productIds, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true });
+    const freshProducts = await buildFreshWarehouseProducts(productIds, { refreshPrices: true, livePriceMaster: true, batchPriceMaster: true, priceMasterTimeoutMs: autoPricePmTimeoutMs });
     const recoveryResult = await runSupplierRecoveryAutomation({ products: freshProducts }, { productIds, source: "product_repair", force: true });
     const diagnostics = await buildWarehouseSkuDiagnostics(currentSeed.offerId || currentSeed.sku || currentSeed.productId || currentSeed.id, { limit: 50, auditLimit: 30 });
     const payload = {
