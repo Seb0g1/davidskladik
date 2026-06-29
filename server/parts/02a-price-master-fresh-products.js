@@ -41,7 +41,8 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       const specialCount = preNorm.filter((l) => l.matchType !== "article").length;
       const articleUniqueCount = new Set(preNorm.filter((l) => l.matchType === "article" && l.article).map((l) => l.article)).size;
       const estBatches = Math.max(1, specialCount + Math.ceil(articleUniqueCount / 500));
-      const outerTimeoutMs = effectivePriceMasterTimeoutMs * estBatches + 500;
+      // ×2 buffer: each batch query has one stale-connection retry (doubles worst-case time)
+      const outerTimeoutMs = effectivePriceMasterTimeoutMs * estBatches * 2 + 500;
       matchMap = await Promise.race([
         getBatchPriceMasterMatchesForLinks(links, warehouse.suppliers, rate, { timeoutMs: effectivePriceMasterTimeoutMs }),
         promiseTimeout(outerTimeoutMs, "warehouse_page_pm_timeout"),
