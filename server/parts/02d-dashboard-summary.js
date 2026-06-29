@@ -54,7 +54,9 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
       listFinanceOrders({ period: "7d", limit: 2000, linkedOnly: true }),
       listFinanceExpenses({ period: "7d", limit: 2000 }),
       usePg
-        ? prisma.salesAutomationSkuState.count({ where: { priceStatus: "pending" } }).catch(() => 0)
+        ? prisma.$queryRawUnsafe(
+            `SELECT COUNT(*)::int AS n FROM sales_automation_sku_states WHERE price_status = 'pending' AND last_calculated_at > now() - interval '30 minutes'`
+          ).then((rows) => Number(rows?.[0]?.n || 0)).catch(() => 0)
         : Promise.resolve(0),
       usePg
         ? prisma.warehouseProduct.count({ where: { marketplace: "yandex", archived: true, links: { some: {} } } }).catch(() => 0)
