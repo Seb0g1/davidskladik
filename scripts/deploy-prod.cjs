@@ -150,6 +150,7 @@ async function main() {
       `cd ${remoteRoot}`,
       "npm ci --omit=dev",
       "node node_modules/prisma/build/index.js generate 2>&1 | tail -5",
+      "node node_modules/prisma/build/index.js migrate deploy 2>&1 | tail -10",
       "pm2 delete davidsklad 2>/dev/null || true",
       "pm2 start ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env || pm2 reload ecosystem.config.cjs --only davidsklad-api,davidsklad-worker --update-env",
       "pm2 save",
