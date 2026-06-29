@@ -116,7 +116,7 @@ async function verifyOzonPriceApplied(account, entries = [], { priceIntentId = "
 let deferredOzonVerifyInFlight = 0;
 function scheduleDeferredOzonPriceVerification(account, entries = [], { priceIntentId = "", sentAt = new Date().toISOString() } = {}) {
   if (!entries.length) return;
-  const maxInFlight = Math.max(1, Number(process.env.OZON_PRICE_VERIFY_MAX_INFLIGHT || 5) || 5);
+  const maxInFlight = Math.max(1, Number(process.env.OZON_PRICE_VERIFY_MAX_INFLIGHT || 15) || 15);
   if (deferredOzonVerifyInFlight >= maxInFlight) {
     logger.warn("deferred ozon price verification skipped: too many in flight", {
       inFlight: deferredOzonVerifyInFlight,
