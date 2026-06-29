@@ -147,6 +147,21 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
     const ids = resolution.ids;
     await rewriteResolvedOzonUnarchiveQueueItems(resolution.rewrites);
     if (!ids.length) {
+      // All dueItems that were not rewritten (no matching warehouse product found by offerId) are
+      // ghost entries — the product was deleted or its offerId changed since the item was queued.
+      // Remove them to prevent accumulation of permanently-unresolvable items.
+      const rewrittenKeys = new Set((resolution.rewrites || []).map((r) => ozonUnarchiveQueueKey(r.item)));
+      const ghostItems = dueItems.filter((item) => !rewrittenKeys.has(ozonUnarchiveQueueKey(item)));
+      if (ghostItems.length) {
+        try {
+          let currentQueue = await readOzonUnarchiveQueue();
+          currentQueue = removeOzonUnarchiveQueueItems(currentQueue, ghostItems);
+          await writeOzonUnarchiveQueue(currentQueue);
+          logger.info("ozon_unarchive_queue_ghost_purge", { purged: ghostItems.length, remaining: currentQueue.items?.length || 0 });
+        } catch (purgeError) {
+          logger.warn("ozon unarchive queue ghost purge failed", { detail: purgeError?.message || String(purgeError) });
+        }
+      }
       const empty = {
         ok: true,
         source,
@@ -154,6 +169,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
         startedAt,
         finishedAt: new Date().toISOString(),
         selected: 0,
+        ghostPurged: ghostItems.length,
         result: { recovered: 0, unarchivePending: publicQueue.due, queueSize: publicQueue.total },
         queue: publicQueue,
       };
@@ -164,6 +180,7 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
         recovered: 0,
         unarchivePending: publicQueue.due,
         queueSize: publicQueue.total,
+        ghostPurged: ghostItems.length,
         at: empty.finishedAt,
       };
       return { ...empty, ...ozonUnarchiveQueueAutomationPublic() };

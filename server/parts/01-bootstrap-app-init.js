@@ -223,6 +223,7 @@ const autoPricePushHeartbeatLogMs = Math.max(15000, Number(process.env.AUTO_PRIC
 const autoPricePushStallGuardMs = Math.max(600000, Number(process.env.AUTO_PRICE_PUSH_STALL_GUARD_MS || 600000) || 600000);
 const ozonUnarchiveVerifyDelayMs = Math.max(0, Number(process.env.OZON_UNARCHIVE_VERIFY_DELAY_MS || 5000) || 5000);
 const ozonUnarchiveVerifyAttempts = Math.max(1, Math.min(10, Number(process.env.OZON_UNARCHIVE_VERIFY_ATTEMPTS || 3) || 3));
+const ozonUnarchiveMaxAttempts = Math.max(1, Number(process.env.OZON_UNARCHIVE_MAX_ATTEMPTS || 20) || 20);
 const ozonUnarchiveVisibilityRetryMinutes = Math.max(5, Number(process.env.OZON_UNARCHIVE_VISIBILITY_RETRY_MINUTES || ozonUnarchiveQueueAutoIntervalMinutes) || ozonUnarchiveQueueAutoIntervalMinutes);
 const ozonPriceVerifyDelayMs = Math.max(0, Number(process.env.OZON_PRICE_VERIFY_DELAY_MS || 30000) || 30000);
 const ozonPriceVerifyAttempts = Math.max(1, Math.min(10, Number(process.env.OZON_PRICE_VERIFY_ATTEMPTS || 5) || 5));

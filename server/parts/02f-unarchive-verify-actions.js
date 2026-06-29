@@ -104,15 +104,37 @@ async function verifyOzonUnarchiveActions(products = [], actions = [], options =
 
   if (retryProducts.length) {
     try {
-      const queueState = queueOzonUnarchiveItems(await readOzonUnarchiveQueue(), retryProducts, {
-        nextRetryAt,
-        warning: "ozon_unarchive_verify_pending",
-        attempted: true,
-      });
-      await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: retryProducts });
-      Promise.resolve(rescheduleOzonUnarchiveQueueAutoSoon("visibility_pending")).catch((error) => {
-        logger.warn("ozon unarchive queue reschedule failed", { detail: error?.message || String(error) });
-      });
+      const currentQueue = await readOzonUnarchiveQueue();
+      const attemptsByKey = new Map((currentQueue.items || []).map((item) => [ozonUnarchiveQueueKey(item), item]));
+      const toQueue = [];
+      const exhausted = [];
+      for (const product of retryProducts) {
+        const key = ozonUnarchiveQueueKey(product);
+        const existing = attemptsByKey.get(key);
+        const currentAttempts = Math.max(0, Number(existing?.attempts || 0) || 0) + 1;
+        if (currentAttempts >= ozonUnarchiveMaxAttempts) {
+          exhausted.push(product);
+        } else {
+          toQueue.push(product);
+        }
+      }
+      if (exhausted.length) {
+        logger.warn("ozon_unarchive_verify_exhausted", {
+          count: exhausted.length,
+          offerIds: exhausted.slice(0, 10).map((p) => p.offerId),
+        });
+      }
+      if (toQueue.length) {
+        const queueState = queueOzonUnarchiveItems(currentQueue, toQueue, {
+          nextRetryAt,
+          warning: "ozon_unarchive_verify_pending",
+          attempted: true,
+        });
+        await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: toQueue });
+        Promise.resolve(rescheduleOzonUnarchiveQueueAutoSoon("visibility_pending")).catch((error) => {
+          logger.warn("ozon unarchive queue reschedule failed", { detail: error?.message || String(error) });
+        });
+      }
     } catch (error) {
       logger.warn("ozon unarchive pending requeue failed", { detail: error?.message || String(error) });
     }
