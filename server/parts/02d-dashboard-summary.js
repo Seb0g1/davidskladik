@@ -5,8 +5,13 @@
 // hour after price_sweep should have reconciled it (sweep runs every ~2 min, see
 // 02f-price-sweep.js) means the push is stuck (repeated failure, oscillation, etc.) — not
 // just "queued". Alert if too many SKUs are stuck like this.
+// The query must mirror the sweep's own exclusions so we only count SKUs the sweep
+// actually intends to process — otherwise recently-verified or duplicate-name SKUs inflate
+// the count with false positives (verified-cooldown products re-diverge on every USD rate
+// recompute but the sweep correctly skips them for PRICE_SWEEP_VERIFIED_COOLDOWN_HOURS).
 const stalePriceLinkedHours = Math.max(0, Number(process.env.STALE_PRICE_LINKED_HOURS || 1) || 1);
 const stalePriceLinkedAlertThreshold = Math.max(0, Number(process.env.STALE_PRICE_LINKED_ALERT_THRESHOLD || 50) || 50);
+const stalePriceExcludeVerifiedHours = Math.max(0, Number(process.env.PRICE_SWEEP_VERIFIED_COOLDOWN_HOURS || 6) || 6);
 
 // PLAN-HARDENING.md 1.3: alert if the oldest pending "auto-price-push" job has been
 // waiting longer than this — a sign that recovery/unarchive jobs are starving price
@@ -70,6 +75,11 @@ app.get("/api/dashboard/summary", requireAdmin, async (_request, response, next)
               AND p.target_price IS NOT NULL AND p.target_price > 0
               AND (p.current_price IS NULL OR p.current_price <> p.target_price)
               AND p.updated_at < now() - interval '${stalePriceLinkedHours} hours'
+              AND (
+                p.raw->>'priceVerifiedAt' IS NULL
+                OR (p.raw->>'priceVerifiedAt')::timestamptz < now() - interval '${stalePriceExcludeVerifiedHours} hours'
+              )
+              AND ${duplicateNameSqlExclusion("p")}
               AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
           `).then((rows) => Number(rows?.[0]?.n || 0)).catch(() => 0)
         : Promise.resolve(0),
