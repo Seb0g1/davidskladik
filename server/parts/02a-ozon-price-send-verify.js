@@ -113,19 +113,36 @@ async function verifyOzonPriceApplied(account, entries = [], { priceIntentId = "
 // Deferred (background) price verification: the send pipeline no longer blocks 10-30s per
 // batch waiting for Ozon to apply prices. Runs after a delay, updates sku states, and
 // force-requeues prices that did not apply so they are pushed again automatically.
-let deferredOzonVerifyInFlight = 0;
+//
+// Two counters: "pending" (scheduled, waiting for delay) and "running" (actively calling Ozon).
+// The cap applies to RUNNING only — scheduled tasks are lightweight (just a setTimeout).
+// Previously the cap applied to scheduled+running together, which caused the 30-second delay
+// window to saturate 5 (now 15) slots and drop all subsequent verifications.
+let deferredOzonVerifyPending = 0;
+let deferredOzonVerifyRunning = 0;
 function scheduleDeferredOzonPriceVerification(account, entries = [], { priceIntentId = "", sentAt = new Date().toISOString() } = {}) {
   if (!entries.length) return;
-  const maxInFlight = Math.max(1, Number(process.env.OZON_PRICE_VERIFY_MAX_INFLIGHT || 15) || 15);
-  if (deferredOzonVerifyInFlight >= maxInFlight) {
-    logger.warn("deferred ozon price verification skipped: too many in flight", {
-      inFlight: deferredOzonVerifyInFlight,
+  const maxPending = Math.max(1, Number(process.env.OZON_PRICE_VERIFY_MAX_PENDING || 200) || 200);
+  const maxRunning = Math.max(1, Number(process.env.OZON_PRICE_VERIFY_MAX_INFLIGHT || 15) || 15);
+  if (deferredOzonVerifyPending >= maxPending) {
+    logger.warn("deferred ozon price verification skipped: too many pending", {
+      pending: deferredOzonVerifyPending,
+      running: deferredOzonVerifyRunning,
       items: entries.length,
     });
     return;
   }
-  deferredOzonVerifyInFlight += 1;
+  deferredOzonVerifyPending += 1;
   const timer = setTimeout(async () => {
+    deferredOzonVerifyPending -= 1;
+    if (deferredOzonVerifyRunning >= maxRunning) {
+      logger.warn("deferred ozon price verification skipped: too many in flight", {
+        running: deferredOzonVerifyRunning,
+        items: entries.length,
+      });
+      return;
+    }
+    deferredOzonVerifyRunning += 1;
     try {
       const { verified, failed } = await verifyOzonPriceApplied(account, entries, { priceIntentId, sentAt });
       if (verified.length) {
@@ -162,7 +179,7 @@ function scheduleDeferredOzonPriceVerification(account, entries = [], { priceInt
     } catch (error) {
       logger.warn("deferred ozon price verification failed", { detail: error?.message || String(error) });
     } finally {
-      deferredOzonVerifyInFlight -= 1;
+      deferredOzonVerifyRunning -= 1;
     }
   }, Math.max(1000, ozonPriceVerifyDelayMs));
   timer.unref?.();
