@@ -57,14 +57,18 @@ async function runChangedPriceSweep({ source = "schedule" } = {}) {
       priceSweepRecentlyQueued.set(id, { price, at: nowMs });
       if (productIds.length >= priceSweepBatchLimit) break;
     }
-    // Reconcile stale unchanged_verified entries where warehouse_products is already synced.
-    // These accumulate when the reconcile ran but salesAutomationSkuState was never reset.
+    // Reconcile stale price_status='pending' entries where warehouse_products is already synced.
+    // Covers two cases:
+    // 1. reason='unchanged_verified': reconcile ran but salesAutomationSkuState was never reset.
+    // 2. reason='verification_pending'/'api_accepted': price was sent but Ozon verification job
+    //    failed or was never scheduled; current_price was later updated by the reconciler, so the
+    //    price IS correct on the marketplace — the pending flag is just a stale artefact.
     await prisma.$executeRawUnsafe(`
       UPDATE sales_automation_sku_states s
       SET reason = 'ok', price_status = 'success', updated_at = now()
       FROM warehouse_products p
       WHERE s.product_id = p.id
-        AND s.reason = 'unchanged_verified'
+        AND s.price_status = 'pending'
         AND p.current_price IS NOT NULL AND p.target_price IS NOT NULL
         AND p.current_price = p.target_price
     `).catch(() => null);
