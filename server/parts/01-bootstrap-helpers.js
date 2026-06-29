@@ -126,6 +126,7 @@ const priceMasterSearchCache = new Map();
 const priceMasterSearchCacheTtlMs = Math.max(1000, Number(process.env.PRICEMASTER_SEARCH_CACHE_MS || 30000));
 const priceMasterSearchCacheMax = Math.max(100, Number(process.env.PRICEMASTER_SEARCH_CACHE_MAX || 1000));
 let warehousePostgresSummaryCache = null;
+const warehousePostgresSummaryInflight = new Map();
 const warehousePostgresSummaryCacheTtlMs = Math.max(1000, Number(process.env.WAREHOUSE_PAGE_SUMMARY_CACHE_MS || 120000));
 let warehousePostgresSuppliersCache = null;
 let suppliersListCache = null;
@@ -304,6 +305,7 @@ function invalidateWarehouseViewCache() {
   warehouseViewCache.clear();
   warehouseViewBuilds.clear();
   warehousePostgresSummaryCache = null;
+  warehousePostgresSummaryInflight.clear();
   warehousePostgresSuppliersCache = null;
   suppliersListCache = null;
   warehouseBrandListCache = null;

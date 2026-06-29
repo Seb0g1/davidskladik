@@ -29,39 +29,49 @@ async function getWarehousePostgresSummary(prisma, rate) {
     warehousePostgresSummaryCache = { key: cacheKey, at: Date.now(), value };
     return value;
   }
+  const existingInflight = warehousePostgresSummaryInflight.get(cacheKey);
+  if (existingInflight) return existingInflight;
   const scanLimit = Math.max(500, Math.min(20000, Number(process.env.WAREHOUSE_SUMMARY_LINKED_SCAN_LIMIT || 5000) || 5000));
-  const [totalAll, ozonStateCounts, yandexStateCounts, linkedRows, suppliers] = await Promise.all([
-    prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
-    getOzonStateCountsFromPostgres(prisma),
-    getMarketplaceStateCountsFromPostgres(prisma, "yandex"),
-    prisma.warehouseProduct.findMany({
-      where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] },
-      include: { links: true },
-      orderBy: { updatedAt: "desc" },
-      take: scanLimit,
-    }),
-    getWarehousePostgresSuppliers(prisma),
-  ]);
-  const normalizedSuppliers = suppliers;
-  const linkedProducts = linkedRows.map(productFromPostgres);
-  const counterStats = await buildWarehouseCounterStatsFromLinkedProducts(
-    linkedProducts,
-    normalizedSuppliers,
-    { totalProducts: totalAll, usdRate: rate },
-  );
-  const value = {
-    totalAll,
-    ozonStateCounts,
-    yandexStateCounts,
-    normalizedSuppliers,
-    counterStats,
-    linkedArchived: linkedProducts
-      .filter((product) => Array.isArray(product.links) && product.links.length && productLooksArchived(product)).length,
-    lightweight: false,
-    summarySampled: linkedRows.length >= scanLimit,
-  };
-  warehousePostgresSummaryCache = { key: cacheKey, at: Date.now(), value };
-  return value;
+  const fetchPromise = (async () => {
+    try {
+      const [totalAll, ozonStateCounts, yandexStateCounts, linkedRows, suppliers] = await Promise.all([
+        prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
+        getOzonStateCountsFromPostgres(prisma),
+        getMarketplaceStateCountsFromPostgres(prisma, "yandex"),
+        prisma.warehouseProduct.findMany({
+          where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] },
+          include: { links: true },
+          orderBy: { updatedAt: "desc" },
+          take: scanLimit,
+        }),
+        getWarehousePostgresSuppliers(prisma),
+      ]);
+      const normalizedSuppliers = suppliers;
+      const linkedProducts = linkedRows.map(productFromPostgres);
+      const counterStats = await buildWarehouseCounterStatsFromLinkedProducts(
+        linkedProducts,
+        normalizedSuppliers,
+        { totalProducts: totalAll, usdRate: rate },
+      );
+      const value = {
+        totalAll,
+        ozonStateCounts,
+        yandexStateCounts,
+        normalizedSuppliers,
+        counterStats,
+        linkedArchived: linkedProducts
+          .filter((product) => Array.isArray(product.links) && product.links.length && productLooksArchived(product)).length,
+        lightweight: false,
+        summarySampled: linkedRows.length >= scanLimit,
+      };
+      warehousePostgresSummaryCache = { key: cacheKey, at: Date.now(), value };
+      return value;
+    } finally {
+      warehousePostgresSummaryInflight.delete(cacheKey);
+    }
+  })();
+  warehousePostgresSummaryInflight.set(cacheKey, fetchPromise);
+  return fetchPromise;
 }
 
 async function getWarehousePostgresSummaryLight(prisma, rate) {
@@ -73,42 +83,52 @@ async function getWarehousePostgresSummaryLight(prisma, rate) {
   ) {
     return warehousePostgresSummaryCache.value;
   }
-  const [totalAll, ozonStateCounts, yandexStateCounts, linkedProducts, linkedArchived, normalizedSuppliers] = await Promise.all([
-    prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
-    getOzonStateCountsFromPostgres(prisma),
-    getMarketplaceStateCountsFromPostgres(prisma, "yandex"),
-    prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] } }).catch(() => 0),
-    prisma.warehouseProduct.count({
-      where: {
-        AND: [
-          enabledWarehouseTargetWhere(),
-          { links: { some: {} } },
-          { OR: [{ archived: true }, { status: "archived" }] },
-        ],
-      },
-    }).catch(() => 0),
-    getWarehousePostgresSuppliers(prisma),
-  ]);
-  const value = {
-    totalAll,
-    ozonStateCounts,
-    yandexStateCounts,
-    normalizedSuppliers,
-    counterStats: {
-      ready: 0,
-      changed: 0,
-      withoutSupplier: 0,
-      linkedProducts,
-      linkedNotReady: 0,
-    },
-    linkedArchived,
-    lightweight: true,
-  };
-  const existing = warehousePostgresSummaryCache;
-  if (!existing || existing.key !== cacheKey || existing.value?.lightweight) {
-    warehousePostgresSummaryCache = { key: cacheKey, at: Date.now(), value };
-  }
-  return value;
+  const existingInflightLight = warehousePostgresSummaryInflight.get(cacheKey);
+  if (existingInflightLight) return existingInflightLight;
+  const fetchPromiseLight = (async () => {
+    try {
+      const [totalAll, ozonStateCounts, yandexStateCounts, linkedProducts, linkedArchived, normalizedSuppliers] = await Promise.all([
+        prisma.warehouseProduct.count({ where: enabledWarehouseTargetWhere() }),
+        getOzonStateCountsFromPostgres(prisma),
+        getMarketplaceStateCountsFromPostgres(prisma, "yandex"),
+        prisma.warehouseProduct.count({ where: { AND: [enabledWarehouseTargetWhere(), { links: { some: {} } }] } }).catch(() => 0),
+        prisma.warehouseProduct.count({
+          where: {
+            AND: [
+              enabledWarehouseTargetWhere(),
+              { links: { some: {} } },
+              { OR: [{ archived: true }, { status: "archived" }] },
+            ],
+          },
+        }).catch(() => 0),
+        getWarehousePostgresSuppliers(prisma),
+      ]);
+      const value = {
+        totalAll,
+        ozonStateCounts,
+        yandexStateCounts,
+        normalizedSuppliers,
+        counterStats: {
+          ready: 0,
+          changed: 0,
+          withoutSupplier: 0,
+          linkedProducts,
+          linkedNotReady: 0,
+        },
+        linkedArchived,
+        lightweight: true,
+      };
+      const existing = warehousePostgresSummaryCache;
+      if (!existing || existing.key !== cacheKey || existing.value?.lightweight) {
+        warehousePostgresSummaryCache = { key: cacheKey, at: Date.now(), value };
+      }
+      return value;
+    } finally {
+      warehousePostgresSummaryInflight.delete(cacheKey);
+    }
+  })();
+  warehousePostgresSummaryInflight.set(cacheKey, fetchPromiseLight);
+  return fetchPromiseLight;
 }
 
 function getCachedWarehousePostgresSummary(rate) {
