@@ -53,6 +53,23 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: pmDbPoolSize,
   connectTimeout: pmDbConnectTimeoutMs,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 60000,
   decimalNumbers: true,
   dateStrings: true,
 });
+
+// Retry once on stale-connection errors (ECONNRESET, Query inactivity timeout, etc.).
+// mysql2 returns stale connections from the pool when keepAlive fails to prevent
+// the server from closing the connection; a single retry gets a fresh one.
+const pmConnectionRetryErrors = new Set(["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "PROTOCOL_CONNECTION_LOST"]);
+const originalPoolQuery = pool.query.bind(pool);
+pool.query = async function pmPoolQueryWithRetry(sqlOrOptions, values) {
+  try {
+    return values !== undefined ? await originalPoolQuery(sqlOrOptions, values) : await originalPoolQuery(sqlOrOptions);
+  } catch (error) {
+    const isStale = pmConnectionRetryErrors.has(error?.code) || /inactivity timeout|connection lost|gone away/i.test(error?.message || "");
+    if (!isStale) throw error;
+    return values !== undefined ? originalPoolQuery(sqlOrOptions, values) : originalPoolQuery(sqlOrOptions);
+  }
+};

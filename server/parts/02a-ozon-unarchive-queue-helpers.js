@@ -112,9 +112,18 @@ async function writeOzonUnarchiveDailyState(daily = {}) {
     updatedAt: new Date().toISOString(),
     daily: daily && typeof daily === "object" ? daily : {},
   };
-  const tmpPath = `${ozonUnarchiveDailyStatePath}.${process.pid}.${Date.now()}.tmp`;
+  // Use crypto.randomUUID() in the temp name so concurrent calls from the same
+  // process at the same millisecond don't produce the same path (ENOENT on rename
+  // race: both write to the same .tmp, first rename moves it, second finds it gone).
+  const tmpPath = `${ozonUnarchiveDailyStatePath}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
-  await fs.rename(tmpPath, ozonUnarchiveDailyStatePath);
+  try {
+    await fs.rename(tmpPath, ozonUnarchiveDailyStatePath);
+  } catch (renameError) {
+    // ENOENT here means another concurrent write already moved the tmp file — ignore.
+    if (renameError?.code !== "ENOENT") throw renameError;
+    await fs.unlink(tmpPath).catch(() => {});
+  }
 }
 
 function ozonUnarchiveQueueItemToPostgres(item = {}) {
