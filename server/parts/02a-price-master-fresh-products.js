@@ -33,10 +33,14 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
   let matchMap = new Map();
   if (livePriceMaster) {
     if (batchPriceMaster) {
-      // Outer race must cover all 500-article batches, not just one. Articles are de-duplicated
-      // inside getBatchPriceMasterMatchesForLinks, so ceil(links.length/500) is an upper bound
-      // on the number of sequential MySQL queries. Each gets effectivePriceMasterTimeoutMs.
-      const estBatches = Math.max(1, Math.ceil(links.length / 500));
+      // Outer race must cover:
+      //   - special links (exactName/sourceRowId): processed 1-by-1, each up to timeoutMs
+      //   - article links: batched 500/query after de-dup
+      // Pre-normalize to get an accurate count of each type before the race starts.
+      const preNorm = links.map(normalizeWarehouseLink).filter((l) => l.article || l.exactName || l.sourceRowId);
+      const specialCount = preNorm.filter((l) => l.matchType !== "article").length;
+      const articleUniqueCount = new Set(preNorm.filter((l) => l.matchType === "article" && l.article).map((l) => l.article)).size;
+      const estBatches = Math.max(1, specialCount + Math.ceil(articleUniqueCount / 500));
       const outerTimeoutMs = effectivePriceMasterTimeoutMs * estBatches + 500;
       matchMap = await Promise.race([
         getBatchPriceMasterMatchesForLinks(links, warehouse.suppliers, rate, { timeoutMs: effectivePriceMasterTimeoutMs }),
