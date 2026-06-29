@@ -98,6 +98,11 @@ async function runHealthAlertCheck({ source = "schedule" } = {}) {
         WHERE p.archived = false AND p.target_price IS NOT NULL AND p.target_price > 0
           AND (p.current_price IS NULL OR p.current_price <> p.target_price)
           AND p.updated_at < now() - interval '${stalePriceLinkedHours} hours'
+          AND (
+            p.raw->>'priceVerifiedAt' IS NULL
+            OR (p.raw->>'priceVerifiedAt')::timestamptz < now() - interval '${stalePriceExcludeVerifiedHours} hours'
+          )
+          AND ${duplicateNameSqlExclusion("p")}
           AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
       `).then((rows) => Number(rows?.[0]?.n || 0)).catch(() => 0),
       oldestPendingPriceJobAgeMs().catch(() => 0),
