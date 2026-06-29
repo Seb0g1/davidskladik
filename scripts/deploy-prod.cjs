@@ -20,6 +20,8 @@ const skipLocalChecks = process.argv.includes("--skip-local-checks");
 
 const deployFiles = [
   "server.js",
+  "server/assemble.js",
+  "server/source.js",
   "api-entry.js",
   "worker-entry.js",
   "ecosystem.config.cjs",
@@ -40,6 +42,24 @@ const deployFiles = [
   "scripts/inspect-bullmq-failed-jobs.cjs",
   "scripts/setup-prod-monitoring.cjs",
   "scripts/run-prod-bullmq-triage.cjs",
+  // prisma schema + migrations needed for migrate deploy
+  "prisma/schema.prisma",
+  ...(() => {
+    const migrationsRoot = path.join(path.resolve(__dirname, ".."), "prisma/migrations");
+    const files = [];
+    for (const dir of fs.readdirSync(migrationsRoot)) {
+      const migDir = path.join(migrationsRoot, dir);
+      if (!fs.statSync(migDir).isDirectory()) continue;
+      for (const file of fs.readdirSync(migDir)) {
+        files.push(`prisma/migrations/${dir}/${file}`);
+      }
+    }
+    return files;
+  })(),
+  // server/parts: the actual business logic assembled at runtime
+  ...fs.readdirSync(path.join(path.resolve(__dirname, ".."), "server/parts"))
+    .filter((f) => f.endsWith(".js"))
+    .map((f) => `server/parts/${f}`),
 ];
 
 function exec(conn, command) {
