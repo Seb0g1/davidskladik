@@ -24,13 +24,24 @@ async function writeNotificationsState(state) {
 
 function notifySourceShouldSkip(key) {
   const failures = notifySourceFailures.get(key) || 0;
-  // After 5 consecutive failures poll the source only every ~15 minutes.
+  if (failures <= 0) return false;
+  // Permanent errors (permission denied, feature not enabled) get very long backoff.
+  // Every 200th tick ≈ 5 hours at 90-second poll interval.
+  if (failures >= 100) return (failures - 100) % 200 !== 0;
+  // After 5 consecutive transient failures: poll every ~15 minutes (1 in 10 ticks).
   return failures >= 5 && (failures - 5) % 10 !== 0;
 }
 
-function notifySourceResult(key, ok) {
-  if (ok) notifySourceFailures.delete(key);
-  else notifySourceFailures.set(key, (notifySourceFailures.get(key) || 0) + 1);
+function notifySourceResult(key, ok, { permanent = false } = {}) {
+  if (ok) {
+    notifySourceFailures.delete(key);
+  } else {
+    const prev = notifySourceFailures.get(key) || 0;
+    // Permanent errors (e.g. PermissionDenied) jump straight to the high-backoff tier
+    // so they don't spam the log every 90 seconds while still polling occasionally in
+    // case the permission is later granted.
+    notifySourceFailures.set(key, permanent ? Math.max(100, prev + 1) : prev + 1);
+  }
 }
 
 async function pollOzonOrderNotifications(state) {
@@ -133,7 +144,8 @@ async function pollOzonReviewNotifications(state) {
       }
       notifySourceResult(key, true);
     } catch (error) {
-      notifySourceResult(key, false);
+      const isPermissionDenied = /PermissionDenied|not available|permission denied/i.test(error?.message || "");
+      notifySourceResult(key, false, { permanent: isPermissionDenied });
       logger.warn("notify poll ozon reviews failed", { account: account.id, detail: error?.message || String(error) });
     }
   }
@@ -162,7 +174,8 @@ async function pollOzonQuestionNotifications(state) {
       }
       notifySourceResult(key, true);
     } catch (error) {
-      notifySourceResult(key, false);
+      const isPermissionDenied = /PermissionDenied|not available|permission denied/i.test(error?.message || "");
+      notifySourceResult(key, false, { permanent: isPermissionDenied });
       logger.warn("notify poll ozon questions failed", { account: account.id, detail: error?.message || String(error) });
     }
   }
