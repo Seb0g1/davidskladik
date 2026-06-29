@@ -28,14 +28,19 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
   const productsToBuild = (warehouse.products || []).filter((product) => wanted.has(String(product.id)));
   if (!productsToBuild.length) return [];
   const links = productsToBuild.flatMap((product) => product.links || []);
-  const effectivePriceMasterTimeoutMs = Math.max(500, Number(priceMasterTimeoutMs || process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 1500) || 1500);
+  const effectivePriceMasterTimeoutMs = Math.max(500, Number(priceMasterTimeoutMs || process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 2500) || 2500);
   let priceMasterSourceError = null;
   let matchMap = new Map();
   if (livePriceMaster) {
     if (batchPriceMaster) {
+      // Outer race must cover all 500-article batches, not just one. Articles are de-duplicated
+      // inside getBatchPriceMasterMatchesForLinks, so ceil(links.length/500) is an upper bound
+      // on the number of sequential MySQL queries. Each gets effectivePriceMasterTimeoutMs.
+      const estBatches = Math.max(1, Math.ceil(links.length / 500));
+      const outerTimeoutMs = effectivePriceMasterTimeoutMs * estBatches + 500;
       matchMap = await Promise.race([
         getBatchPriceMasterMatchesForLinks(links, warehouse.suppliers, rate, { timeoutMs: effectivePriceMasterTimeoutMs }),
-        promiseTimeout(effectivePriceMasterTimeoutMs + 100, "warehouse_page_pm_timeout"),
+        promiseTimeout(outerTimeoutMs, "warehouse_page_pm_timeout"),
       ]).catch((error) => {
         priceMasterSourceError = error?.message || String(error);
         logger.warn("warehouse page PriceMaster enrichment skipped", { detail: priceMasterSourceError });
