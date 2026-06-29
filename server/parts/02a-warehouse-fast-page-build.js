@@ -96,8 +96,17 @@ async function buildFastWarehousePageFromPostgres({
     pageBaseCount = pageSlice.length;
     visibleProducts = strictIdentitySearch ? pageSlice : addWarehousePageGroupSiblings(siblingSourceProducts, pageSlice);
   }
+  // When WAREHOUSE_PAGE_AUTO_ENRICH_BLOCKING=false: fire-and-forget the Ozon refresh
+  // so we return the snapshot immediately and save the 300-2000ms Ozon API latency.
+  // The DB is updated in the background; next page load sees the refreshed data.
+  const enrichBlocking = process.env.WAREHOUSE_PAGE_AUTO_ENRICH_BLOCKING !== "false";
+  const enrichedForPage = enrichBlocking
+    ? await enrichWeakOzonProductsForPage(visibleProducts)
+    : (enrichWeakOzonProductsForPage(visibleProducts).catch((err) => {
+      logger.warn("non-blocking page Ozon enrich failed", { detail: err?.message || String(err) });
+    }), visibleProducts);
   const pageProducts = Array.from(new Map(
-    (await enrichWeakOzonProductsForPage(visibleProducts)).map((product) => [product.id, product]),
+    enrichedForPage.map((product) => [product.id, product]),
   ).values());
   const pageWarehouse = {
     createdAt: dbRows[0]?.createdAt?.toISOString() || null,
