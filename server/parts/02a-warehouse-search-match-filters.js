@@ -25,6 +25,9 @@ function warehouseProductMatchesSearchQuery(product = {}, query = "") {
 
 function warehousePageProductMatches(product = {}, filters = {}) {
   if (!isWarehouseProductTargetEnabled(product)) return false;
+  // Deletion-marker names ("удалить1212", "дубль" …) never surface in the catalog/search
+  // (in-memory path; the Postgres path excludes them via duplicateNameExclusionWhere).
+  if (isTrashNameProduct(product)) return false;
   if (!warehouseProductMatchesSearchQuery(product, filters.q || "")) return false;
   const linked = cleanText(filters.linked || "all");
   const hasLinks = Array.isArray(product.links) && product.links.length > 0;

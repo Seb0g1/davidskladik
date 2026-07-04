@@ -17,6 +17,19 @@ function isYandexNoBoxProduct(textOrProduct = {}) {
   return YANDEX_NO_BOX_RE.test(text || "");
 }
 
+// Deletion-marker names: operators rename a product to "удалить1212" / "удаленны1" /
+// "дубль" instead of deleting it right away. Such products must never be imported to
+// Yandex, must be removed by the Yandex cleanup, and must not surface in the panel
+// catalog or search. The keyword list lives in DUPLICATE_MARKER_NAMES
+// (02a-warehouse-page-postgres-where.js) — one list drives catalog hiding, sweeps,
+// import blocks and cleanup alike.
+function isTrashNameProduct(textOrProduct = {}) {
+  const text = typeof textOrProduct === "string"
+    ? textOrProduct
+    : [textOrProduct.name, textOrProduct.ozon?.name, textOrProduct.yandex?.name].map(cleanText).filter(Boolean).join(" ");
+  return isDuplicateMarkerName(text);
+}
+
 function extractOzonYandexImportVolumesMl(name = "") {
   const raw = cleanText(name);
   if (!raw) return [];
@@ -111,6 +124,7 @@ function ozonYandexImportBlockReasons(product = {}, { manual = false } = {}) {
     reasons.push("Товар неактивен или статус Ozon не подтвержден");
   }
   if (lower.includes("отливант")) reasons.push("Название содержит «Отливант»");
+  if (isTrashNameProduct(lower)) reasons.push("Название-заглушка: товар помечен на удаление");
   if (/без\s+коробк/iu.test(lower)) reasons.push("Название содержит «без коробки»");
   const volumeText = collectYandexVolumeSearchText(product);
   const smallVolumeCheck = assessYandexSmallVolume(volumeText);
@@ -256,6 +270,7 @@ function buildYandexCleanupCandidate(item = {}, shop = {}, protectedBrandsInput 
   const lowerName = name.toLowerCase();
   const hasBlockedKeyword = lowerName.includes("отливант")
     || lowerName.includes("тестер")
+    || isTrashNameProduct(lowerName)
     || isYandexNoBoxProduct(searchableTextRaw);
   const forceDelete = smallVolume || hasBlockedKeyword;
   const protectedByBrand = matchedBrands.length > 0 && !forceDelete;

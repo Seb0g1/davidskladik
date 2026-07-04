@@ -88,6 +88,7 @@ app.post("/api/yandex-cleanup/delete-filtered-local", async (request, response, 
       const lowerName = name.toLowerCase();
       const hasBlockedKeyword = lowerName.includes("отливант")
         || lowerName.includes("тестер")
+        || isTrashNameProduct(lowerName)
         || isYandexNoBoxProduct(name);
       const volumeAssessment = assessYandexSmallVolume(name);
       // Delete only when the LARGEST mentioned volume is under 20ml — "50 мл + 10 мл"
