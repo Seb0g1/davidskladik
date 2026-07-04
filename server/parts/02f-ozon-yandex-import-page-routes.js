@@ -91,34 +91,76 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
     // When showing only eligible candidates, use a SQL anti-join to skip Ozon products
     // already on Yandex before JS evaluation — with 10K+ products this drops response
     // time from 15-25s to under 1s when most of the catalog is already imported.
+    // The scan is CHUNKED on purpose: one LIMIT-50000 query selecting the full raw JSONB
+    // made the Prisma engine buffer the whole result set in native memory (~3GB RSS with a
+    // 68MB JS heap) — with the /app/import tab re-fetching after every restart the api
+    // kept crossing pm2's max_memory_restart and looped. 1000-row chunks cap that.
     let rows;
     let total;
     let scanCapped = false;
     if (onlyEligible) {
       const scanLimit = 50000;
+      const chunkSize = 1000;
       const qFilter = q
         ? Prisma.sql`AND (LOWER(wp.offer_id) LIKE ${`%${q.toLowerCase()}%`} OR LOWER(wp.name) LIKE ${`%${q.toLowerCase()}%`})`
         : Prisma.empty;
       const brandFilter = brand
         ? Prisma.sql`AND LOWER(wp.brand) LIKE ${`%${brand.toLowerCase()}%`}`
         : Prisma.empty;
-      const rawRows = await prisma.$queryRaw`
-        SELECT wp.id, wp.offer_id as "offerId", wp.name, wp.raw
-        FROM warehouse_products wp
-        WHERE wp.marketplace = 'ozon' AND wp.archived = false
-          AND NOT EXISTS (
-            SELECT 1 FROM warehouse_products yp
-            WHERE yp.marketplace = 'yandex'
-              AND LOWER(yp.offer_id) = LOWER(wp.offer_id)
-          )
-          ${qFilter}
-          ${brandFilter}
-        ORDER BY wp.updated_at DESC
-        LIMIT ${scanLimit}
-      `;
-      rows = rawRows;
-      total = rows.length;
-      scanCapped = rows.length >= scanLimit;
+      const eligibleItems = [];
+      let scanned = 0;
+      let cursor = null;
+      for (;;) {
+        const cursorFilter = cursor
+          ? Prisma.sql`AND (wp.updated_at, wp.id) < (${cursor.updatedAt}, ${cursor.id})`
+          : Prisma.empty;
+        const chunk = await prisma.$queryRaw`
+          SELECT wp.id, wp.offer_id as "offerId", wp.name, wp.raw, wp.updated_at as "updatedAt"
+          FROM warehouse_products wp
+          WHERE wp.marketplace = 'ozon' AND wp.archived = false
+            AND NOT EXISTS (
+              SELECT 1 FROM warehouse_products yp
+              WHERE yp.marketplace = 'yandex'
+                AND LOWER(yp.offer_id) = LOWER(wp.offer_id)
+            )
+            ${qFilter}
+            ${brandFilter}
+            ${cursorFilter}
+          ORDER BY wp.updated_at DESC, wp.id DESC
+          LIMIT ${chunkSize}
+        `;
+        if (!chunk.length) break;
+        scanned += chunk.length;
+        const last = chunk[chunk.length - 1];
+        cursor = { updatedAt: last.updatedAt, id: last.id };
+        for (const row of chunk) {
+          const product = row.raw && typeof row.raw === "object" ? normalizeWarehouseProduct(row.raw) : normalizeWarehouseProduct(row);
+          const candidate = buildOzonYandexImportCandidate(product, { yandexExistingOfferIds: existingOfferIds, manual: true });
+          if (!candidate.eligible) continue;
+          eligibleItems.push({
+            id: row.id,
+            offerId: candidate.offerId || row.offerId,
+            name: candidate.name || cleanText(row.name),
+            vendor: candidate.vendor || "",
+            imageUrl: cleanText(product.imageUrl || product.ozon?.primaryImage || ""),
+            eligible: true,
+            existsOnYandex: false,
+            yandexReady: Boolean(candidate.yandexReady),
+            blockReasons: [],
+            missing: Array.isArray(candidate.missing) ? candidate.missing : [],
+          });
+        }
+        if (scanned >= scanLimit || chunk.length < chunkSize) break;
+      }
+      scanCapped = scanned >= scanLimit;
+      return response.json({
+        ok: true,
+        page,
+        pageSize,
+        total: eligibleItems.length,
+        scanCapped,
+        items: eligibleItems.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize),
+      });
     } else {
       total = await prisma.warehouseProduct.count({ where });
       rows = await prisma.warehouseProduct.findMany({
@@ -150,21 +192,13 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
       };
     });
 
-    let items = mapped;
-    let effectiveTotal = total;
-    if (onlyEligible) {
-      const eligible = mapped.filter((item) => item.eligible);
-      effectiveTotal = eligible.length;
-      items = eligible.slice((page - 1) * pageSize, (page - 1) * pageSize + pageSize);
-    }
-
     response.json({
       ok: true,
       page,
       pageSize,
-      total: effectiveTotal,
+      total,
       scanCapped,
-      items,
+      items: mapped,
     });
   } catch (error) {
     next(error);
@@ -182,18 +216,6 @@ app.get("/api/ozon-yandex-import/candidates/eligible-ids", requireAdmin, async (
 
     const { Prisma } = require("@prisma/client");
     const brandLike = `%${brand.toLowerCase()}%`;
-    const rawRows = await prisma.$queryRaw`
-      SELECT wp.id, wp.offer_id as "offerId", wp.name, wp.raw
-      FROM warehouse_products wp
-      WHERE wp.marketplace = 'ozon' AND wp.archived = false
-        AND NOT EXISTS (
-          SELECT 1 FROM warehouse_products yp
-          WHERE yp.marketplace = 'yandex' AND LOWER(yp.offer_id) = LOWER(wp.offer_id)
-        )
-        AND LOWER(wp.brand) LIKE ${brandLike}
-      ORDER BY wp.updated_at DESC
-      LIMIT 5000
-    `;
 
     const yandexRows = await prisma.warehouseProduct.findMany({
       where: { marketplace: "yandex" },
@@ -201,14 +223,43 @@ app.get("/api/ozon-yandex-import/candidates/eligible-ids", requireAdmin, async (
     });
     const existingOfferIds = new Set(yandexRows.map((row) => cleanText(row.offerId).toLowerCase()).filter(Boolean));
 
+    // Chunked for the same reason as the candidates scan: raw JSONB for thousands of rows
+    // in one query bloats the Prisma engine's native memory.
+    const scanLimit = 5000;
+    const chunkSize = 1000;
     const ids = [];
-    for (const row of rawRows) {
-      const product = row.raw && typeof row.raw === "object" ? normalizeWarehouseProduct(row.raw) : normalizeWarehouseProduct(row);
-      const candidate = buildOzonYandexImportCandidate(product, { yandexExistingOfferIds: existingOfferIds, manual: true });
-      if (candidate.eligible) ids.push(row.id);
+    let scanned = 0;
+    let cursor = null;
+    for (;;) {
+      const cursorFilter = cursor
+        ? Prisma.sql`AND (wp.updated_at, wp.id) < (${cursor.updatedAt}, ${cursor.id})`
+        : Prisma.empty;
+      const chunk = await prisma.$queryRaw`
+        SELECT wp.id, wp.offer_id as "offerId", wp.name, wp.raw, wp.updated_at as "updatedAt"
+        FROM warehouse_products wp
+        WHERE wp.marketplace = 'ozon' AND wp.archived = false
+          AND NOT EXISTS (
+            SELECT 1 FROM warehouse_products yp
+            WHERE yp.marketplace = 'yandex' AND LOWER(yp.offer_id) = LOWER(wp.offer_id)
+          )
+          AND LOWER(wp.brand) LIKE ${brandLike}
+          ${cursorFilter}
+        ORDER BY wp.updated_at DESC, wp.id DESC
+        LIMIT ${chunkSize}
+      `;
+      if (!chunk.length) break;
+      scanned += chunk.length;
+      const last = chunk[chunk.length - 1];
+      cursor = { updatedAt: last.updatedAt, id: last.id };
+      for (const row of chunk) {
+        const product = row.raw && typeof row.raw === "object" ? normalizeWarehouseProduct(row.raw) : normalizeWarehouseProduct(row);
+        const candidate = buildOzonYandexImportCandidate(product, { yandexExistingOfferIds: existingOfferIds, manual: true });
+        if (candidate.eligible) ids.push(row.id);
+      }
+      if (scanned >= scanLimit || chunk.length < chunkSize) break;
     }
 
-    response.json({ ids, eligible: ids.length, total: rawRows.length });
+    response.json({ ids, eligible: ids.length, total: scanned });
   } catch (error) {
     next(error);
   }
