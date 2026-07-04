@@ -3427,7 +3427,12 @@ test("isDuplicateMarkerName flags Ozon 'дубль' duplicate listings (case-ins
   assert.equal(isDuplicateMarkerName("Дубль93"), true);
   assert.equal(isDuplicateMarkerName("ДуБЛЬ57"), true);
   assert.equal(isDuplicateMarkerName("Дубль 111"), true);
+  assert.equal(isDuplicateMarkerName("удалить1212"), true);
+  assert.equal(isDuplicateMarkerName("Удаленны1"), true);
   assert.equal(isDuplicateMarkerName("Etro Ambra 100 мл туалетная вода унисекс"), false);
+  // Prefix-only: the same stems mid-name are legit product text, not deletion markers.
+  assert.equal(isDuplicateMarkerName("Мицеллярная вода для удаления стойкого макияжа 120 мл"), false);
+  assert.equal(isDuplicateMarkerName("Спрей удаляет запахи 50 мл"), false);
   assert.equal(isDuplicateMarkerName(""), false);
   // SQL fragment keeps null names and excludes the marker; never empty (valid in AND chains).
   const sql = duplicateNameSqlExclusion("p");

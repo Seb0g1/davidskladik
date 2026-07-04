@@ -24,10 +24,12 @@ function isYandexNoBoxProduct(textOrProduct = {}) {
 // (02a-warehouse-page-postgres-where.js) — one list drives catalog hiding, sweeps,
 // import blocks and cleanup alike.
 function isTrashNameProduct(textOrProduct = {}) {
-  const text = typeof textOrProduct === "string"
-    ? textOrProduct
-    : [textOrProduct.name, textOrProduct.ozon?.name, textOrProduct.yandex?.name].map(cleanText).filter(Boolean).join(" ");
-  return isDuplicateMarkerName(text);
+  // Prefix semantics: each candidate name is checked separately (joining them would
+  // hide markers that are not at the very start of the combined string).
+  const names = typeof textOrProduct === "string"
+    ? [textOrProduct]
+    : [textOrProduct.name, textOrProduct.ozon?.name, textOrProduct.yandex?.name];
+  return names.map(cleanText).filter(Boolean).some(isDuplicateMarkerName);
 }
 
 function extractOzonYandexImportVolumesMl(name = "") {

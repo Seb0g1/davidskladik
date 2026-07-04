@@ -4,7 +4,10 @@
 // from the whole managed catalog (this WHERE is shared by the catalog page, summaries,
 // counters, the reconciler and reprice) and from the fast sweeps. Data is kept in the
 // table (not deleted) so it's reversible: set DUPLICATE_CATALOG_EXCLUDE_ENABLED=false.
-// Stems avoid false positives ("удаляет запахи" contains neither "удалить" nor "удален").
+// Markers match only at the START of the name: stub names are "удалить1212", "Дубль21",
+// "удаленны1" — while real products mention the same stems mid-name ("мицеллярная вода
+// для удаления стойкого макияжа" must NOT be flagged). Prefix semantics are expressible
+// in every consumer: startsWith (Prisma), ILIKE 'марк%' (SQL), startsWith (in-memory).
 const DUPLICATE_MARKER_NAMES = Array.from(new Set(
   cleanText(process.env.DUPLICATE_MARKER_NAMES || process.env.DUPLICATE_MARKER_NAME || "дубль, дубликат, удалить, удален")
     .toLowerCase()
@@ -18,16 +21,16 @@ function isDuplicateMarkerName(name) {
   if (!duplicateCatalogExcludeEnabled) return false;
   const lower = cleanText(name).toLowerCase();
   if (!lower) return false;
-  return DUPLICATE_MARKER_NAMES.some((marker) => lower.includes(marker));
+  return DUPLICATE_MARKER_NAMES.some((marker) => lower.startsWith(marker));
 }
 
 // Prisma where fragment excluding duplicate-marker products (null names are kept).
 function duplicateNameExclusionWhere() {
   if (!duplicateCatalogExcludeEnabled) return {};
-  // Top-level NOT (the field-level `name: { not: { contains } }` form is invalid Prisma).
+  // Top-level NOT (the field-level `name: { not: { startsWith } }` form is invalid Prisma).
   // `name` is non-nullable (schema: WarehouseProduct.name String), so no null branch needed —
   // a `{ name: null }` branch would itself be invalid ("Argument `name` is missing").
-  return { NOT: { OR: DUPLICATE_MARKER_NAMES.map((marker) => ({ name: { contains: marker, mode: "insensitive" } })) } };
+  return { NOT: { OR: DUPLICATE_MARKER_NAMES.map((marker) => ({ name: { startsWith: marker, mode: "insensitive" } })) } };
 }
 
 // Raw-SQL fragment for the same exclusion, for the sweeps that query warehouse_products directly.
@@ -35,7 +38,7 @@ function duplicateNameSqlExclusion(alias = "p") {
   if (!duplicateCatalogExcludeEnabled) return "TRUE";
   // No parens around the ILIKE chain: AND binds tighter than OR in SQL.
   const clauses = DUPLICATE_MARKER_NAMES
-    .map((marker) => `${alias}.name NOT ILIKE '%${marker.replace(/'/g, "''")}%'`)
+    .map((marker) => `${alias}.name NOT ILIKE '${marker.replace(/'/g, "''")}%'`)
     .join(" AND ");
   return `(${alias}.name IS NULL OR ${clauses})`;
 }
