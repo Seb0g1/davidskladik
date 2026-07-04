@@ -91,7 +91,12 @@ module.exports = {
       exec_mode: "fork",
       autorestart: true,
       watch: false,
-      max_memory_restart: "4096M",
+      // glibc retains ~3GB of freed native memory from big Prisma result sets even with
+      // MALLOC_ARENA_MAX=2 (it only trims the top of the heap). Steady-state RSS is
+      // ~3.4GB + request spikes ~0.7GB; a 4096M limit sat inside that band and pm2
+      // kill-looped the api every 30s. 5120M clears the band with RAM to spare
+      // (16GB box; worker peaks well under its 6144M limit).
+      max_memory_restart: "5120M",
       kill_timeout: 15000,
       env: {
         NODE_ENV: "production",
