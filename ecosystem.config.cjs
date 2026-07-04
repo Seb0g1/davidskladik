@@ -5,6 +5,11 @@
  * REDIS_URL и секреты берутся из .env на сервере.
  */
 const sharedStabilityEnv = {
+  // glibc malloc grows up to 8 arenas per core (64 on this 8-core box), 64MB each;
+  // Prisma's threaded engine pushes big JSONB rows through them and freed memory never
+  // returns to the OS — the api idled at ~3.5GB RSS with a 34MB JS heap and pm2 kept
+  // killing it against max_memory_restart. Two arenas cap that native bloat.
+  MALLOC_ARENA_MAX: "2",
   WAREHOUSE_WARM_ON_STARTUP: "false",
   WAREHOUSE_FULL_MEMORY_LOAD_ENABLED: "false",
   WAREHOUSE_SUMMARY_WARM_ENABLED: "false",
