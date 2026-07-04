@@ -288,6 +288,16 @@ function startBackgroundSchedulers() {
       nextRunAt: yandexPhotoBackfillNextRunAt,
     });
   }
+  if (ozonNewOfferDiscoveryEnabled) {
+    // Short initial delay on purpose: the worker restarts often enough that a long
+    // first delay would keep pushing the run past the next restart.
+    scheduleOzonNewOfferDiscovery(3 * 60 * 1000);
+    logger.info("ozon new offer discovery scheduler enabled", {
+      everyMinutes: ozonNewOfferDiscoveryIntervalMinutes,
+      perRun: ozonNewOfferDiscoveryPerRunLimit,
+      nextRunAt: ozonNewOfferDiscoveryNextRunAt,
+    });
+  }
   if (linkedReconcilerEnabled) {
     scheduleLinkedReconciler(linkedReconcilerInitialDelaySeconds * 1000);
     logger.info("linked reconciler scheduler enabled", {
