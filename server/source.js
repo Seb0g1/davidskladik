@@ -216,6 +216,7 @@ const partFiles = [
   "02f-yandex-cleanup-preview-history-routes.js",
   "02f-yandex-cleanup-action-routes.js",
   "02f-ozon-yandex-auto-import.js",
+  "02f-yandex-photo-backfill.js",
   "02f-ozon-yandex-import-page-routes.js",
   "02f-price-sweep.js",
   "02f-stock-sweep.js",

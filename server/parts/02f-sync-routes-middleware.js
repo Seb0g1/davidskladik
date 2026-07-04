@@ -280,6 +280,14 @@ function startBackgroundSchedulers() {
       nextRunAt: ozonYandexAutoImportNextRunAt,
     });
   }
+  if (yandexPhotoBackfillEnabled) {
+    scheduleYandexPhotoBackfill(30 * 60 * 1000);
+    logger.info("yandex photo backfill scheduler enabled", {
+      everyHours: yandexPhotoBackfillIntervalHours,
+      perRun: yandexPhotoBackfillPerRunLimit,
+      nextRunAt: yandexPhotoBackfillNextRunAt,
+    });
+  }
   if (linkedReconcilerEnabled) {
     scheduleLinkedReconciler(linkedReconcilerInitialDelaySeconds * 1000);
     logger.info("linked reconciler scheduler enabled", {
