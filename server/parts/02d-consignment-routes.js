@@ -26,6 +26,7 @@ function consignmentItemFromPostgres(row = {}) {
 function consignmentOperationFromPostgres(row = {}) {
   return {
     id: row.id,
+    sourceKey: row.sourceKey || null,
     itemId: row.itemId || null,
     itemName: cleanText(row.itemName),
     type: cleanText(row.type),

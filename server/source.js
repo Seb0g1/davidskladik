@@ -230,6 +230,7 @@ const partFiles = [
   "02f-notifications-core.js",
   "02f-notifications-pollers.js",
   "02f-finance-orders-sync.js",
+  "02f-consignment-marketplace-sync.js",
   "02f-reviews-routes.js",
   "02f-ozon-name-backfill.js",
   "02f-ozon-new-offer-discovery.js",

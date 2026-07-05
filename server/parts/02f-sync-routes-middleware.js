@@ -216,6 +216,13 @@ function startBackgroundSchedulers() {
       lookbackDays: financeOrdersLookbackDays,
     });
   }
+  if (consignmentMpSyncEnabled) {
+    scheduleConsignmentMarketplaceSync(4 * 60_000);
+    logger.info("consignment marketplace sync scheduler enabled", {
+      intervalMinutes: Math.round(consignmentMpSyncIntervalMs / 60000),
+      lookbackDays: consignmentMpSyncLookbackDays,
+    });
+  }
   if (notifyPollEnabled) {
     scheduleNotificationPolling(60_000);
     logger.info("notification polling enabled", {

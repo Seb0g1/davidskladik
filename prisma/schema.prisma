@@ -525,6 +525,7 @@ model ConsignmentItem {
 
 model ConsignmentOperation {
   id                 String   @id @default(cuid())
+  sourceKey          String?  @unique @map("source_key")
   itemId             String?  @map("item_id")
   itemName           String?  @map("item_name")
   type               String

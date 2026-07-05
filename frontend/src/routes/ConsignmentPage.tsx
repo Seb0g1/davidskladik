@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, Boxes, Check, HandCoins, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, TrendingUp, Wallet, X } from "lucide-react";
+import { Banknote, Boxes, Check, CloudDownload, HandCoins, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, TrendingUp, Wallet, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import {
   ConsignmentItem,
   ConsignmentItemsSchema,
+  ConsignmentMpSyncSchema,
   ConsignmentMutationSchema,
   ConsignmentOperationsSchema,
   ConsignmentPmSearchSchema,
@@ -147,6 +148,11 @@ export function ConsignmentPage() {
     onSuccess: invalidate,
   });
 
+  const mpSync = useMutation({
+    mutationFn: () => fetchJson("/api/consignment/sync-marketplace", ConsignmentMpSyncSchema, mutationBody({})),
+    onSuccess: invalidate,
+  });
+
   const payout = useMutation({
     mutationFn: () => fetchJson("/api/consignment/payouts", ConsignmentMutationSchema, mutationBody({
       kind: payoutForm.kind,
@@ -190,11 +196,23 @@ export function ConsignmentPage() {
         title="Реализация (товар спонсора)"
         subtitle="Товар от спонсора: остатки, продажи с профитом 50/50, списания, возвраты, общий баланс и закупки со свободных денег."
         action={(
-          <button className="secondary-action" type="button" onClick={invalidate}>
-            <RefreshCw size={16} /> Обновить
-          </button>
+          <div className="row-actions">
+            <button className="secondary-action" type="button" disabled={mpSync.isPending} onClick={() => mpSync.mutate()} title="Подтянуть продажи с Ozon и Яндекс Маркета по артикулу (работает и автоматически каждые 10 минут)">
+              {mpSync.isPending ? <Loader2 className="spin" size={16} /> : <CloudDownload size={16} />} Продажи с МП
+            </button>
+            <button className="secondary-action" type="button" onClick={invalidate}>
+              <RefreshCw size={16} /> Обновить
+            </button>
+          </div>
         )}
       />
+      {mpSync.isSuccess ? (
+        <div className="success-strip">
+          Синк с маркетплейсами: найдено {Number(mpSync.data?.matched || 0)}, оформлено продаж {Number(mpSync.data?.created || 0)}
+          {Number(mpSync.data?.noStock || 0) ? `, без остатка ${Number(mpSync.data?.noStock || 0)} (оформятся после прихода)` : ""}.
+        </div>
+      ) : null}
+      {mpSync.error ? <div className="inline-error">{errorMessage(mpSync.error)}</div> : null}
 
       <section className="dashboard-metrics">
         <Stat label="Капитализация (по закупке)" value={money(s?.capitalization)} tone="accent" icon={<Boxes size={18} />} />
@@ -232,23 +250,23 @@ export function ConsignmentPage() {
           />
           <span className="muted-note"><Search size={14} /> Подставит наименование, артикул и поставщика из номенклатуры</span>
         </div>
-        {pmOpen && pmQuery.trim().length >= 2 && (pmSearch.data?.items?.length || pmSearch.isLoading) ? (
-          <div className="table-panel" style={{ maxHeight: 220, overflowY: "auto" }}>
+        {pmOpen && pmQuery.trim().length >= 2 ? (
+          <div className="consignment-pm-results">
             {pmSearch.isLoading ? <div className="empty-state">Ищу в номенклатуре…</div> : null}
             {(pmSearch.data?.items || []).map((row, index) => (
               <button
                 key={`${row.article}-${index}`}
                 type="button"
-                className="table-row"
-                style={{ width: "100%", textAlign: "left", cursor: "pointer" }}
+                className="consignment-pm-result"
                 onClick={() => applyPmRow(row)}
               >
                 <span>{row.article || "-"}</span>
-                <span>{row.name || "-"}</span>
+                <span title={row.name}>{row.name || "-"}</span>
                 <span>{row.supplierName || "-"}</span>
                 <span>{row.priceRub !== null && row.priceRub !== undefined ? money(row.priceRub) : "-"}</span>
               </button>
             ))}
+            {!pmSearch.isLoading && !pmSearch.data?.items?.length ? <div className="empty-state">Ничего не найдено в номенклатуре.</div> : null}
           </div>
         ) : null}
         <div className="settings-form-row">
@@ -336,7 +354,7 @@ export function ConsignmentPage() {
       ) : null}
 
       <div className="table-panel price-table consignment-items-table">
-        <div className="section-title" style={{ padding: "12px 16px 0" }}>
+        <div className="section-title">
           <div>
             <span>Склад реализации</span>
             <h3>Товары ({items.data?.items?.length || 0})</h3>
@@ -426,7 +444,7 @@ export function ConsignmentPage() {
       </section>
 
       <div className="table-panel price-table consignment-operations-table">
-        <div className="section-title" style={{ padding: "12px 16px 0" }}>
+        <div className="section-title">
           <div>
             <span>История</span>
             <h3>Операции</h3>
