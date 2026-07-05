@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, RefreshCw, Repeat2 } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
-import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartPreviewSchema } from "../types";
+import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartOverrideSchema, SupplierCartPreviewSchema } from "../types";
+import { SupplierAltPicker } from "../components/SupplierAltPicker";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
@@ -175,6 +176,7 @@ export function SupplierCartPanel() {
   const [marketplace, setMarketplace] = useState("all");
   const [limit, setLimit] = useState(100);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [altKey, setAltKey] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const draftQuery = useQuery({
     queryKey: ["supplier-cart-draft"],
@@ -195,6 +197,17 @@ export function SupplierCartPanel() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
       queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
+    },
+  });
+  const overrideMutation = useMutation({
+    mutationFn: ({ key, partnerId, rowId }: { key: string; partnerId: string; rowId: string }) =>
+      fetchJson(`/api/supplier-cart/draft/${encodeURIComponent(key)}/supplier`, SupplierCartOverrideSchema, mutationBody({ partnerId, rowId })),
+    onSuccess: () => {
+      setAltKey(null);
+      // Черновик обновился на сервере — сбрасываем локальный результат generate,
+      // иначе он перекроет свежие данные draft-запроса.
+      generateMutation.reset();
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
     },
   });
   const historyQuery = useQuery({
@@ -291,6 +304,23 @@ export function SupplierCartPanel() {
                   {row.stockOnlyFallback ? <small>Заказ уйдёт через «Наш склад» — цена в PriceMaster будет 0, остаток со склада.</small> : null}
                   {row.skipReason === "supplier_cutoff_passed_no_alternative" ? <small className="danger-text">Все подходящие поставщики уже закрыли прием заказов на сегодня.</small> : null}
                   {!row.ready && !row.alreadyCommitted ? <small className="danger-text">Причина: {row.skipReason || "не готово"}</small> : null}
+                  {!row.alreadyCommitted ? (
+                    <div className="supplier-cart-actions">
+                      <button className="secondary-action" type="button" disabled={overrideMutation.isPending} onClick={() => setAltKey(altKey === row.key ? null : row.key)}>
+                        <Repeat2 size={14} /> Заменить поставщика
+                      </button>
+                    </div>
+                  ) : null}
+                  {altKey === row.key ? (
+                    <SupplierAltPicker
+                      offerId={row.offerId}
+                      currentPartnerId={String(row.partnerId || "")}
+                      busy={overrideMutation.isPending}
+                      actionLabel="Выбрать"
+                      onPick={(option) => overrideMutation.mutate({ key: row.key, partnerId: option.partnerId, rowId: option.rowId })}
+                      onClose={() => setAltKey(null)}
+                    />
+                  ) : null}
                 </article>
               );
             })}
@@ -300,6 +330,7 @@ export function SupplierCartPanel() {
       {commitMutation.data ? <div className="success-strip">Добавлено в PriceMaster: {commitMutation.data.inserted}. Проверено в PM: {commitMutation.data.verifiedRows}. База: {commitMutation.data.priceMasterDb || "-"}. Документы: {commitMutation.data.docIds.join(", ") || "-"}</div> : null}
       {generateMutation.error && <div className="inline-error">{errorMessage(generateMutation.error)}</div>}
       {commitMutation.error && <div className="inline-error">{errorMessage(commitMutation.error)}</div>}
+      {overrideMutation.error && <div className="inline-error">Замена поставщика: {errorMessage(overrideMutation.error)}</div>}
       <div className="section-title compact-title">
         <div><span>История автокорзины</span><h3>{historyQuery.data?.totalProcessed || 0} обработано</h3></div>
         <button className="secondary-action" type="button" onClick={() => historyQuery.refetch()}><RefreshCw size={16} /> Обновить</button>

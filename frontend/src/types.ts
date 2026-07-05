@@ -880,6 +880,46 @@ export const ConsignmentPmSearchSchema = z.object({
   }).passthrough()).optional().default([]),
 }).passthrough();
 
+export const SupplierAlternativeOptionSchema = z.object({
+  partnerId: z.coerce.string().optional().default(""),
+  supplierName: z.coerce.string().optional().default(""),
+  rowId: z.coerce.string().optional().default(""),
+  price: z.number().optional().default(0),
+  originalPrice: z.number().optional().default(0),
+  priceCurrency: z.coerce.string().optional().default("USD"),
+  available: z.boolean().optional().default(true),
+  trustFactor: z.number().optional().default(100),
+  orderCutoffTime: z.coerce.string().optional().default(""),
+  reseller: z.boolean().optional().default(false),
+  stockOnly: z.boolean().optional().default(false),
+  blocked: z.boolean().optional().default(false),
+  cutoffPassed: z.boolean().optional().default(false),
+  score: z.number().optional().default(0),
+  orderable: z.boolean().optional().default(false),
+}).passthrough();
+
+export const SupplierAlternativesSchema = z.object({
+  ok: z.boolean().optional(),
+  offerId: z.coerce.string().optional().default(""),
+  skipReason: z.coerce.string().optional().default(""),
+  options: z.array(SupplierAlternativeOptionSchema).optional().default([]),
+}).passthrough();
+
+export const SupplierCartOverrideSchema = z.object({
+  ok: z.boolean().optional(),
+  row: z.record(z.string(), z.unknown()).optional().nullable(),
+}).passthrough();
+
+export const SupplierReplaceResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  oldKey: z.coerce.string().optional().default(""),
+  supplierName: z.coerce.string().optional().default(""),
+  inserted: z.number().optional().default(0),
+  docIds: z.array(z.union([z.string(), z.number()])).optional().default([]),
+  verifiedInPriceMaster: z.boolean().optional().default(false),
+  row: z.record(z.string(), z.unknown()).optional().nullable(),
+}).passthrough();
+
 export const ConsignmentMpSyncSchema = z.object({
   status: z.coerce.string().optional().default(""),
   matched: z.number().optional().default(0),

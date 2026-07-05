@@ -293,6 +293,30 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
   return lines.slice(0, limit);
 }
 
+// The api process keeps the warehouse in memory only as a postgres stub
+// (postgresOnly, products: []) after the OOM hardening. The cart resolver
+// matches marketplace order lines against warehouse products, so on a stub we
+// load exactly the offers being resolved from Postgres (with links) instead of
+// silently reporting product_not_found for every row.
+async function hydrateSupplierCartWarehouse(warehouse = {}, offerIds = []) {
+  if (!warehouse?.postgresOnly || (warehouse.products || []).length) return warehouse;
+  if (!shouldUsePostgresStorage()) return warehouse;
+  const unique = [...new Set(offerIds.map((offerId) => cleanText(offerId)).filter(Boolean))];
+  if (!unique.length) return warehouse;
+  const products = [];
+  for (const batch of chunkArray(unique, 200)) {
+    const rows = await getPrisma().warehouseProduct.findMany({
+      where: { offerId: { in: batch, mode: "insensitive" } },
+      include: { links: true },
+    }).catch((error) => {
+      logger.warn("supplier cart warehouse hydrate failed", { detail: error?.message || String(error) });
+      return [];
+    });
+    products.push(...rows.map(productFromPostgres));
+  }
+  return { ...warehouse, products };
+}
+
 function findSupplierCartWarehouseProduct(warehouse = {}, line = {}) {
   const offer = cleanText(line.offerId).toLowerCase();
   if (!offer) return null;

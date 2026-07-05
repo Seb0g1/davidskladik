@@ -294,6 +294,7 @@ module.exports = {
   supplierOrderCutoffPassed,
   supplierCartOrderScore,
   selectSupplierCartSupplierFromMatches,
+  hydrateSupplierCartWarehouse,
   readAiImageJobs,
   writeAiImageJobs,
   normalizeAiImageJob,

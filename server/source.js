@@ -188,6 +188,7 @@ const partFiles = [
   "02d-supplier-cart-resolve.js",
   "02d-supplier-cart-build.js",
   "02d-supplier-cart-insert.js",
+  "02d-supplier-cart-alternatives.js",
   "02d-price-master-rollback.js",
   "02d-operation-runners-cart.js",
   "02d-operation-runners-core.js",

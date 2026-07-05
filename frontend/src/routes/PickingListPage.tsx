@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, CheckCircle2, ClipboardList, Copy, Loader2, RefreshCw, RotateCcw, Trash2, Truck, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ClipboardList, Copy, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -8,7 +8,8 @@ import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
-import { SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema } from "../types";
+import { SupplierAltPicker } from "../components/SupplierAltPicker";
+import { SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
 type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
@@ -74,14 +75,28 @@ export function PickingListPage() {
     queryKey: ["supplier-picking-list", "invoices", period],
     queryFn: () => fetchJson(`/api/supplier-picking-list/invoices?period=${encodeURIComponent(period)}`, SupplierPickingInvoiceSchema),
   });
+  const [replaceKey, setReplaceKey] = useState<string | null>(null);
   const updateMutation = useMutation({
     mutationFn: ({ key, nextStatus }: { key: string; nextStatus: string }) =>
       fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({ status: nextStatus })),
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
+      // «Не было» → сразу предлагаем работнику заменить поставщика для этой строки.
+      if (variables.nextStatus === "missing") setReplaceKey(variables.key);
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+  });
+  const replaceMutation = useMutation({
+    mutationFn: ({ key, partnerId, rowId }: { key: string; partnerId: string; rowId: string }) =>
+      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/replace-supplier`, SupplierReplaceResponseSchema, mutationBody({ partnerId, rowId })),
+    onSuccess: () => {
+      setReplaceKey(null);
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
     },
   });
   const cancelCartMutation = useMutation({
@@ -184,6 +199,8 @@ export function PickingListPage() {
       {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
       {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}
       {cancelCartMutation.error ? <div className="inline-error">{errorMessage(cancelCartMutation.error)}</div> : null}
+      {replaceMutation.error ? <div className="inline-error">Замена поставщика: {errorMessage(replaceMutation.error)}</div> : null}
+      {replaceMutation.data ? <div className="success-strip">Перезаказано у «{replaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (док {replaceMutation.data.docIds?.join(", ") || "-"}), строка сборки появилась у нового поставщика.</div> : null}
       {paymentMutation.error ? <div className="inline-error">{errorMessage(paymentMutation.error)}</div> : null}
 
       <div className="picking-groups">
@@ -249,7 +266,8 @@ export function PickingListPage() {
                     <span className="picking-meta-secondary">Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
                     <span>Статус: {statusLabel(row.status)}</span>
                   </div>
-                  {row.status === "missing" ? <small className="danger-text">Поставщик пропущен для этого SKU до {compactDate(row.nextRetryAt)}. Автокорзина попробует другого поставщика.</small> : null}
+                  {row.status === "missing" && !row.replacementKey ? <small className="danger-text">Поставщик пропущен для этого SKU до {compactDate(row.nextRetryAt)}. Замените поставщика кнопкой ниже или автокорзина попробует другого сама.</small> : null}
+                  {row.status === "reordered" && row.replacementKey ? <small>Перезаказано у другого поставщика (строка {row.replacementKey}).</small> : null}
                   <div className="picking-actions">
                     <button className="primary-action success-action" type="button" disabled={updateMutation.isPending || row.status !== "open"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "picked" })}>
                       <Check size={16} /> Собрал
@@ -257,9 +275,24 @@ export function PickingListPage() {
                     <button className="secondary-action danger-action" type="button" disabled={updateMutation.isPending || row.status !== "open"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "missing" })}>
                       <X size={16} /> Не было
                     </button>
+                    {["open", "missing"].includes(row.status) && !row.replacementKey ? (
+                      <button className="secondary-action" type="button" disabled={replaceMutation.isPending} onClick={() => setReplaceKey(replaceKey === row.key ? null : row.key)}>
+                        <Repeat2 size={16} /> Заменить поставщика
+                      </button>
+                    ) : null}
                     {isAdmin && row.status !== "open" ? <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}><RotateCcw size={16} /> Вернуть</button> : null}
                     {isAdmin && row.requestRowId ? <button className="secondary-action danger-action" type="button" disabled={cancelCartMutation.isPending} onClick={() => cancelCartMutation.mutate(row.key)}><Trash2 size={16} /> Отменить автокорзину</button> : null}
                   </div>
+                  {replaceKey === row.key ? (
+                    <SupplierAltPicker
+                      offerId={row.offerId}
+                      currentPartnerId={row.partnerId}
+                      busy={replaceMutation.isPending}
+                      actionLabel="Заказать у него"
+                      onPick={(option) => replaceMutation.mutate({ key: row.key, partnerId: option.partnerId, rowId: option.rowId })}
+                      onClose={() => setReplaceKey(null)}
+                    />
+                  ) : null}
                 </div>
               ))}
             </div>

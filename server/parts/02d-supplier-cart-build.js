@@ -31,7 +31,10 @@ async function buildSupplierCartPreview(params = {}) {
     }
   }
   const uniqueLines = Array.from(new Map(lines.map((line) => [line.key, line])).values()).slice(0, limit);
-  const warehouse = await readWarehouse();
+  const warehouse = await hydrateSupplierCartWarehouse(
+    await readWarehouse(),
+    uniqueLines.map((line) => line.offerId),
+  );
   const state = await readSupplierCartState();
   const rows = [];
   for (const line of uniqueLines) {
