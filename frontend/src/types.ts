@@ -791,6 +791,98 @@ export const YandexQualityCandidatesSchema = z.object({
   products: z.array(z.record(z.string(), z.unknown())).optional().default([]),
 }).passthrough();
 
+export const ConsignmentItemSchema = z.object({
+  id: z.coerce.string(),
+  name: z.coerce.string().optional().default(""),
+  article: z.coerce.string().optional().default(""),
+  supplierName: z.coerce.string().optional().default(""),
+  partnerId: z.coerce.string().optional().default(""),
+  purchasePrice: z.number().optional().default(0),
+  salePrice: z.number().optional().default(0),
+  quantity: z.number().optional().default(0),
+  note: z.coerce.string().optional().default(""),
+  archived: z.boolean().optional().default(false),
+  createdAt: z.string().optional().nullable(),
+  updatedAt: z.string().optional().nullable(),
+}).passthrough();
+
+export const ConsignmentOperationSchema = z.object({
+  id: z.coerce.string(),
+  itemId: z.coerce.string().optional().nullable(),
+  itemName: z.coerce.string().optional().default(""),
+  type: z.coerce.string().optional().default(""),
+  quantity: z.number().optional().default(0),
+  unitPurchase: z.number().optional().default(0),
+  unitSale: z.number().optional().default(0),
+  balanceDelta: z.number().optional().default(0),
+  sponsorDelta: z.number().optional().default(0),
+  myDelta: z.number().optional().default(0),
+  note: z.coerce.string().optional().default(""),
+  status: z.coerce.string().optional().default("active"),
+  relatedOperationId: z.coerce.string().optional().nullable(),
+  createdBy: z.coerce.string().optional().default(""),
+  createdAt: z.string().optional().nullable(),
+}).passthrough();
+
+export const ConsignmentSummarySchema = z.object({
+  ok: z.boolean().optional(),
+  summary: z.object({
+    items: z.number().optional().default(0),
+    stockQuantity: z.number().optional().default(0),
+    capitalization: z.number().optional().default(0),
+    stockSaleValue: z.number().optional().default(0),
+    balance: z.number().optional().default(0),
+    sponsorProfit: z.number().optional().default(0),
+    myProfit: z.number().optional().default(0),
+    soldQuantity: z.number().optional().default(0),
+    returnedQuantity: z.number().optional().default(0),
+    writeoffQuantity: z.number().optional().default(0),
+    salesRevenue: z.number().optional().default(0),
+    profitTotal: z.number().optional().default(0),
+    purchasesFromBalance: z.number().optional().default(0),
+    sponsorPayouts: z.number().optional().default(0),
+    sponsorProfitPaidOut: z.number().optional().default(0),
+    myProfitPaidOut: z.number().optional().default(0),
+  }).passthrough().optional(),
+}).passthrough();
+
+export const ConsignmentItemsSchema = z.object({
+  ok: z.boolean().optional(),
+  items: z.array(ConsignmentItemSchema).optional().default([]),
+}).passthrough();
+
+export const ConsignmentOperationsSchema = z.object({
+  ok: z.boolean().optional(),
+  operations: z.array(ConsignmentOperationSchema).optional().default([]),
+}).passthrough();
+
+export const ConsignmentMutationSchema = z.object({
+  ok: z.boolean().optional(),
+  item: ConsignmentItemSchema.optional().nullable(),
+  operation: ConsignmentOperationSchema.optional().nullable(),
+}).passthrough();
+
+export const ConsignmentSuppliersSchema = z.object({
+  ok: z.boolean().optional(),
+  suppliers: z.array(z.coerce.string()).optional().default([]),
+}).passthrough();
+
+export const ConsignmentPmSearchSchema = z.object({
+  ok: z.boolean().optional(),
+  items: z.array(z.object({
+    article: z.coerce.string().optional().default(""),
+    name: z.coerce.string().optional().default(""),
+    supplierName: z.coerce.string().optional().default(""),
+    partnerId: z.coerce.string().optional().default(""),
+    price: z.number().optional().nullable(),
+    currency: z.coerce.string().optional().default("USD"),
+    priceRub: z.number().optional().nullable(),
+  }).passthrough()).optional().default([]),
+}).passthrough();
+
+export type ConsignmentItem = z.infer<typeof ConsignmentItemSchema>;
+export type ConsignmentOperation = z.infer<typeof ConsignmentOperationSchema>;
+
 export type Product = z.infer<typeof ProductSchema>;
 export type ProductLink = z.infer<typeof LinkSchema>;
 export type ProductGroupPageItem = z.infer<typeof ProductGroupPageItemSchema>;

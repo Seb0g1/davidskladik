@@ -500,6 +500,58 @@ model SupplierLedgerEntry {
   @@map("supplier_ledger_entries")
 }
 
+model ConsignmentItem {
+  id            String   @id @default(cuid())
+  name          String
+  article       String?
+  supplierName  String?  @map("supplier_name")
+  partnerId     String?  @map("partner_id")
+  purchasePrice Decimal  @default(0) @map("purchase_price") @db.Decimal(14, 2)
+  salePrice     Decimal  @default(0) @map("sale_price") @db.Decimal(14, 2)
+  quantity      Int      @default(0)
+  note          String?
+  archived      Boolean  @default(false)
+  raw           Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  operations ConsignmentOperation[]
+
+  @@index([article])
+  @@index([supplierName])
+  @@index([archived, updatedAt])
+  @@map("consignment_items")
+}
+
+model ConsignmentOperation {
+  id                 String   @id @default(cuid())
+  itemId             String?  @map("item_id")
+  itemName           String?  @map("item_name")
+  type               String
+  quantity           Int      @default(0)
+  unitPurchase       Decimal  @default(0) @map("unit_purchase") @db.Decimal(14, 2)
+  unitSale           Decimal  @default(0) @map("unit_sale") @db.Decimal(14, 2)
+  balanceDelta       Decimal  @default(0) @map("balance_delta") @db.Decimal(14, 2)
+  sponsorDelta       Decimal  @default(0) @map("sponsor_delta") @db.Decimal(14, 2)
+  myDelta            Decimal  @default(0) @map("my_delta") @db.Decimal(14, 2)
+  note               String?
+  status             String   @default("active")
+  relatedOperationId String?  @map("related_operation_id")
+  createdBy          String?  @map("created_by")
+  raw                Json?
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  item ConsignmentItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@index([itemId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+  @@index([relatedOperationId])
+  @@map("consignment_operations")
+}
+
 model SyncRun {
   id         String     @id @default(cuid())
   trigger    String

@@ -1,0 +1,490 @@
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Banknote, Boxes, Check, HandCoins, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, TrendingUp, Wallet, X } from "lucide-react";
+import { fetchJson, mutationBody, patchBody } from "../api";
+import {
+  ConsignmentItem,
+  ConsignmentItemsSchema,
+  ConsignmentMutationSchema,
+  ConsignmentOperationsSchema,
+  ConsignmentPmSearchSchema,
+  ConsignmentSummarySchema,
+  ConsignmentSuppliersSchema,
+} from "../types";
+import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
+import { ListSkeleton } from "../components/Skeleton";
+import { Stat } from "../components/Stat";
+import { errorMessage } from "../lib/common";
+
+const money = (value: unknown) => {
+  const n = Number(value || 0);
+  return `${(Math.round(n * 100) / 100).toLocaleString("ru-RU")} ₽`;
+};
+
+const dateText = (value: unknown) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "-";
+  const date = new Date(raw);
+  return Number.isFinite(date.getTime())
+    ? `${date.toLocaleDateString("ru-RU")} ${date.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}`
+    : raw;
+};
+
+const OPERATION_LABELS: Record<string, string> = {
+  receive: "Приход от спонсора",
+  purchase: "Закупка с баланса",
+  sale: "Продажа",
+  writeoff: "Списание",
+  return: "Возврат",
+  sponsor_payout: "Выплата спонсору (с баланса)",
+  sponsor_profit_payout: "Вывод профита спонсора",
+  my_profit_payout: "Вывод моего профита",
+};
+
+type StockAction = { item: ConsignmentItem; mode: "sale" | "writeoff" | "receive" };
+
+const emptyAddForm = {
+  name: "",
+  article: "",
+  supplierName: "",
+  purchasePrice: "",
+  salePrice: "",
+  quantity: "1",
+  note: "",
+  fromBalance: false,
+};
+
+export function ConsignmentPage() {
+  const queryClient = useQueryClient();
+  const [itemSearch, setItemSearch] = useState("");
+  const [addForm, setAddForm] = useState(emptyAddForm);
+  const [pmQuery, setPmQuery] = useState("");
+  const [pmOpen, setPmOpen] = useState(false);
+  const [action, setAction] = useState<StockAction | null>(null);
+  const [actionForm, setActionForm] = useState({ quantity: "1", price: "", note: "", fromBalance: false });
+  const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
+  const [payoutForm, setPayoutForm] = useState({ kind: "sponsor_payout", amount: "", note: "" });
+  const [opFilter, setOpFilter] = useState("all");
+
+  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["consignment"] });
+
+  const summary = useQuery({
+    queryKey: ["consignment", "summary"],
+    queryFn: () => fetchJson("/api/consignment/summary", ConsignmentSummarySchema),
+  });
+  const items = useQuery({
+    queryKey: ["consignment", "items", itemSearch],
+    queryFn: () => fetchJson(`/api/consignment/items?q=${encodeURIComponent(itemSearch)}&limit=500`, ConsignmentItemsSchema),
+  });
+  const operations = useQuery({
+    queryKey: ["consignment", "operations", opFilter],
+    queryFn: () => fetchJson(`/api/consignment/operations?type=${encodeURIComponent(opFilter)}&limit=300`, ConsignmentOperationsSchema),
+  });
+  const suppliers = useQuery({
+    queryKey: ["consignment", "suppliers"],
+    queryFn: () => fetchJson("/api/consignment/suppliers", ConsignmentSuppliersSchema),
+  });
+  const pmSearch = useQuery({
+    queryKey: ["consignment", "pm-search", pmQuery],
+    queryFn: () => fetchJson(`/api/consignment/pm-search?q=${encodeURIComponent(pmQuery)}`, ConsignmentPmSearchSchema),
+    enabled: pmQuery.trim().length >= 2,
+  });
+
+  const createItem = useMutation({
+    mutationFn: () => fetchJson("/api/consignment/items", ConsignmentMutationSchema, mutationBody({
+      name: addForm.name,
+      article: addForm.article,
+      supplierName: addForm.supplierName,
+      purchasePrice: Number(addForm.purchasePrice || 0),
+      salePrice: Number(addForm.salePrice || 0),
+      quantity: Number(addForm.quantity || 0),
+      note: addForm.note,
+      fromBalance: addForm.fromBalance,
+    })),
+    onSuccess: () => {
+      setAddForm(emptyAddForm);
+      setPmQuery("");
+      invalidate();
+    },
+  });
+
+  const savePrice = useMutation({
+    mutationFn: ({ id, salePrice }: { id: string; salePrice: number }) =>
+      fetchJson(`/api/consignment/items/${encodeURIComponent(id)}`, ConsignmentMutationSchema, patchBody({ salePrice })),
+    onSuccess: (_data, variables) => {
+      setPriceDrafts((current) => {
+        const next = { ...current };
+        delete next[variables.id];
+        return next;
+      });
+      invalidate();
+    },
+  });
+
+  const stockOperation = useMutation({
+    mutationFn: ({ item, mode }: StockAction) => fetchJson(
+      `/api/consignment/items/${encodeURIComponent(item.id)}/${mode}`,
+      ConsignmentMutationSchema,
+      mutationBody({
+        quantity: Number(actionForm.quantity || 0),
+        note: actionForm.note,
+        ...(mode === "sale" && actionForm.price !== "" ? { salePrice: Number(actionForm.price) } : {}),
+        ...(mode === "receive" && actionForm.price !== "" ? { purchasePrice: Number(actionForm.price) } : {}),
+        ...(mode === "receive" ? { fromBalance: actionForm.fromBalance } : {}),
+      }),
+    ),
+    onSuccess: () => {
+      setAction(null);
+      setActionForm({ quantity: "1", price: "", note: "", fromBalance: false });
+      invalidate();
+    },
+  });
+
+  const returnSale = useMutation({
+    mutationFn: ({ id, note }: { id: string; note: string }) =>
+      fetchJson(`/api/consignment/operations/${encodeURIComponent(id)}/return`, ConsignmentMutationSchema, mutationBody({ note })),
+    onSuccess: invalidate,
+  });
+
+  const payout = useMutation({
+    mutationFn: () => fetchJson("/api/consignment/payouts", ConsignmentMutationSchema, mutationBody({
+      kind: payoutForm.kind,
+      amount: Number(payoutForm.amount || 0),
+      note: payoutForm.note,
+    })),
+    onSuccess: () => {
+      setPayoutForm({ kind: payoutForm.kind, amount: "", note: "" });
+      invalidate();
+    },
+  });
+
+  const s = summary.data?.summary || ({} as NonNullable<typeof summary.data>["summary"] & Record<string, number>);
+  const openAction = (item: ConsignmentItem, mode: StockAction["mode"]) => {
+    setAction({ item, mode });
+    setActionForm({
+      quantity: "1",
+      price: mode === "sale" ? String(item.salePrice || "") : (mode === "receive" ? String(item.purchasePrice || "") : ""),
+      note: "",
+      fromBalance: false,
+    });
+  };
+  const applyPmRow = (row: { article: string; name: string; supplierName: string; priceRub?: number | null }) => {
+    setAddForm((current) => ({
+      ...current,
+      name: row.name || current.name,
+      article: row.article || current.article,
+      supplierName: row.supplierName || current.supplierName,
+      purchasePrice: row.priceRub !== null && row.priceRub !== undefined ? String(row.priceRub) : current.purchasePrice,
+    }));
+    setPmOpen(false);
+  };
+
+  const actionTitle = action
+    ? (action.mode === "sale" ? "Продажа" : action.mode === "writeoff" ? "Списание" : "Приход / докупка")
+    : "";
+
+  return (
+    <section className="page-section consignment-page">
+      <PageHeader
+        title="Реализация (товар спонсора)"
+        subtitle="Товар от спонсора: остатки, продажи с профитом 50/50, списания, возвраты, общий баланс и закупки со свободных денег."
+        action={(
+          <button className="secondary-action" type="button" onClick={invalidate}>
+            <RefreshCw size={16} /> Обновить
+          </button>
+        )}
+      />
+
+      <section className="dashboard-metrics">
+        <Stat label="Капитализация (по закупке)" value={money(s?.capitalization)} tone="accent" icon={<Boxes size={18} />} />
+        <Stat label="Товара на складе" value={`${Number(s?.stockQuantity || 0)} шт`} tone="" icon={<Package size={18} />} />
+        <Stat label="Общий баланс" value={money(s?.balance)} tone={Number(s?.balance || 0) >= 0 ? "success" : "warn"} icon={<Wallet size={18} />} />
+        <Stat label="Профит спонсора" value={money(s?.sponsorProfit)} tone="accent" icon={<HandCoins size={18} />} />
+        <Stat label="Мой профит" value={money(s?.myProfit)} tone="success" icon={<TrendingUp size={18} />} />
+      </section>
+
+      <div className="summary-grid">
+        <div className="system-card"><span>Продано (за всё время)</span><strong>{Number(s?.soldQuantity || 0)} шт на {money(s?.salesRevenue)}</strong></div>
+        <div className="system-card"><span>Общий профит с продаж</span><strong>{money(s?.profitTotal)}</strong></div>
+        <div className="system-card"><span>Стоимость склада по продаже</span><strong>{money(s?.stockSaleValue)}</strong></div>
+        <div className="system-card"><span>Закупки с баланса</span><strong>{money(s?.purchasesFromBalance)}</strong></div>
+        <div className="system-card"><span>Выплачено спонсору</span><strong>{money(Number(s?.sponsorPayouts || 0) + Number(s?.sponsorProfitPaidOut || 0))}</strong></div>
+        <div className="system-card"><span>Выведено моего профита</span><strong>{money(s?.myProfitPaidOut)}</strong></div>
+      </div>
+
+      <section className="settings-panel settings-panel-wide">
+        <div className="section-title">
+          <div>
+            <span>Новый товар</span>
+            <h3>Принять товар от спонсора или закупить с баланса</h3>
+          </div>
+        </div>
+        <div className="settings-form-row" style={{ position: "relative" }}>
+          <input
+            placeholder="Поиск по базе (артикул или наименование)"
+            value={pmQuery}
+            onChange={(event) => {
+              setPmQuery(event.target.value);
+              setPmOpen(true);
+            }}
+            onFocus={() => setPmOpen(true)}
+          />
+          <span className="muted-note"><Search size={14} /> Подставит наименование, артикул и поставщика из номенклатуры</span>
+        </div>
+        {pmOpen && pmQuery.trim().length >= 2 && (pmSearch.data?.items?.length || pmSearch.isLoading) ? (
+          <div className="table-panel" style={{ maxHeight: 220, overflowY: "auto" }}>
+            {pmSearch.isLoading ? <div className="empty-state">Ищу в номенклатуре…</div> : null}
+            {(pmSearch.data?.items || []).map((row, index) => (
+              <button
+                key={`${row.article}-${index}`}
+                type="button"
+                className="table-row"
+                style={{ width: "100%", textAlign: "left", cursor: "pointer" }}
+                onClick={() => applyPmRow(row)}
+              >
+                <span>{row.article || "-"}</span>
+                <span>{row.name || "-"}</span>
+                <span>{row.supplierName || "-"}</span>
+                <span>{row.priceRub !== null && row.priceRub !== undefined ? money(row.priceRub) : "-"}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <div className="settings-form-row">
+          <input placeholder="Наименование *" value={addForm.name} onChange={(event) => setAddForm({ ...addForm, name: event.target.value })} />
+          <input placeholder="Артикул" value={addForm.article} onChange={(event) => setAddForm({ ...addForm, article: event.target.value })} />
+          <input
+            placeholder="Поставщик"
+            list="consignment-suppliers"
+            value={addForm.supplierName}
+            onChange={(event) => setAddForm({ ...addForm, supplierName: event.target.value })}
+          />
+          <datalist id="consignment-suppliers">
+            {(suppliers.data?.suppliers || []).map((name) => <option key={name} value={name} />)}
+          </datalist>
+        </div>
+        <div className="settings-form-row">
+          <input type="number" min="0" step="0.01" placeholder="Закупка, ₽" value={addForm.purchasePrice} onChange={(event) => setAddForm({ ...addForm, purchasePrice: event.target.value })} />
+          <input type="number" min="0" step="0.01" placeholder="Продажа, ₽" value={addForm.salePrice} onChange={(event) => setAddForm({ ...addForm, salePrice: event.target.value })} />
+          <input type="number" min="0" placeholder="Кол-во" value={addForm.quantity} onChange={(event) => setAddForm({ ...addForm, quantity: event.target.value })} />
+          <input placeholder="Примечание" value={addForm.note} onChange={(event) => setAddForm({ ...addForm, note: event.target.value })} />
+          <label className="toggle-row" title="Если включено — сумма закупки спишется с общего баланса">
+            <input type="checkbox" checked={addForm.fromBalance} onChange={(event) => setAddForm({ ...addForm, fromBalance: event.target.checked })} />
+            Закупка с баланса
+          </label>
+          <button
+            className="primary-action"
+            type="button"
+            disabled={createItem.isPending || !addForm.name.trim()}
+            onClick={() => createItem.mutate()}
+          >
+            {createItem.isPending ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Добавить товар
+          </button>
+        </div>
+        {createItem.error ? <div className="inline-error">{errorMessage(createItem.error)}</div> : null}
+        {createItem.isSuccess ? <div className="success-strip">Товар добавлен на склад реализации.</div> : null}
+      </section>
+
+      {action ? (
+        <section className="settings-panel settings-panel-wide">
+          <div className="section-title">
+            <div>
+              <span>{actionTitle}</span>
+              <h3>{action.item.name} — остаток {action.item.quantity} шт</h3>
+            </div>
+            <button className="secondary-action" type="button" onClick={() => setAction(null)}><X size={16} /> Отмена</button>
+          </div>
+          <div className="settings-form-row">
+            <input type="number" min="1" placeholder="Кол-во" value={actionForm.quantity} onChange={(event) => setActionForm({ ...actionForm, quantity: event.target.value })} />
+            {action.mode !== "writeoff" ? (
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder={action.mode === "sale" ? "Цена продажи, ₽" : "Цена закупки, ₽"}
+                value={actionForm.price}
+                onChange={(event) => setActionForm({ ...actionForm, price: event.target.value })}
+              />
+            ) : null}
+            <input placeholder="Примечание" value={actionForm.note} onChange={(event) => setActionForm({ ...actionForm, note: event.target.value })} />
+            {action.mode === "receive" ? (
+              <label className="toggle-row" title="Списать сумму закупки с общего баланса">
+                <input type="checkbox" checked={actionForm.fromBalance} onChange={(event) => setActionForm({ ...actionForm, fromBalance: event.target.checked })} />
+                Закупка с баланса
+              </label>
+            ) : null}
+            <button
+              className="primary-action"
+              type="button"
+              disabled={stockOperation.isPending || !(Number(actionForm.quantity) > 0)}
+              onClick={() => stockOperation.mutate(action)}
+            >
+              {stockOperation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Подтвердить
+            </button>
+          </div>
+          {action.mode === "sale" ? (
+            <span className="muted-note">
+              Профит: {money((Number(actionForm.price === "" ? action.item.salePrice : actionForm.price) - action.item.purchasePrice) * Number(actionForm.quantity || 0))}
+              {" "}(спонсору {money(((Number(actionForm.price === "" ? action.item.salePrice : actionForm.price) - action.item.purchasePrice) * Number(actionForm.quantity || 0)) / 2)},
+              мне {money(((Number(actionForm.price === "" ? action.item.salePrice : actionForm.price) - action.item.purchasePrice) * Number(actionForm.quantity || 0)) / 2)}).
+              Закупочная часть {money(action.item.purchasePrice * Number(actionForm.quantity || 0))} уйдёт на общий баланс.
+            </span>
+          ) : null}
+          {stockOperation.error ? <div className="inline-error">{errorMessage(stockOperation.error)}</div> : null}
+        </section>
+      ) : null}
+
+      <div className="table-panel price-table consignment-items-table">
+        <div className="section-title" style={{ padding: "12px 16px 0" }}>
+          <div>
+            <span>Склад реализации</span>
+            <h3>Товары ({items.data?.items?.length || 0})</h3>
+          </div>
+          <input placeholder="Поиск: название, артикул, поставщик" value={itemSearch} onChange={(event) => setItemSearch(event.target.value)} />
+        </div>
+        <div className="table-head">
+          <span>Товар</span><span>Артикул</span><span>Поставщик</span><span>Закупка</span><span>Продажа</span><span>Кол-во</span><span>Сумма (закупка)</span><span>Действия</span>
+        </div>
+        {(items.data?.items || []).map((item) => {
+          const draft = priceDrafts[item.id];
+          const draftValue = draft ?? String(item.salePrice);
+          const dirty = draft !== undefined && Number(draft) !== item.salePrice;
+          return (
+            <div className="table-row" key={item.id}>
+              <span data-label="Товар">{item.name}</span>
+              <span data-label="Артикул">{item.article || "-"}</span>
+              <span data-label="Поставщик">{item.supplierName || "-"}</span>
+              <span data-label="Закупка">{money(item.purchasePrice)}</span>
+              <span data-label="Продажа" className="finance-inline-edit">
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={draftValue}
+                  onChange={(event) => setPriceDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                  style={{ width: 90 }}
+                />
+                {dirty ? (
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    title="Сохранить цену продажи"
+                    disabled={savePrice.isPending}
+                    onClick={() => savePrice.mutate({ id: item.id, salePrice: Number(draft || 0) })}
+                  >
+                    {savePrice.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
+                  </button>
+                ) : null}
+              </span>
+              <span data-label="Кол-во">{item.quantity} шт</span>
+              <span data-label="Сумма">{money(item.purchasePrice * item.quantity)}</span>
+              <span data-label="Действия" className="row-actions">
+                <button className="secondary-action" type="button" title="Продать" disabled={!item.quantity} onClick={() => openAction(item, "sale")}><ShoppingCart size={14} /></button>
+                <button className="secondary-action" type="button" title="Списать" disabled={!item.quantity} onClick={() => openAction(item, "writeoff")}><PackageMinus size={14} /></button>
+                <button className="secondary-action" type="button" title="Приход / докупка" onClick={() => openAction(item, "receive")}><PackagePlus size={14} /></button>
+              </span>
+            </div>
+          );
+        })}
+        {savePrice.error ? <div className="inline-error">{errorMessage(savePrice.error)}</div> : null}
+        {!items.data?.items?.length && items.isLoading ? <ListSkeleton rows={5} /> : null}
+        {!items.data?.items?.length && !items.isLoading ? <div className="empty-state">Товаров пока нет — добавьте первый через форму выше.</div> : null}
+      </div>
+
+      <section className="settings-panel settings-panel-wide">
+        <div className="section-title">
+          <div>
+            <span>Выплаты</span>
+            <h3>Вывести деньги с балансов</h3>
+          </div>
+        </div>
+        <div className="settings-form-row">
+          <SelectField
+            ariaLabel="Тип выплаты"
+            value={payoutForm.kind}
+            onChange={(kind) => setPayoutForm({ ...payoutForm, kind })}
+            options={[
+              { value: "sponsor_payout", label: `Спонсору с общего баланса (${money(s?.balance)})` },
+              { value: "sponsor_profit_payout", label: `Профит спонсора (${money(s?.sponsorProfit)})` },
+              { value: "my_profit_payout", label: `Мой профит (${money(s?.myProfit)})` },
+            ]}
+          />
+          <input type="number" min="0" step="0.01" placeholder="Сумма, ₽" value={payoutForm.amount} onChange={(event) => setPayoutForm({ ...payoutForm, amount: event.target.value })} />
+          <input placeholder="Примечание" value={payoutForm.note} onChange={(event) => setPayoutForm({ ...payoutForm, note: event.target.value })} />
+          <button
+            className="primary-action"
+            type="button"
+            disabled={payout.isPending || !(Number(payoutForm.amount) > 0)}
+            onClick={() => payout.mutate()}
+          >
+            {payout.isPending ? <Loader2 className="spin" size={16} /> : <Banknote size={16} />} Выплатить
+          </button>
+        </div>
+        {payout.error ? <div className="inline-error">{errorMessage(payout.error)}</div> : null}
+        {payout.isSuccess ? <div className="success-strip">Выплата записана.</div> : null}
+      </section>
+
+      <div className="table-panel price-table consignment-operations-table">
+        <div className="section-title" style={{ padding: "12px 16px 0" }}>
+          <div>
+            <span>История</span>
+            <h3>Операции</h3>
+          </div>
+          <SelectField
+            ariaLabel="Фильтр операций"
+            value={opFilter}
+            onChange={setOpFilter}
+            options={[
+              { value: "all", label: "Все операции" },
+              { value: "sale", label: "Продажи" },
+              { value: "receive", label: "Приходы" },
+              { value: "purchase", label: "Закупки с баланса" },
+              { value: "writeoff", label: "Списания" },
+              { value: "return", label: "Возвраты" },
+              { value: "sponsor_payout", label: "Выплаты спонсору" },
+              { value: "sponsor_profit_payout", label: "Вывод профита спонсора" },
+              { value: "my_profit_payout", label: "Вывод моего профита" },
+            ]}
+          />
+        </div>
+        <div className="table-head">
+          <span>Дата</span><span>Операция</span><span>Товар</span><span>Кол-во</span><span>Цена</span><span>На баланс</span><span>Профит (спонсор / мой)</span><span>Примечание</span><span></span>
+        </div>
+        {(operations.data?.operations || []).map((op) => (
+          <div className="table-row" key={op.id}>
+            <span data-label="Дата">{dateText(op.createdAt)}</span>
+            <span data-label="Операция">
+              {OPERATION_LABELS[op.type] || op.type}
+              {op.status === "returned" ? " (возвращена)" : ""}
+            </span>
+            <span data-label="Товар">{op.itemName || "-"}</span>
+            <span data-label="Кол-во">{op.quantity ? `${op.quantity} шт` : "-"}</span>
+            <span data-label="Цена">{op.type === "sale" || op.type === "return" ? money(op.unitSale) : (op.quantity ? money(op.unitPurchase) : "-")}</span>
+            <span data-label="На баланс">{op.balanceDelta ? money(op.balanceDelta) : "-"}</span>
+            <span data-label="Профит">{op.sponsorDelta || op.myDelta ? `${money(op.sponsorDelta)} / ${money(op.myDelta)}` : "-"}</span>
+            <span data-label="Примечание">{op.note || "-"}</span>
+            <span data-label="">
+              {op.type === "sale" && op.status === "active" ? (
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={returnSale.isPending}
+                  onClick={() => {
+                    const note = window.prompt("Примечание к возврату (необязательно):", "") ?? "";
+                    returnSale.mutate({ id: op.id, note });
+                  }}
+                >
+                  {returnSale.isPending ? <Loader2 className="spin" size={14} /> : <RotateCcw size={14} />} Возврат
+                </button>
+              ) : null}
+            </span>
+          </div>
+        ))}
+        {returnSale.error ? <div className="inline-error">{errorMessage(returnSale.error)}</div> : null}
+        {!operations.data?.operations?.length && operations.isLoading ? <ListSkeleton rows={6} /> : null}
+        {!operations.data?.operations?.length && !operations.isLoading ? <div className="empty-state">Операций пока нет.</div> : null}
+      </div>
+    </section>
+  );
+}
