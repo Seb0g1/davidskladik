@@ -3960,15 +3960,19 @@ test("supplier cart scoring respects trust, reseller flag and Moscow cutoff", ()
 
 test("supplier cart hydrates postgres stub warehouse before resolving offers", async () => {
   const { hydrateSupplierCartWarehouse } = require("../server.js");
-  // Full in-memory warehouse and already hydrated stubs pass through untouched.
+  // Full in-memory warehouse passes through untouched.
   const full = { postgresOnly: false, products: [{ id: "x" }], suppliers: [] };
   assert.equal(await hydrateSupplierCartWarehouse(full, ["SKU-1"]), full);
-  const hydrated = { postgresOnly: true, products: [{ id: "y" }], suppliers: [] };
-  assert.equal(await hydrateSupplierCartWarehouse(hydrated, ["SKU-1"]), hydrated);
   // Stub without postgres (json mode) or without offers stays as-is instead of erroring.
   const stub = { postgresOnly: true, products: [], suppliers: [] };
   assert.equal(await hydrateSupplierCartWarehouse(stub, []), stub);
   assert.equal(await hydrateSupplierCartWarehouse(stub, ["SKU-1"]), stub);
+  // A partially hydrated stub (other routes merge products into the memory
+  // cache) must NOT short-circuit hydration: the cart offers may be missing
+  // from that partial cache and would all report product_not_found. Guard the
+  // regression at the source level since tests run without postgres.
+  const resolveSource = await fs.readFile(path.join(__dirname, "..", "server", "parts", "02d-supplier-cart-resolve.js"), "utf8");
+  assert.doesNotMatch(resolveSource, /!warehouse\?\.postgresOnly \|\| \(warehouse\.products \|\| \[\]\)\.length/);
   // Preview and the alternatives picker must resolve against the hydrated pool,
   // otherwise every cart row on the api process reports product_not_found.
   const buildSource = await fs.readFile(path.join(__dirname, "..", "server", "parts", "02d-supplier-cart-build.js"), "utf8");

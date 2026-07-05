@@ -294,16 +294,18 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
 }
 
 // The api process keeps the warehouse in memory only as a postgres stub
-// (postgresOnly, products: []) after the OOM hardening. The cart resolver
-// matches marketplace order lines against warehouse products, so on a stub we
-// load exactly the offers being resolved from Postgres (with links) instead of
-// silently reporting product_not_found for every row.
+// (postgresOnly) after the OOM hardening. Unrelated routes partially hydrate
+// that stub via mergeWarehouseProductsIntoMemory, so a non-empty products list
+// does NOT mean the warehouse is fully loaded — treating it that way made the
+// cart resolver report product_not_found for every offer missing from the
+// partial cache. On a postgresOnly warehouse we always load the offers being
+// resolved from Postgres (with links) and merge them over the cached products.
 async function hydrateSupplierCartWarehouse(warehouse = {}, offerIds = []) {
-  if (!warehouse?.postgresOnly || (warehouse.products || []).length) return warehouse;
+  if (!warehouse?.postgresOnly) return warehouse;
   if (!shouldUsePostgresStorage()) return warehouse;
   const unique = [...new Set(offerIds.map((offerId) => cleanText(offerId)).filter(Boolean))];
   if (!unique.length) return warehouse;
-  const products = [];
+  const loaded = [];
   for (const batch of chunkArray(unique, 200)) {
     const rows = await getPrisma().warehouseProduct.findMany({
       where: { offerId: { in: batch, mode: "insensitive" } },
@@ -312,9 +314,12 @@ async function hydrateSupplierCartWarehouse(warehouse = {}, offerIds = []) {
       logger.warn("supplier cart warehouse hydrate failed", { detail: error?.message || String(error) });
       return [];
     });
-    products.push(...rows.map(productFromPostgres));
+    loaded.push(...rows.map(productFromPostgres));
   }
-  return { ...warehouse, products };
+  if (!loaded.length) return warehouse;
+  const byId = new Map((warehouse.products || []).map((product) => [String(product.id), product]));
+  for (const product of loaded) byId.set(String(product.id), product);
+  return { ...warehouse, products: Array.from(byId.values()) };
 }
 
 function findSupplierCartWarehouseProduct(warehouse = {}, line = {}) {
