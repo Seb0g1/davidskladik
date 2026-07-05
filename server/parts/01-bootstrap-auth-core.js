@@ -112,6 +112,79 @@ function normalizeAppRole(value, fallback = "manager") {
   return cleanText(value).toLowerCase() === "admin" ? "admin" : fallback;
 }
 
+// Page keys must match AppRoute keys in frontend/src/App.tsx.
+const APP_PAGE_KEYS = [
+  "dashboard", "warehouse", "suppliers", "picking-list", "reviews", "chats",
+  "import", "statistics", "settings", "questions", "prices", "operations",
+  "supplier-cart", "recovery-queue", "problem-products", "finance",
+  "consignment", "system", "ai-drafts", "no-supplier",
+];
+
+const DEFAULT_MANAGER_PAGES = ["warehouse", "picking-list"];
+
+// null => role defaults apply (admin: everything, manager: warehouse + picking).
+function normalizeAllowedPages(value) {
+  if (!Array.isArray(value)) return null;
+  const pages = [...new Set(value.map((page) => cleanText(page).toLowerCase()).filter((page) => APP_PAGE_KEYS.includes(page)))];
+  return pages.length ? pages : null;
+}
+
+function effectiveAllowedPages(user = {}) {
+  if (cleanText(user.role).toLowerCase() === "admin") return [...APP_PAGE_KEYS];
+  return normalizeAllowedPages(user.allowedPages) || [...DEFAULT_MANAGER_PAGES];
+}
+
+// API prefix -> page key. Granting a page to a user also grants its admin APIs.
+// Deliberately NOT mapped: warehouse/picking-list (the default manager pages must
+// not silently unlock admin-only warehouse endpoints) and settings/system/users
+// style admin surfaces beyond the ones listed here.
+const API_PREFIX_PAGE_KEYS = [
+  ["/api/consignment", "consignment"],
+  ["/api/finance", "finance"],
+  ["/api/dashboard", "dashboard"],
+  ["/api/suppliers", "suppliers"],
+  ["/api/supplier-ledger", "suppliers"],
+  ["/api/supplier-cart", "supplier-cart"],
+  ["/api/reviews", "reviews"],
+  ["/api/questions", "questions"],
+  ["/api/chats", "chats"],
+  ["/api/warehouse/prices", "prices"],
+  ["/api/problem-products", "problem-products"],
+  ["/api/ozon-yandex-import", "import"],
+];
+
+function apiPathPageKey(pathname = "") {
+  const path = cleanText(pathname);
+  for (const [prefix, page] of API_PREFIX_PAGE_KEYS) {
+    if (path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`)) return page;
+  }
+  return "";
+}
+
+const allowedPagesCache = new Map();
+const ALLOWED_PAGES_CACHE_TTL_MS = 30_000;
+
+function invalidateAllowedPagesCache() {
+  allowedPagesCache.clear();
+}
+
+async function resolveAllowedPagesForUsername(usernameInput) {
+  const username = cleanText(usernameInput).toLowerCase();
+  if (!username) return [...DEFAULT_MANAGER_PAGES];
+  const cached = allowedPagesCache.get(username);
+  if (cached && cached.expiresAt > Date.now()) return cached.pages;
+  let pages = [...DEFAULT_MANAGER_PAGES];
+  try {
+    const users = await configuredUsersAsync();
+    const user = users.find((item) => cleanText(item.username).toLowerCase() === username);
+    if (user) pages = effectiveAllowedPages(user);
+  } catch (error) {
+    logger.warn("allowed pages lookup failed", { detail: error?.message || String(error) });
+  }
+  allowedPagesCache.set(username, { pages, expiresAt: Date.now() + ALLOWED_PAGES_CACHE_TTL_MS });
+  return pages;
+}
+
 const passwordHashPrefix = "scrypt";
 
 function isPasswordHash(value) {
@@ -151,6 +224,7 @@ function normalizeAppUser(input = {}, { source = "local", protectedUser = false,
     source: input.source || source,
     protected: Boolean(input.protected ?? protectedUser),
     disabled: Boolean(input.disabled),
+    allowedPages: normalizeAllowedPages(input.allowedPages ?? input.allowed_pages),
     createdAt: input.createdAt || new Date().toISOString(),
     updatedAt: input.updatedAt || new Date().toISOString(),
   };

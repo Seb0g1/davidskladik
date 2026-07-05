@@ -6605,3 +6605,202 @@ textarea:focus-visible,
   font-size: 12.5px;
   line-height: 1.45;
 }
+
+/* Page access modal (Настройки -> Сотрудники -> Доступ к страницам) */
+.page-access-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(2, 8, 18, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.page-access-modal {
+  width: min(1180px, 100%);
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+.page-access-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.page-access-head h3 {
+  margin: 2px 0 0;
+}
+
+.page-access-head h3 small {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.page-access-presets {
+  flex-wrap: wrap;
+}
+
+.page-access-body {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.6fr);
+  gap: 14px;
+  min-height: 0;
+  flex: 1;
+}
+
+.page-access-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  overflow-y: auto;
+  padding-right: 4px;
+  min-height: 0;
+}
+
+.page-access-row {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 8px;
+  cursor: pointer;
+  background: rgba(8, 17, 31, 0.38);
+}
+
+.page-access-row:hover {
+  border-color: rgba(var(--accent-rgb), 0.4);
+}
+
+.page-access-row.is-active {
+  border-color: rgba(var(--accent-rgb), 0.65);
+  background: rgba(var(--accent-rgb), 0.1);
+}
+
+.page-access-row.is-checked .page-access-icon {
+  color: var(--accent);
+}
+
+.page-access-row .page-access-eye {
+  color: var(--muted);
+  opacity: 0;
+}
+
+.page-access-row:hover .page-access-eye,
+.page-access-row.is-active .page-access-eye {
+  opacity: 1;
+}
+
+.page-access-text {
+  display: grid;
+  min-width: 0;
+}
+
+.page-access-text strong {
+  font-size: 13px;
+}
+
+.page-access-text small {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.page-access-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.page-access-preview-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.page-access-preview-head small {
+  color: var(--muted);
+}
+
+.page-access-preview-frame {
+  position: relative;
+  flex: 1;
+  min-height: 420px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg, #060d19);
+}
+
+.page-access-preview-frame iframe {
+  width: 300%;
+  height: 300%;
+  border: 0;
+  transform: scale(0.3334);
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+
+.page-access-preview-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  z-index: 1;
+}
+
+.page-access-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.page-access-foot small {
+  color: var(--muted);
+}
+
+@media (max-width: 980px) {
+  .page-access-body {
+    grid-template-columns: 1fr;
+  }
+
+  .page-access-preview {
+    display: none;
+  }
+}
+
+/* Embedded preview mode (?embed=preview inside the page-access modal iframe) */
+.app-shell.preview-embed .side-nav,
+.app-shell.preview-embed .content-topbar,
+.app-shell.preview-embed .sidebar-backdrop {
+  display: none !important;
+}
+
+.app-shell.preview-embed {
+  grid-template-columns: 1fr !important;
+}
+
+.app-shell.preview-embed .app-content {
+  padding: 12px;
+}

@@ -9,6 +9,7 @@ registerAuthSessionRoutes(app, {
   readSession,
   isAdminSession,
   isSecureSessionCookie: () => String(process.env.PUBLIC_BASE_URL || "").startsWith("https://"),
+  resolveAllowedPagesForUsername,
 });
 
 app.use(requireAuth);

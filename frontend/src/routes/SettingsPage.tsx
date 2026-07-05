@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckSquare, Download, Loader2, Percent, RefreshCw, Save, Search, Square, Trash2, Upload, UserX } from "lucide-react";
+import { CheckSquare, Download, Eye, Loader2, Percent, RefreshCw, Save, Search, Square, Trash2, Upload, UserX } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AuditLogSchema, PriceHistorySchema, PriceRetryQueueSchema, SettingsResponseSchema, SuppliersResponseSchema, SyncStatusSchema, UsersResponseSchema, UsersStatsResponseSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { DiagnosticValue } from "../components/DiagnosticValue";
+import { PageAccessModal } from "../components/PageAccessModal";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
 import { readNotificationSoundSettings, writeNotificationSoundSettings, playNotificationSound, NotificationSoundSettings } from "../components/NotificationsBell";
 
@@ -339,6 +340,7 @@ function BrandingLogoPanel({
 function UsersSettingsPanel() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState({ username: "", password: "", role: "manager" });
+  const [accessUser, setAccessUser] = useState<{ username: string; role: string; allowedPages: string[] | null } | null>(null);
   const [statsPeriod, setStatsPeriod] = useState("30d");
   const [selectedStatsUsers, setSelectedStatsUsers] = useState<string[]>([]);
   const [includeInactiveStats, setIncludeInactiveStats] = useState(true);
@@ -374,6 +376,17 @@ function UsersSettingsPanel() {
       { method: "PUT", body: JSON.stringify(patch), headers: { "Content-Type": "application/json" } },
     ),
     onSuccess: refreshUsers,
+  });
+  const saveAccess = useMutation({
+    mutationFn: ({ username, pages }: { username: string; pages: string[] | null }) => fetchJson(
+      `/api/users/${encodeURIComponent(username)}`,
+      UsersResponseSchema,
+      { method: "PUT", body: JSON.stringify({ allowedPages: pages }), headers: { "Content-Type": "application/json" } },
+    ),
+    onSuccess: () => {
+      setAccessUser(null);
+      refreshUsers();
+    },
   });
   const deleteUser = useMutation({
     mutationFn: (username: string) => fetchJson(
@@ -446,13 +459,16 @@ function UsersSettingsPanel() {
         const role = String(user.role || "manager");
         const active = user.active !== false && user.disabled !== true;
         const protectedUser = Boolean(user.protected);
+        const allowedPages = Array.isArray(user.allowedPages) ? (user.allowedPages as unknown[]).map((page) => String(page)) : null;
+        const accessLabel = role === "admin" ? "все страницы" : (allowedPages?.length ? `страниц: ${allowedPages.length}` : "по умолчанию (склад + сборка)");
         return (
           <article className="job-row" key={username}>
             <div>
               <strong>{username}</strong>
-              <span>{role} · {active ? "активен" : "выключен"} · {String(user.source || "local")}</span>
+              <span>{role} · {active ? "активен" : "выключен"} · {String(user.source || "local")} · доступ: {accessLabel}</span>
             </div>
             <div className="row-actions">
+              <button className="secondary-action" type="button" disabled={updateUser.isPending} onClick={() => setAccessUser({ username, role, allowedPages })}><Eye size={15} /> Доступ к страницам</button>
               <button className="secondary-action" type="button" disabled={protectedUser || updateUser.isPending} onClick={() => updateUser.mutate({ username, patch: { role: role === "admin" ? "manager" : "admin" } })}>{role === "admin" ? "Сделать manager" : "Сделать admin"}</button>
               <button className="secondary-action" type="button" disabled={protectedUser || updateUser.isPending} onClick={() => updateUser.mutate({ username, patch: { active: !active } })}>{active ? "Выключить" : "Включить"}</button>
               <button className="icon-action danger" type="button" disabled={protectedUser || deleteUser.isPending} onClick={() => deleteUser.mutate(username)} title="Удалить"><Trash2 size={15} /></button>
@@ -464,6 +480,17 @@ function UsersSettingsPanel() {
         );
       })}
       {(createUser.error || updateUser.error || deleteUser.error || hardDeleteUser.error) && <div className="inline-error">{errorMessage(createUser.error || updateUser.error || deleteUser.error || hardDeleteUser.error)}</div>}
+      {accessUser ? (
+        <PageAccessModal
+          username={accessUser.username}
+          role={accessUser.role}
+          allowedPages={accessUser.allowedPages}
+          saving={saveAccess.isPending}
+          error={saveAccess.error ? errorMessage(saveAccess.error) : undefined}
+          onClose={() => setAccessUser(null)}
+          onSave={(pages) => saveAccess.mutate({ username: accessUser.username, pages })}
+        />
+      ) : null}
     </section>
     <section className="settings-panel settings-panel-wide">
       <div className="section-title">

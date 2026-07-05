@@ -41,6 +41,18 @@ function requireAuth(request, response, next) {
 
 function requireAdmin(request, response, next) {
   if (isAdminSession(request.session)) return next();
+  // Non-admins may still use APIs of pages explicitly granted to them
+  // (Настройки -> Сотрудники -> Доступ к страницам). Unmapped API paths stay admin-only.
+  const pageKey = apiPathPageKey(request.path);
+  if (pageKey && request.session?.username) {
+    resolveAllowedPagesForUsername(request.session.username)
+      .then((pages) => {
+        if (pages.includes(pageKey)) return next();
+        return response.status(403).json({ error: "Доступ только для администратора.", code: "admin_required" });
+      })
+      .catch(() => response.status(403).json({ error: "Доступ только для администратора.", code: "admin_required" }));
+    return undefined;
+  }
   return response.status(403).json({ error: "Доступ только для администратора.", code: "admin_required" });
 }
 

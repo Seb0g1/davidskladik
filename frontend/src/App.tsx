@@ -25,7 +25,7 @@ import { StatisticsPage } from "./routes/StatisticsPage";
 import { ConsignmentPage } from "./routes/ConsignmentPage";
 
 type AppRoute = "dashboard" | "import" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier";
-type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null };
+type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
   { route: "dashboard", href: "/app/dashboard", label: "Дашборд", icon: <Home size={16} /> },
@@ -73,6 +73,9 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/no-supplier")) return "no-supplier";
   return "warehouse";
 }
+
+// Embedded page preview (iframe inside the page-access modal): hide the app chrome.
+const isPreviewEmbed = new URLSearchParams(window.location.search).get("embed") === "preview";
 
 function AppShell() {
   const [route, setRoute] = useState<AppRoute>(() => currentRoute());
@@ -155,18 +158,32 @@ function AppShell() {
   };
   const sessionReady = session !== null;
   const isAdmin = session?.role === "admin";
-  const canUseStaffRoutes = session?.role === "manager" || isAdmin;
-  const canUseAdminRoutes = sessionReady ? isAdmin : false;
-  const headerRoutes = new Set<AppRoute>(isAdmin ? ["dashboard", "warehouse", "suppliers", "picking-list", "reviews", "chats", "statistics", "settings", "questions", "prices", "operations", "supplier-cart", "recovery-queue", "problem-products", "finance", "consignment", "system", "ai-drafts", "no-supplier", "import"] : ["warehouse", "picking-list"]);
+  // Per-user page visibility: admins see everything, others see the pages granted
+  // in Настройки -> Сотрудники (empty grant falls back to the old manager defaults).
+  const defaultEmployeeRoutes: AppRoute[] = ["warehouse", "picking-list"];
+  const allRouteKeys = navItems.map((item) => item.route);
+  const grantedPages = (session?.allowedPages || []).filter((page): page is AppRoute => (allRouteKeys as string[]).includes(page));
+  const headerRoutes = new Set<AppRoute>(isAdmin ? allRouteKeys : (grantedPages.length ? grantedPages : defaultEmployeeRoutes));
   const visibleNavItems = navItems.filter((item) => headerRoutes.has(item.route));
   useEffect(() => {
     activeNavRef.current?.scrollIntoView({ block: "nearest" });
   }, [route, visibleNavItems.length]);
-  const accessDenied = sessionReady && ((route !== "warehouse" && route !== "picking-list" && !canUseAdminRoutes) || (route === "picking-list" && !canUseStaffRoutes));
+  const accessDenied = sessionReady && !headerRoutes.has(route);
+  useEffect(() => {
+    // Users without access to the current page land on their first granted page
+    // (the sponsor logs in and goes straight to Реализация).
+    if (!sessionReady || !accessDenied) return;
+    const fallback = navItems.find((item) => headerRoutes.has(item.route));
+    if (fallback && fallback.route !== route) {
+      window.history.replaceState(null, "", fallback.href);
+      setRoute(currentRoute());
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionReady, accessDenied]);
   const roleLabel = !sessionReady ? "Загрузка" : (isAdmin ? "Администратор" : (session?.role === "manager" ? "Менеджер" : "Сотрудник"));
   const navExpanded = isMobileNav ? sidebarOpen : !sidebarCompact;
   return (
-    <main className={`app-shell with-sidebar${sidebarOpen ? " sidebar-open" : ""}${sidebarCompact ? " sidebar-compact" : ""}`}>
+    <main className={`app-shell with-sidebar${sidebarOpen ? " sidebar-open" : ""}${sidebarCompact ? " sidebar-compact" : ""}${isPreviewEmbed ? " preview-embed" : ""}`}>
       <aside className="side-nav" aria-label="Основная навигация">
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true">D</span>
@@ -235,8 +252,8 @@ function AppShell() {
         <section className="access-denied-panel">
           <AlertCircle size={24} />
           <strong>Нет доступа</strong>
-          <span>Для роли manager доступны каталог, привязки PriceMaster и лист сборки.</span>
-          <a href="/app/warehouse" onClick={(event) => navigate(event, "/app/warehouse")}>Вернуться в каталог</a>
+          <span>Эта страница не входит в ваш доступ. Обратитесь к администратору.</span>
+          {visibleNavItems[0] ? <a href={visibleNavItems[0].href} onClick={(event) => navigate(event, visibleNavItems[0].href)}>Перейти: {visibleNavItems[0].label}</a> : null}
         </section>
       ) : null}
       {sessionReady && !accessDenied && route === "dashboard" ? <DashboardPage /> : null}
@@ -258,7 +275,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "system" ? <SystemPage /> : null}
       {sessionReady && !accessDenied && route === "ai-drafts" ? <AiDraftsPage /> : null}
       {sessionReady && !accessDenied && route === "no-supplier" ? <NoSupplierPage /> : null}
-      {sessionReady && route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
+      {sessionReady && !accessDenied && route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
       </div>
     </main>
   );

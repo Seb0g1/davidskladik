@@ -67,6 +67,7 @@ function appUserFromPostgres(row = {}) {
     source: row.source || "postgres",
     protected: row.protected,
     disabled: row.active === false,
+    allowedPages: row.allowedPages,
     createdAt: row.createdAt ? row.createdAt.toISOString() : null,
     updatedAt: row.updatedAt ? row.updatedAt.toISOString() : null,
   }, { source: row.source || "postgres", defaultRole: "manager" });
@@ -112,12 +113,15 @@ function publicAppUser(user = {}) {
     source: user.source || "local",
     protected: Boolean(user.protected),
     disabled: Boolean(user.disabled),
+    allowedPages: normalizeAllowedPages(user.allowedPages),
+    effectivePages: effectiveAllowedPages(user),
     createdAt: user.createdAt || null,
     updatedAt: user.updatedAt || null,
   };
 }
 
 async function writeStoredAppUsers(users = []) {
+  invalidateAllowedPagesCache();
   const normalized = dedupeAppUsers(users.map((item) => normalizeAppUser(item, { source: "local", defaultRole: "manager" })))
     .filter((item) => item.username && item.password)
     .map((item) => ({ ...item, source: "local", protected: false }));
@@ -143,6 +147,7 @@ async function writeStoredAppUsers(users = []) {
               active: !user.disabled,
               source: "postgres",
               protected: false,
+              allowedPages: normalizeAllowedPages(user.allowedPages),
               createdAt: toDateOrNull(user.createdAt) || new Date(),
               updatedAt: toDateOrNull(user.updatedAt) || new Date(),
             },
@@ -152,6 +157,7 @@ async function writeStoredAppUsers(users = []) {
               active: !user.disabled,
               source: "postgres",
               protected: false,
+              allowedPages: normalizeAllowedPages(user.allowedPages),
             },
           });
         }

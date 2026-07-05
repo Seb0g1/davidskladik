@@ -698,6 +698,10 @@ app.put("/api/users/:username", requireAdmin, async (request, response, next) =>
       role: normalizeAppRole(request.body.role, users[index].role || "manager"),
       updatedAt: new Date().toISOString(),
     };
+    if (request.body.allowedPages !== undefined) {
+      // null / [] resets to role defaults; an array stores an explicit page set.
+      nextUser.allowedPages = Array.isArray(request.body.allowedPages) ? request.body.allowedPages : null;
+    }
     if (request.body.active !== undefined || request.body.disabled !== undefined) {
       const active = request.body.active !== undefined
         ? Boolean(request.body.active)

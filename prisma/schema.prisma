@@ -45,6 +45,7 @@ model AppUser {
   active       Boolean  @default(true)
   source       String   @default("postgres")
   protected    Boolean  @default(false)
+  allowedPages Json?    @map("allowed_pages")
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 

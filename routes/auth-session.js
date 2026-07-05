@@ -10,6 +10,7 @@ function registerAuthSessionRoutes(app, deps) {
     readSession,
     isAdminSession,
     isSecureSessionCookie,
+    resolveAllowedPagesForUsername,
   } = deps;
 
 app.post("/api/login", loginLimiter, async (request, response, next) => {
@@ -49,12 +50,17 @@ app.post("/api/logout", (_request, response) => {
   response.json({ ok: true });
 });
 
-app.get("/api/session", (request, response) => {
+app.get("/api/session", async (request, response) => {
   const session = readSession(request);
+  let allowedPages = [];
+  if (session?.username && typeof resolveAllowedPagesForUsername === "function") {
+    allowedPages = await resolveAllowedPagesForUsername(session.username).catch(() => []);
+  }
   response.json({
     authenticated: Boolean(session),
     username: session?.username || null,
     role: session?.role || null,
+    allowedPages,
     permissions: {
       admin: isAdminSession(session),
       settings: isAdminSession(session),
