@@ -179,6 +179,10 @@ function normalizeWarehousePayload(warehouse) {
     updatedAt: new Date().toISOString(),
     products: Array.isArray(warehouse.products) ? warehouse.products.map(normalizeWarehouseProduct) : [],
     suppliers: Array.isArray(warehouse.suppliers) ? warehouse.suppliers.map(normalizeManagedSupplier) : [],
+    // На postgres-стабе products — всегда частичный список. Без флага writeWarehouse
+    // превращает кэш в «полный» каталог: readWarehouse отдаёт его как есть, hydrate-хелперы
+    // пропускают догрузку из Postgres, и автокорзина метит все офферы вне кэша product_not_found.
+    postgresOnly: shouldUsePostgresStorage() && !warehouseFullMemoryLoadEnabled,
   };
 }
 

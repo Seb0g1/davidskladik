@@ -4071,6 +4071,15 @@ test("supplier cart hydrates postgres stub warehouse before resolving offers", a
   assert.match(buildSource, /hydrateSupplierCartWarehouse\(/);
   const altSource = await fs.readFile(path.join(__dirname, "..", "server", "parts", "02d-supplier-cart-alternatives.js"), "utf8");
   assert.match(altSource, /hydrateSupplierCartWarehouse\(/);
+  // Hydration must also pull group siblings: the PriceMaster link may live on the
+  // paired ozon/yandex product or a manual-group sibling with a different offerId.
+  assert.match(resolveSource, /readWarehouseGroupSiblingsFromPostgres\(/);
+  // writeWarehouse/writeWarehouseProductPatch rebuild the memory cache via
+  // normalizeWarehousePayload; losing the postgresOnly flag there makes the partial
+  // cache look like the full catalog, hydration is skipped and every cart offer
+  // outside the cache reports product_not_found again.
+  const ioSource = await fs.readFile(path.join(__dirname, "..", "server", "parts", "02a-warehouse-postgres-io.js"), "utf8");
+  assert.match(ioSource, /function normalizeWarehousePayload[\s\S]{0,900}postgresOnly: shouldUsePostgresStorage\(\) && !warehouseFullMemoryLoadEnabled/);
 });
 
 test("selectSupplierCartSupplierFromMatches prefers regular suppliers over stock-only", () => {

@@ -317,8 +317,14 @@ async function hydrateSupplierCartWarehouse(warehouse = {}, offerIds = []) {
     loaded.push(...rows.map(productFromPostgres));
   }
   if (!loaded.length) return warehouse;
+  // Привязка может жить на соседе по группе с другим артикулом (ozon/yandex-пара,
+  // ручная группа) — без соседей buildCommonWarehouseGroupLinks её не увидит.
+  const withSiblings = await readWarehouseGroupSiblingsFromPostgres(loaded).catch((error) => {
+    logger.warn("supplier cart group sibling hydrate failed", { detail: error?.message || String(error) });
+    return loaded;
+  });
   const byId = new Map((warehouse.products || []).map((product) => [String(product.id), product]));
-  for (const product of loaded) byId.set(String(product.id), product);
+  for (const product of withSiblings) byId.set(String(product.id), product);
   return { ...warehouse, products: Array.from(byId.values()) };
 }
 
