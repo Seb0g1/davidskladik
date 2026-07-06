@@ -139,9 +139,10 @@ async function hydrateWarehouseProductsForIds(productIds = [], { expandGroups = 
       loaded = await readWarehouseProductsFromPostgresByIds(missingIds);
     }
     if (loaded.length) {
-      const suppliers = warehouse.suppliers?.length
-        ? warehouse.suppliers
-        : await getWarehousePostgresSuppliers(getPrisma()).catch(() => []);
+      // Не предпочитаем in-memory список поставщиков: в worker-процессе он может быть
+      // устаревшим (валюту/статус меняют через api-процесс). getWarehousePostgresSuppliers
+      // кэширован по TTL, так что это дешёвое обновление.
+      const suppliers = await getWarehousePostgresSuppliers(getPrisma()).catch(() => warehouse.suppliers || []);
       mergeWarehouseProductsIntoMemory(loaded, { suppliers });
     }
   }

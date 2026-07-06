@@ -111,6 +111,7 @@ app.patch("/api/suppliers/:id/profile", requireAdmin, async (request, response, 
         ...(suppliers[index].raw || {}),
         ...(request.body?.raw || {}),
       },
+      updatedAt: new Date().toISOString(),
     });
     warehouse.suppliers = suppliers;
     await writeWarehouse(warehouse);

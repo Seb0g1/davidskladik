@@ -12,10 +12,13 @@ async function writeWarehouseToPostgres(prisma, payload) {
   const writeConcurrency = warehousePostgresWriteConcurrency();
   const supplierRows = suppliers.map(supplierToPostgresData);
   await runWithLimitedConcurrency(supplierRows, writeConcurrency, async (data) => {
-    await prisma.managedSupplier.upsert({
-      where: { partnerId: data.partnerId || data.name },
-      create: data,
-      update: {
+    const partnerKey = data.partnerId || data.name;
+    // api и worker держат независимые in-memory копии склада: bulk-запись из
+    // устаревшей копии не должна откатывать более свежую строку поставщика
+    // (например валюту, выставленную на странице «Поставщики»).
+    const updated = await prisma.managedSupplier.updateMany({
+      where: { partnerId: partnerKey, updatedAt: { lte: data.updatedAt } },
+      data: {
         name: data.name,
         active: data.active,
         defaultCurrency: data.defaultCurrency,
@@ -25,6 +28,14 @@ async function writeWarehouseToPostgres(prisma, payload) {
         updatedAt: data.updatedAt,
       },
     });
+    if (!updated.count) {
+      const existing = await prisma.managedSupplier.findUnique({ where: { partnerId: partnerKey }, select: { id: true } });
+      if (!existing) {
+        await prisma.managedSupplier.create({ data }).catch((error) => {
+          if (error?.code !== "P2002") throw error;
+        });
+      }
+    }
   });
   for (const productChunk of chunkArray(changedProducts, chunkSize)) {
     await runWithLimitedConcurrency(productChunk, writeConcurrency, async (product) => {

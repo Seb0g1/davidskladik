@@ -67,7 +67,10 @@ function syncWarehouseSuppliersFromPriceMaster(warehouse, partners = []) {
     const keyName = normalizeSupplierName(partner.name);
     const existing = (partner.partnerId && byId.get(String(partner.partnerId))) || byName.get(keyName);
     if (existing) {
-      if (!existing.partnerId && partner.partnerId) existing.partnerId = String(partner.partnerId);
+      if (!existing.partnerId && partner.partnerId) {
+        existing.partnerId = String(partner.partnerId);
+        existing.updatedAt = new Date().toISOString();
+      }
       if (!existing.source) existing.source = "pricemaster";
       continue;
     }

@@ -83,6 +83,8 @@ const {
   applyOzonInfoToWarehouseProduct,
   productFromPostgres,
   productToPostgresData,
+  supplierToPostgresData,
+  writeWarehouseToPostgres,
   marketplaceStateCodeFromPostgresRow,
   warehousePageProductMatches,
   warehousePagePostgresWhere,
@@ -3257,6 +3259,63 @@ test("normalizePriceMasterPrice keeps dollar-like values in USD", () => {
 test("normalizeManagedSupplier defaults PriceMaster currency to USD", () => {
   const supplier = normalizeManagedSupplier({ name: "Supplier" });
   assert.equal(supplier.priceCurrency, "USD");
+});
+
+test("normalizeManagedSupplier preserves updatedAt so stale copies stay detectable", () => {
+  const supplier = normalizeManagedSupplier({ name: "Supplier", updatedAt: "2026-01-01T00:00:00.000Z" });
+  assert.equal(supplier.updatedAt, "2026-01-01T00:00:00.000Z");
+  assert.ok(normalizeManagedSupplier({ name: "Supplier" }).updatedAt);
+});
+
+test("warehouse postgres supplier write does not roll back a newer supplier row", async () => {
+  const calls = { updateMany: [], create: [], findUnique: [] };
+  const prisma = {
+    managedSupplier: {
+      updateMany: async (args) => {
+        calls.updateMany.push(args);
+        return { count: 0 };
+      },
+      findUnique: async (args) => {
+        calls.findUnique.push(args);
+        return { id: "existing" };
+      },
+      create: async (args) => {
+        calls.create.push(args);
+        return args.data;
+      },
+    },
+  };
+  const staleSupplier = {
+    id: "pm-42",
+    partnerId: "42",
+    name: "Косметика от Фест",
+    priceCurrency: "USD",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  await writeWarehouseToPostgres(prisma, { products: [], suppliers: [staleSupplier] });
+  assert.equal(calls.updateMany.length, 1);
+  assert.equal(calls.updateMany[0].where.partnerId, "42");
+  assert.deepEqual(calls.updateMany[0].where.updatedAt, { lte: new Date("2026-01-01T00:00:00.000Z") });
+  // Строка в Postgres новее (updateMany вернул 0 при существующей записи) — create не должен затирать её.
+  assert.equal(calls.create.length, 0);
+});
+
+test("warehouse postgres supplier write creates missing supplier rows", async () => {
+  const calls = { create: [] };
+  const prisma = {
+    managedSupplier: {
+      updateMany: async () => ({ count: 0 }),
+      findUnique: async () => null,
+      create: async (args) => {
+        calls.create.push(args);
+        return args.data;
+      },
+    },
+  };
+  const supplier = normalizeManagedSupplier({ id: "pm-7", partnerId: "7", name: "Fresh", priceCurrency: "RUB" });
+  await writeWarehouseToPostgres(prisma, { products: [], suppliers: [supplier] });
+  assert.equal(calls.create.length, 1);
+  assert.equal(calls.create[0].data.defaultCurrency, "RUB");
 });
 
 test("normalizeManagedSupplier supports stock-only pricing mode", () => {

@@ -74,7 +74,10 @@ function normalizeManagedSupplier(input = {}) {
     inactiveUntilUnknown: Boolean(input.inactiveUntilUnknown || input.inactive_until_unknown || (stopped && !inactiveUntil)),
     articles: Array.isArray(input.articles) ? input.articles.map(normalizeSupplierArticle) : [],
     createdAt: input.createdAt || new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    // Preserve the original timestamp: bumping it on every normalize makes a stale
+    // in-memory copy (api/worker keep independent caches) look "fresh" and lets a
+    // bulk warehouse write roll back newer supplier rows in Postgres.
+    updatedAt: input.updatedAt || input.updated_at || new Date().toISOString(),
   };
 }
 

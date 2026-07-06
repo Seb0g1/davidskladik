@@ -1,7 +1,7 @@
 app.post("/api/suppliers", async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
-    const supplier = normalizeManagedSupplier(request.body);
+    const supplier = normalizeManagedSupplier({ ...request.body, updatedAt: new Date().toISOString() });
     if (!supplier.name) return response.status(400).json({ error: "Укажите название поставщика." });
 
     const index = warehouse.suppliers.findIndex((item) => item.id === supplier.id);
