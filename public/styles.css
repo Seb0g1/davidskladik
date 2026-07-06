@@ -1280,6 +1280,11 @@ th,
   color: #815500;
 }
 
+.market-badge.avito {
+  background: rgba(151, 207, 38, 0.2);
+  color: #3c6b00;
+}
+
 .badge.ok {
   background: rgba(52, 199, 89, 0.14);
   color: #10723f;

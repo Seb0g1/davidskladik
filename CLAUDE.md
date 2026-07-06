@@ -102,6 +102,7 @@ REDIS_URL              Redis DSN
 PM_DB_HOST/PORT/USER/PASSWORD/NAME  MySQL PriceMaster
 OZON_CLIENT_ID / OZON_API_KEY
 YANDEX_SHOPS_JSON      JSON-массив магазинов ЯМ
+AVITO_CLIENT_ID / AVITO_CLIENT_SECRET  OAuth-ключи Avito (client_credentials)
 APP_USER / APP_PASSWORD / APP_SESSION_SECRET
 NODE_ENV               production требует APP_SESSION_SECRET
 SERVER_ROLE            api | worker (production)

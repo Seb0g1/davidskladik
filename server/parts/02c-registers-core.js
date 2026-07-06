@@ -17,6 +17,7 @@ registerMarketplaceRoutes(app, {
   appendAudit,
   getEnvOzonAccounts,
   getEnvYandexShops,
+  getEnvAvitoAccounts,
   accountPayloadWithSecretFallback,
 });
 

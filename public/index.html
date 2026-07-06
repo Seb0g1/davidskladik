@@ -356,7 +356,7 @@
         <section class="control-panel accounts-hero">
           <div>
             <h2>Кабинеты маркетплейсов</h2>
-            <p>Добавляйте несколько кабинетов Ozon и Yandex Market, выбирайте нужный кабинет в складе и формах товара.</p>
+            <p>Добавляйте несколько кабинетов Ozon, Yandex Market и Avito, выбирайте нужный кабинет в складе и формах товара.</p>
           </div>
           <button id="reloadAccountsButton" class="secondary-button" type="button">Обновить список</button>
         </section>
@@ -380,18 +380,19 @@
               <select id="accountMarketplaceInput" name="marketplace">
                 <option value="ozon">Ozon</option>
                 <option value="yandex">Yandex Market</option>
+                <option value="avito">Avito</option>
               </select>
             </label>
             <label>
               Название
               <input id="accountNameInput" name="name" type="text" placeholder="Например: Ozon основной" required />
             </label>
-            <label class="account-ozon-field">
-              Ozon Client-Id
+            <label class="account-clientid-field">
+              <span id="accountClientIdLabel">Ozon Client-Id</span>
               <input id="accountClientIdInput" name="clientId" type="text" autocomplete="off" />
             </label>
             <label>
-              API Key
+              <span id="accountApiKeyLabel">API Key</span>
               <input id="accountApiKeyInput" name="apiKey" type="password" autocomplete="new-password" />
             </label>
             <label class="account-yandex-field hidden">

@@ -3307,10 +3307,16 @@ function fillSupplierArticleForm(panel, article) {
   form.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
+function accountMarketplaceLabel(marketplace) {
+  if (marketplace === "yandex") return "Yandex Market";
+  if (marketplace === "avito") return "Avito";
+  return "Ozon";
+}
+
 function renderAccounts() {
   if (!elements.accountsBoard) return;
   if (!state.accounts.length) {
-    elements.accountsBoard.innerHTML = `<div class="empty">Добавьте первый кабинет Ozon или Yandex Market.</div>`;
+    elements.accountsBoard.innerHTML = `<div class="empty">Добавьте первый кабинет Ozon, Yandex Market или Avito.</div>`;
     renderHiddenAccounts();
     return;
   }
@@ -3318,12 +3324,13 @@ function renderAccounts() {
   elements.accountsBoard.innerHTML = state.accounts
     .map((account) => {
       const isOzon = account.marketplace === "ozon";
+      const isAvito = account.marketplace === "avito";
       const syncEnabled = account.syncEnabled !== false;
       return `
         <article class="account-card ${account.configured ? "configured" : "not-configured"} ${syncEnabled ? "" : "sync-disabled"}" data-account-id="${escapeHtml(account.id)}">
           <div class="account-card-head">
             <div>
-              <span class="market-badge ${escapeHtml(account.marketplace)}">${isOzon ? "Ozon" : "Yandex Market"}</span>
+              <span class="market-badge ${escapeHtml(account.marketplace)}">${accountMarketplaceLabel(account.marketplace)}</span>
               <h3>${escapeHtml(account.name)}</h3>
               <p class="account-sync-note">${syncEnabled ? "Загрузка товаров включена" : "Загрузка товаров выключена"}</p>
               <p>${account.readOnly ? "Задан в .env" : account.inheritedFromEnv ? "Переопределён из интерфейса" : "Локальная настройка"} · ${account.configured ? "ключи подключены" : "не настроен"}</p>
@@ -3338,11 +3345,11 @@ function renderAccounts() {
           </div>
           <dl class="account-meta">
             ${
-              isOzon
-                ? `<div><dt>Client-Id</dt><dd>${escapeHtml(account.clientId || "-")}</dd></div>`
+              isOzon || isAvito
+                ? `<div><dt>${isAvito ? "Client ID" : "Client-Id"}</dt><dd>${escapeHtml(account.clientId || "-")}</dd></div>`
                 : `<div><dt>Business ID</dt><dd>${escapeHtml(account.businessId || "-")}</dd></div>`
             }
-            <div><dt>API Key</dt><dd>${escapeHtml(account.apiKey || "-")}</dd></div>
+            <div><dt>${isAvito ? "Client Secret" : "API Key"}</dt><dd>${escapeHtml(account.apiKey || "-")}</dd></div>
             ${account.campaignId ? `<div><dt>Campaign</dt><dd>${escapeHtml(account.campaignId)}</dd></div>` : ""}
           </dl>
           <p class="account-test-status" data-account-test-status>Проверка подключения еще не запускалась.</p>
@@ -3363,7 +3370,7 @@ function renderHiddenAccounts() {
     .map((account) => `
       <div class="hidden-account-row" data-account-id="${escapeHtml(account.id)}">
         <div>
-          <span class="market-badge ${escapeHtml(account.marketplace)}">${account.marketplace === "ozon" ? "Ozon" : "Yandex Market"}</span>
+          <span class="market-badge ${escapeHtml(account.marketplace)}">${accountMarketplaceLabel(account.marketplace)}</span>
           <strong>${escapeHtml(account.name)}</strong>
           <small>${escapeHtml(account.id)}</small>
         </div>
@@ -3375,8 +3382,12 @@ function renderHiddenAccounts() {
 
 function updateAccountFormMode() {
   const marketplace = elements.accountMarketplaceInput.value;
-  document.querySelectorAll(".account-ozon-field").forEach((item) => item.classList.toggle("hidden", marketplace !== "ozon"));
+  document.querySelectorAll(".account-clientid-field").forEach((item) => item.classList.toggle("hidden", marketplace === "yandex"));
   document.querySelectorAll(".account-yandex-field").forEach((item) => item.classList.toggle("hidden", marketplace !== "yandex"));
+  const clientIdLabel = document.querySelector("#accountClientIdLabel");
+  if (clientIdLabel) clientIdLabel.textContent = marketplace === "avito" ? "Avito Client ID" : "Ozon Client-Id";
+  const apiKeyLabel = document.querySelector("#accountApiKeyLabel");
+  if (apiKeyLabel) apiKeyLabel.textContent = marketplace === "avito" ? "Avito Client Secret" : "API Key";
 }
 
 function resetAccountForm() {

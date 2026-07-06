@@ -1,6 +1,7 @@
 function normalizeMarketplaceAccount(input = {}, current = {}) {
-  const marketplace = cleanText(input.marketplace || current.marketplace).toLowerCase() === "yandex" ? "yandex" : "ozon";
-  const fallbackName = marketplace === "ozon" ? "Ozon" : "Yandex Market";
+  const rawMarketplace = cleanText(input.marketplace || current.marketplace).toLowerCase();
+  const marketplace = ["yandex", "avito"].includes(rawMarketplace) ? rawMarketplace : "ozon";
+  const fallbackName = marketplace === "ozon" ? "Ozon" : marketplace === "avito" ? "Avito" : "Yandex Market";
   return {
     id: cleanText(input.id || current.id) || `${marketplace}-${crypto.randomUUID().slice(0, 8)}`,
     marketplace,
@@ -74,8 +75,23 @@ function getEnvYandexShops() {
   }
 }
 
+function getEnvAvitoAccounts() {
+  if (!process.env.AVITO_CLIENT_ID || !process.env.AVITO_CLIENT_SECRET) return [];
+  return [
+    {
+      id: "avito",
+      marketplace: "avito",
+      name: process.env.AVITO_NAME || "Avito",
+      clientId: process.env.AVITO_CLIENT_ID,
+      apiKey: process.env.AVITO_CLIENT_SECRET,
+      source: "env",
+      readOnly: true,
+    },
+  ];
+}
+
 function getMarketplaceAccounts() {
-  const envAccounts = [...getEnvOzonAccounts(), ...getEnvYandexShops()];
+  const envAccounts = [...getEnvOzonAccounts(), ...getEnvYandexShops(), ...getEnvAvitoAccounts()];
   const localAccounts = readMarketplaceAccountsSync().map((account) => ({ ...account, source: "local", readOnly: false }));
   const localById = new Map(localAccounts.map((account) => [account.id, account]));
   const hiddenIds = new Set(localAccounts.filter((account) => account.hidden).map((account) => account.id));
@@ -94,7 +110,7 @@ function getMarketplaceAccounts() {
 }
 
 function getHiddenMarketplaceAccounts() {
-  const envById = new Map([...getEnvOzonAccounts(), ...getEnvYandexShops()].map((account) => [account.id, account]));
+  const envById = new Map([...getEnvOzonAccounts(), ...getEnvYandexShops(), ...getEnvAvitoAccounts()].map((account) => [account.id, account]));
   return readMarketplaceAccountsSync()
     .filter((account) => account.hidden)
     .map((account) => ({ ...(envById.get(account.id) || account), ...account, source: "local", readOnly: false }));
@@ -116,7 +132,7 @@ function sanitizeMarketplaceAccount(account = {}) {
     apiKey: account.apiKey ? maskSecret(account.apiKey) : "",
     businessId: account.businessId || "",
     campaignId: account.campaignId || "",
-    configured: account.marketplace === "ozon"
+    configured: account.marketplace === "ozon" || account.marketplace === "avito"
       ? Boolean(account.clientId && account.apiKey)
       : Boolean(account.apiKey && account.businessId),
     source: account.source || "local",
@@ -170,6 +186,36 @@ async function testMarketplaceAccountConnection(account = {}) {
       message: "Yandex Market подключен. Ключи работают, каталог доступен.",
       checkedAt: new Date().toISOString(),
     };
+  }
+
+  if (marketplace === "avito") {
+    if (!account.clientId || !account.apiKey) {
+      const error = new Error("Для проверки Avito нужны Client ID и Client Secret.");
+      error.statusCode = 400;
+      throw error;
+    }
+    await getAvitoAccessToken(account, { forceRefresh: true });
+    try {
+      const profile = await getAvitoAutoloadProfile(account);
+      return {
+        ok: true,
+        marketplace: "avito",
+        autoloadEnabled: Boolean(profile?.autoload_enabled),
+        message: "Avito подключен. Ключи работают, профиль автозагрузки доступен.",
+        checkedAt: new Date().toISOString(),
+      };
+    } catch (error) {
+      if (error?.statusCode === 404) {
+        return {
+          ok: true,
+          marketplace: "avito",
+          autoloadEnabled: false,
+          message: "Avito подключен. Ключи работают, профиль автозагрузки ещё не создан.",
+          checkedAt: new Date().toISOString(),
+        };
+      }
+      throw error;
+    }
   }
 
   const error = new Error("Неизвестный маркетплейс.");
@@ -303,6 +349,23 @@ function getYandexShops({ includeSyncDisabled = false } = {}) {
   return getMarketplaceAccounts()
     .filter((account) => account.marketplace === "yandex")
     .filter((account) => includeSyncDisabled || isAccountSyncEnabled(account));
+}
+
+function getAvitoAccounts({ includeSyncDisabled = false } = {}) {
+  return getMarketplaceAccounts()
+    .filter((account) => account.marketplace === "avito")
+    .filter((account) => includeSyncDisabled || isAccountSyncEnabled(account));
+}
+
+function getAvitoAccountByTarget(targetId) {
+  const accounts = getAvitoAccounts();
+  const target = cleanText(targetId || "");
+  if (!target || target === "avito") return accounts[0] || null;
+  return accounts.find((account) => (
+    cleanText(account.id) === target
+    || cleanText(account.clientId) === target
+    || cleanText(account.name).toLowerCase() === target.toLowerCase()
+  )) || null;
 }
 
 function getOzonAccountByTarget(targetId) {

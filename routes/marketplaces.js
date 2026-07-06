@@ -18,8 +18,14 @@ function registerMarketplaceRoutes(app, deps) {
     appendAudit,
     getEnvOzonAccounts,
     getEnvYandexShops,
+    getEnvAvitoAccounts,
     accountPayloadWithSecretFallback,
   } = deps;
+  const allEnvAccounts = () => [
+    ...getEnvOzonAccounts(),
+    ...getEnvYandexShops(),
+    ...(typeof getEnvAvitoAccounts === "function" ? getEnvAvitoAccounts() : []),
+  ];
 
 app.get("/api/marketplaces", (_request, response) => {
   readAppSettings()
@@ -97,6 +103,9 @@ app.post("/api/marketplace-accounts", async (request, response, next) => {
     if (input.marketplace === "yandex" && (!input.businessId || !input.apiKey)) {
       return response.status(400).json({ error: "Для Yandex нужны Business ID и Api-Key." });
     }
+    if (input.marketplace === "avito" && (!input.clientId || !input.apiKey)) {
+      return response.status(400).json({ error: "Для Avito нужны Client ID и Client Secret." });
+    }
 
     const index = localAccounts.findIndex((account) => account.id === input.id);
     if (index >= 0) localAccounts[index] = normalizeMarketplaceAccount(input, localAccounts[index]);
@@ -119,7 +128,7 @@ app.patch("/api/marketplace-accounts/:id", async (request, response, next) => {
   try {
     const localAccounts = await readMarketplaceAccounts();
     const index = localAccounts.findIndex((account) => account.id === request.params.id);
-    const envAccount = [...getEnvOzonAccounts(), ...getEnvYandexShops()].find((account) => account.id === request.params.id);
+    const envAccount = allEnvAccounts().find((account) => account.id === request.params.id);
     if (index < 0 && !envAccount) return response.status(404).json({ error: "Кабинет не найден." });
 
     if (index >= 0) {
@@ -152,7 +161,7 @@ app.patch("/api/marketplace-accounts/:id", async (request, response, next) => {
 app.delete("/api/marketplace-accounts/:id", async (request, response, next) => {
   try {
     const localAccounts = await readMarketplaceAccounts();
-    const envAccount = [...getEnvOzonAccounts(), ...getEnvYandexShops()].find((account) => account.id === request.params.id);
+    const envAccount = allEnvAccounts().find((account) => account.id === request.params.id);
     const index = localAccounts.findIndex((account) => account.id === request.params.id);
     let nextAccounts = localAccounts.filter((account) => account.id !== request.params.id);
     if (envAccount) {

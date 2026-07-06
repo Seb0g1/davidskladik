@@ -115,7 +115,7 @@ function normalizeAppRole(value, fallback = "manager") {
 // Page keys must match AppRoute keys in frontend/src/App.tsx.
 const APP_PAGE_KEYS = [
   "dashboard", "warehouse", "suppliers", "picking-list", "reviews", "chats",
-  "import", "statistics", "settings", "questions", "prices", "operations",
+  "import", "avito", "statistics", "settings", "questions", "prices", "operations",
   "supplier-cart", "recovery-queue", "problem-products", "finance",
   "consignment", "system", "ai-drafts", "no-supplier",
 ];
@@ -151,6 +151,7 @@ const API_PREFIX_PAGE_KEYS = [
   ["/api/warehouse/prices", "prices"],
   ["/api/problem-products", "problem-products"],
   ["/api/ozon-yandex-import", "import"],
+  ["/api/avito", "avito"],
 ];
 
 function apiPathPageKey(pathname = "") {

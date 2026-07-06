@@ -9,6 +9,7 @@ import { ReviewsPage } from "./routes/ReviewsPage";
 import { QuestionsPage } from "./routes/QuestionsPage";
 import { ChatsPage } from "./routes/ChatsPage";
 import { ImportPage } from "./routes/ImportPage";
+import { AvitoPage } from "./routes/AvitoPage";
 import { OperationsPage } from "./routes/OperationsPage";
 import { SettingsPage } from "./routes/SettingsPage";
 import { AiDraftsPage } from "./routes/AiDraftsPage";
@@ -24,7 +25,7 @@ import { SuppliersPage } from "./routes/SuppliersPage";
 import { StatisticsPage } from "./routes/StatisticsPage";
 import { ConsignmentPage } from "./routes/ConsignmentPage";
 
-type AppRoute = "dashboard" | "import" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier";
+type AppRoute = "dashboard" | "import" | "avito" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -35,6 +36,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "reviews", href: "/app/reviews", label: "Отзывы", icon: <Star size={16} /> },
   { route: "chats", href: "/app/chats", label: "Чаты", icon: <MessageCircle size={16} /> },
   { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Upload size={16} /> },
+  { route: "avito", href: "/app/avito", label: "Импорт на Avito", icon: <Upload size={16} /> },
   { route: "statistics", href: "/app/statistics", label: "Статистика", icon: <BarChart3 size={16} /> },
   { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
   { route: "questions", href: "/app/questions", label: "Вопросы", icon: <HelpCircle size={16} /> },
@@ -62,6 +64,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/questions")) return "questions";
   if (path.startsWith("/app/chats")) return "chats";
   if (path.startsWith("/app/import")) return "import";
+  if (path.startsWith("/app/avito")) return "avito";
   if (path.startsWith("/app/prices")) return "prices";
   if (path.startsWith("/app/problem-products")) return "problem-products";
   if (path.startsWith("/app/finance")) return "finance";
@@ -266,6 +269,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "questions" ? <QuestionsPage /> : null}
       {sessionReady && !accessDenied && route === "chats" ? <ChatsPage /> : null}
       {sessionReady && !accessDenied && route === "import" ? <ImportPage /> : null}
+      {sessionReady && !accessDenied && route === "avito" ? <AvitoPage /> : null}
       {sessionReady && !accessDenied && route === "prices" ? <PricesPage /> : null}
       {sessionReady && !accessDenied && route === "problem-products" ? <ProblemProductsPage /> : null}
       {sessionReady && !accessDenied && route === "finance" ? <FinancePage /> : null}

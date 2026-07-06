@@ -90,6 +90,8 @@ const aiImageJobsPath = path.join(dataDir, "ai-image-jobs.json");
 const supplierCartStatePath = path.join(dataDir, "supplier-cart-state.json");
 const supplierPickingListPath = path.join(dataDir, "supplier-picking-list.json");
 const financeStatePath = path.join(dataDir, "finance-state.json");
+const avitoListingsPath = path.join(dataDir, "avito-listings.json");
+const avitoImportRulesPath = path.join(dataDir, "avito-import-rules.json");
 const ozonProductRulesPath = path.join(configDir, "ozon-product-rules.json");
 const ozonProductRulesExamplePath = path.join(configDir, "ozon-product-rules.example.json");
 const buildVersion = cleanBuildVersion(process.env.APP_BUILD_VERSION || process.env.GIT_COMMIT || readGitCommit());
@@ -195,6 +197,7 @@ const warehouseViewCacheMs = Math.max(1000, Number(process.env.WAREHOUSE_VIEW_CA
 const ozonWarehouseListEnabled = process.env.OZON_WAREHOUSE_LIST_ENABLED === "true";
 const ozonBaseUrl = "https://api-seller.ozon.ru";
 const yandexBaseUrl = "https://api.partner.market.yandex.ru";
+const avitoBaseUrl = "https://api.avito.ru";
 const yandexCleanupDeleteLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_CLEANUP_DELETE_LIMIT || 10000) || 10000));
 const yandexImportSendLimit = Math.max(1, Math.min(10000, Number(process.env.YANDEX_IMPORT_SEND_LIMIT || 5000) || 5000));
 const yandexStockCampaignIds = new Set(
