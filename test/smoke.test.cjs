@@ -1018,6 +1018,39 @@ test("Ozon EMPTY_STOCK visibility does not override a positive seller stock read
   assert.equal(pickOzonState(flaggedProduct, { visibility: "EMPTY_STOCK" }, zeroStockInfo).code, "active");
 });
 
+test("Ozon v3 info is_archived/is_autoarchived flags drive archive state both ways (autoarchive regression)", () => {
+  const zeroStockInfo = { stock: 0, present: 0, reserved: 0, warehouses: [] };
+
+  // Autoarchived product: /v3/product/info/list has no visibility/state strings, only booleans.
+  // Before the fix this read as out_of_stock and the product never left the Ozon archive.
+  const autoArchived = pickOzonState({}, { is_archived: false, is_autoarchived: true }, zeroStockInfo);
+  assert.equal(autoArchived.code, "archived");
+  assert.equal(autoArchived.archived, true);
+  assert.equal(pickOzonState({}, { is_archived: true, is_autoarchived: false }, zeroStockInfo).code, "archived");
+
+  // Explicit false flags must CLEAR a stale sticky archived flag after a successful unarchive,
+  // otherwise the unarchive queue retries the same product forever.
+  const cleared = pickOzonState({ archived: true }, { is_archived: false, is_autoarchived: false }, { stock: 3, present: 3, reserved: 0 });
+  assert.equal(cleared.code, "active");
+  assert.equal(cleared.archived, false);
+
+  // Without explicit flags the legacy sticky detection still applies (full /v3/product/list import).
+  assert.equal(pickOzonState({ archived: true }, {}, zeroStockInfo).code, "archived");
+  assert.equal(pickOzonState({}, { visibility: "ARCHIVED" }, zeroStockInfo).code, "archived");
+
+  // applyOzonInfoToWarehouseProduct must recompute marketplaceState when only the archive
+  // booleans are present (no stockInfo/visibility/status), not keep the stale stored state.
+  const product = normalizeWarehouseProduct({
+    id: "ozon:test:auto-arch",
+    target: "ozon",
+    offerId: "AUTO-ARCH-1",
+    marketplaceState: { code: "active", label: "Активен Ozon", stock: 5, archived: false },
+  });
+  const applied = applyOzonInfoToWarehouseProduct(product, { is_archived: false, is_autoarchived: true }, { id: "ozon" }, {}, {});
+  assert.equal(applied.marketplaceState.code, "archived");
+  assert.equal(applied.marketplaceState.archived, true);
+});
+
 test("Ozon /v4/product/info/stocks fixture: type-keyed FBS/FBO stocks parse into correct sums (contract)", async () => {
   // Saved sample of the real API shape (stocks keyed by type, empty warehouse_ids for
   // FBS/rfbs). Guards against the API changing shape in a way our parser misses.

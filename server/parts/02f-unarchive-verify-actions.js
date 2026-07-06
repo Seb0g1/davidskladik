@@ -1,7 +1,9 @@
 function ozonInfoLooksArchived(info = {}) {
   const visibility = cleanText(info.visibility).toUpperCase();
   const state = cleanText(info.status?.state || info.state || info.state_name || info.status_name).toUpperCase();
-  return Boolean(info.archived || visibility === "ARCHIVED" || state === "ARCHIVED");
+  // /v3/product/info/list reports archive state via is_archived/is_autoarchived booleans only —
+  // without reading them a still-archived product verifies as "active" and never gets retried.
+  return Boolean(info.archived || info.is_archived || info.is_autoarchived || visibility === "ARCHIVED" || state === "ARCHIVED");
 }
 
 async function verifyOzonUnarchiveActions(products = [], actions = [], options = {}) {

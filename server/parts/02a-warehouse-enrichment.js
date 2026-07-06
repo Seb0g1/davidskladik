@@ -22,6 +22,7 @@ function applyOzonInfoToWarehouseProduct(product, info = {}, account = {}, stock
     pickOzonCabinetListedPrice(priceDetails) || parseMoneyValue(info.price) || product.marketplacePrice || null;
   const hasStockInfo = Boolean(stockInfo && Object.keys(stockInfo).length);
   const marketplaceState = hasStockInfo || info.visibility || info.status || info.state
+    || typeof info.is_archived === "boolean" || typeof info.is_autoarchived === "boolean"
     ? pickOzonState(product, info, stockInfo)
     : product.marketplaceState;
   return normalizeWarehouseProduct({

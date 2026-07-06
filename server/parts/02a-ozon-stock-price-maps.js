@@ -52,7 +52,14 @@ function pickOzonState(product = {}, info = {}, stockInfo = {}) {
   const state = cleanText(info.status?.state || info.state || product.status || product.state).toUpperCase();
   const stateName = cleanText(info.status?.state_name || info.state_name || info.status_name);
   const stateDescription = cleanText(info.status?.state_description || info.state_description || info.status_description);
-  const archived = Boolean(product.archived || info.archived || visibility === "ARCHIVED" || state === "ARCHIVED");
+  // /v3/product/info/list has no visibility/state strings — archive state comes only from the
+  // explicit is_archived/is_autoarchived booleans. When present they are authoritative in both
+  // directions (detect autoarchive AND clear the flag after a successful unarchive); otherwise
+  // fall back to the legacy sticky detection used by the full /v3/product/list import.
+  const hasExplicitArchiveFlags = typeof info.is_archived === "boolean" || typeof info.is_autoarchived === "boolean";
+  const archived = hasExplicitArchiveFlags
+    ? Boolean(info.is_archived || info.is_autoarchived)
+    : Boolean(product.archived || info.archived || visibility === "ARCHIVED" || state === "ARCHIVED");
   const present = Number(stockInfo.present || 0);
   const reserved = Number(stockInfo.reserved || 0);
   const warehouses = Array.isArray(stockInfo.warehouses) ? stockInfo.warehouses : [];
@@ -60,7 +67,7 @@ function pickOzonState(product = {}, info = {}, stockInfo = {}) {
   const hasStocks = Boolean(product.has_fbs_stocks || product.hasFbsStocks || stock > 0);
 
   if (archived) {
-    return normalizeMarketplaceState({ code: "archived", label: "В архиве Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
+    return normalizeMarketplaceState({ code: "archived", label: info.is_autoarchived ? "В автоархиве Ozon" : "В архиве Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
   }
   // Ozon reports visibility=EMPTY_STOCK for FBS/rfbs products even when the seller's own
   // stock is positive (it reflects Ozon's cross-dock stock, not ours) — don't let that alone

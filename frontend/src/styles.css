@@ -6531,6 +6531,44 @@ textarea:focus-visible,
   max-width: 320px;
 }
 
+.consignment-group-row {
+  background: rgba(var(--accent-rgb), 0.06);
+  font-weight: 600;
+}
+
+.consignment-group-row .muted-note {
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.consignment-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.consignment-group-lot > span:first-child {
+  padding-left: 26px;
+  color: var(--muted);
+}
+
+.consignment-operations-filters {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.consignment-operations-filters input {
+  max-width: 240px;
+}
+
 .consignment-pm-results {
   display: flex;
   flex-direction: column;

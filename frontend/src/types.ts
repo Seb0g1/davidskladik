@@ -920,15 +920,6 @@ export const SupplierReplaceResponseSchema = z.object({
   row: z.record(z.string(), z.unknown()).optional().nullable(),
 }).passthrough();
 
-export const ConsignmentMpSyncSchema = z.object({
-  status: z.coerce.string().optional().default(""),
-  matched: z.number().optional().default(0),
-  created: z.number().optional().default(0),
-  noStock: z.number().optional().default(0),
-  alreadyBooked: z.number().optional().default(0),
-  errors: z.number().optional().default(0),
-}).passthrough();
-
 export type ConsignmentItem = z.infer<typeof ConsignmentItemSchema>;
 export type ConsignmentOperation = z.infer<typeof ConsignmentOperationSchema>;
 

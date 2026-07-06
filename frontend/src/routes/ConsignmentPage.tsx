@@ -1,12 +1,12 @@
-import { useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, Boxes, Check, CloudDownload, HandCoins, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, TrendingUp, Wallet, X } from "lucide-react";
+import { Banknote, Boxes, Check, ChevronDown, ChevronRight, HandCoins, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, TrendingUp, Wallet, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import {
   ConsignmentItem,
   ConsignmentItemsSchema,
-  ConsignmentMpSyncSchema,
   ConsignmentMutationSchema,
+  ConsignmentOperation,
   ConsignmentOperationsSchema,
   ConsignmentPmSearchSchema,
   ConsignmentSummarySchema,
@@ -18,9 +18,16 @@ import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { errorMessage } from "../lib/common";
 
+// Все цены на странице реализации ведутся в долларах.
 const money = (value: unknown) => {
   const n = Number(value || 0);
-  return `${(Math.round(n * 100) / 100).toLocaleString("ru-RU")} ₽`;
+  return `${(Math.round(n * 100) / 100).toLocaleString("ru-RU")} $`;
+};
+
+const pmPriceText = (row: { price?: number | null; currency?: string }) => {
+  if (row.price === null || row.price === undefined) return "-";
+  const symbol = ["RUB", "RUR"].includes(String(row.currency || "USD").toUpperCase()) ? "₽" : "$";
+  return `${(Math.round(Number(row.price) * 100) / 100).toLocaleString("ru-RU")} ${symbol}`;
 };
 
 const dateText = (value: unknown) => {
@@ -45,6 +52,84 @@ const OPERATION_LABELS: Record<string, string> = {
 
 type StockAction = { item: ConsignmentItem; mode: "sale" | "writeoff" | "receive" };
 
+type ItemGroup = {
+  key: string;
+  article: string;
+  items: ConsignmentItem[];
+  quantity: number;
+  avgPurchasePrice: number;
+  avgSalePrice: number;
+  purchaseTotal: number;
+};
+
+// Средняя цена взвешена по остатку партий; когда всё распродано — простое среднее.
+const averagePrice = (items: ConsignmentItem[], pick: (item: ConsignmentItem) => number, totalQuantity: number) => {
+  if (totalQuantity > 0) {
+    return items.reduce((sum, item) => sum + pick(item) * item.quantity, 0) / totalQuantity;
+  }
+  return items.length ? items.reduce((sum, item) => sum + pick(item), 0) / items.length : 0;
+};
+
+const groupItemsByArticle = (list: ConsignmentItem[]): ItemGroup[] => {
+  const groups = new Map<string, ConsignmentItem[]>();
+  for (const item of list) {
+    const article = item.article.trim().toLowerCase();
+    const key = article ? `article:${article}` : `single:${item.id}`;
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(item);
+    else groups.set(key, [item]);
+  }
+  return Array.from(groups.entries()).map(([key, items]) => {
+    const quantity = items.reduce((sum, item) => sum + item.quantity, 0);
+    return {
+      key,
+      article: items[0].article,
+      items,
+      quantity,
+      avgPurchasePrice: averagePrice(items, (item) => item.purchasePrice, quantity),
+      avgSalePrice: averagePrice(items, (item) => item.salePrice, quantity),
+      purchaseTotal: items.reduce((sum, item) => sum + item.purchasePrice * item.quantity, 0),
+    };
+  });
+};
+
+const operationPrice = (op: ConsignmentOperation) => (op.type === "sale" || op.type === "return" ? op.unitSale : op.unitPurchase);
+
+const OPERATION_SORT_OPTIONS = [
+  { value: "date_desc", label: "Сначала новые" },
+  { value: "date_asc", label: "Сначала старые" },
+  { value: "name_asc", label: "Товар А→Я" },
+  { value: "name_desc", label: "Товар Я→А" },
+  { value: "price_desc", label: "Цена: по убыванию" },
+  { value: "price_asc", label: "Цена: по возрастанию" },
+  { value: "qty_desc", label: "Кол-во: по убыванию" },
+  { value: "qty_asc", label: "Кол-во: по возрастанию" },
+  { value: "type_asc", label: "По типу операции" },
+];
+
+const sortOperations = (list: ConsignmentOperation[], sort: string): ConsignmentOperation[] => {
+  const time = (op: ConsignmentOperation) => {
+    const value = new Date(op.createdAt || 0).getTime();
+    return Number.isFinite(value) ? value : 0;
+  };
+  const byName = (a: ConsignmentOperation, b: ConsignmentOperation) =>
+    String(a.itemName || "").localeCompare(String(b.itemName || ""), "ru");
+  const byLabel = (op: ConsignmentOperation) => OPERATION_LABELS[op.type] || op.type;
+  const sorted = [...list];
+  switch (sort) {
+    case "date_asc": sorted.sort((a, b) => time(a) - time(b)); break;
+    case "name_asc": sorted.sort((a, b) => byName(a, b) || time(b) - time(a)); break;
+    case "name_desc": sorted.sort((a, b) => byName(b, a) || time(b) - time(a)); break;
+    case "price_desc": sorted.sort((a, b) => operationPrice(b) - operationPrice(a) || time(b) - time(a)); break;
+    case "price_asc": sorted.sort((a, b) => operationPrice(a) - operationPrice(b) || time(b) - time(a)); break;
+    case "qty_desc": sorted.sort((a, b) => b.quantity - a.quantity || time(b) - time(a)); break;
+    case "qty_asc": sorted.sort((a, b) => a.quantity - b.quantity || time(b) - time(a)); break;
+    case "type_asc": sorted.sort((a, b) => byLabel(a).localeCompare(byLabel(b), "ru") || time(b) - time(a)); break;
+    default: sorted.sort((a, b) => time(b) - time(a));
+  }
+  return sorted;
+};
+
 const emptyAddForm = {
   name: "",
   article: "",
@@ -67,6 +152,9 @@ export function ConsignmentPage() {
   const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
   const [payoutForm, setPayoutForm] = useState({ kind: "sponsor_payout", amount: "", note: "" });
   const [opFilter, setOpFilter] = useState("all");
+  const [opSearch, setOpSearch] = useState("");
+  const [opSort, setOpSort] = useState("date_desc");
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["consignment"] });
 
@@ -148,11 +236,6 @@ export function ConsignmentPage() {
     onSuccess: invalidate,
   });
 
-  const mpSync = useMutation({
-    mutationFn: () => fetchJson("/api/consignment/sync-marketplace", ConsignmentMpSyncSchema, mutationBody({})),
-    onSuccess: invalidate,
-  });
-
   const payout = useMutation({
     mutationFn: () => fetchJson("/api/consignment/payouts", ConsignmentMutationSchema, mutationBody({
       kind: payoutForm.kind,
@@ -175,13 +258,13 @@ export function ConsignmentPage() {
       fromBalance: false,
     });
   };
-  const applyPmRow = (row: { article: string; name: string; supplierName: string; priceRub?: number | null }) => {
+  const applyPmRow = (row: { article: string; name: string; supplierName: string; price?: number | null }) => {
     setAddForm((current) => ({
       ...current,
       name: row.name || current.name,
       article: row.article || current.article,
       supplierName: row.supplierName || current.supplierName,
-      purchasePrice: row.priceRub !== null && row.priceRub !== undefined ? String(row.priceRub) : current.purchasePrice,
+      purchasePrice: row.price !== null && row.price !== undefined ? String(row.price) : current.purchasePrice,
     }));
     setPmOpen(false);
   };
@@ -190,6 +273,17 @@ export function ConsignmentPage() {
     ? (action.mode === "sale" ? "Продажа" : action.mode === "writeoff" ? "Списание" : "Приход / докупка")
     : "";
 
+  const itemGroups = useMemo(() => groupItemsByArticle(items.data?.items || []), [items.data]);
+  const visibleOperations = useMemo(() => {
+    const query = opSearch.trim().toLowerCase();
+    const list = (operations.data?.operations || []).filter((op) => {
+      if (!query) return true;
+      const label = OPERATION_LABELS[op.type] || op.type;
+      return [op.itemName, op.note, label].some((text) => String(text || "").toLowerCase().includes(query));
+    });
+    return sortOperations(list, opSort);
+  }, [operations.data, opSearch, opSort]);
+
   return (
     <section className="page-section consignment-page">
       <PageHeader
@@ -197,22 +291,12 @@ export function ConsignmentPage() {
         subtitle="Товар от спонсора: остатки, продажи с профитом 50/50, списания, возвраты, общий баланс и закупки со свободных денег."
         action={(
           <div className="row-actions">
-            <button className="secondary-action" type="button" disabled={mpSync.isPending} onClick={() => mpSync.mutate()} title="Подтянуть продажи с Ozon и Яндекс Маркета по артикулу (работает и автоматически каждые 10 минут)">
-              {mpSync.isPending ? <Loader2 className="spin" size={16} /> : <CloudDownload size={16} />} Продажи с МП
-            </button>
             <button className="secondary-action" type="button" onClick={invalidate}>
               <RefreshCw size={16} /> Обновить
             </button>
           </div>
         )}
       />
-      {mpSync.isSuccess ? (
-        <div className="success-strip">
-          Синк с маркетплейсами: найдено {Number(mpSync.data?.matched || 0)}, оформлено продаж {Number(mpSync.data?.created || 0)}
-          {Number(mpSync.data?.noStock || 0) ? `, без остатка ${Number(mpSync.data?.noStock || 0)} (оформятся после прихода)` : ""}.
-        </div>
-      ) : null}
-      {mpSync.error ? <div className="inline-error">{errorMessage(mpSync.error)}</div> : null}
 
       <section className="dashboard-metrics">
         <Stat label="Капитализация (по закупке)" value={money(s?.capitalization)} tone="accent" icon={<Boxes size={18} />} />
@@ -263,7 +347,7 @@ export function ConsignmentPage() {
                 <span>{row.article || "-"}</span>
                 <span title={row.name}>{row.name || "-"}</span>
                 <span>{row.supplierName || "-"}</span>
-                <span>{row.priceRub !== null && row.priceRub !== undefined ? money(row.priceRub) : "-"}</span>
+                <span>{pmPriceText(row)}</span>
               </button>
             ))}
             {!pmSearch.isLoading && !pmSearch.data?.items?.length ? <div className="empty-state">Ничего не найдено в номенклатуре.</div> : null}
@@ -283,8 +367,8 @@ export function ConsignmentPage() {
           </datalist>
         </div>
         <div className="settings-form-row">
-          <input type="number" min="0" step="0.01" placeholder="Закупка, ₽" value={addForm.purchasePrice} onChange={(event) => setAddForm({ ...addForm, purchasePrice: event.target.value })} />
-          <input type="number" min="0" step="0.01" placeholder="Продажа, ₽" value={addForm.salePrice} onChange={(event) => setAddForm({ ...addForm, salePrice: event.target.value })} />
+          <input type="number" min="0" step="0.01" placeholder="Закупка, $" value={addForm.purchasePrice} onChange={(event) => setAddForm({ ...addForm, purchasePrice: event.target.value })} />
+          <input type="number" min="0" step="0.01" placeholder="Продажа, $" value={addForm.salePrice} onChange={(event) => setAddForm({ ...addForm, salePrice: event.target.value })} />
           <input type="number" min="0" placeholder="Кол-во" value={addForm.quantity} onChange={(event) => setAddForm({ ...addForm, quantity: event.target.value })} />
           <input placeholder="Примечание" value={addForm.note} onChange={(event) => setAddForm({ ...addForm, note: event.target.value })} />
           <label className="toggle-row" title="Если включено — сумма закупки спишется с общего баланса">
@@ -320,7 +404,7 @@ export function ConsignmentPage() {
                 type="number"
                 min="0"
                 step="0.01"
-                placeholder={action.mode === "sale" ? "Цена продажи, ₽" : "Цена закупки, ₽"}
+                placeholder={action.mode === "sale" ? "Цена продажи, $" : "Цена закупки, $"}
                 value={actionForm.price}
                 onChange={(event) => setActionForm({ ...actionForm, price: event.target.value })}
               />
@@ -364,45 +448,74 @@ export function ConsignmentPage() {
         <div className="table-head">
           <span>Товар</span><span>Артикул</span><span>Поставщик</span><span>Закупка</span><span>Продажа</span><span>Кол-во</span><span>Сумма (закупка)</span><span>Действия</span>
         </div>
-        {(items.data?.items || []).map((item) => {
-          const draft = priceDrafts[item.id];
-          const draftValue = draft ?? String(item.salePrice);
-          const dirty = draft !== undefined && Number(draft) !== item.salePrice;
+        {itemGroups.map((group) => {
+          const renderItemRow = (item: ConsignmentItem, lot = false) => {
+            const draft = priceDrafts[item.id];
+            const draftValue = draft ?? String(item.salePrice);
+            const dirty = draft !== undefined && Number(draft) !== item.salePrice;
+            return (
+              <div className={lot ? "table-row consignment-group-lot" : "table-row"} key={item.id}>
+                <span data-label="Товар">{item.name}</span>
+                <span data-label="Артикул">{item.article || "-"}</span>
+                <span data-label="Поставщик">{item.supplierName || "-"}</span>
+                <span data-label="Закупка">{money(item.purchasePrice)}</span>
+                <span data-label="Продажа" className="finance-inline-edit">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={draftValue}
+                    onChange={(event) => setPriceDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
+                    style={{ width: 90 }}
+                  />
+                  {dirty ? (
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      title="Сохранить цену продажи"
+                      disabled={savePrice.isPending}
+                      onClick={() => savePrice.mutate({ id: item.id, salePrice: Number(draft || 0) })}
+                    >
+                      {savePrice.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
+                    </button>
+                  ) : null}
+                </span>
+                <span data-label="Кол-во">{item.quantity} шт</span>
+                <span data-label="Сумма">{money(item.purchasePrice * item.quantity)}</span>
+                <span data-label="Действия" className="row-actions">
+                  <button className="secondary-action" type="button" title="Продать" disabled={!item.quantity} onClick={() => openAction(item, "sale")}><ShoppingCart size={14} /></button>
+                  <button className="secondary-action" type="button" title="Списать" disabled={!item.quantity} onClick={() => openAction(item, "writeoff")}><PackageMinus size={14} /></button>
+                  <button className="secondary-action" type="button" title="Приход / докупка" onClick={() => openAction(item, "receive")}><PackagePlus size={14} /></button>
+                </span>
+              </div>
+            );
+          };
+          if (group.items.length === 1) return renderItemRow(group.items[0]);
+          const expanded = Boolean(expandedGroups[group.key]);
+          const toggle = () => setExpandedGroups((current) => ({ ...current, [group.key]: !expanded }));
+          const supplierNames = Array.from(new Set(group.items.map((item) => item.supplierName).filter(Boolean))).join(", ");
           return (
-            <div className="table-row" key={item.id}>
-              <span data-label="Товар">{item.name}</span>
-              <span data-label="Артикул">{item.article || "-"}</span>
-              <span data-label="Поставщик">{item.supplierName || "-"}</span>
-              <span data-label="Закупка">{money(item.purchasePrice)}</span>
-              <span data-label="Продажа" className="finance-inline-edit">
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={draftValue}
-                  onChange={(event) => setPriceDrafts((current) => ({ ...current, [item.id]: event.target.value }))}
-                  style={{ width: 90 }}
-                />
-                {dirty ? (
-                  <button
-                    className="secondary-action"
-                    type="button"
-                    title="Сохранить цену продажи"
-                    disabled={savePrice.isPending}
-                    onClick={() => savePrice.mutate({ id: item.id, salePrice: Number(draft || 0) })}
-                  >
-                    {savePrice.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />}
+            <Fragment key={group.key}>
+              <div className="table-row consignment-group-row">
+                <span data-label="Товар">
+                  <button type="button" className="consignment-group-toggle" onClick={toggle} title={expanded ? "Свернуть партии" : "Показать партии"}>
+                    {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />} {group.items[0].name}
                   </button>
-                ) : null}
-              </span>
-              <span data-label="Кол-во">{item.quantity} шт</span>
-              <span data-label="Сумма">{money(item.purchasePrice * item.quantity)}</span>
-              <span data-label="Действия" className="row-actions">
-                <button className="secondary-action" type="button" title="Продать" disabled={!item.quantity} onClick={() => openAction(item, "sale")}><ShoppingCart size={14} /></button>
-                <button className="secondary-action" type="button" title="Списать" disabled={!item.quantity} onClick={() => openAction(item, "writeoff")}><PackageMinus size={14} /></button>
-                <button className="secondary-action" type="button" title="Приход / докупка" onClick={() => openAction(item, "receive")}><PackagePlus size={14} /></button>
-              </span>
-            </div>
+                </span>
+                <span data-label="Артикул">{group.article || "-"}</span>
+                <span data-label="Поставщик">{supplierNames || "-"}</span>
+                <span data-label="Закупка" title="Средняя цена закупки по партиям">{money(group.avgPurchasePrice)} <span className="muted-note">сред.</span></span>
+                <span data-label="Продажа" title="Средняя цена продажи по партиям">{money(group.avgSalePrice)} <span className="muted-note">сред.</span></span>
+                <span data-label="Кол-во">{group.quantity} шт</span>
+                <span data-label="Сумма">{money(group.purchaseTotal)}</span>
+                <span data-label="Действия" className="row-actions">
+                  <button className="secondary-action" type="button" onClick={toggle}>
+                    {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />} {group.items.length} парт.
+                  </button>
+                </span>
+              </div>
+              {expanded ? group.items.map((item) => renderItemRow(item, true)) : null}
+            </Fragment>
           );
         })}
         {savePrice.error ? <div className="inline-error">{errorMessage(savePrice.error)}</div> : null}
@@ -428,7 +541,7 @@ export function ConsignmentPage() {
               { value: "my_profit_payout", label: `Мой профит (${money(s?.myProfit)})` },
             ]}
           />
-          <input type="number" min="0" step="0.01" placeholder="Сумма, ₽" value={payoutForm.amount} onChange={(event) => setPayoutForm({ ...payoutForm, amount: event.target.value })} />
+          <input type="number" min="0" step="0.01" placeholder="Сумма, $" value={payoutForm.amount} onChange={(event) => setPayoutForm({ ...payoutForm, amount: event.target.value })} />
           <input placeholder="Примечание" value={payoutForm.note} onChange={(event) => setPayoutForm({ ...payoutForm, note: event.target.value })} />
           <button
             className="primary-action"
@@ -449,27 +562,40 @@ export function ConsignmentPage() {
             <span>История</span>
             <h3>Операции</h3>
           </div>
-          <SelectField
-            ariaLabel="Фильтр операций"
-            value={opFilter}
-            onChange={setOpFilter}
-            options={[
-              { value: "all", label: "Все операции" },
-              { value: "sale", label: "Продажи" },
-              { value: "receive", label: "Приходы" },
-              { value: "purchase", label: "Закупки с баланса" },
-              { value: "writeoff", label: "Списания" },
-              { value: "return", label: "Возвраты" },
-              { value: "sponsor_payout", label: "Выплаты спонсору" },
-              { value: "sponsor_profit_payout", label: "Вывод профита спонсора" },
-              { value: "my_profit_payout", label: "Вывод моего профита" },
-            ]}
-          />
+          <div className="row-actions consignment-operations-filters">
+            <input
+              placeholder="Поиск: товар или примечание"
+              value={opSearch}
+              onChange={(event) => setOpSearch(event.target.value)}
+            />
+            <SelectField
+              ariaLabel="Фильтр операций"
+              value={opFilter}
+              onChange={setOpFilter}
+              options={[
+                { value: "all", label: "Все операции" },
+                { value: "sale", label: "Продажи" },
+                { value: "receive", label: "Приходы" },
+                { value: "purchase", label: "Закупки с баланса" },
+                { value: "writeoff", label: "Списания" },
+                { value: "return", label: "Возвраты" },
+                { value: "sponsor_payout", label: "Выплаты спонсору" },
+                { value: "sponsor_profit_payout", label: "Вывод профита спонсора" },
+                { value: "my_profit_payout", label: "Вывод моего профита" },
+              ]}
+            />
+            <SelectField
+              ariaLabel="Сортировка операций"
+              value={opSort}
+              onChange={setOpSort}
+              options={OPERATION_SORT_OPTIONS}
+            />
+          </div>
         </div>
         <div className="table-head">
           <span>Дата</span><span>Операция</span><span>Товар</span><span>Кол-во</span><span>Цена</span><span>На баланс</span><span>Профит (спонсор / мой)</span><span>Примечание</span><span></span>
         </div>
-        {(operations.data?.operations || []).map((op) => (
+        {visibleOperations.map((op) => (
           <div className="table-row" key={op.id}>
             <span data-label="Дата">{dateText(op.createdAt)}</span>
             <span data-label="Операция">
@@ -502,6 +628,7 @@ export function ConsignmentPage() {
         {returnSale.error ? <div className="inline-error">{errorMessage(returnSale.error)}</div> : null}
         {!operations.data?.operations?.length && operations.isLoading ? <ListSkeleton rows={6} /> : null}
         {!operations.data?.operations?.length && !operations.isLoading ? <div className="empty-state">Операций пока нет.</div> : null}
+        {(operations.data?.operations?.length || 0) > 0 && !visibleOperations.length ? <div className="empty-state">По заданному поиску операций не найдено.</div> : null}
       </div>
     </section>
   );
