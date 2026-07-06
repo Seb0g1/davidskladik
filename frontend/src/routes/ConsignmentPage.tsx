@@ -1,8 +1,9 @@
 import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, Boxes, Check, ChevronDown, ChevronRight, HandCoins, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, TrendingUp, Wallet, X } from "lucide-react";
+import { Banknote, Boxes, Check, ChevronDown, ChevronRight, HandCoins, ListPlus, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, Trash2, TrendingUp, Upload, Wallet, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import {
+  ConsignmentBulkCreateSchema,
   ConsignmentItem,
   ConsignmentItemsSchema,
   ConsignmentMutationSchema,
@@ -141,6 +142,8 @@ const emptyAddForm = {
   fromBalance: false,
 };
 
+type DraftItem = typeof emptyAddForm & { draftId: string };
+
 export function ConsignmentPage() {
   const queryClient = useQueryClient();
   const [itemSearch, setItemSearch] = useState("");
@@ -155,6 +158,7 @@ export function ConsignmentPage() {
   const [opSearch, setOpSearch] = useState("");
   const [opSort, setOpSort] = useState("date_desc");
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["consignment"] });
 
@@ -197,6 +201,32 @@ export function ConsignmentPage() {
       invalidate();
     },
   });
+
+  const bulkCreate = useMutation({
+    mutationFn: (drafts: DraftItem[]) => fetchJson("/api/consignment/items/bulk", ConsignmentBulkCreateSchema, mutationBody({
+      items: drafts.map((draft) => ({
+        name: draft.name,
+        article: draft.article,
+        supplierName: draft.supplierName,
+        purchasePrice: Number(draft.purchasePrice || 0),
+        salePrice: Number(draft.salePrice || 0),
+        quantity: Number(draft.quantity || 0),
+        note: draft.note,
+        fromBalance: draft.fromBalance,
+      })),
+    })),
+    onSuccess: () => {
+      setDraftItems([]);
+      invalidate();
+    },
+  });
+
+  const addToDraft = () => {
+    if (!addForm.name.trim()) return;
+    setDraftItems((current) => [...current, { ...addForm, draftId: crypto.randomUUID() }]);
+    setAddForm(emptyAddForm);
+    setPmQuery("");
+  };
 
   const savePrice = useMutation({
     mutationFn: ({ id, salePrice }: { id: string; salePrice: number }) =>
@@ -376,6 +406,15 @@ export function ConsignmentPage() {
             Закупка с баланса
           </label>
           <button
+            className="secondary-action"
+            type="button"
+            title="Добавить товар в список, чтобы потом загрузить всё разом"
+            disabled={!addForm.name.trim()}
+            onClick={addToDraft}
+          >
+            <ListPlus size={16} /> В список
+          </button>
+          <button
             className="primary-action"
             type="button"
             disabled={createItem.isPending || !addForm.name.trim()}
@@ -386,6 +425,64 @@ export function ConsignmentPage() {
         </div>
         {createItem.error ? <div className="inline-error">{errorMessage(createItem.error)}</div> : null}
         {createItem.isSuccess ? <div className="success-strip">Товар добавлен на склад реализации.</div> : null}
+
+        {draftItems.length ? (
+          <div className="consignment-draft-panel">
+            <div className="section-title">
+              <div>
+                <span>Список к загрузке</span>
+                <h3>
+                  {draftItems.length} шт на {money(draftItems.reduce((sum, draft) => sum + Number(draft.purchasePrice || 0) * Number(draft.quantity || 0), 0))} (закупка)
+                </h3>
+              </div>
+              <div className="row-actions">
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={bulkCreate.isPending}
+                  onClick={() => setDraftItems([])}
+                >
+                  <Trash2 size={14} /> Очистить
+                </button>
+                <button
+                  className="primary-action"
+                  type="button"
+                  disabled={bulkCreate.isPending}
+                  onClick={() => bulkCreate.mutate(draftItems)}
+                >
+                  {bulkCreate.isPending ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Загрузить в базу ({draftItems.length})
+                </button>
+              </div>
+            </div>
+            <div className="consignment-draft-head">
+              <span>Товар</span><span>Артикул</span><span>Поставщик</span><span>Закупка</span><span>Продажа</span><span>Кол-во</span><span>Примечание</span><span></span>
+            </div>
+            {draftItems.map((draft) => (
+              <div className="consignment-draft-row" key={draft.draftId}>
+                <span title={draft.name}>{draft.name}</span>
+                <span>{draft.article || "-"}</span>
+                <span>{draft.supplierName || "-"}</span>
+                <span>{money(draft.purchasePrice)}</span>
+                <span>{money(draft.salePrice)}</span>
+                <span>{Number(draft.quantity || 0)} шт{draft.fromBalance ? " · с баланса" : ""}</span>
+                <span title={draft.note}>{draft.note || "-"}</span>
+                <span>
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    title="Убрать из списка"
+                    disabled={bulkCreate.isPending}
+                    onClick={() => setDraftItems((current) => current.filter((row) => row.draftId !== draft.draftId))}
+                  >
+                    <X size={14} />
+                  </button>
+                </span>
+              </div>
+            ))}
+            {bulkCreate.error ? <div className="inline-error">{errorMessage(bulkCreate.error)}</div> : null}
+          </div>
+        ) : null}
+        {bulkCreate.isSuccess && !draftItems.length ? <div className="success-strip">Список загружен: товары добавлены на склад реализации.</div> : null}
       </section>
 
       {action ? (

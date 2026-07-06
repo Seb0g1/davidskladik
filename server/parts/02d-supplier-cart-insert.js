@@ -161,6 +161,31 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
   return { inserted, skipped: readyRows.length - inserted.length, docIds, pickingCreated, verification };
 }
 
+// «Не было» на сборке: отправить прикреплённого поставщика в инактив (snooze привязки),
+// тем же механизмом, что и «Отложить поставщика» в карточке товара.
+async function snoozeSupplierLinkForPickingRow(row = {}, days = 7) {
+  const normalized = normalizeSupplierPickingRow(row);
+  const productId = cleanText(normalized.warehouseProductId);
+  if (!productId) return { ok: false, reason: "no_warehouse_product" };
+  const [product] = await readWarehouseProductsFromPostgresByIds([productId]);
+  if (!product) return { ok: false, reason: "product_not_found" };
+  const partnerId = cleanText(normalized.partnerId).toLowerCase();
+  const supplierName = cleanText(normalized.supplierName).toLowerCase();
+  const link = (product.links || []).find((item) => partnerId && cleanText(item.partnerId).toLowerCase() === partnerId)
+    || (product.links || []).find((item) => supplierName && cleanText(item.supplierName).toLowerCase() === supplierName);
+  if (!link) return { ok: false, reason: "link_not_found" };
+  const normalizedDays = Math.max(1, Math.round(Number(days || 7) || 7));
+  const result = await applyWarehouseLinkSnooze(productId, link.id, normalizedDays, { reason: "picking_missing_snooze" });
+  return {
+    ok: true,
+    productId,
+    linkId: link.id,
+    supplierName: link.supplierName || normalized.supplierName,
+    days: normalizedDays,
+    snoozedUntil: result.snoozedUntil,
+  };
+}
+
 function supplierCartSourceKeyForPickingRow(row = {}) {
   const normalized = normalizeSupplierPickingRow(row);
   return cleanText(normalized.replacementFor || normalized.key.replace(/\|retry:.+$/, ""));

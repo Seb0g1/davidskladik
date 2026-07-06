@@ -638,6 +638,18 @@ export const SupplierCartHistorySchema = z.object({
   history: z.array(z.record(z.string(), z.unknown())).optional().default([]),
 }).passthrough();
 
+export const SupplierCartScheduleSchema = z.object({
+  ok: z.boolean().optional(),
+  settings: z.object({
+    enabled: z.boolean().optional().default(true),
+    autoEnabled: z.boolean().optional().default(true),
+    mode: z.coerce.string().optional().default("draft"),
+    scheduleTimes: z.array(z.coerce.string()).optional().default([]),
+  }).passthrough().optional(),
+  nextAutoRunAt: z.coerce.string().optional().nullable(),
+  lastAutoRunAt: z.coerce.string().optional().nullable(),
+}).passthrough();
+
 export const SupplierPickingRowSchema = z.object({
   key: z.coerce.string(),
   marketplace: z.coerce.string().optional().default(""),
@@ -665,6 +677,8 @@ export const SupplierPickingRowSchema = z.object({
   missingBy: z.coerce.string().optional().default(""),
   missingAt: z.coerce.string().optional().nullable(),
   missingReason: z.coerce.string().optional().default(""),
+  missingSnoozeDays: z.number().optional().default(0),
+  missingPermanent: z.boolean().optional().default(false),
   nextRetryAt: z.coerce.string().optional().nullable(),
   replacementFor: z.coerce.string().optional().default(""),
   replacementKey: z.coerce.string().optional().default(""),
@@ -860,6 +874,12 @@ export const ConsignmentMutationSchema = z.object({
   ok: z.boolean().optional(),
   item: ConsignmentItemSchema.optional().nullable(),
   operation: ConsignmentOperationSchema.optional().nullable(),
+}).passthrough();
+
+export const ConsignmentBulkCreateSchema = z.object({
+  ok: z.boolean().optional(),
+  created: z.number().optional().default(0),
+  items: z.array(ConsignmentItemSchema).optional().default([]),
 }).passthrough();
 
 export const ConsignmentSuppliersSchema = z.object({

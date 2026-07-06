@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, RefreshCw, Repeat2 } from "lucide-react";
-import { fetchJson, mutationBody } from "../api";
-import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartOverrideSchema, SupplierCartPreviewSchema } from "../types";
+import { fetchJson, mutationBody, patchBody } from "../api";
+import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartOverrideSchema, SupplierCartPreviewSchema, SupplierCartScheduleSchema } from "../types";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
@@ -214,6 +214,15 @@ export function SupplierCartPanel() {
     queryKey: ["supplier-cart-history"],
     queryFn: () => fetchJson("/api/supplier-cart/history", SupplierCartHistorySchema),
   });
+  const scheduleQuery = useQuery({
+    queryKey: ["supplier-cart-schedule"],
+    queryFn: () => fetchJson("/api/supplier-cart/schedule", SupplierCartScheduleSchema),
+  });
+  const scheduleMutation = useMutation({
+    mutationFn: (mode: string) => fetchJson("/api/supplier-cart/schedule", SupplierCartScheduleSchema, patchBody({ mode })),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["supplier-cart-schedule"] }),
+  });
+  const cartMode = scheduleQuery.data?.settings?.mode === "auto" ? "auto" : "draft";
   const previewData = generateMutation.data || draftQuery.data;
   const rows = previewData?.rows || [];
   const toggleRow = (key: string) => {
@@ -253,7 +262,30 @@ export function SupplierCartPanel() {
         <label>Лимит строк
           <input type="number" value={limit} onChange={(event) => setLimit(numberValue(event.target.value, 100))} />
         </label>
+        <label>Отправка в PriceMaster
+          <SelectField
+            ariaLabel="Режим автокорзины"
+            value={cartMode}
+            onChange={(mode) => scheduleMutation.mutate(mode)}
+            options={[
+              { value: "draft", label: "Вручную: только список, в PM — кнопкой" },
+              { value: "auto", label: "Автоматически: сразу в PM по расписанию" },
+            ]}
+          />
+        </label>
       </div>
+      {cartMode === "draft" ? (
+        <div className="soft-empty compact">
+          Планировщик ({(scheduleQuery.data?.settings?.scheduleTimes || []).join(", ") || "09:30, 12:00, 15:00"} МСК) только формирует список.
+          В PriceMaster строки попадают после нажатия «Добавить выбранное в PriceMaster» — там они создают неотправленные документы
+          «Запросы клиентов» (заявка поставщику НЕ отсылается автоматически).
+        </div>
+      ) : (
+        <div className="soft-empty compact">
+          Планировщик сам добавляет готовые строки в PriceMaster (документы «Запросы клиентов», без рассылки поставщикам).
+        </div>
+      )}
+      {scheduleMutation.error ? <div className="inline-error">{errorMessage(scheduleMutation.error)}</div> : null}
       {previewData ? (
         <div className="operation-stats">
           <DiagnosticValue label="Найдено" value={previewData.total} />

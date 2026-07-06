@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, CheckCircle2, ClipboardList, Copy, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, X } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ClipboardList, Clock, Copy, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -76,12 +76,20 @@ export function PickingListPage() {
     queryFn: () => fetchJson(`/api/supplier-picking-list/invoices?period=${encodeURIComponent(period)}`, SupplierPickingInvoiceSchema),
   });
   const [replaceKey, setReplaceKey] = useState<string | null>(null);
+  const [missingRow, setMissingRow] = useState<PickingRow | null>(null);
   const updateMutation = useMutation({
-    mutationFn: ({ key, nextStatus }: { key: string; nextStatus: string }) =>
-      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({ status: nextStatus })),
+    mutationFn: ({ key, nextStatus, snoozeDays, permanent }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean }) =>
+      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({
+        status: nextStatus,
+        ...(snoozeDays ? { snoozeDays } : {}),
+        ...(permanent ? { permanent: true } : {}),
+      })),
     onSuccess: (_data, variables) => {
       // «Не было» → сразу предлагаем работнику заменить поставщика для этой строки.
-      if (variables.nextStatus === "missing") setReplaceKey(variables.key);
+      if (variables.nextStatus === "missing") {
+        setMissingRow(null);
+        setReplaceKey(variables.key);
+      }
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
@@ -266,13 +274,20 @@ export function PickingListPage() {
                     <span className="picking-meta-secondary">Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
                     <span>Статус: {statusLabel(row.status)}</span>
                   </div>
-                  {row.status === "missing" && !row.replacementKey ? <small className="danger-text">Поставщик пропущен для этого SKU до {compactDate(row.nextRetryAt)}. Замените поставщика кнопкой ниже или автокорзина попробует другого сама.</small> : null}
+                  {row.status === "missing" && !row.replacementKey ? (
+                    <small className="danger-text">
+                      {row.missingPermanent || !row.nextRetryAt
+                        ? "Поставщик отправлен в инактив насовсем (снять можно в карточке товара или вернув строку в сборку)."
+                        : `Поставщик в инактиве для этого SKU до ${compactDate(row.nextRetryAt)}.`}
+                      {" "}Замените поставщика кнопкой ниже или автокорзина попробует другого сама.
+                    </small>
+                  ) : null}
                   {row.status === "reordered" && row.replacementKey ? <small>Перезаказано у другого поставщика (строка {row.replacementKey}).</small> : null}
                   <div className="picking-actions">
                     <button className="primary-action success-action" type="button" disabled={updateMutation.isPending || row.status !== "open"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "picked" })}>
                       <Check size={16} /> Собрал
                     </button>
-                    <button className="secondary-action danger-action" type="button" disabled={updateMutation.isPending || row.status !== "open"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "missing" })}>
+                    <button className="secondary-action danger-action" type="button" disabled={updateMutation.isPending || row.status !== "open"} onClick={() => setMissingRow(row)}>
                       <X size={16} /> Не было
                     </button>
                     {["open", "missing"].includes(row.status) && !row.replacementKey ? (
@@ -337,6 +352,53 @@ export function PickingListPage() {
           {!invoiceRows.length ? <div className="soft-empty">Собранных строк за период нет.</div> : null}
         </div>
       </section>
+
+      {missingRow ? (
+        <div className="page-access-overlay" onClick={() => setMissingRow(null)}>
+          <div className="picking-missing-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="page-access-head">
+              <div>
+                <span className="muted-note">Товара не было</span>
+                <h3>{missingRow.productName || missingRow.offerId}</h3>
+              </div>
+              <button className="secondary-action" type="button" onClick={() => setMissingRow(null)}><X size={16} /> Отмена</button>
+            </div>
+            <p className="muted-note">
+              Поставщик «{missingRow.supplierName || "-"}» уйдёт в инактив для этого товара: автокорзина и цены переключатся на другого поставщика,
+              строка сборки получит статус «не было». На какой срок отправить поставщика в инактив?
+            </p>
+            <div className="picking-missing-options">
+              {[
+                { label: "Завтра товар появится", hint: "инактив 1 день", snoozeDays: 1 },
+                { label: "2 дня инактива", hint: "поставщик вернётся через 2 дня", snoozeDays: 2 },
+                { label: "3 дня инактива", hint: "поставщик вернётся через 3 дня", snoozeDays: 3 },
+                { label: "5 дней инактива", hint: "поставщик вернётся через 5 дней", snoozeDays: 5 },
+              ].map((option) => (
+                <button
+                  key={option.snoozeDays}
+                  className="secondary-action picking-missing-option"
+                  type="button"
+                  disabled={updateMutation.isPending}
+                  onClick={() => updateMutation.mutate({ key: missingRow.key, nextStatus: "missing", snoozeDays: option.snoozeDays })}
+                >
+                  <Clock size={15} />
+                  <span><strong>{option.label}</strong><small>{option.hint}</small></span>
+                </button>
+              ))}
+              <button
+                className="secondary-action danger-action picking-missing-option"
+                type="button"
+                disabled={updateMutation.isPending}
+                onClick={() => updateMutation.mutate({ key: missingRow.key, nextStatus: "missing", permanent: true })}
+              >
+                {updateMutation.isPending ? <Loader2 className="spin" size={15} /> : <AlertTriangle size={15} />}
+                <span><strong>Товар уходит в инактив</strong><small>насовсем — снять можно в карточке товара</small></span>
+              </button>
+            </div>
+            {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

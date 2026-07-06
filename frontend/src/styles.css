@@ -6569,6 +6569,59 @@ textarea:focus-visible,
   max-width: 240px;
 }
 
+.consignment-draft-panel {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid rgba(var(--accent-rgb), 0.28);
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+.consignment-draft-head,
+.consignment-draft-row {
+  display: grid;
+  grid-template-columns:
+    minmax(170px, 1.4fr)
+    minmax(80px, 0.55fr)
+    minmax(110px, 0.7fr)
+    minmax(84px, 0.5fr)
+    minmax(84px, 0.5fr)
+    minmax(110px, 0.6fr)
+    minmax(120px, 0.8fr)
+    minmax(42px, 0.25fr);
+  gap: 10px;
+  align-items: center;
+  padding: 7px 6px;
+}
+
+.consignment-draft-head {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.consignment-draft-row {
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.consignment-draft-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 980px) {
+  .consignment-draft-head {
+    display: none;
+  }
+
+  .consignment-draft-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .consignment-pm-results {
   display: flex;
   flex-direction: column;
@@ -6642,6 +6695,43 @@ textarea:focus-visible,
   color: var(--muted);
   font-size: 12.5px;
   line-height: 1.45;
+}
+
+/* Сборка: модалка «Не было» — выбор срока инактива поставщика */
+.picking-missing-modal {
+  width: min(520px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid rgba(var(--accent-rgb), 0.3);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+.picking-missing-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.picking-missing-option {
+  justify-content: flex-start;
+  width: 100%;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.picking-missing-option > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.picking-missing-option small {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 /* Page access modal (Настройки -> Сотрудники -> Доступ к страницам) */

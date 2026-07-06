@@ -216,6 +216,74 @@ app.post("/api/consignment/items", requireAdmin, async (request, response, next)
   }
 });
 
+app.post("/api/consignment/items/bulk", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const rows = Array.isArray(request.body?.items) ? request.body.items : [];
+    if (!rows.length) return response.status(400).json({ error: "Список товаров пуст.", code: "consignment_bulk_empty" });
+    if (rows.length > 200) return response.status(400).json({ error: "За один раз можно загрузить не более 200 товаров.", code: "consignment_bulk_too_many" });
+    const prepared = [];
+    for (let index = 0; index < rows.length; index += 1) {
+      const body = rows[index] || {};
+      const name = cleanText(body.name);
+      if (!name) return response.status(400).json({ error: `Строка ${index + 1}: укажите наименование товара.`, code: "consignment_name_required" });
+      const purchasePrice = normalizeFinanceMoney(body.purchasePrice, 0);
+      const salePrice = normalizeFinanceMoney(body.salePrice, 0);
+      if (!(purchasePrice >= 0) || !(salePrice >= 0)) return response.status(400).json({ error: `Строка ${index + 1}: цены не могут быть отрицательными.`, code: "consignment_price_invalid" });
+      prepared.push({
+        name,
+        article: cleanText(body.article) || null,
+        supplierName: cleanText(body.supplierName) || null,
+        partnerId: cleanText(body.partnerId) || null,
+        purchasePrice,
+        salePrice,
+        quantity: consignmentQuantityInput(body.quantity),
+        note: cleanText(body.note) || null,
+        fromBalance: body.fromBalance === true,
+      });
+    }
+    const username = requestUsername(request);
+    const created = await getPrisma().$transaction(async (tx) => {
+      const results = [];
+      for (const row of prepared) {
+        const { fromBalance, ...data } = row;
+        const item = await tx.consignmentItem.create({ data });
+        let operation = null;
+        if (row.quantity > 0) {
+          operation = await tx.consignmentOperation.create({
+            data: {
+              itemId: item.id,
+              itemName: item.name,
+              type: fromBalance ? "purchase" : "receive",
+              quantity: row.quantity,
+              unitPurchase: row.purchasePrice,
+              unitSale: row.salePrice,
+              balanceDelta: fromBalance ? -normalizeFinanceMoney(row.purchasePrice * row.quantity, 0) : 0,
+              note: row.note,
+              createdBy: username || null,
+            },
+          });
+        }
+        results.push({ item, operation });
+      }
+      return results;
+    });
+    await appendAudit(request, "consignment.item.bulk_create", {
+      entityType: "consignment_item",
+      entityId: created.map((row) => row.item.id).join(","),
+      newValue: { count: created.length },
+    });
+    response.status(201).json({
+      ok: true,
+      created: created.length,
+      items: created.map((row) => consignmentItemFromPostgres(row.item)),
+      operations: created.filter((row) => row.operation).length,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch("/api/consignment/items/:id", requireAdmin, async (request, response, next) => {
   try {
     if (consignmentStorageUnavailable(response)) return;

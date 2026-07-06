@@ -1,3 +1,7 @@
+// «Насовсем» = 10 лет: инактив без автоснятия; убрать можно вручную в карточке товара
+// («Отложить поставщика» → отмена) или вернув строку сборки в статус «к сборке».
+const PICKING_PERMANENT_SNOOZE_DAYS = 3650;
+
 app.get("/api/supplier-picking-list", requireStaff, async (request, response, next) => {
   try {
     const state = await readSupplierPickingState();
@@ -65,6 +69,14 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     }
     const now = new Date();
     const username = requestUsername(request);
+    // «Не было»: сотрудник выбирает срок инактива поставщика — 1 (завтра появится), 2, 3, 5 дней
+    // или насовсем (permanent). Без явного выбора действует прежний срок 7 дней.
+    const missingPermanent = status === "missing" && request.body?.permanent === true;
+    const requestedSnoozeDays = Math.round(Number(request.body?.snoozeDays || 0) || 0);
+    const missingDays = missingPermanent
+      ? PICKING_PERMANENT_SNOOZE_DAYS
+      : (requestedSnoozeDays >= 1 ? Math.min(60, requestedSnoozeDays) : 7);
+    const missingRetryAt = missingPermanent ? null : new Date(now.getTime() + missingDays * 24 * 60 * 60 * 1000).toISOString();
     const nextRow = normalizeSupplierPickingRow({
       ...current,
       status,
@@ -73,7 +85,9 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         missingBy: username,
         missingAt: now.toISOString(),
         missingReason: cleanText(request.body?.reason || "employee_missing"),
-        nextRetryAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        missingSnoozeDays: missingPermanent ? 0 : missingDays,
+        missingPermanent,
+        nextRetryAt: missingRetryAt,
       } : {}),
       ...(status === "open" ? {
         pickedBy: "",
@@ -81,9 +95,27 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         missingBy: "",
         missingAt: null,
         missingReason: "",
+        missingSnoozeDays: 0,
+        missingPermanent: false,
+        missingSnoozeLinkId: "",
         nextRetryAt: null,
       } : {}),
     });
+
+    let linkSnooze = null;
+    if (status === "missing") {
+      linkSnooze = await snoozeSupplierLinkForPickingRow(current, missingDays).catch((error) => {
+        logger.warn("picking missing link snooze failed", { key, detail: error?.message || String(error) });
+        return { ok: false, reason: error?.message || String(error) };
+      });
+      if (linkSnooze?.ok) nextRow.missingSnoozeLinkId = linkSnooze.linkId;
+    } else if (status === "open" && current.missingSnoozeLinkId && current.warehouseProductId) {
+      // Возврат строки в «к сборке» снимает инактив, поставленный этой же строкой.
+      await cancelWarehouseLinkSnooze(current.warehouseProductId, current.missingSnoozeLinkId, request).catch((error) => {
+        logger.warn("picking open link snooze cancel failed", { key, detail: error?.message || String(error) });
+      });
+    }
+
     state.rows[key] = nextRow;
     await writeSupplierPickingState(state);
 
@@ -94,7 +126,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         offerId: current.offerId,
         partnerId: current.partnerId,
         supplierName: current.supplierName,
-        reason: "employee_missing",
+        reason: missingPermanent ? "employee_missing_permanent" : "employee_missing",
         blockedAt: now.toISOString(),
         blockedBy: username,
         expiresAt: nextRow.nextRetryAt,
@@ -106,7 +138,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       await appendAudit(request, "supplier_cart.supplier_blocked", {
         entityType: "supplier_cart",
         entityId: blockKey,
-        newValue: cartState.supplierBlocks[blockKey],
+        newValue: { ...cartState.supplierBlocks[blockKey], linkSnooze },
       });
     } else if (status === "open") {
       if (current.status === "missing") await deactivateSupplierBlockForPickingRow(current, request);
@@ -156,7 +188,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       supplierLedgerEntryId: supplierLedgerEntry?.id || null,
       stockRecovery,
     });
-    response.json({ ok: true, row: nextRow, financeOrder, supplierLedgerEntry, stockRecovery });
+    response.json({ ok: true, row: nextRow, financeOrder, supplierLedgerEntry, stockRecovery, linkSnooze });
   } catch (error) {
     next(error);
   }
