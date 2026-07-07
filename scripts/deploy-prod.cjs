@@ -37,6 +37,10 @@ const deployFiles = [
   "lib/logger.js",
   "lib/postgres.js",
   "lib/static-app.js",
+  // Legacy public app (вкладка «Кабинеты» с формой Avito живёт здесь)
+  "public/index.html",
+  "public/app.js",
+  "public/styles.css",
   "scripts/prod-post-deploy-check.cjs",
   "scripts/prod-alert-on-failure.cjs",
   "scripts/inspect-bullmq-failed-jobs.cjs",
