@@ -493,6 +493,63 @@ app.post("/api/consignment/operations/:id/return", requireAdmin, async (request,
   }
 });
 
+// Удаление операции реализации. Деньги (баланс/прибыли) считаются суммой
+// операций, поэтому удаление строки откатывает их автоматически; остаток
+// товара возвращаем явно. Продажу с оформленным возвратом удалить нельзя —
+// сначала удаляется возврат (он вернёт продаже статус active).
+app.delete("/api/consignment/operations/:id", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const id = cleanText(request.params.id);
+    let failure = null;
+    const result = await getPrisma().$transaction(async (tx) => {
+      const operation = await tx.consignmentOperation.findUnique({ where: { id } });
+      if (!operation) {
+        failure = { status: 404, error: "Операция не найдена.", code: "consignment_operation_not_found" };
+        return null;
+      }
+      if (operation.type === "sale" && operation.status === "returned") {
+        failure = { status: 400, error: "По этой продаже оформлен возврат — сначала удалите операцию возврата.", code: "consignment_sale_has_return" };
+        return null;
+      }
+      const quantityDelta = ["sale", "writeoff"].includes(operation.type)
+        ? operation.quantity
+        : ["receive", "purchase", "return"].includes(operation.type) ? -operation.quantity : 0;
+      let item = null;
+      if (operation.itemId && quantityDelta !== 0) {
+        const current = await tx.consignmentItem.findUnique({ where: { id: operation.itemId } });
+        if (current) {
+          item = await tx.consignmentItem.update({
+            where: { id: operation.itemId },
+            data: { quantity: Math.max(0, current.quantity + quantityDelta) },
+          });
+        }
+      }
+      if (operation.type === "return" && operation.relatedOperationId) {
+        await tx.consignmentOperation.updateMany({
+          where: { id: operation.relatedOperationId },
+          data: { status: "active" },
+        });
+      }
+      await tx.consignmentOperation.delete({ where: { id } });
+      return { operation, item };
+    });
+    if (failure) return response.status(failure.status).json({ error: failure.error, code: failure.code });
+    await appendAudit(request, "consignment.operation.delete", {
+      entityType: "consignment_operation",
+      entityId: id,
+      oldValue: consignmentOperationFromPostgres(result.operation),
+    });
+    response.json({
+      ok: true,
+      deleted: consignmentOperationFromPostgres(result.operation),
+      item: result.item ? consignmentItemFromPostgres(result.item) : null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/consignment/operations", requireAdmin, async (request, response, next) => {
   try {
     if (consignmentStorageUnavailable(response)) return;

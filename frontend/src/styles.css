@@ -7110,3 +7110,51 @@ textarea:focus-visible,
 .nav-section.is-collapsed .nav-section-chevron { transform: rotate(-90deg); }
 .app-shell.sidebar-compact .nav-section-title { display: none; }
 .app-shell.sidebar-compact .nav-section + .nav-section { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(var(--accent-rgb), 0.14); }
+
+/* ===== Marketplace accounts panel (Настройки → Маркетплейсы) ===== */
+.accounts-panel .account-edit-form { border: 1px solid rgba(var(--accent-rgb), 0.22); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; background: rgba(var(--accent-rgb), 0.05); }
+.account-form-row { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.account-form-row label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); }
+.account-form-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.accounts-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; }
+.account-modern-card { border: 1px solid rgba(var(--accent-rgb), 0.18); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; background: rgba(var(--accent-rgb), 0.06); }
+.account-modern-card.not-configured { border-color: rgba(255, 176, 32, 0.4); }
+.account-modern-card.sync-disabled { opacity: 0.75; }
+.account-modern-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.account-modern-head strong { font-size: 13.5px; }
+.account-modern-meta { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.account-modern-meta b { color: var(--text-soft); font-weight: 600; }
+.account-source { font-size: 11px; opacity: 0.8; }
+.account-modern-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: auto; }
+.account-hidden-row { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px dashed rgba(var(--accent-rgb), 0.25); border-radius: 10px; margin-top: 6px; }
+.account-hidden-row strong { flex: 1; font-size: 13px; }
+.account-hidden-row small { color: var(--muted-soft); }
+.success-strip.compact { padding: 6px 10px; font-size: 12px; }
+
+/* ===== Markup rules: grouped by marketplace ===== */
+.rules-marketplace-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 10px; }
+.rules-marketplace-tabs button { display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px; border-radius: 999px; border: 1px solid rgba(var(--accent-rgb), 0.25); background: rgba(var(--accent-rgb), 0.06); color: var(--text-soft); font-size: 12.5px; cursor: pointer; }
+.rules-marketplace-tabs button:hover { border-color: rgba(var(--accent-rgb), 0.5); }
+.rules-marketplace-tabs button.is-active { background: rgba(var(--accent-rgb), 0.2); border-color: rgba(var(--accent-rgb), 0.6); color: var(--text); }
+.rules-tab-count { background: rgba(var(--accent-rgb), 0.2); border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 700; }
+.markup-rule-table .settings-rule-head, .markup-rule-table .settings-rule-row { grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) 44px; }
+
+/* ===== Avito price rules & quick adjust ===== */
+.avito-price-rules { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+.avito-price-rule-head, .avito-price-rule-row { display: grid; grid-template-columns: minmax(130px, 1fr) minmax(130px, 1fr) 40px; gap: 8px; align-items: center; }
+.avito-price-rule-head { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.avito-price-rule-row input { min-height: 38px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); padding: 0 10px; border-radius: 9px; font: inherit; }
+.avito-price-adjust { border: 1px solid rgba(var(--accent-rgb), 0.2); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; background: rgba(var(--accent-rgb), 0.05); margin-bottom: 10px; }
+.avito-price-adjust strong { font-size: 13px; }
+.avito-price-adjust-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.avito-price-adjust-row select, .avito-price-adjust-row input { min-height: 38px; border: 1px solid var(--line); background: var(--field-bg); color: var(--text); padding: 0 10px; border-radius: 9px; font: inherit; }
+.avito-price-adjust-row input { width: 90px; }
+.info-strip.success.compact { padding: 7px 11px; font-size: 12.5px; }
+
+/* ===== Consignment: operations subpage link ===== */
+.consignment-operations-link { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; margin-top: 14px; padding: 14px 16px; border: 1px solid rgba(var(--accent-rgb), 0.25); border-radius: 14px; background: rgba(var(--accent-rgb), 0.07); color: var(--text); cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+.consignment-operations-link:hover { border-color: rgba(var(--accent-rgb), 0.55); background: rgba(var(--accent-rgb), 0.12); }
+.consignment-operations-link span { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.consignment-operations-link strong { font-size: 14px; }
+.consignment-operations-link small { color: var(--muted); font-size: 12px; }
+.consignment-op-actions { display: inline-flex; align-items: center; gap: 6px; }

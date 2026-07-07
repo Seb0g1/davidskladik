@@ -125,6 +125,10 @@ function defaultAvitoImportRules() {
     minStock: 0,
     // Множитель к рублёвой цене Ozon для цены на Avito.
     priceCoefficient: 1,
+    // Гибкие правила цены: от базовой цены (₽) действует свой коэффициент,
+    // берётся правило с наибольшим подходящим порогом. Пустой список — везде
+    // используется priceCoefficient.
+    priceRules: [],
     // Автообновление фида: подтягивать актуальную цену склада при каждой
     // сборке XML и скрывать товары без остатков/в архиве.
     autoUpdatePrices: true,
@@ -139,6 +143,28 @@ function defaultAvitoImportRules() {
       description: "",
     },
   };
+}
+
+function normalizeAvitoPriceRule(input = {}) {
+  const minPriceRub = Number(input.minPriceRub ?? input.min_price_rub ?? input.minPrice ?? 0);
+  const coefficient = Number(input.coefficient ?? input.markup ?? 0);
+  if (!Number.isFinite(minPriceRub) || minPriceRub < 0) return null;
+  if (!Number.isFinite(coefficient) || coefficient <= 0) return null;
+  return {
+    minPriceRub: Math.round(minPriceRub),
+    coefficient: Number(Math.min(100, coefficient).toFixed(4)),
+  };
+}
+
+// Коэффициент для базовой цены: правило с наибольшим порогом <= цены,
+// иначе базовый priceCoefficient.
+function avitoPriceCoefficientFor(basePriceRub, rules = {}) {
+  const price = Number(basePriceRub || 0);
+  let matched = null;
+  for (const rule of Array.isArray(rules.priceRules) ? rules.priceRules : []) {
+    if (price >= rule.minPriceRub && (!matched || rule.minPriceRub > matched.minPriceRub)) matched = rule;
+  }
+  return matched ? matched.coefficient : (Number(rules.priceCoefficient) > 0 ? Number(rules.priceCoefficient) : 1);
 }
 
 function normalizeAvitoWordList(value, fallback = []) {
@@ -170,6 +196,11 @@ function normalizeAvitoImportRules(input = {}) {
     skipArchived: parseBooleanSetting(raw.skipArchived ?? raw.skip_archived, fallback.skipArchived),
     minStock: clampNumber(raw.minStock ?? raw.min_stock, fallback.minStock, { max: 100000 }),
     priceCoefficient: clampNumber(raw.priceCoefficient ?? raw.price_coefficient, fallback.priceCoefficient, { min: 0.01, max: 100, round: false }),
+    priceRules: (Array.isArray(raw.priceRules ?? raw.price_rules) ? (raw.priceRules ?? raw.price_rules) : fallback.priceRules)
+      .map(normalizeAvitoPriceRule)
+      .filter(Boolean)
+      .sort((a, b) => a.minPriceRub - b.minPriceRub)
+      .slice(0, 100),
     autoUpdatePrices: parseBooleanSetting(raw.autoUpdatePrices ?? raw.auto_update_prices, fallback.autoUpdatePrices),
     hideOutOfStock: parseBooleanSetting(raw.hideOutOfStock ?? raw.hide_out_of_stock, fallback.hideOutOfStock),
     maxItems: clampNumber(raw.maxItems ?? raw.max_items, fallback.maxItems, { max: 1000000 }),

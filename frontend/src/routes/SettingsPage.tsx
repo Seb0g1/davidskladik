@@ -7,6 +7,7 @@ import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageAccessModal } from "../components/PageAccessModal";
+import { MarketplaceAccountsPanel } from "../components/MarketplaceAccountsPanel";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
 import { readNotificationSoundSettings, writeNotificationSoundSettings, playNotificationSound, NotificationSoundSettings } from "../components/NotificationsBell";
 
@@ -787,6 +788,7 @@ export function SettingsPage() {
   const [adjustMarketplace, setAdjustMarketplace] = useState("all");
   const [adjustDirection, setAdjustDirection] = useState("decrease");
   const [adjustPercent, setAdjustPercent] = useState(2);
+  const [rulesTab, setRulesTab] = useState("ozon");
 
   useEffect(() => {
     if (settingsQuery.data?.settings) setDraft(settingsQuery.data.settings);
@@ -919,30 +921,48 @@ export function SettingsPage() {
         <div className="settings-panel settings-panel-wide">
           <div className="section-title">
             <div><span>Наценки</span><h3>Гибкие правила наценки</h3></div>
-            <button className="secondary-action" type="button" onClick={() => setMarkupRules([...markupRules, { marketplace: "all", minUsd: 0, coefficient: 1 }])}>Добавить</button>
+            <button className="secondary-action" type="button" onClick={() => setMarkupRules([...markupRules, { marketplace: rulesTab, minUsd: 0, coefficient: 1 }])}>
+              Добавить правило {rulesTab === "all" ? "для всех" : rulesTab === "ozon" ? "Ozon" : "Yandex"}
+            </button>
           </div>
-          <p className="settings-hint">Правила применяются по цене поставщика в USD. Пустой список допустим: тогда используются базовые наценки.</p>
-          <div className="settings-rule-table">
-            <div className="settings-rule-head"><span>Маркетплейс</span><span>От цены, USD</span><span>Коэффициент</span><span></span></div>
-            {markupRules.map((rule, index) => (
-              <div className="settings-rule-row" key={`markup-${index}`}>
-                <SelectField
-                  ariaLabel="Маркетплейс правила"
-                  value={rule.marketplace}
-                  onChange={(next) => updateMarkupRule(index, { marketplace: next })}
-                  options={[
-                    { value: "all", label: "Все" },
-                    { value: "ozon", label: "Ozon" },
-                    { value: "yandex", label: "Yandex Market" },
-                  ]}
-                />
-                <input type="number" min="0" step="0.0001" value={String(rule.minUsd)} onChange={(event) => updateMarkupRule(index, { minUsd: numberValue(event.target.value) })} />
-                <input type="number" min="0.0001" step="0.0001" value={String(rule.coefficient)} onChange={(event) => updateMarkupRule(index, { coefficient: numberValue(event.target.value, 1) })} />
-                <button className="icon-action danger" type="button" title="Удалить правило" onClick={() => setMarkupRules(markupRules.filter((_, ruleIndex) => ruleIndex !== index))}><Trash2 size={15} /></button>
+          <p className="settings-hint">Правила применяются по цене поставщика в USD и разложены по маркетплейсам — каждая вкладка отсортирована по цене «от». Пустой список допустим: тогда используются базовые наценки.</p>
+          <nav className="rules-marketplace-tabs" aria-label="Маркетплейс правил">
+            {[
+              { value: "ozon", label: "Ozon" },
+              { value: "yandex", label: "Yandex Market" },
+              { value: "all", label: "Общие (все МП)" },
+            ].map((tab) => {
+              const count = markupRules.filter((rule) => rule.marketplace === tab.value).length;
+              return (
+                <button key={tab.value} type="button" className={rulesTab === tab.value ? "is-active" : ""} onClick={() => setRulesTab(tab.value)}>
+                  {tab.label}
+                  <span className="rules-tab-count">{count}</span>
+                </button>
+              );
+            })}
+          </nav>
+          <div className="settings-rule-table markup-rule-table">
+            <div className="settings-rule-head"><span>От цены, USD</span><span>Коэффициент</span><span></span></div>
+            {markupRules
+              .map((rule, index) => ({ rule, index }))
+              .filter(({ rule }) => rule.marketplace === rulesTab)
+              .sort((a, b) => a.rule.minUsd - b.rule.minUsd || a.index - b.index)
+              .map(({ rule, index }) => (
+                <div className="settings-rule-row" key={`markup-${index}`}>
+                  <input type="number" min="0" step="0.0001" value={String(rule.minUsd)} onChange={(event) => updateMarkupRule(index, { minUsd: numberValue(event.target.value) })} />
+                  <input type="number" min="0.0001" step="0.0001" value={String(rule.coefficient)} onChange={(event) => updateMarkupRule(index, { coefficient: numberValue(event.target.value, 1) })} />
+                  <button className="icon-action danger" type="button" title="Удалить правило" onClick={() => setMarkupRules(markupRules.filter((_, ruleIndex) => ruleIndex !== index))}><Trash2 size={15} /></button>
+                </div>
+              ))}
+            {!markupRules.some((rule) => rule.marketplace === rulesTab) && (
+              <div className="soft-empty compact">
+                {rulesTab === "all"
+                  ? "Общих правил нет — действуют правила конкретных маркетплейсов и базовые наценки."
+                  : `Правил для ${rulesTab === "ozon" ? "Ozon" : "Yandex Market"} нет. Будет использоваться базовая наценка.`}
               </div>
-            ))}
-            {!markupRules.length && <div className="soft-empty compact">Гибких правил нет. Будут использоваться базовые наценки Ozon/Yandex.</div>}
+            )}
           </div>
+          <p className="settings-hint">Наценки Avito настраиваются на странице «Автозагрузка Avito» — там цена считается от рублёвой цены Ozon.</p>
         </div>
 
         <div className="settings-panel settings-panel-wide">
@@ -996,6 +1016,7 @@ export function SettingsPage() {
       </section>}
 
       {activeTab === "marketplaces" && <section className="settings-grid pricing-settings-grid">
+        <MarketplaceAccountsPanel />
         <SupplierStockModePanel />
 
         <div className="settings-panel settings-panel-wide">
@@ -1013,11 +1034,6 @@ export function SettingsPage() {
           <div className="soft-empty compact">Остатки должны уходить только в Magic Stick: 128820967.</div>
         </div>
 
-        <div className="settings-panel">
-          <div className="section-title"><div><span>Fallback</span><h3>Старый интерфейс</h3></div></div>
-          <div className="soft-empty compact">Legacy оставлен только как аварийный fallback на время приемки нового интерфейса.</div>
-          <a className="secondary-action" href="/legacy">Открыть legacy</a>
-        </div>
       </section>}
 
       {activeTab === "tools" && <ToolsSettingsPanel />}

@@ -27,6 +27,7 @@ type ImportRules = {
   skipArchived: boolean;
   minStock: number;
   priceCoefficient: number;
+  priceRules: Array<{ minPriceRub: number; coefficient: number }>;
   autoUpdatePrices: boolean;
   hideOutOfStock: boolean;
   maxItems: number;
@@ -232,6 +233,20 @@ export function AvitoPage() {
       void queryClient.invalidateQueries({ queryKey: ["avito-uploads"] });
     },
   });
+  const [adjustDirection, setAdjustDirection] = useState<"decrease" | "increase">("decrease");
+  const [adjustPercent, setAdjustPercent] = useState(2);
+  const adjustPrices = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; rules: ImportRules }>("/api/avito/price/adjust-percent", {
+      method: "POST",
+      body: JSON.stringify({ direction: adjustDirection, percent: adjustPercent }),
+    }),
+    onSuccess: (data) => {
+      if (data.rules) setRules(data.rules);
+      void queryClient.invalidateQueries({ queryKey: ["avito-import-rules"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
+    },
+  });
   const refreshFeed = useMutation({
     mutationFn: () => apiJson<FeedRefreshResult>("/api/avito/feed/refresh", { method: "POST", body: JSON.stringify({}) }),
     onSuccess: () => {
@@ -364,6 +379,44 @@ export function AvitoPage() {
                   <input type="checkbox" checked={rules.hideOutOfStock} onChange={(event) => updateRules({ hideOutOfStock: event.target.checked })} />
                   Скрывать без остатков
                 </label>
+              </div>
+              <div className="section-title compact-title">
+                <div><span>Цена</span><h3>Гибкие правила наценки Avito</h3></div>
+                <button className="secondary-action" type="button" onClick={() => updateRules({ priceRules: [...rules.priceRules, { minPriceRub: 0, coefficient: rules.priceCoefficient || 1 }] })}>
+                  Добавить правило
+                </button>
+              </div>
+              <p className="form-hint">Коэффициент к рублёвой цене Ozon: берётся правило с наибольшим подходящим порогом «от цены». Если правил нет — действует базовый коэффициент выше.</p>
+              <div className="avito-price-rules">
+                <div className="avito-price-rule-head"><span>От цены, ₽</span><span>Коэффициент</span><span></span></div>
+                {rules.priceRules
+                  .map((rule, index) => ({ rule, index }))
+                  .sort((a, b) => a.rule.minPriceRub - b.rule.minPriceRub || a.index - b.index)
+                  .map(({ rule, index }) => (
+                    <div className="avito-price-rule-row" key={`price-rule-${index}`}>
+                      <input type="number" min={0} value={String(rule.minPriceRub)} onChange={(event) => updateRules({ priceRules: rules.priceRules.map((item, itemIndex) => (itemIndex === index ? { ...item, minPriceRub: numberInput(event.target.value) } : item)) })} />
+                      <input type="number" min={0.01} step={0.01} value={String(rule.coefficient)} onChange={(event) => updateRules({ priceRules: rules.priceRules.map((item, itemIndex) => (itemIndex === index ? { ...item, coefficient: numberInput(event.target.value, 1) } : item)) })} />
+                      <button className="icon-action danger" type="button" title="Удалить правило" onClick={() => updateRules({ priceRules: rules.priceRules.filter((_, itemIndex) => itemIndex !== index) })}>×</button>
+                    </div>
+                  ))}
+                {!rules.priceRules.length ? <div className="form-hint">Правил нет — используется базовый коэффициент {rules.priceCoefficient}.</div> : null}
+              </div>
+              <div className="avito-price-adjust">
+                <strong>Быстрая корректировка цен</strong>
+                <div className="avito-price-adjust-row">
+                  <select value={adjustDirection} onChange={(event) => setAdjustDirection(event.target.value as "decrease" | "increase")}>
+                    <option value="decrease">Снизить</option>
+                    <option value="increase">Поднять</option>
+                  </select>
+                  <input type="number" min={0.01} max={90} step={0.01} value={String(adjustPercent)} onChange={(event) => setAdjustPercent(numberInput(event.target.value, 0))} />
+                  <span>%</span>
+                  <button className="primary-action" type="button" disabled={adjustPrices.isPending || !(adjustPercent > 0)} onClick={() => adjustPrices.mutate()}>
+                    {adjustPrices.isPending ? <Loader2 className="spin" size={15} /> : null} Применить
+                  </button>
+                </div>
+                <small className="form-hint">Меняет базовый коэффициент и все правила на указанный процент и сразу обновляет цены в фиде.</small>
+                {adjustPrices.isSuccess ? <div className="info-strip success compact">Коэффициенты обновлены, цены в фиде пересчитаны.</div> : null}
+                {adjustPrices.error ? <div className="inline-error">{String((adjustPrices.error as Error).message)}</div> : null}
               </div>
               <div className="settings-form-row">
                 <label className="field-label field-label-wide">

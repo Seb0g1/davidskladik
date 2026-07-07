@@ -230,7 +230,7 @@ test("GET /health", async () => {
   assert.equal(res.body.components.redis.queueMode, "inline");
 });
 
-test("modern index is primary and legacy index keeps cache-busted assets", async () => {
+test("modern index is primary and legacy paths redirect to the modern app", async () => {
   const agent = request.agent(app);
   await agent
     .post("/api/login")
@@ -241,22 +241,20 @@ test("modern index is primary and legacy index keeps cache-busted assets", async
   assert.match(res.text, /\/app-modern\/assets\/index-[^"]+\.css/);
   assert.match(res.headers["cache-control"], /no-cache/);
 
-  const legacyRes = await agent.get("/legacy").expect(200);
-  assert.match(legacyRes.text, /\/app\.js\?v=[^"]+/);
-  assert.match(legacyRes.text, /\/styles\.css\?v=[^"]+/);
-  assert.match(legacyRes.headers["cache-control"], /no-cache/);
+  const legacyRes = await agent.get("/legacy").expect(302);
+  assert.equal(legacyRes.headers.location, "/app/warehouse");
 });
 
-test("legacy page aliases keep old admin screens available", async () => {
+test("legacy page aliases redirect to the modern app", async () => {
   const agent = request.agent(app);
   await agent
     .post("/api/login")
     .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
-  const res = await agent.get("/legacy/settings").expect(200);
-  assert.match(res.text, /settingsForm/);
-  const operations = await agent.get("/legacy/operations").expect(200);
-  assert.match(operations.text, /operationsList/);
+  const res = await agent.get("/legacy/settings").expect(302);
+  assert.equal(res.headers.location, "/app/warehouse");
+  const operations = await agent.get("/legacy/operations").expect(302);
+  assert.equal(operations.headers.location, "/app/warehouse");
 });
 
 test("modern PriceMaster link UI keeps drafts scoped and removes manual supplier search", async () => {
@@ -392,16 +390,14 @@ test("warehouse page product groups merge marketplace variants by offer and manu
   assert.deepEqual(manualGroup.products.map((product) => product.offerId).sort(), ["A-1", "B-1"]);
 });
 
-test("old index path can still be opened directly", async () => {
+test("old index path redirects to the modern app", async () => {
   const agent = request.agent(app);
   await agent
     .post("/api/login")
     .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
-  const res = await agent.get("/legacy/index.html").expect(200);
-  assert.match(res.text, /\/app\.js\?v=[^"]+/);
-  assert.match(res.text, /\/styles\.css\?v=[^"]+/);
-  assert.match(res.headers["cache-control"], /no-cache/);
+  const res = await agent.get("/legacy/index.html").expect(302);
+  assert.equal(res.headers.location, "/app/warehouse");
 });
 
 test("GET /health deep exposes operational component details", async () => {

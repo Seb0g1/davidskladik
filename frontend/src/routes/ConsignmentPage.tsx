@@ -1,6 +1,6 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, Boxes, Check, ChevronDown, ChevronRight, HandCoins, ListPlus, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, Trash2, TrendingUp, Upload, Wallet, X } from "lucide-react";
+import { ArrowLeft, Banknote, Boxes, Check, ChevronDown, ChevronRight, HandCoins, History, ListPlus, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, Trash2, TrendingUp, Upload, Wallet, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import {
   ConsignmentBulkCreateSchema,
@@ -266,6 +266,28 @@ export function ConsignmentPage() {
     onSuccess: invalidate,
   });
 
+  const deleteOperation = useMutation({
+    mutationFn: (id: string) =>
+      fetchJson(`/api/consignment/operations/${encodeURIComponent(id)}`, ConsignmentMutationSchema, { method: "DELETE" }),
+    onSuccess: invalidate,
+  });
+
+  // Подстраница операций: /app/consignment/operations (не в сайдбаре).
+  const [view, setView] = useState<"main" | "operations">(() => (window.location.pathname.includes("/operations") ? "operations" : "main"));
+  useEffect(() => {
+    const onPop = () => setView(window.location.pathname.includes("/operations") ? "operations" : "main");
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  const openOperations = () => {
+    window.history.pushState(null, "", "/app/consignment/operations");
+    setView("operations");
+  };
+  const backToMain = () => {
+    window.history.pushState(null, "", "/app/consignment");
+    setView("main");
+  };
+
   const payout = useMutation({
     mutationFn: () => fetchJson("/api/consignment/payouts", ConsignmentMutationSchema, mutationBody({
       kind: payoutForm.kind,
@@ -314,6 +336,119 @@ export function ConsignmentPage() {
     return sortOperations(list, opSort);
   }, [operations.data, opSearch, opSort]);
 
+  const operationsTable = (
+    <div className="table-panel price-table consignment-operations-table">
+      <div className="section-title">
+        <div>
+          <span>История</span>
+          <h3>Операции</h3>
+        </div>
+        <div className="row-actions consignment-operations-filters">
+          <input
+            placeholder="Поиск: товар или примечание"
+            value={opSearch}
+            onChange={(event) => setOpSearch(event.target.value)}
+          />
+          <SelectField
+            ariaLabel="Фильтр операций"
+            value={opFilter}
+            onChange={setOpFilter}
+            options={[
+              { value: "all", label: "Все операции" },
+              { value: "sale", label: "Продажи" },
+              { value: "receive", label: "Приходы" },
+              { value: "purchase", label: "Закупки с баланса" },
+              { value: "writeoff", label: "Списания" },
+              { value: "return", label: "Возвраты" },
+              { value: "sponsor_payout", label: "Выплаты спонсору" },
+              { value: "sponsor_profit_payout", label: "Вывод профита спонсора" },
+              { value: "my_profit_payout", label: "Вывод моего профита" },
+            ]}
+          />
+          <SelectField
+            ariaLabel="Сортировка операций"
+            value={opSort}
+            onChange={setOpSort}
+            options={OPERATION_SORT_OPTIONS}
+          />
+        </div>
+      </div>
+      <div className="table-head">
+        <span>Дата</span><span>Операция</span><span>Товар</span><span>Кол-во</span><span>Цена</span><span>На баланс</span><span>Профит (спонсор / мой)</span><span>Примечание</span><span></span>
+      </div>
+      {visibleOperations.map((op) => (
+        <div className="table-row" key={op.id}>
+          <span data-label="Дата">{dateText(op.createdAt)}</span>
+          <span data-label="Операция">
+            {OPERATION_LABELS[op.type] || op.type}
+            {op.status === "returned" ? " (возвращена)" : ""}
+          </span>
+          <span data-label="Товар">{op.itemName || "-"}</span>
+          <span data-label="Кол-во">{op.quantity ? `${op.quantity} шт` : "-"}</span>
+          <span data-label="Цена">{op.type === "sale" || op.type === "return" ? money(op.unitSale) : (op.quantity ? money(op.unitPurchase) : "-")}</span>
+          <span data-label="На баланс">{op.balanceDelta ? money(op.balanceDelta) : "-"}</span>
+          <span data-label="Профит">{op.sponsorDelta || op.myDelta ? `${money(op.sponsorDelta)} / ${money(op.myDelta)}` : "-"}</span>
+          <span data-label="Примечание">{op.note || "-"}</span>
+          <span data-label="" className="consignment-op-actions">
+            {op.type === "sale" && op.status === "active" ? (
+              <button
+                className="secondary-action"
+                type="button"
+                disabled={returnSale.isPending}
+                onClick={() => {
+                  const note = window.prompt("Примечание к возврату (необязательно):", "") ?? "";
+                  returnSale.mutate({ id: op.id, note });
+                }}
+              >
+                {returnSale.isPending ? <Loader2 className="spin" size={14} /> : <RotateCcw size={14} />} Возврат
+              </button>
+            ) : null}
+            <button
+              className="icon-action danger"
+              type="button"
+              title="Удалить операцию (остаток и балансы откатятся)"
+              disabled={deleteOperation.isPending}
+              onClick={() => {
+                if (window.confirm(`Удалить операцию «${OPERATION_LABELS[op.type] || op.type}»${op.itemName ? ` по «${op.itemName}»` : ""}? Остаток товара и балансы будут пересчитаны.`)) {
+                  deleteOperation.mutate(op.id);
+                }
+              }}
+            >
+              <Trash2 size={14} />
+            </button>
+          </span>
+        </div>
+      ))}
+      {returnSale.error ? <div className="inline-error">{errorMessage(returnSale.error)}</div> : null}
+      {deleteOperation.error ? <div className="inline-error">{errorMessage(deleteOperation.error)}</div> : null}
+      {!operations.data?.operations?.length && operations.isLoading ? <ListSkeleton rows={6} /> : null}
+      {!operations.data?.operations?.length && !operations.isLoading ? <div className="empty-state">Операций пока нет.</div> : null}
+      {(operations.data?.operations?.length || 0) > 0 && !visibleOperations.length ? <div className="empty-state">По заданному поиску операций не найдено.</div> : null}
+    </div>
+  );
+
+  if (view === "operations") {
+    return (
+      <section className="page-section consignment-page">
+        <PageHeader
+          title="Операции реализации"
+          subtitle="Полная история операций: продажи, приходы, списания, возвраты и выплаты."
+          action={(
+            <div className="row-actions">
+              <button className="primary-action" type="button" onClick={backToMain}>
+                <ArrowLeft size={16} /> К реализации
+              </button>
+              <button className="secondary-action" type="button" onClick={invalidate}>
+                <RefreshCw size={16} /> Обновить
+              </button>
+            </div>
+          )}
+        />
+        {operationsTable}
+      </section>
+    );
+  }
+
   return (
     <section className="page-section consignment-page">
       <PageHeader
@@ -321,6 +456,9 @@ export function ConsignmentPage() {
         subtitle="Товар от спонсора: остатки, продажи с профитом 50/50, списания, возвраты, общий баланс и закупки со свободных денег."
         action={(
           <div className="row-actions">
+            <button className="secondary-action" type="button" onClick={openOperations}>
+              <History size={16} /> Операции ({operations.data?.operations?.length ?? "…"})
+            </button>
             <button className="secondary-action" type="button" onClick={invalidate}>
               <RefreshCw size={16} /> Обновить
             </button>
@@ -653,80 +791,14 @@ export function ConsignmentPage() {
         {payout.isSuccess ? <div className="success-strip">Выплата записана.</div> : null}
       </section>
 
-      <div className="table-panel price-table consignment-operations-table">
-        <div className="section-title">
-          <div>
-            <span>История</span>
-            <h3>Операции</h3>
-          </div>
-          <div className="row-actions consignment-operations-filters">
-            <input
-              placeholder="Поиск: товар или примечание"
-              value={opSearch}
-              onChange={(event) => setOpSearch(event.target.value)}
-            />
-            <SelectField
-              ariaLabel="Фильтр операций"
-              value={opFilter}
-              onChange={setOpFilter}
-              options={[
-                { value: "all", label: "Все операции" },
-                { value: "sale", label: "Продажи" },
-                { value: "receive", label: "Приходы" },
-                { value: "purchase", label: "Закупки с баланса" },
-                { value: "writeoff", label: "Списания" },
-                { value: "return", label: "Возвраты" },
-                { value: "sponsor_payout", label: "Выплаты спонсору" },
-                { value: "sponsor_profit_payout", label: "Вывод профита спонсора" },
-                { value: "my_profit_payout", label: "Вывод моего профита" },
-              ]}
-            />
-            <SelectField
-              ariaLabel="Сортировка операций"
-              value={opSort}
-              onChange={setOpSort}
-              options={OPERATION_SORT_OPTIONS}
-            />
-          </div>
-        </div>
-        <div className="table-head">
-          <span>Дата</span><span>Операция</span><span>Товар</span><span>Кол-во</span><span>Цена</span><span>На баланс</span><span>Профит (спонсор / мой)</span><span>Примечание</span><span></span>
-        </div>
-        {visibleOperations.map((op) => (
-          <div className="table-row" key={op.id}>
-            <span data-label="Дата">{dateText(op.createdAt)}</span>
-            <span data-label="Операция">
-              {OPERATION_LABELS[op.type] || op.type}
-              {op.status === "returned" ? " (возвращена)" : ""}
-            </span>
-            <span data-label="Товар">{op.itemName || "-"}</span>
-            <span data-label="Кол-во">{op.quantity ? `${op.quantity} шт` : "-"}</span>
-            <span data-label="Цена">{op.type === "sale" || op.type === "return" ? money(op.unitSale) : (op.quantity ? money(op.unitPurchase) : "-")}</span>
-            <span data-label="На баланс">{op.balanceDelta ? money(op.balanceDelta) : "-"}</span>
-            <span data-label="Профит">{op.sponsorDelta || op.myDelta ? `${money(op.sponsorDelta)} / ${money(op.myDelta)}` : "-"}</span>
-            <span data-label="Примечание">{op.note || "-"}</span>
-            <span data-label="">
-              {op.type === "sale" && op.status === "active" ? (
-                <button
-                  className="secondary-action"
-                  type="button"
-                  disabled={returnSale.isPending}
-                  onClick={() => {
-                    const note = window.prompt("Примечание к возврату (необязательно):", "") ?? "";
-                    returnSale.mutate({ id: op.id, note });
-                  }}
-                >
-                  {returnSale.isPending ? <Loader2 className="spin" size={14} /> : <RotateCcw size={14} />} Возврат
-                </button>
-              ) : null}
-            </span>
-          </div>
-        ))}
-        {returnSale.error ? <div className="inline-error">{errorMessage(returnSale.error)}</div> : null}
-        {!operations.data?.operations?.length && operations.isLoading ? <ListSkeleton rows={6} /> : null}
-        {!operations.data?.operations?.length && !operations.isLoading ? <div className="empty-state">Операций пока нет.</div> : null}
-        {(operations.data?.operations?.length || 0) > 0 && !visibleOperations.length ? <div className="empty-state">По заданному поиску операций не найдено.</div> : null}
-      </div>
+      <button className="consignment-operations-link" type="button" onClick={openOperations}>
+        <History size={18} />
+        <span>
+          <strong>Операции реализации</strong>
+          <small>Вся история продаж, приходов, возвратов и выплат — {operations.data?.operations?.length ?? "…"} записей</small>
+        </span>
+        <ChevronRight size={17} />
+      </button>
     </section>
   );
 }

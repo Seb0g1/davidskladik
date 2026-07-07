@@ -57,7 +57,7 @@ function evaluateAvitoImportCandidate(product = {}, rules = {}) {
   if (rules.skipWithoutVolume && volumeMl <= 0) reasons.push("volume_unknown");
 
   const basePriceRub = Number(product.targetPrice || product.currentPrice || 0);
-  const priceRub = basePriceRub > 0 ? Math.round(basePriceRub * (rules.priceCoefficient || 1)) : 0;
+  const priceRub = basePriceRub > 0 ? Math.round(basePriceRub * avitoPriceCoefficientFor(basePriceRub, rules)) : 0;
   if (priceRub <= 0) reasons.push("no_price");
   if (rules.minPriceRub > 0 && priceRub > 0 && priceRub < rules.minPriceRub) reasons.push(`price_below_min:${priceRub}`);
   if (rules.maxPriceRub > 0 && priceRub > rules.maxPriceRub) reasons.push(`price_above_max:${priceRub}`);

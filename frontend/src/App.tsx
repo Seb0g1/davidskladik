@@ -54,10 +54,10 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
 
 // Сайдбар: первые пять пунктов — без заголовка, дальше сворачиваемые группы.
 const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
-  { id: "main", routes: ["dashboard", "warehouse", "picking-list", "avito", "consignment"] },
+  { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
   { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions"] },
   { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "no-supplier", "operations", "recovery-queue"] },
-  { id: "extra", title: "Дополнительное", routes: ["suppliers", "import", "supplier-cart", "prices", "statistics", "problem-products", "finance"] },
+  { id: "extra", title: "Дополнительное", routes: ["suppliers", "import", "avito", "prices", "statistics", "problem-products", "finance"] },
 ];
 
 function currentRoute(): AppRoute {

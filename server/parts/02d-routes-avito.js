@@ -265,6 +265,31 @@ app.get("/api/avito/feed-info", async (request, response, next) => {
   }
 });
 
+// Быстрая корректировка цен Avito, как у Ozon/Yandex: меняет базовый
+// коэффициент и все гибкие правила цены на указанный процент, затем сразу
+// переносит новые цены в объявления фида.
+app.post("/api/avito/price/adjust-percent", requireAdmin, async (request, response, next) => {
+  try {
+    const direction = cleanText(request.body?.direction).toLowerCase() === "increase" ? "increase" : "decrease";
+    const percent = Number(request.body?.percent || 0);
+    if (!Number.isFinite(percent) || percent <= 0 || percent >= 90) {
+      return response.status(400).json({ error: "Процент должен быть от 0.01 до 90." });
+    }
+    const multiplier = direction === "increase" ? 1 + percent / 100 : 1 - percent / 100;
+    const before = await readAvitoImportRules();
+    const saved = await writeAvitoImportRules({
+      ...before,
+      priceCoefficient: Number((before.priceCoefficient * multiplier).toFixed(4)),
+      priceRules: before.priceRules.map((rule) => ({ ...rule, coefficient: Number((rule.coefficient * multiplier).toFixed(4)) })),
+    });
+    const refresh = await runAvitoFeedRefresh({ source: "price_adjust" });
+    await appendAudit(request, "avito.price.adjust", { oldValue: before, newValue: saved, details: { direction, percent } });
+    response.json({ ok: true, rules: saved, refresh });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Ручной перенос актуальных цен/остатков склада в сохранённые объявления.
 app.post("/api/avito/feed/refresh", requireAdmin, async (request, response, next) => {
   try {

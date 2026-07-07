@@ -87,7 +87,7 @@ function applyAvitoLiveState(listing, product, rules) {
   const outOfStock = Boolean(product.archived) || Number(product.targetStock || 0) <= 0;
   if (!rules.autoUpdatePrices) return { listing, outOfStock };
   const basePriceRub = Number(product.targetPrice || product.currentPrice || 0);
-  const priceRub = basePriceRub > 0 ? Math.round(basePriceRub * (rules.priceCoefficient || 1)) : listing.priceRub;
+  const priceRub = basePriceRub > 0 ? Math.round(basePriceRub * avitoPriceCoefficientFor(basePriceRub, rules)) : listing.priceRub;
   return { listing: priceRub === listing.priceRub ? listing : { ...listing, priceRub }, outOfStock };
 }
 
