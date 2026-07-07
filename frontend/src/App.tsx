@@ -31,25 +31,33 @@ type SessionState = { authenticated?: boolean; role?: string | null; username?: 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
   { route: "dashboard", href: "/app/dashboard", label: "Дашборд", icon: <Home size={16} /> },
   { route: "warehouse", href: "/app/warehouse", label: "Склад", icon: <PackageCheck size={16} /> },
-  { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} /> },
   { route: "picking-list", href: "/app/picking-list", label: "Сборка", icon: <ClipboardList size={16} /> },
+  { route: "avito", href: "/app/avito", label: "Автозагрузка Avito", icon: <Upload size={16} /> },
+  { route: "consignment", href: "/app/consignment", label: "Реализация", icon: <HandCoins size={16} /> },
   { route: "reviews", href: "/app/reviews", label: "Отзывы", icon: <Star size={16} /> },
   { route: "chats", href: "/app/chats", label: "Чаты", icon: <MessageCircle size={16} /> },
-  { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Upload size={16} /> },
-  { route: "avito", href: "/app/avito", label: "Импорт на Avito", icon: <Upload size={16} /> },
-  { route: "statistics", href: "/app/statistics", label: "Статистика", icon: <BarChart3 size={16} /> },
-  { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
   { route: "questions", href: "/app/questions", label: "Вопросы", icon: <HelpCircle size={16} /> },
-  { route: "prices", href: "/app/prices", label: "Цены", icon: <BadgeDollarSign size={16} /> },
-  { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} /> },
-  { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
-  { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
-  { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} /> },
-  { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} /> },
-  { route: "consignment", href: "/app/consignment", label: "Реализация", icon: <HandCoins size={16} /> },
+  { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
   { route: "system", href: "/app/system", label: "Система", icon: <Activity size={16} /> },
   { route: "ai-drafts", href: "/app/ai-drafts", label: "AI drafts", icon: <Sparkles size={16} /> },
   { route: "no-supplier", href: "/app/no-supplier", label: "Ошибки наличия", icon: <AlertCircle size={16} /> },
+  { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} /> },
+  { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
+  { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} /> },
+  { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Upload size={16} /> },
+  { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
+  { route: "prices", href: "/app/prices", label: "Цены", icon: <BadgeDollarSign size={16} /> },
+  { route: "statistics", href: "/app/statistics", label: "Статистика", icon: <BarChart3 size={16} /> },
+  { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} /> },
+  { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} /> },
+];
+
+// Сайдбар: первые пять пунктов — без заголовка, дальше сворачиваемые группы.
+const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
+  { id: "main", routes: ["dashboard", "warehouse", "picking-list", "avito", "consignment"] },
+  { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions"] },
+  { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "no-supplier", "operations", "recovery-queue"] },
+  { id: "extra", title: "Дополнительное", routes: ["suppliers", "import", "supplier-cart", "prices", "statistics", "problem-products", "finance"] },
 ];
 
 function currentRoute(): AppRoute {
@@ -86,6 +94,20 @@ function AppShell() {
   const [globalSearch, setGlobalSearch] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCompact, setSidebarCompact] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem("nav-collapsed-sections") || "");
+      if (stored && typeof stored === "object") return stored;
+    } catch { /* дефолт ниже */ }
+    return { extra: true };
+  });
+  const toggleNavSection = (id: string) => {
+    setCollapsedSections((current) => {
+      const next = { ...current, [id]: !current[id] };
+      try { window.localStorage.setItem("nav-collapsed-sections", JSON.stringify(next)); } catch { /* приватный режим */ }
+      return next;
+    });
+  };
   const [isMobileNav, setIsMobileNav] = useState(() => window.matchMedia("(max-width: 980px)").matches);
   const activeNavRef = useRef<HTMLAnchorElement | null>(null);
   const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
@@ -199,11 +221,31 @@ function AppShell() {
           {roleLabel}
         </div>
         <nav className="side-nav-links">
-          {visibleNavItems.map((item) => (
-            <a key={item.route} ref={route === item.route ? activeNavRef : undefined} className={route === item.route ? "is-active" : ""} href={item.href} onClick={(event) => navigate(event, item.href)}>
-              {item.icon}{item.label}
-            </a>
-          ))}
+          {NAV_SECTIONS.map((section) => {
+            const items = section.routes
+              .map((sectionRoute) => visibleNavItems.find((item) => item.route === sectionRoute))
+              .filter((item): item is typeof navItems[number] => Boolean(item));
+            if (!items.length) return null;
+            const containsActive = items.some((item) => item.route === route);
+            // Свёрнутая группа с активной страницей раскрывается, чтобы подсветка не
+            // терялась; в компактном (иконочном) режиме заголовков нет — показываем всё.
+            const collapsed = Boolean(section.title && collapsedSections[section.id] && !containsActive && navExpanded);
+            return (
+              <div className={`nav-section${collapsed ? " is-collapsed" : ""}`} key={section.id}>
+                {section.title ? (
+                  <button type="button" className="nav-section-title" aria-expanded={!collapsed} onClick={() => toggleNavSection(section.id)}>
+                    <span>{section.title}</span>
+                    <ChevronDown size={13} className="nav-section-chevron" />
+                  </button>
+                ) : null}
+                {!collapsed ? items.map((item) => (
+                  <a key={item.route} ref={route === item.route ? activeNavRef : undefined} className={route === item.route ? "is-active" : ""} href={item.href} onClick={(event) => navigate(event, item.href)}>
+                    {item.icon}{item.label}
+                  </a>
+                )) : null}
+              </div>
+            );
+          })}
         </nav>
         <div className="side-user-card">
           <span>Статистика пользователя</span>
