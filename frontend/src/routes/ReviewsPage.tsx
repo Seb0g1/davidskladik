@@ -67,17 +67,17 @@ function ReviewCard({ review, templates, onReplied }: { review: ReviewRow; templ
       <div className="review-head">
         <span className={`market-badge market-${review.marketplace}`}>{review.marketplace === "ozon" ? "Ozon" : "Яндекс"}</span>
         <Stars rating={review.rating} />
-        <strong className="review-product">{review.productName || review.offerId || "товар"}</strong>
-        <small>{review.createdAt ? new Date(review.createdAt).toLocaleString("ru-RU") : ""}</small>
-      </div>
-      {review.authorName ? <small className="review-author">{review.authorName}</small> : null}
-      {review.text ? <p>{review.text}</p> : null}
-      {review.advantages ? <p><b>Плюсы:</b> {review.advantages}</p> : null}
-      {review.disadvantages ? <p><b>Минусы:</b> {review.disadvantages}</p> : null}
-      <div className="review-actions">
         {review.needsReply ? <span className="pill warn">ждёт ответа</span> : <span className="pill ok">отвечено</span>}
+        <small className="review-date">{review.createdAt ? new Date(review.createdAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}</small>
+      </div>
+      <strong className="review-product">{review.productName || review.offerId || "товар"}</strong>
+      {review.authorName ? <small className="review-author">{review.authorName}</small> : null}
+      {review.text ? <p className="review-text">{review.text}</p> : null}
+      {review.advantages ? <p className="review-pros"><b>Плюсы</b>{review.advantages}</p> : null}
+      {review.disadvantages ? <p className="review-cons"><b>Минусы</b>{review.disadvantages}</p> : null}
+      <div className="review-actions">
         <button className="secondary-action" type="button" onClick={() => setOpen((value) => !value)}>
-          <MessageSquareReply size={15} /> Ответить
+          <MessageSquareReply size={15} /> {open ? "Скрыть" : "Ответить"}
         </button>
       </div>
       {open ? (

@@ -151,6 +151,43 @@ app.get("/api/chats", requireAdmin, async (request, response, next) => {
   }
 });
 
+const CHAT_IMAGE_EXT_RE = /\.(jpe?g|png|webp|gif|heic|bmp)(?:$|[?#])/i;
+const CHAT_VIDEO_EXT_RE = /\.(mp4|mov|webm|m4v|avi)(?:$|[?#])/i;
+
+function chatMediaAttachmentFromUrl(url, name = "") {
+  const clean = cleanText(url);
+  if (!/^https?:\/\//i.test(clean)) return null;
+  let pathname = clean;
+  try { pathname = new URL(clean).pathname; } catch { /* оставляем весь url */ }
+  if (CHAT_VIDEO_EXT_RE.test(pathname)) return { type: "video", url: clean, name: cleanText(name) };
+  if (CHAT_IMAGE_EXT_RE.test(pathname)) return { type: "image", url: clean, name: cleanText(name) };
+  return null;
+}
+
+// Ozon присылает фото/видео покупателя ссылками прямо в тексте сообщения
+// (голыми или markdown-ссылками) — выносим их во вложения, чтобы фронт
+// показывал медиа, а не URL.
+function extractChatMediaFromText(rawText) {
+  const attachments = [];
+  let text = String(rawText || "");
+  text = text.replace(/\[([^\]\n]*)\]\((https?:\/\/[^)\s]+)\)/g, (full, label, url) => {
+    const attachment = chatMediaAttachmentFromUrl(url, label);
+    if (!attachment) return full;
+    attachments.push(attachment);
+    return "";
+  });
+  text = text.replace(/https?:\/\/[^\s"'<>]+/g, (url) => {
+    const attachment = chatMediaAttachmentFromUrl(url);
+    if (!attachment) return url;
+    attachments.push(attachment);
+    return "";
+  });
+  return {
+    text: text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim(),
+    attachments,
+  };
+}
+
 function ozonChatAuthorLabel(userType) {
   const type = cleanText(userType).toLowerCase();
   if (type === "seller") return "Вы";
@@ -184,12 +221,13 @@ function normalizeOzonChatMessage(message = {}) {
     text = cleanText(message.data || "");
   }
   const userType = cleanText(message.user?.type || message.user_type || "");
+  const extracted = extractChatMediaFromText(text || cleanText(message.text || ""));
   return {
     id: cleanText(message.message_id || message.id),
     author: ozonChatAuthorLabel(userType),
     isSeller: userType.toLowerCase() === "seller",
-    text: text || cleanText(message.text || ""),
-    attachments,
+    text: extracted.text,
+    attachments: [...attachments, ...extracted.attachments],
     createdAt: cleanText(message.created_at || ""),
     isRead: message.is_read !== false,
   };
@@ -202,12 +240,23 @@ function normalizeYandexChatMessage(message = {}) {
     : sender === "MARKET" ? "Яндекс Маркет"
     : sender === "SUPPORT" ? "Поддержка"
     : (cleanText(message.sender) || "Покупатель");
+  // Файлы покупателя приходят в payload: [{ name, url, size }] — фото и видео
+  // показываем инлайн, остальное как ссылку на файл.
+  const attachments = (Array.isArray(message.payload) ? message.payload : [])
+    .map((file) => {
+      const url = cleanText(file?.url);
+      if (!url) return null;
+      return chatMediaAttachmentFromUrl(url, file?.name)
+        || { type: "file", url, name: cleanText(file?.name) || "Файл" };
+    })
+    .filter(Boolean);
+  const extracted = extractChatMediaFromText(cleanText(message.message || message.text || ""));
   return {
     id: cleanText(message.messageId || message.id),
     author: authorLabel,
     isSeller: sender === "PARTNER",
-    text: cleanText(message.message || message.text || ""),
-    attachments: [],
+    text: extracted.text,
+    attachments: [...attachments, ...extracted.attachments],
     createdAt: cleanText(message.createdAt || ""),
     isRead: true,
   };

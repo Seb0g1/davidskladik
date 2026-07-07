@@ -49,15 +49,15 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
       <div className="review-head">
         <span className="market-badge market-ozon">Ozon</span>
         <HelpCircle size={15} color="#c792ea" />
-        <strong className="review-product">{question.productName || question.sku || "товар"}</strong>
-        <small>{question.createdAt ? new Date(question.createdAt).toLocaleString("ru-RU") : ""}</small>
-      </div>
-      {question.authorName ? <small className="review-author">{question.authorName}</small> : null}
-      {question.text ? <p>{question.text}</p> : null}
-      <div className="review-actions">
         {question.needsAnswer ? <span className="pill warn">ждёт ответа</span> : <span className="pill ok">отвечено ({question.answersCount})</span>}
+        <small className="review-date">{question.createdAt ? new Date(question.createdAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}</small>
+      </div>
+      <strong className="review-product">{question.productName || question.sku || "товар"}</strong>
+      {question.authorName ? <small className="review-author">{question.authorName}</small> : null}
+      {question.text ? <p className="review-text review-question-text">{question.text}</p> : null}
+      <div className="review-actions">
         <button className="secondary-action" type="button" onClick={() => setOpen((value) => !value)}>
-          <MessageSquareReply size={15} /> Ответить
+          <MessageSquareReply size={15} /> {open ? "Скрыть" : "Ответить"}
         </button>
       </div>
       {open ? (

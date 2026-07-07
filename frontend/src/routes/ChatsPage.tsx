@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, BookOpen, Loader2, MessageCircle, RefreshCw, Send } from "lucide-react";
+import { BellRing, BookOpen, Download, Loader2, MessageCircle, Paperclip, RefreshCw, Send, X } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
@@ -103,6 +103,72 @@ function chatTime(value?: string) {
     : date.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
+function chatDayLabel(value?: string): string {
+  if (!value) return "";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "";
+  const today = new Date();
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  if (date.toDateString() === today.toDateString()) return "Сегодня";
+  if (date.toDateString() === yesterday.toDateString()) return "Вчера";
+  return date.toLocaleDateString("ru-RU", { day: "numeric", month: "long", ...(date.getFullYear() !== today.getFullYear() ? { year: "numeric" } : {}) });
+}
+
+type LightboxMedia = { type: "image" | "video"; url: string } | null;
+
+function ChatLightbox({ media, onClose }: { media: LightboxMedia; onClose: () => void }) {
+  useEffect(() => {
+    if (!media) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [media, onClose]);
+  if (!media) return null;
+  return (
+    <div className="chat-lightbox" role="dialog" aria-label="Просмотр вложения" onClick={onClose}>
+      <div className="chat-lightbox-body" onClick={(event) => event.stopPropagation()}>
+        {media.type === "video" ? (
+          <video controls autoPlay src={media.url} className="chat-lightbox-media" />
+        ) : (
+          <img src={media.url} alt="Вложение" className="chat-lightbox-media" />
+        )}
+        <div className="chat-lightbox-actions">
+          <a className="secondary-action" href={media.url} target="_blank" rel="noopener noreferrer" download>
+            <Download size={15} /> Скачать
+          </a>
+          <button className="secondary-action" type="button" onClick={onClose}><X size={15} /> Закрыть</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ChatAttachments({ attachments, onOpen }: { attachments: ChatAttachment[]; onOpen: (media: LightboxMedia) => void }) {
+  if (!attachments.length) return null;
+  return (
+    <div className="chat-attachments">
+      {attachments.map((att, index) => (
+        att.type === "image" ? (
+          <button key={index} type="button" className="chat-attachment-thumb" title="Открыть фото" onClick={() => onOpen({ type: "image", url: att.url })}>
+            <img src={att.url} alt={att.name || "фото"} loading="lazy" />
+          </button>
+        ) : att.type === "video" ? (
+          <div key={index} className="chat-attachment-video">
+            <video controls preload="metadata" src={att.url} poster={att.previewUrl || undefined} />
+            <button type="button" className="chat-attachment-expand" title="Открыть на весь экран" onClick={() => onOpen({ type: "video", url: att.url })}>⛶</button>
+          </div>
+        ) : (
+          <a key={index} href={att.url} target="_blank" rel="noopener noreferrer" className="chat-file-link">
+            <Paperclip size={13} /> {att.name || "Файл"}
+          </a>
+        )
+      ))}
+    </div>
+  );
+}
+
 export function ChatsPage() {
   const queryClient = useQueryClient();
   const [marketplace, setMarketplace] = useState("all");
@@ -110,6 +176,7 @@ export function ChatsPage() {
   const [selected, setSelected] = useState<ChatRow | null>(null);
   const [text, setText] = useState("");
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [lightbox, setLightbox] = useState<LightboxMedia>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const chatsQuery = useQuery({
@@ -198,11 +265,15 @@ export function ChatsPage() {
               className={`chat-item${selected?.id === chat.id ? " is-active" : ""}${chat.unreadCount ? " has-unread" : ""}`}
               onClick={() => setSelected(chat)}
             >
-              <span className={`market-badge market-${chat.marketplace}`}>{chat.marketplace === "ozon" ? "Ozon" : "Яндекс"}</span>
-              <strong>{chat.title}</strong>
-              {chat.subtitle ? <small className="chat-subtitle">{chat.subtitle}</small> : null}
-              <small>{chatTime(chat.lastMessageAt)}</small>
-              {chat.unreadCount ? <span className="notify-badge chat-unread">{chat.unreadCount}</span> : null}
+              <span className="chat-item-top">
+                <span className={`market-badge market-${chat.marketplace}`}>{chat.marketplace === "ozon" ? "Ozon" : "Яндекс"}</span>
+                <strong>{chat.title}</strong>
+                {chat.unreadCount ? <span className="notify-badge chat-unread">{chat.unreadCount}</span> : null}
+              </span>
+              <span className="chat-item-bottom">
+                {chat.subtitle ? <small className="chat-subtitle">{chat.subtitle}</small> : <small className="chat-subtitle chat-subtitle-empty" />}
+                <small className="chat-item-time">{chatTime(chat.lastMessageAt)}</small>
+              </span>
             </button>
           ))}
           {chatsQuery.isFetching && !rows.length ? <ListSkeleton rows={7} /> : null}
@@ -233,27 +304,27 @@ export function ChatsPage() {
                 {historyQuery.isFetching ? <Loader2 className="spin" size={14} /> : null}
               </div>
               <div className="chat-messages">
-                {messages.map((message) => (
-                  <div className={`chat-bubble${message.isSeller ? " mine" : ""}`} key={message.id}>
-                    {message.text ? <div className="chat-text">{renderChatMarkdown(message.text)}</div> : null}
-                    {(message.attachments || []).map((att, i) => (
-                      att.type === "video" ? (
-                        <div key={i} className="chat-video-wrap">
-                          <video controls src={att.url} poster={att.previewUrl} className="chat-video" />
-                        </div>
-                      ) : att.type === "image" ? (
-                        <img key={i} src={att.url} alt="вложение" className="chat-image" />
-                      ) : (
-                        <a key={i} href={att.url} target="_blank" rel="noopener noreferrer" className="chat-file-link">
-                          📎 {att.name || "Файл"}
-                        </a>
-                      )
-                    ))}
-                    {!message.text && !(message.attachments || []).length ? <p className="chat-empty-att">(вложение)</p> : null}
-                    <small>{message.author && !message.isSeller ? `${message.author} · ` : ""}{chatTime(message.createdAt)}{message.isSeller ? " · вы" : ""}</small>
-                  </div>
-                ))}
+                {messages.map((message, index) => {
+                  const prev = messages[index - 1];
+                  const dayLabel = chatDayLabel(message.createdAt);
+                  const showDay = dayLabel && dayLabel !== chatDayLabel(prev?.createdAt);
+                  const showAuthor = !message.isSeller && message.author
+                    && (prev?.isSeller !== message.isSeller || prev?.author !== message.author || showDay);
+                  return (
+                    <div className="chat-message-group" key={message.id}>
+                      {showDay ? <div className="chat-day-sep"><span>{dayLabel}</span></div> : null}
+                      <div className={`chat-bubble${message.isSeller ? " mine" : ""}`}>
+                        {showAuthor ? <span className="chat-author">{message.author}</span> : null}
+                        {message.text ? <div className="chat-text">{renderChatMarkdown(message.text)}</div> : null}
+                        <ChatAttachments attachments={message.attachments || []} onOpen={setLightbox} />
+                        {!message.text && !(message.attachments || []).length ? <p className="chat-empty-att">(вложение)</p> : null}
+                        <small className="chat-meta">{chatTime(message.createdAt)}</small>
+                      </div>
+                    </div>
+                  );
+                })}
                 {!messages.length && !historyQuery.isFetching ? <div className="empty-state">Сообщений нет.</div> : null}
+                {historyQuery.isFetching && !messages.length ? <div className="table-note"><Loader2 className="spin" size={14} /> Загружаю переписку…</div> : null}
                 <div ref={messagesEndRef} />
               </div>
               <div className="chat-composer">
@@ -276,13 +347,13 @@ export function ChatsPage() {
                   <textarea
                     rows={2}
                     value={text}
-                    placeholder="Сообщение покупателю…"
+                    placeholder="Сообщение покупателю… (Ctrl+Enter — отправить)"
                     onChange={(event) => setText(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && text.trim()) send.mutate();
                     }}
                   />
-                  <button className="primary-action" type="button" disabled={!text.trim() || send.isPending} onClick={() => send.mutate()}>
+                  <button className="primary-action chat-send-btn" type="button" title="Отправить (Ctrl+Enter)" disabled={!text.trim() || send.isPending} onClick={() => send.mutate()}>
                     {send.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
                   </button>
                 </div>
@@ -292,6 +363,7 @@ export function ChatsPage() {
           )}
         </div>
       </div>
+      <ChatLightbox media={lightbox} onClose={() => setLightbox(null)} />
       <TemplatesDrawer
         open={templatesOpen}
         onClose={() => setTemplatesOpen(false)}
