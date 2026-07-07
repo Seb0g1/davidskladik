@@ -54,14 +54,72 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
   return xml;
 }
 
+// Живое состояние товаров-источников: свежая цена и остаток из Postgres на
+// момент сборки XML (Avito скачивает фид по расписанию — данные всегда
+// актуальные без пересохранения объявлений). null = Postgres недоступен,
+// используем сохранённые значения.
+async function loadAvitoLiveProductStates(listings) {
+  const ids = [...new Set(
+    listings
+      .map((item) => cleanText(item.sourceProductId))
+      .filter(Boolean),
+  )];
+  if (!ids.length) return new Map();
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) return null;
+  try {
+    const rows = await prisma.warehouseProduct.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, targetPrice: true, currentPrice: true, targetStock: true, archived: true },
+    });
+    return new Map(rows.map((row) => [row.id, row]));
+  } catch (error) {
+    logger.warn("avito feed live state load failed, using stored prices", { detail: error?.message || String(error) });
+    return null;
+  }
+}
+
+// Возвращает объявление со свежей ценой и признак «нет в наличии».
+// Товар, удалённый со склада, считается отсутствующим в наличии.
+function applyAvitoLiveState(listing, product, rules) {
+  if (!listing.sourceProductId) return { listing, outOfStock: false };
+  if (!product) return { listing, outOfStock: true };
+  const outOfStock = Boolean(product.archived) || Number(product.targetStock || 0) <= 0;
+  if (!rules.autoUpdatePrices) return { listing, outOfStock };
+  const basePriceRub = Number(product.targetPrice || product.currentPrice || 0);
+  const priceRub = basePriceRub > 0 ? Math.round(basePriceRub * (rules.priceCoefficient || 1)) : listing.priceRub;
+  return { listing: priceRub === listing.priceRub ? listing : { ...listing, priceRub }, outOfStock };
+}
+
 async function buildAvitoFeedXml() {
   const [state, rules] = await Promise.all([readAvitoListingsFile(), readAvitoImportRules()]);
   const enabled = state.items.filter((item) => item.enabled !== false && item.title);
+  const liveStates = rules.autoUpdatePrices || rules.hideOutOfStock
+    ? await loadAvitoLiveProductStates(enabled)
+    : new Map();
+  let hiddenOutOfStock = 0;
   let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
   xml += "<Ads formatVersion=\"3\" target=\"Avito.ru\">\n";
-  for (const listing of enabled) {
+  let count = 0;
+  for (const item of enabled) {
+    // Без живых данных (Postgres недоступен) полагаемся на сохранённый флаг
+    // outOfStock из фонового рефреша.
+    const { listing, outOfStock } = liveStates === null
+      ? { listing: item, outOfStock: item.outOfStock === true }
+      : applyAvitoLiveState(item, liveStates.get(cleanText(item.sourceProductId)), rules);
+    if (rules.hideOutOfStock && outOfStock) {
+      hiddenOutOfStock += 1;
+      continue;
+    }
     xml += buildAvitoAdXml(listing, rules.feedDefaults);
+    count += 1;
   }
   xml += "</Ads>\n";
-  return { xml, count: enabled.length, total: state.items.length };
+  return {
+    xml,
+    count,
+    total: state.items.length,
+    hiddenOutOfStock,
+    liveSource: liveStates === null ? "stored" : "postgres",
+  };
 }

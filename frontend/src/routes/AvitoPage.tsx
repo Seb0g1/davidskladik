@@ -27,6 +27,8 @@ type ImportRules = {
   skipArchived: boolean;
   minStock: number;
   priceCoefficient: number;
+  autoUpdatePrices: boolean;
+  hideOutOfStock: boolean;
   maxItems: number;
   feedDefaults: FeedDefaults;
 };
@@ -72,11 +74,33 @@ type Listing = {
   priceRub: number;
   imageUrls: string[];
   enabled: boolean;
+  outOfStock?: boolean;
+  lastSyncedAt?: string | null;
   updatedAt: string;
 };
 
 type ListingsResponse = { updatedAt: string | null; total: number; items: Listing[] };
-type FeedInfoResponse = { feedUrl: string; enabledCount: number; totalListings: number };
+type FeedRefreshResult = {
+  status: string;
+  updatedPrices?: number;
+  outOfStock?: number;
+  total?: number;
+  at?: string;
+  error?: string;
+};
+type FeedInfoResponse = {
+  feedUrl: string;
+  enabledCount: number;
+  totalListings: number;
+  hiddenOutOfStock?: number;
+  liveSource?: string;
+  autoRefresh?: {
+    enabled: boolean;
+    intervalMinutes: number;
+    nextRunAt: string | null;
+    lastResult: FeedRefreshResult | null;
+  };
+};
 type AvitoUpload = {
   upload_id: number;
   status: string;
@@ -208,6 +232,13 @@ export function AvitoPage() {
       void queryClient.invalidateQueries({ queryKey: ["avito-uploads"] });
     },
   });
+  const refreshFeed = useMutation({
+    mutationFn: () => apiJson<FeedRefreshResult>("/api/avito/feed/refresh", { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
+    },
+  });
 
   const copyFeedUrl = async () => {
     const url = feedInfoQuery.data?.feedUrl;
@@ -325,6 +356,14 @@ export function AvitoPage() {
                   <input type="checkbox" checked={rules.skipArchived} onChange={(event) => updateRules({ skipArchived: event.target.checked })} />
                   Пропускать архивные
                 </label>
+                <label className="settings-toggle" title="При каждом скачивании фида Avito получает актуальную цену склада × коэффициент">
+                  <input type="checkbox" checked={rules.autoUpdatePrices} onChange={(event) => updateRules({ autoUpdatePrices: event.target.checked })} />
+                  Автообновлять цены в фиде
+                </label>
+                <label className="settings-toggle" title="Товары без остатков или в архиве исключаются из фида — Avito снимет объявление">
+                  <input type="checkbox" checked={rules.hideOutOfStock} onChange={(event) => updateRules({ hideOutOfStock: event.target.checked })} />
+                  Скрывать без остатков
+                </label>
               </div>
               <div className="settings-form-row">
                 <label className="field-label field-label-wide">
@@ -390,7 +429,31 @@ export function AvitoPage() {
                   <ClipboardCopy size={16} /> {copied ? "Скопировано" : "Копировать"}
                 </button>
               </div>
-              <p className="form-hint">В фиде: {feedInfoQuery.data.enabledCount} активных из {feedInfoQuery.data.totalListings} объявлений. <a href="/api/avito/feed.xml" target="_blank" rel="noopener">Открыть XML</a></p>
+              <p className="form-hint">
+                В фиде: {feedInfoQuery.data.enabledCount} активных из {feedInfoQuery.data.totalListings} объявлений
+                {feedInfoQuery.data.hiddenOutOfStock ? ` · скрыто без остатков: ${feedInfoQuery.data.hiddenOutOfStock}` : ""}.
+                {" "}<a href="/api/avito/feed.xml" target="_blank" rel="noopener">Открыть XML</a>
+              </p>
+              <p className="form-hint">
+                Цены и остатки подставляются из склада при каждом скачивании фида
+                {feedInfoQuery.data.autoRefresh?.enabled
+                  ? `; фоновая сверка каждые ${feedInfoQuery.data.autoRefresh.intervalMinutes} мин`
+                  : ""}
+                {feedInfoQuery.data.autoRefresh?.lastResult?.at
+                  ? ` · последняя: ${new Date(feedInfoQuery.data.autoRefresh.lastResult.at).toLocaleString("ru-RU")}`
+                  : ""}.
+              </p>
+              <div className="row-actions">
+                <button className="secondary-action" type="button" disabled={refreshFeed.isPending} onClick={() => refreshFeed.mutate()} title="Перенести актуальные цены и остатки склада в объявления прямо сейчас">
+                  {refreshFeed.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить цены/остатки
+                </button>
+              </div>
+              {refreshFeed.data ? (
+                <p className="form-hint">
+                  Обновлено цен: {refreshFeed.data.updatedPrices ?? 0} · без остатков: {refreshFeed.data.outOfStock ?? 0} из {refreshFeed.data.total ?? 0}.
+                </p>
+              ) : null}
+              {refreshFeed.error ? <div className="inline-error">{String((refreshFeed.error as Error).message)}</div> : null}
             </>
           ) : (
             <div className="table-note"><Loader2 className="spin" size={14} /> Загружаю…</div>
@@ -475,7 +538,13 @@ export function AvitoPage() {
               <span data-label="Артикул">{item.adId}</span>
               <span data-label="Объём">{item.volumeMl ? `${item.volumeMl} мл` : "—"}</span>
               <span data-label="Цена">{item.priceRub ? `${item.priceRub} ₽` : "—"}</span>
-              <span data-label="Источник"><span className={`pill ${item.source === "ozon" ? "ok" : "muted"}`}>{item.source === "ozon" ? "Ozon" : "вручную"}</span></span>
+              <span data-label="Источник">
+                {item.outOfStock ? (
+                  <span className="pill warn" title="Нет остатков на складе — объявление скрыто из фида">нет остатков</span>
+                ) : (
+                  <span className={`pill ${item.source === "ozon" ? "ok" : "muted"}`}>{item.source === "ozon" ? "Ozon" : "вручную"}</span>
+                )}
+              </span>
               <span>
                 <button className="icon-action danger" type="button" disabled={removeListing.isPending} onClick={() => removeListing.mutate(item.adId)} title="Убрать из фида">
                   <Trash2 size={15} />

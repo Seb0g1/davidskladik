@@ -245,13 +245,35 @@ app.delete("/api/avito/listings", requireAdmin, async (request, response, next) 
 app.get("/api/avito/feed-info", async (request, response, next) => {
   try {
     const token = await ensureAvitoFeedToken();
-    const { count, total } = await buildAvitoFeedXml();
+    const { count, total, hiddenOutOfStock, liveSource } = await buildAvitoFeedXml();
     const baseUrl = cleanText(process.env.PUBLIC_BASE_URL) || `${request.protocol}://${request.get("host")}`;
     response.json({
       feedUrl: `${baseUrl}/public/avito-feed/${token}.xml`,
       enabledCount: count,
       totalListings: total,
+      hiddenOutOfStock,
+      liveSource,
+      autoRefresh: {
+        enabled: avitoFeedRefreshEnabled,
+        intervalMinutes: Math.round(avitoFeedRefreshIntervalMs / 60000),
+        nextRunAt: avitoFeedRefreshNextRunAt,
+        lastResult: avitoFeedRefreshLastResult,
+      },
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Ручной перенос актуальных цен/остатков склада в сохранённые объявления.
+app.post("/api/avito/feed/refresh", requireAdmin, async (request, response, next) => {
+  try {
+    const result = await runAvitoFeedRefresh({ source: "manual" });
+    if (result.status === "postgres_unavailable") {
+      return response.status(503).json({ error: "Postgres недоступен: обновить цены и остатки сейчас нельзя.", ...result });
+    }
+    await appendAudit(request, "avito.feed.refresh", { newValue: result });
+    response.json({ ok: result.status !== "error", ...result });
   } catch (error) {
     next(error);
   }

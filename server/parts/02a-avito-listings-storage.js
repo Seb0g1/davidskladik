@@ -31,6 +31,10 @@ function normalizeAvitoListing(input = {}, current = {}) {
     address: cleanText(input.address ?? current.address),
     extraFields,
     enabled: parseBooleanSetting(input.enabled, current.enabled !== false),
+    // Актуализируется фоновым рефрешем и живым обогащением фида: товар без
+    // остатков или в архиве не попадает в XML (Avito снимет объявление).
+    outOfStock: parseBooleanSetting(input.outOfStock ?? input.out_of_stock, current.outOfStock === true),
+    lastSyncedAt: cleanText(input.lastSyncedAt ?? input.last_synced_at ?? current.lastSyncedAt) || null,
     createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -121,6 +125,10 @@ function defaultAvitoImportRules() {
     minStock: 0,
     // Множитель к рублёвой цене Ozon для цены на Avito.
     priceCoefficient: 1,
+    // Автообновление фида: подтягивать актуальную цену склада при каждой
+    // сборке XML и скрывать товары без остатков/в архиве.
+    autoUpdatePrices: true,
+    hideOutOfStock: true,
     maxItems: 0,
     feedDefaults: {
       category: "Красота и здоровье",
@@ -162,6 +170,8 @@ function normalizeAvitoImportRules(input = {}) {
     skipArchived: parseBooleanSetting(raw.skipArchived ?? raw.skip_archived, fallback.skipArchived),
     minStock: clampNumber(raw.minStock ?? raw.min_stock, fallback.minStock, { max: 100000 }),
     priceCoefficient: clampNumber(raw.priceCoefficient ?? raw.price_coefficient, fallback.priceCoefficient, { min: 0.01, max: 100, round: false }),
+    autoUpdatePrices: parseBooleanSetting(raw.autoUpdatePrices ?? raw.auto_update_prices, fallback.autoUpdatePrices),
+    hideOutOfStock: parseBooleanSetting(raw.hideOutOfStock ?? raw.hide_out_of_stock, fallback.hideOutOfStock),
     maxItems: clampNumber(raw.maxItems ?? raw.max_items, fallback.maxItems, { max: 1000000 }),
     feedDefaults: {
       category: cleanText(rawDefaults.category ?? fallback.feedDefaults.category),

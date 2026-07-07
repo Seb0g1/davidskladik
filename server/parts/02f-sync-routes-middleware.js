@@ -250,6 +250,12 @@ function startBackgroundSchedulers() {
       batchLimit: priceSweepBatchLimit,
     });
   }
+  if (avitoFeedRefreshEnabled) {
+    scheduleAvitoFeedRefresh(4 * 60_000);
+    logger.info("avito feed refresh scheduler enabled", {
+      intervalMinutes: Math.round(avitoFeedRefreshIntervalMs / 60000),
+    });
+  }
   if (healthAlertEnabled) {
     scheduleHealthAlertMonitor(150_000);
     logger.info("health alert monitor enabled", {

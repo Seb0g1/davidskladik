@@ -229,6 +229,7 @@ const partFiles = [
   "02f-price-sweep.js",
   "02f-stock-sweep.js",
   "02f-zero-stock-sweep.js",
+  "02f-avito-feed-refresh.js",
   "02f-snooze-sweep.js",
   "02f-sweep-heartbeat.js",
   "02f-health-alert-monitor.js",
