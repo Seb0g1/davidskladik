@@ -77,3 +77,10 @@ playwright-report/
 .playwright/
 ._*
 *.zip
+claude.exe
+photo_*.jpg
+avito/*
+!avito/*.txt
+Добавление товаров*.pdf
+Портал разработчика Авито_files/
+Сайт маркетплейс свой/
