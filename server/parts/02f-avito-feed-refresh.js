@@ -21,6 +21,7 @@ async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
     }
     const liveStates = await loadAvitoLiveProductStates(state.items);
     if (liveStates === null) return { status: "postgres_unavailable" };
+    const pricing = await loadAvitoPricingContext();
 
     const syncedAt = new Date().toISOString();
     let updatedPrices = 0;
@@ -29,7 +30,7 @@ async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
     const nextItems = state.items.map((item) => {
       const sourceProductId = cleanText(item.sourceProductId);
       if (!sourceProductId) return item;
-      const { listing, outOfStock } = applyAvitoLiveState(item, liveStates.get(sourceProductId), rules);
+      const { listing, outOfStock } = applyAvitoLiveState(item, liveStates.get(sourceProductId), rules, pricing);
       if (outOfStock) outOfStockCount += 1;
       if (listing.priceRub !== item.priceRub) updatedPrices += 1;
       if (listing.priceRub !== item.priceRub || outOfStock !== (item.outOfStock === true)) changed = true;
@@ -75,9 +76,15 @@ function scheduleAvitoFeedRefresh(delayMs = avitoFeedRefreshIntervalMs) {
       await runAvitoFeedRefresh({ source: "schedule" });
     } catch (error) {
       logger.warn("avito feed refresh tick failed", { detail: error?.message || String(error) });
-    } finally {
-      scheduleAvitoFeedRefresh(avitoFeedRefreshIntervalMs);
     }
+    // Фоновое дозаполнение описаний с Ozon — порция за цикл, пока не кончатся
+    // объявления без description.
+    try {
+      await backfillAvitoListingDescriptionsFromOzon({ source: "schedule" });
+    } catch (error) {
+      logger.warn("avito description backfill tick failed", { detail: error?.message || String(error) });
+    }
+    scheduleAvitoFeedRefresh(avitoFeedRefreshIntervalMs);
   }, normalizedDelay);
   avitoFeedRefreshTimer.unref?.();
 }

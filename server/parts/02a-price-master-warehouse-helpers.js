@@ -76,7 +76,9 @@ function resolveMarkupCoefficient({ productMarkup, marketplace, supplierUsdPrice
   const defaults = appSettings?.defaultMarkups || {};
   const fallback = marketplace === "ozon"
     ? Number(defaults.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7)
-    : Number(defaults.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
+    : marketplace === "avito"
+      ? Number(defaults.avito || process.env.DEFAULT_AVITO_MARKUP || 1.6)
+      : Number(defaults.yandex || process.env.DEFAULT_YANDEX_MARKUP || 1.6);
   let usd = Number(supplierUsdPrice || 0);
   const currency = cleanText(supplierPriceCurrency || "USD").toUpperCase();
   if ((currency === "RUB" || currency === "RUR") && usd > 0) {

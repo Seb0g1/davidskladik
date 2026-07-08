@@ -290,6 +290,19 @@ app.post("/api/avito/price/adjust-percent", requireAdmin, async (request, respon
   }
 });
 
+// Ручное дозаполнение описаний объявлений с Ozon (для объявлений без
+// description). Порциями, чтобы HTTP-запрос не висел дольше пары минут.
+app.post("/api/avito/descriptions/backfill", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = Math.min(500, Math.max(1, Number(request.body?.limit || 200) || 200));
+    const result = await backfillAvitoListingDescriptionsFromOzon({ limit, source: "manual" });
+    await appendAudit(request, "avito.descriptions.backfill", { newValue: result });
+    response.json({ ok: result.status === "ok" || result.status === "done", ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Ручной перенос актуальных цен/остатков склада в сохранённые объявления.
 app.post("/api/avito/feed/refresh", requireAdmin, async (request, response, next) => {
   try {

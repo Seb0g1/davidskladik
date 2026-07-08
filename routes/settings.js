@@ -17,6 +17,7 @@ function registerSettingsRoutes(app, deps) {
     priceAffectingSettingsChanged,
     queueImmediateAutoPricePush,
     queueAuthoritativePriceReprice,
+    runAvitoFeedRefresh,
     appendAudit,
     logger,
     normalizeOpenAiImageError,
@@ -120,8 +121,10 @@ app.post("/api/settings", requireAdmin, saveSettingsHandler);
 
 function pricingAdjustMarketplace(value) {
   const text = cleanText(value || "all").toLowerCase();
-  return text === "ozon" || text === "yandex" ? text : "all";
+  return text === "ozon" || text === "yandex" || text === "avito" ? text : "all";
 }
+
+const PRICING_ADJUST_MARKETPLACES = ["ozon", "yandex", "avito"];
 
 function pricingAdjustCoefficient(value, multiplier) {
   const current = Number(value || 0);
@@ -142,10 +145,12 @@ function pricingAdjustRule(rule, marketplace, multiplier) {
     return [{ ...normalized, coefficient: pricingAdjustCoefficient(normalized.coefficient, multiplier) || normalized.coefficient }];
   }
   if (normalized.marketplace !== "all") return [normalized];
-  const other = marketplace === "ozon" ? "yandex" : "ozon";
+  // Общее правило («all») при точечной корректировке распадается на правила
+  // по маркетплейсам: скорректированное + нетронутые копии для остальных.
+  const others = PRICING_ADJUST_MARKETPLACES.filter((key) => key !== marketplace);
   return [
     { ...normalized, marketplace, coefficient: pricingAdjustCoefficient(normalized.coefficient, multiplier) || normalized.coefficient },
-    { ...normalized, marketplace: other },
+    ...others.map((key) => ({ ...normalized, marketplace: key })),
   ];
 }
 
@@ -164,7 +169,7 @@ app.post("/api/settings/pricing/adjust-percent", requireAdmin, async (request, r
       markupRules: Array.isArray(previous.markupRules) ? previous.markupRules : [],
     };
     const nextDefaultMarkups = { ...(previous.defaultMarkups || {}) };
-    for (const key of ["ozon", "yandex"]) {
+    for (const key of PRICING_ADJUST_MARKETPLACES) {
       if (marketplace !== "all" && marketplace !== key) continue;
       const adjusted = pricingAdjustCoefficient(nextDefaultMarkups[key], multiplier);
       if (adjusted) nextDefaultMarkups[key] = adjusted;
@@ -194,7 +199,14 @@ app.post("/api/settings/pricing/adjust-percent", requireAdmin, async (request, r
     let priceRepriceQueueError = "";
     let priceRepriceQueue = null;
     try {
-      if (typeof queueAuthoritativePriceReprice === "function") {
+      if (marketplace === "avito") {
+        // Цены Avito считаются на лету при каждой сборке фида — пересчёт цен
+        // склада не нужен, достаточно обновить сохранённые объявления.
+        if (typeof runAvitoFeedRefresh === "function") {
+          await runAvitoFeedRefresh({ source: "settings_price_adjust" }).catch(() => null);
+        }
+        priceRepriceQueued = true;
+      } else if (typeof queueAuthoritativePriceReprice === "function") {
         priceRepriceQueue = await queueAuthoritativePriceReprice({
           marketplace,
           reason: "settings_price_adjust_percent",

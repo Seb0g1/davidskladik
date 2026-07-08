@@ -27,17 +27,43 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
     || cleanText(feedDefaults.description)
       .replace(/\{title\}/g, listing.title || "")
       .replace(/\{brand\}/g, listing.brand || "");
+  const emitted = new Set();
   let xml = "  <Ad>\n";
-  xml += avitoXmlTag("Id", listing.adId);
-  xml += avitoXmlTag("Title", listing.title);
+  const emit = (name, value) => {
+    const tag = avitoXmlTag(name, value);
+    if (tag) emitted.add(name);
+    xml += tag;
+  };
+  emit("Id", listing.adId);
+  emit("Title", listing.title);
   xml += avitoXmlCdataTag("Description", description);
-  if (listing.priceRub > 0) xml += avitoXmlTag("Price", listing.priceRub);
-  xml += avitoXmlTag("Category", listing.category || feedDefaults.category);
-  xml += avitoXmlTag("GoodsType", listing.goodsType || feedDefaults.goodsType);
-  xml += avitoXmlTag("AdType", listing.adType || feedDefaults.adType);
-  xml += avitoXmlTag("Condition", listing.condition || feedDefaults.condition);
-  xml += avitoXmlTag("Address", listing.address || feedDefaults.address);
-  xml += avitoXmlTag("Brand", listing.brand);
+  emitted.add("Description");
+  if (listing.priceRub > 0) emit("Price", listing.priceRub);
+
+  // Цепочка категоризации по справочнику: выводим ровно те теги, которые есть
+  // в шаблоне категории (у Парфюмерии — PerfumeryType и Condition, у «Уход и
+  // гигиена» — GoodsSubType/SubType без Condition). Для старых объявлений без
+  // categoryKey — прежнее поведение на feedDefaults.
+  const spec = getAvitoCategorySpec(listing.categoryKey);
+  if (spec) {
+    emit("Category", AVITO_FEED_CATEGORY);
+    emit("GoodsType", spec.tags.GoodsType);
+    if (spec.tags.GoodsSubType) emit("GoodsSubType", spec.tags.GoodsSubType);
+    if (spec.tags.SubType) emit("SubType", spec.tags.SubType);
+    if (spec.tags.PerfumeryType) emit("PerfumeryType", spec.tags.PerfumeryType);
+    emit("AdType", listing.adType || feedDefaults.adType);
+    if (spec.condition) emit("Condition", listing.condition || feedDefaults.condition || "Новое");
+  } else {
+    emit("Category", listing.category || feedDefaults.category);
+    emit("GoodsType", listing.goodsType || feedDefaults.goodsType);
+    if (listing.goodsSubType) emit("GoodsSubType", listing.goodsSubType);
+    if (listing.subType) emit("SubType", listing.subType);
+    if (listing.perfumeryType) emit("PerfumeryType", listing.perfumeryType);
+    emit("AdType", listing.adType || feedDefaults.adType);
+    emit("Condition", listing.condition || feedDefaults.condition);
+  }
+  emit("Address", listing.address || feedDefaults.address);
+  emit("Brand", listing.brand);
   if (listing.imageUrls.length) {
     xml += "    <Images>\n";
     for (const url of listing.imageUrls) {
@@ -47,7 +73,7 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
   }
   for (const [tag, value] of Object.entries(listing.extraFields || {})) {
     const tagName = cleanText(tag).replace(/[^A-Za-z0-9_]/g, "");
-    if (!tagName) continue;
+    if (!tagName || emitted.has(tagName)) continue;
     xml += avitoXmlTag(tagName, value);
   }
   xml += "  </Ad>\n";
@@ -68,11 +94,28 @@ async function loadAvitoLiveProductStates(listings) {
   const prisma = getPrisma();
   if (!prisma || !shouldUsePostgresStorage()) return null;
   try {
-    const rows = await prisma.warehouseProduct.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, targetPrice: true, currentPrice: true, targetStock: true, archived: true },
-    });
-    return new Map(rows.map((row) => [row.id, row]));
+    const map = new Map();
+    const chunkSize = 5000;
+    for (let index = 0; index < ids.length; index += chunkSize) {
+      const chunk = ids.slice(index, index + chunkSize);
+      // Снимок выбранного поставщика нужен для цены «от поставщика», поэтому
+      // обычного select колонок недостаточно — тянем путь из raw.
+      const rows = await prisma.$queryRaw`
+        SELECT id, target_price, target_stock, archived, raw->'selectedSupplier' AS supplier
+        FROM warehouse_products
+        WHERE id = ANY(${chunk})
+      `;
+      for (const row of rows) {
+        map.set(cleanText(row.id), {
+          id: cleanText(row.id),
+          targetPrice: Number(row.target_price || 0),
+          targetStock: Number(row.target_stock || 0),
+          archived: Boolean(row.archived),
+          supplier: row.supplier && typeof row.supplier === "object" ? row.supplier : null,
+        });
+      }
+    }
+    return map;
   } catch (error) {
     logger.warn("avito feed live state load failed, using stored prices", { detail: error?.message || String(error) });
     return null;
@@ -81,13 +124,12 @@ async function loadAvitoLiveProductStates(listings) {
 
 // Возвращает объявление со свежей ценой и признак «нет в наличии».
 // Товар, удалённый со склада, считается отсутствующим в наличии.
-function applyAvitoLiveState(listing, product, rules) {
+function applyAvitoLiveState(listing, product, rules, pricing = {}) {
   if (!listing.sourceProductId) return { listing, outOfStock: false };
   if (!product) return { listing, outOfStock: true };
   const outOfStock = Boolean(product.archived) || Number(product.targetStock || 0) <= 0;
   if (!rules.autoUpdatePrices) return { listing, outOfStock };
-  const basePriceRub = Number(product.targetPrice || product.currentPrice || 0);
-  const priceRub = basePriceRub > 0 ? Math.round(basePriceRub * avitoPriceCoefficientFor(basePriceRub, rules)) : listing.priceRub;
+  const priceRub = resolveAvitoListingPriceRub(product, product.supplier, rules, pricing) || listing.priceRub;
   return { listing: priceRub === listing.priceRub ? listing : { ...listing, priceRub }, outOfStock };
 }
 
@@ -97,6 +139,7 @@ async function buildAvitoFeedXml() {
   const liveStates = rules.autoUpdatePrices || rules.hideOutOfStock
     ? await loadAvitoLiveProductStates(enabled)
     : new Map();
+  const pricing = liveStates && rules.autoUpdatePrices ? await loadAvitoPricingContext() : {};
   let hiddenOutOfStock = 0;
   let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
   xml += "<Ads formatVersion=\"3\" target=\"Avito.ru\">\n";
@@ -106,7 +149,7 @@ async function buildAvitoFeedXml() {
     // outOfStock из фонового рефреша.
     const { listing, outOfStock } = liveStates === null
       ? { listing: item, outOfStock: item.outOfStock === true }
-      : applyAvitoLiveState(item, liveStates.get(cleanText(item.sourceProductId)), rules);
+      : applyAvitoLiveState(item, liveStates.get(cleanText(item.sourceProductId)), rules, pricing);
     if (rules.hideOutOfStock && outOfStock) {
       hiddenOutOfStock += 1;
       continue;

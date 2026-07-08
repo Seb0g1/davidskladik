@@ -7100,3 +7100,74 @@ test("Ozon discount quarantine uses staged price steps under 90% drop limit", ()
   assert.deepEqual(planOzonQuarantinePriceSteps(1200, 1100), [1100]);
   assert.ok(resolveOzonOldPrice(54, {}) >= 69);
 });
+
+test("Avito categorizer maps titles to category specs and feed XML emits spec tag chain", () => {
+  const { classifyAvitoCategory, getAvitoCategorySpec, buildAvitoAdXml, normalizeAvitoAdType, avitoListingCategoryPath, detectAvitoPerfumeGender } = require("../server.js");
+
+  // Классификация по названию: цепочки категорий из шаблонов Автозагрузки.
+  assert.equal(classifyAvitoCategory("GIORGIO ARMANI CODE Мужские духи 75мл").key, "parfum-edt");
+  assert.equal(classifyAvitoCategory("CHANEL подарочный набор: духи 5мл + лосьон").key, "parfum-sets");
+  assert.equal(classifyAvitoCategory("Масляные духи Attar Collection 12 мл").key, "parfum-oils");
+  assert.equal(classifyAvitoCategory("Крем для рук увлажняющий 75 мл").key, "body-creams");
+  assert.equal(classifyAvitoCategory("Ночной крем для лица 50 мл").key, "face-creams");
+  assert.equal(classifyAvitoCategory("Шампунь укрепляющий 400 мл").key, "hair");
+  assert.equal(classifyAvitoCategory("Гидрогелевые патчи для глаз 60 шт").key, "face-patches");
+  assert.equal(classifyAvitoCategory("Дезодорант-антиперспирант 150 мл").key, "body-deo");
+  const fallback = classifyAvitoCategory("Непонятный товар без ключевых слов");
+  assert.equal(fallback.key, "parfum-edt");
+  assert.equal(fallback.autoDefaulted, true);
+
+  // Канонический AdType Avito — «приобретен» без «ё».
+  assert.equal(normalizeAvitoAdType("Товар приобретён на продажу"), "Товар приобретен на продажу");
+  assert.equal(detectAvitoPerfumeGender("Духи женские 50 мл"), "Женщины");
+
+  // XML духов: PerfumeryType + Condition, без GoodsSubType/SubType.
+  const perfumeXml = buildAvitoAdXml({
+    adId: "oz-1", title: "Тест духи", priceRub: 1000, imageUrls: [], extraFields: { Gender: "Женщины" },
+    categoryKey: "parfum-edt", adType: "Товар приобретен на продажу", condition: "Новое", brand: "",
+  }, { address: "Москва", description: "{title}" });
+  assert.match(perfumeXml, /<GoodsType>Парфюмерия<\/GoodsType>/);
+  assert.match(perfumeXml, /<PerfumeryType>Духи и туалетная вода<\/PerfumeryType>/);
+  assert.match(perfumeXml, /<Condition>Новое<\/Condition>/);
+  assert.match(perfumeXml, /<Gender>Женщины<\/Gender>/);
+  assert.match(perfumeXml, /<Address>Москва<\/Address>/);
+  assert.match(perfumeXml, /<Description><!\[CDATA\[Тест духи\]\]><\/Description>/);
+  assert.doesNotMatch(perfumeXml, /<GoodsSubType>/);
+  assert.doesNotMatch(perfumeXml, /<SubType>/);
+
+  // XML ухода: GoodsSubType/SubType, без PerfumeryType и Condition.
+  const careXml = buildAvitoAdXml({
+    adId: "oz-2", title: "Крем", priceRub: 500, imageUrls: [],
+    categoryKey: "body-creams", adType: "Товар приобретен на продажу", brand: "",
+  }, { address: "Москва", description: "{title}" });
+  assert.match(careXml, /<GoodsType>Уход и гигиена<\/GoodsType>/);
+  assert.match(careXml, /<GoodsSubType>Уход за телом<\/GoodsSubType>/);
+  assert.match(careXml, /<SubType>Кремы<\/SubType>/);
+  assert.doesNotMatch(careXml, /<PerfumeryType>/);
+  assert.doesNotMatch(careXml, /<Condition>/);
+
+  assert.equal(avitoListingCategoryPath({ categoryKey: "face-serums" }), "Уход за лицом / Сыворотки и эссенции");
+  assert.ok(getAvitoCategorySpec("care-sun"));
+});
+
+test("Avito price comes from linked supplier purchase price, not Ozon listing price", () => {
+  const { evaluateAvitoImportCandidate, normalizeAvitoImportRules } = require("../server.js");
+  const rules = normalizeAvitoImportRules({});
+  const pricing = {
+    usdRate: 100,
+    appSettings: { defaultMarkups: { ozon: 1.7, yandex: 1.6, avito: 1.5 }, markupRules: [{ marketplace: "avito", minUsd: 50, coefficient: 2 }] },
+    supplierByProductId: new Map([["p1", { price: 60, priceCurrency: "USD" }]]),
+  };
+  const product = {
+    id: "p1", offerId: "SKU1", name: "Тестовые духи 100 мл", archived: false,
+    targetStock: 5, targetPrice: 9999, images: ["https://example.com/a.jpg"],
+  };
+  const result = evaluateAvitoImportCandidate(product, rules, pricing);
+  assert.equal(result.ok, true);
+  // 60 USD × 100 ₽ × 2 (правило avito от $50) = 12000 — не targetPrice и не цена Ozon.
+  assert.equal(result.listing.priceRub, 12000);
+
+  // Без поставщика — фолбэк на targetPrice (цена от поставщика, посчитанная для Ozon).
+  const noSupplier = evaluateAvitoImportCandidate(product, rules, { ...pricing, supplierByProductId: new Map() });
+  assert.equal(noSupplier.listing.priceRub, 9999);
+});

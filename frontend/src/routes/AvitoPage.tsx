@@ -26,6 +26,7 @@ type ImportRules = {
   requireImages: boolean;
   skipArchived: boolean;
   minStock: number;
+  defaultCategoryKey: string;
   priceCoefficient: number;
   priceRules: Array<{ minPriceRub: number; coefficient: number }>;
   autoUpdatePrices: boolean;
@@ -42,6 +43,11 @@ type MatchedListing = {
   volumeMl: number;
   priceRub: number;
   imageUrls: string[];
+  categoryKey?: string;
+  goodsType?: string;
+  goodsSubType?: string;
+  subType?: string;
+  perfumeryType?: string;
 };
 
 type SkippedItem = { id: string; offerId: string; name: string; reasons: string[] };
@@ -52,6 +58,7 @@ type PreviewResponse = {
   matchedCount: number;
   skippedCount: number;
   skippedByReason: Record<string, number>;
+  matchedByCategory?: Record<string, number>;
   matchedSample: MatchedListing[];
   skippedSample: SkippedItem[];
 };
@@ -64,6 +71,7 @@ type ApplyResponse = {
   created: number;
   updated: number;
   totalListings: number;
+  matchedByCategory?: Record<string, number>;
 };
 
 type Listing = {
@@ -74,6 +82,13 @@ type Listing = {
   volumeMl: number;
   priceRub: number;
   imageUrls: string[];
+  description?: string;
+  categoryKey?: string;
+  goodsType?: string;
+  goodsSubType?: string;
+  subType?: string;
+  perfumeryType?: string;
+  categoryAutoDefaulted?: boolean;
   enabled: boolean;
   outOfStock?: boolean;
   lastSyncedAt?: string | null;
@@ -167,6 +182,22 @@ function numberInput(value: string, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+// Ключи и подписи должны совпадать с AVITO_CATEGORY_SPECS на сервере
+// (server/parts/02a-avito-categorizer.js).
+const CATEGORY_OPTIONS: Array<{ key: string; label: string }> = [
+  { key: "parfum-edt", label: "Парфюмерия / Духи и туалетная вода" },
+  { key: "parfum-sets", label: "Парфюмерия / Парфюмерные наборы" },
+  { key: "parfum-oils", label: "Парфюмерия / Парфюмерные масла" },
+  { key: "parfum-diffusers", label: "Парфюмерия / Диффузоры, спреи и саше" },
+  { key: "parfum-atomizers", label: "Парфюмерия / Атомайзеры и флаконы" },
+  { key: "parfum-other", label: "Парфюмерия / Другое" },
+  { key: "care-sets", label: "Уход и гигиена / Наборы уходовой косметики" },
+];
+
+function categoryPath(item: { goodsType?: string; goodsSubType?: string; subType?: string; perfumeryType?: string }): string {
+  return [item.goodsType, item.goodsSubType, item.subType, item.perfumeryType].filter(Boolean).join(" / ");
+}
+
 export function AvitoPage() {
   const queryClient = useQueryClient();
   const [rules, setRules] = useState<ImportRules | null>(null);
@@ -254,6 +285,12 @@ export function AvitoPage() {
       void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
     },
   });
+  const backfillDescriptions = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; status: string; updated?: number; remaining?: number }>("/api/avito/descriptions/backfill", { method: "POST", body: JSON.stringify({ limit: 500 }) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+    },
+  });
 
   const copyFeedUrl = async () => {
     const url = feedInfoQuery.data?.feedUrl;
@@ -281,7 +318,7 @@ export function AvitoPage() {
     <section className="page-section import-page avito-page">
       <PageHeader
         title="Импорт на Avito"
-        subtitle="Перенос товаров с Ozon в фид Автозагрузки Avito по гибким правилам: объём, стоп-слова, бренды, цены."
+        subtitle="Перенос товаров с Ozon в фид Автозагрузки Avito. Цена считается от закупки привязанного поставщика × наценка Avito (Настройки → Цены); категория и описание подбираются автоматически."
         action={(
           <div className="row-actions">
             <button className="secondary-action" type="button" disabled={!rules || preview.isPending} onClick={() => rules && preview.mutate(rules)}>
@@ -337,8 +374,8 @@ export function AvitoPage() {
                   Мин. объём, мл (0 = выкл)
                   <input type="number" min={0} value={String(rules.minVolumeMl)} onChange={(event) => updateRules({ minVolumeMl: numberInput(event.target.value) })} />
                 </label>
-                <label className="field-label">
-                  Коэффициент цены Avito
+                <label className="field-label" title="Применяется поверх цены «закупка поставщика × наценка Avito из Настроек». 1 = без изменения.">
+                  Доп. коэффициент цены
                   <input type="number" min={0.01} step={0.01} value={String(rules.priceCoefficient)} onChange={(event) => updateRules({ priceCoefficient: numberInput(event.target.value, 1) })} />
                 </label>
                 <label className="field-label">
@@ -356,6 +393,14 @@ export function AvitoPage() {
                 <label className="field-label">
                   Лимит объявлений (0 = все)
                   <input type="number" min={0} value={String(rules.maxItems)} onChange={(event) => updateRules({ maxItems: numberInput(event.target.value) })} />
+                </label>
+                <label className="field-label" title="Категория Avito подбирается автоматически по названию товара; сюда попадают товары без уверенной классификации">
+                  Категория по умолчанию
+                  <select value={rules.defaultCategoryKey || "parfum-edt"} onChange={(event) => updateRules({ defaultCategoryKey: event.target.value })}>
+                    {CATEGORY_OPTIONS.map((option) => (
+                      <option key={option.key} value={option.key}>{option.label}</option>
+                    ))}
+                  </select>
                 </label>
               </div>
               <div className="settings-form-row">
@@ -386,7 +431,7 @@ export function AvitoPage() {
                   Добавить правило
                 </button>
               </div>
-              <p className="form-hint">Коэффициент к рублёвой цене Ozon: берётся правило с наибольшим подходящим порогом «от цены». Если правил нет — действует базовый коэффициент выше.</p>
+              <p className="form-hint">Дополнительный коэффициент поверх цены от поставщика: берётся правило с наибольшим подходящим порогом «от цены». Если правил нет — действует базовый коэффициент выше. Основная наценка Avito настраивается в Настройки → Цены → «Гибкие правила наценки».</p>
               <div className="avito-price-rules">
                 <div className="avito-price-rule-head"><span>От цены, ₽</span><span>Коэффициент</span><span></span></div>
                 {rules.priceRules
@@ -500,6 +545,9 @@ export function AvitoPage() {
                 <button className="secondary-action" type="button" disabled={refreshFeed.isPending} onClick={() => refreshFeed.mutate()} title="Перенести актуальные цены и остатки склада в объявления прямо сейчас">
                   {refreshFeed.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить цены/остатки
                 </button>
+                <button className="secondary-action" type="button" disabled={backfillDescriptions.isPending} onClick={() => backfillDescriptions.mutate()} title="Подтянуть описания товаров с Ozon для объявлений без описания (порция до 500 за запуск; фоновая задача добирает остальные автоматически)">
+                  {backfillDescriptions.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Описания с Ozon
+                </button>
               </div>
               {refreshFeed.data ? (
                 <p className="form-hint">
@@ -507,6 +555,12 @@ export function AvitoPage() {
                 </p>
               ) : null}
               {refreshFeed.error ? <div className="inline-error">{String((refreshFeed.error as Error).message)}</div> : null}
+              {backfillDescriptions.data ? (
+                <p className="form-hint">
+                  Описания: добавлено {backfillDescriptions.data.updated ?? 0}, осталось без описания {backfillDescriptions.data.remaining ?? 0}.
+                </p>
+              ) : null}
+              {backfillDescriptions.error ? <div className="inline-error">{String((backfillDescriptions.error as Error).message)}</div> : null}
             </>
           ) : (
             <div className="table-note"><Loader2 className="spin" size={14} /> Загружаю…</div>
@@ -537,6 +591,18 @@ export function AvitoPage() {
                 <span className="brand-chip" key={reason}>{reasonLabel(reason)}: {count}</span>
               ))}
             </div>
+          ) : null}
+          {previewData.matchedByCategory && Object.keys(previewData.matchedByCategory).length ? (
+            <>
+              <h4>Категории Avito</h4>
+              <div className="brand-chips">
+                {Object.entries(previewData.matchedByCategory)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([category, count]) => (
+                    <span className="brand-chip" key={category}>{category}: {count}</span>
+                  ))}
+              </div>
+            </>
           ) : null}
           <div className="preview-columns">
             <div>
@@ -586,7 +652,10 @@ export function AvitoPage() {
             <div className="table-row avito-listing-row" key={item.adId}>
               <span className="import-product">
                 {item.imageUrls[0] ? <img src={item.imageUrls[0]} alt="" loading="lazy" /> : <span className="import-noimg" />}
-                <span className="import-name">{item.title}</span>
+                <span className="import-name">
+                  {item.title}
+                  {categoryPath(item) ? <small style={{ display: "block", opacity: 0.65 }}>{categoryPath(item)}{item.categoryAutoDefaulted ? " · по умолчанию" : ""}{!item.description ? " · без описания" : ""}</small> : null}
+                </span>
               </span>
               <span data-label="Артикул">{item.adId}</span>
               <span data-label="Объём">{item.volumeMl ? `${item.volumeMl} мл` : "—"}</span>

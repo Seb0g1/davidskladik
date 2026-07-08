@@ -60,6 +60,7 @@ registerSettingsRoutes(app, {
   priceAffectingSettingsChanged,
   queueImmediateAutoPricePush,
   queueAuthoritativePriceReprice,
+  runAvitoFeedRefresh,
   appendAudit,
   logger,
   normalizeOpenAiImageError,

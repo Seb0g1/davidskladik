@@ -26,6 +26,11 @@ function normalizeAvitoListing(input = {}, current = {}) {
     imageUrls,
     category: cleanText(input.category ?? current.category),
     goodsType: cleanText(input.goodsType ?? input.goods_type ?? current.goodsType),
+    goodsSubType: cleanText(input.goodsSubType ?? input.goods_sub_type ?? current.goodsSubType),
+    subType: cleanText(input.subType ?? input.sub_type ?? current.subType),
+    perfumeryType: cleanText(input.perfumeryType ?? input.perfumery_type ?? current.perfumeryType),
+    categoryKey: cleanText(input.categoryKey ?? input.category_key ?? current.categoryKey),
+    categoryAutoDefaulted: parseBooleanSetting(input.categoryAutoDefaulted ?? input.category_auto_defaulted, current.categoryAutoDefaulted === true),
     adType: cleanText(input.adType ?? input.ad_type ?? current.adType),
     condition: cleanText(input.condition ?? current.condition),
     address: cleanText(input.address ?? current.address),
@@ -83,7 +88,10 @@ async function upsertAvitoListings(newItems, { source = "manual" } = {}) {
   let updated = 0;
   for (const raw of Array.isArray(newItems) ? newItems : []) {
     const current = byAdId.get(cleanText(raw?.adId ?? raw?.ad_id));
-    const normalized = normalizeAvitoListing({ source, ...raw }, current || {});
+    // source по умолчанию ставится только новым объявлениям: частичные
+    // обновления (например, дозаполнение описаний) не должны перетирать
+    // исходный source существующего объявления.
+    const normalized = normalizeAvitoListing(current ? { ...raw } : { source, ...raw }, current || {});
     if (!normalized) continue;
     if (current) updated += 1;
     else created += 1;
@@ -123,6 +131,9 @@ function defaultAvitoImportRules() {
     requireImages: true,
     skipArchived: true,
     minStock: 0,
+    // Категория по умолчанию для товаров без уверенной классификации по
+    // названию (ключ из AVITO_CATEGORY_SPECS, см. 02a-avito-categorizer.js).
+    defaultCategoryKey: "parfum-edt",
     // Множитель к рублёвой цене Ozon для цены на Avito.
     priceCoefficient: 1,
     // Гибкие правила цены: от базовой цены (₽) действует свой коэффициент,
@@ -134,13 +145,15 @@ function defaultAvitoImportRules() {
     autoUpdatePrices: true,
     hideOutOfStock: true,
     maxItems: 0,
+    // Фолбэки для объявлений без распознанной категории и обязательные
+    // реквизиты фида. AdType — строго «приобретен» без «ё» (значение Avito).
     feedDefaults: {
       category: "Красота и здоровье",
       goodsType: "Парфюмерия",
-      adType: "Товар приобретён на продажу",
+      adType: "Товар приобретен на продажу",
       condition: "Новое",
-      address: "",
-      description: "",
+      address: "Москва, Складочная ул., 1с1",
+      description: "{title} — оригинальная продукция, новый товар. Быстрая отправка, Авито Доставка.",
     },
   };
 }
@@ -195,6 +208,9 @@ function normalizeAvitoImportRules(input = {}) {
     requireImages: parseBooleanSetting(raw.requireImages ?? raw.require_images, fallback.requireImages),
     skipArchived: parseBooleanSetting(raw.skipArchived ?? raw.skip_archived, fallback.skipArchived),
     minStock: clampNumber(raw.minStock ?? raw.min_stock, fallback.minStock, { max: 100000 }),
+    defaultCategoryKey: getAvitoCategorySpec(raw.defaultCategoryKey ?? raw.default_category_key)
+      ? cleanText(raw.defaultCategoryKey ?? raw.default_category_key)
+      : fallback.defaultCategoryKey,
     priceCoefficient: clampNumber(raw.priceCoefficient ?? raw.price_coefficient, fallback.priceCoefficient, { min: 0.01, max: 100, round: false }),
     priceRules: (Array.isArray(raw.priceRules ?? raw.price_rules) ? (raw.priceRules ?? raw.price_rules) : fallback.priceRules)
       .map(normalizeAvitoPriceRule)
@@ -207,10 +223,14 @@ function normalizeAvitoImportRules(input = {}) {
     feedDefaults: {
       category: cleanText(rawDefaults.category ?? fallback.feedDefaults.category),
       goodsType: cleanText(rawDefaults.goodsType ?? rawDefaults.goods_type ?? fallback.feedDefaults.goodsType),
-      adType: cleanText(rawDefaults.adType ?? rawDefaults.ad_type ?? fallback.feedDefaults.adType),
-      condition: cleanText(rawDefaults.condition ?? fallback.feedDefaults.condition),
-      address: cleanText(rawDefaults.address ?? fallback.feedDefaults.address),
-      description: typeof rawDefaults.description === "string" ? rawDefaults.description : fallback.feedDefaults.description,
+      adType: normalizeAvitoAdType(rawDefaults.adType ?? rawDefaults.ad_type, fallback.feedDefaults.adType),
+      condition: normalizeAvitoCondition(rawDefaults.condition, fallback.feedDefaults.condition),
+      // Адрес и шаблон описания обязательны для публикации на Avito —
+      // пустое значение заменяется дефолтом.
+      address: cleanText(rawDefaults.address) || fallback.feedDefaults.address,
+      description: typeof rawDefaults.description === "string" && rawDefaults.description.trim()
+        ? rawDefaults.description
+        : fallback.feedDefaults.description,
     },
   };
 }

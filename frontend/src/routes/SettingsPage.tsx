@@ -129,7 +129,16 @@ const codexSaleAiPreset = {
 
 function normalizeMarketplace(value: unknown) {
   const text = String(value || "all").toLowerCase();
-  return text === "ozon" || text === "yandex" ? text : "all";
+  return text === "ozon" || text === "yandex" || text === "avito" ? text : "all";
+}
+
+const PRICING_MARKETPLACES = ["ozon", "yandex", "avito"] as const;
+
+function marketplaceLabel(value: string) {
+  if (value === "ozon") return "Ozon";
+  if (value === "yandex") return "Yandex Market";
+  if (value === "avito") return "Avito";
+  return "Все маркетплейсы";
 }
 
 function settingsArray(value: unknown) {
@@ -170,6 +179,7 @@ function settingsSavePayload(draft: Record<string, unknown>) {
       ...markups,
       ozon: numberValue(markups.ozon, 1.7),
       yandex: numberValue(markups.yandex, 1.6),
+      avito: numberValue(markups.avito, 1.6),
     },
     markupRules,
     availabilityRules: availabilityRules.length ? availabilityRules : [defaultAvailabilityRule],
@@ -191,10 +201,10 @@ function adjustedRulePreview(rule: MarkupRuleDraft, marketplace: string, multipl
   if (marketplace === "all") return [{ ...rule, nextMarketplace: rule.marketplace, nextCoefficient: adjustCoefficient(rule.coefficient, multiplier), splitOnly: false }];
   if (rule.marketplace === marketplace) return [{ ...rule, nextMarketplace: rule.marketplace, nextCoefficient: adjustCoefficient(rule.coefficient, multiplier), splitOnly: false }];
   if (rule.marketplace !== "all") return [];
-  const other = marketplace === "ozon" ? "yandex" : "ozon";
+  const others = PRICING_MARKETPLACES.filter((key) => key !== marketplace);
   return [
     { ...rule, nextMarketplace: marketplace, nextCoefficient: adjustCoefficient(rule.coefficient, multiplier), splitOnly: false },
-    { ...rule, nextMarketplace: other, nextCoefficient: rule.coefficient, splitOnly: true },
+    ...others.map((other) => ({ ...rule, nextMarketplace: other, nextCoefficient: rule.coefficient, splitOnly: true })),
   ];
 }
 
@@ -830,7 +840,7 @@ export function SettingsPage() {
     setAvailabilityRules(availabilityRules.map((rule, ruleIndex) => (ruleIndex === index ? { ...rule, ...patch } : rule)));
   };
   const adjustMultiplier = adjustDirection === "increase" ? 1 + numberValue(adjustPercent, 0) / 100 : 1 - numberValue(adjustPercent, 0) / 100;
-  const previewMarketplaces = adjustMarketplace === "all" ? ["ozon", "yandex"] : [adjustMarketplace];
+  const previewMarketplaces = adjustMarketplace === "all" ? [...PRICING_MARKETPLACES] : [adjustMarketplace];
   const adjustedDefaults = previewMarketplaces.map((marketplace) => ({
     marketplace,
     current: recordNumber(draftMarkups, marketplace),
@@ -870,9 +880,10 @@ export function SettingsPage() {
               value={adjustMarketplace}
               onChange={setAdjustMarketplace}
               options={[
-                { value: "all", label: "Ozon + Yandex" },
+                { value: "all", label: "Ozon + Yandex + Avito" },
                 { value: "ozon", label: "Ozon" },
                 { value: "yandex", label: "Yandex Market" },
+                { value: "avito", label: "Avito" },
               ]}
             />
             <SelectField
@@ -891,7 +902,7 @@ export function SettingsPage() {
             <div className="settings-rule-head"><span>Что изменится</span><span>Было</span><span>Станет</span><span></span></div>
             {adjustedDefaults.map((row) => (
               <div className="settings-rule-row" key={`default-${row.marketplace}`}>
-                <span>Базовая наценка {row.marketplace === "ozon" ? "Ozon" : "Yandex"}</span>
+                <span>Базовая наценка {marketplaceLabel(row.marketplace)}</span>
                 <span>{row.current.toFixed(4)}</span>
                 <strong>{row.next.toFixed(4)}</strong>
                 <span></span>
@@ -915,6 +926,7 @@ export function SettingsPage() {
           <label>Курс USD/RUB<input type="number" min="0.0001" step="0.0001" value={String(draft.fixedUsdRate ?? settings.fixedUsdRate ?? "")} onChange={(event) => update({ fixedUsdRate: numberValue(event.target.value) })} /></label>
           <label>Базовая наценка Ozon<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.ozon ?? markups.ozon ?? "")} onChange={(event) => updateMarkups({ ozon: numberValue(event.target.value) })} /></label>
           <label>Базовая наценка Yandex Market<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.yandex ?? markups.yandex ?? "")} onChange={(event) => updateMarkups({ yandex: numberValue(event.target.value) })} /></label>
+          <label>Базовая наценка Avito<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.avito ?? markups.avito ?? "")} onChange={(event) => updateMarkups({ avito: numberValue(event.target.value) })} /></label>
           <div className="soft-empty compact">После изменения курса или наценки backend ставит пересчет цен в очередь.</div>
         </div>
 
@@ -922,7 +934,7 @@ export function SettingsPage() {
           <div className="section-title">
             <div><span>Наценки</span><h3>Гибкие правила наценки</h3></div>
             <button className="secondary-action" type="button" onClick={() => setMarkupRules([...markupRules, { marketplace: rulesTab, minUsd: 0, coefficient: 1 }])}>
-              Добавить правило {rulesTab === "all" ? "для всех" : rulesTab === "ozon" ? "Ozon" : "Yandex"}
+              Добавить правило {rulesTab === "all" ? "для всех" : marketplaceLabel(rulesTab)}
             </button>
           </div>
           <p className="settings-hint">Правила применяются по цене поставщика в USD и разложены по маркетплейсам — каждая вкладка отсортирована по цене «от». Пустой список допустим: тогда используются базовые наценки.</p>
@@ -930,6 +942,7 @@ export function SettingsPage() {
             {[
               { value: "ozon", label: "Ozon" },
               { value: "yandex", label: "Yandex Market" },
+              { value: "avito", label: "Avito" },
               { value: "all", label: "Общие (все МП)" },
             ].map((tab) => {
               const count = markupRules.filter((rule) => rule.marketplace === tab.value).length;
@@ -958,11 +971,11 @@ export function SettingsPage() {
               <div className="soft-empty compact">
                 {rulesTab === "all"
                   ? "Общих правил нет — действуют правила конкретных маркетплейсов и базовые наценки."
-                  : `Правил для ${rulesTab === "ozon" ? "Ozon" : "Yandex Market"} нет. Будет использоваться базовая наценка.`}
+                  : `Правил для ${marketplaceLabel(rulesTab)} нет. Будет использоваться базовая наценка.`}
               </div>
             )}
           </div>
-          <p className="settings-hint">Наценки Avito настраиваются на странице «Автозагрузка Avito» — там цена считается от рублёвой цены Ozon.</p>
+          <p className="settings-hint">Avito использует эти же правила: цена объявления = закупка у привязанного поставщика × коэффициент Avito. Дополнительная тонкая подстройка — на странице «Импорт на Avito».</p>
         </div>
 
         <div className="settings-panel settings-panel-wide">
