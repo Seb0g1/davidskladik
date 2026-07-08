@@ -290,6 +290,7 @@ app.post("/api/avito/product-status", async (request, response, next) => {
               supplierUsd: breakdown.supplierUsd,
               purchaseRub: breakdown.purchaseRub,
               usdRate: breakdown.usdRate,
+              rubNative: breakdown.rubNative === true,
               coefficient: breakdown.coefficient,
             }
             : null,

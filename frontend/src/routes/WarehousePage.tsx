@@ -1417,7 +1417,7 @@ type AvitoProductStatus = {
   outOfStock?: boolean;
   priceRub?: number;
   markupCoefficient?: number;
-  priceFormula?: { supplierUsd: number; purchaseRub: number; usdRate: number; coefficient: number } | null;
+  priceFormula?: { supplierUsd: number; purchaseRub: number; usdRate: number; rubNative?: boolean; coefficient: number } | null;
   categoryPath?: string;
   categoryAutoDefaulted?: boolean;
   hasDescription?: boolean;
@@ -1554,7 +1554,9 @@ function AvitoPanel({ products, canEdit = false }: { products: Product[]; canEdi
                   <span className={`formula-chip ${item.hasDescription ? "muted" : ""}`}>{item.hasDescription ? "описание с Ozon" : "описание: шаблон (докачивается)"}</span>
                   {item.priceFormula ? (
                     <span className="formula-chip">
-                      {item.priceFormula.supplierUsd} $ × {item.priceFormula.usdRate} ₽ × {item.priceFormula.coefficient} = {money(item.priceRub)}
+                      {item.priceFormula.rubNative
+                        ? `${item.priceFormula.purchaseRub} ₽ × ${item.priceFormula.coefficient} = ${money(item.priceRub)} (поставщик в рублях)`
+                        : `${item.priceFormula.supplierUsd} $ × ${item.priceFormula.usdRate} ₽ × ${item.priceFormula.coefficient} = ${money(item.priceRub)}`}
                     </span>
                   ) : null}
                   <span className="formula-chip muted">

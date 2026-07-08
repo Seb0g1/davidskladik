@@ -7202,6 +7202,11 @@ test("Avito per-listing markup coefficient overrides global markup rules", () =>
   const cleared = normalizeAvitoListing({ markupCoefficient: 0 }, withMarkup);
   assert.equal(cleared.markupCoefficient, 0);
   assert.equal(applyAvitoLiveState(cleared, live, rules, pricing).listing.priceRub, 4592);
+
+  // Рублёвый поставщик: курс не участвует — чистое умножение на коэффициент.
+  const rubLive = { ...live, supplier: { price: 2500, priceCurrency: "RUB" } };
+  assert.equal(applyAvitoLiveState(cleared, rubLive, rules, pricing).listing.priceRub, 4000); // 2500 × 1.6
+  assert.equal(applyAvitoLiveState(withMarkup, rubLive, rules, pricing).listing.priceRub, 5000); // 2500 × 2
 });
 
 test("consignment sponsor topup adds to balance and is tracked separately", () => {

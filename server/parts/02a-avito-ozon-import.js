@@ -81,7 +81,10 @@ function avitoSupplierPriceBreakdown(supplier, { usdRate, appSettings } = {}, pr
   const purchaseRub = warehouseSupplierPurchaseRubPrice(supplier, usdRate);
   if (!Number.isFinite(purchaseRub) || purchaseRub <= 0 || purchaseRub >= Number.MAX_SAFE_INTEGER) return null;
   const rate = Number(usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
-  const usd = !supplierPriceIsRubNative(supplier) && Number(supplier.price || 0) > 0
+  // Рублёвый поставщик: закупка уже в рублях, курс в цене не участвует —
+  // USD-эквивалент считается только для подбора правила наценки по порогу.
+  const rubNative = supplierPriceIsRubNative(supplier);
+  const usd = !rubNative && Number(supplier.price || 0) > 0
     ? Number(supplier.price)
     : purchaseRub / rate;
   const coefficient = resolveMarkupCoefficient({
@@ -95,6 +98,7 @@ function avitoSupplierPriceBreakdown(supplier, { usdRate, appSettings } = {}, pr
     purchaseRub,
     supplierUsd: Number(Number(usd).toFixed(2)),
     usdRate: rate,
+    rubNative,
     coefficient,
     priceRub: roundPrice(purchaseRub * coefficient),
   };
