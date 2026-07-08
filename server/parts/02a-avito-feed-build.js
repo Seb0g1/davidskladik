@@ -124,13 +124,15 @@ async function loadAvitoLiveProductStates(listings) {
 
 // Возвращает объявление со свежей ценой и признак «нет в наличии».
 // Товар, удалённый со склада, считается отсутствующим в наличии.
-// Личная цена (manualPriceRub) фиксирована — авторасчёт её не пересчитывает.
+// Личный коэффициент объявления (markupCoefficient) пересчитывается от свежей
+// закупки поставщика, но побеждает общие правила наценки.
 function applyAvitoLiveState(listing, product, rules, pricing = {}) {
   if (!listing.sourceProductId) return { listing, outOfStock: false };
   if (!product) return { listing, outOfStock: true };
   const outOfStock = Boolean(product.archived) || Number(product.targetStock || 0) <= 0;
-  if (!rules.autoUpdatePrices || Number(listing.manualPriceRub) > 0) return { listing, outOfStock };
-  const priceRub = resolveAvitoListingPriceRub(product, product.supplier, rules, pricing) || listing.priceRub;
+  if (!rules.autoUpdatePrices) return { listing, outOfStock };
+  const markupOverride = Number(listing.markupCoefficient) > 0 ? Number(listing.markupCoefficient) : 0;
+  const priceRub = resolveAvitoListingPriceRub(product, product.supplier, rules, pricing, markupOverride) || listing.priceRub;
   return { listing: priceRub === listing.priceRub ? listing : { ...listing, priceRub }, outOfStock };
 }
 

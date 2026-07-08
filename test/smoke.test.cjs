@@ -7172,34 +7172,36 @@ test("Avito price comes from linked supplier purchase price, not Ozon listing pr
   assert.equal(noSupplier.listing.priceRub, 9999);
 });
 
-test("Avito manual price overrides auto price and survives live refresh", () => {
+test("Avito per-listing markup coefficient overrides global markup rules", () => {
   const { normalizeAvitoListing, applyAvitoLiveState, normalizeAvitoImportRules } = require("../server.js");
   const rules = normalizeAvitoImportRules({});
-  const pricing = { usdRate: 100, appSettings: { defaultMarkups: { avito: 1.5 } } };
+  // Поставщик 35 USD, курс 82: без личного коэффициента — общие правила
+  // наценки Avito (defaultMarkups.avito = 1.6), с личным — он побеждает.
+  const pricing = { usdRate: 82, appSettings: { defaultMarkups: { avito: 1.6 } } };
+  const live = { id: "p1", targetPrice: 9999, targetStock: 5, archived: false, supplier: { price: 35, priceCurrency: "USD" } };
 
-  // Личная цена побеждает расчётную при нормализации хранилища.
   const listing = normalizeAvitoListing({
-    adId: "oz-SKU1", sourceProductId: "p1", title: "Тестовые духи 100 мл",
-    priceRub: 12000, manualPriceRub: 7777,
+    adId: "oz-126921", sourceProductId: "p1", title: "Jacomo Aura for women 75 мл", priceRub: 1,
   });
-  assert.equal(listing.manualPriceRub, 7777);
-  assert.equal(listing.priceRub, 7777);
+  assert.equal(listing.markupCoefficient, 0);
+  // 35 × 82 × 1.6 = 4592 — цена поставщика × курс × коэффициент из настроек.
+  const auto = applyAvitoLiveState(listing, live, rules, pricing);
+  assert.equal(auto.listing.priceRub, 4592);
 
-  // Живое обогащение фида не пересчитывает личную цену от поставщика.
-  const live = { id: "p1", targetPrice: 9999, targetStock: 5, archived: false, supplier: { price: 60, priceCurrency: "USD" } };
-  const refreshed = applyAvitoLiveState(listing, live, rules, pricing);
-  assert.equal(refreshed.listing.priceRub, 7777);
-  assert.equal(refreshed.outOfStock, false);
+  // Личный коэффициент 2 побеждает общие правила: 35 × 82 × 2 = 5740.
+  const withMarkup = normalizeAvitoListing({ markupCoefficient: 2 }, listing);
+  assert.equal(withMarkup.markupCoefficient, 2);
+  const overridden = applyAvitoLiveState(withMarkup, live, rules, pricing);
+  assert.equal(overridden.listing.priceRub, 5740);
 
-  // Реимпорт Ozon → Avito не затирает личную цену (merge с current).
-  const reimported = normalizeAvitoListing({ adId: "oz-SKU1", priceRub: 12000 }, listing);
-  assert.equal(reimported.manualPriceRub, 7777);
-  assert.equal(reimported.priceRub, 7777);
+  // Реимпорт Ozon → Avito не затирает личный коэффициент (merge с current).
+  const reimported = normalizeAvitoListing({ adId: "oz-126921", priceRub: 4592 }, withMarkup);
+  assert.equal(reimported.markupCoefficient, 2);
 
-  // Сброс (manualPriceRub = 0) возвращает автоцену.
-  const cleared = normalizeAvitoListing({ manualPriceRub: 0, priceRub: 12000 }, listing);
-  assert.equal(cleared.manualPriceRub, 0);
-  assert.equal(cleared.priceRub, 12000);
+  // Сброс (markupCoefficient = 0) возвращает общие правила наценки.
+  const cleared = normalizeAvitoListing({ markupCoefficient: 0 }, withMarkup);
+  assert.equal(cleared.markupCoefficient, 0);
+  assert.equal(applyAvitoLiveState(cleared, live, rules, pricing).listing.priceRub, 4592);
 });
 
 test("consignment sponsor topup adds to balance and is tracked separately", () => {

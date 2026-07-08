@@ -268,6 +268,9 @@ app.post("/api/avito/product-status", async (request, response, next) => {
         const { listing: fresh, outOfStock } = liveStates === null
           ? { listing, outOfStock: listing.outOfStock === true }
           : applyAvitoLiveState(listing, live, rules, pricing);
+        const markupOverride = Number(listing.markupCoefficient) > 0 ? Number(listing.markupCoefficient) : 0;
+        // Разбивка «цена поставщика × курс × коэффициент» для карточки товара.
+        const breakdown = live?.supplier ? avitoSupplierPriceBreakdown(live.supplier, pricing, markupOverride) : null;
         items.push({
           productId,
           inFeed: true,
@@ -276,12 +279,20 @@ app.post("/api/avito/product-status", async (request, response, next) => {
           outOfStock,
           priceRub: fresh.priceRub,
           storedPriceRub: listing.priceRub,
-          manualPriceRub: listing.manualPriceRub || 0,
+          markupCoefficient: markupOverride,
           categoryKey: listing.categoryKey || "",
           categoryPath: avitoListingCategoryPath(listing),
           categoryAutoDefaulted: listing.categoryAutoDefaulted === true,
           hasDescription: Boolean(cleanText(listing.description)),
-          priceSource: listing.manualPriceRub > 0 ? "manual" : live?.supplier ? "supplier" : "target",
+          priceSource: markupOverride > 0 ? "markup" : breakdown ? "supplier" : "target",
+          priceFormula: breakdown
+            ? {
+              supplierUsd: breakdown.supplierUsd,
+              purchaseRub: breakdown.purchaseRub,
+              usdRate: breakdown.usdRate,
+              coefficient: breakdown.coefficient,
+            }
+            : null,
         });
         continue;
       }
@@ -367,17 +378,18 @@ app.post("/api/avito/price/adjust-percent", requireAdmin, async (request, respon
   }
 });
 
-// Личная цена Avito на конкретное объявление: priceRub > 0 фиксирует цену
-// (авторасчёт от поставщика её не трогает), priceRub = 0 возвращает автоцену
-// и сразу пересчитывает её из живых данных склада.
-app.post("/api/avito/price/manual", requireAdmin, async (request, response, next) => {
+// Личный коэффициент наценки Avito на конкретное объявление (как markup у
+// Ozon/Yandex): цена = закупка поставщика × коэффициент, общие правила наценки
+// не применяются. coefficient = 0 возвращает общие правила. Цена
+// пересчитывается сразу из живых данных склада.
+app.post("/api/avito/price/markup", requireAdmin, async (request, response, next) => {
   try {
     const adId = cleanText(request.body?.adId);
     const productId = cleanText(request.body?.productId);
     if (!adId && !productId) return response.status(400).json({ error: "Нужен adId или productId объявления." });
-    const manualPriceRub = Math.round(Number(request.body?.priceRub || 0));
-    if (!Number.isFinite(manualPriceRub) || manualPriceRub < 0 || manualPriceRub > 100_000_000) {
-      return response.status(400).json({ error: "priceRub должен быть числом от 0 до 100 000 000 (0 — вернуть автоцену)." });
+    const coefficient = Number(request.body?.coefficient || 0);
+    if (!Number.isFinite(coefficient) || coefficient < 0 || coefficient > 100) {
+      return response.status(400).json({ error: "Коэффициент должен быть числом от 0 до 100 (0 — вернуть общие правила наценки)." });
     }
 
     const state = await readAvitoListingsFile();
@@ -385,34 +397,30 @@ app.post("/api/avito/price/manual", requireAdmin, async (request, response, next
       (adId && item.adId === adId) || (!adId && productId && cleanText(item.sourceProductId) === productId));
     if (!listing) return response.status(404).json({ error: "Объявление не найдено в фиде Avito." });
 
-    const before = { adId: listing.adId, manualPriceRub: listing.manualPriceRub || 0, priceRub: listing.priceRub };
-    const updatedListing = { ...listing, manualPriceRub };
-    if (manualPriceRub > 0) {
-      updatedListing.priceRub = manualPriceRub;
-    } else {
-      // Сброс: не ждём фонового рефреша, сразу возвращаем автоцену от поставщика.
-      const [rules, pricing, liveStates] = await Promise.all([
-        readAvitoImportRules(),
-        loadAvitoPricingContext(),
-        loadAvitoLiveProductStates([listing]),
-      ]);
-      const live = liveStates instanceof Map ? liveStates.get(cleanText(listing.sourceProductId)) : null;
-      if (live) {
-        const priceRub = resolveAvitoListingPriceRub(live, live.supplier, rules, pricing);
-        if (priceRub > 0) updatedListing.priceRub = priceRub;
-      }
+    const before = { adId: listing.adId, markupCoefficient: listing.markupCoefficient || 0, priceRub: listing.priceRub };
+    const updatedListing = { ...listing, markupCoefficient: coefficient };
+    // Пересчитываем цену сразу, не дожидаясь фонового рефреша.
+    const [rules, pricing, liveStates] = await Promise.all([
+      readAvitoImportRules(),
+      loadAvitoPricingContext(),
+      loadAvitoLiveProductStates([listing]),
+    ]);
+    const live = liveStates instanceof Map ? liveStates.get(cleanText(listing.sourceProductId)) : null;
+    if (live) {
+      const priceRub = resolveAvitoListingPriceRub(live, live.supplier, rules, pricing, coefficient > 0 ? coefficient : 0);
+      if (priceRub > 0) updatedListing.priceRub = priceRub;
     }
     await upsertAvitoListings([updatedListing]);
-    await appendAudit(request, "avito.price.manual", {
+    await appendAudit(request, "avito.price.markup", {
       oldValue: before,
-      newValue: { adId: listing.adId, manualPriceRub, priceRub: updatedListing.priceRub },
+      newValue: { adId: listing.adId, markupCoefficient: coefficient, priceRub: updatedListing.priceRub },
     });
     response.json({
       ok: true,
       adId: listing.adId,
-      manualPriceRub,
+      markupCoefficient: coefficient,
       priceRub: updatedListing.priceRub,
-      priceSource: manualPriceRub > 0 ? "manual" : "auto",
+      priceSource: coefficient > 0 ? "markup" : "auto",
     });
   } catch (error) {
     next(error);

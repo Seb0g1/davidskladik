@@ -72,31 +72,46 @@ async function loadAvitoPricingContext() {
   };
 }
 
-// Рублёвая цена Avito от поставщика: закупка (₽) × коэффициент наценки Avito
-// (правило по цене поставщика в USD либо базовая наценка Avito). 0 = у товара
-// нет пригодной цены поставщика.
-function computeAvitoSupplierPriceRub(supplier, { usdRate, appSettings } = {}) {
-  if (!supplier || typeof supplier !== "object") return 0;
+// Разбивка цены Avito от поставщика: закупка (₽), USD-цена, курс и коэффициент.
+// Формула: цена поставщика (USD) × курс × коэффициент — как у Ozon/Yandex.
+// productMarkup > 0 — личный коэффициент объявления, он побеждает общие
+// правила наценки (Настройки → Цены). null = нет пригодной цены поставщика.
+function avitoSupplierPriceBreakdown(supplier, { usdRate, appSettings } = {}, productMarkup = 0) {
+  if (!supplier || typeof supplier !== "object") return null;
   const purchaseRub = warehouseSupplierPurchaseRubPrice(supplier, usdRate);
-  if (!Number.isFinite(purchaseRub) || purchaseRub <= 0 || purchaseRub >= Number.MAX_SAFE_INTEGER) return 0;
+  if (!Number.isFinite(purchaseRub) || purchaseRub <= 0 || purchaseRub >= Number.MAX_SAFE_INTEGER) return null;
   const rate = Number(usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
   const usd = !supplierPriceIsRubNative(supplier) && Number(supplier.price || 0) > 0
     ? Number(supplier.price)
     : purchaseRub / rate;
   const coefficient = resolveMarkupCoefficient({
-    productMarkup: 0,
+    productMarkup,
     marketplace: "avito",
     supplierUsdPrice: usd,
     usdRate: rate,
     appSettings,
   });
-  return roundPrice(purchaseRub * coefficient);
+  return {
+    purchaseRub,
+    supplierUsd: Number(Number(usd).toFixed(2)),
+    usdRate: rate,
+    coefficient,
+    priceRub: roundPrice(purchaseRub * coefficient),
+  };
+}
+
+function computeAvitoSupplierPriceRub(supplier, pricing = {}, productMarkup = 0) {
+  const breakdown = avitoSupplierPriceBreakdown(supplier, pricing, productMarkup);
+  return breakdown ? breakdown.priceRub : 0;
 }
 
 // Базовая цена листинга: поставщик → targetPrice; поверх — локальные правила
-// страницы Avito (priceCoefficient/priceRules, по умолчанию ×1).
-function resolveAvitoListingPriceRub(product = {}, supplier, rules = {}, pricing = {}) {
-  const supplierPriceRub = computeAvitoSupplierPriceRub(supplier, pricing);
+// страницы Avito (priceCoefficient/priceRules, по умолчанию ×1). Личный
+// коэффициент (productMarkup) даёт конечную цену от закупки поставщика —
+// локальные правила страницы к ней не применяются.
+function resolveAvitoListingPriceRub(product = {}, supplier, rules = {}, pricing = {}, productMarkup = 0) {
+  const supplierPriceRub = computeAvitoSupplierPriceRub(supplier, pricing, productMarkup);
+  if (productMarkup > 0 && supplierPriceRub > 0) return Math.round(supplierPriceRub);
   const basePriceRub = supplierPriceRub > 0 ? supplierPriceRub : Number(product.targetPrice || 0);
   if (!(basePriceRub > 0)) return 0;
   return Math.round(basePriceRub * avitoPriceCoefficientFor(basePriceRub, rules));

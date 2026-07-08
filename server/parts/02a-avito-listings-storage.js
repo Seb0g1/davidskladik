@@ -10,13 +10,14 @@ function normalizeAvitoListing(input = {}, current = {}) {
     .map((url) => cleanText(url))
     .filter(Boolean)
     .slice(0, 10);
-  // Личная цена Avito: ручное переопределение (> 0 — фиксирует цену, авторасчёт
-  // от поставщика её не трогает; 0 — цена снова автоматическая).
-  const manualPriceRubRaw = Number(input.manualPriceRub ?? input.manual_price_rub ?? current.manualPriceRub ?? 0);
-  const manualPriceRub = Number.isFinite(manualPriceRubRaw) && manualPriceRubRaw > 0 ? Math.round(manualPriceRubRaw) : 0;
-  const priceRub = manualPriceRub > 0
-    ? manualPriceRub
-    : Number(input.priceRub ?? input.price_rub ?? input.price ?? current.priceRub ?? 0);
+  // Личный коэффициент наценки Avito (как markup у Ozon/Yandex): цена =
+  // закупка поставщика × коэффициент, общие правила наценки не применяются.
+  // 0 = не задан — работают общие правила (Настройки → Цены).
+  const markupCoefficientRaw = Number(input.markupCoefficient ?? input.markup_coefficient ?? current.markupCoefficient ?? 0);
+  const markupCoefficient = Number.isFinite(markupCoefficientRaw) && markupCoefficientRaw > 0
+    ? Number(Math.min(100, markupCoefficientRaw).toFixed(4))
+    : 0;
+  const priceRub = Number(input.priceRub ?? input.price_rub ?? input.price ?? current.priceRub ?? 0);
   const rawExtra = input.extraFields ?? input.extra_fields ?? current.extraFields;
   const extraFields = rawExtra && typeof rawExtra === "object" && !Array.isArray(rawExtra) ? rawExtra : {};
   return {
@@ -29,7 +30,7 @@ function normalizeAvitoListing(input = {}, current = {}) {
     brand: cleanText(input.brand ?? current.brand),
     volumeMl: Number(input.volumeMl ?? input.volume_ml ?? current.volumeMl ?? 0) || 0,
     priceRub: Number.isFinite(priceRub) && priceRub > 0 ? Math.round(priceRub) : 0,
-    manualPriceRub,
+    markupCoefficient,
     imageUrls,
     category: cleanText(input.category ?? current.category),
     goodsType: cleanText(input.goodsType ?? input.goods_type ?? current.goodsType),

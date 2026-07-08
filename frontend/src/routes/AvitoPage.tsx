@@ -81,7 +81,7 @@ type Listing = {
   brand: string;
   volumeMl: number;
   priceRub: number;
-  manualPriceRub?: number;
+  markupCoefficient?: number;
   imageUrls: string[];
   description?: string;
   categoryKey?: string;
@@ -662,8 +662,8 @@ export function AvitoPage() {
               <span data-label="Объём">{item.volumeMl ? `${item.volumeMl} мл` : "—"}</span>
               <span data-label="Цена">
                 {item.priceRub ? `${item.priceRub} ₽` : "—"}
-                {(item.manualPriceRub || 0) > 0 ? (
-                  <span className="pill muted" title="Личная цена: зафиксирована вручную, авторасчёт её не меняет">личная</span>
+                {(item.markupCoefficient || 0) > 0 ? (
+                  <span className="pill muted" title="Личный коэффициент наценки: цена = закупка поставщика × коэффициент, общие правила не применяются">коэф. ×{item.markupCoefficient}</span>
                 ) : null}
               </span>
               <span data-label="Источник">

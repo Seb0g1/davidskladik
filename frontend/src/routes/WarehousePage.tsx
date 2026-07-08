@@ -1416,7 +1416,8 @@ type AvitoProductStatus = {
   enabled?: boolean;
   outOfStock?: boolean;
   priceRub?: number;
-  manualPriceRub?: number;
+  markupCoefficient?: number;
+  priceFormula?: { supplierUsd: number; purchaseRub: number; usdRate: number; coefficient: number } | null;
   categoryPath?: string;
   categoryAutoDefaulted?: boolean;
   hasDescription?: boolean;
@@ -1443,17 +1444,18 @@ function avitoSkipLabel(reason: string): string {
   return AVITO_SKIP_LABELS[key] || key;
 }
 
-// Личная цена Avito: > 0 фиксирует цену объявления (авторасчёт от поставщика
-// её не трогает), сброс возвращает автоцену.
-function AvitoManualPrice({ item, onSaved }: { item: AvitoProductStatus; onSaved: () => void }) {
+// Личный коэффициент наценки Avito (как коэффициент у Ozon/Yandex):
+// цена = закупка поставщика × коэффициент. 0/сброс — общие правила наценки
+// из Настройки → Цены.
+function AvitoMarkupEditor({ item, onSaved }: { item: AvitoProductStatus; onSaved: () => void }) {
   const [value, setValue] = useState("");
   const mutation = useMutation({
-    mutationFn: async (priceRub: number) => {
-      const response = await fetch("/api/avito/price/manual", {
+    mutationFn: async (coefficient: number) => {
+      const response = await fetch("/api/avito/price/markup", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adId: item.adId, productId: item.productId, priceRub }),
+        body: JSON.stringify({ adId: item.adId, productId: item.productId, coefficient }),
       });
       const payload = await response.json().catch(() => null);
       if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
@@ -1464,24 +1466,27 @@ function AvitoManualPrice({ item, onSaved }: { item: AvitoProductStatus; onSaved
       onSaved();
     },
   });
-  const parsed = Math.round(Number(value));
-  const canSave = Number.isFinite(parsed) && parsed > 0;
+  const parsed = Number(value);
+  const canSave = Number.isFinite(parsed) && parsed > 0 && parsed <= 100;
+  const currentCoefficient = Number(item.markupCoefficient || 0);
   return (
     <div className="avito-manual-price">
       <input
         type="number"
-        min="1"
+        min="0.01"
+        max="100"
+        step="0.01"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        placeholder={item.priceRub ? `Личная цена, сейчас ${item.priceRub}` : "Личная цена, ₽"}
-        aria-label="Личная цена Avito"
+        placeholder={currentCoefficient > 0 ? `Коэф. Avito, сейчас ${currentCoefficient}` : "Свой коэф. Avito, напр. 1.8"}
+        aria-label="Личный коэффициент наценки Avito"
       />
       <button className="secondary-action" type="button" disabled={!canSave || mutation.isPending} onClick={() => mutation.mutate(parsed)}>
-        {mutation.isPending ? <Loader2 className="spin" size={14} /> : null} Задать цену
+        {mutation.isPending ? <Loader2 className="spin" size={14} /> : null} Задать коэф.
       </button>
-      {(item.manualPriceRub || 0) > 0 ? (
+      {currentCoefficient > 0 ? (
         <button className="secondary-action" type="button" disabled={mutation.isPending} onClick={() => mutation.mutate(0)}>
-          Вернуть автоцену
+          Вернуть общие правила
         </button>
       ) : null}
       {mutation.error ? <span className="inline-error">{String((mutation.error as Error).message)}</span> : null}
@@ -1540,19 +1545,24 @@ function AvitoPanel({ products, canEdit = false }: { products: Product[]; canEdi
               <small>Цена Avito</small>
               <strong>{item.inFeed ? money(item.priceRub) : item.potential ? money(item.potential.priceRub) : "—"}</strong>
               {!item.inFeed && item.potential ? <small>после импорта</small> : null}
-              {item.inFeed && (item.manualPriceRub || 0) > 0 ? <small>личная цена</small> : null}
+              {item.inFeed && (item.markupCoefficient || 0) > 0 ? <small>свой коэф. ×{item.markupCoefficient}</small> : null}
             </div>
             <div className="marketplace-flags">
               {item.inFeed ? (
                 <>
                   {item.categoryPath ? <span className="formula-chip">{item.categoryPath}{item.categoryAutoDefaulted ? " · по умолчанию" : ""}</span> : null}
                   <span className={`formula-chip ${item.hasDescription ? "muted" : ""}`}>{item.hasDescription ? "описание с Ozon" : "описание: шаблон (докачивается)"}</span>
+                  {item.priceFormula ? (
+                    <span className="formula-chip">
+                      {item.priceFormula.supplierUsd} $ × {item.priceFormula.usdRate} ₽ × {item.priceFormula.coefficient} = {money(item.priceRub)}
+                    </span>
+                  ) : null}
                   <span className="formula-chip muted">
-                    {item.priceSource === "manual"
-                      ? "личная цена: зафиксирована вручную"
+                    {item.priceSource === "markup"
+                      ? "свой коэффициент товара (общие правила не применяются)"
                       : item.priceSource === "supplier"
-                        ? "цена от поставщика × наценка Avito"
-                        : "цена: фолбэк targetPrice"}
+                        ? "коэффициент из общих правил наценки Avito"
+                        : "нет цены поставщика — фолбэк: цена Ozon (targetPrice)"}
                   </span>
                 </>
               ) : (
@@ -1562,7 +1572,7 @@ function AvitoPanel({ products, canEdit = false }: { products: Product[]; canEdi
                 </>
               )}
             </div>
-            {canEdit && item.inFeed ? <AvitoManualPrice item={item} onSaved={() => statusQuery.refetch()} /> : null}
+            {canEdit && item.inFeed ? <AvitoMarkupEditor item={item} onSaved={() => statusQuery.refetch()} /> : null}
           </div>
         ))}
         {!items.length && !statusQuery.isLoading && !statusQuery.error ? <div className="table-note">Нет строк Ozon — на Avito выгружаются товары Ozon.</div> : null}
