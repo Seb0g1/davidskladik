@@ -92,7 +92,9 @@ async function loadAvitoPricingContext() {
   ]);
   return {
     appSettings: appSettings || {},
-    usdRate: Number(rate?.rate || appSettings?.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95),
+    // Как у расчёта склада (buildFreshWarehouseProducts...): фиксированный курс
+    // из настроек важнее живого курса из API.
+    usdRate: Number(appSettings?.fixedUsdRate || rate?.rate || process.env.DEFAULT_USD_RATE || 95),
   };
 }
 
@@ -121,7 +123,10 @@ function avitoSupplierPriceBreakdown(supplier, { usdRate, appSettings } = {}, pr
   return {
     purchaseRub,
     supplierUsd: Number(Number(usd).toFixed(2)),
-    usdRate: rate,
+    // Эффективный курс: закупка может прийти готовым снапшотом (purchaseRubPrice),
+    // посчитанным по другому курсу, — в формуле показываем курс, из которого
+    // реально сложилась закупка, чтобы умножение сходилось.
+    usdRate: rubNative ? rate : Number((purchaseRub / usd).toFixed(2)),
     rubNative,
     coefficient,
     priceRub: roundPrice(purchaseRub * coefficient),
