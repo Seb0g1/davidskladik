@@ -4,6 +4,7 @@ import { ArrowLeft, Banknote, Boxes, Check, ChevronDown, ChevronRight, HandCoins
 import { fetchJson, mutationBody, patchBody } from "../api";
 import {
   ConsignmentBulkCreateSchema,
+  ConsignmentGroupMutationSchema,
   ConsignmentItem,
   ConsignmentItemsSchema,
   ConsignmentMutationSchema,
@@ -46,12 +47,15 @@ const OPERATION_LABELS: Record<string, string> = {
   sale: "Продажа",
   writeoff: "Списание",
   return: "Возврат",
+  sponsor_topup: "Пополнение баланса спонсора",
   sponsor_payout: "Выплата спонсору (с баланса)",
   sponsor_profit_payout: "Вывод профита спонсора",
   my_profit_payout: "Вывод моего профита",
 };
 
-type StockAction = { item: ConsignmentItem; mode: "sale" | "writeoff" | "receive" };
+// group задан — операция по всему товару сразу: продажа/списание распределяются
+// по партиям FIFO на сервере, приход-докупка попадает в самую свежую партию.
+type StockAction = { item: ConsignmentItem; mode: "sale" | "writeoff" | "receive"; group?: ItemGroup };
 
 type ItemGroup = {
   key: string;
@@ -154,6 +158,7 @@ export function ConsignmentPage() {
   const [actionForm, setActionForm] = useState({ quantity: "1", price: "", note: "", fromBalance: false });
   const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
   const [payoutForm, setPayoutForm] = useState({ kind: "sponsor_payout", amount: "", note: "" });
+  const [topupForm, setTopupForm] = useState({ amount: "", note: "" });
   const [opFilter, setOpFilter] = useState("all");
   const [opSearch, setOpSearch] = useState("");
   const [opSort, setOpSort] = useState("date_desc");
@@ -242,17 +247,21 @@ export function ConsignmentPage() {
   });
 
   const stockOperation = useMutation({
-    mutationFn: ({ item, mode }: StockAction) => fetchJson(
-      `/api/consignment/items/${encodeURIComponent(item.id)}/${mode}`,
-      ConsignmentMutationSchema,
-      mutationBody({
+    mutationFn: ({ item, mode, group }: StockAction) => {
+      const payload = {
         quantity: Number(actionForm.quantity || 0),
         note: actionForm.note,
         ...(mode === "sale" && actionForm.price !== "" ? { salePrice: Number(actionForm.price) } : {}),
         ...(mode === "receive" && actionForm.price !== "" ? { purchasePrice: Number(actionForm.price) } : {}),
         ...(mode === "receive" ? { fromBalance: actionForm.fromBalance } : {}),
-      }),
-    ),
+      };
+      return group
+        ? fetchJson(`/api/consignment/groups/${mode}`, ConsignmentGroupMutationSchema, mutationBody({
+          ...payload,
+          itemIds: group.items.map((lot) => lot.id),
+        }))
+        : fetchJson(`/api/consignment/items/${encodeURIComponent(item.id)}/${mode}`, ConsignmentMutationSchema, mutationBody(payload));
+    },
     onSuccess: () => {
       setAction(null);
       setActionForm({ quantity: "1", price: "", note: "", fromBalance: false });
@@ -300,6 +309,17 @@ export function ConsignmentPage() {
     },
   });
 
+  const topup = useMutation({
+    mutationFn: () => fetchJson("/api/consignment/topups", ConsignmentMutationSchema, mutationBody({
+      amount: Number(topupForm.amount || 0),
+      note: topupForm.note,
+    })),
+    onSuccess: () => {
+      setTopupForm({ amount: "", note: "" });
+      invalidate();
+    },
+  });
+
   const s = summary.data?.summary || ({} as NonNullable<typeof summary.data>["summary"] & Record<string, number>);
   const openAction = (item: ConsignmentItem, mode: StockAction["mode"]) => {
     setAction({ item, mode });
@@ -309,6 +329,12 @@ export function ConsignmentPage() {
       note: "",
       fromBalance: false,
     });
+  };
+  // Операция по всему товару: цена по умолчанию пустая — продажа возьмёт цену
+  // каждой партии, докупка сохранит цену свежей партии.
+  const openGroupAction = (group: ItemGroup, mode: StockAction["mode"]) => {
+    setAction({ item: group.items[0], mode, group });
+    setActionForm({ quantity: "1", price: "", note: "", fromBalance: false });
   };
   const applyPmRow = (row: { article: string; name: string; supplierName: string; price?: number | null }) => {
     setAddForm((current) => ({
@@ -360,6 +386,7 @@ export function ConsignmentPage() {
               { value: "purchase", label: "Закупки с баланса" },
               { value: "writeoff", label: "Списания" },
               { value: "return", label: "Возвраты" },
+              { value: "sponsor_topup", label: "Пополнения баланса" },
               { value: "sponsor_payout", label: "Выплаты спонсору" },
               { value: "sponsor_profit_payout", label: "Вывод профита спонсора" },
               { value: "my_profit_payout", label: "Вывод моего профита" },
@@ -479,6 +506,7 @@ export function ConsignmentPage() {
         <div className="system-card"><span>Общий профит с продаж</span><strong>{money(s?.profitTotal)}</strong></div>
         <div className="system-card"><span>Стоимость склада по продаже</span><strong>{money(s?.stockSaleValue)}</strong></div>
         <div className="system-card"><span>Закупки с баланса</span><strong>{money(s?.purchasesFromBalance)}</strong></div>
+        <div className="system-card"><span>Пополнения баланса</span><strong>{money(s?.sponsorTopUps)}</strong></div>
         <div className="system-card"><span>Выплачено спонсору</span><strong>{money(Number(s?.sponsorPayouts || 0) + Number(s?.sponsorProfitPaidOut || 0))}</strong></div>
         <div className="system-card"><span>Выведено моего профита</span><strong>{money(s?.myProfitPaidOut)}</strong></div>
       </div>
@@ -628,10 +656,17 @@ export function ConsignmentPage() {
           <div className="section-title">
             <div>
               <span>{actionTitle}</span>
-              <h3>{action.item.name} — остаток {action.item.quantity} шт</h3>
+              <h3>{action.item.name} — остаток {action.group ? action.group.quantity : action.item.quantity} шт{action.group ? ` (${action.group.items.length} парт.)` : ""}</h3>
             </div>
             <button className="secondary-action" type="button" onClick={() => setAction(null)}><X size={16} /> Отмена</button>
           </div>
+          {action.group ? (
+            <span className="muted-note">
+              {action.mode === "receive"
+                ? "Докупка попадёт в самую свежую партию товара."
+                : "Количество спишется по партиям: сначала старые (FIFO), профит считается по закупке каждой партии."}
+            </span>
+          ) : null}
           <div className="settings-form-row">
             <input type="number" min="1" placeholder="Кол-во" value={actionForm.quantity} onChange={(event) => setActionForm({ ...actionForm, quantity: event.target.value })} />
             {action.mode !== "writeoff" ? (
@@ -639,7 +674,9 @@ export function ConsignmentPage() {
                 type="number"
                 min="0"
                 step="0.01"
-                placeholder={action.mode === "sale" ? "Цена продажи, $" : "Цена закупки, $"}
+                placeholder={action.mode === "sale"
+                  ? (action.group ? "Цена продажи, $ (пусто — цена партии)" : "Цена продажи, $")
+                  : (action.group ? "Цена закупки, $ (пусто — цена партии)" : "Цена закупки, $")}
                 value={actionForm.price}
                 onChange={(event) => setActionForm({ ...actionForm, price: event.target.value })}
               />
@@ -660,14 +697,19 @@ export function ConsignmentPage() {
               {stockOperation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Подтвердить
             </button>
           </div>
-          {action.mode === "sale" ? (
-            <span className="muted-note">
-              Профит: {money((Number(actionForm.price === "" ? action.item.salePrice : actionForm.price) - action.item.purchasePrice) * Number(actionForm.quantity || 0))}
-              {" "}(спонсору {money(((Number(actionForm.price === "" ? action.item.salePrice : actionForm.price) - action.item.purchasePrice) * Number(actionForm.quantity || 0)) / 2)},
-              мне {money(((Number(actionForm.price === "" ? action.item.salePrice : actionForm.price) - action.item.purchasePrice) * Number(actionForm.quantity || 0)) / 2)}).
-              Закупочная часть {money(action.item.purchasePrice * Number(actionForm.quantity || 0))} уйдёт на общий баланс.
-            </span>
-          ) : null}
+          {action.mode === "sale" ? (() => {
+            const purchase = action.group ? action.group.avgPurchasePrice : action.item.purchasePrice;
+            const sale = Number(actionForm.price === "" ? (action.group ? action.group.avgSalePrice : action.item.salePrice) : actionForm.price);
+            const quantity = Number(actionForm.quantity || 0);
+            const profit = (sale - purchase) * quantity;
+            return (
+              <span className="muted-note">
+                Профит{action.group ? " (оценка по средним ценам партий)" : ""}: {money(profit)}
+                {" "}(спонсору {money(profit / 2)}, мне {money(profit / 2)}).
+                Закупочная часть {money(purchase * quantity)} уйдёт на общий баланс.
+              </span>
+            );
+          })() : null}
           {stockOperation.error ? <div className="inline-error">{errorMessage(stockOperation.error)}</div> : null}
         </section>
       ) : null}
@@ -744,9 +786,9 @@ export function ConsignmentPage() {
                 <span data-label="Кол-во">{group.quantity} шт</span>
                 <span data-label="Сумма">{money(group.purchaseTotal)}</span>
                 <span data-label="Действия" className="row-actions">
-                  <button className="secondary-action" type="button" onClick={toggle}>
-                    {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />} {group.items.length} парт.
-                  </button>
+                  <button className="secondary-action" type="button" title="Продать (спишется по партиям, сначала старые)" disabled={!group.quantity} onClick={() => openGroupAction(group, "sale")}><ShoppingCart size={14} /></button>
+                  <button className="secondary-action" type="button" title="Списать (спишется по партиям, сначала старые)" disabled={!group.quantity} onClick={() => openGroupAction(group, "writeoff")}><PackageMinus size={14} /></button>
+                  <button className="secondary-action" type="button" title="Приход / докупка (в свежую партию)" onClick={() => openGroupAction(group, "receive")}><PackagePlus size={14} /></button>
                 </span>
               </div>
               {expanded ? group.items.map((item) => renderItemRow(item, true)) : null}
@@ -789,6 +831,32 @@ export function ConsignmentPage() {
         </div>
         {payout.error ? <div className="inline-error">{errorMessage(payout.error)}</div> : null}
         {payout.isSuccess ? <div className="success-strip">Выплата записана.</div> : null}
+      </section>
+
+      <section className="settings-panel settings-panel-wide">
+        <div className="section-title">
+          <div>
+            <span>Пополнение</span>
+            <h3>Пополнить баланс спонсора</h3>
+          </div>
+        </div>
+        <span className="muted-note">
+          Довнесение денег на общий баланс — например, компенсация за испорченный товар в поставке. Текущий баланс: {money(s?.balance)}.
+        </span>
+        <div className="settings-form-row">
+          <input type="number" min="0" step="0.01" placeholder="Сумма, $" value={topupForm.amount} onChange={(event) => setTopupForm({ ...topupForm, amount: event.target.value })} />
+          <input placeholder="Примечание (за что пополнение)" value={topupForm.note} onChange={(event) => setTopupForm({ ...topupForm, note: event.target.value })} />
+          <button
+            className="primary-action"
+            type="button"
+            disabled={topup.isPending || !(Number(topupForm.amount) > 0)}
+            onClick={() => topup.mutate()}
+          >
+            {topup.isPending ? <Loader2 className="spin" size={16} /> : <HandCoins size={16} />} Пополнить
+          </button>
+        </div>
+        {topup.error ? <div className="inline-error">{errorMessage(topup.error)}</div> : null}
+        {topup.isSuccess ? <div className="success-strip">Пополнение записано — баланс обновлён.</div> : null}
       </section>
 
       <button className="consignment-operations-link" type="button" onClick={openOperations}>

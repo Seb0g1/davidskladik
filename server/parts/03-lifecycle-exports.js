@@ -303,6 +303,7 @@ module.exports = {
   normalizeAvitoAdType,
   normalizeAvitoCondition,
   avitoListingCategoryPath,
+  consignmentSummaryFromRows,
   evaluateAvitoImportCandidate,
   buildAvitoAdXml,
   normalizeAvitoImportRules,

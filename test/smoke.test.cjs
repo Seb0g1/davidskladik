@@ -7201,3 +7201,18 @@ test("Avito manual price overrides auto price and survives live refresh", () => 
   assert.equal(cleared.manualPriceRub, 0);
   assert.equal(cleared.priceRub, 12000);
 });
+
+test("consignment sponsor topup adds to balance and is tracked separately", () => {
+  const { consignmentSummaryFromRows } = require("../server.js");
+  const summary = consignmentSummaryFromRows([], [
+    { type: "sale", quantity: 1, unitPurchase: 100, unitSale: 140, balanceDelta: 100, sponsorDelta: 20, myDelta: 20 },
+    { type: "sponsor_topup", quantity: 0, balanceDelta: 50, sponsorDelta: 0, myDelta: 0 },
+    { type: "sponsor_payout", quantity: 0, balanceDelta: -30, sponsorDelta: 0, myDelta: 0 },
+  ].map((op) => ({ unitPurchase: 0, unitSale: 0, balanceDelta: 0, sponsorDelta: 0, myDelta: 0, ...op })));
+  // Баланс = 100 (закупочная часть продажи) + 50 (пополнение) − 30 (выплата).
+  assert.equal(summary.balance, 120);
+  assert.equal(summary.sponsorTopUps, 50);
+  assert.equal(summary.sponsorPayouts, 30);
+  assert.equal(summary.sponsorProfit, 20);
+  assert.equal(summary.myProfit, 20);
+});

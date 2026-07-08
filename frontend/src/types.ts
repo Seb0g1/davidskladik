@@ -854,6 +854,7 @@ export const ConsignmentSummarySchema = z.object({
     salesRevenue: z.number().optional().default(0),
     profitTotal: z.number().optional().default(0),
     purchasesFromBalance: z.number().optional().default(0),
+    sponsorTopUps: z.number().optional().default(0),
     sponsorPayouts: z.number().optional().default(0),
     sponsorProfitPaidOut: z.number().optional().default(0),
     myProfitPaidOut: z.number().optional().default(0),
@@ -874,6 +875,12 @@ export const ConsignmentMutationSchema = z.object({
   ok: z.boolean().optional(),
   item: ConsignmentItemSchema.optional().nullable(),
   operation: ConsignmentOperationSchema.optional().nullable(),
+}).passthrough();
+
+export const ConsignmentGroupMutationSchema = z.object({
+  ok: z.boolean().optional(),
+  items: z.array(ConsignmentItemSchema).optional().default([]),
+  operations: z.array(ConsignmentOperationSchema).optional().default([]),
 }).passthrough();
 
 export const ConsignmentBulkCreateSchema = z.object({

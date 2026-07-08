@@ -73,6 +73,7 @@ function consignmentSummaryFromRows(items = [], operations = []) {
     }
     if (op.type === "writeoff") acc.writeoffQuantity += op.quantity;
     if (op.type === "purchase") acc.purchasesFromBalance += Math.abs(op.balanceDelta);
+    if (op.type === "sponsor_topup") acc.sponsorTopUps += Math.abs(op.balanceDelta);
     if (op.type === "sponsor_payout") acc.sponsorPayouts += Math.abs(op.balanceDelta);
     if (op.type === "sponsor_profit_payout") acc.sponsorProfitPaidOut += Math.abs(op.sponsorDelta);
     if (op.type === "my_profit_payout") acc.myProfitPaidOut += Math.abs(op.myDelta);
@@ -87,6 +88,7 @@ function consignmentSummaryFromRows(items = [], operations = []) {
     salesRevenue: 0,
     profitTotal: 0,
     purchasesFromBalance: 0,
+    sponsorTopUps: 0,
     sponsorPayouts: 0,
     sponsorProfitPaidOut: 0,
     myProfitPaidOut: 0,
@@ -105,6 +107,7 @@ function consignmentSummaryFromRows(items = [], operations = []) {
     salesRevenue: normalizeFinanceMoney(totals.salesRevenue, 0),
     profitTotal: normalizeFinanceMoney(totals.profitTotal, 0),
     purchasesFromBalance: normalizeFinanceMoney(totals.purchasesFromBalance, 0),
+    sponsorTopUps: normalizeFinanceMoney(totals.sponsorTopUps, 0),
     sponsorPayouts: normalizeFinanceMoney(totals.sponsorPayouts, 0),
     sponsorProfitPaidOut: normalizeFinanceMoney(totals.sponsorProfitPaidOut, 0),
     myProfitPaidOut: normalizeFinanceMoney(totals.myProfitPaidOut, 0),
@@ -433,6 +436,132 @@ app.post("/api/consignment/items/:id/receive", requireAdmin, (request, response,
   });
 });
 
+// Групповые операции по товару с несколькими партиями (один артикул, разные
+// лоты): продажа/списание распределяются по партиям FIFO (старые сначала),
+// приход-докупка попадает в самую свежую партию. На каждую затронутую партию
+// создаётся своя операция — удаление любой строки откатывает её часть.
+async function runConsignmentGroupOperation(request, response, next, mode) {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const body = request.body || {};
+    const itemIds = [...new Set((Array.isArray(body.itemIds) ? body.itemIds : []).map((value) => cleanText(value)).filter(Boolean))].slice(0, 200);
+    if (!itemIds.length) return response.status(400).json({ error: "Передайте партии группы (itemIds).", code: "consignment_group_items_required" });
+    const quantity = consignmentQuantityInput(body.quantity);
+    if (!quantity) return response.status(400).json({ error: "Количество должно быть больше нуля.", code: "consignment_quantity_required" });
+    const username = requestUsername(request);
+    let failure = null;
+    const result = await getPrisma().$transaction(async (tx) => {
+      const rows = await tx.consignmentItem.findMany({ where: { id: { in: itemIds } }, orderBy: { createdAt: "asc" } });
+      const lots = rows.map(consignmentItemFromPostgres);
+      if (!lots.length) {
+        failure = { status: 404, error: "Партии не найдены.", code: "consignment_item_not_found" };
+        return null;
+      }
+      const items = [];
+      const operations = [];
+      if (mode === "receive") {
+        const target = lots[lots.length - 1];
+        const unitPurchase = body.purchasePrice === undefined || body.purchasePrice === null || body.purchasePrice === ""
+          ? target.purchasePrice
+          : normalizeFinanceMoney(body.purchasePrice, -1);
+        if (!(unitPurchase >= 0)) {
+          failure = { status: 400, error: "Некорректная закупочная цена.", code: "consignment_price_invalid" };
+          return null;
+        }
+        const fromBalance = body.fromBalance === true;
+        const updated = await tx.consignmentItem.update({
+          where: { id: target.id },
+          data: { quantity: target.quantity + quantity, ...(unitPurchase !== target.purchasePrice ? { purchasePrice: unitPurchase } : {}) },
+        });
+        const operation = await tx.consignmentOperation.create({
+          data: {
+            itemId: target.id,
+            itemName: target.name,
+            type: fromBalance ? "purchase" : "receive",
+            quantity,
+            unitPurchase,
+            unitSale: target.salePrice,
+            balanceDelta: fromBalance ? -normalizeFinanceMoney(unitPurchase * quantity, 0) : 0,
+            note: cleanText(body.note) || null,
+            createdBy: username || null,
+          },
+        });
+        items.push(updated);
+        operations.push(operation);
+        return { items, operations };
+      }
+      const available = lots.reduce((sum, lot) => sum + lot.quantity, 0);
+      if (available < quantity) {
+        failure = { status: 400, error: `Недостаточно остатка: по партиям доступно ${available} шт.`, code: "consignment_stock_not_enough" };
+        return null;
+      }
+      const overrideSale = body.salePrice === undefined || body.salePrice === null || body.salePrice === ""
+        ? null
+        : normalizeFinanceMoney(body.salePrice, -1);
+      if (mode === "sale" && overrideSale !== null && !(overrideSale >= 0)) {
+        failure = { status: 400, error: "Некорректная цена продажи.", code: "consignment_price_invalid" };
+        return null;
+      }
+      let remaining = quantity;
+      for (const lot of lots) {
+        if (!remaining) break;
+        const take = Math.min(lot.quantity, remaining);
+        if (!take) continue;
+        remaining -= take;
+        const updated = await tx.consignmentItem.update({ where: { id: lot.id }, data: { quantity: lot.quantity - take } });
+        let data;
+        if (mode === "sale") {
+          const unitSale = overrideSale !== null ? overrideSale : lot.salePrice;
+          const profit = normalizeFinanceMoney((unitSale - lot.purchasePrice) * take, 0);
+          const sponsorHalf = normalizeFinanceMoney(profit / 2, 0);
+          data = {
+            type: "sale",
+            quantity: take,
+            unitPurchase: lot.purchasePrice,
+            unitSale,
+            balanceDelta: normalizeFinanceMoney(lot.purchasePrice * take, 0),
+            sponsorDelta: sponsorHalf,
+            myDelta: normalizeFinanceMoney(profit - sponsorHalf, 0),
+          };
+        } else {
+          data = { type: "writeoff", quantity: take, unitPurchase: lot.purchasePrice, unitSale: lot.salePrice };
+        }
+        const operation = await tx.consignmentOperation.create({
+          data: { ...data, itemId: lot.id, itemName: lot.name, note: cleanText(body.note) || null, createdBy: username || null },
+        });
+        items.push(updated);
+        operations.push(operation);
+      }
+      return { items, operations };
+    });
+    if (failure) return response.status(failure.status).json({ error: failure.error, code: failure.code });
+    await appendAudit(request, `consignment.group.${mode}`, {
+      entityType: "consignment_operation",
+      entityId: result.operations.map((op) => op.id).join(","),
+      newValue: { mode, quantity, operations: result.operations.map(consignmentOperationFromPostgres) },
+    });
+    response.status(201).json({
+      ok: true,
+      items: result.items.map(consignmentItemFromPostgres),
+      operations: result.operations.map(consignmentOperationFromPostgres),
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+app.post("/api/consignment/groups/sale", requireAdmin, (request, response, next) => {
+  void runConsignmentGroupOperation(request, response, next, "sale");
+});
+
+app.post("/api/consignment/groups/writeoff", requireAdmin, (request, response, next) => {
+  void runConsignmentGroupOperation(request, response, next, "writeoff");
+});
+
+app.post("/api/consignment/groups/receive", requireAdmin, (request, response, next) => {
+  void runConsignmentGroupOperation(request, response, next, "receive");
+});
+
 app.post("/api/consignment/operations/:id/return", requireAdmin, async (request, response, next) => {
   try {
     if (consignmentStorageUnavailable(response)) return;
@@ -596,6 +725,35 @@ app.post("/api/consignment/payouts", requireAdmin, async (request, response, nex
       },
     });
     await appendAudit(request, `consignment.${kind}`, {
+      entityType: "consignment_operation",
+      entityId: operation.id,
+      newValue: consignmentOperationFromPostgres(operation),
+    });
+    response.status(201).json({ ok: true, operation: consignmentOperationFromPostgres(operation) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Пополнение общего баланса спонсора: довнесение денег извне (например,
+// компенсация за испорченный товар в поставке). Зеркальная операция к
+// sponsor_payout — плюс к балансу, удаление строки откатывает деньги.
+app.post("/api/consignment/topups", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const body = request.body || {};
+    const amount = normalizeFinanceMoney(body.amount, 0);
+    if (!(amount > 0)) return response.status(400).json({ error: "Сумма пополнения должна быть больше нуля.", code: "consignment_amount_required" });
+    const operation = await getPrisma().consignmentOperation.create({
+      data: {
+        type: "sponsor_topup",
+        quantity: 0,
+        balanceDelta: amount,
+        note: cleanText(body.note) || null,
+        createdBy: requestUsername(request) || null,
+      },
+    });
+    await appendAudit(request, "consignment.sponsor_topup", {
       entityType: "consignment_operation",
       entityId: operation.id,
       newValue: consignmentOperationFromPostgres(operation),
