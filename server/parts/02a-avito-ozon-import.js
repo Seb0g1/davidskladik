@@ -21,10 +21,16 @@ function parseVolumeMlFromText(value) {
 }
 
 function extractAvitoImageUrls(images) {
-  const list = Array.isArray(images) ? images : [];
-  return list
+  // В Postgres колонка images — объект { imageUrl, images: [...] }
+  // (см. productToPostgresData), но встречается и плоский массив URL.
+  const list = Array.isArray(images)
+    ? images
+    : images && typeof images === "object"
+      ? [images.imageUrl, ...(Array.isArray(images.images) ? images.images : [])]
+      : [];
+  return [...new Set(list
     .map((item) => cleanText(typeof item === "string" ? item : item?.url || item?.fileName || ""))
-    .filter((url) => /^https?:\/\//i.test(url))
+    .filter((url) => /^https?:\/\//i.test(url)))]
     .slice(0, 10);
 }
 
