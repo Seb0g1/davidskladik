@@ -7106,6 +7106,11 @@ test("Avito categorizer maps titles to category specs and feed XML emits spec ta
 
   // Классификация по названию: цепочки категорий из шаблонов Автозагрузки.
   assert.equal(classifyAvitoCategory("GIORGIO ARMANI CODE Мужские духи 75мл").key, "parfum-edt");
+  // Пробники/отливанты — своя категория: валидатор Avito отклоняет их с типом
+  // «Духи и туалетная вода».
+  assert.equal(classifyAvitoCategory("Gucci FLORA GORGEOUS JASMINE Вода парфюмерная женская 1.5 ml пробник").key, "parfum-samples");
+  assert.equal(classifyAvitoCategory("Christian Louboutin LOUBIHORSE Парфюмерная вода спрей для женщин (пробник) 2 мл").key, "parfum-samples");
+  assert.equal(classifyAvitoCategory("Байредо отливант 10 мл парфюмерная вода").key, "parfum-samples");
   assert.equal(classifyAvitoCategory("CHANEL подарочный набор: духи 5мл + лосьон").key, "parfum-sets");
   assert.equal(classifyAvitoCategory("Масляные духи Attar Collection 12 мл").key, "parfum-oils");
   assert.equal(classifyAvitoCategory("Крем для рук увлажняющий 75 мл").key, "body-creams");
@@ -7167,9 +7172,14 @@ test("Avito price comes from linked supplier purchase price, not Ozon listing pr
   // 60 USD × 100 ₽ × 2 (правило avito от $50) = 12000 — не targetPrice и не цена Ozon.
   assert.equal(result.listing.priceRub, 12000);
 
-  // Без поставщика — фолбэк на targetPrice (цена от поставщика, посчитанная для Ozon).
+  // Без поставщика фолбэка на цену Ozon (targetPrice) НЕТ — товар отсеивается.
   const noSupplier = evaluateAvitoImportCandidate(product, rules, { ...pricing, supplierByProductId: new Map() });
-  assert.equal(noSupplier.listing.priceRub, 9999);
+  assert.equal(noSupplier.ok, false);
+  assert.ok(noSupplier.reasons.includes("no_price"));
+
+  // Первый проход импорта (skipPriceChecks) пропускает ценовые проверки.
+  const cheapPass = evaluateAvitoImportCandidate(product, rules, { ...pricing, supplierByProductId: new Map(), skipPriceChecks: true });
+  assert.equal(cheapPass.ok, true);
 });
 
 test("Avito per-listing markup coefficient overrides global markup rules", () => {
@@ -7207,6 +7217,10 @@ test("Avito per-listing markup coefficient overrides global markup rules", () =>
   const rubLive = { ...live, supplier: { price: 2500, priceCurrency: "RUB" } };
   assert.equal(applyAvitoLiveState(cleared, rubLive, rules, pricing).listing.priceRub, 4000); // 2500 × 1.6
   assert.equal(applyAvitoLiveState(withMarkup, rubLive, rules, pricing).listing.priceRub, 5000); // 2500 × 2
+
+  // Без поставщика цена не падает на targetPrice — остаётся сохранённая в фиде.
+  const noSupplierLive = { ...live, supplier: null };
+  assert.equal(applyAvitoLiveState(withMarkup, noSupplierLive, rules, pricing).listing.priceRub, withMarkup.priceRub);
 });
 
 test("consignment sponsor topup adds to balance and is tracked separately", () => {

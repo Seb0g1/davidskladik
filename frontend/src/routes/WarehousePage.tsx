@@ -1564,7 +1564,7 @@ function AvitoPanel({ products, canEdit = false }: { products: Product[]; canEdi
                       ? "свой коэффициент товара (общие правила не применяются)"
                       : item.priceSource === "supplier"
                         ? "коэффициент из общих правил наценки Avito"
-                        : "нет цены поставщика — фолбэк: цена Ozon (targetPrice)"}
+                        : "цена поставщика недоступна — сохранённая цена фида"}
                   </span>
                 </>
               ) : (

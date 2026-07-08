@@ -15,6 +15,10 @@ const AVITO_CONDITIONS = ["Новое", "Б/у"];
 // gender: страницы духов/наборов/масел содержат тег Gender.
 const AVITO_CATEGORY_SPECS = [
   { key: "parfum-edt", label: "Парфюмерия / Духи и туалетная вода", tags: { GoodsType: "Парфюмерия", PerfumeryType: "Духи и туалетная вода" }, condition: true, gender: true },
+  // Пробники/отливанты: валидатор Avito отклоняет их с PerfumeryType «Духи и
+  // туалетная вода» («Неправильно заполнен обязательный параметр — Тип
+  // парфюмерии») и сам подсказывает значение «Пробники и отливанты».
+  { key: "parfum-samples", label: "Парфюмерия / Пробники и отливанты", tags: { GoodsType: "Парфюмерия", PerfumeryType: "Пробники и отливанты" }, condition: true, gender: true },
   { key: "parfum-sets", label: "Парфюмерия / Парфюмерные наборы", tags: { GoodsType: "Парфюмерия", PerfumeryType: "Парфюмерные наборы" }, condition: true, gender: true },
   { key: "parfum-oils", label: "Парфюмерия / Парфюмерные масла", tags: { GoodsType: "Парфюмерия", PerfumeryType: "Парфюмерные масла" }, condition: true, gender: true },
   { key: "parfum-diffusers", label: "Парфюмерия / Диффузоры, спреи и саше", tags: { GoodsType: "Парфюмерия", PerfumeryType: "Диффузоры, спреи и саше" }, condition: true, gender: false },
@@ -74,6 +78,9 @@ function classifyAvitoCategory(title, { defaultCategoryKey = AVITO_DEFAULT_CATEG
     autoDefaulted,
   });
 
+  if (/пробник|отливант|\bдекант\b|\bdecant\b|\bsample\b/.test(text) && perfumeContext.test(text)) {
+    return pick("parfum-samples");
+  }
   if (/набор|подарочн|gift set|\bset\b|\bkit\b/.test(text)) {
     if (perfumeContext.test(text)) return pick("parfum-sets");
     if (/крем|маск|сыворот|уход|космети|шампун|патч/.test(text)) return pick("care-sets");

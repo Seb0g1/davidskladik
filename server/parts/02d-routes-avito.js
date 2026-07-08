@@ -258,12 +258,16 @@ app.post("/api/avito/product-status", async (request, response, next) => {
     }
     const pricing = await loadAvitoPricingContext();
     const liveStates = await loadAvitoLiveProductStates(productIds.map((id) => ({ sourceProductId: id })));
+    // Поставщики: снапшот из raw + живой расчёт из PriceMaster для товаров без
+    // снапшота (карточка — до 50 товаров, это быстро).
+    const supplierMap = await loadAvitoSupplierPricingMap(productIds);
     const prisma = getPrisma();
 
     const items = [];
     for (const productId of productIds) {
       const listing = listingByProductId.get(productId) || null;
-      const live = liveStates instanceof Map ? liveStates.get(productId) : null;
+      const liveRaw = liveStates instanceof Map ? liveStates.get(productId) : null;
+      const live = liveRaw ? { ...liveRaw, supplier: liveRaw.supplier || supplierMap.get(productId) || null } : liveRaw;
       if (listing) {
         const { listing: fresh, outOfStock } = liveStates === null
           ? { listing, outOfStock: listing.outOfStock === true }
@@ -284,7 +288,7 @@ app.post("/api/avito/product-status", async (request, response, next) => {
           categoryPath: avitoListingCategoryPath(listing),
           categoryAutoDefaulted: listing.categoryAutoDefaulted === true,
           hasDescription: Boolean(cleanText(listing.description)),
-          priceSource: markupOverride > 0 ? "markup" : breakdown ? "supplier" : "target",
+          priceSource: markupOverride > 0 ? "markup" : breakdown ? "supplier" : "stored",
           priceFormula: breakdown
             ? {
               supplierUsd: breakdown.supplierUsd,
@@ -408,6 +412,10 @@ app.post("/api/avito/price/markup", requireAdmin, async (request, response, next
     ]);
     const live = liveStates instanceof Map ? liveStates.get(cleanText(listing.sourceProductId)) : null;
     if (live) {
+      if (!live.supplier) {
+        const supplierMap = await loadAvitoSupplierPricingMap([cleanText(listing.sourceProductId)]);
+        live.supplier = supplierMap.get(cleanText(listing.sourceProductId)) || null;
+      }
       const priceRub = resolveAvitoListingPriceRub(live, live.supplier, rules, pricing, coefficient > 0 ? coefficient : 0);
       if (priceRub > 0) updatedListing.priceRub = priceRub;
     }

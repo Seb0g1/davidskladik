@@ -22,10 +22,26 @@ async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
     const liveStates = await loadAvitoLiveProductStates(state.items);
     if (liveStates === null) return { status: "postgres_unavailable" };
     const pricing = await loadAvitoPricingContext();
+    // Снапшот поставщика в raw есть не у всех товаров — добираем живым
+    // расчётом из PriceMaster, иначе цена не пересчитается от поставщика и в
+    // фиде останется старая (эры цены Ozon).
+    if (rules.autoUpdatePrices) {
+      const missingIds = [...liveStates.entries()]
+        .filter(([, liveState]) => liveState && !liveState.supplier)
+        .map(([id]) => id);
+      if (missingIds.length) {
+        const supplierMap = await loadAvitoSupplierPricingMap(missingIds);
+        for (const id of missingIds) {
+          const supplier = supplierMap.get(id);
+          if (supplier) liveStates.get(id).supplier = supplier;
+        }
+      }
+    }
 
     const syncedAt = new Date().toISOString();
     let updatedPrices = 0;
     let outOfStockCount = 0;
+    let reclassified = 0;
     let changed = false;
     const nextItems = state.items.map((item) => {
       const sourceProductId = cleanText(item.sourceProductId);
@@ -34,7 +50,20 @@ async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
       if (outOfStock) outOfStockCount += 1;
       if (listing.priceRub !== item.priceRub) updatedPrices += 1;
       if (listing.priceRub !== item.priceRub || outOfStock !== (item.outOfStock === true)) changed = true;
-      return { ...listing, outOfStock, lastSyncedAt: syncedAt };
+      const next = { ...listing, outOfStock, lastSyncedAt: syncedAt };
+      // Переклассификация по актуальному справочнику: например, пробники должны
+      // уходить с PerfumeryType «Пробники и отливанты» — валидатор Avito
+      // отклонял старые объявления с типом «Духи и туалетная вода».
+      const classification = classifyAvitoCategory(item.title, rules);
+      if (classification.spec && classification.spec.key !== cleanText(item.categoryKey)) {
+        next.categoryKey = classification.spec.key;
+        next.categoryAutoDefaulted = classification.autoDefaulted;
+        const gender = classification.spec.gender ? detectAvitoPerfumeGender(item.title) : "";
+        if (gender) next.extraFields = { ...(item.extraFields || {}), Gender: gender };
+        reclassified += 1;
+        changed = true;
+      }
+      return next;
     });
 
     // lastSyncedAt меняется всегда — пишем файл только при реальных изменениях,
@@ -47,6 +76,7 @@ async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
       total: state.items.length,
       updatedPrices,
       outOfStock: outOfStockCount,
+      reclassified,
       persisted: changed,
       at: syncedAt,
     };

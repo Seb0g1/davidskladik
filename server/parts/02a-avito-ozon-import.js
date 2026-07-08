@@ -41,7 +41,13 @@ function extractAvitoImageUrls(images) {
 // warehouse_products.raw->selectedSupplier. Фолбэк — targetPrice (та же цена от
 // поставщика, посчитанная для Ozon); листинговая цена Ozon не используется.
 
-async function loadAvitoSupplierPricingMap(productIds = []) {
+// Карта поставщиков для цены Avito. Снапшот raw->selectedSupplier есть только
+// у товаров, прошедших через отправку цены (normalizeWarehouseProduct не
+// сохраняет selectedSupplier, а отправка цены дописывает его отдельно) — для
+// остальных считаем живого поставщика из PriceMaster тем же механизмом, что и
+// репрайс склада (самый дешёвый активный). Без этого фолбэка большинство
+// товаров оставались без цены поставщика и фид падал на цену Ozon.
+async function loadAvitoSupplierPricingMap(productIds = [], { fresh = true, freshChunkSize = 400 } = {}) {
   const prisma = getPrisma();
   const ids = [...new Set(productIds.map((value) => cleanText(value)).filter(Boolean))];
   if (!prisma || !ids.length) return new Map();
@@ -56,6 +62,24 @@ async function loadAvitoSupplierPricingMap(productIds = []) {
     `;
     for (const row of rows) {
       if (row.supplier && typeof row.supplier === "object") map.set(cleanText(row.id), row.supplier);
+    }
+  }
+  if (!fresh) return map;
+  const missing = ids.filter((id) => !map.has(id));
+  for (let index = 0; index < missing.length; index += freshChunkSize) {
+    const chunk = missing.slice(index, index + freshChunkSize);
+    try {
+      const built = await buildFreshWarehouseProducts(chunk, {
+        refreshPrices: false,
+        persistMutations: false,
+        livePriceMaster: true,
+        batchPriceMaster: true,
+      });
+      for (const product of built) {
+        if (product?.selectedSupplier) map.set(cleanText(product.id), product.selectedSupplier);
+      }
+    } catch (error) {
+      logger.warn("avito supplier fresh build failed", { detail: error?.message || String(error), products: chunk.length });
     }
   }
   return map;
@@ -109,16 +133,17 @@ function computeAvitoSupplierPriceRub(supplier, pricing = {}, productMarkup = 0)
   return breakdown ? breakdown.priceRub : 0;
 }
 
-// Базовая цена листинга: поставщик → targetPrice; поверх — локальные правила
-// страницы Avito (priceCoefficient/priceRules, по умолчанию ×1). Личный
-// коэффициент (productMarkup) даёт конечную цену от закупки поставщика —
+// Цена листинга — ТОЛЬКО от цены поставщика (закупка × коэффициент), фолбэка
+// на цену Ozon (targetPrice) нет: без поставщика возвращается 0 — при импорте
+// товар отсеется (no_price), а в фиде останется последняя сохранённая цена.
+// Поверх — локальные правила страницы Avito (priceCoefficient/priceRules,
+// по умолчанию ×1). Личный коэффициент (productMarkup) даёт конечную цену —
 // локальные правила страницы к ней не применяются.
 function resolveAvitoListingPriceRub(product = {}, supplier, rules = {}, pricing = {}, productMarkup = 0) {
   const supplierPriceRub = computeAvitoSupplierPriceRub(supplier, pricing, productMarkup);
-  if (productMarkup > 0 && supplierPriceRub > 0) return Math.round(supplierPriceRub);
-  const basePriceRub = supplierPriceRub > 0 ? supplierPriceRub : Number(product.targetPrice || 0);
-  if (!(basePriceRub > 0)) return 0;
-  return Math.round(basePriceRub * avitoPriceCoefficientFor(basePriceRub, rules));
+  if (!(supplierPriceRub > 0)) return 0;
+  if (productMarkup > 0) return Math.round(supplierPriceRub);
+  return Math.round(supplierPriceRub * avitoPriceCoefficientFor(supplierPriceRub, rules));
 }
 
 // Возвращает { ok, reasons, listing } — причины пропуска нужны для предпросмотра.
@@ -149,10 +174,15 @@ function evaluateAvitoImportCandidate(product = {}, rules = {}, pricing = {}) {
   }
   if (rules.skipWithoutVolume && volumeMl <= 0) reasons.push("volume_unknown");
 
-  const priceRub = resolveAvitoListingPriceRub(product, pricing.supplierByProductId?.get(cleanText(product.id)), rules, pricing);
-  if (priceRub <= 0) reasons.push("no_price");
-  if (rules.minPriceRub > 0 && priceRub > 0 && priceRub < rules.minPriceRub) reasons.push(`price_below_min:${priceRub}`);
-  if (rules.maxPriceRub > 0 && priceRub > rules.maxPriceRub) reasons.push(`price_above_max:${priceRub}`);
+  // pricing.skipPriceChecks — первый проход импорта: дешёвые фильтры без
+  // похода за поставщиком, цена проверяется вторым проходом.
+  let priceRub = 0;
+  if (!pricing.skipPriceChecks) {
+    priceRub = resolveAvitoListingPriceRub(product, pricing.supplierByProductId?.get(cleanText(product.id)), rules, pricing);
+    if (priceRub <= 0) reasons.push("no_price");
+    if (rules.minPriceRub > 0 && priceRub > 0 && priceRub < rules.minPriceRub) reasons.push(`price_below_min:${priceRub}`);
+    if (rules.maxPriceRub > 0 && priceRub > rules.maxPriceRub) reasons.push(`price_above_max:${priceRub}`);
+  }
 
   const imageUrls = extractAvitoImageUrls(product.images);
   if (rules.requireImages && !imageUrls.length) reasons.push("no_images");
@@ -219,18 +249,31 @@ async function collectAvitoImportCandidates(rulesOverride = null) {
     orderBy: { updatedAt: "desc" },
   });
 
+  const pricingContext = await loadAvitoPricingContext();
+  // Проход 1: дешёвые фильтры (архив, объём, стоп-слова, фото) без похода за
+  // поставщиком. Поставщиков (в т.ч. живой расчёт из PriceMaster) тянем только
+  // для прошедших — иначе на 18k+ товаров это неподъёмно.
+  const prelim = products.map((product) => ({
+    product,
+    result: evaluateAvitoImportCandidate(product, rules, { ...pricingContext, skipPriceChecks: true }),
+  }));
+  const priceCandidateIds = prelim.filter((row) => row.result.ok).map((row) => row.product.id);
   const pricing = {
-    ...(await loadAvitoPricingContext()),
-    supplierByProductId: await loadAvitoSupplierPricingMap(products.map((product) => product.id)),
+    ...pricingContext,
+    supplierByProductId: await loadAvitoSupplierPricingMap(priceCandidateIds),
   };
 
   const matched = [];
   const skipped = [];
-  for (const product of products) {
+  for (const { product, result } of prelim) {
     if (rules.maxItems > 0 && matched.length >= rules.maxItems) break;
-    const result = evaluateAvitoImportCandidate(product, rules, pricing);
-    if (result.ok) matched.push(result.listing);
-    else skipped.push({ id: product.id, offerId: product.offerId, name: product.name, reasons: result.reasons });
+    if (!result.ok) {
+      skipped.push({ id: product.id, offerId: product.offerId, name: product.name, reasons: result.reasons });
+      continue;
+    }
+    const full = evaluateAvitoImportCandidate(product, rules, pricing);
+    if (full.ok) matched.push(full.listing);
+    else skipped.push({ id: product.id, offerId: product.offerId, name: product.name, reasons: full.reasons });
   }
   return { rules, totalOzonProducts: products.length, matched, skipped };
 }
