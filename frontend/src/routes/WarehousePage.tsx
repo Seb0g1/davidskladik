@@ -1409,6 +1409,168 @@ function MarketplaceRows({ products, breakdown = [] }: { products: Product[]; br
   );
 }
 
+type AvitoProductStatus = {
+  productId: string;
+  inFeed: boolean;
+  adId?: string;
+  enabled?: boolean;
+  outOfStock?: boolean;
+  priceRub?: number;
+  manualPriceRub?: number;
+  categoryPath?: string;
+  categoryAutoDefaulted?: boolean;
+  hasDescription?: boolean;
+  priceSource?: string;
+  reasons?: string[];
+  potential?: { priceRub: number; categoryPath: string } | null;
+};
+
+const AVITO_SKIP_LABELS: Record<string, string> = {
+  archived: "в архиве Ozon",
+  no_images: "нет фото",
+  no_price: "нет цены поставщика",
+  volume_below_min: "объём меньше порога",
+  volume_unknown: "объём не распознан",
+  title_word: "стоп-слово в названии",
+  no_title: "нет названия",
+  stock_below_min: "мало остатков",
+  not_ozon: "не товар Ozon",
+  not_found: "товар не найден",
+};
+
+function avitoSkipLabel(reason: string): string {
+  const key = reason.split(":")[0];
+  return AVITO_SKIP_LABELS[key] || key;
+}
+
+// Личная цена Avito: > 0 фиксирует цену объявления (авторасчёт от поставщика
+// её не трогает), сброс возвращает автоцену.
+function AvitoManualPrice({ item, onSaved }: { item: AvitoProductStatus; onSaved: () => void }) {
+  const [value, setValue] = useState("");
+  const mutation = useMutation({
+    mutationFn: async (priceRub: number) => {
+      const response = await fetch("/api/avito/price/manual", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adId: item.adId, productId: item.productId, priceRub }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`);
+      return payload;
+    },
+    onSuccess: () => {
+      setValue("");
+      onSaved();
+    },
+  });
+  const parsed = Math.round(Number(value));
+  const canSave = Number.isFinite(parsed) && parsed > 0;
+  return (
+    <div className="avito-manual-price">
+      <input
+        type="number"
+        min="1"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        placeholder={item.priceRub ? `Личная цена, сейчас ${item.priceRub}` : "Личная цена, ₽"}
+        aria-label="Личная цена Avito"
+      />
+      <button className="secondary-action" type="button" disabled={!canSave || mutation.isPending} onClick={() => mutation.mutate(parsed)}>
+        {mutation.isPending ? <Loader2 className="spin" size={14} /> : null} Задать цену
+      </button>
+      {(item.manualPriceRub || 0) > 0 ? (
+        <button className="secondary-action" type="button" disabled={mutation.isPending} onClick={() => mutation.mutate(0)}>
+          Вернуть автоцену
+        </button>
+      ) : null}
+      {mutation.error ? <span className="inline-error">{String((mutation.error as Error).message)}</span> : null}
+    </div>
+  );
+}
+
+function AvitoPanel({ products, canEdit = false }: { products: Product[]; canEdit?: boolean }) {
+  const ozonIds = useMemo(
+    () => products.filter((product) => product.marketplace === "ozon").map((product) => String(product.id)).sort(),
+    [products],
+  );
+  const statusQuery = useQuery({
+    queryKey: ["avito", "product-status", ozonIds.join("|")],
+    enabled: ozonIds.length > 0,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const response = await fetch("/api/avito/product-status", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: ozonIds }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return (await response.json()) as { items: AvitoProductStatus[] };
+    },
+  });
+  if (!ozonIds.length) return null;
+  const items = statusQuery.data?.items || [];
+  return (
+    <section className="detail-section">
+      <div className="section-title">
+        <div>
+          <span>Avito</span>
+          <h3>Автозагрузка Avito</h3>
+        </div>
+        <a className="secondary-action" href="/app/avito">Открыть Avito</a>
+      </div>
+      {statusQuery.isLoading ? <div className="table-note"><Loader2 className="spin" size={14} /> Проверяю фид…</div> : null}
+      {statusQuery.error ? <div className="inline-error">Статус Avito недоступен: {String((statusQuery.error as Error).message)}</div> : null}
+      <div className="marketplace-rows">
+        {items.map((item) => (
+          <div className="marketplace-row" key={item.productId}>
+            <div>
+              <strong>Avito</strong>
+              <span>{item.adId || item.productId}</span>
+            </div>
+            {item.inFeed ? (
+              <span className={`pill ${item.outOfStock ? "warn" : item.enabled ? "ok" : "muted"}`}>
+                {item.outOfStock ? "скрыт: нет остатков" : item.enabled ? "в фиде" : "выключен"}
+              </span>
+            ) : (
+              <span className="pill warn">не в фиде</span>
+            )}
+            <div>
+              <small>Цена Avito</small>
+              <strong>{item.inFeed ? money(item.priceRub) : item.potential ? money(item.potential.priceRub) : "—"}</strong>
+              {!item.inFeed && item.potential ? <small>после импорта</small> : null}
+              {item.inFeed && (item.manualPriceRub || 0) > 0 ? <small>личная цена</small> : null}
+            </div>
+            <div className="marketplace-flags">
+              {item.inFeed ? (
+                <>
+                  {item.categoryPath ? <span className="formula-chip">{item.categoryPath}{item.categoryAutoDefaulted ? " · по умолчанию" : ""}</span> : null}
+                  <span className={`formula-chip ${item.hasDescription ? "muted" : ""}`}>{item.hasDescription ? "описание с Ozon" : "описание: шаблон (докачивается)"}</span>
+                  <span className="formula-chip muted">
+                    {item.priceSource === "manual"
+                      ? "личная цена: зафиксирована вручную"
+                      : item.priceSource === "supplier"
+                        ? "цена от поставщика × наценка Avito"
+                        : "цена: фолбэк targetPrice"}
+                  </span>
+                </>
+              ) : (
+                <>
+                  {(item.reasons || []).map((reason) => <span className="formula-chip" key={reason}>{avitoSkipLabel(reason)}</span>)}
+                  {item.potential?.categoryPath ? <span className="formula-chip muted">{item.potential.categoryPath}</span> : null}
+                </>
+              )}
+            </div>
+            {canEdit && item.inFeed ? <AvitoManualPrice item={item} onSaved={() => statusQuery.refetch()} /> : null}
+          </div>
+        ))}
+        {!items.length && !statusQuery.isLoading && !statusQuery.error ? <div className="table-note">Нет строк Ozon — на Avito выгружаются товары Ozon.</div> : null}
+      </div>
+    </section>
+  );
+}
+
 function formatEtaSeconds(seconds: number): string {
   if (seconds <= 30) return "вот-вот";
   const minutes = Math.round(seconds / 60);
@@ -1729,6 +1891,7 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
       </div>
       <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} readOnly={demoMode} />
       <MarketplaceRows products={products} breakdown={breakdown} />
+      {!demoMode ? <AvitoPanel products={products} canEdit={isAdmin} /> : null}
       {isAdmin && !demoMode ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <AiImagesPanel product={primary} products={products} onSaved={refreshDetail} /> : null}

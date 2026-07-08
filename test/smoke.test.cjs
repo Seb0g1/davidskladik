@@ -7171,3 +7171,33 @@ test("Avito price comes from linked supplier purchase price, not Ozon listing pr
   const noSupplier = evaluateAvitoImportCandidate(product, rules, { ...pricing, supplierByProductId: new Map() });
   assert.equal(noSupplier.listing.priceRub, 9999);
 });
+
+test("Avito manual price overrides auto price and survives live refresh", () => {
+  const { normalizeAvitoListing, applyAvitoLiveState, normalizeAvitoImportRules } = require("../server.js");
+  const rules = normalizeAvitoImportRules({});
+  const pricing = { usdRate: 100, appSettings: { defaultMarkups: { avito: 1.5 } } };
+
+  // Личная цена побеждает расчётную при нормализации хранилища.
+  const listing = normalizeAvitoListing({
+    adId: "oz-SKU1", sourceProductId: "p1", title: "Тестовые духи 100 мл",
+    priceRub: 12000, manualPriceRub: 7777,
+  });
+  assert.equal(listing.manualPriceRub, 7777);
+  assert.equal(listing.priceRub, 7777);
+
+  // Живое обогащение фида не пересчитывает личную цену от поставщика.
+  const live = { id: "p1", targetPrice: 9999, targetStock: 5, archived: false, supplier: { price: 60, priceCurrency: "USD" } };
+  const refreshed = applyAvitoLiveState(listing, live, rules, pricing);
+  assert.equal(refreshed.listing.priceRub, 7777);
+  assert.equal(refreshed.outOfStock, false);
+
+  // Реимпорт Ozon → Avito не затирает личную цену (merge с current).
+  const reimported = normalizeAvitoListing({ adId: "oz-SKU1", priceRub: 12000 }, listing);
+  assert.equal(reimported.manualPriceRub, 7777);
+  assert.equal(reimported.priceRub, 7777);
+
+  // Сброс (manualPriceRub = 0) возвращает автоцену.
+  const cleared = normalizeAvitoListing({ manualPriceRub: 0, priceRub: 12000 }, listing);
+  assert.equal(cleared.manualPriceRub, 0);
+  assert.equal(cleared.priceRub, 12000);
+});

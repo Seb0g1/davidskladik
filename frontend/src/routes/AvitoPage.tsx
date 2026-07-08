@@ -81,6 +81,7 @@ type Listing = {
   brand: string;
   volumeMl: number;
   priceRub: number;
+  manualPriceRub?: number;
   imageUrls: string[];
   description?: string;
   categoryKey?: string;
@@ -659,7 +660,12 @@ export function AvitoPage() {
               </span>
               <span data-label="Артикул">{item.adId}</span>
               <span data-label="Объём">{item.volumeMl ? `${item.volumeMl} мл` : "—"}</span>
-              <span data-label="Цена">{item.priceRub ? `${item.priceRub} ₽` : "—"}</span>
+              <span data-label="Цена">
+                {item.priceRub ? `${item.priceRub} ₽` : "—"}
+                {(item.manualPriceRub || 0) > 0 ? (
+                  <span className="pill muted" title="Личная цена: зафиксирована вручную, авторасчёт её не меняет">личная</span>
+                ) : null}
+              </span>
               <span data-label="Источник">
                 {item.outOfStock ? (
                   <span className="pill warn" title="Нет остатков на складе — объявление скрыто из фида">нет остатков</span>

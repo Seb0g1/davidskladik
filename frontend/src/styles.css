@@ -1364,6 +1364,26 @@ button:disabled {
   color: var(--muted);
 }
 
+.avito-manual-price {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.avito-manual-price input {
+  width: 190px;
+  max-width: 100%;
+  min-height: 36px;
+  border: 1px solid var(--line);
+  background: var(--field-bg);
+  color: var(--text);
+  padding: 0 11px;
+  border-radius: 10px;
+  outline: none;
+}
+
 .section-note {
   margin: 4px 0 0;
   max-width: 760px;

@@ -239,6 +239,83 @@ app.delete("/api/avito/listings", requireAdmin, async (request, response, next) 
   }
 });
 
+// Статус товаров склада в фиде Avito — для панели Avito в карточке товара:
+// в фиде ли товар, живая цена (от поставщика), категория, описание; если не в
+// фиде — причины пропуска и потенциальная цена.
+app.post("/api/avito/product-status", async (request, response, next) => {
+  try {
+    const productIds = (Array.isArray(request.body?.productIds) ? request.body.productIds : [])
+      .map((value) => cleanText(value))
+      .filter(Boolean)
+      .slice(0, 50);
+    if (!productIds.length) return response.json({ items: [] });
+
+    const [state, rules] = await Promise.all([readAvitoListingsFile(), readAvitoImportRules()]);
+    const listingByProductId = new Map();
+    for (const item of state.items) {
+      const sourceProductId = cleanText(item.sourceProductId);
+      if (sourceProductId && !listingByProductId.has(sourceProductId)) listingByProductId.set(sourceProductId, item);
+    }
+    const pricing = await loadAvitoPricingContext();
+    const liveStates = await loadAvitoLiveProductStates(productIds.map((id) => ({ sourceProductId: id })));
+    const prisma = getPrisma();
+
+    const items = [];
+    for (const productId of productIds) {
+      const listing = listingByProductId.get(productId) || null;
+      const live = liveStates instanceof Map ? liveStates.get(productId) : null;
+      if (listing) {
+        const { listing: fresh, outOfStock } = liveStates === null
+          ? { listing, outOfStock: listing.outOfStock === true }
+          : applyAvitoLiveState(listing, live, rules, pricing);
+        items.push({
+          productId,
+          inFeed: true,
+          adId: listing.adId,
+          enabled: listing.enabled !== false,
+          outOfStock,
+          priceRub: fresh.priceRub,
+          storedPriceRub: listing.priceRub,
+          manualPriceRub: listing.manualPriceRub || 0,
+          categoryKey: listing.categoryKey || "",
+          categoryPath: avitoListingCategoryPath(listing),
+          categoryAutoDefaulted: listing.categoryAutoDefaulted === true,
+          hasDescription: Boolean(cleanText(listing.description)),
+          priceSource: listing.manualPriceRub > 0 ? "manual" : live?.supplier ? "supplier" : "target",
+        });
+        continue;
+      }
+      if (!prisma) {
+        items.push({ productId, inFeed: false, reasons: ["postgres_unavailable"] });
+        continue;
+      }
+      const row = await prisma.warehouseProduct.findUnique({
+        where: { id: productId },
+        select: { id: true, offerId: true, name: true, brand: true, images: true, archived: true, targetStock: true, targetPrice: true, marketplace: true },
+      });
+      if (!row || row.marketplace !== "ozon") {
+        items.push({ productId, inFeed: false, reasons: [row ? "not_ozon" : "not_found"] });
+        continue;
+      }
+      const result = evaluateAvitoImportCandidate(row, rules, {
+        ...pricing,
+        supplierByProductId: new Map([[productId, live?.supplier || null]]),
+      });
+      items.push({
+        productId,
+        inFeed: false,
+        reasons: result.reasons,
+        potential: result.ok
+          ? { priceRub: result.listing.priceRub, categoryPath: avitoListingCategoryPath(result.listing) }
+          : null,
+      });
+    }
+    response.json({ items });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // --- Фид ---
 
 // Информация о фиде: публичная ссылка для настроек автозагрузки Avito.
@@ -285,6 +362,58 @@ app.post("/api/avito/price/adjust-percent", requireAdmin, async (request, respon
     const refresh = await runAvitoFeedRefresh({ source: "price_adjust" });
     await appendAudit(request, "avito.price.adjust", { oldValue: before, newValue: saved, details: { direction, percent } });
     response.json({ ok: true, rules: saved, refresh });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Личная цена Avito на конкретное объявление: priceRub > 0 фиксирует цену
+// (авторасчёт от поставщика её не трогает), priceRub = 0 возвращает автоцену
+// и сразу пересчитывает её из живых данных склада.
+app.post("/api/avito/price/manual", requireAdmin, async (request, response, next) => {
+  try {
+    const adId = cleanText(request.body?.adId);
+    const productId = cleanText(request.body?.productId);
+    if (!adId && !productId) return response.status(400).json({ error: "Нужен adId или productId объявления." });
+    const manualPriceRub = Math.round(Number(request.body?.priceRub || 0));
+    if (!Number.isFinite(manualPriceRub) || manualPriceRub < 0 || manualPriceRub > 100_000_000) {
+      return response.status(400).json({ error: "priceRub должен быть числом от 0 до 100 000 000 (0 — вернуть автоцену)." });
+    }
+
+    const state = await readAvitoListingsFile();
+    const listing = state.items.find((item) =>
+      (adId && item.adId === adId) || (!adId && productId && cleanText(item.sourceProductId) === productId));
+    if (!listing) return response.status(404).json({ error: "Объявление не найдено в фиде Avito." });
+
+    const before = { adId: listing.adId, manualPriceRub: listing.manualPriceRub || 0, priceRub: listing.priceRub };
+    const updatedListing = { ...listing, manualPriceRub };
+    if (manualPriceRub > 0) {
+      updatedListing.priceRub = manualPriceRub;
+    } else {
+      // Сброс: не ждём фонового рефреша, сразу возвращаем автоцену от поставщика.
+      const [rules, pricing, liveStates] = await Promise.all([
+        readAvitoImportRules(),
+        loadAvitoPricingContext(),
+        loadAvitoLiveProductStates([listing]),
+      ]);
+      const live = liveStates instanceof Map ? liveStates.get(cleanText(listing.sourceProductId)) : null;
+      if (live) {
+        const priceRub = resolveAvitoListingPriceRub(live, live.supplier, rules, pricing);
+        if (priceRub > 0) updatedListing.priceRub = priceRub;
+      }
+    }
+    await upsertAvitoListings([updatedListing]);
+    await appendAudit(request, "avito.price.manual", {
+      oldValue: before,
+      newValue: { adId: listing.adId, manualPriceRub, priceRub: updatedListing.priceRub },
+    });
+    response.json({
+      ok: true,
+      adId: listing.adId,
+      manualPriceRub,
+      priceRub: updatedListing.priceRub,
+      priceSource: manualPriceRub > 0 ? "manual" : "auto",
+    });
   } catch (error) {
     next(error);
   }

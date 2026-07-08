@@ -307,6 +307,7 @@ module.exports = {
   buildAvitoAdXml,
   normalizeAvitoImportRules,
   normalizeAvitoListing,
+  applyAvitoLiveState,
   readAiImageJobs,
   writeAiImageJobs,
   normalizeAiImageJob,
