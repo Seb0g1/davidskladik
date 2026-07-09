@@ -48,13 +48,46 @@ function compareWarehouseSupplierPrices(a = {}, b = {}) {
   return String(a.rowId || "").localeCompare(String(b.rowId || ""));
 }
 
+// Защита от битой строки PriceMaster: аномально дешёвый кандидат (реальный
+// кейс 11573 — строка ~1.8 USD при рынке ~30 USD появилась на сутки, репрайс
+// уронил Ozon 8461 → 490 и Yandex 5337 → 294, а карантин скидок ступенями
+// провёл цену через защиту Ozon «скидка 90%») не выбирается, если его закупка
+// меньше доли SUPPLIER_PRICE_OUTLIER_RATIO (деф. 0.35) от медианы остальных
+// доступных поставщиков. Нужно минимум SUPPLIER_PRICE_OUTLIER_MIN_PEERS
+// (деф. 2) соседей для сравнения — на одном-двух поставщиках не решаем.
+// SUPPLIER_PRICE_OUTLIER_RATIO=0 отключает защиту.
+function supplierPriceOutlierConfig() {
+  const ratioRaw = Number(process.env.SUPPLIER_PRICE_OUTLIER_RATIO);
+  const ratio = Number.isFinite(ratioRaw) ? Math.max(0, Math.min(0.9, ratioRaw)) : 0.35;
+  const minPeers = Math.max(1, Number(process.env.SUPPLIER_PRICE_OUTLIER_MIN_PEERS || 2) || 2);
+  return { ratio, minPeers };
+}
+
 function pickWarehouseSupplier(matches) {
-  return [...matches]
+  const eligible = [...matches]
     .filter((match) => match.available
       && match.priceEligible !== false
       && match.stockOnly !== true
       && !supplierUsesStockOnlyPricing(null, match))
-    .sort(compareWarehouseSupplierPrices)[0] || null;
+    .sort(compareWarehouseSupplierPrices);
+  if (!eligible.length) return null;
+  const { ratio, minPeers } = supplierPriceOutlierConfig();
+  if (!(ratio > 0)) return eligible[0];
+  for (let index = 0; index < eligible.length; index += 1) {
+    const candidate = eligible[index];
+    const purchase = warehouseSupplierPurchaseRubPrice(candidate);
+    if (!(purchase > 0) || purchase >= Number.MAX_SAFE_INTEGER) return candidate;
+    // eligible отсортирован по закупке — peers уже по возрастанию.
+    const peers = eligible.slice(index + 1)
+      .map((supplier) => warehouseSupplierPurchaseRubPrice(supplier))
+      .filter((price) => price > 0 && price < Number.MAX_SAFE_INTEGER);
+    if (peers.length < minPeers) return candidate;
+    const median = peers[Math.floor(peers.length / 2)];
+    if (purchase >= median * ratio) return candidate;
+    candidate.priceOutlier = true;
+  }
+  // Сюда не доходим: у последних кандидатов не хватает peers и цикл вернул их.
+  return eligible[eligible.length - 1];
 }
 
 function pickWarehouseStockOnlySupplier(matches) {
@@ -196,9 +229,11 @@ function supplierAlternativesForDiagnostics(suppliers = [], limit = 5) {
       effectiveFinalPrice: supplier.effectiveFinalPrice || supplier.calculatedPrice || null,
       calculatedPrice: supplier.calculatedPrice || null,
       priceSource: supplier.priceSource || supplier.source || "snapshot",
-      exclusionReason: supplier.available
-        ? (supplier.stockOnly || supplier.priceEligible === false ? "stock_only_excluded" : null)
-        : (supplier.stopped ? "supplier_stopped" : "not_available"),
+      exclusionReason: supplier.priceOutlier
+        ? "price_outlier"
+        : supplier.available
+          ? (supplier.stockOnly || supplier.priceEligible === false ? "stock_only_excluded" : null)
+          : (supplier.stopped ? "supplier_stopped" : "not_available"),
     }));
 }
 

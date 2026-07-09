@@ -7259,6 +7259,39 @@ test("Avito feed XML hides duplicates and listings without images", async () => 
   assert.ok(!xml.includes("<Images>"));
 });
 
+test("warehouse supplier picker skips anomalously cheap price outliers", () => {
+  const { pickWarehouseSupplier } = require("../server.js");
+  const supplier = (rowId, purchaseRubPrice) => ({
+    rowId,
+    partnerName: `partner-${rowId}`,
+    available: true,
+    priceEligible: true,
+    stockOnly: false,
+    purchaseRubPrice,
+    price: purchaseRubPrice / 82,
+  });
+  // Реальный кейс 11573: битая строка PM ~146 ₽ закупки при рынке ~2500 ₽
+  // роняла цену Ozon 8461 → 490. Выброс пропускается, берётся следующий.
+  const picked = pickWarehouseSupplier([
+    supplier("bogus", 146),
+    supplier("a", 2460),
+    supplier("b", 2470),
+    supplier("c", 2520),
+  ]);
+  assert.equal(picked.rowId, "a");
+  // Скидка в разумных пределах (>= 35% медианы) — не выброс, берём дешёвого.
+  const discounted = pickWarehouseSupplier([
+    supplier("cheap", 1500),
+    supplier("a", 2460),
+    supplier("b", 2500),
+    supplier("c", 2600),
+  ]);
+  assert.equal(discounted.rowId, "cheap");
+  // Соседей меньше двух — данных для вердикта нет, поведение прежнее.
+  const few = pickWarehouseSupplier([supplier("bogus", 146), supplier("a", 2460)]);
+  assert.equal(few.rowId, "bogus");
+});
+
 test("warehouse price clamp reason surfaces stale auto-price limits", () => {
   const { applyWarehouseNextPriceLimits, warehousePriceClampReason } = require("../server.js");
   // Реальный кейс: поставщик даёт 8461 ₽, но забытый лимит autoPriceMax=490
