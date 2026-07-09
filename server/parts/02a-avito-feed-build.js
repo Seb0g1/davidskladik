@@ -144,6 +144,12 @@ async function buildAvitoFeedXml() {
     : new Map();
   const pricing = liveStates && rules.autoUpdatePrices ? await loadAvitoPricingContext() : {};
   let hiddenOutOfStock = 0;
+  let hiddenNoImages = 0;
+  let hiddenDuplicates = 0;
+  // Страховка от повторов прямо на отдаче XML: один товар склада и одно
+  // название = одно объявление, даже если в файле листингов остались дубли.
+  const seenSourceProductIds = new Set();
+  const seenTitleKeys = new Set();
   let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n";
   xml += "<Ads formatVersion=\"3\" target=\"Avito.ru\">\n";
   let count = 0;
@@ -157,6 +163,20 @@ async function buildAvitoFeedXml() {
       hiddenOutOfStock += 1;
       continue;
     }
+    const sourceProductId = cleanText(listing.sourceProductId);
+    const titleKey = cleanText(listing.title).toLowerCase().replace(/ё/g, "е");
+    if ((sourceProductId && seenSourceProductIds.has(sourceProductId)) || (titleKey && seenTitleKeys.has(titleKey))) {
+      hiddenDuplicates += 1;
+      continue;
+    }
+    // Avito отклоняет объявления без фото и может завалить всю загрузку —
+    // товар без картинок не публикуем, фоновый бэкфилл фото вернёт его в фид.
+    if (!listing.imageUrls.length) {
+      hiddenNoImages += 1;
+      continue;
+    }
+    if (sourceProductId) seenSourceProductIds.add(sourceProductId);
+    if (titleKey) seenTitleKeys.add(titleKey);
     xml += buildAvitoAdXml(listing, rules.feedDefaults);
     count += 1;
   }
@@ -166,6 +186,8 @@ async function buildAvitoFeedXml() {
     count,
     total: state.items.length,
     hiddenOutOfStock,
+    hiddenNoImages,
+    hiddenDuplicates,
     liveSource: liveStates === null ? "stored" : "postgres",
   };
 }

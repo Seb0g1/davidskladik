@@ -1,4 +1,4 @@
-app.post("/api/ozon-yandex-import/send", async (request, response, next) => {
+app.post("/api/ozon-yandex-import/send", requireAdmin, async (request, response, next) => {
   try {
     if (request.body?.confirmed !== true) {
       return response.status(400).json({ error: "Для выгрузки в Яндекс нужно подтверждение confirmed=true." });

@@ -181,6 +181,10 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     }
     const ozonMinPrice = product.marketplace === "ozon" ? minPriceMap.get(product.id) || null : null;
     nextPrice = applyWarehouseNextPriceLimits(nextPrice, { autoPriceMin: minAuto, autoPriceMax: maxAuto, ozonMinPrice });
+    // Лимиты авто-цены задаются вручную и невидимы в расчёте от поставщика —
+    // фиксируем причину, чтобы UI показал «цена срезана лимитом», а не молча
+    // отправлял цену, оторванную от закупки (реальный кейс: 8461 ₽ → 490 ₽).
+    const priceClampReason = warehousePriceClampReason({ rawNextPrice, nextPrice, minAuto, maxAuto, ozonMinPrice });
     const currentPrice = priceMap.get(product.id) || persistedCurrentPrice;
     const lastPriceSend = product.marketplace === "ozon" ? product.lastOzonPriceSend : product.lastYandexPriceSend;
 
@@ -203,6 +207,9 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
         targetStock: availabilityPolicy.targetStock ?? null,
         stockOnlyFallbackActive,
         stockOnlyManualPrice,
+        priceClampReason,
+        autoPriceMin: minAuto > 0 ? minAuto : null,
+        autoPriceMax: maxAuto > 0 ? maxAuto : null,
         priceSource: stockOnlyFallbackActive ? "stock_only_manual" : (selectedSupplierWithPolicy?.priceSource || (sourceError ? "timeout" : "snapshot")),
         priceSelectionReason: selectedSupplierWithPolicy?.priceSelectionReason || null,
       },

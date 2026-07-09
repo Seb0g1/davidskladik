@@ -568,6 +568,24 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
     onSuccess: (payload) => refreshAfterMutation(payload),
   });
 
+  // Лимиты авто-цены (мин/макс) остались от старого интерфейса и молча
+  // ограничивают расчёт от поставщика — показываем их и даём сбросить.
+  const priceLimitProducts = products.filter((item) =>
+    Number((item as any).autoPriceMin || 0) > 0 || Number((item as any).autoPriceMax || 0) > 0);
+  const resetPriceLimitsMutation = useMutation({
+    mutationFn: async () => {
+      for (const item of priceLimitProducts) {
+        await fetchJson(`/api/warehouse/products/${encodeURIComponent(item.id)}`, MutationProductResponseSchema, patchBody({
+          autoPriceMin: 0,
+          autoPriceMax: 0,
+          expectedUpdatedAt: item.updatedAt || undefined,
+        }));
+      }
+      return null;
+    },
+    onSuccess: () => refreshAfterMutation(),
+  });
+
   useEffect(() => {
     setDrafts([]);
     setDraft(emptyLinkDraft());
@@ -664,6 +682,23 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
         </div>
         {manualPricesMutation.error && <div className="inline-error">{errorMessage(manualPricesMutation.error)}</div>}
       </div>
+
+      {priceLimitProducts.length > 0 ? (
+        <div className="warning-strip compact">
+          <span>
+            Лимиты авто-цены ограничивают расчёт от поставщика:{" "}
+            {priceLimitProducts.map((item) => {
+              const minLimit = Number((item as any).autoPriceMin || 0) || 0;
+              const maxLimit = Number((item as any).autoPriceMax || 0) || 0;
+              return `${String(item.marketplace || "").toUpperCase() || item.offerId}${minLimit ? ` мин ${money(minLimit)}` : ""}${maxLimit ? ` макс ${money(maxLimit)}` : ""}`;
+            }).join(" · ")}
+          </span>
+          <button className="secondary-action" type="button" onClick={() => resetPriceLimitsMutation.mutate()} disabled={readOnly || resetPriceLimitsMutation.isPending} title="Убрать мин/макс лимиты авто-цены — цена снова будет считаться только от закупки поставщика и коэффициента">
+            {resetPriceLimitsMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Сбросить лимиты
+          </button>
+          {resetPriceLimitsMutation.error ? <div className="inline-error">{errorMessage(resetPriceLimitsMutation.error)}</div> : null}
+        </div>
+      ) : null}
 
       <div className="pm-link-toolbar">
           <input value={linkFilter} onChange={(event) => setLinkFilter(event.target.value)} placeholder="Фильтр сохраненных поставщиков: поставщик, артикул или название" />
@@ -1342,6 +1377,10 @@ function MarketplaceRows({ products, breakdown = [] }: { products: Product[]; br
           const lastArchiveSend = asRecord(asRecord(product).lastArchiveSend);
           const ozonUnarchiveQueued = Boolean(rowBreakdown?.ozonUnarchiveQueued || lastArchiveSend.queuedByDailyLimit || lastArchiveSend.warning === "ozon_unarchive_daily_limit_queued" || lastArchiveSend.warning === "linked_activation_queued");
           const ozonUnarchiveNextRetryAt = String(rowBreakdown?.ozonUnarchiveNextRetryAt || lastArchiveSend.nextRetryAt || "");
+          const priceClampReason = String(formula.priceClampReason || "");
+          const autoPriceMinLimit = Number((product as any).autoPriceMin || formula.autoPriceMin || 0) || 0;
+          const autoPriceMaxLimit = Number((product as any).autoPriceMax || formula.autoPriceMax || 0) || 0;
+          const clampedCalculated = Number(formula.calculatedPrice || 0) || 0;
           const formulaParts = [
             stockOnlyFallback ? "Складской fallback · цена PM не используется" : "",
             supplier.supplierName ? `Поставщик: ${String(supplier.supplierName)}${supplier.article ? ` · ${String(supplier.article)}` : ""}${supplier.name || supplier.nativeName || supplier.exactName ? ` · ${String(supplier.name || supplier.nativeName || supplier.exactName)}` : ""}` : "",
@@ -1352,6 +1391,9 @@ function MarketplaceRows({ products, breakdown = [] }: { products: Product[]; br
             product.priceSource ? `Источник PM: ${String(product.priceSource)}` : "",
             stockOnlyFallback && stockOnlyManualPrice ? `Ручная fallback-цена: ${money(stockOnlyManualPrice)}` : "",
             targetPrice ? `Новая цена: ${money(targetPrice)}` : "",
+            priceClampReason === "auto_price_max" ? `⚠ Цена срезана лимитом макс. авто-цены ${money(autoPriceMaxLimit)} — расчёт от поставщика ${money(clampedCalculated)}. Сбросить лимит можно в блоке «Лимиты авто-цены» ниже.` : "",
+            priceClampReason === "auto_price_min" ? `⚠ Цена поднята лимитом мин. авто-цены ${money(autoPriceMinLimit)} — расчёт от поставщика ${money(clampedCalculated)}.` : "",
+            priceClampReason === "ozon_min_price" ? `Цена поднята до минимальной цены Ozon.` : "",
           ].filter(Boolean);
           const alternativeParts = supplierAlternatives
             .slice(0, 5)

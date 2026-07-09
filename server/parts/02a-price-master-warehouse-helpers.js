@@ -214,6 +214,19 @@ function applyWarehouseNextPriceLimits(nextPrice, { autoPriceMin = 0, autoPriceM
   return price;
 }
 
+// Почему итоговая цена отличается от расчёта по поставщику: срезана лимитом
+// макс. авто-цены, поднята лимитом мин. авто-цены или минимальной ценой Ozon.
+// null — лимиты не сработали.
+function warehousePriceClampReason({ rawNextPrice, nextPrice, minAuto = 0, maxAuto = 0, ozonMinPrice = null } = {}) {
+  const raw = Number(rawNextPrice || 0);
+  const final = Number(nextPrice || 0);
+  if (!(raw > 0) || !(final > 0) || raw === final) return null;
+  if (maxAuto > 0 && raw > maxAuto && final === maxAuto) return "auto_price_max";
+  if (Number(ozonMinPrice || 0) > 0 && final === Number(ozonMinPrice)) return "ozon_min_price";
+  if (minAuto > 0 && raw < minAuto && final === minAuto) return "auto_price_min";
+  return null;
+}
+
 function storedMarketplacePrice(product = {}) {
   const ozonPrice = Number(product.ozon?.price || 0);
   const yandexPrice = Number(product.yandex?.price || 0);

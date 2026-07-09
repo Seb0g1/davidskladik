@@ -114,6 +114,13 @@ function scheduleAvitoFeedRefresh(delayMs = avitoFeedRefreshIntervalMs) {
     } catch (error) {
       logger.warn("avito description backfill tick failed", { detail: error?.message || String(error) });
     }
+    // Фоновое дозаполнение фото: без фото объявление скрыто из XML, бэкфилл
+    // возвращает его в фид (Postgres → Ozon API).
+    try {
+      await backfillAvitoListingImages({ source: "schedule" });
+    } catch (error) {
+      logger.warn("avito image backfill tick failed", { detail: error?.message || String(error) });
+    }
     scheduleAvitoFeedRefresh(avitoFeedRefreshIntervalMs);
   }, normalizedDelay);
   avitoFeedRefreshTimer.unref?.();

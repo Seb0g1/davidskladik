@@ -42,6 +42,7 @@ const partFiles = [
   "02a-avito-feed-build.js",
   "02a-avito-ozon-import.js",
   "02a-avito-ozon-descriptions.js",
+  "02a-avito-ozon-images.js",
   "02a-ozon-products-info-maps.js",
   "02a-ozon-stock-price-maps.js",
   "02a-ozon-product-pick-helpers.js",

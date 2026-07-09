@@ -1,6 +1,6 @@
 // Targeted delete: removes only products matching keyword (Тестер/Отливант) or volume <20ml.
 // Safer than the general /delete endpoint — no protectedBrands list needed.
-app.post("/api/yandex-cleanup/delete-filtered", async (request, response, next) => {
+app.post("/api/yandex-cleanup/delete-filtered", requireAdmin, async (request, response, next) => {
   try {
     const dryRun = request.body?.dryRun !== false;
     if (!dryRun && request.body?.confirmed !== true) {
@@ -52,7 +52,7 @@ app.post("/api/yandex-cleanup/delete-filtered", async (request, response, next) 
 // Fast variant of delete-filtered: builds the candidate list from the local DB instead of
 // paging the whole Yandex catalog through the partner API (which takes 10+ minutes and can
 // stall the API process). Same filter: keyword Тестер/Отливант or volume < 20ml.
-app.post("/api/yandex-cleanup/delete-filtered-local", async (request, response, next) => {
+app.post("/api/yandex-cleanup/delete-filtered-local", requireAdmin, async (request, response, next) => {
   try {
     const dryRun = request.body?.dryRun !== false;
     if (!dryRun && request.body?.confirmed !== true) {
@@ -173,7 +173,7 @@ app.post("/api/yandex-cleanup/delete-filtered-local", async (request, response, 
   }
 });
 
-app.post("/api/yandex-cleanup/archive", async (request, response, next) => {
+app.post("/api/yandex-cleanup/archive", requireAdmin, async (request, response, next) => {
   try {
     response.status(410).json({ error: "Архивация отключена. Используйте удаление: /api/yandex-cleanup/delete." });
   } catch (error) {
@@ -181,7 +181,7 @@ app.post("/api/yandex-cleanup/archive", async (request, response, next) => {
   }
 });
 
-app.post("/api/yandex-cleanup/delete", async (request, response, next) => {
+app.post("/api/yandex-cleanup/delete", requireAdmin, async (request, response, next) => {
   try {
     const dryRun = request.body?.dryRun === true;
     if (!dryRun && (request.body?.confirmed !== true || cleanText(request.body?.confirmationText) !== "УДАЛИТЬ ЯНДЕКС")) {

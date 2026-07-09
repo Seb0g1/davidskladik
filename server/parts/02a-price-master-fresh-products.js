@@ -166,6 +166,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
     }
     const ozonMinPrice = product.marketplace === "ozon" ? minPriceMap.get(product.id) || null : null;
     nextPrice = applyWarehouseNextPriceLimits(nextPrice, { autoPriceMin: minAuto, autoPriceMax: maxAuto, ozonMinPrice });
+    const priceClampReason = warehousePriceClampReason({ rawNextPrice, nextPrice, minAuto, maxAuto, ozonMinPrice });
     const currentPrice = priceMap.get(product.id) || persistedCurrentPrice;
     const lastPriceSend = product.marketplace === "ozon" ? product.lastOzonPriceSend : product.lastYandexPriceSend;
 
@@ -188,6 +189,9 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         targetStock: availabilityPolicy.targetStock ?? null,
         stockOnlyFallbackActive,
         stockOnlyManualPrice,
+        priceClampReason,
+        autoPriceMin: minAuto > 0 ? minAuto : null,
+        autoPriceMax: maxAuto > 0 ? maxAuto : null,
         priceSource: stockOnlyFallbackActive ? "stock_only_manual" : (selectedSupplierWithPolicy?.priceSource || "snapshot"),
         priceSelectionReason: selectedSupplierWithPolicy?.priceSelectionReason || null,
       },

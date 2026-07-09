@@ -19,6 +19,7 @@ registerMarketplaceRoutes(app, {
   getEnvYandexShops,
   getEnvAvitoAccounts,
   accountPayloadWithSecretFallback,
+  requireAdmin,
 });
 
 registerUsersRoutes(app, {

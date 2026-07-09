@@ -1,4 +1,4 @@
-app.post("/api/warehouse/products/:id/export", async (request, response, next) => {
+app.post("/api/warehouse/products/:id/export", requireAdmin, async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
       return response.status(400).json({ error: "Product export was not sent because manual confirmation is required." });
@@ -98,7 +98,7 @@ app.post("/api/warehouse/products/:id/export", async (request, response, next) =
   }
 });
 
-app.post("/api/warehouse/products/:id/publish", async (request, response, next) => {
+app.post("/api/warehouse/products/:id/publish", requireAdmin, async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
       return response.status(400).json({ error: "Product was not published because manual confirmation is required." });
@@ -134,7 +134,7 @@ app.post("/api/warehouse/products/:id/publish", async (request, response, next) 
   }
 });
 
-app.post("/api/ozon/products/send", async (request, response, next) => {
+app.post("/api/ozon/products/send", requireAdmin, async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
       return response.status(400).json({

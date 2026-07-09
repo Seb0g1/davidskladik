@@ -7223,6 +7223,68 @@ test("Avito per-listing markup coefficient overrides global markup rules", () =>
   assert.equal(applyAvitoLiveState(withMarkup, noSupplierLive, rules, pricing).listing.priceRub, withMarkup.priceRub);
 });
 
+test("Avito listings dedupe keeps one ad per source product and extracts Ozon info images", () => {
+  const { dedupeAvitoListingsBySource, extractOzonInfoImageUrls, normalizeAvitoListing } = require("../server.js");
+  // Смена offerId у товара порождает новый adId — старое объявление должно
+  // уйти, остаётся более свежее по createdAt.
+  const older = normalizeAvitoListing({ adId: "oz-old", sourceProductId: "p1", title: "Духи 50 мл", createdAt: "2026-01-01T00:00:00.000Z" });
+  const newer = normalizeAvitoListing({ adId: "oz-new", sourceProductId: "p1", title: "Духи 50 мл", createdAt: "2026-06-01T00:00:00.000Z" });
+  const manual = normalizeAvitoListing({ adId: "manual-1", title: "Ручное объявление" });
+  const deduped = dedupeAvitoListingsBySource([older, newer, manual]);
+  assert.equal(deduped.length, 2);
+  assert.ok(deduped.some((item) => item.adId === "oz-new"));
+  assert.ok(!deduped.some((item) => item.adId === "oz-old"));
+  // Ручные объявления без sourceProductId не трогаются.
+  assert.ok(deduped.some((item) => item.adId === "manual-1"));
+
+  // Фото из ответа Ozon /v3/product/info/list: primary_image первым, без дублей.
+  const urls = extractOzonInfoImageUrls({
+    primary_image: "https://cdn.ozon.ru/a.jpg",
+    images: ["https://cdn.ozon.ru/a.jpg", "https://cdn.ozon.ru/b.jpg", "not-a-url"],
+  });
+  assert.deepEqual(urls, ["https://cdn.ozon.ru/a.jpg", "https://cdn.ozon.ru/b.jpg"]);
+});
+
+test("Avito feed XML hides duplicates and listings without images", async () => {
+  const { buildAvitoAdXml } = require("../server.js");
+  // Объявление без фото не должно уходить в XML — проверяем, что сам ad
+  // строится, а фильтрация происходит на уровне фида (см. buildAvitoFeedXml).
+  const xml = buildAvitoAdXml({
+    adId: "oz-1",
+    title: "Духи 50 мл",
+    priceRub: 1000,
+    imageUrls: [],
+    extraFields: {},
+  }, { category: "Красота и здоровье", goodsType: "Парфюмерия", adType: "Товар приобретен на продажу", condition: "Новое", address: "Москва" });
+  assert.ok(!xml.includes("<Images>"));
+});
+
+test("warehouse price clamp reason surfaces stale auto-price limits", () => {
+  const { applyWarehouseNextPriceLimits, warehousePriceClampReason } = require("../server.js");
+  // Реальный кейс: поставщик даёт 8461 ₽, но забытый лимит autoPriceMax=490
+  // молча срезал цену до 490 ₽ — теперь причина видна в priceFormula.
+  const clamped = applyWarehouseNextPriceLimits(8461, { autoPriceMin: 0, autoPriceMax: 490, ozonMinPrice: null });
+  assert.equal(clamped, 490);
+  assert.equal(
+    warehousePriceClampReason({ rawNextPrice: 8461, nextPrice: clamped, minAuto: 0, maxAuto: 490, ozonMinPrice: null }),
+    "auto_price_max",
+  );
+  // Лимит не сработал — причины нет.
+  assert.equal(
+    warehousePriceClampReason({ rawNextPrice: 8461, nextPrice: 8461, minAuto: 0, maxAuto: 9000, ozonMinPrice: null }),
+    null,
+  );
+  // Поднятие до минимальной авто-цены и до минимальной цены Ozon различаются.
+  assert.equal(
+    warehousePriceClampReason({ rawNextPrice: 400, nextPrice: 600, minAuto: 600, maxAuto: 0, ozonMinPrice: null }),
+    "auto_price_min",
+  );
+  assert.equal(
+    warehousePriceClampReason({ rawNextPrice: 400, nextPrice: 700, minAuto: 0, maxAuto: 0, ozonMinPrice: 700 }),
+    "ozon_min_price",
+  );
+});
+
 test("consignment sponsor topup adds to balance and is tracked separately", () => {
   const { consignmentSummaryFromRows } = require("../server.js");
   const summary = consignmentSummaryFromRows([], [

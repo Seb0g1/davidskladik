@@ -17,6 +17,15 @@ function timingSafeEqual(a, b) {
 }
 
 function parseCookies(header = "") {
+  // Битые %-последовательности в cookie не должны ронять запрос 500-кой:
+  // decodeURIComponent бросает URIError на невалидном значении.
+  const safeDecode = (value) => {
+    try {
+      return decodeURIComponent(value);
+    } catch (_error) {
+      return value;
+    }
+  };
   return Object.fromEntries(
     header
       .split(";")
@@ -24,7 +33,7 @@ function parseCookies(header = "") {
       .filter(Boolean)
       .map((part) => {
         const index = part.indexOf("=");
-        return [decodeURIComponent(part.slice(0, index)), decodeURIComponent(part.slice(index + 1))];
+        return [safeDecode(part.slice(0, index)), safeDecode(part.slice(index + 1))];
       }),
   );
 }

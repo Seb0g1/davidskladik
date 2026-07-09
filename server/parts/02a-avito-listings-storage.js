@@ -68,12 +68,47 @@ async function readAvitoListingsFile() {
   }
 }
 
+// Один товар склада = одно объявление. Дубли появляются, когда у товара
+// меняется offerId (adId = oz-<offerId> становится новым, старое объявление
+// остаётся) — на Avito это два одинаковых объявления. Оставляем самое свежее
+// (createdAt новее, при равенстве — позже в списке), ручные объявления без
+// sourceProductId не трогаем.
+function dedupeAvitoListingsBySource(items) {
+  const keptByProductId = new Map();
+  const result = [];
+  for (const item of items) {
+    const sourceProductId = cleanText(item.sourceProductId);
+    if (!sourceProductId) {
+      result.push(item);
+      continue;
+    }
+    const existing = keptByProductId.get(sourceProductId);
+    if (!existing) {
+      keptByProductId.set(sourceProductId, item);
+      result.push(item);
+      continue;
+    }
+    const existingCreatedAt = Date.parse(existing.createdAt || 0) || 0;
+    const itemCreatedAt = Date.parse(item.createdAt || 0) || 0;
+    if (itemCreatedAt >= existingCreatedAt) {
+      result[result.indexOf(existing)] = item;
+      keptByProductId.set(sourceProductId, item);
+    }
+  }
+  return result;
+}
+
 async function writeAvitoListingsFile(state) {
   await fs.mkdir(dataDir, { recursive: true });
+  const items = (Array.isArray(state.items) ? state.items : []).map((item) => normalizeAvitoListing(item)).filter(Boolean);
+  const deduped = dedupeAvitoListingsBySource(items);
+  if (deduped.length !== items.length) {
+    logger.info("avito listings dedupe", { removed: items.length - deduped.length, total: deduped.length });
+  }
   const payload = {
     updatedAt: new Date().toISOString(),
     feedToken: cleanText(state.feedToken),
-    items: (Array.isArray(state.items) ? state.items : []).map((item) => normalizeAvitoListing(item)).filter(Boolean),
+    items: deduped,
   };
   await fs.writeFile(avitoListingsPath, JSON.stringify(payload, null, 2), "utf8");
   return payload;

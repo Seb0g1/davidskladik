@@ -397,7 +397,8 @@ app.get("/api/ozon/prices/preview", async (request, response, next) => {
   }
 });
 
-app.post("/api/ozon/prices/send", async (request, response, next) => {
+// Отправка цен на Ozon меняет живой кабинет — только админ.
+app.post("/api/ozon/prices/send", requireAdmin, async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
       return response.status(400).json({
@@ -448,7 +449,8 @@ app.get("/api/ozon/products/preview", async (request, response, next) => {
   }
 });
 
-app.post("/api/ozon/products/create", async (request, response, next) => {
+// Создание карточки в кабинете Ozon — только админ.
+app.post("/api/ozon/products/create", requireAdmin, async (request, response, next) => {
   try {
     if (request.body.confirmed !== true) {
       return response.status(400).json({

@@ -1,5 +1,15 @@
 app.use(express.json({ limit: "1mb" }));
 app.use(compression({ threshold: 1024 }));
+// Базовые защитные заголовки: панель не должна открываться во фрейме чужого
+// сайта (кликджекинг), а браузер не должен угадывать MIME-типы ответов.
+const hstsEnabled = String(process.env.PUBLIC_BASE_URL || "").startsWith("https://");
+app.use((_request, response, next) => {
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "SAMEORIGIN");
+  response.setHeader("Referrer-Policy", "same-origin");
+  if (hstsEnabled) response.setHeader("Strict-Transport-Security", "max-age=15552000");
+  next();
+});
 app.use((request, response, next) => {
   activeHttpRequests += 1;
   let released = false;

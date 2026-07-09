@@ -338,13 +338,15 @@ app.post("/api/avito/product-status", async (request, response, next) => {
 app.get("/api/avito/feed-info", async (request, response, next) => {
   try {
     const token = await ensureAvitoFeedToken();
-    const { count, total, hiddenOutOfStock, liveSource } = await buildAvitoFeedXml();
+    const { count, total, hiddenOutOfStock, hiddenNoImages, hiddenDuplicates, liveSource } = await buildAvitoFeedXml();
     const baseUrl = cleanText(process.env.PUBLIC_BASE_URL) || `${request.protocol}://${request.get("host")}`;
     response.json({
       feedUrl: `${baseUrl}/public/avito-feed/${token}.xml`,
       enabledCount: count,
       totalListings: total,
       hiddenOutOfStock,
+      hiddenNoImages,
+      hiddenDuplicates,
       liveSource,
       autoRefresh: {
         enabled: avitoFeedRefreshEnabled,
@@ -449,6 +451,19 @@ app.post("/api/avito/descriptions/backfill", requireAdmin, async (request, respo
   }
 });
 
+// Ручное дозаполнение фото объявлений без картинок: из Postgres, недостающие —
+// с Ozon API (с персистом обратно в склад).
+app.post("/api/avito/images/backfill", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = Math.min(1000, Math.max(1, Number(request.body?.limit || 300) || 300));
+    const result = await backfillAvitoListingImages({ limit, source: "manual" });
+    await appendAudit(request, "avito.images.backfill", { newValue: result });
+    response.json({ ok: result.status === "ok" || result.status === "done", ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Ручной перенос актуальных цен/остатков склада в сохранённые объявления.
 app.post("/api/avito/feed/refresh", requireAdmin, async (request, response, next) => {
   try {
@@ -478,7 +493,7 @@ app.get("/api/avito/feed.xml", async (_request, response, next) => {
 app.get("/public/avito-feed/:token.xml", async (request, response, next) => {
   try {
     const state = await readAvitoListingsFile();
-    if (!state.feedToken || cleanText(request.params.token) !== state.feedToken) {
+    if (!state.feedToken || !timingSafeEqual(cleanText(request.params.token), state.feedToken)) {
       return response.status(404).send("Not found");
     }
     const { xml } = await buildAvitoFeedXml();

@@ -276,7 +276,7 @@ app.post("/api/ozon-yandex-import/auto-run", requireAdmin, async (request, respo
   }
 });
 
-app.post("/api/ozon-yandex-import/archive-blocked", async (request, response, next) => {
+app.post("/api/ozon-yandex-import/archive-blocked", requireAdmin, async (request, response, next) => {
   try {
     if (request.body?.confirmed !== true) {
       return response.status(400).json({ error: "Нужно подтверждение archived-blocked confirmed=true." });
@@ -306,7 +306,7 @@ app.post("/api/ozon-yandex-import/archive-blocked", async (request, response, ne
   }
 });
 
-app.post("/api/ozon-yandex-import/sync-stocks", async (request, response, next) => {
+app.post("/api/ozon-yandex-import/sync-stocks", requireAdmin, async (request, response, next) => {
   try {
     const requestedLimit = Number(request.body?.limit || request.query.limit || 30000);
     const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));

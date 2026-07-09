@@ -20,6 +20,7 @@ function registerMarketplaceRoutes(app, deps) {
     getEnvYandexShops,
     getEnvAvitoAccounts,
     accountPayloadWithSecretFallback,
+    requireAdmin,
   } = deps;
   const allEnvAccounts = () => [
     ...getEnvOzonAccounts(),
@@ -65,7 +66,8 @@ app.get("/api/marketplace-accounts", (_request, response) => {
   });
 });
 
-app.post("/api/marketplace-accounts/:id/test", async (request, response) => {
+// Проверка подключения использует сохранённые секреты кабинета — только админ.
+app.post("/api/marketplace-accounts/:id/test", requireAdmin, async (request, response) => {
   const account = findMarketplaceAccount(request.params.id);
   if (!account) return response.status(404).json({ ok: false, error: "Кабинет не найден." });
   try {
@@ -92,7 +94,9 @@ app.post("/api/marketplace-accounts/:id/test", async (request, response) => {
   }
 });
 
-app.post("/api/marketplace-accounts", async (request, response, next) => {
+// Мутации кабинетов (API-ключи маркетплейсов) — строго админ: менеджер не
+// должен уметь подменять или удалять ключи кабинетов.
+app.post("/api/marketplace-accounts", requireAdmin, async (request, response, next) => {
   try {
     const localAccounts = await readMarketplaceAccounts();
     const input = normalizeMarketplaceAccount(request.body);
@@ -124,7 +128,7 @@ app.post("/api/marketplace-accounts", async (request, response, next) => {
   }
 });
 
-app.patch("/api/marketplace-accounts/:id", async (request, response, next) => {
+app.patch("/api/marketplace-accounts/:id", requireAdmin, async (request, response, next) => {
   try {
     const localAccounts = await readMarketplaceAccounts();
     const index = localAccounts.findIndex((account) => account.id === request.params.id);
@@ -158,7 +162,7 @@ app.patch("/api/marketplace-accounts/:id", async (request, response, next) => {
   }
 });
 
-app.delete("/api/marketplace-accounts/:id", async (request, response, next) => {
+app.delete("/api/marketplace-accounts/:id", requireAdmin, async (request, response, next) => {
   try {
     const localAccounts = await readMarketplaceAccounts();
     const envAccount = allEnvAccounts().find((account) => account.id === request.params.id);
@@ -182,7 +186,7 @@ app.delete("/api/marketplace-accounts/:id", async (request, response, next) => {
   }
 });
 
-app.post("/api/marketplace-accounts/:id/restore", async (request, response, next) => {
+app.post("/api/marketplace-accounts/:id/restore", requireAdmin, async (request, response, next) => {
   try {
     const localAccounts = await readMarketplaceAccounts();
     const nextAccounts = localAccounts.filter((account) => !(account.id === request.params.id && account.hidden));

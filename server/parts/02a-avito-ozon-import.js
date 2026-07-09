@@ -270,6 +270,10 @@ async function collectAvitoImportCandidates(rulesOverride = null) {
 
   const matched = [];
   const skipped = [];
+  // Дедупликация: одинаковые названия на складе (дубли карточек Ozon) не должны
+  // превращаться в несколько объявлений — Avito блокирует повторы. Товары
+  // отсортированы по updatedAt desc, остаётся самый свежий.
+  const seenTitleKeys = new Set();
   for (const { product, result } of prelim) {
     if (rules.maxItems > 0 && matched.length >= rules.maxItems) break;
     if (!result.ok) {
@@ -277,8 +281,17 @@ async function collectAvitoImportCandidates(rulesOverride = null) {
       continue;
     }
     const full = evaluateAvitoImportCandidate(product, rules, pricing);
-    if (full.ok) matched.push(full.listing);
-    else skipped.push({ id: product.id, offerId: product.offerId, name: product.name, reasons: full.reasons });
+    if (!full.ok) {
+      skipped.push({ id: product.id, offerId: product.offerId, name: product.name, reasons: full.reasons });
+      continue;
+    }
+    const titleKey = normalizeAvitoMatchText(full.listing.title);
+    if (titleKey && seenTitleKeys.has(titleKey)) {
+      skipped.push({ id: product.id, offerId: product.offerId, name: product.name, reasons: ["duplicate_title"] });
+      continue;
+    }
+    if (titleKey) seenTitleKeys.add(titleKey);
+    matched.push(full.listing);
   }
   return { rules, totalOzonProducts: products.length, matched, skipped };
 }

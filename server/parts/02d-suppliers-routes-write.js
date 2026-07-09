@@ -1,4 +1,6 @@
-app.post("/api/suppliers", async (request, response, next) => {
+// Мутации поставщиков меняют закупочные цены и запускают глобальный репрайс —
+// админ или сотрудник с выданной страницей «Поставщики» (см. apiPathPageKey).
+app.post("/api/suppliers", requireAdmin, async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
     const supplier = normalizeManagedSupplier({ ...request.body, updatedAt: new Date().toISOString() });
@@ -42,7 +44,7 @@ app.post("/api/suppliers", async (request, response, next) => {
   }
 });
 
-app.patch("/api/suppliers/:id", async (request, response, next) => {
+app.patch("/api/suppliers/:id", requireAdmin, async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
     const supplier = warehouse.suppliers.find((item) => item.id === request.params.id);
@@ -137,7 +139,7 @@ app.patch("/api/suppliers/:id", async (request, response, next) => {
   }
 });
 
-app.delete("/api/suppliers/:id", async (request, response, next) => {
+app.delete("/api/suppliers/:id", requireAdmin, async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
     const before = warehouse.suppliers.find((supplier) => supplier.id === request.params.id) || null;
@@ -154,7 +156,7 @@ app.delete("/api/suppliers/:id", async (request, response, next) => {
   }
 });
 
-app.post("/api/suppliers/:id/articles", async (request, response, next) => {
+app.post("/api/suppliers/:id/articles", requireAdmin, async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
     const supplier = warehouse.suppliers.find((item) => item.id === request.params.id);
@@ -187,7 +189,7 @@ app.post("/api/suppliers/:id/articles", async (request, response, next) => {
   }
 });
 
-app.delete("/api/suppliers/:supplierId/articles/:articleId", async (request, response, next) => {
+app.delete("/api/suppliers/:supplierId/articles/:articleId", requireAdmin, async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
     const supplier = warehouse.suppliers.find((item) => item.id === request.params.supplierId);

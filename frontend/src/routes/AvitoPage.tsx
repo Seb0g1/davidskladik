@@ -110,6 +110,8 @@ type FeedInfoResponse = {
   enabledCount: number;
   totalListings: number;
   hiddenOutOfStock?: number;
+  hiddenNoImages?: number;
+  hiddenDuplicates?: number;
   liveSource?: string;
   autoRefresh?: {
     enabled: boolean;
@@ -143,6 +145,7 @@ const SKIP_REASON_LABELS: Record<string, string> = {
   archived: "В архиве",
   stock_below_min: "Мало остатков",
   no_title: "Нет названия",
+  duplicate_title: "Дубль по названию",
 };
 
 function reasonLabel(reason: string): string {
@@ -290,6 +293,13 @@ export function AvitoPage() {
     mutationFn: () => apiJson<{ ok: boolean; status: string; updated?: number; remaining?: number }>("/api/avito/descriptions/backfill", { method: "POST", body: JSON.stringify({ limit: 500 }) }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+    },
+  });
+  const backfillImages = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; status: string; updatedFromPostgres?: number; updatedFromOzon?: number; remaining?: number }>("/api/avito/images/backfill", { method: "POST", body: JSON.stringify({ limit: 500 }) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
     },
   });
 
@@ -530,7 +540,9 @@ export function AvitoPage() {
               </div>
               <p className="form-hint">
                 В фиде: {feedInfoQuery.data.enabledCount} активных из {feedInfoQuery.data.totalListings} объявлений
-                {feedInfoQuery.data.hiddenOutOfStock ? ` · скрыто без остатков: ${feedInfoQuery.data.hiddenOutOfStock}` : ""}.
+                {feedInfoQuery.data.hiddenOutOfStock ? ` · скрыто без остатков: ${feedInfoQuery.data.hiddenOutOfStock}` : ""}
+                {feedInfoQuery.data.hiddenNoImages ? ` · скрыто без фото: ${feedInfoQuery.data.hiddenNoImages}` : ""}
+                {feedInfoQuery.data.hiddenDuplicates ? ` · скрыто дублей: ${feedInfoQuery.data.hiddenDuplicates}` : ""}.
                 {" "}<a href="/api/avito/feed.xml" target="_blank" rel="noopener">Открыть XML</a>
               </p>
               <p className="form-hint">
@@ -549,6 +561,9 @@ export function AvitoPage() {
                 <button className="secondary-action" type="button" disabled={backfillDescriptions.isPending} onClick={() => backfillDescriptions.mutate()} title="Подтянуть описания товаров с Ozon для объявлений без описания (порция до 500 за запуск; фоновая задача добирает остальные автоматически)">
                   {backfillDescriptions.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Описания с Ozon
                 </button>
+                <button className="secondary-action" type="button" disabled={backfillImages.isPending} onClick={() => backfillImages.mutate()} title="Подтянуть фото для объявлений без картинок: сначала со склада, недостающие — с Ozon API (порция до 500; фоновая задача добирает остальные автоматически)">
+                  {backfillImages.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Фото с Ozon
+                </button>
               </div>
               {refreshFeed.data ? (
                 <p className="form-hint">
@@ -562,6 +577,12 @@ export function AvitoPage() {
                 </p>
               ) : null}
               {backfillDescriptions.error ? <div className="inline-error">{String((backfillDescriptions.error as Error).message)}</div> : null}
+              {backfillImages.data ? (
+                <p className="form-hint">
+                  Фото: со склада {backfillImages.data.updatedFromPostgres ?? 0}, с Ozon {backfillImages.data.updatedFromOzon ?? 0}, осталось без фото {backfillImages.data.remaining ?? 0}.
+                </p>
+              ) : null}
+              {backfillImages.error ? <div className="inline-error">{String((backfillImages.error as Error).message)}</div> : null}
             </>
           ) : (
             <div className="table-note"><Loader2 className="spin" size={14} /> Загружаю…</div>
