@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, X } from "lucide-react";
+import { AlertTriangle, Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, Users, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -2195,6 +2195,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
         <Stat label="Готовы" value={catalogStats?.ready ?? (pageQuery.data != null ? (pageQuery.data?.ready ?? 0) : undefined)} tone="success" icon={<Check size={18} />} />
         <Stat label="Изменения" value={catalogStats?.changed ?? (pageQuery.data != null ? (pageQuery.data?.changed ?? 0) : undefined)} tone="warn" icon={<RefreshCw size={18} />} />
         <Stat label="Без поставщика" value={catalogStats?.withoutSupplier ?? (pageQuery.data != null ? (pageQuery.data?.withoutSupplier ?? 0) : undefined)} icon={<Link2 size={18} />} />
+        <Stat label="С поставщиком" value={pageQuery.data != null ? (pageQuery.data?.linkedProducts ?? 0) : undefined} tone="success" icon={<Users size={18} />} />
       </section>
       {useDemoCatalog ? (
         <div className="demo-catalog-strip">

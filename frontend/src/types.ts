@@ -129,6 +129,7 @@ export const WarehousePageSchema = z.object({
   ready: z.number().optional().default(0),
   changed: z.number().optional().default(0),
   withoutSupplier: z.number().optional().default(0),
+  linkedProducts: z.number().optional().default(0),
   linkedArchived: z.number().optional().default(0),
   ozonArchived: z.number().optional().default(0),
   ozonInactive: z.number().optional().default(0),
