@@ -131,27 +131,35 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
     const normalizedLimit = Math.max(1, Math.min(5000, Math.round(Number(limit || ozonUnarchiveQueueBatchLimit) || ozonUnarchiveQueueBatchLimit)));
     const queue = await readOzonUnarchiveQueue();
     const publicQueue = ozonUnarchiveQueuePublic(queue, { limit: 5000 });
+    // Over-select candidates (1.5× + 20 buffer) to ensure we still get normalizedLimit resolved
+    // items even when some queue entries are ghosts (deleted warehouse products) or need UUID
+    // rewrite (offerId changed). After resolution we trim back to normalizedLimit.
+    const candidateLimit = Math.min(5000, Math.ceil(normalizedLimit * 1.5) + 20);
     const perTargetTaken = new Map();
     const dueItems = [];
     for (const item of publicQueue.items || []) {
       if (!item.due) continue;
       const target = cleanText(item.target) || "default";
-      const available = normalizedLimit;
       const taken = perTargetTaken.get(target) || 0;
-      if (taken >= available) continue;
+      if (taken >= candidateLimit) continue;
       dueItems.push(item);
       perTargetTaken.set(target, taken + 1);
-      if (dueItems.length >= normalizedLimit) break;
+      if (dueItems.length >= candidateLimit) break;
     }
     const resolution = await resolveOzonUnarchiveQueueProducts(dueItems);
-    const ids = resolution.ids;
     await rewriteResolvedOzonUnarchiveQueueItems(resolution.rewrites);
-    if (!ids.length) {
-      // All dueItems that were not rewritten (no matching warehouse product found by offerId) are
-      // ghost entries — the product was deleted or its offerId changed since the item was queued.
-      // Remove them to prevent accumulation of permanently-unresolvable items.
+    // Purge ghost items: queue entries not resolvable to any warehouse product (deleted products,
+    // stale offerIds). Previously only purged when ids.length === 0; now purge partial ghosts too
+    // so the queue stays clean and the next over-selection finds live items to fill the buffer.
+    {
+      const resolvedUuidSet = new Set(resolution.ids);
       const rewrittenKeys = new Set((resolution.rewrites || []).map((r) => ozonUnarchiveQueueKey(r.item)));
-      const ghostItems = dueItems.filter((item) => !rewrittenKeys.has(ozonUnarchiveQueueKey(item)));
+      const ghostItems = dueItems.filter((item) => {
+        const id = cleanText(item.warehouseProductId || item.id);
+        if (resolvedUuidSet.has(id)) return false;
+        if (rewrittenKeys.has(ozonUnarchiveQueueKey(item))) return false;
+        return true;
+      });
       if (ghostItems.length) {
         try {
           let currentQueue = await readOzonUnarchiveQueue();
@@ -162,6 +170,10 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
           logger.warn("ozon unarchive queue ghost purge failed", { detail: purgeError?.message || String(purgeError) });
         }
       }
+    }
+    // Trim to normalizedLimit so we never exceed the configured batch size to Ozon
+    const ids = resolution.ids.slice(0, normalizedLimit);
+    if (!ids.length) {
       const empty = {
         ok: true,
         source,
@@ -169,7 +181,6 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
         startedAt,
         finishedAt: new Date().toISOString(),
         selected: 0,
-        ghostPurged: ghostItems.length,
         result: { recovered: 0, unarchivePending: publicQueue.due, queueSize: publicQueue.total },
         queue: publicQueue,
       };
@@ -180,7 +191,6 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
         recovered: 0,
         unarchivePending: publicQueue.due,
         queueSize: publicQueue.total,
-        ghostPurged: ghostItems.length,
         at: empty.finishedAt,
       };
       return { ...empty, ...ozonUnarchiveQueueAutomationPublic() };
