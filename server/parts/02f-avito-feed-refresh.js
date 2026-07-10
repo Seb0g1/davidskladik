@@ -11,6 +11,16 @@ let avitoFeedRefreshRunning = false;
 let avitoFeedRefreshNextRunAt = null;
 let avitoFeedRefreshLastResult = null;
 
+// Авто-синк фида: каждые N часов полностью переимпортирует привязанные товары —
+// добавляет новые (появился поставщик, добавили привязку) и удаляет потерявшие
+// поставщика. Управляется AVITO_AUTO_SYNC_ENABLED / AVITO_AUTO_SYNC_HOURS.
+const avitoAutoSyncEnabled = process.env.AVITO_AUTO_SYNC_ENABLED !== "false";
+const avitoAutoSyncIntervalMs = Math.max(60 * 60_000, Number(process.env.AVITO_AUTO_SYNC_HOURS || 4) * 60 * 60_000 || 4 * 60 * 60_000);
+let avitoAutoSyncTimer = null;
+let avitoAutoSyncRunning = false;
+let avitoAutoSyncNextRunAt = null;
+let avitoAutoSyncLastResult = null;
+
 async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
   if (avitoFeedRefreshRunning) return { status: "already_running" };
   avitoFeedRefreshRunning = true;
@@ -124,4 +134,47 @@ function scheduleAvitoFeedRefresh(delayMs = avitoFeedRefreshIntervalMs) {
     scheduleAvitoFeedRefresh(avitoFeedRefreshIntervalMs);
   }, normalizedDelay);
   avitoFeedRefreshTimer.unref?.();
+}
+
+async function runAvitoAutoSync({ source = "schedule" } = {}) {
+  if (avitoAutoSyncRunning) return { status: "already_running" };
+  avitoAutoSyncRunning = true;
+  try {
+    const result = await syncAvitoOzonListings();
+    const summary = {
+      status: "ok",
+      source,
+      ...result,
+      at: new Date().toISOString(),
+    };
+    avitoAutoSyncLastResult = summary;
+    logger.info("avito auto sync complete", summary);
+    return summary;
+  } catch (error) {
+    const summary = { status: "error", source, error: error?.message || String(error), at: new Date().toISOString() };
+    avitoAutoSyncLastResult = summary;
+    logger.warn("avito auto sync failed", { detail: summary.error });
+    return summary;
+  } finally {
+    avitoAutoSyncRunning = false;
+  }
+}
+
+function scheduleAvitoAutoSync(delayMs = avitoAutoSyncIntervalMs) {
+  if (!avitoAutoSyncEnabled) {
+    avitoAutoSyncNextRunAt = null;
+    return;
+  }
+  if (avitoAutoSyncTimer) clearTimeout(avitoAutoSyncTimer);
+  const normalizedDelay = Math.max(60_000, Number(delayMs) || avitoAutoSyncIntervalMs);
+  avitoAutoSyncNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
+  avitoAutoSyncTimer = setTimeout(async () => {
+    try {
+      await runAvitoAutoSync({ source: "schedule" });
+    } catch (error) {
+      logger.warn("avito auto sync tick failed", { detail: error?.message || String(error) });
+    }
+    scheduleAvitoAutoSync(avitoAutoSyncIntervalMs);
+  }, normalizedDelay);
+  avitoAutoSyncTimer.unref?.();
 }

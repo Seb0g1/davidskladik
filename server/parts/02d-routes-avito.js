@@ -354,6 +354,12 @@ app.get("/api/avito/feed-info", async (request, response, next) => {
         nextRunAt: avitoFeedRefreshNextRunAt,
         lastResult: avitoFeedRefreshLastResult,
       },
+      autoSync: {
+        enabled: avitoAutoSyncEnabled,
+        intervalHours: Math.round(avitoAutoSyncIntervalMs / 3600000),
+        nextRunAt: avitoAutoSyncNextRunAt,
+        lastResult: avitoAutoSyncLastResult,
+      },
     });
   } catch (error) {
     next(error);
@@ -459,6 +465,18 @@ app.post("/api/avito/images/backfill", requireAdmin, async (request, response, n
     const result = await backfillAvitoListingImages({ limit, source: "manual" });
     await appendAudit(request, "avito.images.backfill", { newValue: result });
     response.json({ ok: result.status === "ok" || result.status === "done", ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Полный ручной синк: добавляет новые привязанные товары, удаляет потерявшие
+// поставщика. Эквивалент авто-синка по расписанию.
+app.post("/api/avito/feed/sync", requireAdmin, async (request, response, next) => {
+  try {
+    const result = await runAvitoAutoSync({ source: "manual" });
+    await appendAudit(request, "avito.feed.sync", { newValue: result });
+    response.json({ ok: result.status !== "error", ...result });
   } catch (error) {
     next(error);
   }

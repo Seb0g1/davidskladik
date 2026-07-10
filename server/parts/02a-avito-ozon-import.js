@@ -240,7 +240,7 @@ async function collectAvitoImportCandidates(rulesOverride = null) {
   }
   const rules = normalizeAvitoImportRules(rulesOverride || (await readAvitoImportRules()));
   const products = await prisma.warehouseProduct.findMany({
-    where: { marketplace: "ozon" },
+    where: { marketplace: "ozon", links: { some: {} } },
     select: {
       id: true,
       offerId: true,
@@ -313,6 +313,46 @@ function summarizeAvitoSkipReasons(skipped) {
     byReason[key] = (byReason[key] || 0) + 1;
   }
   return byReason;
+}
+
+// Полный синк: добавляет новые привязанные товары + удаляет объявления
+// ozon-источника, которые больше не проходят фильтры (потеряли поставщика,
+// ушли в архив и т.п.). Ручные объявления (source != "ozon") не трогает.
+async function syncAvitoOzonListings({ rules = null } = {}) {
+  const result = await collectAvitoImportCandidates(rules);
+  const matchedIds = new Set(
+    result.matched.map((listing) => cleanText(listing.sourceProductId)).filter(Boolean),
+  );
+
+  const descriptions = await loadStoredOzonDescriptionsMap(result.matched.map((listing) => listing.sourceProductId));
+  for (const listing of result.matched) {
+    const description = descriptions.get(cleanText(listing.sourceProductId));
+    if (description) listing.description = description;
+  }
+
+  const currentState = await readAvitoListingsFile();
+  const toRemoveAdIds = currentState.items
+    .filter((item) => item.source === "ozon" && cleanText(item.sourceProductId) && !matchedIds.has(cleanText(item.sourceProductId)))
+    .map((item) => item.adId);
+
+  const upsertResult = await upsertAvitoListings(result.matched, { source: "ozon" });
+  let removed = 0;
+  if (toRemoveAdIds.length) {
+    const removeResult = await removeAvitoListings(toRemoveAdIds);
+    removed = removeResult.removed;
+  }
+
+  return {
+    totalOzonProducts: result.totalOzonProducts,
+    matchedCount: result.matched.length,
+    skippedCount: result.skipped.length,
+    skippedByReason: summarizeAvitoSkipReasons(result.skipped),
+    matchedByCategory: summarizeAvitoMatchedByCategory(result.matched),
+    created: upsertResult.created,
+    updated: upsertResult.updated,
+    removed,
+    totalListings: upsertResult.total - removed,
+  };
 }
 
 async function previewAvitoOzonImport({ rules = null, sampleLimit = 50 } = {}) {

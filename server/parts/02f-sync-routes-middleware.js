@@ -256,6 +256,12 @@ function startBackgroundSchedulers() {
       intervalMinutes: Math.round(avitoFeedRefreshIntervalMs / 60000),
     });
   }
+  if (avitoAutoSyncEnabled) {
+    scheduleAvitoAutoSync(10 * 60_000);
+    logger.info("avito auto sync scheduler enabled", {
+      intervalHours: Math.round(avitoAutoSyncIntervalMs / 3600000),
+    });
+  }
   if (healthAlertEnabled) {
     scheduleHealthAlertMonitor(150_000);
     logger.info("health alert monitor enabled", {
