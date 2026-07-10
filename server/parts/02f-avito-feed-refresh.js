@@ -32,10 +32,12 @@ async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
     const liveStates = await loadAvitoLiveProductStates(state.items);
     if (liveStates === null) return { status: "postgres_unavailable" };
     const pricing = await loadAvitoPricingContext();
-    // Снапшот поставщика в raw есть не у всех товаров — добираем живым
-    // расчётом из PriceMaster, иначе цена не пересчитается от поставщика и в
-    // фиде останется старая (эры цены Ozon).
-    if (rules.autoUpdatePrices) {
+    // Снапшот поставщика в raw есть не у всех товаров (авто-архивные на Ozon
+    // могут никогда не получать отправку цены) — добираем живым расчётом из
+    // PriceMaster. Делаем всегда: outOfStock = false если поставщик даёт цену,
+    // независимо от autoUpdatePrices; результат сохраняется в файл и потом
+    // используется buildAvitoFeedXml как фолбэк без живого запроса в PM.
+    {
       const missingIds = [...liveStates.entries()]
         .filter(([, liveState]) => liveState && !liveState.supplier)
         .map(([id]) => id);
