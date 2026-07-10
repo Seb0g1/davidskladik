@@ -47,6 +47,11 @@ const AVITO_CATEGORY_SPECS = [
   { key: "care-oral", label: "Уход и гигиена / Уход за полостью рта", tags: { GoodsType: "Уход и гигиена", GoodsSubType: "Уход за полостью рта" }, condition: false, gender: false },
   { key: "care-sun", label: "Уход и гигиена / Загар и защита от солнца", tags: { GoodsType: "Уход и гигиена", GoodsSubType: "Загар и защита от солнца" }, condition: false, gender: false },
   { key: "hair", label: "Средства для волос", tags: { GoodsType: "Средства для волос" }, condition: false, gender: false },
+  { key: "makeup", label: "Макияж и маникюр", tags: { GoodsType: "Макияж и маникюр" }, condition: false, gender: false },
+  { key: "makeup-lips", label: "Макияж и маникюр / Губы", tags: { GoodsType: "Макияж и маникюр", GoodsSubType: "Губы" }, condition: false, gender: false },
+  { key: "makeup-eyes", label: "Макияж и маникюр / Глаза", tags: { GoodsType: "Макияж и маникюр", GoodsSubType: "Глаза" }, condition: false, gender: false },
+  { key: "makeup-face", label: "Макияж и маникюр / Лицо", tags: { GoodsType: "Макияж и маникюр", GoodsSubType: "Лицо" }, condition: false, gender: false },
+  { key: "makeup-nails", label: "Макияж и маникюр / Ногти", tags: { GoodsType: "Макияж и маникюр", GoodsSubType: "Ногти" }, condition: false, gender: false },
 ];
 
 const AVITO_CATEGORY_SPEC_BY_KEY = new Map(AVITO_CATEGORY_SPECS.map((spec) => [spec.key, spec]));
@@ -88,7 +93,7 @@ function classifyAvitoCategory(title, { defaultCategoryKey = AVITO_DEFAULT_CATEG
   if (/атомайзер|atomizer|флакон дл|пустой флакон/.test(text)) return pick("parfum-atomizers");
   if (/диффузор|саше|аромат для дома|home spray|благовони/.test(text)) return pick("parfum-diffusers");
   if (/масля?н\w* дух|дух\w* масл|парфюмерн\w+ масл|масло-дух|\battar\b/.test(text)) return pick("parfum-oils");
-  if (/шампун|кондиционер для волос|бальзам для волос|маск\w* для волос|масл\w* для волос|для роста волос|укладк/.test(text)) return pick("hair");
+  if (/шампун|кондиционер|бальзам для волос|маск\w* для волос|масл\w* для волос|для роста волос|укладк/.test(text)) return pick("hair");
   if (/дезодорант|антиперспирант/.test(text)) return pick("body-deo");
   if (/\bspf\b|солнцезащит|автозагар|после загара|для загара|от солнца/.test(text)) return pick("care-sun");
   if (/зубн|полост\w* рта|ополаскиватель для рта|ирригатор/.test(text)) return pick("care-oral");
@@ -114,6 +119,16 @@ function classifyAvitoCategory(title, { defaultCategoryKey = AVITO_DEFAULT_CATEG
     return /для тела|массаж/.test(text) ? pick("body-oils") : pick("face-oils");
   }
   if (/эпилятор|триммер|массаж[её]р|расческ|щетка для/.test(text)) return pick("care-devices");
+  // Макияж и маникюр: специфичные до общего fallback на парфюмерию
+  if (/тушь для ресниц|\bмаскар[аe]|mascara/.test(text)) return pick("makeup-eyes");
+  if (/тени для век|\bтени\b.*глаз|eyeshadow/.test(text)) return pick("makeup-eyes");
+  if (/карандаш для бровей|eyebrow pencil|\bbrow\b.*pencil|\bbrow\b.*pen\b|brow line/.test(text)) return pick("makeup-eyes");
+  if (/карандаш для глаз|подводка.*глаз|eyeliner|\bliner\b.*глаз/.test(text)) return pick("makeup-eyes");
+  if (/помада|lip gloss|lipstick|lip stick|блеск для губ|карандаш для губ|lip liner/.test(text)) return pick("makeup-lips");
+  if (/румяна|\bблаш\b|\bblush\b|хайлайтер|highlighter|бронзат/.test(text)) return pick("makeup-face");
+  if (/тональный|тональн\w+ крем|консилер|foundation|concealer|бб.крем|сс.крем|\bbb.cream\b|\bcc.cream\b/.test(text)) return pick("makeup-face");
+  if (/пудр[аыу]|\bпудр\b|\bpowder\b/.test(text) && !/стирал|стиральн|зубн/.test(text)) return pick("makeup-face");
+  if (/лак для ногтей|nail polish|накладные ногти|типс[аы]|nail art/.test(text)) return pick("makeup-nails");
   if (perfumeContext.test(text)) return pick("parfum-edt");
   const fallbackKey = getAvitoCategorySpec(defaultCategoryKey) ? cleanText(defaultCategoryKey) : AVITO_DEFAULT_CATEGORY_KEY;
   return pick(fallbackKey, true);
