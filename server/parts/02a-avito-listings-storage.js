@@ -160,7 +160,7 @@ function defaultAvitoImportRules() {
   return {
     enabled: true,
     // Товары с распознанным объёмом меньше порога не импортируются (0 = выкл).
-    minVolumeMl: 20,
+    minVolumeMl: 0,
     // Пропускать товары, в названии которых объём распознать не удалось.
     skipWithoutVolume: false,
     // Стоп-слова по названию (регистронезависимо, «ё» приравнивается к «е»).
@@ -172,7 +172,7 @@ function defaultAvitoImportRules() {
     minPriceRub: 0,
     maxPriceRub: 0,
     requireImages: true,
-    skipArchived: true,
+    skipArchived: false,
     minStock: 0,
     // Категория по умолчанию для товаров без уверенной классификации по
     // названию (ключ из AVITO_CATEGORY_SPECS, см. 02a-avito-categorizer.js).
