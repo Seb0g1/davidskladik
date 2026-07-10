@@ -123,13 +123,20 @@ async function loadAvitoLiveProductStates(listings) {
 }
 
 // Возвращает объявление со свежей ценой и признак «нет в наличии».
-// Товар, удалённый со склада, считается отсутствующим в наличии.
+// Авто-архив Ozon — статус маркетплейса, не физическое отсутствие товара:
+// если поставщик даёт цену, товар считается доступным на Avito.
 // Личный коэффициент объявления (markupCoefficient) пересчитывается от свежей
 // закупки поставщика, но побеждает общие правила наценки.
 function applyAvitoLiveState(listing, product, rules, pricing = {}) {
   if (!listing.sourceProductId) return { listing, outOfStock: false };
   if (!product) return { listing, outOfStock: true };
-  const outOfStock = Boolean(product.archived) || Number(product.targetStock || 0) <= 0;
+  const hasSupplierPrice = product.supplier
+    ? computeAvitoSupplierPriceRub(product.supplier, pricing) > 0
+    : false;
+  // Если поставщик даёт цену — товар в наличии на Avito независимо от архива Ozon.
+  const outOfStock = hasSupplierPrice
+    ? false
+    : (Boolean(product.archived) || Number(product.targetStock || 0) <= 0);
   if (!rules.autoUpdatePrices) return { listing, outOfStock };
   const markupOverride = Number(listing.markupCoefficient) > 0 ? Number(listing.markupCoefficient) : 0;
   const priceRub = resolveAvitoListingPriceRub(product, product.supplier, rules, pricing, markupOverride) || listing.priceRub;
@@ -142,7 +149,21 @@ async function buildAvitoFeedXml() {
   const liveStates = rules.autoUpdatePrices || rules.hideOutOfStock
     ? await loadAvitoLiveProductStates(enabled)
     : new Map();
-  const pricing = liveStates && rules.autoUpdatePrices ? await loadAvitoPricingContext() : {};
+  const pricing = liveStates ? await loadAvitoPricingContext() : {};
+  // Обогащаем поставщиком товары без снапшота selectedSupplier — без этого
+  // авто-архивные товары Ozon ошибочно считались бы «нет в наличии».
+  if (liveStates && (rules.hideOutOfStock || rules.autoUpdatePrices)) {
+    const missingIds = [...liveStates.entries()]
+      .filter(([, s]) => s && !s.supplier)
+      .map(([id]) => id);
+    if (missingIds.length) {
+      const supplierMap = await loadAvitoSupplierPricingMap(missingIds, { fresh: false });
+      for (const id of missingIds) {
+        const supplier = supplierMap.get(id);
+        if (supplier) liveStates.get(id).supplier = supplier;
+      }
+    }
+  }
   let hiddenOutOfStock = 0;
   let hiddenNoImages = 0;
   let hiddenDuplicates = 0;
