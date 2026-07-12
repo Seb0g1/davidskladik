@@ -4762,7 +4762,7 @@ test("bulk warehouse link delete removes grouped marketplace refs together", asy
   }
 });
 
-test("Ozon unarchive does not enforce a local 100 item daily limit", async () => {
+test("Ozon unarchive caps sends at the remaining daily quota and defers overflow without API calls", async () => {
   const accountsBackup = await backupFile(marketplaceAccountsPath);
   const queueBackup = await backupFile(ozonUnarchiveQueuePath);
   const originalFetch = global.fetch;
@@ -4797,16 +4797,22 @@ test("Ozon unarchive does not enforce a local 100 item daily limit", async () =>
       offerId: `OZQ-${index + 1}`,
     }));
 
+    // 101 products against a fresh day: exactly 100 go out (one API call), the 101st is
+    // deferred to the next window locally — no wasted call that Ozon would reject wholesale.
     const firstRun = await unarchiveProductsOnMarketplaces(products);
-    assert.equal(unarchiveCalls().length, 2);
+    assert.equal(unarchiveCalls().length, 1);
     assert.equal(unarchiveCalls()[0].body.product_id.length, 100);
-    assert.deepEqual(unarchiveCalls()[1].body.product_id, [101]);
-    assert.equal(firstRun.filter((item) => item.ok && !item.pending).length, 101);
-    assert.equal(firstRun.filter((item) => item.queuedByDailyLimit).length, 0);
+    assert.equal(firstRun.filter((item) => item.ok && !item.pending).length, 100);
+    const queuedFirst = firstRun.filter((item) => item.queuedByDailyLimit);
+    assert.equal(queuedFirst.length, 1);
+    assert.equal(queuedFirst[0].id, "ozon-queue-101");
 
     let queue = await readOzonUnarchiveQueue();
-    assert.equal(queue.items.length, 0);
+    assert.equal(queue.items.length, 1);
+    assert.equal(queue.items[0].id, "ozon-queue-101");
+    assert.equal(Number(queue.daily?.[ozonUnarchiveDateKey()]?.["ozon-test"] || 0), 100);
 
+    // Quota already spent: a follow-up send is deferred without touching the API.
     await writeOzonUnarchiveQueue({
       items: [],
       daily: {
@@ -4816,10 +4822,20 @@ test("Ozon unarchive does not enforce a local 100 item daily limit", async () =>
       },
     });
     const secondRun = await unarchiveProductsOnMarketplaces([products[100]]);
-    assert.equal(unarchiveCalls().length, 3);
-    assert.deepEqual(unarchiveCalls()[2].body.product_id, [101]);
+    assert.equal(unarchiveCalls().length, 1);
     assert.equal(secondRun[0].ok, true);
-    assert.equal(secondRun[0].pending, undefined);
+    assert.equal(secondRun[0].pending, true);
+    assert.equal(secondRun[0].queuedByDailyLimit, true);
+    queue = await readOzonUnarchiveQueue();
+    assert.equal(queue.items.length, 1);
+    assert.equal(queue.items[0].id, "ozon-queue-101");
+
+    // forceOzonDailyLimit (manual force route) bypasses the local quota gate.
+    const forcedRun = await unarchiveProductsOnMarketplaces([products[100]], { forceOzonDailyLimit: true });
+    assert.equal(unarchiveCalls().length, 2);
+    assert.deepEqual(unarchiveCalls()[1].body.product_id, [101]);
+    assert.equal(forcedRun[0].ok, true);
+    assert.equal(forcedRun[0].pending, undefined);
     queue = await readOzonUnarchiveQueue();
     assert.equal(queue.items.length, 0);
   } finally {

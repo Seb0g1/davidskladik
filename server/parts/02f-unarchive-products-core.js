@@ -62,9 +62,31 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
           productId: row.productId,
           ozonProductId: row.productId,
         }));
-      const runnableItems = resolvedItems;
       let usedToday = ozonUnarchiveDailyUsed(queueState, target);
-      for (const chunk of chunkArray(runnableItems, 100)) {
+      // Cap the send by the remaining local daily quota. Ozon rejects a whole /v1/product/unarchive
+      // request when it crosses the daily limit, so an ungated batch wastes the remaining quota
+      // (e.g. 88 used + a batch of 100 → whole batch rejected, day ends at 88 instead of 100).
+      // Over-quota items are deferred to the next scheduled window without an API call.
+      const enforceDailyLimit = options.forceOzonDailyLimit !== true && Number.isFinite(ozonUnarchiveDailyLimit);
+      const availableToday = enforceDailyLimit ? Math.max(0, ozonUnarchiveDailyLimit - usedToday) : resolvedItems.length;
+      const runnableItems = resolvedItems.slice(0, availableToday);
+      const overflowItems = resolvedItems.slice(runnableItems.length);
+      if (overflowItems.length) {
+        const nextRetryAt = nextOzonUnarchiveRetryAt();
+        queueState = queueOzonUnarchiveItems(queueState, overflowItems, {
+          nextRetryAt,
+          warning: "ozon_unarchive_daily_limit_queued",
+          attempted: false,
+        });
+        await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: overflowItems });
+        actions.push(...ozonUnarchiveQueuedActions(overflowItems, queueState, {
+          warning: "ozon_unarchive_daily_limit_queued",
+          nextRetryAt,
+        }));
+      }
+      const chunks = chunkArray(runnableItems, 100);
+      for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+        const chunk = chunks[chunkIndex];
         const productIds = chunk.map((item) => Number(ozonNumericProductId(item.ozonProductId || item.productId))).filter((id) => id > 0);
         if (!productIds.length) {
           const nextRetryAt = nextOzonUnarchiveVisibilityRetryAt();
@@ -110,15 +132,30 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
           const detail = error?.message || "unarchive_failed";
           if (/daily|суточ|лимит|limit|quota|auto.?archive|автоархив/i.test(detail)) {
             const nextRetryAt = nextOzonUnarchiveRetryAt();
+            const remainingItems = chunks.slice(chunkIndex + 1).flat();
             queueState = queueOzonUnarchiveItems(queueState, chunk, { nextRetryAt, attempted: true, error: detail });
-            await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: chunk });
+            if (remainingItems.length) {
+              queueState = queueOzonUnarchiveItems(queueState, remainingItems, {
+                nextRetryAt,
+                warning: "ozon_unarchive_daily_limit_queued",
+                attempted: false,
+              });
+            }
+            // Ozon says the daily limit is reached — trust it over the local counter so the rest
+            // of today's runs defer immediately instead of burning more rejected API calls.
+            if (Number.isFinite(ozonUnarchiveDailyLimit)) {
+              usedToday = Math.max(usedToday, ozonUnarchiveDailyLimit);
+              setOzonUnarchiveDailyUsed(queueState, target, usedToday);
+            }
+            await writeOzonUnarchiveQueueDelta(queueState, { upsertProducts: [...chunk, ...remainingItems] });
             rescheduleOzonUnarchiveQueueAutoSoon("api_limit_queue").catch((rescheduleError) => {
               logger.warn("ozon unarchive queue reschedule failed", { detail: rescheduleError?.message || String(rescheduleError) });
             });
-            actions.push(...ozonUnarchiveQueuedActions(chunk, queueState, {
+            actions.push(...ozonUnarchiveQueuedActions([...chunk, ...remainingItems], queueState, {
               warning: "ozon_unarchive_daily_limit_queued",
               nextRetryAt,
             }));
+            break;
           } else {
             const nextRetryAt = nextOzonUnarchiveVisibilityRetryAt();
             queueState = queueOzonUnarchiveItems(queueState, chunk, {

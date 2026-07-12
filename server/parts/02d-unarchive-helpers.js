@@ -131,22 +131,64 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
     const normalizedLimit = Math.max(1, Math.min(5000, Math.round(Number(limit || ozonUnarchiveQueueBatchLimit) || ozonUnarchiveQueueBatchLimit)));
     const queue = await readOzonUnarchiveQueue();
     const publicQueue = ozonUnarchiveQueuePublic(queue, { limit: 5000 });
-    // Over-select candidates (1.5× + 20 buffer) to ensure we still get normalizedLimit resolved
+    // Remaining Ozon daily unarchive quota per target (dailyLimit − dailyUsed). Selecting past
+    // it is wasted work: the send core defers over-quota items to the next window anyway.
+    const availableByTarget = new Map();
+    for (const item of publicQueue.items || []) {
+      const target = cleanText(item.target) || "default";
+      if (availableByTarget.has(target)) continue;
+      const available = force || item.availableToday === null || item.availableToday === undefined
+        ? Infinity
+        : Math.max(0, Number(item.availableToday) || 0);
+      availableByTarget.set(target, available);
+    }
+    const totalAvailable = Array.from(availableByTarget.values())
+      .reduce((sum, available) => sum + Math.min(normalizedLimit, available), 0);
+    const effectiveLimit = Math.min(normalizedLimit, totalAvailable);
+    // Over-select candidates (1.5× + 20 buffer) to ensure we still get effectiveLimit resolved
     // items even when some queue entries are ghosts (deleted warehouse products) or need UUID
-    // rewrite (offerId changed). After resolution we trim back to normalizedLimit.
-    const candidateLimit = Math.min(5000, Math.ceil(normalizedLimit * 1.5) + 20);
+    // rewrite (offerId changed). After resolution we trim back to effectiveLimit.
+    const candidateLimit = Math.min(5000, Math.ceil(Math.max(1, effectiveLimit) * 1.5) + 20);
     const perTargetTaken = new Map();
     const dueItems = [];
+    // Due items whose target has no daily quota left. Without a bulk defer they stay due and the
+    // auto scheduler keeps re-running every second, burning heavy product builds for nothing.
+    const quotaExhaustedItems = [];
     for (const item of publicQueue.items || []) {
       if (!item.due) continue;
       const target = cleanText(item.target) || "default";
+      const available = availableByTarget.get(target);
+      if (!(available > 0)) {
+        quotaExhaustedItems.push(item);
+        continue;
+      }
+      if (dueItems.length >= candidateLimit) continue;
       const taken = perTargetTaken.get(target) || 0;
-      if (taken >= candidateLimit) continue;
+      const targetCandidateLimit = available === Infinity
+        ? candidateLimit
+        : Math.min(candidateLimit, Math.ceil(Math.min(normalizedLimit, available) * 1.5) + 20);
+      if (taken >= targetCandidateLimit) continue;
       dueItems.push(item);
       perTargetTaken.set(target, taken + 1);
-      if (dueItems.length >= candidateLimit) break;
     }
-    const resolution = await resolveOzonUnarchiveQueueProducts(dueItems);
+    if (!force && quotaExhaustedItems.length) {
+      try {
+        const deferRetryAt = nextOzonUnarchiveRetryAt();
+        let deferQueue = await readOzonUnarchiveQueue();
+        deferQueue = queueOzonUnarchiveItems(deferQueue, quotaExhaustedItems, {
+          nextRetryAt: deferRetryAt,
+          warning: "ozon_unarchive_daily_limit_queued",
+          attempted: false,
+        });
+        await writeOzonUnarchiveQueueDelta(deferQueue, { upsertProducts: quotaExhaustedItems });
+        logger.info("ozon_unarchive_queue_daily_defer", { deferred: quotaExhaustedItems.length, nextRetryAt: deferRetryAt });
+      } catch (deferError) {
+        logger.warn("ozon unarchive queue daily defer failed", { detail: deferError?.message || String(deferError) });
+      }
+    }
+    const resolution = dueItems.length
+      ? await resolveOzonUnarchiveQueueProducts(dueItems)
+      : { ids: [], rewrites: [] };
     await rewriteResolvedOzonUnarchiveQueueItems(resolution.rewrites);
     // Purge ghost items: queue entries not resolvable to any warehouse product (deleted products,
     // stale offerIds). Previously only purged when ids.length === 0; now purge partial ghosts too
@@ -171,8 +213,9 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
         }
       }
     }
-    // Trim to normalizedLimit so we never exceed the configured batch size to Ozon
-    const ids = resolution.ids.slice(0, normalizedLimit);
+    // Trim to effectiveLimit so we never exceed the configured batch size nor the remaining
+    // daily quota when sending to Ozon
+    const ids = resolution.ids.slice(0, effectiveLimit);
     if (!ids.length) {
       const empty = {
         ok: true,
