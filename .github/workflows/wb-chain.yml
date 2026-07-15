@@ -1,0 +1,39 @@
+name: wb-chain
+
+# Запуск цепочки Wildberries на проде отдельным процессом с большим heap
+# (импорт карточек по правилу «закупка ≥ 14 500 ₽», фото, цены, остатки).
+# Триггер — тег вида wb-<mode>.<arg>.<n>, например:
+#   wb-chain.0.1      — полная цепочка (preview → apply → media → prices → stocks)
+#   wb-preview.0.2    — только оценка кандидатов
+#   wb-stocks.1048198.3 — только остатки на склад 1048198
+# arg=0 означает «без аргумента»; <n> — счётчик, чтобы имя тега было уникальным.
+
+on:
+  push:
+    tags:
+      - "wb-*"
+
+jobs:
+  wb-chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci --omit=dev
+      - name: Run WB chain on prod
+        env:
+          DEPLOY_PASSWORD: ${{ secrets.DEPLOY_PASSWORD }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          BODY="${TAG#wb-}"
+          MODE="${BODY%%.*}"
+          REST="${BODY#*.}"
+          ARG=""
+          if [ "$REST" != "$BODY" ]; then ARG="${REST%%.*}"; fi
+          if [ "$ARG" = "0" ]; then ARG=""; fi
+          echo "mode=$MODE arg=$ARG"
+          node scripts/run-prod-wb-chain.cjs "$MODE" $ARG

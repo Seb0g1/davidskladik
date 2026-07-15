@@ -280,6 +280,122 @@ app.post("/api/wb/media/backfill", requireAdmin, async (request, response, next)
   }
 });
 
+// Статус товаров склада на WB — для панели Wildberries в карточке товара:
+// есть ли карточка на WB (vendorCode = наш offerId), nmID и фото, закупка и
+// цена WB, порог 14 500 ₽; если карточки нет — причины пропуска импорта.
+app.post("/api/wb/product-status", async (request, response, next) => {
+  try {
+    const productIds = (Array.isArray(request.body?.productIds) ? request.body.productIds : [])
+      .map((value) => cleanText(value))
+      .filter(Boolean)
+      .slice(0, 20);
+    const account = getWbAccountByTarget(cleanText(request.body?.target || "wb"));
+    if (!productIds.length) return response.json({ configured: Boolean(account), items: [] });
+
+    const prisma = getPrisma();
+    if (!prisma || !shouldUsePostgresStorage()) {
+      return response.json({ configured: Boolean(account), items: productIds.map((productId) => ({ productId, onWb: false, reasons: ["postgres_unavailable"] })) });
+    }
+    const [rules, pricing, supplierMap, rows] = await Promise.all([
+      readWbImportRules(),
+      loadAvitoPricingContext(),
+      loadAvitoSupplierPricingMap(productIds),
+      prisma.warehouseProduct.findMany({
+        where: { id: { in: productIds } },
+        select: { id: true, marketplace: true, raw: true },
+      }),
+    ]);
+    const rowById = new Map(rows.map((row) => [cleanText(row.id), row]));
+
+    // Карточки WB по vendorCode: точечный textSearch — в карточке товара
+    // максимум несколько строк Ozon, полный список не нужен.
+    const cardByVendorCode = new Map();
+    let wbError = "";
+    if (account) {
+      const vendorCodes = new Set();
+      for (const row of rows) {
+        if (row.marketplace !== "ozon") continue;
+        const offerId = cleanText(row.raw && typeof row.raw === "object" ? row.raw.offerId : "");
+        if (offerId) vendorCodes.add(offerId);
+      }
+      for (const vendorCode of vendorCodes) {
+        try {
+          const found = await wbCardsList(account, { textSearch: vendorCode, limit: 20 });
+          for (const card of found) {
+            const key = cleanText(card.vendorCode).toLowerCase();
+            if (key && !cardByVendorCode.has(key)) cardByVendorCode.set(key, card);
+          }
+        } catch (error) {
+          wbError = error?.message || String(error);
+          break;
+        }
+      }
+    }
+
+    const items = [];
+    for (const productId of productIds) {
+      const row = rowById.get(productId);
+      if (!row || row.marketplace !== "ozon") {
+        items.push({ productId, onWb: false, reasons: [row ? "not_ozon" : "not_found"] });
+        continue;
+      }
+      const product = row.raw && typeof row.raw === "object" ? normalizeWarehouseProduct(row.raw) : null;
+      if (!product) {
+        items.push({ productId, onWb: false, reasons: ["not_found"] });
+        continue;
+      }
+      const supplier = supplierMap.get(productId) || product.selectedSupplier || null;
+      const purchaseRub = Math.round(wbSupplierPurchaseRub(supplier, pricing));
+      const priceRub = purchaseRub > 0 ? wbSupplierPriceRub(supplier, pricing) : 0;
+      const evaluated = evaluateWbImportCandidate(product, rules, {
+        ...pricing,
+        supplierByProductId: new Map([[productId, supplier]]),
+      });
+      const card = cardByVendorCode.get(cleanText(product.offerId).toLowerCase()) || null;
+      const belowMin = purchaseRub > 0 && purchaseRub < rules.minSupplierPriceRub;
+      items.push({
+        productId,
+        onWb: Boolean(card),
+        nmID: card ? Number(card.nmID) || 0 : 0,
+        hasPhotos: card ? Boolean(Array.isArray(card.photos) && card.photos.length) : false,
+        purchaseRub,
+        priceRub,
+        minSupplierPriceRub: rules.minSupplierPriceRub,
+        belowMin,
+        // Ниже порога товар гасится синком остатков даже при созданной карточке.
+        sellable: Boolean(card) && !product.archived && !belowMin && purchaseRub > 0,
+        reasons: evaluated.ok ? [] : evaluated.reasons,
+      });
+    }
+    response.json({ configured: Boolean(account), wbError: wbError || undefined, items });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Результат и лог последнего запуска цепочки импорта WB на сервере
+// (scripts/prod-wb-chain.cjs) — наблюдение за импортом без SSH.
+app.get("/api/wb/chain/result", requireAdmin, async (request, response, next) => {
+  try {
+    let result = null;
+    try {
+      result = JSON.parse(await fs.readFile(path.join(dataDir, "wb-chain-result.json"), "utf8"));
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    let logTail = "";
+    try {
+      const log = await fs.readFile(path.join(dataDir, "wb-chain.log"), "utf8");
+      logTail = log.split("\n").slice(-120).join("\n");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    response.json({ result, logTail });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // --- Цены ---
 
 // Отправка цен: закупка поставщика × наценка WB. Ниже порога 14 500 ₽ — цена
@@ -359,7 +475,15 @@ app.post("/api/wb/stocks/sync", requireAdmin, async (request, response, next) =>
     }
     const rules = await readWbImportRules();
     const pricing = await loadAvitoPricingContext();
-    const cards = await wbCardsList(account);
+    // Опциональный фильтр: трогаем только перечисленные vendorCode — карточки,
+    // созданные на WB вручную (не из нашего импорта), синк иначе обнулит.
+    const onlyVendorCodes = new Set((Array.isArray(request.body?.vendorCodes) ? request.body.vendorCodes : [])
+      .map((value) => cleanText(value).toLowerCase())
+      .filter(Boolean));
+    const allCards = await wbCardsList(account);
+    const cards = onlyVendorCodes.size
+      ? allCards.filter((card) => onlyVendorCodes.has(cleanText(card.vendorCode).toLowerCase()))
+      : allCards;
     const linked = await loadWbLinkedOzonProducts(cards.map((card) => card.vendorCode));
 
     const stocks = [];

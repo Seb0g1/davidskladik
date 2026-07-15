@@ -1625,6 +1625,110 @@ function AvitoPanel({ products, canEdit = false }: { products: Product[]; canEdi
   );
 }
 
+type WbProductStatus = {
+  productId: string;
+  onWb: boolean;
+  nmID?: number;
+  hasPhotos?: boolean;
+  purchaseRub?: number;
+  priceRub?: number;
+  minSupplierPriceRub?: number;
+  belowMin?: boolean;
+  sellable?: boolean;
+  reasons?: string[];
+};
+
+const WB_SKIP_LABELS: Record<string, string> = {
+  archived: "в архиве Ozon",
+  no_images: "нет фото",
+  no_price: "нет цены поставщика",
+  price_below_min: "закупка ниже порога",
+  title_word: "стоп-слово в названии",
+  no_title: "нет названия",
+  no_subject: "не выбран предмет WB",
+  not_ozon: "не товар Ozon",
+  not_found: "товар не найден",
+  postgres_unavailable: "БД недоступна",
+};
+
+function wbSkipLabel(reason: string): string {
+  const [key, detail] = reason.split(":");
+  const label = WB_SKIP_LABELS[key] || key;
+  if (key === "price_below_min" && detail) return `${label} (${money(Number(detail))})`;
+  if (key === "title_word" && detail) return `${label}: ${detail}`;
+  return label;
+}
+
+// Состояние Wildberries в карточке товара: есть ли карточка на WB
+// (vendorCode = offerId Ozon), цена/закупка и порог 14 500 ₽, причины пропуска.
+function WbPanel({ products }: { products: Product[] }) {
+  const ozonIds = useMemo(
+    () => products.filter((product) => product.marketplace === "ozon").map((product) => String(product.id)).sort(),
+    [products],
+  );
+  const statusQuery = useQuery({
+    queryKey: ["wb", "product-status", ozonIds.join("|")],
+    enabled: ozonIds.length > 0,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const response = await fetch("/api/wb/product-status", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: ozonIds }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return (await response.json()) as { configured: boolean; wbError?: string; items: WbProductStatus[] };
+    },
+  });
+  if (!ozonIds.length) return null;
+  const data = statusQuery.data;
+  const items = data?.items || [];
+  return (
+    <section className="detail-section">
+      <div className="section-title">
+        <div>
+          <span>Wildberries</span>
+          <h3>Состояние Wildberries</h3>
+        </div>
+      </div>
+      {statusQuery.isLoading ? <div className="table-note"><Loader2 className="spin" size={14} /> Проверяю карточки WB…</div> : null}
+      {statusQuery.error ? <div className="inline-error">Статус WB недоступен: {String((statusQuery.error as Error).message)}</div> : null}
+      {data && !data.configured ? <div className="table-note">Кабинет Wildberries не настроен — добавьте API-токен в Настройки → Маркетплейсы.</div> : null}
+      {data?.wbError ? <div className="inline-error">WB API: {data.wbError}</div> : null}
+      <div className="marketplace-rows">
+        {items.map((item) => (
+          <div className="marketplace-row" key={item.productId}>
+            <div>
+              <strong>WB</strong>
+              <span>{item.nmID ? `nmID ${item.nmID}` : item.productId}</span>
+            </div>
+            {item.onWb ? (
+              <span className={`pill ${item.sellable ? "ok" : "warn"}`}>
+                {item.sellable ? "В продаже WB" : item.belowMin ? "Карточка есть · ниже порога" : "Карточка на WB"}
+              </span>
+            ) : (
+              <span className="pill warn">Не на WB</span>
+            )}
+            <div>
+              <small>Цена WB</small>
+              <strong>{item.priceRub ? money(item.priceRub) : "—"}</strong>
+              {item.purchaseRub ? <small>закупка {money(item.purchaseRub)}</small> : null}
+            </div>
+            <div className="marketplace-flags">
+              {item.minSupplierPriceRub ? <span className="formula-chip muted">Порог закупки: {money(item.minSupplierPriceRub)}</span> : null}
+              {item.onWb ? <span className={`formula-chip ${item.hasPhotos ? "muted" : ""}`}>{item.hasPhotos ? "фото загружены" : "фото нет (досылаются)"}</span> : null}
+              {(item.reasons || []).map((reason) => <span className="formula-chip" key={reason}>{wbSkipLabel(reason)}</span>)}
+              {item.onWb && item.belowMin ? <span className="formula-chip">остаток обнуляется синком — закупка ниже порога</span> : null}
+            </div>
+          </div>
+        ))}
+        {!items.length && !statusQuery.isLoading && !statusQuery.error ? <div className="table-note">Нет строк Ozon — на WB выгружаются товары Ozon.</div> : null}
+      </div>
+    </section>
+  );
+}
+
 function formatEtaSeconds(seconds: number): string {
   if (seconds <= 30) return "вот-вот";
   const minutes = Math.round(seconds / 60);
@@ -1946,6 +2050,7 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
       <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} readOnly={demoMode} />
       <MarketplaceRows products={products} breakdown={breakdown} />
       {!demoMode ? <AvitoPanel products={products} canEdit={isAdmin} /> : null}
+      {!demoMode ? <WbPanel products={products} /> : null}
       {isAdmin && !demoMode ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <AiImagesPanel product={primary} products={products} onSaved={refreshDetail} /> : null}
