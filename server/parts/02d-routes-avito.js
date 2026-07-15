@@ -342,6 +342,7 @@ app.get("/api/avito/feed-info", async (request, response, next) => {
     const baseUrl = cleanText(process.env.PUBLIC_BASE_URL) || `${request.protocol}://${request.get("host")}`;
     response.json({
       feedUrl: `${baseUrl}/public/avito-feed/${token}.xml`,
+      stockFeedUrl: `${baseUrl}/public/avito-stock/${token}.csv`,
       enabledCount: count,
       totalListings: total,
       hiddenOutOfStock,
@@ -516,6 +517,34 @@ app.get("/public/avito-feed/:token.xml", async (request, response, next) => {
     }
     const { xml } = await buildAvitoFeedXml();
     response.type("application/xml").send(xml);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// --- Файл остатков (раздел Avito «Управление остатками») ---
+
+// Авторизованный предпросмотр CSV остатков.
+app.get("/api/avito/stock.csv", async (_request, response, next) => {
+  try {
+    const { csv } = await buildAvitoStockCsv();
+    response.type("text/csv; charset=utf-8").send(csv);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Публичный CSV остатков — ссылку указываем в «Управление остатками» → способ
+// «Автоматический», Авито скачивает файл раз в час. Тот же секретный токен,
+// что и у XML-фида (см. исключение в requireAuth).
+app.get("/public/avito-stock/:token.csv", async (request, response, next) => {
+  try {
+    const state = await readAvitoListingsFile();
+    if (!state.feedToken || !timingSafeEqual(cleanText(request.params.token), state.feedToken)) {
+      return response.status(404).send("Not found");
+    }
+    const { csv } = await buildAvitoStockCsv();
+    response.type("text/csv; charset=utf-8").send(csv);
   } catch (error) {
     next(error);
   }

@@ -167,6 +167,51 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}) {
   return { listing: withStock(nextListing, outOfStock, hasSupplierPrice), outOfStock };
 }
 
+// CSV с остатками для раздела Avito «Управление остатками» (способ загрузки
+// «Автоматический»: Авито скачивает файл по ссылке раз в час). Формат из
+// справки Авито: строка «#date,<время>», затем колонки Id,Stock — Id совпадает
+// с Id объявления из фида автозагрузки, Stock 0 снимает объявление с продажи.
+function avitoStockCsvCell(value) {
+  const text = String(value ?? "");
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, "\"\"")}"` : text;
+}
+
+function renderAvitoStockCsv(listings, rules, liveStates, pricing, now = new Date()) {
+  const pad = (part) => String(part).padStart(2, "0");
+  const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  let csv = `#date,${stamp}\nId,Stock\n`;
+  let count = 0;
+  let outOfStockCount = 0;
+  for (const item of listings) {
+    const { listing, outOfStock } = liveStates === null
+      ? { listing: item, outOfStock: item.outOfStock === true }
+      : applyAvitoLiveState(item, liveStates.get(cleanText(item.sourceProductId)), rules, pricing);
+    const hasQuantity = listing.stockQuantity !== null && listing.stockQuantity !== undefined
+      && Number.isFinite(Number(listing.stockQuantity));
+    const stock = outOfStock
+      ? 0
+      : hasQuantity ? Math.max(0, Math.round(Number(listing.stockQuantity))) : avitoFeedDefaultStock;
+    if (stock <= 0) outOfStockCount += 1;
+    csv += `${avitoStockCsvCell(listing.adId)},${stock}\n`;
+    count += 1;
+  }
+  return { csv, count, outOfStock: outOfStockCount };
+}
+
+async function buildAvitoStockCsv() {
+  const [state, rules] = await Promise.all([readAvitoListingsFile(), readAvitoImportRules()]);
+  const enabled = state.items.filter((item) => item.enabled !== false && item.title);
+  const liveStates = await loadAvitoLiveProductStates(enabled);
+  // Прайсинг нужен applyAvitoLiveState для признака «нет в наличии» (поставщик
+  // без цены = нет товара), поэтому грузим его всегда при живых данных, а не
+  // только при autoUpdatePrices, как в XML.
+  const pricing = liveStates ? await loadAvitoPricingContext() : {};
+  return {
+    ...renderAvitoStockCsv(enabled, rules, liveStates, pricing),
+    liveSource: liveStates === null ? "stored" : "postgres",
+  };
+}
+
 async function buildAvitoFeedXml() {
   const [state, rules] = await Promise.all([readAvitoListingsFile(), readAvitoImportRules()]);
   const enabled = state.items.filter((item) => item.enabled !== false && item.title);

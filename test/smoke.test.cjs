@@ -7303,6 +7303,34 @@ test("Avito feed XML hides duplicates and listings without images", async () => 
   assert.ok(!xml.includes("<Images>"));
 });
 
+test("Avito stock CSV follows help format and zeroes out-of-stock ads", () => {
+  const { renderAvitoStockCsv } = require("../server.js");
+  const listings = [
+    // Живой остаток склада без поставщика — в CSV уходит фактическое количество.
+    { adId: "oz-1", sourceProductId: "p1", title: "A", stockQuantity: 7, imageUrls: [], extraFields: {} },
+    // «Нет в наличии» → Stock 0: Авито снимает объявление с продажи.
+    { adId: "oz-2", sourceProductId: "p2", title: "B", outOfStock: true, imageUrls: [], extraFields: {} },
+  ];
+  const liveStates = new Map([
+    ["p1", { id: "p1", targetPrice: 0, targetStock: 7, archived: false, supplier: null }],
+  ]);
+  const live = renderAvitoStockCsv(listings, { autoUpdatePrices: false }, liveStates, {}, new Date("2026-07-15T12:00:00"));
+  const lines = live.csv.trim().split("\n");
+  assert.equal(lines[0], "#date,2026-07-15T12:00:00");
+  assert.equal(lines[1], "Id,Stock");
+  assert.equal(lines[2], "oz-1,7");
+  // p2 не найден в живых данных склада → товара нет, остаток 0.
+  assert.equal(lines[3], "oz-2,0");
+  assert.equal(live.count, 2);
+  assert.equal(live.outOfStock, 1);
+  // Postgres недоступен (liveStates === null): сохранённый флаг outOfStock
+  // обнуляет остаток, объявление без количества получает целевой остаток фида.
+  const stored = renderAvitoStockCsv(listings, { autoUpdatePrices: false }, null, {});
+  const storedLines = stored.csv.trim().split("\n");
+  assert.equal(storedLines[2], "oz-1,7");
+  assert.equal(storedLines[3], "oz-2,0");
+});
+
 test("warehouse supplier picker skips anomalously cheap price outliers", () => {
   const { pickWarehouseSupplier } = require("../server.js");
   const supplier = (rowId, purchaseRubPrice) => ({

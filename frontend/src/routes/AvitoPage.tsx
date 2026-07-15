@@ -107,6 +107,7 @@ type FeedRefreshResult = {
 };
 type FeedInfoResponse = {
   feedUrl: string;
+  stockFeedUrl?: string;
   enabledCount: number;
   totalListings: number;
   hiddenOutOfStock?: number;
@@ -206,6 +207,7 @@ export function AvitoPage() {
   const queryClient = useQueryClient();
   const [rules, setRules] = useState<ImportRules | null>(null);
   const [copied, setCopied] = useState(false);
+  const [copiedStock, setCopiedStock] = useState(false);
 
   const accountsQuery = useQuery({
     queryKey: ["marketplace-accounts"],
@@ -310,6 +312,18 @@ export function AvitoPage() {
       await navigator.clipboard.writeText(url);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard недоступен — url виден в поле */
+    }
+  };
+
+  const copyStockFeedUrl = async () => {
+    const url = feedInfoQuery.data?.stockFeedUrl;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedStock(true);
+      window.setTimeout(() => setCopiedStock(false), 2000);
     } catch {
       /* clipboard недоступен — url виден в поле */
     }
@@ -545,6 +559,23 @@ export function AvitoPage() {
                 {feedInfoQuery.data.hiddenDuplicates ? ` · скрыто дублей: ${feedInfoQuery.data.hiddenDuplicates}` : ""}.
                 {" "}<a href="/api/avito/feed.xml" target="_blank" rel="noopener">Открыть XML</a>
               </p>
+              {feedInfoQuery.data.stockFeedUrl ? (
+                <>
+                  <p className="form-hint" style={{ marginTop: 12 }}>
+                    <strong>Файл остатков.</strong> Укажите эту ссылку в разделе Avito «Управление остатками» → способ загрузки «Автоматический» — Avito будет обновлять остатки по ней каждый час.
+                  </p>
+                  <div className="feed-url-row">
+                    <input readOnly value={feedInfoQuery.data.stockFeedUrl} onFocus={(event) => event.target.select()} />
+                    <button className="secondary-action" type="button" onClick={copyStockFeedUrl}>
+                      <ClipboardCopy size={16} /> {copiedStock ? "Скопировано" : "Копировать"}
+                    </button>
+                  </div>
+                  <p className="form-hint">
+                    Формат CSV (Id,Stock): Id совпадает с объявлением из фида, Stock 0 снимает объявление с продажи.
+                    {" "}<a href="/api/avito/stock.csv" target="_blank" rel="noopener">Открыть CSV</a>
+                  </p>
+                </>
+              ) : null}
               <p className="form-hint">
                 Цены и остатки подставляются из склада при каждом скачивании фида
                 {feedInfoQuery.data.autoRefresh?.enabled

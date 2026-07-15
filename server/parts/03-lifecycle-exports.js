@@ -306,6 +306,7 @@ module.exports = {
   consignmentSummaryFromRows,
   evaluateAvitoImportCandidate,
   buildAvitoAdXml,
+  renderAvitoStockCsv,
   normalizeAvitoImportRules,
   normalizeAvitoListing,
   applyAvitoLiveState,

@@ -24,6 +24,8 @@ function requireAuth(request, response, next) {
   // Фид Avito Автозагрузки: Авито скачивает XML без сессии, доступ по секретному
   // токену в URL (проверяется в самом роуте).
   if (request.path.startsWith("/public/avito-feed/")) return next();
+  // CSV остатков для «Управления остатками» Авито — тоже по секретному токену.
+  if (request.path.startsWith("/public/avito-stock/")) return next();
   if (request.path === "/api/login" || request.path === "/api/session") return next();
 
   const session = readSession(request);
