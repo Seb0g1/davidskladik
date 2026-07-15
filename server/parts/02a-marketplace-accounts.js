@@ -1,7 +1,7 @@
 function normalizeMarketplaceAccount(input = {}, current = {}) {
   const rawMarketplace = cleanText(input.marketplace || current.marketplace).toLowerCase();
-  const marketplace = ["yandex", "avito"].includes(rawMarketplace) ? rawMarketplace : "ozon";
-  const fallbackName = marketplace === "ozon" ? "Ozon" : marketplace === "avito" ? "Avito" : "Yandex Market";
+  const marketplace = ["yandex", "avito", "wb"].includes(rawMarketplace) ? rawMarketplace : "ozon";
+  const fallbackName = marketplace === "ozon" ? "Ozon" : marketplace === "avito" ? "Avito" : marketplace === "wb" ? "Wildberries" : "Yandex Market";
   return {
     id: cleanText(input.id || current.id) || `${marketplace}-${crypto.randomUUID().slice(0, 8)}`,
     marketplace,
@@ -90,8 +90,24 @@ function getEnvAvitoAccounts() {
   ];
 }
 
+function getEnvWbAccounts() {
+  if (!process.env.WB_API_TOKEN) return [];
+  return [
+    {
+      id: "wb",
+      marketplace: "wb",
+      name: process.env.WB_NAME || "Wildberries",
+      apiKey: process.env.WB_API_TOKEN,
+      // Campaign ID у WB используется как ID склада FBS для остатков.
+      campaignId: cleanText(process.env.WB_WAREHOUSE_ID || ""),
+      source: "env",
+      readOnly: true,
+    },
+  ];
+}
+
 function getMarketplaceAccounts() {
-  const envAccounts = [...getEnvOzonAccounts(), ...getEnvYandexShops(), ...getEnvAvitoAccounts()];
+  const envAccounts = [...getEnvOzonAccounts(), ...getEnvYandexShops(), ...getEnvAvitoAccounts(), ...getEnvWbAccounts()];
   const localAccounts = readMarketplaceAccountsSync().map((account) => ({ ...account, source: "local", readOnly: false }));
   const localById = new Map(localAccounts.map((account) => [account.id, account]));
   const hiddenIds = new Set(localAccounts.filter((account) => account.hidden).map((account) => account.id));
@@ -110,7 +126,7 @@ function getMarketplaceAccounts() {
 }
 
 function getHiddenMarketplaceAccounts() {
-  const envById = new Map([...getEnvOzonAccounts(), ...getEnvYandexShops(), ...getEnvAvitoAccounts()].map((account) => [account.id, account]));
+  const envById = new Map([...getEnvOzonAccounts(), ...getEnvYandexShops(), ...getEnvAvitoAccounts(), ...getEnvWbAccounts()].map((account) => [account.id, account]));
   return readMarketplaceAccountsSync()
     .filter((account) => account.hidden)
     .map((account) => ({ ...(envById.get(account.id) || account), ...account, source: "local", readOnly: false }));
@@ -134,7 +150,9 @@ function sanitizeMarketplaceAccount(account = {}) {
     campaignId: account.campaignId || "",
     configured: account.marketplace === "ozon" || account.marketplace === "avito"
       ? Boolean(account.clientId && account.apiKey)
-      : Boolean(account.apiKey && account.businessId),
+      : account.marketplace === "wb"
+        ? Boolean(account.apiKey)
+        : Boolean(account.apiKey && account.businessId),
     source: account.source || "local",
     readOnly: Boolean(account.readOnly),
     inheritedFromEnv: Boolean(account.inheritedFromEnv),
@@ -216,6 +234,25 @@ async function testMarketplaceAccountConnection(account = {}) {
       }
       throw error;
     }
+  }
+
+  if (marketplace === "wb") {
+    if (!account.apiKey) {
+      const error = new Error("Для проверки Wildberries нужен API-токен продавца.");
+      error.statusCode = 400;
+      throw error;
+    }
+    await wbPing(account);
+    const seller = await wbSellerInfo(account).catch(() => null);
+    return {
+      ok: true,
+      marketplace: "wb",
+      sellerName: cleanText(seller?.name || seller?.tradeMark || ""),
+      message: seller?.name
+        ? `Wildberries подключен. Продавец: ${seller.name}.`
+        : "Wildberries подключен. Токен работает.",
+      checkedAt: new Date().toISOString(),
+    };
   }
 
   const error = new Error("Неизвестный маркетплейс.");
@@ -355,6 +392,22 @@ function getAvitoAccounts({ includeSyncDisabled = false } = {}) {
   return getMarketplaceAccounts()
     .filter((account) => account.marketplace === "avito")
     .filter((account) => includeSyncDisabled || isAccountSyncEnabled(account));
+}
+
+function getWbAccounts({ includeSyncDisabled = false } = {}) {
+  return getMarketplaceAccounts()
+    .filter((account) => account.marketplace === "wb")
+    .filter((account) => includeSyncDisabled || isAccountSyncEnabled(account));
+}
+
+function getWbAccountByTarget(targetId) {
+  const accounts = getWbAccounts();
+  const target = cleanText(targetId || "");
+  if (!target || target === "wb") return accounts[0] || null;
+  return accounts.find((account) => (
+    cleanText(account.id) === target
+    || cleanText(account.name).toLowerCase() === target.toLowerCase()
+  )) || null;
 }
 
 function getAvitoAccountByTarget(targetId) {

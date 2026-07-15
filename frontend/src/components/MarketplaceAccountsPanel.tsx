@@ -37,7 +37,7 @@ type AccountDraft = {
 
 const EMPTY_DRAFT: AccountDraft = { id: "", marketplace: "ozon", name: "", clientId: "", apiKey: "", businessId: "", campaignId: "", syncEnabled: true };
 
-const MARKETPLACE_LABELS: Record<string, string> = { ozon: "Ozon", yandex: "Yandex Market", avito: "Avito" };
+const MARKETPLACE_LABELS: Record<string, string> = { ozon: "Ozon", yandex: "Yandex Market", avito: "Avito", wb: "Wildberries" };
 
 function marketplaceLabel(marketplace: string): string {
   return MARKETPLACE_LABELS[marketplace] || marketplace;
@@ -120,9 +120,14 @@ export function MarketplaceAccountsPanel() {
   const hidden = accountsQuery.data?.hiddenAccounts || [];
   const isEditing = Boolean(draft.id);
   const isYandex = draft.marketplace === "yandex";
+  const isWb = draft.marketplace === "wb";
   const clientIdLabel = draft.marketplace === "avito" ? "Client ID" : "Client-Id";
-  const apiKeyLabel = draft.marketplace === "avito" ? "Client Secret" : "API Key";
-  const canSave = Boolean(draft.name.trim()) && (isEditing || (isYandex ? Boolean(draft.businessId && draft.apiKey) : Boolean(draft.clientId && draft.apiKey)));
+  const apiKeyLabel = draft.marketplace === "avito" ? "Client Secret" : isWb ? "API-токен продавца" : "API Key";
+  const canSave = Boolean(draft.name.trim()) && (isEditing || (isYandex
+    ? Boolean(draft.businessId && draft.apiKey)
+    : isWb
+      ? Boolean(draft.apiKey)
+      : Boolean(draft.clientId && draft.apiKey)));
 
   return (
     <div className="settings-panel settings-panel-wide accounts-panel">
@@ -132,7 +137,7 @@ export function MarketplaceAccountsPanel() {
           {formOpen ? <X size={15} /> : <Plus size={15} />} {formOpen ? "Закрыть форму" : "Добавить кабинет"}
         </button>
       </div>
-      <p className="settings-hint">Ключи Ozon, Yandex Market и Avito хранятся в кабинете сайта — без правки .env и перезапуска. После сохранения проверьте подключение кнопкой на карточке.</p>
+      <p className="settings-hint">Ключи Ozon, Yandex Market, Avito и Wildberries хранятся в кабинете сайта — без правки .env и перезапуска. После сохранения проверьте подключение кнопкой на карточке.</p>
 
       {formOpen ? (
         <div className="account-edit-form">
@@ -146,6 +151,7 @@ export function MarketplaceAccountsPanel() {
                   { value: "ozon", label: "Ozon" },
                   { value: "yandex", label: "Yandex Market" },
                   { value: "avito", label: "Avito" },
+                  { value: "wb", label: "Wildberries" },
                 ]}
               />
             </label>
@@ -154,20 +160,21 @@ export function MarketplaceAccountsPanel() {
             </label>
           </div>
           <div className="settings-form-row account-form-row">
-            {!isYandex ? (
+            {!isYandex && !isWb ? (
               <label>{clientIdLabel}
                 <input value={draft.clientId} autoComplete="off" placeholder={isEditing ? "оставьте пустым, чтобы не менять" : ""} onChange={(event) => setDraft((current) => ({ ...current, clientId: event.target.value }))} />
               </label>
-            ) : (
+            ) : null}
+            {isYandex ? (
               <label>Business ID
                 <input value={draft.businessId} inputMode="numeric" onChange={(event) => setDraft((current) => ({ ...current, businessId: event.target.value }))} />
               </label>
-            )}
+            ) : null}
             <label>{apiKeyLabel}
               <input type="password" value={draft.apiKey} autoComplete="new-password" placeholder={isEditing ? "оставьте пустым, чтобы не менять" : ""} onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))} />
             </label>
-            {isYandex ? (
-              <label>Campaign ID
+            {isYandex || isWb ? (
+              <label>{isWb ? "ID склада FBS (для остатков)" : "Campaign ID"}
                 <input value={draft.campaignId} inputMode="numeric" onChange={(event) => setDraft((current) => ({ ...current, campaignId: event.target.value }))} />
               </label>
             ) : null}
@@ -200,8 +207,10 @@ export function MarketplaceAccountsPanel() {
               <div className="account-modern-meta">
                 {account.marketplace === "yandex"
                   ? <span>Business ID: <b>{account.businessId || "—"}</b>{account.campaignId ? <> · Campaign: <b>{account.campaignId}</b></> : null}</span>
-                  : <span>{account.marketplace === "avito" ? "Client ID" : "Client-Id"}: <b>{account.clientId || "—"}</b></span>}
-                <span>{account.marketplace === "avito" ? "Secret" : "API Key"}: <b>{account.apiKey || "—"}</b></span>
+                  : account.marketplace === "wb"
+                    ? <span>Склад FBS: <b>{account.campaignId || "—"}</b></span>
+                    : <span>{account.marketplace === "avito" ? "Client ID" : "Client-Id"}: <b>{account.clientId || "—"}</b></span>}
+                <span>{account.marketplace === "avito" ? "Secret" : account.marketplace === "wb" ? "Токен" : "API Key"}: <b>{account.apiKey || "—"}</b></span>
                 <span className="account-source">{account.readOnly ? "из .env" : account.inheritedFromEnv ? "переопределён" : "локальный"}</span>
               </div>
               {testResult ? (

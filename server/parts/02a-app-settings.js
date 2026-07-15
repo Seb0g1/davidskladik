@@ -11,6 +11,7 @@ function defaultAppSettings() {
       ozon: Number(process.env.DEFAULT_OZON_MARKUP || 1.7),
       yandex: Number(process.env.DEFAULT_YANDEX_MARKUP || 1.6),
       avito: Number(process.env.DEFAULT_AVITO_MARKUP || 1.6),
+      wb: Number(process.env.DEFAULT_WB_MARKUP || 1.6),
     },
     automation: {
       autoSyncEnabled: autoSyncMinutes > 0,
@@ -57,7 +58,7 @@ function normalizeMarkupRule(input = {}) {
   const minUsd = Number(input.minUsd ?? input.min_usd ?? 0);
   const coefficient = Number(input.coefficient ?? input.markup ?? 0);
   const rawMarketplace = cleanText(input.marketplace || input.target || "all").toLowerCase();
-  const marketplace = rawMarketplace === "ozon" || rawMarketplace === "yandex" || rawMarketplace === "avito" ? rawMarketplace : "all";
+  const marketplace = ["ozon", "yandex", "avito", "wb"].includes(rawMarketplace) ? rawMarketplace : "all";
   if (!Number.isFinite(minUsd) || !Number.isFinite(coefficient) || coefficient <= 0) return null;
   return {
     minUsd: Math.max(0, Number(minUsd.toFixed(4))),
@@ -173,6 +174,7 @@ function normalizeAppSettings(input = {}) {
     ozon: Number(input.defaultMarkups?.ozon ?? input.default_ozon_markup ?? fallback.defaultMarkups.ozon),
     yandex: Number(input.defaultMarkups?.yandex ?? input.default_yandex_markup ?? fallback.defaultMarkups.yandex),
     avito: Number(input.defaultMarkups?.avito ?? input.default_avito_markup ?? fallback.defaultMarkups.avito),
+    wb: Number(input.defaultMarkups?.wb ?? input.default_wb_markup ?? fallback.defaultMarkups.wb),
   };
   const rawAutomation = input.automation || {};
   const automationEnabled = parseBooleanSetting(
@@ -197,6 +199,7 @@ function normalizeAppSettings(input = {}) {
       ozon: Number.isFinite(defaultMarkups.ozon) && defaultMarkups.ozon > 0 ? defaultMarkups.ozon : fallback.defaultMarkups.ozon,
       yandex: Number.isFinite(defaultMarkups.yandex) && defaultMarkups.yandex > 0 ? defaultMarkups.yandex : fallback.defaultMarkups.yandex,
       avito: Number.isFinite(defaultMarkups.avito) && defaultMarkups.avito > 0 ? defaultMarkups.avito : fallback.defaultMarkups.avito,
+      wb: Number.isFinite(defaultMarkups.wb) && defaultMarkups.wb > 0 ? defaultMarkups.wb : fallback.defaultMarkups.wb,
     },
     automation: {
       autoSyncEnabled: automationEnabled,

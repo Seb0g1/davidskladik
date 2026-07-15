@@ -129,15 +129,16 @@ const codexSaleAiPreset = {
 
 function normalizeMarketplace(value: unknown) {
   const text = String(value || "all").toLowerCase();
-  return text === "ozon" || text === "yandex" || text === "avito" ? text : "all";
+  return text === "ozon" || text === "yandex" || text === "avito" || text === "wb" ? text : "all";
 }
 
-const PRICING_MARKETPLACES = ["ozon", "yandex", "avito"] as const;
+const PRICING_MARKETPLACES = ["ozon", "yandex", "avito", "wb"] as const;
 
 function marketplaceLabel(value: string) {
   if (value === "ozon") return "Ozon";
   if (value === "yandex") return "Yandex Market";
   if (value === "avito") return "Avito";
+  if (value === "wb") return "Wildberries";
   return "Все маркетплейсы";
 }
 
@@ -180,6 +181,7 @@ function settingsSavePayload(draft: Record<string, unknown>) {
       ozon: numberValue(markups.ozon, 1.7),
       yandex: numberValue(markups.yandex, 1.6),
       avito: numberValue(markups.avito, 1.6),
+      wb: numberValue(markups.wb, 1.6),
     },
     markupRules,
     availabilityRules: availabilityRules.length ? availabilityRules : [defaultAvailabilityRule],
@@ -880,10 +882,11 @@ export function SettingsPage() {
               value={adjustMarketplace}
               onChange={setAdjustMarketplace}
               options={[
-                { value: "all", label: "Ozon + Yandex + Avito" },
+                { value: "all", label: "Ozon + Yandex + Avito + WB" },
                 { value: "ozon", label: "Ozon" },
                 { value: "yandex", label: "Yandex Market" },
                 { value: "avito", label: "Avito" },
+                { value: "wb", label: "Wildberries" },
               ]}
             />
             <SelectField
@@ -927,6 +930,7 @@ export function SettingsPage() {
           <label>Базовая наценка Ozon<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.ozon ?? markups.ozon ?? "")} onChange={(event) => updateMarkups({ ozon: numberValue(event.target.value) })} /></label>
           <label>Базовая наценка Yandex Market<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.yandex ?? markups.yandex ?? "")} onChange={(event) => updateMarkups({ yandex: numberValue(event.target.value) })} /></label>
           <label>Базовая наценка Avito<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.avito ?? markups.avito ?? "")} onChange={(event) => updateMarkups({ avito: numberValue(event.target.value) })} /></label>
+          <label>Базовая наценка Wildberries<input type="number" min="0.0001" step="0.0001" value={String(draftMarkups.wb ?? markups.wb ?? "")} onChange={(event) => updateMarkups({ wb: numberValue(event.target.value) })} /></label>
           <div className="soft-empty compact">После изменения курса или наценки backend ставит пересчет цен в очередь.</div>
         </div>
 
@@ -943,6 +947,7 @@ export function SettingsPage() {
               { value: "ozon", label: "Ozon" },
               { value: "yandex", label: "Yandex Market" },
               { value: "avito", label: "Avito" },
+              { value: "wb", label: "Wildberries" },
               { value: "all", label: "Общие (все МП)" },
             ].map((tab) => {
               const count = markupRules.filter((rule) => rule.marketplace === tab.value).length;

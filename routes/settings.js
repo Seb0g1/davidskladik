@@ -121,10 +121,10 @@ app.post("/api/settings", requireAdmin, saveSettingsHandler);
 
 function pricingAdjustMarketplace(value) {
   const text = cleanText(value || "all").toLowerCase();
-  return text === "ozon" || text === "yandex" || text === "avito" ? text : "all";
+  return ["ozon", "yandex", "avito", "wb"].includes(text) ? text : "all";
 }
 
-const PRICING_ADJUST_MARKETPLACES = ["ozon", "yandex", "avito"];
+const PRICING_ADJUST_MARKETPLACES = ["ozon", "yandex", "avito", "wb"];
 
 function pricingAdjustCoefficient(value, multiplier) {
   const current = Number(value || 0);

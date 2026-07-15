@@ -110,6 +110,9 @@ app.post("/api/marketplace-accounts", requireAdmin, async (request, response, ne
     if (input.marketplace === "avito" && (!input.clientId || !input.apiKey)) {
       return response.status(400).json({ error: "Для Avito нужны Client ID и Client Secret." });
     }
+    if (input.marketplace === "wb" && !input.apiKey) {
+      return response.status(400).json({ error: "Для Wildberries нужен API-токен продавца." });
+    }
 
     const index = localAccounts.findIndex((account) => account.id === input.id);
     if (index >= 0) localAccounts[index] = normalizeMarketplaceAccount(input, localAccounts[index]);
