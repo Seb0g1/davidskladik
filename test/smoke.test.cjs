@@ -7303,6 +7303,31 @@ test("Avito feed XML hides duplicates and listings without images", async () => 
   assert.ok(!xml.includes("<Images>"));
 });
 
+test("Yandex category fixer targets beauty categories and skips ambiguous items", () => {
+  const { isWrongYandexBeautyCategory, resolveYandexTargetCategoryName } = require("../server.js");
+  // Реальные промахи автokatегоризации Яндекса из кабинета.
+  assert.ok(isWrongYandexBeautyCategory("Костюмы спортивные детские"));
+  assert.ok(isWrongYandexBeautyCategory("Дорожные и спортивные сумки"));
+  assert.ok(isWrongYandexBeautyCategory("Вина игристые"));
+  assert.ok(isWrongYandexBeautyCategory("Средства для воды в аквариуме"));
+  assert.ok(isWrongYandexBeautyCategory("Ароматические диффузоры"));
+  // Правильные бьюти-категории не считаются ошибочными.
+  assert.ok(!isWrongYandexBeautyCategory("Парфюмерия"));
+  assert.ok(!isWrongYandexBeautyCategory("Дезодоранты"));
+  assert.ok(!isWrongYandexBeautyCategory("Кремы и масла"));
+
+  assert.equal(resolveYandexTargetCategoryName("DIPTYQUE SET Парфюмерный набор 5 + 7.5 мл"), "Парфюмерия");
+  assert.equal(resolveYandexTargetCategoryName("Подарочный набор / Туалетная вода / Adidas Pure Game 50 мл"), "Парфюмерия");
+  assert.equal(resolveYandexTargetCategoryName("Chanel Bleu De Chanel дезодорант спрей мужской 100 мл"), "Дезодоранты");
+  assert.equal(resolveYandexTargetCategoryName("le labo bergamote 22 shampoo Парфюмированный шампунь 480 ml"), "Шампуни");
+  assert.equal(resolveYandexTargetCategoryName("Chanel BLEU DE CHANEL Гель для душа 200 ml"), "Для душа");
+  // Свечи/диффузоры/косметички не трогаем — их категория может быть верной.
+  assert.equal(resolveYandexTargetCategoryName("TIZIANA TERENZI KIRKE Парфюмированная свеча 30 г"), "");
+  assert.equal(resolveYandexTargetCategoryName("Vicky Tiel косметичка розовая"), "");
+  // Непонятное название — не угадываем.
+  assert.equal(resolveYandexTargetCategoryName("ЮК347533"), "");
+});
+
 test("Avito stock CSV follows help format and zeroes out-of-stock ads", () => {
   const { renderAvitoStockCsv } = require("../server.js");
   const listings = [

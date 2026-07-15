@@ -148,6 +148,156 @@ app.post("/api/ozon-yandex-import/repair-yandex-content", requireAdmin, async (r
   }
 });
 
+// --- Исправление категорий карточек Яндекса ---
+// Карточки создавались без marketCategoryId, Яндекс подбирал категорию по
+// названию и часто промахивался: «Костюмы спортивные детские» у набора духов,
+// «Вина игристые» у парфюмерного сета. Отсюда требования чужих обязательных
+// полей («Пол», «Размерная сетка»). Категории явно не из бьюти-сегмента
+// переотправляются с правильным marketCategoryId; id целевой категории берётся
+// из карточек, где уже лежит большинство таких товаров (без хардкода id).
+
+const YANDEX_WRONG_CATEGORY_PATTERNS = [
+  /сумк/i, /костюм/i, /юбк/i, /худи/i, /игрушк/i, /(^|\s)вина(\s|$)/i, /аквариум/i,
+  /автомобильн/i, /диффузор/i, /одежд/i, /обув/i, /плать/i, /футболк/i,
+  /брюк/i, /куртк/i, /носк/i, /детск/i, /спортивн/i, /канцеляр/i, /посуд/i,
+];
+
+function isWrongYandexBeautyCategory(categoryName = "") {
+  const name = cleanText(categoryName);
+  if (!name) return false;
+  return YANDEX_WRONG_CATEGORY_PATTERNS.some((pattern) => pattern.test(name));
+}
+
+// Целевая категория по названию товара. Пустая строка = не уверены, не трогаем.
+// Свечи/диффузоры/ароматизаторы пропускаем: для них «Ароматические диффузоры»
+// и «Декоративные свечи» могут быть верными.
+function resolveYandexTargetCategoryName(productName = "") {
+  const text = cleanText(productName).toLowerCase().replace(/ё/g, "е");
+  if (!text) return "";
+  if (/свеч|диффузор|ароматизатор|косметичк/.test(text)) return "";
+  if (/дезодорант|deodorant/.test(text)) return "Дезодоранты";
+  if (/шампунь|shampoo/.test(text)) return "Шампуни";
+  if (/для душа|shower gel|body cleanser/.test(text)) return "Для душа";
+  if (/парфюм|духи|туалетн|eau de|edp|edt|parfum|аромат|discovery/.test(text)) return "Парфюмерия";
+  return "";
+}
+
+app.post("/api/ozon-yandex-import/fix-yandex-categories", requireAdmin, async (request, response, next) => {
+  try {
+    const dryRun = request.body?.dryRun !== false;
+    const withErrorsReport = request.body?.errorsReport !== false;
+    const shops = uniqueYandexShopsByBusiness
+      ? uniqueYandexShopsByBusiness()
+      : getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+    if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
+
+    const errorCounts = new Map();
+    const warningCounts = new Map();
+    const planned = [];
+    const results = [];
+    let totalOffers = 0;
+    let cardsWithErrors = 0;
+
+    for (const shop of shops) {
+      const mappings = await getYandexOfferMappings(shop);
+      const rows = mappings.map((item) => ({
+        offerId: cleanText(item.offer?.offerId || item.offerId),
+        name: cleanText(item.offer?.name),
+        categoryId: Number(item.mapping?.marketCategoryId || item.offer?.marketCategoryId || 0) || 0,
+        categoryName: cleanText(item.mapping?.marketCategoryName || item.offer?.marketCategoryName),
+      })).filter((row) => row.offerId);
+      totalOffers += rows.length;
+
+      // Гистограмма id по имени категории: у правильных категорий большинство.
+      const idsByCategoryName = new Map();
+      for (const row of rows) {
+        if (!row.categoryId || !row.categoryName) continue;
+        const key = row.categoryName.toLowerCase();
+        const counter = idsByCategoryName.get(key) || new Map();
+        counter.set(row.categoryId, (counter.get(row.categoryId) || 0) + 1);
+        idsByCategoryName.set(key, counter);
+      }
+      const majorityCategoryId = (name) => {
+        const counter = idsByCategoryName.get(cleanText(name).toLowerCase());
+        if (!counter || !counter.size) return 0;
+        return [...counter.entries()].sort((a, b) => b[1] - a[1])[0][0];
+      };
+
+      for (const row of rows) {
+        if (!isWrongYandexBeautyCategory(row.categoryName)) continue;
+        const targetName = resolveYandexTargetCategoryName(row.name);
+        if (!targetName) continue;
+        const targetId = majorityCategoryId(targetName);
+        if (!targetId || targetId === row.categoryId) continue;
+        planned.push({
+          shopId: shop.id,
+          offerId: row.offerId,
+          name: row.name,
+          fromCategory: row.categoryName,
+          toCategory: targetName,
+          toCategoryId: targetId,
+        });
+      }
+
+      // Полный отчёт ошибок карточек — точные размеры классов проблем.
+      if (withErrorsReport) {
+        const cards = await getYandexOfferCardsContentStatus(shop, rows.map((row) => row.offerId));
+        for (const card of cards) {
+          if (card.errors?.length) cardsWithErrors += 1;
+          for (const error of card.errors || []) {
+            const key = cleanText(error.message || error.comment || error.type || "unknown");
+            errorCounts.set(key, (errorCounts.get(key) || 0) + 1);
+          }
+          for (const warning of card.warnings || []) {
+            const key = cleanText(warning.message || warning.comment || warning.type || "unknown");
+            warningCounts.set(key, (warningCounts.get(key) || 0) + 1);
+          }
+        }
+      }
+
+      if (!dryRun) {
+        const byShopPlanned = planned.filter((item) => item.shopId === shop.id);
+        for (const chunk of chunkArray(byShopPlanned, 500)) {
+          const sent = await sendYandexOfferMappings(
+            shop,
+            chunk.map((item) => ({ offerId: item.offerId, marketCategoryId: item.toCategoryId })),
+          );
+          results.push(...sent.map((item) => ({ ...item, target: shop.id })));
+        }
+      }
+    }
+
+    const topEntries = (map) => [...map.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 20)
+      .map(([message, count]) => ({ message, count }));
+    const fixesByTransition = new Map();
+    for (const item of planned) {
+      const key = `${item.fromCategory} → ${item.toCategory}`;
+      fixesByTransition.set(key, (fixesByTransition.get(key) || 0) + 1);
+    }
+
+    response.json({
+      ok: dryRun || results.every((item) => item.ok),
+      dryRun,
+      totalOffers,
+      cardsWithErrors,
+      topErrors: topEntries(errorCounts),
+      topWarnings: topEntries(warningCounts),
+      plannedCategoryFixes: planned.length,
+      fixesByTransition: [...fixesByTransition.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([transition, count]) => ({ transition, count })),
+      sample: planned.slice(0, 30).map(({ shopId, ...rest }) => rest),
+      sent: results.filter((item) => item.ok).length,
+      failed: results.filter((item) => !item.ok).length,
+      errors: results.filter((item) => !item.ok).slice(0, 30),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Sync names (and vendor/description) from Ozon products to their Yandex counterparts
 // where the stored name differs. Sends a content-mode partial update to the Yandex API.
 app.post("/api/ozon-yandex-import/sync-names", requireAdmin, async (request, response, next) => {

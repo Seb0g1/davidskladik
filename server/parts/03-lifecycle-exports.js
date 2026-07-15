@@ -191,6 +191,8 @@ module.exports = {
   sendApprovedYandexProductContent,
   sendApprovedYandexProductCardRepair,
   getYandexOfferCardsContentStatus,
+  isWrongYandexBeautyCategory,
+  resolveYandexTargetCategoryName,
   resolveYandexWeightDimensionsFromProduct,
   resolveYandexVendorFromProduct,
   shouldPreferCompatibleOpenAiChatRequest,
