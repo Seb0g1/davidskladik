@@ -71,8 +71,13 @@ async function readAvitoListingsFile() {
       items: items.map((item) => normalizeAvitoListing(item)).filter(Boolean),
     };
   } catch (error) {
-    if (error.code !== "ENOENT") logger.warn("read avito listings failed", { detail: error?.message || String(error) });
-    return { feedToken: "", updatedAt: null, items: [] };
+    if (error.code === "ENOENT") return { feedToken: "", updatedAt: null, items: [] };
+    // Битый файл (обрыв процесса на середине неатомарной записи ~27 МБ) раньше
+    // молча превращался в пустое состояние: следующий writer терял ВСЕ объявления
+    // и feedToken — Avito получал 404 по сохранённой ссылке фида. Падаем громко:
+    // личные коэффициенты и описания дороже, чем один неудавшийся цикл.
+    logger.warn("read avito listings failed", { detail: error?.message || String(error) });
+    throw error;
   }
 }
 
@@ -118,7 +123,16 @@ async function writeAvitoListingsFile(state) {
     feedToken: cleanText(state.feedToken),
     items: deduped,
   };
-  await fs.writeFile(avitoListingsPath, JSON.stringify(payload, null, 2), "utf8");
+  // Атомарно (tmp+rename): файл ~27 МБ, обрыв процесса на середине записи
+  // оставлял битый JSON → потеря листингов и feedToken (см. readAvitoListingsFile).
+  const tmpPath = `${avitoListingsPath}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+  try {
+    await fs.rename(tmpPath, avitoListingsPath);
+  } catch (renameError) {
+    if (renameError?.code !== "ENOENT") throw renameError;
+    await fs.unlink(tmpPath).catch(() => {});
+  }
   return payload;
 }
 

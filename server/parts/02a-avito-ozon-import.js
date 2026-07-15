@@ -331,8 +331,29 @@ async function syncAvitoOzonListings({ rules = null } = {}) {
   }
 
   const currentState = await readAvitoListingsFile();
+  // Временный no_price (таймаут PriceMaster, пустой/карантинный снапшот) — не
+  // повод снимать объявление: фид показывает последнюю сохранённую цену, а
+  // удаление отправляет объявление в архив Avito до пересоздания следующим
+  // синком (мигание 700–1300 объявлений каждые 4 часа). Удаляем только за
+  // структурные причины (дубль, стоп-слово, объём, нет фото и т.п.).
+  const transientSkipIds = new Set(
+    result.skipped
+      .filter((item) => (item.reasons || []).length
+        && item.reasons.every((reason) => String(reason).split(":")[0] === "no_price"))
+      .map((item) => cleanText(item.id))
+      .filter(Boolean),
+  );
+  let keptNoPrice = 0;
   const toRemoveAdIds = currentState.items
-    .filter((item) => item.source === "ozon" && cleanText(item.sourceProductId) && !matchedIds.has(cleanText(item.sourceProductId)))
+    .filter((item) => {
+      const sourceProductId = cleanText(item.sourceProductId);
+      if (item.source !== "ozon" || !sourceProductId || matchedIds.has(sourceProductId)) return false;
+      if (transientSkipIds.has(sourceProductId)) {
+        keptNoPrice += 1;
+        return false;
+      }
+      return true;
+    })
     .map((item) => item.adId);
 
   const upsertResult = await upsertAvitoListings(result.matched, { source: "ozon" });
@@ -351,6 +372,7 @@ async function syncAvitoOzonListings({ rules = null } = {}) {
     created: upsertResult.created,
     updated: upsertResult.updated,
     removed,
+    keptNoPrice,
     totalListings: upsertResult.total - removed,
   };
 }
