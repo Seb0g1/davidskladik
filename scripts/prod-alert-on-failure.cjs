@@ -9,7 +9,9 @@ require("dotenv").config();
 
 const root = path.resolve(__dirname, "..");
 const alertPath = path.join(root, "data", "last-prod-alert.json");
-const debounceMs = Math.max(60_000, Number(process.env.PROD_ALERT_DEBOUNCE_MS || 900000) || 900000);
+// 1 час по умолчанию: cron-чек ходит каждые 5 минут, при затяжном инциденте
+// сообщение раз в 15 минут превращалось в спам без новой информации.
+const debounceMs = Math.max(60_000, Number(process.env.PROD_ALERT_DEBOUNCE_MS || 3600000) || 3600000);
 const rawArgs = process.argv.slice(2).filter(Boolean);
 // --immediate: the caller (e.g. health-watchdog) already confirmed the incident and acted on
 // it (restart), so don't require a second consecutive failure before alerting. Debounce still

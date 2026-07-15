@@ -77,7 +77,10 @@ function evaluateHealthAlerts(metrics = {}, thresholds = {}) {
   // over a full ~14k cycle is ~1%). Total churn stays in the dashboard as info only.
   const wronglyHidden = Number(metrics.marketplaceWronglyHidden || 0);
   if (wronglyHidden > Number(thresholds.marketplaceWronglyHidden || 0)) {
-    alerts.push({ key: "marketplace_wrongly_hidden", message: `⚠️ Скрытые продаваемые: за последний цикл сверки ${wronglyHidden} товаров были у нас «нет в наличии/архив», а на Ozon/Yandex продаются (порог ${thresholds.marketplaceWronglyHidden}). Возможна потеря продаж.` });
+    // Значение метрики меняется только по завершении цикла сверки (цикл идёт часами),
+    // поэтому ключ включает метку цикла, а once не даёт переспамить тот же цикл после
+    // истечения cooldown — одно сообщение на один завершённый цикл.
+    alerts.push({ key: `marketplace_wrongly_hidden:${metrics.marketplaceWronglyHiddenCycleAt || ""}`, once: true, message: `⚠️ Скрытые продаваемые: за последний цикл сверки ${wronglyHidden} товаров были у нас «нет в наличии/архив», а на Ozon/Yandex продаются (порог ${thresholds.marketplaceWronglyHidden}). Возможна потеря продаж.` });
   }
   const errorSpikes = Array.isArray(metrics.errorSpikes) ? metrics.errorSpikes : [];
   for (const spike of errorSpikes) {
@@ -119,7 +122,8 @@ async function runHealthAlertCheck({ source = "schedule" } = {}) {
     const staleSweeps = (sweeps || []).filter((s) => s.stale).map((s) => s.name);
     const marketplaceStateMismatches = Number(reconcilerState?.lastCycleStateMismatches || 0);
     const marketplaceWronglyHidden = Number(reconcilerState?.lastCycleWronglyHidden || 0);
-    const metrics = { stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, staleSweeps, marketplaceStateMismatches, marketplaceWronglyHidden, errorSpikes };
+    const marketplaceWronglyHiddenCycleAt = cleanText(reconcilerState?.lastCycleMismatchAt) || null;
+    const metrics = { stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, staleSweeps, marketplaceStateMismatches, marketplaceWronglyHidden, marketplaceWronglyHiddenCycleAt, errorSpikes };
     const thresholds = {
       stalePriceLinked: stalePriceLinkedAlertThreshold,
       staleHours: stalePriceLinkedHours,
@@ -136,6 +140,7 @@ async function runHealthAlertCheck({ source = "schedule" } = {}) {
       const nowMs = Date.now();
       for (const alert of alerts) {
         const last = healthAlertLastSentAt.get(alert.key) || 0;
+        if (alert.once && last) continue;
         if (nowMs - last < healthAlertCooldownMs) continue;
         const ok = await sendHealthAlertTelegram(`DavidSklad · мониторинг\n${alert.message}`);
         if (ok) { healthAlertLastSentAt.set(alert.key, nowMs); sent += 1; }

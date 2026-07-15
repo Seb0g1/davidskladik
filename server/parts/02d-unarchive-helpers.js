@@ -1,3 +1,29 @@
+// Квота-проба: локальный суточный счётчик может опережать реальный счётчик Ozon
+// (повторные unarchive уже активных товаров, ложные срабатывания «лимита» на
+// generic-ошибках) — день заканчивался на 80–90 реальных разархивациях при
+// локальных 100. Когда локальная квота исчерпана, а due-товары остались,
+// периодически шлём малый батч в обход локального гейта: настоящий ответ Ozon —
+// единственный надёжный сигнал. Отказ Ozon (daily limit) откладывает всё на
+// завтра штатной веткой и выключает пробы до конца суток.
+const ozonUnarchiveQuotaProbeLimit = Math.max(1, Math.min(50, Number(process.env.OZON_UNARCHIVE_QUOTA_PROBE_LIMIT || 10) || 10));
+const ozonUnarchiveQuotaProbeIntervalMs = Math.max(5 * 60_000, Number(process.env.OZON_UNARCHIVE_QUOTA_PROBE_INTERVAL_MINUTES || 45) * 60_000 || 45 * 60_000);
+const ozonUnarchiveQuotaProbeState = new Map(); // target -> { dateKey, lastProbeAt, rejected }
+
+function ozonUnarchiveQuotaProbeAllowed(target) {
+  const dateKey = ozonUnarchiveDateKey();
+  const state = ozonUnarchiveQuotaProbeState.get(target);
+  if (!state || state.dateKey !== dateKey) return true;
+  if (state.rejected) return false;
+  return Date.now() - (state.lastProbeAt || 0) >= ozonUnarchiveQuotaProbeIntervalMs;
+}
+
+function markOzonUnarchiveQuotaProbe(target, patch = {}) {
+  const dateKey = ozonUnarchiveDateKey();
+  const state = ozonUnarchiveQuotaProbeState.get(target);
+  const base = state && state.dateKey === dateKey ? state : { dateKey, lastProbeAt: 0, rejected: false };
+  ozonUnarchiveQuotaProbeState.set(target, { ...base, ...patch, dateKey });
+}
+
 async function resolveOzonUnarchiveQueueProducts(dueItems = []) {
   const items = Array.isArray(dueItems) ? dueItems : [];
   const directIds = Array.from(new Set(items
@@ -142,9 +168,32 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
         : Math.max(0, Number(item.availableToday) || 0);
       availableByTarget.set(target, available);
     }
-    const totalAvailable = Array.from(availableByTarget.values())
+    let totalAvailable = Array.from(availableByTarget.values())
       .reduce((sum, available) => sum + Math.min(normalizedLimit, available), 0);
-    const effectiveLimit = Math.min(normalizedLimit, totalAvailable);
+    // Локальная квота исчерпана, но due-товары остались — квота-проба: малый батч
+    // в обход локального гейта, реальный ответ Ozon решает. Активируется только
+    // когда исчерпаны ВСЕ targets, чтобы force-обход не пересылал лишнее по
+    // target'у, у которого квота ещё есть.
+    let quotaProbe = false;
+    const quotaProbeTargets = new Set();
+    if (!force && totalAvailable === 0) {
+      const dueTargets = new Set((publicQueue.items || [])
+        .filter((item) => item.due)
+        .map((item) => cleanText(item.target) || "default"));
+      for (const [target, available] of availableByTarget.entries()) {
+        if (available > 0 || !dueTargets.has(target)) continue;
+        if (!ozonUnarchiveQuotaProbeAllowed(target)) continue;
+        availableByTarget.set(target, ozonUnarchiveQuotaProbeLimit);
+        markOzonUnarchiveQuotaProbe(target, { lastProbeAt: Date.now() });
+        quotaProbeTargets.add(target);
+        quotaProbe = true;
+      }
+      if (quotaProbe) {
+        totalAvailable = Array.from(availableByTarget.values())
+          .reduce((sum, available) => sum + Math.min(normalizedLimit, available), 0);
+      }
+    }
+    const effectiveLimit = Math.min(normalizedLimit, totalAvailable, quotaProbe ? ozonUnarchiveQuotaProbeLimit : Infinity);
     // Over-select candidates (1.5× + 20 buffer) to ensure we still get effectiveLimit resolved
     // items even when some queue entries are ghosts (deleted warehouse products) or need UUID
     // rewrite (offerId changed). After resolution we trim back to effectiveLimit.
@@ -173,7 +222,22 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
     }
     if (!force && quotaExhaustedItems.length) {
       try {
-        const deferRetryAt = nextOzonUnarchiveRetryAt();
+        // Пока Ozon сам не подтвердил исчерпание суточного лимита, откладываем не на
+        // завтра, а до следующего окна квота-пробы: локальный счётчик может опережать
+        // реальный, и без due-товаров проба никогда не сработает.
+        const todayKey = ozonUnarchiveDateKey();
+        const probeStillPossible = Array.from(new Set(quotaExhaustedItems
+          .map((item) => cleanText(item.target) || "default")))
+          .some((target) => {
+            const state = ozonUnarchiveQuotaProbeState.get(target);
+            return !(state && state.dateKey === todayKey && state.rejected);
+          });
+        const deferRetryAt = probeStillPossible
+          ? new Date(Math.min(
+            new Date(nextOzonUnarchiveRetryAt()).getTime(),
+            Date.now() + ozonUnarchiveQuotaProbeIntervalMs,
+          )).toISOString()
+          : nextOzonUnarchiveRetryAt();
         let deferQueue = await readOzonUnarchiveQueue();
         deferQueue = queueOzonUnarchiveItems(deferQueue, quotaExhaustedItems, {
           nextRetryAt: deferRetryAt,
@@ -243,8 +307,24 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
       productIds: ids,
       source,
       force,
-      forceOzonDailyLimit: Boolean(force),
+      // Квота-проба обходит локальный гейт умышленно: реальный ответ Ozon решает.
+      forceOzonDailyLimit: Boolean(force) || quotaProbe,
     });
+    if (quotaProbe) {
+      // Ozon отклонил батч по суточному лимиту → пробы выключаются до конца суток
+      // (штатная ветка уже отложила товары на завтра). Принят → квота реально была,
+      // разрешаем следующую пробу сразу — 1-секундный планировщик дочерпает очередь.
+      const probeRejected = Number(result.queuedByDailyLimit || 0) > 0;
+      for (const target of quotaProbeTargets) {
+        markOzonUnarchiveQuotaProbe(target, probeRejected ? { rejected: true } : { lastProbeAt: 0 });
+      }
+      logger.info("ozon_unarchive_quota_probe", {
+        targets: Array.from(quotaProbeTargets),
+        rejected: probeRejected,
+        selected: ids.length,
+        unarchived: Number(result.unarchived || 0),
+      });
+    }
     const freshQueue = ozonUnarchiveQueuePublic(await readOzonUnarchiveQueue(), { limit: 5000 });
     const finishedAt = new Date().toISOString();
     ozonUnarchiveQueueAutoLastResult = {

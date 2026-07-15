@@ -20,6 +20,13 @@ function normalizeAvitoListing(input = {}, current = {}) {
   const priceRub = Number(input.priceRub ?? input.price_rub ?? input.price ?? current.priceRub ?? 0);
   const rawExtra = input.extraFields ?? input.extra_fields ?? current.extraFields;
   const extraFields = rawExtra && typeof rawExtra === "object" && !Array.isArray(rawExtra) ? rawExtra : {};
+  // Остаток для тега <Stock> фида. Авито без этого тега считает количество = 1:
+  // после первой продажи объявление уходит в «нет в наличии» и само не
+  // восстанавливается. null = не выводить тег (ручные объявления без источника).
+  const stockQuantityRaw = input.stockQuantity ?? input.stock_quantity ?? current.stockQuantity;
+  const stockQuantity = stockQuantityRaw === null || stockQuantityRaw === undefined || stockQuantityRaw === ""
+    ? null
+    : Math.max(0, Math.min(999999, Math.round(Number(stockQuantityRaw) || 0)));
   return {
     adId,
     sourceProductId: cleanText(input.sourceProductId ?? input.source_product_id ?? current.sourceProductId),
@@ -47,6 +54,7 @@ function normalizeAvitoListing(input = {}, current = {}) {
     // Актуализируется фоновым рефрешем и живым обогащением фида: товар без
     // остатков или в архиве не попадает в XML (Avito снимет объявление).
     outOfStock: parseBooleanSetting(input.outOfStock ?? input.out_of_stock, current.outOfStock === true),
+    stockQuantity,
     lastSyncedAt: cleanText(input.lastSyncedAt ?? input.last_synced_at ?? current.lastSyncedAt) || null,
     createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),

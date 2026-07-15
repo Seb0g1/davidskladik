@@ -4,6 +4,8 @@
 require("dotenv").config();
 
 const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
 const { execSync } = require("node:child_process");
 
 const failures = [];
@@ -252,7 +254,25 @@ async function main() {
   };
 
   console.log(JSON.stringify(report, null, 2));
+  if (!failures.length) resetAlertCounter();
   if (failures.length) process.exit(1);
+}
+
+// Cron вызывает prod-alert-on-failure.cjs только при фейле, поэтому счётчик
+// consecutiveFailures без этого сброса рос вечно (наблюдалось 3976) и терял смысл.
+function resetAlertCounter() {
+  const alertPath = path.join(__dirname, "..", "data", "last-prod-alert.json");
+  try {
+    const state = JSON.parse(fs.readFileSync(alertPath, "utf8"));
+    if (!state || !Number(state.consecutiveFailures)) return;
+    fs.writeFileSync(alertPath, `${JSON.stringify({
+      ...state,
+      consecutiveFailures: 0,
+      lastSuccessAt: new Date().toISOString(),
+    }, null, 2)}\n`, "utf8");
+  } catch {
+    // нет файла состояния — сбрасывать нечего
+  }
 }
 
 main().catch((error) => {

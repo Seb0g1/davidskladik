@@ -130,7 +130,11 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
           })));
         } catch (error) {
           const detail = error?.message || "unarchive_failed";
-          if (/daily|суточ|лимит|limit|quota|auto.?archive|автоархив/i.test(detail)) {
+          // «rate limit» / 429 / too many requests — троттлинг API, а не суточный лимит
+          // разархивации: слэм локального счётчика до 100 здесь досрочно закрывал день
+          // на 80–90 реальных разархивациях. Такие ошибки идут в обычный ретрай.
+          const looksThrottled = /too.?many.?request|rate.?limit|429/i.test(detail);
+          if (!looksThrottled && /daily|суточ|лимит|limit|quota|auto.?archive|автоархив/i.test(detail)) {
             const nextRetryAt = nextOzonUnarchiveRetryAt();
             const remainingItems = chunks.slice(chunkIndex + 1).flat();
             queueState = queueOzonUnarchiveItems(queueState, chunk, { nextRetryAt, attempted: true, error: detail });

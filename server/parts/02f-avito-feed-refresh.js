@@ -61,7 +61,7 @@ async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
       const { listing, outOfStock } = applyAvitoLiveState(item, liveStates.get(sourceProductId), rules, pricing);
       if (outOfStock) outOfStockCount += 1;
       if (listing.priceRub !== item.priceRub) updatedPrices += 1;
-      if (listing.priceRub !== item.priceRub || outOfStock !== (item.outOfStock === true)) changed = true;
+      if (listing.priceRub !== item.priceRub || outOfStock !== (item.outOfStock === true) || listing.stockQuantity !== item.stockQuantity) changed = true;
       const next = { ...listing, outOfStock, lastSyncedAt: syncedAt };
       // Переклассификация по актуальному справочнику: например, пробники должны
       // уходить с PerfumeryType «Пробники и отливанты» — валидатор Avito

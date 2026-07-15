@@ -3553,7 +3553,10 @@ test("evaluateHealthAlerts only fires for breached thresholds (PLAN-HARDENING.md
   assert.deepEqual(keys({ oldestPriceJobAgeMs: 999999 }), ["price_queue_starved"]);
   assert.deepEqual(keys({ linkedSoldBelowTarget: 5000 }), ["sold_below_target"]);
   assert.ok(keys({ staleSweeps: ["price_sweep"] })[0].startsWith("stale_sweeps:"));
-  assert.deepEqual(keys({ marketplaceWronglyHidden: 21 }), ["marketplace_wrongly_hidden"]);
+  // Ключ включает метку цикла сверки (+once) — одно сообщение на завершённый цикл,
+  // без повторов каждые cooldown по тому же значению.
+  assert.deepEqual(keys({ marketplaceWronglyHidden: 21, marketplaceWronglyHiddenCycleAt: "2026-07-15T00:00:00.000Z" }), ["marketplace_wrongly_hidden:2026-07-15T00:00:00.000Z"]);
+  assert.equal(evaluateHealthAlerts({ marketplaceWronglyHidden: 21 }, thresholds)[0].once, true);
   // The benign churn direction (active -> out_of_stock) is NOT alerted, only wronglyHidden is.
   assert.deepEqual(keys({ marketplaceStateMismatches: 999, marketplaceWronglyHidden: 0 }), []);
   // Error spikes: one alert per breached class, already filtered by readErrorSpikes' HAVING clause
@@ -7237,6 +7240,31 @@ test("Avito per-listing markup coefficient overrides global markup rules", () =>
   // Без поставщика цена не падает на targetPrice — остаётся сохранённая в фиде.
   const noSupplierLive = { ...live, supplier: null };
   assert.equal(applyAvitoLiveState(withMarkup, noSupplierLive, rules, pricing).listing.priceRub, withMarkup.priceRub);
+});
+
+test("Avito feed restores <Stock> to default while supplier gives a price (продажа на Avito не обнуляет остаток навсегда)", () => {
+  const { normalizeAvitoListing, applyAvitoLiveState, normalizeAvitoImportRules, buildAvitoAdXml } = require("../server.js");
+  const rules = normalizeAvitoImportRules({});
+  const pricing = { usdRate: 82, appSettings: { defaultMarkups: { avito: 1.6 } } };
+  const listing = normalizeAvitoListing({
+    adId: "oz-1", sourceProductId: "p1", title: "Jacomo Aura for women 75 мл", priceRub: 4592,
+    imageUrls: ["https://img.example/1.jpg"],
+  });
+  // Поставщик даёт цену → остаток восстанавливается до дефолта (5), даже если
+  // targetStock в БД уже 0 после продажи.
+  const live = { id: "p1", targetPrice: 0, targetStock: 0, archived: false, supplier: { price: 35, priceCurrency: "USD" } };
+  const withSupplier = applyAvitoLiveState(listing, live, rules, pricing);
+  assert.equal(withSupplier.outOfStock, false);
+  assert.equal(withSupplier.listing.stockQuantity, 5);
+  // Тег <Stock> попадает в XML объявления.
+  assert.ok(buildAvitoAdXml(withSupplier.listing, rules.feedDefaults).includes("<Stock>5</Stock>"));
+  // Нет поставщика и сохранён outOfStock → остаток 0.
+  const gone = applyAvitoLiveState({ ...listing, outOfStock: true }, { ...live, supplier: null }, rules, pricing);
+  assert.equal(gone.outOfStock, true);
+  assert.equal(gone.listing.stockQuantity, 0);
+  // stockQuantity переживает нормализацию файла листингов.
+  assert.equal(normalizeAvitoListing({ ...withSupplier.listing }).stockQuantity, 5);
+  assert.equal(normalizeAvitoListing({ adId: "manual-1", title: "Ручное" }).stockQuantity, null);
 });
 
 test("Avito listings dedupe keeps one ad per source product and extracts Ozon info images", () => {

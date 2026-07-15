@@ -31,7 +31,15 @@ async function readSnapshot() {
     priceMasterSnapshotMemoryCache = JSON.parse(await fs.readFile(snapshotPath, "utf8"));
     return priceMasterSnapshotMemoryCache;
   } catch (error) {
-    if (error.code === "ENOENT") {
+    if (error.code === "ENOENT" || error instanceof SyntaxError) {
+      // Битый снапшот (процесс убит на середине 77-МБ записи до перехода на
+      // атомарный write) валил daily sync каждый день: «Unterminated string in
+      // JSON». Карантиним файл и начинаем с пустого — следующий синк PriceMaster
+      // пересоберёт его из MySQL.
+      if (error instanceof SyntaxError) {
+        logger.warn("price master snapshot corrupted, quarantining", { detail: error.message });
+        await fs.rename(snapshotPath, `${snapshotPath}.corrupt`).catch(() => {});
+      }
       priceMasterSnapshotMemoryCache = { createdAt: null, items: {}, changes: [] };
       return priceMasterSnapshotMemoryCache;
     }
@@ -41,7 +49,16 @@ async function readSnapshot() {
 
 async function writeSnapshot(snapshot) {
   await fs.mkdir(dataDir, { recursive: true });
-  await fs.writeFile(snapshotPath, JSON.stringify(snapshot, null, 2), "utf8");
+  // Атомарно: tmp + rename — обрыв процесса на середине записи (~77 МБ) не
+  // оставляет усечённый snapshot.json (см. паттерн writeOzonUnarchiveDailyState).
+  const tmpPath = `${snapshotPath}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(snapshot, null, 2), "utf8");
+  try {
+    await fs.rename(tmpPath, snapshotPath);
+  } catch (renameError) {
+    if (renameError?.code !== "ENOENT") throw renameError;
+    await fs.unlink(tmpPath).catch(() => {});
+  }
   priceMasterSnapshotMemoryCache = snapshot;
   priceMasterArticleIndexCache = null;
   priceMasterSnapshotIndexCache = null;

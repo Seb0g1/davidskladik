@@ -1,6 +1,11 @@
 // Построение XML-фида Avito Автозагрузки (Ads formatVersion 3).
 // Авито скачивает фид по публичной ссылке из настроек профиля автозагрузки.
 
+// Целевой остаток для тега <Stock>. Без тега Авито считает количество = 1 и после
+// первой продажи остаток остаётся 0 навсегда; с тегом каждая автозагрузка
+// восстанавливает остаток до целевого значения, пока поставщик даёт цену.
+const avitoFeedDefaultStock = Math.max(1, Math.min(999999, Number(process.env.AVITO_DEFAULT_STOCK || 5) || 5));
+
 function escapeAvitoXml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -64,6 +69,9 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
   }
   emit("Address", listing.address || feedDefaults.address);
   emit("Brand", listing.brand);
+  if (listing.stockQuantity !== null && listing.stockQuantity !== undefined && Number.isFinite(Number(listing.stockQuantity))) {
+    emit("Stock", String(Math.max(0, Math.round(Number(listing.stockQuantity)))));
+  }
   if (listing.imageUrls.length) {
     xml += "    <Images>\n";
     for (const url of listing.imageUrls) {
@@ -131,18 +139,32 @@ async function loadAvitoLiveProductStates(listings) {
 //    живой запрос в PriceMaster и сохраняет актуальное значение)
 function applyAvitoLiveState(listing, product, rules, pricing = {}) {
   if (!listing.sourceProductId) return { listing, outOfStock: false };
-  if (!product) return { listing, outOfStock: true };
+  if (!product) return { listing: { ...listing, stockQuantity: 0 }, outOfStock: true };
+  // Остаток для <Stock>: поставщик с ценой → целевой (5) — продажа на Avito не
+  // уменьшает физический склад, автозагрузка восстанавливает количество; без
+  // поставщика — остаток склада, «нет в наличии» → 0.
+  const listingStock = (outOfStock, targetStock, hasSupplier) => {
+    if (outOfStock) return 0;
+    if (hasSupplier) return Math.max(avitoFeedDefaultStock, Math.round(Number(targetStock || 0)) || 0);
+    return Math.max(1, Math.round(Number(targetStock || 0)) || 0, Number(listing.stockQuantity || 0) || 0);
+  };
+  const withStock = (base, outOfStock, hasSupplier) => {
+    const stockQuantity = listingStock(outOfStock, product.targetStock, hasSupplier);
+    return stockQuantity === base.stockQuantity ? base : { ...base, stockQuantity };
+  };
   if (!product.supplier) {
-    return { listing, outOfStock: listing.outOfStock === true };
+    const outOfStock = listing.outOfStock === true;
+    return { listing: withStock(listing, outOfStock, false), outOfStock };
   }
   const hasSupplierPrice = computeAvitoSupplierPriceRub(product.supplier, pricing) > 0;
   const outOfStock = hasSupplierPrice
     ? false
     : (Boolean(product.archived) || Number(product.targetStock || 0) <= 0);
-  if (!rules.autoUpdatePrices) return { listing, outOfStock };
+  if (!rules.autoUpdatePrices) return { listing: withStock(listing, outOfStock, hasSupplierPrice), outOfStock };
   const markupOverride = Number(listing.markupCoefficient) > 0 ? Number(listing.markupCoefficient) : 0;
   const priceRub = resolveAvitoListingPriceRub(product, product.supplier, rules, pricing, markupOverride) || listing.priceRub;
-  return { listing: priceRub === listing.priceRub ? listing : { ...listing, priceRub }, outOfStock };
+  const nextListing = priceRub === listing.priceRub ? listing : { ...listing, priceRub };
+  return { listing: withStock(nextListing, outOfStock, hasSupplierPrice), outOfStock };
 }
 
 async function buildAvitoFeedXml() {
