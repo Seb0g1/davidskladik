@@ -77,6 +77,11 @@ const workerOnlyEnv = {
   MARKETPLACE_MAINTENANCE_MIN_UPTIME_SEC: "900",
   MARKETPLACE_MAINTENANCE_INITIAL_DELAY_MS: "900000",
   MARKETPLACE_MAINTENANCE_DEFER_RETRY_MS: "1800000",
+  // Полная цепочка «новый товар Ozon → Yandex/Avito» не должна превышать ~3 ч:
+  // discovery новых офферов Ozon — каждый час (дефолт), дальше импорт на Яндекс
+  // и синк фида Avito каждые 3 часа вместо дефолтных 6/4.
+  OZON_YANDEX_AUTO_IMPORT_INTERVAL_HOURS: "3",
+  AVITO_AUTO_SYNC_HOURS: "3",
   OZON_PRICE_BATCH_SIZE: "500",
   OZON_PRICE_BATCH_DELAY_MS: "300",
 };
