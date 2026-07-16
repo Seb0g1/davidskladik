@@ -83,21 +83,67 @@ async function stepApply(account, evaluated, limit) {
     withoutBarcode.forEach((listing, index) => { listing.barcode = generated[index] || ""; });
   }
   const ready = candidates.filter((listing) => listing.barcode);
+  // Лимитер WB на cards/upload — тот же Token Bucket, что у media/save: залп
+  // без пауз (прогон 16.07: 20 чанков подряд) сжигает burst, дальше сплошные
+  // 429 и штраф не остывает, пока запросы продолжаются. Поэтому базовая пауза
+  // между чанками + на 429 ждём X-Ratelimit-Retry и повторяем ТОТ ЖЕ чанк.
+  const pauseMs = Math.max(1000, Number(process.env.WB_UPLOAD_PAUSE_MS || 6000) || 6000);
+  const chunks = server.chunkArray(ready, 50);
   let uploaded = 0;
+  let aborted = false;
   const errors = [];
-  for (const chunk of server.chunkArray(ready, 50)) {
-    try {
-      await server.wbCardsUpload(account, chunk.map((listing) => server.buildWbCardPayload(listing, tnvedCharc)));
-      uploaded += chunk.length;
-      console.log(`uploaded chunk: +${chunk.length} (total ${uploaded})`);
-    } catch (error) {
-      errors.push({ vendorCodes: chunk.map((listing) => listing.vendorCode).slice(0, 5), error: error?.message || String(error) });
+  for (let index = 0; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+    let done = false;
+    for (let attempt = 1; attempt <= 5 && !done; attempt += 1) {
+      try {
+        await server.wbCardsUpload(account, chunk.map((listing) => server.buildWbCardPayload(listing, tnvedCharc)));
+        uploaded += chunk.length;
+        done = true;
+        console.log(`uploaded chunk ${index + 1}/${chunks.length}: +${chunk.length} (total ${uploaded})`);
+      } catch (error) {
+        const statusCode = Number(error?.statusCode) || 0;
+        const retrySec = Number(error?.retryAfterSec) || 0;
+        if (statusCode === 429 && attempt < 5) {
+          // Ждём, сколько просит лимитер (не меньше 2 мин — остывание), и
+          // повторяем чанк: карточки не теряем.
+          const waitMs = Math.min(900000, Math.max(retrySec * 1000 + 1000, 120000));
+          state.steps.push({ step: "apply-progress", at: new Date().toISOString(), chunk: index + 1, of: chunks.length, uploaded, waiting429Sec: Math.round(waitMs / 1000), retrySec });
+          saveState();
+          await sleep(waitMs);
+          continue;
+        }
+        errors.push({
+          vendorCodes: chunk.map((listing) => listing.vendorCode).slice(0, 5),
+          statusCode,
+          retrySec,
+          error: error?.message || String(error),
+          wb: error?.wb,
+        });
+        done = true;
+        // Чанк не прошёл даже после долгих ожиданий 429 — лимитер не остывает,
+        // дальнейшие чанки только продлят штраф. Остаток дошлёт следующий запуск.
+        if (statusCode === 429) {
+          aborted = true;
+        }
+      }
     }
+    if (aborted) {
+      state.steps.push({ step: "apply-aborted", at: new Date().toISOString(), reason: "429 не остывает после 5 попыток", uploadedSoFar: uploaded, remainingChunks: chunks.length - index - 1 });
+      saveState();
+      break;
+    }
+    if ((index + 1) % 10 === 0) {
+      state.steps.push({ step: "apply-progress", at: new Date().toISOString(), chunk: index + 1, of: chunks.length, uploaded, errors: errors.length });
+      saveState();
+    }
+    if (index + 1 < chunks.length) await sleep(pauseMs);
   }
   recordStep("apply", {
     candidates: candidates.length,
     alreadyOnWb: existingVendorCodes.size,
     uploaded,
+    aborted,
     tnved: tnvedCharc ? tnvedCharc.code : null,
     skippedNoBarcode: candidates.length - ready.length,
     errors: errors.slice(0, 20),

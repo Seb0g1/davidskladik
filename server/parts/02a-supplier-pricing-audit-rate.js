@@ -173,7 +173,9 @@ function summarizeApiErrorPayload(data = {}, fallback = "API error") {
       return;
     }
     push(value.message);
-    push(value.error);
+    push(value.errorText);
+    // WB шлёт { error: true, errorText: "..." } — булев флаг в тексте бесполезен.
+    if (typeof value.error !== "boolean") push(value.error);
     push(value.code);
     push(value.field);
     push(value.sku || value.offerId || value.offer_id);
