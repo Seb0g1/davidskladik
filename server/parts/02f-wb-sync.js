@@ -54,6 +54,25 @@ async function runWbMarketplaceSync({ source = "auto" } = {}) {
     const pricesResult = priceItems.length ? await wbSetPrices(account, priceItems) : { ok: true, sent: 0, tasks: [] };
     const stocksResult = stocks.length ? await wbUpdateStocks(account, warehouseId, stocks) : { ok: true, sent: 0 };
 
+    // Дозабор описаний с Ozon: разовый enrich берёт максимум ~300 описаний
+    // (лимит Ozon product/info), на ~10k карточек нужен не один прогон —
+    // каждый тик синка добирает следующую порцию, пока не останется нечего.
+    let enrichSummary = null;
+    const enrichDescriptionsBudget = Math.max(0, Math.min(1000, Number(process.env.WB_SYNC_ENRICH_DESCRIPTIONS ?? 300) || 0));
+    if (enrichDescriptionsBudget > 0) {
+      try {
+        const enrichResult = await enrichWbCards(account, { fetchDescriptions: enrichDescriptionsBudget });
+        enrichSummary = {
+          updated: enrichResult.updated,
+          descriptionsFetched: enrichResult.descriptionsFetched,
+          alreadyComplete: enrichResult.alreadyComplete,
+        };
+      } catch (error) {
+        enrichSummary = { error: error?.message || String(error) };
+        logger.warn("wb sync enrich failed", { detail: enrichSummary.error });
+      }
+    }
+
     const result = {
       status: "ok",
       source,
@@ -67,6 +86,7 @@ async function runWbMarketplaceSync({ source = "auto" } = {}) {
       minSupplierPriceRub: rules.minSupplierPriceRub,
       tasks: pricesResult.tasks || [],
       stocksSent: stocksResult.sent,
+      enrich: enrichSummary,
       elapsedMs: Date.now() - startedAt,
       at: new Date().toISOString(),
     };

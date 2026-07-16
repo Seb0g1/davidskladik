@@ -46,11 +46,34 @@ async function runWbMediaBackfill({ limit = wbMediaBackfillPerRunLimit, source =
       return { status: "ok", remaining: 0, sent: 0 };
     }
 
+    // Квота ~1 фото/15 мин на ~10k карточек: фото в первую очередь товарам,
+    // которые реально в продаже (sellable), остальные — когда очередь дойдёт.
+    let ordered = withoutPhoto;
+    try {
+      const rules = await readWbImportRules();
+      const pricing = await loadAvitoPricingContext();
+      const linked = await loadWbLinkedOzonProducts(withoutPhoto.map((card) => card.vendorCode));
+      const sellableNmIds = new Set();
+      for (const card of withoutPhoto) {
+        const product = linked.get(cleanText(card.vendorCode).toLowerCase());
+        if (!product) continue;
+        const purchaseRub = wbSupplierPurchaseRub(product.supplier, pricing);
+        const priceRub = purchaseRub > 0 ? wbSupplierPriceRub(product.supplier, pricing) : 0;
+        if (wbCardSellable({ product, purchaseRub, priceRub, rules })) sellableNmIds.add(card.nmID);
+      }
+      ordered = [
+        ...withoutPhoto.filter((card) => sellableNmIds.has(card.nmID)),
+        ...withoutPhoto.filter((card) => !sellableNmIds.has(card.nmID)),
+      ];
+    } catch (error) {
+      logger.warn("wb media backfill prioritize failed", { detail: error?.message || String(error) });
+    }
+
     let sent = 0;
     let skippedNoImages = 0;
     let throttled = false;
     const errors = [];
-    for (const card of withoutPhoto) {
+    for (const card of ordered) {
       if (sent >= limit || errors.length >= 5) break;
       let imageUrls = [];
       try {
