@@ -1636,7 +1636,9 @@ type WbProductStatus = {
   purchaseRub?: number;
   priceRub?: number;
   minSupplierPriceRub?: number;
+  maxWbPriceRub?: number;
   belowMin?: boolean;
+  aboveMax?: boolean;
   sellable?: boolean;
   stock?: number;
   reasons?: string[];
@@ -1647,6 +1649,7 @@ const WB_SKIP_LABELS: Record<string, string> = {
   no_images: "нет фото",
   no_price: "нет цены поставщика",
   price_below_min: "закупка ниже порога",
+  price_above_max: "цена выше лимита WB",
   title_word: "стоп-слово в названии",
   no_title: "нет названия",
   no_subject: "не выбран предмет WB",
@@ -1658,7 +1661,7 @@ const WB_SKIP_LABELS: Record<string, string> = {
 function wbSkipLabel(reason: string): string {
   const [key, detail] = reason.split(":");
   const label = WB_SKIP_LABELS[key] || key;
-  if (key === "price_below_min" && detail) return `${label} (${money(Number(detail))})`;
+  if ((key === "price_below_min" || key === "price_above_max") && detail) return `${label} (${money(Number(detail))})`;
   if (key === "title_word" && detail) return `${label}: ${detail}`;
   return label;
 }
@@ -1703,7 +1706,7 @@ function WbRows({ products, groupLinkCount = 0 }: { products: Product[]; groupLi
           </div>
           {item.onWb ? (
             <span className={`pill ${item.sellable ? "success" : "warning"}`}>
-              {item.sellable ? "Активен WB" : item.belowMin ? "Карточка есть · ниже порога" : "Карточка на WB"}
+              {item.sellable ? "Активен WB" : item.aboveMax ? "Карточка есть · дороже лимита" : item.belowMin ? "Карточка есть · ниже порога" : "Карточка на WB"}
             </span>
           ) : (
             <span className="pill warning">Не на WB</span>
@@ -1722,9 +1725,11 @@ function WbRows({ products, groupLinkCount = 0 }: { products: Product[]; groupLi
             <strong>{groupLinkCount}</strong>
           </div>
           <div className="marketplace-flags">
+            {item.maxWbPriceRub ? <span className="formula-chip muted">Лимит цены WB: {money(item.maxWbPriceRub)}</span> : null}
             {item.minSupplierPriceRub ? <span className="formula-chip muted">Порог закупки: {money(item.minSupplierPriceRub)}</span> : null}
             {item.onWb ? <span className={`formula-chip ${item.hasPhotos ? "muted" : ""}`}>{item.hasPhotos ? "фото загружены" : "фото нет (досылаются)"}</span> : null}
             {(item.reasons || []).map((reason) => <span className="formula-chip" key={reason}>{wbSkipLabel(reason)}</span>)}
+            {item.onWb && item.aboveMax ? <span className="formula-chip">остаток обнуляется синком — цена выше лимита WB</span> : null}
             {item.onWb && item.belowMin ? <span className="formula-chip">остаток обнуляется синком — закупка ниже порога</span> : null}
           </div>
         </div>

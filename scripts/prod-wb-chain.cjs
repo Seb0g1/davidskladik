@@ -221,6 +221,7 @@ async function stepPrices(account) {
   const linked = await server.loadWbLinkedOzonProducts(cards.map((card) => card.vendorCode));
   const items = [];
   let skippedBelowMin = 0;
+  let skippedAboveMax = 0;
   let skippedNoSupplier = 0;
   let skippedNotLinked = 0;
   for (const card of cards) {
@@ -228,8 +229,9 @@ async function stepPrices(account) {
     if (!product) { skippedNotLinked += 1; continue; }
     const purchaseRub = server.wbSupplierPurchaseRub(product.supplier, pricing);
     if (!(purchaseRub > 0)) { skippedNoSupplier += 1; continue; }
-    if (purchaseRub < rules.minSupplierPriceRub) { skippedBelowMin += 1; continue; }
+    if (rules.minSupplierPriceRub > 0 && purchaseRub < rules.minSupplierPriceRub) { skippedBelowMin += 1; continue; }
     const priceRub = server.wbSupplierPriceRub(product.supplier, pricing);
+    if (rules.maxWbPriceRub > 0 && priceRub > rules.maxWbPriceRub) { skippedAboveMax += 1; continue; }
     if (priceRub > 0) items.push({ nmID: card.nmID, price: priceRub, discount: 0 });
   }
   const result = items.length ? await server.wbSetPrices(account, items) : { ok: true, tasks: [] };
@@ -238,9 +240,11 @@ async function stepPrices(account) {
     cards: cards.length,
     prepared: items.length,
     skippedBelowMin,
+    skippedAboveMax,
     skippedNoSupplier,
     skippedNotLinked,
     minSupplierPriceRub: rules.minSupplierPriceRub,
+    maxWbPriceRub: rules.maxWbPriceRub,
     tasks: result.tasks || [],
   });
 }
@@ -261,7 +265,8 @@ async function stepStocks(account, warehouseId) {
     const product = linked.get(clean(card.vendorCode).toLowerCase());
     if (!product) { skippedManual += 1; continue; } // ручные карточки не трогаем
     const purchaseRub = server.wbSupplierPurchaseRub(product.supplier, pricing);
-    const sellable = !product.archived && purchaseRub >= rules.minSupplierPriceRub;
+    const priceRub = purchaseRub > 0 ? server.wbSupplierPriceRub(product.supplier, pricing) : 0;
+    const sellable = server.wbCardSellable({ product, purchaseRub, priceRub, rules });
     const amount = sellable ? rules.defaultStock : 0;
     if (sellable) inStock += 1; else zeroed += 1;
     for (const sku of skus) stocks.push({ sku, amount });
@@ -277,6 +282,7 @@ async function stepStocks(account, warehouseId) {
     sent: result.sent,
     defaultStock: rules.defaultStock,
     minSupplierPriceRub: rules.minSupplierPriceRub,
+    maxWbPriceRub: rules.maxWbPriceRub,
   });
 }
 
@@ -308,9 +314,11 @@ async function main() {
     } catch (error) {
       recordStep("enrich", { statusCode: error?.statusCode, error: error?.message || String(error) });
     }
-    await stepMedia(account, 20000);
     await stepPrices(account);
     await stepStocks(account, defaultWarehouseId);
+    // Фото — последними: квота WB media/save крошечная, шаг может идти часами
+    // (основную догрузку ведёт фоновый шедулер wb-media-backfill на worker).
+    await stepMedia(account, 20000);
   } else if (mode === "preview") {
     await stepPreview();
   } else if (mode === "apply") {

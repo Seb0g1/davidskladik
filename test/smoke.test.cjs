@@ -7303,16 +7303,21 @@ test("Avito feed XML hides duplicates and listings without images", async () => 
   assert.ok(!xml.includes("<Images>"));
 });
 
-test("WB import blocks supplier purchase below 15000 RUB and prices survivors by WB markup", () => {
+test("WB import blocks final price above 20000 RUB and prices survivors by WB markup", () => {
   const {
     evaluateWbImportCandidate,
     buildWbCardPayload,
     WB_MIN_SUPPLIER_PRICE_RUB,
+    WB_MAX_PRICE_RUB,
+    wbCardSellable,
     normalizeWbImportRules,
   } = require("../server.js");
-  assert.equal(WB_MIN_SUPPLIER_PRICE_RUB, 15000);
+  assert.equal(WB_MIN_SUPPLIER_PRICE_RUB, 0);
+  assert.equal(WB_MAX_PRICE_RUB, 20000);
 
   const rules = normalizeWbImportRules({ subjectId: 105, subjectName: "Духи" });
+  assert.equal(rules.minSupplierPriceRub, 0);
+  assert.equal(rules.maxWbPriceRub, 20000);
   const pricing = {
     usdRate: 100,
     appSettings: { defaultMarkups: { wb: 1.5 }, markupRules: [] },
@@ -7329,26 +7334,32 @@ test("WB import blocks supplier purchase below 15000 RUB and prices survivors by
   });
   const supplierMap = (id, usd) => new Map([[id, usd === null ? null : { price: usd, available: true }]]);
 
-  // Закупка 160 $ × 100 = 16 000 ₽ ≥ 15 000 → проходит, цена 16 000 × 1.5 = 24 000.
-  const rich = evaluateWbImportCandidate(product("p1"), rules, { ...pricing, supplierByProductId: supplierMap("p1", 160) });
+  // Закупка 100 $ × 100 = 10 000 ₽ → цена 10 000 × 1.5 = 15 000 ≤ 20 000 — проходит.
+  const rich = evaluateWbImportCandidate(product("p1"), rules, { ...pricing, supplierByProductId: supplierMap("p1", 100) });
   assert.equal(rich.ok, true);
-  assert.equal(rich.listing.purchaseRub, 16000);
-  assert.equal(rich.listing.priceRub, 24000);
+  assert.equal(rich.listing.purchaseRub, 10000);
+  assert.equal(rich.listing.priceRub, 15000);
 
-  // Ровно 15 000 ₽ — допускается («итоговая цена поставщика от 15 000»).
-  const edge = evaluateWbImportCandidate(product("p2"), rules, { ...pricing, supplierByProductId: supplierMap("p2", 150) });
+  // Цена ровно 20 000 ₽ — допускается («только товары до 20 000»).
+  const edge = evaluateWbImportCandidate(product("p2"), rules, { ...pricing, supplierByProductId: supplierMap("p2", 133.33) });
   assert.equal(edge.ok, true);
-  assert.equal(edge.listing.purchaseRub, 15000);
+  assert.equal(edge.listing.priceRub, 20000);
 
-  // 14 999 ₽ — блок price_below_min.
-  const cheap = evaluateWbImportCandidate(product("p3"), rules, { ...pricing, supplierByProductId: supplierMap("p3", 149.99) });
-  assert.equal(cheap.ok, false);
-  assert.ok(cheap.reasons.some((reason) => reason.startsWith("price_below_min")));
+  // Цена 24 000 ₽ (закупка 160 $) — блок price_above_max: дорогие товары
+  // снимаются с WB, в т.ч. при будущем повышении коэффициента наценки.
+  const expensive = evaluateWbImportCandidate(product("p3"), rules, { ...pricing, supplierByProductId: supplierMap("p3", 160) });
+  assert.equal(expensive.ok, false);
+  assert.ok(expensive.reasons.some((reason) => reason.startsWith("price_above_max")));
 
   // Без поставщика — no_price, на WB не загружается.
   const noSupplier = evaluateWbImportCandidate(product("p4"), rules, { ...pricing, supplierByProductId: supplierMap("p4", null) });
   assert.equal(noSupplier.ok, false);
   assert.ok(noSupplier.reasons.includes("no_price"));
+
+  // Единая проверка sellable: выше лимита — остаток обнуляется, в лимите — продаётся.
+  assert.equal(wbCardSellable({ product: { archived: false }, purchaseRub: 16000, priceRub: 24000, rules }), false);
+  assert.equal(wbCardSellable({ product: { archived: false }, purchaseRub: 10000, priceRub: 15000, rules }), true);
+  assert.equal(wbCardSellable({ product: { archived: true }, purchaseRub: 10000, priceRub: 15000, rules }), false);
 
   // Payload карточки WB: предмет, артикул, размер со штрихкодом, габариты.
   const payload = buildWbCardPayload(rich.listing);

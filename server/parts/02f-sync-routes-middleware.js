@@ -310,6 +310,13 @@ function startBackgroundSchedulers() {
       nextRunAt: wbMediaBackfillNextRunAt,
     });
   }
+  if (wbSyncEnabled) {
+    scheduleWbSync(20 * 60 * 1000);
+    logger.info("wb sync scheduler enabled", {
+      everyHours: wbSyncIntervalHours,
+      nextRunAt: wbSyncNextRunAt,
+    });
+  }
   if (ozonNewOfferDiscoveryEnabled) {
     // Short initial delay on purpose: the worker restarts often enough that a long
     // first delay would keep pushing the run past the next restart.

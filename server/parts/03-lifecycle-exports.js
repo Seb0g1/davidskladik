@@ -310,6 +310,8 @@ module.exports = {
   buildAvitoAdXml,
   renderAvitoStockCsv,
   WB_MIN_SUPPLIER_PRICE_RUB,
+  WB_MAX_PRICE_RUB,
+  wbCardSellable,
   normalizeWbImportRules,
   evaluateWbImportCandidate,
   buildWbCardPayload,

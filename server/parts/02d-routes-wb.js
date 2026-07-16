@@ -1,7 +1,7 @@
 // API-роуты Wildberries: проверка кабинета, справочник предметов, правила и
 // импорт Ozon → WB, карточки, фото, цены и остатки FBS.
-// Бизнес-правило: закупка поставщика ниже minSupplierPriceRub (деф. 15 000 ₽) —
-// товар не загружается, цена не шлётся, остаток обнуляется.
+// Бизнес-правило: итоговая цена WB (закупка × наценка) выше maxWbPriceRub
+// (деф. 20 000 ₽) — товар не загружается, цена не шлётся, остаток обнуляется.
 
 function resolveWbAccountOr404(request, response) {
   const account = getWbAccountByTarget(cleanText(request.query.target || request.body?.target || "wb"));
@@ -137,7 +137,7 @@ app.put("/api/wb/import/rules", requireAdmin, async (request, response, next) =>
 
 // --- Импорт Ozon → WB ---
 
-// Предпросмотр: сколько товаров пройдёт порог закупки 15 000 ₽ и почему
+// Предпросмотр: сколько товаров впишется в лимит цены WB и почему
 // остальные отсеяны. Правила можно передать в body без сохранения.
 app.post("/api/wb/import/preview", async (request, response, next) => {
   try {
@@ -147,6 +147,7 @@ app.post("/api/wb/import/preview", async (request, response, next) => {
     response.json({
       total,
       minSupplierPriceRub: effectiveRules.minSupplierPriceRub,
+      maxWbPriceRub: effectiveRules.maxWbPriceRub,
       subjectId: effectiveRules.subjectId,
       subjectName: effectiveRules.subjectName,
       ...summary,
@@ -332,9 +333,9 @@ app.post("/api/wb/media/backfill", requireAdmin, async (request, response, next)
   }
 });
 
-// Статус товаров склада на WB — для панели Wildberries в карточке товара:
+// Статус товаров склада на WB — для строк WB в карточке товара:
 // есть ли карточка на WB (vendorCode = наш offerId), nmID и фото, закупка и
-// цена WB, порог 15 000 ₽; если карточки нет — причины пропуска импорта.
+// цена WB, лимит цены 20 000 ₽; если карточки нет — причины пропуска импорта.
 app.post("/api/wb/product-status", async (request, response, next) => {
   try {
     const productIds = (Array.isArray(request.body?.productIds) ? request.body.productIds : [])
@@ -404,8 +405,9 @@ app.post("/api/wb/product-status", async (request, response, next) => {
         supplierByProductId: new Map([[productId, supplier]]),
       });
       const card = cardByVendorCode.get(cleanText(product.offerId).toLowerCase()) || null;
-      const belowMin = purchaseRub > 0 && purchaseRub < rules.minSupplierPriceRub;
-      const sellable = Boolean(card) && !product.archived && !belowMin && purchaseRub > 0;
+      const belowMin = rules.minSupplierPriceRub > 0 && purchaseRub > 0 && purchaseRub < rules.minSupplierPriceRub;
+      const aboveMax = rules.maxWbPriceRub > 0 && priceRub > rules.maxWbPriceRub;
+      const sellable = Boolean(card) && wbCardSellable({ product, purchaseRub, priceRub, rules });
       items.push({
         productId,
         onWb: Boolean(card),
@@ -415,8 +417,10 @@ app.post("/api/wb/product-status", async (request, response, next) => {
         purchaseRub,
         priceRub,
         minSupplierPriceRub: rules.minSupplierPriceRub,
+        maxWbPriceRub: rules.maxWbPriceRub,
         belowMin,
-        // Ниже порога товар гасится синком остатков даже при созданной карточке.
+        aboveMax,
+        // Вне лимитов товар гасится синком остатков даже при созданной карточке.
         sellable,
         // Остаток FBS, который выставит синк: defaultStock или 0.
         stock: sellable ? rules.defaultStock : 0,
@@ -454,8 +458,8 @@ app.get("/api/wb/chain/result", requireAdmin, async (request, response, next) =>
 
 // --- Цены ---
 
-// Отправка цен: закупка поставщика × наценка WB. Ниже порога 15 000 ₽ — цена
-// не шлётся (skippedBelowMin), товар гасится синком остатков.
+// Отправка цен: закупка поставщика × наценка WB. Выше лимита 20 000 ₽ (или
+// ниже минимума, если задан) — цена не шлётся, товар гасится синком остатков.
 app.post("/api/wb/prices/send", requireAdmin, async (request, response, next) => {
   try {
     const account = resolveWbAccountOr404(request, response);
@@ -474,6 +478,7 @@ app.post("/api/wb/prices/send", requireAdmin, async (request, response, next) =>
 
     const items = [];
     let skippedBelowMin = 0;
+    let skippedAboveMax = 0;
     let skippedNoSupplier = 0;
     let skippedNotLinked = 0;
     for (const card of targetCards) {
@@ -487,11 +492,15 @@ app.post("/api/wb/prices/send", requireAdmin, async (request, response, next) =>
         skippedNoSupplier += 1;
         continue;
       }
-      if (purchaseRub < rules.minSupplierPriceRub) {
+      if (rules.minSupplierPriceRub > 0 && purchaseRub < rules.minSupplierPriceRub) {
         skippedBelowMin += 1;
         continue;
       }
       const priceRub = wbSupplierPriceRub(product.supplier, pricing);
+      if (rules.maxWbPriceRub > 0 && priceRub > rules.maxWbPriceRub) {
+        skippedAboveMax += 1;
+        continue;
+      }
       if (priceRub > 0) items.push({ nmID: card.nmID, price: priceRub, discount: 0 });
     }
 
@@ -505,9 +514,11 @@ app.post("/api/wb/prices/send", requireAdmin, async (request, response, next) =>
       prepared: items.length,
       sent: dryRun ? 0 : items.length,
       skippedBelowMin,
+      skippedAboveMax,
       skippedNoSupplier,
       skippedNotLinked,
       minSupplierPriceRub: rules.minSupplierPriceRub,
+      maxWbPriceRub: rules.maxWbPriceRub,
       tasks: result.tasks || [],
       sample: items.slice(0, 20),
     });
@@ -518,7 +529,7 @@ app.post("/api/wb/prices/send", requireAdmin, async (request, response, next) =>
 
 // --- Остатки (FBS) ---
 
-// Синк остатков: defaultStock при валидном поставщике с закупкой ≥ порога,
+// Синк остатков: defaultStock при валидном поставщике и цене в лимите,
 // иначе 0 (товар снимается с продажи). warehouseId — из body или campaignId
 // кабинета (список складов: GET /api/wb/warehouses).
 app.post("/api/wb/stocks/sync", requireAdmin, async (request, response, next) => {
@@ -550,7 +561,8 @@ app.post("/api/wb/stocks/sync", requireAdmin, async (request, response, next) =>
       if (!skus.length) continue;
       const product = linked.get(cleanText(card.vendorCode).toLowerCase());
       const purchaseRub = product ? wbSupplierPurchaseRub(product.supplier, pricing) : 0;
-      const sellable = product && !product.archived && purchaseRub >= rules.minSupplierPriceRub;
+      const priceRub = purchaseRub > 0 ? wbSupplierPriceRub(product.supplier, pricing) : 0;
+      const sellable = wbCardSellable({ product, purchaseRub, priceRub, rules });
       const amount = sellable ? rules.defaultStock : 0;
       if (sellable) inStock += 1;
       else zeroed += 1;

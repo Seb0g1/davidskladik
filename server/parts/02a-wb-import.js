@@ -1,14 +1,15 @@
 // Импорт Ozon → Wildberries: правила, кандидаты и payload карточек.
 //
-// Бизнес-правило WB: продаём только дорогие товары — итоговая закупочная цена
-// поставщика (₽) должна быть не ниже WB_MIN_SUPPLIER_PRICE_RUB (по умолчанию
-// 15 000 ₽). Ниже порога товар не загружается, цена не отправляется, остаток
-// обнуляется.
-//
-// Цена WB = закупка поставщика × наценка WB (Настройки → Цены: defaultMarkups.wb
-// + гибкие правила marketplace "wb") — та же формула, что у Ozon/Yandex/Avito.
+// Бизнес-правило WB (с 2026-07-16): продаются только товары с итоговой ценой
+// WB не выше WB_MAX_PRICE_RUB (по умолчанию 20 000 ₽). Итоговая цена — это
+// закупка поставщика × наценка WB (Настройки → Цены: defaultMarkups.wb +
+// гибкие правила marketplace "wb"), НЕ цена Ozon. Выше лимита: товар не
+// загружается, цена не отправляется, остаток обнуляется — в т.ч. когда лимит
+// превышается после смены коэффициента наценки (автосинк каждые 3 часа).
+// Старый порог «закупка ≥ 15 000» отменён: minSupplierPriceRub по умолчанию 0.
 
-const WB_MIN_SUPPLIER_PRICE_RUB = Math.max(0, Number(process.env.WB_MIN_SUPPLIER_PRICE_RUB || 15000) || 15000);
+const WB_MIN_SUPPLIER_PRICE_RUB = Math.max(0, Number(process.env.WB_MIN_SUPPLIER_PRICE_RUB || 0) || 0);
+const WB_MAX_PRICE_RUB = Math.max(0, Number(process.env.WB_MAX_PRICE_RUB || 20000) || 20000);
 const wbImportRulesPath = path.join(dataDir, "wb-import-rules.json");
 
 function normalizeWbImportRules(input = {}) {
@@ -20,7 +21,10 @@ function normalizeWbImportRules(input = {}) {
     // Код ТН ВЭД для карточек: пусто — берём первый код из справочника WB
     // по предмету (GET /content/v2/directory/tnved).
     tnved: cleanText(input.tnved),
-    minSupplierPriceRub: Number(input.minSupplierPriceRub) > 0 ? Number(input.minSupplierPriceRub) : WB_MIN_SUPPLIER_PRICE_RUB,
+    // 0 — минимальный порог закупки отключён (легаси-правило «только дорогие»).
+    minSupplierPriceRub: Number(input.minSupplierPriceRub) >= 0 ? Number(input.minSupplierPriceRub) || 0 : WB_MIN_SUPPLIER_PRICE_RUB,
+    // Лимит итоговой цены WB: выше — товар не продаётся на WB.
+    maxWbPriceRub: Number(input.maxWbPriceRub) > 0 ? Number(input.maxWbPriceRub) : WB_MAX_PRICE_RUB,
     skipArchived: input.skipArchived !== false,
     excludeTitleWords: Array.isArray(input.excludeTitleWords)
       ? input.excludeTitleWords.map((word) => cleanText(word).toLowerCase().replace(/ё/g, "е")).filter(Boolean)
@@ -54,6 +58,19 @@ function wbSupplierPurchaseRub(supplier, pricing = {}) {
   const purchaseRub = warehouseSupplierPurchaseRubPrice(supplier, pricing.usdRate);
   if (!Number.isFinite(purchaseRub) || purchaseRub <= 0 || purchaseRub >= Number.MAX_SAFE_INTEGER) return 0;
   return purchaseRub;
+}
+
+// Единая проверка «товар продаётся на WB»: валидный поставщик, не архив,
+// закупка не ниже минимума (если задан) и итоговая цена не выше лимита.
+// Используется отправкой цен, синком остатков и статусом карточки.
+function wbCardSellable({ product = null, purchaseRub = 0, priceRub = 0, rules = {} } = {}) {
+  if (!product || product.archived) return false;
+  if (!(purchaseRub > 0) || !(priceRub > 0)) return false;
+  const minRub = Number(rules.minSupplierPriceRub || 0);
+  if (minRub > 0 && purchaseRub < minRub) return false;
+  const maxRub = Number(rules.maxWbPriceRub || 0);
+  if (maxRub > 0 && priceRub > maxRub) return false;
+  return true;
 }
 
 function wbSupplierPriceRub(supplier, pricing = {}) {
@@ -129,12 +146,14 @@ function evaluateWbImportCandidate(product = {}, rules = {}, pricing = {}) {
     ? pricing.supplierByProductId.get(cleanText(product.id)) || null
     : product.selectedSupplier || null;
   const purchaseRub = wbSupplierPurchaseRub(supplier, pricing);
+  const priceRub = purchaseRub > 0 ? wbSupplierPriceRub(supplier, pricing) : 0;
   if (!(purchaseRub > 0)) {
     reasons.push("no_price");
-  } else if (purchaseRub < normalizedRules.minSupplierPriceRub) {
+  } else if (normalizedRules.minSupplierPriceRub > 0 && purchaseRub < normalizedRules.minSupplierPriceRub) {
     reasons.push(`price_below_min:${Math.round(purchaseRub)}`);
+  } else if (normalizedRules.maxWbPriceRub > 0 && priceRub > normalizedRules.maxWbPriceRub) {
+    reasons.push(`price_above_max:${Math.round(priceRub)}`);
   }
-  const priceRub = purchaseRub > 0 ? wbSupplierPriceRub(supplier, pricing) : 0;
 
   if (reasons.length) return { ok: false, reasons, listing: null };
   return {
