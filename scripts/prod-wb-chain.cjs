@@ -111,6 +111,12 @@ async function stepTnved(account) {
   recordStep("tnved", result);
 }
 
+// Обогащение карточек данными Ozon: бренд, описание, объём, артикул Ozon.
+async function stepEnrich(account) {
+  const result = await server.enrichWbCards(account, {});
+  recordStep("enrich", { ...result, errors: (result.errors || []).slice(0, 10) });
+}
+
 // Создание карточек на WB асинхронное: ждём, пока список карточек перестанет
 // расти (nmID присвоены), максимум maxWaitMs.
 async function stepWaitCards(account, maxWaitMs = 15 * 60 * 1000) {
@@ -297,6 +303,11 @@ async function main() {
     } catch (error) {
       recordStep("tnved", { statusCode: error?.statusCode, error: error?.message || String(error) });
     }
+    try {
+      await stepEnrich(account);
+    } catch (error) {
+      recordStep("enrich", { statusCode: error?.statusCode, error: error?.message || String(error) });
+    }
     await stepMedia(account, 20000);
     await stepPrices(account);
     await stepStocks(account, defaultWarehouseId);
@@ -310,6 +321,8 @@ async function main() {
     await stepErrors(account);
   } else if (mode === "tnved") {
     await stepTnved(account);
+  } else if (mode === "enrich") {
+    await stepEnrich(account);
   } else if (mode === "diag") {
     // Полная диагностика падающих вызовов content-API: статус и тело ошибки.
     try {

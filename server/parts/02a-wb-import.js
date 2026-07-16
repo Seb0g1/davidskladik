@@ -272,6 +272,166 @@ async function backfillWbTnvedCharacteristics(account, { limit = 20000 } = {}) {
   };
 }
 
+// --- Обогащение созданных карточек данными Ozon ---
+// Карточки создавались «скелетами»: бренд не приживался, описание = названию,
+// характеристик нет. Дозаполняем через cards/update: бренд (поле + charc),
+// описание из raw ozon.description (недостающие добираются с Ozon API),
+// объём из названия и артикул Ozon.
+
+const WB_CHARC_BRAND_ID = 14177446;
+const WB_CHARC_VOLUME_ML_ID = 89010;
+const WB_CHARC_OZON_ARTICLE_ID = 15003293;
+
+async function loadWbEnrichSourceRows(prisma, vendorCodes = []) {
+  const codes = [...new Set(vendorCodes.map((value) => cleanText(value).toLowerCase()).filter(Boolean))];
+  const byOfferId = new Map();
+  for (const chunk of chunkArray(codes, 5000)) {
+    if (!chunk.length) continue;
+    const rows = await prisma.$queryRaw`
+      SELECT id, offer_id, target, product_id,
+             COALESCE(NULLIF(raw->>'brand', ''), NULLIF(raw#>>'{ozon,vendor}', '')) AS brand,
+             raw#>>'{ozon,description}' AS description,
+             COALESCE(NULLIF(raw->>'name', ''), '') AS name
+      FROM warehouse_products
+      WHERE marketplace = 'ozon' AND LOWER(offer_id) = ANY(${chunk})
+    `;
+    for (const row of rows) {
+      const key = cleanText(row.offer_id).toLowerCase();
+      if (key && !byOfferId.has(key)) byOfferId.set(key, row);
+    }
+  }
+  return byOfferId;
+}
+
+function wbCharcValue(charcs = [], id = 0) {
+  const charc = charcs.find((item) => Number(item.id) === id);
+  if (!charc) return null;
+  return Array.isArray(charc.value) ? charc.value[0] : charc.value;
+}
+
+async function enrichWbCards(account, { limit = 20000, fetchDescriptions = 300, descriptionDelayMs = 150 } = {}) {
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) {
+    const error = new Error("Postgres недоступен: обогащение WB требует основную БД.");
+    error.statusCode = 503;
+    throw error;
+  }
+  const cards = (await wbCardsList(account)).filter((card) => Number(card.nmID) > 0);
+  const sourceByOfferId = await loadWbEnrichSourceRows(prisma, cards.map((card) => card.vendorCode));
+
+  let descriptionBudget = Math.max(0, Number(fetchDescriptions) || 0);
+  let descriptionsFetched = 0;
+  let descriptionApiErrors = 0;
+  const updates = [];
+  let skippedNotLinked = 0;
+  let alreadyComplete = 0;
+
+  for (const card of cards) {
+    if (updates.length >= limit) break;
+    const source = sourceByOfferId.get(cleanText(card.vendorCode).toLowerCase());
+    if (!source) {
+      skippedNotLinked += 1;
+      continue;
+    }
+    const charcs = Array.isArray(card.characteristics) ? card.characteristics : [];
+    const brand = cleanText(source.brand);
+    let description = cleanText(source.description);
+    const cardDescription = cleanText(card.description);
+    const cardTitle = cleanText(card.title);
+    const volumes = extractOzonYandexImportVolumesMl([cardTitle, cleanText(source.name)].filter(Boolean).join(" "));
+    const volumeMl = volumes.length ? Math.max(...volumes) : 0;
+
+    const needBrand = Boolean(brand) && (cleanText(card.brand) !== brand || cleanText(wbCharcValue(charcs, WB_CHARC_BRAND_ID)) !== brand);
+    const needVolume = volumeMl > 0 && Number(wbCharcValue(charcs, WB_CHARC_VOLUME_ML_ID) || 0) !== volumeMl;
+    const needArticle = cleanText(wbCharcValue(charcs, WB_CHARC_OZON_ARTICLE_ID)) !== cleanText(card.vendorCode);
+    // Описание «скелета» — копия названия; настоящее берём из raw, недостающее
+    // добираем с Ozon API в пределах бюджета за прогон.
+    let needDescription = Boolean(description) && description !== cardDescription;
+    if (!description && (!cardDescription || cardDescription === cardTitle) && descriptionBudget > 0 && descriptionApiErrors < 5) {
+      descriptionBudget -= 1;
+      try {
+        const ozonAccount = getOzonAccountByTarget(cleanText(source.target) || "ozon");
+        if (ozonAccount) {
+          const body = source.product_id
+            ? { product_id: Number(source.product_id) || undefined, offer_id: cleanText(source.offer_id) }
+            : { offer_id: cleanText(source.offer_id) };
+          const data = await ozonRequest("/v1/product/info/description", body, ozonAccount);
+          description = cleanText(data?.result?.description || "");
+          if (description) {
+            descriptionsFetched += 1;
+            needDescription = true;
+          }
+          if (descriptionDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, descriptionDelayMs));
+        }
+      } catch (error) {
+        descriptionApiErrors += 1;
+        logger.warn("wb enrich: ozon description fetch failed", { offerId: source.offer_id, detail: error?.message || String(error) });
+      }
+    }
+
+    if (!needBrand && !needVolume && !needArticle && !needDescription) {
+      alreadyComplete += 1;
+      continue;
+    }
+
+    const keptCharcs = charcs
+      .filter((charc) => ![WB_CHARC_BRAND_ID, WB_CHARC_VOLUME_ML_ID, WB_CHARC_OZON_ARTICLE_ID].includes(Number(charc.id)))
+      .map((charc) => ({ id: Number(charc.id), value: charc.value }));
+    updates.push(compactObject({
+      nmID: Number(card.nmID),
+      vendorCode: cleanText(card.vendorCode),
+      brand: brand || cleanText(card.brand) || undefined,
+      title: cardTitle,
+      description: (description || cardDescription || cardTitle).slice(0, 2000),
+      dimensions: card.dimensions ? compactObject({
+        length: Number(card.dimensions.length) || 0,
+        width: Number(card.dimensions.width) || 0,
+        height: Number(card.dimensions.height) || 0,
+        weightBrutto: Number(card.dimensions.weightBrutto) || undefined,
+      }) : undefined,
+      characteristics: [
+        ...keptCharcs,
+        ...(brand ? [{ id: WB_CHARC_BRAND_ID, value: [brand] }] : []),
+        ...(volumeMl > 0 ? [{ id: WB_CHARC_VOLUME_ML_ID, value: volumeMl }] : []),
+        { id: WB_CHARC_OZON_ARTICLE_ID, value: [cleanText(card.vendorCode)] },
+      ],
+      sizes: (Array.isArray(card.sizes) ? card.sizes : []).map((size) => compactObject({
+        chrtID: Number(size.chrtID) || undefined,
+        techSize: cleanText(size.techSize) || "0",
+        wbSize: cleanText(size.wbSize) || undefined,
+        skus: Array.isArray(size.skus) ? size.skus : [],
+      })),
+    }));
+  }
+
+  let updated = 0;
+  const errors = [];
+  for (const chunk of chunkArray(updates, 100)) {
+    try {
+      await wbCardsUpdate(account, chunk);
+      updated += chunk.length;
+    } catch (error) {
+      errors.push({
+        nmIDs: chunk.map((card) => card.nmID).slice(0, 5),
+        statusCode: error?.statusCode,
+        wb: error?.wb,
+        error: error?.message || String(error),
+      });
+    }
+  }
+  return {
+    ok: errors.length === 0,
+    cards: cards.length,
+    prepared: updates.length,
+    updated,
+    alreadyComplete,
+    skippedNotLinked,
+    descriptionsFetched,
+    descriptionApiErrors,
+    errors: errors.slice(0, 20),
+  };
+}
+
 // Кандидаты импорта из Postgres: дешёвые фильтры первым проходом, поставщики —
 // только для прошедших (двухпроходный, как у Avito: живой PriceMaster дорогой).
 async function collectWbImportCandidates({ rules = null, limit = 50000 } = {}) {

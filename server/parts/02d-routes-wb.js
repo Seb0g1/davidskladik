@@ -277,6 +277,22 @@ app.post("/api/wb/tnved/backfill", requireAdmin, async (request, response, next)
   }
 });
 
+// Обогащение карточек WB данными Ozon: бренд, описание, объём, артикул Ozon.
+app.post("/api/wb/cards/enrich", requireAdmin, async (request, response, next) => {
+  try {
+    const account = resolveWbAccountOr404(request, response);
+    if (!account) return;
+    const result = await enrichWbCards(account, {
+      limit: Math.max(1, Math.min(20000, Number(request.body?.limit || 20000) || 20000)),
+      fetchDescriptions: Math.max(0, Math.min(1000, Number(request.body?.fetchDescriptions ?? 300))),
+    });
+    await appendAudit(request, "wb.cards.enrich", { newValue: { updated: result.updated, prepared: result.prepared } });
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Досылка фото с нашего склада (Ozon-картинки) в карточки WB без фото.
 app.post("/api/wb/media/backfill", requireAdmin, async (request, response, next) => {
   try {

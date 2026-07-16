@@ -335,6 +335,7 @@ module.exports = {
   wbTnvedList,
   resolveWbTnvedCharacteristic,
   backfillWbTnvedCharacteristics,
+  enrichWbCards,
   wbGenerateBarcodes,
   wbMediaSave,
   wbSetPrices,
