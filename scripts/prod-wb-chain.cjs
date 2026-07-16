@@ -91,6 +91,7 @@ async function stepApply(account, evaluated, limit) {
   const chunks = server.chunkArray(ready, 50);
   let uploaded = 0;
   let aborted = false;
+  let abortReason = "429 не остывает после 5 попыток";
   const errors = [];
   for (let index = 0; index < chunks.length; index += 1) {
     const chunk = chunks[index];
@@ -104,6 +105,17 @@ async function stepApply(account, evaluated, limit) {
       } catch (error) {
         const statusCode = Number(error?.statusCode) || 0;
         const retrySec = Number(error?.retryAfterSec) || 0;
+        const wbText = clean(error?.wb?.errorText || "");
+        // Дневной лимит WB — 1000 новых карточек/сутки («You have already used
+        // up your daily limit — 1000. Try tomorrow»): дальше сегодня бить
+        // бессмысленно, остаток дошлёт завтрашний запуск.
+        if (/daily limit|Try tomorrow/i.test(wbText)) {
+          errors.push({ vendorCodes: chunk.map((listing) => listing.vendorCode).slice(0, 5), statusCode, error: wbText });
+          abortReason = "дневной лимит WB на новые карточки (1000/сутки) — остаток дошлёт завтрашний запуск";
+          aborted = true;
+          done = true;
+          break;
+        }
         if (statusCode === 429 && attempt < 5) {
           // Ждём, сколько просит лимитер (не меньше 2 мин — остывание), и
           // повторяем чанк: карточки не теряем.
@@ -120,6 +132,12 @@ async function stepApply(account, evaluated, limit) {
           error: error?.message || String(error),
           wb: error?.wb,
         });
+        console.error(`chunk ${index + 1}/${chunks.length} failed: status=${statusCode} ${error?.message || error}`, JSON.stringify(error?.wb || null)?.slice(0, 500));
+        // Первые ошибки — сразу в state (диагноз без ожидания конца шага).
+        if (errors.length <= 3) {
+          state.steps.push({ step: "apply-progress", at: new Date().toISOString(), chunk: index + 1, of: chunks.length, uploaded, lastError: errors[errors.length - 1] });
+          saveState();
+        }
         done = true;
         // Чанк не прошёл даже после долгих ожиданий 429 — лимитер не остывает,
         // дальнейшие чанки только продлят штраф. Остаток дошлёт следующий запуск.
@@ -129,12 +147,12 @@ async function stepApply(account, evaluated, limit) {
       }
     }
     if (aborted) {
-      state.steps.push({ step: "apply-aborted", at: new Date().toISOString(), reason: "429 не остывает после 5 попыток", uploadedSoFar: uploaded, remainingChunks: chunks.length - index - 1 });
+      state.steps.push({ step: "apply-aborted", at: new Date().toISOString(), reason: abortReason, uploadedSoFar: uploaded, remainingChunks: chunks.length - index - 1 });
       saveState();
       break;
     }
     if ((index + 1) % 10 === 0) {
-      state.steps.push({ step: "apply-progress", at: new Date().toISOString(), chunk: index + 1, of: chunks.length, uploaded, errors: errors.length });
+      state.steps.push({ step: "apply-progress", at: new Date().toISOString(), chunk: index + 1, of: chunks.length, uploaded, errors: errors.length, lastError: errors[errors.length - 1] || null });
       saveState();
     }
     if (index + 1 < chunks.length) await sleep(pauseMs);
