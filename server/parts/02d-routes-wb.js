@@ -1,6 +1,6 @@
 // API-роуты Wildberries: проверка кабинета, справочник предметов, правила и
 // импорт Ozon → WB, карточки, фото, цены и остатки FBS.
-// Бизнес-правило: закупка поставщика ниже minSupplierPriceRub (деф. 14 500 ₽) —
+// Бизнес-правило: закупка поставщика ниже minSupplierPriceRub (деф. 15 000 ₽) —
 // товар не загружается, цена не шлётся, остаток обнуляется.
 
 function resolveWbAccountOr404(request, response) {
@@ -92,6 +92,18 @@ app.get("/api/wb/subjects/:id/characteristics", async (request, response, next) 
   }
 });
 
+// Справочник ТН ВЭД по предмету (subjectId — из query или правил импорта).
+app.get("/api/wb/tnved", async (request, response, next) => {
+  try {
+    const account = resolveWbAccountOr404(request, response);
+    if (!account) return;
+    const subjectId = Number(request.query.subjectId || 0) || (await readWbImportRules()).subjectId;
+    response.json({ subjectId, tnved: await wbTnvedList(account, subjectId, request.query.search) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/wb/warehouses", async (request, response, next) => {
   try {
     const account = resolveWbAccountOr404(request, response);
@@ -125,7 +137,7 @@ app.put("/api/wb/import/rules", requireAdmin, async (request, response, next) =>
 
 // --- Импорт Ozon → WB ---
 
-// Предпросмотр: сколько товаров пройдёт порог закупки 14 500 ₽ и почему
+// Предпросмотр: сколько товаров пройдёт порог закупки 15 000 ₽ и почему
 // остальные отсеяны. Правила можно передать в body без сохранения.
 app.post("/api/wb/import/preview", async (request, response, next) => {
   try {
@@ -179,6 +191,15 @@ app.post("/api/wb/import/apply", requireAdmin, async (request, response, next) =
       .slice(0, limit)
       .map(({ result }) => result.listing);
 
+    // Характеристика «ТНВЭД» — автозаполнение из справочника WB по предмету
+    // (или код из правил). Ошибка справочника не блокирует импорт.
+    let tnvedCharc = null;
+    try {
+      tnvedCharc = await resolveWbTnvedCharacteristic(account, effectiveRules);
+    } catch (error) {
+      logger.warn("wb tnved resolve failed", { detail: error?.message || String(error) });
+    }
+
     // WB требует уникальный штрихкод на размер: недостающие генерируем API.
     const withoutBarcode = candidates.filter((listing) => !listing.barcode);
     if (withoutBarcode.length) {
@@ -193,7 +214,7 @@ app.post("/api/wb/import/apply", requireAdmin, async (request, response, next) =
     const errors = [];
     for (const chunk of chunkArray(ready, 50)) {
       try {
-        await wbCardsUpload(account, chunk.map((listing) => buildWbCardPayload(listing)));
+        await wbCardsUpload(account, chunk.map((listing) => buildWbCardPayload(listing, tnvedCharc)));
         uploaded += chunk.length;
       } catch (error) {
         errors.push({ vendorCodes: chunk.map((listing) => listing.vendorCode), error: error?.message || String(error) });
@@ -241,6 +262,21 @@ app.get("/api/wb/cards/errors", async (request, response, next) => {
   }
 });
 
+// Дозаполнение ТН ВЭД в уже созданных карточках WB (код — из правил или
+// первый из справочника WB по предмету).
+app.post("/api/wb/tnved/backfill", requireAdmin, async (request, response, next) => {
+  try {
+    const account = resolveWbAccountOr404(request, response);
+    if (!account) return;
+    const limit = Math.max(1, Math.min(20000, Number(request.body?.limit || 20000) || 20000));
+    const result = await backfillWbTnvedCharacteristics(account, { limit });
+    await appendAudit(request, "wb.tnved.backfill", { newValue: { updated: result.updated, missingTnved: result.missingTnved, tnved: result.tnved } });
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Досылка фото с нашего склада (Ozon-картинки) в карточки WB без фото.
 app.post("/api/wb/media/backfill", requireAdmin, async (request, response, next) => {
   try {
@@ -282,7 +318,7 @@ app.post("/api/wb/media/backfill", requireAdmin, async (request, response, next)
 
 // Статус товаров склада на WB — для панели Wildberries в карточке товара:
 // есть ли карточка на WB (vendorCode = наш offerId), nmID и фото, закупка и
-// цена WB, порог 14 500 ₽; если карточки нет — причины пропуска импорта.
+// цена WB, порог 15 000 ₽; если карточки нет — причины пропуска импорта.
 app.post("/api/wb/product-status", async (request, response, next) => {
   try {
     const productIds = (Array.isArray(request.body?.productIds) ? request.body.productIds : [])
@@ -353,17 +389,21 @@ app.post("/api/wb/product-status", async (request, response, next) => {
       });
       const card = cardByVendorCode.get(cleanText(product.offerId).toLowerCase()) || null;
       const belowMin = purchaseRub > 0 && purchaseRub < rules.minSupplierPriceRub;
+      const sellable = Boolean(card) && !product.archived && !belowMin && purchaseRub > 0;
       items.push({
         productId,
         onWb: Boolean(card),
         nmID: card ? Number(card.nmID) || 0 : 0,
+        vendorCode: card ? cleanText(card.vendorCode) : cleanText(product.offerId),
         hasPhotos: card ? Boolean(Array.isArray(card.photos) && card.photos.length) : false,
         purchaseRub,
         priceRub,
         minSupplierPriceRub: rules.minSupplierPriceRub,
         belowMin,
         // Ниже порога товар гасится синком остатков даже при созданной карточке.
-        sellable: Boolean(card) && !product.archived && !belowMin && purchaseRub > 0,
+        sellable,
+        // Остаток FBS, который выставит синк: defaultStock или 0.
+        stock: sellable ? rules.defaultStock : 0,
         reasons: evaluated.ok ? [] : evaluated.reasons,
       });
     }
@@ -398,7 +438,7 @@ app.get("/api/wb/chain/result", requireAdmin, async (request, response, next) =>
 
 // --- Цены ---
 
-// Отправка цен: закупка поставщика × наценка WB. Ниже порога 14 500 ₽ — цена
+// Отправка цен: закупка поставщика × наценка WB. Ниже порога 15 000 ₽ — цена
 // не шлётся (skippedBelowMin), товар гасится синком остатков.
 app.post("/api/wb/prices/send", requireAdmin, async (request, response, next) => {
   try {

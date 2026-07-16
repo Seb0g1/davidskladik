@@ -66,11 +66,16 @@ async function main() {
   });
   try {
     await sftpPut(conn, path.join(__dirname, "prod-wb-chain.cjs"), `${remoteRoot}/scripts/prod-wb-chain.cjs`);
+    // Один запуск за раз: старый процесс цепочки (например, зависший media)
+    // конкурировал бы за лимиты WB API. Отдельный exec + [n]-паттерн, чтобы
+    // pkill не убил собственный шелл (его cmdline содержит имя скрипта), и вне
+    // команды запуска — `& echo` уводит весь &&-список в фоновый сабшелл.
+    await exec(conn, "pkill -f 'prod-wb-chai[n].cjs' || true; sleep 1");
     await exec(conn, [
       `cd ${remoteRoot}`,
       "mkdir -p data",
       "rm -f data/wb-chain-result.json",
-      `nohup env MALLOC_ARENA_MAX=2 NODE_OPTIONS='--max-old-space-size=4096' node scripts/prod-wb-chain.cjs ${args} > data/wb-chain.log 2>&1 & echo "started pid=$!"`,
+      `nohup env MALLOC_ARENA_MAX=2 NODE_OPTIONS='--max-old-space-size=4096' WB_REQUEST_MAX_ATTEMPTS=4 node scripts/prod-wb-chain.cjs ${args} > data/wb-chain.log 2>&1 & echo "started pid=$!"`,
     ].join(" && "));
 
     // Поллим результат до finishedAt (или 110 минут).
@@ -88,7 +93,7 @@ async function main() {
       try { state = JSON.parse(stateRaw); } catch { /* файл пишется в этот момент */ }
       if (!state) {
         // Процесс мог упасть до первой записи — проверяем, жив ли он.
-        const alive = await exec(conn, "pgrep -f 'scripts/prod-wb-chain.cjs' || true", { quiet: true });
+        const alive = await exec(conn, "pgrep -f 'prod-wb-chai[n].cjs' || true", { quiet: true });
         if (!alive.trim()) {
           await exec(conn, `tail -50 ${remoteRoot}/data/wb-chain.log || true`);
           throw new Error("Процесс цепочки не запустился (нет результата и нет процесса)");
@@ -111,7 +116,7 @@ async function main() {
         return;
       }
       // Результат есть, но не завершён — проверяем, что процесс ещё жив.
-      const alive = await exec(conn, "pgrep -f 'scripts/prod-wb-chain.cjs' || true", { quiet: true });
+      const alive = await exec(conn, "pgrep -f 'prod-wb-chai[n].cjs' || true", { quiet: true });
       if (!alive.trim()) {
         await exec(conn, `tail -50 ${remoteRoot}/data/wb-chain.log || true`);
         throw new Error("Процесс цепочки умер, не дописав результат (возможно OOM)");

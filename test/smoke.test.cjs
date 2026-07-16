@@ -7303,14 +7303,14 @@ test("Avito feed XML hides duplicates and listings without images", async () => 
   assert.ok(!xml.includes("<Images>"));
 });
 
-test("WB import blocks supplier purchase below 14500 RUB and prices survivors by WB markup", () => {
+test("WB import blocks supplier purchase below 15000 RUB and prices survivors by WB markup", () => {
   const {
     evaluateWbImportCandidate,
     buildWbCardPayload,
     WB_MIN_SUPPLIER_PRICE_RUB,
     normalizeWbImportRules,
   } = require("../server.js");
-  assert.equal(WB_MIN_SUPPLIER_PRICE_RUB, 14500);
+  assert.equal(WB_MIN_SUPPLIER_PRICE_RUB, 15000);
 
   const rules = normalizeWbImportRules({ subjectId: 105, subjectName: "Духи" });
   const pricing = {
@@ -7329,19 +7329,19 @@ test("WB import blocks supplier purchase below 14500 RUB and prices survivors by
   });
   const supplierMap = (id, usd) => new Map([[id, usd === null ? null : { price: usd, available: true }]]);
 
-  // Закупка 160 $ × 100 = 16 000 ₽ ≥ 14 500 → проходит, цена 16 000 × 1.5 = 24 000.
+  // Закупка 160 $ × 100 = 16 000 ₽ ≥ 15 000 → проходит, цена 16 000 × 1.5 = 24 000.
   const rich = evaluateWbImportCandidate(product("p1"), rules, { ...pricing, supplierByProductId: supplierMap("p1", 160) });
   assert.equal(rich.ok, true);
   assert.equal(rich.listing.purchaseRub, 16000);
   assert.equal(rich.listing.priceRub, 24000);
 
-  // Ровно 14 500 ₽ — допускается («от 15 000, допускается 14 500»).
-  const edge = evaluateWbImportCandidate(product("p2"), rules, { ...pricing, supplierByProductId: supplierMap("p2", 145) });
+  // Ровно 15 000 ₽ — допускается («итоговая цена поставщика от 15 000»).
+  const edge = evaluateWbImportCandidate(product("p2"), rules, { ...pricing, supplierByProductId: supplierMap("p2", 150) });
   assert.equal(edge.ok, true);
-  assert.equal(edge.listing.purchaseRub, 14500);
+  assert.equal(edge.listing.purchaseRub, 15000);
 
-  // 14 499 ₽ — блок price_below_min.
-  const cheap = evaluateWbImportCandidate(product("p3"), rules, { ...pricing, supplierByProductId: supplierMap("p3", 144.99) });
+  // 14 999 ₽ — блок price_below_min.
+  const cheap = evaluateWbImportCandidate(product("p3"), rules, { ...pricing, supplierByProductId: supplierMap("p3", 149.99) });
   assert.equal(cheap.ok, false);
   assert.ok(cheap.reasons.some((reason) => reason.startsWith("price_below_min")));
 
@@ -7357,6 +7357,11 @@ test("WB import blocks supplier purchase below 14500 RUB and prices survivors by
   assert.deepEqual(payload.variants[0].sizes[0].skus, ["4600000000000"]);
   assert.ok(payload.variants[0].dimensions.length > 0 && payload.variants[0].dimensions.weightBrutto > 0);
   assert.ok(payload.variants[0].title.length <= 60);
+  assert.equal(payload.variants[0].characteristics, undefined);
+
+  // ТН ВЭД: характеристика уходит в карточку при создании.
+  const withTnved = buildWbCardPayload(rich.listing, { id: 15000001, code: "3303001000", value: ["3303001000"] });
+  assert.deepEqual(withTnved.variants[0].characteristics, [{ id: 15000001, value: ["3303001000"] }]);
 });
 
 test("Yandex category fixer targets beauty categories and skips ambiguous items", () => {

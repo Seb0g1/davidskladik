@@ -43,6 +43,9 @@ async function wbRequest(account, host, method, pathname, body) {
         const error = new Error(summarizeApiErrorPayload(data, `Wildberries API error ${response.status}`));
         error.statusCode = response.status;
         error.wb = data;
+        // Token Bucket WB: X-Ratelimit-Retry — сколько секунд ждать до
+        // следующей попытки. Игнорировать его = кормить штраф лимитера.
+        error.retryAfterSec = Number(response.headers.get("x-ratelimit-retry") || response.headers.get("retry-after") || 0) || 0;
         // 429 у WB — жёсткие поминутные лимиты, ждём дольше обычного.
         if (![429, 500, 502, 503, 504].includes(response.status) || attempt >= attempts) throw error;
         lastError = error;
@@ -55,7 +58,10 @@ async function wbRequest(account, host, method, pathname, body) {
       if (attempt >= attempts) throw lastError;
     }
 
-    const delayMs = lastError?.statusCode === 429 ? Math.min(30000, 5000 * attempt) : Math.min(5000, 500 * attempt * attempt);
+    const retryAfterMs = Number(lastError?.retryAfterSec) > 0 ? Math.min(180000, lastError.retryAfterSec * 1000 + 500) : 0;
+    const delayMs = lastError?.statusCode === 429
+      ? Math.max(retryAfterMs, Math.min(30000, 5000 * attempt))
+      : Math.min(5000, 500 * attempt * attempt);
     await sleep(delayMs);
   }
 

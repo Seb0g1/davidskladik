@@ -34,6 +34,18 @@ async function wbSubjectCharacteristics(account, subjectId) {
   return Array.isArray(data?.data) ? data.data : [];
 }
 
+// Справочник кодов ТН ВЭД по предмету: [{ tnVed, isKiz }]. search — фильтр по
+// началу кода (опционально).
+async function wbTnvedList(account, subjectId, search = "") {
+  const id = Number(subjectId);
+  if (!Number.isFinite(id) || id <= 0) throw new Error("Нужен subjectId предмета WB.");
+  const params = new URLSearchParams({ subjectID: String(id), locale: "ru" });
+  const query = cleanText(search);
+  if (query) params.set("search", query);
+  const data = await wbRequest(account, "content", "GET", `/content/v2/directory/tnved?${params.toString()}`);
+  return Array.isArray(data?.data) ? data.data : [];
+}
+
 // --- Штрихкоды ---
 
 async function wbGenerateBarcodes(account, count = 1) {
@@ -94,9 +106,20 @@ async function wbCardsUpdate(account, cards = []) {
 }
 
 // Необработанные ошибки создания карточек (vendorCode + список ошибок).
-async function wbCardErrors(account) {
-  const data = await wbRequest(account, "content", "GET", "/content/v2/cards/error/list?locale=ru");
-  return Array.isArray(data?.data) ? data.data : [];
+// С октября 2025 GET-версия отключена WB (PLUG-404): только POST с
+// пагинацией page/limit (limit 100–1000).
+async function wbCardErrors(account, { maxItems = 5000 } = {}) {
+  const items = [];
+  const limit = 1000;
+  let page = 1;
+  while (items.length < maxItems) {
+    const data = await wbRequest(account, "content", "POST", "/content/v2/cards/error/list?locale=ru", { page, limit });
+    const pageItems = Array.isArray(data?.data) ? data.data : [];
+    items.push(...pageItems);
+    if (pageItems.length < limit) break;
+    page += 1;
+  }
+  return items.slice(0, maxItems);
 }
 
 // Фото по URL для существующей карточки (nmID уже присвоен).

@@ -1316,7 +1316,7 @@ function marketplaceStatusTone(code = "", archived = false): "success" | "warnin
   return "neutral";
 }
 
-function MarketplaceRows({ products, breakdown = [] }: { products: Product[]; breakdown?: MarketplaceBreakdownRow[] }) {
+function MarketplaceRows({ products, breakdown = [], canEdit = false, withExternal = false }: { products: Product[]; breakdown?: MarketplaceBreakdownRow[]; canEdit?: boolean; withExternal?: boolean }) {
   const groupLinkCount = uniqueLinks(products).length;
   const marketplaceBadges = groupMarketplaceLabels(products);
   const breakdownByProductId = useMemo(
@@ -1446,6 +1446,8 @@ function MarketplaceRows({ products, breakdown = [] }: { products: Product[]; br
             </div>
           );
         })}
+        {withExternal ? <AvitoRows products={products} canEdit={canEdit} groupLinkCount={groupLinkCount} /> : null}
+        {withExternal ? <WbRows products={products} groupLinkCount={groupLinkCount} /> : null}
       </div>
     </section>
   );
@@ -1536,7 +1538,9 @@ function AvitoMarkupEditor({ item, onSaved }: { item: AvitoProductStatus; onSave
   );
 }
 
-function AvitoPanel({ products, canEdit = false }: { products: Product[]; canEdit?: boolean }) {
+// Строки Avito внутри «Строк карточки» — тот же формат, что у Ozon/Yandex:
+// пилюля статуса, цена, остаток, общие PM и чипы формулы.
+function AvitoRows({ products, canEdit = false, groupLinkCount = 0 }: { products: Product[]; canEdit?: boolean; groupLinkCount?: number }) {
   const ozonIds = useMemo(
     () => products.filter((product) => product.marketplace === "ozon").map((product) => String(product.id)).sort(),
     [products],
@@ -1557,71 +1561,69 @@ function AvitoPanel({ products, canEdit = false }: { products: Product[]; canEdi
     },
   });
   if (!ozonIds.length) return null;
+  if (statusQuery.isLoading) return <div className="table-note"><Loader2 className="spin" size={14} /> Проверяю Avito…</div>;
+  if (statusQuery.error) return <div className="inline-error">Статус Avito недоступен: {String((statusQuery.error as Error).message)}</div>;
   const items = statusQuery.data?.items || [];
   return (
-    <section className="detail-section">
-      <div className="section-title">
-        <div>
-          <span>Avito</span>
-          <h3>Автозагрузка Avito</h3>
-        </div>
-        <a className="secondary-action" href="/app/avito">Открыть Avito</a>
-      </div>
-      {statusQuery.isLoading ? <div className="table-note"><Loader2 className="spin" size={14} /> Проверяю фид…</div> : null}
-      {statusQuery.error ? <div className="inline-error">Статус Avito недоступен: {String((statusQuery.error as Error).message)}</div> : null}
-      <div className="marketplace-rows">
-        {items.map((item) => (
-          <div className="marketplace-row" key={item.productId}>
-            <div>
-              <strong>Avito</strong>
-              <span>{item.adId || item.productId}</span>
-            </div>
-            {item.inFeed ? (
-              <span className={`pill ${item.outOfStock ? "warn" : item.enabled ? "ok" : "muted"}`}>
-                {item.outOfStock ? "скрыт: нет остатков" : item.enabled ? "в фиде" : "выключен"}
-              </span>
-            ) : (
-              <span className="pill warn">не в фиде</span>
-            )}
-            <div>
-              <small>Цена Avito</small>
-              <strong>{item.inFeed ? money(item.priceRub) : item.potential ? money(item.potential.priceRub) : "—"}</strong>
-              {!item.inFeed && item.potential ? <small>после импорта</small> : null}
-              {item.inFeed && (item.markupCoefficient || 0) > 0 ? <small>свой коэф. ×{item.markupCoefficient}</small> : null}
-            </div>
-            <div className="marketplace-flags">
-              {item.inFeed ? (
-                <>
-                  {item.categoryPath ? <span className="formula-chip">{item.categoryPath}{item.categoryAutoDefaulted ? " · по умолчанию" : ""}</span> : null}
-                  <span className={`formula-chip ${item.hasDescription ? "muted" : ""}`}>{item.hasDescription ? "описание с Ozon" : "описание: шаблон (докачивается)"}</span>
-                  {item.priceFormula ? (
-                    <span className="formula-chip">
-                      {item.priceFormula.rubNative
-                        ? `${item.priceFormula.purchaseRub} ₽ × ${item.priceFormula.coefficient} = ${money(item.priceRub)} (поставщик в рублях)`
-                        : `${item.priceFormula.supplierUsd} $ × ${item.priceFormula.usdRate} ₽ × ${item.priceFormula.coefficient} = ${money(item.priceRub)}`}
-                    </span>
-                  ) : null}
-                  <span className="formula-chip muted">
-                    {item.priceSource === "markup"
-                      ? "свой коэффициент товара (общие правила не применяются)"
-                      : item.priceSource === "supplier"
-                        ? "коэффициент из общих правил наценки Avito"
-                        : "цена поставщика недоступна — сохранённая цена фида"}
-                  </span>
-                </>
-              ) : (
-                <>
-                  {(item.reasons || []).map((reason) => <span className="formula-chip" key={reason}>{avitoSkipLabel(reason)}</span>)}
-                  {item.potential?.categoryPath ? <span className="formula-chip muted">{item.potential.categoryPath}</span> : null}
-                </>
-              )}
-            </div>
-            {canEdit && item.inFeed ? <AvitoMarkupEditor item={item} onSaved={() => statusQuery.refetch()} /> : null}
+    <>
+      {items.map((item) => (
+        <div className="marketplace-row" key={`avito-${item.productId}`}>
+          <div>
+            <strong>Avito{item.adId ? ` · ${item.adId}` : ""}</strong>
+            <span>{item.adId || item.productId}</span>
           </div>
-        ))}
-        {!items.length && !statusQuery.isLoading && !statusQuery.error ? <div className="table-note">Нет строк Ozon — на Avito выгружаются товары Ozon.</div> : null}
-      </div>
-    </section>
+          {item.inFeed ? (
+            <span className={`pill ${item.outOfStock ? "warning" : item.enabled ? "success" : "neutral"}`}>
+              {item.outOfStock ? "Скрыт: нет остатков" : item.enabled ? "Активен Avito" : "Выключен"}
+            </span>
+          ) : (
+            <span className="pill warning">Не в фиде</span>
+          )}
+          <div>
+            <small>Цена</small>
+            <strong>{item.inFeed ? money(item.priceRub) : item.potential ? money(item.potential.priceRub) : "—"}</strong>
+            {!item.inFeed && item.potential ? <small>после импорта</small> : null}
+            {item.inFeed && (item.markupCoefficient || 0) > 0 ? <small>свой коэф. ×{item.markupCoefficient}</small> : null}
+          </div>
+          <div>
+            <small>Остаток</small>
+            <strong>{item.inFeed ? (item.outOfStock ? 0 : "в фиде") : "—"}</strong>
+          </div>
+          <div>
+            <small>Общие PM</small>
+            <strong>{groupLinkCount}</strong>
+          </div>
+          <div className="marketplace-flags">
+            {item.inFeed ? (
+              <>
+                {item.categoryPath ? <span className="formula-chip">{item.categoryPath}{item.categoryAutoDefaulted ? " · по умолчанию" : ""}</span> : null}
+                <span className={`formula-chip ${item.hasDescription ? "muted" : ""}`}>{item.hasDescription ? "описание с Ozon" : "описание: шаблон (докачивается)"}</span>
+                {item.priceFormula ? (
+                  <span className="formula-chip">
+                    {item.priceFormula.rubNative
+                      ? `${item.priceFormula.purchaseRub} ₽ × ${item.priceFormula.coefficient} = ${money(item.priceRub)} (поставщик в рублях)`
+                      : `${item.priceFormula.supplierUsd} $ × ${item.priceFormula.usdRate} ₽ × ${item.priceFormula.coefficient} = ${money(item.priceRub)}`}
+                  </span>
+                ) : null}
+                <span className="formula-chip muted">
+                  {item.priceSource === "markup"
+                    ? "свой коэффициент товара (общие правила не применяются)"
+                    : item.priceSource === "supplier"
+                      ? "коэффициент из общих правил наценки Avito"
+                      : "цена поставщика недоступна — сохранённая цена фида"}
+                </span>
+              </>
+            ) : (
+              <>
+                {(item.reasons || []).map((reason) => <span className="formula-chip" key={reason}>{avitoSkipLabel(reason)}</span>)}
+                {item.potential?.categoryPath ? <span className="formula-chip muted">{item.potential.categoryPath}</span> : null}
+              </>
+            )}
+          </div>
+          {canEdit && item.inFeed ? <AvitoMarkupEditor item={item} onSaved={() => statusQuery.refetch()} /> : null}
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -1629,12 +1631,14 @@ type WbProductStatus = {
   productId: string;
   onWb: boolean;
   nmID?: number;
+  vendorCode?: string;
   hasPhotos?: boolean;
   purchaseRub?: number;
   priceRub?: number;
   minSupplierPriceRub?: number;
   belowMin?: boolean;
   sellable?: boolean;
+  stock?: number;
   reasons?: string[];
 };
 
@@ -1659,9 +1663,10 @@ function wbSkipLabel(reason: string): string {
   return label;
 }
 
-// Состояние Wildberries в карточке товара: есть ли карточка на WB
-// (vendorCode = offerId Ozon), цена/закупка и порог 14 500 ₽, причины пропуска.
-function WbPanel({ products }: { products: Product[] }) {
+// Строки Wildberries внутри «Строк карточки» — тот же формат, что у
+// Ozon/Yandex: есть ли карточка на WB (vendorCode = offerId Ozon),
+// цена/закупка, порог 15 000 ₽, остаток синка и причины пропуска.
+function WbRows({ products, groupLinkCount = 0 }: { products: Product[]; groupLinkCount?: number }) {
   const ozonIds = useMemo(
     () => products.filter((product) => product.marketplace === "ozon").map((product) => String(product.id)).sort(),
     [products],
@@ -1682,50 +1687,49 @@ function WbPanel({ products }: { products: Product[] }) {
     },
   });
   if (!ozonIds.length) return null;
+  if (statusQuery.isLoading) return <div className="table-note"><Loader2 className="spin" size={14} /> Проверяю карточки WB…</div>;
+  if (statusQuery.error) return <div className="inline-error">Статус WB недоступен: {String((statusQuery.error as Error).message)}</div>;
   const data = statusQuery.data;
   const items = data?.items || [];
   return (
-    <section className="detail-section">
-      <div className="section-title">
-        <div>
-          <span>Wildberries</span>
-          <h3>Состояние Wildberries</h3>
-        </div>
-      </div>
-      {statusQuery.isLoading ? <div className="table-note"><Loader2 className="spin" size={14} /> Проверяю карточки WB…</div> : null}
-      {statusQuery.error ? <div className="inline-error">Статус WB недоступен: {String((statusQuery.error as Error).message)}</div> : null}
+    <>
       {data && !data.configured ? <div className="table-note">Кабинет Wildberries не настроен — добавьте API-токен в Настройки → Маркетплейсы.</div> : null}
       {data?.wbError ? <div className="inline-error">WB API: {data.wbError}</div> : null}
-      <div className="marketplace-rows">
-        {items.map((item) => (
-          <div className="marketplace-row" key={item.productId}>
-            <div>
-              <strong>WB</strong>
-              <span>{item.nmID ? `nmID ${item.nmID}` : item.productId}</span>
-            </div>
-            {item.onWb ? (
-              <span className={`pill ${item.sellable ? "ok" : "warn"}`}>
-                {item.sellable ? "В продаже WB" : item.belowMin ? "Карточка есть · ниже порога" : "Карточка на WB"}
-              </span>
-            ) : (
-              <span className="pill warn">Не на WB</span>
-            )}
-            <div>
-              <small>Цена WB</small>
-              <strong>{item.priceRub ? money(item.priceRub) : "—"}</strong>
-              {item.purchaseRub ? <small>закупка {money(item.purchaseRub)}</small> : null}
-            </div>
-            <div className="marketplace-flags">
-              {item.minSupplierPriceRub ? <span className="formula-chip muted">Порог закупки: {money(item.minSupplierPriceRub)}</span> : null}
-              {item.onWb ? <span className={`formula-chip ${item.hasPhotos ? "muted" : ""}`}>{item.hasPhotos ? "фото загружены" : "фото нет (досылаются)"}</span> : null}
-              {(item.reasons || []).map((reason) => <span className="formula-chip" key={reason}>{wbSkipLabel(reason)}</span>)}
-              {item.onWb && item.belowMin ? <span className="formula-chip">остаток обнуляется синком — закупка ниже порога</span> : null}
-            </div>
+      {items.map((item) => (
+        <div className="marketplace-row" key={`wb-${item.productId}`}>
+          <div>
+            <strong>WB{item.vendorCode ? ` · ${item.vendorCode}` : ""}</strong>
+            <span>{item.nmID ? `nmID ${item.nmID}` : item.vendorCode || item.productId}</span>
           </div>
-        ))}
-        {!items.length && !statusQuery.isLoading && !statusQuery.error ? <div className="table-note">Нет строк Ozon — на WB выгружаются товары Ozon.</div> : null}
-      </div>
-    </section>
+          {item.onWb ? (
+            <span className={`pill ${item.sellable ? "success" : "warning"}`}>
+              {item.sellable ? "Активен WB" : item.belowMin ? "Карточка есть · ниже порога" : "Карточка на WB"}
+            </span>
+          ) : (
+            <span className="pill warning">Не на WB</span>
+          )}
+          <div>
+            <small>Цена</small>
+            <strong>{item.priceRub ? money(item.priceRub) : "—"}</strong>
+            {item.purchaseRub ? <small>закупка {money(item.purchaseRub)}</small> : null}
+          </div>
+          <div>
+            <small>Остаток</small>
+            <strong>{item.onWb ? (item.stock ?? "—") : "—"}</strong>
+          </div>
+          <div>
+            <small>Общие PM</small>
+            <strong>{groupLinkCount}</strong>
+          </div>
+          <div className="marketplace-flags">
+            {item.minSupplierPriceRub ? <span className="formula-chip muted">Порог закупки: {money(item.minSupplierPriceRub)}</span> : null}
+            {item.onWb ? <span className={`formula-chip ${item.hasPhotos ? "muted" : ""}`}>{item.hasPhotos ? "фото загружены" : "фото нет (досылаются)"}</span> : null}
+            {(item.reasons || []).map((reason) => <span className="formula-chip" key={reason}>{wbSkipLabel(reason)}</span>)}
+            {item.onWb && item.belowMin ? <span className="formula-chip">остаток обнуляется синком — закупка ниже порога</span> : null}
+          </div>
+        </div>
+      ))}
+    </>
   );
 }
 
@@ -2048,9 +2052,7 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
         <Stat label="Привязки" value={groupLinkCount} />
       </div>
       <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} readOnly={demoMode} />
-      <MarketplaceRows products={products} breakdown={breakdown} />
-      {!demoMode ? <AvitoPanel products={products} canEdit={isAdmin} /> : null}
-      {!demoMode ? <WbPanel products={products} /> : null}
+      <MarketplaceRows products={products} breakdown={breakdown} canEdit={isAdmin && !demoMode} withExternal={!demoMode} />
       {isAdmin && !demoMode ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <AiImagesPanel product={primary} products={products} onSaved={refreshDetail} /> : null}

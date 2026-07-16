@@ -11,7 +11,7 @@
 //
 // Прогресс и итог каждого шага пишутся в data/wb-chain-result.json — их отдаёт
 // GET /api/wb/chain/result (наблюдение без SSH). Бизнес-правило: на WB только
-// товары с закупкой поставщика ≥ minSupplierPriceRub (деф. 14 500 ₽).
+// товары с закупкой поставщика ≥ minSupplierPriceRub (деф. 15 000 ₽).
 //
 // stocks/prices трогают ТОЛЬКО карточки, привязанные к нашим товарам Ozon
 // (vendorCode = offerId). Ручные карточки кабинета (sultane*/sklad*) не трогаем.
@@ -64,6 +64,13 @@ async function stepPreview() {
 async function stepApply(account, evaluated, limit) {
   const rules = await server.readWbImportRules();
   if (!rules.subjectId) throw new Error("Не задан subjectId в правилах WB");
+  // ТН ВЭД для новых карточек: код из правил или первый из справочника WB.
+  let tnvedCharc = null;
+  try {
+    tnvedCharc = await server.resolveWbTnvedCharacteristic(account, rules);
+  } catch (error) {
+    console.error("tnved resolve failed:", error?.message || String(error));
+  }
   const existingCards = await server.wbCardsList(account);
   const existingVendorCodes = new Set(existingCards.map((card) => clean(card.vendorCode).toLowerCase()).filter(Boolean));
   const candidates = evaluated
@@ -80,7 +87,7 @@ async function stepApply(account, evaluated, limit) {
   const errors = [];
   for (const chunk of server.chunkArray(ready, 50)) {
     try {
-      await server.wbCardsUpload(account, chunk.map((listing) => server.buildWbCardPayload(listing)));
+      await server.wbCardsUpload(account, chunk.map((listing) => server.buildWbCardPayload(listing, tnvedCharc)));
       uploaded += chunk.length;
       console.log(`uploaded chunk: +${chunk.length} (total ${uploaded})`);
     } catch (error) {
@@ -91,10 +98,17 @@ async function stepApply(account, evaluated, limit) {
     candidates: candidates.length,
     alreadyOnWb: existingVendorCodes.size,
     uploaded,
+    tnved: tnvedCharc ? tnvedCharc.code : null,
     skippedNoBarcode: candidates.length - ready.length,
     errors: errors.slice(0, 20),
   });
   return uploaded;
+}
+
+// Дозаполнение ТН ВЭД в уже созданных карточках (cards/update).
+async function stepTnved(account) {
+  const result = await server.backfillWbTnvedCharacteristics(account, {});
+  recordStep("tnved", result);
 }
 
 // Создание карточек на WB асинхронное: ждём, пока список карточек перестанет
@@ -125,14 +139,20 @@ async function stepErrors(account) {
 }
 
 async function stepMedia(account, limit) {
+  // Темп media/save: Token Bucket WB на продавца. Базовая пауза + честный
+  // X-Ratelimit-Retry в ретраях wbRequest — иначе штраф лимитера не остывает
+  // (ночной прогон: 46/50 ошибок 429 при паузе 1.2с).
+  const pauseMs = Math.max(1000, Number(process.env.WB_MEDIA_PAUSE_MS || 10000) || 10000);
   const cards = await server.wbCardsList(account);
   const withoutPhoto = cards
     .filter((card) => Number(card.nmID) > 0 && !(Array.isArray(card.photos) && card.photos.length))
     .slice(0, limit);
   const linked = await server.loadWbLinkedOzonProducts(withoutPhoto.map((card) => card.vendorCode));
   const prisma = server.getPrisma();
+  recordStep("media-start", { cardsWithoutPhoto: withoutPhoto.length, linked: linked.size, pauseMs });
   let sent = 0;
   let skippedNoImages = 0;
+  let consecutive429 = 0;
   const errors = [];
   for (const card of withoutPhoto) {
     const product = linked.get(clean(card.vendorCode).toLowerCase());
@@ -146,11 +166,41 @@ async function stepMedia(account, limit) {
       skippedNoImages += 1;
       continue;
     }
-    const result = await server.wbMediaSave(account, card.nmID, imageUrls.slice(0, 10));
-    if (result.ok) sent += 1;
-    else errors.push({ vendorCode: card.vendorCode, nmID: card.nmID, error: result.error || "media_save_failed" });
-    if ((sent + errors.length) % 50 === 0) {
-      state.steps.push({ step: "media-progress", at: new Date().toISOString(), sent, errors: errors.length });
+    // Глобальный лимитер WB на продавца: пауза между вызовами + не валим весь
+    // шаг из-за одной карточки (ретраи 429 внутри wbRequest). Если WB отклонил
+    // весь список URL — пробуем только первое фото (частая причина: один битый
+    // URL валит весь вызов media/save).
+    try {
+      let result = await server.wbMediaSave(account, card.nmID, imageUrls.slice(0, 10));
+      if (!result.ok && imageUrls.length > 1) {
+        await sleep(pauseMs);
+        result = await server.wbMediaSave(account, card.nmID, imageUrls.slice(0, 1));
+      }
+      if (result.ok) {
+        sent += 1;
+        consecutive429 = 0;
+      } else {
+        errors.push({ vendorCode: card.vendorCode, nmID: card.nmID, wb: result.result, error: result.error || "media_save_failed" });
+      }
+    } catch (error) {
+      errors.push({ vendorCode: card.vendorCode, nmID: card.nmID, statusCode: error?.statusCode, wb: error?.wb, error: error?.message || String(error) });
+      // Лимит WB исчерпан даже после ретраев — даём лимитеру остыть. Серия
+      // сплошных 429 значит, что штраф не остывает, — прерываем шаг, чтобы
+      // не кормить лимитер: остаток дошлёт следующий запуск media.
+      if (Number(error?.statusCode) === 429) {
+        consecutive429 += 1;
+        if (consecutive429 >= 8) {
+          recordStep("media-aborted", { reason: "8 подряд 429 — лимитер WB не остывает", sent, errors: errors.length, lastError: errors[errors.length - 1] });
+          break;
+        }
+        await sleep(120000);
+      } else {
+        consecutive429 = 0;
+      }
+    }
+    await sleep(pauseMs);
+    if ((sent + errors.length) % 10 === 0) {
+      state.steps.push({ step: "media-progress", at: new Date().toISOString(), sent, errors: errors.length, lastError: errors[errors.length - 1] || null });
       saveState();
     }
   }
@@ -234,7 +284,18 @@ async function main() {
     const evaluated = await stepPreview();
     await stepApply(account, evaluated, 20000);
     await stepWaitCards(account);
-    await stepErrors(account);
+    // Отчёт об ошибках карточек — информационный, не валим цепочку из-за него.
+    try {
+      await stepErrors(account);
+    } catch (error) {
+      recordStep("card-errors", { error: error?.message || String(error) });
+    }
+    // ТН ВЭД — тоже не блокирует фото/цены/остатки.
+    try {
+      await stepTnved(account);
+    } catch (error) {
+      recordStep("tnved", { statusCode: error?.statusCode, error: error?.message || String(error) });
+    }
     await stepMedia(account, 20000);
     await stepPrices(account);
     await stepStocks(account, defaultWarehouseId);
@@ -246,6 +307,44 @@ async function main() {
     await stepApply(account, evaluated, limit);
   } else if (mode === "errors") {
     await stepErrors(account);
+  } else if (mode === "tnved") {
+    await stepTnved(account);
+  } else if (mode === "diag") {
+    // Полная диагностика падающих вызовов content-API: статус и тело ошибки.
+    try {
+      const errors = await server.wbCardErrors(account);
+      recordStep("diag-card-errors", { ok: true, total: errors.length });
+    } catch (error) {
+      recordStep("diag-card-errors", { statusCode: error?.statusCode, wb: error?.wb, message: error?.message });
+    }
+    const cards = await server.wbCardsList(account);
+    const target = cards.find((card) => Number(card.nmID) > 0 && !(Array.isArray(card.photos) && card.photos.length));
+    if (target) {
+      const linked = await server.loadWbLinkedOzonProducts([target.vendorCode]);
+      const product = linked.get(clean(target.vendorCode).toLowerCase());
+      let imageUrls = [];
+      if (product) {
+        const prisma = server.getPrisma();
+        const row = await prisma.warehouseProduct.findUnique({ where: { id: product.id }, select: { raw: true } });
+        const normalized = row?.raw && typeof row.raw === "object" ? server.normalizeWarehouseProduct(row.raw) : null;
+        if (normalized) imageUrls = server.wbExtractImageUrls(normalized);
+      }
+      try {
+        const result = await server.wbMediaSave(account, target.nmID, imageUrls.slice(0, 10));
+        recordStep("diag-media-save", { nmID: target.nmID, vendorCode: target.vendorCode, urls: imageUrls.slice(0, 3), ...result });
+      } catch (error) {
+        recordStep("diag-media-save", {
+          nmID: target.nmID,
+          vendorCode: target.vendorCode,
+          urls: imageUrls.slice(0, 3),
+          statusCode: error?.statusCode,
+          wb: error?.wb,
+          message: error?.message,
+        });
+      }
+    } else {
+      recordStep("diag-media-save", { note: "нет карточек без фото" });
+    }
   } else if (mode === "cards") {
     const cards = await server.wbCardsList(account);
     recordStep("cards", {
