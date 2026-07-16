@@ -293,7 +293,30 @@ async function main() {
   // Склад FBS «Opt» по умолчанию (id 1048198, deliveryType 1).
   const defaultWarehouseId = Number(process.argv[3] || account.campaignId || 0) || 1048198;
 
-  if (mode === "chain") {
+  if (mode === "chain-nomedia") {
+    // Полная цепочка без шага media: фото ведёт фоновый шедулер
+    // wb-media-backfill на worker (квота WB ~1 фото/15 мин).
+    const evaluated = await stepPreview();
+    await stepApply(account, evaluated, 20000);
+    await stepWaitCards(account);
+    try {
+      await stepErrors(account);
+    } catch (error) {
+      recordStep("card-errors", { error: error?.message || String(error) });
+    }
+    try {
+      await stepTnved(account);
+    } catch (error) {
+      recordStep("tnved", { statusCode: error?.statusCode, error: error?.message || String(error) });
+    }
+    try {
+      await stepEnrich(account);
+    } catch (error) {
+      recordStep("enrich", { statusCode: error?.statusCode, error: error?.message || String(error) });
+    }
+    await stepPrices(account);
+    await stepStocks(account, defaultWarehouseId);
+  } else if (mode === "chain") {
     const evaluated = await stepPreview();
     await stepApply(account, evaluated, 20000);
     await stepWaitCards(account);
