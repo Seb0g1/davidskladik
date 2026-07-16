@@ -123,10 +123,10 @@ async function wbCardErrors(account, { maxItems = 5000 } = {}) {
 }
 
 // Фото по URL для существующей карточки (nmID уже присвоен).
-async function wbMediaSave(account, nmId, urls = []) {
+async function wbMediaSave(account, nmId, urls = [], options = {}) {
   const data = Array.isArray(urls) ? urls.map((url) => cleanText(url)).filter(Boolean) : [];
   if (!Number(nmId) || !data.length) return { ok: false, error: "Нужны nmId и список URL фото." };
-  const result = await wbRequest(account, "content", "POST", "/content/v3/media/save", { nmId: Number(nmId), data });
+  const result = await wbRequest(account, "content", "POST", "/content/v3/media/save", { nmId: Number(nmId), data }, options);
   return { ok: !result?.error, result };
 }
 

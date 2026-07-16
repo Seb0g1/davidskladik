@@ -8,7 +8,7 @@ const WB_API_HOSTS = {
   statistics: "https://statistics-api.wildberries.ru",
 };
 
-async function wbRequest(account, host, method, pathname, body) {
+async function wbRequest(account, host, method, pathname, body, options = {}) {
   if (!account?.apiKey) {
     const error = new Error("Не задан API-токен Wildberries: добавьте кабинет WB в настройках маркетплейсов.");
     error.statusCode = 400;
@@ -17,7 +17,9 @@ async function wbRequest(account, host, method, pathname, body) {
   const baseUrl = WB_API_HOSTS[host];
   if (!baseUrl) throw new Error(`Неизвестный хост WB API: ${host}`);
 
-  const attempts = Math.max(1, Number(process.env.WB_REQUEST_MAX_ATTEMPTS || 3) || 3);
+  // options.attempts — точечный override: фоновому шедулеру media нужен
+  // fail-fast без ретраев (квота WB media/save — единицы запросов в окно).
+  const attempts = Math.max(1, Number(options.attempts || process.env.WB_REQUEST_MAX_ATTEMPTS || 3) || 3);
   const timeoutMs = Math.max(1000, Number(process.env.WB_REQUEST_TIMEOUT_MS || 30000) || 30000);
   let lastError = null;
 
@@ -46,6 +48,12 @@ async function wbRequest(account, host, method, pathname, body) {
         // Token Bucket WB: X-Ratelimit-Retry — сколько секунд ждать до
         // следующей попытки. Игнорировать его = кормить штраф лимитера.
         error.retryAfterSec = Number(response.headers.get("x-ratelimit-retry") || response.headers.get("retry-after") || 0) || 0;
+        error.rateLimit = {
+          limit: response.headers.get("x-ratelimit-limit") || undefined,
+          remaining: response.headers.get("x-ratelimit-remaining") || undefined,
+          retry: response.headers.get("x-ratelimit-retry") || undefined,
+          retryAfter: response.headers.get("retry-after") || undefined,
+        };
         // 429 у WB — жёсткие поминутные лимиты, ждём дольше обычного.
         if (![429, 500, 502, 503, 504].includes(response.status) || attempt >= attempts) throw error;
         lastError = error;

@@ -300,6 +300,16 @@ function startBackgroundSchedulers() {
       nextRunAt: yandexPhotoBackfillNextRunAt,
     });
   }
+  if (wbMediaBackfillEnabled) {
+    // Короткая первая задержка: квота WB media/save крошечная (~1 фото/15 мин),
+    // каждый рестарт worker не должен отодвигать следующий кадр.
+    scheduleWbMediaBackfill(90 * 1000);
+    logger.info("wb media backfill scheduler enabled", {
+      everyMinutes: wbMediaBackfillIntervalMinutes,
+      perRun: wbMediaBackfillPerRunLimit,
+      nextRunAt: wbMediaBackfillNextRunAt,
+    });
+  }
   if (ozonNewOfferDiscoveryEnabled) {
     // Short initial delay on purpose: the worker restarts often enough that a long
     // first delay would keep pushing the run past the next restart.

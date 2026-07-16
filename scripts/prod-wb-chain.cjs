@@ -183,7 +183,7 @@ async function stepMedia(account, limit) {
         errors.push({ vendorCode: card.vendorCode, nmID: card.nmID, wb: result.result, error: result.error || "media_save_failed" });
       }
     } catch (error) {
-      errors.push({ vendorCode: card.vendorCode, nmID: card.nmID, statusCode: error?.statusCode, wb: error?.wb, error: error?.message || String(error) });
+      errors.push({ vendorCode: card.vendorCode, nmID: card.nmID, statusCode: error?.statusCode, rateLimit: error?.rateLimit, wb: error?.wb, error: error?.message || String(error) });
       // Лимит WB исчерпан даже после ретраев — даём лимитеру остыть. Серия
       // сплошных 429 значит, что штраф не остывает, — прерываем шаг, чтобы
       // не кормить лимитер: остаток дошлёт следующий запуск media.
@@ -199,7 +199,8 @@ async function stepMedia(account, limit) {
       }
     }
     await sleep(pauseMs);
-    if ((sent + errors.length) % 10 === 0) {
+    // Первые ошибки пишем сразу (диагноз лимитера), дальше — каждые 10 карточек.
+    if (errors.length <= 3 || (sent + errors.length) % 10 === 0) {
       state.steps.push({ step: "media-progress", at: new Date().toISOString(), sent, errors: errors.length, lastError: errors[errors.length - 1] || null });
       saveState();
     }

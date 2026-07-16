@@ -106,6 +106,7 @@ AVITO_CLIENT_ID / AVITO_CLIENT_SECRET  OAuth-ключи Avito (client_credential
 WB_API_TOKEN           API-токен продавца Wildberries (или кабинет через UI)
 WB_WAREHOUSE_ID        ID склада WB FBS для остатков (опционально)
 WB_MIN_SUPPLIER_PRICE_RUB  порог закупки поставщика для WB (деф. 15000)
+WB_MEDIA_BACKFILL_ENABLED  фоновая досылка фото WB на worker (деф. true; лимит WB ~1 фото/15 мин)
 DEFAULT_WB_MARKUP      наценка WB по умолчанию (деф. 1.6)
 APP_USER / APP_PASSWORD / APP_SESSION_SECRET
 NODE_ENV               production требует APP_SESSION_SECRET
