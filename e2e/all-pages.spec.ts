@@ -50,7 +50,8 @@ test("все страницы открываются без крашей и page
     await link.click();
 
     // Страница отрендерила свою секцию (или явную заглушку) — не пустой экран.
-    const section = page.locator("main .page-section, main .access-denied-panel");
+    // .toolbar — WarehousePage; .settings-stack — SettingsPage (не используют .page-section)
+    const section = page.locator("main .page-section, main .access-denied-panel, main .toolbar, main .settings-stack");
     await expect(section.first(), `${label} (${href}): страница не отрендерилась`).toBeVisible({ timeout: 10_000 });
 
     expect(pageErrors, `${label} (${href}): необработанные исключения: ${pageErrors.join("; ")}`).toEqual([]);
