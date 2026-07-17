@@ -342,11 +342,11 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
         try {
           // Маркер для event_loop_blocked: батч реконсайлера — главный
           // подозреваемый в 9-10с блокировках (heap-качели ~1 ГБ за цикл).
-          setEventLoopBlockMarker("linked_reconciler_batch");
+          const closeMarker = setEventLoopBlockMarker("linked_reconciler_batch");
           try {
             result = await processLinkedReconcilerBatch(products);
           } finally {
-            setEventLoopBlockMarker("");
+            closeMarker();
           }
           totals.batches += 1;
           totals.products += result.products;

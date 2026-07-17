@@ -31,11 +31,11 @@ async function readSnapshot() {
     const text = await fs.readFile(snapshotPath, "utf8");
     // Десятки МБ одним JSON.parse — секунды блокировки event loop (watchdog
     // считает worker мёртвым); маркер атрибутирует блокировку в логе.
-    setEventLoopBlockMarker("pricemaster_snapshot_parse");
+    const closeMarker = setEventLoopBlockMarker("pricemaster_snapshot_parse");
     try {
       priceMasterSnapshotMemoryCache = JSON.parse(text);
     } finally {
-      setEventLoopBlockMarker("");
+      closeMarker();
     }
     return priceMasterSnapshotMemoryCache;
   } catch (error) {
@@ -62,12 +62,12 @@ async function writeSnapshot(snapshot) {
   const tmpPath = `${snapshotPath}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
   // Компактный JSON вместо pretty-print: 77 МБ файла — во многом отступы, а
   // stringify(…, null, 2) блокировал event loop в разы дольше компактного.
-  setEventLoopBlockMarker("pricemaster_snapshot_stringify");
+  const closeMarker = setEventLoopBlockMarker("pricemaster_snapshot_stringify");
   let serialized;
   try {
     serialized = JSON.stringify(snapshot);
   } finally {
-    setEventLoopBlockMarker("");
+    closeMarker();
   }
   await fs.writeFile(tmpPath, serialized, "utf8");
   try {
@@ -206,7 +206,7 @@ async function getPriceMasterSnapshotIndexes() {
   }
   // Индексация ~267k строк — заметная синхронная работа: маркер атрибутирует
   // блокировку event loop в логе event_loop_blocked.
-  setEventLoopBlockMarker("pricemaster_snapshot_index_build");
+  const closeMarker = setEventLoopBlockMarker("pricemaster_snapshot_index_build");
   const indexes = {
     byArticle: new Map(),
     byName: new Map(),
@@ -235,7 +235,7 @@ async function getPriceMasterSnapshotIndexes() {
     for (const rows of indexes.byName.values()) sortPriceMasterSnapshotRows(rows);
     for (const rows of indexes.byRowId.values()) sortPriceMasterSnapshotRows(rows);
   } finally {
-    setEventLoopBlockMarker("");
+    closeMarker();
   }
   priceMasterSnapshotIndexCache = {
     syncId: snapshot.syncId || null,

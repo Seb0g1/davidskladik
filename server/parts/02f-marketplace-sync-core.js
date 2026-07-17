@@ -5,15 +5,20 @@ async function runSync() {
     const previous = await readSnapshot();
     // Маркеры для event_loop_blocked: парсинг 267k строк MySQL и сравнение
     // снапшотов — крупные синхронные куски, идущие каждый цикл автосинка.
-    setEventLoopBlockMarker("pricemaster_mysql_dump");
+    const closeDumpMarker = setEventLoopBlockMarker("pricemaster_mysql_dump");
     let currentOffers;
     let compared;
     try {
       currentOffers = await getCurrentOffers(connection);
-      setEventLoopBlockMarker("pricemaster_compare_snapshots");
-      compared = compareSnapshots(previous.items || {}, currentOffers);
+      closeDumpMarker();
+      const closeCompareMarker = setEventLoopBlockMarker("pricemaster_compare_snapshots");
+      try {
+        compared = compareSnapshots(previous.items || {}, currentOffers);
+      } finally {
+        closeCompareMarker();
+      }
     } finally {
-      setEventLoopBlockMarker("");
+      closeDumpMarker();
     }
     const { currentItems, changes } = compared;
     // Автосинк гоняет runSync каждые ~10-30 мин; без изменений НЕ переписываем

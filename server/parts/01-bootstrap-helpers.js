@@ -376,10 +376,24 @@ function touchEventLoopHeartbeat() {
 // тяжёлой секции (setEventLoopBlockMarker) — атрибуция по маркеру и соседним
 // строкам лога.
 const eventLoopLagLogThresholdMs = Math.max(500, Number(process.env.EVENT_LOOP_LAG_LOG_THRESHOLD_MS || 2000) || 2000);
-let eventLoopBlockMarker = "";
+// Маркеры — МНОЖЕСТВО активных секций: секции с await внутри перемежаются, и
+// одна глобальная строка затиралась чужим finally (блокировки шли «без
+// маркера»). setEventLoopBlockMarker(name) открывает секцию и возвращает
+// функцию-закрытие; setEventLoopBlockMarker("") — совместимость (no-op close).
+const activeEventLoopBlockMarkers = new Map(); // name -> count
 
 function setEventLoopBlockMarker(marker = "") {
-  eventLoopBlockMarker = cleanText(marker);
+  const name = cleanText(marker);
+  if (!name) return () => {};
+  activeEventLoopBlockMarkers.set(name, (activeEventLoopBlockMarkers.get(name) || 0) + 1);
+  let closed = false;
+  return () => {
+    if (closed) return;
+    closed = true;
+    const count = (activeEventLoopBlockMarkers.get(name) || 0) - 1;
+    if (count > 0) activeEventLoopBlockMarkers.set(name, count);
+    else activeEventLoopBlockMarkers.delete(name);
+  };
 }
 
 {
@@ -392,7 +406,7 @@ function setEventLoopBlockMarker(marker = "") {
     if (lagMs >= eventLoopLagLogThresholdMs) {
       logger.warn("event_loop_blocked", {
         blockedMs: lagMs,
-        marker: eventLoopBlockMarker || undefined,
+        markers: activeEventLoopBlockMarkers.size ? Array.from(activeEventLoopBlockMarkers.keys()) : undefined,
         heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1048576),
         rssMb: Math.round(process.memoryUsage().rss / 1048576),
       });

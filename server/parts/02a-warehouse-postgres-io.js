@@ -208,14 +208,14 @@ async function writeWarehouse(warehouse, { writePostgres = true } = {}) {
   // not before — see withWarehouseMutation in 01-bootstrap-helpers.js.
   return withWarehouseMutation(async () => {
     warehouseWritePromise = warehouseWritePromise.then(async () => {
-      setEventLoopBlockMarker("warehouse_write_normalize");
+      const closeMarker = setEventLoopBlockMarker("warehouse_write_normalize");
       let materialized;
       let payload;
       try {
         materialized = materializeYandexExportedProductsForWarehouse(warehouse);
         payload = normalizeWarehousePayload(materialized.warehouse);
       } finally {
-        setEventLoopBlockMarker("");
+        closeMarker();
       }
       if (materialized.added > 0) {
         logger.info("materialized yandex exported products into warehouse", { added: materialized.added });

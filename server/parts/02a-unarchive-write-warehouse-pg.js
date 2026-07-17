@@ -1,11 +1,11 @@
 async function writeWarehouseToPostgres(prisma, payload) {
   // Маркер для event_loop_blocked: дельта-запись склада в Postgres гоняет
   // хеширование и сериализацию тысяч product.raw — кандидат в блокировщики.
-  setEventLoopBlockMarker("warehouse_postgres_write");
+  const closeMarker = setEventLoopBlockMarker("warehouse_postgres_write");
   try {
     await writeWarehouseToPostgresInner(prisma, payload);
   } finally {
-    setEventLoopBlockMarker("");
+    closeMarker();
   }
 }
 
