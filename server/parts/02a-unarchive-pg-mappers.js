@@ -12,15 +12,19 @@ function productToPostgresData(product = {}) {
     productId: normalized.productId || null,
     name: normalized.name || normalized.offerId || normalized.id,
     brand: resolveWarehouseBrand(normalized) || null,
-    images: cloneAuditValue(images) || {},
-    marketplaceState: cloneAuditValue(normalized.marketplaceState) || {},
+    // Без cloneAuditValue (JSON.parse(JSON.stringify())): Prisma сериализует
+    // Json-поля сам при вызове, а тройной JSON-клон каждого товара (raw —
+    // десятки КБ) на дельтах в тысячи строк блокировал event loop на ~10 с
+    // за чанк (event_loop_blocked: warehouse_postgres_write).
+    images: images || {},
+    marketplaceState: normalized.marketplaceState || {},
     currentPrice: roundPrice(normalized.marketplacePrice || 0) || null,
     targetPrice: roundPrice(normalized.nextPrice || normalized.targetPrice || normalized.calculatedPrice || 0) || null,
     targetStock: Number.isFinite(Number(normalized.targetStock)) ? Number(normalized.targetStock) : null,
     status: normalized.marketplaceState?.code || normalized.marketplaceState?.state || normalized.status || null,
     archived: Boolean(normalized.marketplaceState?.archived || normalized.archived),
     everHadLinks: Boolean(normalized.everHadLinks),
-    raw: cloneAuditValue(normalized) || {},
+    raw: normalized || {},
     createdAt: toDateOrNull(normalized.createdAt) || new Date(),
     updatedAt: toDateOrNull(normalized.updatedAt) || new Date(),
   };
