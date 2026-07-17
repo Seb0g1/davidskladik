@@ -45,6 +45,7 @@ const deployFiles = [
   "scripts/prod-alert-on-failure.cjs",
   // Цепочка WB: её запускает ежедневный cron (лимит WB — 1000 карточек/сутки)
   "scripts/prod-wb-chain.cjs",
+  "scripts/wb-chain-cron.sh",
   "scripts/inspect-bullmq-failed-jobs.cjs",
   "scripts/setup-prod-monitoring.cjs",
   "scripts/run-prod-bullmq-triage.cjs",

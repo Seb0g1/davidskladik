@@ -450,7 +450,16 @@ app.get("/api/wb/chain/result", requireAdmin, async (request, response, next) =>
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
-    response.json({ result, logTail });
+    // Ночной cron пишет в отдельный лог — его хвост нужен, чтобы диагностировать
+    // несработавший запуск без SSH.
+    let cronLogTail = "";
+    try {
+      const cronLog = await fs.readFile(path.join(dataDir, "wb-chain-cron.log"), "utf8");
+      cronLogTail = cronLog.split("\n").slice(-80).join("\n");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+    response.json({ result, logTail, cronLogTail });
   } catch (error) {
     next(error);
   }

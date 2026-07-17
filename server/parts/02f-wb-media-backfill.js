@@ -14,6 +14,27 @@ let wbMediaBackfillRunning = false;
 let wbMediaBackfillNextRunAt = null;
 const wbMediaBackfillStats = { totalSent: 0, lastSentAt: null, last429At: null, lastRetrySec: null, remaining: null, lastRunAt: null, lastStatus: "" };
 
+// Шедулер тикает на worker, а HTTP обслуживает api-процесс — worker пишет
+// снапшот статуса в data/, статус-роут читает его, когда локально пусто.
+const wbMediaBackfillStatusPath = path.join(dataDir, "wb-media-backfill-status.json");
+
+function wbMediaBackfillStatusSnapshot() {
+  return {
+    enabled: wbMediaBackfillEnabled,
+    intervalMinutes: wbMediaBackfillIntervalMinutes,
+    nextRunAt: wbMediaBackfillNextRunAt,
+    ...wbMediaBackfillStats,
+  };
+}
+
+function persistWbMediaBackfillStatus() {
+  if (!wbMediaBackfillTimer) return;
+  const snapshot = { ...wbMediaBackfillStatusSnapshot(), updatedAt: new Date().toISOString(), pid: process.pid };
+  fs.writeFile(wbMediaBackfillStatusPath, JSON.stringify(snapshot, null, 2)).catch((error) => {
+    logger.warn("wb media backfill status persist failed", { detail: error?.message || String(error) });
+  });
+}
+
 // Картинки Ozon-товара по vendorCode карточки WB (vendorCode = наш offerId).
 async function wbMediaBackfillImagesForVendorCode(prisma, vendorCode) {
   const code = cleanText(vendorCode).toLowerCase();
@@ -128,6 +149,7 @@ async function runWbMediaBackfill({ limit = wbMediaBackfillPerRunLimit, source =
     return { status: "error", error: error?.message || String(error) };
   } finally {
     wbMediaBackfillRunning = false;
+    persistWbMediaBackfillStatus();
   }
 }
 
@@ -150,16 +172,21 @@ function scheduleWbMediaBackfill(delayMs = null) {
     }
   }, normalizedDelay);
   wbMediaBackfillTimer.unref?.();
+  persistWbMediaBackfillStatus();
 }
 
-// Статус фоновой досылки фото WB (тикает на worker; на api видны только env).
+// Статус фоновой досылки фото WB (тикает на worker; на api отдаётся снапшот
+// worker из data/wb-media-backfill-status.json).
 app.get("/api/wb/media-backfill/status", async (_request, response) => {
-  response.json({
-    enabled: wbMediaBackfillEnabled,
-    intervalMinutes: wbMediaBackfillIntervalMinutes,
-    nextRunAt: wbMediaBackfillNextRunAt,
-    ...wbMediaBackfillStats,
-  });
+  if (!wbMediaBackfillTimer && !wbMediaBackfillStats.lastRunAt) {
+    try {
+      const saved = JSON.parse(await fs.readFile(wbMediaBackfillStatusPath, "utf8"));
+      return response.json({ ...saved, source: "worker" });
+    } catch {
+      // нет файла — worker ещё не тикал, отдаём локальное состояние
+    }
+  }
+  response.json({ ...wbMediaBackfillStatusSnapshot(), source: "local" });
 });
 
 // Ручной тик (admin): одна порция до первого 429.

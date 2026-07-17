@@ -13,6 +13,29 @@ let wbSyncRunning = false;
 let wbSyncNextRunAt = null;
 let wbSyncLastResult = null;
 
+// Шедулер тикает на worker, а HTTP обслуживает api-процесс — in-memory статус
+// снаружи не виден. Worker пишет снапшот в data/, статус-роут читает его,
+// когда в своём процессе шедулер не запущен.
+const wbSyncStatusPath = path.join(dataDir, "wb-sync-status.json");
+
+function wbSyncStatusSnapshot() {
+  return {
+    enabled: wbSyncEnabled,
+    intervalHours: wbSyncIntervalHours,
+    nextRunAt: wbSyncNextRunAt,
+    running: wbSyncRunning,
+    lastResult: wbSyncLastResult,
+  };
+}
+
+function persistWbSyncStatus() {
+  if (!wbSyncTimer) return;
+  const snapshot = { ...wbSyncStatusSnapshot(), updatedAt: new Date().toISOString(), pid: process.pid };
+  fs.writeFile(wbSyncStatusPath, JSON.stringify(snapshot, null, 2)).catch((error) => {
+    logger.warn("wb sync status persist failed", { detail: error?.message || String(error) });
+  });
+}
+
 async function runWbMarketplaceSync({ source = "auto" } = {}) {
   if (wbSyncRunning) return { status: "already_running" };
   const account = getWbAccountByTarget("wb");
@@ -100,6 +123,7 @@ async function runWbMarketplaceSync({ source = "auto" } = {}) {
     return result;
   } finally {
     wbSyncRunning = false;
+    persistWbSyncStatus();
   }
 }
 
@@ -127,17 +151,20 @@ function scheduleWbSync(delayMs = null) {
     }
   }, normalizedDelay);
   wbSyncTimer.unref?.();
+  persistWbSyncStatus();
 }
 
 // Статус и ручной запуск автосинка WB (выполняется в вызвавшем процессе).
 app.get("/api/wb/sync/status", async (_request, response) => {
-  response.json({
-    enabled: wbSyncEnabled,
-    intervalHours: wbSyncIntervalHours,
-    nextRunAt: wbSyncNextRunAt,
-    running: wbSyncRunning,
-    lastResult: wbSyncLastResult,
-  });
+  if (!wbSyncTimer && !wbSyncLastResult) {
+    try {
+      const saved = JSON.parse(await fs.readFile(wbSyncStatusPath, "utf8"));
+      return response.json({ ...saved, source: "worker" });
+    } catch {
+      // нет файла — worker ещё не тикал, отдаём локальное состояние
+    }
+  }
+  response.json({ ...wbSyncStatusSnapshot(), source: "local" });
 });
 
 app.post("/api/wb/sync/run", requireAdmin, async (request, response, next) => {
