@@ -74,9 +74,10 @@ async function findPriceMasterRowsForLinkFast(linkInput, usdRate, managedSupplie
   const negativeTtlMs = Math.max(60_000, Number(process.env.PM_LIVE_NEGATIVE_TTL_MS || 30 * 60_000) || 30 * 60_000);
   if (cached && cached.rows.length === 0 && Date.now() - cached.at < negativeTtlMs) return [];
 
-  // 1.2 с не хватало PM MySQL через туннель даже на здоровые запросы —
-  // дефолт поднят до 2.5 с (частоту live-запросов режет негативный кэш).
-  const timeoutMs = Math.max(250, Number(options.timeoutMs || process.env.LINK_SAVE_PM_TIMEOUT_MS || 2500));
+  // После GC-пауз (8-9 с) Node.js обрабатывает таймеры ДО poll-фазы (ответ MySQL),
+  // поэтому 2.5 с давало ложные timeouts даже если MySQL ответил во время паузы.
+  // Дефолт поднят до 12 с — переживает GC-паузу и укладывается в watchdog 15 с.
+  const timeoutMs = Math.max(250, Number(options.timeoutMs || process.env.LINK_SAVE_PM_TIMEOUT_MS || 12000));
   try {
     const liveRows = await Promise.race([
       findPriceMasterRowsForLink(link, usdRate, managedSuppliers),
