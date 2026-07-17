@@ -7021,10 +7021,16 @@ test("marketplace maintenance scheduler runs PM sync, marketplace sync and zero-
   assert.match(serverSource, /serverUnderMemoryPressure/);
 });
 
-test("interval auto sync avoids full marketplace import to prevent OOM", async () => {
+test("interval auto sync imports marketplaces on schedule with OOM guard", async () => {
   const serverSource = readServerSource();
   assert.match(serverSource, /autoSyncShouldImportMarketplaces/);
-  assert.match(serverSource, /buildWarehouseView\(\{ sync: autoSyncShouldImportMarketplaces\(trigger\) \}\)/);
+  // Периодический импорт (MARKETPLACE_IMPORT_HOURS) держит страницы на свежих
+  // данных маркетплейсов, но обязан пропускать тик под давлением памяти —
+  // полный импорт исторически ронял worker по OOM.
+  assert.match(serverSource, /MARKETPLACE_IMPORT_HOURS/);
+  assert.match(serverSource, /buildWarehouseView\(\{ sync: importMarketplaces \}\)/);
+  const importGuard = serverSource.match(/async function shouldRunIntervalMarketplaceImport\(\)[\s\S]{0,500}/)?.[0] || "";
+  assert.match(importGuard, /serverUnderMemoryPressure\(\)/);
   assert.match(serverSource, /runAutoSyncCycle\("interval"\)/);
 });
 

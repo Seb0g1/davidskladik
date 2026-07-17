@@ -3503,6 +3503,7 @@ button:disabled {
 .market-badge.market-ozon { color: #6db3ff; }
 .market-badge.market-yandex { color: #ffd25e; }
 .market-badge.market-wb { color: #d977ff; }
+.live-refresh-note { display: flex; align-items: center; gap: 6px; color: #7f92bd; font-size: 12px; margin: -4px 0 8px; }
 
 .templates-drawer-backdrop {
   position: fixed;

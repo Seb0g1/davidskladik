@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { AlertTriangle, Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, Users, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
-import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
+import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { BrandPicker } from "../components/BrandPicker";
 import { SelectField } from "../components/SelectField";
@@ -2007,6 +2007,28 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
   // without an explicit reload (PLAN-HARDENING.md 5.2).
   const refreshDetail = () => void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
 
+  // Живое обновление при открытии карточки: сервер тянет актуальные цены
+  // Ozon/Yandex по группе и сохраняет их (кулдаун на сервере — повторные
+  // открытия не жгут API), после чего карточка тихо перечитывается.
+  const [liveRefreshedAt, setLiveRefreshedAt] = useState("");
+  const liveRefreshedGroupRef = useRef("");
+  const liveRefresh = useMutation({
+    mutationFn: (productIds: string[]) => fetchJson("/api/warehouse/products/refresh-live", LiveRefreshSchema, mutationBody({ productIds })),
+    onSuccess: (payload) => {
+      if (payload.refreshed) {
+        setLiveRefreshedAt(payload.refreshedAt || new Date().toISOString());
+        void queryClient.invalidateQueries({ queryKey: ["warehouse", "group-detail", selectedGroup] });
+      }
+    },
+  });
+  useEffect(() => {
+    if (!selectedGroup || demoMode || !products.length) return;
+    if (liveRefreshedGroupRef.current === selectedGroup) return;
+    liveRefreshedGroupRef.current = selectedGroup;
+    liveRefresh.mutate(products.map((item) => item.id).filter(Boolean).slice(0, 20));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedGroup, demoMode, products.length]);
+
   if (!primary) {
     return (
       <aside className={`detail-panel ${selectedGroup ? "" : "empty-panel"}`}>
@@ -2056,6 +2078,15 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
         <Stat label="Остаток" value={primary.targetStock || primary.stock || "-"} />
         <Stat label="Привязки" value={groupLinkCount} />
       </div>
+      {!demoMode && (liveRefresh.isPending || liveRefreshedAt) ? (
+        <small className="live-refresh-note">
+          {liveRefresh.isPending ? (
+            <><Loader2 className="spin" size={11} /> Обновляю цены с маркетплейсов…</>
+          ) : (
+            <>Цены маркетплейсов обновлены в {new Date(liveRefreshedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</>
+          )}
+        </small>
+      ) : null}
       <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} readOnly={demoMode} />
       <MarketplaceRows products={products} breakdown={breakdown} canEdit={isAdmin && !demoMode} withExternal={!demoMode} />
       {isAdmin && !demoMode ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}

@@ -205,6 +205,40 @@ app.get("/api/warehouse/products/group-detail", async (request, response, next) 
   }
 });
 
+// Живое обновление цен маркетплейсов для открытой карточки: тянет актуальные
+// цены Ozon/Yandex по товарам группы и сохраняет их, не дожидаясь
+// периодического импорта. Кулдаун на товар — открытия карточки не жгут API.
+const productLiveRefreshAt = new Map(); // productId -> timestamp
+const productLiveRefreshCooldownMs = Math.max(30_000, Number(process.env.PRODUCT_LIVE_REFRESH_COOLDOWN_MS || 180_000) || 180_000);
+
+app.post("/api/warehouse/products/refresh-live", async (request, response, next) => {
+  try {
+    const productIds = (Array.isArray(request.body?.productIds) ? request.body.productIds : [])
+      .map((value) => cleanText(value))
+      .filter(Boolean)
+      .slice(0, 20);
+    if (!productIds.length) return response.status(400).json({ error: "Нужен productIds." });
+    const now = Date.now();
+    const dueIds = productIds.filter((id) => now - (productLiveRefreshAt.get(id) || 0) >= productLiveRefreshCooldownMs);
+    if (!dueIds.length) return response.json({ ok: true, refreshed: 0, skipped: "cooldown" });
+    for (const id of dueIds) productLiveRefreshAt.set(id, now);
+    if (productLiveRefreshAt.size > 5000) {
+      for (const [id, at] of productLiveRefreshAt) {
+        if (now - at >= productLiveRefreshCooldownMs) productLiveRefreshAt.delete(id);
+      }
+    }
+    const built = await buildFreshWarehouseProducts(dueIds, {
+      refreshPrices: true,
+      persistMutations: true,
+      batchPriceMaster: true,
+      priceMasterTimeoutMs: autoPricePmTimeoutMs,
+    });
+    response.json({ ok: true, refreshed: built.length, refreshedAt: new Date().toISOString() });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/warehouse/products/:id/detail", async (request, response, next) => {
   try {
     const sync = request.query.sync === "true";

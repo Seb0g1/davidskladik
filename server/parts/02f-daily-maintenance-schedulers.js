@@ -129,6 +129,37 @@ function scheduleDailySync() {
   }, delay);
 }
 
+// Входящие данные маркетплейсов (цены кабинета, остатки, статусы карточек)
+// обновлялись только суточным синком в 23:00 МСК — страницы и карточки жили
+// на вчерашних данных. Теперь интервальный автосинк раз в
+// MARKETPLACE_IMPORT_HOURS (деф. 3 ч; 0 — только daily) делает полный импорт
+// Ozon/Yandex. Отметка последнего импорта переживает рестарты worker в data/.
+const marketplaceImportEveryMs = Math.max(0, Number(process.env.MARKETPLACE_IMPORT_HOURS ?? 3) || 0) * 60 * 60 * 1000;
+const marketplaceImportStatePath = path.join(dataDir, "marketplace-import-state.json");
+let marketplaceImportLastAt = 0;
+
+async function shouldRunIntervalMarketplaceImport() {
+  if (!marketplaceImportEveryMs) return false;
+  // Полный импорт — самая тяжёлая по памяти операция worker (исторический OOM,
+  // из-за которого интервальному автосинку импорт вообще запрещали): под
+  // давлением heap пропускаем тик, импорт уйдёт следующему циклу.
+  if (serverUnderMemoryPressure()) return false;
+  if (!marketplaceImportLastAt) {
+    try {
+      const saved = JSON.parse(await fs.readFile(marketplaceImportStatePath, "utf8"));
+      marketplaceImportLastAt = new Date(saved.lastImportAt || 0).getTime() || 0;
+    } catch {
+      marketplaceImportLastAt = 0;
+    }
+  }
+  return Date.now() - marketplaceImportLastAt >= marketplaceImportEveryMs;
+}
+
+async function markIntervalMarketplaceImportDone() {
+  marketplaceImportLastAt = Date.now();
+  await fs.writeFile(marketplaceImportStatePath, JSON.stringify({ lastImportAt: new Date().toISOString() }, null, 2)).catch(() => {});
+}
+
 async function runAutoSyncCycle(trigger = "auto") {
   if (manualWarehouseSyncPromise) {
     logger.info("auto sync skipped: manual warehouse sync running");
@@ -141,7 +172,9 @@ async function runAutoSyncCycle(trigger = "auto") {
   autoSyncRunning = true;
   try {
     const result = await runSync();
-    const warehouse = await buildWarehouseView({ sync: autoSyncShouldImportMarketplaces(trigger) });
+    const importMarketplaces = autoSyncShouldImportMarketplaces(trigger) || await shouldRunIntervalMarketplaceImport();
+    const warehouse = await buildWarehouseView({ sync: importMarketplaces });
+    if (importMarketplaces) await markIntervalMarketplaceImportDone();
     const backgroundAutomation = await runTargetedBackgroundSupplierAutomations(result, warehouse);
     const automation = backgroundAutomation.automation;
     const recovery = backgroundAutomation.recovery;
@@ -159,6 +192,7 @@ async function runAutoSyncCycle(trigger = "auto") {
       : [];
     logger.info("auto sync complete", {
       trigger,
+      importMarketplaces,
       items: result.items,
       changes: result.changes,
       at: result.createdAt,

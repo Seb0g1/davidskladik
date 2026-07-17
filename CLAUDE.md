@@ -116,6 +116,7 @@ NODE_ENV               production требует APP_SESSION_SECRET
 SERVER_ROLE            api | worker (production)
 BACKGROUND_JOBS_ENABLED  true только для worker
 DAILY_SYNC_ENABLED / DAILY_SYNC_TIME
+MARKETPLACE_IMPORT_HOURS  периодический импорт данных Ozon/Yandex в автосинке (деф. 3 ч; 0 — только суточный)
 ```
 
 ### Runbook и дополнительная документация

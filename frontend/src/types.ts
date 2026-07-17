@@ -343,6 +343,13 @@ export const ProductRepairSchema = z.object({
   nextRetryAt: z.coerce.string().optional().nullable(),
 }).passthrough();
 
+export const LiveRefreshSchema = z.object({
+  ok: z.boolean().optional(),
+  refreshed: z.number().optional().default(0),
+  refreshedAt: z.coerce.string().optional().default(""),
+  skipped: z.coerce.string().optional().default(""),
+}).passthrough();
+
 export const SystemStatusSchema = z.object({
   ok: z.boolean().optional(),
   time: z.coerce.string().optional().default(""),
