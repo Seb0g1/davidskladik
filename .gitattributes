@@ -1,0 +1,2 @@
+# Shell-скрипты уезжают на прод по sftp как есть: CRLF ломает /bin/sh.
+*.sh text eol=lf
