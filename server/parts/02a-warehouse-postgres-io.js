@@ -208,8 +208,15 @@ async function writeWarehouse(warehouse, { writePostgres = true } = {}) {
   // not before — see withWarehouseMutation in 01-bootstrap-helpers.js.
   return withWarehouseMutation(async () => {
     warehouseWritePromise = warehouseWritePromise.then(async () => {
-      const materialized = materializeYandexExportedProductsForWarehouse(warehouse);
-      const payload = normalizeWarehousePayload(materialized.warehouse);
+      setEventLoopBlockMarker("warehouse_write_normalize");
+      let materialized;
+      let payload;
+      try {
+        materialized = materializeYandexExportedProductsForWarehouse(warehouse);
+        payload = normalizeWarehousePayload(materialized.warehouse);
+      } finally {
+        setEventLoopBlockMarker("");
+      }
       if (materialized.added > 0) {
         logger.info("materialized yandex exported products into warehouse", { added: materialized.added });
       }
@@ -219,7 +226,14 @@ async function writeWarehouse(warehouse, { writePostgres = true } = {}) {
       } else if (!shouldUsePostgresStorage()) {
         refreshWarehouseHashCache(payload);
       }
-      await writeWarehouseJsonPayload(payload);
+      // personal-warehouse.json (вырос до 181 МБ) — JSON-fallback: в
+      // postgres-режиме loadWarehouseMemory его не читает вовсе (склад идёт из
+      // Postgres), а сериализация файла блокировала event loop на 5-10 с при
+      // КАЖДОМ writeWarehouse (батч реконсайлера — каждые ~40 с). Пишем файл
+      // только вне postgres-режима, где он действительно источник данных.
+      if (!shouldUsePostgresStorage()) {
+        await writeWarehouseJsonPayload(payload);
+      }
       return payload;
     });
     return warehouseWritePromise;
