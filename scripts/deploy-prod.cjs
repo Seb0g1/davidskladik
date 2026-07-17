@@ -106,12 +106,9 @@ async function uploadRelativeFiles(conn, sftp, relativeFiles) {
 }
 
 function readFrontendBundleFiles() {
-  const indexHtml = fs.readFileSync(path.join(root, "public/app-modern/index.html"), "utf8");
-  const assets = [];
-  for (const match of indexHtml.matchAll(/\/app-modern\/(assets\/[^"']+)/g)) {
-    assets.push(`public/app-modern/${match[1]}`);
-  }
-  return ["public/app-modern/index.html", ...Array.from(new Set(assets))];
+  const assetsDir = path.join(root, "public/app-modern/assets");
+  const assets = fs.readdirSync(assetsDir).map((f) => `public/app-modern/assets/${f}`);
+  return ["public/app-modern/index.html", ...assets];
 }
 
 function runLocalPreDeploy() {
