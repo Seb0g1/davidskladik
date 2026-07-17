@@ -28,7 +28,15 @@ function searchPriceMasterSnapshotJsonRows(rows = [], { q = "", supplier = "", l
 async function readSnapshot() {
   if (priceMasterSnapshotMemoryCache) return priceMasterSnapshotMemoryCache;
   try {
-    priceMasterSnapshotMemoryCache = JSON.parse(await fs.readFile(snapshotPath, "utf8"));
+    const text = await fs.readFile(snapshotPath, "utf8");
+    // Десятки МБ одним JSON.parse — секунды блокировки event loop (watchdog
+    // считает worker мёртвым); маркер атрибутирует блокировку в логе.
+    setEventLoopBlockMarker("pricemaster_snapshot_parse");
+    try {
+      priceMasterSnapshotMemoryCache = JSON.parse(text);
+    } finally {
+      setEventLoopBlockMarker("");
+    }
     return priceMasterSnapshotMemoryCache;
   } catch (error) {
     if (error.code === "ENOENT" || error instanceof SyntaxError) {
@@ -52,7 +60,16 @@ async function writeSnapshot(snapshot) {
   // Атомарно: tmp + rename — обрыв процесса на середине записи (~77 МБ) не
   // оставляет усечённый snapshot.json (см. паттерн writeOzonUnarchiveDailyState).
   const tmpPath = `${snapshotPath}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
-  await fs.writeFile(tmpPath, JSON.stringify(snapshot, null, 2), "utf8");
+  // Компактный JSON вместо pretty-print: 77 МБ файла — во многом отступы, а
+  // stringify(…, null, 2) блокировал event loop в разы дольше компактного.
+  setEventLoopBlockMarker("pricemaster_snapshot_stringify");
+  let serialized;
+  try {
+    serialized = JSON.stringify(snapshot);
+  } finally {
+    setEventLoopBlockMarker("");
+  }
+  await fs.writeFile(tmpPath, serialized, "utf8");
   try {
     await fs.rename(tmpPath, snapshotPath);
   } catch (renameError) {
@@ -187,32 +204,39 @@ async function getPriceMasterSnapshotIndexes() {
   if (priceMasterSnapshotIndexCache?.syncId === snapshot.syncId && priceMasterSnapshotIndexCache?.createdAt === snapshot.createdAt) {
     return priceMasterSnapshotIndexCache.indexes;
   }
+  // Индексация ~267k строк — заметная синхронная работа: маркер атрибутирует
+  // блокировку event loop в логе event_loop_blocked.
+  setEventLoopBlockMarker("pricemaster_snapshot_index_build");
   const indexes = {
     byArticle: new Map(),
     byName: new Map(),
     byRowId: new Map(),
     rows: Object.values(snapshot.items || {}),
   };
-  for (const row of indexes.rows) {
-    const article = cleanText(row.article || row.NativeID || row.nativeId);
-    if (article) {
-      if (!indexes.byArticle.has(article)) indexes.byArticle.set(article, []);
-      indexes.byArticle.get(article).push(row);
+  try {
+    for (const row of indexes.rows) {
+      const article = cleanText(row.article || row.NativeID || row.nativeId);
+      if (article) {
+        if (!indexes.byArticle.has(article)) indexes.byArticle.set(article, []);
+        indexes.byArticle.get(article).push(row);
+      }
+      const name = cleanText(row.name || row.nativeName || row.NativeName).toLowerCase();
+      if (name) {
+        if (!indexes.byName.has(name)) indexes.byName.set(name, []);
+        indexes.byName.get(name).push(row);
+      }
+      const rowId = cleanText(row.rowId || row.RowID);
+      if (rowId) {
+        if (!indexes.byRowId.has(rowId)) indexes.byRowId.set(rowId, []);
+        indexes.byRowId.get(rowId).push(row);
+      }
     }
-    const name = cleanText(row.name || row.nativeName || row.NativeName).toLowerCase();
-    if (name) {
-      if (!indexes.byName.has(name)) indexes.byName.set(name, []);
-      indexes.byName.get(name).push(row);
-    }
-    const rowId = cleanText(row.rowId || row.RowID);
-    if (rowId) {
-      if (!indexes.byRowId.has(rowId)) indexes.byRowId.set(rowId, []);
-      indexes.byRowId.get(rowId).push(row);
-    }
+    for (const rows of indexes.byArticle.values()) sortPriceMasterSnapshotRows(rows);
+    for (const rows of indexes.byName.values()) sortPriceMasterSnapshotRows(rows);
+    for (const rows of indexes.byRowId.values()) sortPriceMasterSnapshotRows(rows);
+  } finally {
+    setEventLoopBlockMarker("");
   }
-  for (const rows of indexes.byArticle.values()) sortPriceMasterSnapshotRows(rows);
-  for (const rows of indexes.byName.values()) sortPriceMasterSnapshotRows(rows);
-  for (const rows of indexes.byRowId.values()) sortPriceMasterSnapshotRows(rows);
   priceMasterSnapshotIndexCache = {
     syncId: snapshot.syncId || null,
     createdAt: snapshot.createdAt || null,

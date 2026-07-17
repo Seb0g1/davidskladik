@@ -3,8 +3,37 @@ async function runSync() {
   try {
     connection = await pool.getConnection();
     const previous = await readSnapshot();
-    const currentOffers = await getCurrentOffers(connection);
-    const { currentItems, changes } = compareSnapshots(previous.items || {}, currentOffers);
+    // Маркеры для event_loop_blocked: парсинг 267k строк MySQL и сравнение
+    // снапшотов — крупные синхронные куски, идущие каждый цикл автосинка.
+    setEventLoopBlockMarker("pricemaster_mysql_dump");
+    let currentOffers;
+    let compared;
+    try {
+      currentOffers = await getCurrentOffers(connection);
+      setEventLoopBlockMarker("pricemaster_compare_snapshots");
+      compared = compareSnapshots(previous.items || {}, currentOffers);
+    } finally {
+      setEventLoopBlockMarker("");
+    }
+    const { currentItems, changes } = compared;
+    // Автосинк гоняет runSync каждые ~10-30 мин; без изменений НЕ переписываем
+    // мир: writeSnapshot — это stringify ~77 МБ + запись файла + Postgres +
+    // сброс всех индексов (переиндексация 267k строк при следующем обращении).
+    // Именно эта пила блокировала event loop worker до рестартов watchdog'ом.
+    // Прежние syncId/createdAt сохраняются — кэши индексов остаются валидными.
+    if (previous.syncId && !changes.length
+      && Object.keys(currentItems).length === Object.keys(previous.items || {}).length) {
+      const unchangedResult = {
+        syncId: previous.syncId,
+        createdAt: previous.createdAt,
+        items: Object.keys(currentItems).length,
+        changes: 0,
+        changeCounts: {},
+        unchanged: true,
+      };
+      Object.defineProperty(unchangedResult, "changedRows", { value: [], enumerable: false, configurable: false });
+      return unchangedResult;
+    }
     const syncId = crypto.randomUUID();
     const snapshot = {
       syncId,

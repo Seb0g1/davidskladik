@@ -370,6 +370,37 @@ function touchEventLoopHeartbeat() {
   eventLoopHeartbeatAt = Date.now();
 }
 
+// Watchdog рестартует worker, когда event loop заблокирован (8с+ без ответа
+// /health, 31 рестарт за 16.07), но виновника в логах не видно. Сэмплер меряет
+// дрейф таймера и логирует блокировки дольше порога вместе с маркером текущей
+// тяжёлой секции (setEventLoopBlockMarker) — атрибуция по маркеру и соседним
+// строкам лога.
+const eventLoopLagLogThresholdMs = Math.max(500, Number(process.env.EVENT_LOOP_LAG_LOG_THRESHOLD_MS || 2000) || 2000);
+let eventLoopBlockMarker = "";
+
+function setEventLoopBlockMarker(marker = "") {
+  eventLoopBlockMarker = cleanText(marker);
+}
+
+{
+  const sampleIntervalMs = 500;
+  let eventLoopLagExpectedAt = Date.now() + sampleIntervalMs;
+  const eventLoopLagTimer = setInterval(() => {
+    const now = Date.now();
+    const lagMs = now - eventLoopLagExpectedAt;
+    eventLoopLagExpectedAt = now + sampleIntervalMs;
+    if (lagMs >= eventLoopLagLogThresholdMs) {
+      logger.warn("event_loop_blocked", {
+        blockedMs: lagMs,
+        marker: eventLoopBlockMarker || undefined,
+        heapUsedMb: Math.round(process.memoryUsage().heapUsed / 1048576),
+        rssMb: Math.round(process.memoryUsage().rss / 1048576),
+      });
+    }
+  }, sampleIntervalMs);
+  eventLoopLagTimer.unref?.();
+}
+
 function isEventLoopHeartbeatHealthy(ageMs, maxAgeMs = eventLoopHeartbeatMaxAgeMs) {
   return Number(ageMs) < maxAgeMs;
 }
