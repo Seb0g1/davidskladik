@@ -26,7 +26,7 @@ export default defineConfig({
     // Allow a tiny ratio of diff pixels for font-antialiasing jitter across runs.
     toHaveScreenshot: { animations: "disabled", caret: "hide", maxDiffPixelRatio: 0.01 },
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"], channel: "chrome" } }],
   webServer: {
     command: "npm run frontend:dev",
     url: "http://localhost:5173/app-modern/",

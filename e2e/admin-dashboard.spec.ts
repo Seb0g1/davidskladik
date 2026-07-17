@@ -13,12 +13,16 @@ import { test, expect } from "@playwright/test";
 // the app's own route matching expects bare /app/... pathnames (true in production, where the
 // express server serves /app/* directly).
 test.beforeEach(async ({ page }) => {
-  // Порядок важен: первый совпавший обработчик выигрывает. Специфичные маршруты
-  // должны быть зарегистрированы РАНЬШЕ catch-all, иначе **/api/** перехватит /api/session.
-  await page.route("**/api/notifications/stream", (route) => route.abort());
-  await page.route("**/api/session", (route) => route.fulfill({ json: { authenticated: true, role: "admin", username: "admin" } }));
-  await page.route("**/api/**", (route) => route.fulfill({ json: {} }));
+  // Один обработчик: Playwright использует LIFO (последний зарегистрированный
+  // выигрывает), поэтому несколько page.route() дают непредсказуемый порядок.
+  await page.route("**/api/**", (route) => {
+    const url = route.request().url();
+    if (url.includes("/api/notifications/stream")) return route.abort();
+    if (url.includes("/api/session")) return route.fulfill({ json: { authenticated: true, role: "admin", username: "admin" } });
+    return route.fulfill({ json: {} });
+  });
   await page.goto("/app-modern/");
+  await page.waitForSelector('.side-nav-links a[href="/app/dashboard"]', { timeout: 10_000 });
   await page.locator('.side-nav-links a[href="/app/dashboard"]').click();
   await page.waitForSelector(".dashboard-metrics");
 });

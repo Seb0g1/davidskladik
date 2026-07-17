@@ -1,1 +1,0 @@
-import{$n as e,nr as t}from"./index-BQwp2WV3.js";function n({title:e,subtitle:t,action:n}){return(0,r.jsxs)(`section`,{className:`page-heading`,children:[(0,r.jsxs)(`div`,{children:[(0,r.jsx)(`span`,{className:`eyebrow`,children:`ДавидСклад 2.0`}),(0,r.jsx)(`h1`,{children:e}),(0,r.jsx)(`p`,{children:t})]}),n]})}var r,i=t((()=>{r=e()}));export{i as n,n as t};
