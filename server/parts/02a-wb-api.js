@@ -80,6 +80,43 @@ async function wbCardsList(account, { limit = Number.POSITIVE_INFINITY, textSear
   return cards.slice(0, maxItems);
 }
 
+// Карточки в корзине WB (удалённые): их vendorCode остаётся занятым, и upload
+// с таким артикулом падает «vendor code is used in other cards» — при импорте
+// корзину надо исключать или восстанавливать. Пагинация: trashedAt + nmID.
+async function wbCardsTrashList(account, { limit = Number.POSITIVE_INFINITY } = {}) {
+  const maxItems = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : Number.MAX_SAFE_INTEGER;
+  const cards = [];
+  let cursor = { limit: Math.min(100, maxItems) };
+  while (cards.length < maxItems) {
+    const settings = {
+      cursor: { ...cursor, limit: Math.min(100, maxItems - cards.length) },
+      filter: { withPhoto: -1 },
+      sort: { ascending: false },
+    };
+    const data = await wbRequest(account, "content", "POST", "/content/v2/get/cards/trash?locale=ru", { settings });
+    const pageCards = Array.isArray(data?.cards) ? data.cards : [];
+    cards.push(...pageCards);
+    const nextCursor = data?.cursor || {};
+    if (!pageCards.length || pageCards.length < settings.cursor.limit) break;
+    cursor = { trashedAt: nextCursor.trashedAt, nmID: nextCursor.nmID };
+    if (!cursor.trashedAt || !cursor.nmID) break;
+  }
+  return cards.slice(0, maxItems);
+}
+
+// Восстановление карточек из корзины (лимит WB — 1000 nmID за запрос).
+async function wbCardsRecover(account, nmIDs = []) {
+  const ids = Array.from(new Set(nmIDs.map((value) => Number(value)).filter((value) => value > 0)));
+  if (!ids.length) return { ok: true, recovered: 0 };
+  const data = await wbRequest(account, "content", "POST", "/content/v2/cards/recover", { nmIDs: ids.slice(0, 1000) });
+  if (data?.error) {
+    const error = new Error(cleanText(data.errorText) || "WB отклонил восстановление карточек из корзины");
+    error.wb = data;
+    throw error;
+  }
+  return { ok: true, recovered: Math.min(ids.length, 1000), result: data };
+}
+
 // Создание карточек: [{ subjectID, variants: [{ vendorCode, title, description,
 // brand, dimensions, sizes: [{ techSize, wbSize, skus: [barcode] }] }] }].
 // Создание асинхронное: ошибки приходят позже в /cards/error/list.

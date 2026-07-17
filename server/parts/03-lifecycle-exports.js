@@ -330,6 +330,8 @@ module.exports = {
   wbExtractImageUrls,
   wbPing,
   wbCardsList,
+  wbCardsTrashList,
+  wbCardsRecover,
   wbCardsUpload,
   wbCardsUpdate,
   wbCardErrors,

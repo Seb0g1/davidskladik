@@ -4,7 +4,7 @@
 // Цепочка Wildberries НА СЕРВЕРЕ отдельным процессом с большим heap:
 //   cd /var/www/davidsklad/davidskladik && \
 //   MALLOC_ARENA_MAX=2 NODE_OPTIONS='--max-old-space-size=4096' \
-//   node scripts/prod-wb-chain.cjs <chain|preview|apply|cards|errors|media|prices|stocks> [args]
+//   node scripts/prod-wb-chain.cjs <chain|chain-nomedia|preview|apply|cards|errors|media|prices|stocks|trash-recover> [args]
 //
 // require(server.js) собирает всё приложение, но НЕ вызывает startServer():
 // ни HTTP-листенера, ни фоновых шедулеров — только функции.
@@ -44,6 +44,37 @@ function recordStep(step, result) {
   console.log(JSON.stringify(result, null, 2).slice(0, 4000));
 }
 
+// Глобальный лимитер WB штрафует кабинет на минуты, а wbRequest при 429 с
+// retry > 60 с кидает сразу (не кормит штраф) — шаг цепочки пережидает штраф
+// сам и повторяет попытку. Без этого ночной прогон умирал на prices сразу
+// после тяжёлого apply (17.07 03:42), и цены новых карточек ждали автосинка.
+// Финальный отказ пишется как шаг с ошибкой, цепочка идёт дальше.
+async function runStepWaiting429(stepName, fn, { attempts = 3, maxWaitMs = 30 * 60 * 1000 } = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      const statusCode = Number(error?.statusCode) || 0;
+      const retrySec = Number(error?.retryAfterSec) || 0;
+      if (statusCode === 429 && attempt < attempts) {
+        const waitMs = Math.min(maxWaitMs, Math.max(retrySec * 1000 + 5000, 120000));
+        state.steps.push({ step: `${stepName}-waiting429`, at: new Date().toISOString(), attempt, retrySec, waitSec: Math.round(waitMs / 1000) });
+        saveState();
+        console.log(`${stepName}: 429, жду ${Math.round(waitMs / 1000)}с (retry=${retrySec}с, попытка ${attempt}/${attempts})`);
+        await sleep(waitMs);
+        continue;
+      }
+      recordStep(stepName, {
+        statusCode: statusCode || undefined,
+        retrySec: retrySec || undefined,
+        error: error?.message || String(error),
+      });
+      return null;
+    }
+  }
+  return null;
+}
+
 async function stepPreview() {
   const { evaluated, total, rules } = await server.collectWbImportCandidates({});
   const summary = server.summarizeWbImportPreview(evaluated);
@@ -73,8 +104,31 @@ async function stepApply(account, evaluated, limit) {
   }
   const existingCards = await server.wbCardsList(account);
   const existingVendorCodes = new Set(existingCards.map((card) => clean(card.vendorCode).toLowerCase()).filter(Boolean));
+  // Карточки в корзине WB держат vendorCode занятым: upload с таким артикулом
+  // падает «vendor code is used in other cards» и валит весь чанк из 50 —
+  // корзину исключаем из кандидатов (восстановление — режим trash-recover).
+  let trashVendorCodes = new Set();
+  try {
+    trashVendorCodes = new Set((await server.wbCardsTrashList(account))
+      .map((card) => clean(card.vendorCode).toLowerCase())
+      .filter(Boolean));
+  } catch (error) {
+    console.error("trash list failed:", error?.message || String(error));
+  }
+  let skippedInTrash = 0;
+  let skippedDuplicate = 0;
+  const seenVendorCodes = new Set();
   const candidates = evaluated
-    .filter(({ result }) => result.ok && !existingVendorCodes.has(result.listing.vendorCode.toLowerCase()))
+    .filter(({ result }) => {
+      if (!result.ok) return false;
+      const code = result.listing.vendorCode.toLowerCase();
+      if (existingVendorCodes.has(code)) return false;
+      if (trashVendorCodes.has(code)) { skippedInTrash += 1; return false; }
+      // Дубли vendorCode внутри самого каталога тоже валят чанк целиком.
+      if (seenVendorCodes.has(code)) { skippedDuplicate += 1; return false; }
+      seenVendorCodes.add(code);
+      return true;
+    })
     .slice(0, limit)
     .map(({ result }) => result.listing);
   const withoutBarcode = candidates.filter((listing) => !listing.barcode);
@@ -164,6 +218,8 @@ async function stepApply(account, evaluated, limit) {
     aborted,
     tnved: tnvedCharc ? tnvedCharc.code : null,
     skippedNoBarcode: candidates.length - ready.length,
+    skippedInTrash,
+    skippedDuplicate,
     errors: errors.slice(0, 20),
   });
   return uploaded;
@@ -360,52 +416,51 @@ async function main() {
   if (mode === "chain-nomedia") {
     // Полная цепочка без шага media: фото ведёт фоновый шедулер
     // wb-media-backfill на worker (квота WB ~1 фото/15 мин).
+    // Все шаги после apply — через runStepWaiting429: отчётные (errors/tnved/
+    // enrich) не валят цепочку, а prices/stocks пережидают штраф лимитера.
     const evaluated = await stepPreview();
     await stepApply(account, evaluated, 20000);
     await stepWaitCards(account);
-    try {
-      await stepErrors(account);
-    } catch (error) {
-      recordStep("card-errors", { error: error?.message || String(error) });
-    }
-    try {
-      await stepTnved(account);
-    } catch (error) {
-      recordStep("tnved", { statusCode: error?.statusCode, error: error?.message || String(error) });
-    }
-    try {
-      await stepEnrich(account);
-    } catch (error) {
-      recordStep("enrich", { statusCode: error?.statusCode, error: error?.message || String(error) });
-    }
-    await stepPrices(account);
-    await stepStocks(account, defaultWarehouseId);
+    await runStepWaiting429("card-errors", () => stepErrors(account));
+    await runStepWaiting429("tnved", () => stepTnved(account));
+    await runStepWaiting429("enrich", () => stepEnrich(account));
+    await runStepWaiting429("prices", () => stepPrices(account));
+    await runStepWaiting429("stocks", () => stepStocks(account, defaultWarehouseId));
   } else if (mode === "chain") {
     const evaluated = await stepPreview();
     await stepApply(account, evaluated, 20000);
     await stepWaitCards(account);
-    // Отчёт об ошибках карточек — информационный, не валим цепочку из-за него.
-    try {
-      await stepErrors(account);
-    } catch (error) {
-      recordStep("card-errors", { error: error?.message || String(error) });
-    }
-    // ТН ВЭД — тоже не блокирует фото/цены/остатки.
-    try {
-      await stepTnved(account);
-    } catch (error) {
-      recordStep("tnved", { statusCode: error?.statusCode, error: error?.message || String(error) });
-    }
-    try {
-      await stepEnrich(account);
-    } catch (error) {
-      recordStep("enrich", { statusCode: error?.statusCode, error: error?.message || String(error) });
-    }
-    await stepPrices(account);
-    await stepStocks(account, defaultWarehouseId);
+    await runStepWaiting429("card-errors", () => stepErrors(account));
+    await runStepWaiting429("tnved", () => stepTnved(account));
+    await runStepWaiting429("enrich", () => stepEnrich(account));
+    await runStepWaiting429("prices", () => stepPrices(account));
+    await runStepWaiting429("stocks", () => stepStocks(account, defaultWarehouseId));
     // Фото — последними: квота WB media/save крошечная, шаг может идти часами
     // (основную догрузку ведёт фоновый шедулер wb-media-backfill на worker).
     await stepMedia(account, 20000);
+  } else if (mode === "trash-recover") {
+    // Восстанавливает из корзины WB карточки, которые по текущим правилам
+    // должны продаваться (vendorCode среди OK-кандидатов импорта). Их артикулы
+    // заняты корзиной и валили upload («vendor code is used in other cards»),
+    // а после восстановления карточки живут обычной жизнью: цены/остатки
+    // подхватит автосинк, фото — media-backfill.
+    const { evaluated } = await server.collectWbImportCandidates({});
+    const wanted = new Set(evaluated
+      .filter(({ result }) => result.ok)
+      .map(({ result }) => result.listing.vendorCode.toLowerCase()));
+    const trash = await server.wbCardsTrashList(account);
+    const matches = trash.filter((card) => wanted.has(clean(card.vendorCode).toLowerCase()));
+    recordStep("trash-scan", {
+      trashTotal: trash.length,
+      matchedCandidates: matches.length,
+      sample: matches.slice(0, 20).map((card) => ({ nmID: card.nmID, vendorCode: card.vendorCode, title: clean(card.title).slice(0, 60) })),
+    });
+    let recovered = 0;
+    for (const chunk of server.chunkArray(matches.map((card) => card.nmID), 1000)) {
+      const result = await server.wbCardsRecover(account, chunk);
+      recovered += result.recovered || 0;
+    }
+    recordStep("trash-recover", { recovered });
   } else if (mode === "preview") {
     await stepPreview();
   } else if (mode === "apply") {
