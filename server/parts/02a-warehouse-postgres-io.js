@@ -107,17 +107,30 @@ function mergeWarehouseProductsIntoMemory(products = [], { suppliers = null } = 
   const normalized = (Array.isArray(products) ? products : []).map(normalizeWarehouseProduct).filter((product) => product?.id);
   if (!normalized.length) return warehouseMemoryCache || { products: [], suppliers: [] };
   const existing = warehouseMemoryCache || { createdAt: new Date().toISOString(), updatedAt: null, products: [], suppliers: [] };
-  const byId = new Map((existing.products || []).map((product) => [String(product.id), product]));
-  for (const product of normalized) byId.set(String(product.id), product);
-  const payload = {
-    ...existing,
-    products: Array.from(byId.values()),
-    suppliers: Array.isArray(suppliers) && suppliers.length ? suppliers : (existing.suppliers || []),
-    postgresOnly: shouldUsePostgresStorage() && !warehouseFullMemoryLoadEnabled,
-  };
-  warehouseMemoryCache = payload;
-  warehouseMemoryProductIndexCache = { products: null, byId: new Map() };
-  return payload;
+  if (!Array.isArray(existing.products)) existing.products = [];
+  // Раньше каждый hydrate (батч реконсайлера — каждые ~40 с) строил здесь
+  // новую Map и новый массив на все ~30k товаров: аллокационный шторм давал
+  // GC-паузы 7-10 с (event_loop_blocked) и рестарты worker watchdog'ом.
+  // Теперь массив мутируется на месте: идентичность products сохраняется,
+  // позиционный индекс warehouseProductIndexFor остаётся валидным и лишь
+  // дополняется для новых товаров.
+  const list = existing.products;
+  const index = warehouseProductIndexFor(existing);
+  for (const product of normalized) {
+    const key = String(product.id);
+    const position = index.get(key);
+    if (position === undefined) {
+      index.set(key, list.length);
+      list.push(product);
+    } else {
+      list[position] = product;
+    }
+  }
+  if (Array.isArray(suppliers) && suppliers.length) existing.suppliers = suppliers;
+  else if (!Array.isArray(existing.suppliers)) existing.suppliers = [];
+  existing.postgresOnly = shouldUsePostgresStorage() && !warehouseFullMemoryLoadEnabled;
+  warehouseMemoryCache = existing;
+  return existing;
 }
 
 async function hydrateWarehouseProductsForIds(productIds = [], { expandGroups = true, forceRefresh = false } = {}) {
@@ -132,7 +145,11 @@ async function hydrateWarehouseProductsForIds(productIds = [], { expandGroups = 
   // hydrateWarehouseProductsForIds must go to Postgres to get the updated state.
   const missingIds = forceRefresh
     ? ids
-    : ids.filter((id) => !(warehouse.products || []).some((product) => String(product.id) === id));
+    : (() => {
+      // O(1) по позиционному индексу вместо O(ids × 30k) прохода по каталогу.
+      const index = warehouseProductIndexFor(warehouse);
+      return ids.filter((id) => !index.has(id));
+    })();
   if (missingIds.length && shouldUsePostgresStorage()) {
     let loaded = await readWarehouseProductsFromPostgresByIds(missingIds, { includeDisabledTargets: true });
     if (!loaded.length) {
