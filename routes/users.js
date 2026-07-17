@@ -356,9 +356,28 @@ app.get("/api/users", requireAdmin, async (_request, response, next) => {
   }
 });
 
+// Отчёт сканирует привязки и audit-log (~7 с на проде): минутный кэш спасает
+// страницу «Сотрудники» от полного пересчёта при каждом заходе и смене фильтра.
+const usersStatsReportCache = new Map(); // key -> { at, report }
+
+async function buildUsersStatsResponseCached(options = {}) {
+  const key = JSON.stringify([
+    usersStatsPeriod(options.period),
+    selectedUsernamesFromInput(options.users),
+    Boolean(options.includeInactive),
+    Boolean(options.includeDeleted),
+  ]);
+  const cached = usersStatsReportCache.get(key);
+  if (cached && Date.now() - cached.at < 60_000) return cached.report;
+  const report = await buildUsersStatsResponse(options);
+  usersStatsReportCache.set(key, { at: Date.now(), report });
+  if (usersStatsReportCache.size > 20) usersStatsReportCache.delete(usersStatsReportCache.keys().next().value);
+  return report;
+}
+
 app.get("/api/users/stats", requireAdmin, async (request, response, next) => {
   try {
-    response.json(await buildUsersStatsResponse({
+    response.json(await buildUsersStatsResponseCached({
       period: request.query.period,
       users: request.query.users,
       includeInactive: booleanQuery(request.query.includeInactive, true),

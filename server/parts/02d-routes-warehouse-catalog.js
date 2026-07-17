@@ -205,6 +205,9 @@ app.get("/api/warehouse/products/group-detail", async (request, response, next) 
   }
 });
 
+// Кэш страницы «Ошибки наличия»: пересчёт стоит ~15 с.
+let noSupplierPageCache = { at: 0, payload: null };
+
 // Живое обновление цен маркетплейсов для открытой карточки: тянет актуальные
 // цены Ozon/Yandex по товарам группы и сохраняет их, не дожидаясь
 // периодического импорта. Кулдаун на товар — открытия карточки не жгут API.
@@ -262,6 +265,13 @@ app.get("/api/warehouse/no-supplier", async (request, response, next) => {
   try {
     const prisma = getPrisma();
     if (!prisma) return response.json({ total: 0, withoutSupplier: 0, alerts: [] });
+    // Полный пересчёт — ~15 с (2000 товаров через buildFresh + PriceMaster):
+    // страница «Ошибки наличия» висела со спиннером, а каждый заход грел api.
+    // Кэшируем результат; «Обновить» в течение TTL отдаёт кэш мгновенно.
+    const ttlMs = Math.max(30_000, Number(process.env.NO_SUPPLIER_CACHE_TTL_MS || 120_000) || 120_000);
+    if (noSupplierPageCache.payload && Date.now() - noSupplierPageCache.at < ttlMs) {
+      return response.json({ ...noSupplierPageCache.payload, cachedAt: new Date(noSupplierPageCache.at).toISOString() });
+    }
     const appSettings = await readAppSettings();
     const rate = Number(appSettings.fixedUsdRate || process.env.DEFAULT_USD_RATE || 95);
     const [suppliers, dbRows] = await Promise.all([
@@ -279,11 +289,13 @@ app.get("/api/warehouse/no-supplier", async (request, response, next) => {
       { refreshPrices: false, persistMutations: false, livePriceMaster: false, batchPriceMaster: false, usdRate: rate },
     );
     const noSupplier = built.filter((p) => !p.selectedSupplier && !p.stockOnlyFallbackActive);
-    response.json({
+    const payload = {
       total: built.length,
       withoutSupplier: noSupplier.length,
       alerts: buildNoSupplierAlerts(built, { limit: Number.POSITIVE_INFINITY }),
-    });
+    };
+    noSupplierPageCache = { at: Date.now(), payload };
+    response.json(payload);
   } catch (error) {
     next(error);
   }

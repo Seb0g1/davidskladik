@@ -82,8 +82,10 @@ type Listing = {
   volumeMl: number;
   priceRub: number;
   markupCoefficient?: number;
+  // Список с сервера урезан: только первое фото и флаг наличия описания
+  // (полный дамп с описаниями весил ~19 МБ).
   imageUrls: string[];
-  description?: string;
+  hasDescription?: boolean;
   categoryKey?: string;
   goodsType?: string;
   goodsSubType?: string;
@@ -707,7 +709,7 @@ export function AvitoPage() {
                 {item.imageUrls[0] ? <img src={item.imageUrls[0]} alt="" loading="lazy" /> : <span className="import-noimg" />}
                 <span className="import-name">
                   {item.title}
-                  {categoryPath(item) ? <small style={{ display: "block", opacity: 0.65 }}>{categoryPath(item)}{item.categoryAutoDefaulted ? " · по умолчанию" : ""}{!item.description ? " · без описания" : ""}</small> : null}
+                  {categoryPath(item) ? <small style={{ display: "block", opacity: 0.65 }}>{categoryPath(item)}{item.categoryAutoDefaulted ? " · по умолчанию" : ""}{!item.hasDescription ? " · без описания" : ""}</small> : null}
                 </span>
               </span>
               <span data-label="Артикул">{item.adId}</span>

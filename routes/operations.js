@@ -12,11 +12,28 @@ function registerOperationsRoutes(app, deps) {
     activeOperationJobs,
   } = deps;
 
+// Список отдаёт только скаляры result: полные результаты завершённых задач
+// (массивы statuses/results на тысячи строк) раздували ответ до ~4 МБ, а
+// строкам списка нужны лишь счётчики и summary. Детали (ошибки, построчные
+// результаты) грузятся отдельно из GET /api/operations/:id.
+function operationJobListPublic(job) {
+  const publicJob = operationJobPublic(job);
+  if (publicJob.result && typeof publicJob.result === "object") {
+    const compact = {};
+    for (const [key, value] of Object.entries(publicJob.result)) {
+      if (value == null || typeof value === "number" || typeof value === "boolean") compact[key] = value;
+      else if (typeof value === "string") compact[key] = value.slice(0, 300);
+    }
+    publicJob.result = compact;
+  }
+  return publicJob;
+}
+
 app.get("/api/operations", requireAdmin, async (request, response, next) => {
   try {
     const limit = cleanLimit(request.query.limit, 50, 300);
     const jobs = await readOperationJobs(limit);
-    response.json({ ok: true, jobs: jobs.map(operationJobPublic), total: jobs.length });
+    response.json({ ok: true, jobs: jobs.map(operationJobListPublic), total: jobs.length });
   } catch (error) {
     next(error);
   }

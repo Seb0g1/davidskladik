@@ -211,7 +211,15 @@ app.post("/api/avito/import/apply", requireAdmin, async (request, response, next
 app.get("/api/avito/listings", async (_request, response, next) => {
   try {
     const state = await readAvitoListingsFile();
-    response.json({ updatedAt: state.updatedAt, total: state.items.length, items: state.items });
+    // Полный дамп (описания + все фото на 11k+ объявлений) весил ~19 МБ и
+    // подвешивал страницу Avito; списку нужны только первое фото и факт
+    // наличия описания (item.hasDescription).
+    const items = state.items.map(({ description, imageUrls, ...rest }) => ({
+      ...rest,
+      imageUrls: Array.isArray(imageUrls) && imageUrls.length ? [imageUrls[0]] : [],
+      hasDescription: Boolean(cleanText(description || "")),
+    }));
+    response.json({ updatedAt: state.updatedAt, total: items.length, items });
   } catch (error) {
     next(error);
   }
