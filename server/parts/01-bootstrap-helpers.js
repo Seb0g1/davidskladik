@@ -200,6 +200,9 @@ let supplierCartAutoLastRunAt = null;
 let supplierCartAutoLastResult = null;
 let marketplaceQueue = null;
 let marketplaceWorker = null;
+// Консьюмер пишет heartbeat в Redis: getWorkers() (CLIENT LIST) флапает и
+// давал ложное «обработчик недоступен» в шапке при живом worker-процессе.
+const marketplaceWorkerHeartbeatKey = "davidsklad:marketplace-worker-heartbeat";
 const warehouseProductMutationLocks = new Map();
 
 function sleep(ms) {
@@ -265,11 +268,20 @@ async function marketplaceQueueCounts() {
     // getWorkers() lists consumers connected to the queue THROUGH REDIS, so the api process
     // can see the worker process's consumer — `marketplaceWorker` is process-local and is
     // always null in the api process (false "обработчик недоступен").
-    const [counts, workers] = await Promise.all([
+    const [counts, workers, consumerHeartbeatAt] = await Promise.all([
       healthTimeout(marketplaceQueue.getJobCounts("waiting", "active", "delayed", "failed", "paused", "completed")),
       healthTimeout(marketplaceQueue.getWorkers()).catch(() => []),
+      healthTimeout(marketplaceQueue.client.then((client) => client.get(marketplaceWorkerHeartbeatKey))).catch(() => null),
     ]);
-    return { enabled: true, mode: "bullmq", ok: true, counts, workers: Array.isArray(workers) ? workers.length : 0 };
+    return {
+      enabled: true,
+      mode: "bullmq",
+      ok: true,
+      counts,
+      workers: Array.isArray(workers) ? workers.length : 0,
+      // Ключ живёт 120 с (EX) — само его наличие значит «консьюмер жив».
+      consumerHeartbeatAt: consumerHeartbeatAt || null,
+    };
   } catch (error) {
     return { enabled: true, mode: "bullmq", ok: false, error: error?.message || String(error) };
   }

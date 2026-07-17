@@ -265,6 +265,16 @@ function initMarketplaceQueue() {
     marketplaceWorker.on("error", (error) => {
       logger.warn("marketplace worker error", { detail: error?.message || String(error) });
     });
+    // Heartbeat консьюмера в Redis: health на api-процессе читает его вместо
+    // флапающего getWorkers() (CLIENT LIST) — иначе шапка показывает ложное
+    // «обработчик недоступен» при живом воркере.
+    const heartbeatTimer = setInterval(() => {
+      if (!marketplaceQueue || !marketplaceWorker) return;
+      void marketplaceQueue.client
+        .then((client) => client.set(marketplaceWorkerHeartbeatKey, new Date().toISOString(), "EX", 120))
+        .catch(() => {});
+    }, 30_000);
+    heartbeatTimer.unref?.();
     marketplaceQueue.on("error", (error) => {
       logger.warn("marketplace queue error", { detail: error?.message || String(error) });
     });
