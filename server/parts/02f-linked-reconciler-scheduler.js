@@ -190,18 +190,31 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
   if (!ids.length) return { products: 0, recovered: 0, unarchived: 0, zeroStockSent: 0, stockSent: 0, priceQueued: 0 };
 
   // Build fresh products with live PriceMaster (hydrates ids from Postgres + applies pricing).
-  let products = await buildFreshWarehouseProducts(ids, {
-    livePriceMaster: true,
-    refreshPrices: true,
-    batchPriceMaster: true,
-    persistMutations: true,
-    priceMasterTimeoutMs: autoPricePmTimeoutMs,
-  });
+  // Фазовые маркеры reconciler_* — бисекция остаточных 7-10 с блокировок.
+  let closePhaseMarker = setEventLoopBlockMarker("reconciler_build_prices");
+  let products;
+  try {
+    products = await buildFreshWarehouseProducts(ids, {
+      livePriceMaster: true,
+      refreshPrices: true,
+      batchPriceMaster: true,
+      persistMutations: true,
+      priceMasterTimeoutMs: autoPricePmTimeoutMs,
+    });
+  } finally {
+    closePhaseMarker();
+  }
 
   // Refresh live marketplace archive/stock state.
   // CRITICAL: capture the return value — it contains fresh archived/stock data even when
   // the internal DB-persist step fails (persist errors are caught-and-logged inside).
-  const refreshed = await refreshMarketplaceStateForProducts(products);
+  closePhaseMarker = setEventLoopBlockMarker("reconciler_state_refresh");
+  let refreshed;
+  try {
+    refreshed = await refreshMarketplaceStateForProducts(products);
+  } finally {
+    closePhaseMarker();
+  }
   const stateMismatches = countMarketplaceStateMismatches(products, refreshed);
   const liveStateById = new Map(
     (Array.isArray(refreshed) ? refreshed : [])
@@ -212,13 +225,19 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
   // Rebuild with live PriceMaster to get fresh supplier prices, then overlay the live
   // marketplace state captured above so archived/stock flags are always current regardless
   // of whether the DB persist inside refreshMarketplaceStateForProducts succeeded.
-  const rebuilt = await buildFreshWarehouseProducts(ids, {
-    livePriceMaster: true,
-    refreshPrices: false,
-    batchPriceMaster: true,
-    persistMutations: true,
-    priceMasterTimeoutMs: autoPricePmTimeoutMs,
-  });
+  closePhaseMarker = setEventLoopBlockMarker("reconciler_rebuild");
+  let rebuilt;
+  try {
+    rebuilt = await buildFreshWarehouseProducts(ids, {
+      livePriceMaster: true,
+      refreshPrices: false,
+      batchPriceMaster: true,
+      persistMutations: true,
+      priceMasterTimeoutMs: autoPricePmTimeoutMs,
+    });
+  } finally {
+    closePhaseMarker();
+  }
   products = rebuilt.map((p) => {
     const liveState = liveStateById.get(String(p.id));
     return liveState ? { ...p, marketplaceState: liveState } : p;
@@ -226,10 +245,16 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
 
   // Supplier recovery: unarchive (Yandex immediate / Ozon queued on quota), restore stock,
   // requeue price. Reuses the existing automation verbatim, scoped to this batch.
-  const recovery = await runSupplierRecoveryAutomation(
-    { products },
-    { productIds: ids, source: "linked_reconciler", sourceEvent: "linked_reconciler" },
-  );
+  closePhaseMarker = setEventLoopBlockMarker("reconciler_recovery");
+  let recovery;
+  try {
+    recovery = await runSupplierRecoveryAutomation(
+      { products },
+      { productIds: ids, source: "linked_reconciler", sourceEvent: "linked_reconciler" },
+    );
+  } finally {
+    closePhaseMarker();
+  }
 
   // No-supplier automation: supplier fallback / stock-only ("Наш склад") / zero stock.
   // includeNoLinks:false because the reconciler scope is strictly linked products.

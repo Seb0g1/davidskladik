@@ -76,12 +76,26 @@ function warehouseProductPostgresUpdateData(data = {}) {
 }
 
 async function upsertWarehouseProductPostgres(client, product) {
-  const data = productToPostgresData(product);
-  await client.warehouseProduct.upsert({
-    where: { id: data.id },
-    create: data,
-    update: warehouseProductPostgresUpdateData(data),
-  });
+  // Микро-маркеры для event_loop_blocked: делят стоимость upsert'а на
+  // подготовку данных (normalize) и вызов Prisma (сериализация Json-полей +
+  // движок) — бисекция остаточных 7-10 с блокировок worker.
+  const closePrepareMarker = setEventLoopBlockMarker("pg_upsert_prepare");
+  let data;
+  try {
+    data = productToPostgresData(product);
+  } finally {
+    closePrepareMarker();
+  }
+  const closeCallMarker = setEventLoopBlockMarker("pg_upsert_call");
+  try {
+    await client.warehouseProduct.upsert({
+      where: { id: data.id },
+      create: data,
+      update: warehouseProductPostgresUpdateData(data),
+    });
+  } finally {
+    closeCallMarker();
+  }
 }
 
 async function runWithLimitedConcurrency(items = [], concurrency = 1, worker) {
