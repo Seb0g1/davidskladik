@@ -66,7 +66,17 @@ async function findPriceMasterRowsForLinkFast(linkInput, usdRate, managedSupplie
     return rows;
   }
 
-  const timeoutMs = Math.max(250, Number(options.timeoutMs || process.env.LINK_SAVE_PM_TIMEOUT_MS || 1200));
+  // Негативный кэш live-запросов: если артикула нет ни в снапшоте, ни в PG —
+  // это почти всегда мёртвая привязка, а повторный live-запрос к PM MySQL от
+  // каждого батча реконсайлера давал сотни link_save_pm_timeout в день.
+  // Пустой/таймаутный live не повторяем чаще раза в PM_LIVE_NEGATIVE_TTL_MS;
+  // появление товара в PM подхватит шаг снапшота (синк ~12 мин) раньше.
+  const negativeTtlMs = Math.max(60_000, Number(process.env.PM_LIVE_NEGATIVE_TTL_MS || 30 * 60_000) || 30 * 60_000);
+  if (cached && cached.rows.length === 0 && Date.now() - cached.at < negativeTtlMs) return [];
+
+  // 1.2 с не хватало PM MySQL через туннель даже на здоровые запросы —
+  // дефолт поднят до 2.5 с (частоту live-запросов режет негативный кэш).
+  const timeoutMs = Math.max(250, Number(options.timeoutMs || process.env.LINK_SAVE_PM_TIMEOUT_MS || 2500));
   try {
     const liveRows = await Promise.race([
       findPriceMasterRowsForLink(link, usdRate, managedSuppliers),

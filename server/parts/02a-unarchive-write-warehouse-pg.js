@@ -10,6 +10,9 @@ async function writeWarehouseToPostgres(prisma, payload) {
 }
 
 async function writeWarehouseToPostgresInner(prisma, payload) {
+  // Прогрев персистентного кэша записей: без него первый write после
+  // рестарта считает изменившимся весь каталог.
+  await loadWarehousePgWrittenCache();
   const products = Array.isArray(payload.products) ? payload.products : [];
   const suppliers = Array.isArray(payload.suppliers) ? payload.suppliers : [];
   const chunkSize = Math.max(25, Math.min(250, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 100) || 100));
