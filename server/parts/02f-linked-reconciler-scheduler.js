@@ -340,7 +340,14 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
       let result = null;
       if (products.length) {
         try {
-          result = await processLinkedReconcilerBatch(products);
+          // Маркер для event_loop_blocked: батч реконсайлера — главный
+          // подозреваемый в 9-10с блокировках (heap-качели ~1 ГБ за цикл).
+          setEventLoopBlockMarker("linked_reconciler_batch");
+          try {
+            result = await processLinkedReconcilerBatch(products);
+          } finally {
+            setEventLoopBlockMarker("");
+          }
           totals.batches += 1;
           totals.products += result.products;
           totals.recovered += result.recovered;

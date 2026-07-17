@@ -1,4 +1,15 @@
 async function writeWarehouseToPostgres(prisma, payload) {
+  // Маркер для event_loop_blocked: дельта-запись склада в Postgres гоняет
+  // хеширование и сериализацию тысяч product.raw — кандидат в блокировщики.
+  setEventLoopBlockMarker("warehouse_postgres_write");
+  try {
+    await writeWarehouseToPostgresInner(prisma, payload);
+  } finally {
+    setEventLoopBlockMarker("");
+  }
+}
+
+async function writeWarehouseToPostgresInner(prisma, payload) {
   const products = Array.isArray(payload.products) ? payload.products : [];
   const suppliers = Array.isArray(payload.suppliers) ? payload.suppliers : [];
   const chunkSize = Math.max(25, Math.min(250, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 100) || 100));
