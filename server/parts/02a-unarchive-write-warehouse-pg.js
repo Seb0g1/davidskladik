@@ -15,14 +15,10 @@ async function writeWarehouseToPostgresInner(prisma, payload) {
   await loadWarehousePgWrittenCache();
   const products = Array.isArray(payload.products) ? payload.products : [];
   const suppliers = Array.isArray(payload.suppliers) ? payload.suppliers : [];
-  const chunkSize = Math.max(25, Math.min(250, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 100) || 100));
-  const changedProducts = products.filter((product) =>
-    !warehousePostgresHashCache.has(product.id)
-    || cleanText(product.updatedAt) !== warehousePostgresUpdatedAtCache.get(product.id)
-  );
-  if (changedProducts.length) {
-    logger.info("warehouse postgres write delta", { products: changedProducts.length, suppliers: suppliers.length, chunkSize });
-  }
+  const chunkSize = Math.max(10, Math.min(100, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 50) || 50));
+  // Стриминговый фильтр без pre-allocation массива changedProducts:
+  // при дельте 8-11k предварительная фильтрация держала 400-800 МБ в памяти
+  // параллельно с полным каталогом reconciler'а → heap 4+ GB → GC-паузы 22 с.
   const writeConcurrency = warehousePostgresWriteConcurrency();
   const supplierRows = suppliers.map(supplierToPostgresData);
   await runWithLimitedConcurrency(supplierRows, writeConcurrency, async (data) => {
@@ -51,11 +47,32 @@ async function writeWarehouseToPostgresInner(prisma, payload) {
       }
     }
   });
-  for (const productChunk of chunkArray(changedProducts, chunkSize)) {
-    await runWithLimitedConcurrency(productChunk, writeConcurrency, async (product) => {
-      await upsertWarehouseProductPostgres(prisma, product);
+  let productChunk = [];
+  let totalWritten = 0;
+  for (const product of products) {
+    const cachedUpdatedAt = warehousePostgresUpdatedAtCache.get(product.id);
+    const upToDate = cachedUpdatedAt && cleanText(product.updatedAt) === cachedUpdatedAt;
+    if (upToDate) continue;
+    productChunk.push(product);
+    if (productChunk.length >= chunkSize) {
+      await runWithLimitedConcurrency(productChunk, writeConcurrency, async (p) => {
+        await upsertWarehouseProductPostgres(prisma, p);
+      });
+      markWarehousePostgresProductsWritten(productChunk);
+      totalWritten += productChunk.length;
+      productChunk = [];
+      await new Promise((r) => setImmediate(r));
+    }
+  }
+  if (productChunk.length) {
+    await runWithLimitedConcurrency(productChunk, writeConcurrency, async (p) => {
+      await upsertWarehouseProductPostgres(prisma, p);
     });
     markWarehousePostgresProductsWritten(productChunk);
+    totalWritten += productChunk.length;
+  }
+  if (totalWritten) {
+    logger.info("warehouse postgres write delta", { products: totalWritten, suppliers: suppliers.length, chunkSize });
   }
 }
 

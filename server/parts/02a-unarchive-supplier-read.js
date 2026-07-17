@@ -60,7 +60,7 @@ function persistWarehousePgWrittenCacheSoon() {
     } catch (error) {
       logger.warn("warehouse pg written cache persist failed", { detail: error?.message || String(error) });
     }
-  }, 60_000);
+  }, 10_000);
   warehousePgWrittenCachePersistTimer.unref?.();
 }
 
