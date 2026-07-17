@@ -13,9 +13,11 @@ import { test, expect } from "@playwright/test";
 // the app's own route matching expects bare /app/... pathnames (true in production, where the
 // express server serves /app/* directly).
 test.beforeEach(async ({ page }) => {
-  await page.route("**/api/**", (route) => route.fulfill({ json: {} }));
-  await page.route("**/api/session", (route) => route.fulfill({ json: { authenticated: true, role: "admin", username: "admin" } }));
+  // Порядок важен: первый совпавший обработчик выигрывает. Специфичные маршруты
+  // должны быть зарегистрированы РАНЬШЕ catch-all, иначе **/api/** перехватит /api/session.
   await page.route("**/api/notifications/stream", (route) => route.abort());
+  await page.route("**/api/session", (route) => route.fulfill({ json: { authenticated: true, role: "admin", username: "admin" } }));
+  await page.route("**/api/**", (route) => route.fulfill({ json: {} }));
   await page.goto("/app-modern/");
   await page.locator('.side-nav-links a[href="/app/dashboard"]').click();
   await page.waitForSelector(".dashboard-metrics");
