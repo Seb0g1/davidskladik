@@ -242,7 +242,7 @@ export function AvitoPage() {
   });
 
   useEffect(() => {
-    if (rulesQuery.data && !rules) setRules(rulesQuery.data);
+    if (rulesQuery.data?.priceRules !== undefined && !rules) setRules(rulesQuery.data);
   }, [rulesQuery.data, rules]);
 
   const saveRules = useMutation({

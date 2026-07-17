@@ -33,12 +33,19 @@ test("все страницы открываются без крашей и page
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(String(error?.message || error)));
 
-  await page.route("**/api/notifications/stream", (route) => route.abort());
-  await page.route("**/api/session", (route) => route.fulfill({ json: { authenticated: true, role: "admin", username: "admin" } }));
-  await page.route("**/api/**", (route) => route.fulfill({ json: {} }));
+  // Один обработчик: Playwright использует LIFO (последний зарегистрированный
+  // выигрывает), поэтому несколько page.route() дают непредсказуемый порядок.
+  await page.route("**/api/**", (route) => {
+    const url = route.request().url();
+    if (url.includes("/api/notifications/stream")) return route.abort();
+    if (url.includes("/api/session")) return route.fulfill({ json: { authenticated: true, role: "admin", username: "admin" } });
+    return route.fulfill({ json: {} });
+  });
 
   await page.goto("/app-modern/");
-  await page.waitForSelector(".side-nav-links");
+  // Ждём пока сессия загрузится и появится dashboard-ссылка (признак admin-роли).
+  // .side-nav-links рендерится сразу, но admin-маршруты видны только после /api/session.
+  await page.waitForSelector('.side-nav-links a[href="/app/dashboard"]', { timeout: 10_000 });
 
   for (const { href, label } of ROUTES) {
     // Сворачиваемые секции сайдбара: раскрываем все перед кликом.
@@ -50,8 +57,15 @@ test("все страницы открываются без крашей и page
     await link.click();
 
     // Страница отрендерила свою секцию (или явную заглушку) — не пустой экран.
-    // .toolbar — WarehousePage; .settings-stack — SettingsPage (не используют .page-section)
-    const section = page.locator("main .page-section, main .access-denied-panel, main .toolbar, main .settings-stack");
+    // Фильтруем :visible, чтобы React Suspense не скрывал предыдущую страницу
+    // (display:none во время загрузки lazy-чанка) и не мешал .first().
+    // .toolbar — WarehousePage; .settings-tabs — SettingsPage (не используют .page-section)
+    const section = page.locator([
+      "main .page-section:visible",
+      "main .access-denied-panel:visible",
+      "main .toolbar:visible",
+      "main .settings-tabs:visible",
+    ].join(", "));
     await expect(section.first(), `${label} (${href}): страница не отрендерилась`).toBeVisible({ timeout: 10_000 });
 
     expect(pageErrors, `${label} (${href}): необработанные исключения: ${pageErrors.join("; ")}`).toEqual([]);
