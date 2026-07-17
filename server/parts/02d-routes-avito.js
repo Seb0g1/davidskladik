@@ -208,18 +208,24 @@ app.post("/api/avito/import/apply", requireAdmin, async (request, response, next
 
 // --- Объявления фида ---
 
-app.get("/api/avito/listings", async (_request, response, next) => {
+app.get("/api/avito/listings", async (request, response, next) => {
   try {
     const state = await readAvitoListingsFile();
-    // Полный дамп (описания + все фото на 11k+ объявлений) весил ~19 МБ и
-    // подвешивал страницу Avito; списку нужны только первое фото и факт
-    // наличия описания (item.hasDescription).
-    const items = state.items.map(({ description, imageUrls, ...rest }) => ({
+    // Полный дамп на 11k+ объявлений весил ~19 МБ и подвешивал страницу.
+    // UI показывает максимум 200 строк — сервер отдаёт срез с поиском по
+    // артикулу/названию/бренду, только первое фото и флаг hasDescription.
+    const q = cleanText(request.query.q || "").toLowerCase();
+    const limit = Math.max(1, Math.min(1000, Number(request.query.limit || 200) || 200));
+    const filtered = q
+      ? state.items.filter((item) => [item.adId, item.title, item.brand]
+        .some((value) => String(value || "").toLowerCase().includes(q)))
+      : state.items;
+    const items = filtered.slice(0, limit).map(({ description, imageUrls, ...rest }) => ({
       ...rest,
       imageUrls: Array.isArray(imageUrls) && imageUrls.length ? [imageUrls[0]] : [],
       hasDescription: Boolean(cleanText(description || "")),
     }));
-    response.json({ updatedAt: state.updatedAt, total: items.length, items });
+    response.json({ updatedAt: state.updatedAt, total: state.items.length, matched: filtered.length, items });
   } catch (error) {
     next(error);
   }

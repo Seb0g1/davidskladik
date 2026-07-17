@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckSquare, ClipboardCopy, Eye, Link2, Loader2, PackageCheck, RefreshCw, Save, Send, Trash2, Upload } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
+import { useDebounced } from "../lib/common";
 
 type FeedDefaults = {
   category: string;
@@ -98,7 +99,7 @@ type Listing = {
   updatedAt: string;
 };
 
-type ListingsResponse = { updatedAt: string | null; total: number; items: Listing[] };
+type ListingsResponse = { updatedAt: string | null; total: number; matched?: number; items: Listing[] };
 type FeedRefreshResult = {
   status: string;
   updatedPrices?: number;
@@ -219,9 +220,11 @@ export function AvitoPage() {
     queryKey: ["avito-import-rules"],
     queryFn: () => apiJson<ImportRules>("/api/avito/import/rules"),
   });
+  const [listingSearch, setListingSearch] = useState("");
+  const debouncedListingSearch = useDebounced(listingSearch, 400);
   const listingsQuery = useQuery({
-    queryKey: ["avito-listings"],
-    queryFn: () => apiJson<ListingsResponse>("/api/avito/listings"),
+    queryKey: ["avito-listings", debouncedListingSearch],
+    queryFn: () => apiJson<ListingsResponse>(`/api/avito/listings?q=${encodeURIComponent(debouncedListingSearch)}&limit=200`),
   });
   const feedInfoQuery = useQuery({
     queryKey: ["avito-feed-info"],
@@ -692,7 +695,18 @@ export function AvitoPage() {
       <section className="settings-panel settings-panel-wide">
         <div className="section-title">
           <div><span>Объявления фида</span><h3>Всего: {listingsQuery.data?.total ?? 0}</h3></div>
-          <button className="secondary-action" type="button" onClick={() => listingsQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
+          <div className="row-actions">
+            <input
+              type="search"
+              value={listingSearch}
+              onChange={(event) => setListingSearch(event.target.value)}
+              placeholder="Поиск: артикул, название, бренд"
+              aria-label="Поиск по объявлениям"
+            />
+            <button className="secondary-action" type="button" onClick={() => listingsQuery.refetch()}>
+              {listingsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+            </button>
+          </div>
         </div>
         <div className="table-panel import-table">
           <div className="table-head avito-listing-row">
@@ -735,10 +749,16 @@ export function AvitoPage() {
             </div>
           ))}
           {!listings.length && !listingsQuery.isFetching ? (
-            <div className="empty-state">Фид пуст. Настрой правила и нажми «Импортировать в фид».</div>
+            <div className="empty-state">
+              {debouncedListingSearch ? "Ничего не найдено по запросу." : "Фид пуст. Настрой правила и нажми «Импортировать в фид»."}
+            </div>
           ) : null}
         </div>
-        {listings.length > 200 ? <p className="form-hint">Показаны первые 200 объявлений из {listings.length}.</p> : null}
+        {(listingsQuery.data?.matched ?? 0) > listings.length ? (
+          <p className="form-hint">
+            Показаны первые {listings.length} из {listingsQuery.data?.matched}{debouncedListingSearch ? " найденных" : ""} — уточни поиск.
+          </p>
+        ) : null}
       </section>
     </section>
   );

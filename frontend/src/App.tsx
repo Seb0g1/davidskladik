@@ -1,29 +1,32 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, HandCoins, Home, LogOut, Menu, PackageCheck, RefreshCcw, Search, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, UserCircle, Upload } from "lucide-react";
-import { ReactNode, useEffect, useRef, useState } from "react";
-import { WarehousePage } from "./routes/WarehousePage";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, RefreshCcw, Search, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, UserCircle, Upload } from "lucide-react";
+import { lazy, ReactNode, Suspense, useEffect, useRef, useState } from "react";
 import { NotificationsBell } from "./components/NotificationsBell";
 import { SystemHealthIndicator } from "./components/SystemHealthIndicator";
 import { ThemeSwitcher } from "./components/ThemeSwitcher";
-import { DashboardPage } from "./routes/DashboardPage";
-import { ReviewsPage } from "./routes/ReviewsPage";
-import { QuestionsPage } from "./routes/QuestionsPage";
-import { ChatsPage } from "./routes/ChatsPage";
-import { ImportPage } from "./routes/ImportPage";
-import { AvitoPage } from "./routes/AvitoPage";
-import { OperationsPage } from "./routes/OperationsPage";
-import { SettingsPage } from "./routes/SettingsPage";
-import { AiDraftsPage } from "./routes/AiDraftsPage";
-import { NoSupplierPage } from "./routes/NoSupplierPage";
-import { SupplierCartPage } from "./routes/SupplierCartPage";
-import { RecoveryQueuePage } from "./routes/RecoveryQueuePage";
-import { PricesPage } from "./routes/PricesPage";
-import { SystemPage } from "./routes/SystemPage";
-import { PickingListPage } from "./routes/PickingListPage";
-import { ProblemProductsPage } from "./routes/ProblemProductsPage";
-import { FinancePage } from "./routes/FinancePage";
-import { SuppliersPage } from "./routes/SuppliersPage";
-import { StatisticsPage } from "./routes/StatisticsPage";
-import { ConsignmentPage } from "./routes/ConsignmentPage";
+
+// Страницы грузятся лениво: один бандл на всё приложение весил 780 КБ и
+// тормозил первый вход — теперь каждый раздел приезжает своим чанком.
+const WarehousePage = lazy(() => import("./routes/WarehousePage").then((m) => ({ default: m.WarehousePage })));
+const DashboardPage = lazy(() => import("./routes/DashboardPage").then((m) => ({ default: m.DashboardPage })));
+const ReviewsPage = lazy(() => import("./routes/ReviewsPage").then((m) => ({ default: m.ReviewsPage })));
+const QuestionsPage = lazy(() => import("./routes/QuestionsPage").then((m) => ({ default: m.QuestionsPage })));
+const ChatsPage = lazy(() => import("./routes/ChatsPage").then((m) => ({ default: m.ChatsPage })));
+const ImportPage = lazy(() => import("./routes/ImportPage").then((m) => ({ default: m.ImportPage })));
+const AvitoPage = lazy(() => import("./routes/AvitoPage").then((m) => ({ default: m.AvitoPage })));
+const OperationsPage = lazy(() => import("./routes/OperationsPage").then((m) => ({ default: m.OperationsPage })));
+const SettingsPage = lazy(() => import("./routes/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const AiDraftsPage = lazy(() => import("./routes/AiDraftsPage").then((m) => ({ default: m.AiDraftsPage })));
+const NoSupplierPage = lazy(() => import("./routes/NoSupplierPage").then((m) => ({ default: m.NoSupplierPage })));
+const SupplierCartPage = lazy(() => import("./routes/SupplierCartPage").then((m) => ({ default: m.SupplierCartPage })));
+const RecoveryQueuePage = lazy(() => import("./routes/RecoveryQueuePage").then((m) => ({ default: m.RecoveryQueuePage })));
+const PricesPage = lazy(() => import("./routes/PricesPage").then((m) => ({ default: m.PricesPage })));
+const SystemPage = lazy(() => import("./routes/SystemPage").then((m) => ({ default: m.SystemPage })));
+const PickingListPage = lazy(() => import("./routes/PickingListPage").then((m) => ({ default: m.PickingListPage })));
+const ProblemProductsPage = lazy(() => import("./routes/ProblemProductsPage").then((m) => ({ default: m.ProblemProductsPage })));
+const FinancePage = lazy(() => import("./routes/FinancePage").then((m) => ({ default: m.FinancePage })));
+const SuppliersPage = lazy(() => import("./routes/SuppliersPage").then((m) => ({ default: m.SuppliersPage })));
+const StatisticsPage = lazy(() => import("./routes/StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
+const ConsignmentPage = lazy(() => import("./routes/ConsignmentPage").then((m) => ({ default: m.ConsignmentPage })));
 
 type AppRoute = "dashboard" | "import" | "avito" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null };
@@ -301,6 +304,7 @@ function AppShell() {
           {visibleNavItems[0] ? <a href={visibleNavItems[0].href} onClick={(event) => navigate(event, visibleNavItems[0].href)}>Перейти: {visibleNavItems[0].label}</a> : null}
         </section>
       ) : null}
+      <Suspense fallback={<div className="page-lazy-loading"><Loader2 className="spin" size={22} /> Загружаю раздел…</div>}>
       {sessionReady && !accessDenied && route === "dashboard" ? <DashboardPage /> : null}
       {sessionReady && !accessDenied && route === "operations" ? <OperationsPage /> : null}
       {sessionReady && !accessDenied && route === "picking-list" ? <PickingListPage /> : null}
@@ -322,6 +326,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "ai-drafts" ? <AiDraftsPage /> : null}
       {sessionReady && !accessDenied && route === "no-supplier" ? <NoSupplierPage /> : null}
       {sessionReady && !accessDenied && route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
+      </Suspense>
       </div>
     </main>
   );

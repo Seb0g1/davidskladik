@@ -3504,6 +3504,7 @@ button:disabled {
 .market-badge.market-yandex { color: #ffd25e; }
 .market-badge.market-wb { color: #d977ff; }
 .live-refresh-note { display: flex; align-items: center; gap: 6px; color: #7f92bd; font-size: 12px; margin: -4px 0 8px; }
+.page-lazy-loading { display: flex; align-items: center; gap: 10px; justify-content: center; padding: 48px 0; color: #7f92bd; font-size: 14px; }
 
 .templates-drawer-backdrop {
   position: fixed;
