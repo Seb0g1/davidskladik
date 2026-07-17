@@ -1,8 +1,13 @@
-// Unified chats (messenger) for both marketplaces.
+// Unified chats (messenger) for all marketplaces.
 //
 // Ozon: POST /v3/chat/list, /v3/chat/history, send /v1/chat/send/message, read /v2/chat/read.
 // Yandex: POST /v2/businesses/{businessId}/chats, GET .../chats/history?chatId=,
 //         POST .../chats/message?chatId= { message: { text } }.
+// WB (buyer-chat-api): GET /api/v1/seller/chats (чаты + replySign для отправки),
+//         GET /api/v1/seller/events?next= — единый поток сообщений ВСЕХ чатов
+//         (истории по одному чату у WB нет — фильтруем поток по chatID),
+//         POST /api/v1/seller/message — multipart { replySign, message }.
+//         Токен кабинета должен включать категорию «Чат с покупателями».
 // Reply templates: data/chat-templates.json (same shape as review templates).
 
 const chatTemplatesPath = path.join(dataDir, "chat-templates.json");
@@ -42,6 +47,94 @@ function normalizeOzonChat(entry = {}, account = {}) {
     unreadCount: Number(entry.unread_count ?? chat.unread_count ?? 0) || 0,
     lastMessageAt: cleanText(chat.last_message_at || entry.last_message_at || chat.created_at || ""),
     title: ozonChatTitle(chat.chat_type, chatId),
+  };
+}
+
+// --- WB chat helpers ---
+
+async function wbChatsListRaw(account) {
+  // attempts: 1 — «global limiter per seller» WB штрафует за повторы, а UI
+  // чатов не должен висеть в ретраях (nginx рубит запрос на 60-й секунде).
+  const data = await wbRequest(account, "chat", "GET", "/api/v1/seller/chats", undefined, { attempts: 1 });
+  const raw = data?.result?.chats || data?.result || data?.chats || [];
+  return Array.isArray(raw) ? raw : [];
+}
+
+// Поток событий WB общий на все чаты и отдаётся только курсором next —
+// сканируем целиком и кэшируем на минуту, чтобы переключение чатов и
+// автообновление истории (каждые 15 с) не жгли лимиты API.
+const wbChatEventsCache = new Map(); // account.id -> { at, events }
+
+async function wbChatEventsAll(account) {
+  const cacheKey = cleanText(account.id || "wb");
+  const cached = wbChatEventsCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < 60_000) return cached.events;
+  const events = [];
+  const startedAt = Date.now();
+  let next = 0;
+  // Бюджет: не больше 12 страниц и ~15 секунд — иначе запрос UI упирается в
+  // 60-секундный таймаут nginx, а лишние вызовы греют лимитер WB.
+  for (let pageIndex = 0; pageIndex < 12 && Date.now() - startedAt < 15_000; pageIndex += 1) {
+    const data = await wbRequest(account, "chat", "GET", `/api/v1/seller/events${next ? `?next=${encodeURIComponent(next)}` : ""}`, undefined, { attempts: 1 });
+    const result = data?.result || data || {};
+    const batch = Array.isArray(result.events) ? result.events : [];
+    events.push(...batch);
+    const nextCursor = Number(result.next || 0) || 0;
+    if (!batch.length || !nextCursor || nextCursor === next) break;
+    next = nextCursor;
+  }
+  wbChatEventsCache.set(cacheKey, { at: Date.now(), events });
+  return events;
+}
+
+function wbChatEventTimestamp(event = {}) {
+  const raw = event.addTimestamp ?? event.addTime ?? event.createdAt ?? "";
+  const numeric = Number(raw);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    // Секунды или миллисекунды — приводим к ISO.
+    return new Date(numeric > 1e12 ? numeric : numeric * 1000).toISOString();
+  }
+  return cleanText(raw);
+}
+
+function normalizeWbChat(chat = {}, account = {}, lastMessageAtByChat = new Map()) {
+  const chatId = cleanText(chat.chatID || chat.chatId || chat.id);
+  const clientName = cleanText(chat.clientName || "");
+  return {
+    id: `wb:${chatId}`,
+    marketplace: "wb",
+    target: account.id || "wb",
+    chatId,
+    replySign: cleanText(chat.replySign || ""),
+    type: "buyer",
+    status: "",
+    unreadCount: 0,
+    lastMessageAt: lastMessageAtByChat.get(chatId) || "",
+    title: clientName ? `Покупатель · ${clientName}` : `Чат ${chatId.slice(0, 8)}`,
+  };
+}
+
+function normalizeWbChatMessage(event = {}) {
+  const sender = cleanText(event.sender || event.source || "").toLowerCase();
+  const isSeller = /seller|supplier/.test(sender);
+  const message = event.message && typeof event.message === "object" ? event.message : {};
+  const rawText = cleanText(message.text || (typeof event.message === "string" ? event.message : "") || event.text || "");
+  // Вложения покупателя: images/attachments со ссылками — как у Ozon/Яндекса.
+  const attachments = [];
+  for (const item of [...(Array.isArray(message.images) ? message.images : []), ...(Array.isArray(message.attachments) ? message.attachments : [])]) {
+    const url = cleanText(typeof item === "string" ? item : item?.url || item?.link || "");
+    if (!url) continue;
+    attachments.push(chatMediaAttachmentFromUrl(url, item?.name) || { type: "file", url, name: cleanText(item?.name) || "Файл" });
+  }
+  const extracted = extractChatMediaFromText(rawText);
+  return {
+    id: cleanText(event.eventID || event.eventId || event.id),
+    author: isSeller ? "Вы" : (cleanText(event.clientName) || "Покупатель"),
+    isSeller,
+    text: extracted.text,
+    attachments: [...attachments, ...extracted.attachments],
+    createdAt: wbChatEventTimestamp(event),
+    isRead: true,
   };
 }
 
@@ -113,6 +206,30 @@ app.get("/api/chats", requireAdmin, async (request, response, next) => {
             .filter((chat) => !unreadOnly || chat.unreadCount > 0));
         } catch (error) {
           warnings.push(`Yandex ${shop.id}: ${error?.message || "ошибка"}`);
+        }
+      }
+    }
+
+    if (marketplace === "all" || marketplace === "wb") {
+      for (const account of getWbAccounts()) {
+        try {
+          const rows = await wbChatsListRaw(account);
+          // Время последнего сообщения берём из потока событий (best-effort).
+          const lastMessageAtByChat = new Map();
+          try {
+            for (const event of await wbChatEventsAll(account)) {
+              const chatId = cleanText(event.chatID || event.chatId);
+              if (!chatId) continue;
+              const at = wbChatEventTimestamp(event);
+              if (at && at > (lastMessageAtByChat.get(chatId) || "")) lastMessageAtByChat.set(chatId, at);
+            }
+          } catch {
+            /* список чатов важнее сортировки по времени */
+          }
+          // unreadOnly у WB не поддержан (API не отдаёт непрочитанность) — не режем список.
+          chats.push(...rows.map((chat) => normalizeWbChat(chat, account, lastMessageAtByChat)));
+        } catch (error) {
+          warnings.push(`WB ${account.id}: ${error?.message || "ошибка"}`);
         }
       }
     }
@@ -332,7 +449,19 @@ app.get("/api/chats/history", requireAdmin, async (request, response, next) => {
       return response.json({ ok: true, rows, context });
     }
 
-    response.status(400).json({ error: "marketplace должен быть ozon или yandex." });
+    if (marketplace === "wb") {
+      const account = getWbAccountByTarget(target) || getWbAccounts()[0];
+      if (!account) return response.status(400).json({ error: "Кабинет WB не найден." });
+      const events = await wbChatEventsAll(account);
+      const rows = events
+        .filter((event) => cleanText(event.chatID || event.chatId) === chatId)
+        .map(normalizeWbChatMessage)
+        .filter((message) => message.text || message.attachments.length);
+      rows.sort((a, b) => cleanText(a.createdAt).localeCompare(cleanText(b.createdAt)));
+      return response.json({ ok: true, rows, context: null });
+    }
+
+    response.status(400).json({ error: "marketplace должен быть ozon, yandex или wb." });
   } catch (error) {
     next(error);
   }
@@ -364,7 +493,28 @@ app.post("/api/chats/send", requireAdmin, async (request, response, next) => {
       return response.json({ ok: true, result });
     }
 
-    response.status(400).json({ error: "marketplace должен быть ozon или yandex." });
+    if (marketplace === "wb") {
+      const account = getWbAccountByTarget(target) || getWbAccounts()[0];
+      if (!account) return response.status(400).json({ error: "Кабинет WB не найден." });
+      // Отправка требует replySign чата: берём из запроса, иначе ищем в списке.
+      let replySign = cleanText(request.body?.replySign);
+      if (!replySign) {
+        const chat = (await wbChatsListRaw(account))
+          .find((item) => cleanText(item.chatID || item.chatId || item.id) === chatId);
+        replySign = cleanText(chat?.replySign || "");
+      }
+      if (!replySign) return response.status(400).json({ error: "Чат WB не найден (нет replySign)." });
+      const form = new FormData();
+      form.append("replySign", replySign);
+      form.append("message", text.slice(0, 1000));
+      const result = await wbRequest(account, "chat", "POST", "/api/v1/seller/message", form);
+      // Сообщение появится в потоке событий — сбрасываем кэш, чтобы история обновилась.
+      wbChatEventsCache.delete(cleanText(account.id || "wb"));
+      await appendAudit(request, "chats.send", { entityType: "chat", entityId: `wb:${chatId}` });
+      return response.json({ ok: true, result });
+    }
+
+    response.status(400).json({ error: "marketplace должен быть ozon, yandex или wb." });
   } catch (error) {
     next(error);
   }

@@ -1,8 +1,11 @@
-// Reviews: unified listing from both marketplaces + replies + reply templates.
+// Reviews: unified listing from all marketplaces + replies + reply templates.
 //
 // Ozon (Premium): POST /v1/review/list, reply POST /v1/review/comment/create.
 // Yandex (Medium): POST /v2/businesses/{businessId}/goods-feedback (page_token),
 //                  reply POST /v2/businesses/{businessId}/goods-feedback/comments/update.
+// WB (feedbacks-api): GET /api/v1/feedbacks?isAnswered=&take=&skip=,
+//                     reply POST /api/v1/feedbacks/answer { id, text } (204).
+//                     Токен кабинета должен включать категорию «Вопросы и отзывы».
 // Templates live in data/review-templates.json (id, title, text).
 
 const reviewTemplatesPath = path.join(dataDir, "review-templates.json");
@@ -66,6 +69,46 @@ function normalizeYandexReview(feedback = {}, shop = {}) {
   };
 }
 
+function normalizeWbReview(feedback = {}, account = {}) {
+  const details = feedback.productDetails || {};
+  const answered = Boolean(cleanText(feedback.answer?.text || ""));
+  return {
+    id: `wb:${cleanText(feedback.id)}`,
+    marketplace: "wb",
+    target: account.id || "wb",
+    externalId: cleanText(feedback.id),
+    sku: cleanText(details.nmId || ""),
+    // supplierArticle = наш vendorCode (offerId Ozon) — по нему находится товар.
+    offerId: cleanText(details.supplierArticle || ""),
+    productName: cleanText(details.productName || ""),
+    rating: Number(feedback.productValuation || 0) || 0,
+    text: cleanText(feedback.text || ""),
+    advantages: cleanText(feedback.pros || ""),
+    disadvantages: cleanText(feedback.cons || ""),
+    authorName: cleanText(feedback.userName || ""),
+    createdAt: cleanText(feedback.createdDate || ""),
+    status: answered ? "PROCESSED" : "NEW",
+    needsReply: !answered,
+    commentsCount: answered ? 1 : 0,
+    photosCount: Array.isArray(feedback.photoLinks) ? feedback.photoLinks.length : 0,
+  };
+}
+
+// WB требует явный isAnswered: «все отзывы» — это два запроса (сначала новые).
+async function listWbFeedbacks(account, { onlyUnanswered, limit }) {
+  const take = Math.max(1, Math.min(1000, limit));
+  const rows = [];
+  for (const isAnswered of onlyUnanswered ? [false] : [false, true]) {
+    if (rows.length >= limit) break;
+    // attempts: 1 — bucket отзывов WB после 429 просит ждать ~60 с; ретрай
+    // внутри UI-запроса упирается в таймаут nginx, лучше сразу warning.
+    const data = await wbRequest(account, "feedbacks", "GET",
+      `/api/v1/feedbacks?isAnswered=${isAnswered}&take=${take}&skip=0&order=dateDesc`, undefined, { attempts: 1 });
+    rows.push(...(data?.data?.feedbacks || []));
+  }
+  return rows.slice(0, limit);
+}
+
 app.get("/api/reviews", requireAdmin, async (request, response, next) => {
   try {
     const marketplace = cleanText(request.query.marketplace || "all").toLowerCase();
@@ -110,6 +153,17 @@ app.get("/api/reviews", requireAdmin, async (request, response, next) => {
           reviews.push(...rows.slice(0, limit).map((feedback) => normalizeYandexReview(feedback, shop)));
         } catch (error) {
           warnings.push(`Yandex ${shop.id}: ${error?.message || "ошибка"}`);
+        }
+      }
+    }
+
+    if (marketplace === "all" || marketplace === "wb") {
+      for (const account of getWbAccounts()) {
+        try {
+          const rows = await listWbFeedbacks(account, { onlyUnanswered, limit });
+          reviews.push(...rows.map((feedback) => normalizeWbReview(feedback, account)));
+        } catch (error) {
+          warnings.push(`WB ${account.id}: ${error?.message || "ошибка"}`);
         }
       }
     }
@@ -174,7 +228,19 @@ app.post("/api/reviews/reply", requireAdmin, async (request, response, next) => 
       return response.json({ ok: true, marketplace, result });
     }
 
-    response.status(400).json({ error: "marketplace должен быть ozon или yandex." });
+    if (marketplace === "wb") {
+      const account = getWbAccountByTarget(target) || getWbAccounts()[0];
+      if (!account) return response.status(400).json({ error: "Кабинет WB не найден." });
+      // 204 без тела при успехе; текст ответа WB ограничивает 5000 символами.
+      const result = await wbRequest(account, "feedbacks", "POST", "/api/v1/feedbacks/answer", {
+        id: externalId,
+        text: text.slice(0, 5000),
+      });
+      await appendAudit(request, "reviews.reply", { entityType: "review", entityId: `wb:${externalId}` });
+      return response.json({ ok: true, marketplace, result });
+    }
+
+    response.status(400).json({ error: "marketplace должен быть ozon, yandex или wb." });
   } catch (error) {
     next(error);
   }

@@ -174,9 +174,13 @@ function summarizeApiErrorPayload(data = {}, fallback = "API error") {
     }
     push(value.message);
     push(value.errorText);
+    // WB 429 кладёт человекочитаемое в title/detail («too many requests, Limited
+    // by global limiter…»), а code — хеш запроса, бесполезный оператору.
+    push(value.title);
+    push(value.detail);
     // WB шлёт { error: true, errorText: "..." } — булев флаг в тексте бесполезен.
     if (typeof value.error !== "boolean") push(value.error);
-    push(value.code);
+    if (!/^[0-9a-f]{10,}$/i.test(cleanText(value.code))) push(value.code);
     push(value.field);
     push(value.sku || value.offerId || value.offer_id);
     for (const key of ["errors", "details", "result", "results", "warnings", "params", "raw"]) {

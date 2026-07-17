@@ -13,6 +13,7 @@ type ChatRow = {
   target: string;
   chatId: string;
   orderId?: string;
+  replySign?: string;
   title: string;
   subtitle?: string;
   type?: string;
@@ -20,6 +21,10 @@ type ChatRow = {
   unreadCount: number;
   lastMessageAt?: string;
 };
+
+function marketplaceLabel(marketplace: string): string {
+  return marketplace === "ozon" ? "Ozon" : marketplace === "wb" ? "WB" : "Яндекс";
+}
 
 type ChatAttachment = { type: "video" | "image" | "file"; url: string; name?: string; previewUrl?: string };
 
@@ -200,7 +205,7 @@ export function ChatsPage() {
   const send = useMutation({
     mutationFn: () => apiJson("/api/chats/send", {
       method: "POST",
-      body: JSON.stringify({ marketplace: selected!.marketplace, target: selected!.target, chatId: selected!.chatId, text }),
+      body: JSON.stringify({ marketplace: selected!.marketplace, target: selected!.target, chatId: selected!.chatId, replySign: selected!.replySign, text }),
     }),
     onSuccess: () => {
       setText("");
@@ -222,7 +227,7 @@ export function ChatsPage() {
     <section className="page-section chats-page">
       <PageHeader
         title="Чаты"
-        subtitle="Переписка с покупателями на Ozon и Яндекс.Маркете в одном месте."
+        subtitle="Переписка с покупателями на Ozon, Яндекс.Маркете и Wildberries в одном месте."
         action={(
           <div className="row-actions">
             <button className="secondary-action" type="button" onClick={() => setTemplatesOpen(true)}>
@@ -244,9 +249,10 @@ export function ChatsPage() {
           value={marketplace}
           onChange={(next) => { setMarketplace(next); setSelected(null); }}
           options={[
-            { value: "all", label: "Оба маркетплейса" },
+            { value: "all", label: "Все маркетплейсы" },
             { value: "ozon", label: "Ozon" },
             { value: "yandex", label: "Яндекс" },
+            { value: "wb", label: "Wildberries" },
           ]}
         />
         <label className="settings-toggle">
@@ -266,7 +272,7 @@ export function ChatsPage() {
               onClick={() => setSelected(chat)}
             >
               <span className="chat-item-top">
-                <span className={`market-badge market-${chat.marketplace}`}>{chat.marketplace === "ozon" ? "Ozon" : "Яндекс"}</span>
+                <span className={`market-badge market-${chat.marketplace}`}>{marketplaceLabel(chat.marketplace)}</span>
                 <strong>{chat.title}</strong>
                 {chat.unreadCount ? <span className="notify-badge chat-unread">{chat.unreadCount}</span> : null}
               </span>
@@ -286,7 +292,7 @@ export function ChatsPage() {
           ) : (
             <>
               <div className="chat-thread-head">
-                <span className={`market-badge market-${selected.marketplace}`}>{selected.marketplace === "ozon" ? "Ozon" : "Яндекс"}</span>
+                <span className={`market-badge market-${selected.marketplace}`}>{marketplaceLabel(selected.marketplace)}</span>
                 <strong>{selected.title}</strong>
                 {selected.subtitle ? <small className="chat-subtitle">{selected.subtitle}</small> : null}
                 {historyQuery.data?.context?.buyerName ? (

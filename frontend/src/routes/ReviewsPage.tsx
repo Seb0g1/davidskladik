@@ -65,7 +65,7 @@ function ReviewCard({ review, templates, onReplied }: { review: ReviewRow; templ
   return (
     <div className={`review-card${review.needsReply ? " needs-reply" : ""}`}>
       <div className="review-head">
-        <span className={`market-badge market-${review.marketplace}`}>{review.marketplace === "ozon" ? "Ozon" : "Яндекс"}</span>
+        <span className={`market-badge market-${review.marketplace}`}>{review.marketplace === "ozon" ? "Ozon" : review.marketplace === "wb" ? "WB" : "Яндекс"}</span>
         <Stars rating={review.rating} />
         {review.needsReply ? <span className="pill warn">ждёт ответа</span> : <span className="pill ok">отвечено</span>}
         <small className="review-date">{review.createdAt ? new Date(review.createdAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}</small>
@@ -137,7 +137,7 @@ export function ReviewsPage() {
     <section className="page-section reviews-page">
       <PageHeader
         title="Отзывы"
-        subtitle="Отвечай покупателям на Ozon и Яндекс.Маркете и держи рейтинг товаров высоким."
+        subtitle="Отвечай покупателям на Ozon, Яндекс.Маркете и Wildberries и держи рейтинг товаров высоким."
         action={(
           <div className="row-actions">
             <button className="secondary-action" type="button" onClick={() => setTemplatesOpen(true)}>
@@ -160,9 +160,10 @@ export function ReviewsPage() {
           value={marketplace}
           onChange={setMarketplace}
           options={[
-            { value: "all", label: "Оба маркетплейса" },
+            { value: "all", label: "Все маркетплейсы" },
             { value: "ozon", label: "Ozon" },
             { value: "yandex", label: "Яндекс" },
+            { value: "wb", label: "Wildberries" },
           ]}
         />
         <label className="settings-toggle">

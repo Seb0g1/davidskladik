@@ -6,6 +6,8 @@ const WB_API_HOSTS = {
   prices: "https://discounts-prices-api.wildberries.ru",
   marketplace: "https://marketplace-api.wildberries.ru",
   statistics: "https://statistics-api.wildberries.ru",
+  feedbacks: "https://feedbacks-api.wildberries.ru",
+  chat: "https://buyer-chat-api.wildberries.ru",
 };
 
 async function wbRequest(account, host, method, pathname, body, options = {}) {
@@ -27,13 +29,16 @@ async function wbRequest(account, host, method, pathname, body, options = {}) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
+      // FormData — multipart (чат WB принимает сообщения только так);
+      // Content-Type тогда выставляет сам fetch вместе с boundary.
+      const isMultipart = typeof FormData !== "undefined" && body instanceof FormData;
       const response = await fetch(`${baseUrl}${pathname}`, {
         method,
         headers: {
           Authorization: account.apiKey,
-          "Content-Type": "application/json",
+          ...(isMultipart ? {} : { "Content-Type": "application/json" }),
         },
-        body: body !== undefined && body !== null ? JSON.stringify(body) : undefined,
+        body: isMultipart ? body : (body !== undefined && body !== null ? JSON.stringify(body) : undefined),
         signal: controller.signal,
       });
       clearTimeout(timer);
@@ -54,6 +59,10 @@ async function wbRequest(account, host, method, pathname, body, options = {}) {
           retry: response.headers.get("x-ratelimit-retry") || undefined,
           retryAfter: response.headers.get("retry-after") || undefined,
         };
+        // 429 «global limiter per seller» с большим Retry (штраф на минуты):
+        // повтор внутри запроса бессмыслен и только продлевает штраф — отдаём
+        // ошибку сразу, шедулеры уходят в cooldown до конца штрафа.
+        if (response.status === 429 && Number(error.retryAfterSec) > 60) throw error;
         // 429 у WB — жёсткие поминутные лимиты, ждём дольше обычного.
         if (![429, 500, 502, 503, 504].includes(response.status) || attempt >= attempts) throw error;
         lastError = error;

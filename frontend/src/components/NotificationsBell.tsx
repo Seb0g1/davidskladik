@@ -179,7 +179,7 @@ export function NotificationsBell() {
           <div className="notify-list">
             {rows.length ? rows.map((row) => (
               <div className={`notify-item${row.readAt ? "" : " is-unread"}`} key={row.id}>
-                <span className={`notify-type notify-type-${row.type}`}>{typeIcon(row.type)} {typeLabel(row.type)} · {row.marketplace === "ozon" ? "Ozon" : "Яндекс"}</span>
+                <span className={`notify-type notify-type-${row.type}`}>{typeIcon(row.type)} {typeLabel(row.type)} · {row.marketplace === "ozon" ? "Ozon" : row.marketplace === "wb" ? "WB" : "Яндекс"}</span>
                 <strong>{row.title}</strong>
                 {row.body ? <small>{row.body}</small> : null}
                 <small className="notify-time">{row.createdAt ? new Date(row.createdAt).toLocaleString("ru-RU") : ""}</small>

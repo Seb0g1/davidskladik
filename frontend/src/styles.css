@@ -3502,6 +3502,7 @@ button:disabled {
 .filters-row { display: flex; gap: 14px; align-items: center; margin: 10px 0; }
 .market-badge.market-ozon { color: #6db3ff; }
 .market-badge.market-yandex { color: #ffd25e; }
+.market-badge.market-wb { color: #d977ff; }
 
 .templates-drawer-backdrop {
   position: fixed;

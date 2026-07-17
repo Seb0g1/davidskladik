@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, BookOpen, HelpCircle, Loader2, MessageSquareReply, RefreshCw } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
+import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { TemplatesDrawer } from "../components/TemplatesDrawer";
 
@@ -40,14 +41,14 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
   const reply = useMutation({
     mutationFn: () => apiJson("/api/questions/reply", {
       method: "POST",
-      body: JSON.stringify({ externalId: question.externalId, sku: question.sku, target: question.target, text }),
+      body: JSON.stringify({ marketplace: question.marketplace, externalId: question.externalId, sku: question.sku, target: question.target, text }),
     }),
     onSuccess: () => { setOpen(false); setText(""); onReplied(); },
   });
   return (
     <div className={`review-card${question.needsAnswer ? " needs-reply" : ""}`}>
       <div className="review-head">
-        <span className="market-badge market-ozon">Ozon</span>
+        <span className={`market-badge market-${question.marketplace}`}>{question.marketplace === "wb" ? "WB" : "Ozon"}</span>
         <HelpCircle size={15} color="#c792ea" />
         {question.needsAnswer ? <span className="pill warn">ждёт ответа</span> : <span className="pill ok">отвечено ({question.answersCount})</span>}
         <small className="review-date">{question.createdAt ? new Date(question.createdAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}</small>
@@ -90,11 +91,12 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
 
 export function QuestionsPage() {
   const queryClient = useQueryClient();
+  const [marketplace, setMarketplace] = useState("all");
   const [unanswered, setUnanswered] = useState(true);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const questionsQuery = useQuery({
-    queryKey: ["questions", unanswered],
-    queryFn: () => apiJson<{ rows: QuestionRow[]; warnings: string[] }>(`/api/questions?unanswered=${unanswered}&limit=50`),
+    queryKey: ["questions", marketplace, unanswered],
+    queryFn: () => apiJson<{ rows: QuestionRow[]; warnings: string[] }>(`/api/questions?marketplace=${marketplace}&unanswered=${unanswered}&limit=50`),
     refetchInterval: 120_000,
   });
   const templatesQuery = useQuery({
@@ -107,7 +109,7 @@ export function QuestionsPage() {
     <section className="page-section questions-page">
       <PageHeader
         title="Вопросы по товарам"
-        subtitle="Отвечай на вопросы покупателей по товарам на Ozon."
+        subtitle="Отвечай на вопросы покупателей по товарам на Ozon и Wildberries."
         action={(
           <div className="row-actions">
             <button className="secondary-action" type="button" onClick={() => setTemplatesOpen(true)}>
@@ -124,11 +126,21 @@ export function QuestionsPage() {
         <Stat label="Ждут ответа" value={rows.filter((row) => row.needsAnswer).length} tone={rows.some((row) => row.needsAnswer) ? "warn" : "success"} icon={<AlertCircle size={18} />} />
       </section>
       <div className="filters-row">
+        <SelectField
+          ariaLabel="Маркетплейс"
+          value={marketplace}
+          onChange={setMarketplace}
+          options={[
+            { value: "all", label: "Все маркетплейсы" },
+            { value: "ozon", label: "Ozon" },
+            { value: "wb", label: "Wildberries" },
+          ]}
+        />
         <label className="settings-toggle">
           <input type="checkbox" checked={unanswered} onChange={(event) => setUnanswered(event.target.checked)} />
           Только без ответа
         </label>
-        <small className="review-author">Вопросы доступны только на Ozon — у Яндекс.Маркета нет API вопросов.</small>
+        <small className="review-author">Вопросы приходят с Ozon и Wildberries — у Яндекс.Маркета нет API вопросов.</small>
       </div>
       {(questionsQuery.data?.warnings || []).map((warning) => (
         <div className="inline-error" key={warning}>{warning}</div>

@@ -290,6 +290,171 @@ async function pollYandexChatNotifications(state) {
   }
 }
 
+// WB Token Bucket «global limiter per seller» ОБЩИЙ на все разделы API
+// кабинета: опрос каждые 90 с продлевает штраф и валит даже синк цен и
+// media-backfill (выяснено 2026-07-17: retry вырастал до ~48 мин). Поэтому
+// WB-поллеры ходят не чаще раза в WB_NOTIFY_POLL_MINUTES, без ретраев
+// (attempts: 1) и замолкают до конца штрафа по любому 429.
+const wbNotifyMinIntervalMs = Math.max(5, Number(process.env.WB_NOTIFY_POLL_MINUTES || 15) || 15) * 60_000;
+const wbNotifyLastRunAt = new Map();
+let wbNotifyCooldownUntil = 0;
+
+function wbNotifyShouldSkip(key) {
+  if (Date.now() < wbNotifyCooldownUntil) return true;
+  if (Date.now() - (wbNotifyLastRunAt.get(key) || 0) < wbNotifyMinIntervalMs) return true;
+  return false;
+}
+
+function wbNotifyRegisterError(error) {
+  if (Number(error?.statusCode) !== 429) return;
+  const retrySec = Math.max(300, Number(error?.retryAfterSec || 0) || 0);
+  wbNotifyCooldownUntil = Math.max(wbNotifyCooldownUntil, Date.now() + retrySec * 1000);
+  logger.warn("wb notify pollers cooldown", { untilSec: retrySec });
+}
+
+async function pollWbOrderNotifications(state) {
+  for (const account of getWbAccounts()) {
+    const key = `wb-orders:${account.id}`;
+    if (notifySourceShouldSkip(key) || wbNotifyShouldSkip(key)) continue;
+    wbNotifyLastRunAt.set(key, Date.now());
+    try {
+      const data = await wbRequest(account, "marketplace", "GET", "/api/v3/orders/new", undefined, { attempts: 1 });
+      const orders = Array.isArray(data?.orders) ? data.orders : [];
+      for (const order of orders.slice(0, 50)) {
+        const id = cleanText(order.id);
+        if (!id) continue;
+        const priceRub = Math.round(Number(order.convertedPrice || order.price || 0) / 100);
+        await insertAppNotification({
+          type: "order",
+          marketplace: "wb",
+          externalId: id,
+          title: `Новый заказ WB № ${id}${priceRub ? ` · ${priceRub} ₽` : ""}`,
+          body: cleanText(order.article || ""),
+          url: "/app/finance",
+          eventAt: cleanText(order.createdAt) || null,
+        });
+      }
+      notifySourceResult(key, true);
+    } catch (error) {
+      wbNotifyRegisterError(error);
+      notifySourceResult(key, false);
+      logger.warn("notify poll wb orders failed", { account: account.id, status: error?.statusCode, detail: error?.message || String(error) });
+    }
+  }
+}
+
+async function pollWbReviewNotifications(state) {
+  for (const account of getWbAccounts()) {
+    const key = `wb-reviews:${account.id}`;
+    if (notifySourceShouldSkip(key) || wbNotifyShouldSkip(key)) continue;
+    wbNotifyLastRunAt.set(key, Date.now());
+    try {
+      const data = await wbRequest(account, "feedbacks", "GET", "/api/v1/feedbacks?isAnswered=false&take=50&skip=0&order=dateDesc", undefined, { attempts: 1 });
+      for (const feedback of data?.data?.feedbacks || []) {
+        const id = cleanText(feedback.id);
+        if (!id) continue;
+        await insertAppNotification({
+          type: "review",
+          marketplace: "wb",
+          externalId: id,
+          title: `Новый отзыв WB · ${Number(feedback.productValuation || 0)}★`,
+          body: cleanText(feedback.text || feedback.pros || "").slice(0, 200),
+          url: "/app/reviews",
+          eventAt: cleanText(feedback.createdDate) || null,
+        });
+      }
+      notifySourceResult(key, true);
+    } catch (error) {
+      wbNotifyRegisterError(error);
+      // 403 — в токене нет категории «Вопросы и отзывы»: не спамим лог каждые 90 с.
+      const isPermissionDenied = Number(error?.statusCode) === 403;
+      notifySourceResult(key, false, { permanent: isPermissionDenied });
+      logger.warn("notify poll wb reviews failed", { account: account.id, status: error?.statusCode, detail: error?.message || String(error) });
+    }
+  }
+}
+
+async function pollWbQuestionNotifications(state) {
+  for (const account of getWbAccounts()) {
+    const key = `wb-questions:${account.id}`;
+    if (notifySourceShouldSkip(key) || wbNotifyShouldSkip(key)) continue;
+    wbNotifyLastRunAt.set(key, Date.now());
+    try {
+      const data = await wbRequest(account, "feedbacks", "GET", "/api/v1/questions?isAnswered=false&take=50&skip=0&order=dateDesc", undefined, { attempts: 1 });
+      for (const question of data?.data?.questions || []) {
+        const id = cleanText(question.id);
+        if (!id) continue;
+        await insertAppNotification({
+          type: "question",
+          marketplace: "wb",
+          externalId: id,
+          title: "Новый вопрос WB",
+          body: cleanText(question.text || "").slice(0, 200),
+          url: "/app/questions",
+          eventAt: cleanText(question.createdDate) || null,
+        });
+      }
+      notifySourceResult(key, true);
+    } catch (error) {
+      wbNotifyRegisterError(error);
+      const isPermissionDenied = Number(error?.statusCode) === 403;
+      notifySourceResult(key, false, { permanent: isPermissionDenied });
+      logger.warn("notify poll wb questions failed", { account: account.id, status: error?.statusCode, detail: error?.message || String(error) });
+    }
+  }
+}
+
+async function pollWbChatNotifications(state) {
+  for (const account of getWbAccounts()) {
+    const key = `wb-chats:${account.id}`;
+    if (notifySourceShouldSkip(key) || wbNotifyShouldSkip(key)) continue;
+    wbNotifyLastRunAt.set(key, Date.now());
+    try {
+      // Поток событий с курсором next: первый прогон молча запоминает хвост
+      // (не спамим историей), дальше уведомляем о новых сообщениях покупателей.
+      const storedNext = Number(state[key]?.next || 0) || 0;
+      let next = storedNext;
+      const clientEvents = [];
+      for (let pageIndex = 0; pageIndex < 5; pageIndex += 1) {
+        const suffix = next ? `?next=${encodeURIComponent(next)}` : "";
+        const data = await wbRequest(account, "chat", "GET", `/api/v1/seller/events${suffix}`, undefined, { attempts: 1 });
+        const result = data?.result || data || {};
+        const batch = Array.isArray(result.events) ? result.events : [];
+        for (const event of batch) {
+          const sender = cleanText(event.sender || event.source || "").toLowerCase();
+          if (!/seller|supplier/.test(sender)) clientEvents.push(event);
+        }
+        const nextCursor = Number(result.next || 0) || 0;
+        if (!batch.length || !nextCursor || nextCursor === next) break;
+        next = nextCursor;
+      }
+      if (storedNext) {
+        for (const event of clientEvents.slice(0, 50)) {
+          const chatId = cleanText(event.chatID || event.chatId);
+          const eventId = cleanText(event.eventID || event.eventId || event.id);
+          if (!chatId || !eventId) continue;
+          const text = cleanText(event.message?.text || "");
+          await insertAppNotification({
+            type: "chat",
+            marketplace: "wb",
+            externalId: eventId,
+            title: `Новое сообщение в чате WB${event.clientName ? ` · ${cleanText(event.clientName)}` : ""}`,
+            body: text.slice(0, 200) || `Чат ${chatId}`,
+            url: "/app/chats",
+          });
+        }
+      }
+      state[key] = { next };
+      notifySourceResult(key, true);
+    } catch (error) {
+      wbNotifyRegisterError(error);
+      const isPermissionDenied = Number(error?.statusCode) === 403;
+      notifySourceResult(key, false, { permanent: isPermissionDenied });
+      logger.warn("notify poll wb chats failed", { account: account.id, status: error?.statusCode, detail: error?.message || String(error) });
+    }
+  }
+}
+
 async function runNotificationPollCycle() {
   if (notifyPollRunning) return;
   notifyPollRunning = true;
@@ -298,11 +463,15 @@ async function runNotificationPollCycle() {
     const state = await readNotificationsState();
     await pollOzonOrderNotifications(state);
     await pollYandexOrderNotifications(state);
+    await pollWbOrderNotifications(state);
     await pollOzonChatNotifications(state);
     await pollYandexChatNotifications(state);
+    await pollWbChatNotifications(state);
     await pollOzonReviewNotifications(state);
     await pollYandexReviewNotifications(state);
+    await pollWbReviewNotifications(state);
     await pollOzonQuestionNotifications(state);
+    await pollWbQuestionNotifications(state);
     await writeNotificationsState(state);
   } catch (error) {
     logger.warn("notification poll cycle failed", { detail: error?.message || String(error) });
