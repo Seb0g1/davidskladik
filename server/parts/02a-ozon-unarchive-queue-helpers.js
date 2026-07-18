@@ -25,7 +25,10 @@ function nextOzonUnarchiveScheduledRunAt(date = new Date()) {
 }
 
 function nextOzonUnarchiveRetryAt(date = new Date()) {
-  return nextOzonUnarchiveScheduledRunAt(date).toISOString();
+  const base = date instanceof Date ? date : new Date(date);
+  const ms = Number.isFinite(base.getTime()) ? base.getTime() : Date.now();
+  const retryHours = Math.max(1, Number(process.env.OZON_UNARCHIVE_RETRY_HOURS || 5) || 5);
+  return new Date(ms + retryHours * 60 * 60 * 1000).toISOString();
 }
 
 function nextOzonUnarchiveVisibilityRetryAt(date = new Date()) {
