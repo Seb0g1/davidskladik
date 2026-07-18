@@ -121,6 +121,56 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
   }
 }
 
+// No-link archive retry sweep: products whose links were deleted and stockZeroAt was set
+// by the no-supplier-automation BullMQ job, but archival never completed (job failed /
+// worker restart). Re-runs the archive step for stuck candidates on every sweep tick so
+// archival eventually succeeds even when BullMQ jobs transiently fail.
+async function runNoLinkArchiveSweep({ source = "schedule" } = {}) {
+  if (process.env.AUTO_ARCHIVE_ON_NO_LINKS === "false") return { status: "disabled" };
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) return { status: "postgres_disabled" };
+  try {
+    const rows = await prisma.$queryRawUnsafe(`
+      SELECT p.id
+      FROM warehouse_products p
+      WHERE p.archived = false
+        AND p.ever_had_links = true
+        AND NOT EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
+        AND (p.marketplace <> 'yandex' OR jsonb_array_length(COALESCE(p.raw->'links', '[]'::jsonb)) = 0)
+        AND p.raw -> 'noSupplierAutomation' ->> 'stockZeroAt' IS NOT NULL
+        AND (p.raw -> 'noSupplierAutomation' ->> 'archivedAt') IS NULL
+      LIMIT 50
+    `).catch((error) => {
+      logger.warn("no-link archive sweep query failed", { detail: error?.message || String(error) });
+      return [];
+    });
+    if (!rows.length) return { status: "ok", candidates: 0, archived: 0 };
+    const ids = rows.map((row) => String(row.id));
+    const products = await buildFreshWarehouseProducts(ids, { livePriceMaster: false }).catch((error) => {
+      logger.warn("no-link archive sweep build failed", { detail: error?.message || String(error) });
+      return [];
+    });
+    if (!products.length) return { status: "ok", candidates: rows.length, archived: 0 };
+    const result = await runNoSupplierMarketplaceAutomation(
+      { products },
+      { productIds: ids, includeNoLinks: true, source: `no_link_archive_sweep_${source}` },
+    ).catch((error) => {
+      logger.warn("no-link archive sweep automation failed", { detail: error?.message || String(error) });
+      return { archived: 0, zeroStockSent: 0 };
+    });
+    logger.info("no_link_archive_sweep_complete", {
+      source,
+      candidates: rows.length,
+      archived: result.archived || 0,
+      zeroStockSent: result.zeroStockSent || 0,
+    });
+    return { status: "ok", candidates: rows.length, archived: result.archived || 0 };
+  } catch (error) {
+    logger.warn("no-link archive sweep failed", { detail: error?.message || String(error) });
+    return { status: "error", error: error?.message || String(error) };
+  }
+}
+
 function scheduleZeroStockSweep(delayMs = zeroStockSweepIntervalMs) {
   if (!zeroStockSweepEnabled) {
     zeroStockSweepNextRunAt = null;
@@ -137,6 +187,9 @@ function scheduleZeroStockSweep(delayMs = zeroStockSweepIntervalMs) {
       logger.warn("zero stock sweep tick failed", { detail: error?.message || String(error) });
       result = { status: "error", error: error?.message || String(error) };
     } finally {
+      await runNoLinkArchiveSweep({ source: "schedule" }).catch((error) => {
+        logger.warn("no-link archive sweep tick failed", { detail: error?.message || String(error) });
+      });
       await recordSweepHeartbeat("zero_stock_sweep", { status: result?.status || "unknown", intervalMs: zeroStockSweepIntervalMs, detail: result || {} }).catch(() => {});
       scheduleZeroStockSweep(zeroStockSweepIntervalMs);
     }

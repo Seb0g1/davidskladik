@@ -173,6 +173,10 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     // (multi-second) save can repopulate warehouseFastPageCache with pre-link rows and serve
     // them stale for ~45s — that's why the page kept showing the product as "not linked"
     // right after saving (PLAN-HARDENING.md 1.4).
+    // Activation (price push + recovery) is enqueued to BullMQ and doesn't need to block the
+    // HTTP response — we send the response as soon as the DB write + fresh read complete, then
+    // finish activation within the withWarehouseMutation scope so cache invalidation still
+    // happens after the full write has settled.
     await withWarehouseMutation(async () => {
     await writeWarehouseProductPatch(
       warehouse.products.filter((product) => updatedIds.includes(product.id)),
@@ -181,9 +185,6 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const updatedProducts = targetProducts;
     const savedProducts = await buildFreshWarehouseProductsFromKnownProducts(warehouse, updatedProducts, { usdRate });
     const expandedUpdatedIds = targetProducts.map((product) => product.id);
-    const activation = await queueLinkedProductActivation(expandedUpdatedIds, "link_bulk_add_or_update", warehouseLinkActivationRequestMeta(expandedUpdatedIds, {
-      username: requestUsername(request),
-    }));
     response.json({
       ok: true,
       changed: savedProducts.length || updatedIds.length,
@@ -192,8 +193,17 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       expandedProductIds: expandedUpdatedIds,
       groupLinkSignature: warehouseGroupLinkSignature(savedProducts),
       marketplacePriceBreakdown: marketplacePriceBreakdown(savedProducts),
-      ...activation,
+      activationQueued: true,
+      recoveryQueued: true,
+      priceIntentId: null,
+      affectedProductIds: expandedUpdatedIds,
     });
+    await queueLinkedProductActivation(expandedUpdatedIds, "link_bulk_add_or_update", warehouseLinkActivationRequestMeta(expandedUpdatedIds, {
+      username: requestUsername(request),
+    })).catch((activationError) => logger.warn("link bulk activation failed after response", {
+      detail: activationError?.message || String(activationError),
+      productIds: expandedUpdatedIds,
+    }));
     appendAudit(request, "warehouse.links.bulk_save", {
       productIds: updatedIds,
       links: baseLinks.map((link) => ({
@@ -296,16 +306,22 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
     await withWarehouseMutation(async () => {
     await writeWarehouseProductPatch([product], { reason: "warehouse_link_save" });
     const [savedProduct] = await buildFreshWarehouseProductsFromKnownProducts(warehouse, [product], { usdRate });
-    const activation = await queueLinkedProductActivation([product.id], "link_add_or_update", warehouseLinkActivationRequestMeta([product.id], {
-      username: requestUsername(request),
-    }));
     response.json({
       ok: true,
       product: savedProduct || normalizeWarehouseProduct(product),
       links: (savedProduct || product).links || [],
       persisted: "written",
-      ...activation,
+      activationQueued: true,
+      recoveryQueued: true,
+      priceIntentId: null,
+      affectedProductIds: [product.id],
     });
+    await queueLinkedProductActivation([product.id], "link_add_or_update", warehouseLinkActivationRequestMeta([product.id], {
+      username: requestUsername(request),
+    })).catch((activationError) => logger.warn("link activation failed after response", {
+      detail: activationError?.message || String(activationError),
+      productId: product.id,
+    }));
     appendAudit(request, "warehouse.link.save", {
       productId: product.id,
       offerId: product.offerId,
