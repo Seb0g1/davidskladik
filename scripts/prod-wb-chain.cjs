@@ -26,6 +26,15 @@ const clean = (value) => String(value == null ? "" : value).trim();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const resultPath = path.join(process.cwd(), "data", "wb-chain-result.json");
+// vendorCode, у которых WB ответил «used in other cards» — занято чужой карточкой.
+// Persist между запусками: bisect находит их один раз, дальше пропускаем сразу.
+const conflictVendorCodesPath = path.join(process.cwd(), "data", "wb-apply-conflict-vendorcodes.json");
+function loadConflictVendorCodes() {
+  try { return new Set(JSON.parse(fsSync.readFileSync(conflictVendorCodesPath, "utf8"))); } catch { return new Set(); }
+}
+function saveConflictVendorCodes(set) {
+  fsSync.writeFileSync(conflictVendorCodesPath, JSON.stringify([...set], null, 2));
+}
 const state = { mode, startedAt: new Date().toISOString(), finishedAt: null, error: null, steps: [] };
 
 function saveState() {
@@ -141,6 +150,8 @@ async function stepApply(account, evaluated, limit) {
   }
   let skippedInTrash = 0;
   let skippedDuplicate = 0;
+  let skippedConflict = 0;
+  const conflictVendorCodes = loadConflictVendorCodes();
   const seenVendorCodes = new Set();
   const candidates = evaluated
     .filter(({ result }) => {
@@ -150,6 +161,9 @@ async function stepApply(account, evaluated, limit) {
       if (trashVendorCodes.has(code)) { skippedInTrash += 1; return false; }
       // Дубли vendorCode внутри самого каталога тоже валят чанк целиком.
       if (seenVendorCodes.has(code)) { skippedDuplicate += 1; return false; }
+      // vendorCode, занятые чужой карточкой кабинета — находим bisect один раз,
+      // затем постоянно пропускаем (data/wb-apply-conflict-vendorcodes.json).
+      if (conflictVendorCodes.has(code)) { skippedConflict += 1; return false; }
       seenVendorCodes.add(code);
       return true;
     })
@@ -211,6 +225,9 @@ async function stepApply(account, evaluated, limit) {
           if (bisectResult.skippedVendorCodes.length) {
             errors.push({ vendorCodes: bisectResult.skippedVendorCodes, statusCode: 400, error: "used in other cards — vendorCode занят, пропускаем" });
             console.warn(`bisect: пропущено ${bisectResult.skippedVendorCodes.length} vendorCode с коллизией:`, bisectResult.skippedVendorCodes.join(", "));
+            // Persist: следующий запуск пропустит эти vendorCode до bisect.
+            for (const vc of bisectResult.skippedVendorCodes) conflictVendorCodes.add(vc.toLowerCase());
+            saveConflictVendorCodes(conflictVendorCodes);
           }
           console.log(`uploaded chunk ${index + 1}/${chunks.length} via bisect: +${bisectResult.uploaded} (skipped ${bisectResult.skippedVendorCodes.length}, total ${uploaded})`);
           done = true;
@@ -266,6 +283,7 @@ async function stepApply(account, evaluated, limit) {
     skippedNoBarcode: candidates.length - ready.length,
     skippedInTrash,
     skippedDuplicate,
+    skippedConflict,
     errors: errors.slice(0, 20),
   });
   return uploaded;
