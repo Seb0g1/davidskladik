@@ -92,6 +92,30 @@ async function stepPreview() {
   return evaluated;
 }
 
+// Бинарный поиск vendorCode с «used in other cards»: загружает всё что можно,
+// пропускает только те листинги, у которых коллизия vendorCode в кабинете WB.
+async function uploadBisect(account, listings, tnvedCharc, bisectResult) {
+  if (!listings.length) return;
+  try {
+    await server.wbCardsUpload(account, listings.map((l) => server.buildWbCardPayload(l, tnvedCharc)));
+    bisectResult.uploaded += listings.length;
+  } catch (error) {
+    const statusCode = Number(error?.statusCode) || 0;
+    const wbText = clean(error?.wb?.errorText || error?.message || "");
+    if (statusCode === 400 && /used in other cards/i.test(wbText) && listings.length > 1) {
+      const mid = Math.ceil(listings.length / 2);
+      await uploadBisect(account, listings.slice(0, mid), tnvedCharc, bisectResult);
+      await uploadBisect(account, listings.slice(mid), tnvedCharc, bisectResult);
+      return;
+    }
+    if (statusCode === 400 && /used in other cards/i.test(wbText) && listings.length === 1) {
+      bisectResult.skippedVendorCodes.push(listings[0].vendorCode);
+      return;
+    }
+    throw error;
+  }
+}
+
 async function stepApply(account, evaluated, limit) {
   const rules = await server.readWbImportRules();
   if (!rules.subjectId) throw new Error("Не задан subjectId в правилах WB");
@@ -159,7 +183,7 @@ async function stepApply(account, evaluated, limit) {
       } catch (error) {
         const statusCode = Number(error?.statusCode) || 0;
         const retrySec = Number(error?.retryAfterSec) || 0;
-        const wbText = clean(error?.wb?.errorText || "");
+        const wbText = clean(error?.wb?.errorText || error?.message || "");
         // Дневной лимит WB — 1000 новых карточек/сутки («You have already used
         // up your daily limit — 1000. Try tomorrow»): дальше сегодня бить
         // бессмысленно, остаток дошлёт завтрашний запуск.
@@ -167,6 +191,28 @@ async function stepApply(account, evaluated, limit) {
           errors.push({ vendorCodes: chunk.map((listing) => listing.vendorCode).slice(0, 5), statusCode, error: wbText });
           abortReason = "дневной лимит WB на новые карточки (1000/сутки) — остаток дошлёт завтрашний запуск";
           aborted = true;
+          done = true;
+          break;
+        }
+        // «Used in other cards» — vendorCode занят другой карточкой кабинета.
+        // Находим проблемный артикул бисектом (загружаем по одному), остальные
+        // в чанке прокидываем нормально.
+        if (statusCode === 400 && /used in other cards/i.test(wbText)) {
+          const bisectResult = { uploaded: 0, skippedVendorCodes: [] };
+          try {
+            await uploadBisect(account, chunk, tnvedCharc, bisectResult);
+          } catch (bisectError) {
+            // bisect встретил 429 или другую ошибку — обрабатываем ниже
+            errors.push({ vendorCodes: chunk.map((l) => l.vendorCode).slice(0, 5), statusCode: Number(bisectError?.statusCode) || 0, error: bisectError?.message || String(bisectError) });
+            done = true;
+            break;
+          }
+          uploaded += bisectResult.uploaded;
+          if (bisectResult.skippedVendorCodes.length) {
+            errors.push({ vendorCodes: bisectResult.skippedVendorCodes, statusCode: 400, error: "used in other cards — vendorCode занят, пропускаем" });
+            console.warn(`bisect: пропущено ${bisectResult.skippedVendorCodes.length} vendorCode с коллизией:`, bisectResult.skippedVendorCodes.join(", "));
+          }
+          console.log(`uploaded chunk ${index + 1}/${chunks.length} via bisect: +${bisectResult.uploaded} (skipped ${bisectResult.skippedVendorCodes.length}, total ${uploaded})`);
           done = true;
           break;
         }
@@ -424,8 +470,11 @@ async function main() {
     await runStepWaiting429("card-errors", () => stepErrors(account));
     await runStepWaiting429("tnved", () => stepTnved(account));
     await runStepWaiting429("enrich", () => stepEnrich(account));
-    await runStepWaiting429("prices", () => stepPrices(account));
+    // stocks идёт до prices: цены и остатки на разных лимитерах WB — stocks после
+    // enrich даёт лимитеру цен ~1–2 мин на остывание (logs 17.07: stocks ok за 40 с
+    // после того как prices дал up на попытке 3; 4-я попытка прошла бы).
     await runStepWaiting429("stocks", () => stepStocks(account, defaultWarehouseId));
+    await runStepWaiting429("prices", () => stepPrices(account), { attempts: 15, maxWaitMs: 3 * 60 * 60 * 1000 });
   } else if (mode === "chain") {
     const evaluated = await stepPreview();
     await stepApply(account, evaluated, 20000);
@@ -433,8 +482,8 @@ async function main() {
     await runStepWaiting429("card-errors", () => stepErrors(account));
     await runStepWaiting429("tnved", () => stepTnved(account));
     await runStepWaiting429("enrich", () => stepEnrich(account));
-    await runStepWaiting429("prices", () => stepPrices(account));
     await runStepWaiting429("stocks", () => stepStocks(account, defaultWarehouseId));
+    await runStepWaiting429("prices", () => stepPrices(account), { attempts: 15, maxWaitMs: 3 * 60 * 60 * 1000 });
     // Фото — последними: квота WB media/save крошечная, шаг может идти часами
     // (основную догрузку ведёт фоновый шедулер wb-media-backfill на worker).
     await stepMedia(account, 20000);
