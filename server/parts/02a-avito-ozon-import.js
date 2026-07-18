@@ -20,6 +20,24 @@ function parseVolumeMlFromText(value) {
   return maxVolume;
 }
 
+// Принятые Avito значения поля Volume (категория «Духи и туалетная вода»).
+// 1-15 мл поштучно, затем только 30/50/75/90/100/120/150, иначе «Другой».
+const AVITO_VOLUME_VALUES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 30, 50, 75, 90, 100, 120, 150];
+
+function detectAvitoVolumeMl(title) {
+  const ml = parseVolumeMlFromText(title);
+  if (!ml || ml <= 0) return "";
+  let closest = AVITO_VOLUME_VALUES[0];
+  let minDiff = Infinity;
+  for (const v of AVITO_VOLUME_VALUES) {
+    const diff = Math.abs(ml - v);
+    if (diff < minDiff) { minDiff = diff; closest = v; }
+  }
+  // Если ближайшее значение отличается более чем на 30%, возвращаем «Другой».
+  if (minDiff > ml * 0.3) return "Другой";
+  return `${closest} мл`;
+}
+
 function extractAvitoImageUrls(images) {
   // В Postgres колонка images — объект { imageUrl, images: [...] }
   // (см. productToPostgresData), но встречается и плоский массив URL.
@@ -198,10 +216,17 @@ function evaluateAvitoImportCandidate(product = {}, rules = {}, pricing = {}) {
   if (reasons.length) return { ok: false, reasons, listing: null };
 
   // Категоризация по названию: полная цепочка тегов Avito из справочника
-  // (см. 02a-avito-categorizer.js), Gender — только для парфюмерии.
+  // (см. 02a-avito-categorizer.js), Gender и PerfumeType — только для парфюмерии.
   const classification = classifyAvitoCategory(title, rules);
   const spec = classification.spec;
   const gender = spec.gender ? detectAvitoPerfumeGender(title) : "";
+  const perfumeType = spec.gender ? detectAvitoPerfumeType(title) : "";
+  const volume = spec.gender ? detectAvitoVolumeMl(title) : "";
+
+  const extraFields = {};
+  if (gender) extraFields.Gender = gender;
+  if (perfumeType) extraFields.PerfumeType = perfumeType;
+  if (volume) extraFields.Volume = volume;
 
   return {
     ok: true,
@@ -225,7 +250,7 @@ function evaluateAvitoImportCandidate(product = {}, rules = {}, pricing = {}) {
       condition: spec.condition ? (rules.feedDefaults?.condition || "Новое") : "",
       adType: normalizeAvitoAdType(rules.feedDefaults?.adType),
       categoryAutoDefaulted: classification.autoDefaulted,
-      ...(gender ? { extraFields: { Gender: gender } } : {}),
+      ...(Object.keys(extraFields).length ? { extraFields } : {}),
       enabled: true,
     },
   };

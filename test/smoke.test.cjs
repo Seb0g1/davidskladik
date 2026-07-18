@@ -7127,7 +7127,7 @@ test("Ozon discount quarantine uses staged price steps under 90% drop limit", ()
 });
 
 test("Avito categorizer maps titles to category specs and feed XML emits spec tag chain", () => {
-  const { classifyAvitoCategory, getAvitoCategorySpec, buildAvitoAdXml, normalizeAvitoAdType, avitoListingCategoryPath, detectAvitoPerfumeGender } = require("../server.js");
+  const { classifyAvitoCategory, getAvitoCategorySpec, buildAvitoAdXml, normalizeAvitoAdType, avitoListingCategoryPath, detectAvitoPerfumeGender, detectAvitoPerfumeType, detectAvitoVolumeMl } = require("../server.js");
 
   // Классификация по названию: цепочки категорий из шаблонов Автозагрузки.
   assert.equal(classifyAvitoCategory("GIORGIO ARMANI CODE Мужские духи 75мл").key, "parfum-edt");
@@ -7150,6 +7150,22 @@ test("Avito categorizer maps titles to category specs and feed XML emits spec ta
   // Канонический AdType Avito — «приобретен» без «ё».
   assert.equal(normalizeAvitoAdType("Товар приобретён на продажу"), "Товар приобретен на продажу");
   assert.equal(detectAvitoPerfumeGender("Духи женские 50 мл"), "Женщины");
+  // PerfumeType детектирует тип аромата по ключевым словам в названии.
+  assert.equal(detectAvitoPerfumeType("CHANEL Мадемуазель EDP 100мл"), "Парфюмерная вода");
+  assert.equal(detectAvitoPerfumeType("DIOR Sauvage Туалетная вода 200 мл"), "Туалетная вода");
+  assert.equal(detectAvitoPerfumeType("DIOR Sauvage EDT 200 мл"), "Туалетная вода");
+  assert.equal(detectAvitoPerfumeType("Acqua di Gio Одеколон 100 мл"), "Одеколон");
+  assert.equal(detectAvitoPerfumeType("Духи женские 50 мл"), "Духи");
+  assert.equal(detectAvitoPerfumeType("Дымка для волос парфюмированная 100 мл"), "Дымка и вуаль");
+  assert.equal(detectAvitoPerfumeType("Крем для рук 75 мл"), "");
+  // Volume маппит мл из названия на принятые значения Avito.
+  assert.equal(detectAvitoVolumeMl("CHANEL N5 EDP 100 мл"), "100 мл");
+  assert.equal(detectAvitoVolumeMl("Dior Sauvage EDT 200 мл"), "150 мл");
+  assert.equal(detectAvitoVolumeMl("Givenchy L'Interdit 50мл"), "50 мл");
+  assert.equal(detectAvitoVolumeMl("Tom Ford Noir 30 мл"), "30 мл");
+  assert.equal(detectAvitoVolumeMl("Духи 7.5 мл"), "7 мл");
+  assert.equal(detectAvitoVolumeMl("Отливант 2ml"), "2 мл");
+  assert.equal(detectAvitoVolumeMl("Крем для рук"), "");
 
   // XML духов: PerfumeryType + Condition, без GoodsSubType/SubType.
   const perfumeXml = buildAvitoAdXml({

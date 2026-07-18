@@ -302,6 +302,8 @@ module.exports = {
   classifyAvitoCategory,
   getAvitoCategorySpec,
   detectAvitoPerfumeGender,
+  detectAvitoPerfumeType,
+  detectAvitoVolumeMl,
   normalizeAvitoAdType,
   normalizeAvitoCondition,
   avitoListingCategoryPath,

@@ -67,13 +67,34 @@ async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
       // уходить с PerfumeryType «Пробники и отливанты» — валидатор Avito
       // отклонял старые объявления с типом «Духи и туалетная вода».
       const classification = classifyAvitoCategory(item.title, rules);
-      if (classification.spec && classification.spec.key !== cleanText(item.categoryKey)) {
-        next.categoryKey = classification.spec.key;
+      const spec = classification.spec;
+      if (spec && spec.key !== cleanText(item.categoryKey)) {
+        next.categoryKey = spec.key;
         next.categoryAutoDefaulted = classification.autoDefaulted;
-        const gender = classification.spec.gender ? detectAvitoPerfumeGender(item.title) : "";
-        if (gender) next.extraFields = { ...(item.extraFields || {}), Gender: gender };
+        const gender = spec.gender ? detectAvitoPerfumeGender(item.title) : "";
+        const perfumeType = spec.gender ? detectAvitoPerfumeType(item.title) : "";
+        const volume = spec.gender ? detectAvitoVolumeMl(item.title) : "";
+        const newExtra = { ...(item.extraFields || {}) };
+        if (gender) newExtra.Gender = gender; else delete newExtra.Gender;
+        if (perfumeType) newExtra.PerfumeType = perfumeType; else delete newExtra.PerfumeType;
+        if (volume) newExtra.Volume = volume; else delete newExtra.Volume;
+        next.extraFields = newExtra;
         reclassified += 1;
         changed = true;
+      } else if (spec?.gender) {
+        // Обогащение PerfumeType/Volume у уже правильно классифицированных объявлений.
+        const perfumeType = detectAvitoPerfumeType(item.title);
+        const volume = detectAvitoVolumeMl(item.title);
+        const needsPerfumeType = perfumeType && !(item.extraFields?.PerfumeType);
+        const needsVolume = volume && !(item.extraFields?.Volume);
+        if (needsPerfumeType || needsVolume) {
+          next.extraFields = {
+            ...(item.extraFields || {}),
+            ...(needsPerfumeType ? { PerfumeType: perfumeType } : {}),
+            ...(needsVolume ? { Volume: volume } : {}),
+          };
+          changed = true;
+        }
       }
       return next;
     });
