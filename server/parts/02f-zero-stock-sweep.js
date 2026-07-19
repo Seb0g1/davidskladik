@@ -187,7 +187,10 @@ function scheduleZeroStockSweep(delayMs = zeroStockSweepIntervalMs) {
       logger.warn("zero stock sweep tick failed", { detail: error?.message || String(error) });
       result = { status: "error", error: error?.message || String(error) };
     } finally {
-      await runNoLinkArchiveSweep({ source: "schedule" }).catch((error) => {
+      // Archive sweep runs fire-and-forget so it cannot delay the heartbeat write or
+      // the next schedule tick — marketplace API calls inside can take several minutes
+      // and would make the sweep appear stale to the heartbeat monitor otherwise.
+      runNoLinkArchiveSweep({ source: "schedule" }).catch((error) => {
         logger.warn("no-link archive sweep tick failed", { detail: error?.message || String(error) });
       });
       await recordSweepHeartbeat("zero_stock_sweep", { status: result?.status || "unknown", intervalMs: zeroStockSweepIntervalMs, detail: result || {} }).catch(() => {});
