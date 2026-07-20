@@ -59,7 +59,8 @@ function warehouseProductDiagnosticSaleState(product = {}, contextProducts = [])
     product.noSupplierAutomation?.lastError
       || lastStockSend?.error
       || lastArchiveSend?.error
-      || lastPriceSend?.detail
+      // detail:"ok" means success — only use it as error text when the price send failed
+      || (lastPriceSend?.status === "success" ? "" : lastPriceSend?.detail)
       || "",
   );
 
