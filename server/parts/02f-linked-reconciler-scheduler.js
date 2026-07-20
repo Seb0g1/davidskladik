@@ -250,7 +250,7 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
   try {
     recovery = await runSupplierRecoveryAutomation(
       { products },
-      { productIds: ids, source: "linked_reconciler", sourceEvent: "linked_reconciler" },
+      { productIds: ids, source: "linked_reconciler", sourceEvent: "linked_reconciler", forceOzonDailyLimit: true },
     );
   } finally {
     closePhaseMarker();

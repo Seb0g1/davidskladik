@@ -234,6 +234,11 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
       {
         productIds: recoveryIds,
         force: true,
+        // Bypass our self-imposed daily counter: user-triggered link saves should unarchive
+        // immediately. The background queue processes slowly (100/day limit exhausted at 03:00
+        // MSK), so without this flag new link activations would wait hours or days. Ozon's
+        // actual API limit is still honoured — a rejection falls back to the queue.
+        forceOzonDailyLimit: true,
         source: normalizedSourceEvent,
         sourceEvent: normalizedSourceEvent,
         requestedBy: requestMeta.username || requestMeta.user || "system",
