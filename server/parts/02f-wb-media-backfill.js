@@ -36,17 +36,24 @@ function persistWbMediaBackfillStatus() {
 }
 
 // Картинки Ozon-товара по vendorCode карточки WB (vendorCode = наш offerId).
+// Читает и raw (полная нормализация) и images-колонку (денормализованный кэш):
+// images заполняется из raw.ozon.images при upsert, но может оказаться свежее
+// (например, когда name-backfill обновил raw.ozon без пересчёта images).
 async function wbMediaBackfillImagesForVendorCode(prisma, vendorCode) {
   const code = cleanText(vendorCode).toLowerCase();
   if (!code) return [];
   const rows = await prisma.$queryRaw`
-    SELECT raw FROM warehouse_products
+    SELECT raw, images FROM warehouse_products
     WHERE marketplace = 'ozon' AND LOWER(offer_id) = ${code}
     LIMIT 1
   `;
-  const raw = rows?.[0]?.raw;
-  const normalized = raw && typeof raw === "object" ? normalizeWarehouseProduct(raw) : null;
-  return normalized ? wbExtractImageUrls(normalized) : [];
+  if (!rows?.[0]) return [];
+  const raw = rows[0].raw && typeof rows[0].raw === "object" ? rows[0].raw : {};
+  const imageState = rows[0].images && typeof rows[0].images === "object" ? rows[0].images : {};
+  const normalized = normalizeWarehouseProduct({ ...raw, imageUrl: raw.imageUrl || imageState.imageUrl });
+  const fromNormalized = wbExtractImageUrls(normalized);
+  const fromImageState = splitList(imageState.images);
+  return Array.from(new Set([...fromNormalized, ...fromImageState].filter(Boolean)));
 }
 
 async function runWbMediaBackfill({ limit = wbMediaBackfillPerRunLimit, source = "auto" } = {}) {
@@ -130,7 +137,7 @@ async function runWbMediaBackfill({ limit = wbMediaBackfillPerRunLimit, source =
     }
 
     wbMediaBackfillStats.lastStatus = throttled ? "throttled" : "ok";
-    if (sent || errors.length) {
+    if (sent || throttled || skippedNoImages || errors.length) {
       logger.info("wb_media_backfill_tick", {
         source,
         sent,
@@ -163,12 +170,19 @@ function scheduleWbMediaBackfill(delayMs = null) {
   const normalizedDelay = Math.max(30_000, Number(delayMs ?? intervalMs) || intervalMs);
   wbMediaBackfillNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   wbMediaBackfillTimer = setTimeout(async () => {
+    let result = null;
     try {
-      await runWbMediaBackfill({ source: "schedule" });
+      result = await runWbMediaBackfill({ source: "schedule" });
     } catch (error) {
       logger.warn("wb media backfill tick failed", { detail: error?.message || String(error) });
     } finally {
-      scheduleWbMediaBackfill(intervalMs);
+      // После 429 уважаем retrySec WB: не долбим лимитер каждые 5 мин зря
+      // (logs 2026-07-18: retrySec=1314 → 4 напрасных попытки до сброса).
+      const retrySec = Number(result?.retrySec) || 0;
+      const nextDelay = result?.throttled && retrySec > 0
+        ? Math.max(intervalMs, retrySec * 1000 + 10_000)
+        : intervalMs;
+      scheduleWbMediaBackfill(nextDelay);
     }
   }, normalizedDelay);
   wbMediaBackfillTimer.unref?.();

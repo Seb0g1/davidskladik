@@ -7161,6 +7161,9 @@ textarea:focus-visible,
 .rules-marketplace-tabs button.is-active { background: rgba(var(--accent-rgb), 0.2); border-color: rgba(var(--accent-rgb), 0.6); color: var(--text); }
 .rules-tab-count { background: rgba(var(--accent-rgb), 0.2); border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 700; }
 .markup-rule-table .settings-rule-head, .markup-rule-table .settings-rule-row { grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) 44px; }
+.section-title-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.copy-from-select { padding: 5px 10px; background: rgba(var(--accent-rgb), 0.06); border: 1px solid rgba(var(--accent-rgb), 0.25); border-radius: 6px; color: var(--text-soft); font-size: 13px; cursor: pointer; }
+.copy-from-select:hover { border-color: rgba(var(--accent-rgb), 0.5); color: var(--text); }
 
 /* ===== Avito price rules & quick adjust ===== */
 .avito-price-rules { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }

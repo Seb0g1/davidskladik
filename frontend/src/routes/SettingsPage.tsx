@@ -802,6 +802,14 @@ export function SettingsPage() {
   const [adjustPercent, setAdjustPercent] = useState(2);
   const [rulesTab, setRulesTab] = useState("ozon");
 
+  const copyRulesFrom = (sourceMarketplace: string) => {
+    const sourceRules = markupRules
+      .filter((rule) => rule.marketplace === sourceMarketplace)
+      .map((rule) => ({ ...rule, marketplace: rulesTab }));
+    const otherRules = markupRules.filter((rule) => rule.marketplace !== rulesTab);
+    setMarkupRules([...otherRules, ...sourceRules]);
+  };
+
   useEffect(() => {
     if (settingsQuery.data?.settings) setDraft(settingsQuery.data.settings);
   }, [settingsQuery.data]);
@@ -937,9 +945,35 @@ export function SettingsPage() {
         <div className="settings-panel settings-panel-wide">
           <div className="section-title">
             <div><span>Наценки</span><h3>Гибкие правила наценки</h3></div>
-            <button className="secondary-action" type="button" onClick={() => setMarkupRules([...markupRules, { marketplace: rulesTab, minUsd: 0, coefficient: 1 }])}>
-              Добавить правило {rulesTab === "all" ? "для всех" : marketplaceLabel(rulesTab)}
-            </button>
+            <div className="section-title-actions">
+              {(() => {
+                const copyOptions = [
+                  { value: "ozon", label: "Ozon" },
+                  { value: "yandex", label: "Yandex Market" },
+                  { value: "avito", label: "Avito" },
+                  { value: "wb", label: "Wildberries" },
+                  { value: "all", label: "Общие" },
+                ].filter((mp) => mp.value !== rulesTab && markupRules.some((r) => r.marketplace === mp.value));
+                if (!copyOptions.length) return null;
+                return (
+                  <select
+                    className="copy-from-select"
+                    value=""
+                    title="Скопировать правила с другого маркетплейса (заменит текущие правила вкладки)"
+                    onChange={(e) => { if (e.target.value) copyRulesFrom(e.target.value); }}
+                  >
+                    <option value="">Скопировать с…</option>
+                    {copyOptions.map((opt) => {
+                      const n = markupRules.filter((r) => r.marketplace === opt.value).length;
+                      return <option key={opt.value} value={opt.value}>{opt.label} ({n})</option>;
+                    })}
+                  </select>
+                );
+              })()}
+              <button className="secondary-action" type="button" onClick={() => setMarkupRules([...markupRules, { marketplace: rulesTab, minUsd: 0, coefficient: 1 }])}>
+                Добавить правило {rulesTab === "all" ? "для всех" : marketplaceLabel(rulesTab)}
+              </button>
+            </div>
           </div>
           <p className="settings-hint">Правила применяются по цене поставщика в USD и разложены по маркетплейсам — каждая вкладка отсортирована по цене «от». Пустой список допустим: тогда используются базовые наценки.</p>
           <nav className="rules-marketplace-tabs" aria-label="Маркетплейс правил">

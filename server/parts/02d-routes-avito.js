@@ -163,6 +163,20 @@ app.get("/api/avito/categories/:slug/fields", async (request, response, next) =>
   }
 });
 
+app.get("/api/avito/categories/:slug/fields/:tag/values", async (request, response, next) => {
+  try {
+    const account = resolveAvitoAccountOr404(request, response);
+    if (!account) return;
+    const fields = await getAvitoCategoryFields(account, request.params.slug);
+    const field = (fields?.fields || []).find((f) => f.tag === request.params.tag);
+    const link = field?.content?.[0]?.values_link_json;
+    if (!link) return response.status(404).json({ error: "Поле не найдено или не имеет значений." });
+    response.json(await getAvitoCategoryFieldValues(account, link));
+  } catch (error) {
+    next(error);
+  }
+});
+
 // --- Правила импорта Ozon → Avito ---
 
 app.get("/api/avito/import/rules", async (_request, response, next) => {

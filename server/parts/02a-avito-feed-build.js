@@ -56,6 +56,7 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
     if (spec.tags.GoodsSubType) emit("GoodsSubType", spec.tags.GoodsSubType);
     if (spec.tags.SubType) emit("SubType", spec.tags.SubType);
     if (spec.tags.PerfumeryType) emit("PerfumeryType", spec.tags.PerfumeryType);
+    if (spec.tags.CosmeticsType) emit("CosmeticsType", spec.tags.CosmeticsType);
     emit("AdType", listing.adType || feedDefaults.adType);
     if (spec.condition) emit("Condition", listing.condition || feedDefaults.condition || "Новое");
   } else {

@@ -88,17 +88,18 @@ function scheduleOzonNewOfferDiscovery(delayMs = null) {
   const normalizedDelay = Math.max(60_000, Number(delayMs ?? intervalMs) || intervalMs);
   ozonNewOfferDiscoveryNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   ozonNewOfferDiscoveryTimer = setTimeout(async () => {
+    let deferred = false;
     try {
       if (heavyBackgroundWorkShouldDefer("ozon_new_offer_discovery")) {
         logger.info("ozon new offer discovery deferred under load");
-        scheduleOzonNewOfferDiscovery(10 * 60 * 1000);
+        deferred = true;
         return;
       }
       await runOzonNewOfferDiscovery({ source: "schedule" });
     } catch (error) {
       logger.warn("ozon new offer discovery tick failed", { detail: error?.message || String(error) });
     } finally {
-      scheduleOzonNewOfferDiscovery(intervalMs);
+      scheduleOzonNewOfferDiscovery(deferred ? 10 * 60 * 1000 : intervalMs);
     }
   }, normalizedDelay);
   ozonNewOfferDiscoveryTimer.unref?.();

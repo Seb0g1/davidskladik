@@ -59,6 +59,17 @@ async function getAvitoCategoryFields(account, nodeSlug, { ifModifiedSince = "" 
   });
 }
 
+async function getAvitoCategoryFieldValues(account, valuesLinkJson) {
+  const url = cleanText(valuesLinkJson);
+  if (!url || !url.startsWith("https://api.avito.ru/")) {
+    const error = new Error("Неверный URL значений поля Avito.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const pathname = url.slice("https://api.avito.ru".length);
+  return avitoRequest(pathname, { account });
+}
+
 // --- Соответствие ID объявлений ---
 
 // По номерам объявлений на Авито возвращает Id объявлений из файла автозагрузки.

@@ -174,17 +174,18 @@ function scheduleOzonYandexAutoImport(delayMs = null) {
   const normalizedDelay = Math.max(60_000, Number(delayMs ?? intervalMs) || intervalMs);
   ozonYandexAutoImportNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   ozonYandexAutoImportTimer = setTimeout(async () => {
+    let deferred = false;
     try {
       if (heavyBackgroundWorkShouldDefer("ozon_yandex_auto_import")) {
         logger.info("ozon yandex auto import deferred under load");
-        scheduleOzonYandexAutoImport(15 * 60 * 1000);
+        deferred = true;
         return;
       }
       await runOzonYandexAutoImport({ source: "schedule" });
     } catch (error) {
       logger.warn("ozon yandex auto import tick failed", { detail: error?.message || String(error) });
     } finally {
-      scheduleOzonYandexAutoImport(intervalMs);
+      scheduleOzonYandexAutoImport(deferred ? 15 * 60 * 1000 : intervalMs);
     }
   }, normalizedDelay);
   ozonYandexAutoImportTimer.unref?.();

@@ -48,10 +48,12 @@ const AVITO_CATEGORY_SPECS = [
   { key: "care-sun", label: "Уход и гигиена / Загар и защита от солнца", tags: { GoodsType: "Уход и гигиена", GoodsSubType: "Загар и защита от солнца" }, condition: false, gender: false },
   { key: "hair", label: "Средства для волос", tags: { GoodsType: "Средства для волос" }, condition: false, gender: false },
   { key: "makeup", label: "Макияж и маникюр", tags: { GoodsType: "Макияж и маникюр" }, condition: false, gender: false },
-  { key: "makeup-lips", label: "Макияж и маникюр / Губы", tags: { GoodsType: "Макияж и маникюр", GoodsSubType: "Губы" }, condition: false, gender: false },
-  { key: "makeup-eyes", label: "Макияж и маникюр / Глаза", tags: { GoodsType: "Макияж и маникюр", GoodsSubType: "Глаза" }, condition: false, gender: false },
-  { key: "makeup-face", label: "Макияж и маникюр / Лицо", tags: { GoodsType: "Макияж и маникюр", GoodsSubType: "Лицо" }, condition: false, gender: false },
-  { key: "makeup-nails", label: "Макияж и маникюр / Ногти", tags: { GoodsType: "Макияж и маникюр", GoodsSubType: "Ногти" }, condition: false, gender: false },
+  // CosmeticsType — обязательный параметр для категорий макияжа (GoodsSubType
+  // у «Макияж и маникюр» нет — используется CosmeticsType вместо него).
+  { key: "makeup-lips", label: "Макияж и маникюр / Для губ", tags: { GoodsType: "Макияж и маникюр", CosmeticsType: "Для губ" }, condition: false, gender: false },
+  { key: "makeup-eyes", label: "Макияж и маникюр / Для глаз и бровей", tags: { GoodsType: "Макияж и маникюр", CosmeticsType: "Для глаз и бровей" }, condition: false, gender: false },
+  { key: "makeup-face", label: "Макияж и маникюр / Для лица", tags: { GoodsType: "Макияж и маникюр", CosmeticsType: "Для лица" }, condition: false, gender: false },
+  { key: "makeup-nails", label: "Макияж и маникюр / Для ногтей", tags: { GoodsType: "Макияж и маникюр", CosmeticsType: "Для ногтей" }, condition: false, gender: false },
 ];
 
 const AVITO_CATEGORY_SPEC_BY_KEY = new Map(AVITO_CATEGORY_SPECS.map((spec) => [spec.key, spec]));
@@ -119,17 +121,17 @@ function classifyAvitoCategory(title, { defaultCategoryKey = AVITO_DEFAULT_CATEG
     return /для тела|массаж/.test(text) ? pick("body-oils") : pick("face-oils");
   }
   if (/эпилятор|триммер|массаж[её]р|расческ|щетка для/.test(text)) return pick("care-devices");
-  // Макияж и маникюр: специфичные до общего fallback на парфюмерию
+  if (perfumeContext.test(text)) return pick("parfum-edt");
+  // Макияж и маникюр: специфичные до общего fallback
   if (/тушь для ресниц|\bмаскар[аe]|mascara/.test(text)) return pick("makeup-eyes");
   if (/тени для век|\bтени\b.*глаз|eyeshadow/.test(text)) return pick("makeup-eyes");
-  if (/карандаш для бровей|eyebrow pencil|\bbrow\b.*pencil|\bbrow\b.*pen\b|brow line/.test(text)) return pick("makeup-eyes");
+  if (/карандаш для бровей|eyebrow pencil|\bbrow\b.*pencil|\bbrow\b.*pen\b|brow line|\bbeautiful brows\b|\bbrow kit\b|\bbrow palette\b|\bbrow define|\bfor brows\b/.test(text)) return pick("makeup-eyes");
   if (/карандаш для глаз|подводка.*глаз|eyeliner|\bliner\b.*глаз/.test(text)) return pick("makeup-eyes");
-  if (/помада|lip gloss|lipstick|lip stick|блеск для губ|карандаш для губ|lip liner/.test(text)) return pick("makeup-lips");
+  if (/помада|lip gloss|lipstick|lip stick|блеск для губ|карандаш для губ|lip liner|\blip kit\b|\blip wardrobe\b|\blip palette\b|\blip collection\b/.test(text)) return pick("makeup-lips");
   if (/румяна|\bблаш\b|\bblush\b|хайлайтер|highlighter|бронзат/.test(text)) return pick("makeup-face");
   if (/тональный|тональн\w+ крем|консилер|foundation|concealer|бб.крем|сс.крем|\bbb.cream\b|\bcc.cream\b/.test(text)) return pick("makeup-face");
   if (/пудр[аыу]|\bпудр\b|\bpowder\b/.test(text) && !/стирал|стиральн|зубн/.test(text)) return pick("makeup-face");
   if (/лак для ногтей|nail polish|накладные ногти|типс[аы]|nail art/.test(text)) return pick("makeup-nails");
-  if (perfumeContext.test(text)) return pick("parfum-edt");
   const fallbackKey = getAvitoCategorySpec(defaultCategoryKey) ? cleanText(defaultCategoryKey) : AVITO_DEFAULT_CATEGORY_KEY;
   return pick(fallbackKey, true);
 }
@@ -143,6 +145,26 @@ function detectAvitoPerfumeGender(title) {
   if (female && male) return "Унисекс";
   if (female) return "Женщины";
   if (male) return "Мужчины";
+  return "";
+}
+
+// Тип парфюма для тега PerfumeType (опциональный, повышает релевантность поиска).
+// Значения по API: «Духи», «Парфюмерная вода», «Туалетная вода», «Одеколон»,
+// «Дымка и вуаль», «Другой».
+// Примечание: \b не работает с кириллицей — обёртываем текст пробелами и
+// используем пробел/начало/конец как границы слов.
+function detectAvitoPerfumeType(title) {
+  const text = ` ${normalizeAvitoMatchText(title)} `;
+  // EDP = Eau de Parfum = Парфюмерная вода
+  if (/парфюмерная вода| edp | eau de parfum/.test(text)) return "Парфюмерная вода";
+  // EDT = Eau de Toilette = Туалетная вода
+  if (/туалетная вода| edt | eau de toilette/.test(text)) return "Туалетная вода";
+  // Cologne = Одеколон
+  if (/одеколон| edc | eau de cologne/.test(text)) return "Одеколон";
+  // Духи (Extrait / Parfum). Проверяем ДО «парфюмерная вода» нет, уже вышли.
+  if (/ духи | extrait | pure parfum | parfum (?!.*вода)/.test(text)) return "Духи";
+  // Дымка, мист, вуаль
+  if (/ дымка | мист | mist | вуаль | body spray | body mist /.test(text)) return "Дымка и вуаль";
   return "";
 }
 

@@ -74,8 +74,18 @@ async function runWbMarketplaceSync({ source = "auto" } = {}) {
       for (const sku of skus) stocks.push({ sku, amount });
     }
 
-    const pricesResult = priceItems.length ? await wbSetPrices(account, priceItems) : { ok: true, sent: 0, tasks: [] };
+    // stocks до prices: лимитеры WB независимы — если prices даст 429,
+    // остатки должны обновиться (зеро-аут проданных / добавление новых).
     const stocksResult = stocks.length ? await wbUpdateStocks(account, warehouseId, stocks) : { ok: true, sent: 0 };
+
+    let pricesResult = { ok: true, sent: 0, tasks: [] };
+    let pricesError = null;
+    try {
+      pricesResult = priceItems.length ? await wbSetPrices(account, priceItems) : { ok: true, sent: 0, tasks: [] };
+    } catch (error) {
+      pricesError = error?.message || String(error);
+      logger.warn("wb sync prices failed", { detail: pricesError });
+    }
 
     // Дозабор описаний с Ozon: разовый enrich берёт максимум ~300 описаний
     // (лимит Ozon product/info), на ~10k карточек нужен не один прогон —
@@ -97,7 +107,7 @@ async function runWbMarketplaceSync({ source = "auto" } = {}) {
     }
 
     const result = {
-      status: "ok",
+      status: pricesError ? "prices_failed" : "ok",
       source,
       warehouseId,
       cards: cards.length,
@@ -108,6 +118,7 @@ async function runWbMarketplaceSync({ source = "auto" } = {}) {
       maxWbPriceRub: rules.maxWbPriceRub,
       minSupplierPriceRub: rules.minSupplierPriceRub,
       tasks: pricesResult.tasks || [],
+      pricesError: pricesError || undefined,
       stocksSent: stocksResult.sent,
       enrich: enrichSummary,
       elapsedMs: Date.now() - startedAt,
@@ -137,17 +148,21 @@ function scheduleWbSync(delayMs = null) {
   const normalizedDelay = Math.max(60_000, Number(delayMs ?? intervalMs) || intervalMs);
   wbSyncNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   wbSyncTimer = setTimeout(async () => {
+    // Флаг defer нужен, чтобы finally-reschedule знал, что использовать 15-мин
+    // задержку вместо полного intervalMs — return внутри try всё равно выполняет
+    // finally, иначе scheduleWbSync(15min) тут же перезаписывается scheduleWbSync(3h).
+    let deferred = false;
     try {
       if (heavyBackgroundWorkShouldDefer("wb_sync")) {
         logger.info("wb sync deferred under load");
-        scheduleWbSync(15 * 60 * 1000);
+        deferred = true;
         return;
       }
       await runWbMarketplaceSync({ source: "schedule" });
     } catch (error) {
       logger.warn("wb sync tick failed", { detail: error?.message || String(error) });
     } finally {
-      scheduleWbSync(intervalMs);
+      scheduleWbSync(deferred ? 15 * 60 * 1000 : intervalMs);
     }
   }, normalizedDelay);
   wbSyncTimer.unref?.();

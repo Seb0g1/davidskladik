@@ -7192,7 +7192,24 @@ test("Avito categorizer maps titles to category specs and feed XML emits spec ta
   assert.doesNotMatch(careXml, /<PerfumeryType>/);
   assert.doesNotMatch(careXml, /<Condition>/);
 
+  // XML макияжа: CosmeticsType из спека, без GoodsSubType (у «Макияж и маникюр»
+  // его нет — вместо него обязательный параметр CosmeticsType).
+  const makeupFaceXml = buildAvitoAdXml({
+    adId: "oz-m1", title: "Пудра компактная", priceRub: 2000, imageUrls: [],
+    categoryKey: "makeup-face", adType: "Товар приобретен на продажу", brand: "Collistar",
+  }, { address: "Москва", description: "{title}" });
+  assert.match(makeupFaceXml, /<GoodsType>Макияж и маникюр<\/GoodsType>/);
+  assert.match(makeupFaceXml, /<CosmeticsType>Для лица<\/CosmeticsType>/);
+  assert.doesNotMatch(makeupFaceXml, /<GoodsSubType>/);
+
+  assert.equal(classifyAvitoCategory("DELILAH Nude Lip Wardrobe Collection Kit").key, "makeup-lips");
+  assert.equal(classifyAvitoCategory("DELILAH Beautiful Brows набор").key, "makeup-eyes");
+  assert.equal(classifyAvitoCategory("Frederic Malle Lipstick Rose Парфюмерная вода для женщин 100 мл").key, "parfum-edt");
+  assert.equal(classifyAvitoCategory("TOM FORD SANTAL BLUSH Парфюмерная вода для женщин 50 мл").key, "parfum-edt");
+  assert.equal(classifyAvitoCategory("Cherry Blush Парфюмерная вода 100мл").key, "parfum-edt");
+
   assert.equal(avitoListingCategoryPath({ categoryKey: "face-serums" }), "Уход за лицом / Сыворотки и эссенции");
+  assert.equal(avitoListingCategoryPath({ categoryKey: "makeup-lips" }), "Макияж и маникюр / Для губ");
   assert.ok(getAvitoCategorySpec("care-sun"));
 });
 

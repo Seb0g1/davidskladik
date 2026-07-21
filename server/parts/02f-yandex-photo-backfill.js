@@ -203,17 +203,18 @@ function scheduleYandexPhotoBackfill(delayMs = null) {
   const normalizedDelay = Math.max(60_000, Number(delayMs ?? intervalMs) || intervalMs);
   yandexPhotoBackfillNextRunAt = new Date(Date.now() + normalizedDelay).toISOString();
   yandexPhotoBackfillTimer = setTimeout(async () => {
+    let deferred = false;
     try {
       if (heavyBackgroundWorkShouldDefer("yandex_photo_backfill")) {
         logger.info("yandex photo backfill deferred under load");
-        scheduleYandexPhotoBackfill(15 * 60 * 1000);
+        deferred = true;
         return;
       }
       await runYandexPhotoBackfill({ source: "schedule" });
     } catch (error) {
       logger.warn("yandex photo backfill tick failed", { detail: error?.message || String(error) });
     } finally {
-      scheduleYandexPhotoBackfill(intervalMs);
+      scheduleYandexPhotoBackfill(deferred ? 15 * 60 * 1000 : intervalMs);
     }
   }, normalizedDelay);
   yandexPhotoBackfillTimer.unref?.();
