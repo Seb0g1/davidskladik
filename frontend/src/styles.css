@@ -7184,3 +7184,11 @@ textarea:focus-visible,
 .consignment-operations-link strong { font-size: 14px; }
 .consignment-operations-link small { color: var(--muted); font-size: 12px; }
 .consignment-op-actions { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ===== Avito images panel ===== */
+.avito-images-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+.avito-image-item { position: relative; width: 80px; height: 80px; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); background: var(--field-bg); flex-shrink: 0; }
+.avito-image-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.avito-image-remove { position: absolute; top: 3px; right: 3px; background: rgba(0,0,0,.65); color: #fff; border: none; border-radius: 50%; width: 18px; height: 18px; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; opacity: 0; transition: opacity 0.15s; }
+.avito-image-item:hover .avito-image-remove { opacity: 1; }
+.avito-images-empty { color: var(--muted); font-size: 13px; margin: 4px 0 0; }

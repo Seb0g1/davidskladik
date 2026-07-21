@@ -904,6 +904,98 @@ function aiJobProgressPercent(jobInput: unknown) {
   return Math.max(4, Math.min(100, Math.round((done / total) * 100)));
 }
 
+function AvitoImagesPanel({ product, onSaved }: { product: Product; onSaved: () => void }) {
+  const queryClient = useQueryClient();
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const images = product.avitoImages || [];
+
+  const saveMutation = useMutation({
+    mutationFn: (avitoImages: string[]) =>
+      fetch(`/api/warehouse/products/${encodeURIComponent(product.id)}/avito-images`, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ avitoImages }),
+      }).then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        return data;
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      onSaved();
+      setUploadError("");
+    },
+    onError: (err) => setUploadError(errorMessage(err)),
+  });
+
+  async function handleUpload(files: FileList | null) {
+    if (!files || !files.length) return;
+    setUploading(true);
+    setUploadError("");
+    try {
+      const formData = new FormData();
+      for (const file of Array.from(files)) formData.append("images", file);
+      const res = await fetch("/api/uploads/images", { method: "POST", credentials: "same-origin", body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      const newUrls: string[] = (data.files || []).map((f: { url: string }) => f.url).filter(Boolean);
+      saveMutation.mutate([...images, ...newUrls].slice(0, 10));
+    } catch (err) {
+      setUploadError(errorMessage(err));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  const busy = uploading || saveMutation.isPending;
+
+  return (
+    <section className="detail-section">
+      <div className="section-title">
+        <div>
+          <span>Avito</span>
+          <h3>Фото для Avito</h3>
+        </div>
+        <label className="secondary-action" style={{ cursor: "pointer" }}>
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            multiple
+            style={{ display: "none" }}
+            onChange={(e) => { handleUpload(e.target.files); e.target.value = ""; }}
+            disabled={busy}
+          />
+          {busy ? <Loader2 className="spin" size={14} /> : <ImagePlus size={14} />}
+          {" "}Добавить фото
+        </label>
+      </div>
+      {images.length === 0 ? (
+        <p className="avito-images-empty">Нет фото. Загрузите, чтобы использовать вместо Ozon-фото в фиде Avito.</p>
+      ) : (
+        <div className="avito-images-grid">
+          {images.map((url, i) => (
+            <div key={url} className="avito-image-item">
+              <img src={url} alt={`Фото ${i + 1}`} loading="lazy" />
+              <button
+                type="button"
+                className="avito-image-remove"
+                title="Удалить"
+                onClick={() => saveMutation.mutate(images.filter((u) => u !== url))}
+                disabled={busy}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      {uploadError ? <div className="info-strip" style={{ borderColor: "var(--danger)", marginTop: 8 }}>{uploadError}</div> : null}
+    </section>
+  );
+}
+
 function AiImagesPanel({ product, products, onSaved }: { product: Product; products: Product[]; onSaved: () => void }) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState("");
@@ -2091,6 +2183,7 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
       <MarketplaceRows products={products} breakdown={breakdown} canEdit={isAdmin && !demoMode} withExternal={!demoMode} />
       {isAdmin && !demoMode ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
+      {isAdmin && !demoMode ? <AvitoImagesPanel product={primary} onSaved={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <AiImagesPanel product={primary} products={products} onSaved={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <section className="detail-section">
         <div className="section-title">

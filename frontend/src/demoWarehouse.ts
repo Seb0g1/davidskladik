@@ -114,6 +114,7 @@ function product(input: {
     stockOnlyManualPrices: input.stockOnly ? { default: input.targetPrice, ozon: input.targetPrice, yandex: input.targetPrice } : {},
     stockOnlyAvailableSupplierCount: input.stockOnly ? 1 : 0,
     noSupplierAutomation: {},
+    avitoImages: [],
     aiImages: [
       {
         id: `${input.id}-ai-1`,

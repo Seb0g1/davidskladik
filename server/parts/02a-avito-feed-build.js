@@ -110,7 +110,9 @@ async function loadAvitoLiveProductStates(listings) {
       // Снимок выбранного поставщика нужен для цены «от поставщика», поэтому
       // обычного select колонок недостаточно — тянем путь из raw.
       const rows = await prisma.$queryRaw`
-        SELECT id, target_price, target_stock, archived, raw->'selectedSupplier' AS supplier
+        SELECT id, target_price, target_stock, archived,
+               raw->'selectedSupplier' AS supplier,
+               COALESCE(raw->'avitoImages', '[]'::jsonb) AS avito_images
         FROM warehouse_products
         WHERE id = ANY(${chunk})
       `;
@@ -121,6 +123,7 @@ async function loadAvitoLiveProductStates(listings) {
           targetStock: Number(row.target_stock || 0),
           archived: Boolean(row.archived),
           supplier: row.supplier && typeof row.supplier === "object" ? row.supplier : null,
+          avitoImages: Array.isArray(row.avito_images) ? row.avito_images.map((url) => cleanText(url)).filter(Boolean) : [],
         });
       }
     }
@@ -141,6 +144,10 @@ async function loadAvitoLiveProductStates(listings) {
 function applyAvitoLiveState(listing, product, rules, pricing = {}) {
   if (!listing.sourceProductId) return { listing, outOfStock: false };
   if (!product) return { listing: { ...listing, stockQuantity: 0 }, outOfStock: true };
+  // Product-specific Avito photos override the listing's imageUrls (sourced from Ozon import).
+  if (Array.isArray(product.avitoImages) && product.avitoImages.length) {
+    listing = { ...listing, imageUrls: product.avitoImages };
+  }
   // Остаток для <Stock>: поставщик с ценой → целевой (5) — продажа на Avito не
   // уменьшает физический склад, автозагрузка восстанавливает количество; без
   // поставщика — остаток склада, «нет в наличии» → 0.

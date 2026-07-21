@@ -7066,7 +7066,8 @@ test("pm2 split entry files and immediate link activation hooks exist", async ()
   assert.match(ecosystem, /davidsklad-worker/);
   assert.doesNotMatch(ecosystem, /name: "davidsklad"/);
   assert.match(ecosystem, /max-old-space-size=3072/);
-  assert.match(ecosystem, /max-old-space-size=5120/);
+  assert.doesNotMatch(ecosystem, /max-old-space-size=5120/);
+  assert.match(ecosystem, /AUTHORITATIVE_REPRICE_BATCH_SIZE: "100"/);
   assert.match(ecosystem, /max_memory_restart: "5120M"/);
   assert.match(ecosystem, /MALLOC_ARENA_MAX: "2"/);
   assert.match(ecosystem, /max_memory_restart: "6144M"/);

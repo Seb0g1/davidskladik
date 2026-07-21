@@ -80,6 +80,9 @@ function normalizeWarehouseProduct(input = {}) {
     marketplaceState: normalizeMarketplaceState(input.marketplaceState || input.marketplace_state || input.ozonState),
     exports: normalizeProductExports(input.exports),
     aiImages: normalizeAiImageDrafts(input.aiImages || input.ai_images || input.imageDrafts),
+    avitoImages: Array.isArray(input.avitoImages || input.avito_images)
+      ? (input.avitoImages || input.avito_images).map((url) => cleanText(url)).filter(Boolean).slice(0, 10)
+      : [],
     aiContentDrafts: normalizeAiContentDrafts(input.aiContentDrafts || input.ai_content_drafts || input.contentDrafts),
     priceHistory: Array.isArray(input.priceHistory) ? input.priceHistory.slice(-100) : [],
     noSupplierAutomation: {

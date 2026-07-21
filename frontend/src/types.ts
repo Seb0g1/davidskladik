@@ -94,6 +94,7 @@ export const ProductSchema = z.object({
   noSupplierAutomation: z.record(z.string(), z.unknown()).optional().default({}),
   hasSnoozedLinks: z.boolean().optional().default(false),
   aiImages: z.array(AiImageSchema).optional().default([]),
+  avitoImages: z.array(z.string()).optional().default([]),
 }).passthrough();
 
 export const ProductGroupPageItemSchema = z.object({

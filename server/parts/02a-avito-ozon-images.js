@@ -14,12 +14,14 @@ async function loadWarehouseImagesUrlsMap(productIds = []) {
   for (let index = 0; index < ids.length; index += chunkSize) {
     const chunk = ids.slice(index, index + chunkSize);
     const rows = await prisma.$queryRaw`
-      SELECT id, images
+      SELECT id, images, COALESCE(raw->'avitoImages', '[]'::jsonb) AS avito_images
       FROM warehouse_products
       WHERE id = ANY(${chunk})
     `;
     for (const row of rows) {
-      const urls = extractAvitoImageUrls(row.images);
+      // Avito-specific photos take priority over Ozon images
+      const avitoUrls = Array.isArray(row.avito_images) ? row.avito_images.map((url) => cleanText(url)).filter(Boolean) : [];
+      const urls = avitoUrls.length ? avitoUrls : extractAvitoImageUrls(row.images);
       if (urls.length) map.set(cleanText(row.id), urls);
     }
   }

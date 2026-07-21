@@ -267,6 +267,34 @@ app.delete("/api/avito/listings", requireAdmin, async (request, response, next) 
   }
 });
 
+// Avito-специфичные фото товара склада: загрузка/замена массива URL для конкретного товара.
+// Эти фото приоритетнее Ozon-фото при построении фида и бэкфилла.
+app.put("/api/warehouse/products/:id/avito-images", requireAdmin, async (request, response, next) => {
+  try {
+    const warehouse = await readWarehouse();
+    const product = warehouse.products.find((item) => item.id === request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден." });
+    const avitoImages = Array.isArray(request.body?.avitoImages)
+      ? request.body.avitoImages.map((url) => cleanText(url)).filter(Boolean).slice(0, 10)
+      : [];
+    product.avitoImages = avitoImages;
+    product.updatedAt = new Date().toISOString();
+    await writeWarehouseProductPatch([product], { reason: "avito_images_update", writeLinks: false });
+    // Обновляем imageUrls объявления сразу, чтобы фид работал даже без живых данных Postgres
+    if (avitoImages.length) {
+      const state = await readAvitoListingsFile();
+      const listing = state.items.find((item) => cleanText(item.sourceProductId) === product.id);
+      if (listing) {
+        await upsertAvitoListings([{ adId: listing.adId, imageUrls: avitoImages }], { source: undefined });
+      }
+    }
+    await appendAudit(request, "warehouse.product.avito_images.update", { productId: product.id, offerId: product.offerId, count: avitoImages.length });
+    response.json({ ok: true, avitoImages, productId: product.id });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Статус товаров склада в фиде Avito — для панели Avito в карточке товара:
 // в фиде ли товар, живая цена (от поставщика), категория, описание; если не в
 // фиде — причины пропуска и потенциальная цена.

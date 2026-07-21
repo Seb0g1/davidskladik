@@ -46,7 +46,10 @@ const apiOnlyEnv = {
 const workerOnlyEnv = {
   ...sharedStabilityEnv,
   SERVER_ROLE: "worker",
-  NODE_OPTIONS: "--max-old-space-size=5120",
+  // 5120 → 3072: GC triggers at ~2.7GB instead of ~4.5GB; pauses drop from 11s to ~3s.
+  // warehouse-write + auto-price-push batches + WB sync together pushed heap to 4GB+
+  // causing stop-the-world full GC that pinned the event loop and stalled BullMQ workers.
+  NODE_OPTIONS: "--max-old-space-size=3072",
   WORKER_HEALTH_PORT: "3001",
   BACKGROUND_JOBS_ENABLED: "true",
   BULLMQ_ENABLED: "true",
@@ -84,6 +87,9 @@ const workerOnlyEnv = {
   AVITO_AUTO_SYNC_HOURS: "3",
   OZON_PRICE_BATCH_SIZE: "500",
   OZON_PRICE_BATCH_DELAY_MS: "300",
+  // 200 → 100: halves per-job memory footprint for auto-price-push jobs,
+  // reducing concurrent heap pressure when multiple jobs run alongside warehouse write.
+  AUTHORITATIVE_REPRICE_BATCH_SIZE: "100",
 };
 
 module.exports = {
