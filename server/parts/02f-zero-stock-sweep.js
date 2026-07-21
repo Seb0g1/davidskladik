@@ -48,6 +48,7 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
         AND (
           COALESCE(p.target_stock, 0) > 0
           OR COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) > 0
+          OR (p.raw -> 'noSupplierAutomation' ->> 'stockZeroAt') IS NULL
         )
       ORDER BY p.updated_at DESC
       LIMIT ${zeroStockSweepBatchLimit * 4}
@@ -77,12 +78,15 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
     // "Carries stock" = live marketplace stock OR a positive target_stock (catalog «Остаток»),
     // so a product whose marketplace stock is already 0 but whose target_stock is still > 0
     // gets its target reset to 0 too.
+    // Also includes products never zeroed before (stockZeroAt IS NULL): they may have stock
+    // on the marketplace that our DB never tracked (e.g. link supplier name mismatch).
     // manualSellableAt expires after 48 h — long enough for unarchive/recovery to settle,
     // but short enough that a product whose supplier truly vanished again gets zeroed.
     const manualSellableTtlMs = 48 * 60 * 60 * 1000;
     const noSupplierWithStock = products.filter((product) => {
       if (!product?.hasLinks || product.selectedSupplier) return false;
-      if (!marketplaceHasPositiveStock(product) && Number(product.targetStock || 0) <= 0) return false;
+      const neverZeroed = !product.noSupplierAutomation?.stockZeroAt;
+      if (!neverZeroed && !marketplaceHasPositiveStock(product) && Number(product.targetStock || 0) <= 0) return false;
       const manualAt = product.noSupplierAutomation?.manualSellableAt;
       if (manualAt && nowMs - new Date(manualAt).getTime() < manualSellableTtlMs) return false;
       return true;
