@@ -17,6 +17,8 @@ function registerSettingsRoutes(app, deps) {
     priceAffectingSettingsChanged,
     queueImmediateAutoPricePush,
     queueAuthoritativePriceReprice,
+    queueMarketplaceJob,
+    QUEUE_PRIORITY,
     runAvitoFeedRefresh,
     appendAudit,
     logger,
@@ -95,6 +97,10 @@ async function saveSettingsHandler(request, response, next) {
           queueImmediateAutoPricePush([], "settings_price_update", { force: true });
         }
         priceRepriceQueued = true;
+        if (typeof queueMarketplaceJob === "function") {
+          queueMarketplaceJob("wb-marketplace-sync", { source: "settings_price_update" }, { priority: QUEUE_PRIORITY.PRICE_BACKGROUND })
+            .catch((error) => logger.warn("wb sync queue after settings failed", { detail: error?.message || String(error) }));
+        }
       } catch (queueError) {
         priceRepriceQueueError = queueError?.message || String(queueError);
         logger.warn("settings auto price queue failed", { detail: queueError?.message || String(queueError) });
@@ -217,6 +223,10 @@ app.post("/api/settings/pricing/adjust-percent", requireAdmin, async (request, r
           livePriceMaster: true,
           verify: true,
         });
+        if ((marketplace === "all" || marketplace === "wb") && typeof queueMarketplaceJob === "function") {
+          queueMarketplaceJob("wb-marketplace-sync", { source: "settings_price_adjust" }, { priority: QUEUE_PRIORITY.PRICE_BACKGROUND })
+            .catch((error) => logger.warn("wb sync queue after price adjust failed", { detail: error?.message || String(error) }));
+        }
       } else {
         queueImmediateAutoPricePush([], "settings_price_adjust_percent", { force: true });
       }

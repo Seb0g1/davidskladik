@@ -92,6 +92,9 @@ async function processMarketplaceJob(name, data = {}) {
       queueRunId: cleanText(data.queueRunId || data.runId),
     });
   }
+  if (name === "wb-marketplace-sync") {
+    return runWbMarketplaceSync({ source: cleanText(data.source || "queue") });
+  }
   return null;
 }
 

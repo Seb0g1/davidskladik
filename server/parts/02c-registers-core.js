@@ -61,6 +61,8 @@ registerSettingsRoutes(app, {
   priceAffectingSettingsChanged,
   queueImmediateAutoPricePush,
   queueAuthoritativePriceReprice,
+  queueMarketplaceJob,
+  QUEUE_PRIORITY,
   runAvitoFeedRefresh,
   appendAudit,
   logger,
