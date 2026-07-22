@@ -27,8 +27,9 @@ const FinancePage = lazy(() => import("./routes/FinancePage").then((m) => ({ def
 const SuppliersPage = lazy(() => import("./routes/SuppliersPage").then((m) => ({ default: m.SuppliersPage })));
 const StatisticsPage = lazy(() => import("./routes/StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
 const ConsignmentPage = lazy(() => import("./routes/ConsignmentPage").then((m) => ({ default: m.ConsignmentPage })));
+const NewProductsPage = lazy(() => import("./routes/NewProductsPage").then((m) => ({ default: m.NewProductsPage })));
 
-type AppRoute = "dashboard" | "import" | "avito" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier";
+type AppRoute = "dashboard" | "import" | "avito" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -53,6 +54,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "statistics", href: "/app/statistics", label: "Статистика", icon: <BarChart3 size={16} /> },
   { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} /> },
   { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} /> },
+  { route: "new-products", href: "/app/new-products", label: "Новые товары", icon: <Sparkles size={16} /> },
 ];
 
 // Сайдбар: первые пять пунктов — без заголовка, дальше сворачиваемые группы.
@@ -60,7 +62,7 @@ const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = 
   { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
   { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions"] },
   { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "no-supplier", "operations", "recovery-queue"] },
-  { id: "extra", title: "Дополнительное", routes: ["suppliers", "import", "avito", "prices", "statistics", "problem-products", "finance"] },
+  { id: "extra", title: "Дополнительное", routes: ["suppliers", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products"] },
 ];
 
 function currentRoute(): AppRoute {
@@ -85,6 +87,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/system")) return "system";
   if (path.startsWith("/app/ai-drafts")) return "ai-drafts";
   if (path.startsWith("/app/no-supplier")) return "no-supplier";
+  if (path.startsWith("/app/new-products")) return "new-products";
   return "warehouse";
 }
 
@@ -325,6 +328,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "system" ? <SystemPage /> : null}
       {sessionReady && !accessDenied && route === "ai-drafts" ? <AiDraftsPage /> : null}
       {sessionReady && !accessDenied && route === "no-supplier" ? <NoSupplierPage /> : null}
+      {sessionReady && !accessDenied && route === "new-products" ? <NewProductsPage /> : null}
       {sessionReady && !accessDenied && route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
       </Suspense>
       </div>

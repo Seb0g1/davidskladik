@@ -128,6 +128,50 @@ app.post("/api/supplier-cart/rollback-all", requireAdmin, async (request, respon
   }
 });
 
+app.post("/api/supplier-cart/manual-order", requireAdmin, async (request, response, next) => {
+  try {
+    const offerId = cleanText(request.body?.offerId);
+    const quantity = Math.max(1, Math.round(Number(request.body?.quantity || 1) || 1));
+    const marketplace = cleanText(request.body?.marketplace || "ozon").toLowerCase();
+    const note = cleanText(request.body?.note || "").slice(0, 200);
+    if (!offerId) return response.status(400).json({ error: "offerId is required.", code: "manual_order_no_offer_id" });
+    const warehouse = await hydrateSupplierCartWarehouse(await readWarehouse(), [offerId]);
+    const product = findSupplierCartWarehouseProduct(warehouse, { offerId, marketplace, accountId: "" });
+    if (!product) return response.status(404).json({ error: "Товар не найден на складе.", code: "product_not_found" });
+    const state = await readSupplierCartState();
+    const manualKey = `manual|manual|manual-${Date.now()}|${offerId}`;
+    const manualLine = normalizeSupplierCartLine({
+      key: manualKey,
+      marketplace: "manual",
+      offerId,
+      quantity,
+      productName: cleanText(product.productName || product.name || offerId),
+      orderId: `manual-${Date.now()}`,
+      accountId: "manual",
+      accountName: "Ручной заказ",
+    });
+    const row = await resolveSupplierCartRow(warehouse, manualLine, state);
+    if (!row.ready) {
+      return response.status(400).json({
+        error: "Не удалось подобрать поставщика.",
+        skipReason: row.skipReason || "supplier_not_found",
+        code: "manual_order_no_supplier",
+      });
+    }
+    const rowWithNote = { ...row, quantity, manualNote: note };
+    const result = await insertSupplierCartRowsIntoPriceMaster([rowWithNote], request);
+    response.json({
+      ok: true,
+      inserted: result.inserted.length,
+      docIds: result.docIds,
+      pickingCreated: result.pickingCreated?.length || 0,
+      row: result.inserted[0] || null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/supplier-cart/history", requireAdmin, async (_request, response, next) => {
   try {
     const state = await readSupplierCartState();

@@ -145,6 +145,27 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       if (current.requestRowId || current.requestDocId) await restoreSupplierCartProcessedForPickingRow(current, request);
     }
 
+    // Экспресс-заказы: подтвердить упаковку/готовность только после физической сборки.
+    if (status === "picked" && nextRow.isExpress) {
+      if (nextRow.marketplace === "ozon" && nextRow.postingNumber && nextRow.ozonProductId) {
+        await confirmOzonPostingPackaged(nextRow.postingNumber, [{
+          product_id: Number(nextRow.ozonProductId),
+          quantity: Math.max(1, Math.round(Number(nextRow.quantity || 1))),
+        }]).catch((error) => {
+          logger.warn("express ozon posting package confirm failed", {
+            key, postingNumber: nextRow.postingNumber, detail: error?.message || String(error),
+          });
+        });
+      }
+      if (nextRow.marketplace === "yandex" && nextRow.orderId) {
+        await confirmYandexOrderReadyToShip(nextRow.orderId, nextRow.campaignId).catch((error) => {
+          logger.warn("express yandex order ready-to-ship failed", {
+            key, orderId: nextRow.orderId, detail: error?.message || String(error),
+          });
+        });
+      }
+    }
+
     let financeOrder = null;
     let supplierLedgerEntry = null;
     let stockRecovery = null;

@@ -50,6 +50,8 @@ function normalizeSupplierCartLine(input = {}) {
     quantity,
     orderedAt: input.orderedAt || input.createdAt || input.in_process_at || null,
     status: cleanText(input.status),
+    isExpress: Boolean(input.isExpress),
+    ozonProductId: Number(input.ozonProductId || 0) || 0,
     raw: input.raw && typeof input.raw === "object" ? input.raw : undefined,
   };
   line.key = line.key || supplierCartItemKey(line);
@@ -112,8 +114,10 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
     }
   }
 
+  const isSorinSupplier = (row) => /сорин/i.test(cleanText(row.partnerName || row.supplierName || ""));
   candidates.sort((left, right) =>
-    supplierCartOrderScore(left, now) - supplierCartOrderScore(right, now)
+    (isSorinSupplier(left) ? 0 : 1) - (isSorinSupplier(right) ? 0 : 1)
+    || supplierCartOrderScore(left, now) - supplierCartOrderScore(right, now)
     || Number(left.price || Number.POSITIVE_INFINITY) - Number(right.price || Number.POSITIVE_INFINITY)
     || normalizeSupplierTrustFactor(right.trustFactor, 100) - normalizeSupplierTrustFactor(left.trustFactor, 100)
     || String(left.partnerName || "").localeCompare(String(right.partnerName || ""), "ru", { sensitivity: "base" }),
@@ -173,6 +177,7 @@ function normalizeOzonSupplierCartPostings(data = {}, account = {}) {
   const lines = [];
   for (const posting of postings) {
     const products = Array.isArray(posting.products) ? posting.products : [];
+    const isExpress = Boolean(posting.is_express || posting.delivery_method?.type === "Express");
     for (const product of products) {
       const line = normalizeSupplierCartLine({
         marketplace: "ozon",
@@ -187,7 +192,9 @@ function normalizeOzonSupplierCartPostings(data = {}, account = {}) {
         quantity: product.quantity,
         orderedAt: posting.in_process_at || posting.created_at,
         status: posting.status,
-        raw: { postingNumber: posting.posting_number, product },
+        isExpress,
+        ozonProductId: Number(product.sku) || 0,
+        raw: { postingNumber: posting.posting_number, product, isExpress },
       });
       if (line.offerId) lines.push(line);
     }
@@ -202,6 +209,8 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
   const lines = [];
   for (const order of orders) {
     const items = Array.isArray(order.items) ? order.items : [];
+    const isExpress = cleanText(order.delivery?.type || order.deliveryType || "").toUpperCase() === "EXPRESS";
+    const orderCampaignId = cleanText(order.campaignId || shop.campaignId || "");
     for (const item of items) {
       const itemStatus = cleanText(item.itemStatus || item.status).toUpperCase();
       if (itemStatus === "REJECTED" || itemStatus === "RETURNED") continue;
@@ -209,7 +218,7 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
         marketplace: "yandex",
         accountId: shop.id || shop.campaignId || "yandex",
         accountName: shop.name || "Yandex Market",
-        campaignId: order.campaignId || shop.campaignId,
+        campaignId: orderCampaignId,
         orderId: order.id || order.orderId,
         externalOrderId: order.externalOrderId,
         itemId: item.id || item.offerId,
@@ -218,7 +227,8 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
         quantity: item.count,
         orderedAt: order.creationDate || order.creationDateTime || order.updateDate,
         status: order.status,
-        raw: { orderId: order.id, item },
+        isExpress,
+        raw: { orderId: order.id, item, isExpress, campaignId: orderCampaignId },
       });
       if (line.offerId) lines.push(line);
     }

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, RefreshCw, Repeat2 } from "lucide-react";
+import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, Plus, RefreshCw, Repeat2, Search, Zap } from "lucide-react";
+import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartOverrideSchema, SupplierCartPreviewSchema, SupplierCartScheduleSchema } from "../types";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
@@ -172,11 +173,24 @@ function OperationDetailPanel({ jobId }: { jobId: string }) {
   );
 }
 
+const ManualOrderResultSchema = z.object({
+  ok: z.boolean().optional(),
+  inserted: z.number().optional().default(0),
+  docIds: z.array(z.union([z.string(), z.number()])).optional().default([]),
+  pickingCreated: z.number().optional().default(0),
+}).passthrough();
+
 export function SupplierCartPanel() {
   const [marketplace, setMarketplace] = useState("all");
   const [limit, setLimit] = useState(100);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [altKey, setAltKey] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+  const [showManualOrder, setShowManualOrder] = useState(false);
+  const [manualOfferId, setManualOfferId] = useState("");
+  const [manualQty, setManualQty] = useState(1);
+  const [manualMp, setManualMp] = useState("ozon");
+  const [manualNote, setManualNote] = useState("");
   const queryClient = useQueryClient();
   const draftQuery = useQuery({
     queryKey: ["supplier-cart-draft"],
@@ -210,6 +224,21 @@ export function SupplierCartPanel() {
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
     },
   });
+  const manualOrderMutation = useMutation({
+    mutationFn: () => fetchJson("/api/supplier-cart/manual-order", ManualOrderResultSchema, mutationBody({
+      offerId: manualOfferId.trim(),
+      quantity: manualQty,
+      marketplace: manualMp,
+      note: manualNote.trim(),
+    })),
+    onSuccess: () => {
+      setManualOfferId("");
+      setManualQty(1);
+      setManualNote("");
+      setShowManualOrder(false);
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+    },
+  });
   const historyQuery = useQuery({
     queryKey: ["supplier-cart-history"],
     queryFn: () => fetchJson("/api/supplier-cart/history", SupplierCartHistorySchema),
@@ -225,6 +254,12 @@ export function SupplierCartPanel() {
   const cartMode = scheduleQuery.data?.settings?.mode === "auto" ? "auto" : "draft";
   const previewData = generateMutation.data || draftQuery.data;
   const rows = previewData?.rows || [];
+  const filteredRows = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return rows;
+    return rows.filter((row) => [row.productName, row.offerId, row.orderId, row.postingNumber, row.supplierName]
+      .join(" ").toLowerCase().includes(needle));
+  }, [q, rows]);
   const toggleRow = (key: string) => {
     setSelected((current) => {
       const next = new Set(current);
@@ -242,9 +277,14 @@ export function SupplierCartPanel() {
           <span>Автокорзина PriceMaster</span>
           <h3>Заказы Ozon/Yandex &rarr; заявки поставщикам</h3>
         </div>
-        <button className="secondary-action" type="button" onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
-          {generateMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Сгенерировать корзину
-        </button>
+        <div className="supplier-cart-actions">
+          <button className="secondary-action" type="button" onClick={() => setShowManualOrder((v) => !v)}>
+            <Plus size={16} /> Ручной заказ
+          </button>
+          <button className="secondary-action" type="button" onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
+            {generateMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Сгенерировать корзину
+          </button>
+        </div>
       </div>
       <div className="control-grid compact-controls">
         <label>Маркетплейс
@@ -273,7 +313,56 @@ export function SupplierCartPanel() {
             ]}
           />
         </label>
+        <label>Поиск
+          <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="SKU, товар, заказ, поставщик" />
+        </label>
       </div>
+      {showManualOrder ? (
+        <div className="table-panel supplier-cart-manual-form">
+          <div className="section-title compact-title">
+            <div><span>Ручной заказ</span><h3>Добавить товар без заказа маркетплейса</h3></div>
+            <button className="secondary-action" type="button" onClick={() => setShowManualOrder(false)}>Закрыть</button>
+          </div>
+          <div className="control-grid compact-controls">
+            <label>SKU (артикул)
+              <input value={manualOfferId} onChange={(e) => setManualOfferId(e.target.value)} placeholder="Артикул товара" />
+            </label>
+            <label>Количество
+              <input type="number" min="1" value={manualQty} onChange={(e) => setManualQty(Math.max(1, Number(e.target.value) || 1))} />
+            </label>
+            <label>Маркетплейс (для поиска товара)
+              <SelectField
+                ariaLabel="Маркетплейс товара"
+                value={manualMp}
+                onChange={setManualMp}
+                options={[
+                  { value: "ozon", label: "Ozon" },
+                  { value: "yandex", label: "Yandex" },
+                ]}
+              />
+            </label>
+            <label>Заметка (необязательно)
+              <input value={manualNote} onChange={(e) => setManualNote(e.target.value)} placeholder="Комментарий к заказу" />
+            </label>
+          </div>
+          <div className="supplier-cart-actions">
+            <button
+              className="primary-action"
+              type="button"
+              disabled={!manualOfferId.trim() || manualOrderMutation.isPending}
+              onClick={() => manualOrderMutation.mutate()}
+            >
+              {manualOrderMutation.isPending ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Заказать у поставщика
+            </button>
+          </div>
+          {manualOrderMutation.data ? (
+            <div className="success-strip">
+              Добавлено в PriceMaster: {manualOrderMutation.data.inserted}. Строк сборки: {manualOrderMutation.data.pickingCreated}. Документы: {manualOrderMutation.data.docIds.join(", ") || "-"}.
+            </div>
+          ) : null}
+          {manualOrderMutation.error ? <div className="inline-error">{errorMessage(manualOrderMutation.error)}</div> : null}
+        </div>
+      ) : null}
       {cartMode === "draft" ? (
         <div className="soft-empty compact">
           Планировщик ({(scheduleQuery.data?.settings?.scheduleTimes || []).join(", ") || "09:30, 12:00, 15:00"} МСК) только формирует список.
@@ -313,13 +402,15 @@ export function SupplierCartPanel() {
             <button className="secondary-action" type="button" onClick={() => setSelected(new Set())}>Снять выбор</button>
           </div>
           <div className="supplier-cart-list">
-            {rows.map((row) => {
+            {q && filteredRows.length !== rows.length ? <div className="soft-empty compact"><Search size={14} /> {filteredRows.length} из {rows.length}</div> : null}
+            {filteredRows.map((row) => {
               const disabled = !row.ready || row.alreadyCommitted;
               return (
-                <article className={`supplier-cart-row ${row.ready ? "ready" : "skipped"}`} key={row.key}>
+                <article className={`supplier-cart-row ${row.ready ? "ready" : "skipped"}${row.isExpress ? " is-express" : ""}`} key={row.key}>
                   <label className="checkline">
                     <input type="checkbox" disabled={disabled} checked={selected.has(row.key)} onChange={() => toggleRow(row.key)} />
                     <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
+                    {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс</span> : null}
                   </label>
                   <strong>{row.productName || row.offerId}</strong>
                   <div className="meta-grid">
@@ -331,6 +422,7 @@ export function SupplierCartPanel() {
                     <span>{row.orderCutoffTime ? `Заказы до ${row.orderCutoffTime}` : "Без дедлайна"}</span>
                     {row.reseller ? <span>Перекупщик</span> : null}
                     {row.stockOnlyFallback ? <span>Складской fallback</span> : null}
+                    {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс — подтверждение Ozon после «Собрал»</span> : null}
                   </div>
                   {row.alreadyCommitted ? <small>Уже в заявке PriceMaster: Doc {row.requestDocId}, Row {row.requestRowId}</small> : null}
                   {row.stockOnlyFallback ? <small>Заказ уйдёт через «Наш склад» — цена в PriceMaster будет 0, остаток со склада.</small> : null}

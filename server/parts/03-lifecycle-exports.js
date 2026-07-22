@@ -284,6 +284,8 @@ module.exports = {
   readSupplierPickingState,
   writeSupplierPickingState,
   createSupplierPickingRows,
+  confirmOzonPostingPackaged,
+  confirmYandexOrderReadyToShip,
   supplierPickingInvoiceRows,
   supplierLedgerSourceKeyForPicking,
   supplierLedgerEntryFromPostgres,

@@ -1,3 +1,77 @@
+async function confirmOzonPostingPackaged(postingNumber, products = [], account = null) {
+  if (!postingNumber || !products.length) return null;
+  try {
+    const result = await ozonRequest("/v1/posting/fbs/package", {
+      posting_number: postingNumber,
+      packages: [{ products }],
+    }, account);
+    logger.info("ozon posting packaged", { postingNumber, products: products.length });
+    return { ok: true, postingNumber, result };
+  } catch (error) {
+    logger.warn("ozon posting package confirmation failed", {
+      postingNumber,
+      detail: error?.message || String(error),
+    });
+    return { ok: false, postingNumber, error: error?.message || String(error) };
+  }
+}
+
+async function confirmYandexOrderReadyToShip(orderId, campaignId) {
+  if (!orderId || !campaignId) return null;
+  const shop = getYandexShopByTarget(campaignId) || getYandexShopByTarget("yandex");
+  if (!shop) {
+    logger.warn("yandex order ready-to-ship: shop not found", { orderId, campaignId });
+    return { ok: false, orderId, reason: "shop_not_found" };
+  }
+  try {
+    const result = await yandexRequest(shop, "PUT", `/v2/campaigns/${campaignId}/orders/${orderId}/status`, {
+      order: { status: "PROCESSING", substatus: "READY_TO_SHIP" },
+    });
+    logger.info("yandex order ready-to-ship confirmed", { orderId, campaignId });
+    return { ok: true, orderId, campaignId, result };
+  } catch (error) {
+    logger.warn("yandex order ready-to-ship failed", {
+      orderId,
+      campaignId,
+      detail: error?.message || String(error),
+    });
+    return { ok: false, orderId, campaignId, error: error?.message || String(error) };
+  }
+}
+
+async function confirmMarketplaceOrdersAfterInsert(inserted = []) {
+  const results = [];
+
+  // Ozon: сгруппировать не-экспресс строки по postingNumber и подтвердить упаковку
+  const ozonRows = inserted.filter(
+    (row) => row.marketplace === "ozon" && !row.isExpress && row.postingNumber && row.ozonProductId,
+  );
+  const byPosting = new Map();
+  for (const row of ozonRows) {
+    if (!byPosting.has(row.postingNumber)) byPosting.set(row.postingNumber, []);
+    byPosting.get(row.postingNumber).push({
+      product_id: Number(row.ozonProductId),
+      quantity: Math.max(1, Math.round(Number(row.quantity || 1))),
+    });
+  }
+  for (const [postingNumber, products] of byPosting.entries()) {
+    results.push(await confirmOzonPostingPackaged(postingNumber, products));
+  }
+
+  // Yandex: сгруппировать не-экспресс строки по orderId и подтвердить READY_TO_SHIP
+  const yandexOrders = new Map();
+  for (const row of inserted) {
+    if (row.marketplace !== "yandex" || row.isExpress || !row.orderId) continue;
+    const campaignId = cleanText(row.campaignId || "");
+    if (!yandexOrders.has(row.orderId)) yandexOrders.set(row.orderId, campaignId);
+  }
+  for (const [orderId, campaignId] of yandexOrders.entries()) {
+    results.push(await confirmYandexOrderReadyToShip(orderId, campaignId));
+  }
+
+  return results;
+}
+
 async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) {
   const readyRows = rows.map(normalizeSupplierCartPreviewRow).filter((row) => row.ready && !row.alreadyCommitted && row.offerRowId && row.partnerId);
   if (!readyRows.length) return { inserted: [], skipped: rows.length, docIds: [] };
@@ -30,7 +104,10 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
     let nextRowId = Number(rowMax?.maxRowId || 0) + 1;
     for (const [partnerId, partnerRows] of byPartner.entries()) {
       const docId = nextDocId++;
-      const comment = `ДавидСклад автокорзина ${new Date().toLocaleString("ru-RU")}`;
+      const isManualBatch = partnerRows.every((row) => row.marketplace === "manual");
+      const comment = isManualBatch
+        ? `ДавидСклад ручной заказ ${new Date().toLocaleString("ru-RU")}`
+        : `ДавидСклад автокорзина ${new Date().toLocaleString("ru-RU")}`;
       await connection.query(
         "INSERT INTO RequestDocs (DocID, DocDate, PartnerID, Sended, Recieved, Comment, Registered) VALUES (?, NOW(), ?, 0, 0, ?, 1)",
         [docId, Number(partnerId), comment],
@@ -38,12 +115,15 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
       docIds.push(docId);
       for (const row of partnerRows) {
         const requestRowId = nextRowId++;
-        const rowComment = [
-          "ДавидСклад",
-          row.marketplace,
-          row.orderId || row.postingNumber,
-          row.offerId,
-        ].filter(Boolean).join(" · ").slice(0, 250);
+        const manualNote = cleanText(row.manualNote || "");
+        const rowComment = row.marketplace === "manual"
+          ? ["ДавидСклад", "ручной", row.offerId, manualNote].filter(Boolean).join(" · ").slice(0, 250)
+          : [
+              "ДавидСклад",
+              row.marketplace,
+              row.orderId || row.postingNumber,
+              row.offerId,
+            ].filter(Boolean).join(" · ").slice(0, 250);
         await connection.query(
           "INSERT INTO RequestRows (RowID, OfferRowID, RequestQuant, RequestPrice, RequestComment, DocID) VALUES (?, ?, ?, 0.00, ?, ?)",
           [requestRowId, Number(row.offerRowId), Math.max(1, Math.round(Number(row.quantity || 1))), rowComment, docId],
@@ -158,7 +238,11 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
     newValue: { inserted: inserted.length, docIds, verifiedInPriceMaster: Boolean(verification?.ok), verifiedRows: Number(verification?.verifiedRows || 0), priceMasterDb: verification?.db || "", rows: inserted },
   });
   const pickingCreated = await createSupplierPickingRows(inserted, request);
-  return { inserted, skipped: readyRows.length - inserted.length, docIds, pickingCreated, verification };
+  const marketplaceConfirms = await confirmMarketplaceOrdersAfterInsert(inserted).catch((error) => {
+    logger.warn("marketplace order confirmation after insert failed", { detail: error?.message || String(error) });
+    return [];
+  });
+  return { inserted, skipped: readyRows.length - inserted.length, docIds, pickingCreated, marketplaceConfirms, verification };
 }
 
 // «Не было» на сборке: отправить прикреплённого поставщика в инактив (snooze привязки),

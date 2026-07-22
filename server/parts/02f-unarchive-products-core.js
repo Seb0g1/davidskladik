@@ -135,7 +135,10 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
           // на 80–90 реальных разархивациях. Такие ошибки идут в обычный ретрай.
           const looksThrottled = /too.?many.?request|rate.?limit|429/i.test(detail);
           if (!looksThrottled && /daily|суточ|лимит|limit|quota|auto.?archive|автоархив/i.test(detail)) {
-            const nextRetryAt = nextOzonUnarchiveRetryAt();
+            // Ozon подтвердил исчерпание суточного лимита → откладываем до следующего
+            // сброса окна (03:00 МСК), а не на now+5h, чтобы фоновая очередь стартовала
+            // первой (до link-активаций) и получила все 100 дневных слотов.
+            const nextRetryAt = nextOzonUnarchiveScheduledRunAt().toISOString();
             const remainingItems = chunks.slice(chunkIndex + 1).flat();
             queueState = queueOzonUnarchiveItems(queueState, chunk, { nextRetryAt, attempted: true, error: detail });
             if (remainingItems.length) {

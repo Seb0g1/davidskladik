@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, CheckCircle2, ClipboardList, Clock, Copy, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, X } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, CheckCircle2, ClipboardList, Clock, Copy, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, X, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -47,6 +47,7 @@ const currentGroupTotal = (rows: PickingRow[]) => rows.reduce((sum, row) => {
 }, 0);
 
 export function PickingListPage() {
+  const [view, setView] = useState<"list" | "sheets">("list");
   const [status, setStatus] = useState("open");
   const [supplier, setSupplier] = useState("");
   const [q, setQ] = useState("");
@@ -54,6 +55,7 @@ export function PickingListPage() {
   const [copied, setCopied] = useState(false);
   const [paymentDrafts, setPaymentDrafts] = useState<Record<string, string>>({});
   const [paymentNotes, setPaymentNotes] = useState<Record<string, string>>({});
+  const [expandedSheets, setExpandedSheets] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
   const sessionQuery = useQuery({
     queryKey: ["session"],
@@ -75,6 +77,23 @@ export function PickingListPage() {
     queryKey: ["supplier-picking-list", "invoices", period],
     queryFn: () => fetchJson(`/api/supplier-picking-list/invoices?period=${encodeURIComponent(period)}`, SupplierPickingInvoiceSchema),
   });
+  const sheetsQuery = useQuery({
+    queryKey: ["supplier-picking-list", "sheets"],
+    queryFn: () => fetchJson("/api/supplier-picking-list?status=picked&limit=1000", SupplierPickingListSchema),
+    enabled: view === "sheets",
+    refetchInterval: 30_000,
+  });
+  const sheets = useMemo(() => {
+    const pickedRows = sheetsQuery.data?.rows || [];
+    const groups = new Map<string, PickingRow[]>();
+    for (const row of pickedRows) {
+      const dateKey = row.pickedAt ? row.pickedAt.slice(0, 10) : "";
+      if (!dateKey) continue;
+      if (!groups.has(dateKey)) groups.set(dateKey, []);
+      groups.get(dateKey)!.push(row);
+    }
+    return Array.from(groups.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [sheetsQuery.data]);
   const [replaceKey, setReplaceKey] = useState<string | null>(null);
   const [missingRow, setMissingRow] = useState<PickingRow | null>(null);
   const updateMutation = useMutation({
@@ -166,6 +185,15 @@ export function PickingListPage() {
         action={<button className="secondary-action" type="button" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>{listQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить</button>}
       />
 
+      <div className="page-tabs">
+        <button className={`page-tab-btn${view === "list" ? " active" : ""}`} type="button" onClick={() => setView("list")}>
+          <ClipboardList size={15} /> Список
+        </button>
+        <button className={`page-tab-btn${view === "sheets" ? " active" : ""}`} type="button" onClick={() => setView("sheets")}>
+          <CalendarDays size={15} /> Листы сборки
+        </button>
+      </div>
+
       <section className="dashboard-metrics">
         <Stat label="К сборке" value={numberValue(summary.open)} tone={numberValue(summary.open) ? "warn" : "success"} icon={<ClipboardList size={18} />} />
         <Stat label="Собрано" value={numberValue(summary.picked)} tone="success" icon={<CheckCircle2 size={18} />} />
@@ -211,6 +239,76 @@ export function PickingListPage() {
       {replaceMutation.data ? <div className="success-strip">Перезаказано у «{replaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (док {replaceMutation.data.docIds?.join(", ") || "-"}), строка сборки появилась у нового поставщика.</div> : null}
       {paymentMutation.error ? <div className="inline-error">{errorMessage(paymentMutation.error)}</div> : null}
 
+      {view === "sheets" ? (
+        <section className="table-panel assembly-sheets">
+          {sheetsQuery.isLoading ? <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю листы сборки...</div> : null}
+          {sheets.map(([dateKey, sheetRows]) => {
+            const expanded = expandedSheets.has(dateKey);
+            const totalCost = sheetRows.reduce((sum, row) => sum + (row.price || 0) * (row.quantity || 1), 0);
+            const supplierSet = new Set(sheetRows.map((row) => row.supplierName).filter(Boolean));
+            const dateLabel = new Date(dateKey + "T12:00:00").toLocaleDateString("ru-RU", {
+              weekday: "long", day: "numeric", month: "long", year: "numeric",
+            });
+            return (
+              <article className="assembly-sheet" key={dateKey}>
+                <button
+                  className="assembly-sheet-header"
+                  type="button"
+                  onClick={() => setExpandedSheets((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(dateKey)) next.delete(dateKey);
+                    else next.add(dateKey);
+                    return next;
+                  })}
+                >
+                  <div>
+                    <span className="assembly-sheet-date">{dateLabel}</span>
+                    <span className="assembly-sheet-meta">
+                      {sheetRows.length} позиций · {supplierSet.size} поставщ. · {Math.round(totalCost).toLocaleString("ru-RU")} ₽
+                    </span>
+                  </div>
+                  <span className="sheet-toggle">{expanded ? "▲" : "▼"}</span>
+                </button>
+                {expanded ? (
+                  <div className="assembly-sheet-body">
+                    {sheetRows.map((row) => (
+                      <div className="picking-row status-picked" key={row.key}>
+                        <div className="picking-main">
+                          <strong>{row.productName || row.offerId}</strong>
+                          <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
+                        </div>
+                        <div className="meta-grid">
+                          <span>Поставщик: {row.supplierName || "-"}</span>
+                          <span>Кол-во: {row.quantity}</span>
+                          <span>Собрал: {row.pickedBy || "-"} · {compactDate(row.pickedAt)}</span>
+                          <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
+                          <span className="picking-meta-secondary">Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
+                        </div>
+                        {isAdmin ? (
+                          <div className="picking-actions">
+                            <button
+                              className="secondary-action"
+                              type="button"
+                              disabled={updateMutation.isPending}
+                              onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}
+                            >
+                              <RotateCcw size={14} /> Отменить сборку
+                            </button>
+                          </div>
+                        ) : null}
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+          {!sheets.length && !sheetsQuery.isLoading ? <div className="soft-empty">Нет завершённых листов сборки.</div> : null}
+        </section>
+      ) : null}
+
+      {view === "list" ? (
+      <>
       <div className="picking-groups">
         {grouped.map(([supplierName, supplierRows]) => {
           const ledger = supplierLedger[supplierName] || {};
@@ -263,7 +361,10 @@ export function PickingListPage() {
                 <div className={`picking-row status-${row.status}`} key={row.key}>
                   <div className="picking-main">
                     <strong>{row.productName || row.offerId}</strong>
-                    <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
+                    <span>
+                      {row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}
+                      {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс</span> : null}
+                    </span>
                   </div>
                   <div className="meta-grid">
                     <span>Кол-во: {row.quantity}</span>
@@ -318,7 +419,7 @@ export function PickingListPage() {
         {!grouped.length && !listQuery.isLoading ? <div className="empty-state">Строк для выбранного фильтра нет.</div> : null}
       </div>
 
-      <section className="table-panel picking-invoices">
+      <section className="table-panel picking-invoices" key="invoices">
         <div className="section-title">
           <div>
             <span>Внутренняя накладная</span>
@@ -352,6 +453,8 @@ export function PickingListPage() {
           {!invoiceRows.length ? <div className="soft-empty">Собранных строк за период нет.</div> : null}
         </div>
       </section>
+      </>
+      ) : null}
 
       {missingRow ? (
         <div className="page-access-overlay" onClick={() => setMissingRow(null)}>

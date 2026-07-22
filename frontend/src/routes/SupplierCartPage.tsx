@@ -1,10 +1,16 @@
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarClock, Clock3, Database, ListChecks, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, CalendarClock, Clock3, Database, ListChecks, Loader2, Package, RefreshCw, Repeat2, RotateCcw, Trash2 } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
+import { SupplierAltPicker } from "../components/SupplierAltPicker";
+import { SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { SupplierCartPanel } from "./OperationsPage";
+import { compactDate, errorMessage } from "../lib/common";
+
+type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
 
 const SupplierCartScheduleSchema = z.object({
   ok: z.boolean().optional(),
@@ -63,7 +69,140 @@ const rollbackCount = (summary: z.infer<typeof RollbackSummarySchema> | undefine
     + countArray(pm.docIds);
 };
 
+function ReadyToShipPanel() {
+  const [q, setQ] = useState("");
+  const [replaceKey, setReplaceKey] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+
+  const sessionQuery = useQuery({
+    queryKey: ["session"],
+    queryFn: () => fetchJson("/api/session", z.object({ role: z.coerce.string().optional().nullable() }).passthrough()),
+    staleTime: 60_000,
+  });
+  const isAdmin = sessionQuery.data?.role === "admin";
+
+  const listQuery = useQuery({
+    queryKey: ["supplier-picking-list", "picked", "ready-to-ship"],
+    queryFn: () => fetchJson("/api/supplier-picking-list?status=picked&limit=500", SupplierPickingListSchema),
+    refetchInterval: 15_000,
+  });
+
+  const revertMutation = useMutation({
+    mutationFn: (key: string) =>
+      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({ status: "open" })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+    },
+  });
+
+  // Revert to "open" then immediately replace supplier — both steps are needed because
+  // replace-supplier rejects rows that aren't in "open" or "missing" status.
+  const revertAndReplaceMutation = useMutation({
+    mutationFn: async ({ key, partnerId, rowId }: { key: string; partnerId: string; rowId: string }) => {
+      await fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({ status: "open" }));
+      return fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/replace-supplier`, SupplierReplaceResponseSchema, mutationBody({ partnerId, rowId }));
+    },
+    onSuccess: () => {
+      setReplaceKey(null);
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+    },
+  });
+
+  const rows = listQuery.data?.rows || [];
+  const filteredRows = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return needle
+      ? rows.filter((row: PickingRow) =>
+          [row.productName, row.offerId, row.orderId, row.postingNumber, row.supplierName]
+            .join(" ").toLowerCase().includes(needle))
+      : rows;
+  }, [q, rows]);
+
+  return (
+    <section className="table-panel supplier-cart-panel">
+      <div className="section-title">
+        <div>
+          <span>Готовы к отгрузке</span>
+          <h3>Позиции со статусом «собрано» — {rows.length} шт.</h3>
+        </div>
+        <button className="secondary-action" type="button" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>
+          {listQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+        </button>
+      </div>
+      <div className="control-grid compact-controls">
+        <label>Поиск
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU, товар, заказ, поставщик" />
+        </label>
+      </div>
+      {!isAdmin ? (
+        <div className="soft-empty compact">Замена поставщика и возврат к сборке доступны только администратору.</div>
+      ) : null}
+      {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
+      {revertMutation.error ? <div className="inline-error">{errorMessage(revertMutation.error)}</div> : null}
+      {revertAndReplaceMutation.error ? <div className="inline-error">Замена поставщика: {errorMessage(revertAndReplaceMutation.error)}</div> : null}
+      {revertAndReplaceMutation.data ? (
+        <div className="success-strip">
+          Перезаказано у «{revertAndReplaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (doc {revertAndReplaceMutation.data.docIds?.join(", ") || "-"}).
+        </div>
+      ) : null}
+      <div className="supplier-cart-list">
+        {listQuery.isLoading ? <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю...</div> : null}
+        {filteredRows.map((row: PickingRow) => (
+          <article className="supplier-cart-row ready" key={row.key}>
+            <span className="checkline">
+              <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
+            </span>
+            <strong>{row.productName || row.offerId}</strong>
+            <div className="meta-grid">
+              <span>Кол-во: {row.quantity}</span>
+              <span>Поставщик: {row.supplierName || "-"}</span>
+              <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
+              <span>Собрал: {row.pickedBy || "-"} · {compactDate(row.pickedAt)}</span>
+              <span>Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
+            </div>
+            {isAdmin ? (
+              <div className="supplier-cart-actions">
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={revertAndReplaceMutation.isPending || revertMutation.isPending}
+                  onClick={() => setReplaceKey(replaceKey === row.key ? null : row.key)}
+                >
+                  <Repeat2 size={14} /> Заменить поставщика и заказать в PM
+                </button>
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={revertMutation.isPending || revertAndReplaceMutation.isPending}
+                  onClick={() => revertMutation.mutate(row.key)}
+                >
+                  <RotateCcw size={14} /> Вернуть к сборке
+                </button>
+              </div>
+            ) : null}
+            {replaceKey === row.key ? (
+              <SupplierAltPicker
+                offerId={row.offerId}
+                currentPartnerId={row.partnerId}
+                busy={revertAndReplaceMutation.isPending}
+                actionLabel="Вернуть к сборке и заказать у него"
+                onPick={(option) => revertAndReplaceMutation.mutate({ key: row.key, partnerId: option.partnerId, rowId: option.rowId })}
+                onClose={() => setReplaceKey(null)}
+              />
+            ) : null}
+          </article>
+        ))}
+        {!filteredRows.length && !listQuery.isLoading ? <div className="soft-empty">Позиций со статусом «собрано» нет.</div> : null}
+      </div>
+    </section>
+  );
+}
+
 export function SupplierCartPage() {
+  const [tab, setTab] = useState<"cart" | "ready">("cart");
   const queryClient = useQueryClient();
   const schedule = useQuery({
     queryKey: ["supplier-cart", "schedule"],
@@ -168,7 +307,15 @@ export function SupplierCartPage() {
         {rollbackDryRun.error ? <div className="inline-error">{String(rollbackDryRun.error)}</div> : null}
         {rollbackApply.error ? <div className="inline-error">{String(rollbackApply.error)}</div> : null}
       </section>
-      <SupplierCartPanel />
+      <div className="page-tabs">
+        <button className={`page-tab-btn${tab === "cart" ? " active" : ""}`} type="button" onClick={() => setTab("cart")}>
+          <ListChecks size={15} /> Корзина
+        </button>
+        <button className={`page-tab-btn${tab === "ready" ? " active" : ""}`} type="button" onClick={() => setTab("ready")}>
+          <Package size={15} /> Готовы к отгрузке
+        </button>
+      </div>
+      {tab === "cart" ? <SupplierCartPanel /> : <ReadyToShipPanel />}
     </section>
   );
 }

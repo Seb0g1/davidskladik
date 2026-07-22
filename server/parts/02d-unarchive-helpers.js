@@ -232,12 +232,16 @@ async function processOzonUnarchiveQueue({ source = "manual", limit = ozonUnarch
             const state = ozonUnarchiveQuotaProbeState.get(target);
             return !(state && state.dateKey === todayKey && state.rejected);
           });
+        // Probe allowed → короткий интервал (≤45 мин): позволяет пробе запуститься до полуночи.
+        // Probe отклонён Ozon-ом → откладываем до следующего сброса суточного окна (03:00 МСК),
+        // а не на now+5h: иначе позиции становятся due после полуночи, когда link-активации
+        // уже успели «съесть» часть из 100 дневных слотов.
         const deferRetryAt = probeStillPossible
           ? new Date(Math.min(
             new Date(nextOzonUnarchiveRetryAt()).getTime(),
             Date.now() + ozonUnarchiveQuotaProbeIntervalMs,
           )).toISOString()
-          : nextOzonUnarchiveRetryAt();
+          : nextOzonUnarchiveScheduledRunAt().toISOString();
         let deferQueue = await readOzonUnarchiveQueue();
         deferQueue = queueOzonUnarchiveItems(deferQueue, quotaExhaustedItems, {
           nextRetryAt: deferRetryAt,
