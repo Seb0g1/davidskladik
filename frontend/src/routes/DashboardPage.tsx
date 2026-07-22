@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Archive, CheckCircle2, ClipboardList, HelpCircle, MessageCircle, PackageCheck, RefreshCw, ShoppingCart, Star, TrendingUp, Truck } from "lucide-react";
 import { fetchJson } from "../api";
@@ -5,6 +6,34 @@ import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { DashboardSummarySchema, FinanceSummarySchema, OperationsSchema, SalesAutomationSummarySchema, SupplierPickingListSchema, SuppliersResponseSchema, WarehousePageSchema } from "../types";
 import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
+
+type DayStat = { date: string; orders: number; income: number; profit: number };
+type MpStat = { marketplace: string; orders: number; income: number; profit: number };
+type ProductStat = { offerId: string; name: string; orders: number; income: number; profit: number };
+type SalesAnalytics = { ok: boolean; period: string; totalOrders: number; byDay: DayStat[]; byMarketplace: MpStat[]; topProducts: ProductStat[] };
+
+const MP_LABELS: Record<string, string> = { ozon: "Ozon", yandex: "Яндекс", wb: "WB", avito: "Avito", other: "Прочие" };
+
+function SalesBarChart({ days, metric }: { days: DayStat[]; metric: "income" | "profit" }) {
+  const values = days.map((d) => d[metric]);
+  const maxVal = Math.max(...values, 1);
+  const barW = Math.max(4, Math.min(18, Math.floor(540 / Math.max(days.length, 1)) - 2));
+  const chartW = days.length * (barW + 2);
+  return (
+    <svg className="sales-bar-chart" viewBox={`0 0 ${chartW} 60`} preserveAspectRatio="none" aria-label="График продаж по дням">
+      {days.map((d, i) => {
+        const h = Math.max(2, Math.round((d[metric] / maxVal) * 52));
+        const x = i * (barW + 2);
+        return (
+          <g key={d.date}>
+            <title>{d.date}: {Math.round(d[metric]).toLocaleString("ru-RU")} ₽ ({d.orders} заказ.)</title>
+            <rect x={x} y={60 - h} width={barW} height={h} className={`bar-${metric}`} rx={2} />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
 
 const warehouseUrl = "/api/warehouse/products/page?page=1&pageSize=8&q=&marketplace=all&linked=all&state=all&autoOnly=false&grouped=true";
 
@@ -33,6 +62,7 @@ function MiniTrend({ tone = "" }: { tone?: "success" | "warn" | "danger" | "" })
 }
 
 export function DashboardPage() {
+  const [analyticsPeriod, setAnalyticsPeriod] = useState<"7d" | "30d">("30d");
   const warehouse = useQuery({
     queryKey: ["dashboard", "warehouse"],
     queryFn: () => fetchJson(warehouseUrl, WarehousePageSchema),
@@ -62,12 +92,23 @@ export function DashboardPage() {
     queryKey: ["dashboard", "summary"],
     queryFn: () => fetchJson("/api/dashboard/summary", DashboardSummarySchema),
   });
+  const analyticsQuery = useQuery({
+    queryKey: ["dashboard", "analytics", analyticsPeriod],
+    queryFn: async () => {
+      const res = await fetch(`/api/analytics/sales?period=${analyticsPeriod}`, { credentials: "same-origin" });
+      return res.json() as Promise<SalesAnalytics>;
+    },
+  });
 
   const supplierList = suppliers.data?.suppliers || [];
   const activeSuppliers = supplierList.filter(supplierActive).length;
   const financeSummary = asRecord(finance.data?.summary);
   const jobs = operations.data?.jobs || [];
   const rows = picking.data?.rows || [];
+  const analytics = analyticsQuery.data;
+  const analyticsReady = Boolean(analytics?.ok);
+  const analyticsDays = useMemo(() => analytics?.byDay || [], [analytics]);
+  const analyticsMaxIncome = useMemo(() => Math.max(...analyticsDays.map((d) => d.income), 1), [analyticsDays]);
   const salesToday = summary.data?.salesToday || { orders: 0, income: 0, profit: 0 };
   const salesWeek = summary.data?.salesWeek || { orders: 0, income: 0, profit: 0 };
   const topSuppliers = summary.data?.topSuppliers || [];
@@ -83,6 +124,7 @@ export function DashboardPage() {
     void sales.refetch();
     void operations.refetch();
     void summary.refetch();
+    void analyticsQuery.refetch();
   };
 
   return (
@@ -243,6 +285,78 @@ export function DashboardPage() {
             </div>
           </section>
         </aside>
+      </section>
+
+      {/* Аналитика продаж */}
+      <section className="dashboard-analytics">
+        <div className="section-title">
+          <div><span>Аналитика</span><h3>Продажи по дням и каналам</h3></div>
+          <div className="row-actions">
+            <button className={`secondary-action${analyticsPeriod === "7d" ? " active" : ""}`} type="button" onClick={() => setAnalyticsPeriod("7d")}>7 дней</button>
+            <button className={`secondary-action${analyticsPeriod === "30d" ? " active" : ""}`} type="button" onClick={() => setAnalyticsPeriod("30d")}>30 дней</button>
+          </div>
+        </div>
+
+        {analyticsQuery.isLoading ? (
+          <div className="table-note"><RefreshCw className="spin" size={14} /> Загружаю аналитику…</div>
+        ) : !analyticsReady ? (
+          <div className="table-note">Нет данных о продажах за период.</div>
+        ) : (
+          <div className="analytics-grid">
+            {/* График по дням */}
+            <div className="analytics-chart-panel">
+              <div className="analytics-chart-legend">
+                <span className="legend-income">Выручка</span>
+                <span className="legend-profit">Прибыль</span>
+                <span className="analytics-total">{analytics!.totalOrders} заказ(ов) · выручка {money(analytics!.byDay.reduce((s, d) => s + d.income, 0))} · прибыль {money(analytics!.byDay.reduce((s, d) => s + d.profit, 0))}</span>
+              </div>
+              <div className="analytics-chart-scroll">
+                {analyticsDays.length ? <SalesBarChart days={analyticsDays} metric="income" /> : <div className="soft-empty">Нет данных</div>}
+              </div>
+              <div className="analytics-chart-dates">
+                {analyticsDays.length >= 2 ? (
+                  <>
+                    <span>{analyticsDays[0].date.slice(5)}</span>
+                    <span>{analyticsDays[Math.floor(analyticsDays.length / 2)].date.slice(5)}</span>
+                    <span>{analyticsDays[analyticsDays.length - 1].date.slice(5)}</span>
+                  </>
+                ) : null}
+              </div>
+            </div>
+
+            {/* Каналы продаж */}
+            <div className="analytics-mp-panel">
+              <div className="analytics-section-label">По каналу</div>
+              {(analytics!.byMarketplace || []).map((mp) => {
+                const pct = analyticsMaxIncome > 0 ? Math.round((mp.income / analyticsMaxIncome) * 100) : 0;
+                return (
+                  <div className="analytics-mp-row" key={mp.marketplace}>
+                    <span className="analytics-mp-name">{MP_LABELS[mp.marketplace] || mp.marketplace}</span>
+                    <div className="analytics-mp-bar-wrap">
+                      <div className="analytics-mp-bar" style={{ width: `${pct}%` }} />
+                    </div>
+                    <span className="analytics-mp-val">{money(mp.profit)}</span>
+                    <span className="analytics-mp-orders">{mp.orders} шт.</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Топ товаров */}
+            <div className="analytics-top-panel">
+              <div className="analytics-section-label">Топ товаров по прибыли</div>
+              {(analytics!.topProducts || []).slice(0, 10).map((p, i) => (
+                <div className="analytics-product-row" key={p.offerId}>
+                  <span className="analytics-product-rank">{i + 1}</span>
+                  <span className="analytics-product-name" title={`${p.name} (${p.offerId})`}>{p.name || p.offerId}</span>
+                  <span className="analytics-product-orders">{p.orders} шт.</span>
+                  <span className="analytics-product-profit">{money(p.profit)}</span>
+                </div>
+              ))}
+              {!(analytics!.topProducts || []).length ? <div className="soft-empty">Нет данных</div> : null}
+            </div>
+          </div>
+        )}
       </section>
 
       {error ? <div className="inline-error">{errorMessage(error)}</div> : null}

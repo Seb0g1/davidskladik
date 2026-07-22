@@ -105,6 +105,62 @@ app.patch("/api/finance/orders/:id", requireAdmin, async (request, response, nex
   }
 });
 
+// --- Аналитика продаж: группировка по дням, маркетплейсам, продуктам ---
+
+app.get("/api/analytics/sales", requireAdmin, async (request, response, next) => {
+  try {
+    const period = cleanText(request.query.period || "30d").toLowerCase();
+    const result = await listFinanceOrders({ period, limit: 2000, linkedOnly: false });
+    const orders = result.orders || [];
+
+    const byDayMap = new Map();
+    const byMpMap = new Map();
+    const byProductMap = new Map();
+
+    for (const order of orders) {
+      const income = normalizeFinanceMoney(order.payoutAmount ?? order.saleAmount, 0);
+      const profit = normalizeFinanceMoney(order.profitAmount ?? financeOrderProfit(order), 0);
+      const date = cleanText((order.soldAt || order.createdAt || "")).slice(0, 10);
+      const mp = cleanText(order.marketplace || "other");
+      const offerId = cleanText(order.offerId || "");
+      const name = cleanText(order.productName || offerId);
+
+      if (date) {
+        const d = byDayMap.get(date) || { date, orders: 0, income: 0, profit: 0 };
+        d.orders += 1; d.income += income; d.profit += profit;
+        byDayMap.set(date, d);
+      }
+
+      const m = byMpMap.get(mp) || { marketplace: mp, orders: 0, income: 0, profit: 0 };
+      m.orders += 1; m.income += income; m.profit += profit;
+      byMpMap.set(mp, m);
+
+      if (offerId) {
+        const p = byProductMap.get(offerId) || { offerId, name, orders: 0, income: 0, profit: 0 };
+        p.orders += 1; p.income += income; p.profit += profit;
+        if (name && !p.name) p.name = name;
+        byProductMap.set(offerId, p);
+      }
+    }
+
+    const round = (v) => Math.round(Number(v || 0));
+    const byDay = Array.from(byDayMap.values())
+      .map((d) => ({ ...d, income: round(d.income), profit: round(d.profit) }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    const byMarketplace = Array.from(byMpMap.values())
+      .map((m) => ({ ...m, income: round(m.income), profit: round(m.profit) }))
+      .sort((a, b) => b.profit - a.profit);
+    const topProducts = Array.from(byProductMap.values())
+      .map((p) => ({ ...p, income: round(p.income), profit: round(p.profit) }))
+      .sort((a, b) => b.profit - a.profit)
+      .slice(0, 20);
+
+    response.json({ ok: true, period, totalOrders: orders.length, byDay, byMarketplace, topProducts });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/finance/expenses", requireAdmin, async (request, response, next) => {
   try {
     const result = await listFinanceExpenses({
