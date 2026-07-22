@@ -135,6 +135,46 @@ type AvitoUpload = {
 type UploadsResponse = { uploads?: AvitoUpload[] };
 type AccountsResponse = { accounts: Array<{ id: string; marketplace: string; name: string; configured: boolean }> };
 
+type AvitoFeedRefreshResult = {
+  status: string;
+  source?: string;
+  total?: number;
+  updatedPrices?: number;
+  outOfStock?: number;
+  reclassified?: number;
+  persisted?: boolean;
+  at?: string;
+  error?: string;
+};
+type AvitoUploadTriggerResult = {
+  ok?: boolean;
+  at?: string;
+  error?: string;
+  skipped?: boolean;
+  reason?: string;
+  nextAllowedAt?: string;
+};
+type AvitoSyncStatus = {
+  ok: boolean;
+  listings: number;
+  inStock: number;
+  outOfStock: number;
+  feedRefreshEnabled: boolean;
+  feedRefreshIntervalMs: number;
+  feedRefreshRunning: boolean;
+  feedRefreshNextRunAt: string | null;
+  feedRefreshLastResult: AvitoFeedRefreshResult | null;
+  autoUploadEnabled: boolean;
+  lastUploadTriggerAt: string | null;
+  lastUploadTriggerResult: AvitoUploadTriggerResult | null;
+  uploadTriggerRunning: boolean;
+};
+type AvitoSyncResponse = {
+  ok: boolean;
+  refreshResult: AvitoFeedRefreshResult;
+  uploadResult: AvitoUploadTriggerResult;
+};
+
 const SKIP_REASON_LABELS: Record<string, string> = {
   title_word: "Стоп-слово в названии",
   title_not_in_include_list: "Нет обязательного слова",
@@ -230,6 +270,11 @@ export function AvitoPage() {
     queryKey: ["avito-feed-info"],
     queryFn: () => apiJson<FeedInfoResponse>("/api/avito/feed-info"),
   });
+  const syncStatusQuery = useQuery({
+    queryKey: ["avito-sync-status"],
+    queryFn: () => apiJson<AvitoSyncStatus>("/api/avito/sync-status"),
+    refetchInterval: 30_000,
+  });
 
   const avitoAccount = (accountsQuery.data?.accounts || []).find((account) => account.marketplace === "avito");
   const avitoConfigured = Boolean(avitoAccount?.configured);
@@ -296,6 +341,14 @@ export function AvitoPage() {
       void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
     },
   });
+  const syncNow = useMutation({
+    mutationFn: (force: boolean) => apiJson<AvitoSyncResponse>("/api/avito/sync", { method: "POST", body: JSON.stringify({ force }) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-sync-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
+    },
+  });
   const backfillDescriptions = useMutation({
     mutationFn: () => apiJson<{ ok: boolean; status: string; updated?: number; remaining?: number }>("/api/avito/descriptions/backfill", { method: "POST", body: JSON.stringify({ limit: 500 }) }),
     onSuccess: () => {
@@ -343,6 +396,7 @@ export function AvitoPage() {
 
   const listings = listingsQuery.data?.items || [];
   const previewData = preview.data;
+  const syncStatus = syncStatusQuery.data;
 
   return (
     <section className="page-section import-page avito-page">
@@ -637,6 +691,80 @@ export function AvitoPage() {
               <span>{upload.stats?.count ?? 0} объявл.</span>
             </div>
           ))}
+
+          <div className="section-title compact-title">
+            <div><span>Синхронизация</span><h3>Цены и остатки Avito</h3></div>
+            <button
+              className="primary-action"
+              type="button"
+              disabled={!avitoConfigured || syncNow.isPending || syncStatus?.feedRefreshRunning}
+              onClick={() => syncNow.mutate(false)}
+              title="Обновить цены/остатки в фиде и сразу сообщить Avito скачать его. Лимит Avito — раз в час; если лимит ещё не вышел, загрузка будет пропущена."
+            >
+              {syncNow.isPending || syncStatus?.feedRefreshRunning ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
+              {syncNow.isPending ? "Синхронизирую…" : "Синхронизировать сейчас"}
+            </button>
+          </div>
+          {syncStatus ? (
+            <>
+              <div className="brand-chips" style={{ marginBottom: 6 }}>
+                <span className="brand-chip ok">{syncStatus.inStock} в наличии</span>
+                {syncStatus.outOfStock > 0 ? <span className="brand-chip warn">{syncStatus.outOfStock} нет в наличии</span> : null}
+                <span className="brand-chip muted">{syncStatus.listings} объявлений всего</span>
+              </div>
+              {syncStatus.feedRefreshEnabled ? (
+                <p className="form-hint">
+                  Фоновая сверка каждые {Math.round(syncStatus.feedRefreshIntervalMs / 60_000)} мин
+                  {syncStatus.feedRefreshNextRunAt
+                    ? ` · следующая: ${new Date(syncStatus.feedRefreshNextRunAt).toLocaleTimeString("ru-RU")}`
+                    : ""}
+                  {syncStatus.feedRefreshLastResult?.at
+                    ? ` · последняя: ${new Date(syncStatus.feedRefreshLastResult.at).toLocaleString("ru-RU")}`
+                    : ""}
+                  {syncStatus.feedRefreshLastResult?.updatedPrices
+                    ? ` · обновлено цен: ${syncStatus.feedRefreshLastResult.updatedPrices}`
+                    : ""}
+                  .
+                </p>
+              ) : (
+                <p className="form-hint">Фоновая сверка отключена (AVITO_FEED_REFRESH_ENABLED=false).</p>
+              )}
+              {syncStatus.lastUploadTriggerResult ? (
+                <p className="form-hint">
+                  {"Последний триггер Avito: "}
+                  {syncStatus.lastUploadTriggerResult.ok ? (
+                    <span className="pill ok">
+                      успешно {syncStatus.lastUploadTriggerResult.at ? new Date(syncStatus.lastUploadTriggerResult.at).toLocaleString("ru-RU") : ""}
+                    </span>
+                  ) : syncStatus.lastUploadTriggerResult.skipped ? (
+                    <span className="pill muted">
+                      пропущен ({syncStatus.lastUploadTriggerResult.reason})
+                      {syncStatus.lastUploadTriggerResult.nextAllowedAt
+                        ? ` · следующий не раньше ${new Date(syncStatus.lastUploadTriggerResult.nextAllowedAt).toLocaleTimeString("ru-RU")}`
+                        : ""}
+                    </span>
+                  ) : (
+                    <span className="pill warn">ошибка: {syncStatus.lastUploadTriggerResult.error}</span>
+                  )}
+                </p>
+              ) : (
+                <p className="form-hint">Триггер Avito ещё не запускался с последнего рестарта.</p>
+              )}
+            </>
+          ) : (
+            <div className="table-note"><Loader2 className="spin" size={14} /> Загружаю состояние…</div>
+          )}
+          {syncNow.data ? (
+            <div className="info-strip success compact">
+              Синхронизация выполнена
+              {syncNow.data.refreshResult?.updatedPrices ? ` · обновлено цен: ${syncNow.data.refreshResult.updatedPrices}` : ""}
+              {syncNow.data.refreshResult?.outOfStock ? ` · без остатков: ${syncNow.data.refreshResult.outOfStock}` : ""}
+              {syncNow.data.uploadResult?.ok ? " · загрузка Avito запущена" : ""}
+              {syncNow.data.uploadResult?.skipped ? ` · загрузка пропущена (${syncNow.data.uploadResult.reason})` : ""}
+              .
+            </div>
+          ) : null}
+          {syncNow.error ? <div className="inline-error">{String((syncNow.error as Error).message)}</div> : null}
         </section>
       </div>
 

@@ -11,6 +11,54 @@ let avitoFeedRefreshRunning = false;
 let avitoFeedRefreshNextRunAt = null;
 let avitoFeedRefreshLastResult = null;
 
+// Авто-триггер загрузки: после refresh с изменениями говорим Avito скачать фид
+// прямо сейчас. Лимит Avito — раз в час; держим минимальный интервал 55 мин.
+const avitoAutoUploadEnabled = process.env.AVITO_AUTO_UPLOAD_ENABLED !== "false";
+const avitoAutoUploadMinIntervalMs = Math.max(55 * 60_000, Number(process.env.AVITO_AUTO_UPLOAD_MIN_MINUTES || 55) * 60_000 || 55 * 60_000);
+let avitoLastUploadTriggerAt = null;
+let avitoLastUploadTriggerResult = null;
+let avitoUploadTriggerRunning = false;
+
+async function runAvitoUploadTriggerIfNeeded({ force = false } = {}) {
+  if (avitoUploadTriggerRunning) return { skipped: true, reason: "already_running" };
+  const accounts = getAvitoAccounts ? getAvitoAccounts() : [];
+  if (!accounts.length) return { skipped: true, reason: "no_avito_account" };
+  const account = accounts[0];
+  const now = Date.now();
+  const lastMs = avitoLastUploadTriggerAt ? new Date(avitoLastUploadTriggerAt).getTime() : 0;
+  if (!force && now - lastMs < avitoAutoUploadMinIntervalMs) {
+    return { skipped: true, reason: "rate_limited", nextAllowedAt: new Date(lastMs + avitoAutoUploadMinIntervalMs).toISOString() };
+  }
+  avitoUploadTriggerRunning = true;
+  try {
+    const result = await triggerAvitoAutoloadUpload(account);
+    avitoLastUploadTriggerAt = new Date().toISOString();
+    avitoLastUploadTriggerResult = { ok: true, at: avitoLastUploadTriggerAt, result };
+    logger.info("avito autoload upload triggered", { at: avitoLastUploadTriggerAt });
+    return avitoLastUploadTriggerResult;
+  } catch (error) {
+    avitoLastUploadTriggerResult = { ok: false, at: new Date().toISOString(), error: error?.message || String(error) };
+    logger.warn("avito autoload upload trigger failed", { detail: error?.message || String(error) });
+    return avitoLastUploadTriggerResult;
+  } finally {
+    avitoUploadTriggerRunning = false;
+  }
+}
+
+function avitoSyncPublic() {
+  return {
+    feedRefreshEnabled: avitoFeedRefreshEnabled,
+    feedRefreshIntervalMs: avitoFeedRefreshIntervalMs,
+    feedRefreshRunning: avitoFeedRefreshRunning,
+    feedRefreshNextRunAt: avitoFeedRefreshNextRunAt,
+    feedRefreshLastResult: avitoFeedRefreshLastResult,
+    autoUploadEnabled: avitoAutoUploadEnabled,
+    lastUploadTriggerAt: avitoLastUploadTriggerAt,
+    lastUploadTriggerResult: avitoLastUploadTriggerResult,
+    uploadTriggerRunning: avitoUploadTriggerRunning,
+  };
+}
+
 // Авто-синк фида: каждые N часов полностью переимпортирует привязанные товары —
 // добавляет новые (появился поставщик, добавили привязку) и удаляет потерявшие
 // поставщика. Управляется AVITO_AUTO_SYNC_ENABLED / AVITO_AUTO_SYNC_HOURS.
@@ -115,6 +163,12 @@ async function runAvitoFeedRefresh({ source = "schedule" } = {}) {
     };
     avitoFeedRefreshLastResult = result;
     if (changed) logger.info("avito feed refresh applied", result);
+    // При изменении цен/остатков — говорим Avito скачать обновлённый фид прямо сейчас.
+    if (changed && avitoAutoUploadEnabled) {
+      runAvitoUploadTriggerIfNeeded().catch((error) => {
+        logger.warn("avito auto upload trigger failed after refresh", { detail: error?.message || String(error) });
+      });
+    }
     return result;
   } catch (error) {
     const result = { status: "error", error: error?.message || String(error), at: new Date().toISOString() };

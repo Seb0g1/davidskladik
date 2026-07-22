@@ -578,6 +578,41 @@ app.get("/public/avito-feed/:token.xml", async (request, response, next) => {
   }
 });
 
+// --- Статус синхронизации и ручной запуск ---
+
+app.get("/api/avito/sync-status", async (_request, response, next) => {
+  try {
+    const state = await readAvitoListingsFile();
+    const listings = state.items || [];
+    const inStock = listings.filter((item) => !item.outOfStock && item.enabled !== false).length;
+    const outOfStock = listings.filter((item) => item.outOfStock).length;
+    response.json({
+      ok: true,
+      listings: listings.length,
+      inStock,
+      outOfStock,
+      feedToken: state.feedToken ? `${state.feedToken.slice(0, 6)}…` : null,
+      ...avitoSyncPublic(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Ручная синхронизация: обновить фид (цены/остатки) + сразу триггернуть загрузку.
+app.post("/api/avito/sync", requireAdmin, async (request, response, next) => {
+  try {
+    const account = resolveAvitoAccountOr404(request, response);
+    if (!account) return;
+    const refreshResult = await runAvitoFeedRefresh({ source: "manual" });
+    const uploadResult = await runAvitoUploadTriggerIfNeeded({ force: Boolean(request.body?.force) });
+    await appendAudit(request, "avito.sync.manual", { refreshResult, uploadResult });
+    response.json({ ok: true, refreshResult, uploadResult });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // --- Файл остатков (раздел Avito «Управление остатками») ---
 
 // Авторизованный предпросмотр CSV остатков.
