@@ -377,6 +377,13 @@ export function PickingListPage() {
                     {row.reseller ? <span className="picking-meta-secondary">Перекупщик</span> : null}
                     <span className="picking-meta-secondary">Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
                     <span>Статус: {statusLabel(row.status)}</span>
+                    {row.wbSupplyId ? (
+                      <span>
+                        WB поставка: <strong>{row.wbSupplyId}</strong>
+                        {" · "}
+                        <a href={`/api/wb/supplies/${row.wbSupplyId}/barcode?type=png`} target="_blank" rel="noreferrer" className="link-plain">Стикер</a>
+                      </span>
+                    ) : null}
                   </div>
                   {row.status === "missing" && !row.replacementKey ? (
                     <small className="danger-text">

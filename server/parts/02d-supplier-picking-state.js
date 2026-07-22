@@ -51,6 +51,7 @@ function normalizeSupplierPickingRow(input = {}) {
     replacementKey: cleanText(input.replacementKey),
     returnedBy: cleanText(input.returnedBy),
     returnedAt: input.returnedAt || null,
+    wbSupplyId: cleanText(input.wbSupplyId || input.wb_supply_id),
   };
 }
 

@@ -197,6 +197,13 @@ function ReadyToShipPanel() {
               <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
               <span>Собрал: {row.pickedBy || "-"} · {compactDate(row.pickedAt)}</span>
               <span>Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
+              {row.wbSupplyId ? (
+                <span>
+                  WB поставка: <strong>{row.wbSupplyId}</strong>
+                  {" · "}
+                  <a href={`/api/wb/supplies/${row.wbSupplyId}/barcode?type=png`} target="_blank" rel="noreferrer" className="link-plain">Стикер</a>
+                </span>
+              ) : null}
             </div>
             {isAdmin ? (
               <div className="supplier-cart-actions">

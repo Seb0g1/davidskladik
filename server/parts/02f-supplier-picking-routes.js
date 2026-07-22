@@ -168,6 +168,19 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       }
     }
 
+    // WB FBS: при сборке автоматически создать поставку и назначить заказ
+    let wbShipment = null;
+    if (status === "picked" && nextRow.marketplace === "wb" && nextRow.orderId) {
+      wbShipment = await confirmWbOrderShipped(nextRow.orderId).catch((error) => ({
+        ok: false, orderId: nextRow.orderId, error: error?.message || String(error),
+      }));
+      if (wbShipment?.ok && wbShipment.supplyId) {
+        nextRow.wbSupplyId = wbShipment.supplyId;
+        state.rows[key] = nextRow;
+        await writeSupplierPickingState(state);
+      }
+    }
+
     let financeOrder = null;
     let supplierLedgerEntry = null;
     let stockRecovery = null;
@@ -211,8 +224,9 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       financeOrderId: financeOrder?.id || null,
       supplierLedgerEntryId: supplierLedgerEntry?.id || null,
       stockRecovery,
+      wbShipment,
     });
-    response.json({ ok: true, row: nextRow, financeOrder, supplierLedgerEntry, stockRecovery, linkSnooze });
+    response.json({ ok: true, row: nextRow, financeOrder, supplierLedgerEntry, stockRecovery, linkSnooze, wbShipment });
   } catch (error) {
     next(error);
   }

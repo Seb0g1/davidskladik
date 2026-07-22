@@ -39,6 +39,26 @@ async function confirmYandexOrderReadyToShip(orderId, campaignId) {
   }
 }
 
+async function confirmWbOrderShipped(orderId, account = null) {
+  if (!orderId) return null;
+  const wbAccount = account || getWbAccounts({ includeSyncDisabled: true })[0];
+  if (!wbAccount) return { ok: false, orderId, reason: "no_wb_account" };
+  try {
+    const supply = await wbRequest(wbAccount, "marketplace", "POST", "/api/v3/supplies", {
+      name: `DavidSklad-${new Date().toISOString().slice(0, 10)}-${orderId}`,
+    });
+    const supplyId = supply?.id;
+    if (!supplyId) return { ok: false, orderId, reason: "no_supply_id", raw: supply };
+    await wbRequest(wbAccount, "marketplace", "PATCH", `/api/v3/supplies/${supplyId}/orders/${orderId}`);
+    await wbRequest(wbAccount, "marketplace", "PATCH", `/api/v3/supplies/${supplyId}/deliver`);
+    logger.info("wb order shipped to supply", { orderId, supplyId });
+    return { ok: true, orderId, supplyId };
+  } catch (error) {
+    logger.warn("wb order supply create failed", { orderId, detail: error?.message || String(error) });
+    return { ok: false, orderId, error: error?.message || String(error) };
+  }
+}
+
 async function confirmMarketplaceOrdersAfterInsert(inserted = []) {
   const results = [];
 

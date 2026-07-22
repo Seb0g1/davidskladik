@@ -595,3 +595,27 @@ app.post("/api/wb/stocks/sync", requireAdmin, async (request, response, next) =>
     next(error);
   }
 });
+
+// Стикер поставки WB: проксируем PNG/SVG от WB API (wbRequest не подходит — возвращает binary).
+app.get("/api/wb/supplies/:supplyId/barcode", requireStaff, async (request, response, next) => {
+  try {
+    const account = resolveWbAccountOr404(request, response);
+    if (!account) return;
+    const supplyId = cleanText(request.params.supplyId || "");
+    if (!supplyId) return response.status(400).json({ error: "supplyId is required" });
+    const type = cleanText(request.query.type || "png").toLowerCase() === "svg" ? "svg" : "png";
+    const wbResp = await fetch(`https://marketplace-api.wildberries.ru/api/v3/supplies/${supplyId}/barcode?type=${type}`, {
+      headers: { Authorization: account.apiKey },
+    });
+    if (!wbResp.ok) {
+      const text = await wbResp.text().catch(() => "");
+      return response.status(wbResp.status).json({ error: `WB API ${wbResp.status}`, detail: text });
+    }
+    const buf = Buffer.from(await wbResp.arrayBuffer());
+    response.setHeader("Content-Type", type === "svg" ? "image/svg+xml" : "image/png");
+    response.setHeader("Content-Disposition", `inline; filename="wb-supply-${supplyId}.${type}"`);
+    response.send(buf);
+  } catch (error) {
+    next(error);
+  }
+});
