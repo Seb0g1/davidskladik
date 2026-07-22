@@ -180,12 +180,9 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     const limit = cleanLimit(request.query.limit, 80, 200);
     const prisma = getPrisma();
     if (!prisma) return response.status(503).json({ ok: false, error: "Database not available" });
-    const where = { active: true };
+    const where = { active: true, price: { not: null, gt: 0 } };
     if (q) {
-      where.OR = [
-        { nativeName: { contains: q, mode: "insensitive" } },
-        { article: { contains: q, mode: "insensitive" } },
-      ];
+      where.nativeName = { contains: q, mode: "insensitive" };
     }
     if (partnerId) where.partnerId = partnerId;
     const items = await prisma.priceMasterSnapshotItem.findMany({

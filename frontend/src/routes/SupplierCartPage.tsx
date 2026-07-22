@@ -1,10 +1,9 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarClock, Clock3, Database, ListChecks, Loader2, Package, PackageOpen, RefreshCw, Repeat2, RotateCcw, Search, Trash2 } from "lucide-react";
+import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, Clock3, Database, ListChecks, Loader2, Package, PackageOpen, RefreshCw, Repeat2, RotateCcw, Search, Settings2, Trash2 } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
-import { Stat } from "../components/Stat";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
 import { SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { SupplierCartPanel } from "./OperationsPage";
@@ -131,8 +130,6 @@ function ReadyToShipPanel() {
     },
   });
 
-  // Revert to "open" then immediately replace supplier — both steps are needed because
-  // replace-supplier rejects rows that aren't in "open" or "missing" status.
   const revertAndReplaceMutation = useMutation({
     mutationFn: async ({ key, partnerId, rowId }: { key: string; partnerId: string; rowId: string }) => {
       await fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({ status: "open" }));
@@ -301,8 +298,8 @@ function PmSearchPanel() {
         style={{ display: "flex", gap: 8, alignItems: "flex-end" }}
       >
         <label style={{ flex: 1 }}>
-          Поиск по названию или артикулу
-          <input value={searchQ} onChange={(e) => setSearchQ(e.target.value)} placeholder="Например: Chanel Jersey, DIOR001…" />
+          Поиск по названию товара (только позиции в наличии)
+          <input value={searchQ} onChange={(e) => setSearchQ(e.target.value)} placeholder="Например: Chanel Jersey, Dior Sauvage…" />
         </label>
         <button className="primary-action" type="submit" disabled={!searchQ.trim()} style={{ alignSelf: "flex-end" }}>
           <Search size={14} /> Найти в PM
@@ -340,12 +337,13 @@ function PmSearchPanel() {
                       onChange={() => toggleItem(item)}
                       onClick={(e) => e.stopPropagation()}
                     />
-                    <span>{item.article} · {item.supplierName || "-"}</span>
+                    <span>{item.supplierName || "-"}</span>
                   </span>
                   <strong>{item.name || item.article}</strong>
                   <div className="meta-grid">
                     <span>Цена PM: {item.price ? `${item.price} ${item.currency}` : "-"}</span>
                     <span>Поставщик: {item.supplierName || "-"}</span>
+                    {item.article ? <span>Артикул: {item.article}</span> : null}
                     {item.docDate ? <span>Дата: {compactDate(item.docDate)}</span> : null}
                     {sel ? (
                       <span onClick={(e) => e.stopPropagation()}>
@@ -392,6 +390,7 @@ function PmSearchPanel() {
 
 export function SupplierCartPage() {
   const [tab, setTab] = useState<"cart" | "ready" | "pm-search">("cart");
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const queryClient = useQueryClient();
   const schedule = useQuery({
     queryKey: ["supplier-cart", "schedule"],
@@ -408,6 +407,7 @@ export function SupplierCartPage() {
     queryKey: ["supplier-cart", "pricemaster-status"],
     queryFn: () => fetchJson("/api/supplier-cart/pricemaster/status", PriceMasterStatusSchema),
     refetchInterval: 60_000,
+    enabled: settingsOpen,
   });
   const rollbackDryRun = useMutation({
     mutationFn: () => fetchJson("/api/supplier-cart/rollback-all", SupplierCartRollbackSchema, mutationBody({
@@ -430,72 +430,112 @@ export function SupplierCartPage() {
   const settings = schedule.data?.settings || {};
   const times = Array.isArray(settings.scheduleTimes) ? settings.scheduleTimes.map(text).filter(Boolean) : ["09:30", "12:00", "15:00"];
   const last = schedule.data?.lastAutoResult;
+  const autoEnabled = settings.autoEnabled !== false;
   const dryRun = rollbackDryRun.data?.before;
   const pm = dryRun?.pm || {};
+
   return (
     <section className="page-section supplier-cart-page">
       <PageHeader
         title="Автокорзина"
-        subtitle="Заказы Ozon/Yandex автоматически собираются и отправляются в корзину PriceMaster по расписанию."
-        action={<a className="secondary-action" href="/app/operations"><RefreshCw size={16} /> Операции</a>}
-      />
-      <section className="dashboard-metrics">
-        <Stat label="Авторежим" value={settings.autoEnabled !== false ? "включено" : "выключено"} tone={settings.autoEnabled !== false ? "success" : "warn"} icon={<Clock3 size={18} />} />
-        <Stat label="Следующий запуск" value={formatDate(schedule.data?.nextAutoRunAt)} tone="accent" icon={<CalendarClock size={18} />} />
-        <Stat label="Документы ДавидСклад" value={pmStatus.data?.davidskladDocs?.length || 0} tone="accent" icon={<Database size={18} />} />
-        <Stat label="Строки PM" value={pmStatus.data?.latestRows?.length || 0} tone="accent" icon={<ListChecks size={18} />} />
-      </section>
-      <section className="table-panel supplier-cart-schedule">
-        <div className="section-title">
-          <div>
-            <span>Расписание</span>
-            <h3>Автогенерация корзины</h3>
-          </div>
-          <button className="secondary-action" type="button" disabled={toggle.isPending} onClick={() => toggle.mutate(!(settings.autoEnabled !== false))}>
-            {toggle.isPending ? <Loader2 className="spin" size={16} /> : <Clock3 size={16} />} {settings.autoEnabled !== false ? "Выключить авто" : "Включить авто"}
-          </button>
-        </div>
-        <div className="summary-grid">
-          <div><span>Статус</span><strong>{settings.autoEnabled !== false ? "включено" : "выключено"}</strong></div>
-          <div><span>Время</span><strong>{times.join(" · ")}</strong></div>
-          <div><span>Следующий запуск</span><strong>{formatDate(schedule.data?.nextAutoRunAt)}</strong></div>
-          <div><span>Последний запуск</span><strong>{formatDate(schedule.data?.lastAutoRunAt)}</strong></div>
-        </div>
-        {last ? (
-          <div className="success-strip">
-            Последний запуск: всего {Number(last.total || 0)}, готово {Number(last.ready || 0)}, добавлено в PriceMaster {Number(last.inserted || 0)}, проверено в PM {Number(last.verifiedRows || 0)}, база {String(last.priceMasterDb || "-")}, создано строк сборки {Number(last.pickingCreated || 0)}, пропущено {Number(last.skipped || 0)}.
-          </div>
-        ) : null}
-      </section>
-      <section className="table-panel supplier-cart-schedule">
-        <div className="section-title">
-          <div>
-            <span>PriceMaster</span>
-            <h3>Диагностика корзины и полный откат</h3>
-          </div>
-          <button className="secondary-action danger-action" type="button" disabled={rollbackDryRun.isPending} onClick={() => rollbackDryRun.mutate()}>
-            {rollbackDryRun.isPending ? <Loader2 className="spin" size={16} /> : <AlertTriangle size={16} />} Проверить откат
-          </button>
-        </div>
-        <div className="summary-grid">
-          <div><span>PM база</span><strong>{pmStatus.data?.db || String(pmStatus.data?.config?.database || "-")}</strong></div>
-          <div><span>RequestDocs</span><strong>{pmStatus.data?.tables?.requestDocs ? "ok" : "нет"}</strong></div>
-          <div><span>Документы ДавидСклад</span><strong>{pmStatus.data?.davidskladDocs?.length || 0}</strong></div>
-          <div><span>Последние строки PM</span><strong>{pmStatus.data?.latestRows?.length || 0}</strong></div>
-        </div>
-        {pmStatus.error ? <div className="inline-error">{String(pmStatus.error)}</div> : null}
-        {dryRun ? (
-          <div className="inline-warning">
-            Будет очищено: processed {dryRun.cartProcessed}, черновик {dryRun.draftRows}, сборка {dryRun.pickingRows}, блокировки {dryRun.supplierBlocks}, PM rows {countArray(pm.rowIds)}, PM docs {countArray(pm.docIds)}.
-            <button className="secondary-action danger-action" type="button" disabled={rollbackApply.isPending || rollbackCount(dryRun) === 0} onClick={() => rollbackApply.mutate()}>
-              {rollbackApply.isPending ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Откатить автокорзину и сборку
+        subtitle="Заказы Ozon/Yandex автоматически отправляются в корзину PriceMaster по расписанию."
+        action={
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className={`secondary-action${settingsOpen ? " active" : ""}`}
+              type="button"
+              onClick={() => setSettingsOpen((v) => !v)}
+              title="Настройки расписания и диагностика"
+            >
+              <Settings2 size={15} />
+              Настройки
+              {settingsOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
             </button>
+            <a className="secondary-action" href="/app/operations"><RefreshCw size={15} /> Операции</a>
           </div>
-        ) : null}
-        {rollbackApply.data ? <div className="success-strip">Откат выполнен. Осталось строк сборки: {rollbackApply.data.after?.pickingRows || 0}, PM rows: {countArray(rollbackApply.data.after?.pm?.rowIds)}.</div> : null}
-        {rollbackDryRun.error ? <div className="inline-error">{String(rollbackDryRun.error)}</div> : null}
-        {rollbackApply.error ? <div className="inline-error">{String(rollbackApply.error)}</div> : null}
-      </section>
+        }
+      />
+
+      {/* Compact status strip */}
+      <div className="cart-status-strip">
+        <div className={`cart-status-chip${autoEnabled ? " cart-status-chip--on" : " cart-status-chip--off"}`}>
+          <Clock3 size={13} />
+          Авторежим: {autoEnabled ? "включён" : "выключен"}
+        </div>
+        <div className="cart-status-chip">
+          <CalendarClock size={13} />
+          {schedule.data?.nextAutoRunAt ? `Запуск: ${formatDate(schedule.data.nextAutoRunAt)}` : "Следующий запуск: —"}
+        </div>
+        <button
+          className={`cart-status-toggle${autoEnabled ? "" : " cart-status-toggle--off"}`}
+          type="button"
+          disabled={toggle.isPending}
+          onClick={() => toggle.mutate(!autoEnabled)}
+        >
+          {toggle.isPending ? <Loader2 className="spin" size={13} /> : <Clock3 size={13} />}
+          {autoEnabled ? "Выключить авто" : "Включить авто"}
+        </button>
+      </div>
+
+      {/* Collapsible settings drawer */}
+      {settingsOpen ? (
+        <div className="cart-settings-drawer">
+          <section className="cart-settings-section">
+            <div className="cart-settings-section-title">
+              <Clock3 size={14} /> Расписание
+              <span className="cart-settings-badge">{times.join(" · ")}</span>
+            </div>
+            <div className="summary-grid">
+              <div><span>Статус</span><strong>{autoEnabled ? "включено" : "выключено"}</strong></div>
+              <div><span>Время запусков</span><strong>{times.join(" · ")}</strong></div>
+              <div><span>Следующий запуск</span><strong>{formatDate(schedule.data?.nextAutoRunAt)}</strong></div>
+              <div><span>Последний запуск</span><strong>{formatDate(schedule.data?.lastAutoRunAt)}</strong></div>
+            </div>
+            {last ? (
+              <div className="success-strip" style={{ marginTop: 8 }}>
+                Последний запуск: всего {Number(last.total || 0)}, готово {Number(last.ready || 0)}, добавлено в PM {Number(last.inserted || 0)}, строк сборки {Number(last.pickingCreated || 0)}, пропущено {Number(last.skipped || 0)}.
+              </div>
+            ) : null}
+          </section>
+
+          <section className="cart-settings-section">
+            <div className="cart-settings-section-title">
+              <Database size={14} /> PriceMaster / Диагностика
+            </div>
+            <div className="summary-grid">
+              <div><span>PM база</span><strong>{pmStatus.data?.db || String(pmStatus.data?.config?.database || "-")}</strong></div>
+              <div><span>RequestDocs</span><strong>{pmStatus.data?.tables?.requestDocs ? "ok" : "нет"}</strong></div>
+              <div><span>Документы ДавидСклад</span><strong>{pmStatus.data?.davidskladDocs?.length || 0}</strong></div>
+              <div><span>Строки PM</span><strong>{pmStatus.data?.latestRows?.length || 0}</strong></div>
+            </div>
+            {pmStatus.error ? <div className="inline-error">{String(pmStatus.error)}</div> : null}
+            <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button className="secondary-action danger-action" type="button" disabled={rollbackDryRun.isPending} onClick={() => rollbackDryRun.mutate()}>
+                {rollbackDryRun.isPending ? <Loader2 className="spin" size={14} /> : <AlertTriangle size={14} />} Проверить откат
+              </button>
+              {dryRun ? (
+                <button
+                  className="secondary-action danger-action"
+                  type="button"
+                  disabled={rollbackApply.isPending || rollbackCount(dryRun) === 0}
+                  onClick={() => rollbackApply.mutate()}
+                >
+                  {rollbackApply.isPending ? <Loader2 className="spin" size={14} /> : <Trash2 size={14} />} Откатить автокорзину и сборку
+                </button>
+              ) : null}
+            </div>
+            {dryRun ? (
+              <div className="inline-warning" style={{ marginTop: 8 }}>
+                Будет очищено: processed {dryRun.cartProcessed}, черновик {dryRun.draftRows}, сборка {dryRun.pickingRows}, блокировки {dryRun.supplierBlocks}, PM rows {countArray(pm.rowIds)}, PM docs {countArray(pm.docIds)}.
+              </div>
+            ) : null}
+            {rollbackApply.data ? <div className="success-strip">Откат выполнен. Осталось строк сборки: {rollbackApply.data.after?.pickingRows || 0}, PM rows: {countArray(rollbackApply.data.after?.pm?.rowIds)}.</div> : null}
+            {rollbackDryRun.error ? <div className="inline-error">{String(rollbackDryRun.error)}</div> : null}
+            {rollbackApply.error ? <div className="inline-error">{String(rollbackApply.error)}</div> : null}
+          </section>
+        </div>
+      ) : null}
+
       <div className="page-tabs">
         <button className={`page-tab-btn${tab === "cart" ? " active" : ""}`} type="button" onClick={() => setTab("cart")}>
           <ListChecks size={15} /> Корзина
