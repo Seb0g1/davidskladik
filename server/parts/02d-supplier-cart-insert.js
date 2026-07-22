@@ -78,8 +78,26 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
   const state = await readSupplierCartState();
   const freshRows = readyRows.filter((row) => !state.processed?.[row.key]);
   if (!freshRows.length) return { inserted: [], skipped: readyRows.length, docIds: [] };
+
+  // Items returned from ПВЗ: use physical stock instead of re-ordering from PM
+  const pickingStateCheck = await readSupplierPickingState();
+  const returnedByOfferId = new Map();
+  for (const pRow of Object.values(pickingStateCheck.rows || {})) {
+    const pr = normalizeSupplierPickingRow(pRow);
+    if (pr.status === "returned" && pr.offerId) {
+      const key = cleanText(pr.offerId).toLowerCase();
+      if (!returnedByOfferId.has(key)) returnedByOfferId.set(key, pr);
+    }
+  }
+  const pmRows = returnedByOfferId.size
+    ? freshRows.filter((row) => !returnedByOfferId.has(cleanText(row.offerId).toLowerCase()))
+    : freshRows;
+  const returnCoveredRows = returnedByOfferId.size
+    ? freshRows.filter((row) => returnedByOfferId.has(cleanText(row.offerId).toLowerCase()))
+    : [];
+
   const byPartner = new Map();
-  for (const row of freshRows) {
+  for (const row of pmRows) {
     const partnerId = cleanText(row.partnerId);
     if (!byPartner.has(partnerId)) byPartner.set(partnerId, []);
     byPartner.get(partnerId).push(row);
@@ -238,11 +256,55 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
     newValue: { inserted: inserted.length, docIds, verifiedInPriceMaster: Boolean(verification?.ok), verifiedRows: Number(verification?.verifiedRows || 0), priceMasterDb: verification?.db || "", rows: inserted },
   });
   const pickingCreated = await createSupplierPickingRows(inserted, request);
+
+  // Claim returned items from the return pool (товары вернулись из ПВЗ)
+  let returnClaimed = [];
+  if (returnCoveredRows.length) {
+    const psReturns = await readSupplierPickingState();
+    for (const row of returnCoveredRows) {
+      const offerKey = cleanText(row.offerId).toLowerCase();
+      const returnedRow = returnedByOfferId.get(offerKey);
+      if (!returnedRow || psReturns.rows[row.key]) continue;
+      const pickingRow = normalizeSupplierPickingRow({
+        ...row,
+        key: row.key,
+        status: "picked",
+        pickedBy: "auto:return",
+        pickedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        createdBy: requestUsername(request),
+        replacementFor: returnedRow.key,
+      });
+      psReturns.rows[pickingRow.key] = pickingRow;
+      const currentRet = psReturns.rows[returnedRow.key];
+      if (currentRet) {
+        psReturns.rows[returnedRow.key] = normalizeSupplierPickingRow({
+          ...currentRet,
+          status: "return_used",
+          replacementKey: row.key,
+        });
+      }
+      returnClaimed.push(pickingRow);
+    }
+    if (returnClaimed.length) {
+      await writeSupplierPickingState(psReturns);
+      logger.info("picking rows claimed from ПВЗ return pool", { count: returnClaimed.length });
+    }
+  }
+
   const marketplaceConfirms = await confirmMarketplaceOrdersAfterInsert(inserted).catch((error) => {
     logger.warn("marketplace order confirmation after insert failed", { detail: error?.message || String(error) });
     return [];
   });
-  return { inserted, skipped: readyRows.length - inserted.length, docIds, pickingCreated, marketplaceConfirms, verification };
+  return {
+    inserted,
+    skipped: readyRows.length - inserted.length - returnCoveredRows.length,
+    returnClaimed,
+    docIds,
+    pickingCreated: [...(Array.isArray(pickingCreated) ? pickingCreated : []), ...returnClaimed],
+    marketplaceConfirms,
+    verification,
+  };
 }
 
 // «Не было» на сборке: отправить прикреплённого поставщика в инактив (snooze привязки),

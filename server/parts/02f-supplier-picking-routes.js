@@ -51,7 +51,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     const key = cleanText(request.params.key || "");
     const status = cleanText(request.body?.status).toLowerCase();
     const admin = isAdminSession(request.session);
-    if (!["open", "picked", "missing"].includes(status)) {
+    if (!["open", "picked", "missing", "returned"].includes(status)) {
       return response.status(400).json({ error: "Unsupported picking status.", code: "supplier_picking_status_invalid" });
     }
     if (status === "open" && !admin) {
@@ -60,7 +60,8 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     const state = await readSupplierPickingState();
     const current = state.rows[key] ? normalizeSupplierPickingRow(state.rows[key]) : null;
     if (!current) return response.status(404).json({ error: "Picking row not found.", code: "supplier_picking_not_found" });
-    if (current.status !== "open" && status !== "open") {
+    // Allow picked→returned (item came back from ПВЗ); all other cross-status transitions blocked
+    if (current.status !== "open" && status !== "open" && !(current.status === "picked" && status === "returned")) {
       return response.status(409).json({
         error: "Picking row is already finalized.",
         code: "supplier_picking_finalized",
@@ -100,6 +101,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         missingSnoozeLinkId: "",
         nextRetryAt: null,
       } : {}),
+      ...(status === "returned" ? { returnedBy: username, returnedAt: now.toISOString() } : {}),
     });
 
     let linkSnooze = null;
@@ -195,12 +197,13 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
           });
         }
       }
-    } else if (current.status === "picked") {
+    } else if (current.status === "picked" && status !== "returned") {
+      // Keep finance order when item returns from ПВЗ — the sale will be re-attempted
       await removeFinanceOrderForPickingRow(current);
       supplierLedgerEntry = await voidSupplierLedgerDebtForPickingRow(current, request);
     }
 
-    await appendAudit(request, `supplier_picking.${status === "picked" ? "picked" : status === "missing" ? "missing" : "status_update"}`, {
+    await appendAudit(request, `supplier_picking.${status === "picked" ? "picked" : status === "missing" ? "missing" : status === "returned" ? "returned" : "status_update"}`, {
       entityType: "supplier_picking",
       entityId: key,
       oldValue: current,

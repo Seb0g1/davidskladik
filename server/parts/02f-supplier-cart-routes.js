@@ -172,6 +172,102 @@ app.post("/api/supplier-cart/manual-order", requireAdmin, async (request, respon
   }
 });
 
+// Поиск товаров в снапшоте PriceMaster по названию/артикулу
+app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, next) => {
+  try {
+    const q = cleanText(request.query.q || "").toLowerCase();
+    const partnerId = cleanText(request.query.partnerId || "");
+    const limit = cleanLimit(request.query.limit, 80, 200);
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ ok: false, error: "Database not available" });
+    const where = { active: true };
+    if (q) {
+      where.OR = [
+        { nativeName: { contains: q, mode: "insensitive" } },
+        { article: { contains: q, mode: "insensitive" } },
+      ];
+    }
+    if (partnerId) where.partnerId = partnerId;
+    const items = await prisma.priceMasterSnapshotItem.findMany({
+      where,
+      orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
+      take: limit,
+      select: { id: true, rowId: true, article: true, partnerId: true, partnerName: true, nativeName: true, price: true, currency: true, docDate: true },
+    });
+    response.json({
+      ok: true,
+      total: items.length,
+      items: items.map((item) => ({
+        id: item.id,
+        rowId: cleanText(item.rowId || ""),
+        article: cleanText(item.article || ""),
+        partnerId: cleanText(item.partnerId || ""),
+        supplierName: cleanText(item.partnerName || ""),
+        name: cleanText(item.nativeName || ""),
+        price: Number(item.price || 0),
+        currency: cleanText(item.currency || "USD"),
+        docDate: item.docDate?.toISOString?.()?.slice(0, 10) || null,
+      })),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Ручной заказ из PM-поиска: выбранные строки снапшота → RequestDocs/RequestRows
+app.post("/api/supplier-cart/pm-manual-commit", requireAdmin, async (request, response, next) => {
+  try {
+    const items = Array.isArray(request.body?.items) ? request.body.items : [];
+    if (!items.length) return response.status(400).json({ ok: false, error: "No items provided." });
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ ok: false, error: "Database not available" });
+    const ids = [...new Set(items.map((i) => cleanText(i.id)).filter(Boolean))];
+    const snapshotRows = await prisma.priceMasterSnapshotItem.findMany({
+      where: { id: { in: ids }, active: true },
+    });
+    const snapById = new Map(snapshotRows.map((r) => [r.id, r]));
+    const cartRows = items
+      .map((item) => {
+        const snap = snapById.get(cleanText(item.id));
+        if (!snap || !snap.rowId || !snap.partnerId) return null;
+        const quantity = Math.max(1, Math.round(Number(item.quantity || 1) || 1));
+        const note = cleanText(item.note || "").slice(0, 200);
+        return normalizeSupplierCartPreviewRow({
+          key: `manual|pm|${snap.partnerId}|${snap.article}|${Date.now()}`,
+          marketplace: "manual",
+          offerId: snap.article,
+          productName: snap.nativeName || snap.article,
+          quantity,
+          partnerId: cleanText(snap.partnerId),
+          supplierName: cleanText(snap.partnerName || ""),
+          offerRowId: cleanText(snap.rowId),
+          price: Number(snap.price || 0),
+          priceCurrency: cleanText(snap.currency || "USD"),
+          manualNote: note,
+          ready: true,
+          alreadyCommitted: false,
+          trustFactor: 100,
+          reseller: false,
+          supplierScore: 100,
+        });
+      })
+      .filter(Boolean);
+    if (!cartRows.length) return response.status(400).json({ ok: false, error: "No valid rows found in PriceMaster snapshot." });
+    const result = await insertSupplierCartRowsIntoPriceMaster(cartRows, request);
+    response.json({
+      ok: true,
+      inserted: result.inserted.length,
+      skipped: result.skipped,
+      docIds: result.docIds,
+      pickingCreated: Array.isArray(result.pickingCreated) ? result.pickingCreated.length : (result.pickingCreated || 0),
+      verifiedInPriceMaster: Boolean(result.verification?.ok),
+      rows: result.inserted,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/supplier-cart/history", requireAdmin, async (_request, response, next) => {
   try {
     const state = await readSupplierCartState();

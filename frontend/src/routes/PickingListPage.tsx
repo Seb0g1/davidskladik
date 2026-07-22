@@ -20,6 +20,8 @@ const statusLabel = (status: string) => {
     picked: "собрано",
     missing: "не было",
     reordered: "перезаказано",
+    returned: "возврат из ПВЗ",
+    return_used: "возврат использован",
     all: "все",
   };
   return labels[status] || status || "-";
@@ -212,6 +214,7 @@ export function PickingListPage() {
               { value: "picked", label: "Собрано" },
               { value: "missing", label: "Не было" },
               { value: "reordered", label: "Перезаказано" },
+              { value: "returned", label: "Возврат из ПВЗ" },
               { value: "all", label: "Все" },
             ]}
           />
@@ -396,7 +399,13 @@ export function PickingListPage() {
                         <Repeat2 size={16} /> Заменить поставщика
                       </button>
                     ) : null}
-                    {isAdmin && row.status !== "open" ? <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}><RotateCcw size={16} /> Вернуть</button> : null}
+                    {isAdmin && row.status === "picked" ? (
+                      <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "returned" })}>
+                        <RotateCcw size={16} /> Вернули из ПВЗ
+                      </button>
+                    ) : null}
+                    {isAdmin && row.status !== "open" && row.status !== "picked" ? <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}><RotateCcw size={16} /> Вернуть</button> : null}
+                    {isAdmin && row.status === "picked" ? <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}><RotateCcw size={16} /> Вернуть к сборке</button> : null}
                     {isAdmin && row.requestRowId ? <button className="secondary-action danger-action" type="button" disabled={cancelCartMutation.isPending} onClick={() => cancelCartMutation.mutate(row.key)}><Trash2 size={16} /> Отменить автокорзину</button> : null}
                   </div>
                   {replaceKey === row.key ? (

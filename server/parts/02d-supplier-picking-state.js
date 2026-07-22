@@ -1,6 +1,6 @@
 function normalizeSupplierPickingRow(input = {}) {
   const key = cleanText(input.key || supplierCartItemKey(input));
-  const status = ["picked", "missing", "reordered"].includes(cleanText(input.status).toLowerCase())
+  const status = ["picked", "missing", "reordered", "returned", "return_used"].includes(cleanText(input.status).toLowerCase())
     ? cleanText(input.status).toLowerCase()
     : "open";
   return {
@@ -49,6 +49,8 @@ function normalizeSupplierPickingRow(input = {}) {
     nextRetryAt: input.nextRetryAt || null,
     replacementFor: cleanText(input.replacementFor),
     replacementKey: cleanText(input.replacementKey),
+    returnedBy: cleanText(input.returnedBy),
+    returnedAt: input.returnedAt || null,
   };
 }
 

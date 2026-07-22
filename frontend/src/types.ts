@@ -693,6 +693,8 @@ export const SupplierPickingRowSchema = z.object({
   nextRetryAt: z.coerce.string().optional().nullable(),
   replacementFor: z.coerce.string().optional().default(""),
   replacementKey: z.coerce.string().optional().default(""),
+  returnedBy: z.coerce.string().optional().default(""),
+  returnedAt: z.coerce.string().optional().nullable(),
 }).passthrough();
 
 export const SupplierPickingListSchema = z.object({

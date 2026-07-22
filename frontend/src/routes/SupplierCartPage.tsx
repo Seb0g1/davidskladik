@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarClock, Clock3, Database, ListChecks, Loader2, Package, RefreshCw, Repeat2, RotateCcw, Trash2 } from "lucide-react";
+import { AlertTriangle, CalendarClock, Clock3, Database, ListChecks, Loader2, Package, PackageOpen, RefreshCw, Repeat2, RotateCcw, Search, Trash2 } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -49,6 +49,34 @@ const PriceMasterStatusSchema = z.object({
   latestRows: z.array(z.record(z.string(), z.unknown())).optional().default([]),
 }).passthrough();
 
+const PmSearchItemSchema = z.object({
+  id: z.string(),
+  rowId: z.coerce.string().optional().default(""),
+  article: z.coerce.string().optional().default(""),
+  partnerId: z.coerce.string().optional().default(""),
+  supplierName: z.coerce.string().optional().default(""),
+  name: z.coerce.string().optional().default(""),
+  price: z.number().optional().default(0),
+  currency: z.coerce.string().optional().default("USD"),
+  docDate: z.coerce.string().optional().nullable(),
+}).passthrough();
+
+const PmSearchResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  total: z.number().optional().default(0),
+  items: z.array(PmSearchItemSchema).optional().default([]),
+}).passthrough();
+
+const PmManualCommitSchema = z.object({
+  ok: z.boolean().optional(),
+  inserted: z.number().optional().default(0),
+  skipped: z.number().optional().default(0),
+  docIds: z.array(z.unknown()).optional().default([]),
+  pickingCreated: z.number().optional().default(0),
+}).passthrough();
+
+type PmSearchItem = z.infer<typeof PmSearchItemSchema>;
+
 const text = (value: unknown) => String(value ?? "").trim();
 const formatDate = (value: unknown) => {
   const raw = text(value);
@@ -90,6 +118,14 @@ function ReadyToShipPanel() {
   const revertMutation = useMutation({
     mutationFn: (key: string) =>
       fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({ status: "open" })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+    },
+  });
+
+  const returnMutation = useMutation({
+    mutationFn: (key: string) =>
+      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({ status: "returned" })),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
     },
@@ -142,6 +178,8 @@ function ReadyToShipPanel() {
       ) : null}
       {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
       {revertMutation.error ? <div className="inline-error">{errorMessage(revertMutation.error)}</div> : null}
+      {returnMutation.error ? <div className="inline-error">{errorMessage(returnMutation.error)}</div> : null}
+      {returnMutation.data ? <div className="success-strip">Товар отмечен как «вернули из ПВЗ». При следующем заказе этого SKU PM-заявка не создаётся — берётся из пула возвратов.</div> : null}
       {revertAndReplaceMutation.error ? <div className="inline-error">Замена поставщика: {errorMessage(revertAndReplaceMutation.error)}</div> : null}
       {revertAndReplaceMutation.data ? (
         <div className="success-strip">
@@ -165,6 +203,15 @@ function ReadyToShipPanel() {
             </div>
             {isAdmin ? (
               <div className="supplier-cart-actions">
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={returnMutation.isPending || revertMutation.isPending || revertAndReplaceMutation.isPending}
+                  onClick={() => returnMutation.mutate(row.key)}
+                  title="Товар вернулся из ПВЗ — следующий заказ этого SKU не пойдёт в PM, а возьмётся из этого возврата"
+                >
+                  <PackageOpen size={14} /> Вернули из ПВЗ
+                </button>
                 <button
                   className="secondary-action"
                   type="button"
@@ -201,8 +248,150 @@ function ReadyToShipPanel() {
   );
 }
 
+function PmSearchPanel() {
+  const [searchQ, setSearchQ] = useState("");
+  const [submittedQ, setSubmittedQ] = useState("");
+  const [selected, setSelected] = useState<Record<string, { qty: number; item: PmSearchItem }>>({});
+  const queryClient = useQueryClient();
+
+  const searchQuery = useQuery({
+    queryKey: ["pm-search", submittedQ],
+    queryFn: () => fetchJson(`/api/supplier-cart/pm-search?q=${encodeURIComponent(submittedQ)}&limit=80`, PmSearchResponseSchema),
+    enabled: Boolean(submittedQ),
+    staleTime: 60_000,
+  });
+
+  const commitMutation = useMutation({
+    mutationFn: () => {
+      const items = Object.entries(selected).map(([id, { qty }]) => ({ id, quantity: qty }));
+      return fetchJson("/api/supplier-cart/pm-manual-commit", PmManualCommitSchema, mutationBody({ items }));
+    },
+    onSuccess: () => {
+      setSelected({});
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
+    },
+  });
+
+  const items = searchQuery.data?.items ?? [];
+  const selectedCount = Object.keys(selected).length;
+
+  const toggleItem = (item: PmSearchItem) => {
+    setSelected((prev) => {
+      const next = { ...prev };
+      if (next[item.id]) { delete next[item.id]; } else { next[item.id] = { qty: 1, item }; }
+      return next;
+    });
+  };
+
+  const setQty = (id: string, qty: number) =>
+    setSelected((prev) => prev[id] ? { ...prev, [id]: { ...prev[id], qty: Math.max(1, qty) } } : prev);
+
+  return (
+    <section className="table-panel supplier-cart-panel">
+      <div className="section-title">
+        <div>
+          <span>Поиск в PriceMaster</span>
+          <h3>Найдите товар по названию и добавьте напрямую в закупку</h3>
+        </div>
+      </div>
+      <form
+        className="control-grid compact-controls"
+        onSubmit={(e) => { e.preventDefault(); setSubmittedQ(searchQ.trim()); }}
+        style={{ display: "flex", gap: 8, alignItems: "flex-end" }}
+      >
+        <label style={{ flex: 1 }}>
+          Поиск по названию или артикулу
+          <input value={searchQ} onChange={(e) => setSearchQ(e.target.value)} placeholder="Например: Chanel Jersey, DIOR001…" />
+        </label>
+        <button className="primary-action" type="submit" disabled={!searchQ.trim()} style={{ alignSelf: "flex-end" }}>
+          <Search size={14} /> Найти в PM
+        </button>
+      </form>
+
+      {searchQuery.isLoading ? <div className="soft-empty"><Loader2 className="spin" size={16} /> Ищу в PriceMaster…</div> : null}
+      {searchQuery.error ? <div className="inline-error">{errorMessage(searchQuery.error)}</div> : null}
+      {commitMutation.error ? <div className="inline-error">{errorMessage(commitMutation.error)}</div> : null}
+      {commitMutation.data ? (
+        <div className="success-strip">
+          Добавлено в PM: {commitMutation.data.inserted} строк · doc {commitMutation.data.docIds?.join(", ") || "-"} · строк сборки: {commitMutation.data.pickingCreated}
+        </div>
+      ) : null}
+
+      {items.length ? (
+        <>
+          <div className="new-products-count-strip">
+            {items.length} результатов · выбрано {selectedCount}
+          </div>
+          <div className="supplier-cart-list">
+            {items.map((item) => {
+              const sel = selected[item.id];
+              return (
+                <article
+                  key={item.id}
+                  className={`supplier-cart-row${sel ? " ready" : ""}`}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => toggleItem(item)}
+                >
+                  <span className="checkline">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(sel)}
+                      onChange={() => toggleItem(item)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    <span>{item.article} · {item.supplierName || "-"}</span>
+                  </span>
+                  <strong>{item.name || item.article}</strong>
+                  <div className="meta-grid">
+                    <span>Цена PM: {item.price ? `${item.price} ${item.currency}` : "-"}</span>
+                    <span>Поставщик: {item.supplierName || "-"}</span>
+                    {item.docDate ? <span>Дата: {compactDate(item.docDate)}</span> : null}
+                    {sel ? (
+                      <span onClick={(e) => e.stopPropagation()}>
+                        Кол-во:&nbsp;
+                        <input
+                          type="number"
+                          min={1}
+                          value={sel.qty}
+                          onChange={(e) => setQty(item.id, Number(e.target.value))}
+                          style={{ width: 60, display: "inline" }}
+                        />
+                      </span>
+                    ) : null}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          {selectedCount > 0 ? (
+            <div className="supplier-cart-actions" style={{ marginTop: 12 }}>
+              <button
+                className="primary-action"
+                type="button"
+                disabled={commitMutation.isPending}
+                onClick={() => commitMutation.mutate()}
+              >
+                {commitMutation.isPending ? <Loader2 className="spin" size={14} /> : <Database size={14} />}
+                Добавить выбранное в PM ({selectedCount} поз.)
+              </button>
+              <button className="secondary-action" type="button" onClick={() => setSelected({})}>
+                Снять выделение
+              </button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      {submittedQ && !items.length && !searchQuery.isLoading ? (
+        <div className="soft-empty">Ничего не найдено по запросу «{submittedQ}».</div>
+      ) : null}
+    </section>
+  );
+}
+
 export function SupplierCartPage() {
-  const [tab, setTab] = useState<"cart" | "ready">("cart");
+  const [tab, setTab] = useState<"cart" | "ready" | "pm-search">("cart");
   const queryClient = useQueryClient();
   const schedule = useQuery({
     queryKey: ["supplier-cart", "schedule"],
@@ -314,8 +503,11 @@ export function SupplierCartPage() {
         <button className={`page-tab-btn${tab === "ready" ? " active" : ""}`} type="button" onClick={() => setTab("ready")}>
           <Package size={15} /> Готовы к отгрузке
         </button>
+        <button className={`page-tab-btn${tab === "pm-search" ? " active" : ""}`} type="button" onClick={() => setTab("pm-search")}>
+          <Search size={15} /> Поиск в PM
+        </button>
       </div>
-      {tab === "cart" ? <SupplierCartPanel /> : <ReadyToShipPanel />}
+      {tab === "cart" ? <SupplierCartPanel /> : tab === "ready" ? <ReadyToShipPanel /> : <PmSearchPanel />}
     </section>
   );
 }
