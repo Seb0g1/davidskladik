@@ -24,10 +24,17 @@ app.get("/api/new-products", requireStaff, async (request, response, next) => {
 
     // Fetch all linked supplier articles in one query — article alone is the dedup key
     // because an article identifies a unique product across all suppliers.
-    const linkedLinks = await prisma.productLink.findMany({
-      select: { supplierArticle: true },
-    });
+    const [linkedLinks, warehouseNames] = await Promise.all([
+      prisma.productLink.findMany({ select: { supplierArticle: true } }),
+      prisma.warehouseProduct.findMany({ where: { archived: false }, select: { name: true } }),
+    ]);
     const linkedSet = new Set(linkedLinks.map((l) => cleanText(l.supplierArticle || "").toLowerCase()));
+    // Normalized warehouse names for name-prefix matching: PM often stores "Brand Fragrance"
+    // while the warehouse product is "Brand Fragrance Парфюмерная вода 50 мл" — same product,
+    // different article. If the PM name is a prefix of any warehouse name, skip it.
+    const warehouseNormNames = warehouseNames
+      .map((p) => cleanText(p.name || "").toLowerCase())
+      .filter((n) => n.length >= 5);
 
     // Fetch all active PM snapshot items (newest first so DISTINCT ON keeps best row)
     const pmItems = await prisma.priceMasterSnapshotItem.findMany({
@@ -59,6 +66,9 @@ app.get("/api/new-products", requireStaff, async (request, response, next) => {
 
       if (linkedSet.has(article)) continue;
       if (isTestOrDecant(nameLower)) continue;
+      // Skip PM items whose name is a case-insensitive prefix of any warehouse product name
+      // (e.g. PM "Chanel Jersey" → warehouse "Chanel JERSEY Парфюмерная вода 1.5 мл")
+      if (nameLower.length >= 8 && warehouseNormNames.some((wn) => wn.startsWith(nameLower))) continue;
 
       const priceNum = Number(item.price || 0) || 0;
       if (priceNum <= 0) continue;
