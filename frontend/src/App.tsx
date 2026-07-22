@@ -28,8 +28,9 @@ const SuppliersPage = lazy(() => import("./routes/SuppliersPage").then((m) => ({
 const StatisticsPage = lazy(() => import("./routes/StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
 const ConsignmentPage = lazy(() => import("./routes/ConsignmentPage").then((m) => ({ default: m.ConsignmentPage })));
 const NewProductsPage = lazy(() => import("./routes/NewProductsPage").then((m) => ({ default: m.NewProductsPage })));
+const WbPage = lazy(() => import("./routes/WbPage").then((m) => ({ default: m.WbPage })));
 
-type AppRoute = "dashboard" | "import" | "avito" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products";
+type AppRoute = "dashboard" | "import" | "avito" | "wb" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -48,6 +49,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} /> },
   { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
   { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} /> },
+  { route: "wb", href: "/app/wb", label: "Wildberries", icon: <Upload size={16} /> },
   { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Upload size={16} /> },
   { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
   { route: "prices", href: "/app/prices", label: "Цены", icon: <BadgeDollarSign size={16} /> },
@@ -62,7 +64,7 @@ const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = 
   { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
   { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions"] },
   { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "no-supplier", "operations", "recovery-queue"] },
-  { id: "extra", title: "Дополнительное", routes: ["suppliers", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products"] },
+  { id: "extra", title: "Дополнительное", routes: ["suppliers", "wb", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products"] },
 ];
 
 function currentRoute(): AppRoute {
@@ -78,6 +80,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/chats")) return "chats";
   if (path.startsWith("/app/import")) return "import";
   if (path.startsWith("/app/avito")) return "avito";
+  if (path.startsWith("/app/wb")) return "wb";
   if (path.startsWith("/app/prices")) return "prices";
   if (path.startsWith("/app/problem-products")) return "problem-products";
   if (path.startsWith("/app/finance")) return "finance";
@@ -319,6 +322,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "chats" ? <ChatsPage /> : null}
       {sessionReady && !accessDenied && route === "import" ? <ImportPage /> : null}
       {sessionReady && !accessDenied && route === "avito" ? <AvitoPage /> : null}
+      {sessionReady && !accessDenied && route === "wb" ? <WbPage /> : null}
       {sessionReady && !accessDenied && route === "prices" ? <PricesPage /> : null}
       {sessionReady && !accessDenied && route === "problem-products" ? <ProblemProductsPage /> : null}
       {sessionReady && !accessDenied && route === "finance" ? <FinancePage /> : null}
