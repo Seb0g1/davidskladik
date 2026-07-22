@@ -303,6 +303,41 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
   return lines.slice(0, limit);
 }
 
+function normalizeWbSupplierCartOrders(data = {}, account = {}) {
+  const orders = Array.isArray(data?.orders) ? data.orders : [];
+  const lines = [];
+  for (const order of orders) {
+    const offerId = cleanText(order.article || "");
+    if (!offerId) continue;
+    const line = normalizeSupplierCartLine({
+      marketplace: "wb",
+      accountId: account.id || "wb",
+      accountName: account.name || "Wildberries",
+      orderId: String(order.id || ""),
+      itemId: String(order.id || ""),
+      offerId,
+      productName: offerId,
+      quantity: 1,
+      orderedAt: cleanText(order.createdAt || ""),
+      status: "new",
+      raw: { orderId: order.id, article: order.article, nmId: order.nmId },
+    });
+    if (line.offerId) lines.push(line);
+  }
+  return lines;
+}
+
+async function fetchWbSupplierCartLines({ limit } = {}) {
+  const accounts = getWbAccounts();
+  const lines = [];
+  for (const account of accounts) {
+    if (lines.length >= limit) break;
+    const data = await wbRequest(account, "marketplace", "GET", "/api/v3/orders/new");
+    lines.push(...normalizeWbSupplierCartOrders(data, account));
+  }
+  return lines.slice(0, limit);
+}
+
 // The api process keeps the warehouse in memory only as a postgres stub
 // (postgresOnly) after the OOM hardening. Unrelated routes partially hydrate
 // that stub via mergeWarehouseProductsIntoMemory, so a non-empty products list

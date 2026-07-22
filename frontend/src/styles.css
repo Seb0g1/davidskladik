@@ -3484,6 +3484,34 @@ button:disabled {
   color: var(--muted);
   margin-bottom: 10px;
 }
+.cart-marketplace-toggles {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.cart-mp-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(148, 163, 184, 0.05);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  user-select: none;
+}
+.cart-mp-toggle input[type="checkbox"] { margin: 0; accent-color: var(--blue); }
+.cart-mp-toggle--on {
+  border-color: rgba(56, 163, 255, 0.35);
+  background: rgba(56, 163, 255, 0.1);
+  color: var(--text);
+}
+
 .cart-settings-badge {
   margin-left: 6px;
   font-size: 11.5px;

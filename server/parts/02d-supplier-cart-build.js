@@ -30,6 +30,16 @@ async function buildSupplierCartPreview(params = {}) {
       warnings.push({ marketplace: "yandex", error: error?.message || String(error) });
     }
   }
+  if ((marketplace === "all" || marketplace === "wb") && enabledMarketplaces.has("wb") && lines.length < limit) {
+    try {
+      lines.push(...await fetchWbSupplierCartLines({
+        ...range,
+        limit: Math.max(1, limit - lines.length),
+      }));
+    } catch (error) {
+      warnings.push({ marketplace: "wb", error: error?.message || String(error) });
+    }
+  }
   const uniqueLines = Array.from(new Map(lines.map((line) => [line.key, line])).values()).slice(0, limit);
   const warehouse = await hydrateSupplierCartWarehouse(
     await readWarehouse(),

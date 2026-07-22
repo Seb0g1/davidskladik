@@ -388,9 +388,16 @@ function PmSearchPanel() {
   );
 }
 
+const ALL_MARKETPLACES = [
+  { id: "ozon", label: "Ozon" },
+  { id: "yandex", label: "Yandex Market" },
+  { id: "wb", label: "Wildberries" },
+] as const;
+
 export function SupplierCartPage() {
   const [tab, setTab] = useState<"cart" | "ready" | "pm-search">("cart");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [pendingMarketplaces, setPendingMarketplaces] = useState<string[] | null>(null);
   const queryClient = useQueryClient();
   const schedule = useQuery({
     queryKey: ["supplier-cart", "schedule"],
@@ -400,6 +407,13 @@ export function SupplierCartPage() {
   const toggle = useMutation({
     mutationFn: (autoEnabled: boolean) => fetchJson("/api/supplier-cart/schedule", SupplierCartScheduleSchema, patchBody({ autoEnabled })),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart", "schedule"] });
+    },
+  });
+  const marketplacesMutation = useMutation({
+    mutationFn: (marketplaces: string[]) => fetchJson("/api/supplier-cart/schedule", SupplierCartScheduleSchema, patchBody({ marketplaces })),
+    onSuccess: () => {
+      setPendingMarketplaces(null);
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart", "schedule"] });
     },
   });
@@ -431,6 +445,8 @@ export function SupplierCartPage() {
   const times = Array.isArray(settings.scheduleTimes) ? settings.scheduleTimes.map(text).filter(Boolean) : ["09:30", "12:00", "15:00"];
   const last = schedule.data?.lastAutoResult;
   const autoEnabled = settings.autoEnabled !== false;
+  const savedMarketplaces: string[] = Array.isArray(settings.marketplaces) ? settings.marketplaces as string[] : ["ozon", "yandex", "wb"];
+  const activeMarketplaces = pendingMarketplaces ?? savedMarketplaces;
   const dryRun = rollbackDryRun.data?.before;
   const pm = dryRun?.pm || {};
 
@@ -438,7 +454,7 @@ export function SupplierCartPage() {
     <section className="page-section supplier-cart-page">
       <PageHeader
         title="Автокорзина"
-        subtitle="Заказы Ozon/Yandex автоматически отправляются в корзину PriceMaster по расписанию."
+        subtitle={`Заказы ${activeMarketplaces.map((m) => m === "wb" ? "Wildberries" : m === "yandex" ? "Yandex Market" : "Ozon").join(", ")} автоматически отправляются в корзину PriceMaster по расписанию.`}
         action={
           <div style={{ display: "flex", gap: 8 }}>
             <button
@@ -480,6 +496,45 @@ export function SupplierCartPage() {
       {/* Collapsible settings drawer */}
       {settingsOpen ? (
         <div className="cart-settings-drawer">
+          <section className="cart-settings-section">
+            <div className="cart-settings-section-title">
+              <ListChecks size={14} /> Маркетплейсы
+            </div>
+            <div className="cart-marketplace-toggles">
+              {ALL_MARKETPLACES.map(({ id, label }) => {
+                const active = activeMarketplaces.includes(id);
+                return (
+                  <label key={id} className={`cart-mp-toggle${active ? " cart-mp-toggle--on" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={active}
+                      onChange={() => {
+                        const next = active
+                          ? activeMarketplaces.filter((m) => m !== id)
+                          : [...activeMarketplaces, id];
+                        setPendingMarketplaces(next);
+                      }}
+                    />
+                    {label}
+                  </label>
+                );
+              })}
+              {pendingMarketplaces ? (
+                <button
+                  className="primary-action"
+                  type="button"
+                  disabled={marketplacesMutation.isPending || activeMarketplaces.length === 0}
+                  onClick={() => marketplacesMutation.mutate(activeMarketplaces)}
+                  style={{ marginLeft: 8 }}
+                >
+                  {marketplacesMutation.isPending ? <Loader2 className="spin" size={13} /> : null}
+                  Сохранить
+                </button>
+              ) : null}
+            </div>
+            {marketplacesMutation.error ? <div className="inline-error" style={{ marginTop: 8 }}>{errorMessage(marketplacesMutation.error)}</div> : null}
+          </section>
+
           <section className="cart-settings-section">
             <div className="cart-settings-section-title">
               <Clock3 size={14} /> Расписание
