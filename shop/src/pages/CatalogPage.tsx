@@ -183,8 +183,8 @@ export default function CatalogPage() {
   const page    = Number(searchParams.get("page") ?? 1);
   const inStock = searchParams.get("inStock") === "true";
 
-  // Only show grid when a filter or category is active
-  const showGrid = !!(category || q || brand || inStock);
+  // Show grid when any filter active or non-default sort
+  const showGrid = !!(category || q || brand || inStock || sort !== "name");
 
   const { data, isLoading } = useQuery({
     queryKey: ["shop-catalog", { category, q, brand, sort, page, inStock }],

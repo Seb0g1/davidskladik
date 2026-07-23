@@ -60,6 +60,10 @@ export const api = {
     return req<AutoCategory[]>("/auto-categories");
   },
 
+  brands(): Promise<{ name: string; count: number }[]> {
+    return req<{ name: string; count: number }[]>("/brands");
+  },
+
   createOrder(payload: ShopOrderPayload, token?: string): Promise<ShopOrder> {
     return req<ShopOrder>("/orders", { method: "POST", body: JSON.stringify(payload) }, token);
   },

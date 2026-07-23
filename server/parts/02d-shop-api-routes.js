@@ -472,6 +472,30 @@ app.get("/api/shop/auto-categories", shopCors, async (_request, response, next) 
   } catch (error) { next(error); }
 });
 
+app.get("/api/shop/brands", shopCors, async (_request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.json([]);
+    const rows = await prisma.warehouseProduct.findMany({
+      where: { archived: false, marketplace: { in: ["ozon", "yandex"] }, NOT: { status: "deleted" }, currentPrice: { gt: 0 }, links: { some: {} }, brand: { not: null } },
+      select: { offerId: true, brand: true },
+    });
+    const seen = new Set();
+    const counts = {};
+    for (const p of rows) {
+      const key = (p.offerId || "").trim().toLowerCase();
+      if (!key || seen.has(key) || !p.brand) continue;
+      seen.add(key);
+      const b = cleanText(p.brand).trim();
+      if (b) counts[b] = (counts[b] || 0) + 1;
+    }
+    const brands = Object.entries(counts)
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+    response.json(brands);
+  } catch (error) { next(error); }
+});
+
 app.get("/api/shop/settings", shopCors, async (_request, response, next) => {
   try {
     const settings = await readShopSettings();

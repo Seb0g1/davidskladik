@@ -7,6 +7,7 @@ import CartPage from "./pages/CartPage";
 import CheckoutPage from "./pages/CheckoutPage";
 import OrderSuccessPage from "./pages/OrderSuccessPage";
 import AccountPage from "./pages/AccountPage";
+import BrandsPage from "./pages/BrandsPage";
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
           <Route path="/order-success" element={<OrderSuccessPage />} />
           <Route path="/orders" element={<AccountPage />} />
           <Route path="/account" element={<AccountPage />} />
+          <Route path="/brands" element={<BrandsPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

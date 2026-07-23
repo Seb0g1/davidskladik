@@ -8,9 +8,9 @@ import AuthModal from "./AuthModal";
 
 const NAV = [
   { label: "Каталог", to: "/catalog" },
-  { label: "Бренды", to: "/catalog?sort=name" },
+  { label: "Бренды", to: "/brands" },
   { label: "Новинки", to: "/catalog?sort=price_desc" },
-  { label: "Акции", to: "/catalog/sale", accent: true },
+  { label: "Акции", to: "/catalog?inStock=true&sort=price_asc", accent: true },
 ];
 
 export default function Header() {
