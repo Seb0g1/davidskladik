@@ -293,9 +293,10 @@ export function SupplierCartPanel() {
             value={marketplace}
             onChange={setMarketplace}
             options={[
-              { value: "all", label: "Ozon + Yandex" },
+              { value: "all", label: "Ozon + Yandex + WB" },
               { value: "ozon", label: "Ozon" },
               { value: "yandex", label: "Yandex" },
+              { value: "wb", label: "Wildberries" },
             ]}
           />
         </label>
@@ -338,6 +339,7 @@ export function SupplierCartPanel() {
                 options={[
                   { value: "ozon", label: "Ozon" },
                   { value: "yandex", label: "Yandex" },
+                  { value: "wb", label: "Wildberries" },
                 ]}
               />
             </label>
