@@ -62,13 +62,14 @@ export interface CartItem {
 export interface ShopOrderPayload {
   items: { offerId: string; quantity: number; priceRub: number }[];
   delivery: {
+    type?: "courier" | "pickup";
     firstName: string;
-    lastName: string;
+    lastName?: string;
     phone: string;
     email: string;
-    address: string;
+    address?: string;
     city: string;
-    postalCode: string;
+    postalCode?: string;
   };
   comment?: string;
 }

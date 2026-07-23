@@ -507,6 +507,59 @@ app.get("/api/shop/settings", shopCors, async (_request, response, next) => {
   }
 });
 
+// GET /api/shop/delivery/pvz?city=Москва — search Ozon pickup points via 2GIS API
+app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
+  try {
+    const city = String(request.query.city || "").trim().slice(0, 100);
+    if (!city) return response.status(400).json({ error: "city required" });
+
+    const dgisKey = process.env.DGIS_API_KEY;
+    if (!dgisKey) {
+      logger.warn("DGIS_API_KEY not set — returning empty PVZ list");
+      return response.json({ pvz: [], city, configured: false });
+    }
+
+    // Step 1: geocode city to coordinates
+    const geoRes = await fetch(
+      `https://catalog.api.2gis.com/3.0/items/geocode?q=${encodeURIComponent(city + " Россия")}&key=${dgisKey}&fields=items.point&type=settlement`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!geoRes.ok) return response.json({ pvz: [], city });
+    const geoData = await geoRes.json();
+    const pt = geoData.result?.items?.[0]?.point;
+    if (!pt) return response.json({ pvz: [], city });
+
+    // Step 2: search for Ozon pickup points within 30 km
+    const searchRes = await fetch(
+      `https://catalog.api.2gis.com/3.0/items?q=${encodeURIComponent("пункт выдачи ozon")}&location=${pt.lon},${pt.lat}&radius=30000&key=${dgisKey}&page_size=50&sort_point=${pt.lon},${pt.lat}&fields=items.point,items.address,items.name,items.schedule`,
+      { signal: AbortSignal.timeout(10000) }
+    );
+    if (!searchRes.ok) return response.json({ pvz: [], city });
+    const searchData = await searchRes.json();
+
+    const pvz = (searchData.result?.items || [])
+      .filter(it => {
+        const n = (it.name || "").toLowerCase();
+        return n.includes("ozon") || n.includes("озон");
+      })
+      .map(it => ({
+        id: String(it.id || ""),
+        name: it.name || "Ozon ПВЗ",
+        address: it.address?.name || "",
+        lat: it.point?.lat,
+        lng: it.point?.lon,
+        schedule: it.schedule?.Mon?.working_hours?.[0]
+          ? `${it.schedule.Mon.working_hours[0].from}–${it.schedule.Mon.working_hours[0].to}`
+          : null,
+      }))
+      .filter(p => p.lat && p.lng && p.address);
+
+    response.json({ pvz, city, count: pvz.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/shop/orders", shopCors, async (request, response, next) => {
   try {
     const prisma = getPrisma();
