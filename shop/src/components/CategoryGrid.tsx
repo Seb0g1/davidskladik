@@ -3,52 +3,47 @@ import { Sparkles, Droplets, Wind, User, Gift, Zap } from "lucide-react";
 import type { ShopCategory } from "../types";
 
 const DEFAULT_CATEGORIES: ShopCategory[] = [
-  { id: "c1", name: "Парфюмерия", slug: "parfumery", order: 0 },
-  { id: "c2", name: "Уход за кожей", slug: "care", order: 1 },
-  { id: "c3", name: "Для волос", slug: "hair", order: 2 },
-  { id: "c4", name: "Для мужчин", slug: "men", order: 3 },
-  { id: "c5", name: "Подарки", slug: "gifts", order: 4 },
-  { id: "c6", name: "Акции", slug: "sale", order: 5 },
+  { id: "c1", name: "Женская парфюмерия",   slug: "women",   order: 0 },
+  { id: "c2", name: "Мужская парфюмерия",    slug: "men",     order: 1 },
+  { id: "c3", name: "Унисекс",              slug: "unisex",  order: 2 },
+  { id: "c4", name: "Уход за кожей",        slug: "care",    order: 3 },
+  { id: "c5", name: "Подарочные наборы",    slug: "gifts",   order: 4 },
+  { id: "c6", name: "Акции",               slug: "sale",    order: 5 },
 ];
 
-const ICONS = [Sparkles, Droplets, Wind, User, Gift, Zap];
+const ICONS = [Sparkles, User, Wind, Droplets, Gift, Zap];
 const COLORS = [
-  "from-violet-500 to-purple-600",
-  "from-pink-400 to-rose-500",
-  "from-blue-400 to-cyan-500",
-  "from-slate-500 to-gray-700",
-  "from-amber-400 to-orange-500",
-  "from-red-500 to-rose-600",
+  "bg-rose-50 text-rose-600",
+  "bg-blue-50 text-blue-600",
+  "bg-amber-50 text-amber-600",
+  "bg-violet-50 text-violet-600",
+  "bg-pink-50 text-pink-600",
+  "bg-red-50 text-red-600",
 ];
 
-interface Props {
-  categories?: ShopCategory[];
-}
+interface Props { categories?: ShopCategory[]; }
 
 export default function CategoryGrid({ categories }: Props) {
   const items = categories?.length ? categories : DEFAULT_CATEGORIES;
 
   return (
     <section>
-      <h2 className="text-2xl font-display font-bold text-gray-900 mb-5">Категории</h2>
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <h2 className="text-xl font-bold text-apple-black tracking-tight mb-4">Категории</h2>
+      <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
         {items.map((cat, i) => {
           const Icon = ICONS[i % ICONS.length];
-          const gradient = COLORS[i % COLORS.length];
+          const color = COLORS[i % COLORS.length];
           return (
             <Link
               key={cat.id}
               to={`/catalog/${cat.slug}`}
-              className="group flex flex-col items-center gap-3 p-4 rounded-2xl bg-white shadow-card hover:shadow-card-hover transition-all duration-300 hover:-translate-y-0.5"
+              className="group flex flex-col items-center gap-2.5 p-4 bg-white rounded-2xl hover:shadow-card-hover transition-all duration-200 hover:-translate-y-0.5 text-center"
+              style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}
             >
-              {cat.imageUrl ? (
-                <img src={cat.imageUrl} alt={cat.name} className="w-14 h-14 object-cover rounded-xl" />
-              ) : (
-                <div className={`w-14 h-14 rounded-xl bg-gradient-to-br ${gradient} flex items-center justify-center text-white shadow-sm group-hover:scale-110 transition-transform duration-300`}>
-                  <Icon size={24} />
-                </div>
-              )}
-              <span className="text-xs font-semibold text-gray-700 text-center leading-tight">{cat.name}</span>
+              <div className={`w-12 h-12 rounded-xl ${color} flex items-center justify-center group-hover:scale-105 transition-transform duration-200`}>
+                <Icon size={20} />
+              </div>
+              <span className="text-[11px] font-semibold text-apple-black leading-tight">{cat.name}</span>
             </Link>
           );
         })}

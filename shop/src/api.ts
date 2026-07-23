@@ -4,9 +4,10 @@ import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayl
 // В production установите VITE_API_BASE=https://davidsklad.ru
 const BASE = (import.meta.env.VITE_API_BASE ?? "") + "/api/shop";
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
+async function req<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
+  const authHeader: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
   const res = await fetch(BASE + path, {
-    headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    headers: { "Content-Type": "application/json", ...authHeader, ...(init?.headers || {}) },
     ...init,
   });
   if (!res.ok) {
@@ -55,8 +56,8 @@ export const api = {
     return req<ShopSettings>("/settings");
   },
 
-  createOrder(payload: ShopOrderPayload): Promise<ShopOrder> {
-    return req<ShopOrder>("/orders", { method: "POST", body: JSON.stringify(payload) });
+  createOrder(payload: ShopOrderPayload, token?: string): Promise<ShopOrder> {
+    return req<ShopOrder>("/orders", { method: "POST", body: JSON.stringify(payload) }, token);
   },
 };
 

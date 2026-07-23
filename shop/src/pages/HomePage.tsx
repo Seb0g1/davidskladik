@@ -1,204 +1,181 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Truck, Shield, RefreshCw, Headphones, ArrowRight, Sparkles, Flame, Star } from "lucide-react";
+import { ArrowRight, Truck, Shield, RefreshCw, Headphones } from "lucide-react";
 import { api } from "../api";
-import CategoryGrid from "../components/CategoryGrid";
-import BrandStrip from "../components/BrandStrip";
 import ProductCard from "../components/ProductCard";
 
 const PERKS = [
-  { icon: Truck,       title: "Доставка Ozon",    text: "По всей России" },
-  { icon: Shield,      title: "100% оригинал",    text: "Гарантия подлинности" },
-  { icon: RefreshCw,   title: "Возврат 14 дней",  text: "Без вопросов" },
-  { icon: Headphones,  title: "Поддержка 24/7",   text: "Всегда на связи" },
+  { icon: Truck,       title: "Доставка Ozon",   text: "По всей России, 1–5 дней" },
+  { icon: Shield,      title: "100% оригинал",   text: "Гарантия подлинности" },
+  { icon: RefreshCw,   title: "Возврат 14 дней", text: "Без вопросов" },
+  { icon: Headphones,  title: "Поддержка 24/7",  text: "Всегда на связи" },
 ];
 
-function ProductSkeleton() {
+const BRANDS = [
+  "Chanel", "Dior", "Tom Ford", "Hermès", "Byredo", "Jo Malone",
+  "Creed", "Guerlain", "Givenchy", "Prada", "Valentino", "Burberry",
+  "Versace", "Hugo Boss", "Montale", "Kilian", "Dolce & Gabbana", "Lancome",
+];
+
+function Skeleton() {
   return (
-    <div className="bg-white rounded-2xl overflow-hidden">
+    <div className="bg-white rounded-2xl overflow-hidden" style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
       <div className="aspect-square skeleton" />
-      <div className="p-4 space-y-2">
-        <div className="h-3 skeleton rounded w-1/3" />
-        <div className="h-4 skeleton rounded" />
-        <div className="h-4 skeleton rounded w-3/4" />
-        <div className="h-6 skeleton rounded w-1/2 mt-3" />
-      </div>
-    </div>
-  );
-}
-
-function HeroSection() {
-  return (
-    <div className="relative overflow-hidden rounded-3xl bg-[#0F0A1E] min-h-[420px] md:min-h-[500px] flex items-center">
-      {/* Gradient blobs */}
-      <div className="absolute -top-24 -left-24 w-96 h-96 bg-violet-700/40 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute -bottom-20 -right-20 w-80 h-80 bg-pink-600/30 rounded-full blur-3xl pointer-events-none" />
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[200px] bg-violet-900/20 rounded-full blur-2xl pointer-events-none" />
-
-      {/* Floating decorative elements */}
-      <div className="absolute right-8 top-10 text-violet-400/30 animate-float pointer-events-none hidden md:block">
-        <Sparkles size={64} />
-      </div>
-      <div className="absolute right-28 bottom-16 text-pink-400/20 animate-float-slow pointer-events-none hidden md:block">
-        <Star size={48} />
-      </div>
-      <div className="absolute left-1/2 top-8 text-violet-300/10 animate-float-fast pointer-events-none hidden lg:block">
-        <Sparkles size={32} />
-      </div>
-
-      {/* Content */}
-      <div className="relative z-10 max-w-2xl mx-auto px-8 py-12 text-center">
-        <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/15 rounded-full px-4 py-1.5 text-xs text-violet-200 font-medium mb-6 fade-up">
-          <Flame size={12} className="text-rose-400" />
-          Оригинальная парфюмерия · Быстрая доставка
-        </div>
-        <h1 className="font-display text-4xl md:text-6xl font-bold text-white leading-tight mb-4 fade-up-2">
-          Мировая<br />
-          <span className="bg-gradient-to-r from-violet-300 via-pink-300 to-rose-300 bg-clip-text text-transparent">
-            парфюмерия
-          </span>
-        </h1>
-        <p className="text-gray-300 text-base md:text-lg mb-8 max-w-md mx-auto leading-relaxed fade-up-3">
-          Более 22 000 ароматов от мировых домов. Ozon Pay · Доставка по России
-        </p>
-        <div className="flex flex-col sm:flex-row gap-3 justify-center fade-up-3">
-          <Link
-            to="/catalog"
-            className="inline-flex items-center gap-2 bg-gradient-to-r from-violet-600 to-violet-700 hover:from-violet-500 hover:to-violet-600 text-white font-semibold px-8 py-3.5 rounded-xl transition-all duration-200 shadow-lg shadow-violet-900/40 hover:shadow-violet-900/60 hover:-translate-y-0.5"
-          >
-            Смотреть каталог <ArrowRight size={16} />
-          </Link>
-          <Link
-            to="/catalog?sort=price_desc"
-            className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-sm border border-white/20 hover:bg-white/20 text-white font-semibold px-8 py-3.5 rounded-xl transition-all duration-200 hover:-translate-y-0.5"
-          >
-            Лучшие новинки
-          </Link>
-        </div>
+      <div className="p-3.5 space-y-2">
+        <div className="h-2.5 skeleton rounded w-1/3" />
+        <div className="h-3.5 skeleton rounded" />
+        <div className="h-3.5 skeleton rounded w-2/3" />
+        <div className="h-4 skeleton rounded w-1/2 mt-2" />
       </div>
     </div>
   );
 }
 
 export default function HomePage() {
-  const { data: catalogData, isLoading } = useQuery({
-    queryKey: ["shop-home-products"],
+  const { data: catalog, isLoading } = useQuery({
+    queryKey: ["shop-home"],
     queryFn: () => api.catalog({ pageSize: 12, sort: "price_desc" }),
   });
 
-  const { data: categories } = useQuery({
-    queryKey: ["shop-categories"],
-    queryFn: () => api.categories(),
-    staleTime: 10 * 60 * 1000,
-  });
+  const doubled = [...BRANDS, ...BRANDS];
 
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6 space-y-12">
-
-      {/* Hero */}
-      <HeroSection />
-
-      {/* Perks */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {PERKS.map(({ icon: Icon, title, text }) => (
-          <div key={title} className="flex items-center gap-3 bg-white rounded-2xl p-4 shadow-sm border border-gray-100 hover:border-violet-200 transition-colors">
-            <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center flex-shrink-0">
-              <Icon size={18} className="text-violet-600" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold text-gray-800 leading-tight">{title}</div>
-              <div className="text-xs text-gray-400 mt-0.5">{text}</div>
-            </div>
+    <div className="min-h-screen">
+      {/* ── Hero ── */}
+      <section className="bg-white border-b border-gray-100">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-16 md:py-24 text-center">
+          <div className="inline-flex items-center gap-2 bg-violet-50 text-violet-700 text-xs font-semibold px-4 py-2 rounded-full mb-8 tracking-wide uppercase">
+            Оригинальная парфюмерия
           </div>
-        ))}
-      </div>
-
-      {/* Categories */}
-      <CategoryGrid categories={categories} />
-
-      {/* Featured products */}
-      <section>
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h2 className="text-2xl font-display font-bold text-gray-900">Популярные товары</h2>
-            <p className="text-sm text-gray-400 mt-1">Топ продаж среди наших покупателей</p>
+          <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold text-apple-black tracking-tight leading-none mb-6">
+            Мировая<br />
+            <span className="text-violet-600">парфюмерия</span>
+          </h1>
+          <p className="text-lg md:text-xl text-apple-gray max-w-2xl mx-auto leading-relaxed mb-10">
+            22 000+ ароматов от мировых домов. Оригинальная продукция, быстрая доставка по России через Ozon.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-3 justify-center">
+            <Link
+              to="/catalog"
+              className="inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white font-semibold px-8 py-4 rounded-2xl transition-all duration-200 hover:-translate-y-0.5 shadow-lg shadow-violet-200 text-[15px]"
+            >
+              Смотреть каталог <ArrowRight size={18} />
+            </Link>
+            <Link
+              to="/catalog?sort=price_desc"
+              className="inline-flex items-center justify-center gap-2 bg-apple-gray-bg hover:bg-gray-200 text-apple-black font-semibold px-8 py-4 rounded-2xl transition-all duration-200 hover:-translate-y-0.5 text-[15px]"
+            >
+              Лучшие новинки
+            </Link>
           </div>
-          <Link
-            to="/catalog"
-            className="hidden sm:flex items-center gap-1.5 text-sm text-violet-600 font-medium hover:text-violet-800 transition-colors"
-          >
-            Все товары <ArrowRight size={14} />
-          </Link>
-        </div>
-
-        {isLoading ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-            {Array.from({ length: 12 }).map((_, i) => <ProductSkeleton key={i} />)}
-          </div>
-        ) : catalogData?.products.length ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
-            {catalogData.products.map((p) => (
-              <ProductCard key={p.offerId} product={p} />
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-16 text-gray-400">
-            <p className="text-lg">Загрузка товаров...</p>
-          </div>
-        )}
-
-        <div className="text-center mt-8">
-          <Link
-            to="/catalog"
-            className="inline-flex items-center gap-2 bg-white border border-gray-200 hover:border-violet-400 hover:text-violet-700 text-gray-700 font-medium px-8 py-3 rounded-xl transition-all duration-200"
-          >
-            Показать все товары <ArrowRight size={16} />
-          </Link>
         </div>
       </section>
 
-      {/* Promo strip */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[
-          {
-            title: "Пробники",
-            text: "Миниатюры и сэмплы",
-            desc: "Попробуй перед покупкой",
-            color: "from-pink-600 to-rose-700",
-            slug: "samples",
-          },
-          {
-            title: "Скидки",
-            text: "До −55% на хиты",
-            desc: "Ограниченное предложение",
-            color: "from-violet-700 to-indigo-800",
-            slug: "sale",
-          },
-          {
-            title: "Aroma Box",
-            text: "Наборы и подарки",
-            desc: "Идея для подарка",
-            color: "from-amber-600 to-orange-700",
-            slug: "sets",
-          },
-        ].map((item) => (
-          <Link
-            key={item.slug}
-            to={`/catalog/${item.slug}`}
-            className={`bg-gradient-to-br ${item.color} rounded-2xl p-6 text-white group hover:opacity-95 transition-all hover:-translate-y-0.5 duration-200`}
-          >
-            <div className="text-xs font-semibold uppercase tracking-widest text-white/60 mb-1">{item.desc}</div>
-            <div className="text-xl font-display font-bold mb-1">{item.title}</div>
-            <div className="text-2xl font-black mb-4">{item.text}</div>
-            <div className="inline-flex items-center gap-1.5 text-sm font-medium bg-white/15 rounded-lg px-3 py-1.5 group-hover:bg-white/25 transition-colors">
-              Смотреть <ArrowRight size={13} />
-            </div>
-          </Link>
-        ))}
-      </div>
+      {/* ── Perks ── */}
+      <section className="bg-apple-gray-bg border-b border-gray-100">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {PERKS.map(({ icon: Icon, title, text }) => (
+              <div key={title} className="flex items-center gap-3 bg-white rounded-2xl p-4" style={{ boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
+                <div className="w-10 h-10 rounded-xl bg-violet-50 flex items-center justify-center flex-shrink-0">
+                  <Icon size={18} className="text-violet-600" />
+                </div>
+                <div>
+                  <div className="text-[13px] font-semibold text-apple-black leading-tight">{title}</div>
+                  <div className="text-[11px] text-apple-gray mt-0.5">{text}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
 
-      {/* Brand marquee */}
-      <BrandStrip />
+      {/* ── Featured products ── */}
+      <section className="bg-apple-gray-bg">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12">
+          <div className="flex items-end justify-between mb-8">
+            <div>
+              <h2 className="text-2xl md:text-3xl font-bold text-apple-black tracking-tight">Популярные товары</h2>
+              <p className="text-apple-gray text-sm mt-1">Топ ароматов нашего каталога</p>
+            </div>
+            <Link to="/catalog" className="hidden sm:flex items-center gap-1.5 text-[13px] font-medium text-violet-600 hover:text-violet-800 transition-colors">
+              Все товары <ArrowRight size={14} />
+            </Link>
+          </div>
+
+          {isLoading ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              {Array.from({ length: 12 }).map((_, i) => <Skeleton key={i} />)}
+            </div>
+          ) : catalog?.products.length ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+              {catalog.products.map((p) => <ProductCard key={p.offerId} product={p} />)}
+            </div>
+          ) : (
+            <div className="text-center py-16 text-apple-gray">
+              <p>Товары загружаются...</p>
+            </div>
+          )}
+
+          <div className="text-center mt-8">
+            <Link
+              to="/catalog"
+              className="inline-flex items-center gap-2 bg-white hover:bg-gray-50 border border-gray-200 hover:border-violet-300 text-apple-black font-medium px-8 py-3.5 rounded-2xl transition-all duration-200 text-sm"
+            >
+              Показать все товары <ArrowRight size={15} />
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* ── Collections strip ── */}
+      <section className="bg-white border-t border-b border-gray-100">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {[
+              { title: "Женская парфюмерия", sub: "Нежные и чувственные ароматы", slug: "women", bg: "bg-rose-50", text: "text-rose-700", btn: "bg-rose-600 hover:bg-rose-700" },
+              { title: "Мужская парфюмерия", sub: "Свежие и древесные ноты", slug: "men",   bg: "bg-indigo-50", text: "text-indigo-700", btn: "bg-indigo-600 hover:bg-indigo-700" },
+              { title: "Унисекс",            sub: "Для всех — смелые ароматы", slug: "unisex", bg: "bg-amber-50", text: "text-amber-700", btn: "bg-amber-600 hover:bg-amber-700" },
+            ].map((c) => (
+              <Link
+                key={c.slug}
+                to={`/catalog/${c.slug}`}
+                className={`${c.bg} rounded-3xl p-8 group hover:shadow-card-hover transition-all duration-300 hover:-translate-y-1 block`}
+              >
+                <div className={`text-xs font-bold uppercase tracking-widest ${c.text} mb-3 opacity-60`}>Коллекция</div>
+                <h3 className="text-xl font-bold text-apple-black mb-2 tracking-tight">{c.title}</h3>
+                <p className="text-sm text-apple-gray mb-6">{c.sub}</p>
+                <div className={`inline-flex items-center gap-2 ${c.btn} text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition-colors`}>
+                  Смотреть <ArrowRight size={14} className="group-hover:translate-x-0.5 transition-transform" />
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ── Brand marquee ── */}
+      <section className="bg-apple-gray-bg border-t border-gray-100 overflow-hidden py-8">
+        <p className="text-center text-xs font-semibold uppercase tracking-widest text-apple-gray mb-6">
+          Ведущие мировые бренды
+        </p>
+        <div className="relative">
+          <div className="absolute left-0 top-0 bottom-0 w-20 bg-gradient-to-r from-apple-gray-bg to-transparent z-10 pointer-events-none" />
+          <div className="absolute right-0 top-0 bottom-0 w-20 bg-gradient-to-l from-apple-gray-bg to-transparent z-10 pointer-events-none" />
+          <div className="animate-marquee">
+            {doubled.map((brand, i) => (
+              <Link
+                key={i}
+                to={`/catalog?brand=${encodeURIComponent(brand)}`}
+                className="inline-flex items-center mx-6 text-[13px] font-semibold text-apple-gray hover:text-apple-black transition-colors whitespace-nowrap"
+              >
+                {brand}
+                <span className="ml-6 text-gray-200">·</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      </section>
     </div>
   );
 }

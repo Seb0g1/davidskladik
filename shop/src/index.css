@@ -3,13 +3,18 @@
 @tailwind utilities;
 
 @layer base {
-  html { scroll-behavior: smooth; }
-  body {
-    font-family: 'Inter', system-ui, sans-serif;
-    color: #111827;
-    background: #F8F7FF;
-    -webkit-font-smoothing: antialiased;
+  html {
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
   }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    color: #1d1d1f;
+    background: #f5f5f7;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  * { box-sizing: border-box; }
 }
 
 @layer utilities {
@@ -25,6 +30,21 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* Shimmer skeleton */
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position: 200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, #e8e8ec 25%, #f0f0f4 50%, #e8e8ec 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s infinite;
+  border-radius: 8px;
 }
 
 /* Marquee */
@@ -35,35 +55,22 @@
 .animate-marquee {
   display: flex;
   width: max-content;
-  animation: marquee 28s linear infinite;
+  animation: marquee 32s linear infinite;
 }
 .animate-marquee:hover { animation-play-state: paused; }
 
-/* Fade up */
-@keyframes fade-up {
-  from { opacity: 0; transform: translateY(20px); }
-  to   { opacity: 1; transform: translateY(0); }
+/* Modal overlay */
+.modal-overlay {
+  animation: fadeIn 0.2s ease;
 }
-.fade-up { animation: fade-up 0.6s ease both; }
-.fade-up-2 { animation: fade-up 0.6s 0.15s ease both; }
-.fade-up-3 { animation: fade-up 0.6s 0.3s ease both; }
-
-/* Float */
-@keyframes float {
-  0%, 100% { transform: translateY(0px) rotate(0deg); }
-  50% { transform: translateY(-12px) rotate(3deg); }
+.modal-content {
+  animation: scaleIn 0.25s cubic-bezier(0.34,1.56,0.64,1);
 }
-.animate-float { animation: float 6s ease-in-out infinite; }
-.animate-float-slow { animation: float 9s ease-in-out infinite; }
-.animate-float-fast { animation: float 4s ease-in-out infinite; }
-
-/* Shimmer skeleton */
-@keyframes shimmer {
-  from { background-position: -200% 0; }
-  to   { background-position: 200% 0; }
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
-.skeleton {
-  background: linear-gradient(90deg, #f0f0f5 25%, #e8e8f0 50%, #f0f0f5 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s infinite;
+@keyframes scaleIn {
+  from { opacity: 0; transform: scale(0.94) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }

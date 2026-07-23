@@ -554,6 +554,38 @@ model ConsignmentOperation {
   @@map("consignment_operations")
 }
 
+model ShopCustomer {
+  id        String      @id @default(cuid())
+  email     String      @unique
+  password  String
+  firstName String?     @map("first_name")
+  lastName  String?     @map("last_name")
+  phone     String?
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  orders ShopOrder[]
+
+  @@map("shop_customers")
+}
+
+model ShopOrder {
+  id         String        @id
+  customerId String?       @map("customer_id")
+  status     String        @default("pending")
+  items      Json
+  delivery   Json
+  totalRub   Int           @map("total_rub")
+  comment    String?
+  createdAt  DateTime      @default(now()) @map("created_at")
+
+  customer ShopCustomer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@index([createdAt])
+  @@map("shop_orders")
+}
+
 model SyncRun {
   id         String     @id @default(cuid())
   trigger    String

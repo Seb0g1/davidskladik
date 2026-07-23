@@ -1,82 +1,71 @@
 import { Link } from "react-router-dom";
-import { Sparkles, Phone, Mail, MapPin, Instagram } from "lucide-react";
 
 export default function Footer() {
   return (
-    <footer className="bg-brand-dark text-gray-300 mt-16">
-      <div className="max-w-7xl mx-auto px-4 py-12 grid grid-cols-1 md:grid-cols-4 gap-8">
-        {/* Brand */}
-        <div className="md:col-span-1">
-          <div className="flex items-center gap-2 mb-3">
-            <Sparkles className="text-violet-400" size={22} />
-            <div>
-              <div className="font-display font-bold text-lg text-white leading-none">Magic Vibes</div>
-              <div className="text-[10px] text-gray-500 uppercase tracking-widest">Парфюмерия</div>
+    <footer className="bg-apple-black text-white/60 mt-20">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 py-12">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-8 pb-10 border-b border-white/10">
+          {/* Brand */}
+          <div className="col-span-2 md:col-span-1">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-8 h-8 rounded-xl bg-violet-600 flex items-center justify-center flex-shrink-0">
+                <span className="text-white text-xs font-bold">MV</span>
+              </div>
+              <span className="font-bold text-white text-[15px]">Magic Vibes</span>
+            </div>
+            <p className="text-sm leading-relaxed">
+              Оригинальная парфюмерия<br />с доставкой по всей России
+            </p>
+            <div className="mt-4 text-xs">
+              <a href="mailto:info@magicvibes.ru" className="hover:text-white transition-colors">info@magicvibes.ru</a>
             </div>
           </div>
-          <p className="text-sm leading-relaxed text-gray-400 mb-4">
-            Оригинальная парфюмерия и косметика. Быстрая доставка по всей России через Ozon.
-          </p>
-          <a href="https://instagram.com" className="inline-flex items-center gap-2 text-sm hover:text-violet-400 transition-colors">
-            <Instagram size={16} /> @magicvibes.ru
-          </a>
-        </div>
 
-        {/* Catalog */}
-        <div>
-          <h4 className="text-white font-semibold mb-4 text-sm uppercase tracking-wider">Каталог</h4>
-          <ul className="space-y-2 text-sm">
-            {["Парфюмерия", "Уход за кожей", "Для волос", "Для мужчин", "Подарки", "Акции"].map((item) => (
-              <li key={item}>
-                <Link to="/catalog" className="hover:text-violet-400 transition-colors">{item}</Link>
+          {/* Catalog */}
+          <div>
+            <h4 className="text-white font-semibold text-sm mb-4">Каталог</h4>
+            <ul className="space-y-2.5 text-sm">
+              {[
+                { label: "Все товары", to: "/catalog" },
+                { label: "Новинки", to: "/catalog?sort=price_desc" },
+                { label: "Акции", to: "/catalog/sale" },
+                { label: "Бренды", to: "/catalog" },
+              ].map((l) => (
+                <li key={l.to}><Link to={l.to} className="hover:text-white transition-colors">{l.label}</Link></li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Info */}
+          <div>
+            <h4 className="text-white font-semibold text-sm mb-4">Информация</h4>
+            <ul className="space-y-2.5 text-sm">
+              {["О магазине", "Доставка и оплата", "Возврат товара", "Гарантия оригинала"].map((item) => (
+                <li key={item}><a href="#" className="hover:text-white transition-colors">{item}</a></li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Delivery */}
+          <div>
+            <h4 className="text-white font-semibold text-sm mb-4">Доставка</h4>
+            <ul className="space-y-2.5 text-sm">
+              <li>Доставка Ozon по России</li>
+              <li>Бесплатно от 3 000 ₽</li>
+              <li>Срок 1–5 дней</li>
+              <li className="pt-2">
+                <div className="inline-flex items-center gap-2 bg-white/10 rounded-lg px-3 py-1.5 text-xs">
+                  <span className="text-blue-400 font-bold">Ozon</span>
+                  <span>Pay · Доставка</span>
+                </div>
               </li>
-            ))}
-          </ul>
-        </div>
-
-        {/* Info */}
-        <div>
-          <h4 className="text-white font-semibold mb-4 text-sm uppercase tracking-wider">Информация</h4>
-          <ul className="space-y-2 text-sm">
-            {["О магазине", "Доставка и оплата", "Возврат товара", "Гарантия подлинности", "Контакты"].map((item) => (
-              <li key={item}>
-                <Link to="/" className="hover:text-violet-400 transition-colors">{item}</Link>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {/* Contacts */}
-        <div>
-          <h4 className="text-white font-semibold mb-4 text-sm uppercase tracking-wider">Контакты</h4>
-          <ul className="space-y-3 text-sm">
-            <li className="flex items-start gap-2">
-              <Phone size={15} className="text-violet-400 mt-0.5 flex-shrink-0" />
-              <span>+7 (800) 123-45-67</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <Mail size={15} className="text-violet-400 mt-0.5 flex-shrink-0" />
-              <span>info@magicvibes.ru</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <MapPin size={15} className="text-violet-400 mt-0.5 flex-shrink-0" />
-              <span>Доставка по всей России</span>
-            </li>
-          </ul>
-          <div className="mt-4 p-3 bg-white/5 rounded-lg">
-            <div className="text-xs text-gray-400 mb-1">Доставка и оплата</div>
-            <div className="flex gap-2 items-center">
-              <div className="bg-blue-500 text-white text-xs font-bold px-2 py-0.5 rounded">Ozon</div>
-              <div className="text-xs text-gray-300">Pay · Доставка</div>
-            </div>
+            </ul>
           </div>
         </div>
-      </div>
 
-      <div className="border-t border-white/10">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-gray-500">
+        <div className="pt-6 flex flex-col sm:flex-row justify-between items-center gap-2 text-xs text-white/30">
           <span>© {new Date().getFullYear()} Magic Vibes. Все права защищены.</span>
-          <span>ИП Иванов И.И. · ИНН 1234567890</span>
+          <span>100% оригинальная продукция</span>
         </div>
       </div>
     </footer>

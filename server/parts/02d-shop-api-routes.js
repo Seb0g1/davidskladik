@@ -1,4 +1,67 @@
 // ─── Magic Vibes Shop API ──────────────────────────────────────────────────
+const { scrypt, randomBytes, timingSafeEqual } = require("crypto");
+const { promisify } = require("util");
+const scryptAsync = promisify(scrypt);
+
+async function hashPassword(pw) {
+  const salt = randomBytes(16).toString("hex");
+  const buf = await scryptAsync(pw, salt, 64);
+  return buf.toString("hex") + "." + salt;
+}
+async function verifyPassword(pw, stored) {
+  const [hex, salt] = stored.split(".");
+  if (!hex || !salt) return false;
+  const buf = await scryptAsync(pw, salt, 64);
+  return timingSafeEqual(Buffer.from(hex, "hex"), buf);
+}
+function signShopToken(payload) {
+  const { createHmac } = require("crypto");
+  const secret = process.env.APP_SESSION_SECRET || "mv-shop-secret";
+  const h = Buffer.from(JSON.stringify({ alg: "HS256" })).toString("base64url");
+  const b = Buffer.from(JSON.stringify({ ...payload, iat: Date.now() })).toString("base64url");
+  const sig = createHmac("sha256", secret).update(h + "." + b).digest("base64url");
+  return h + "." + b + "." + sig;
+}
+function verifyShopToken(token) {
+  const { createHmac } = require("crypto");
+  const secret = process.env.APP_SESSION_SECRET || "mv-shop-secret";
+  if (!token) return null;
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [h, b, sig] = parts;
+  const expected = createHmac("sha256", secret).update(h + "." + b).digest("base64url");
+  if (sig !== expected) return null;
+  try { return JSON.parse(Buffer.from(b, "base64url").toString()); } catch { return null; }
+}
+async function requireShopAuth(request, response, next) {
+  const auth = request.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+  const payload = verifyShopToken(token);
+  if (!payload?.customerId) return response.status(401).json({ error: "Требуется авторизация" });
+  request.shopCustomer = payload;
+  next();
+}
+
+function extractImages(p) {
+  // images column can be: array of URLs, { imageUrl, images: [] }, or null
+  if (Array.isArray(p.images) && p.images.length) return p.images.filter(Boolean);
+  if (p.images && typeof p.images === "object" && !Array.isArray(p.images)) {
+    const obj = p.images;
+    const urls = [];
+    if (obj.imageUrl) urls.push(obj.imageUrl);
+    if (Array.isArray(obj.images)) urls.push(...obj.images);
+    if (urls.length) return urls.filter(Boolean);
+  }
+  // Fall back to raw column
+  if (p.raw && typeof p.raw === "object") {
+    const raw = p.raw;
+    if (Array.isArray(raw.ozon?.images) && raw.ozon.images.length) return raw.ozon.images.filter(Boolean);
+    if (raw.ozon?.primaryImage) return [raw.ozon.primaryImage].filter(Boolean);
+    if (Array.isArray(raw.yandex?.pictures) && raw.yandex.pictures.length) return raw.yandex.pictures.filter(Boolean);
+    if (raw.imageUrl) return [raw.imageUrl];
+  }
+  return [];
+}
 // Публичные эндпоинты для магазина (без сессии, CORS разрешён для shopOrigin).
 // Адм. эндпоинты /api/shop/admin/* требуют requireAdmin.
 
@@ -78,12 +141,13 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
 
   const skip = (page - 1) * pageSize;
 
-  // Build where clause — только товары с ценой
+  // Build where clause — только товары с активной привязкой и ценой
   const where = {
     archived: false,
     marketplace: { in: ["ozon", "yandex"] },
     NOT: { status: "deleted" },
     currentPrice: { gt: 0 },
+    links: { some: {} },
   };
   if (q) {
     where.OR = [
@@ -108,7 +172,11 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
   const [rawProducts, total] = await Promise.all([
     prisma.warehouseProduct.findMany({
       where,
-      include: { links: { take: 1 } },
+      select: {
+        id: true, offerId: true, name: true, brand: true, marketplace: true,
+        images: true, raw: true, currentPrice: true, targetStock: true, status: true,
+        links: { take: 2, select: { supplierArticle: true } },
+      },
       orderBy: sort === "price_asc" || sort === "price_desc" ? { currentPrice: sort === "price_asc" ? "asc" : "desc" } : { name: "asc" },
       take: pageSize * 2,
       skip,
@@ -147,7 +215,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
 
   // Build shop products
   const products = deduped.map((p) => {
-    const images = Array.isArray(p.images) ? p.images.filter(Boolean) : [];
+    const images = extractImages(p);
     const link = p.links[0];
     const snap = link ? pmMap.get(cleanText(link.supplierArticle)) : null;
     const priceUsd = snap ? Number(snap.price || 0) : 0;
@@ -209,7 +277,12 @@ async function findShopProductByOfferId(offerId) {
 
   const products = await prisma.warehouseProduct.findMany({
     where: { offerId: { equals: offerId, mode: "insensitive" }, archived: false },
-    include: { links: { take: 3 } },
+    select: {
+      id: true, offerId: true, name: true, brand: true, marketplace: true,
+      images: true, raw: true, currentPrice: true, targetStock: true, status: true,
+      marketplaceState: true,
+      links: { take: 3, select: { supplierArticle: true } },
+    },
     take: 5,
   });
 
@@ -217,7 +290,7 @@ async function findShopProductByOfferId(offerId) {
 
   // prefer Ozon
   const p = products.find((pr) => pr.marketplace === "ozon") || products[0];
-  const images = Array.isArray(p.images) ? p.images.filter(Boolean) : [];
+  const images = extractImages(p);
 
   // Try to get description from marketplaceState
   let description = "";
@@ -328,6 +401,7 @@ app.get("/api/shop/settings", shopCors, async (_request, response, next) => {
 
 app.post("/api/shop/orders", shopCors, async (request, response, next) => {
   try {
+    const prisma = getPrisma();
     const body = request.body || {};
     const items = Array.isArray(body.items) ? body.items : [];
     const delivery = body.delivery || {};
@@ -340,25 +414,109 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
     const totalRub = items.reduce((s, i) => s + Number(i.priceRub || 0) * Number(i.quantity || 1), 0);
     const orderId = `MV-${Date.now().toString(36).toUpperCase()}`;
 
-    // TODO: integrate Ozon Pay here — call Ozon Pay API to create payment session
-    // const paymentUrl = await createOzonPaySession({ orderId, totalRub, items, delivery });
-    // For now: return orderId and null paymentUrl
-    const paymentUrl = process.env.OZON_PAY_ENABLED === "true"
-      ? null  // placeholder — replace with real Ozon Pay call
-      : null;
+    // Resolve customer from Bearer token (optional — guest checkout also works)
+    let customerId = null;
+    const auth = request.headers.authorization || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+    const payload = verifyShopToken(token);
+    if (payload?.customerId && prisma) {
+      const cust = await prisma.shopCustomer.findUnique({ where: { id: payload.customerId }, select: { id: true } });
+      if (cust) customerId = cust.id;
+    }
+
+    // Save order to DB
+    if (prisma) {
+      await prisma.shopOrder.create({
+        data: {
+          id: orderId,
+          customerId,
+          status: "pending",
+          items: items,
+          delivery: delivery,
+          totalRub: Math.round(totalRub),
+          comment: body.comment ? cleanText(body.comment) : null,
+        },
+      });
+    }
 
     logger.info("shop order created", {
-      orderId,
-      totalRub,
-      itemCount: items.length,
+      orderId, totalRub, itemCount: items.length, customerId,
       city: cleanText(delivery.city || ""),
       phone: cleanText(delivery.phone || "").replace(/\d{4}$/, "****"),
     });
 
-    response.json({ ok: true, id: orderId, status: "pending", totalRub, paymentUrl });
+    response.json({ ok: true, id: orderId, status: "pending", totalRub, paymentUrl: null });
   } catch (error) {
     next(error);
   }
+});
+
+// ── Auth routes ───────────────────────────────────────────────────────────
+
+app.post("/api/shop/auth/register", shopCors, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "База данных недоступна" });
+    const { email, password, firstName, lastName, phone } = request.body || {};
+    if (!email || !password) return response.status(400).json({ error: "Email и пароль обязательны" });
+    if (password.length < 6) return response.status(400).json({ error: "Пароль не менее 6 символов" });
+    const existing = await prisma.shopCustomer.findUnique({ where: { email: email.toLowerCase().trim() } });
+    if (existing) return response.status(409).json({ error: "Email уже зарегистрирован" });
+    const hashed = await hashPassword(password);
+    const customer = await prisma.shopCustomer.create({
+      data: {
+        id: require("crypto").randomBytes(12).toString("hex"),
+        email: email.toLowerCase().trim(),
+        password: hashed,
+        firstName: firstName ? cleanText(firstName) : null,
+        lastName: lastName ? cleanText(lastName) : null,
+        phone: phone ? cleanText(phone) : null,
+      },
+    });
+    const token = signShopToken({ customerId: customer.id, email: customer.email });
+    response.json({ ok: true, token, customer: { id: customer.id, email: customer.email, firstName: customer.firstName, lastName: customer.lastName } });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/shop/auth/login", shopCors, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "База данных недоступна" });
+    const { email, password } = request.body || {};
+    if (!email || !password) return response.status(400).json({ error: "Email и пароль обязательны" });
+    const customer = await prisma.shopCustomer.findUnique({ where: { email: email.toLowerCase().trim() } });
+    if (!customer) return response.status(401).json({ error: "Неверный email или пароль" });
+    const valid = await verifyPassword(password, customer.password);
+    if (!valid) return response.status(401).json({ error: "Неверный email или пароль" });
+    const token = signShopToken({ customerId: customer.id, email: customer.email });
+    response.json({ ok: true, token, customer: { id: customer.id, email: customer.email, firstName: customer.firstName, lastName: customer.lastName } });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/shop/auth/me", shopCors, requireShopAuth, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "База данных недоступна" });
+    const customer = await prisma.shopCustomer.findUnique({
+      where: { id: request.shopCustomer.customerId },
+      select: { id: true, email: true, firstName: true, lastName: true, phone: true, createdAt: true },
+    });
+    if (!customer) return response.status(404).json({ error: "Пользователь не найден" });
+    response.json({ ok: true, customer });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/shop/auth/orders", shopCors, requireShopAuth, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "База данных недоступна" });
+    const orders = await prisma.shopOrder.findMany({
+      where: { customerId: request.shopCustomer.customerId },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    response.json({ ok: true, orders });
+  } catch (error) { next(error); }
 });
 
 // ── Admin routes ──────────────────────────────────────────────────────────
