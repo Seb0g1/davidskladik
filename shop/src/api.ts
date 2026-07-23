@@ -1,6 +1,8 @@
 import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse } from "./types";
 
-const BASE = "/api/shop";
+// В dev Vite-прокси перенаправляет /api/shop → davidsklad.ru.
+// В production установите VITE_API_BASE=https://davidsklad.ru
+const BASE = (import.meta.env.VITE_API_BASE ?? "") + "/api/shop";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(BASE + path, {
