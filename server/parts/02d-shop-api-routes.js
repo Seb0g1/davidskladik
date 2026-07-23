@@ -73,15 +73,17 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
   const markup = shopSettings.markup || 2.2;
 
   let usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
-  try { usdRate = await getUsdRate(); } catch (_) {}
+  try { const r = await getUsdRate(); usdRate = Number(r?.rate || r || 95); } catch (_) {}
+  if (!usdRate || usdRate < 1) usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
 
   const skip = (page - 1) * pageSize;
 
-  // Build where clause
+  // Build where clause — только товары с ценой
   const where = {
     archived: false,
     marketplace: { in: ["ozon", "yandex"] },
     NOT: { status: "deleted" },
+    currentPrice: { gt: 0 },
   };
   if (q) {
     where.OR = [
@@ -102,13 +104,14 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
   }
 
   // De-duplicate by offerId: prefer Ozon over Yandex
+  // over-fetch 2x для компенсации дублей ozon+yandex
   const [rawProducts, total] = await Promise.all([
     prisma.warehouseProduct.findMany({
       where,
       include: { links: { take: 1 } },
       orderBy: sort === "price_asc" || sort === "price_desc" ? { currentPrice: sort === "price_asc" ? "asc" : "desc" } : { name: "asc" },
-      take: pageSize * 3, // over-fetch for de-dup
-      skip: 0,
+      take: pageSize * 2,
+      skip,
     }),
     prisma.warehouseProduct.count({ where }),
   ]);
@@ -148,21 +151,23 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     const link = p.links[0];
     const snap = link ? pmMap.get(cleanText(link.supplierArticle)) : null;
     const priceUsd = snap ? Number(snap.price || 0) : 0;
+    const currentPriceNum = Number(p.currentPrice || 0);
     const priceRub = priceUsd > 0
       ? Math.round(priceUsd * usdRate * markup)
-      : p.currentPrice ? Math.round(p.currentPrice * markup / 100) : 0;
+      : currentPriceNum > 0 ? Math.round(currentPriceNum * markup / 100) : 0;
 
     const stockQty = p.targetStock ?? 0;
+    const name = cleanText(p.name || "");
 
     return {
       id: p.id,
       offerId: p.offerId,
-      name: cleanText(p.name || p.offerId),
+      name: name || cleanText(p.offerId),
       brand: cleanText(p.brand || ""),
       description: "",
       images,
       priceRub,
-      inStock: stockQty > 0 || (p.status !== "archived" && p.currentPrice != null && p.currentPrice > 0),
+      inStock: stockQty > 0 || (p.status !== "archived" && currentPriceNum > 0),
       stockQty: Math.max(0, stockQty),
       volume: extractVolume(p.name || ""),
       category: categoryFromBrand(cleanText(p.brand || "")),
@@ -170,7 +175,8 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
       rating: 0,
       reviewCount: 0,
     };
-  }).filter((p) => p.priceRub > 0 || !inStock);
+  // Всегда требуем цену > 0 и нормальное название
+  }).filter((p) => p.priceRub > 0 && p.name.length > 1);
 
   const filtered = inStock ? products.filter((p) => p.inStock) : products;
 
@@ -198,7 +204,8 @@ async function findShopProductByOfferId(offerId) {
   const shopSettings = await readShopSettings();
   const markup = shopSettings.markup || 2.2;
   let usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
-  try { usdRate = await getUsdRate(); } catch (_) {}
+  try { const r = await getUsdRate(); usdRate = Number(r?.rate || r || 95); } catch (_) {}
+  if (!usdRate || usdRate < 1) usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
 
   const products = await prisma.warehouseProduct.findMany({
     where: { offerId: { equals: offerId, mode: "insensitive" }, archived: false },
@@ -233,9 +240,10 @@ async function findShopProductByOfferId(offerId) {
     if (snaps[0]) priceUsd = Number(snaps[0].price || 0);
   }
 
+  const currentPriceNum = Number(p.currentPrice || 0);
   const priceRub = priceUsd > 0
     ? Math.round(priceUsd * usdRate * markup)
-    : p.currentPrice ? Math.round(p.currentPrice * markup / 100) : 0;
+    : currentPriceNum > 0 ? Math.round(currentPriceNum * markup / 100) : 0;
 
   return {
     id: p.id,
@@ -245,7 +253,7 @@ async function findShopProductByOfferId(offerId) {
     description,
     images,
     priceRub,
-    inStock: (p.targetStock ?? 0) > 0 || (p.status !== "archived" && p.currentPrice != null),
+    inStock: (p.targetStock ?? 0) > 0 || (p.status !== "archived" && currentPriceNum > 0),
     stockQty: Math.max(0, p.targetStock ?? 0),
     volume: extractVolume(p.name || ""),
     category: categoryFromBrand(cleanText(p.brand || "")),
