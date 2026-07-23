@@ -507,54 +507,72 @@ app.get("/api/shop/settings", shopCors, async (_request, response, next) => {
   }
 });
 
-// GET /api/shop/delivery/pvz?city=Москва — search Ozon pickup points via 2GIS API
+// GET /api/shop/delivery/pvz?city=Москва
+// Free: Nominatim geocode → Overpass API (OpenStreetMap) for Ozon pickup points. No API key needed.
 app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
   try {
     const city = String(request.query.city || "").trim().slice(0, 100);
     if (!city) return response.status(400).json({ error: "city required" });
 
-    const dgisKey = process.env.DGIS_API_KEY;
-    if (!dgisKey) {
-      logger.warn("DGIS_API_KEY not set — returning empty PVZ list");
-      return response.json({ pvz: [], city, configured: false });
-    }
-
-    // Step 1: geocode city to coordinates
+    // Step 1: geocode city → lat/lng via Nominatim (OSM, free, no key)
     const geoRes = await fetch(
-      `https://catalog.api.2gis.com/3.0/items/geocode?q=${encodeURIComponent(city + " Россия")}&key=${dgisKey}&fields=items.point&type=settlement`,
-      { signal: AbortSignal.timeout(8000) }
+      `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city + ", Россия")}&format=json&limit=1&featuretype=city`,
+      {
+        headers: { "User-Agent": "MagicVibesShop/1.0 (noreply@magicvibes.ru)" },
+        signal: AbortSignal.timeout(8000),
+      }
     );
     if (!geoRes.ok) return response.json({ pvz: [], city });
     const geoData = await geoRes.json();
-    const pt = geoData.result?.items?.[0]?.point;
-    if (!pt) return response.json({ pvz: [], city });
+    if (!geoData.length) return response.json({ pvz: [], city });
+    const lat = parseFloat(geoData[0].lat);
+    const lng = parseFloat(geoData[0].lon);
 
-    // Step 2: search for Ozon pickup points within 30 km
-    const searchRes = await fetch(
-      `https://catalog.api.2gis.com/3.0/items?q=${encodeURIComponent("пункт выдачи ozon")}&location=${pt.lon},${pt.lat}&radius=30000&key=${dgisKey}&page_size=50&sort_point=${pt.lon},${pt.lat}&fields=items.point,items.address,items.name,items.schedule`,
-      { signal: AbortSignal.timeout(10000) }
-    );
-    if (!searchRes.ok) return response.json({ pvz: [], city });
-    const searchData = await searchRes.json();
+    // Step 2: Overpass API — find Ozon nodes/ways within 25 km
+    const overpassQuery = `
+[out:json][timeout:20];
+(
+  node["brand"~"Ozon|Озон",i](around:25000,${lat},${lng});
+  node["operator"~"Ozon|Озон",i]["amenity"~"post_office|delivery_point|parcel_locker"](around:25000,${lat},${lng});
+  node["name"~"^Ozon |^Ozon$|ПВЗ Ozon|Ozon ПВЗ|Озон ПВЗ",i](around:25000,${lat},${lng});
+);
+out body;`;
+    const ovRes = await fetch("https://overpass-api.de/api/interpreter", {
+      method: "POST",
+      body: "data=" + encodeURIComponent(overpassQuery),
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!ovRes.ok) return response.json({ pvz: [], city });
+    const ovData = await ovRes.json();
 
-    const pvz = (searchData.result?.items || [])
-      .filter(it => {
-        const n = (it.name || "").toLowerCase();
-        return n.includes("ozon") || n.includes("озон");
+    const pvz = (ovData.elements || [])
+      .map(el => {
+        const t = el.tags || {};
+        const street = [t["addr:street"], t["addr:housenumber"]].filter(Boolean).join(", ");
+        const address = street || t["name"] || t["brand"] || "Ozon ПВЗ";
+        const fullAddress = [city, street].filter(Boolean).join(", ") || address;
+        return {
+          id: String(el.id),
+          name: t["name"] || t["brand"] || "Ozon",
+          address: fullAddress,
+          lat: el.lat,
+          lng: el.lon,
+          schedule: t["opening_hours"] || null,
+        };
       })
-      .map(it => ({
-        id: String(it.id || ""),
-        name: it.name || "Ozon ПВЗ",
-        address: it.address?.name || "",
-        lat: it.point?.lat,
-        lng: it.point?.lon,
-        schedule: it.schedule?.Mon?.working_hours?.[0]
-          ? `${it.schedule.Mon.working_hours[0].from}–${it.schedule.Mon.working_hours[0].to}`
-          : null,
-      }))
-      .filter(p => p.lat && p.lng && p.address);
+      .filter(p => p.lat && p.lng);
 
-    response.json({ pvz, city, count: pvz.length });
+    // Deduplicate by rounded coordinates (50m grid)
+    const seen = new Set();
+    const deduped = pvz.filter(p => {
+      const key = `${Math.round(p.lat * 2000)},${Math.round(p.lng * 2000)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    response.json({ pvz: deduped, city, count: deduped.length, source: "osm" });
   } catch (error) {
     next(error);
   }
