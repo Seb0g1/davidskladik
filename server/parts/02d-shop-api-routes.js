@@ -255,6 +255,9 @@ async function findShopProductByOfferId(offerId) {
   };
 }
 
+// ── CORS middleware for all shop routes (incl. OPTIONS preflight) ──────────
+app.use("/api/shop", shopCors);
+
 // ── Public routes ─────────────────────────────────────────────────────────
 
 app.get("/api/shop/catalog", shopCors, async (request, response, next) => {
