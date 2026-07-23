@@ -551,19 +551,82 @@ function shopOtpRedis() {
   } catch { return null; }
 }
 
-let _shopMailerTransport = null;
-function shopMailerTransport() {
-  if (_shopMailerTransport) return _shopMailerTransport;
-  const host = process.env.SHOP_SMTP_HOST;
-  const port = Number(process.env.SHOP_SMTP_PORT || 465);
-  const user = process.env.SHOP_SMTP_USER;
-  const pass = process.env.SHOP_SMTP_PASS;
-  if (!host || !user || !pass) return null;
-  try {
-    const nodemailer = require("nodemailer");
-    _shopMailerTransport = nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } });
-    return _shopMailerTransport;
-  } catch { return null; }
+// Minimal SMTPS (port 465, implicit TLS) client — no external deps
+function shopSendEmail({ to, subject, html }) {
+  return new Promise((resolve, reject) => {
+    const tls = require("tls");
+    const host = process.env.SHOP_SMTP_HOST;
+    const port = Number(process.env.SHOP_SMTP_PORT || 465);
+    const user = process.env.SHOP_SMTP_USER;
+    const pass = process.env.SHOP_SMTP_PASS;
+    if (!host || !user || !pass) return reject(new Error("SMTP not configured"));
+
+    const b64 = (s) => Buffer.from(s).toString("base64");
+    const lines = [];
+    let buf = "";
+    let done = false;
+
+    const sock = tls.connect({ host, port, rejectUnauthorized: false }, () => {
+      // greeting handled in data handler
+    });
+
+    sock.setTimeout(15000);
+    sock.on("timeout", () => { sock.destroy(new Error("SMTP timeout")); });
+
+    function send(line) { sock.write(line + "\r\n"); }
+
+    function onLine(line) {
+      const code = parseInt(line.slice(0, 3), 10);
+      const last = line[3] !== "-"; // multi-line if "-"
+      if (!last) return;
+      if (code === 220) { send("EHLO magicvibes.ru"); return; }
+      if (code === 250) {
+        if (!lines.includes("auth")) { lines.push("auth"); send("AUTH LOGIN"); return; }
+        if (!lines.includes("user")) { lines.push("user"); send(b64(user)); return; }
+        if (!lines.includes("rcpt")) { lines.push("rcpt"); send(`RCPT TO:<${to}>`); return; }
+        if (!lines.includes("data")) { lines.push("data"); send("DATA"); return; }
+        if (!lines.includes("quit")) { lines.push("quit"); send("QUIT"); return; }
+        return;
+      }
+      if (code === 334) {
+        if (!lines.includes("user")) { lines.push("user"); send(b64(user)); return; }
+        send(b64(pass));
+        return;
+      }
+      if (code === 235) {
+        send(`MAIL FROM:<${user}>`);
+        return;
+      }
+      if (code === 354) {
+        const body = [
+          `From: "Magic Vibes" <${user}>`,
+          `To: ${to}`,
+          `Subject: ${subject}`,
+          `MIME-Version: 1.0`,
+          `Content-Type: text/html; charset=utf-8`,
+          ``,
+          html,
+          `.`,
+        ].join("\r\n");
+        sock.write(body + "\r\n");
+        return;
+      }
+      if (code === 221) { sock.destroy(); if (!done) { done = true; resolve(); } return; }
+      if (code >= 400) { sock.destroy(new Error(`SMTP error ${code}: ${line.slice(4)}`)); return; }
+    }
+
+    sock.on("data", (chunk) => {
+      buf += chunk.toString();
+      let idx;
+      while ((idx = buf.indexOf("\r\n")) !== -1) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 2);
+        onLine(line);
+      }
+    });
+    sock.on("error", (err) => { if (!done) { done = true; reject(err); } });
+    sock.on("close", () => { if (!done) { done = true; resolve(); } });
+  });
 }
 
 function shopOtpEmailHtml(code) {
@@ -598,8 +661,7 @@ app.post("/api/shop/auth/send-code", shopCors, async (request, response, next) =
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       return response.status(400).json({ error: "Укажите корректный email" });
     }
-    const mailer = shopMailerTransport();
-    if (!mailer) return response.status(503).json({ error: "Email-сервис не настроен" });
+    if (!process.env.SHOP_SMTP_HOST) return response.status(503).json({ error: "Email-сервис не настроен" });
 
     const redis = shopOtpRedis();
     const normalEmail = email.toLowerCase().trim();
@@ -617,8 +679,7 @@ app.post("/api/shop/auth/send-code", shopCors, async (request, response, next) =
       await redis.set(rateLimitKey, "1", "EX", 60);
     }
 
-    await mailer.sendMail({
-      from: `"Magic Vibes" <${process.env.SHOP_SMTP_USER}>`,
+    await shopSendEmail({
       to: normalEmail,
       subject: `${code} — код для входа на Magic Vibes`,
       html: shopOtpEmailHtml(code),
