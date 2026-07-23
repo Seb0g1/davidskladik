@@ -19,8 +19,10 @@ interface ShopBanner {
 interface ShopCategory {
   id: string; name: string; slug: string; imageUrl?: string; order: number; filterTag?: string;
 }
+interface ShopMarkupRule { minUsd: number; coefficient: number }
 interface ShopSettings {
-  markup: number; shopName: string; shopDescription: string;
+  markup: number; markupRules: ShopMarkupRule[];
+  shopName: string; shopDescription: string;
   contactEmail?: string; contactPhone?: string; deliveryDays?: number; freeDeliveryFrom?: number;
 }
 interface ShopCustomer {
@@ -544,9 +546,15 @@ function SettingsTab() {
     queryFn: () => apiFetch<ShopSettings>("/api/shop/admin/settings"),
   });
   const [form, setForm] = useState<Partial<ShopSettings>>({});
+  const [rules, setRules] = useState<ShopMarkupRule[]>([]);
   const [saved, setSaved] = useState(false);
 
-  useEffect(() => { if (settings) setForm(settings); }, [settings]);
+  useEffect(() => {
+    if (settings) {
+      setForm(settings);
+      setRules(Array.isArray(settings.markupRules) ? settings.markupRules : []);
+    }
+  }, [settings]);
 
   const saveMut = useMutation({
     mutationFn: (d: Partial<ShopSettings>) => apiFetch<{ ok: boolean }>("/api/shop/admin/settings", {
@@ -558,7 +566,16 @@ function SettingsTab() {
   const setF = (k: keyof ShopSettings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: ["markup", "deliveryDays", "freeDeliveryFrom"].includes(k) ? Number(e.target.value) : e.target.value }));
 
+  const addRule = () => setRules(r => [...r, { minUsd: 0, coefficient: form.markup ?? 2.2 }]);
+  const removeRule = (i: number) => setRules(r => r.filter((_, idx) => idx !== i));
+  const updateRule = (i: number, field: keyof ShopMarkupRule, val: string) =>
+    setRules(r => r.map((rule, idx) => idx === i ? { ...rule, [field]: Number(val) } : rule));
+
+  const handleSave = () => saveMut.mutate({ ...form, markupRules: rules });
+
   if (isLoading) return <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю…</div>;
+
+  const sortedRules = [...rules].sort((a, b) => a.minUsd - b.minUsd);
 
   return (
     <div className="page-section" style={{ maxWidth: 760 }}>
@@ -590,13 +607,13 @@ function SettingsTab() {
         <h3>Цены и доставка</h3>
         <div className="mv-field-grid">
           <div className="mv-field">
-            <label>Коэффициент наценки</label>
+            <label>Коэффициент наценки (по умолчанию)</label>
             <div className="mv-form-inline">
               <input type="number" step="0.05" min="0.5" max="20" value={form.markup ?? 2.2} onChange={setF("markup")} style={{ width: 110 }} />
               <span style={{ color: "var(--muted)", fontSize: 12 }}>× (USD × курс)</span>
             </div>
             <span style={{ color: "var(--muted)", fontSize: 11, marginTop: 4 }}>
-              Цена = PM (USD) × курс × {form.markup ?? 2.2}
+              Применяется, если ни одно гибкое правило не совпало
             </span>
           </div>
           <div className="mv-field">
@@ -607,6 +624,55 @@ function SettingsTab() {
             <label>Срок доставки (дней)</label>
             <input type="number" min="1" max="30" value={form.deliveryDays ?? 3} onChange={setF("deliveryDays")} />
           </div>
+        </div>
+
+        {/* Flexible markup rules */}
+        <div className="mv-field" style={{ marginTop: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+            <label style={{ margin: 0 }}>Гибкие правила наценки</label>
+            <button type="button" className="btn-outline" style={{ fontSize: 12, padding: "4px 10px", display: "flex", alignItems: "center", gap: 4 }} onClick={addRule}>
+              <Plus size={13} /> Добавить правило
+            </button>
+          </div>
+          <p style={{ color: "var(--muted)", fontSize: 11, marginBottom: 10 }}>
+            Правило применяется, если цена закупки ≥ minUSD. При нескольких совпадениях побеждает наибольший порог.
+          </p>
+
+          {sortedRules.length === 0 ? (
+            <div style={{ color: "var(--muted)", fontSize: 12, padding: "10px 0" }}>
+              Гибких правил нет — используется коэффициент по умолчанию
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {sortedRules.map((rule, i) => {
+                const origIdx = rules.indexOf(rule);
+                return (
+                  <div key={i} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 12px", background: "var(--surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
+                    <span style={{ color: "var(--muted)", fontSize: 12, flexShrink: 0 }}>Цена от</span>
+                    <input
+                      type="number" min="0" step="1"
+                      value={rule.minUsd}
+                      onChange={e => updateRule(origIdx, "minUsd", e.target.value)}
+                      style={{ width: 80, fontSize: 13 }}
+                    />
+                    <span style={{ color: "var(--muted)", fontSize: 12, flexShrink: 0 }}>USD → коэф.</span>
+                    <input
+                      type="number" min="0.5" max="20" step="0.05"
+                      value={rule.coefficient}
+                      onChange={e => updateRule(origIdx, "coefficient", e.target.value)}
+                      style={{ width: 90, fontSize: 13 }}
+                    />
+                    <span style={{ color: "var(--muted)", fontSize: 11, flex: 1 }}>
+                      ≈ {(rule.coefficient * 100 - 100).toFixed(0)}% наценка
+                    </span>
+                    <button type="button" onClick={() => removeRule(origIdx)} style={{ color: "var(--danger)", background: "none", border: "none", cursor: "pointer", padding: 4 }}>
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
@@ -619,7 +685,7 @@ function SettingsTab() {
         <div className="warning-strip">Ошибка сохранения</div>
       )}
 
-      <button onClick={() => saveMut.mutate(form)} disabled={saveMut.isPending} className="primary-action">
+      <button onClick={handleSave} disabled={saveMut.isPending} className="primary-action">
         {saveMut.isPending ? <Loader2 size={16} className="spin" /> : <Save size={16} />} Сохранить настройки
       </button>
     </div>

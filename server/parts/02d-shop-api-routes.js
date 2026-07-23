@@ -92,6 +92,7 @@ function shopCors(request, response, next) {
 function defaultShopSettings() {
   return {
     markup: Number(process.env.DEFAULT_SHOP_MARKUP || 2.2),
+    markupRules: [],
     shopName: "Magic Vibes",
     shopDescription: "Оригинальная парфюмерия и косметика с доставкой по России",
     contactEmail: process.env.SHOP_CONTACT_EMAIL || "",
@@ -99,6 +100,21 @@ function defaultShopSettings() {
     deliveryDays: 3,
     freeDeliveryFrom: 3000,
   };
+}
+
+function resolveShopMarkup(priceUsd, defaultMarkup, rules) {
+  if (!Array.isArray(rules) || !rules.length || !(priceUsd > 0)) return defaultMarkup;
+  const sorted = [...rules].filter(r => Number(r.coefficient) > 0).sort((a, b) => b.minUsd - a.minUsd);
+  const matched = sorted.find(r => priceUsd >= Number(r.minUsd || 0));
+  return Number(matched?.coefficient) > 0 ? Number(matched.coefficient) : defaultMarkup;
+}
+
+function normalizeShopMarkupRules(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map(r => ({ minUsd: Math.max(0, Number(r.minUsd ?? r.min_usd ?? 0)), coefficient: Number(r.coefficient ?? 0) }))
+    .filter(r => Number.isFinite(r.minUsd) && Number.isFinite(r.coefficient) && r.coefficient > 0)
+    .sort((a, b) => a.minUsd - b.minUsd);
 }
 
 async function readShopSettings() {
@@ -132,7 +148,8 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
   if (!prisma) return { products: [], total: 0, brands: [] };
 
   const shopSettings = await readShopSettings();
-  const markup = shopSettings.markup || 2.2;
+  const defaultMarkup = shopSettings.markup || 2.2;
+  const shopMarkupRules = shopSettings.markupRules || [];
 
   let usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
   try { const r = await getUsdRate(); usdRate = Number(r?.rate || r || 95); } catch (_) {}
@@ -229,6 +246,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     const snap = link ? pmMap.get(cleanText(link.supplierArticle)) : null;
     const priceUsd = snap ? Number(snap.price || 0) : 0;
     const currentPriceNum = Number(p.currentPrice || 0);
+    const markup = resolveShopMarkup(priceUsd, defaultMarkup, shopMarkupRules);
     const priceRub = priceUsd > 0
       ? Math.round(priceUsd * usdRate * markup)
       : currentPriceNum > 0 ? Math.round(currentPriceNum * markup / 100) : 0;
@@ -296,7 +314,8 @@ async function findShopProductByOfferId(offerId) {
   if (!prisma) return null;
 
   const shopSettings = await readShopSettings();
-  const markup = shopSettings.markup || 2.2;
+  const defaultMarkupSingle = shopSettings.markup || 2.2;
+  const shopMarkupRulesSingle = shopSettings.markupRules || [];
   let usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
   try { const r = await getUsdRate(); usdRate = Number(r?.rate || r || 95); } catch (_) {}
   if (!usdRate || usdRate < 1) usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
@@ -340,9 +359,10 @@ async function findShopProductByOfferId(offerId) {
   }
 
   const currentPriceNum = Number(p.currentPrice || 0);
+  const resolvedMarkup = resolveShopMarkup(priceUsd, defaultMarkupSingle, shopMarkupRulesSingle);
   const priceRub = priceUsd > 0
-    ? Math.round(priceUsd * usdRate * markup)
-    : currentPriceNum > 0 ? Math.round(currentPriceNum * markup / 100) : 0;
+    ? Math.round(priceUsd * usdRate * resolvedMarkup)
+    : currentPriceNum > 0 ? Math.round(currentPriceNum * resolvedMarkup / 100) : 0;
   const _pCat = extractProductCategory(cleanText(p.name || ""));
 
   return {
@@ -684,12 +704,13 @@ app.get("/api/shop/admin/settings", requireAdmin, async (_request, response, nex
 app.patch("/api/shop/admin/settings", requireAdmin, async (request, response, next) => {
   try {
     const current = await readShopSettings();
-    const allowed = ["markup", "shopName", "shopDescription", "contactEmail", "contactPhone", "deliveryDays", "freeDeliveryFrom"];
+    const allowed = ["markup", "markupRules", "shopName", "shopDescription", "contactEmail", "contactPhone", "deliveryDays", "freeDeliveryFrom"];
     const updates = {};
     for (const k of allowed) {
       if (request.body[k] !== undefined) updates[k] = request.body[k];
     }
     if (updates.markup !== undefined) updates.markup = Math.max(0.5, Math.min(20, Number(updates.markup) || current.markup));
+    if (updates.markupRules !== undefined) updates.markupRules = normalizeShopMarkupRules(updates.markupRules);
     const merged = { ...current, ...updates };
     const appSettings = await readAppSettings();
     await writeAppSettings({ ...appSettings, [SHOP_SETTINGS_KEY]: merged });
