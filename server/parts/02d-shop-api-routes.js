@@ -631,3 +631,89 @@ app.patch("/api/shop/admin/settings", requireAdmin, async (request, response, ne
     response.json({ ok: true, settings: merged });
   } catch (error) { next(error); }
 });
+
+// Orders (admin)
+app.get("/api/shop/admin/orders", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.json({ orders: [], total: 0 });
+    const page = Math.max(1, Number(request.query.page || 1));
+    const pageSize = Math.min(50, Math.max(1, Number(request.query.pageSize || 20)));
+    const status = request.query.status || undefined;
+    const where = status ? { status } : {};
+    const [orders, total] = await Promise.all([
+      prisma.shopOrder.findMany({
+        where,
+        include: { customer: { select: { id: true, email: true, firstName: true, lastName: true } } },
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.shopOrder.count({ where }),
+    ]);
+    response.json({ ok: true, orders, total, page, pageSize });
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/shop/admin/orders/:id", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "DB unavailable" });
+    const allowed = ["pending", "confirmed", "picking", "shipped", "delivered", "cancelled"];
+    const { status } = request.body;
+    if (!allowed.includes(status)) return response.status(400).json({ error: "Invalid status" });
+    const order = await prisma.shopOrder.update({
+      where: { id: request.params.id },
+      data: { status },
+    });
+    response.json({ ok: true, order });
+  } catch (error) { next(error); }
+});
+
+// Customers (admin)
+app.get("/api/shop/admin/customers", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.json({ customers: [], total: 0 });
+    const page = Math.max(1, Number(request.query.page || 1));
+    const pageSize = Math.min(50, Math.max(1, Number(request.query.pageSize || 20)));
+    const [customers, total] = await Promise.all([
+      prisma.shopCustomer.findMany({
+        select: { id: true, email: true, firstName: true, lastName: true, phone: true, createdAt: true, _count: { select: { orders: true } } },
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.shopCustomer.count(),
+    ]);
+    response.json({ ok: true, customers, total, page, pageSize });
+  } catch (error) { next(error); }
+});
+
+// Stats (admin)
+app.get("/api/shop/admin/stats", requireAdmin, async (_request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.json({ ok: true, orders: 0, revenue: 0, customers: 0, todayOrders: 0 });
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const weekStart = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const [totalOrders, totalCustomers, todayOrders, weekOrders, revenueAgg, weekRevenueAgg] = await Promise.all([
+      prisma.shopOrder.count(),
+      prisma.shopCustomer.count(),
+      prisma.shopOrder.count({ where: { createdAt: { gte: todayStart } } }),
+      prisma.shopOrder.count({ where: { createdAt: { gte: weekStart } } }),
+      prisma.shopOrder.aggregate({ _sum: { totalRub: true }, where: { status: { not: "cancelled" } } }),
+      prisma.shopOrder.aggregate({ _sum: { totalRub: true }, where: { status: { not: "cancelled" }, createdAt: { gte: weekStart } } }),
+    ]);
+    response.json({
+      ok: true,
+      totalOrders,
+      totalCustomers,
+      todayOrders,
+      weekOrders,
+      totalRevenue: revenueAgg._sum.totalRub || 0,
+      weekRevenue: weekRevenueAgg._sum.totalRub || 0,
+    });
+  } catch (error) { next(error); }
+});
