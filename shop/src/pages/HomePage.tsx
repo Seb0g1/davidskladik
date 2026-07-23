@@ -19,6 +19,7 @@ const BRANDS = [
 ];
 
 const CAT_ICONS: Record<string, string> = {
+  testers:   "🧪",
   parfum:    "🌹",
   edp:       "🫧",
   edt:       "💧",
@@ -31,6 +32,7 @@ const CAT_ICONS: Record<string, string> = {
 };
 
 const CAT_COLORS: Record<string, { bg: string; border: string; text: string }> = {
+  testers:   { bg: "#f0f9ff", border: "#7dd3fc", text: "#0369a1" },
   parfum:    { bg: "#fdf2f8", border: "#f9a8d4", text: "#9d174d" },
   edp:       { bg: "#f5f3ff", border: "#c4b5fd", text: "#5b21b6" },
   edt:       { bg: "#eff6ff", border: "#93c5fd", text: "#1e40af" },

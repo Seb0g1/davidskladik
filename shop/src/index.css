@@ -74,3 +74,51 @@
   from { opacity: 0; transform: scale(0.94) translateY(8px); }
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
+
+/* Entrance animations */
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(28px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-16px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes popIn {
+  0%   { opacity: 0; transform: scale(0.88); }
+  70%  { transform: scale(1.04); }
+  100% { opacity: 1; transform: scale(1); }
+}
+.anim-slide-up   { animation: slideUp 0.45s cubic-bezier(0.22,1,0.36,1) both; }
+.anim-slide-in   { animation: slideIn 0.35s cubic-bezier(0.22,1,0.36,1) both; }
+.anim-pop-in     { animation: popIn  0.4s  cubic-bezier(0.22,1,0.36,1) both; }
+.anim-fade-in    { animation: fadeIn 0.4s ease both; }
+
+/* Carousel */
+.carousel-track {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding-bottom: 4px;
+}
+.carousel-track::-webkit-scrollbar { display: none; }
+.carousel-item { scroll-snap-align: start; flex-shrink: 0; }
+
+/* Carousel arrow button */
+.carousel-btn {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  z-index: 10; width: 36px; height: 36px; border-radius: 50%;
+  background: #fff; box-shadow: 0 2px 12px rgba(0,0,0,0.14);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; font-weight: 600; color: #1d1d1f;
+  cursor: pointer; border: none; transition: all 0.18s;
+  opacity: 0;
+}
+.carousel-btn:hover { background: #7c3aed; color: #fff; box-shadow: 0 4px 20px rgba(124,58,237,0.35); }
+.carousel-wrapper:hover .carousel-btn { opacity: 1; }
+.carousel-btn.left  { left: -12px; }
+.carousel-btn.right { right: -12px; }

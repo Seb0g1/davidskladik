@@ -183,7 +183,10 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
         images: true, raw: true, currentPrice: true, targetStock: true, status: true,
         links: { take: 2, select: { supplierArticle: true } },
       },
-      orderBy: sort === "price_asc" || sort === "price_desc" ? { currentPrice: sort === "price_asc" ? "asc" : "desc" } : { name: "asc" },
+      orderBy: [
+        { marketplace: "asc" }, // ozon < yandex — ensures ozon version wins de-dup
+        sort === "price_asc" ? { currentPrice: "asc" } : sort === "price_desc" ? { currentPrice: "desc" } : { name: "asc" },
+      ],
       take: pageSize * 2,
       skip,
     }),
@@ -265,8 +268,9 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
 }
 
 const SHOP_CATEGORIES = [
-  { slug: "parfum", label: "Духи",              pattern: /духи|extrait|pure[\s-]parfum/i,                               keywords: ["духи", "extrait", "pure parfum"] },
-  { slug: "edp",    label: "Парфюмерная вода",  pattern: /парфюм[\s-]?(ерная)?\s*вода|eau[\s-]de[\s-]parfum|\bedp\b/i,  keywords: ["парфюмерная вода", "eau de parfum"] },
+  { slug: "testers", label: "Тестеры и отливанты", pattern: /тестер|tester|отливант|decant|пробник/i,                    keywords: ["тестер", "tester", "отливант", "decant", "пробник"] },
+  { slug: "parfum",  label: "Духи",               pattern: /духи|extrait|pure[\s-]parfum/i,                              keywords: ["духи", "extrait", "pure parfum"] },
+  { slug: "edp",     label: "Парфюмерная вода",   pattern: /парфюм[\s-]?(ерная)?\s*вода|eau[\s-]de[\s-]parfum|\bedp\b/i, keywords: ["парфюмерная вода", "eau de parfum"] },
   { slug: "edt",    label: "Туалетная вода",    pattern: /туалет\w*\s*вода|eau[\s-]de[\s-]toilette|\bedt\b/i,           keywords: ["туалетная вода", "eau de toilette"] },
   { slug: "edc",    label: "Одеколон",          pattern: /одеколон|eau[\s-]de[\s-]cologne|\bedc\b/i,                    keywords: ["одеколон", "eau de cologne"] },
   { slug: "deo",    label: "Дезодоранты",       pattern: /дезодорант|антиперспирант|deodorant/i,                        keywords: ["дезодорант", "антиперспирант", "deodorant"] },
@@ -429,7 +433,7 @@ app.get("/api/shop/auto-categories", shopCors, async (_request, response, next) 
       const cat = extractProductCategory(cleanText(p.name || ""));
       counts[cat.slug] = (counts[cat.slug] || 0) + 1;
     }
-    const ORDER = ["edp", "edt", "parfum", "edc", "deo", "sets", "body", "home"];
+    const ORDER = ["edp", "edt", "parfum", "edc", "testers", "deo", "sets", "body", "home"];
     const result = ORDER
       .map((slug) => {
         const def = SHOP_CATEGORIES.find((c) => c.slug === slug);
