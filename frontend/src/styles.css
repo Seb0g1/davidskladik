@@ -7714,3 +7714,51 @@ textarea:focus-visible,
   gap: 6px;
 }
 .assembly-sheet-body .picking-row { border-radius: 8px; }
+
+/* ===== Magic Vibes Shop Admin ===== */
+.mv-shop-page .orders-table .table-head,
+.mv-shop-page .orders-table .table-row {
+  grid-template-columns: minmax(130px, 1.2fr) minmax(130px, 1fr) minmax(70px, .4fr) minmax(100px, .7fr) minmax(130px, .9fr);
+}
+.mv-shop-page .customers-table .table-head,
+.mv-shop-page .customers-table .table-row {
+  grid-template-columns: minmax(140px, 1fr) minmax(140px, 1fr) minmax(110px, .8fr) minmax(60px, .4fr) minmax(130px, .8fr);
+}
+.mv-shop-page .banners-table .table-head,
+.mv-shop-page .banners-table .table-row {
+  grid-template-columns: 80px minmax(130px, 1fr) minmax(120px, .8fr) 90px 74px;
+}
+.mv-shop-page .cats-table .table-head,
+.mv-shop-page .cats-table .table-row {
+  grid-template-columns: minmax(130px, 1fr) minmax(120px, .8fr) minmax(100px, .6fr) 74px;
+}
+.mv-order-expand {
+  border-top: 1px solid var(--line);
+  background: rgba(8, 17, 31, .55);
+  padding: 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.mv-order-expand strong { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; text-transform: uppercase; letter-spacing: .04em; }
+.mv-order-expand dl { display: grid; gap: 4px; margin: 0; }
+.mv-order-expand dt { font-size: 11px; color: var(--muted); }
+.mv-order-expand dd { margin: 0; font-size: 13px; }
+.mv-order-status-bar { border-top: 1px solid var(--line); padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mv-banner-preview { width: 72px; height: 44px; object-fit: cover; background: rgba(8,17,31,.6); display: block; }
+.mv-form-section { border: 1px solid var(--line); background: var(--panel); padding: 16px; display: grid; gap: 14px; border-radius: 8px; margin-bottom: 14px; }
+.mv-form-section h3 { margin: 0 0 4px; font-size: 14px; font-weight: 700; }
+.mv-field-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+.mv-field { display: grid; gap: 5px; }
+.mv-field label { font-size: 11px; font-weight: 800; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.mv-field input, .mv-field select, .mv-field textarea {
+  min-height: 38px; border: 1px solid var(--line); background: var(--field-bg);
+  color: var(--text); padding: 0 10px; outline: none; font: inherit; border-radius: 6px;
+}
+.mv-field textarea { min-height: 80px; padding: 8px 10px; resize: vertical; }
+.mv-form-inline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+@media (max-width: 700px) {
+  .mv-order-expand { grid-template-columns: 1fr; }
+  .mv-shop-page .orders-table .table-head span:nth-child(4),
+  .mv-shop-page .orders-table .table-row span:nth-child(4) { display: none; }
+}

@@ -3,9 +3,12 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ExternalLink, ShoppingBag, Users, TrendingUp, Package,
   Plus, Trash2, Edit2, Save, X, Loader2, Image as ImageIcon,
-  ChevronLeft, ChevronRight, Check, AlertCircle, RefreshCw,
+  ChevronLeft, ChevronRight, Check, RefreshCw,
   LayoutDashboard, Settings, Tag, Image, ClipboardList, UserCheck,
+  ChevronDown, ChevronUp,
 } from "lucide-react";
+import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -14,8 +17,7 @@ interface ShopBanner {
   linkUrl?: string; linkText?: string; active: boolean; order: number;
 }
 interface ShopCategory {
-  id: string; name: string; slug: string; imageUrl?: string;
-  order: number; filterTag?: string;
+  id: string; name: string; slug: string; imageUrl?: string; order: number; filterTag?: string;
 }
 interface ShopSettings {
   markup: number; shopName: string; shopDescription: string;
@@ -27,7 +29,7 @@ interface ShopCustomer {
 }
 interface ShopOrder {
   id: string; status: string; totalRub: number; items: unknown[];
-  delivery: { firstName?: string; lastName?: string; phone?: string; email?: string; city?: string };
+  delivery: { firstName?: string; lastName?: string; phone?: string; email?: string; city?: string; address?: string; pvz?: string };
   comment?: string; createdAt: string;
   customer?: { id: string; email: string; firstName?: string; lastName?: string } | null;
 }
@@ -52,65 +54,20 @@ const STATUS_LABELS: Record<string, string> = {
   pending: "Новый", confirmed: "Подтверждён", picking: "Комплектация",
   shipped: "Отправлен", delivered: "Доставлен", cancelled: "Отменён",
 };
-const STATUS_COLORS: Record<string, string> = {
-  pending: "bg-amber-100 text-amber-700",
-  confirmed: "bg-blue-100 text-blue-700",
-  picking: "bg-indigo-100 text-indigo-700",
-  shipped: "bg-violet-100 text-violet-700",
-  delivered: "bg-green-100 text-green-700",
-  cancelled: "bg-red-100 text-red-600",
+
+const STATUS_TONE: Record<string, string> = {
+  pending: "warn", confirmed: "info", picking: "info",
+  shipped: "", delivered: "success", cancelled: "danger",
 };
 
 function fmt(n: number) { return n.toLocaleString("ru-RU"); }
 function fmtDate(s: string) {
   const d = new Date(s);
-  return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
-function customerName(c: { firstName?: string; lastName?: string; email: string } | null | undefined, delivery?: ShopOrder["delivery"]) {
-  const from = c || delivery;
-  if (!from) return "—";
-  const name = [from.firstName, (from as { lastName?: string }).lastName].filter(Boolean).join(" ");
-  return name || (from as { email?: string }).email || (delivery?.phone ?? "—");
-}
-
-// ── Field input helper ────────────────────────────────────────────────────────
-
-function Field({ label, value, onChange, placeholder, type = "text" }: {
-  label: string; value: string | number; onChange: (v: string) => void;
-  placeholder?: string; type?: string;
-}) {
-  return (
-    <div>
-      <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">{label}</label>
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition-all bg-gray-50 focus:bg-white"
-      />
-    </div>
-  );
-}
-
-// ── Stat Card ─────────────────────────────────────────────────────────────────
-
-function StatCard({ label, value, sub, icon: Icon, color }: {
-  label: string; value: string | number; sub?: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>; color: string;
-}) {
-  return (
-    <div className="bg-white rounded-2xl p-5 border border-gray-100 flex items-start gap-4">
-      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center flex-shrink-0 ${color}`}>
-        <Icon size={22} className="text-white" />
-      </div>
-      <div>
-        <div className="text-2xl font-bold text-gray-900 tracking-tight">{value}</div>
-        <div className="text-sm text-gray-500 mt-0.5">{label}</div>
-        {sub && <div className="text-xs text-gray-400 mt-0.5">{sub}</div>}
-      </div>
-    </div>
-  );
+function customerName(c?: ShopOrder["customer"], d?: ShopOrder["delivery"]) {
+  const n = [c?.firstName ?? d?.firstName, c?.lastName ?? d?.lastName].filter(Boolean).join(" ");
+  return n || c?.email || d?.phone || "—";
 }
 
 // ── Pagination ────────────────────────────────────────────────────────────────
@@ -119,17 +76,11 @@ function Pagination({ page, total, pageSize, onChange }: { page: number; total: 
   const totalPages = Math.ceil(total / pageSize);
   if (totalPages <= 1) return null;
   return (
-    <div className="flex items-center justify-between pt-4">
-      <span className="text-sm text-gray-500">{fmt(total)} записей</span>
-      <div className="flex items-center gap-1">
-        <button onClick={() => onChange(page - 1)} disabled={page <= 1} className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 disabled:opacity-40 hover:border-violet-400 transition-colors">
-          <ChevronLeft size={15} />
-        </button>
-        <span className="px-3 text-sm font-medium">{page} / {totalPages}</span>
-        <button onClick={() => onChange(page + 1)} disabled={page >= totalPages} className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 disabled:opacity-40 hover:border-violet-400 transition-colors">
-          <ChevronRight size={15} />
-        </button>
-      </div>
+    <div className="pager">
+      <span style={{ color: "var(--muted)", fontSize: 12 }}>{fmt(total)} записей</span>
+      <button onClick={() => onChange(page - 1)} disabled={page <= 1} className="secondary-action icon-action"><ChevronLeft size={15} /></button>
+      <span style={{ fontSize: 13 }}>{page} / {totalPages}</span>
+      <button onClick={() => onChange(page + 1)} disabled={page >= totalPages} className="secondary-action icon-action"><ChevronRight size={15} /></button>
     </div>
   );
 }
@@ -142,70 +93,52 @@ function DashboardTab() {
     queryFn: () => apiFetch<Stats>("/api/shop/admin/stats"),
     refetchInterval: 60_000,
   });
-  const { data: ordersData } = useQuery<{ orders: ShopOrder[]; total: number }>({
-    queryKey: ["shop-admin-orders", { page: 1 }],
-    queryFn: () => apiFetch<{ orders: ShopOrder[]; total: number }>("/api/shop/admin/orders?pageSize=5"),
+  const { data: ordersData } = useQuery<{ orders: ShopOrder[] }>({
+    queryKey: ["shop-admin-orders", { page: 1, statusFilter: "" }],
+    queryFn: () => apiFetch<{ orders: ShopOrder[] }>("/api/shop/admin/orders?pageSize=5"),
   });
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-gray-900">Обзор магазина</h2>
-        <button onClick={() => refetch()} className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-violet-600 transition-colors">
-          <RefreshCw size={14} /> Обновить
+    <div className="page-section">
+      <div className="section-title">
+        <div><h2>Обзор магазина</h2></div>
+        <button onClick={() => void refetch()} className="secondary-action" type="button" disabled={isLoading}>
+          <RefreshCw size={14} className={isLoading ? "spin" : ""} /> Обновить
         </button>
       </div>
 
-      {isLoading ? (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          {[...Array(4)].map((_, i) => <div key={i} className="h-24 bg-gray-100 rounded-2xl animate-pulse" />)}
-        </div>
+      <section className="dashboard-metrics">
+        <Stat label="Заказов всего" value={isLoading ? "…" : fmt(stats?.totalOrders ?? 0)} icon={<ShoppingBag size={17} />} delta={`Сегодня: ${stats?.todayOrders ?? 0}`} tone="accent" />
+        <Stat label="Выручка, ₽" value={isLoading ? "…" : fmt(stats?.totalRevenue ?? 0)} icon={<TrendingUp size={17} />} delta={`За неделю: ${fmt(stats?.weekRevenue ?? 0)} ₽`} tone="success" />
+        <Stat label="За неделю" value={isLoading ? "…" : (stats?.weekOrders ?? 0)} icon={<Package size={17} />} delta="заказов" />
+        <Stat label="Покупатели" value={isLoading ? "…" : fmt(stats?.totalCustomers ?? 0)} icon={<Users size={17} />} delta="зарегистрировано" />
+      </section>
+
+      <div className="section-title"><div><h3>Последние заказы</h3></div></div>
+
+      {!ordersData?.orders.length ? (
+        <div className="soft-empty"><Package size={18} /> Заказов пока нет</div>
       ) : (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard label="Заказов всего" value={fmt(stats?.totalOrders ?? 0)} sub={`Сегодня: ${stats?.todayOrders ?? 0}`} icon={ShoppingBag} color="bg-violet-500" />
-          <StatCard label="Выручка, ₽" value={fmt(stats?.totalRevenue ?? 0)} sub={`За неделю: ${fmt(stats?.weekRevenue ?? 0)} ₽`} icon={TrendingUp} color="bg-emerald-500" />
-          <StatCard label="За неделю" value={stats?.weekOrders ?? 0} sub="заказов" icon={Package} color="bg-blue-500" />
-          <StatCard label="Покупатели" value={fmt(stats?.totalCustomers ?? 0)} sub="зарегистрировано" icon={Users} color="bg-amber-500" />
+        <div className="table-panel">
+          <div className="table-head" style={{ display: "grid", gridTemplateColumns: "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)", gap: 10 }}>
+            <span>Заказ / Дата</span><span>Покупатель</span><span>Товары</span><span>Сумма</span><span>Статус</span>
+          </div>
+          {ordersData.orders.map((o) => (
+            <div key={o.id} className="table-row" style={{ display: "grid", gridTemplateColumns: "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)", gap: 10 }}>
+              <span>
+                <div style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{o.id}</div>
+                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{fmtDate(o.createdAt)}</div>
+              </span>
+              <span style={{ fontSize: 13 }}>{customerName(o.customer ?? undefined, o.delivery)}</span>
+              <span style={{ color: "var(--muted)", fontSize: 12 }}>{Array.isArray(o.items) ? `${o.items.length} поз.` : "—"}</span>
+              <span style={{ fontWeight: 600 }}>{fmt(o.totalRub)} ₽</span>
+              <span>
+                <span className={`pill ${STATUS_TONE[o.status] ?? ""}`}>{STATUS_LABELS[o.status] ?? o.status}</span>
+              </span>
+            </div>
+          ))}
         </div>
       )}
-
-      {/* Recent orders */}
-      <div>
-        <h3 className="font-semibold text-gray-800 mb-3">Последние заказы</h3>
-        {ordersData?.orders.length === 0 ? (
-          <div className="text-center py-10 text-gray-400 border-2 border-dashed border-gray-200 rounded-2xl text-sm">Заказов пока нет</div>
-        ) : (
-          <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 border-b border-gray-100">
-                <tr>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Заказ</th>
-                  <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden sm:table-cell">Покупатель</th>
-                  <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Сумма</th>
-                  <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Статус</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {ordersData?.orders.map((o) => (
-                  <tr key={o.id} className="hover:bg-gray-50/50 transition-colors">
-                    <td className="px-4 py-3">
-                      <div className="font-mono text-xs font-bold text-gray-800">{o.id}</div>
-                      <div className="text-xs text-gray-400 mt-0.5">{fmtDate(o.createdAt)}</div>
-                    </td>
-                    <td className="px-4 py-3 hidden sm:table-cell text-gray-700">{customerName(o.customer, o.delivery)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-gray-900">{fmt(o.totalRub)} ₽</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[o.status] ?? "bg-gray-100 text-gray-600"}`}>
-                        {STATUS_LABELS[o.status] ?? o.status}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -231,19 +164,19 @@ function OrdersTab() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["shop-admin-orders"] }),
   });
 
+  const COL = "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)";
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-3">
-        <h2 className="text-lg font-bold text-gray-900">Заказы</h2>
-        <div className="flex gap-1.5 flex-wrap">
+    <div className="page-section">
+      <div className="section-title" style={{ flexWrap: "wrap", gap: "10px" }}>
+        <div><h2>Заказы</h2></div>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {["", ...Object.keys(STATUS_LABELS)].map((s) => (
             <button
               key={s}
               onClick={() => { setStatusFilter(s); setPage(1); }}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${statusFilter === s
-                ? "bg-violet-600 text-white"
-                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-              }`}
+              className={`secondary-action${statusFilter === s ? " is-active" : ""}`}
+              style={{ minHeight: 32, padding: "5px 10px", fontSize: 12 }}
             >
               {s ? STATUS_LABELS[s] : "Все"}
             </button>
@@ -252,109 +185,92 @@ function OrdersTab() {
       </div>
 
       {isLoading ? (
-        <div className="space-y-2">
-          {[...Array(5)].map((_, i) => <div key={i} className="h-16 bg-gray-100 rounded-xl animate-pulse" />)}
-        </div>
+        <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю заказы…</div>
       ) : !data?.orders.length ? (
-        <div className="text-center py-16 text-gray-400 border-2 border-dashed border-gray-200 rounded-2xl text-sm">Заказов нет</div>
+        <div className="soft-empty"><ShoppingBag size={18} /> Заказов нет</div>
       ) : (
-        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-100">
-              <tr>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Заказ / Дата</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Покупатель</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden sm:table-cell">Товары</th>
-                <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Сумма</th>
-                <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Статус</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {data.orders.map((o) => (
-                <>
-                  <tr
-                    key={o.id}
-                    className="hover:bg-gray-50/60 transition-colors cursor-pointer"
-                    onClick={() => setExpanded(expanded === o.id ? null : o.id)}
-                  >
-                    <td className="px-4 py-3">
-                      <div className="font-mono text-xs font-bold text-gray-800">{o.id}</div>
-                      <div className="text-xs text-gray-400 mt-0.5">{fmtDate(o.createdAt)}</div>
-                    </td>
-                    <td className="px-4 py-3 hidden md:table-cell">
-                      <div className="text-gray-800">{customerName(o.customer, o.delivery)}</div>
-                      {o.delivery?.city && <div className="text-xs text-gray-400">{o.delivery.city}</div>}
-                    </td>
-                    <td className="px-4 py-3 hidden sm:table-cell text-gray-600 text-xs">
-                      {Array.isArray(o.items) ? `${o.items.length} поз.` : "—"}
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-gray-900">{fmt(o.totalRub)} ₽</td>
-                    <td className="px-4 py-3 text-center">
-                      <span className={`inline-block px-2.5 py-1 rounded-full text-xs font-medium ${STATUS_COLORS[o.status] ?? "bg-gray-100 text-gray-600"}`}>
-                        {STATUS_LABELS[o.status] ?? o.status}
-                      </span>
-                    </td>
-                  </tr>
-                  {expanded === o.id && (
-                    <tr key={`${o.id}-exp`}>
-                      <td colSpan={5} className="px-4 pb-4 bg-gray-50/80">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3">
-                          {/* Delivery info */}
-                          <div className="text-sm space-y-1">
-                            <div className="font-semibold text-gray-700 mb-2">Доставка</div>
-                            {o.delivery && Object.entries(o.delivery).map(([k, v]) => v ? (
-                              <div key={k} className="flex gap-2">
-                                <span className="text-gray-400 w-24 flex-shrink-0 capitalize">{k}</span>
-                                <span className="text-gray-800">{String(v)}</span>
-                              </div>
-                            ) : null)}
-                            {o.comment && <div className="mt-2 text-gray-600 italic">Комментарий: {o.comment}</div>}
-                          </div>
-                          {/* Items */}
-                          <div className="text-sm">
-                            <div className="font-semibold text-gray-700 mb-2">Позиции</div>
-                            <div className="space-y-1">
-                              {Array.isArray(o.items) && o.items.map((item, idx) => {
-                                const it = item as { name?: string; quantity?: number; priceRub?: number };
-                                return (
-                                  <div key={idx} className="flex justify-between gap-2">
-                                    <span className="text-gray-700 truncate">{it.name || `Товар ${idx + 1}`} × {it.quantity ?? 1}</span>
-                                    <span className="text-gray-900 font-medium flex-shrink-0">{fmt((it.priceRub ?? 0) * (it.quantity ?? 1))} ₽</span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        </div>
-                        {/* Status change */}
-                        <div className="flex flex-wrap gap-1.5 mt-4 pt-3 border-t border-gray-200">
-                          <span className="text-xs text-gray-500 mr-1 self-center">Изменить статус:</span>
-                          {Object.entries(STATUS_LABELS).map(([s, label]) => (
-                            <button
-                              key={s}
-                              disabled={o.status === s || updateStatus.isPending}
-                              onClick={(e) => { e.stopPropagation(); updateStatus.mutate({ id: o.id, status: s }); }}
-                              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium transition-colors border ${
-                                o.status === s
-                                  ? "border-violet-300 bg-violet-50 text-violet-700"
-                                  : "border-gray-200 hover:border-violet-300 text-gray-600 hover:text-violet-700"
-                              } disabled:opacity-60`}
-                            >
-                              {o.status === s && <Check size={11} />}
-                              {label}
-                            </button>
-                          ))}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </>
-              ))}
-            </tbody>
-          </table>
-          <div className="px-4 pb-4">
-            <Pagination page={page} total={data.total} pageSize={20} onChange={setPage} />
+        <div className="table-panel orders-table">
+          <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+            <span>Заказ / Дата</span><span>Покупатель</span><span>Позиций</span><span>Сумма</span><span>Статус</span>
           </div>
+
+          {data.orders.map((o) => (
+            <div key={o.id}>
+              <button
+                type="button"
+                className="table-row"
+                style={{ display: "grid", gridTemplateColumns: COL, gap: 10, width: "100%", textAlign: "left", cursor: "pointer" }}
+                onClick={() => setExpanded(expanded === o.id ? null : o.id)}
+              >
+                <span>
+                  <div style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{o.id}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{fmtDate(o.createdAt)}</div>
+                </span>
+                <span style={{ fontSize: 13 }}>
+                  <div>{customerName(o.customer ?? undefined, o.delivery)}</div>
+                  {o.delivery?.city && <div style={{ fontSize: 11, color: "var(--muted)" }}>{o.delivery.city}</div>}
+                </span>
+                <span style={{ color: "var(--muted)", fontSize: 12 }}>{Array.isArray(o.items) ? o.items.length : "—"}</span>
+                <span style={{ fontWeight: 600 }}>{fmt(o.totalRub)} ₽</span>
+                <span style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                  <span className={`pill ${STATUS_TONE[o.status] ?? ""}`}>{STATUS_LABELS[o.status] ?? o.status}</span>
+                  {expanded === o.id ? <ChevronUp size={14} style={{ color: "var(--muted)", flexShrink: 0 }} /> : <ChevronDown size={14} style={{ color: "var(--muted)", flexShrink: 0 }} />}
+                </span>
+              </button>
+
+              {expanded === o.id && (
+                <div>
+                  <div className="mv-order-expand">
+                    <div>
+                      <strong>Доставка</strong>
+                      <dl>
+                        {Object.entries(o.delivery).map(([k, v]) => v ? (
+                          <div key={k} style={{ display: "flex", gap: 8 }}>
+                            <dt style={{ width: 90, flexShrink: 0, textTransform: "capitalize" }}>{k}</dt>
+                            <dd>{String(v)}</dd>
+                          </div>
+                        ) : null)}
+                        {o.comment && <div style={{ marginTop: 8, fontStyle: "italic", color: "var(--muted)", fontSize: 12 }}>Комментарий: {o.comment}</div>}
+                      </dl>
+                    </div>
+                    <div>
+                      <strong>Позиции</strong>
+                      <div style={{ display: "grid", gap: 6 }}>
+                        {Array.isArray(o.items) && o.items.map((item, idx) => {
+                          const it = item as { name?: string; quantity?: number; priceRub?: number };
+                          return (
+                            <div key={idx} style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13 }}>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {it.name || `Товар ${idx + 1}`} × {it.quantity ?? 1}
+                              </span>
+                              <span style={{ flexShrink: 0, fontWeight: 600 }}>{fmt((it.priceRub ?? 0) * (it.quantity ?? 1))} ₽</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="mv-order-status-bar">
+                    <span style={{ fontSize: 12, color: "var(--muted)", marginRight: 4 }}>Статус:</span>
+                    {Object.entries(STATUS_LABELS).map(([s, label]) => (
+                      <button
+                        key={s}
+                        type="button"
+                        disabled={o.status === s || updateStatus.isPending}
+                        onClick={() => updateStatus.mutate({ id: o.id, status: s })}
+                        className={`secondary-action${o.status === s ? " is-active" : ""}`}
+                        style={{ minHeight: 30, padding: "4px 10px", fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5 }}
+                      >
+                        {o.status === s && <Check size={12} />} {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+
+          <Pagination page={page} total={data.total} pageSize={20} onChange={setPage} />
         </div>
       )}
     </div>
@@ -370,47 +286,33 @@ function CustomersTab() {
     queryFn: () => apiFetch<{ customers: ShopCustomer[]; total: number }>(`/api/shop/admin/customers?page=${page}&pageSize=20`),
   });
 
+  const COL = "minmax(140px,1fr) minmax(140px,1fr) minmax(110px,.8fr) minmax(60px,.4fr) minmax(130px,.8fr)";
+
   return (
-    <div className="space-y-4">
-      <h2 className="text-lg font-bold text-gray-900">Покупатели</h2>
+    <div className="page-section">
+      <div className="section-title"><div><h2>Покупатели</h2></div></div>
+
       {isLoading ? (
-        <div className="space-y-2">{[...Array(5)].map((_, i) => <div key={i} className="h-14 bg-gray-100 rounded-xl animate-pulse" />)}</div>
+        <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю…</div>
       ) : !data?.customers.length ? (
-        <div className="text-center py-16 text-gray-400 border-2 border-dashed border-gray-200 rounded-2xl text-sm">Зарегистрированных покупателей нет</div>
+        <div className="soft-empty"><Users size={18} /> Зарегистрированных покупателей нет</div>
       ) : (
-        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-100">
-              <tr>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Покупатель</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden sm:table-cell">Email</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Телефон</th>
-                <th className="text-center px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Заказов</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden lg:table-cell">Регистрация</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {data.customers.map((c) => (
-                <tr key={c.id} className="hover:bg-gray-50/50 transition-colors">
-                  <td className="px-4 py-3">
-                    <div className="font-medium text-gray-900">{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</div>
-                    <div className="text-xs text-gray-400 sm:hidden">{c.email}</div>
-                  </td>
-                  <td className="px-4 py-3 text-gray-600 hidden sm:table-cell">{c.email}</td>
-                  <td className="px-4 py-3 text-gray-600 hidden md:table-cell">{c.phone || "—"}</td>
-                  <td className="px-4 py-3 text-center">
-                    <span className="inline-block w-8 h-8 rounded-full bg-violet-100 text-violet-700 text-xs font-bold leading-8 text-center">
-                      {c._count.orders}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-gray-400 text-xs hidden lg:table-cell">{fmtDate(c.createdAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="px-4 pb-4">
-            <Pagination page={page} total={data.total} pageSize={20} onChange={setPage} />
+        <div className="table-panel customers-table">
+          <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+            <span>Имя</span><span>Email</span><span>Телефон</span><span>Заказов</span><span>Регистрация</span>
           </div>
+          {data.customers.map((c) => (
+            <div key={c.id} className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+              <span style={{ fontWeight: 600 }}>{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
+              <span style={{ fontSize: 13, color: "var(--muted-soft)" }}>{c.email}</span>
+              <span style={{ fontSize: 13 }}>{c.phone || "—"}</span>
+              <span>
+                <span className="section-count">{c._count.orders}</span>
+              </span>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(c.createdAt)}</span>
+            </div>
+          ))}
+          <Pagination page={page} total={data.total} pageSize={20} onChange={setPage} />
         </div>
       )}
     </div>
@@ -419,45 +321,46 @@ function CustomersTab() {
 
 // ── Banners ───────────────────────────────────────────────────────────────────
 
-function BannerForm({ banner, onSave, onCancel }: {
-  banner?: Partial<ShopBanner>; onSave: (d: Partial<ShopBanner>) => void; onCancel: () => void;
+function BannerForm({ banner, onSave, onCancel, saving }: {
+  banner?: Partial<ShopBanner>; onSave: (d: Partial<ShopBanner>) => void; onCancel: () => void; saving?: boolean;
 }) {
   const [form, setForm] = useState<Partial<ShopBanner>>({
     imageUrl: "", title: "", subtitle: "", linkUrl: "", linkText: "", active: true, ...banner,
   });
-  const set = (k: keyof ShopBanner) => (v: string | boolean) => setForm((f) => ({ ...f, [k]: v }));
+  const set = (k: keyof ShopBanner) => (e: React.ChangeEvent<HTMLInputElement>) =>
+    setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
 
   return (
-    <div className="bg-violet-50 border border-violet-100 rounded-2xl p-5 space-y-4">
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Field label="URL изображения" value={form.imageUrl ?? ""} onChange={set("imageUrl") as (v: string) => void} placeholder="https://..." />
-        <Field label="Заголовок" value={form.title ?? ""} onChange={set("title") as (v: string) => void} placeholder="Летняя коллекция" />
-        <Field label="Подзаголовок" value={form.subtitle ?? ""} onChange={set("subtitle") as (v: string) => void} placeholder="Скидки до 50%" />
-        <Field label="Ссылка" value={form.linkUrl ?? ""} onChange={set("linkUrl") as (v: string) => void} placeholder="/catalog/sale" />
-        <Field label="Текст кнопки" value={form.linkText ?? ""} onChange={set("linkText") as (v: string) => void} placeholder="Смотреть акции" />
-        <div className="flex items-center gap-3 pt-5">
-          <button
-            type="button"
-            onClick={() => set("active")(!form.active)}
-            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${form.active ? "bg-violet-600" : "bg-gray-300"}`}
-          >
-            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${form.active ? "translate-x-6" : "translate-x-1"}`} />
-          </button>
-          <span className="text-sm text-gray-700">Активен (показывать)</span>
+    <div className="mv-form-section">
+      {form.imageUrl && (
+        <img src={form.imageUrl} alt="" className="mv-banner-preview" style={{ marginBottom: 8, height: 80, width: "auto", maxWidth: "100%" }}
+          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+      )}
+      <div className="mv-field-grid">
+        {([
+          ["imageUrl", "URL изображения", "https://..."],
+          ["title", "Заголовок", "Летняя коллекция"],
+          ["subtitle", "Подзаголовок", "Скидки до 50%"],
+          ["linkUrl", "Ссылка", "/catalog/sale"],
+          ["linkText", "Текст кнопки", "Смотреть акции"],
+        ] as const).map(([key, label, placeholder]) => (
+          <div key={key} className="mv-field">
+            <label>{label}</label>
+            <input value={(form[key] as string) ?? ""} onChange={set(key)} placeholder={placeholder} />
+          </div>
+        ))}
+        <div className="mv-field" style={{ justifyContent: "flex-end" }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" checked={form.active !== false} onChange={set("active")} />
+            Активен (показывать)
+          </label>
         </div>
       </div>
-      {form.imageUrl && (
-        <div className="rounded-xl overflow-hidden h-32 bg-gray-100">
-          <img src={form.imageUrl} alt="" className="w-full h-full object-cover" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
-        </div>
-      )}
-      <div className="flex gap-2">
-        <button onClick={() => onSave(form)} className="flex items-center gap-2 bg-violet-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-violet-700 transition-colors">
-          <Save size={15} /> Сохранить
+      <div className="row-actions">
+        <button onClick={() => onSave(form)} disabled={saving} className="primary-action">
+          {saving ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Сохранить
         </button>
-        <button onClick={onCancel} className="flex items-center gap-2 border border-gray-200 px-5 py-2.5 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-          <X size={15} /> Отмена
-        </button>
+        <button onClick={onCancel} className="secondary-action"><X size={15} /> Отмена</button>
       </div>
     </div>
   );
@@ -484,54 +387,55 @@ function BannersTab() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["shop-admin-banners"] }),
   });
 
+  const COL = "80px minmax(130px,1fr) minmax(120px,.8fr) 90px 74px";
+
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-gray-900">Баннеры главной страницы</h2>
-        <button onClick={() => setEditing("new")} className="flex items-center gap-2 bg-violet-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-violet-700 transition-colors">
+    <div className="page-section">
+      <div className="section-title">
+        <div><h2>Баннеры главной страницы</h2></div>
+        <button onClick={() => setEditing("new")} className="primary-action">
           <Plus size={16} /> Добавить баннер
         </button>
       </div>
 
       {editing === "new" && (
-        <BannerForm onSave={(d) => saveMut.mutate(d)} onCancel={() => setEditing(null)} />
+        <BannerForm onSave={(d) => saveMut.mutate(d)} onCancel={() => setEditing(null)} saving={saveMut.isPending} />
       )}
 
       {isLoading ? (
-        <div className="space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-16 bg-gray-100 rounded-xl animate-pulse" />)}</div>
+        <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю баннеры…</div>
       ) : banners.length === 0 && editing !== "new" ? (
-        <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-2xl">
-          <ImageIcon size={32} className="mx-auto mb-3 text-gray-300" />
-          <p className="text-sm text-gray-400">Баннеры не добавлены. Без них на главной показывается градиентный фон.</p>
-        </div>
+        <div className="soft-empty"><ImageIcon size={18} /> Баннеры не добавлены — на главной показывается градиентный фон</div>
       ) : (
-        <div className="space-y-2">
+        <div className="table-panel banners-table">
+          <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+            <span>Фото</span><span>Заголовок</span><span>Ссылка</span><span>Статус</span><span />
+          </div>
           {banners.map((b) => (
-            <div key={b.id} className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-              <div className="flex items-center gap-3 p-4">
-                <div className="w-20 h-12 rounded-xl bg-gray-100 flex-shrink-0 overflow-hidden">
+            <div key={b.id}>
+              <div className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+                <span>
                   {b.imageUrl
-                    ? <img src={b.imageUrl} alt="" className="w-full h-full object-cover" />
-                    : <div className="w-full h-full flex items-center justify-center text-gray-300"><ImageIcon size={16} /></div>
+                    ? <img src={b.imageUrl} alt="" className="mv-banner-preview" />
+                    : <div style={{ width: 72, height: 44, background: "rgba(8,17,31,.6)", display: "flex", alignItems: "center", justifyContent: "center" }}><ImageIcon size={16} style={{ color: "var(--muted)" }} /></div>
                   }
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold text-sm text-gray-800">{b.title || "(без названия)"}</div>
-                  <div className="text-xs text-gray-400 truncate mt-0.5">{b.subtitle || b.linkUrl || ""}</div>
-                </div>
-                <span className={`text-xs px-2.5 py-1 rounded-full font-medium flex-shrink-0 ${b.active ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
-                  {b.active ? "Активен" : "Скрыт"}
                 </span>
-                <button onClick={() => setEditing(editing === b.id ? null : b.id)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-400 hover:text-violet-600 transition-colors flex-shrink-0">
-                  <Edit2 size={15} />
-                </button>
-                <button onClick={() => { if (confirm("Удалить баннер?")) deleteMut.mutate(b.id); }} className="p-2 rounded-xl hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors flex-shrink-0">
-                  <Trash2 size={15} />
-                </button>
+                <span>
+                  <div style={{ fontWeight: 600 }}>{b.title || "(без названия)"}</div>
+                  {b.subtitle && <div style={{ fontSize: 12, color: "var(--muted)" }}>{b.subtitle}</div>}
+                </span>
+                <span style={{ fontSize: 12, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.linkUrl || "—"}</span>
+                <span>
+                  <span className={`pill ${b.active ? "success" : ""}`}>{b.active ? "Активен" : "Скрыт"}</span>
+                </span>
+                <span style={{ display: "flex", gap: 4 }}>
+                  <button onClick={() => setEditing(editing === b.id ? null : b.id)} className="secondary-action icon-action"><Edit2 size={14} /></button>
+                  <button onClick={() => { if (confirm("Удалить баннер?")) deleteMut.mutate(b.id); }} className="icon-action danger"><Trash2 size={14} /></button>
+                </span>
               </div>
               {editing === b.id && (
-                <div className="px-4 pb-4">
-                  <BannerForm banner={b} onSave={(d) => saveMut.mutate({ ...d, id: b.id })} onCancel={() => setEditing(null)} />
+                <div style={{ padding: "0 0 12px" }}>
+                  <BannerForm banner={b} onSave={(d) => saveMut.mutate({ ...d, id: b.id })} onCancel={() => setEditing(null)} saving={saveMut.isPending} />
                 </div>
               )}
             </div>
@@ -566,80 +470,65 @@ function CategoriesTab() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["shop-admin-categories"] }),
   });
 
-  function openNew() { setForm({ name: "", slug: "", imageUrl: "", filterTag: "" }); setEditing("new"); }
-  function openEdit(c: ShopCategory) { setForm({ ...c }); setEditing(c.id); }
-
-  const setF = (k: keyof ShopCategory) => (v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const setF = (k: keyof ShopCategory) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const COL = "minmax(130px,1fr) minmax(120px,.8fr) minmax(100px,.6fr) 74px";
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-bold text-gray-900">Категории каталога</h2>
-        <button onClick={openNew} className="flex items-center gap-2 bg-violet-600 text-white px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-violet-700 transition-colors">
+    <div className="page-section">
+      <div className="section-title">
+        <div><h2>Категории каталога</h2></div>
+        <button onClick={() => { setForm({ name: "", slug: "", imageUrl: "", filterTag: "" }); setEditing("new"); }} className="primary-action">
           <Plus size={16} /> Добавить категорию
         </button>
       </div>
 
-      {(editing === "new" || (editing && cats.find((c) => c.id === editing))) && (
-        <div className="bg-violet-50 border border-violet-100 rounded-2xl p-5 space-y-4">
-          <h3 className="font-semibold text-gray-800">{editing === "new" ? "Новая категория" : "Редактировать категорию"}</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Field label="Название" value={form.name ?? ""} onChange={setF("name")} placeholder="Парфюмерия" />
-            <Field label="Slug (URL)" value={form.slug ?? ""} onChange={setF("slug")} placeholder="parfumery" />
-            <Field label="URL изображения" value={form.imageUrl ?? ""} onChange={setF("imageUrl")} placeholder="https://..." />
-            <Field label="Тег фильтрации" value={form.filterTag ?? ""} onChange={setF("filterTag")} placeholder="parfum" />
+      {editing && (
+        <div className="mv-form-section">
+          <h3>{editing === "new" ? "Новая категория" : "Редактировать категорию"}</h3>
+          <div className="mv-field-grid">
+            {([["name", "Название", "Парфюмерия"], ["slug", "Slug (URL)", "parfumery"], ["imageUrl", "URL изображения", "https://..."], ["filterTag", "Тег фильтра", "parfum"]] as const).map(([k, l, p]) => (
+              <div key={k} className="mv-field">
+                <label>{l}</label>
+                <input value={(form[k] as string) ?? ""} onChange={setF(k)} placeholder={p} />
+              </div>
+            ))}
           </div>
-          <div className="flex gap-2">
+          <div className="row-actions">
             <button
               onClick={() => saveMut.mutate(editing === "new" ? form : { ...form, id: editing })}
               disabled={saveMut.isPending}
-              className="flex items-center gap-2 bg-violet-600 text-white px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-violet-700 disabled:opacity-50 transition-colors"
+              className="primary-action"
             >
-              {saveMut.isPending ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} Сохранить
+              {saveMut.isPending ? <Loader2 size={15} className="spin" /> : <Save size={15} />} Сохранить
             </button>
-            <button onClick={() => { setEditing(null); setForm({}); }} className="flex items-center gap-2 border border-gray-200 px-5 py-2.5 rounded-xl text-sm text-gray-600 hover:bg-gray-50 transition-colors">
-              <X size={15} /> Отмена
-            </button>
+            <button onClick={() => { setEditing(null); setForm({}); }} className="secondary-action"><X size={15} /> Отмена</button>
           </div>
         </div>
       )}
 
       {isLoading ? (
-        <div className="space-y-2">{[...Array(3)].map((_, i) => <div key={i} className="h-14 bg-gray-100 rounded-xl animate-pulse" />)}</div>
+        <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю…</div>
       ) : cats.length === 0 && !editing ? (
-        <div className="text-center py-12 border-2 border-dashed border-gray-200 rounded-2xl text-sm text-gray-400">Категории не добавлены</div>
+        <div className="soft-empty"><Tag size={18} /> Категории не добавлены</div>
       ) : (
-        <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 border-b border-gray-100">
-              <tr>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider">Категория</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden sm:table-cell">Slug</th>
-                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider hidden md:table-cell">Тег</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-50">
-              {cats.map((c) => (
-                <tr key={c.id} className="hover:bg-gray-50/50 transition-colors">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      {c.imageUrl && <img src={c.imageUrl} alt="" className="w-8 h-8 rounded-lg object-cover flex-shrink-0" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
-                      <span className="font-medium text-gray-800">{c.name}</span>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-gray-500 text-xs font-mono hidden sm:table-cell">{c.slug}</td>
-                  <td className="px-4 py-3 text-gray-400 text-xs hidden md:table-cell">{c.filterTag || "—"}</td>
-                  <td className="px-4 py-3 text-right">
-                    <div className="flex justify-end gap-1">
-                      <button onClick={() => openEdit(c)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-400 hover:text-violet-600 transition-colors"><Edit2 size={14} /></button>
-                      <button onClick={() => { if (confirm("Удалить категорию?")) deleteMut.mutate(c.id); }} className="p-2 rounded-xl hover:bg-red-50 text-gray-400 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="table-panel cats-table">
+          <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+            <span>Категория</span><span>Slug</span><span>Тег фильтра</span><span />
+          </div>
+          {cats.map((c) => (
+            <div key={c.id} className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {c.imageUrl && <img src={c.imageUrl} alt="" style={{ width: 28, height: 28, objectFit: "cover", borderRadius: 4, background: "#f8fafc" }} onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />}
+                <span style={{ fontWeight: 600 }}>{c.name}</span>
+              </span>
+              <span style={{ fontFamily: "monospace", fontSize: 12, color: "var(--muted)" }}>{c.slug}</span>
+              <span style={{ fontSize: 12, color: "var(--muted)" }}>{c.filterTag || "—"}</span>
+              <span style={{ display: "flex", gap: 4 }}>
+                <button onClick={() => { setForm({ ...c }); setEditing(c.id); }} className="secondary-action icon-action"><Edit2 size={14} /></button>
+                <button onClick={() => { if (confirm("Удалить категорию?")) deleteMut.mutate(c.id); }} className="icon-action danger"><Trash2 size={14} /></button>
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -660,95 +549,78 @@ function SettingsTab() {
   useEffect(() => { if (settings) setForm(settings); }, [settings]);
 
   const saveMut = useMutation({
-    mutationFn: (d: Partial<ShopSettings>) => apiFetch<{ ok: boolean; settings: ShopSettings }>("/api/shop/admin/settings", {
+    mutationFn: (d: Partial<ShopSettings>) => apiFetch<{ ok: boolean }>("/api/shop/admin/settings", {
       method: "PATCH", body: JSON.stringify(d),
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["shop-admin-settings"] }); setSaved(true); setTimeout(() => setSaved(false), 3000); },
   });
 
-  const setF = (k: keyof ShopSettings) => (v: string) => setForm((f) => ({ ...f, [k]: k === "markup" || k === "deliveryDays" || k === "freeDeliveryFrom" ? Number(v) : v }));
+  const setF = (k: keyof ShopSettings) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
+    setForm((f) => ({ ...f, [k]: ["markup", "deliveryDays", "freeDeliveryFrom"].includes(k) ? Number(e.target.value) : e.target.value }));
 
-  if (isLoading) return <div className="flex justify-center py-16"><Loader2 className="animate-spin text-violet-600" size={28} /></div>;
+  if (isLoading) return <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю…</div>;
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      <h2 className="text-lg font-bold text-gray-900">Настройки магазина</h2>
+    <div className="page-section" style={{ maxWidth: 760 }}>
+      <div className="section-title"><div><h2>Настройки магазина</h2></div></div>
 
-      {/* Basic */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 space-y-4">
-        <h3 className="font-semibold text-gray-800">Основное</h3>
-        <Field label="Название магазина" value={form.shopName ?? ""} onChange={setF("shopName")} placeholder="Magic Vibes" />
-        <div>
-          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Описание</label>
-          <textarea
-            rows={3}
-            value={form.shopDescription ?? ""}
-            onChange={(e) => setF("shopDescription")(e.target.value)}
-            className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition-all bg-gray-50 focus:bg-white resize-none"
-          />
+      <div className="mv-form-section">
+        <h3>Основное</h3>
+        <div className="mv-field-grid">
+          <div className="mv-field">
+            <label>Название магазина</label>
+            <input value={form.shopName ?? ""} onChange={setF("shopName")} placeholder="Magic Vibes" />
+          </div>
+          <div className="mv-field">
+            <label>Email для связи</label>
+            <input value={form.contactEmail ?? ""} onChange={setF("contactEmail")} placeholder="info@magicvibes.ru" />
+          </div>
+          <div className="mv-field">
+            <label>Телефон</label>
+            <input value={form.contactPhone ?? ""} onChange={setF("contactPhone")} placeholder="+7 800 ..." />
+          </div>
         </div>
-        <div className="grid grid-cols-2 gap-4">
-          <Field label="Email для связи" value={form.contactEmail ?? ""} onChange={setF("contactEmail")} placeholder="info@magicvibes.ru" />
-          <Field label="Телефон" value={form.contactPhone ?? ""} onChange={setF("contactPhone")} placeholder="+7 800 ..." />
+        <div className="mv-field">
+          <label>Описание магазина</label>
+          <textarea value={form.shopDescription ?? ""} onChange={setF("shopDescription")} />
         </div>
       </div>
 
-      {/* Pricing & delivery */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-6 space-y-4">
-        <h3 className="font-semibold text-gray-800">Цены и доставка</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Коэффициент наценки</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number" step="0.05" min="0.5" max="20"
-                value={form.markup ?? 2.2}
-                onChange={(e) => setF("markup")(e.target.value)}
-                className="w-28 px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition-all bg-gray-50 focus:bg-white"
-              />
-              <span className="text-xs text-gray-500">× (USD × курс)</span>
+      <div className="mv-form-section">
+        <h3>Цены и доставка</h3>
+        <div className="mv-field-grid">
+          <div className="mv-field">
+            <label>Коэффициент наценки</label>
+            <div className="mv-form-inline">
+              <input type="number" step="0.05" min="0.5" max="20" value={form.markup ?? 2.2} onChange={setF("markup")} style={{ width: 110 }} />
+              <span style={{ color: "var(--muted)", fontSize: 12 }}>× (USD × курс)</span>
             </div>
-            <p className="text-xs text-gray-400 mt-1">Итоговая цена = цена PM (USD) × курс USD/RUB × {form.markup ?? 2.2}</p>
+            <span style={{ color: "var(--muted)", fontSize: 11, marginTop: 4 }}>
+              Цена = PM (USD) × курс × {form.markup ?? 2.2}
+            </span>
           </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Бесплатная доставка от (₽)</label>
-            <input
-              type="number" min="0"
-              value={form.freeDeliveryFrom ?? 3000}
-              onChange={(e) => setF("freeDeliveryFrom")(e.target.value)}
-              className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition-all bg-gray-50 focus:bg-white"
-            />
+          <div className="mv-field">
+            <label>Бесплатная доставка от (₽)</label>
+            <input type="number" min="0" value={form.freeDeliveryFrom ?? 3000} onChange={setF("freeDeliveryFrom")} />
           </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Срок доставки (дней)</label>
-            <input
-              type="number" min="1" max="30"
-              value={form.deliveryDays ?? 3}
-              onChange={(e) => setF("deliveryDays")(e.target.value)}
-              className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 focus:border-transparent transition-all bg-gray-50 focus:bg-white"
-            />
+          <div className="mv-field">
+            <label>Срок доставки (дней)</label>
+            <input type="number" min="1" max="30" value={form.deliveryDays ?? 3} onChange={setF("deliveryDays")} />
           </div>
         </div>
       </div>
 
       {saved && (
-        <div className="flex items-center gap-2 text-emerald-600 bg-emerald-50 px-4 py-3 rounded-xl text-sm font-medium">
+        <div className="success-strip" style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Check size={16} /> Настройки сохранены
         </div>
       )}
       {saveMut.isError && (
-        <div className="flex items-center gap-2 text-red-600 bg-red-50 px-4 py-3 rounded-xl text-sm">
-          <AlertCircle size={16} /> Ошибка сохранения
-        </div>
+        <div className="warning-strip">Ошибка сохранения</div>
       )}
 
-      <button
-        onClick={() => saveMut.mutate(form)}
-        disabled={saveMut.isPending}
-        className="flex items-center gap-2 bg-violet-600 text-white px-6 py-3 rounded-xl text-sm font-semibold hover:bg-violet-700 disabled:opacity-50 transition-colors shadow-md shadow-violet-100"
-      >
-        {saveMut.isPending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-        Сохранить настройки
+      <button onClick={() => saveMut.mutate(form)} disabled={saveMut.isPending} className="primary-action">
+        {saveMut.isPending ? <Loader2 size={16} className="spin" /> : <Save size={16} />} Сохранить настройки
       </button>
     </div>
   );
@@ -771,49 +643,37 @@ export default function ShopAdminPage() {
   const [tab, setTab] = useState<Tab>("dashboard");
 
   return (
-    <div className="min-h-screen bg-gray-50/60">
-      <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Magic Vibes — Магазин</h1>
-            <p className="text-sm text-gray-500 mt-0.5">Управление витриной, заказами и настройками</p>
-          </div>
-          <a
-            href={SHOP_URL} target="_blank" rel="noreferrer"
-            className="flex items-center gap-2 bg-white border border-gray-200 hover:border-violet-300 text-gray-700 hover:text-violet-700 px-4 py-2.5 rounded-xl text-sm font-medium transition-all shadow-sm"
-          >
+    <section className="page-section mv-shop-page">
+      <PageHeader
+        title="Magic Vibes — Магазин"
+        subtitle="Управление витриной, заказами и настройками"
+        action={
+          <a href={SHOP_URL} target="_blank" rel="noreferrer" className="secondary-action">
             <ExternalLink size={15} /> Открыть магазин
           </a>
-        </div>
+        }
+      />
 
-        {/* Tab bar */}
-        <div className="bg-white border border-gray-100 rounded-2xl p-1 flex gap-0.5 flex-wrap shadow-sm">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setTab(id)}
-              className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                tab === id
-                  ? "bg-violet-600 text-white shadow-sm shadow-violet-200"
-                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-50"
-              }`}
-            >
-              <Icon size={15} /> {label}
-            </button>
-          ))}
-        </div>
-
-        {/* Content */}
-        <div>
-          {tab === "dashboard" && <DashboardTab />}
-          {tab === "orders" && <OrdersTab />}
-          {tab === "customers" && <CustomersTab />}
-          {tab === "banners" && <BannersTab />}
-          {tab === "categories" && <CategoriesTab />}
-          {tab === "settings" && <SettingsTab />}
-        </div>
+      <div className="settings-tabs" style={{ marginBottom: 6 }}>
+        {TABS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setTab(id)}
+            className={`secondary-action${tab === id ? " is-active" : ""}`}
+            style={{ display: "inline-flex", alignItems: "center", gap: 7 }}
+          >
+            <Icon size={15} /> {label}
+          </button>
+        ))}
       </div>
-    </div>
+
+      {tab === "dashboard" && <DashboardTab />}
+      {tab === "orders" && <OrdersTab />}
+      {tab === "customers" && <CustomersTab />}
+      {tab === "banners" && <BannersTab />}
+      {tab === "categories" && <CategoriesTab />}
+      {tab === "settings" && <SettingsTab />}
+    </section>
   );
 }
