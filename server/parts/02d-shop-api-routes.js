@@ -443,7 +443,11 @@ app.get("/api/shop/auto-categories", shopCors, async (_request, response, next) 
     Object.entries(counts)
       .filter(([slug]) => !ORDER.includes(slug) && (counts[slug] || 0) > 0)
       .sort(([, a], [, b]) => b - a)
-      .forEach(([slug, count]) => result.push({ slug, label: slug, count }));
+      .forEach(([slug, count]) => {
+        const def = SHOP_CATEGORIES.find((c) => c.slug === slug);
+        const label = def ? def.label : slug === "parfumery" ? "Парфюмерия" : slug;
+        result.push({ slug, label, count });
+      });
     response.json(result);
   } catch (error) { next(error); }
 });
