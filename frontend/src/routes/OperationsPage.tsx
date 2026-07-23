@@ -182,7 +182,7 @@ const ManualOrderResultSchema = z.object({
 
 export function SupplierCartPanel() {
   const [marketplace, setMarketplace] = useState("all");
-  const [limit, setLimit] = useState(100);
+  const [limit, setLimit] = useState(500);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [altKey, setAltKey] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -301,7 +301,7 @@ export function SupplierCartPanel() {
           />
         </label>
         <label>Лимит строк
-          <input type="number" value={limit} onChange={(event) => setLimit(numberValue(event.target.value, 100))} />
+          <input type="number" value={limit} onChange={(event) => setLimit(numberValue(event.target.value, 500))} />
         </label>
         <label>Отправка в PriceMaster
           <SelectField
