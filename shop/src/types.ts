@@ -73,12 +73,29 @@ export interface ShopOrderPayload {
   comment?: string;
 }
 
+export interface ShopOrderItem {
+  offerId: string;
+  quantity: number;
+  priceRub: number;
+  name?: string;
+}
+
 export interface ShopOrder {
   id: string;
   status: string;
   paymentUrl?: string;
   totalRub: number;
   createdAt: string;
+  items?: ShopOrderItem[];
+  delivery?: {
+    firstName?: string;
+    lastName?: string;
+    city?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+  };
+  comment?: string;
 }
 
 export interface CatalogResponse {

@@ -16,20 +16,31 @@ interface AuthCtx {
   loading: boolean;
   sendCode: (email: string) => Promise<void>;
   verifyCode: (email: string, code: string) => Promise<void>;
+  updateProfile: (data: { firstName?: string; lastName?: string; phone?: string }) => Promise<void>;
   logout: () => void;
 }
 
 const Ctx = createContext<AuthCtx | null>(null);
 
-async function apiPost(path: string, body: object) {
+async function apiReq(path: string, init: RequestInit, token?: string) {
   const res = await fetch(API + path, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    ...init,
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || "Ошибка");
   return data;
+}
+
+function apiPost(path: string, body: object, token?: string) {
+  return apiReq(path, { method: "POST", body: JSON.stringify(body) }, token);
+}
+
+function apiPatch(path: string, body: object, token: string) {
+  return apiReq(path, { method: "PATCH", body: JSON.stringify(body) }, token);
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -59,6 +70,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setCustomer(c);
   }, []);
 
+  const updateProfile = useCallback(async (data: { firstName?: string; lastName?: string; phone?: string }) => {
+    const saved = localStorage.getItem("mv_token");
+    if (!saved) throw new Error("Не авторизован");
+    const res = await apiPatch("/profile", data, saved);
+    if (res.customer) setCustomer(res.customer);
+  }, []);
+
   const logout = useCallback(() => {
     localStorage.removeItem("mv_token");
     setToken(null);
@@ -66,7 +84,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ customer, token, loading, sendCode, verifyCode, logout }}>
+    <Ctx.Provider value={{ customer, token, loading, sendCode, verifyCode, updateProfile, logout }}>
       {children}
     </Ctx.Provider>
   );

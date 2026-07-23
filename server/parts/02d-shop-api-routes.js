@@ -789,6 +789,24 @@ app.get("/api/shop/auth/me", shopCors, requireShopAuth, async (request, response
   } catch (error) { next(error); }
 });
 
+app.patch("/api/shop/auth/profile", shopCors, requireShopAuth, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "База данных недоступна" });
+    const { firstName, lastName, phone } = request.body || {};
+    const data = {};
+    if (firstName !== undefined) data.firstName = firstName ? cleanText(firstName) : null;
+    if (lastName !== undefined) data.lastName = lastName ? cleanText(lastName) : null;
+    if (phone !== undefined) data.phone = phone ? cleanText(phone) : null;
+    const customer = await prisma.shopCustomer.update({
+      where: { id: request.shopCustomer.customerId },
+      data,
+      select: { id: true, email: true, firstName: true, lastName: true, phone: true },
+    });
+    response.json({ ok: true, customer });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/shop/auth/orders", shopCors, requireShopAuth, async (request, response, next) => {
   try {
     const prisma = getPrisma();

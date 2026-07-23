@@ -63,6 +63,14 @@ export const api = {
   createOrder(payload: ShopOrderPayload, token?: string): Promise<ShopOrder> {
     return req<ShopOrder>("/orders", { method: "POST", body: JSON.stringify(payload) }, token);
   },
+
+  getOrders(token: string): Promise<{ ok: boolean; orders: ShopOrder[] }> {
+    return req<{ ok: boolean; orders: ShopOrder[] }>("/auth/orders", {}, token);
+  },
+
+  updateProfile(data: { firstName?: string; lastName?: string; phone?: string }, token: string): Promise<{ ok: boolean; customer: import("./AuthContext").ShopCustomer }> {
+    return req<{ ok: boolean; customer: import("./AuthContext").ShopCustomer }>("/auth/profile", { method: "PATCH", body: JSON.stringify(data) }, token);
+  },
 };
 
 export const adminApi = {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { Search, ShoppingBag, User, X, Menu, LogOut, Package } from "lucide-react";
+import { Search, ShoppingBag, User, X, Menu, LogOut, Package, Settings } from "lucide-react";
 import clsx from "clsx";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
@@ -129,6 +129,10 @@ export default function Header() {
                   <Link to="/orders" onClick={() => setUserMenuOpen(false)}
                     className="flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-apple-black hover:bg-gray-50 transition-colors">
                     <Package size={15} className="text-apple-gray" /> Мои заказы
+                  </Link>
+                  <Link to="/account" onClick={() => setUserMenuOpen(false)}
+                    className="flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-apple-black hover:bg-gray-50 transition-colors">
+                    <Settings size={15} className="text-apple-gray" /> Профиль
                   </Link>
                   <button onClick={() => { logout(); setUserMenuOpen(false); }}
                     className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-red-500 hover:bg-red-50 transition-colors">
