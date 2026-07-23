@@ -1,4 +1,4 @@
-import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse } from "./types";
+import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse, AutoCategory } from "./types";
 
 // В dev Vite-прокси перенаправляет /api/shop → davidsklad.ru.
 // В production установите VITE_API_BASE=https://davidsklad.ru
@@ -54,6 +54,10 @@ export const api = {
 
   settings(): Promise<ShopSettings> {
     return req<ShopSettings>("/settings");
+  },
+
+  autoCategories(): Promise<AutoCategory[]> {
+    return req<AutoCategory[]>("/auto-categories");
   },
 
   createOrder(payload: ShopOrderPayload, token?: string): Promise<ShopOrder> {

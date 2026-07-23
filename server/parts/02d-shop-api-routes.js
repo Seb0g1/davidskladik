@@ -165,6 +165,13 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
       delete where.OR;
     }
   }
+  if (category && category !== "parfumery") {
+    const _catDef = SHOP_CATEGORIES.find((c) => c.slug === category);
+    if (_catDef && _catDef.keywords.length) {
+      const _catOr = _catDef.keywords.map((kw) => ({ name: { contains: kw, mode: "insensitive" } }));
+      where.AND = [{ OR: _catOr }];
+    }
+  }
 
   // De-duplicate by offerId: prefer Ozon over Yandex
   // over-fetch 2x для компенсации дублей ozon+yandex
@@ -225,6 +232,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
 
     const stockQty = p.targetStock ?? 0;
     const name = cleanText(p.name || "");
+    const _cat = extractProductCategory(name);
 
     return {
       id: p.id,
@@ -237,7 +245,8 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
       inStock: stockQty > 0 || (p.status !== "archived" && currentPriceNum > 0),
       stockQty: Math.max(0, stockQty),
       volume: extractVolume(p.name || ""),
-      category: categoryFromBrand(cleanText(p.brand || "")),
+      category: _cat.slug,
+      categoryLabel: _cat.label,
       tags: [],
       rating: 0,
       reviewCount: 0,
@@ -255,13 +264,27 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
   return { products: filtered, total, brands };
 }
 
+const SHOP_CATEGORIES = [
+  { slug: "parfum", label: "Духи",              pattern: /духи|extrait|pure[\s-]parfum/i,                               keywords: ["духи", "extrait", "pure parfum"] },
+  { slug: "edp",    label: "Парфюмерная вода",  pattern: /парфюм[\s-]?(ерная)?\s*вода|eau[\s-]de[\s-]parfum|\bedp\b/i,  keywords: ["парфюмерная вода", "eau de parfum"] },
+  { slug: "edt",    label: "Туалетная вода",    pattern: /туалет\w*\s*вода|eau[\s-]de[\s-]toilette|\bedt\b/i,           keywords: ["туалетная вода", "eau de toilette"] },
+  { slug: "edc",    label: "Одеколон",          pattern: /одеколон|eau[\s-]de[\s-]cologne|\bedc\b/i,                    keywords: ["одеколон", "eau de cologne"] },
+  { slug: "deo",    label: "Дезодоранты",       pattern: /дезодорант|антиперспирант|deodorant/i,                        keywords: ["дезодорант", "антиперспирант", "deodorant"] },
+  { slug: "home",   label: "Ароматы для дома",  pattern: /свеч[аи]|аромасвеч|candle/i,                                 keywords: ["свеча", "свечи", "аромасвеча", "candle"] },
+  { slug: "sets",   label: "Подарочные наборы", pattern: /набор|gift[\s-]set/i,                                         keywords: ["набор", "gift set"] },
+  { slug: "body",   label: "Уход за телом",     pattern: /крем|лосьон|масло.{0,8}тел|гель.{0,8}душ|шампун/i,           keywords: ["крем", "лосьон", "масло для тела", "гель для душа", "шампунь"] },
+];
+
 function extractVolume(name = "") {
   const m = name.match(/(\d+\s*(?:мл|ml|г|g|oz)\b)/i);
   return m ? m[1] : undefined;
 }
 
-function categoryFromBrand(_brand) {
-  return "parfumery";
+function extractProductCategory(name = "") {
+  for (const cat of SHOP_CATEGORIES) {
+    if (cat.pattern.test(name)) return { slug: cat.slug, label: cat.label };
+  }
+  return { slug: "parfumery", label: "Парфюмерия" };
 }
 
 async function findShopProductByOfferId(offerId) {
@@ -316,6 +339,7 @@ async function findShopProductByOfferId(offerId) {
   const priceRub = priceUsd > 0
     ? Math.round(priceUsd * usdRate * markup)
     : currentPriceNum > 0 ? Math.round(currentPriceNum * markup / 100) : 0;
+  const _pCat = extractProductCategory(cleanText(p.name || ""));
 
   return {
     id: p.id,
@@ -328,7 +352,8 @@ async function findShopProductByOfferId(offerId) {
     inStock: (p.targetStock ?? 0) > 0 || (p.status !== "archived" && currentPriceNum > 0),
     stockQty: Math.max(0, p.targetStock ?? 0),
     volume: extractVolume(p.name || ""),
-    category: categoryFromBrand(cleanText(p.brand || "")),
+    category: _pCat.slug,
+    categoryLabel: _pCat.label,
     tags: [],
     rating: 0,
     reviewCount: 0,
@@ -385,6 +410,38 @@ app.get("/api/shop/categories", shopCors, async (_request, response, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+app.get("/api/shop/auto-categories", shopCors, async (_request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.json([]);
+    const allProds = await prisma.warehouseProduct.findMany({
+      where: { archived: false, marketplace: { in: ["ozon", "yandex"] }, NOT: { status: "deleted" }, currentPrice: { gt: 0 }, links: { some: {} } },
+      select: { offerId: true, name: true },
+    });
+    const seen = new Set();
+    const counts = {};
+    for (const p of allProds) {
+      const key = (p.offerId || "").trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      const cat = extractProductCategory(cleanText(p.name || ""));
+      counts[cat.slug] = (counts[cat.slug] || 0) + 1;
+    }
+    const ORDER = ["edp", "edt", "parfum", "edc", "deo", "sets", "body", "home"];
+    const result = ORDER
+      .map((slug) => {
+        const def = SHOP_CATEGORIES.find((c) => c.slug === slug);
+        return { slug, label: def ? def.label : slug, count: counts[slug] || 0 };
+      })
+      .filter((c) => c.count > 0);
+    Object.entries(counts)
+      .filter(([slug]) => !ORDER.includes(slug) && (counts[slug] || 0) > 0)
+      .sort(([, a], [, b]) => b - a)
+      .forEach(([slug, count]) => result.push({ slug, label: slug, count }));
+    response.json(result);
+  } catch (error) { next(error); }
 });
 
 app.get("/api/shop/settings", shopCors, async (_request, response, next) => {

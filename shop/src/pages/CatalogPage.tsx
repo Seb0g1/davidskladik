@@ -6,6 +6,11 @@ import { api } from "../api";
 import ProductCard from "../components/ProductCard";
 import clsx from "clsx";
 
+const CAT_ICONS: Record<string, string> = {
+  parfum: "🌹", edp: "🫧", edt: "💧", edc: "🌿",
+  deo: "✨", home: "🕯️", sets: "🎁", body: "🌸",
+};
+
 const SORT_OPTIONS = [
   { value: "name",       label: "По названию" },
   { value: "price_asc",  label: "Дешевле" },
@@ -28,8 +33,9 @@ function Skeleton() {
 }
 
 export default function CatalogPage() {
-  const { category } = useParams<{ category?: string }>();
+  const { category: urlCategory } = useParams<{ category?: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
+  const category = urlCategory || (searchParams.get("category") ?? "");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [brandsExpanded, setBrandsExpanded] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
@@ -43,6 +49,12 @@ export default function CatalogPage() {
   const { data, isLoading } = useQuery({
     queryKey: ["shop-catalog", { category, q, brand, sort, page, inStock }],
     queryFn: () => api.catalog({ category, q, brand, sort, page, pageSize: PAGE_SIZE, inStock }),
+  });
+
+  const { data: autoCategories } = useQuery({
+    queryKey: ["shop-auto-categories"],
+    queryFn: () => api.autoCategories(),
+    staleTime: 5 * 60_000,
   });
 
   useEffect(() => { if (filtersOpen) setFiltersOpen(false); }, [location.pathname]);
@@ -170,6 +182,37 @@ export default function CatalogPage() {
             </button>
           </div>
         </div>
+
+        {/* Category tabs */}
+        {autoCategories && autoCategories.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto pb-2 mb-4" style={{ scrollbarWidth: "none" }}>
+            <Link
+              to="/catalog"
+              className={clsx(
+                "flex-shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-colors whitespace-nowrap",
+                !category ? "bg-violet-600 text-white" : "bg-white border border-gray-200 text-apple-black hover:border-violet-300"
+              )}
+            >
+              Все
+            </Link>
+            {autoCategories.map((cat) => (
+              <Link
+                key={cat.slug}
+                to={`/catalog?category=${cat.slug}`}
+                className={clsx(
+                  "flex-shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-medium transition-colors whitespace-nowrap",
+                  category === cat.slug ? "bg-violet-600 text-white" : "bg-white border border-gray-200 text-apple-black hover:border-violet-300"
+                )}
+              >
+                <span>{CAT_ICONS[cat.slug] || "🌸"}</span>
+                {cat.label}
+                <span className={clsx("text-[11px]", category === cat.slug ? "text-violet-200" : "text-apple-gray")}>
+                  {cat.count}
+                </span>
+              </Link>
+            ))}
+          </div>
+        )}
 
         {/* Active filter chips */}
         {activeFilters.length > 0 && (

@@ -88,11 +88,21 @@ export default function ProductCard({ product }: Props) {
 
       {/* Info */}
       <div className="p-3.5">
-        {product.brand && (
-          <p className="text-[11px] font-semibold text-apple-gray uppercase tracking-wider mb-1 truncate">
-            {product.brand}
-          </p>
-        )}
+        <div className="flex items-center gap-1.5 mb-1">
+          {product.brand && (
+            <p className="text-[11px] font-semibold text-apple-gray uppercase tracking-wider truncate">
+              {product.brand}
+            </p>
+          )}
+          {product.categoryLabel && product.categoryLabel !== "Парфюмерия" && (
+            <span
+              className="flex-shrink-0 text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full"
+              style={{ background: "#ede9fe", color: "#5b21b6" }}
+            >
+              {product.categoryLabel}
+            </span>
+          )}
+        </div>
         <p className="text-[13px] font-medium text-apple-black line-clamp-2 leading-snug">
           {product.name}
         </p>

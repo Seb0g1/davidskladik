@@ -11,9 +11,16 @@ export interface ShopProduct {
   stockQty: number;
   volume?: string;
   category?: string;
+  categoryLabel?: string;
   tags?: string[];
   rating?: number;
   reviewCount?: number;
+}
+
+export interface AutoCategory {
+  slug: string;
+  label: string;
+  count: number;
 }
 
 export interface ShopBanner {
