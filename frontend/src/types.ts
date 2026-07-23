@@ -587,6 +587,24 @@ export const SupplierLedgerPaymentSchema = z.object({
   summary: SupplierLedgerSummarySchema.optional().default(emptySupplierLedgerSummary),
 }).passthrough();
 
+export const PickerCashAdvanceSchema = z.object({
+  id: z.coerce.string(),
+  amount: z.number().optional().default(0),
+  note: z.coerce.string().optional().default(""),
+  createdAt: z.coerce.string().optional().nullable(),
+  createdBy: z.coerce.string().optional().default(""),
+}).passthrough();
+
+export const PickerCashSchema = z.object({
+  ok: z.boolean().optional(),
+  date: z.coerce.string().optional().default(""),
+  advances: z.array(PickerCashAdvanceSchema).optional().default([]),
+  totalIssued: z.number().optional().default(0),
+  spent: z.number().optional().default(0),
+  spentCount: z.number().optional().default(0),
+  remaining: z.number().optional().default(0),
+}).passthrough();
+
 export const SupplierCartRowSchema = z.object({
   key: z.coerce.string(),
   marketplace: z.coerce.string().optional().default(""),

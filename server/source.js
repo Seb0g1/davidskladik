@@ -190,6 +190,7 @@ const partFiles = [
   "02d-finance-normalize-helpers.js",
   "02d-finance-linked-helpers.js",
   "02d-finance-supplier-ledger.js",
+  "02d-picker-cash.js",
   "02d-finance-orders-storage.js",
   "02d-finance-list-query.js",
   "02d-prices-finance-routes-api.js",

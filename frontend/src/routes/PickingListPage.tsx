@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarDays, Check, CheckCircle2, ClipboardList, Clock, Copy, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, X, Zap } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, CheckCircle2, ClipboardList, Clock, Copy, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, Wallet, X, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -9,7 +9,7 @@ import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
-import { SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
+import { PickerCashSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
 type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
@@ -96,8 +96,30 @@ export function PickingListPage() {
     }
     return Array.from(groups.entries()).sort((a, b) => b[0].localeCompare(a[0]));
   }, [sheetsQuery.data]);
+  const [cashDraft, setCashDraft] = useState("");
+  const [cashNoteDraft, setCashNoteDraft] = useState("");
   const [replaceKey, setReplaceKey] = useState<string | null>(null);
   const [missingRow, setMissingRow] = useState<PickingRow | null>(null);
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const cashQuery = useQuery({
+    queryKey: ["picker-cash", todayStr],
+    queryFn: () => fetchJson(`/api/picker-cash?date=${todayStr}`, PickerCashSchema),
+    refetchInterval: 30_000,
+  });
+  const addCashMutation = useMutation({
+    mutationFn: ({ amount, note }: { amount: number; note: string }) =>
+      fetchJson("/api/picker-cash", PickerCashSchema, mutationBody({ amount, note, date: todayStr })),
+    onSuccess: () => {
+      setCashDraft("");
+      setCashNoteDraft("");
+      void queryClient.invalidateQueries({ queryKey: ["picker-cash"] });
+    },
+  });
+  const deleteCashMutation = useMutation({
+    mutationFn: (id: string) =>
+      fetchJson(`/api/picker-cash/${encodeURIComponent(id)}?date=${todayStr}`, PickerCashSchema, { method: "DELETE" }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["picker-cash"] }),
+  });
   const updateMutation = useMutation({
     mutationFn: ({ key, nextStatus, snoozeDays, permanent }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean }) =>
       fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({
@@ -312,6 +334,69 @@ export function PickingListPage() {
 
       {view === "list" ? (
       <>
+      <section className="picker-cash-card">
+        <div className="picker-cash-head">
+          <Wallet size={16} />
+          <span>Касса сборщика — {todayStr}</span>
+        </div>
+        <div className="summary-grid compact-summary">
+          <DiagnosticValue label="Выдано" value={money(cashQuery.data?.totalIssued ?? 0)} />
+          <DiagnosticValue label="Потрачено" value={money(cashQuery.data?.spent ?? 0)} tone={cashQuery.data && cashQuery.data.spent > 0 ? "warn" : ""} />
+          <DiagnosticValue
+            label="Остаток"
+            value={money(Math.abs(cashQuery.data?.remaining ?? 0))}
+            tone={(cashQuery.data?.remaining ?? 0) >= 0 ? "success" : "danger"}
+          />
+        </div>
+        {isAdmin ? (
+          <div className="settings-form-row picker-cash-input-row">
+            <input
+              type="number"
+              min="0"
+              step="1"
+              placeholder="Выдать сборщику, ₽"
+              value={cashDraft}
+              onChange={(event) => setCashDraft(event.target.value)}
+            />
+            <input
+              placeholder="Комментарий"
+              value={cashNoteDraft}
+              onChange={(event) => setCashNoteDraft(event.target.value)}
+            />
+            <button
+              className="primary-action"
+              type="button"
+              disabled={addCashMutation.isPending || !(Number(cashDraft) > 0)}
+              onClick={() => addCashMutation.mutate({ amount: Number(cashDraft), note: cashNoteDraft })}
+            >
+              {addCashMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Выдал
+            </button>
+          </div>
+        ) : null}
+        {(cashQuery.data?.advances || []).length > 0 ? (
+          <div className="picker-cash-advances">
+            {(cashQuery.data?.advances || []).map((adv) => (
+              <div className="picker-cash-advance-row" key={adv.id}>
+                <span className="picker-cash-amount">{money(adv.amount)}</span>
+                {adv.note ? <span className="muted-note">{adv.note}</span> : null}
+                <span className="muted-note">{compactDate(adv.createdAt ?? null)}</span>
+                {isAdmin ? (
+                  <button
+                    className="icon-action danger-action"
+                    type="button"
+                    title="Удалить выдачу"
+                    disabled={deleteCashMutation.isPending}
+                    onClick={() => deleteCashMutation.mutate(adv.id)}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {addCashMutation.error ? <div className="inline-error">{errorMessage(addCashMutation.error)}</div> : null}
+      </section>
       <div className="picking-groups">
         {grouped.map(([supplierName, supplierRows]) => {
           const ledger = supplierLedger[supplierName] || {};

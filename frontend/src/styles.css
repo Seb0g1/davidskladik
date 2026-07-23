@@ -2401,17 +2401,18 @@ button:disabled {
 
 .meta-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 5px;
   min-width: 0;
 }
 
 .meta-grid span {
   min-width: 0;
-  padding: 6px 8px;
+  padding: 3px 6px;
   border: 1px solid var(--border);
   color: var(--muted);
   overflow-wrap: anywhere;
+  font-size: 0.78rem;
 }
 
 .danger-text {
@@ -2432,14 +2433,14 @@ button:disabled {
 
 .picking-groups {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .picking-supplier-card {
   display: grid;
-  gap: 12px;
+  gap: 8px;
   min-width: 0;
-  padding: 14px;
+  padding: 12px;
   border: 1px solid var(--border);
   background: rgba(12, 25, 43, 0.72);
 }
@@ -2484,14 +2485,14 @@ button:disabled {
 
 .picking-row-list {
   display: grid;
-  gap: 10px;
+  gap: 6px;
 }
 
 .picking-row {
   display: grid;
-  gap: 10px;
+  gap: 7px;
   min-width: 0;
-  padding: 12px;
+  padding: 9px 11px;
   border: 1px solid var(--border);
   background: rgba(8, 19, 34, 0.76);
 }
@@ -2528,8 +2529,9 @@ button:disabled {
 
 .picking-actions .primary-action,
 .picking-actions .secondary-action {
-  min-height: 40px;
-  padding: 10px 14px;
+  min-height: 34px;
+  padding: 6px 11px;
+  font-size: 0.82rem;
 }
 
 .success-action {
@@ -7761,4 +7763,107 @@ textarea:focus-visible,
   .mv-order-expand { grid-template-columns: 1fr; }
   .mv-shop-page .orders-table .table-head span:nth-child(4),
   .mv-shop-page .orders-table .table-row span:nth-child(4) { display: none; }
+}
+
+/* ===== Picker Cash (касса сборщика) ===== */
+.picker-cash-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid rgba(120, 180, 255, 0.25);
+  background: rgba(10, 22, 44, 0.8);
+  border-radius: 8px;
+}
+
+.picker-cash-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.picker-cash-input-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.picker-cash-input-row input[type="number"] {
+  width: 140px;
+  flex-shrink: 0;
+}
+
+.picker-cash-advances {
+  display: grid;
+  gap: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+.picker-cash-advance-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.82rem;
+  padding: 3px 0;
+}
+
+.picker-cash-amount {
+  font-weight: 600;
+  color: var(--fg);
+  min-width: 70px;
+}
+
+/* ===== Supplier History / Returns ===== */
+.supplier-history-section {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+
+.supplier-history-toggle {
+  justify-self: start;
+  font-size: 0.82rem;
+  padding: 5px 10px;
+  min-height: 30px;
+}
+
+.supplier-history-body {
+  display: grid;
+  gap: 6px;
+}
+
+.supplier-history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.8rem;
+  background: rgba(8, 18, 34, 0.5);
+}
+
+.supplier-history-type {
+  font-weight: 600;
+  font-size: 0.75rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(120, 140, 180, 0.15);
+  color: var(--muted);
+}
+
+.supplier-history-type.type-payment { color: #4ed39a; background: rgba(78, 211, 154, 0.12); }
+.supplier-history-type.type-supplier_return { color: #79b8ff; background: rgba(121, 184, 255, 0.12); }
+.supplier-history-type.type-purchase_debt { color: #ff9aa8; background: rgba(255, 92, 122, 0.12); }
+
+.supplier-history-amount {
+  font-weight: 600;
+  min-width: 80px;
 }

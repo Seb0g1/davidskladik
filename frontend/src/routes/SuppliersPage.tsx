@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Boxes, CheckCircle2, Edit3, Loader2, Package, Plus, RefreshCw, Search, Trash2, Truck, UserX, X } from "lucide-react";
+import { Boxes, CheckCircle2, ChevronDown, ChevronUp, Edit3, Loader2, Package, Plus, RefreshCw, RotateCcw, Search, Trash2, Truck, UserX, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -7,10 +7,11 @@ import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
-import { SupplierLedgerPaymentSchema, SupplierSchema, SuppliersResponseSchema } from "../types";
-import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
+import { SupplierLedgerEntrySchema, SupplierLedgerPaymentSchema, SupplierLedgerResponseSchema, SupplierSchema, SuppliersResponseSchema } from "../types";
+import { asRecord, compactDate, errorMessage, money, numberValue } from "../lib/common";
 
 type Supplier = z.infer<typeof SupplierSchema>;
+type LedgerEntry = z.infer<typeof SupplierLedgerEntrySchema>;
 
 type SupplierForm = {
   id: string;
@@ -94,6 +95,10 @@ export function SuppliersPage() {
   const [inactiveDraft, setInactiveDraft] = useState<InactiveDraft | null>(null);
   const [paymentDrafts, setPaymentDrafts] = useState<Record<string, string>>({});
   const [paymentNotes, setPaymentNotes] = useState<Record<string, string>>({});
+  const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
+  const [returnDrafts, setReturnDrafts] = useState<Record<string, string>>({});
+  const [returnNotes, setReturnNotes] = useState<Record<string, string>>({});
+  const [historySupplier, setHistorySupplier] = useState<Supplier | null>(null);
 
   const suppliersQuery = useQuery({
     queryKey: ["suppliers"],
@@ -163,6 +168,39 @@ export function SuppliersPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+    },
+  });
+
+  const historyQuery = useQuery({
+    queryKey: ["supplier-ledger-history", historySupplier ? supplierId(historySupplier) : "none"],
+    queryFn: () => {
+      const s = historySupplier;
+      if (!s) return fetchJson("/api/supplier-ledger/entries?limit=1", SupplierLedgerResponseSchema);
+      const params = new URLSearchParams({ limit: "30", period: "all" });
+      if (s.partnerId) params.set("partnerId", s.partnerId);
+      else params.set("supplierName", s.name || "");
+      return fetchJson(`/api/supplier-ledger/entries?${params.toString()}`, SupplierLedgerResponseSchema);
+    },
+    enabled: !!historySupplier,
+    staleTime: 15_000,
+  });
+
+  const returnSupplier = useMutation({
+    mutationFn: ({ supplier, amount, note }: { supplier: Supplier; amount: number; note: string }) =>
+      fetchJson("/api/supplier-ledger/returns", SupplierLedgerPaymentSchema, mutationBody({
+        supplierName: supplier.name || "",
+        partnerId: supplier.partnerId || "",
+        amount,
+        note,
+      })),
+    onSuccess: (_data, variables) => {
+      const id = supplierId(variables.supplier);
+      setReturnDrafts((current) => ({ ...current, [id]: "" }));
+      setReturnNotes((current) => ({ ...current, [id]: "" }));
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-ledger-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
     },
   });
 
@@ -241,7 +279,29 @@ export function SuppliersPage() {
     });
   };
 
-  const anyError = suppliersQuery.error || refreshMutation.error || saveSupplier.error || patchSupplier.error || deleteSupplier.error || saveArticle.error || deleteArticle.error || paySupplier.error;
+  const anyError = suppliersQuery.error || refreshMutation.error || saveSupplier.error || patchSupplier.error || deleteSupplier.error || saveArticle.error || deleteArticle.error || paySupplier.error || returnSupplier.error;
+
+  const entryTypeLabel = (type: string) => {
+    if (type === "payment") return "Оплата";
+    if (type === "purchase_debt") return "Закупка";
+    if (type === "supplier_return") return "Возврат";
+    return "Корректировка";
+  };
+
+  const toggleHistory = (supplier: Supplier) => {
+    const id = supplierId(supplier);
+    setExpandedHistory((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+        if (historySupplier && supplierId(historySupplier) === id) setHistorySupplier(null);
+      } else {
+        next.add(id);
+        setHistorySupplier(supplier);
+      }
+      return next;
+    });
+  };
 
   return (
     <section className="page-section suppliers-page">
@@ -414,6 +474,61 @@ export function SuppliersPage() {
                     >
                       <Trash2 size={16} /> Удалить
                     </button>
+                  </div>
+
+                  <div className="supplier-history-section">
+                    <button
+                      className="secondary-action supplier-history-toggle"
+                      type="button"
+                      onClick={() => toggleHistory(supplier)}
+                    >
+                      {expandedHistory.has(id) ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+                      История / Возвраты
+                    </button>
+                    {expandedHistory.has(id) ? (
+                      <div className="supplier-history-body">
+                        <div className="settings-form-row supplier-payment-row">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            placeholder="Сумма возврата, ₽"
+                            value={returnDrafts[id] || ""}
+                            onChange={(event) => setReturnDrafts((current) => ({ ...current, [id]: event.target.value }))}
+                          />
+                          <input
+                            placeholder="Комментарий"
+                            value={returnNotes[id] || ""}
+                            onChange={(event) => setReturnNotes((current) => ({ ...current, [id]: event.target.value }))}
+                          />
+                          <button
+                            className="primary-action"
+                            type="button"
+                            disabled={returnSupplier.isPending || !(Number(returnDrafts[id]) > 0)}
+                            onClick={() => returnSupplier.mutate({ supplier, amount: Number(returnDrafts[id] || 0), note: returnNotes[id] || "" })}
+                          >
+                            {returnSupplier.isPending ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />} Возврат
+                          </button>
+                        </div>
+                        {historyQuery.isLoading && historySupplier && supplierId(historySupplier) === id ? (
+                          <div className="soft-empty"><Loader2 className="spin" size={14} /> Загружаю историю...</div>
+                        ) : null}
+                        {(historySupplier && supplierId(historySupplier) === id ? historyQuery.data?.entries || [] : []).map((entry) => (
+                          <div className="supplier-history-row" key={entry.id}>
+                            <span className={`supplier-history-type type-${entry.entryType}`}>{entryTypeLabel(entry.entryType)}</span>
+                            <span className="supplier-history-amount" style={{ color: Number(entry.amount) < 0 ? "var(--danger)" : Number(entry.amount) > 0 ? "var(--success)" : undefined }}>
+                              {Number(entry.amount) > 0 ? "+" : ""}{money(Number(entry.amount))}
+                            </span>
+                            <span className="muted-note">{compactDate(entry.occurredAt ?? null)}</span>
+                            {entry.note ? <span className="muted-note">{entry.note}</span> : null}
+                            {entry.offerId ? <span className="muted-note">{entry.offerId}</span> : null}
+                          </div>
+                        ))}
+                        {historySupplier && supplierId(historySupplier) === id && !historyQuery.isLoading && !(historyQuery.data?.entries || []).length ? (
+                          <div className="soft-empty">История пуста.</div>
+                        ) : null}
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="supplier-articles">
