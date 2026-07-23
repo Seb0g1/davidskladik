@@ -249,7 +249,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     const markup = resolveShopMarkup(priceUsd, defaultMarkup, shopMarkupRules);
     const priceRub = priceUsd > 0
       ? Math.round(priceUsd * usdRate * markup)
-      : currentPriceNum > 0 ? Math.round(currentPriceNum * markup / 100) : 0;
+      : currentPriceNum > 0 ? currentPriceNum : 0;
 
     const stockQty = p.targetStock ?? 0;
     const name = cleanText(p.name || "");
@@ -362,7 +362,7 @@ async function findShopProductByOfferId(offerId) {
   const resolvedMarkup = resolveShopMarkup(priceUsd, defaultMarkupSingle, shopMarkupRulesSingle);
   const priceRub = priceUsd > 0
     ? Math.round(priceUsd * usdRate * resolvedMarkup)
-    : currentPriceNum > 0 ? Math.round(currentPriceNum * resolvedMarkup / 100) : 0;
+    : currentPriceNum > 0 ? currentPriceNum : 0;
   const _pCat = extractProductCategory(cleanText(p.name || ""));
 
   return {
