@@ -14,22 +14,14 @@ interface AuthCtx {
   customer: ShopCustomer | null;
   token: string | null;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  register: (data: RegisterData) => Promise<void>;
+  sendCode: (email: string) => Promise<void>;
+  verifyCode: (email: string, code: string) => Promise<void>;
   logout: () => void;
-}
-
-interface RegisterData {
-  email: string;
-  password: string;
-  firstName?: string;
-  lastName?: string;
-  phone?: string;
 }
 
 const Ctx = createContext<AuthCtx | null>(null);
 
-async function authReq(path: string, body: object): Promise<{ token: string; customer: ShopCustomer }> {
+async function apiPost(path: string, body: object) {
   const res = await fetch(API + path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -56,15 +48,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const login = useCallback(async (email: string, password: string) => {
-    const { token: t, customer: c } = await authReq("/login", { email, password });
-    localStorage.setItem("mv_token", t);
-    setToken(t);
-    setCustomer(c);
+  const sendCode = useCallback(async (email: string) => {
+    await apiPost("/send-code", { email });
   }, []);
 
-  const register = useCallback(async (data: RegisterData) => {
-    const { token: t, customer: c } = await authReq("/register", data);
+  const verifyCode = useCallback(async (email: string, code: string) => {
+    const { token: t, customer: c } = await apiPost("/verify-code", { email, code });
     localStorage.setItem("mv_token", t);
     setToken(t);
     setCustomer(c);
@@ -77,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ customer, token, loading, login, register, logout }}>
+    <Ctx.Provider value={{ customer, token, loading, sendCode, verifyCode, logout }}>
       {children}
     </Ctx.Provider>
   );

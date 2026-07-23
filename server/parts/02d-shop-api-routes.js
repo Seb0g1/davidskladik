@@ -537,6 +537,144 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
 
 // ── Auth routes ───────────────────────────────────────────────────────────
 
+// ── Email OTP helpers ─────────────────────────────────────────────────────
+
+let _shopOtpRedis = null;
+function shopOtpRedis() {
+  if (_shopOtpRedis) return _shopOtpRedis;
+  if (!redisUrl) return null;
+  try {
+    const Redis = require("ioredis");
+    _shopOtpRedis = new Redis(redisUrl, { maxRetriesPerRequest: 2, enableReadyCheck: false, lazyConnect: false });
+    _shopOtpRedis.on("error", () => {});
+    return _shopOtpRedis;
+  } catch { return null; }
+}
+
+let _shopMailerTransport = null;
+function shopMailerTransport() {
+  if (_shopMailerTransport) return _shopMailerTransport;
+  const host = process.env.SHOP_SMTP_HOST;
+  const port = Number(process.env.SHOP_SMTP_PORT || 465);
+  const user = process.env.SHOP_SMTP_USER;
+  const pass = process.env.SHOP_SMTP_PASS;
+  if (!host || !user || !pass) return null;
+  try {
+    const nodemailer = require("nodemailer");
+    _shopMailerTransport = nodemailer.createTransport({ host, port, secure: port === 465, auth: { user, pass } });
+    return _shopMailerTransport;
+  } catch { return null; }
+}
+
+function shopOtpEmailHtml(code) {
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f5f5f7;font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif;">
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f7;padding:40px 16px;">
+<tr><td align="center">
+<table width="480" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:20px;overflow:hidden;box-shadow:0 2px 16px rgba(0,0,0,0.08);">
+<tr><td style="background:linear-gradient(135deg,#7c3aed,#9333ea);padding:32px 40px;text-align:center;">
+  <div style="font-size:26px;font-weight:800;color:#fff;letter-spacing:-0.5px;">Magic Vibes</div>
+  <div style="font-size:13px;color:rgba(255,255,255,0.75);margin-top:4px;">Парфюмерия</div>
+</td></tr>
+<tr><td style="padding:40px 40px 32px;">
+  <div style="font-size:22px;font-weight:700;color:#1d1d1f;margin-bottom:8px;">Ваш код для входа</div>
+  <div style="font-size:15px;color:#6e6e73;line-height:1.5;margin-bottom:28px;">Введите этот код на сайте. Код действителен 10 минут.</div>
+  <div style="text-align:center;margin:28px 0;">
+    <div style="display:inline-block;background:#f5f3ff;border-radius:16px;padding:24px 48px;border:2px solid #ede9fe;">
+      <span style="font-size:42px;font-weight:800;letter-spacing:10px;color:#7c3aed;font-variant-numeric:tabular-nums;">${code}</span>
+    </div>
+  </div>
+  <div style="font-size:13px;color:#aeaeb2;border-top:1px solid #f0f0f2;padding-top:24px;margin-top:8px;">Если вы не запрашивали этот код — просто проигнорируйте это письмо.</div>
+</td></tr>
+<tr><td style="background:#f9f9fb;padding:20px 40px;text-align:center;">
+  <div style="font-size:12px;color:#aeaeb2;">© Magic Vibes · <a href="https://magicvibes.ru" style="color:#7c3aed;text-decoration:none;">magicvibes.ru</a></div>
+</td></tr>
+</table></td></tr></table></body></html>`;
+}
+
+app.post("/api/shop/auth/send-code", shopCors, async (request, response, next) => {
+  try {
+    const { email } = request.body || {};
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      return response.status(400).json({ error: "Укажите корректный email" });
+    }
+    const mailer = shopMailerTransport();
+    if (!mailer) return response.status(503).json({ error: "Email-сервис не настроен" });
+
+    const redis = shopOtpRedis();
+    const normalEmail = email.toLowerCase().trim();
+    const emailKey = `shop:otp:${normalEmail}`;
+    const rateLimitKey = `shop:otp:rl:${normalEmail}`;
+
+    if (redis) {
+      const rl = await redis.get(rateLimitKey);
+      if (rl) return response.status(429).json({ error: "Подождите 60 секунд перед повторной отправкой", retryAfter: 60 });
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    if (redis) {
+      await redis.set(emailKey, JSON.stringify({ code, attempts: 0 }), "EX", 600);
+      await redis.set(rateLimitKey, "1", "EX", 60);
+    }
+
+    await mailer.sendMail({
+      from: `"Magic Vibes" <${process.env.SHOP_SMTP_USER}>`,
+      to: normalEmail,
+      subject: `${code} — код для входа на Magic Vibes`,
+      html: shopOtpEmailHtml(code),
+    });
+
+    logger.info("shop otp sent", { email: normalEmail.replace(/(.{2}).+(@.+)/, "$1***$2") });
+    response.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/shop/auth/verify-code", shopCors, async (request, response, next) => {
+  try {
+    const { email, code } = request.body || {};
+    if (!email || !code) return response.status(400).json({ error: "Email и код обязательны" });
+
+    const redis = shopOtpRedis();
+    const normalEmail = email.toLowerCase().trim();
+    const emailKey = `shop:otp:${normalEmail}`;
+
+    let otpData = null;
+    if (redis) {
+      const raw = await redis.get(emailKey);
+      if (raw) otpData = JSON.parse(raw);
+    }
+
+    if (!otpData) return response.status(400).json({ error: "Код истёк или не найден. Запросите новый." });
+
+    if (otpData.attempts >= 5) {
+      if (redis) await redis.del(emailKey);
+      return response.status(400).json({ error: "Слишком много попыток. Запросите новый код." });
+    }
+
+    if (otpData.code !== String(code).trim()) {
+      otpData.attempts += 1;
+      if (redis) await redis.set(emailKey, JSON.stringify(otpData), "KEEPTTL");
+      const left = 5 - otpData.attempts;
+      return response.status(400).json({ error: `Неверный код. Осталось попыток: ${left}` });
+    }
+
+    if (redis) await redis.del(emailKey);
+
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "База данных недоступна" });
+
+    let customer = await prisma.shopCustomer.findUnique({ where: { email: normalEmail } });
+    if (!customer) {
+      customer = await prisma.shopCustomer.create({
+        data: { id: _shopCrypto.randomBytes(12).toString("hex"), email: normalEmail, password: "" },
+      });
+    }
+
+    const token = signShopToken({ customerId: customer.id, email: customer.email });
+    response.json({ ok: true, token, customer: { id: customer.id, email: customer.email, firstName: customer.firstName, lastName: customer.lastName, phone: customer.phone } });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/shop/auth/register", shopCors, async (request, response, next) => {
   try {
     const prisma = getPrisma();
