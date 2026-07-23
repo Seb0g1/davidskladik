@@ -150,6 +150,7 @@ const partFiles = [
   "02d-routes-warehouse-catalog.js",
   "02d-routes-avito.js",
   "02d-routes-wb.js",
+  "02d-shop-api-routes.js",
   "02d-suppliers-routes-read.js",
   "02d-suppliers-routes-search.js",
   "02d-suppliers-routes-write.js",
