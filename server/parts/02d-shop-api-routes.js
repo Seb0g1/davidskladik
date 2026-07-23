@@ -1,18 +1,17 @@
 // ─── Magic Vibes Shop API ──────────────────────────────────────────────────
-const { scrypt, randomBytes, timingSafeEqual } = require("crypto");
-const { promisify } = require("util");
-const scryptAsync = promisify(scrypt);
+const _shopCrypto = require("crypto");
+const _shopScryptAsync = require("util").promisify(_shopCrypto.scrypt);
 
-async function hashPassword(pw) {
-  const salt = randomBytes(16).toString("hex");
-  const buf = await scryptAsync(pw, salt, 64);
+async function _shopHashPassword(pw) {
+  const salt = _shopCrypto.randomBytes(16).toString("hex");
+  const buf = await _shopScryptAsync(pw, salt, 64);
   return buf.toString("hex") + "." + salt;
 }
-async function verifyPassword(pw, stored) {
+async function _shopVerifyPassword(pw, stored) {
   const [hex, salt] = stored.split(".");
   if (!hex || !salt) return false;
-  const buf = await scryptAsync(pw, salt, 64);
-  return timingSafeEqual(Buffer.from(hex, "hex"), buf);
+  const buf = await _shopScryptAsync(pw, salt, 64);
+  return _shopCrypto.timingSafeEqual(Buffer.from(hex, "hex"), buf);
 }
 function signShopToken(payload) {
   const { createHmac } = require("crypto");
@@ -462,7 +461,7 @@ app.post("/api/shop/auth/register", shopCors, async (request, response, next) =>
     if (password.length < 6) return response.status(400).json({ error: "Пароль не менее 6 символов" });
     const existing = await prisma.shopCustomer.findUnique({ where: { email: email.toLowerCase().trim() } });
     if (existing) return response.status(409).json({ error: "Email уже зарегистрирован" });
-    const hashed = await hashPassword(password);
+    const hashed = await _shopHashPassword(password);
     const customer = await prisma.shopCustomer.create({
       data: {
         id: require("crypto").randomBytes(12).toString("hex"),
@@ -486,7 +485,7 @@ app.post("/api/shop/auth/login", shopCors, async (request, response, next) => {
     if (!email || !password) return response.status(400).json({ error: "Email и пароль обязательны" });
     const customer = await prisma.shopCustomer.findUnique({ where: { email: email.toLowerCase().trim() } });
     if (!customer) return response.status(401).json({ error: "Неверный email или пароль" });
-    const valid = await verifyPassword(password, customer.password);
+    const valid = await _shopVerifyPassword(password, customer.password);
     if (!valid) return response.status(401).json({ error: "Неверный email или пароль" });
     const token = signShopToken({ customerId: customer.id, email: customer.email });
     response.json({ ok: true, token, customer: { id: customer.id, email: customer.email, firstName: customer.firstName, lastName: customer.lastName } });
