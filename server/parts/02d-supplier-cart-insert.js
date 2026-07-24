@@ -39,43 +39,55 @@ async function confirmYandexOrderReadyToShip(orderId, campaignId) {
   }
 }
 
-async function confirmWbOrderShipped(orderId, account = null) {
-  if (!orderId) return null;
+// Создать одну поставку WB для всех заказов аккаунта и добавить заказы в неё.
+// НЕ вызывает /deliver — физическая отгрузка делается оператором вручную.
+async function confirmWbOrdersWithSupply(rows = [], account = null) {
   const wbAccount = account || getWbAccounts({ includeSyncDisabled: true })[0];
-  if (!wbAccount) return { ok: false, orderId, reason: "no_wb_account" };
+  if (!wbAccount) return { ok: false, marketplace: "wb", reason: "no_wb_account" };
+  const orderIds = [...new Set(rows.map((row) => cleanText(row.orderId)).filter(Boolean))];
+  if (!orderIds.length) return { ok: true, marketplace: "wb", supplyId: null, orderIds: [] };
   try {
     const supply = await wbRequest(wbAccount, "marketplace", "POST", "/api/v3/supplies", {
-      name: `DavidSklad-${new Date().toISOString().slice(0, 10)}-${orderId}`,
+      name: `ДавидСклад-${new Date().toISOString().slice(0, 10)}`,
     });
     const supplyId = supply?.id;
-    if (!supplyId) return { ok: false, orderId, reason: "no_supply_id", raw: supply };
-    await wbRequest(wbAccount, "marketplace", "PATCH", `/api/v3/supplies/${supplyId}/orders/${orderId}`);
-    await wbRequest(wbAccount, "marketplace", "PATCH", `/api/v3/supplies/${supplyId}/deliver`);
-    logger.info("wb order shipped to supply", { orderId, supplyId });
-    return { ok: true, orderId, supplyId };
+    if (!supplyId) return { ok: false, marketplace: "wb", reason: "no_supply_id", raw: supply };
+    const addResults = [];
+    for (const orderId of orderIds) {
+      const numericId = Number(orderId);
+      if (!numericId) { addResults.push({ orderId, ok: false, reason: "non_numeric_id" }); continue; }
+      try {
+        await wbRequest(wbAccount, "marketplace", "PATCH", `/api/v3/supplies/${supplyId}/orders/${numericId}`);
+        addResults.push({ orderId, ok: true });
+      } catch (error) {
+        addResults.push({ orderId, ok: false, error: error?.message || String(error) });
+      }
+    }
+    const added = addResults.filter((r) => r.ok).length;
+    logger.info("wb supply created for cart orders", { supplyId, total: orderIds.length, added });
+    return { ok: true, marketplace: "wb", supplyId, orderIds, addResults };
   } catch (error) {
-    logger.warn("wb order supply create failed", { orderId, detail: error?.message || String(error) });
-    return { ok: false, orderId, error: error?.message || String(error) };
+    logger.warn("wb supply create for cart failed", { detail: error?.message || String(error) });
+    return { ok: false, marketplace: "wb", error: error?.message || String(error) };
   }
 }
 
 async function confirmMarketplaceOrdersAfterInsert(inserted = []) {
   const results = [];
 
-  // Ozon: сгруппировать не-экспресс строки по postingNumber и подтвердить упаковку
-  const ozonRows = inserted.filter(
-    (row) => row.marketplace === "ozon" && !row.isExpress && row.postingNumber && row.ozonProductId,
-  );
+  // Ozon: сгруппировать не-экспресс строки по postingNumber, подтвердить упаковку с правильным кабинетом
   const byPosting = new Map();
-  for (const row of ozonRows) {
-    if (!byPosting.has(row.postingNumber)) byPosting.set(row.postingNumber, []);
-    byPosting.get(row.postingNumber).push({
+  for (const row of inserted) {
+    if (row.marketplace !== "ozon" || row.isExpress || !row.postingNumber || !row.ozonProductId) continue;
+    if (!byPosting.has(row.postingNumber)) byPosting.set(row.postingNumber, { products: [], accountId: cleanText(row.accountId || "") });
+    byPosting.get(row.postingNumber).products.push({
       product_id: Number(row.ozonProductId),
       quantity: Math.max(1, Math.round(Number(row.quantity || 1))),
     });
   }
-  for (const [postingNumber, products] of byPosting.entries()) {
-    results.push(await confirmOzonPostingPackaged(postingNumber, products));
+  for (const [postingNumber, { products, accountId }] of byPosting.entries()) {
+    const account = getOzonAccountByTarget(accountId) || getOzonAccountByTarget("ozon");
+    results.push(await confirmOzonPostingPackaged(postingNumber, products, account));
   }
 
   // Yandex: сгруппировать не-экспресс строки по orderId и подтвердить READY_TO_SHIP
@@ -89,10 +101,23 @@ async function confirmMarketplaceOrdersAfterInsert(inserted = []) {
     results.push(await confirmYandexOrderReadyToShip(orderId, campaignId));
   }
 
+  // WB: сгруппировать заказы по кабинету, создать поставку и добавить в неё (без deliver)
+  const wbByAccount = new Map();
+  for (const row of inserted) {
+    if (row.marketplace !== "wb" || !row.orderId) continue;
+    const accountId = cleanText(row.accountId || "wb");
+    if (!wbByAccount.has(accountId)) wbByAccount.set(accountId, []);
+    wbByAccount.get(accountId).push(row);
+  }
+  for (const [accountId, wbRows] of wbByAccount.entries()) {
+    const account = getWbAccountByTarget(accountId) || getWbAccounts({ includeSyncDisabled: true })[0];
+    results.push(await confirmWbOrdersWithSupply(wbRows, account));
+  }
+
   return results;
 }
 
-async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) {
+async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, options = {}) {
   const readyRows = rows.map(normalizeSupplierCartPreviewRow).filter((row) => row.ready && !row.alreadyCommitted && row.offerRowId && row.partnerId);
   if (!readyRows.length) return { inserted: [], skipped: rows.length, docIds: [] };
   const state = await readSupplierCartState();
@@ -275,7 +300,7 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null) 
     entityId: "pricemaster",
     newValue: { inserted: inserted.length, docIds, verifiedInPriceMaster: Boolean(verification?.ok), verifiedRows: Number(verification?.verifiedRows || 0), priceMasterDb: verification?.db || "", rows: inserted },
   });
-  const pickingCreated = await createSupplierPickingRows(inserted, request);
+  const pickingCreated = await createSupplierPickingRows(inserted, request, options);
 
   // Claim returned items from the return pool (товары вернулись из ПВЗ)
   let returnClaimed = [];

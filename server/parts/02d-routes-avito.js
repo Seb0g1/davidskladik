@@ -640,3 +640,7 @@ app.get("/public/avito-stock/:token.csv", async (request, response, next) => {
     next(error);
   }
 });
+
+app.get("/avito/callback", (_request, response) => {
+  response.status(200).send("OK");
+});

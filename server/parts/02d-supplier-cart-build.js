@@ -47,18 +47,26 @@ async function buildSupplierCartPreview(params = {}) {
   );
   const state = await readSupplierCartState();
   const rows = [];
-  for (const line of uniqueLines) {
-    try {
-      rows.push(await resolveSupplierCartRow(warehouse, line, state));
-    } catch (error) {
-      rows.push(normalizeSupplierCartPreviewRow({
-        ...line,
-        ready: false,
-        skipReason: `pricemaster_error: ${error?.message || String(error)}`,
-        alreadyCommitted: Boolean(state.processed?.[line.key]),
-        requestDocId: state.processed?.[line.key]?.requestDocId,
-        requestRowId: state.processed?.[line.key]?.requestRowId,
-      }));
+  const RESOLVE_BATCH = 20;
+  for (let batchStart = 0; batchStart < uniqueLines.length; batchStart += RESOLVE_BATCH) {
+    const batch = uniqueLines.slice(batchStart, batchStart + RESOLVE_BATCH);
+    for (const line of batch) {
+      try {
+        rows.push(await resolveSupplierCartRow(warehouse, line, state));
+      } catch (error) {
+        rows.push(normalizeSupplierCartPreviewRow({
+          ...line,
+          ready: false,
+          skipReason: `pricemaster_error: ${error?.message || String(error)}`,
+          alreadyCommitted: Boolean(state.processed?.[line.key]),
+          requestDocId: state.processed?.[line.key]?.requestDocId,
+          requestRowId: state.processed?.[line.key]?.requestRowId,
+        }));
+      }
+    }
+    // Yield the event loop between batches so GC can reclaim PM query results
+    if (batchStart + RESOLVE_BATCH < uniqueLines.length) {
+      await new Promise((resolve) => setImmediate(resolve));
     }
   }
   const ready = rows.filter((row) => row.ready && !row.alreadyCommitted).length;

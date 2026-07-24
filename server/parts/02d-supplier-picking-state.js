@@ -248,11 +248,12 @@ async function writeSupplierPickingState(state = {}) {
   return normalized;
 }
 
-async function createSupplierPickingRows(inserted = [], request = null) {
+async function createSupplierPickingRows(inserted = [], request = null, options = {}) {
   const rows = inserted.map(normalizeSupplierCartPreviewRow).filter((row) => row.key);
   if (!rows.length) return [];
   const state = await readSupplierPickingState();
   const created = [];
+  const initialStatus = options.initialStatus || "open";
   for (const row of rows) {
     const existing = state.rows[row.key] ? normalizeSupplierPickingRow(state.rows[row.key]) : null;
     if (existing && existing.status !== "missing") continue;
@@ -260,13 +261,15 @@ async function createSupplierPickingRows(inserted = [], request = null) {
       ? `${row.key}|retry:${row.requestRowId || Date.now()}`
       : row.key;
     if (state.rows[pickingKey]) continue;
+    const now = new Date().toISOString();
     const pickingRow = normalizeSupplierPickingRow({
       ...row,
       key: pickingKey,
-      status: "open",
-      createdAt: row.committedAt || new Date().toISOString(),
+      status: initialStatus,
+      createdAt: row.committedAt || now,
       createdBy: requestUsername(request),
       replacementFor: existing?.status === "missing" ? existing.key : "",
+      ...(initialStatus === "picked" ? { pickedAt: now, pickedBy: requestUsername(request) || "manual" } : {}),
     });
     state.rows[pickingRow.key] = pickingRow;
     if (existing?.status === "missing") {

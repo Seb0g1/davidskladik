@@ -1,8 +1,196 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckSquare, Download, Loader2, RefreshCw, Search, Square, Upload, Tag, ArrowLeftRight } from "lucide-react";
+import { CheckSquare, ChevronDown, ChevronUp, Download, FileCode, Loader2, RefreshCw, Search, Square, Upload, Tag, ArrowLeftRight, X } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
+
+type AttrResult = {
+  ok?: boolean;
+  dryRun?: boolean;
+  total?: number;
+  updated?: number;
+  candidates?: number;
+  reason?: string;
+  tnvedCode?: string;
+  failed?: number;
+  errors?: Array<{ count?: number; offerId?: string; error?: string }>;
+  categories?: Array<{ key: string; attr: string | null; found: boolean }>;
+  sample?: Array<Record<string, unknown>>;
+};
+
+function OzonAttributesPanel() {
+  const [open, setOpen] = useState(false);
+  const [ozonTnved, setOzonTnved] = useState("");
+  const [yandexTnved, setYandexTnved] = useState("");
+
+  const clearMarkingDry = useMutation({ mutationFn: () => apiJson<AttrResult>("/api/ozon/attributes/clear-marking", { method: "POST", body: JSON.stringify({ dryRun: true }) }) });
+  const clearMarkingApply = useMutation({ mutationFn: () => apiJson<AttrResult>("/api/ozon/attributes/clear-marking", { method: "POST", body: JSON.stringify({ dryRun: false }) }) });
+
+  const ozonTnvedDry = useMutation({ mutationFn: () => apiJson<AttrResult>("/api/ozon/attributes/backfill-tnved", { method: "POST", body: JSON.stringify({ dryRun: true, tnvedCode: ozonTnved.trim() }) }) });
+  const ozonTnvedApply = useMutation({ mutationFn: () => apiJson<AttrResult>("/api/ozon/attributes/backfill-tnved", { method: "POST", body: JSON.stringify({ dryRun: false, tnvedCode: ozonTnved.trim() }) }) });
+
+  const yandexTnvedDry = useMutation({ mutationFn: () => apiJson<AttrResult>("/api/yandex/attributes/backfill-tnved", { method: "POST", body: JSON.stringify({ dryRun: true, tnvedCode: yandexTnved.trim() }) }) });
+  const yandexTnvedApply = useMutation({ mutationFn: () => apiJson<AttrResult>("/api/yandex/attributes/backfill-tnved", { method: "POST", body: JSON.stringify({ dryRun: false, tnvedCode: yandexTnved.trim() }) }) });
+
+  const renderResult = (data: AttrResult | undefined, error: Error | null) => {
+    if (error) return <div className="inline-error">{error.message}</div>;
+    if (!data) return null;
+    const rows = data.categories?.filter((c) => !c.found) || [];
+    return (
+      <div className={`info-strip${data.ok ? " success" : " warn"} compact`} style={{ marginTop: 8 }}>
+        {data.dryRun ? (
+          <span>Проверка: всего товаров {data.total}, будет обновлено {data.candidates ?? data.updated ?? 0}
+            {data.reason ? ` (${data.reason})` : ""}.
+          </span>
+        ) : (
+          <span>Готово: обновлено {data.updated} из {data.total}
+            {data.failed ? ` · ошибок: ${data.failed}` : ""}.
+          </span>
+        )}
+        {rows.length > 0 ? <div style={{ marginTop: 4, fontSize: "0.85em", opacity: 0.8 }}>Атрибут не найден в категориях: {rows.map((c) => c.key).join(", ")}</div> : null}
+        {data.errors?.length ? <div style={{ marginTop: 4, fontSize: "0.85em", color: "var(--color-error)" }}>Ошибки: {data.errors.slice(0, 3).map((e) => e.error || "неизвестно").join("; ")}</div> : null}
+      </div>
+    );
+  };
+
+  return (
+    <div className="table-panel" style={{ marginTop: 24 }}>
+      <button
+        type="button"
+        className="section-title"
+        style={{ width: "100%", background: "none", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px" }}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <div>
+          <span>Атрибуты товаров</span>
+          <h3>ТН ВЭД и код маркировки для Ozon и Яндекс.Маркет</h3>
+        </div>
+        {open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+      </button>
+
+      {open ? (
+        <div style={{ padding: "0 16px 16px" }}>
+
+          {/* Снять код маркировки Ozon */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>
+              <X size={14} style={{ verticalAlign: "middle", marginRight: 4 }} />
+              Снять «Нужен код маркировки» на Ozon
+            </div>
+            <div style={{ fontSize: "0.85em", opacity: 0.75, marginBottom: 8 }}>
+              Убирает галочку «Нужен код маркировки (Честный знак)» со всех товаров в кабинете Ozon.
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                className="secondary-action"
+                type="button"
+                disabled={clearMarkingDry.isPending || clearMarkingApply.isPending}
+                onClick={() => clearMarkingDry.mutate()}
+              >
+                {clearMarkingDry.isPending ? <Loader2 className="spin" size={14} /> : <FileCode size={14} />} Проверить
+              </button>
+              {clearMarkingDry.data && !clearMarkingDry.data.dryRun === false ? null : null}
+              {clearMarkingDry.data?.candidates ? (
+                <button
+                  className="primary-action"
+                  type="button"
+                  disabled={clearMarkingApply.isPending}
+                  onClick={() => clearMarkingApply.mutate()}
+                >
+                  {clearMarkingApply.isPending ? <Loader2 className="spin" size={14} /> : <X size={14} />}
+                  Снять маркировку ({clearMarkingDry.data.candidates} тов.)
+                </button>
+              ) : null}
+            </div>
+            {renderResult(clearMarkingDry.data, clearMarkingDry.error as Error | null)}
+            {renderResult(clearMarkingApply.data, clearMarkingApply.error as Error | null)}
+          </div>
+
+          {/* ТНВЭД Ozon */}
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>
+              <FileCode size={14} style={{ verticalAlign: "middle", marginRight: 4 }} />
+              ТН ВЭД для Ozon
+            </div>
+            <div style={{ fontSize: "0.85em", opacity: 0.75, marginBottom: 8 }}>
+              Заполняет атрибут «ТН ВЭД» на всех товарах в кабинете Ozon. Код вводится в формате Ozon — например, <code>3303301000</code>.
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input
+                value={ozonTnved}
+                onChange={(e) => setOzonTnved(e.target.value)}
+                placeholder="Например: 3303301000"
+                style={{ width: 180 }}
+              />
+              <button
+                className="secondary-action"
+                type="button"
+                disabled={!ozonTnved.trim() || ozonTnvedDry.isPending || ozonTnvedApply.isPending}
+                onClick={() => ozonTnvedDry.mutate()}
+              >
+                {ozonTnvedDry.isPending ? <Loader2 className="spin" size={14} /> : <FileCode size={14} />} Проверить
+              </button>
+              {ozonTnvedDry.data?.candidates ? (
+                <button
+                  className="primary-action"
+                  type="button"
+                  disabled={ozonTnvedApply.isPending}
+                  onClick={() => ozonTnvedApply.mutate()}
+                >
+                  {ozonTnvedApply.isPending ? <Loader2 className="spin" size={14} /> : <Upload size={14} />}
+                  Установить ({ozonTnvedDry.data.candidates} тов.)
+                </button>
+              ) : null}
+            </div>
+            {renderResult(ozonTnvedDry.data, ozonTnvedDry.error as Error | null)}
+            {renderResult(ozonTnvedApply.data, ozonTnvedApply.error as Error | null)}
+          </div>
+
+          {/* ТНВЭД Яндекс */}
+          <div>
+            <div style={{ fontWeight: 600, marginBottom: 6 }}>
+              <FileCode size={14} style={{ verticalAlign: "middle", marginRight: 4 }} />
+              ТН ВЭД для Яндекс.Маркет
+            </div>
+            <div style={{ fontSize: "0.85em", opacity: 0.75, marginBottom: 8 }}>
+              Отправляет код ТН ВЭД в карточки Яндекс.Маркет через поле <code>customsTariffCode</code>. Например: <code>3303 30 100 0</code>.
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input
+                value={yandexTnved}
+                onChange={(e) => setYandexTnved(e.target.value)}
+                placeholder="Например: 3303 30 100 0"
+                style={{ width: 180 }}
+              />
+              <button
+                className="secondary-action"
+                type="button"
+                disabled={!yandexTnved.trim() || yandexTnvedDry.isPending || yandexTnvedApply.isPending}
+                onClick={() => yandexTnvedDry.mutate()}
+              >
+                {yandexTnvedDry.isPending ? <Loader2 className="spin" size={14} /> : <FileCode size={14} />} Проверить
+              </button>
+              {yandexTnvedDry.data?.candidates ? (
+                <button
+                  className="primary-action"
+                  type="button"
+                  disabled={yandexTnvedApply.isPending}
+                  onClick={() => yandexTnvedApply.mutate()}
+                >
+                  {yandexTnvedApply.isPending ? <Loader2 className="spin" size={14} /> : <Upload size={14} />}
+                  Установить ({yandexTnvedDry.data.candidates} тов.)
+                </button>
+              ) : null}
+            </div>
+            {renderResult(yandexTnvedDry.data, yandexTnvedDry.error as Error | null)}
+            {renderResult(yandexTnvedApply.data, yandexTnvedApply.error as Error | null)}
+          </div>
+
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 type Candidate = {
   id: string;
@@ -326,6 +514,8 @@ export function ImportPage() {
         <span>Стр. {page} · {total} тов.</span>
         <button className="secondary-action" type="button" disabled={page * 40 >= total} onClick={() => setPage((value) => value + 1)}>Дальше</button>
       </div>
+
+      <OzonAttributesPanel />
     </section>
   );
 }

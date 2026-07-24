@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, Clock3, Database, ListChecks, Loader2, Package, PackageOpen, RefreshCw, Repeat2, RotateCcw, Search, Settings2, Trash2 } from "lucide-react";
 import { z } from "zod";
@@ -254,14 +254,24 @@ function ReadyToShipPanel() {
 
 function PmSearchPanel() {
   const [searchQ, setSearchQ] = useState("");
-  const [submittedQ, setSubmittedQ] = useState("");
+  const [activeQ, setActiveQ] = useState("");
   const [selected, setSelected] = useState<Record<string, { qty: number; item: PmSearchItem }>>({});
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const trimmed = searchQ.trim();
+    if (!trimmed) { setActiveQ(""); return; }
+    debounceRef.current = setTimeout(() => setActiveQ(trimmed), 400);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [searchQ]);
+
   const searchQuery = useQuery({
-    queryKey: ["pm-search", submittedQ],
-    queryFn: () => fetchJson(`/api/supplier-cart/pm-search?q=${encodeURIComponent(submittedQ)}&limit=80`, PmSearchResponseSchema),
-    enabled: Boolean(submittedQ),
+    queryKey: ["pm-search", activeQ],
+    queryFn: () => fetchJson(`/api/supplier-cart/pm-search?q=${encodeURIComponent(activeQ)}&limit=80`, PmSearchResponseSchema),
+    enabled: Boolean(activeQ),
     staleTime: 60_000,
   });
 
@@ -279,6 +289,7 @@ function PmSearchPanel() {
 
   const items = searchQuery.data?.items ?? [];
   const selectedCount = Object.keys(selected).length;
+  const isSearching = searchQuery.isLoading || (searchQ.trim() !== activeQ && Boolean(searchQ.trim()));
 
   const toggleItem = (item: PmSearchItem) => {
     setSelected((prev) => {
@@ -296,24 +307,31 @@ function PmSearchPanel() {
       <div className="section-title">
         <div>
           <span>Поиск в PriceMaster</span>
-          <h3>Найдите товар по названию и добавьте напрямую в закупку</h3>
+          <h3>Найдите товар по названию или артикулу и добавьте в закупку</h3>
         </div>
       </div>
-      <form
-        className="control-grid compact-controls"
-        onSubmit={(e) => { e.preventDefault(); setSubmittedQ(searchQ.trim()); }}
-        style={{ display: "flex", gap: 8, alignItems: "flex-end" }}
-      >
-        <label style={{ flex: 1 }}>
-          Поиск по названию товара (только позиции в наличии)
-          <input value={searchQ} onChange={(e) => setSearchQ(e.target.value)} placeholder="Например: Chanel Jersey, Dior Sauvage…" />
-        </label>
-        <button className="primary-action" type="submit" disabled={!searchQ.trim()} style={{ alignSelf: "flex-end" }}>
-          <Search size={14} /> Найти в PM
-        </button>
-      </form>
+      <div className="control-grid compact-controls" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div style={{ position: "relative", flex: 1 }}>
+          <Search size={14} style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", opacity: 0.45, pointerEvents: "none" }} />
+          <input
+            ref={inputRef}
+            value={searchQ}
+            onChange={(e) => setSearchQ(e.target.value)}
+            placeholder="Chanel No5, Dior Sauvage 50ml, артикул…"
+            autoFocus
+            style={{ paddingLeft: 30, paddingRight: isSearching ? 30 : undefined }}
+          />
+          {isSearching ? (
+            <Loader2 className="spin" size={14} style={{ position: "absolute", right: 9, top: "50%", transform: "translateY(-50%)", opacity: 0.5 }} />
+          ) : null}
+        </div>
+        {searchQ ? (
+          <button className="secondary-action" type="button" onClick={() => { setSearchQ(""); setActiveQ(""); inputRef.current?.focus(); }}>
+            Очистить
+          </button>
+        ) : null}
+      </div>
 
-      {searchQuery.isLoading ? <div className="soft-empty"><Loader2 className="spin" size={16} /> Ищу в PriceMaster…</div> : null}
       {searchQuery.error ? <div className="inline-error">{errorMessage(searchQuery.error)}</div> : null}
       {commitMutation.error ? <div className="inline-error">{errorMessage(commitMutation.error)}</div> : null}
       {commitMutation.data ? (
@@ -324,8 +342,24 @@ function PmSearchPanel() {
 
       {items.length ? (
         <>
-          <div className="new-products-count-strip">
-            {items.length} результатов · выбрано {selectedCount}
+          <div className="new-products-count-strip" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>{items.length} результатов · выбрано {selectedCount}</span>
+            {selectedCount > 0 ? (
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  className="primary-action"
+                  type="button"
+                  disabled={commitMutation.isPending}
+                  onClick={() => commitMutation.mutate()}
+                >
+                  {commitMutation.isPending ? <Loader2 className="spin" size={14} /> : <Database size={14} />}
+                  Добавить в PM ({selectedCount} поз.)
+                </button>
+                <button className="secondary-action" type="button" onClick={() => setSelected({})}>
+                  Снять
+                </button>
+              </div>
+            ) : null}
           </div>
           <div className="supplier-cart-list">
             {items.map((item) => {
@@ -369,27 +403,14 @@ function PmSearchPanel() {
               );
             })}
           </div>
-          {selectedCount > 0 ? (
-            <div className="supplier-cart-actions" style={{ marginTop: 12 }}>
-              <button
-                className="primary-action"
-                type="button"
-                disabled={commitMutation.isPending}
-                onClick={() => commitMutation.mutate()}
-              >
-                {commitMutation.isPending ? <Loader2 className="spin" size={14} /> : <Database size={14} />}
-                Добавить выбранное в PM ({selectedCount} поз.)
-              </button>
-              <button className="secondary-action" type="button" onClick={() => setSelected({})}>
-                Снять выделение
-              </button>
-            </div>
-          ) : null}
         </>
       ) : null}
 
-      {submittedQ && !items.length && !searchQuery.isLoading ? (
-        <div className="soft-empty">Ничего не найдено по запросу «{submittedQ}».</div>
+      {activeQ && !items.length && !searchQuery.isLoading ? (
+        <div className="soft-empty">Ничего не найдено по запросу «{activeQ}».</div>
+      ) : null}
+      {!searchQ ? (
+        <div className="soft-empty">Начните вводить название товара — поиск запустится автоматически.</div>
       ) : null}
     </section>
   );
@@ -404,6 +425,7 @@ const ALL_MARKETPLACES = [
 export function SupplierCartPage() {
   const [tab, setTab] = useState<"cart" | "ready" | "pm-search">("cart");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showPmSearch, setShowPmSearch] = useState(false);
   const [pendingMarketplaces, setPendingMarketplaces] = useState<string[] | null>(null);
   const queryClient = useQueryClient();
   const schedule = useQuery({
@@ -464,6 +486,14 @@ export function SupplierCartPage() {
         subtitle={`Заказы ${activeMarketplaces.map((m) => m === "wb" ? "Wildberries" : m === "yandex" ? "Yandex Market" : "Ozon").join(", ")} автоматически отправляются в корзину PriceMaster по расписанию.`}
         action={
           <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className={`secondary-action${showPmSearch ? " active" : ""}`}
+              type="button"
+              onClick={() => { setShowPmSearch((v) => !v); if (tab !== "cart") setTab("cart"); }}
+            >
+              <Search size={15} />
+              Поиск в PM
+            </button>
             <button
               className={`secondary-action${settingsOpen ? " active" : ""}`}
               type="button"
@@ -610,6 +640,7 @@ export function SupplierCartPage() {
         </button>
       </div>
       {tab === "cart" ? <SupplierCartPanel /> : tab === "ready" ? <ReadyToShipPanel /> : <PmSearchPanel />}
+      {tab === "cart" && showPmSearch ? <PmSearchPanel /> : null}
     </section>
   );
 }

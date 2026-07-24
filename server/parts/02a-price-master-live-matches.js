@@ -202,7 +202,7 @@ async function findPriceMasterSnapshotRowsForLink(linkInput, usdRate, managedSup
   const rows = await prisma.priceMasterSnapshotItem.findMany({
     where: { AND: and },
     orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
-    take: 200,
+    take: 50,
   });
   return rows
     .map((row) => priceMasterSnapshotLinkRow(row, link, usdRate, supplierMaps))

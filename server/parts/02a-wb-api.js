@@ -198,6 +198,23 @@ async function wbGoodsPrices(account, { limit = 1000, offset = 0, filterNmID = 0
   return Array.isArray(data?.data?.listGoods) ? data.data.listGoods : [];
 }
 
+// Архивирование карточек: POST /content/v2/cards/archive { nmIDs: [...] }
+async function wbArchiveCards(account, nmIDs = []) {
+  const ids = (Array.isArray(nmIDs) ? nmIDs : []).map(Number).filter((n) => n > 0);
+  if (!ids.length) return { ok: true, archived: 0 };
+  const results = [];
+  for (const chunk of chunkArray(ids, 1000)) {
+    const result = await wbRequest(account, "content", "POST", "/content/v2/cards/archive", { nmIDs: chunk });
+    if (result?.error) {
+      const error = new Error(cleanText(result?.errorText) || "WB отклонил архивирование карточек");
+      error.wb = result;
+      throw error;
+    }
+    results.push(result);
+  }
+  return { ok: true, archived: ids.length, results };
+}
+
 // --- Склады и остатки (FBS) ---
 
 async function wbWarehouses(account) {

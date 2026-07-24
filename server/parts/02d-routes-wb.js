@@ -473,63 +473,106 @@ app.post("/api/wb/prices/send", requireAdmin, async (request, response, next) =>
   try {
     const account = resolveWbAccountOr404(request, response);
     if (!account) return;
-    const rules = await readWbImportRules();
-    const pricing = await loadAvitoPricingContext();
-    const onlyVendorCodes = new Set((Array.isArray(request.body?.vendorCodes) ? request.body.vendorCodes : [])
-      .map((value) => cleanText(value).toLowerCase())
-      .filter(Boolean));
-
-    const cards = await wbCardsList(account);
-    const targetCards = cards.filter((card) => (
-      Number(card.nmID) > 0 && (!onlyVendorCodes.size || onlyVendorCodes.has(cleanText(card.vendorCode).toLowerCase()))
-    ));
-    const linked = await loadWbLinkedOzonProducts(targetCards.map((card) => card.vendorCode));
-
-    const items = [];
-    let skippedBelowMin = 0;
-    let skippedAboveMax = 0;
-    let skippedNoSupplier = 0;
-    let skippedNotLinked = 0;
-    for (const card of targetCards) {
-      const product = linked.get(cleanText(card.vendorCode).toLowerCase());
-      if (!product) {
-        skippedNotLinked += 1;
-        continue;
-      }
-      const purchaseRub = wbSupplierPurchaseRub(product.supplier, pricing);
-      if (!(purchaseRub > 0)) {
-        skippedNoSupplier += 1;
-        continue;
-      }
-      if (rules.minSupplierPriceRub > 0 && purchaseRub < rules.minSupplierPriceRub) {
-        skippedBelowMin += 1;
-        continue;
-      }
-      const priceRub = wbSupplierPriceRub(product.supplier, pricing);
-      if (rules.maxWbPriceRub > 0 && priceRub > rules.maxWbPriceRub) {
-        skippedAboveMax += 1;
-        continue;
-      }
-      if (priceRub > 0) items.push({ nmID: card.nmID, price: priceRub, discount: 0 });
-    }
 
     const dryRun = request.body?.dryRun === true;
-    const result = dryRun ? { ok: true, sent: 0 } : await wbSetPrices(account, items);
-    if (!dryRun) await appendAudit(request, "wb.prices.send", { newValue: { prepared: items.length, skippedBelowMin } });
-    response.json({
-      ok: result.ok,
-      dryRun,
-      cards: targetCards.length,
-      prepared: items.length,
-      sent: dryRun ? 0 : items.length,
-      skippedBelowMin,
-      skippedAboveMax,
-      skippedNoSupplier,
-      skippedNotLinked,
-      minSupplierPriceRub: rules.minSupplierPriceRub,
-      maxWbPriceRub: rules.maxWbPriceRub,
-      tasks: result.tasks || [],
-      sample: items.slice(0, 20),
+    const vcArr = (Array.isArray(request.body?.vendorCodes) ? request.body.vendorCodes : [])
+      .map((value) => cleanText(value).toLowerCase())
+      .filter(Boolean);
+
+    async function buildItems() {
+      const rules = await readWbImportRules();
+      const pricing = await loadAvitoPricingContext();
+      const vcSet = new Set(vcArr);
+      const cards = await wbCardsList(account);
+      const targetCards = cards.filter((card) => (
+        Number(card.nmID) > 0 && (!vcSet.size || vcSet.has(cleanText(card.vendorCode).toLowerCase()))
+      ));
+      const linked = await loadWbLinkedOzonProducts(targetCards.map((card) => card.vendorCode));
+      const items = [];
+      let skippedBelowMin = 0;
+      let skippedAboveMax = 0;
+      let skippedNoSupplier = 0;
+      let skippedNotLinked = 0;
+      for (const card of targetCards) {
+        const product = linked.get(cleanText(card.vendorCode).toLowerCase());
+        if (!product) { skippedNotLinked += 1; continue; }
+        const purchaseRub = wbSupplierPurchaseRub(product.supplier, pricing);
+        if (!(purchaseRub > 0)) { skippedNoSupplier += 1; continue; }
+        if (rules.minSupplierPriceRub > 0 && purchaseRub < rules.minSupplierPriceRub) { skippedBelowMin += 1; continue; }
+        const priceRub = wbSupplierPriceRub(product.supplier, pricing);
+        if (rules.maxWbPriceRub > 0 && priceRub > rules.maxWbPriceRub) { skippedAboveMax += 1; continue; }
+        if (priceRub > 0) items.push({ nmID: card.nmID, price: priceRub, discount: 0 });
+      }
+      return { items, targetCards, skippedBelowMin, skippedAboveMax, skippedNoSupplier, skippedNotLinked, rules };
+    }
+
+    if (dryRun) {
+      const { items, targetCards, skippedBelowMin, skippedAboveMax, skippedNoSupplier, skippedNotLinked, rules } = await buildItems();
+      return response.json({
+        ok: true, dryRun: true, sent: 0, tasks: [],
+        cards: targetCards.length, prepared: items.length,
+        skippedBelowMin, skippedAboveMax, skippedNoSupplier, skippedNotLinked,
+        minSupplierPriceRub: rules.minSupplierPriceRub, maxWbPriceRub: rules.maxWbPriceRub,
+        sample: items.slice(0, 20),
+      });
+    }
+
+    // Реальная отправка: отвечаем немедленно, всё тяжёлое (wbCardsList + wbSetPrices)
+    // идёт в фоне, иначе nginx режет по таймауту на 8000+ карточках.
+    void appendAudit(request, "wb.prices.send", { newValue: { async: true, vcCount: vcArr.length } });
+    response.status(202).json({ ok: true, dryRun: false, async: true, message: "Отправка цен запущена в фоне" });
+
+    setImmediate(() => {
+      buildItems()
+        .then(({ items }) => wbSetPrices(account, items))
+        .then((result) => logger.info("wb prices send background complete", { sent: result.sent, tasks: result.tasks?.length }))
+        .catch((error) => logger.error("wb prices send background failed", { detail: error?.message || String(error) }));
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Архивирование карточек WB с ценой выше лимита (или явным списком nmIDs).
+// Отвечает 202 немедленно, архивирует в фоне.
+app.post("/api/wb/cards/archive-above-limit", requireAdmin, async (request, response, next) => {
+  try {
+    const account = resolveWbAccountOr404(request, response);
+    if (!account) return;
+
+    void appendAudit(request, "wb.cards.archive_above_limit", { newValue: { async: true } });
+    response.status(202).json({ ok: true, async: true, message: "Архивирование запущено в фоне" });
+
+    setImmediate(async () => {
+      try {
+        const rules = await readWbImportRules();
+        const pricing = await loadAvitoPricingContext();
+        const cards = await wbCardsList(account);
+        const linked = await loadWbLinkedOzonProducts(cards.map((c) => c.vendorCode));
+
+        const toArchive = [];
+        for (const card of cards) {
+          if (!Number(card.nmID)) continue;
+          const product = linked.get(cleanText(card.vendorCode).toLowerCase());
+          if (!product) continue;
+          const purchaseRub = wbSupplierPurchaseRub(product.supplier, pricing);
+          const priceRub = purchaseRub > 0 ? wbSupplierPriceRub(product.supplier, pricing) : 0;
+          const sellable = wbCardSellable({ product, purchaseRub, priceRub, rules });
+          if (!sellable && priceRub > rules.maxWbPriceRub) toArchive.push(Number(card.nmID));
+        }
+
+        logger.info("wb archive above limit: candidates found", { toArchive: toArchive.length, sampleNmIDs: toArchive.slice(0, 5) });
+
+        if (!toArchive.length) {
+          logger.info("wb archive above limit: nothing to archive");
+          return;
+        }
+
+        const result = await wbArchiveCards(account, toArchive);
+        logger.info("wb archive above limit complete", { archived: result.archived, total: toArchive.length, results: result.results });
+      } catch (error) {
+        logger.error("wb archive above limit failed", { detail: error?.message || String(error), wb: error?.wb });
+      }
     });
   } catch (error) {
     next(error);

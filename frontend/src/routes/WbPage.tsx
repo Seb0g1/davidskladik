@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Image, Loader2, Package, RefreshCw, Save, Send, Warehouse, Zap } from "lucide-react";
+import { AlertTriangle, Archive, Image, Loader2, Package, RefreshCw, Save, Send, Warehouse, Zap } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { useDebounced } from "../lib/common";
@@ -158,6 +158,10 @@ export function WbPage() {
     },
   });
 
+  const archiveAboveLimit = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; async: boolean; message: string }>("/api/wb/cards/archive-above-limit", { method: "POST", body: JSON.stringify({}) }),
+  });
+
   const previewStocks = useMutation({
     mutationFn: () => apiJson<WbStocksSyncResult>("/api/wb/stocks/sync", { method: "POST", body: JSON.stringify({ dryRun: true, warehouseId }) }),
     onSuccess: (data) => setStockPreview(data),
@@ -196,6 +200,9 @@ export function WbPage() {
             </button>
             <button className="primary-action" type="button" disabled={!wbConfigured || sendPrices.isPending} onClick={() => sendPrices.mutate()}>
               {sendPrices.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Отправить цены
+            </button>
+            <button className="secondary-action" type="button" disabled={!wbConfigured || archiveAboveLimit.isPending} onClick={() => { if (window.confirm("Отправить в архив WB все карточки с ценой > 20 000 ₽?")) archiveAboveLimit.mutate(); }}>
+              {archiveAboveLimit.isPending ? <Loader2 className="spin" size={16} /> : <Archive size={16} />} Архив выше лимита
             </button>
           </div>
         )}

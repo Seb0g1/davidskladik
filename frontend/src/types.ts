@@ -647,6 +647,16 @@ export const SupplierCartPreviewSchema = z.object({
   warnings: z.array(z.record(z.string(), z.unknown())).optional().default([]),
 }).passthrough();
 
+export const MarketplaceConfirmSchema = z.object({
+  ok: z.boolean().optional().default(false),
+  marketplace: z.coerce.string().optional().default(""),
+  postingNumber: z.coerce.string().optional().default(""),
+  orderId: z.coerce.string().optional().default(""),
+  supplyId: z.coerce.string().optional().nullable(),
+  reason: z.coerce.string().optional().default(""),
+  error: z.coerce.string().optional().default(""),
+}).passthrough();
+
 export const SupplierCartCommitSchema = z.object({
   ok: z.boolean().optional(),
   inserted: z.number().optional().default(0),
@@ -656,6 +666,7 @@ export const SupplierCartCommitSchema = z.object({
   verifiedInPriceMaster: z.boolean().optional().default(false),
   verifiedRows: z.number().optional().default(0),
   priceMasterDb: z.coerce.string().optional().default(""),
+  marketplaceConfirms: z.array(MarketplaceConfirmSchema).optional().default([]),
   rows: z.array(SupplierCartRowSchema).optional().default([]),
 }).passthrough();
 

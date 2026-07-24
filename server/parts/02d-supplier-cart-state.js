@@ -226,9 +226,20 @@ async function writeSupplierCartState(state = {}) {
       logger.warn("write supplier cart state postgres failed, using JSON fallback", { detail: error?.message || String(error) });
     }
   }
+  // Prune processed entries older than 30 days to keep the JSON file small.
+  // Orders that old are always fulfilled — old keys can't reappear in the cart.
+  const processedCutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const prunedProcessed = {};
+  for (const [key, entry] of Object.entries(normalized.processed || {})) {
+    const committedAt = toDateOrNull(entry?.committedAt);
+    if (!committedAt || committedAt.getTime() >= processedCutoffMs) {
+      prunedProcessed[key] = entry;
+    }
+  }
+  const toWrite = { ...normalized, processed: prunedProcessed };
   await fs.mkdir(dataDir, { recursive: true });
   const temporaryPath = `${supplierCartStatePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(temporaryPath, JSON.stringify(normalized, null, 2), "utf8");
+  await fs.writeFile(temporaryPath, JSON.stringify(toWrite), "utf8");
   await fs.rename(temporaryPath, supplierCartStatePath);
   return normalized;
 }

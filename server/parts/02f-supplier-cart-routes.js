@@ -97,6 +97,7 @@ app.post("/api/supplier-cart/commit", requireAdmin, async (request, response, ne
       verifiedInPriceMaster: Boolean(result.verification?.ok),
       verifiedRows: Number(result.verification?.verifiedRows || 0),
       priceMasterDb: result.verification?.db || "",
+      marketplaceConfirms: result.marketplaceConfirms || [],
       rows: result.inserted,
     });
   } catch (error) {
@@ -182,7 +183,20 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     if (!prisma) return response.status(503).json({ ok: false, error: "Database not available" });
     const where = { active: true, price: { not: null, gt: 0 } };
     if (q) {
-      where.nativeName = { contains: q, mode: "insensitive" };
+      const tokens = q.split(/\s+/).filter(Boolean);
+      if (tokens.length === 1) {
+        where.OR = [
+          { nativeName: { contains: tokens[0], mode: "insensitive" } },
+          { article: { contains: tokens[0], mode: "insensitive" } },
+        ];
+      } else {
+        where.AND = tokens.map((token) => ({
+          OR: [
+            { nativeName: { contains: token, mode: "insensitive" } },
+            { article: { contains: token, mode: "insensitive" } },
+          ],
+        }));
+      }
     }
     if (partnerId) where.partnerId = partnerId;
     const items = await prisma.priceMasterSnapshotItem.findMany({
@@ -250,7 +264,7 @@ app.post("/api/supplier-cart/pm-manual-commit", requireAdmin, async (request, re
       })
       .filter(Boolean);
     if (!cartRows.length) return response.status(400).json({ ok: false, error: "No valid rows found in PriceMaster snapshot." });
-    const result = await insertSupplierCartRowsIntoPriceMaster(cartRows, request);
+    const result = await insertSupplierCartRowsIntoPriceMaster(cartRows, request, { initialStatus: "picked" });
     response.json({
       ok: true,
       inserted: result.inserted.length,

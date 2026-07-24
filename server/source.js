@@ -252,6 +252,7 @@ const partFiles = [
   "02f-finance-orders-sync.js",
   "02f-reviews-routes.js",
   "02f-ozon-name-backfill.js",
+  "02f-ozon-attribute-backfill.js",
   "02f-ozon-new-offer-discovery.js",
   "02f-questions-routes.js",
   "02f-chats-routes.js",
