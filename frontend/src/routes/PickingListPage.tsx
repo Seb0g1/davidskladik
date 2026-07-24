@@ -110,6 +110,12 @@ export function PickingListPage() {
     enabled: isAdmin,
     refetchInterval: 60_000,
   });
+  const allUsersQuery = useQuery({
+    queryKey: ["app-users"],
+    queryFn: () => fetchJson("/api/users", z.object({ users: z.array(z.object({ username: z.coerce.string(), role: z.coerce.string().optional().default("manager"), disabled: z.boolean().optional().default(false) })).optional().default([]) }).passthrough()),
+    enabled: isAdmin,
+    staleTime: 120_000,
+  });
 
   const [cashDraft, setCashDraft] = useState("");
   const [cashNoteDraft, setCashNoteDraft] = useState("");
@@ -231,6 +237,14 @@ export function PickingListPage() {
   const invoiceRows = invoiceQuery.data?.rows || [];
   const myBalance = myBalanceQuery.data?.total ?? 0;
   const allBalances = allBalancesQuery.data?.balances ?? [];
+  // All non-admin active accounts, for populating the picker datalist
+  const knownPickerUsernames = useMemo(() => {
+    const fromUsers = (allUsersQuery.data?.users ?? [])
+      .filter((u) => !u.disabled && u.role !== "admin")
+      .map((u) => u.username);
+    const fromBalances = allBalances.map((b) => b.username);
+    return [...new Set([...fromUsers, ...fromBalances])].sort();
+  }, [allUsersQuery.data, allBalances]);
 
   const copyInvoice = async () => {
     const text = invoiceRows.map((row) => [
@@ -312,7 +326,7 @@ export function PickingListPage() {
                   onChange={(e) => setIssuePickerDraft(e.target.value)}
                 />
                 <datalist id="picker-usernames-list">
-                  {allBalances.map((b) => <option key={b.username} value={b.username} />)}
+                  {knownPickerUsernames.map((u) => <option key={u} value={u} />)}
                 </datalist>
                 <input
                   type="number"
