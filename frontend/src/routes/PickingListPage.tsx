@@ -320,88 +320,93 @@ export function PickingListPage() {
           {/* Admin: issue form + all pickers */}
           {isAdmin ? (
             <div className="picker-balance-panel-admin">
-              <div className="picker-balance-panel-label"><Users size={14} /> Выдать деньги</div>
 
-              <div className="picker-issue-form">
-                <datalist id="picker-usernames-list">
-                  {knownPickerUsernames.map((u) => <option key={u} value={u} />)}
-                </datalist>
-                <input
-                  list="picker-usernames-list"
-                  className="picker-issue-name"
-                  placeholder="Имя сборщика"
-                  value={issuePickerDraft}
-                  onChange={(e) => setIssuePickerDraft(e.target.value)}
-                />
-                <div className="picker-issue-amount-row">
+              {/* Picker selector chips */}
+              {knownPickerUsernames.length > 0 ? (
+                <div className="picker-select-section">
+                  <div className="picker-select-label"><Users size={13} /> Сборщик</div>
+                  <div className="picker-select-chips">
+                    {knownPickerUsernames.map((u) => {
+                      const b = allBalances.find((x) => x.username === u);
+                      const total = b?.total ?? 0;
+                      return (
+                        <button
+                          key={u}
+                          type="button"
+                          className={`picker-select-chip${issuePickerDraft === u ? " active" : ""}`}
+                          onClick={() => setIssuePickerDraft(issuePickerDraft === u ? "" : u)}
+                        >
+                          <span className="picker-chip-avatar">{u[0].toUpperCase()}</span>
+                          <span className="picker-chip-name">{u}</span>
+                          <span className={`picker-chip-balance${total > 0 ? " pos" : total < 0 ? " neg" : ""}`}>{balanceStr(total)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Amount + issue */}
+              <div className="picker-issue-body">
+                <div className="picker-issue-amount-wrap">
+                  <span className="picker-issue-currency">₽</span>
                   <input
                     type="number"
                     min="0"
                     step="1"
-                    placeholder="Сумма, ₽"
+                    placeholder="0"
+                    className="picker-issue-amount-input"
                     value={issueAmountDraft}
                     onChange={(e) => setIssueAmountDraft(e.target.value)}
                   />
-                  <button
-                    className="primary-action"
-                    type="button"
-                    disabled={issueBalanceMutation.isPending || !issuePickerDraft.trim() || !(Number(issueAmountDraft) > 0)}
-                    onClick={() => {
-                      issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Number(issueAmountDraft), note: issueNoteDraft });
-                    }}
-                  >
-                    {issueBalanceMutation.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Выдать
-                  </button>
                 </div>
                 <input
-                  className="picker-issue-note"
+                  className="picker-issue-note-input"
                   placeholder="Комментарий (необязательно)"
                   value={issueNoteDraft}
                   onChange={(e) => setIssueNoteDraft(e.target.value)}
                 />
+                <button
+                  className="primary-action picker-issue-submit"
+                  type="button"
+                  disabled={issueBalanceMutation.isPending || !issuePickerDraft.trim() || !(Number(issueAmountDraft) > 0)}
+                  onClick={() => issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Number(issueAmountDraft), note: issueNoteDraft })}
+                >
+                  {issueBalanceMutation.isPending
+                    ? <><Loader2 className="spin" size={15} /> Выдаю…</>
+                    : <><Check size={15} /> Выдать {issuePickerDraft ? `→ ${issuePickerDraft}` : ""}</>}
+                </button>
               </div>
 
-              {issueBalanceMutation.error ? <div className="inline-error" style={{ marginTop: 6 }}>{errorMessage(issueBalanceMutation.error)}</div> : null}
+              {issueBalanceMutation.error ? <div className="inline-error" style={{ margin: "6px 0 0" }}>{errorMessage(issueBalanceMutation.error)}</div> : null}
 
-              {/* All pickers list — show all known users, merge with balance data */}
-              {knownPickerUsernames.length > 0 ? (
-                <div className="picker-all-balances">
-                  {knownPickerUsernames.map((username) => {
-                    const b = allBalances.find((x) => x.username === username);
-                    const total = b?.total ?? 0;
-                    return (
-                      <div
-                        className="picker-all-balance-row"
-                        key={username}
-                        onClick={() => setIssuePickerDraft(username)}
-                        title="Кликните, чтобы выбрать"
-                      >
-                        <span className="picker-all-balance-name">{username}</span>
-                        <span className={`picker-all-balance-total${total > 0 ? " tone-success" : total < 0 ? " tone-danger" : " tone-muted"}`}>
-                          {balanceStr(total)}
-                        </span>
-                        <div className="picker-all-balance-credits">
-                          {(b?.credits ?? []).slice(-3).reverse().map((c) => (
-                            <span key={c.id} className="picker-all-balance-credit">
-                              +{balanceStr(c.amount ?? 0)}
-                              {c.note ? ` · ${c.note}` : ""}
-                              <button
-                                className="icon-action danger-action"
-                                type="button"
-                                title="Удалить"
-                                disabled={deleteBalanceCreditMutation.isPending}
-                                onClick={(e) => { e.stopPropagation(); deleteBalanceCreditMutation.mutate({ username, id: c.id }); }}
-                              >
-                                <Trash2 size={11} />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
+              {/* Per-picker credit history */}
+              {issuePickerDraft && (() => {
+                const b = allBalances.find((x) => x.username === issuePickerDraft);
+                const credits = b?.credits ?? [];
+                if (!credits.length) return null;
+                return (
+                  <div className="picker-credit-history">
+                    <div className="picker-credit-history-label">История выдач — {issuePickerDraft}</div>
+                    {credits.slice(-5).reverse().map((c) => (
+                      <div className="picker-credit-row" key={c.id}>
+                        <span className="tone-success">+{balanceStr(c.amount ?? 0)}</span>
+                        <span className="muted-note">{c.note || "—"}</span>
+                        <span className="muted-note" style={{ marginLeft: "auto" }}>{compactDate(c.createdAt ?? null)}</span>
+                        <button
+                          className="icon-action danger-action"
+                          type="button"
+                          title="Удалить"
+                          disabled={deleteBalanceCreditMutation.isPending}
+                          onClick={() => deleteBalanceCreditMutation.mutate({ username: issuePickerDraft, id: c.id })}
+                        >
+                          <Trash2 size={11} />
+                        </button>
                       </div>
-                    );
-                  })}
-                </div>
-              ) : null}
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           ) : null}
         </div>
