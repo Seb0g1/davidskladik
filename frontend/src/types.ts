@@ -605,6 +605,30 @@ export const PickerCashSchema = z.object({
   remaining: z.number().optional().default(0),
 }).passthrough();
 
+export const PickerBalanceCreditSchema = z.object({
+  id: z.coerce.string(),
+  amount: z.number().optional().default(0),
+  note: z.coerce.string().optional().default(""),
+  createdAt: z.coerce.string().optional().nullable(),
+  createdBy: z.coerce.string().optional().default(""),
+}).passthrough();
+
+export const PickerBalanceSchema = z.object({
+  ok: z.boolean().optional(),
+  username: z.coerce.string().optional().default(""),
+  total: z.number().optional().default(0),
+  credits: z.array(PickerBalanceCreditSchema).optional().default([]),
+}).passthrough();
+
+export const PickerBalancesSchema = z.object({
+  ok: z.boolean().optional(),
+  balances: z.array(z.object({
+    username: z.coerce.string(),
+    total: z.number().optional().default(0),
+    credits: z.array(PickerBalanceCreditSchema).optional().default([]),
+  })).optional().default([]),
+}).passthrough();
+
 export const SupplierCartRowSchema = z.object({
   key: z.coerce.string(),
   marketplace: z.coerce.string().optional().default(""),

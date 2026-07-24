@@ -96,3 +96,95 @@ app.delete("/api/picker-cash/:id", requireAdmin, async (request, response, next)
     next(error);
   }
 });
+
+// ─── Per-picker persistent balances ─────────────────────────────────────────
+
+async function loadPickerBalance(username) {
+  try {
+    const key = `picker_balance:${cleanText(username)}`;
+    const setting = await getPrisma().appSetting.findUnique({ where: { key } });
+    const raw = setting?.value;
+    return { credits: Array.isArray(raw?.credits) ? raw.credits : [] };
+  } catch {
+    return { credits: [] };
+  }
+}
+
+async function savePickerBalance(username, data) {
+  const key = `picker_balance:${cleanText(username)}`;
+  return getPrisma().appSetting.upsert({
+    where: { key },
+    create: { key, value: data },
+    update: { value: data },
+  });
+}
+
+function pickerBalanceBody(username, balance) {
+  const total = balance.credits.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+  return { ok: true, username: cleanText(username), total: Math.round(total), credits: balance.credits };
+}
+
+app.get("/api/picker-cash/balance", requireStaff, async (request, response, next) => {
+  try {
+    const username = requestUsername(request);
+    if (!username) return response.status(400).json({ error: "Нет имени пользователя." });
+    const balance = await loadPickerBalance(username);
+    response.json(pickerBalanceBody(username, balance));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/picker-cash/balances", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.json({ ok: true, balances: [] });
+    const settings = await prisma.appSetting.findMany({
+      where: { key: { startsWith: "picker_balance:" } },
+    });
+    const balances = settings.map((s) => {
+      const username = String(s.key).replace("picker_balance:", "");
+      const raw = s.value;
+      const credits = Array.isArray(raw?.credits) ? raw.credits : [];
+      const total = credits.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+      return { username, total: Math.round(total), credits };
+    });
+    response.json({ ok: true, balances });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/picker-cash/balance", requireAdmin, async (request, response, next) => {
+  try {
+    const pickerUsername = cleanText(request.body?.pickerUsername || "");
+    if (!pickerUsername) return response.status(400).json({ error: "Укажите имя сборщика." });
+    const amount = normalizeFinanceMoney(request.body?.amount, 0);
+    if (!(amount > 0)) return response.status(400).json({ error: "Укажите сумму больше нуля." });
+    const balance = await loadPickerBalance(pickerUsername);
+    balance.credits.push({
+      id: crypto.randomUUID(),
+      amount,
+      note: cleanText(request.body?.note || ""),
+      createdAt: new Date().toISOString(),
+      createdBy: requestUsername(request),
+    });
+    await savePickerBalance(pickerUsername, balance);
+    response.json(pickerBalanceBody(pickerUsername, balance));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/picker-cash/balance/:username/:id", requireAdmin, async (request, response, next) => {
+  try {
+    const pickerUsername = cleanText(request.params.username);
+    if (!pickerUsername) return response.status(400).json({ error: "Укажите имя сборщика." });
+    const balance = await loadPickerBalance(pickerUsername);
+    balance.credits = balance.credits.filter((c) => String(c.id) !== request.params.id);
+    await savePickerBalance(pickerUsername, balance);
+    response.json(pickerBalanceBody(pickerUsername, balance));
+  } catch (error) {
+    next(error);
+  }
+});

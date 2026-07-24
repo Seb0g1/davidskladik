@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarDays, Check, CheckCircle2, ClipboardList, Clock, Copy, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, Wallet, X, Zap } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, Users, Wallet, X, Zap } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -9,7 +9,7 @@ import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
-import { PickerCashSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
+import { PickerBalanceSchema, PickerBalancesSchema, PickerCashSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
 type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
@@ -58,13 +58,21 @@ export function PickingListPage() {
   const [paymentDrafts, setPaymentDrafts] = useState<Record<string, string>>({});
   const [paymentNotes, setPaymentNotes] = useState<Record<string, string>>({});
   const [expandedSheets, setExpandedSheets] = useState<Set<string>>(new Set());
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [balancePanelOpen, setBalancePanelOpen] = useState(false);
+  const [issuePickerDraft, setIssuePickerDraft] = useState("");
+  const [issueAmountDraft, setIssueAmountDraft] = useState("");
+  const [issueNoteDraft, setIssueNoteDraft] = useState("");
   const queryClient = useQueryClient();
+
   const sessionQuery = useQuery({
     queryKey: ["session"],
-    queryFn: () => fetchJson("/api/session", z.object({ role: z.coerce.string().optional().nullable() }).passthrough()),
+    queryFn: () => fetchJson("/api/session", z.object({ role: z.coerce.string().optional().nullable(), username: z.coerce.string().optional().nullable() }).passthrough()),
     staleTime: 60_000,
   });
   const isAdmin = sessionQuery.data?.role === "admin";
+  const myUsername = sessionQuery.data?.username ?? "";
+
   const listQuery = useQuery({
     queryKey: ["supplier-picking-list", status, supplier, q],
     queryFn: () => {
@@ -85,27 +93,29 @@ export function PickingListPage() {
     enabled: view === "sheets",
     refetchInterval: 30_000,
   });
-  const sheets = useMemo(() => {
-    const pickedRows = sheetsQuery.data?.rows || [];
-    const groups = new Map<string, PickingRow[]>();
-    for (const row of pickedRows) {
-      const dateKey = row.pickedAt ? row.pickedAt.slice(0, 10) : "";
-      if (!dateKey) continue;
-      if (!groups.has(dateKey)) groups.set(dateKey, []);
-      groups.get(dateKey)!.push(row);
-    }
-    return Array.from(groups.entries()).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [sheetsQuery.data]);
-  const [cashDraft, setCashDraft] = useState("");
-  const [cashNoteDraft, setCashNoteDraft] = useState("");
-  const [replaceKey, setReplaceKey] = useState<string | null>(null);
-  const [missingRow, setMissingRow] = useState<PickingRow | null>(null);
   const todayStr = new Date().toISOString().slice(0, 10);
   const cashQuery = useQuery({
     queryKey: ["picker-cash", todayStr],
     queryFn: () => fetchJson(`/api/picker-cash?date=${todayStr}`, PickerCashSchema),
     refetchInterval: 30_000,
   });
+  const myBalanceQuery = useQuery({
+    queryKey: ["picker-balance", "me"],
+    queryFn: () => fetchJson("/api/picker-cash/balance", PickerBalanceSchema),
+    refetchInterval: 30_000,
+  });
+  const allBalancesQuery = useQuery({
+    queryKey: ["picker-balances"],
+    queryFn: () => fetchJson("/api/picker-cash/balances", PickerBalancesSchema),
+    enabled: isAdmin,
+    refetchInterval: 60_000,
+  });
+
+  const [cashDraft, setCashDraft] = useState("");
+  const [cashNoteDraft, setCashNoteDraft] = useState("");
+  const [replaceKey, setReplaceKey] = useState<string | null>(null);
+  const [missingRow, setMissingRow] = useState<PickingRow | null>(null);
+
   const addCashMutation = useMutation({
     mutationFn: ({ amount, note }: { amount: number; note: string }) =>
       fetchJson("/api/picker-cash", PickerCashSchema, mutationBody({ amount, note, date: todayStr })),
@@ -120,6 +130,24 @@ export function PickingListPage() {
       fetchJson(`/api/picker-cash/${encodeURIComponent(id)}?date=${todayStr}`, PickerCashSchema, { method: "DELETE" }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["picker-cash"] }),
   });
+  const issueBalanceMutation = useMutation({
+    mutationFn: ({ pickerUsername, amount, note }: { pickerUsername: string; amount: number; note: string }) =>
+      fetchJson("/api/picker-cash/balance", PickerBalanceSchema, mutationBody({ pickerUsername, amount, note })),
+    onSuccess: () => {
+      setIssueAmountDraft("");
+      setIssueNoteDraft("");
+      void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-balance"] });
+    },
+  });
+  const deleteBalanceCreditMutation = useMutation({
+    mutationFn: ({ username, id }: { username: string; id: string }) =>
+      fetchJson(`/api/picker-cash/balance/${encodeURIComponent(username)}/${encodeURIComponent(id)}`, PickerBalanceSchema, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-balance"] });
+    },
+  });
   const updateMutation = useMutation({
     mutationFn: ({ key, nextStatus, snoozeDays, permanent }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean }) =>
       fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({
@@ -128,7 +156,6 @@ export function PickingListPage() {
         ...(permanent ? { permanent: true } : {}),
       })),
     onSuccess: (_data, variables) => {
-      // «Не было» → сразу предлагаем работнику заменить поставщика для этой строки.
       if (variables.nextStatus === "missing") {
         setMissingRow(null);
         setReplaceKey(variables.key);
@@ -171,6 +198,7 @@ export function PickingListPage() {
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
     },
   });
+
   const rows = listQuery.data?.rows || [];
   const filteredRows = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -185,10 +213,25 @@ export function PickingListPage() {
     }
     return Array.from(groups.entries()).sort((left, right) => left[0].localeCompare(right[0], "ru", { sensitivity: "base" }));
   }, [filteredRows]);
+  const sheets = useMemo(() => {
+    const pickedRows = sheetsQuery.data?.rows || [];
+    const groups = new Map<string, PickingRow[]>();
+    for (const row of pickedRows) {
+      const dateKey = row.pickedAt ? row.pickedAt.slice(0, 10) : "";
+      if (!dateKey) continue;
+      if (!groups.has(dateKey)) groups.set(dateKey, []);
+      groups.get(dateKey)!.push(row);
+    }
+    return Array.from(groups.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+  }, [sheetsQuery.data]);
+
   const summary = listQuery.data?.summary || {};
   const suppliers = listQuery.data?.suppliers || [];
   const supplierLedger = listQuery.data?.supplierLedger || {};
   const invoiceRows = invoiceQuery.data?.rows || [];
+  const myBalance = myBalanceQuery.data?.total ?? 0;
+  const allBalances = allBalancesQuery.data?.balances ?? [];
+
   const copyInvoice = async () => {
     const text = invoiceRows.map((row) => [
       row.supplierName,
@@ -201,13 +244,132 @@ export function PickingListPage() {
     window.setTimeout(() => setCopied(false), 1600);
   };
 
+  const toggleRowExpand = (key: string) =>
+    setExpandedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  const balanceTone = myBalance > 500 ? "success" : myBalance > 0 ? "warn" : myBalance < 0 ? "danger" : "";
+
   return (
     <section className="page-section picking-page">
       <PageHeader
         title="Сборка"
-        subtitle="Лист закупки для сотрудников: собрать товар у поставщика или отметить, что товара не было."
-        action={<button className="secondary-action" type="button" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>{listQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить</button>}
+        subtitle="Лист закупки: собрать товар у поставщика или отметить, что товара не было."
+        action={
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Balance chip — visible to all */}
+            <button
+              className={`picker-balance-chip${balanceTone ? ` picker-balance-chip--${balanceTone}` : ""}`}
+              type="button"
+              onClick={() => setBalancePanelOpen((v) => !v)}
+              title="Мой баланс"
+            >
+              <Wallet size={14} />
+              <span>{money(myBalance)}</span>
+              <ChevronDown size={12} style={{ opacity: 0.6, transform: balancePanelOpen ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
+            </button>
+            <button className="secondary-action" type="button" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>
+              {listQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+              <span className="hide-xs">Обновить</span>
+            </button>
+          </div>
+        }
       />
+
+      {/* Balance flyout panel */}
+      {balancePanelOpen ? (
+        <div className="picker-balance-panel">
+          <div className="picker-balance-panel-my">
+            <div className="picker-balance-panel-label"><Wallet size={14} /> Мой баланс ({myUsername || "—"})</div>
+            <div className={`picker-balance-panel-total${balanceTone ? ` tone-${balanceTone}` : ""}`}>{money(myBalance)}</div>
+            {(myBalanceQuery.data?.credits ?? []).length > 0 ? (
+              <div className="picker-balance-history">
+                {(myBalanceQuery.data?.credits ?? []).slice(-10).reverse().map((c) => (
+                  <div className="picker-balance-history-row" key={c.id}>
+                    <span className="picker-cash-amount">+{money(c.amount)}</span>
+                    {c.note ? <span className="muted-note">{c.note}</span> : null}
+                    <span className="muted-note">{compactDate(c.createdAt ?? null)}</span>
+                    <span className="muted-note">выдал: {c.createdBy || "—"}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="soft-empty" style={{ fontSize: "0.78rem", padding: "6px 0" }}>Пополнений ещё не было.</div>
+            )}
+          </div>
+          {isAdmin ? (
+            <div className="picker-balance-panel-admin">
+              <div className="picker-balance-panel-label"><Users size={14} /> Выдать деньги сборщику</div>
+              <div className="picker-issue-form">
+                <input
+                  list="picker-usernames-list"
+                  placeholder="Имя сборщика"
+                  value={issuePickerDraft}
+                  onChange={(e) => setIssuePickerDraft(e.target.value)}
+                />
+                <datalist id="picker-usernames-list">
+                  {allBalances.map((b) => <option key={b.username} value={b.username} />)}
+                </datalist>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="Сумма, ₽"
+                  value={issueAmountDraft}
+                  onChange={(e) => setIssueAmountDraft(e.target.value)}
+                />
+                <input
+                  placeholder="Комментарий (необязательно)"
+                  value={issueNoteDraft}
+                  onChange={(e) => setIssueNoteDraft(e.target.value)}
+                />
+                <button
+                  className="primary-action"
+                  type="button"
+                  disabled={issueBalanceMutation.isPending || !issuePickerDraft.trim() || !(Number(issueAmountDraft) > 0)}
+                  onClick={() => issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Number(issueAmountDraft), note: issueNoteDraft })}
+                >
+                  {issueBalanceMutation.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Выдать
+                </button>
+              </div>
+              {issueBalanceMutation.error ? <div className="inline-error" style={{ marginTop: 6 }}>{errorMessage(issueBalanceMutation.error)}</div> : null}
+              {allBalances.length > 0 ? (
+                <div className="picker-all-balances">
+                  {allBalances.map((b) => (
+                    <div className="picker-all-balance-row" key={b.username}>
+                      <span className="picker-all-balance-name">{b.username}</span>
+                      <span className={`picker-all-balance-total${b.total > 0 ? " tone-success" : b.total < 0 ? " tone-danger" : ""}`}>{money(b.total)}</span>
+                      <div className="picker-all-balance-credits">
+                        {b.credits.slice(-5).reverse().map((c) => (
+                          <span key={c.id} className="picker-all-balance-credit">
+                            +{money(c.amount)}
+                            {c.note ? ` · ${c.note}` : ""}
+                            <button
+                              className="icon-action danger-action"
+                              type="button"
+                              title="Удалить"
+                              disabled={deleteBalanceCreditMutation.isPending}
+                              onClick={() => deleteBalanceCreditMutation.mutate({ username: b.username, id: c.id })}
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="soft-empty" style={{ fontSize: "0.78rem", marginTop: 6 }}>Балансов пока нет.</div>
+              )}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="page-tabs">
         <button className={`page-tab-btn${view === "list" ? " active" : ""}`} type="button" onClick={() => setView("list")}>
@@ -225,7 +387,7 @@ export function PickingListPage() {
         <Stat label="Поставщиков" value={numberValue(summary.suppliers)} tone="accent" icon={<Truck size={18} />} />
       </section>
 
-      <div className="control-grid compact-controls">
+      <div className="control-grid compact-controls picking-filters">
         <label>Статус
           <SelectField
             ariaLabel="Статус сборки"
@@ -261,7 +423,7 @@ export function PickingListPage() {
       {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}
       {cancelCartMutation.error ? <div className="inline-error">{errorMessage(cancelCartMutation.error)}</div> : null}
       {replaceMutation.error ? <div className="inline-error">Замена поставщика: {errorMessage(replaceMutation.error)}</div> : null}
-      {replaceMutation.data ? <div className="success-strip">Перезаказано у «{replaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (док {replaceMutation.data.docIds?.join(", ") || "-"}), строка сборки появилась у нового поставщика.</div> : null}
+      {replaceMutation.data ? <div className="success-strip">Перезаказано у «{replaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (doc {replaceMutation.data.docIds?.join(", ") || "-"}).</div> : null}
       {paymentMutation.error ? <div className="inline-error">{errorMessage(paymentMutation.error)}</div> : null}
 
       {view === "sheets" ? (
@@ -307,16 +469,10 @@ export function PickingListPage() {
                           <span>Кол-во: {row.quantity}</span>
                           <span>Собрал: {row.pickedBy || "-"} · {compactDate(row.pickedAt)}</span>
                           <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
-                          <span className="picking-meta-secondary">Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
                         </div>
                         {isAdmin ? (
                           <div className="picking-actions">
-                            <button
-                              className="secondary-action"
-                              type="button"
-                              disabled={updateMutation.isPending}
-                              onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}
-                            >
+                            <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
                               <RotateCcw size={14} /> Отменить сборку
                             </button>
                           </div>
@@ -333,228 +489,260 @@ export function PickingListPage() {
       ) : null}
 
       {view === "list" ? (
-      <>
-      <section className="picker-cash-card">
-        <div className="picker-cash-head">
-          <Wallet size={16} />
-          <span>Касса сборщика — {todayStr}</span>
-        </div>
-        <div className="summary-grid compact-summary">
-          <DiagnosticValue label="Выдано" value={money(cashQuery.data?.totalIssued ?? 0)} />
-          <DiagnosticValue label="Потрачено" value={money(cashQuery.data?.spent ?? 0)} tone={cashQuery.data && cashQuery.data.spent > 0 ? "warn" : ""} />
-          <DiagnosticValue
-            label="Остаток"
-            value={money(Math.abs(cashQuery.data?.remaining ?? 0))}
-            tone={(cashQuery.data?.remaining ?? 0) >= 0 ? "success" : "danger"}
-          />
-        </div>
-        {isAdmin ? (
-          <div className="settings-form-row picker-cash-input-row">
-            <input
-              type="number"
-              min="0"
-              step="1"
-              placeholder="Выдать сборщику, ₽"
-              value={cashDraft}
-              onChange={(event) => setCashDraft(event.target.value)}
-            />
-            <input
-              placeholder="Комментарий"
-              value={cashNoteDraft}
-              onChange={(event) => setCashNoteDraft(event.target.value)}
-            />
-            <button
-              className="primary-action"
-              type="button"
-              disabled={addCashMutation.isPending || !(Number(cashDraft) > 0)}
-              onClick={() => addCashMutation.mutate({ amount: Number(cashDraft), note: cashNoteDraft })}
-            >
-              {addCashMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Выдал
-            </button>
-          </div>
-        ) : null}
-        {(cashQuery.data?.advances || []).length > 0 ? (
-          <div className="picker-cash-advances">
-            {(cashQuery.data?.advances || []).map((adv) => (
-              <div className="picker-cash-advance-row" key={adv.id}>
-                <span className="picker-cash-amount">{money(adv.amount)}</span>
-                {adv.note ? <span className="muted-note">{adv.note}</span> : null}
-                <span className="muted-note">{compactDate(adv.createdAt ?? null)}</span>
-                {isAdmin ? (
-                  <button
-                    className="icon-action danger-action"
-                    type="button"
-                    title="Удалить выдачу"
-                    disabled={deleteCashMutation.isPending}
-                    onClick={() => deleteCashMutation.mutate(adv.id)}
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                ) : null}
+        <>
+          {/* Daily cashbox (admin only — shared) */}
+          {isAdmin ? (
+            <section className="picker-cash-card">
+              <div className="picker-cash-head">
+                <Wallet size={16} />
+                <span>Дневная касса — {todayStr}</span>
               </div>
-            ))}
-          </div>
-        ) : null}
-        {addCashMutation.error ? <div className="inline-error">{errorMessage(addCashMutation.error)}</div> : null}
-      </section>
-      <div className="picking-groups">
-        {grouped.map(([supplierName, supplierRows]) => {
-          const ledger = supplierLedger[supplierName] || {};
-          const balance = Number(ledger.balance || 0);
-          const draftAmount = paymentDrafts[supplierName] || "";
-          const draftNote = paymentNotes[supplierName] || "";
-          const total = currentGroupTotal(supplierRows);
-          return (
-          <article className="picking-supplier-card" key={supplierName}>
-            <div className="picking-supplier-toolbar">
-              <div className="picking-supplier-head">
-                <div>
-                  <span>Поставщик</span>
-                  <h3>{supplierName}</h3>
+              <div className="summary-grid compact-summary">
+                <DiagnosticValue label="Выдано" value={money(cashQuery.data?.totalIssued ?? 0)} />
+                <DiagnosticValue label="Потрачено" value={money(cashQuery.data?.spent ?? 0)} tone={cashQuery.data && cashQuery.data.spent > 0 ? "warn" : ""} />
+                <DiagnosticValue
+                  label="Остаток"
+                  value={money(Math.abs(cashQuery.data?.remaining ?? 0))}
+                  tone={(cashQuery.data?.remaining ?? 0) >= 0 ? "success" : "danger"}
+                />
+              </div>
+              <div className="settings-form-row picker-cash-input-row">
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  placeholder="Выдать в кассу, ₽"
+                  value={cashDraft}
+                  onChange={(event) => setCashDraft(event.target.value)}
+                />
+                <input
+                  placeholder="Комментарий"
+                  value={cashNoteDraft}
+                  onChange={(event) => setCashNoteDraft(event.target.value)}
+                />
+                <button
+                  className="primary-action"
+                  type="button"
+                  disabled={addCashMutation.isPending || !(Number(cashDraft) > 0)}
+                  onClick={() => addCashMutation.mutate({ amount: Number(cashDraft), note: cashNoteDraft })}
+                >
+                  {addCashMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Выдал
+                </button>
+              </div>
+              {(cashQuery.data?.advances || []).length > 0 ? (
+                <div className="picker-cash-advances">
+                  {(cashQuery.data?.advances || []).map((adv) => (
+                    <div className="picker-cash-advance-row" key={adv.id}>
+                      <span className="picker-cash-amount">{money(adv.amount)}</span>
+                      {adv.note ? <span className="muted-note">{adv.note}</span> : null}
+                      <span className="muted-note">{compactDate(adv.createdAt ?? null)}</span>
+                      <button className="icon-action danger-action" type="button" title="Удалить выдачу" disabled={deleteCashMutation.isPending} onClick={() => deleteCashMutation.mutate(adv.id)}>
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
-                <strong>{supplierRows.length}</strong>
-              </div>
-              <div className="summary-grid compact-summary supplier-ledger-strip">
-                <DiagnosticValue label={balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(balance)} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
-                <DiagnosticValue label="Собрано в долг" value={moneySigned(-Number(ledger.debtTotal || 0))} />
-                <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0))} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
-                <DiagnosticValue label="Текущая сборка" value={moneySigned(total)} />
-              </div>
-            </div>
-            <div className="settings-form-row supplier-payment-row">
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="Сумма оплаты, ₽"
-                value={draftAmount}
-                onChange={(event) => setPaymentDrafts((current) => ({ ...current, [supplierName]: event.target.value }))}
-              />
-              <input
-                placeholder="Комментарий"
-                value={draftNote}
-                onChange={(event) => setPaymentNotes((current) => ({ ...current, [supplierName]: event.target.value }))}
-              />
-              <button
-                className="primary-action"
-                type="button"
-                disabled={paymentMutation.isPending || !(Number(draftAmount) > 0)}
-                onClick={() => paymentMutation.mutate({ supplierName, amount: Number(draftAmount || 0), note: draftNote })}
-              >
-                {paymentMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Заплатил
-              </button>
-            </div>
-            <div className="picking-row-list">
-              {supplierRows.map((row) => (
-                <div className={`picking-row status-${row.status}`} key={row.key}>
-                  <div className="picking-main">
-                    <strong>{row.productName || row.offerId}</strong>
-                    <span>
-                      {row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}
-                      {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс</span> : null}
-                    </span>
+              ) : null}
+              {addCashMutation.error ? <div className="inline-error">{errorMessage(addCashMutation.error)}</div> : null}
+            </section>
+          ) : null}
+
+          <div className="picking-groups">
+            {grouped.map(([supplierName, supplierRows]) => {
+              const ledger = supplierLedger[supplierName] || {};
+              const balance = Number(ledger.balance || 0);
+              const draftAmount = paymentDrafts[supplierName] || "";
+              const draftNote = paymentNotes[supplierName] || "";
+              const total = currentGroupTotal(supplierRows);
+              return (
+                <article className="picking-supplier-card" key={supplierName}>
+                  <div className="picking-supplier-toolbar">
+                    <div className="picking-supplier-head">
+                      <div className="picking-supplier-name-block">
+                        <span>Поставщик</span>
+                        <h3>{supplierName}</h3>
+                      </div>
+                      <div className="picking-supplier-head-meta">
+                        <span className="picking-supplier-count">{supplierRows.length} поз.</span>
+                        <span className={`picking-supplier-total-price${total > 0 ? " tone-warn" : ""}`}>{money(total)}</span>
+                      </div>
+                    </div>
+                    <div className="supplier-ledger-row">
+                      <DiagnosticValue label={balance < 0 ? "Долг" : "Аванс"} value={moneySigned(balance)} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
+                      <DiagnosticValue label="В долг" value={moneySigned(-Number(ledger.debtTotal || 0))} />
+                      <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0))} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
+                      <DiagnosticValue label="Сборка" value={moneySigned(total)} />
+                    </div>
                   </div>
-                  <div className="meta-grid">
-                    <span>Кол-во: {row.quantity}</span>
-                    <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
-                    <span className="picking-meta-secondary">Доверие: {row.trustFactor}/100</span>
-                    <span className="picking-meta-secondary">{row.orderCutoffTime ? `Заказы до ${row.orderCutoffTime}` : "Без дедлайна"}</span>
-                    {row.reseller ? <span className="picking-meta-secondary">Перекупщик</span> : null}
-                    <span className="picking-meta-secondary">Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
-                    <span>Статус: {statusLabel(row.status)}</span>
-                    {row.wbSupplyId ? (
-                      <span>
-                        WB поставка: <strong>{row.wbSupplyId}</strong>
-                        {" · "}
-                        <a href={`/api/wb/supplies/${row.wbSupplyId}/barcode?type=png`} target="_blank" rel="noreferrer" className="link-plain">Стикер</a>
-                      </span>
-                    ) : null}
-                  </div>
-                  {row.status === "missing" && !row.replacementKey ? (
-                    <small className="danger-text">
-                      {row.missingPermanent || !row.nextRetryAt
-                        ? "Поставщик отправлен в инактив насовсем (снять можно в карточке товара или вернув строку в сборку)."
-                        : `Поставщик в инактиве для этого SKU до ${compactDate(row.nextRetryAt)}.`}
-                      {" "}Замените поставщика кнопкой ниже или автокорзина попробует другого сама.
-                    </small>
-                  ) : null}
-                  {row.status === "reordered" && row.replacementKey ? <small>Перезаказано у другого поставщика (строка {row.replacementKey}).</small> : null}
-                  <div className="picking-actions">
-                    <button className="primary-action success-action" type="button" disabled={updateMutation.isPending || row.status !== "open"} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "picked" })}>
-                      <Check size={16} /> Собрал
-                    </button>
-                    <button className="secondary-action danger-action" type="button" disabled={updateMutation.isPending || row.status !== "open"} onClick={() => setMissingRow(row)}>
-                      <X size={16} /> Не было
-                    </button>
-                    {["open", "missing"].includes(row.status) && !row.replacementKey ? (
-                      <button className="secondary-action" type="button" disabled={replaceMutation.isPending} onClick={() => setReplaceKey(replaceKey === row.key ? null : row.key)}>
-                        <Repeat2 size={16} /> Заменить поставщика
-                      </button>
-                    ) : null}
-                    {isAdmin && row.status === "picked" ? (
-                      <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "returned" })}>
-                        <RotateCcw size={16} /> Вернули из ПВЗ
-                      </button>
-                    ) : null}
-                    {isAdmin && row.status !== "open" && row.status !== "picked" ? <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}><RotateCcw size={16} /> Вернуть</button> : null}
-                    {isAdmin && row.status === "picked" ? <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}><RotateCcw size={16} /> Вернуть к сборке</button> : null}
-                    {isAdmin && row.requestRowId ? <button className="secondary-action danger-action" type="button" disabled={cancelCartMutation.isPending} onClick={() => cancelCartMutation.mutate(row.key)}><Trash2 size={16} /> Отменить автокорзину</button> : null}
-                  </div>
-                  {replaceKey === row.key ? (
-                    <SupplierAltPicker
-                      offerId={row.offerId}
-                      currentPartnerId={row.partnerId}
-                      busy={replaceMutation.isPending}
-                      actionLabel="Заказать у него"
-                      onPick={(option) => replaceMutation.mutate({ key: row.key, partnerId: option.partnerId, rowId: option.rowId })}
-                      onClose={() => setReplaceKey(null)}
+                  <div className="supplier-payment-row">
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Оплата, ₽"
+                      value={draftAmount}
+                      onChange={(event) => setPaymentDrafts((current) => ({ ...current, [supplierName]: event.target.value }))}
                     />
-                  ) : null}
+                    <input
+                      placeholder="Комментарий"
+                      value={draftNote}
+                      onChange={(event) => setPaymentNotes((current) => ({ ...current, [supplierName]: event.target.value }))}
+                    />
+                    <button
+                      className="primary-action"
+                      type="button"
+                      disabled={paymentMutation.isPending || !(Number(draftAmount) > 0)}
+                      onClick={() => paymentMutation.mutate({ supplierName, amount: Number(draftAmount || 0), note: draftNote })}
+                    >
+                      {paymentMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Заплатил
+                    </button>
+                  </div>
+                  <div className="picking-row-list">
+                    {supplierRows.map((row) => {
+                      const rowExpanded = expandedRows.has(row.key);
+                      return (
+                        <div className={`picking-row status-${row.status}`} key={row.key}>
+                          <div className="picking-row-header" onClick={() => toggleRowExpand(row.key)}>
+                            <div className="picking-row-header-left">
+                              <strong className="picking-row-name">{row.productName || row.offerId}</strong>
+                              <span className="picking-row-sub">
+                                {row.marketplace.toUpperCase()} · {row.offerId}
+                                {row.isExpress ? <span className="express-badge"><Zap size={11} /> Экспресс</span> : null}
+                              </span>
+                            </div>
+                            <div className="picking-row-header-right">
+                              <span className="picking-row-qty">×{row.quantity}</span>
+                              {row.price ? <span className="picking-row-price">{row.price} {row.priceCurrency}</span> : null}
+                              <span className={`picking-row-status-badge status-${row.status}`}>{statusLabel(row.status)}</span>
+                              <ChevronDown size={14} className="picking-row-expand-icon" style={{ transform: rowExpanded ? "rotate(180deg)" : "none", transition: "transform .2s", opacity: 0.5 }} />
+                            </div>
+                          </div>
+                          {rowExpanded ? (
+                            <div className="picking-row-meta">
+                              <span>Заказ: {row.orderId || row.postingNumber || "-"}</span>
+                              <span>Доверие: {row.trustFactor}/100</span>
+                              {row.orderCutoffTime ? <span>До {row.orderCutoffTime}</span> : null}
+                              {row.reseller ? <span className="tone-warn">Перекупщик</span> : null}
+                              {row.wbSupplyId ? (
+                                <span>
+                                  WB: <strong>{row.wbSupplyId}</strong>
+                                  {" · "}
+                                  <a href={`/api/wb/supplies/${row.wbSupplyId}/barcode?type=png`} target="_blank" rel="noreferrer" className="link-plain">Стикер</a>
+                                </span>
+                              ) : null}
+                              <span className="muted-note">Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
+                            </div>
+                          ) : null}
+                          {row.status === "missing" && !row.replacementKey ? (
+                            <small className="danger-text" style={{ paddingTop: 4 }}>
+                              {row.missingPermanent || !row.nextRetryAt
+                                ? "Поставщик в инактиве насовсем."
+                                : `Инактив до ${compactDate(row.nextRetryAt)}.`}
+                              {" "}Замените кнопкой ниже или автокорзина попробует сама.
+                            </small>
+                          ) : null}
+                          {row.status === "reordered" && row.replacementKey ? <small>Перезаказано у другого поставщика.</small> : null}
+                          <div className="picking-actions">
+                            <button
+                              className="primary-action success-action picking-action-main"
+                              type="button"
+                              disabled={updateMutation.isPending || row.status !== "open"}
+                              onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "picked" })}
+                            >
+                              <Check size={16} /> Собрал
+                            </button>
+                            <button
+                              className="secondary-action danger-action"
+                              type="button"
+                              disabled={updateMutation.isPending || row.status !== "open"}
+                              onClick={() => setMissingRow(row)}
+                            >
+                              <X size={16} /> Не было
+                            </button>
+                            {["open", "missing"].includes(row.status) && !row.replacementKey ? (
+                              <button className="secondary-action" type="button" disabled={replaceMutation.isPending} onClick={() => setReplaceKey(replaceKey === row.key ? null : row.key)}>
+                                <Repeat2 size={15} /> Замена
+                              </button>
+                            ) : null}
+                            {isAdmin && row.status === "picked" ? (
+                              <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "returned" })}>
+                                <RotateCcw size={14} /> Из ПВЗ
+                              </button>
+                            ) : null}
+                            {isAdmin && row.status !== "open" && row.status !== "picked" ? (
+                              <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
+                                <RotateCcw size={14} /> Вернуть
+                              </button>
+                            ) : null}
+                            {isAdmin && row.status === "picked" ? (
+                              <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
+                                <RotateCcw size={14} /> К сборке
+                              </button>
+                            ) : null}
+                            {isAdmin && row.requestRowId ? (
+                              <button className="secondary-action danger-action" type="button" disabled={cancelCartMutation.isPending} onClick={() => cancelCartMutation.mutate(row.key)}>
+                                <Trash2 size={14} /> Отмена
+                              </button>
+                            ) : null}
+                          </div>
+                          {replaceKey === row.key ? (
+                            <SupplierAltPicker
+                              offerId={row.offerId}
+                              currentPartnerId={row.partnerId}
+                              busy={replaceMutation.isPending}
+                              actionLabel="Заказать у него"
+                              onPick={(option) => replaceMutation.mutate({ key: row.key, partnerId: option.partnerId, rowId: option.rowId })}
+                              onClose={() => setReplaceKey(null)}
+                            />
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </article>
+              );
+            })}
+            {listQuery.isLoading && !grouped.length ? <ListSkeleton rows={8} /> : null}
+            {!grouped.length && !listQuery.isLoading ? <div className="empty-state">Строк для выбранного фильтра нет.</div> : null}
+          </div>
+
+          <section className="table-panel picking-invoices" key="invoices">
+            <div className="section-title">
+              <div>
+                <span>Внутренняя накладная</span>
+                <h3>Собранные позиции</h3>
+              </div>
+              <div className="supplier-cart-actions">
+                <SelectField
+                  ariaLabel="Период"
+                  value={period}
+                  onChange={setPeriod}
+                  options={[
+                    { value: "7d", label: "7 дней" },
+                    { value: "30d", label: "30 дней" },
+                    { value: "all", label: "Все" },
+                  ]}
+                />
+                <button className="secondary-action" type="button" onClick={copyInvoice} disabled={!invoiceRows.length}>
+                  <Copy size={16} /> {copied ? "Скопировано" : "Скопировать"}
+                </button>
+              </div>
+            </div>
+            <div className="picking-invoice-list">
+              {invoiceRows.slice(0, 80).map((row) => (
+                <div className="picking-invoice-row" key={`${row.key}-${row.pickedAt || ""}`}>
+                  <span>{compactDate(row.pickedAt)}</span>
+                  <strong>{row.supplierName}</strong>
+                  <span>{row.offerId}</span>
+                  <span>{row.productName}</span>
+                  <span>x{row.quantity}</span>
+                  <span>{row.price ? `${row.price} ${row.priceCurrency}` : money(0)}</span>
                 </div>
               ))}
+              {!invoiceRows.length ? <div className="soft-empty">Собранных строк за период нет.</div> : null}
             </div>
-          </article>
-          );
-        })}
-        {listQuery.isLoading && !grouped.length ? <ListSkeleton rows={8} /> : null}
-        {!grouped.length && !listQuery.isLoading ? <div className="empty-state">Строк для выбранного фильтра нет.</div> : null}
-      </div>
-
-      <section className="table-panel picking-invoices" key="invoices">
-        <div className="section-title">
-          <div>
-            <span>Внутренняя накладная</span>
-            <h3>Собранные позиции</h3>
-          </div>
-          <div className="supplier-cart-actions">
-            <SelectField
-              ariaLabel="Период"
-              value={period}
-              onChange={setPeriod}
-              options={[
-                { value: "7d", label: "7 дней" },
-                { value: "30d", label: "30 дней" },
-                { value: "all", label: "Все" },
-              ]}
-            />
-            <button className="secondary-action" type="button" onClick={copyInvoice} disabled={!invoiceRows.length}><Copy size={16} /> {copied ? "Скопировано" : "Скопировать"}</button>
-          </div>
-        </div>
-        <div className="picking-invoice-list">
-          {invoiceRows.slice(0, 80).map((row) => (
-            <div className="picking-invoice-row" key={`${row.key}-${row.pickedAt || ""}`}>
-              <span>{compactDate(row.pickedAt)}</span>
-              <strong>{row.supplierName}</strong>
-              <span>{row.offerId}</span>
-              <span>{row.productName}</span>
-              <span>x{row.quantity}</span>
-              <span>{row.price ? `${row.price} ${row.priceCurrency}` : money(0)}</span>
-            </div>
-          ))}
-          {!invoiceRows.length ? <div className="soft-empty">Собранных строк за период нет.</div> : null}
-        </div>
-      </section>
-      </>
+          </section>
+        </>
       ) : null}
 
       {missingRow ? (
@@ -568,15 +756,14 @@ export function PickingListPage() {
               <button className="secondary-action" type="button" onClick={() => setMissingRow(null)}><X size={16} /> Отмена</button>
             </div>
             <p className="muted-note">
-              Поставщик «{missingRow.supplierName || "-"}» уйдёт в инактив для этого товара: автокорзина и цены переключатся на другого поставщика,
-              строка сборки получит статус «не было». На какой срок отправить поставщика в инактив?
+              Поставщик «{missingRow.supplierName || "-"}» уйдёт в инактив для этого товара. На какой срок?
             </p>
             <div className="picking-missing-options">
               {[
-                { label: "Завтра товар появится", hint: "инактив 1 день", snoozeDays: 1 },
-                { label: "2 дня инактива", hint: "поставщик вернётся через 2 дня", snoozeDays: 2 },
-                { label: "3 дня инактива", hint: "поставщик вернётся через 3 дня", snoozeDays: 3 },
-                { label: "5 дней инактива", hint: "поставщик вернётся через 5 дней", snoozeDays: 5 },
+                { label: "Завтра появится", hint: "инактив 1 день", snoozeDays: 1 },
+                { label: "2 дня", hint: "поставщик вернётся через 2 дня", snoozeDays: 2 },
+                { label: "3 дня", hint: "через 3 дня", snoozeDays: 3 },
+                { label: "5 дней", hint: "через 5 дней", snoozeDays: 5 },
               ].map((option) => (
                 <button
                   key={option.snoozeDays}
@@ -596,7 +783,7 @@ export function PickingListPage() {
                 onClick={() => updateMutation.mutate({ key: missingRow.key, nextStatus: "missing", permanent: true })}
               >
                 {updateMutation.isPending ? <Loader2 className="spin" size={15} /> : <AlertTriangle size={15} />}
-                <span><strong>Товар уходит в инактив</strong><small>насовсем — снять можно в карточке товара</small></span>
+                <span><strong>Насовсем</strong><small>снять можно в карточке товара</small></span>
               </button>
             </div>
             {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}

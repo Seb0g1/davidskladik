@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, Clock3, Database, ListChecks, Loader2, Package, PackageOpen, RefreshCw, Repeat2, RotateCcw, Search, Settings2, Trash2 } from "lucide-react";
+import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, Clock3, Database, ListChecks, Loader2, Package, PackageOpen, RefreshCw, Repeat2, RotateCcw, Search, Settings2, Trash2, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -252,10 +252,14 @@ function ReadyToShipPanel() {
   );
 }
 
-function PmSearchPanel() {
+type SortMode = "price_asc" | "price_desc" | "name_asc" | "supplier_asc";
+
+function PmSearchPanel({ onClose }: { onClose: () => void }) {
   const [searchQ, setSearchQ] = useState("");
   const [activeQ, setActiveQ] = useState("");
   const [selected, setSelected] = useState<Record<string, { qty: number; item: PmSearchItem }>>({});
+  const [sortMode, setSortMode] = useState<SortMode>("price_asc");
+  const [supplierFilter, setSupplierFilter] = useState("");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
@@ -264,13 +268,16 @@ function PmSearchPanel() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     const trimmed = searchQ.trim();
     if (!trimmed) { setActiveQ(""); return; }
-    debounceRef.current = setTimeout(() => setActiveQ(trimmed), 400);
+    debounceRef.current = setTimeout(() => setActiveQ(trimmed), 350);
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [searchQ]);
 
+  // Auto-focus when panel opens
+  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 80); }, []);
+
   const searchQuery = useQuery({
     queryKey: ["pm-search", activeQ],
-    queryFn: () => fetchJson(`/api/supplier-cart/pm-search?q=${encodeURIComponent(activeQ)}&limit=80`, PmSearchResponseSchema),
+    queryFn: () => fetchJson(`/api/supplier-cart/pm-search?q=${encodeURIComponent(activeQ)}&limit=150`, PmSearchResponseSchema),
     enabled: Boolean(activeQ),
     staleTime: 60_000,
   });
@@ -287,7 +294,18 @@ function PmSearchPanel() {
     },
   });
 
-  const items = searchQuery.data?.items ?? [];
+  const allItems = searchQuery.data?.items ?? [];
+  const supplierNames = useMemo(() => [...new Set(allItems.map((i) => i.supplierName).filter(Boolean))].sort(), [allItems]);
+
+  const sortedItems = useMemo(() => {
+    let list = supplierFilter ? allItems.filter((i) => i.supplierName === supplierFilter) : allItems;
+    if (sortMode === "price_asc") list = [...list].sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
+    else if (sortMode === "price_desc") list = [...list].sort((a, b) => (b.price ?? 0) - (a.price ?? 0));
+    else if (sortMode === "name_asc") list = [...list].sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru"));
+    else if (sortMode === "supplier_asc") list = [...list].sort((a, b) => (a.supplierName || "").localeCompare(b.supplierName || "", "ru"));
+    return list;
+  }, [allItems, sortMode, supplierFilter]);
+
   const selectedCount = Object.keys(selected).length;
   const isSearching = searchQuery.isLoading || (searchQ.trim() !== activeQ && Boolean(searchQ.trim()));
 
@@ -303,116 +321,152 @@ function PmSearchPanel() {
     setSelected((prev) => prev[id] ? { ...prev, [id]: { ...prev[id], qty: Math.max(1, qty) } } : prev);
 
   return (
-    <section className="table-panel supplier-cart-panel">
-      <div className="section-title">
+    <div className="pm-search-panel">
+      {/* Header */}
+      <div className="pm-search-panel-header">
         <div>
-          <span>Поиск в PriceMaster</span>
-          <h3>Найдите товар по названию или артикулу и добавьте в закупку</h3>
+          <span className="pm-search-panel-title">Поиск в PriceMaster</span>
+          <span className="pm-search-panel-sub">Найдите товар и добавьте заявку</span>
         </div>
+        <button className="icon-action" type="button" onClick={onClose} title="Закрыть"><X size={18} /></button>
       </div>
-      <div className="control-grid compact-controls" style={{ display: "flex", gap: 8, alignItems: "center" }}>
-        <div style={{ position: "relative", flex: 1 }}>
-          <Search size={14} style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", opacity: 0.45, pointerEvents: "none" }} />
-          <input
-            ref={inputRef}
-            value={searchQ}
-            onChange={(e) => setSearchQ(e.target.value)}
-            placeholder="Chanel No5, Dior Sauvage 50ml, артикул…"
-            autoFocus
-            style={{ paddingLeft: 30, paddingRight: isSearching ? 30 : undefined }}
-          />
-          {isSearching ? (
-            <Loader2 className="spin" size={14} style={{ position: "absolute", right: 9, top: "50%", transform: "translateY(-50%)", opacity: 0.5 }} />
-          ) : null}
-        </div>
-        {searchQ ? (
-          <button className="secondary-action" type="button" onClick={() => { setSearchQ(""); setActiveQ(""); inputRef.current?.focus(); }}>
-            Очистить
+
+      {/* Search input */}
+      <div className="pm-search-input-wrap">
+        <Search size={15} className="pm-search-icon" />
+        <input
+          ref={inputRef}
+          className="pm-search-input"
+          value={searchQ}
+          onChange={(e) => setSearchQ(e.target.value)}
+          placeholder="Chanel No5, Dior Sauvage, артикул…"
+        />
+        {isSearching ? (
+          <Loader2 className="spin pm-search-spinner" size={14} />
+        ) : searchQ ? (
+          <button className="pm-search-clear" type="button" onClick={() => { setSearchQ(""); setActiveQ(""); inputRef.current?.focus(); }}>
+            <X size={14} />
           </button>
         ) : null}
       </div>
 
-      {searchQuery.error ? <div className="inline-error">{errorMessage(searchQuery.error)}</div> : null}
-      {commitMutation.error ? <div className="inline-error">{errorMessage(commitMutation.error)}</div> : null}
-      {commitMutation.data ? (
-        <div className="success-strip">
-          Добавлено в PM: {commitMutation.data.inserted} строк · doc {commitMutation.data.docIds?.join(", ") || "-"} · строк сборки: {commitMutation.data.pickingCreated}
-        </div>
-      ) : null}
-
-      {items.length ? (
-        <>
-          <div className="new-products-count-strip" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <span>{items.length} результатов · выбрано {selectedCount}</span>
-            {selectedCount > 0 ? (
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  className="primary-action"
-                  type="button"
-                  disabled={commitMutation.isPending}
-                  onClick={() => commitMutation.mutate()}
-                >
-                  {commitMutation.isPending ? <Loader2 className="spin" size={14} /> : <Database size={14} />}
-                  Добавить в PM ({selectedCount} поз.)
-                </button>
-                <button className="secondary-action" type="button" onClick={() => setSelected({})}>
-                  Снять
-                </button>
-              </div>
-            ) : null}
-          </div>
-          <div className="supplier-cart-list">
-            {items.map((item) => {
-              const sel = selected[item.id];
+      {/* Filters bar */}
+      {allItems.length > 0 ? (
+        <div className="pm-search-filters">
+          <div className="pm-search-filter-group">
+            {(["price_asc", "price_desc", "name_asc", "supplier_asc"] as SortMode[]).map((mode) => {
+              const labels: Record<SortMode, string> = { price_asc: "Цена ↑", price_desc: "Цена ↓", name_asc: "А–Я", supplier_asc: "Поставщик" };
               return (
-                <article
-                  key={item.id}
-                  className={`supplier-cart-row${sel ? " ready" : ""}`}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => toggleItem(item)}
+                <button
+                  key={mode}
+                  className={`pm-search-filter-btn${sortMode === mode ? " active" : ""}`}
+                  type="button"
+                  onClick={() => setSortMode(mode)}
                 >
-                  <span className="checkline">
-                    <input
-                      type="checkbox"
-                      checked={Boolean(sel)}
-                      onChange={() => toggleItem(item)}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                    <span>{item.supplierName || "-"}</span>
-                  </span>
-                  <strong>{item.name || item.article}</strong>
-                  <div className="meta-grid">
-                    <span>Цена PM: {item.price ? `${item.price} ${item.currency}` : "-"}</span>
-                    <span>Поставщик: {item.supplierName || "-"}</span>
-                    {item.article ? <span>Артикул: {item.article}</span> : null}
-                    {item.docDate ? <span>Дата: {compactDate(item.docDate)}</span> : null}
-                    {sel ? (
-                      <span onClick={(e) => e.stopPropagation()}>
-                        Кол-во:&nbsp;
-                        <input
-                          type="number"
-                          min={1}
-                          value={sel.qty}
-                          onChange={(e) => setQty(item.id, Number(e.target.value))}
-                          style={{ width: 60, display: "inline" }}
-                        />
-                      </span>
-                    ) : null}
-                  </div>
-                </article>
+                  {labels[mode]}
+                </button>
               );
             })}
           </div>
-        </>
+          {supplierNames.length > 1 ? (
+            <select
+              className="pm-search-supplier-filter"
+              value={supplierFilter}
+              onChange={(e) => setSupplierFilter(e.target.value)}
+            >
+              <option value="">Все поставщики ({allItems.length})</option>
+              {supplierNames.map((s) => (
+                <option key={s} value={s}>{s} ({allItems.filter((i) => i.supplierName === s).length})</option>
+              ))}
+            </select>
+          ) : null}
+        </div>
       ) : null}
 
-      {activeQ && !items.length && !searchQuery.isLoading ? (
-        <div className="soft-empty">Ничего не найдено по запросу «{activeQ}».</div>
+      {/* Error / success */}
+      {searchQuery.error ? <div className="inline-error" style={{ margin: "8px 16px 0" }}>{errorMessage(searchQuery.error)}</div> : null}
+      {commitMutation.error ? <div className="inline-error" style={{ margin: "8px 16px 0" }}>{errorMessage(commitMutation.error)}</div> : null}
+      {commitMutation.data ? (
+        <div className="success-strip" style={{ margin: "8px 16px 0" }}>
+          Добавлено: {commitMutation.data.inserted} строк · doc {commitMutation.data.docIds?.join(", ") || "-"} · строк сборки: {commitMutation.data.pickingCreated}
+        </div>
       ) : null}
-      {!searchQ ? (
-        <div className="soft-empty">Начните вводить название товара — поиск запустится автоматически.</div>
+
+      {/* Results count */}
+      {sortedItems.length > 0 ? (
+        <div className="pm-search-count">
+          {sortedItems.length} результатов{selectedCount > 0 ? ` · выбрано ${selectedCount}` : ""}
+          {selectedCount > 0 ? (
+            <button className="secondary-action" type="button" style={{ marginLeft: 8, padding: "2px 8px", fontSize: "0.75rem" }} onClick={() => setSelected({})}>
+              Снять всё
+            </button>
+          ) : null}
+        </div>
       ) : null}
-    </section>
+
+      {/* Results list */}
+      <div className="pm-search-results">
+        {!searchQ ? (
+          <div className="soft-empty pm-search-empty">Введите название товара или артикул — результаты появятся автоматически.</div>
+        ) : activeQ && !sortedItems.length && !isSearching ? (
+          <div className="soft-empty pm-search-empty">Ничего не найдено по «{activeQ}».</div>
+        ) : null}
+        {sortedItems.map((item) => {
+          const sel = selected[item.id];
+          return (
+            <article
+              key={item.id}
+              className={`pm-search-item${sel ? " pm-search-item--selected" : ""}`}
+              onClick={() => toggleItem(item)}
+            >
+              <div className="pm-search-item-check">
+                <input
+                  type="checkbox"
+                  checked={Boolean(sel)}
+                  onChange={() => toggleItem(item)}
+                  onClick={(e) => e.stopPropagation()}
+                />
+              </div>
+              <div className="pm-search-item-body">
+                <strong className="pm-search-item-name">{item.name || item.article}</strong>
+                <div className="pm-search-item-meta">
+                  {item.supplierName ? <span className="pm-search-item-supplier">{item.supplierName}</span> : null}
+                  <span className="pm-search-item-price">{item.price ? `${item.price} ${item.currency}` : "—"}</span>
+                  {item.article ? <span>{item.article}</span> : null}
+                  {item.docDate ? <span>{compactDate(item.docDate)}</span> : null}
+                </div>
+                {sel ? (
+                  <div className="pm-search-item-qty" onClick={(e) => e.stopPropagation()}>
+                    <span>Кол-во:</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={sel.qty}
+                      onChange={(e) => setQty(item.id, Number(e.target.value))}
+                    />
+                  </div>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+
+      {/* Footer: commit button */}
+      {selectedCount > 0 ? (
+        <div className="pm-search-footer">
+          <button
+            className="primary-action pm-search-commit-btn"
+            type="button"
+            disabled={commitMutation.isPending}
+            onClick={() => commitMutation.mutate()}
+          >
+            {commitMutation.isPending ? <Loader2 className="spin" size={16} /> : <Database size={16} />}
+            Добавить в PriceMaster — {selectedCount} поз.
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -423,9 +477,9 @@ const ALL_MARKETPLACES = [
 ] as const;
 
 export function SupplierCartPage() {
-  const [tab, setTab] = useState<"cart" | "ready" | "pm-search">("cart");
+  const [tab, setTab] = useState<"cart" | "ready">("cart");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [showPmSearch, setShowPmSearch] = useState(false);
+  const [pmSearchOpen, setPmSearchOpen] = useState(false);
   const [pendingMarketplaces, setPendingMarketplaces] = useState<string[] | null>(null);
   const queryClient = useQueryClient();
   const schedule = useQuery({
@@ -487,9 +541,9 @@ export function SupplierCartPage() {
         action={
           <div style={{ display: "flex", gap: 8 }}>
             <button
-              className={`secondary-action${showPmSearch ? " active" : ""}`}
+              className={`secondary-action${pmSearchOpen ? " active" : ""}`}
               type="button"
-              onClick={() => { setShowPmSearch((v) => !v); if (tab !== "cart") setTab("cart"); }}
+              onClick={() => setPmSearchOpen((v) => !v)}
             >
               <Search size={15} />
               Поиск в PM
@@ -635,12 +689,16 @@ export function SupplierCartPage() {
         <button className={`page-tab-btn${tab === "ready" ? " active" : ""}`} type="button" onClick={() => setTab("ready")}>
           <Package size={15} /> Готовы к отгрузке
         </button>
-        <button className={`page-tab-btn${tab === "pm-search" ? " active" : ""}`} type="button" onClick={() => setTab("pm-search")}>
-          <Search size={15} /> Поиск в PM
-        </button>
       </div>
-      {tab === "cart" ? <SupplierCartPanel /> : tab === "ready" ? <ReadyToShipPanel /> : <PmSearchPanel />}
-      {tab === "cart" && showPmSearch ? <PmSearchPanel /> : null}
+      {tab === "cart" ? <SupplierCartPanel /> : <ReadyToShipPanel />}
+
+      {/* PM Search side panel overlay */}
+      {pmSearchOpen ? (
+        <>
+          <div className="pm-search-backdrop" onClick={() => setPmSearchOpen(false)} />
+          <PmSearchPanel onClose={() => setPmSearchOpen(false)} />
+        </>
+      ) : null}
     </section>
   );
 }
