@@ -578,6 +578,74 @@ out body;`;
   }
 });
 
+// ── Ozon Pay Acquiring ────────────────────────────────────────────────────
+
+const _ozonPayBaseUrl = "https://payapi.ozon.ru";
+const _ozonPayShopBase = () => process.env.SHOP_BASE_URL || "https://magicvibes.ru";
+const _ozonPayApiBase = () => process.env.SHOP_API_BASE_URL || "https://davidsklad.ru";
+
+function _ozonPayRequestSign(...fields) {
+  return require("crypto").createHash("sha256").update(fields.join("")).digest("hex");
+}
+
+function _ozonPayNotificationSign({ accessKey, orderID, transactionID, extOrderID, amount, currencyCode, notificationSecretKey }) {
+  const fingerprint = `${accessKey}|${orderID || ""}|${transactionID != null ? String(transactionID) : ""}|${extOrderID || ""}|${amount}|${currencyCode}|${notificationSecretKey}`;
+  return require("crypto").createHash("sha256").update(fingerprint).digest("hex");
+}
+
+async function _ozonPayCreateOrder({ orderId, totalRub, email }) {
+  const accessKey = process.env.OZON_PAY_ACCESS_KEY;
+  const secretKey = process.env.OZON_PAY_SECRET_KEY;
+  if (!accessKey || !secretKey) return null;
+
+  const extId = orderId;
+  const paymentAlgorithm = "PAY_ALGO_SMS";
+  const currencyCode = "643";
+  const value = String(Math.round(totalRub * 100));
+
+  const requestSign = _ozonPayRequestSign(accessKey, "", extId, "", paymentAlgorithm, currencyCode, value, secretKey);
+
+  const successUrl = `${_ozonPayShopBase()}/order-success?id=${encodeURIComponent(orderId)}`;
+  const failUrl = `${_ozonPayShopBase()}/order-failed?id=${encodeURIComponent(orderId)}`;
+  const notificationUrl = `${_ozonPayApiBase()}/api/shop/payment/notification`;
+
+  const reqBody = {
+    accessKey,
+    amount: { currencyCode, value },
+    extId,
+    paymentAlgorithm,
+    mode: "MODE_SHORTENED",
+    enableFiscalization: false,
+    successUrl,
+    failUrl,
+    notificationUrl,
+    requestSign,
+  };
+  if (email) reqBody.receiptEmail = cleanText(email);
+
+  try {
+    const res = await fetch(`${_ozonPayBaseUrl}/v1/createOrder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reqBody),
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      logger.warn("ozon pay createOrder failed", {
+        status: res.status, extId, detail: data?.message || JSON.stringify(data).slice(0, 200),
+      });
+      return null;
+    }
+    const payLink = data?.order?.payLink || null;
+    if (payLink) logger.info("ozon pay order created", { extId });
+    return payLink;
+  } catch (error) {
+    logger.warn("ozon pay createOrder error", { extId, detail: error?.message || String(error) });
+    return null;
+  }
+}
+
 app.post("/api/shop/orders", shopCors, async (request, response, next) => {
   try {
     const prisma = getPrisma();
@@ -624,7 +692,59 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       phone: cleanText(delivery.phone || "").replace(/\d{4}$/, "****"),
     });
 
-    response.json({ ok: true, id: orderId, status: "pending", totalRub, paymentUrl: null });
+    const paymentUrl = await _ozonPayCreateOrder({ orderId, totalRub, email: cleanText(delivery.email || "") });
+    if (paymentUrl && prisma) {
+      await prisma.shopOrder.update({ where: { id: orderId }, data: { status: "payment_pending" } }).catch(() => {});
+    }
+
+    response.json({ ok: true, id: orderId, status: paymentUrl ? "payment_pending" : "pending", totalRub, paymentUrl: paymentUrl || null });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/shop/payment/notification", async (request, response, next) => {
+  try {
+    const accessKey = process.env.OZON_PAY_ACCESS_KEY;
+    const notificationSecretKey = process.env.OZON_PAY_NOTIFICATION_SECRET;
+    const body = request.body || {};
+
+    if (accessKey && notificationSecretKey && body.requestSign) {
+      const expected = _ozonPayNotificationSign({
+        accessKey,
+        orderID: body.orderID || "",
+        transactionID: body.transactionID,
+        extOrderID: body.extOrderID || "",
+        amount: String(body.amount || ""),
+        currencyCode: String(body.currencyCode || ""),
+        notificationSecretKey,
+      });
+      if (body.requestSign !== expected) {
+        logger.warn("ozon pay notification bad signature", { extOrderID: body.extOrderID });
+        return response.status(400).json({ error: "Bad signature" });
+      }
+    }
+
+    const { extOrderID, status, orderID } = body;
+    logger.info("ozon pay notification", {
+      extOrderID, orderID, status, amount: body.amount, method: body.paymentMethod,
+    });
+
+    if (extOrderID && status === "Completed") {
+      const prisma = getPrisma();
+      if (prisma) {
+        const updated = await prisma.shopOrder.updateMany({
+          where: { id: extOrderID, status: { not: "paid" } },
+          data: { status: "paid" },
+        }).catch((err) => {
+          logger.warn("ozon pay order status update failed", { extOrderID, detail: err?.message });
+          return null;
+        });
+        if (updated?.count > 0) logger.info("shop order paid via ozon pay", { extOrderID });
+      }
+    }
+
+    response.json({ ok: true });
   } catch (error) {
     next(error);
   }

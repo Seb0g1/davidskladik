@@ -6,6 +6,7 @@ import ProductPage from "./pages/ProductPage";
 import CartPage from "./pages/CartPage";
 import CheckoutPage from "./pages/CheckoutPage";
 import OrderSuccessPage from "./pages/OrderSuccessPage";
+import OrderFailedPage from "./pages/OrderFailedPage";
 import AccountPage from "./pages/AccountPage";
 import BrandsPage from "./pages/BrandsPage";
 
@@ -21,6 +22,7 @@ export default function App() {
           <Route path="/cart" element={<CartPage />} />
           <Route path="/checkout" element={<CheckoutPage />} />
           <Route path="/order-success" element={<OrderSuccessPage />} />
+          <Route path="/order-failed" element={<OrderFailedPage />} />
           <Route path="/orders" element={<AccountPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route path="/brands" element={<BrandsPage />} />

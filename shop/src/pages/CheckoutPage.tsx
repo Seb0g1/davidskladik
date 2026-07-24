@@ -81,7 +81,14 @@ export default function CheckoutPage() {
       },
       comment: form.comment || undefined,
     }, token ?? undefined),
-    onSuccess: (order) => { clear(); navigate(`/order-success?id=${order.id}`); },
+    onSuccess: (order) => {
+      clear();
+      if (order.paymentUrl) {
+        window.location.href = order.paymentUrl;
+      } else {
+        navigate(`/order-success?id=${order.id}`);
+      }
+    },
   });
 
   function set(key: keyof FormData) {
