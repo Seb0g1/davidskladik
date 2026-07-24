@@ -267,6 +267,7 @@ export function PickingListPage() {
     });
 
   const balanceTone = myBalance > 500 ? "success" : myBalance > 0 ? "warn" : myBalance < 0 ? "danger" : "";
+  const balanceStr = (n: number) => `${Math.round(n).toLocaleString("ru-RU")} ₽`;
 
   return (
     <section className="page-section picking-page">
@@ -283,7 +284,7 @@ export function PickingListPage() {
               title="Мой баланс"
             >
               <Wallet size={14} />
-              <span>{money(myBalance)}</span>
+              <span>{balanceStr(myBalance)}</span>
               <ChevronDown size={12} style={{ opacity: 0.6, transform: balancePanelOpen ? "rotate(180deg)" : "none", transition: "transform .2s" }} />
             </button>
             <button className="secondary-action" type="button" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>
@@ -297,89 +298,110 @@ export function PickingListPage() {
       {/* Balance flyout panel */}
       {balancePanelOpen ? (
         <div className="picker-balance-panel">
+          {/* My balance */}
           <div className="picker-balance-panel-my">
-            <div className="picker-balance-panel-label"><Wallet size={14} /> Мой баланс ({myUsername || "—"})</div>
-            <div className={`picker-balance-panel-total${balanceTone ? ` tone-${balanceTone}` : ""}`}>{money(myBalance)}</div>
+            <div className="picker-balance-panel-label"><Wallet size={14} /> Мой баланс · {myUsername || "—"}</div>
+            <div className={`picker-balance-panel-total${balanceTone ? ` tone-${balanceTone}` : ""}`}>{balanceStr(myBalance)}</div>
             {(myBalanceQuery.data?.credits ?? []).length > 0 ? (
               <div className="picker-balance-history">
-                {(myBalanceQuery.data?.credits ?? []).slice(-10).reverse().map((c) => (
+                {(myBalanceQuery.data?.credits ?? []).slice(-8).reverse().map((c) => (
                   <div className="picker-balance-history-row" key={c.id}>
-                    <span className="picker-cash-amount">+{money(c.amount)}</span>
-                    {c.note ? <span className="muted-note">{c.note}</span> : null}
-                    <span className="muted-note">{compactDate(c.createdAt ?? null)}</span>
-                    <span className="muted-note">выдал: {c.createdBy || "—"}</span>
+                    <span className="picker-cash-amount tone-success">+{balanceStr(c.amount ?? 0)}</span>
+                    <span className="muted-note">{c.note || "—"}</span>
+                    <span className="muted-note" style={{ marginLeft: "auto" }}>{compactDate(c.createdAt ?? null)}</span>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="soft-empty" style={{ fontSize: "0.78rem", padding: "6px 0" }}>Пополнений ещё не было.</div>
+              <p className="picker-balance-empty-hint">Пополнений ещё не было — обратитесь к администратору.</p>
             )}
           </div>
+
+          {/* Admin: issue form + all pickers */}
           {isAdmin ? (
             <div className="picker-balance-panel-admin">
-              <div className="picker-balance-panel-label"><Users size={14} /> Выдать деньги сборщику</div>
+              <div className="picker-balance-panel-label"><Users size={14} /> Выдать деньги</div>
+
               <div className="picker-issue-form">
-                <input
-                  list="picker-usernames-list"
-                  placeholder="Имя сборщика"
-                  value={issuePickerDraft}
-                  onChange={(e) => setIssuePickerDraft(e.target.value)}
-                />
                 <datalist id="picker-usernames-list">
                   {knownPickerUsernames.map((u) => <option key={u} value={u} />)}
                 </datalist>
                 <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  placeholder="Сумма, ₽"
-                  value={issueAmountDraft}
-                  onChange={(e) => setIssueAmountDraft(e.target.value)}
+                  list="picker-usernames-list"
+                  className="picker-issue-name"
+                  placeholder="Имя сборщика"
+                  value={issuePickerDraft}
+                  onChange={(e) => setIssuePickerDraft(e.target.value)}
                 />
+                <div className="picker-issue-amount-row">
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="Сумма, ₽"
+                    value={issueAmountDraft}
+                    onChange={(e) => setIssueAmountDraft(e.target.value)}
+                  />
+                  <button
+                    className="primary-action"
+                    type="button"
+                    disabled={issueBalanceMutation.isPending || !issuePickerDraft.trim() || !(Number(issueAmountDraft) > 0)}
+                    onClick={() => {
+                      issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Number(issueAmountDraft), note: issueNoteDraft });
+                    }}
+                  >
+                    {issueBalanceMutation.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Выдать
+                  </button>
+                </div>
                 <input
+                  className="picker-issue-note"
                   placeholder="Комментарий (необязательно)"
                   value={issueNoteDraft}
                   onChange={(e) => setIssueNoteDraft(e.target.value)}
                 />
-                <button
-                  className="primary-action"
-                  type="button"
-                  disabled={issueBalanceMutation.isPending || !issuePickerDraft.trim() || !(Number(issueAmountDraft) > 0)}
-                  onClick={() => issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Number(issueAmountDraft), note: issueNoteDraft })}
-                >
-                  {issueBalanceMutation.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Выдать
-                </button>
               </div>
+
               {issueBalanceMutation.error ? <div className="inline-error" style={{ marginTop: 6 }}>{errorMessage(issueBalanceMutation.error)}</div> : null}
-              {allBalances.length > 0 ? (
+
+              {/* All pickers list — show all known users, merge with balance data */}
+              {knownPickerUsernames.length > 0 ? (
                 <div className="picker-all-balances">
-                  {allBalances.map((b) => (
-                    <div className="picker-all-balance-row" key={b.username}>
-                      <span className="picker-all-balance-name">{b.username}</span>
-                      <span className={`picker-all-balance-total${b.total > 0 ? " tone-success" : b.total < 0 ? " tone-danger" : ""}`}>{money(b.total)}</span>
-                      <div className="picker-all-balance-credits">
-                        {b.credits.slice(-5).reverse().map((c) => (
-                          <span key={c.id} className="picker-all-balance-credit">
-                            +{money(c.amount)}
-                            {c.note ? ` · ${c.note}` : ""}
-                            <button
-                              className="icon-action danger-action"
-                              type="button"
-                              title="Удалить"
-                              disabled={deleteBalanceCreditMutation.isPending}
-                              onClick={() => deleteBalanceCreditMutation.mutate({ username: b.username, id: c.id })}
-                            >
-                              <Trash2 size={11} />
-                            </button>
-                          </span>
-                        ))}
+                  {knownPickerUsernames.map((username) => {
+                    const b = allBalances.find((x) => x.username === username);
+                    const total = b?.total ?? 0;
+                    return (
+                      <div
+                        className="picker-all-balance-row"
+                        key={username}
+                        onClick={() => setIssuePickerDraft(username)}
+                        title="Кликните, чтобы выбрать"
+                      >
+                        <span className="picker-all-balance-name">{username}</span>
+                        <span className={`picker-all-balance-total${total > 0 ? " tone-success" : total < 0 ? " tone-danger" : " tone-muted"}`}>
+                          {balanceStr(total)}
+                        </span>
+                        <div className="picker-all-balance-credits">
+                          {(b?.credits ?? []).slice(-3).reverse().map((c) => (
+                            <span key={c.id} className="picker-all-balance-credit">
+                              +{balanceStr(c.amount ?? 0)}
+                              {c.note ? ` · ${c.note}` : ""}
+                              <button
+                                className="icon-action danger-action"
+                                type="button"
+                                title="Удалить"
+                                disabled={deleteBalanceCreditMutation.isPending}
+                                onClick={(e) => { e.stopPropagation(); deleteBalanceCreditMutation.mutate({ username, id: c.id }); }}
+                              >
+                                <Trash2 size={11} />
+                              </button>
+                            </span>
+                          ))}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
-              ) : (
-                <div className="soft-empty" style={{ fontSize: "0.78rem", marginTop: 6 }}>Балансов пока нет.</div>
-              )}
+              ) : null}
             </div>
           ) : null}
         </div>

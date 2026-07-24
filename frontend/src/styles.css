@@ -7873,6 +7873,7 @@ textarea:focus-visible,
 .tone-warn    { color: #fbbf24; }
 .tone-danger  { color: #ff5c7a; }
 .tone-accent  { color: #79b8ff; }
+.tone-muted   { color: var(--muted); }
 
 /* ===== Picker Balance Chip & Panel ===== */
 .picker-balance-chip {
@@ -7942,12 +7943,33 @@ textarea:focus-visible,
 
 .picker-issue-form {
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  flex-wrap: wrap;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
-.picker-issue-form input { flex: 1 1 140px; min-width: 100px; }
-.picker-issue-form .primary-action { flex-shrink: 0; }
+.picker-issue-name,
+.picker-issue-note {
+  width: 100%;
+  box-sizing: border-box;
+}
+.picker-issue-amount-row {
+  display: flex;
+  gap: 8px;
+}
+.picker-issue-amount-row input[type="number"] {
+  flex: 1 1 auto;
+  min-width: 80px;
+}
+.picker-issue-amount-row .primary-action {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.picker-balance-empty-hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin: 4px 0 0;
+  padding: 0;
+}
 
 .picker-all-balances {
   display: grid;
@@ -7964,7 +7986,10 @@ textarea:focus-visible,
   padding: 8px 10px;
   background: var(--surface3);
   border-radius: 6px;
+  cursor: pointer;
+  transition: background .12s;
 }
+.picker-all-balance-row:hover { background: var(--surface2); outline: 1px solid var(--accent); }
 .picker-all-balance-name {
   font-size: 0.85rem;
   font-weight: 600;
