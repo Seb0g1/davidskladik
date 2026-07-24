@@ -9,7 +9,7 @@ import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
-import { PickerBalanceSchema, PickerBalancesSchema, PickerCashSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
+import { PickerBalanceSchema, PickerBalancesSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
 type PickingRow = z.infer<typeof SupplierPickingRowSchema>;
@@ -93,12 +93,6 @@ export function PickingListPage() {
     enabled: view === "sheets",
     refetchInterval: 30_000,
   });
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const cashQuery = useQuery({
-    queryKey: ["picker-cash", todayStr],
-    queryFn: () => fetchJson(`/api/picker-cash?date=${todayStr}`, PickerCashSchema),
-    refetchInterval: 30_000,
-  });
   const myBalanceQuery = useQuery({
     queryKey: ["picker-balance", "me"],
     queryFn: () => fetchJson("/api/picker-cash/balance", PickerBalanceSchema),
@@ -117,25 +111,10 @@ export function PickingListPage() {
     staleTime: 120_000,
   });
 
-  const [cashDraft, setCashDraft] = useState("");
-  const [cashNoteDraft, setCashNoteDraft] = useState("");
   const [replaceKey, setReplaceKey] = useState<string | null>(null);
+  const [editCredit, setEditCredit] = useState<{ username: string; id: string; amount: string; note: string } | null>(null);
   const [missingRow, setMissingRow] = useState<PickingRow | null>(null);
 
-  const addCashMutation = useMutation({
-    mutationFn: ({ amount, note }: { amount: number; note: string }) =>
-      fetchJson("/api/picker-cash", PickerCashSchema, mutationBody({ amount, note, date: todayStr })),
-    onSuccess: () => {
-      setCashDraft("");
-      setCashNoteDraft("");
-      void queryClient.invalidateQueries({ queryKey: ["picker-cash"] });
-    },
-  });
-  const deleteCashMutation = useMutation({
-    mutationFn: (id: string) =>
-      fetchJson(`/api/picker-cash/${encodeURIComponent(id)}?date=${todayStr}`, PickerCashSchema, { method: "DELETE" }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["picker-cash"] }),
-  });
   const issueBalanceMutation = useMutation({
     mutationFn: ({ pickerUsername, amount, note }: { pickerUsername: string; amount: number; note: string }) =>
       fetchJson("/api/picker-cash/balance", PickerBalanceSchema, mutationBody({ pickerUsername, amount, note })),
@@ -150,6 +129,15 @@ export function PickingListPage() {
     mutationFn: ({ username, id }: { username: string; id: string }) =>
       fetchJson(`/api/picker-cash/balance/${encodeURIComponent(username)}/${encodeURIComponent(id)}`, PickerBalanceSchema, { method: "DELETE" }),
     onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-balance"] });
+    },
+  });
+  const editBalanceCreditMutation = useMutation({
+    mutationFn: ({ username, id, amount, note }: { username: string; id: string; amount: number; note: string }) =>
+      fetchJson(`/api/picker-cash/balance/${encodeURIComponent(username)}/${encodeURIComponent(id)}`, PickerBalanceSchema, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ amount, note }) }),
+    onSuccess: () => {
+      setEditCredit(null);
       void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
       void queryClient.invalidateQueries({ queryKey: ["picker-balance"] });
     },
@@ -380,30 +368,75 @@ export function PickingListPage() {
 
               {issueBalanceMutation.error ? <div className="inline-error" style={{ margin: "6px 0 0" }}>{errorMessage(issueBalanceMutation.error)}</div> : null}
 
-              {/* Per-picker credit history */}
+              {/* Per-picker credit history with live edit/delete */}
               {issuePickerDraft && (() => {
                 const b = allBalances.find((x) => x.username === issuePickerDraft);
                 const credits = b?.credits ?? [];
-                if (!credits.length) return null;
                 return (
                   <div className="picker-credit-history">
-                    <div className="picker-credit-history-label">История выдач — {issuePickerDraft}</div>
-                    {credits.slice(-5).reverse().map((c) => (
-                      <div className="picker-credit-row" key={c.id}>
-                        <span className="tone-success">+{balanceStr(c.amount ?? 0)}</span>
-                        <span className="muted-note">{c.note || "—"}</span>
-                        <span className="muted-note" style={{ marginLeft: "auto" }}>{compactDate(c.createdAt ?? null)}</span>
-                        <button
-                          className="icon-action danger-action"
-                          type="button"
-                          title="Удалить"
-                          disabled={deleteBalanceCreditMutation.isPending}
-                          onClick={() => deleteBalanceCreditMutation.mutate({ username: issuePickerDraft, id: c.id })}
-                        >
-                          <Trash2 size={11} />
-                        </button>
-                      </div>
-                    ))}
+                    <div className="picker-credit-history-label">История выдач — {issuePickerDraft} {credits.length ? `(${credits.length})` : ""}</div>
+                    {credits.length === 0 ? (
+                      <p className="picker-balance-empty-hint">Выдач ещё не было.</p>
+                    ) : credits.slice().reverse().map((c) => {
+                      const isEditing = editCredit?.id === c.id && editCredit?.username === issuePickerDraft;
+                      if (isEditing) {
+                        return (
+                          <div className="picker-credit-row picker-credit-row--edit" key={c.id}>
+                            <input
+                              type="number"
+                              min="1"
+                              className="picker-credit-edit-amount"
+                              value={editCredit.amount}
+                              onChange={(e) => setEditCredit((prev) => prev ? { ...prev, amount: e.target.value } : prev)}
+                              autoFocus
+                            />
+                            <input
+                              className="picker-credit-edit-note"
+                              placeholder="Комментарий"
+                              value={editCredit.note}
+                              onChange={(e) => setEditCredit((prev) => prev ? { ...prev, note: e.target.value } : prev)}
+                            />
+                            <button
+                              className="icon-action success-action"
+                              type="button"
+                              title="Сохранить"
+                              disabled={editBalanceCreditMutation.isPending || !(Number(editCredit.amount) > 0)}
+                              onClick={() => editBalanceCreditMutation.mutate({ username: issuePickerDraft, id: c.id, amount: Number(editCredit.amount), note: editCredit.note })}
+                            >
+                              {editBalanceCreditMutation.isPending ? <Loader2 className="spin" size={12} /> : <Check size={12} />}
+                            </button>
+                            <button className="icon-action" type="button" title="Отмена" onClick={() => setEditCredit(null)}>
+                              <X size={12} />
+                            </button>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="picker-credit-row" key={c.id}>
+                          <span className="tone-success picker-credit-amount">+{balanceStr(c.amount ?? 0)}</span>
+                          <span className="muted-note picker-credit-note">{c.note || "—"}</span>
+                          <span className="muted-note picker-credit-date">{compactDate(c.createdAt ?? null)}</span>
+                          <button
+                            className="icon-action"
+                            type="button"
+                            title="Редактировать"
+                            onClick={() => setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(c.amount ?? ""), note: c.note ?? "" })}
+                          >
+                            <Clock size={11} />
+                          </button>
+                          <button
+                            className="icon-action danger-action"
+                            type="button"
+                            title="Удалить"
+                            disabled={deleteBalanceCreditMutation.isPending}
+                            onClick={() => deleteBalanceCreditMutation.mutate({ username: issuePickerDraft, id: c.id })}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                    {editBalanceCreditMutation.error ? <div className="inline-error" style={{ marginTop: 4 }}>{errorMessage(editBalanceCreditMutation.error)}</div> : null}
                   </div>
                 );
               })()}
@@ -531,63 +564,6 @@ export function PickingListPage() {
 
       {view === "list" ? (
         <>
-          {/* Daily cashbox (admin only — shared) */}
-          {isAdmin ? (
-            <section className="picker-cash-card">
-              <div className="picker-cash-head">
-                <Wallet size={16} />
-                <span>Дневная касса — {todayStr}</span>
-              </div>
-              <div className="summary-grid compact-summary">
-                <DiagnosticValue label="Выдано" value={money(cashQuery.data?.totalIssued ?? 0)} />
-                <DiagnosticValue label="Потрачено" value={money(cashQuery.data?.spent ?? 0)} tone={cashQuery.data && cashQuery.data.spent > 0 ? "warn" : ""} />
-                <DiagnosticValue
-                  label="Остаток"
-                  value={money(Math.abs(cashQuery.data?.remaining ?? 0))}
-                  tone={(cashQuery.data?.remaining ?? 0) >= 0 ? "success" : "danger"}
-                />
-              </div>
-              <div className="settings-form-row picker-cash-input-row">
-                <input
-                  type="number"
-                  min="0"
-                  step="1"
-                  placeholder="Выдать в кассу, ₽"
-                  value={cashDraft}
-                  onChange={(event) => setCashDraft(event.target.value)}
-                />
-                <input
-                  placeholder="Комментарий"
-                  value={cashNoteDraft}
-                  onChange={(event) => setCashNoteDraft(event.target.value)}
-                />
-                <button
-                  className="primary-action"
-                  type="button"
-                  disabled={addCashMutation.isPending || !(Number(cashDraft) > 0)}
-                  onClick={() => addCashMutation.mutate({ amount: Number(cashDraft), note: cashNoteDraft })}
-                >
-                  {addCashMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Выдал
-                </button>
-              </div>
-              {(cashQuery.data?.advances || []).length > 0 ? (
-                <div className="picker-cash-advances">
-                  {(cashQuery.data?.advances || []).map((adv) => (
-                    <div className="picker-cash-advance-row" key={adv.id}>
-                      <span className="picker-cash-amount">{money(adv.amount)}</span>
-                      {adv.note ? <span className="muted-note">{adv.note}</span> : null}
-                      <span className="muted-note">{compactDate(adv.createdAt ?? null)}</span>
-                      <button className="icon-action danger-action" type="button" title="Удалить выдачу" disabled={deleteCashMutation.isPending} onClick={() => deleteCashMutation.mutate(adv.id)}>
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {addCashMutation.error ? <div className="inline-error">{errorMessage(addCashMutation.error)}</div> : null}
-            </section>
-          ) : null}
-
           <div className="picking-groups">
             {grouped.map(([supplierName, supplierRows]) => {
               const ledger = supplierLedger[supplierName] || {};

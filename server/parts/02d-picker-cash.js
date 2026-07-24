@@ -176,6 +176,28 @@ app.post("/api/picker-cash/balance", requireAdmin, async (request, response, nex
   }
 });
 
+app.patch("/api/picker-cash/balance/:username/:id", requireAdmin, async (request, response, next) => {
+  try {
+    const pickerUsername = cleanText(request.params.username);
+    if (!pickerUsername) return response.status(400).json({ error: "Укажите имя сборщика." });
+    const balance = await loadPickerBalance(pickerUsername);
+    const credit = balance.credits.find((c) => String(c.id) === request.params.id);
+    if (!credit) return response.status(404).json({ error: "Запись не найдена." });
+    if (request.body?.amount !== undefined) {
+      const amount = normalizeFinanceMoney(request.body.amount, 0);
+      if (!(amount > 0)) return response.status(400).json({ error: "Сумма должна быть больше нуля." });
+      credit.amount = amount;
+    }
+    if (request.body?.note !== undefined) credit.note = cleanText(request.body.note || "");
+    credit.updatedAt = new Date().toISOString();
+    credit.updatedBy = requestUsername(request);
+    await savePickerBalance(pickerUsername, balance);
+    response.json(pickerBalanceBody(pickerUsername, balance));
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete("/api/picker-cash/balance/:username/:id", requireAdmin, async (request, response, next) => {
   try {
     const pickerUsername = cleanText(request.params.username);

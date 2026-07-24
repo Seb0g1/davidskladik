@@ -8063,12 +8063,27 @@ textarea:focus-visible,
 .picker-credit-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   font-size: 0.8rem;
-  padding: 5px 0;
-  border-bottom: 1px solid rgba(255,255,255,.04);
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(255,255,255,.05);
 }
 .picker-credit-row:last-child { border-bottom: none; }
+.picker-credit-amount { font-weight: 600; flex-shrink: 0; min-width: 70px; }
+.picker-credit-note   { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-credit-date   { flex-shrink: 0; font-size: 0.72rem; }
+
+.picker-credit-row--edit {
+  background: rgba(121,184,255,.06);
+  border-radius: 6px;
+  padding: 6px 8px;
+  gap: 6px;
+}
+.picker-credit-edit-amount { width: 90px; flex-shrink: 0; padding: 4px 8px; font-size: 0.82rem; }
+.picker-credit-edit-note   { flex: 1 1 auto; padding: 4px 8px; font-size: 0.82rem; }
+
+.success-action { color: #4ed39a; }
+.success-action:hover { color: #fff; background: rgba(78,211,154,.2); }
 
 /* My balance empty hint */
 .picker-balance-empty-hint {
