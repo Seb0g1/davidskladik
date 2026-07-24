@@ -122,6 +122,29 @@ app.patch("/api/suppliers/:id", requireAdmin, async (request, response, next) =>
       }
     }
     if (!affectedProductIds.length) {
+      // In Postgres-only mode warehouse.products is empty, so supplierImpactProductIds returns [].
+      // When stopping a supplier, query ProductLink directly so no-supplier-automation can
+      // zero out stock on marketplaces for the affected products.
+      if (supplier.stopped) {
+        const prisma = getPrisma();
+        if (prisma) {
+          const supplierNameNorm = normalizeSupplierName(supplier.name);
+          const partnerId = cleanText(supplier.partnerId);
+          const conditions = [];
+          if (supplierNameNorm) conditions.push({ supplierName: { equals: supplierNameNorm, mode: "insensitive" } });
+          if (partnerId) conditions.push({ partnerId });
+          if (conditions.length) {
+            prisma.productLink.findMany({ where: { OR: conditions }, select: { productId: true } })
+              .then((links) => {
+                const pgProductIds = [...new Set(links.map((l) => l.productId))];
+                if (pgProductIds.length) {
+                  queueMarketplaceJob("no-supplier-automation", { productIds: pgProductIds, skipLinkedGrace: true }, { priority: QUEUE_PRIORITY.RECOVERY });
+                }
+              })
+              .catch((err) => logger.warn("supplier stop pg lookup failed", { detail: err?.message || String(err) }));
+          }
+        }
+      }
       queueAuthoritativePriceReprice({
         marketplace: "all",
         reason: "supplier_update",
@@ -150,6 +173,25 @@ app.delete("/api/suppliers/:id", requireAdmin, async (request, response, next) =
     response.json({ ok: true, warehouse: saved });
     if (affectedProductIds.length) {
       queueMarketplaceJob("no-supplier-automation", { productIds: affectedProductIds }, { priority: QUEUE_PRIORITY.RECOVERY });
+    } else if (before) {
+      const prisma = getPrisma();
+      if (prisma) {
+        const supplierNameNorm = normalizeSupplierName(before.name);
+        const partnerId = cleanText(before.partnerId);
+        const conditions = [];
+        if (supplierNameNorm) conditions.push({ supplierName: { equals: supplierNameNorm, mode: "insensitive" } });
+        if (partnerId) conditions.push({ partnerId });
+        if (conditions.length) {
+          prisma.productLink.findMany({ where: { OR: conditions }, select: { productId: true } })
+            .then((links) => {
+              const pgProductIds = [...new Set(links.map((l) => l.productId))];
+              if (pgProductIds.length) {
+                queueMarketplaceJob("no-supplier-automation", { productIds: pgProductIds }, { priority: QUEUE_PRIORITY.RECOVERY });
+              }
+            })
+            .catch((err) => logger.warn("supplier delete pg lookup failed", { detail: err?.message || String(err) }));
+        }
+      }
     }
   } catch (error) {
     next(error);
