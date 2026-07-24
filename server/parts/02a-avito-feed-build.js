@@ -160,8 +160,9 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}) {
     const stockQuantity = listingStock(outOfStock, product.targetStock, hasSupplier);
     return stockQuantity === base.stockQuantity ? base : { ...base, stockQuantity };
   };
-  if (!product.supplier) {
-    const outOfStock = listing.outOfStock === true;
+  if (!product.supplier || product.supplier.stopped) {
+    // Нет поставщика или поставщик на паузе → обнуляем остаток.
+    const outOfStock = Boolean(product.supplier?.stopped) || listing.outOfStock === true;
     return { listing: withStock(listing, outOfStock, false), outOfStock };
   }
   const hasSupplierPrice = computeAvitoSupplierPriceRub(product.supplier, pricing) > 0;
