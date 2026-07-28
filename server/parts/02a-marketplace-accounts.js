@@ -12,6 +12,7 @@ function normalizeMarketplaceAccount(input = {}, current = {}) {
     campaignId: cleanText(input.campaignId ?? input.campaign_id ?? current.campaignId),
     hidden: Boolean(input.hidden ?? current.hidden),
     syncEnabled: parseBooleanSetting(input.syncEnabled ?? input.sync_enabled, current.syncEnabled !== false),
+    importEnabled: parseBooleanSetting(input.importEnabled ?? input.import_enabled, current.importEnabled !== false),
     createdAt: current.createdAt || input.createdAt || new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };

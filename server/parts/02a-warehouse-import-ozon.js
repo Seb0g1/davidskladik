@@ -53,7 +53,7 @@ function buildOzonImportedWarehouseProduct(account, product, { info = {}, stockI
 }
 
 async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, existingProducts = [], options = {}) {
-  const accounts = getOzonAccounts().filter((account) => account.clientId && account.apiKey);
+  const accounts = getOzonAccounts().filter((account) => account.clientId && account.apiKey && account.importEnabled !== false);
   const imported = [];
   const warnings = [];
   if (!accounts.length) return { imported, warnings };

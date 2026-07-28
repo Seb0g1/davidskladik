@@ -16,6 +16,7 @@ type MarketplaceAccount = {
   readOnly?: boolean;
   inheritedFromEnv?: boolean;
   syncEnabled?: boolean;
+  importEnabled?: boolean;
   updatedAt?: string | null;
 };
 
@@ -33,9 +34,10 @@ type AccountDraft = {
   businessId: string;
   campaignId: string;
   syncEnabled: boolean;
+  importEnabled: boolean;
 };
 
-const EMPTY_DRAFT: AccountDraft = { id: "", marketplace: "ozon", name: "", clientId: "", apiKey: "", businessId: "", campaignId: "", syncEnabled: true };
+const EMPTY_DRAFT: AccountDraft = { id: "", marketplace: "ozon", name: "", clientId: "", apiKey: "", businessId: "", campaignId: "", syncEnabled: true, importEnabled: true };
 
 const MARKETPLACE_LABELS: Record<string, string> = { ozon: "Ozon", yandex: "Yandex Market", avito: "Avito", wb: "Wildberries" };
 
@@ -69,7 +71,7 @@ export function MarketplaceAccountsPanel() {
   const save = useMutation({
     mutationFn: (payload: AccountDraft) => apiJson(
       payload.id ? `/api/marketplace-accounts/${encodeURIComponent(payload.id)}` : "/api/marketplace-accounts",
-      { method: payload.id ? "PATCH" : "POST", body: JSON.stringify({ ...payload, syncEnabled: payload.syncEnabled ? "true" : "false" }) },
+      { method: payload.id ? "PATCH" : "POST", body: JSON.stringify({ ...payload, syncEnabled: payload.syncEnabled ? "true" : "false", importEnabled: payload.importEnabled ? "true" : "false" }) },
     ),
     onSuccess: () => {
       setDraft(EMPTY_DRAFT);
@@ -108,6 +110,7 @@ export function MarketplaceAccountsPanel() {
       businessId: account.businessId || "",
       campaignId: account.campaignId || "",
       syncEnabled: account.syncEnabled !== false,
+      importEnabled: account.importEnabled !== false,
     });
     setFormOpen(true);
   };
@@ -182,7 +185,11 @@ export function MarketplaceAccountsPanel() {
           <div className="account-form-actions">
             <label className="settings-toggle">
               <input type="checkbox" checked={draft.syncEnabled} onChange={(event) => setDraft((current) => ({ ...current, syncEnabled: event.target.checked }))} />
-              Загружать товары и цены этого кабинета
+              Синхронизация включена (заказы, цены, остатки)
+            </label>
+            <label className="settings-toggle">
+              <input type="checkbox" checked={draft.importEnabled} onChange={(event) => setDraft((current) => ({ ...current, importEnabled: event.target.checked }))} />
+              Импортировать товары из этого кабинета в склад
             </label>
             <button className="primary-action" type="button" disabled={!canSave || save.isPending} onClick={() => save.mutate(draft)}>
               {save.isPending ? <Loader2 className="spin" size={15} /> : <CheckCircle2 size={15} />} {isEditing ? "Сохранить изменения" : "Сохранить кабинет"}
@@ -202,7 +209,8 @@ export function MarketplaceAccountsPanel() {
                 <span className={`market-badge market-${account.marketplace}`}>{marketplaceLabel(account.marketplace)}</span>
                 <strong>{account.name}</strong>
                 <span className={`pill ${account.configured ? "ok" : "warn"}`}>{account.configured ? "ключи подключены" : "не настроен"}</span>
-                {account.syncEnabled === false ? <span className="pill muted">загрузка выкл</span> : null}
+                {account.syncEnabled === false ? <span className="pill muted">синхр. выкл</span> : null}
+                {account.syncEnabled !== false && account.importEnabled === false ? <span className="pill muted">импорт выкл</span> : null}
               </div>
               <div className="account-modern-meta">
                 {account.marketplace === "yandex"
