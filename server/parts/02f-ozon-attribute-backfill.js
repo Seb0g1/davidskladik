@@ -328,6 +328,29 @@ async function ozonGetCategoryBreakdown(account) {
   return data;
 }
 
+// Загружает словарь ТН ВЭД (атрибут attrId) из нескольких категорий Ozon.
+// Возвращает Map: числовой код (10 цифр) → { value: полный текст из словаря, dictionary_value_id: id }
+// Это нужно, чтобы отправлять не голый "3304990000", а точное значение из словаря Ozon
+// и избегать сообщений "Заменили некорректное значение".
+async function ozonFetchTnvedDictMap(account, uniqueCategories, attrId) {
+  const map = new Map();
+  for (const { descCatId, typeId } of uniqueCategories.slice(0, 20)) {
+    if (!descCatId) continue;
+    try {
+      const dictValues = await ozonGetAttributeDictValues(account, descCatId, typeId || 0, attrId);
+      for (const entry of dictValues) {
+        const text = cleanText(entry.value || "");
+        const m = text.match(/^(\d{10})/);
+        if (m && !map.has(m[1])) {
+          map.set(m[1], { value: text, dictionary_value_id: Number(entry.id) || 0 });
+        }
+      }
+    } catch { /* категория может не иметь этот атрибут */ }
+    if (map.size >= 500) break;
+  }
+  return map;
+}
+
 // Применяет назначения { descCatId, tnvedCode } ко всем товарам Ozon (группировка по descCatId).
 async function ozonApplyTnvedByCategory(account, assignments, { dryRun = false, fallbackCode = "" } = {}) {
   // Ozon официально подтвердил: атрибут «Код ТН ВЭД ЕАЭС» имеет id=22232 для всех категорий.
@@ -350,6 +373,14 @@ async function ozonApplyTnvedByCategory(account, assignments, { dryRun = false, 
   try {
     const products = await ozonGetAllProductsInfo(account);
     ozonTnvedApplyProgress.totalProducts = products.length;
+    ozonTnvedApplyProgress.phase = "loading_dict";
+
+    // Загружаем словарь Ozon для ТН ВЭД — получаем полные тексты вида
+    // "3304990000 - Прочие косметические средства..." вместо голого кода.
+    const uniqueCategories = [...new Map(products.map((p) => [`${p.descCatId}:${p.typeId}`, p])).values()];
+    const tnvedDictMap = await ozonFetchTnvedDictMap(account, uniqueCategories, TNVED_ATTR_ID);
+    logger.info("ozon tnved dict map built", { entries: tnvedDictMap.size, categoriesSampled: Math.min(uniqueCategories.length, 20) });
+
     ozonTnvedApplyProgress.phase = "sending";
 
     // Build update items — code priority: descCatId:typeId → descCatId:0 → fallbackCode
@@ -357,7 +388,13 @@ async function ozonApplyTnvedByCategory(account, assignments, { dryRun = false, 
     for (const { offerId, descCatId, typeId } of products) {
       const code = assignMap.get(`${descCatId}:${typeId}`) || assignMap.get(`${descCatId}:0`) || cleanText(fallbackCode);
       if (!code) continue;
-      updateItems.push({ offer_id: offerId, attributes: [{ id: TNVED_ATTR_ID, values: [{ value: code }] }] });
+      // Используем полный текст из словаря Ozon (если нашли), иначе только числовой код
+      const numericCode = code.match(/^(\d{10})/)?.[1] || code;
+      const dictEntry = tnvedDictMap.get(numericCode);
+      const values = dictEntry
+        ? [{ value: dictEntry.value, dictionary_value_id: dictEntry.dictionary_value_id }]
+        : [{ value: code }];
+      updateItems.push({ offer_id: offerId, attributes: [{ id: TNVED_ATTR_ID, values }] });
     }
 
     const categoryStats = [...assignMap.entries()].map(([key, tnvedCode]) => ({
