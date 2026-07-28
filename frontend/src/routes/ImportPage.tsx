@@ -22,6 +22,25 @@ function OzonAttributesPanel() {
   const [open, setOpen] = useState(false);
   const [ozonTnved, setOzonTnved] = useState("");
   const [yandexTnved, setYandexTnved] = useState("");
+  const [autoCode, setAutoCode] = useState("");
+  const queryClient = useQueryClient();
+
+  const settingsQuery = useQuery({
+    queryKey: ["app-settings"],
+    queryFn: () => apiJson<{ tnved?: { code?: string; autoEnabled?: boolean } }>("/api/settings"),
+  });
+  const savedCode = settingsQuery.data?.tnved?.code ?? "";
+  const autoEnabled = settingsQuery.data?.tnved?.autoEnabled !== false;
+
+  useEffect(() => {
+    if (settingsQuery.data) setAutoCode(settingsQuery.data.tnved?.code ?? "");
+  }, [settingsQuery.data]);
+
+  const saveAutoCode = useMutation({
+    mutationFn: (code: string) =>
+      apiJson("/api/settings", { method: "PATCH", body: JSON.stringify({ tnved: { code: code.trim(), autoEnabled: true } }) }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["app-settings"] }),
+  });
 
   const clearMarkingDry = useMutation({ mutationFn: () => apiJson<AttrResult>("/api/ozon/attributes/clear-marking", { method: "POST", body: JSON.stringify({ dryRun: true }) }) });
   const clearMarkingApply = useMutation({ mutationFn: () => apiJson<AttrResult>("/api/ozon/attributes/clear-marking", { method: "POST", body: JSON.stringify({ dryRun: false }) }) });
@@ -70,6 +89,54 @@ function OzonAttributesPanel() {
 
       {open ? (
         <div style={{ padding: "0 16px 16px" }}>
+
+          {/* Автозаполнение ТН ВЭД */}
+          <div style={{ marginBottom: 20, padding: "12px 14px", background: "var(--color-bg-alt, #f4f6fa)", borderRadius: 8, border: "1px solid var(--color-border, #e2e6ee)" }}>
+            <div style={{ fontWeight: 600, marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
+              <RefreshCw size={14} />
+              Автозаполнение ТН ВЭД (Ozon · Яндекс · WB)
+            </div>
+            <div style={{ fontSize: "0.83em", opacity: 0.7, marginBottom: 10 }}>
+              Код определяется автоматически из справочника WB по предмету и применяется на всех маркетплейсах без вашего участия.
+              Укажите код вручную только если нужен другой (переопределение).
+              {savedCode ? (
+                <span style={{ display: "block", marginTop: 4, color: "var(--color-success, #16a34a)", fontWeight: 500 }}>
+                  Сейчас активен: <code>{savedCode}</code> {autoEnabled ? "✓" : "(отключено)"}
+                </span>
+              ) : (
+                <span style={{ display: "block", marginTop: 4, opacity: 0.6 }}>Не настроено</span>
+              )}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <input
+                value={autoCode}
+                onChange={(e) => setAutoCode(e.target.value)}
+                placeholder="Например: 3303001000"
+                style={{ width: 180 }}
+              />
+              <button
+                className="primary-action"
+                type="button"
+                disabled={!autoCode.trim() || saveAutoCode.isPending}
+                onClick={() => saveAutoCode.mutate(autoCode)}
+              >
+                {saveAutoCode.isPending ? <Loader2 className="spin" size={14} /> : <CheckSquare size={14} />}
+                Сохранить и включить
+              </button>
+              {savedCode && (
+                <button
+                  className="secondary-action"
+                  type="button"
+                  disabled={saveAutoCode.isPending}
+                  onClick={() => { setAutoCode(""); saveAutoCode.mutate(""); }}
+                >
+                  Отключить
+                </button>
+              )}
+            </div>
+            {saveAutoCode.isSuccess && <div style={{ marginTop: 6, fontSize: "0.85em", color: "var(--color-success, #16a34a)" }}>Сохранено. Следующее обслуживание маркетплейсов применит код автоматически.</div>}
+            {saveAutoCode.error && <div className="inline-error" style={{ marginTop: 6 }}>{String((saveAutoCode.error as Error).message)}</div>}
+          </div>
 
           {/* Снять код маркировки Ozon */}
           <div style={{ marginBottom: 20 }}>

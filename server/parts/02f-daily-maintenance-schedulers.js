@@ -329,11 +329,45 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
           logger.warn("marketplace maintenance yandex unarchive queue failed", { detail: error?.message || String(error) });
         }
       }
+      // Авто-заполнение ТН ВЭД: код берётся из справочника WB по предмету (auto-discovery).
+      // Не требует ручного ввода кода.
+      let tnvedResult = null;
+      try {
+        const wbAcc = getWbAccountByTarget("wb");
+        let resolvedCode = null;
+
+        // WB: самостоятельно определяет код по subjectId правил импорта
+        const wbTnved = wbAcc
+          ? await backfillWbTnvedCharacteristics(wbAcc).catch((e) => ({ ok: false, error: e?.message }))
+          : null;
+        if (wbTnved?.tnved) resolvedCode = wbTnved.tnved;
+
+        // Фолбэк: сохранённый код в настройках (если WB не настроен или не дал кода)
+        if (!resolvedCode) {
+          const appSettings = await readAppSettings();
+          resolvedCode = cleanText(appSettings.tnved?.code) || null;
+        }
+
+        if (resolvedCode) {
+          const ozonAcc = getOzonAccountByTarget("ozon");
+          const ozonTnved = ozonAcc
+            ? await ozonBackfillTnved(ozonAcc, resolvedCode, { dryRun: false }).catch((e) => ({ ok: false, error: e?.message }))
+            : { ok: false, error: "no_ozon_account" };
+          const yandexTnved = await yandexBackfillTnved(resolvedCode, { dryRun: false })
+            .catch((e) => ({ ok: false, error: e?.message }));
+          tnvedResult = { code: resolvedCode, wb: wbTnved, ozon: ozonTnved, yandex: yandexTnved };
+          logger.info("marketplace maintenance tnved auto-backfill complete", tnvedResult);
+        }
+      } catch (error) {
+        logger.warn("marketplace maintenance tnved auto-backfill failed", { detail: error?.message || String(error) });
+      }
+
       const result = {
         status: "ok",
         trigger,
         startedAt,
         finishedAt: new Date().toISOString(),
+        tnvedAutoBackfill: tnvedResult,
         priceMaster: {
           items: priceMaster.items,
           changes: priceMaster.changes,

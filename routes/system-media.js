@@ -5,6 +5,7 @@ function registerSystemMediaRoutes(app, deps) {
     fs,
     path,
     crypto,
+    sharp,
     uploadImageDir,
     imageExtension,
     uploadBaseUrl,
@@ -31,14 +32,22 @@ app.post("/api/uploads/images", uploadImages.array("images", 10), async (request
     await fs.mkdir(uploadImageDir, { recursive: true });
     const saved = [];
     for (const file of files) {
-      const extension = imageExtension(file);
-      const fileName = `${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}${extension}`;
+      // Auto-rotate by EXIF orientation only — no resize, no recompression.
+      let processedBuffer = file.buffer;
+      let finalExtension = imageExtension(file);
+      try {
+        processedBuffer = await sharp(file.buffer).rotate().toBuffer();
+      } catch (sharpErr) {
+        logger.warn("upload sharp rotate failed, saving original", { name: file.originalname, detail: sharpErr?.message });
+        processedBuffer = file.buffer;
+      }
+      const fileName = `${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}${finalExtension}`;
       const filePath = path.join(uploadImageDir, fileName);
-      await fs.writeFile(filePath, file.buffer);
+      await fs.writeFile(filePath, processedBuffer);
       const relativeUrl = `/uploads/images/${fileName}`;
       saved.push({
         originalName: file.originalname,
-        size: file.size,
+        size: processedBuffer.length,
         mimeType: file.mimetype,
         path: relativeUrl,
         url: `${uploadBaseUrl(request)}${relativeUrl}`,

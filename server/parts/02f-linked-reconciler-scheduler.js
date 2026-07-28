@@ -431,6 +431,53 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
   }
 }
 
+// Dedicated recovery pass for archived+linked Ozon products.
+// Runs after every normal reconciler tick so archived Ozon products don't have to wait for
+// the rolling cursor to reach them (which can take hours across a large catalog).
+// Uses forceOzonDailyLimit:true (reconciler bypass) so the counter is never inflated.
+async function runArchivedOzonLinkedRecoveryPass() {
+  if (linkedReconcilerRunning) return { status: "already_running" };
+  const prisma = getPrisma();
+  if (!prisma) return { status: "no_db" };
+  linkedReconcilerRunning = true;
+  const maxBatches = Math.max(1, Number(process.env.OZON_RECOVERY_MAX_BATCHES_PER_TICK || 3) || 3);
+  const totals = { products: 0, recovered: 0, unarchived: 0, batches: 0 };
+  try {
+    let lastId = null;
+    for (let batch = 0; batch < maxBatches; batch += 1) {
+      const rows = await prisma.warehouseProduct.findMany({
+        where: {
+          marketplace: "ozon",
+          archived: true,
+          links: { some: {} },
+          ...(lastId ? { id: { gt: lastId } } : {}),
+        },
+        include: { links: true },
+        orderBy: { id: "asc" },
+        take: linkedReconcilerBatchSize * 2,
+      }).catch(() => []);
+      if (!rows.length) break;
+      lastId = String(rows[rows.length - 1].id);
+      const products = rows.map(productFromPostgres);
+      const result = await processLinkedReconcilerBatch(products);
+      totals.batches += 1;
+      totals.products += result.products || 0;
+      totals.recovered += result.recovered || 0;
+      totals.unarchived += result.unarchived || 0;
+      if (rows.length < linkedReconcilerBatchSize * 2) break;
+    }
+    if (totals.products > 0) {
+      logger.info("ozon_archived_recovery_complete", totals);
+    }
+    return { status: "ok", ...totals };
+  } catch (error) {
+    logger.warn("ozon archived recovery pass failed", { detail: error?.message || String(error) });
+    return { status: "error", error: error?.message };
+  } finally {
+    linkedReconcilerRunning = false;
+  }
+}
+
 // Dedicated recovery pass for archived+linked Yandex products.
 // The rolling reconciler cursor walks products alphabetically (ozon- before yandex-), so
 // it takes hours to reach Yandex products after a restart. This pass runs after every normal
@@ -496,8 +543,11 @@ function scheduleLinkedReconciler(delayMs = null) {
       if (result?.status && String(result.status).startsWith("deferred_")) {
         nextDelayMs = linkedReconcilerDeferRetryMs;
       }
-      // After the normal rolling pass, run a dedicated Yandex archived recovery pass so
-      // archived Yandex products are processed every tick regardless of cursor position.
+      // After the normal rolling pass, run dedicated archived-product recovery passes so
+      // archived Ozon and Yandex products are processed every tick regardless of cursor position.
+      await runArchivedOzonLinkedRecoveryPass().catch((error) => {
+        logger.warn("ozon archived recovery pass error", { detail: error?.message || String(error) });
+      });
       await runArchivedYandexLinkedRecoveryPass().catch((error) => {
         logger.warn("yandex archived recovery pass error", { detail: error?.message || String(error) });
       });

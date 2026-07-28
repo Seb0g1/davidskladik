@@ -782,6 +782,26 @@ export const SupplierPickingUpdateSchema = z.object({
   row: SupplierPickingRowSchema,
 }).passthrough();
 
+export const SupplierProfileResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  supplier: SupplierSchema.optional(),
+  stats: z.object({
+    picked: z.number().optional().default(0),
+    missing: z.number().optional().default(0),
+    totalPurchases: z.number().optional().default(0),
+    successRate: z.number().nullable().optional(),
+    averagePrice: z.number().optional().default(0),
+  }).optional(),
+  ledger: z.object({
+    source: z.coerce.string().optional().default(""),
+    total: z.number().optional().default(0),
+    summary: SupplierLedgerSummarySchema.optional(),
+    entries: z.array(SupplierLedgerEntrySchema).optional().default([]),
+    error: z.coerce.string().optional().default(""),
+  }).optional(),
+  history: z.array(SupplierPickingRowSchema).optional().default([]),
+}).passthrough();
+
 export const SettingsResponseSchema = z.object({
   ok: z.boolean().optional(),
   settings: z.record(z.string(), z.unknown()).default({}),

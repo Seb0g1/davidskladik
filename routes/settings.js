@@ -47,6 +47,11 @@ async function saveSettingsHandler(request, response, next) {
   try {
     const previous = await readAppSettings();
     const rawSettings = { ...(request.body || {}) };
+    if (!rawSettings.tnved) {
+      rawSettings.tnved = previous.tnved || {};
+    } else {
+      rawSettings.tnved = { ...(previous.tnved || {}), ...rawSettings.tnved };
+    }
     if (!rawSettings.ai) {
       rawSettings.ai = previous.ai || {};
     } else {

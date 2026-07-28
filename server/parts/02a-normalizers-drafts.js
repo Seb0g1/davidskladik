@@ -195,6 +195,7 @@ function normalizeMarketplaceState(input = {}) {
     reserved: Number.isFinite(Number(input.reserved)) ? Number(input.reserved) : undefined,
     warehouses,
     archived: input.archived !== undefined ? Boolean(input.archived) : undefined,
+    isAutoArchived: input.isAutoArchived !== undefined ? Boolean(input.isAutoArchived) : undefined,
     hasStocks: input.hasStocks !== undefined ? Boolean(input.hasStocks) : undefined,
     partial: input.partial || input.partialSync || input.isPartial ? true : undefined,
   });

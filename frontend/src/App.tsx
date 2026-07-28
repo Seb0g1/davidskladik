@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, RefreshCcw, Search, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, UserCircle, Upload } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, RefreshCcw, Search, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, Tag, UserCircle, Upload } from "lucide-react";
 import { lazy, ReactNode, Suspense, useEffect, useRef, useState } from "react";
 import { NotificationsBell } from "./components/NotificationsBell";
 import { SystemHealthIndicator } from "./components/SystemHealthIndicator";
@@ -28,10 +28,10 @@ const SuppliersPage = lazy(() => import("./routes/SuppliersPage").then((m) => ({
 const StatisticsPage = lazy(() => import("./routes/StatisticsPage").then((m) => ({ default: m.StatisticsPage })));
 const ConsignmentPage = lazy(() => import("./routes/ConsignmentPage").then((m) => ({ default: m.ConsignmentPage })));
 const NewProductsPage = lazy(() => import("./routes/NewProductsPage").then((m) => ({ default: m.NewProductsPage })));
-const WbPage = lazy(() => import("./routes/WbPage").then((m) => ({ default: m.WbPage })));
 const ShopAdminPage = lazy(() => import("./routes/ShopAdminPage").then((m) => ({ default: m.default })));
+const TnvedPage = lazy(() => import("./routes/TnvedPage").then((m) => ({ default: m.TnvedPage })));
 
-type AppRoute = "dashboard" | "import" | "avito" | "wb" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products";
+type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -50,7 +50,6 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} /> },
   { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
   { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} /> },
-  { route: "wb", href: "/app/wb", label: "Wildberries", icon: <Upload size={16} /> },
   { route: "shop", href: "/app/shop", label: "Магазин MV", icon: <Sparkles size={16} /> },
   { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Upload size={16} /> },
   { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
@@ -59,6 +58,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} /> },
   { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} /> },
   { route: "new-products", href: "/app/new-products", label: "Новые товары", icon: <Sparkles size={16} /> },
+  { route: "tnved", href: "/app/tnved", label: "Коды ТН ВЭД", icon: <Tag size={16} /> },
 ];
 
 // Сайдбар: первые пять пунктов — без заголовка, дальше сворачиваемые группы.
@@ -66,7 +66,7 @@ const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = 
   { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
   { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions"] },
   { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "no-supplier", "operations", "recovery-queue"] },
-  { id: "extra", title: "Дополнительное", routes: ["suppliers", "wb", "shop", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products"] },
+  { id: "extra", title: "Дополнительное", routes: ["suppliers", "shop", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products", "tnved"] },
 ];
 
 function currentRoute(): AppRoute {
@@ -82,7 +82,6 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/chats")) return "chats";
   if (path.startsWith("/app/import")) return "import";
   if (path.startsWith("/app/avito")) return "avito";
-  if (path.startsWith("/app/wb")) return "wb";
   if (path.startsWith("/app/shop")) return "shop";
   if (path.startsWith("/app/prices")) return "prices";
   if (path.startsWith("/app/problem-products")) return "problem-products";
@@ -94,6 +93,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/ai-drafts")) return "ai-drafts";
   if (path.startsWith("/app/no-supplier")) return "no-supplier";
   if (path.startsWith("/app/new-products")) return "new-products";
+  if (path.startsWith("/app/tnved")) return "tnved";
   return "warehouse";
 }
 
@@ -325,7 +325,6 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "chats" ? <ChatsPage /> : null}
       {sessionReady && !accessDenied && route === "import" ? <ImportPage /> : null}
       {sessionReady && !accessDenied && route === "avito" ? <AvitoPage /> : null}
-      {sessionReady && !accessDenied && route === "wb" ? <WbPage /> : null}
       {sessionReady && !accessDenied && route === "shop" ? <ShopAdminPage /> : null}
       {sessionReady && !accessDenied && route === "prices" ? <PricesPage /> : null}
       {sessionReady && !accessDenied && route === "problem-products" ? <ProblemProductsPage /> : null}
@@ -337,6 +336,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "ai-drafts" ? <AiDraftsPage /> : null}
       {sessionReady && !accessDenied && route === "no-supplier" ? <NoSupplierPage /> : null}
       {sessionReady && !accessDenied && route === "new-products" ? <NewProductsPage /> : null}
+      {sessionReady && !accessDenied && route === "tnved" ? <TnvedPage /> : null}
       {sessionReady && !accessDenied && route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
       </Suspense>
       </div>

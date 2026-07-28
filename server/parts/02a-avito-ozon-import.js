@@ -207,7 +207,9 @@ function evaluateAvitoImportCandidate(product = {}, rules = {}, pricing = {}) {
     if (rules.maxPriceRub > 0 && priceRub > rules.maxPriceRub) reasons.push(`price_above_max:${priceRub}`);
   }
 
-  const imageUrls = extractAvitoImageUrls(product.images);
+  const imageUrls = (Array.isArray(product.avitoImages) && product.avitoImages.length)
+    ? product.avitoImages
+    : extractAvitoImageUrls(product.images);
   if (rules.requireImages && !imageUrls.length) reasons.push("no_images");
 
   const stock = Number(product.targetStock || 0);
@@ -278,6 +280,61 @@ async function collectAvitoImportCandidates(rulesOverride = null) {
     },
     orderBy: { updatedAt: "desc" },
   });
+
+  // Load manually-set Avito images (raw->'avitoImages') in chunks to avoid
+  // pulling the full raw column for thousands of products.
+  {
+    const avitoImagesMap = new Map();
+    const chunkSize = 1000;
+    const allIds = products.map((p) => cleanText(p.id)).filter(Boolean);
+    for (let i = 0; i < allIds.length; i += chunkSize) {
+      const chunk = allIds.slice(i, i + chunkSize);
+      const rows = await prisma.$queryRaw`
+        SELECT id, COALESCE(raw->'avitoImages', '[]'::jsonb) AS avito_images
+        FROM warehouse_products
+        WHERE id = ANY(${chunk})
+      `.catch(() => []);
+      for (const row of rows) {
+        const imgs = Array.isArray(row.avito_images) ? row.avito_images.map((u) => cleanText(u)).filter(Boolean) : [];
+        if (imgs.length) avitoImagesMap.set(cleanText(row.id), imgs);
+      }
+    }
+    for (const product of products) {
+      product.avitoImages = avitoImagesMap.get(cleanText(product.id)) || [];
+    }
+    // For products that still have no avitoImages, check sibling variants (same offerId).
+    // This handles the case where images were saved on a Yandex/WB variant but the
+    // Ozon variant (used as sourceProductId in the feed) has an empty cache.
+    const missingOfferIds = [...new Set(
+      products.filter((p) => !p.avitoImages.length && cleanText(p.offerId)).map((p) => cleanText(p.offerId))
+    )];
+    if (missingOfferIds.length) {
+      const siblingChunkSize = 1000;
+      const siblingMap = new Map();
+      for (let i = 0; i < missingOfferIds.length; i += siblingChunkSize) {
+        const chunk = missingOfferIds.slice(i, i + siblingChunkSize);
+        const rows = await prisma.$queryRaw`
+          SELECT offer_id, raw->'avitoImages' AS avito_images
+          FROM warehouse_products
+          WHERE offer_id = ANY(${chunk})
+            AND jsonb_array_length(COALESCE(raw->'avitoImages', '[]'::jsonb)) > 0
+        `.catch(() => []);
+        for (const row of rows) {
+          const oid = cleanText(row.offer_id);
+          if (!siblingMap.has(oid)) {
+            const imgs = Array.isArray(row.avito_images) ? row.avito_images.map((u) => cleanText(u)).filter(Boolean) : [];
+            if (imgs.length) siblingMap.set(oid, imgs);
+          }
+        }
+      }
+      for (const product of products) {
+        if (!product.avitoImages.length) {
+          const imgs = siblingMap.get(cleanText(product.offerId));
+          if (imgs) product.avitoImages = imgs;
+        }
+      }
+    }
+  }
 
   const pricingContext = await loadAvitoPricingContext();
   // Проход 1: дешёвые фильтры (архив, объём, стоп-слова, фото) без похода за

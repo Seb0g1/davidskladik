@@ -64,6 +64,41 @@ type AccountsResponse = {
   accounts: Array<{ id: string; marketplace: string; name: string; configured: boolean }>;
 };
 
+type WbPricesSendProgress = {
+  running: boolean;
+  phase: "fetching_cards" | "sending_prices" | null;
+  totalCards: number | null;
+  prepared: number | null;
+  sent: number | null;
+  skippedNotLinked: number | null;
+  skippedNoSupplier: number | null;
+  skippedAboveMax: number | null;
+  skippedBelowMin: number | null;
+  error: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+};
+
+type WbSyncLastResult = {
+  status: string;
+  cards: number;
+  pricesSent: number;
+  inStock: number;
+  zeroed: number;
+  skippedManual: number;
+  pricesError?: string;
+  at: string;
+};
+
+type WbSyncStatus = {
+  enabled: boolean;
+  intervalHours: number;
+  nextRunAt: string | null;
+  running: boolean;
+  lastResult: WbSyncLastResult | null;
+  source?: string;
+};
+
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     credentials: "same-origin",
@@ -171,6 +206,20 @@ export function WbPage() {
     onSuccess: (data) => setStockPreview(data),
   });
 
+  const pricesStatusQuery = useQuery({
+    queryKey: ["wb-prices-status"],
+    queryFn: () => apiJson<WbPricesSendProgress>("/api/wb/prices/status"),
+    refetchInterval: (query) => (query.state.data?.running ? 3000 : 15000),
+    enabled: wbConfigured,
+  });
+
+  const syncStatusQuery = useQuery({
+    queryKey: ["wb-sync-status"],
+    queryFn: () => apiJson<WbSyncStatus>("/api/wb/sync/status"),
+    refetchInterval: (query) => (query.state.data?.running ? 5000 : 30000),
+    enabled: wbConfigured,
+  });
+
   const backfillMedia = useMutation({
     mutationFn: () => apiJson<{ ok: boolean; sent: number; skippedNoImages: number; cardsWithoutPhoto: number }>("/api/wb/media/backfill", { method: "POST", body: JSON.stringify({ limit: 200 }) }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["wb-cards"] }),
@@ -188,6 +237,11 @@ export function WbPage() {
   const cardErrors = errorsQuery.data?.errors || [];
   const warehouses = warehousesQuery.data?.warehouses || [];
 
+  const pricesProgress = pricesStatusQuery.data;
+  const syncStatus = syncStatusQuery.data;
+  const anyPriceSendRunning = Boolean(pricesProgress?.running || syncStatus?.running);
+  const lastSyncResult = syncStatus?.lastResult;
+
   return (
     <section className="page-section wb-page">
       <PageHeader
@@ -198,8 +252,9 @@ export function WbPage() {
             <button className="secondary-action" type="button" disabled={!wbConfigured || previewPrices.isPending} onClick={() => previewPrices.mutate()}>
               {previewPrices.isPending ? <Loader2 className="spin" size={16} /> : <Zap size={16} />} Проверить цены
             </button>
-            <button className="primary-action" type="button" disabled={!wbConfigured || sendPrices.isPending} onClick={() => sendPrices.mutate()}>
-              {sendPrices.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Отправить цены
+            <button className="primary-action" type="button" disabled={!wbConfigured || sendPrices.isPending || anyPriceSendRunning} onClick={() => sendPrices.mutate()}>
+              {(sendPrices.isPending || anyPriceSendRunning) ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
+              {anyPriceSendRunning ? "Отправка идёт…" : "Отправить цены"}
             </button>
             <button className="secondary-action" type="button" disabled={!wbConfigured || archiveAboveLimit.isPending} onClick={() => { if (window.confirm("Отправить в архив WB все карточки с ценой > 20 000 ₽?")) archiveAboveLimit.mutate(); }}>
               {archiveAboveLimit.isPending ? <Loader2 className="spin" size={16} /> : <Archive size={16} />} Архив выше лимита
@@ -214,6 +269,87 @@ export function WbPage() {
         </div>
       ) : null}
 
+      {/* Прогресс-бар отправки цен */}
+      {wbConfigured && (pricesProgress?.running || syncStatus?.running || pricesProgress?.completedAt || lastSyncResult) ? (
+        <div className="settings-panel" style={{ marginBottom: 0 }}>
+          {/* Ручная отправка цен */}
+          {pricesProgress && (pricesProgress.running || pricesProgress.completedAt) ? (
+            <div style={{ marginBottom: lastSyncResult ? 12 : 0 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                {pricesProgress.running ? <Loader2 className="spin" size={14} /> : null}
+                <strong style={{ fontSize: 13 }}>
+                  {pricesProgress.running
+                    ? (pricesProgress.phase === "sending_prices" ? "Отправка цен на WB…" : "Загрузка карточек WB…")
+                    : (pricesProgress.error ? "Ошибка отправки цен" : "Цены отправлены")}
+                </strong>
+                {pricesProgress.startedAt ? (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {new Date(pricesProgress.startedAt).toLocaleTimeString("ru-RU")}
+                  </span>
+                ) : null}
+              </div>
+              {pricesProgress.totalCards !== null ? (
+                <div className="progress-line">
+                  {pricesProgress.totalCards > 0 ? (
+                    <span style={{ width: `${Math.round(((pricesProgress.prepared ?? 0) / pricesProgress.totalCards) * 100)}%` }} />
+                  ) : null}
+                  <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>
+                    {pricesProgress.running && pricesProgress.phase === "sending_prices"
+                      ? `Отправляю ${pricesProgress.prepared ?? "…"} из ${pricesProgress.totalCards} карточек`
+                      : `Готово ${pricesProgress.prepared ?? "…"} из ${pricesProgress.totalCards} карточек`}
+                    {(pricesProgress.skippedNotLinked ?? 0) > 0 ? ` · нет привязки: ${pricesProgress.skippedNotLinked}` : ""}
+                    {(pricesProgress.skippedNoSupplier ?? 0) > 0 ? ` · нет поставщика: ${pricesProgress.skippedNoSupplier}` : ""}
+                    {(pricesProgress.skippedAboveMax ?? 0) > 0 ? ` · выше лимита: ${pricesProgress.skippedAboveMax}` : ""}
+                    {pricesProgress.sent !== null ? ` · отправлено: ${pricesProgress.sent}` : ""}
+                  </span>
+                </div>
+              ) : pricesProgress.running ? (
+                <div className="progress-line">
+                  <span style={{ width: "100%", animation: "pulse 1.5s ease-in-out infinite" }} />
+                  <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>Загрузка карточек с WB…</span>
+                </div>
+              ) : null}
+              {pricesProgress.error ? <div className="inline-error" style={{ marginTop: 4 }}>{pricesProgress.error}</div> : null}
+            </div>
+          ) : null}
+
+          {/* Автосинк WB */}
+          {syncStatus ? (
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                {syncStatus.running ? <Loader2 className="spin" size={14} /> : null}
+                <strong style={{ fontSize: 13 }}>
+                  {syncStatus.running ? "Автосинк WB выполняется…" : "Автосинк WB"}
+                </strong>
+                {syncStatus.nextRunAt && !syncStatus.running ? (
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    следующий: {new Date(syncStatus.nextRunAt).toLocaleTimeString("ru-RU")}
+                  </span>
+                ) : null}
+              </div>
+              {syncStatus.running ? (
+                <div className="progress-line">
+                  <span style={{ width: "100%", animation: "pulse 1.5s ease-in-out infinite" }} />
+                  <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>Получение карточек и обновление цен…</span>
+                </div>
+              ) : lastSyncResult ? (
+                <div className="progress-line">
+                  <span style={{ width: lastSyncResult.cards > 0 ? `${Math.round((lastSyncResult.pricesSent / lastSyncResult.cards) * 100)}%` : "0%" }} />
+                  <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>
+                    {lastSyncResult.status === "ok" ? "Успешно" : lastSyncResult.status === "prices_failed" ? "Цены — ошибка отправки" : lastSyncResult.status}
+                    {" · "}карточек: {lastSyncResult.cards}
+                    {" · "}цен отправлено: {lastSyncResult.pricesSent}
+                    {lastSyncResult.skippedManual > 0 ? ` · ручных (пропущено): ${lastSyncResult.skippedManual}` : ""}
+                    {lastSyncResult.pricesError ? ` · ошибка: ${lastSyncResult.pricesError.slice(0, 80)}` : ""}
+                    {" · "}{new Date(lastSyncResult.at).toLocaleTimeString("ru-RU")}
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <section className="dashboard-metrics">
         <Stat label="Карточек WB" value={cardsQuery.isFetching ? "…" : cards.length} tone="accent" icon={<Package size={18} />} />
         <Stat label="С фото" value={cardsQuery.isFetching ? "…" : withPhoto} tone="success" icon={<Image size={18} />} />
@@ -221,11 +357,16 @@ export function WbPage() {
         <Stat label="Ошибки создания" value={errorsQuery.isFetching ? "…" : cardErrors.length} tone={cardErrors.length > 0 ? "warn" : undefined} icon={<AlertTriangle size={18} />} />
       </section>
 
-      {sendPrices.data && !sendPrices.data.dryRun ? (
+      {sendPrices.data && !("async" in sendPrices.data) && !sendPrices.data.dryRun ? (
         <div className="info-strip success">
           Цены отправлены: {sendPrices.data.sent ?? sendPrices.data.prepared} из {sendPrices.data.cards} карточек
           {sendPrices.data.skippedAboveMax > 0 ? ` · выше лимита ${sendPrices.data.maxWbPriceRub} ₽: ${sendPrices.data.skippedAboveMax}` : ""}
           {sendPrices.data.skippedNoSupplier > 0 ? ` · нет поставщика: ${sendPrices.data.skippedNoSupplier}` : ""}.
+        </div>
+      ) : null}
+      {sendPrices.data && "async" in (sendPrices.data as Record<string, unknown>) && (sendPrices.data as { async?: boolean }).async ? (
+        <div className="info-strip success">
+          Отправка цен запущена в фоне — смотрите прогресс выше.
         </div>
       ) : null}
       {sendPrices.error ? <div className="inline-error">{String((sendPrices.error as Error).message)}</div> : null}
@@ -309,8 +450,9 @@ export function WbPage() {
             <button className="secondary-action" type="button" disabled={!wbConfigured || previewPrices.isPending} onClick={() => previewPrices.mutate()}>
               {previewPrices.isPending ? <Loader2 className="spin" size={16} /> : <Zap size={16} />} Предпросмотр
             </button>
-            <button className="primary-action" type="button" disabled={!wbConfigured || sendPrices.isPending} onClick={() => sendPrices.mutate()}>
-              {sendPrices.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Отправить
+            <button className="primary-action" type="button" disabled={!wbConfigured || sendPrices.isPending || anyPriceSendRunning} onClick={() => sendPrices.mutate()}>
+              {(sendPrices.isPending || anyPriceSendRunning) ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
+              {anyPriceSendRunning ? "Идёт…" : "Отправить"}
             </button>
           </div>
           {pricePreview ? (
@@ -413,6 +555,17 @@ export function WbPage() {
                 Пропускать архивные при импорте
               </label>
               <div className="settings-form-row" style={{ marginTop: 8 }}>
+                <label className="field-label" title="Код ТН ВЭД для карточек WB. Пусто — берётся первый код из справочника WB по предмету (subjectId). Для парфюмерии: 3303009000">
+                  Код ТН ВЭД
+                  <input
+                    type="text"
+                    maxLength={20}
+                    value={rules.tnved}
+                    onChange={(e) => setRules((r) => r ? { ...r, tnved: e.target.value.replace(/\s/g, "") } : r)}
+                    placeholder="3303009000"
+                    style={{ fontFamily: "monospace" }}
+                  />
+                </label>
                 <label className="field-label field-label-wide">
                   Стоп-слова в названии при импорте
                   <textarea rows={2} value={wordsToText(rules.excludeTitleWords)} onChange={(e) => setRules((r) => r ? { ...r, excludeTitleWords: textToWords(e.target.value) } : r)} placeholder="дубль, отливант, тестер" />

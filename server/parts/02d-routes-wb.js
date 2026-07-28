@@ -467,6 +467,26 @@ app.get("/api/wb/chain/result", requireAdmin, async (request, response, next) =>
 
 // --- Цены ---
 
+// Прогресс ручной отправки цен WB (сбрасывается при старте нового фонового сенда).
+let wbPricesSendProgress = {
+  running: false,
+  phase: null,
+  totalCards: null,
+  prepared: null,
+  sent: null,
+  skippedNotLinked: null,
+  skippedNoSupplier: null,
+  skippedAboveMax: null,
+  skippedBelowMin: null,
+  error: null,
+  startedAt: null,
+  completedAt: null,
+};
+
+app.get("/api/wb/prices/status", async (_request, response) => {
+  response.json({ ...wbPricesSendProgress });
+});
+
 // Отправка цен: закупка поставщика × наценка WB. Выше лимита 20 000 ₽ (или
 // ниже минимума, если задан) — цена не шлётся, товар гасится синком остатков.
 app.post("/api/wb/prices/send", requireAdmin, async (request, response, next) => {
@@ -517,16 +537,43 @@ app.post("/api/wb/prices/send", requireAdmin, async (request, response, next) =>
       });
     }
 
+    if (wbPricesSendProgress.running) {
+      return response.status(409).json({ ok: false, error: "Отправка цен уже идёт", progress: wbPricesSendProgress });
+    }
+
     // Реальная отправка: отвечаем немедленно, всё тяжёлое (wbCardsList + wbSetPrices)
     // идёт в фоне, иначе nginx режет по таймауту на 8000+ карточках.
+    wbPricesSendProgress = {
+      running: true, phase: "fetching_cards",
+      totalCards: null, prepared: null, sent: null,
+      skippedNotLinked: null, skippedNoSupplier: null, skippedAboveMax: null, skippedBelowMin: null,
+      error: null, startedAt: new Date().toISOString(), completedAt: null,
+    };
     void appendAudit(request, "wb.prices.send", { newValue: { async: true, vcCount: vcArr.length } });
     response.status(202).json({ ok: true, dryRun: false, async: true, message: "Отправка цен запущена в фоне" });
 
-    setImmediate(() => {
-      buildItems()
-        .then(({ items }) => wbSetPrices(account, items))
-        .then((result) => logger.info("wb prices send background complete", { sent: result.sent, tasks: result.tasks?.length }))
-        .catch((error) => logger.error("wb prices send background failed", { detail: error?.message || String(error) }));
+    setImmediate(async () => {
+      try {
+        wbPricesSendProgress.phase = "fetching_cards";
+        const { items, targetCards, skippedBelowMin, skippedAboveMax, skippedNoSupplier, skippedNotLinked } = await buildItems();
+        wbPricesSendProgress.totalCards = targetCards.length;
+        wbPricesSendProgress.prepared = items.length;
+        wbPricesSendProgress.skippedNotLinked = skippedNotLinked;
+        wbPricesSendProgress.skippedNoSupplier = skippedNoSupplier;
+        wbPricesSendProgress.skippedAboveMax = skippedAboveMax;
+        wbPricesSendProgress.skippedBelowMin = skippedBelowMin;
+        wbPricesSendProgress.phase = "sending_prices";
+        const result = await wbSetPrices(account, items);
+        wbPricesSendProgress.sent = result.sent;
+        logger.info("wb prices send background complete", { sent: result.sent, tasks: result.tasks?.length });
+      } catch (error) {
+        wbPricesSendProgress.error = error?.message || String(error);
+        logger.error("wb prices send background failed", { detail: wbPricesSendProgress.error });
+      } finally {
+        wbPricesSendProgress.running = false;
+        wbPricesSendProgress.phase = null;
+        wbPricesSendProgress.completedAt = new Date().toISOString();
+      }
     });
   } catch (error) {
     next(error);

@@ -38,6 +38,7 @@ const partFiles = [
   "02a-wb-request.js",
   "02a-wb-api.js",
   "02a-avito-request.js",
+  "02a-avito-messenger.js",
   "02a-avito-autoload-api.js",
   "02a-avito-categorizer.js",
   "02a-avito-listings-storage.js",

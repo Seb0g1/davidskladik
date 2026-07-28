@@ -159,12 +159,18 @@ app.use((error, request, response, _next) => {
     recordErrorEvent({ source: `http ${request.method} ${request.path}`, message: error.message, code: error.code || "" });
   }
   const uploadError = error instanceof multer.MulterError;
-  response.status(uploadError ? 400 : error.statusCode || 500).json({
+  // Don't propagate 405/404/401 from upstream APIs (Avito, Ozon…) as-is — they confuse
+  // the client into thinking the Express route doesn't exist. Map external 4xx to 502.
+  const isExternalApiError = Boolean(error.avito || error.ozon);
+  const rawStatus = uploadError ? 400 : (error.statusCode || 500);
+  const httpStatus = isExternalApiError && rawStatus === 405 ? 502 : rawStatus;
+  response.status(httpStatus).json({
     error: requestErrorTitle(error, request),
     detail: error.statusCode ? error.message : (error.code || error.message),
     code: error.code || null,
     matches: error.matches || undefined,
     ozon: error.ozon,
+    avito: error.avito,
   });
 });
 

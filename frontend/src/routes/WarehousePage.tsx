@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Trash2, Users, X } from "lucide-react";
+import { AlertTriangle, Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Star, Trash2, Users, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -908,15 +908,29 @@ function AvitoImagesPanel({ product, onSaved }: { product: Product; onSaved: () 
   const queryClient = useQueryClient();
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
-  const images = product.avitoImages || [];
+  const savedImages = product.avitoImages || [];
+  const [localImages, setLocalImages] = useState<string[]>(savedImages);
+
+  const savedKey = savedImages.join(",");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setLocalImages(savedImages); }, [product.id, savedKey]);
+
+  // Ozon-фото из карточки (не уже включённые в список вручную)
+  const ozonRaw = (product.ozon as Record<string, unknown> | undefined);
+  const ozonImageList: string[] = Array.isArray(ozonRaw?.images)
+    ? (ozonRaw!.images as string[]).filter(Boolean)
+    : (product.imageUrl ? [product.imageUrl] : []);
+  const ozonExtras = ozonImageList.filter((url) => url && !localImages.includes(url));
+
+  const hasChanges = localImages.join(",") !== savedKey;
 
   const saveMutation = useMutation({
-    mutationFn: (avitoImages: string[]) =>
+    mutationFn: (imgs: string[]) =>
       fetch(`/api/warehouse/products/${encodeURIComponent(product.id)}/avito-images`, {
         method: "PUT",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ avitoImages }),
+        body: JSON.stringify({ avitoImages: imgs }),
       }).then(async (r) => {
         const data = await r.json();
         if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
@@ -941,7 +955,7 @@ function AvitoImagesPanel({ product, onSaved }: { product: Product; onSaved: () 
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       const newUrls: string[] = (data.files || []).map((f: { url: string }) => f.url).filter(Boolean);
-      saveMutation.mutate([...images, ...newUrls].slice(0, 10));
+      setLocalImages((prev) => [...newUrls, ...prev].slice(0, 10));
     } catch (err) {
       setUploadError(errorMessage(err));
     } finally {
@@ -967,30 +981,101 @@ function AvitoImagesPanel({ product, onSaved }: { product: Product; onSaved: () 
             onChange={(e) => { handleUpload(e.target.files); e.target.value = ""; }}
             disabled={busy}
           />
-          {busy ? <Loader2 className="spin" size={14} /> : <ImagePlus size={14} />}
-          {" "}Добавить фото
+          {uploading ? <Loader2 className="spin" size={14} /> : <ImagePlus size={14} />}
+          {" "}Добавить
         </label>
       </div>
-      {images.length === 0 ? (
+
+      {localImages.length === 0 ? (
         <p className="avito-images-empty">Нет фото. Загрузите, чтобы использовать вместо Ozon-фото в фиде Avito.</p>
       ) : (
         <div className="avito-images-grid">
-          {images.map((url, i) => (
-            <div key={url} className="avito-image-item">
-              <img src={url} alt={`Фото ${i + 1}`} loading="lazy" />
-              <button
-                type="button"
-                className="avito-image-remove"
-                title="Удалить"
-                onClick={() => saveMutation.mutate(images.filter((u) => u !== url))}
-                disabled={busy}
-              >
-                <X size={12} />
-              </button>
+          {localImages.map((url, i) => (
+            <div key={url} className={`avito-image-card${i === 0 ? " avito-image-card--main" : ""}`}>
+              <div className="avito-image-thumb">
+                <img src={url} alt={`Фото ${i + 1}`} loading="lazy" />
+                {i === 0 && <span className="avito-image-main-badge">Главное</span>}
+              </div>
+              <div className="avito-image-actions">
+                {i !== 0 && (
+                  <button
+                    type="button"
+                    className="avito-image-btn avito-image-btn--star"
+                    title="Сделать главным"
+                    onClick={() => setLocalImages((prev) => [url, ...prev.filter((u) => u !== url)])}
+                    disabled={busy}
+                  >
+                    <Star size={11} />
+                    <span>Главное</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="avito-image-btn avito-image-btn--delete"
+                  title="Удалить фото"
+                  onClick={() => setLocalImages((prev) => prev.filter((u) => u !== url))}
+                  disabled={busy}
+                >
+                  <X size={11} />
+                  <span>Удалить</span>
+                </button>
+              </div>
             </div>
           ))}
         </div>
       )}
+
+      {ozonExtras.length > 0 && (
+        <>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <p className="avito-ozon-label" style={{ margin: 0 }}>Фото из Ozon</p>
+            <button
+              type="button"
+              className="secondary-action"
+              title="Добавить все фото из Ozon в конец списка"
+              onClick={() => setLocalImages((prev) => [...prev, ...ozonExtras].slice(0, 10))}
+              disabled={busy || localImages.length >= 10}
+            >
+              <ImagePlus size={13} />
+              {" "}Добавить все
+            </button>
+          </div>
+          <div className="avito-images-grid">
+            {ozonExtras.map((url, i) => (
+              <div key={url} className="avito-image-card avito-image-card--ozon">
+                <div className="avito-image-thumb">
+                  <img src={url} alt={`Ozon фото ${i + 1}`} loading="lazy" />
+                </div>
+                <div className="avito-image-actions">
+                  <button
+                    type="button"
+                    className="avito-image-btn avito-image-btn--add"
+                    title="Добавить к фото Avito"
+                    onClick={() => setLocalImages((prev) => [...prev, url].slice(0, 10))}
+                    disabled={busy || localImages.length >= 10}
+                  >
+                    <ImagePlus size={11} />
+                    <span>Добавить</span>
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {localImages.length > 0 && (
+        <button
+          type="button"
+          className={`avito-apply-btn${hasChanges ? "" : " avito-apply-btn--saved"}`}
+          onClick={() => { if (hasChanges) saveMutation.mutate(localImages); }}
+          disabled={busy || !hasChanges}
+        >
+          {saveMutation.isPending ? <Loader2 className="spin" size={15} /> : <Check size={15} />}
+          {hasChanges ? "Применить" : "Сохранено"}
+        </button>
+      )}
+
       {uploadError ? <div className="info-strip" style={{ borderColor: "var(--danger)", marginTop: 8 }}>{uploadError}</div> : null}
     </section>
   );

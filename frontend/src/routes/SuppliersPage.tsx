@@ -7,11 +7,12 @@ import { DiagnosticValue } from "../components/DiagnosticValue";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
-import { SupplierLedgerEntrySchema, SupplierLedgerPaymentSchema, SupplierLedgerResponseSchema, SupplierSchema, SuppliersResponseSchema } from "../types";
+import { SupplierLedgerEntrySchema, SupplierLedgerPaymentSchema, SupplierProfileResponseSchema, SupplierSchema, SuppliersResponseSchema } from "../types";
 import { asRecord, compactDate, errorMessage, money, numberValue } from "../lib/common";
 
 type Supplier = z.infer<typeof SupplierSchema>;
 type LedgerEntry = z.infer<typeof SupplierLedgerEntrySchema>;
+type SupplierProfile = z.infer<typeof SupplierProfileResponseSchema>;
 
 type SupplierForm = {
   id: string;
@@ -171,15 +172,13 @@ export function SuppliersPage() {
     },
   });
 
-  const historyQuery = useQuery({
-    queryKey: ["supplier-ledger-history", historySupplier ? supplierId(historySupplier) : "none"],
+  const historyQuery = useQuery<SupplierProfile>({
+    queryKey: ["supplier-profile", historySupplier ? supplierId(historySupplier) : "none"],
     queryFn: () => {
       const s = historySupplier;
-      if (!s) return fetchJson("/api/supplier-ledger/entries?limit=1", SupplierLedgerResponseSchema);
-      const params = new URLSearchParams({ limit: "30", period: "all" });
-      if (s.partnerId) params.set("partnerId", s.partnerId);
-      else params.set("supplierName", s.name || "");
-      return fetchJson(`/api/supplier-ledger/entries?${params.toString()}`, SupplierLedgerResponseSchema);
+      if (!s) return Promise.resolve({ ok: true, history: [], ledger: { source: "", total: 0, entries: [], error: "" } } as unknown as SupplierProfile);
+      const id = supplierId(s);
+      return fetchJson(`/api/suppliers/${encodeURIComponent(id)}/profile`, SupplierProfileResponseSchema);
     },
     enabled: !!historySupplier,
     staleTime: 15_000,
@@ -198,8 +197,18 @@ export function SuppliersPage() {
       setReturnDrafts((current) => ({ ...current, [id]: "" }));
       setReturnNotes((current) => ({ ...current, [id]: "" }));
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
-      void queryClient.invalidateQueries({ queryKey: ["supplier-ledger-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+  });
+
+  const returnPicking = useMutation({
+    mutationFn: ({ pickingKey, note }: { pickingKey: string; note?: string }) =>
+      fetchJson("/api/supplier-ledger/return-picking", SupplierLedgerPaymentSchema, mutationBody({ pickingKey, note: note || "" })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-profile"] });
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
     },
   });
@@ -279,7 +288,7 @@ export function SuppliersPage() {
     });
   };
 
-  const anyError = suppliersQuery.error || refreshMutation.error || saveSupplier.error || patchSupplier.error || deleteSupplier.error || saveArticle.error || deleteArticle.error || paySupplier.error || returnSupplier.error;
+  const anyError = suppliersQuery.error || refreshMutation.error || saveSupplier.error || patchSupplier.error || deleteSupplier.error || saveArticle.error || deleteArticle.error || paySupplier.error || returnSupplier.error || returnPicking.error;
 
   const entryTypeLabel = (type: string) => {
     if (type === "payment") return "Оплата";
@@ -483,52 +492,98 @@ export function SuppliersPage() {
                       onClick={() => toggleHistory(supplier)}
                     >
                       {expandedHistory.has(id) ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-                      История / Возвраты
+                      История заказов
                     </button>
-                    {expandedHistory.has(id) ? (
-                      <div className="supplier-history-body">
-                        <div className="settings-form-row supplier-payment-row">
-                          <input
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            placeholder="Сумма возврата, ₽"
-                            value={returnDrafts[id] || ""}
-                            onChange={(event) => setReturnDrafts((current) => ({ ...current, [id]: event.target.value }))}
-                          />
-                          <input
-                            placeholder="Комментарий"
-                            value={returnNotes[id] || ""}
-                            onChange={(event) => setReturnNotes((current) => ({ ...current, [id]: event.target.value }))}
-                          />
-                          <button
-                            className="primary-action"
-                            type="button"
-                            disabled={returnSupplier.isPending || !(Number(returnDrafts[id]) > 0)}
-                            onClick={() => returnSupplier.mutate({ supplier, amount: Number(returnDrafts[id] || 0), note: returnNotes[id] || "" })}
-                          >
-                            {returnSupplier.isPending ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />} Возврат
-                          </button>
+                    {expandedHistory.has(id) ? (() => {
+                      const isActive = historySupplier && supplierId(historySupplier) === id;
+                      const profile = isActive ? historyQuery.data : undefined;
+                      const pickedRows = (profile?.history || []).filter((r) => r.status === "picked");
+                      const ledgerEntries = profile?.ledger?.entries || [];
+                      const returnedKeys = new Set(
+                        ledgerEntries.filter((e) => e.entryType === "supplier_return" && e.pickingKey).map((e) => e.pickingKey as string)
+                      );
+                      const debtByKey = new Map(
+                        ledgerEntries.filter((e) => e.entryType === "purchase_debt" && e.pickingKey).map((e) => [e.pickingKey as string, e])
+                      );
+                      return (
+                        <div className="supplier-history-body">
+                          {historyQuery.isLoading && isActive ? (
+                            <div className="soft-empty"><Loader2 className="spin" size={14} /> Загружаю историю...</div>
+                          ) : null}
+
+                          {/* Список заказов (picking rows со статусом picked) */}
+                          {!historyQuery.isLoading && isActive && pickedRows.length > 0 ? (
+                            <div className="supplier-orders-list">
+                              <div className="supplier-orders-header">
+                                <span>Товар</span><span>Сумма</span><span>Дата</span><span></span>
+                              </div>
+                              {pickedRows.map((row) => {
+                                const debt = debtByKey.get(row.key);
+                                const amountRub = debt ? Math.abs(Number(debt.amount)) : null;
+                                const isReturned = returnedKeys.has(row.key);
+                                const isPending = returnPicking.isPending && returnPicking.variables?.pickingKey === row.key;
+                                return (
+                                  <div className="supplier-order-row" key={row.key}>
+                                    <div className="supplier-order-name">
+                                      <span>{row.productName || row.offerId || row.key}</span>
+                                      {row.offerId ? <small className="muted-note">{row.offerId}</small> : null}
+                                    </div>
+                                    <span className="supplier-order-amount">
+                                      {amountRub !== null ? money(amountRub) : `${row.price} ${row.priceCurrency}`}
+                                    </span>
+                                    <span className="muted-note">{compactDate(row.pickedAt ?? null)}</span>
+                                    {isReturned ? (
+                                      <span className="supplier-returned-badge"><RotateCcw size={12} /> Возврат</span>
+                                    ) : (
+                                      <button
+                                        className="secondary-action danger-action supplier-return-btn"
+                                        type="button"
+                                        disabled={isPending || returnPicking.isPending}
+                                        onClick={() => returnPicking.mutate({ pickingKey: row.key })}
+                                        title="Вернуть товар поставщику"
+                                      >
+                                        {isPending ? <Loader2 className="spin" size={13} /> : <RotateCcw size={13} />} Возврат
+                                      </button>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                          {!historyQuery.isLoading && isActive && pickedRows.length === 0 ? (
+                            <div className="soft-empty">Заказов пока нет. История появляется после отметки «Собрал» в разделе Сборка.</div>
+                          ) : null}
+
+                          {/* Ручной возврат (произвольная сумма) */}
+                          <details className="supplier-manual-return-details">
+                            <summary className="muted-note" style={{ cursor: "pointer", padding: "4px 0" }}>Ручной возврат (произвольная сумма)</summary>
+                            <div className="settings-form-row supplier-payment-row" style={{ marginTop: 8 }}>
+                              <input
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                placeholder="Сумма возврата, ₽"
+                                value={returnDrafts[id] || ""}
+                                onChange={(event) => setReturnDrafts((current) => ({ ...current, [id]: event.target.value }))}
+                              />
+                              <input
+                                placeholder="Комментарий"
+                                value={returnNotes[id] || ""}
+                                onChange={(event) => setReturnNotes((current) => ({ ...current, [id]: event.target.value }))}
+                              />
+                              <button
+                                className="primary-action"
+                                type="button"
+                                disabled={returnSupplier.isPending || !(Number(returnDrafts[id]) > 0)}
+                                onClick={() => returnSupplier.mutate({ supplier, amount: Number(returnDrafts[id] || 0), note: returnNotes[id] || "" })}
+                              >
+                                {returnSupplier.isPending ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />} Возврат
+                              </button>
+                            </div>
+                          </details>
                         </div>
-                        {historyQuery.isLoading && historySupplier && supplierId(historySupplier) === id ? (
-                          <div className="soft-empty"><Loader2 className="spin" size={14} /> Загружаю историю...</div>
-                        ) : null}
-                        {(historySupplier && supplierId(historySupplier) === id ? historyQuery.data?.entries || [] : []).map((entry) => (
-                          <div className="supplier-history-row" key={entry.id}>
-                            <span className={`supplier-history-type type-${entry.entryType}`}>{entryTypeLabel(entry.entryType)}</span>
-                            <span className="supplier-history-amount" style={{ color: Number(entry.amount) < 0 ? "var(--danger)" : Number(entry.amount) > 0 ? "var(--success)" : undefined }}>
-                              {Number(entry.amount) > 0 ? "+" : ""}{money(Number(entry.amount))}
-                            </span>
-                            <span className="muted-note">{compactDate(entry.occurredAt ?? null)}</span>
-                            {entry.note ? <span className="muted-note">{entry.note}</span> : null}
-                            {entry.offerId ? <span className="muted-note">{entry.offerId}</span> : null}
-                          </div>
-                        ))}
-                        {historySupplier && supplierId(historySupplier) === id && !historyQuery.isLoading && !(historyQuery.data?.entries || []).length ? (
-                          <div className="soft-empty">История пуста.</div>
-                        ) : null}
-                      </div>
-                    ) : null}
+                      );
+                    })() : null}
                   </div>
 
                   <div className="supplier-articles">

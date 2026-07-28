@@ -249,6 +249,31 @@ async function writeWarehouseProductPatch(products = [], { reason = "warehouse_p
   // not before — see withWarehouseMutation in 01-bootstrap-helpers.js.
   return withWarehouseMutation(async () => {
   const warehouse = await readWarehouse();
+  // Preserve user-set avitoImages: if a product in the incoming batch has empty
+  // avitoImages (e.g. worker with stale cache), restore from Postgres before writing.
+  if (shouldUsePostgresStorage() && !writeLinks) {
+    const needsMerge = normalizedProducts.filter((p) => !(Array.isArray(p.avitoImages) && p.avitoImages.length));
+    if (needsMerge.length) {
+      const ids = needsMerge.map((p) => p.id).filter(Boolean);
+      try {
+        const rows = await getPrisma().$queryRaw`
+          SELECT id, raw->'avitoImages' AS ai
+          FROM warehouse_products
+          WHERE id = ANY(${ids})
+            AND jsonb_array_length(COALESCE(raw->'avitoImages', '[]'::jsonb)) > 0
+        `;
+        const existingMap = new Map(rows.map((r) => [cleanText(r.id), r.ai]));
+        for (const product of needsMerge) {
+          const existing = existingMap.get(cleanText(product.id));
+          if (Array.isArray(existing) && existing.length) {
+            product.avitoImages = existing.map((u) => cleanText(u)).filter(Boolean);
+          }
+        }
+      } catch (_e) {
+        // Non-fatal: proceed without merge if Postgres read fails
+      }
+    }
+  }
   const byId = new Map(normalizedProducts.map((product) => [String(product.id), product]));
   let changed = 0;
   const productIndex = warehouseProductIndexFor(warehouse);

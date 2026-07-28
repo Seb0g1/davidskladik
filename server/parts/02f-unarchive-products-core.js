@@ -67,10 +67,19 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
       // request when it crosses the daily limit, so an ungated batch wastes the remaining quota
       // (e.g. 88 used + a batch of 100 → whole batch rejected, day ends at 88 instead of 100).
       // Over-quota items are deferred to the next scheduled window without an API call.
+      //
+      // Ozon's daily limit applies ONLY to auto-archived products (is_autoarchived: true).
+      // Manually archived products (is_archived: true, is_autoarchived: false) have no daily
+      // limit and are always processed regardless of quota — splitting them out prevents the
+      // reconciler's unlimited path from inflating the counter seen by the auto-queue.
       const enforceDailyLimit = options.forceOzonDailyLimit !== true && Number.isFinite(ozonUnarchiveDailyLimit);
-      const availableToday = enforceDailyLimit ? Math.max(0, ozonUnarchiveDailyLimit - usedToday) : resolvedItems.length;
-      const runnableItems = resolvedItems.slice(0, availableToday);
-      const overflowItems = resolvedItems.slice(runnableItems.length);
+      // Regular-archive items always run; auto-archive (and unknown) items respect the daily limit.
+      const regularArchiveItems = resolvedItems.filter((item) => item.marketplaceState?.isAutoArchived === false);
+      const limitedItems = resolvedItems.filter((item) => item.marketplaceState?.isAutoArchived !== false);
+      const availableToday = enforceDailyLimit ? Math.max(0, ozonUnarchiveDailyLimit - usedToday) : limitedItems.length;
+      const runnableLimited = limitedItems.slice(0, availableToday);
+      const overflowItems = limitedItems.slice(runnableLimited.length);
+      const runnableItems = [...regularArchiveItems, ...runnableLimited];
       if (overflowItems.length) {
         const nextRetryAt = nextOzonUnarchiveRetryAt();
         queueState = queueOzonUnarchiveItems(queueState, overflowItems, {
@@ -113,9 +122,17 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
         }
         try {
           await ozonRequest("/v1/product/unarchive", { product_id: productIds }, account);
-          usedToday += productIds.length;
           queueState = removeOzonUnarchiveQueueItems(queueState, chunk);
-          setOzonUnarchiveDailyUsed(queueState, target, usedToday);
+          // Only count auto-archive items (isAutoArchived !== false) against the daily limit.
+          // Never update the counter when in bypass mode (reconciler) to avoid inflating
+          // the budget seen by the auto-queue processor in subsequent runs.
+          if (enforceDailyLimit) {
+            const autoArchiveCount = chunk.filter((item) => item.marketplaceState?.isAutoArchived !== false).length;
+            if (autoArchiveCount > 0) {
+              usedToday += autoArchiveCount;
+              setOzonUnarchiveDailyUsed(queueState, target, usedToday);
+            }
+          }
           await writeOzonUnarchiveQueueDelta(queueState, { removeProducts: chunk });
           actions.push(...chunk.map((item) => ({
             id: item.id,
@@ -150,7 +167,7 @@ async function unarchiveProductsOnMarketplaces(products = [], options = {}) {
             }
             // Ozon says the daily limit is reached — trust it over the local counter so the rest
             // of today's runs defer immediately instead of burning more rejected API calls.
-            if (Number.isFinite(ozonUnarchiveDailyLimit)) {
+            if (enforceDailyLimit && Number.isFinite(ozonUnarchiveDailyLimit)) {
               usedToday = Math.max(usedToday, ozonUnarchiveDailyLimit);
               setOzonUnarchiveDailyUsed(queueState, target, usedToday);
             }

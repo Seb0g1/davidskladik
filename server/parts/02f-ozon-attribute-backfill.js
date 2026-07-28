@@ -246,6 +246,159 @@ async function yandexBackfillTnved(tnvedCode, { dryRun = true, limit = 50000 } =
   return { ok, dryRun, total: offers.length, updated: results.filter((r) => r.ok).length, tnvedCode: code, failed, errors: results.filter((r) => !r.ok).slice(0, 10) };
 }
 
+// ─── ТН ВЭД по категориям ────────────────────────────────────────────────────
+
+const ozonTnvedAssignmentsPath = path.join(dataDir, "ozon-tnved-assignments.json");
+let ozonTnvedApplyProgress = {
+  running: false,
+  phase: null,
+  totalProducts: null,
+  processed: null,
+  updated: null,
+  errors: null,
+  startedAt: null,
+  completedAt: null,
+  categoryStats: null,
+};
+
+async function readOzonTnvedAssignments() {
+  try {
+    const raw = await fs.readFile(ozonTnvedAssignmentsPath, "utf8");
+    const data = JSON.parse(raw);
+    return Array.isArray(data.assignments) ? data.assignments : [];
+  } catch {
+    return [];
+  }
+}
+
+async function writeOzonTnvedAssignments(assignments) {
+  await fs.mkdir(dataDir, { recursive: true });
+  await fs.writeFile(
+    ozonTnvedAssignmentsPath,
+    JSON.stringify({ updatedAt: new Date().toISOString(), assignments }, null, 2),
+  );
+}
+
+// Разворачиваем дерево категорий Ozon в плоский Map { descCatId → name }.
+async function ozonFlatCategoryMap(account) {
+  try {
+    const data = await ozonRequest("/v1/description-category/tree", { language: "DEFAULT" }, account);
+    const map = new Map();
+    function walk(nodes) {
+      for (const node of Array.isArray(nodes) ? nodes : []) {
+        const id = Number(node.description_category_id);
+        if (id) map.set(id, cleanText(node.category_name || node.name || ""));
+        if (Array.isArray(node.children)) walk(node.children);
+        if (Array.isArray(node.types)) {
+          for (const type of node.types) {
+            const typeKey = `${id}:${Number(type.type_id || 0)}`;
+            map.set(typeKey, cleanText(type.type_name || type.name || ""));
+          }
+        }
+      }
+    }
+    walk(data.result || []);
+    return map;
+  } catch (error) {
+    logger.warn("ozon category tree failed", { detail: error?.message || String(error) });
+    return new Map();
+  }
+}
+
+// Кэш категорий: { data, expiresAt } — 10 минут, per account
+const _categoryBreakdownCache = new Map();
+
+// Группировка по descCatId:typeId — один ряд на каждую комбинацию категория+тип.
+async function ozonGetCategoryBreakdown(account) {
+  const cacheKey = String(account?.clientId || "default");
+  const cached = _categoryBreakdownCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.data;
+
+  const products = await ozonGetAllProductsInfo(account);
+  const byKey = new Map();
+  for (const { offerId, descCatId, typeId } of products) {
+    const key = `${descCatId}:${typeId}`;
+    const entry = byKey.get(key) || { descCatId, typeId, count: 0, offerIds: [] };
+    entry.count += 1;
+    if (entry.offerIds.length < 3) entry.offerIds.push(offerId);
+    byKey.set(key, entry);
+  }
+  const data = { categories: [...byKey.values()], totalProducts: products.length };
+  _categoryBreakdownCache.set(cacheKey, { data, expiresAt: Date.now() + 10 * 60 * 1000 });
+  return data;
+}
+
+// Применяет назначения { descCatId, tnvedCode } ко всем товарам Ozon (группировка по descCatId).
+async function ozonApplyTnvedByCategory(account, assignments, { dryRun = false, fallbackCode = "" } = {}) {
+  // Ozon официально подтвердил: атрибут «Код ТН ВЭД ЕАЭС» имеет id=22232 для всех категорий.
+  const TNVED_ATTR_ID = 22232;
+
+  // assignMap: "descCatId:typeId" → tnvedCode (typeId=0 означает «все типы в категории»)
+  const assignMap = new Map(
+    assignments
+      .filter((a) => cleanText(a.tnvedCode))
+      .map((a) => [`${Number(a.descCatId)}:${Number(a.typeId || 0)}`, cleanText(a.tnvedCode)]),
+  );
+  if (!assignMap.size && !fallbackCode) return { ok: true, dryRun, updated: 0, reason: "no_assignments" };
+
+  ozonTnvedApplyProgress = {
+    running: true, phase: "loading_products",
+    totalProducts: null, processed: 0, updated: 0, errors: 0,
+    startedAt: new Date().toISOString(), completedAt: null, categoryStats: null,
+  };
+
+  try {
+    const products = await ozonGetAllProductsInfo(account);
+    ozonTnvedApplyProgress.totalProducts = products.length;
+    ozonTnvedApplyProgress.phase = "sending";
+
+    // Build update items — code priority: descCatId:typeId → descCatId:0 → fallbackCode
+    const updateItems = [];
+    for (const { offerId, descCatId, typeId } of products) {
+      const code = assignMap.get(`${descCatId}:${typeId}`) || assignMap.get(`${descCatId}:0`) || cleanText(fallbackCode);
+      if (!code) continue;
+      updateItems.push({ offer_id: offerId, attributes: [{ id: TNVED_ATTR_ID, values: [{ value: code }] }] });
+    }
+
+    const categoryStats = [...assignMap.entries()].map(([key, tnvedCode]) => ({
+      key, attrName: "Код ТН ВЭД ЕАЭС", found: true, tnvedCode,
+    }));
+    ozonTnvedApplyProgress.categoryStats = categoryStats;
+
+    if (dryRun) {
+      ozonTnvedApplyProgress.running = false;
+      ozonTnvedApplyProgress.completedAt = new Date().toISOString();
+      ozonTnvedApplyProgress.updated = updateItems.length;
+      return { ok: true, dryRun, total: products.length, candidates: updateItems.length, categoryStats, sample: updateItems.slice(0, 5) };
+    }
+
+    let updated = 0;
+    let errors = 0;
+    const errorSamples = [];
+    for (const chunk of chunkArray(updateItems, 100)) {
+      try {
+        await ozonRequest("/v1/product/attributes/update", { items: chunk }, account);
+        updated += chunk.length;
+      } catch (error) {
+        errors += chunk.length;
+        const errMsg = cleanText(error?.message || String(error)).slice(0, 300);
+        if (errorSamples.length < 3) errorSamples.push(errMsg);
+        logger.warn("ozon tnved apply chunk failed", { detail: errMsg, count: chunk.length });
+      }
+      ozonTnvedApplyProgress.processed += chunk.length;
+      ozonTnvedApplyProgress.updated = updated;
+      ozonTnvedApplyProgress.errors = errors;
+      ozonTnvedApplyProgress.errorSamples = errorSamples;
+    }
+
+    logger.info("ozon tnved apply by category", { updated, total: products.length, errors });
+    return { ok: errors === 0, dryRun, total: products.length, updated, errors, errorSamples, categoryStats };
+  } finally {
+    ozonTnvedApplyProgress.running = false;
+    ozonTnvedApplyProgress.completedAt = new Date().toISOString();
+  }
+}
+
 // ─── Маршруты ────────────────────────────────────────────────────────────────
 
 function resolveOzonAccountOr400(request, response) {
@@ -294,6 +447,292 @@ app.post("/api/yandex/attributes/backfill-tnved", requireAdmin, async (request, 
     const result = await yandexBackfillTnved(tnvedCode, { dryRun });
     if (!dryRun) await appendAudit(request, "yandex.attributes.backfill_tnved", { newValue: { code: tnvedCode, updated: result.updated } });
     response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── ТН ВЭД по категориям ─────────────────────────────────────────────────────
+
+// Список всех категорий на Ozon + сохранённые назначения.
+app.get("/api/ozon/tnved/categories", requireAdmin, async (request, response, next) => {
+  try {
+    const account = resolveOzonAccountOr400(request, response);
+    if (!account) return;
+    const [breakdown, categoryNameMap, savedAssignments] = await Promise.all([
+      ozonGetCategoryBreakdown(account),
+      ozonFlatCategoryMap(account),
+      readOzonTnvedAssignments(),
+    ]);
+    // assignMap поддерживает оба ключа: "descCatId:typeId" и "descCatId:0" (весь тип)
+    const assignMap = new Map(savedAssignments.map((a) => [`${Number(a.descCatId)}:${Number(a.typeId || 0)}`, cleanText(a.tnvedCode)]));
+    const categories = breakdown.categories.map((cat) => {
+      const key = `${cat.descCatId}:${cat.typeId}`;
+      const catName = categoryNameMap.get(Number(cat.descCatId)) || "";
+      const typeName = categoryNameMap.get(key) || "";
+      // Fallback: берём код типа, потом код всей категории (typeId=0)
+      const tnvedCode = assignMap.get(key) || assignMap.get(`${cat.descCatId}:0`) || "";
+      return {
+        descCatId: cat.descCatId,
+        typeId: cat.typeId,
+        count: cat.count,
+        offerIds: cat.offerIds,
+        categoryName: catName,
+        typeName,
+        displayName: typeName ? `${catName} / ${typeName}` : (catName || `Категория ${cat.descCatId}`),
+        tnvedCode,
+      };
+    }).sort((a, b) => b.count - a.count);
+    response.json({ categories, totalProducts: breakdown.totalProducts });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Сохранить назначения ТН ВЭД по категориям.
+app.put("/api/ozon/tnved/assignments", requireAdmin, async (request, response, next) => {
+  try {
+    const assignments = (Array.isArray(request.body?.assignments) ? request.body.assignments : [])
+      .map((a) => ({
+        descCatId: Number(a.descCatId || 0),
+        typeId: Number(a.typeId || 0),
+        tnvedCode: cleanText(a.tnvedCode || ""),
+      }))
+      .filter((a) => a.descCatId > 0);
+    await writeOzonTnvedAssignments(assignments);
+    await appendAudit(request, "ozon.tnved.assignments_saved", { newValue: { count: assignments.length } });
+    response.json({ ok: true, saved: assignments.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Статус текущего применения ТН ВЭД.
+app.get("/api/ozon/tnved/progress", async (_request, response) => {
+  response.json({ ...ozonTnvedApplyProgress });
+});
+
+// Запустить применение ТН ВЭД ко всем товарам Ozon (асинхронно).
+app.post("/api/ozon/tnved/apply", requireAdmin, async (request, response, next) => {
+  try {
+    const account = resolveOzonAccountOr400(request, response);
+    if (!account) return;
+    if (ozonTnvedApplyProgress.running) {
+      return response.status(409).json({ error: "Уже выполняется", progress: ozonTnvedApplyProgress });
+    }
+    const dryRun = request.body?.dryRun === true;
+    const assignments = await readOzonTnvedAssignments();
+    if (!assignments.some((a) => cleanText(a.tnvedCode))) {
+      return response.status(400).json({ error: "Нет назначений. Сохраните коды ТН ВЭД для категорий." });
+    }
+    if (dryRun) {
+      const settingsDry = await readAppSettings().catch(() => null);
+      const fallbackCodeDry = cleanText(settingsDry?.tnved?.code || "");
+      const result = await ozonApplyTnvedByCategory(account, assignments, { dryRun: true, fallbackCode: fallbackCodeDry });
+      return response.json(result);
+    }
+    const settings = await readAppSettings().catch(() => null);
+    const fallbackCode = cleanText(settings?.tnved?.code || "");
+    void appendAudit(request, "ozon.tnved.apply", { newValue: { assignmentCount: assignments.length, fallbackCode } });
+    response.status(202).json({ ok: true, async: true, message: "Применение ТН ВЭД запущено в фоне" });
+    setImmediate(() => {
+      ozonApplyTnvedByCategory(account, assignments, { dryRun: false, fallbackCode }).catch((error) => {
+        logger.error("ozon tnved apply background failed", { detail: error?.message || String(error) });
+        ozonTnvedApplyProgress.running = false;
+        ozonTnvedApplyProgress.completedAt = new Date().toISOString();
+      });
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Умный бэкфилл Яндекс: per-product код через Ozon-категории ───────────────
+// Для каждого товара Яндекс находим связанный Ozon-товар по offerId,
+// берём его descCatId/typeId из raw.ozon, ищем код в assignments.
+// При отсутствии категории — используем код из настроек tnved.code.
+
+async function yandexBackfillTnvedFromAssignments({ dryRun = true } = {}) {
+  const prisma = getPrisma();
+  if (!prisma) return { ok: false, error: "postgres_unavailable" };
+
+  const [assignments, settings] = await Promise.all([
+    readOzonTnvedAssignments(),
+    readAppSettings().catch(() => null),
+  ]);
+
+  const fallback = cleanText(settings?.tnved?.code || "");
+  const assignMap = new Map(
+    assignments
+      .filter((a) => cleanText(a.tnvedCode))
+      .map((a) => [`${Number(a.descCatId)}:${Number(a.typeId || 0)}`, cleanText(a.tnvedCode)]),
+  );
+
+  if (!assignMap.size && !fallback) {
+    return { ok: false, error: "Нет назначений ТН ВЭД и не задан код по умолчанию. Заполните коды на странице «Коды ТН ВЭД»." };
+  }
+
+  const yandexRows = await prisma.warehouseProduct.findMany({
+    where: { marketplace: "yandex", archived: false },
+    select: { offerId: true, target: true },
+    orderBy: { id: "asc" },
+    take: 50000,
+  });
+
+  if (!yandexRows.length) return { ok: true, dryRun, total: 0, candidates: 0, reason: "no_yandex_products" };
+
+  // Получаем категории Ozon-товаров по совпадению offerId
+  const offerIdSet = [...new Set(yandexRows.map((r) => cleanText(r.offerId)).filter(Boolean))];
+  const ozonRows = await prisma.warehouseProduct.findMany({
+    where: { marketplace: "ozon", offerId: { in: offerIdSet } },
+    select: { offerId: true, raw: true },
+  });
+
+  const ozonCatByOfferId = new Map();
+  for (const row of ozonRows) {
+    const offerId = cleanText(row.offerId);
+    if (!offerId || ozonCatByOfferId.has(offerId)) continue;
+    const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
+    const ozonData = (raw.ozon && typeof raw.ozon === "object") ? raw.ozon : {};
+    const descCatId = Number(ozonData.categoryId || ozonData.descCatId || 0);
+    const typeId = Number(ozonData.typeId || 0);
+    if (descCatId) ozonCatByOfferId.set(offerId, { descCatId, typeId });
+  }
+
+  const offers = [];
+  let withCategory = 0;
+  let withFallback = 0;
+  let skipped = 0;
+
+  for (const row of yandexRows) {
+    const offerId = cleanText(row.offerId);
+    if (!offerId) { skipped++; continue; }
+    const cat = ozonCatByOfferId.get(offerId);
+    let code = null;
+    if (cat) {
+      code = assignMap.get(`${cat.descCatId}:${cat.typeId}`) || assignMap.get(`${cat.descCatId}:0`) || null;
+      if (code) withCategory++;
+    }
+    if (!code && fallback) { code = fallback; withFallback++; }
+    if (!code) { skipped++; continue; }
+    offers.push({ offerId, customsTariffCode: code });
+  }
+
+  const total = yandexRows.length;
+  const candidates = offers.length;
+
+  if (dryRun) {
+    return { ok: true, dryRun, total, candidates, withCategory, withFallback, skipped, sample: offers.slice(0, 5) };
+  }
+  if (!candidates) {
+    return { ok: false, dryRun, total, candidates: 0, reason: "no_codes_resolved", withCategory, withFallback, skipped };
+  }
+
+  const shops = (typeof uniqueYandexShopsByBusiness === "function" ? uniqueYandexShopsByBusiness() : null)
+    || getYandexShops().filter((s) => s.apiKey && s.businessId);
+  if (!shops.length) return { ok: false, error: "yandex_not_configured" };
+
+  const results = [];
+  for (const shop of shops) {
+    const shopResults = await sendYandexOfferMappings(shop, offers);
+    results.push(...shopResults);
+  }
+
+  const failed = results.filter((r) => !r.ok).length;
+  logger.info("yandex backfill tnved from assignments", {
+    total, candidates, withCategory, withFallback, skipped, failed,
+    shops: shops.map((s) => s.id),
+  });
+  return {
+    ok: failed === 0,
+    dryRun,
+    total,
+    updated: results.filter((r) => r.ok).length,
+    candidates,
+    withCategory,
+    withFallback,
+    skipped,
+    failed,
+    errors: results.filter((r) => !r.ok).slice(0, 10),
+  };
+}
+
+// Применить ТН ВЭД на Яндекс.Маркет (per-product, из Ozon-категорий).
+app.post("/api/yandex/tnved/apply", requireAdmin, async (request, response, next) => {
+  try {
+    const dryRun = request.body?.dryRun === true;
+    const result = await yandexBackfillTnvedFromAssignments({ dryRun });
+    if (!dryRun && result.ok) {
+      void appendAudit(request, "yandex.tnved.apply", {
+        newValue: { updated: result.updated, withCategory: result.withCategory, withFallback: result.withFallback },
+      });
+    }
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Сохранить код ТН ВЭД по умолчанию (используется как fallback для Яндекс).
+app.put("/api/settings/tnved-code", requireAdmin, async (request, response, next) => {
+  try {
+    const code = cleanText(request.body?.code || "").replace(/\s/g, "").slice(0, 20);
+    const previous = await readAppSettings();
+    await writeAppSettings({ ...previous, tnved: { ...(previous.tnved || {}), code } });
+    response.json({ ok: true, code });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Отчёт о покрытии ТН ВЭД по всем площадкам ───────────────────────────────
+
+app.get("/api/tnved/report", requireAdmin, async (request, response, next) => {
+  try {
+    const [assignments, wbRules, settings] = await Promise.all([
+      readOzonTnvedAssignments(),
+      readWbImportRules().catch(() => null),
+      readAppSettings().catch(() => null),
+    ]);
+
+    const assignedCategories = assignments.filter((a) => cleanText(a.tnvedCode)).length;
+    const totalCategories = assignments.length;
+    const prisma = getPrisma();
+    let yandexTotal = 0;
+    let ozonTotal = 0;
+    if (prisma) {
+      try {
+        [yandexTotal, ozonTotal] = await Promise.all([
+          prisma.warehouseProduct.count({ where: { marketplace: "yandex", archived: false } }),
+          prisma.warehouseProduct.count({ where: { marketplace: "ozon", archived: false } }),
+        ]);
+      } catch {
+        // DB недоступна — показываем 0
+      }
+    }
+
+    response.json({
+      ozon: {
+        assignedCategories,
+        totalCategories,
+        totalProducts: ozonTotal,
+        lastApplied: ozonTnvedApplyProgress.completedAt,
+        assignments: assignments.filter((a) => cleanText(a.tnvedCode)).map((a) => ({
+          descCatId: a.descCatId,
+          typeId: a.typeId,
+          tnvedCode: a.tnvedCode,
+        })),
+      },
+      yandex: {
+        totalProducts: yandexTotal,
+        defaultCode: cleanText(settings?.tnved?.code || ""),
+      },
+      wb: {
+        tnvedCode: cleanText(wbRules?.tnved || ""),
+        subjectId: wbRules?.subjectId || 0,
+        subjectName: cleanText(wbRules?.subjectName || ""),
+      },
+    });
   } catch (error) {
     next(error);
   }

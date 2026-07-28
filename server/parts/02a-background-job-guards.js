@@ -87,6 +87,13 @@ function heavyBackgroundWorkShouldDefer(reason = "") {
     return true;
   }
   if (marketplaceMaintenanceRunning || autoSyncRunning || manualWarehouseSyncPromise || dailySyncPromise) {
+    logger.warn("heavy background work deferred: other job running", {
+      reason: cleanText(reason) || "unspecified",
+      marketplaceMaintenanceRunning,
+      autoSyncRunning,
+      hasDailySyncPromise: Boolean(dailySyncPromise),
+      hasManualSyncPromise: Boolean(manualWarehouseSyncPromise),
+    });
     return true;
   }
   return false;

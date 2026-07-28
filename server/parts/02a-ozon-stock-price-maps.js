@@ -67,7 +67,7 @@ function pickOzonState(product = {}, info = {}, stockInfo = {}) {
   const hasStocks = Boolean(product.has_fbs_stocks || product.hasFbsStocks || stock > 0);
 
   if (archived) {
-    return normalizeMarketplaceState({ code: "archived", label: info.is_autoarchived ? "В автоархиве Ozon" : "В архиве Ozon", visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
+    return normalizeMarketplaceState({ code: "archived", label: info.is_autoarchived ? "В автоархиве Ozon" : "В архиве Ozon", isAutoArchived: Boolean(info.is_autoarchived), visibility, state, stateName, stateDescription, stock, present, reserved, warehouses, archived, hasStocks });
   }
   // Ozon reports visibility=EMPTY_STOCK for FBS/rfbs products even when the seller's own
   // stock is positive (it reflects Ozon's cross-dock stock, not ours) — don't let that alone

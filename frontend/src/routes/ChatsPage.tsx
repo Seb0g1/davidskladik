@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, BookOpen, Download, Loader2, MessageCircle, Paperclip, RefreshCw, Send, X } from "lucide-react";
+import { ArrowLeft, BellRing, BookOpen, Download, ImageIcon, Loader2, MessageCircle, Paperclip, RefreshCw, Send, X } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
@@ -23,7 +23,10 @@ type ChatRow = {
 };
 
 function marketplaceLabel(marketplace: string): string {
-  return marketplace === "ozon" ? "Ozon" : marketplace === "wb" ? "WB" : "Яндекс";
+  if (marketplace === "ozon") return "Ozon";
+  if (marketplace === "wb") return "WB";
+  if (marketplace === "avito") return "Avito";
+  return "Яндекс";
 }
 
 type ChatAttachment = { type: "video" | "image" | "file"; url: string; name?: string; previewUrl?: string };
@@ -150,15 +153,30 @@ function ChatLightbox({ media, onClose }: { media: LightboxMedia; onClose: () =>
   );
 }
 
+function ChatAttachmentImage({ url, name, onOpen }: { url: string; name?: string; onOpen: () => void }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) {
+    return (
+      <a href={url} target="_blank" rel="noopener noreferrer" className="chat-attachment-broken" title="Открыть фото в новой вкладке">
+        <ImageIcon size={22} />
+        <span>Фото</span>
+      </a>
+    );
+  }
+  return (
+    <button type="button" className="chat-attachment-thumb" title="Открыть фото" onClick={onOpen}>
+      <img src={url} alt={name || "фото"} loading="lazy" onError={() => setBroken(true)} />
+    </button>
+  );
+}
+
 function ChatAttachments({ attachments, onOpen }: { attachments: ChatAttachment[]; onOpen: (media: LightboxMedia) => void }) {
   if (!attachments.length) return null;
   return (
     <div className="chat-attachments">
       {attachments.map((att, index) => (
         att.type === "image" ? (
-          <button key={index} type="button" className="chat-attachment-thumb" title="Открыть фото" onClick={() => onOpen({ type: "image", url: att.url })}>
-            <img src={att.url} alt={att.name || "фото"} loading="lazy" />
-          </button>
+          <ChatAttachmentImage key={index} url={att.url} name={att.name} onOpen={() => onOpen({ type: "image", url: att.url })} />
         ) : att.type === "video" ? (
           <div key={index} className="chat-attachment-video">
             <video controls preload="metadata" src={att.url} poster={att.previewUrl || undefined} />
@@ -174,15 +192,21 @@ function ChatAttachments({ attachments, onOpen }: { attachments: ChatAttachment[
   );
 }
 
+type PendingImage = { localUrl: string; serverUrl: string };
+
 export function ChatsPage() {
   const queryClient = useQueryClient();
   const [marketplace, setMarketplace] = useState("all");
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [selected, setSelected] = useState<ChatRow | null>(null);
+  const [mobileView, setMobileView] = useState<"list" | "thread">("list");
   const [text, setText] = useState("");
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [lightbox, setLightbox] = useState<LightboxMedia>(null);
+  const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const [uploadingImages, setUploadingImages] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const chatsQuery = useQuery({
     queryKey: ["chats", marketplace, unreadOnly],
@@ -202,13 +226,51 @@ export function ChatsPage() {
     refetchInterval: 15_000,
   });
 
+  const handleFileChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+    setUploadingImages(true);
+    try {
+      const form = new FormData();
+      files.forEach((file) => form.append("images", file));
+      const res = await fetch("/api/uploads/images", { method: "POST", credentials: "same-origin", body: form });
+      const data = await res.json().catch(() => ({})) as any;
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      const uploaded: Array<{ url: string }> = data.files || [];
+      const newItems: PendingImage[] = files
+        .map((file, i) => ({ localUrl: URL.createObjectURL(file), serverUrl: uploaded[i]?.url || "" }))
+        .filter((item) => item.serverUrl);
+      setPendingImages((prev) => [...prev, ...newItems]);
+    } catch (err) {
+      console.error("Ошибка загрузки фото:", err);
+    } finally {
+      setUploadingImages(false);
+      if (event.target) event.target.value = "";
+    }
+  }, []);
+
+  const removePendingImage = useCallback((index: number) => {
+    setPendingImages((prev) => {
+      URL.revokeObjectURL(prev[index].localUrl);
+      return prev.filter((_, j) => j !== index);
+    });
+  }, []);
+
   const send = useMutation({
     mutationFn: () => apiJson("/api/chats/send", {
       method: "POST",
-      body: JSON.stringify({ marketplace: selected!.marketplace, target: selected!.target, chatId: selected!.chatId, replySign: selected!.replySign, text }),
+      body: JSON.stringify({
+        marketplace: selected!.marketplace,
+        target: selected!.target,
+        chatId: selected!.chatId,
+        replySign: selected!.replySign,
+        text,
+        imageUrls: pendingImages.map((img) => img.serverUrl),
+      }),
     }),
     onSuccess: () => {
       setText("");
+      setPendingImages((prev) => { prev.forEach((img) => URL.revokeObjectURL(img.localUrl)); return []; });
       void queryClient.invalidateQueries({ queryKey: ["chat-history", selected?.id] });
       void queryClient.invalidateQueries({ queryKey: ["chats"] });
     },
@@ -227,7 +289,7 @@ export function ChatsPage() {
     <section className="page-section chats-page">
       <PageHeader
         title="Чаты"
-        subtitle="Переписка с покупателями на Ozon, Яндекс.Маркете и Wildberries в одном месте."
+        subtitle="Переписка с покупателями на Ozon, Avito, Яндекс.Маркете и Wildberries в одном месте."
         action={(
           <div className="row-actions">
             <button className="secondary-action" type="button" onClick={() => setTemplatesOpen(true)}>
@@ -253,6 +315,7 @@ export function ChatsPage() {
             { value: "ozon", label: "Ozon" },
             { value: "yandex", label: "Яндекс" },
             { value: "wb", label: "Wildberries" },
+            { value: "avito", label: "Avito" },
           ]}
         />
         <label className="settings-toggle">
@@ -263,13 +326,13 @@ export function ChatsPage() {
       {(chatsQuery.data?.warnings || []).map((warning) => <div className="inline-error" key={warning}>{warning}</div>)}
 
       <div className="chats-layout">
-        <div className="chats-list">
+        <div className={`chats-list${mobileView === "thread" ? " mobile-hidden" : ""}`}>
           {rows.map((chat) => (
             <button
               type="button"
               key={chat.id}
               className={`chat-item${selected?.id === chat.id ? " is-active" : ""}${chat.unreadCount ? " has-unread" : ""}`}
-              onClick={() => setSelected(chat)}
+              onClick={() => { setSelected(chat); setMobileView("thread"); }}
             >
               <span className="chat-item-top">
                 <span className={`market-badge market-${chat.marketplace}`}>{marketplaceLabel(chat.marketplace)}</span>
@@ -286,12 +349,15 @@ export function ChatsPage() {
           {!rows.length && !chatsQuery.isFetching ? <div className="empty-state">Чатов нет.</div> : null}
         </div>
 
-        <div className="chat-thread">
+        <div className={`chat-thread${mobileView === "list" ? " mobile-hidden" : ""}`}>
           {!selected ? (
             <div className="chat-placeholder"><MessageCircle size={34} /> Выбери чат слева</div>
           ) : (
             <>
               <div className="chat-thread-head">
+                <button type="button" className="chat-back-btn" title="Назад к чатам" onClick={() => { setMobileView("list"); }}>
+                  <ArrowLeft size={18} />
+                </button>
                 <span className={`market-badge market-${selected.marketplace}`}>{marketplaceLabel(selected.marketplace)}</span>
                 <strong>{selected.title}</strong>
                 {selected.subtitle ? <small className="chat-subtitle">{selected.subtitle}</small> : null}
@@ -349,17 +415,46 @@ export function ChatsPage() {
                     <button key={emoji} type="button" onClick={() => setText((current) => current + emoji)}>{emoji}</button>
                   ))}
                 </div>
+                {pendingImages.length > 0 && (
+                  <div className="chat-pending-images">
+                    {pendingImages.map((img, i) => (
+                      <div key={i} className="chat-pending-thumb">
+                        <img src={img.localUrl} alt="фото" />
+                        <button type="button" className="chat-pending-remove" title="Убрать" onClick={() => removePendingImage(i)}>
+                          <X size={10} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="chat-input-row">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="chat-file-input"
+                    onChange={handleFileChange}
+                  />
+                  <button
+                    type="button"
+                    className="secondary-action chat-upload-btn"
+                    title="Прикрепить фото"
+                    disabled={uploadingImages}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    {uploadingImages ? <Loader2 className="spin" size={15} /> : <ImageIcon size={15} />}
+                  </button>
                   <textarea
                     rows={2}
                     value={text}
                     placeholder="Сообщение покупателю… (Ctrl+Enter — отправить)"
                     onChange={(event) => setText(event.target.value)}
                     onKeyDown={(event) => {
-                      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && text.trim()) send.mutate();
+                      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && (text.trim() || pendingImages.length)) send.mutate();
                     }}
                   />
-                  <button className="primary-action chat-send-btn" type="button" title="Отправить (Ctrl+Enter)" disabled={!text.trim() || send.isPending} onClick={() => send.mutate()}>
+                  <button className="primary-action chat-send-btn" type="button" title="Отправить (Ctrl+Enter)" disabled={(!text.trim() && !pendingImages.length) || send.isPending || uploadingImages} onClick={() => send.mutate()}>
                     {send.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
                   </button>
                 </div>

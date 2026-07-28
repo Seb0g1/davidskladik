@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CartProvider } from "./CartContext";
 import { AuthProvider } from "./AuthContext";
 import App from "./App";
+import "leaflet/dist/leaflet.css";
 import "./index.css";
 
 const queryClient = new QueryClient({

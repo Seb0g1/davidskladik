@@ -184,9 +184,16 @@ app.get("/api/wb/sync/status", async (_request, response) => {
 
 app.post("/api/wb/sync/run", requireAdmin, async (request, response, next) => {
   try {
-    const result = await runWbMarketplaceSync({ source: "manual" });
-    await appendAudit(request, "wb.sync.run", { newValue: { status: result.status, pricesSent: result.pricesSent, zeroed: result.zeroed } });
-    response.json(result);
+    if (wbSyncRunning) {
+      return response.status(409).json({ status: "already_running", running: true });
+    }
+    void appendAudit(request, "wb.sync.run", { newValue: { async: true } });
+    response.status(202).json({ ok: true, async: true, message: "WB синк запущен в фоне" });
+    setImmediate(() => {
+      runWbMarketplaceSync({ source: "manual" }).catch((error) => {
+        logger.warn("wb manual sync background failed", { detail: error?.message || String(error) });
+      });
+    });
   } catch (error) {
     next(error);
   }

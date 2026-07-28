@@ -82,6 +82,7 @@ registerSystemMediaRoutes(app, {
   fs,
   path,
   crypto,
+  sharp,
   uploadImageDir,
   imageExtension,
   uploadBaseUrl,

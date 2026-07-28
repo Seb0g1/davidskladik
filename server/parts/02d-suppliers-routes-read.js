@@ -216,6 +216,82 @@ app.post("/api/supplier-ledger/payments", requireStaff, async (request, response
   }
 });
 
+app.post("/api/supplier-ledger/return-picking", requireAdmin, async (request, response, next) => {
+  try {
+    if (!shouldUsePostgresStorage()) {
+      return response.status(503).json({ error: "Supplier ledger requires PostgreSQL.", code: "supplier_ledger_postgres_required" });
+    }
+    const pickingKey = cleanText(request.body?.pickingKey || "");
+    const note = cleanText(request.body?.note || "");
+    if (!pickingKey) return response.status(400).json({ error: "pickingKey is required.", code: "picking_key_required" });
+
+    const debtEntry = await getPrisma().supplierLedgerEntry.findFirst({
+      where: { pickingKey, entryType: "purchase_debt", status: "active" },
+    });
+    if (!debtEntry) return response.status(404).json({ error: "Запись долга для этой строки сборки не найдена.", code: "debt_entry_not_found" });
+
+    const existingReturn = await getPrisma().supplierLedgerEntry.findFirst({
+      where: { pickingKey, entryType: "supplier_return", status: "active" },
+    });
+    if (existingReturn) return response.status(409).json({ error: "Возврат для этой строки уже зафиксирован.", code: "return_already_exists", entry: supplierLedgerEntryFromPostgres(existingReturn) });
+
+    const amount = Math.abs(Number(debtEntry.amount));
+    const entry = normalizeSupplierLedgerEntry({
+      sourceKey: `supplier_return:picking:${pickingKey}`,
+      entryType: "supplier_return",
+      supplierName: debtEntry.supplierName,
+      partnerId: debtEntry.partnerId,
+      amount,
+      currency: debtEntry.currency || "RUB",
+      pickingKey,
+      financeOrderId: debtEntry.financeOrderId,
+      orderId: debtEntry.orderId,
+      postingNumber: debtEntry.postingNumber,
+      offerId: debtEntry.offerId,
+      productName: debtEntry.productName,
+      quantity: debtEntry.quantity,
+      note: note || "Возврат товара поставщику",
+      occurredAt: new Date().toISOString(),
+      createdBy: requestUsername(request),
+      raw: { source: "return_picking", pickingKey, debtEntryId: debtEntry.id },
+    });
+    const row = await getPrisma().supplierLedgerEntry.create({
+      data: {
+        id: entry.id,
+        sourceKey: entry.sourceKey,
+        entryType: entry.entryType,
+        supplierName: entry.supplierName || null,
+        partnerId: entry.partnerId || null,
+        amount: entry.amount,
+        currency: entry.currency,
+        pickingKey: entry.pickingKey || null,
+        financeOrderId: entry.financeOrderId || null,
+        orderId: entry.orderId || null,
+        postingNumber: entry.postingNumber || null,
+        offerId: entry.offerId || null,
+        productName: entry.productName || null,
+        quantity: entry.quantity,
+        note: entry.note || null,
+        status: "active",
+        occurredAt: toDateOrNull(entry.occurredAt) || new Date(),
+        createdBy: entry.createdBy || null,
+        raw: entry.raw,
+      },
+    });
+    const saved = supplierLedgerEntryFromPostgres(row);
+    suppliersListCache = null;
+    await appendAudit(request, "supplier_ledger.return_picking", {
+      entityType: "supplier_ledger",
+      entityId: saved.id,
+      newValue: saved,
+    }).catch((e) => logger.warn("supplier ledger return-picking audit failed", { detail: e?.message }));
+    const summary = await listSupplierLedgerEntries({ supplierName: debtEntry.supplierName || "", partnerId: debtEntry.partnerId || "", status: "active", limit: 100, period: "all" });
+    response.status(201).json({ ok: true, entry: saved, summary: summary.summary });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/supplier-ledger/returns", requireAdmin, async (request, response, next) => {
   try {
     if (!shouldUsePostgresStorage()) {

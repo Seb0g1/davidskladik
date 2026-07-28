@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckSquare, ClipboardCopy, Eye, Link2, Loader2, PackageCheck, RefreshCw, Save, Send, Trash2, Upload } from "lucide-react";
+import { CheckSquare, ClipboardCopy, Eye, Link2, Loader2, MessageCircle, PackageCheck, RefreshCw, Save, Send, Trash2, Upload, Wallet } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { useDebounced } from "../lib/common";
@@ -175,6 +175,14 @@ type AvitoSyncResponse = {
   uploadResult: AvitoUploadTriggerResult;
 };
 
+type AvitoMeResponse = {
+  ok: boolean;
+  profile: { id: number; name: string; email: string; phone: string; avatar: string } | null;
+  balance: { real: number; bonus: number; total: number } | null;
+  profileError?: string | null;
+  balanceError?: string | null;
+};
+
 const SKIP_REASON_LABELS: Record<string, string> = {
   title_word: "Стоп-слово в названии",
   title_not_in_include_list: "Нет обязательного слова",
@@ -278,6 +286,14 @@ export function AvitoPage() {
 
   const avitoAccount = (accountsQuery.data?.accounts || []).find((account) => account.marketplace === "avito");
   const avitoConfigured = Boolean(avitoAccount?.configured);
+
+  const meQuery = useQuery({
+    queryKey: ["avito-me"],
+    queryFn: () => apiJson<AvitoMeResponse>("/api/avito/me"),
+    enabled: avitoConfigured,
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
 
   const uploadsQuery = useQuery({
     queryKey: ["avito-uploads"],
@@ -429,7 +445,28 @@ export function AvitoPage() {
         <Stat label="Пройдут фильтр" value={previewData?.matchedCount ?? "—"} tone="success" icon={<CheckSquare size={18} />} />
         <Stat label="Будут пропущены" value={previewData?.skippedCount ?? "—"} tone="warn" icon={<Trash2 size={18} />} />
         <Stat label="Объявлений в фиде" value={feedInfoQuery.data?.enabledCount ?? listings.length} tone="accent" icon={<Link2 size={18} />} />
+        {meQuery.data?.balance ? (
+          <Stat
+            label="Баланс Avito"
+            value={`${meQuery.data.balance.real.toLocaleString("ru-RU")} ₽`}
+            tone={meQuery.data.balance.real < 100 ? "warn" : "success"}
+            icon={<Wallet size={18} />}
+          />
+        ) : null}
+        {meQuery.data?.balance?.bonus ? (
+          <Stat label="Бонусы Avito" value={`${meQuery.data.balance.bonus.toLocaleString("ru-RU")} ₽`} tone="accent" icon={<Wallet size={18} />} />
+        ) : null}
       </section>
+      {meQuery.data?.profile ? (
+        <div className="avito-profile-strip">
+          {meQuery.data.profile.avatar ? <img src={meQuery.data.profile.avatar} alt="" className="avito-profile-avatar" /> : null}
+          <span className="avito-profile-name">{meQuery.data.profile.name}</span>
+          {meQuery.data.profile.phone ? <span className="avito-profile-phone">{meQuery.data.profile.phone}</span> : null}
+          <a href="/chats?marketplace=avito" className="avito-profile-chats secondary-action">
+            <MessageCircle size={13} /> Чаты Avito
+          </a>
+        </div>
+      ) : null}
 
       {applyImport.data ? (
         <div className="info-strip success">

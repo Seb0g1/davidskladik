@@ -10,6 +10,52 @@ function resolveAvitoAccountOr404(request, response) {
   return account;
 }
 
+// --- Профиль продавца + баланс + статистика ---
+
+app.get("/api/avito/me", async (request, response, next) => {
+  try {
+    const account = resolveAvitoAccountOr404(request, response);
+    if (!account) return;
+    const [profile, balance] = await Promise.allSettled([
+      getAvitoMe(account),
+      getAvitoBalance(account),
+    ]);
+    response.json({
+      ok: true,
+      profile: profile.status === "fulfilled" ? profile.value : null,
+      balance: balance.status === "fulfilled" ? balance.value : null,
+      profileError: profile.status === "rejected" ? profile.reason?.message : null,
+      balanceError: balance.status === "rejected" ? balance.reason?.message : null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/avito/balance", async (request, response, next) => {
+  try {
+    const account = resolveAvitoAccountOr404(request, response);
+    if (!account) return;
+    response.json({ ok: true, ...(await getAvitoBalance(account)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/avito/stats", async (request, response, next) => {
+  try {
+    const account = resolveAvitoAccountOr404(request, response);
+    if (!account) return;
+    const itemIds = Array.isArray(request.body?.item_ids) ? request.body.item_ids : [];
+    const dateFrom = cleanText(request.body?.date_from || "");
+    const dateTo = cleanText(request.body?.date_to || "");
+    const result = await getAvitoItemStats(account, itemIds, { dateFrom, dateTo });
+    response.json({ ok: true, result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // --- Профиль автозагрузки ---
 
 app.get("/api/avito/profile", async (request, response, next) => {
@@ -277,18 +323,45 @@ app.put("/api/warehouse/products/:id/avito-images", requireAdmin, async (request
     const avitoImages = Array.isArray(request.body?.avitoImages)
       ? request.body.avitoImages.map((url) => cleanText(url)).filter(Boolean).slice(0, 10)
       : [];
-    product.avitoImages = avitoImages;
-    product.updatedAt = new Date().toISOString();
-    await writeWarehouseProductPatch([product], { reason: "avito_images_update", writeLinks: false });
-    // Обновляем imageUrls объявления сразу, чтобы фид работал даже без живых данных Postgres
-    if (avitoImages.length) {
-      const state = await readAvitoListingsFile();
-      const listing = state.items.find((item) => cleanText(item.sourceProductId) === product.id);
-      if (listing) {
-        await upsertAvitoListings([{ adId: listing.adId, imageUrls: avitoImages }], { source: undefined });
+    const now = new Date().toISOString();
+    // Обновляем все варианты одного товара (по offerId): Avito-фид использует
+    // Ozon-вариант как sourceProductId, поэтому образы нужны на всех siblings.
+    const offerId = cleanText(product.offerId);
+    const siblings = offerId
+      ? warehouse.products.filter((item) => cleanText(item.offerId) === offerId)
+      : [product];
+    for (const sibling of siblings) {
+      sibling.avitoImages = avitoImages;
+      sibling.updatedAt = now;
+    }
+    await writeWarehouseProductPatch(siblings, { reason: "avito_images_update", writeLinks: false });
+    // Persist avitoImages directly to Postgres by offerId so all marketplace variants
+    // (ozon/yandex/wb) and both server processes (api + worker) get the correct value
+    // even when one process has a stale in-memory cache.
+    if (offerId) {
+      const prisma = getPrisma();
+      if (prisma) {
+        const avitoImagesJson = JSON.stringify(avitoImages);
+        await prisma.$executeRaw`
+          UPDATE warehouse_products
+          SET raw = jsonb_set(COALESCE(raw, '{}'::jsonb), '{avitoImages}', ${avitoImagesJson}::jsonb),
+              updated_at = now()
+          WHERE offer_id = ${offerId}
+        `.catch((err) => logger.warn("avito images direct pg update failed", { offerId, detail: err?.message }));
       }
     }
-    await appendAudit(request, "warehouse.product.avito_images.update", { productId: product.id, offerId: product.offerId, count: avitoImages.length });
+    // Обновляем imageUrls объявлений сразу, чтобы фид работал даже без живых данных Postgres
+    if (avitoImages.length) {
+      const state = await readAvitoListingsFile();
+      const siblingIds = new Set(siblings.map((item) => cleanText(item.id)));
+      const listingUpdates = state.items
+        .filter((item) => siblingIds.has(cleanText(item.sourceProductId)))
+        .map((item) => ({ adId: item.adId, imageUrls: avitoImages }));
+      if (listingUpdates.length) {
+        await upsertAvitoListings(listingUpdates, { source: undefined });
+      }
+    }
+    await appendAudit(request, "warehouse.product.avito_images.update", { productId: product.id, offerId, count: avitoImages.length, siblings: siblings.length });
     response.json({ ok: true, avitoImages, productId: product.id });
   } catch (error) {
     next(error);

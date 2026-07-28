@@ -337,6 +337,7 @@ module.exports = {
   wbCardsTrashList,
   wbCardsRecover,
   wbCardsUpload,
+  wbArchiveCards,
   wbCardsUpdate,
   wbCardErrors,
   wbSubjectCharacteristics,

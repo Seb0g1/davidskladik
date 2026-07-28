@@ -210,6 +210,10 @@ function normalizeAppSettings(input = {}) {
     availabilityRules,
     branding: normalizeBrandingSettings(input.branding || {}, fallback.branding),
     supplierCart: normalizeSupplierCartSettings(input.supplierCart || input.supplier_cart || {}, fallback.supplierCart),
+    tnved: {
+      code: cleanText((input.tnved?.code ?? input.tnvedCode) || "").slice(0, 20),
+      autoEnabled: parseBooleanSetting(input.tnved?.autoEnabled, true),
+    },
   };
 }
 

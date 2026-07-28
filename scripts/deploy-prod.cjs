@@ -111,6 +111,34 @@ function readFrontendBundleFiles() {
   return ["public/app-modern/index.html", ...assets];
 }
 
+const shopDistDir = path.join(root, "shop/dist");
+const shopRemoteRoot = "/var/www/magicvibes";
+
+function walkDir(dir) {
+  const result = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) result.push(...walkDir(full));
+    else result.push(full);
+  }
+  return result;
+}
+
+async function deployShop(conn, sftp) {
+  const files = walkDir(shopDistDir);
+  const dirs = new Set([shopRemoteRoot]);
+  for (const f of files) {
+    const rel = path.relative(shopDistDir, path.dirname(f)).split(path.sep).join("/");
+    if (rel && rel !== ".") dirs.add(`${shopRemoteRoot}/${rel}`);
+  }
+  await exec(conn, `mkdir -p ${Array.from(dirs).join(" ")}`);
+  for (const local of files) {
+    const rel = path.relative(shopDistDir, local).split(path.sep).join("/");
+    await sftpPut(sftp, local, `${shopRemoteRoot}/${rel}`);
+  }
+  console.log(`✓ shop: uploaded ${files.length} files → ${shopRemoteRoot}`);
+}
+
 function runLocalPreDeploy() {
   if (skipLocalChecks) {
     console.log("Skipping local npm test + build (--skip-local-checks)");
@@ -120,6 +148,8 @@ function runLocalPreDeploy() {
   execSync("npm test", { cwd: root, stdio: "inherit" });
   console.log("Running npm run build...");
   execSync("npm run build", { cwd: root, stdio: "inherit" });
+  console.log("Building shop (magicvibes.ru)...");
+  execSync("npm run build", { cwd: path.join(root, "shop"), stdio: "inherit" });
 }
 
 function tagProdRelease() {
@@ -169,6 +199,9 @@ async function main() {
 
     console.log("Deploying frontend bundle...");
     await uploadRelativeFiles(conn, sftp, readFrontendBundleFiles());
+
+    console.log("Deploying shop (magicvibes.ru)...");
+    await deployShop(conn, sftp);
 
     await exec(conn, [
       `cd ${remoteRoot}`,

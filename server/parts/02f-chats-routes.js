@@ -258,6 +258,17 @@ app.get("/api/chats", requireAdmin, async (request, response, next) => {
         }
       }
     }
+    if (marketplace === "all" || marketplace === "avito") {
+      for (const account of getAvitoAccounts()) {
+        try {
+          const rows = await getAvitoChats(account, { unreadOnly });
+          chats.push(...rows);
+        } catch (error) {
+          warnings.push(`Avito ${account.id}: ${error?.message || "ошибка"}`);
+        }
+      }
+    }
+
     chats.sort((a, b) => {
       if ((b.unreadCount > 0) !== (a.unreadCount > 0)) return b.unreadCount > 0 ? 1 : -1;
       return cleanText(b.lastMessageAt).localeCompare(cleanText(a.lastMessageAt));
@@ -461,7 +472,14 @@ app.get("/api/chats/history", requireAdmin, async (request, response, next) => {
       return response.json({ ok: true, rows, context: null });
     }
 
-    response.status(400).json({ error: "marketplace должен быть ozon, yandex или wb." });
+    if (marketplace === "avito") {
+      const account = getAvitoAccountByTarget(target) || getAvitoAccounts()[0];
+      if (!account) return response.status(400).json({ error: "Avito аккаунт не найден." });
+      const rows = await getAvitoChatHistory(account, chatId);
+      return response.json({ ok: true, rows, context: null });
+    }
+
+    response.status(400).json({ error: "marketplace должен быть ozon, yandex, wb или avito." });
   } catch (error) {
     next(error);
   }
@@ -473,21 +491,36 @@ app.post("/api/chats/send", requireAdmin, async (request, response, next) => {
     const target = cleanText(request.body?.target);
     const chatId = cleanText(request.body?.chatId);
     const text = cleanText(request.body?.text);
-    if (!marketplace || !chatId || !text) return response.status(400).json({ error: "Нужны marketplace, chatId и text." });
+    const imageUrls = Array.isArray(request.body?.imageUrls)
+      ? request.body.imageUrls.map(cleanText).filter(Boolean)
+      : [];
+    if (!marketplace || !chatId || (!text && !imageUrls.length)) {
+      return response.status(400).json({ error: "Нужны marketplace, chatId и text или imageUrls." });
+    }
 
     if (marketplace === "ozon") {
       const account = getOzonAccountByTarget(target) || getOzonAccounts()[0];
       if (!account) return response.status(400).json({ error: "Ozon аккаунт не найден." });
-      const result = await ozonRequest("/v1/chat/send/message", { chat_id: chatId, text }, account);
+      if (text) {
+        await ozonRequest("/v1/chat/send/message", { chat_id: chatId, text }, account);
+      }
+      for (const imageUrl of imageUrls) {
+        try {
+          await ozonRequest("/v1/chat/send/message", { chat_id: chatId, type: "Images", data: [{ image_link: imageUrl }] }, account);
+        } catch {
+          await ozonRequest("/v1/chat/send/message", { chat_id: chatId, text: imageUrl }, account);
+        }
+      }
       await appendAudit(request, "chats.send", { entityType: "chat", entityId: `ozon:${chatId}` });
-      return response.json({ ok: true, result });
+      return response.json({ ok: true });
     }
 
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target) || getYandexShops()[0];
       if (!shop?.businessId) return response.status(400).json({ error: "Yandex кабинет не найден." });
+      const fullText = [text, ...imageUrls].filter(Boolean).join("\n");
       const result = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/chats/message?chatId=${encodeURIComponent(chatId)}`, {
-        message: { text },
+        message: { text: fullText },
       });
       await appendAudit(request, "chats.send", { entityType: "chat", entityId: `yandex:${chatId}` });
       return response.json({ ok: true, result });
@@ -504,9 +537,10 @@ app.post("/api/chats/send", requireAdmin, async (request, response, next) => {
         replySign = cleanText(chat?.replySign || "");
       }
       if (!replySign) return response.status(400).json({ error: "Чат WB не найден (нет replySign)." });
+      const fullText = [text, ...imageUrls].filter(Boolean).join("\n").slice(0, 1000);
       const form = new FormData();
       form.append("replySign", replySign);
-      form.append("message", text.slice(0, 1000));
+      form.append("message", fullText);
       const result = await wbRequest(account, "chat", "POST", "/api/v1/seller/message", form);
       // Сообщение появится в потоке событий — сбрасываем кэш, чтобы история обновилась.
       wbChatEventsCache.delete(cleanText(account.id || "wb"));
@@ -514,7 +548,30 @@ app.post("/api/chats/send", requireAdmin, async (request, response, next) => {
       return response.json({ ok: true, result });
     }
 
-    response.status(400).json({ error: "marketplace должен быть ozon, yandex или wb." });
+    if (marketplace === "avito") {
+      const account = getAvitoAccountByTarget(target) || getAvitoAccounts()[0];
+      if (!account) return response.status(400).json({ error: "Avito аккаунт не найден." });
+      if (text) {
+        await sendAvitoMessage(account, chatId, text);
+      }
+      for (const imageUrl of imageUrls) {
+        try {
+          const imgRes = await fetch(imageUrl, { signal: AbortSignal.timeout(15000) });
+          if (!imgRes.ok) throw new Error(`fetch image failed: ${imgRes.status}`);
+          const buffer = Buffer.from(await imgRes.arrayBuffer());
+          const fileName = imageUrl.split("/").pop()?.split("?")[0] || "image.jpg";
+          const imageId = await uploadAvitoMessengerImage(account, buffer, fileName);
+          await sendAvitoImageMessage(account, chatId, imageId);
+        } catch (imgErr) {
+          logger.warn("avito image upload/send failed, sending as text", { chatId, imageUrl, detail: imgErr?.message });
+          await sendAvitoMessage(account, chatId, imageUrl);
+        }
+      }
+      await appendAudit(request, "chats.send", { entityType: "chat", entityId: `avito:${chatId}` });
+      return response.json({ ok: true });
+    }
+
+    response.status(400).json({ error: "marketplace должен быть ozon, yandex, wb или avito." });
   } catch (error) {
     next(error);
   }
