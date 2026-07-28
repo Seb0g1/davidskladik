@@ -158,6 +158,7 @@ function sanitizeMarketplaceAccount(account = {}) {
     readOnly: Boolean(account.readOnly),
     inheritedFromEnv: Boolean(account.inheritedFromEnv),
     syncEnabled: account.syncEnabled !== false,
+    importEnabled: account.importEnabled !== false,
     updatedAt: account.updatedAt || account.createdAt || null,
   };
 }
