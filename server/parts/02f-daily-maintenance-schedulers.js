@@ -350,9 +350,13 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
 
         if (resolvedCode) {
           const ozonAcc = getOzonAccountByTarget("ozon");
-          const ozonTnved = ozonAcc
-            ? await ozonBackfillTnved(ozonAcc, resolvedCode, { dryRun: false }).catch((e) => ({ ok: false, error: e?.message }))
-            : { ok: false, error: "no_ozon_account" };
+          // OZON_TNVED_AUTO_BACKFILL_ENABLED=true чтобы включить (default: выключено).
+          // Каждый запуск проходит ~12 000 товаров через /v1/product/attributes/update —
+          // выжигает суточную квоту и не оставляет лимита для добавления новых карточек.
+          const ozonTnvedAutoEnabled = process.env.OZON_TNVED_AUTO_BACKFILL_ENABLED === "true";
+          const ozonTnved = (!ozonTnvedAutoEnabled || !ozonAcc)
+            ? { ok: true, skipped: true, reason: ozonTnvedAutoEnabled ? "no_ozon_account" : "disabled_by_env" }
+            : await ozonBackfillTnved(ozonAcc, resolvedCode, { dryRun: false }).catch((e) => ({ ok: false, error: e?.message }));
           const yandexTnved = await yandexBackfillTnved(resolvedCode, { dryRun: false })
             .catch((e) => ({ ok: false, error: e?.message }));
           tnvedResult = { code: resolvedCode, wb: wbTnved, ozon: ozonTnved, yandex: yandexTnved };
