@@ -413,6 +413,19 @@ function marketplaceMaintenanceStartupDelayMs(requestedDelayMs = null) {
   return Math.max(requested, remainingUptimeMs);
 }
 
+// ─── Ночной сброс "Нужен код маркировки" ────────────────────────────────────
+// ОТКЛЮЧЁН: ozonApplyTnvedByCategory уже записывает marking=false в том же
+// вызове /v1/product/attributes/update, что и ТН ВЭД. Нет нужды гонять
+// отдельный полный проход (12 000+ товаров) каждую ночь — это выжигало всю
+// дневную квоту к 00:05 UTC и не оставляло лимита для добавления новых карточек.
+// Для ручного запуска используй POST /api/ozon/attributes/clear-marking.
+let ozonMarkingClearNightlyTimer = null;
+let ozonMarkingClearNightlyNextRunAt = null;
+
+function scheduleOzonMarkingClearNightly(_delayMs = null) {
+  // no-op: scheduler disabled — see comment above
+}
+
 function scheduleMarketplaceMaintenance(delayMs = null) {
   if (!marketplaceMaintenanceEnabled) {
     marketplaceMaintenanceNextRunAt = null;

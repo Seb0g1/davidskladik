@@ -148,13 +148,15 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}) {
   if (Array.isArray(product.avitoImages) && product.avitoImages.length) {
     listing = { ...listing, imageUrls: product.avitoImages };
   }
-  // Остаток для <Stock>: поставщик с ценой → целевой (5) — продажа на Avito не
-  // уменьшает физический склад, автозагрузка восстанавливает количество; без
-  // поставщика — остаток склада, «нет в наличии» → 0.
+  // Остаток для <Stock>:
+  // • поставщик с ценой + targetStock > 0 → показываем min(targetStock, avitoFeedDefaultStock)
+  // • targetStock = 0 → остаток 0 независимо от наличия поставщика (физический товар кончился)
+  // • без поставщика → остаток из targetStock или сохранённый, минимум 0
   const listingStock = (outOfStock, targetStock, hasSupplier) => {
     if (outOfStock) return 0;
-    if (hasSupplier) return Math.max(avitoFeedDefaultStock, Math.round(Number(targetStock || 0)) || 0);
-    return Math.max(1, Math.round(Number(targetStock || 0)) || 0, Number(listing.stockQuantity || 0) || 0);
+    const ts = Math.max(0, Math.round(Number(targetStock || 0)) || 0);
+    if (hasSupplier) return ts > 0 ? Math.max(avitoFeedDefaultStock, ts) : 0;
+    return Math.max(0, ts, Number(listing.stockQuantity || 0) || 0);
   };
   const withStock = (base, outOfStock, hasSupplier) => {
     const stockQuantity = listingStock(outOfStock, product.targetStock, hasSupplier);
@@ -162,13 +164,13 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}) {
   };
   if (!product.supplier || product.supplier.stopped) {
     // Нет поставщика или поставщик на паузе → обнуляем остаток.
-    const outOfStock = Boolean(product.supplier?.stopped) || listing.outOfStock === true;
+    const outOfStock = Boolean(product.supplier?.stopped) || Number(product.targetStock || 0) <= 0;
     return { listing: withStock(listing, outOfStock, false), outOfStock };
   }
   const hasSupplierPrice = computeAvitoSupplierPriceRub(product.supplier, pricing) > 0;
-  const outOfStock = hasSupplierPrice
-    ? false
-    : (Boolean(product.archived) || Number(product.targetStock || 0) <= 0);
+  // targetStock=0 — физический товар кончился, снимаем независимо от наличия цены поставщика.
+  const outOfStock = Number(product.targetStock || 0) <= 0
+    || (!hasSupplierPrice && Boolean(product.archived));
   if (!rules.autoUpdatePrices) return { listing: withStock(listing, outOfStock, hasSupplierPrice), outOfStock };
   const markupOverride = Number(listing.markupCoefficient) > 0 ? Number(listing.markupCoefficient) : 0;
   const priceRub = resolveAvitoListingPriceRub(product, product.supplier, rules, pricing, markupOverride) || listing.priceRub;

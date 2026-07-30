@@ -279,6 +279,142 @@ app.post("/api/supplier-cart/pm-manual-commit", requireAdmin, async (request, re
   }
 });
 
+app.get("/api/ready-to-ship", requireStaff, async (request, response, next) => {
+  try {
+    const lookbackDays = Math.min(60, Math.max(1, Number(request.query.days || 30) || 30));
+    const limit = cleanLimit(request.query.limit, 500);
+    const now = new Date();
+    const from = new Date(now.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
+    const to = now;
+
+    const [ozonResult, yandexResult, wbResult] = await Promise.allSettled([
+      fetchOzonSupplierCartLines({ from, to, limit: Math.ceil(limit * 0.6), statuses: ["awaiting_packaging", "awaiting_deliver"] }),
+      fetchYandexSupplierCartLines({ from, to, limit: Math.ceil(limit * 0.3), statuses: ["PROCESSING"], substatuses: ["STARTED", "READY_TO_SHIP"] }),
+      fetchWbSupplierCartLines({ limit: Math.ceil(limit * 0.3) }),
+    ]);
+
+    const lines = [
+      ...(ozonResult.status === "fulfilled" ? ozonResult.value : []),
+      ...(yandexResult.status === "fulfilled" ? yandexResult.value : []),
+      ...(wbResult.status === "fulfilled" ? wbResult.value : []),
+    ];
+    const errors = [
+      ozonResult.status === "rejected" ? `Ozon: ${ozonResult.reason?.message || "ошибка"}` : null,
+      yandexResult.status === "rejected" ? `Yandex: ${yandexResult.reason?.message || "ошибка"}` : null,
+      wbResult.status === "rejected" ? `WB: ${wbResult.reason?.message || "ошибка"}` : null,
+    ].filter(Boolean);
+
+    response.json({ ok: true, lines: lines.slice(0, limit), total: lines.length, errors });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// «Нету у поставщика» для заказа из маркетплейса: снузит привязку основного поставщика по offerId.
+app.post("/api/ready-to-ship/missing", requireStaff, async (request, response, next) => {
+  try {
+    const offerId = cleanText(request.body?.offerId);
+    const snoozeDays = Math.min(60, Math.max(1, Number(request.body?.snoozeDays || 7) || 7));
+    const partnerIdHint = cleanText(request.body?.partnerId || "").toLowerCase();
+    if (!offerId) return response.status(400).json({ ok: false, error: "offerId is required.", code: "missing_offer_id" });
+
+    const warehouse = await hydrateSupplierCartWarehouse(await readWarehouse(), [offerId]);
+    const product = findSupplierCartWarehouseProduct(warehouse, { offerId });
+    if (!product) return response.status(404).json({ ok: false, error: "Товар не найден на складе.", code: "product_not_found" });
+
+    const links = product.links || [];
+    const link = (partnerIdHint
+      ? links.find((l) => cleanText(l.partnerId).toLowerCase() === partnerIdHint)
+      : null)
+      || links.find((l) => !l.snoozeUntil || new Date(l.snoozeUntil) <= new Date())
+      || links[0];
+
+    if (!link) return response.status(404).json({ ok: false, error: "Привязка поставщика не найдена.", code: "link_not_found" });
+
+    const result = await applyWarehouseLinkSnooze(product.id, link.id, snoozeDays, { reason: "marketplace_order_missing" });
+    await appendAudit(request, "supplier_cart.marketplace_order_missing", {
+      entityType: "warehouse_product",
+      entityId: product.id,
+      newValue: { offerId, linkId: link.id, partnerId: link.partnerId, supplierName: link.supplierName, snoozeDays, snoozedUntil: result?.snoozedUntil },
+    });
+    response.json({
+      ok: true,
+      offerId,
+      productId: product.id,
+      linkId: link.id,
+      supplierName: link.supplierName || link.partnerId || "",
+      snoozedUntil: result?.snoozedUntil || null,
+      snoozeDays,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Заказать у выбранного поставщика для заказа из маркетплейса (замена поставщика).
+app.post("/api/ready-to-ship/order", requireStaff, async (request, response, next) => {
+  try {
+    const offerId = cleanText(request.body?.offerId);
+    const partnerId = cleanText(request.body?.partnerId);
+    const rowId = cleanText(request.body?.rowId);
+    const quantity = Math.max(1, Math.round(Number(request.body?.quantity || 1) || 1));
+    const marketplace = cleanText(request.body?.marketplace || "ozon").toLowerCase();
+    const orderId = cleanText(request.body?.orderId || "");
+    const accountId = cleanText(request.body?.accountId || "");
+    const accountName = cleanText(request.body?.accountName || "");
+
+    if (!offerId) return response.status(400).json({ ok: false, error: "offerId is required.", code: "missing_offer_id" });
+    if (!partnerId || !rowId) return response.status(400).json({ ok: false, error: "partnerId and rowId are required.", code: "missing_supplier" });
+
+    const { options } = await listSupplierCartSupplierOptions(offerId);
+    const option = pickSupplierCartOption(options, partnerId, rowId);
+    const rejection = supplierCartOptionRejection(option);
+    if (rejection) return response.status(rejection.status).json({ ok: false, error: rejection.error, code: rejection.code });
+
+    const warehouse = await hydrateSupplierCartWarehouse(await readWarehouse(), [offerId]);
+    const product = findSupplierCartWarehouseProduct(warehouse, { offerId, marketplace, accountId });
+    if (!product) return response.status(404).json({ ok: false, error: "Товар не найден на складе.", code: "product_not_found" });
+
+    const cartRow = normalizeSupplierCartPreviewRow({
+      key: `ready-to-ship|${marketplace}|${orderId || Date.now()}|${offerId}`,
+      marketplace,
+      accountId: accountId || marketplace,
+      accountName: accountName || marketplace,
+      orderId: orderId || `mp-${Date.now()}`,
+      offerId,
+      productName: cleanText(product.productName || product.name || offerId),
+      quantity,
+      warehouseProductId: product.id,
+      groupKey: warehouseProductPageGroupKey(product),
+      groupOfferId: product.offerId,
+      partnerId: option.partnerId,
+      supplierName: option.supplierName,
+      offerRowId: option.rowId,
+      price: option.price,
+      originalPrice: option.originalPrice,
+      priceCurrency: option.priceCurrency,
+      trustFactor: option.trustFactor,
+      orderCutoffTime: option.orderCutoffTime,
+      reseller: option.reseller,
+      supplierScore: option.score || 0,
+      available: true,
+      ready: true,
+    });
+
+    const result = await insertSupplierCartRowsIntoPriceMaster([cartRow], request);
+    response.json({
+      ok: true,
+      inserted: result.inserted.length,
+      docIds: result.docIds,
+      pickingCreated: result.pickingCreated?.length || 0,
+      supplierName: option.supplierName,
+      row: result.inserted[0] || null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/supplier-cart/history", requireAdmin, async (_request, response, next) => {
   try {
     const state = await readSupplierCartState();

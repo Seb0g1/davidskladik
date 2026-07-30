@@ -5,13 +5,16 @@
 const ozonCatAttribCache = new Map();
 const ozonCatAttribCacheTtlMs = 30 * 60 * 1000;
 
+let ozonMarkingClearProgress = { running: false, phase: null, total: null, processed: 0, updated: 0, errors: 0, errorSamples: [], startedAt: null, completedAt: null };
+
 async function ozonGetCategoryAttributes(account, descCatId, descTypeId) {
+  if (!Number(descCatId) || !Number(descTypeId)) return [];
   const key = `${account?.id || "ozon"}:${descCatId}:${descTypeId}`;
   const cached = ozonCatAttribCache.get(key);
   if (cached && Date.now() - cached.at < ozonCatAttribCacheTtlMs) return cached.attrs;
   const data = await ozonRequest("/v1/description-category/attribute", {
     description_category_id: Number(descCatId),
-    description_type_id: Number(descTypeId || 0),
+    type_id: Number(descTypeId),
     language: "DEFAULT",
   }, account);
   const attrs = data.result || [];
@@ -25,7 +28,7 @@ async function ozonGetAttributeDictValues(account, descCatId, descTypeId, attrib
   for (let page = 0; page < 20; page += 1) {
     const data = await ozonRequest("/v1/description-category/attribute/values", {
       description_category_id: Number(descCatId),
-      description_type_id: Number(descTypeId || 0),
+      type_id: Number(descTypeId || 0),
       attribute_id: Number(attributeId),
       language: "DEFAULT",
       last_value_id: lastValueId,
@@ -78,68 +81,94 @@ function ozonAttrNameMatches(name, patterns) {
 // ─── Снятие "Нужен код маркировки" ────────────────────────────────────────────
 
 async function ozonClearMarkingRequirement(account, { dryRun = true, limit = 50000 } = {}) {
-  const products = (await ozonGetAllProductsInfo(account)).slice(0, limit);
-  if (!products.length) return { ok: true, dryRun, total: 0, updated: 0, reason: "no_products" };
+  ozonMarkingClearProgress = { running: true, phase: "loading_products", total: null, processed: 0, updated: 0, errors: 0, errorSamples: [], startedAt: new Date().toISOString(), completedAt: null };
 
-  // Per-category: find attribute + "Нет" dict value
-  const categoryMeta = new Map();
-  const uniqueCategories = [...new Map(products.map((p) => [`${p.descCatId}:${p.typeId}`, p])).values()];
-
-  for (const { descCatId, typeId } of uniqueCategories) {
-    if (!descCatId) continue;
-    const catKey = `${descCatId}:${typeId}`;
-    const attrs = await ozonGetCategoryAttributes(account, descCatId, typeId);
-    const markAttr = attrs.find((a) => ozonAttrNameMatches(a.name, [
-      "маркировк", "kiz", "киз", "честный", "cheznyi", "нуженкодмаркировки",
-    ]));
-    if (!markAttr) { categoryMeta.set(catKey, null); continue; }
-
-    let noValue = null;
-    if (Number(markAttr.dictionary_id) > 0) {
-      const dictValues = await ozonGetAttributeDictValues(account, descCatId, typeId, markAttr.id);
-      const noEntry = dictValues.find((v) =>
-        ["нет", "false", "0", "ненужен", "безмаркировки", "netrebyet", "нетребует"].includes(
-          cleanText(v.value || "").toLowerCase().replace(/[\s.,]+/g, ""),
-        ),
-      );
-      if (noEntry) noValue = { value: cleanText(noEntry.value), dictionary_value_id: Number(noEntry.id) };
-    } else {
-      noValue = { value: "Нет" };
+  try {
+    const products = (await ozonGetAllProductsInfo(account)).slice(0, limit);
+    if (!products.length) {
+      ozonMarkingClearProgress = { ...ozonMarkingClearProgress, running: false, total: 0, completedAt: new Date().toISOString() };
+      return { ok: true, dryRun, total: 0, updated: 0, reason: "no_products" };
     }
-    categoryMeta.set(catKey, { attributeId: Number(markAttr.id), attrName: cleanText(markAttr.name), noValue });
-  }
+    ozonMarkingClearProgress.total = products.length;
+    ozonMarkingClearProgress.phase = "loading_attrs";
 
-  const updateItems = [];
-  for (const { offerId, descCatId, typeId } of products) {
-    const meta = categoryMeta.get(`${descCatId}:${typeId}`);
-    if (!meta?.noValue) continue;
-    const attrValue = meta.noValue.dictionary_value_id
-      ? { value: meta.noValue.value, dictionary_value_id: meta.noValue.dictionary_value_id }
-      : { value: meta.noValue.value };
-    updateItems.push({ offer_id: offerId, attributes: [{ id: meta.attributeId, values: [attrValue] }] });
-  }
+    // Per-category: find attribute + "Нет" dict value
+    const categoryMeta = new Map();
+    const uniqueCategories = [...new Map(products.map((p) => [`${p.descCatId}:${p.typeId}`, p])).values()];
 
-  const categoriesSummary = [...categoryMeta.entries()].map(([k, v]) => ({ key: k, attr: v?.attrName || null, found: Boolean(v?.noValue) }));
+    for (const { descCatId, typeId } of uniqueCategories) {
+      if (!descCatId) continue;
+      const catKey = `${descCatId}:${typeId}`;
+      try {
+        const attrs = await ozonGetCategoryAttributes(account, descCatId, typeId);
+        const markAttr = attrs.find((a) => ozonAttrNameMatches(a.name, [
+          "маркировк", "kiz", "киз", "честный", "cheznyi", "нуженкодмаркировки",
+        ]));
+        if (!markAttr) { categoryMeta.set(catKey, null); continue; }
 
-  if (!updateItems.length) {
-    return { ok: true, dryRun, total: products.length, updated: 0, reason: "no_matching_attr", categories: categoriesSummary };
-  }
-  if (dryRun) {
-    return { ok: true, dryRun, total: products.length, candidates: updateItems.length, sample: updateItems.slice(0, 5), categories: categoriesSummary };
-  }
-
-  let updated = 0;
-  const errors = [];
-  for (const chunk of chunkArray(updateItems, 100)) {
-    try {
-      await ozonRequest("/v1/product/attributes/update", { items: chunk }, account);
-      updated += chunk.length;
-    } catch (error) {
-      errors.push({ count: chunk.length, error: cleanText(error?.message || String(error)).slice(0, 200) });
+        let noValue = null;
+        if (Number(markAttr.dictionary_id) > 0) {
+          const dictValues = await ozonGetAttributeDictValues(account, descCatId, typeId, markAttr.id);
+          const noEntry = dictValues.find((v) =>
+            ["нет", "false", "0", "ненужен", "безмаркировки", "netrebyet", "нетребует"].includes(
+              cleanText(v.value || "").toLowerCase().replace(/[\s.,]+/g, ""),
+            ),
+          );
+          if (noEntry) noValue = { value: cleanText(noEntry.value), dictionary_value_id: Number(noEntry.id) };
+        } else if (cleanText(markAttr.type).toLowerCase() === "boolean") {
+          noValue = { value: "false" };
+        } else {
+          noValue = { value: "Нет" };
+        }
+        categoryMeta.set(catKey, { attributeId: Number(markAttr.id), attrName: cleanText(markAttr.name), noValue });
+      } catch { categoryMeta.set(catKey, null); }
     }
+
+    const updateItems = [];
+    for (const { offerId, descCatId, typeId } of products) {
+      const meta = categoryMeta.get(`${descCatId}:${typeId}`);
+      if (!meta?.noValue) continue;
+      const attrValue = meta.noValue.dictionary_value_id
+        ? { value: meta.noValue.value, dictionary_value_id: meta.noValue.dictionary_value_id }
+        : { value: meta.noValue.value };
+      updateItems.push({ offer_id: offerId, attributes: [{ id: meta.attributeId, values: [attrValue] }] });
+    }
+
+    const categoriesSummary = [...categoryMeta.entries()].map(([k, v]) => ({ key: k, attr: v?.attrName || null, found: Boolean(v?.noValue) }));
+
+    if (!updateItems.length) {
+      ozonMarkingClearProgress = { ...ozonMarkingClearProgress, running: false, phase: "done", completedAt: new Date().toISOString() };
+      return { ok: true, dryRun, total: products.length, updated: 0, reason: "no_matching_attr", categories: categoriesSummary };
+    }
+    if (dryRun) {
+      ozonMarkingClearProgress = { ...ozonMarkingClearProgress, running: false, phase: "dry_run", completedAt: new Date().toISOString() };
+      return { ok: true, dryRun, total: products.length, candidates: updateItems.length, sample: updateItems.slice(0, 5), categories: categoriesSummary };
+    }
+
+    ozonMarkingClearProgress.phase = "sending";
+    let updated = 0;
+    let errCount = 0;
+    const errorSamples = [];
+    for (const chunk of chunkArray(updateItems, 100)) {
+      try {
+        await ozonRequest("/v1/product/attributes/update", { items: chunk }, account);
+        updated += chunk.length;
+      } catch (error) {
+        errCount += chunk.length;
+        const msg = cleanText(error?.message || String(error)).slice(0, 200);
+        if (errorSamples.length < 3) errorSamples.push(msg);
+      }
+      ozonMarkingClearProgress.processed += chunk.length;
+      ozonMarkingClearProgress.updated = updated;
+      ozonMarkingClearProgress.errors = errCount;
+      ozonMarkingClearProgress.errorSamples = errorSamples;
+    }
+    logger.info("ozon clear marking requirement", { updated, total: products.length, errors: errCount, errorSamples });
+    return { ok: errCount === 0, dryRun, total: products.length, updated, errors: errCount, errorSamples, categories: categoriesSummary };
+  } finally {
+    ozonMarkingClearProgress.running = false;
+    ozonMarkingClearProgress.completedAt = new Date().toISOString();
   }
-  logger.info("ozon clear marking requirement", { updated, total: products.length, errors: errors.length });
-  return { ok: errors.length === 0, dryRun, total: products.length, updated, errors: errors.slice(0, 10), categories: categoriesSummary };
 }
 
 // ─── Заполнение ТН ВЭД на Ozon ───────────────────────────────────────────────
@@ -148,28 +177,8 @@ async function ozonBackfillTnved(account, tnvedCode, { dryRun = true, limit = 50
   const code = cleanText(tnvedCode);
   if (!code) return { ok: false, error: "tnved_code_required" };
 
-  const products = (await ozonGetAllProductsInfo(account)).slice(0, limit);
-  if (!products.length) return { ok: true, dryRun, total: 0, updated: 0, reason: "no_products" };
-
-  const categoryMeta = new Map();
-  const uniqueCategories = [...new Map(products.map((p) => [`${p.descCatId}:${p.typeId}`, p])).values()];
-
-  for (const { descCatId, typeId } of uniqueCategories) {
-    if (!descCatId) continue;
-    const catKey = `${descCatId}:${typeId}`;
-    const attrs = await ozonGetCategoryAttributes(account, descCatId, typeId);
-    const tnvedAttr = attrs.find((a) => ozonAttrNameMatches(a.name, [
-      "тнвэд", "tnved", "тнвэд", "кодтн", "tarifcode", "тарифный",
-    ]));
-    categoryMeta.set(catKey, tnvedAttr ? { attributeId: Number(tnvedAttr.id), attrName: cleanText(tnvedAttr.name) } : null);
-  }
-
-  const updateItems = [];
-  for (const { offerId, descCatId, typeId } of products) {
-    const meta = categoryMeta.get(`${descCatId}:${typeId}`);
-    if (!meta) continue;
-    updateItems.push({ offer_id: offerId, attributes: [{ id: meta.attributeId, values: [{ value: code }] }] });
-  }
+  // Делегируем в ozonApplyTnvedByCategory: dict-lookup + TN VED + маркировка в одном вызове.
+  return ozonApplyTnvedByCategory(account, [], { dryRun, fallbackCode: code });
 
   const categoriesSummary = [...categoryMeta.entries()].map(([k, v]) => ({ key: k, attr: v?.attrName || null, found: Boolean(v) }));
 
@@ -334,7 +343,7 @@ async function ozonGetCategoryBreakdown(account) {
 // и избегать сообщений "Заменили некорректное значение".
 async function ozonFetchTnvedDictMap(account, uniqueCategories, attrId) {
   const map = new Map();
-  for (const { descCatId, typeId } of uniqueCategories.slice(0, 20)) {
+  for (const { descCatId, typeId } of uniqueCategories) {
     if (!descCatId) continue;
     try {
       const dictValues = await ozonGetAttributeDictValues(account, descCatId, typeId || 0, attrId);
@@ -346,7 +355,7 @@ async function ozonFetchTnvedDictMap(account, uniqueCategories, attrId) {
         }
       }
     } catch { /* категория может не иметь этот атрибут */ }
-    if (map.size >= 500) break;
+    if (map.size >= 1000) break;
   }
   return map;
 }
@@ -354,7 +363,12 @@ async function ozonFetchTnvedDictMap(account, uniqueCategories, attrId) {
 // Применяет назначения { descCatId, tnvedCode } ко всем товарам Ozon (группировка по descCatId).
 async function ozonApplyTnvedByCategory(account, assignments, { dryRun = false, fallbackCode = "" } = {}) {
   // Ozon официально подтвердил: атрибут «Код ТН ВЭД ЕАЭС» имеет id=22232 для всех категорий.
+  // Атрибут «Нужен код маркировки» (Честный знак) — id=23536, тип Boolean.
+  // Отправляем оба в одном вызове: TN VED + marking=false.
+  // Это вдвое снижает расход дневной квоты /v1/product/attributes/update
+  // и исключает промежуточное состояние «TN VED выставлен, маркировка = нужна».
   const TNVED_ATTR_ID = 22232;
+  const MARKING_ATTR_ID = 23536;
 
   // assignMap: "descCatId:typeId" → tnvedCode (typeId=0 означает «все типы в категории»)
   const assignMap = new Map(
@@ -379,22 +393,28 @@ async function ozonApplyTnvedByCategory(account, assignments, { dryRun = false, 
     // "3304990000 - Прочие косметические средства..." вместо голого кода.
     const uniqueCategories = [...new Map(products.map((p) => [`${p.descCatId}:${p.typeId}`, p])).values()];
     const tnvedDictMap = await ozonFetchTnvedDictMap(account, uniqueCategories, TNVED_ATTR_ID);
-    logger.info("ozon tnved dict map built", { entries: tnvedDictMap.size, categoriesSampled: Math.min(uniqueCategories.length, 20) });
+    logger.info("ozon tnved dict map built", { entries: tnvedDictMap.size, categoriesSampled: uniqueCategories.length });
 
     ozonTnvedApplyProgress.phase = "sending";
 
     // Build update items — code priority: descCatId:typeId → descCatId:0 → fallbackCode
+    // Пропускаем товар если нет записи в словаре Ozon: отправка голого кода вызывает ошибку
+    // «Неверное значение атрибута» — атрибут является справочником.
     const updateItems = [];
+    let skippedNoDictEntry = 0;
     for (const { offerId, descCatId, typeId } of products) {
       const code = assignMap.get(`${descCatId}:${typeId}`) || assignMap.get(`${descCatId}:0`) || cleanText(fallbackCode);
       if (!code) continue;
-      // Используем полный текст из словаря Ozon (если нашли), иначе только числовой код
       const numericCode = code.match(/^(\d{10})/)?.[1] || code;
       const dictEntry = tnvedDictMap.get(numericCode);
-      const values = dictEntry
-        ? [{ value: dictEntry.value, dictionary_value_id: dictEntry.dictionary_value_id }]
-        : [{ value: code }];
-      updateItems.push({ offer_id: offerId, attributes: [{ id: TNVED_ATTR_ID, values }] });
+      if (!dictEntry) { skippedNoDictEntry += 1; continue; }
+      updateItems.push({ offer_id: offerId, attributes: [
+        { id: TNVED_ATTR_ID, values: [{ value: dictEntry.value, dictionary_value_id: dictEntry.dictionary_value_id }] },
+        { id: MARKING_ATTR_ID, values: [{ value: "false" }] },
+      ] });
+    }
+    if (skippedNoDictEntry > 0) {
+      logger.warn("ozon tnved apply: skipped products with no dict entry", { skipped: skippedNoDictEntry });
     }
 
     const categoryStats = [...assignMap.entries()].map(([key, tnvedCode]) => ({
@@ -406,7 +426,7 @@ async function ozonApplyTnvedByCategory(account, assignments, { dryRun = false, 
       ozonTnvedApplyProgress.running = false;
       ozonTnvedApplyProgress.completedAt = new Date().toISOString();
       ozonTnvedApplyProgress.updated = updateItems.length;
-      return { ok: true, dryRun, total: products.length, candidates: updateItems.length, categoryStats, sample: updateItems.slice(0, 5) };
+      return { ok: true, dryRun, total: products.length, candidates: updateItems.length, skippedNoDictEntry, categoryStats, sample: updateItems.slice(0, 5) };
     }
 
     let updated = 0;
@@ -428,8 +448,8 @@ async function ozonApplyTnvedByCategory(account, assignments, { dryRun = false, 
       ozonTnvedApplyProgress.errorSamples = errorSamples;
     }
 
-    logger.info("ozon tnved apply by category", { updated, total: products.length, errors });
-    return { ok: errors === 0, dryRun, total: products.length, updated, errors, errorSamples, categoryStats };
+    logger.info("ozon tnved apply by category", { updated, total: products.length, errors, skippedNoDictEntry });
+    return { ok: errors === 0, dryRun, total: products.length, updated, errors, skippedNoDictEntry, errorSamples, categoryStats };
   } finally {
     ozonTnvedApplyProgress.running = false;
     ozonTnvedApplyProgress.completedAt = new Date().toISOString();
@@ -448,14 +468,29 @@ function resolveOzonAccountOr400(request, response) {
   return account;
 }
 
+app.get("/api/ozon/attributes/clear-marking/progress", async (_request, response) => {
+  response.json({ ...ozonMarkingClearProgress });
+});
+
 app.post("/api/ozon/attributes/clear-marking", requireAdmin, async (request, response, next) => {
   try {
     const account = resolveOzonAccountOr400(request, response);
     if (!account) return;
     const dryRun = request.body?.dryRun !== false;
-    const result = await ozonClearMarkingRequirement(account, { dryRun });
-    if (!dryRun) await appendAudit(request, "ozon.attributes.clear_marking", { newValue: { updated: result.updated, total: result.total } });
-    response.json(result);
+    if (dryRun) {
+      const result = await ozonClearMarkingRequirement(account, { dryRun: true });
+      return response.json(result);
+    }
+    if (ozonMarkingClearProgress.running) {
+      return response.status(409).json({ error: "Уже выполняется", progress: ozonMarkingClearProgress });
+    }
+    void appendAudit(request, "ozon.attributes.clear_marking", { newValue: { async: true } });
+    response.status(202).json({ ok: true, async: true, message: "Снятие маркировки запущено в фоне" });
+    setImmediate(() => {
+      ozonClearMarkingRequirement(account, { dryRun: false }).catch((error) => {
+        logger.error("ozon clear marking background failed", { detail: error?.message || String(error) });
+      });
+    });
   } catch (error) {
     next(error);
   }

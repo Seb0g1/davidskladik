@@ -4,7 +4,7 @@ import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, Clock3, Database,
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
-import { SupplierAltPicker } from "../components/SupplierAltPicker";
+import { SupplierAltPicker, type SupplierAltOption } from "../components/SupplierAltPicker";
 import { SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { SupplierCartPanel } from "./OperationsPage";
 import { compactDate, errorMessage } from "../lib/common";
@@ -96,9 +96,64 @@ const rollbackCount = (summary: z.infer<typeof RollbackSummarySchema> | undefine
     + countArray(pm.docIds);
 };
 
+const ReadyToShipLineSchema = z.object({
+  key: z.coerce.string().default(""),
+  marketplace: z.coerce.string().default(""),
+  accountId: z.coerce.string().optional().default(""),
+  accountName: z.coerce.string().optional().default(""),
+  orderId: z.coerce.string().optional().default(""),
+  postingNumber: z.coerce.string().optional().default(""),
+  offerId: z.coerce.string().default(""),
+  productName: z.coerce.string().optional().default(""),
+  quantity: z.number().optional().default(1),
+  orderedAt: z.coerce.string().optional().nullable(),
+  status: z.coerce.string().optional().default(""),
+  isExpress: z.boolean().optional().default(false),
+}).passthrough();
+
+const ReadyToShipResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  lines: z.array(ReadyToShipLineSchema).optional().default([]),
+  total: z.number().optional().default(0),
+  errors: z.array(z.string()).optional().default([]),
+}).passthrough();
+
+type ReadyToShipLine = z.infer<typeof ReadyToShipLineSchema>;
+
+const MARKETPLACE_LABELS: Record<string, string> = { ozon: "Ozon", yandex: "Yandex", wb: "WB", avito: "Avito" };
+const marketplaceBadge = (mp: string) => MARKETPLACE_LABELS[mp.toLowerCase()] || mp.toUpperCase();
+
+const OZON_STATUS_LABELS: Record<string, string> = {
+  awaiting_packaging: "ожидает упаковки",
+  awaiting_deliver: "ожидает отгрузки",
+  delivering: "в доставке",
+};
+const statusLabel = (mp: string, st: string) => {
+  if (mp === "ozon") return OZON_STATUS_LABELS[st] || st;
+  if (mp === "wb") return "новый";
+  if (mp === "yandex") return "в обработке";
+  return st;
+};
+
+const MissingResultSchema = z.object({
+  ok: z.boolean().optional(),
+  supplierName: z.coerce.string().optional().default(""),
+  snoozedUntil: z.coerce.string().optional().nullable(),
+  snoozeDays: z.number().optional().default(7),
+}).passthrough();
+
+const MpOrderResultSchema = z.object({
+  ok: z.boolean().optional(),
+  inserted: z.number().optional().default(0),
+  docIds: z.array(z.unknown()).optional().default([]),
+  pickingCreated: z.number().optional().default(0),
+  supplierName: z.coerce.string().optional().default(""),
+}).passthrough();
+
 function ReadyToShipPanel() {
   const [q, setQ] = useState("");
   const [replaceKey, setReplaceKey] = useState<string | null>(null);
+  const [mpReplaceKey, setMpReplaceKey] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
   const sessionQuery = useQuery({
@@ -108,10 +163,41 @@ function ReadyToShipPanel() {
   });
   const isAdmin = sessionQuery.data?.role === "admin";
 
+  const marketplaceQuery = useQuery({
+    queryKey: ["ready-to-ship"],
+    queryFn: () => fetchJson("/api/ready-to-ship?days=30&limit=500", ReadyToShipResponseSchema),
+    refetchInterval: 30_000,
+  });
+
   const listQuery = useQuery({
     queryKey: ["supplier-picking-list", "picked", "ready-to-ship"],
     queryFn: () => fetchJson("/api/supplier-picking-list?status=picked&limit=500", SupplierPickingListSchema),
-    refetchInterval: 15_000,
+    refetchInterval: 30_000,
+  });
+
+  const mpMissingMutation = useMutation({
+    mutationFn: (line: ReadyToShipLine) =>
+      fetchJson("/api/ready-to-ship/missing", MissingResultSchema, mutationBody({ offerId: line.offerId })),
+    onSuccess: () => void marketplaceQuery.refetch(),
+  });
+
+  const mpOrderMutation = useMutation({
+    mutationFn: ({ line, option }: { line: ReadyToShipLine; option: SupplierAltOption }) =>
+      fetchJson("/api/ready-to-ship/order", MpOrderResultSchema, mutationBody({
+        offerId: line.offerId,
+        partnerId: option.partnerId,
+        rowId: option.rowId,
+        quantity: line.quantity,
+        marketplace: line.marketplace,
+        orderId: line.orderId || line.postingNumber,
+        accountId: line.accountId,
+        accountName: line.accountName,
+      })),
+    onSuccess: () => {
+      setMpReplaceKey(null);
+      void marketplaceQuery.refetch();
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+    },
   });
 
   const revertMutation = useMutation({
@@ -144,6 +230,18 @@ function ReadyToShipPanel() {
     },
   });
 
+  const mpLines: ReadyToShipLine[] = marketplaceQuery.data?.lines || [];
+  const mpErrors: string[] = marketplaceQuery.data?.errors || [];
+
+  const filteredMpLines = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return needle
+      ? mpLines.filter((line) =>
+          [line.productName, line.offerId, line.orderId, line.postingNumber, line.accountName]
+            .join(" ").toLowerCase().includes(needle))
+      : mpLines;
+  }, [q, mpLines]);
+
   const rows = listQuery.data?.rows || [];
   const filteredRows = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -154,100 +252,195 @@ function ReadyToShipPanel() {
       : rows;
   }, [q, rows]);
 
+  const isRefreshing = marketplaceQuery.isFetching || listQuery.isFetching;
+
+  const refreshAll = () => {
+    void marketplaceQuery.refetch();
+    void listQuery.refetch();
+  };
+
   return (
     <section className="table-panel supplier-cart-panel">
       <div className="section-title">
         <div>
           <span>Готовы к отгрузке</span>
-          <h3>Позиции со статусом «собрано» — {rows.length} шт.</h3>
+          <h3>Маркетплейсы: {mpLines.length} · Собрано: {rows.length}</h3>
         </div>
-        <button className="secondary-action" type="button" onClick={() => listQuery.refetch()} disabled={listQuery.isFetching}>
-          {listQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+        <button className="secondary-action" type="button" onClick={refreshAll} disabled={isRefreshing}>
+          {isRefreshing ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
         </button>
       </div>
       <div className="control-grid compact-controls">
         <label>Поиск
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU, товар, заказ, поставщик" />
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="SKU, товар, заказ, кабинет" />
         </label>
       </div>
-      {!isAdmin ? (
-        <div className="soft-empty compact">Замена поставщика и возврат к сборке доступны только администратору.</div>
-      ) : null}
-      {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
-      {revertMutation.error ? <div className="inline-error">{errorMessage(revertMutation.error)}</div> : null}
-      {returnMutation.error ? <div className="inline-error">{errorMessage(returnMutation.error)}</div> : null}
-      {returnMutation.data ? <div className="success-strip">Товар отмечен как «вернули из ПВЗ». При следующем заказе этого SKU PM-заявка не создаётся — берётся из пула возвратов.</div> : null}
-      {revertAndReplaceMutation.error ? <div className="inline-error">Замена поставщика: {errorMessage(revertAndReplaceMutation.error)}</div> : null}
-      {revertAndReplaceMutation.data ? (
-        <div className="success-strip">
-          Перезаказано у «{revertAndReplaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (doc {revertAndReplaceMutation.data.docIds?.join(", ") || "-"}).
-        </div>
-      ) : null}
+
+      {/* Live marketplace orders */}
+      <div className="section-title compact-title" style={{ marginTop: "12px" }}>
+        <div><span>Маркетплейсы</span><h3>Заказы ожидающие отгрузки — {mpLines.length} шт.</h3></div>
+      </div>
+      {mpErrors.map((err) => <div key={err} className="inline-error">{err}</div>)}
+      {marketplaceQuery.error ? <div className="inline-error">{errorMessage(marketplaceQuery.error)}</div> : null}
       <div className="supplier-cart-list">
-        {listQuery.isLoading ? <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю...</div> : null}
-        {filteredRows.map((row: PickingRow) => (
-          <article className="supplier-cart-row ready" key={row.key}>
-            <span className="checkline">
-              <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
-            </span>
-            <strong>{row.productName || row.offerId}</strong>
-            <div className="meta-grid">
-              <span>Кол-во: {row.quantity}</span>
-              <span>Поставщик: {row.supplierName || "-"}</span>
-              <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
-              <span>Собрал: {row.pickedBy || "-"} · {compactDate(row.pickedAt)}</span>
-              <span>Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
-              {row.wbSupplyId ? (
-                <span>
-                  WB поставка: <strong>{row.wbSupplyId}</strong>
-                  {" · "}
-                  <a href={`/api/wb/supplies/${row.wbSupplyId}/barcode?type=png`} target="_blank" rel="noreferrer" className="link-plain">Стикер</a>
-                </span>
+        {marketplaceQuery.isLoading ? <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю заказы с маркетплейсов...</div> : null}
+        {filteredMpLines.map((line) => {
+          const isMissingPending = mpMissingMutation.isPending && (mpMissingMutation.variables as ReadyToShipLine)?.key === line.key;
+          const missingSuccess = mpMissingMutation.isSuccess && (mpMissingMutation.variables as ReadyToShipLine)?.key === line.key;
+          const isOrderPending = mpOrderMutation.isPending && (mpOrderMutation.variables as { line: ReadyToShipLine })?.line?.key === line.key;
+          return (
+            <article className="supplier-cart-row" key={line.key}>
+              <span className="checkline">
+                <span className={`market-badge market-${line.marketplace}`}>{marketplaceBadge(line.marketplace)}</span>
+                {line.isExpress ? <span className="pill warn">Экспресс</span> : null}
+                <span>{line.orderId || line.postingNumber || "-"} · {line.offerId}</span>
+              </span>
+              <strong>{line.productName || line.offerId}</strong>
+              <div className="meta-grid">
+                <span>Кол-во: {line.quantity}</span>
+                <span>Кабинет: {line.accountName || line.accountId || "-"}</span>
+                <span>Статус: {statusLabel(line.marketplace, line.status)}</span>
+                {line.orderedAt ? <span>Заказ: {compactDate(line.orderedAt)}</span> : null}
+                {line.postingNumber ? <span>Posting: {line.postingNumber}</span> : null}
+              </div>
+              {missingSuccess && mpMissingMutation.data ? (
+                <div className="success-strip compact">
+                  Поставщик «{mpMissingMutation.data.supplierName || "?"}» отправлен в инактив до{" "}
+                  {mpMissingMutation.data.snoozedUntil ? compactDate(mpMissingMutation.data.snoozedUntil) : `${mpMissingMutation.data.snoozeDays} дн.`}
+                </div>
               ) : null}
-            </div>
-            {isAdmin ? (
+              {mpMissingMutation.isError && (mpMissingMutation.variables as ReadyToShipLine)?.key === line.key ? (
+                <div className="inline-error">{errorMessage(mpMissingMutation.error)}</div>
+              ) : null}
+              {mpOrderMutation.isError && (mpOrderMutation.variables as { line: ReadyToShipLine })?.line?.key === line.key ? (
+                <div className="inline-error">{errorMessage(mpOrderMutation.error)}</div>
+              ) : null}
+              {mpOrderMutation.isSuccess && (mpOrderMutation.variables as { line: ReadyToShipLine })?.line?.key === line.key ? (
+                <div className="success-strip compact">
+                  Заказано у «{mpOrderMutation.data?.supplierName || "поставщика"}» — doc {(mpOrderMutation.data?.docIds || []).join(", ") || "-"}
+                </div>
+              ) : null}
               <div className="supplier-cart-actions">
                 <button
                   className="secondary-action"
                   type="button"
-                  disabled={returnMutation.isPending || revertMutation.isPending || revertAndReplaceMutation.isPending}
-                  onClick={() => returnMutation.mutate(row.key)}
-                  title="Товар вернулся из ПВЗ — следующий заказ этого SKU не пойдёт в PM, а возьмётся из этого возврата"
+                  disabled={isMissingPending || isOrderPending}
+                  onClick={() => mpMissingMutation.mutate(line)}
+                  title="Снузить привязку основного поставщика для этого SKU"
                 >
-                  <PackageOpen size={14} /> Вернули из ПВЗ
+                  {isMissingPending ? <Loader2 className="spin" size={14} /> : <Package size={14} />} Нету у поставщика
                 </button>
                 <button
                   className="secondary-action"
                   type="button"
-                  disabled={revertAndReplaceMutation.isPending || revertMutation.isPending}
-                  onClick={() => setReplaceKey(replaceKey === row.key ? null : row.key)}
+                  disabled={isOrderPending || isMissingPending}
+                  onClick={() => setMpReplaceKey(mpReplaceKey === line.key ? null : line.key)}
                 >
-                  <Repeat2 size={14} /> Заменить поставщика и заказать в PM
-                </button>
-                <button
-                  className="secondary-action"
-                  type="button"
-                  disabled={revertMutation.isPending || revertAndReplaceMutation.isPending}
-                  onClick={() => revertMutation.mutate(row.key)}
-                >
-                  <RotateCcw size={14} /> Вернуть к сборке
+                  <Repeat2 size={14} /> Заменить поставщика
                 </button>
               </div>
-            ) : null}
-            {replaceKey === row.key ? (
-              <SupplierAltPicker
-                offerId={row.offerId}
-                currentPartnerId={row.partnerId}
-                busy={revertAndReplaceMutation.isPending}
-                actionLabel="Вернуть к сборке и заказать у него"
-                onPick={(option) => revertAndReplaceMutation.mutate({ key: row.key, partnerId: option.partnerId, rowId: option.rowId })}
-                onClose={() => setReplaceKey(null)}
-              />
-            ) : null}
-          </article>
-        ))}
-        {!filteredRows.length && !listQuery.isLoading ? <div className="soft-empty">Позиций со статусом «собрано» нет.</div> : null}
+              {mpReplaceKey === line.key ? (
+                <SupplierAltPicker
+                  offerId={line.offerId}
+                  busy={isOrderPending}
+                  actionLabel="Заказать у этого поставщика"
+                  onPick={(option: SupplierAltOption) => mpOrderMutation.mutate({ line, option })}
+                  onClose={() => setMpReplaceKey(null)}
+                />
+              ) : null}
+            </article>
+          );
+        })}
+        {!filteredMpLines.length && !marketplaceQuery.isLoading ? (
+          <div className="soft-empty">Заказов, ожидающих отгрузки, нет.</div>
+        ) : null}
       </div>
+
+      {/* Internal picked items */}
+      {(rows.length > 0 || listQuery.isLoading) ? (
+        <>
+          <div className="section-title compact-title" style={{ marginTop: "20px" }}>
+            <div><span>Собрано</span><h3>Позиции со статусом «собрано» — {rows.length} шт.</h3></div>
+          </div>
+          {!isAdmin ? (
+            <div className="soft-empty compact">Замена поставщика и возврат к сборке доступны только администратору.</div>
+          ) : null}
+          {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
+          {revertMutation.error ? <div className="inline-error">{errorMessage(revertMutation.error)}</div> : null}
+          {returnMutation.error ? <div className="inline-error">{errorMessage(returnMutation.error)}</div> : null}
+          {returnMutation.data ? <div className="success-strip">Товар отмечен как «вернули из ПВЗ». При следующем заказе этого SKU PM-заявка не создаётся — берётся из пула возвратов.</div> : null}
+          {revertAndReplaceMutation.error ? <div className="inline-error">Замена поставщика: {errorMessage(revertAndReplaceMutation.error)}</div> : null}
+          {revertAndReplaceMutation.data ? (
+            <div className="success-strip">
+              Перезаказано у «{revertAndReplaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (doc {revertAndReplaceMutation.data.docIds?.join(", ") || "-"}).
+            </div>
+          ) : null}
+          <div className="supplier-cart-list">
+            {listQuery.isLoading ? <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю...</div> : null}
+            {filteredRows.map((row: PickingRow) => (
+              <article className="supplier-cart-row ready" key={row.key}>
+                <span className="checkline">
+                  <span>{row.marketplace.toUpperCase()} · {row.orderId || row.postingNumber || "-"} · {row.offerId}</span>
+                </span>
+                <strong>{row.productName || row.offerId}</strong>
+                <div className="meta-grid">
+                  <span>Кол-во: {row.quantity}</span>
+                  <span>Поставщик: {row.supplierName || "-"}</span>
+                  <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
+                  <span>Собрал: {row.pickedBy || "-"} · {compactDate(row.pickedAt)}</span>
+                  <span>Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
+                  {row.wbSupplyId ? (
+                    <span>
+                      WB поставка: <strong>{row.wbSupplyId}</strong>
+                      {" · "}
+                      <a href={`/api/wb/supplies/${row.wbSupplyId}/barcode?type=png`} target="_blank" rel="noreferrer" className="link-plain">Стикер</a>
+                    </span>
+                  ) : null}
+                </div>
+                {isAdmin ? (
+                  <div className="supplier-cart-actions">
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      disabled={returnMutation.isPending || revertMutation.isPending || revertAndReplaceMutation.isPending}
+                      onClick={() => returnMutation.mutate(row.key)}
+                      title="Товар вернулся из ПВЗ — следующий заказ этого SKU не пойдёт в PM, а возьмётся из этого возврата"
+                    >
+                      <PackageOpen size={14} /> Вернули из ПВЗ
+                    </button>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      disabled={revertAndReplaceMutation.isPending || revertMutation.isPending}
+                      onClick={() => setReplaceKey(replaceKey === row.key ? null : row.key)}
+                    >
+                      <Repeat2 size={14} /> Заменить поставщика и заказать в PM
+                    </button>
+                    <button
+                      className="secondary-action"
+                      type="button"
+                      disabled={revertMutation.isPending || revertAndReplaceMutation.isPending}
+                      onClick={() => revertMutation.mutate(row.key)}
+                    >
+                      <RotateCcw size={14} /> Вернуть к сборке
+                    </button>
+                  </div>
+                ) : null}
+                {replaceKey === row.key ? (
+                  <SupplierAltPicker
+                    offerId={row.offerId}
+                    currentPartnerId={row.partnerId}
+                    busy={revertAndReplaceMutation.isPending}
+                    actionLabel="Вернуть к сборке и заказать у него"
+                    onPick={(option) => revertAndReplaceMutation.mutate({ key: row.key, partnerId: option.partnerId, rowId: option.rowId })}
+                    onClose={() => setReplaceKey(null)}
+                  />
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </>
+      ) : null}
     </section>
   );
 }

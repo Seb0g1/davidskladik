@@ -16,7 +16,7 @@ async function runOzonYandexImportSend(payload = {}, auditRequest = { session: {
 
   const warehouse = await readWarehouse();
   const products = (warehouse.products || [])
-    .filter((product) => product.marketplace === "ozon")
+    .filter((product) => product.marketplace === "ozon" && product.target === "ozon")
     .slice(0, limit);
   const initialRows = products.map((product) => buildOzonYandexImportCandidate(product));
   const candidateOfferIds = initialRows

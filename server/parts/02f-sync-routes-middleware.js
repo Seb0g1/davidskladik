@@ -201,6 +201,7 @@ function startBackgroundSchedulers() {
   }
   discoverOfferDocsActiveColumn().catch((error) => logger.warn("OfferDocs schema warmup failed", { detail: error?.message || String(error) }));
   scheduleDailySync();
+  scheduleOzonMarkingClearNightly();
   schedulePriceRetryProcessing(30_000);
   scheduleOzonUnarchiveQueueAuto(ozonUnarchiveQueueAutoInitialDelaySeconds * 1000);
   if (yandexUnarchiveQueueAutoEnabled) {

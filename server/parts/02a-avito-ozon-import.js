@@ -122,6 +122,7 @@ async function loadAvitoPricingContext() {
 // правила наценки (Настройки → Цены). null = нет пригодной цены поставщика.
 function avitoSupplierPriceBreakdown(supplier, { usdRate, appSettings } = {}, productMarkup = 0) {
   if (!supplier || typeof supplier !== "object") return null;
+  if (supplierUsesStockOnlyPricing(null, supplier)) return null;
   const purchaseRub = warehouseSupplierPurchaseRubPrice(supplier, usdRate);
   if (!Number.isFinite(purchaseRub) || purchaseRub <= 0 || purchaseRub >= Number.MAX_SAFE_INTEGER) return null;
   const rate = Number(usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
@@ -156,17 +157,26 @@ function computeAvitoSupplierPriceRub(supplier, pricing = {}, productMarkup = 0)
   return breakdown ? breakdown.priceRub : 0;
 }
 
-// Цена листинга — ТОЛЬКО от цены поставщика (закупка × коэффициент), фолбэка
-// на цену Ozon (targetPrice) нет: без поставщика возвращается 0 — при импорте
-// товар отсеется (no_price), а в фиде останется последняя сохранённая цена.
+// Цена листинга. Приоритет:
+// 1. Цена поставщика (закупка × коэффициент) — если поставщик даёт цену.
+// 2. Фолбэк на targetPrice (цена склада/Ozon) — если поставщика нет или он
+//    stock-only («наш склад»). Это позволяет публиковать на Avito товары без
+//    привязки к поставщику с ценой, выставленной вручную или пришедшей с Ozon.
 // Поверх — локальные правила страницы Avito (priceCoefficient/priceRules,
-// по умолчанию ×1). Личный коэффициент (productMarkup) даёт конечную цену —
-// локальные правила страницы к ней не применяются.
+// по умолчанию ×1). Личный коэффициент (productMarkup) побеждает любые правила.
 function resolveAvitoListingPriceRub(product = {}, supplier, rules = {}, pricing = {}, productMarkup = 0) {
   const supplierPriceRub = computeAvitoSupplierPriceRub(supplier, pricing, productMarkup);
-  if (!(supplierPriceRub > 0)) return 0;
-  if (productMarkup > 0) return Math.round(supplierPriceRub);
-  return Math.round(supplierPriceRub * avitoPriceCoefficientFor(supplierPriceRub, rules));
+  if (supplierPriceRub > 0) {
+    if (productMarkup > 0) return Math.round(supplierPriceRub);
+    return Math.round(supplierPriceRub * avitoPriceCoefficientFor(supplierPriceRub, rules));
+  }
+  // Нет цены поставщика → берём цену склада (targetPrice).
+  const targetPrice = Number(product.targetPrice || product.target_price || 0);
+  if (targetPrice > 0) {
+    if (productMarkup > 0) return Math.round(targetPrice * productMarkup);
+    return Math.round(targetPrice * avitoPriceCoefficientFor(targetPrice, rules));
+  }
+  return 0;
 }
 
 // Возвращает { ok, reasons, listing } — причины пропуска нужны для предпросмотра.
@@ -267,7 +277,7 @@ async function collectAvitoImportCandidates(rulesOverride = null) {
   }
   const rules = normalizeAvitoImportRules(rulesOverride || (await readAvitoImportRules()));
   const products = await prisma.warehouseProduct.findMany({
-    where: { marketplace: "ozon", links: { some: {} } },
+    where: { marketplace: "ozon", target: "ozon", links: { some: {} } },
     select: {
       id: true,
       offerId: true,

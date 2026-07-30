@@ -7231,10 +7231,15 @@ test("Avito price comes from linked supplier purchase price, not Ozon listing pr
   // 60 USD × 100 ₽ × 2 (правило avito от $50) = 12000 — не targetPrice и не цена Ozon.
   assert.equal(result.listing.priceRub, 12000);
 
-  // Без поставщика фолбэка на цену Ozon (targetPrice) НЕТ — товар отсеивается.
+  // Без поставщика — фолбэк на targetPrice (9999 ₽ × priceCoefficient=1 = 9999 ₽).
+  // Avito-правила из настроек страницы применяются, глобальный appSettings.avito не участвует.
   const noSupplier = evaluateAvitoImportCandidate(product, rules, { ...pricing, supplierByProductId: new Map() });
-  assert.equal(noSupplier.ok, false);
-  assert.ok(noSupplier.reasons.includes("no_price"));
+  assert.equal(noSupplier.ok, true);
+  assert.equal(noSupplier.listing.priceRub, 9999);
+  // Без поставщика И targetPrice=0 — товар отсеивается.
+  const noPrice = evaluateAvitoImportCandidate({ ...product, targetPrice: 0 }, rules, { ...pricing, supplierByProductId: new Map() });
+  assert.equal(noPrice.ok, false);
+  assert.ok(noPrice.reasons.includes("no_price"));
 
   // Первый проход импорта (skipPriceChecks) пропускает ценовые проверки.
   const cheapPass = evaluateAvitoImportCandidate(product, rules, { ...pricing, supplierByProductId: new Map(), skipPriceChecks: true });
@@ -7290,16 +7295,19 @@ test("Avito feed restores <Stock> to default while supplier gives a price (пр�
     adId: "oz-1", sourceProductId: "p1", title: "Jacomo Aura for women 75 мл", priceRub: 4592,
     imageUrls: ["https://img.example/1.jpg"],
   });
-  // Поставщик даёт цену → остаток восстанавливается до дефолта (5), даже если
-  // targetStock в БД уже 0 после продажи.
-  const live = { id: "p1", targetPrice: 0, targetStock: 0, archived: false, supplier: { price: 35, priceCurrency: "USD" } };
+  // Поставщик даёт цену + склад > 0 → остаток восстанавливается до дефолта (5).
+  const live = { id: "p1", targetPrice: 0, targetStock: 3, archived: false, supplier: { price: 35, priceCurrency: "USD" } };
   const withSupplier = applyAvitoLiveState(listing, live, rules, pricing);
   assert.equal(withSupplier.outOfStock, false);
   assert.equal(withSupplier.listing.stockQuantity, 5);
   // Тег <Stock> попадает в XML объявления.
   assert.ok(buildAvitoAdXml(withSupplier.listing, rules.feedDefaults).includes("<Stock>5</Stock>"));
-  // Нет поставщика и сохранён outOfStock → остаток 0.
-  const gone = applyAvitoLiveState({ ...listing, outOfStock: true }, { ...live, supplier: null }, rules, pricing);
+  // targetStock=0 → товар закончился физически, выходим в 0 даже с ценой поставщика.
+  const soldOut = applyAvitoLiveState(listing, { ...live, targetStock: 0 }, rules, pricing);
+  assert.equal(soldOut.outOfStock, true);
+  assert.equal(soldOut.listing.stockQuantity, 0);
+  // Нет поставщика → остаток 0.
+  const gone = applyAvitoLiveState({ ...listing, outOfStock: true }, { ...live, supplier: null, targetStock: 0 }, rules, pricing);
   assert.equal(gone.outOfStock, true);
   assert.equal(gone.listing.stockQuantity, 0);
   // stockQuantity переживает нормализацию файла листингов.

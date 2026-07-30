@@ -264,4 +264,78 @@ app.post("/api/yandex-cleanup/delete", requireAdmin, async (request, response, n
   }
 });
 
+// Удаляет с Яндекс.Маркета offer-id, принадлежащие вторичным кабинетам Ozon
+// (target != "ozon"). Находит артикулы в складе по target, затем вызывает
+// /v2/businesses/.../offer-mappings/delete для каждого магазина ЯМ.
+app.post("/api/yandex-cleanup/delete-secondary-ozon", requireAdmin, async (request, response, next) => {
+  try {
+    const dryRun = request.body?.dryRun !== false;
+    if (!dryRun && request.body?.confirmed !== true) {
+      return response.status(400).json({ error: "Передайте confirmed:true для удаления." });
+    }
 
+    const prisma = getPrisma();
+    if (!prisma || !shouldUsePostgresStorage()) {
+      return response.status(503).json({ error: "Postgres недоступен." });
+    }
+
+    const allOzonAccounts = getOzonAccounts();
+    const secondaryTargets = allOzonAccounts.map((a) => a.id).filter((id) => id && id !== "ozon");
+    if (!secondaryTargets.length) {
+      return response.json({ ok: true, message: "Вторичных кабинетов Ozon нет.", products: 0, deleted: 0 });
+    }
+
+    const rows = await prisma.warehouseProduct.findMany({
+      where: { marketplace: "ozon", target: { in: secondaryTargets } },
+      select: { id: true, offerId: true, target: true },
+    });
+
+    const offerIds = [...new Set(rows.map((r) => cleanText(r.offerId)).filter(Boolean))];
+    if (!offerIds.length) {
+      return response.json({ ok: true, message: "Товаров вторичных кабинетов в складе нет.", products: 0, deleted: 0 });
+    }
+
+    const shops = uniqueYandexShopsByBusiness();
+    if (!shops.length) {
+      return response.status(400).json({ error: "Yandex Market не настроен." });
+    }
+
+    if (dryRun) {
+      return response.json({
+        ok: true,
+        dryRun: true,
+        secondaryTargets,
+        products: rows.length,
+        uniqueOfferIds: offerIds.length,
+        sampleOfferIds: offerIds.slice(0, 20),
+        shops: shops.map((s) => s.name || s.id),
+      });
+    }
+
+    const results = [];
+    for (const shop of shops) {
+      const shopResults = await deleteYandexOfferIds(shop, offerIds);
+      results.push(...shopResults.map((r) => ({ ...r, shop: shop.name || shop.id })));
+    }
+
+    const deleted = results.filter((r) => r.ok).length;
+    const failedRows = results.filter((r) => !r.ok);
+
+    await appendAudit(request, "yandex.cleanup.delete_secondary_ozon", {
+      entityType: "yandex_cleanup",
+      entityId: "secondary_ozon_accounts",
+      newValue: { secondaryTargets, products: rows.length, deleted, failed: failedRows.length },
+    });
+
+    response.json({
+      ok: failedRows.length === 0,
+      secondaryTargets,
+      products: rows.length,
+      deleted,
+      failed: failedRows.length,
+      failedOfferIds: failedRows.map((r) => r.offerId).slice(0, 100),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
