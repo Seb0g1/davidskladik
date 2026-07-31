@@ -138,9 +138,14 @@ async function loadAvitoLiveProductStates(listings) {
 //
 // Авто-архив Ozon — статус маркетплейса, не физическое отсутствие товара.
 // Логика outOfStock:
-//  • supplier есть → hasSupplierPrice: true = в наличии, false = archived||stock<=0
-//  • supplier нет  → доверяем outOfStock из файла (рефреш каждые 30 мин делает
-//    живой запрос в PriceMaster и сохраняет актуальное значение)
+//  • supplier есть → outOfStock = !hasSupplierPrice (PM-цена = реальная доступность
+//    для Avito: здесь дропшипинг, не FBS; targetStock отражает остаток Ozon-склада,
+//    а не доступность у поставщика)
+//  • supplier нет, targetStock > 0 → в наличии (физический остаток подтверждён)
+//  • supplier нет, targetStock = 0 → доверяем сохранённому outOfStock из JSON
+//    (рефреш фида делает живой запрос в PM и обновляет значение каждые 30 мин;
+//    XML-билдер этого PM-запроса не делает — не тратим 26 запросов на каждый GET)
+//  • supplier stopped → outOfStock = true
 function applyAvitoLiveState(listing, product, rules, pricing = {}) {
   if (!listing.sourceProductId) return { listing, outOfStock: false };
   if (!product) return { listing: { ...listing, stockQuantity: 0 }, outOfStock: true };
@@ -149,28 +154,36 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}) {
     listing = { ...listing, imageUrls: product.avitoImages };
   }
   // Остаток для <Stock>:
-  // • поставщик с ценой + targetStock > 0 → показываем min(targetStock, avitoFeedDefaultStock)
-  // • targetStock = 0 → остаток 0 независимо от наличия поставщика (физический товар кончился)
+  // • поставщик с ценой → показываем max(targetStock, avitoFeedDefaultStock) — минимум дефолт
+  //   (Avito дропшипинг: PM даёт цену → можно заказать даже при нулевом FBS-остатке)
   // • без поставщика → остаток из targetStock или сохранённый, минимум 0
   const listingStock = (outOfStock, targetStock, hasSupplier) => {
     if (outOfStock) return 0;
     const ts = Math.max(0, Math.round(Number(targetStock || 0)) || 0);
-    if (hasSupplier) return ts > 0 ? Math.max(avitoFeedDefaultStock, ts) : 0;
+    if (hasSupplier) return Math.max(avitoFeedDefaultStock, ts);
     return Math.max(0, ts, Number(listing.stockQuantity || 0) || 0);
   };
   const withStock = (base, outOfStock, hasSupplier) => {
     const stockQuantity = listingStock(outOfStock, product.targetStock, hasSupplier);
     return stockQuantity === base.stockQuantity ? base : { ...base, stockQuantity };
   };
-  if (!product.supplier || product.supplier.stopped) {
-    // Нет поставщика или поставщик на паузе → обнуляем остаток.
-    const outOfStock = Boolean(product.supplier?.stopped) || Number(product.targetStock || 0) <= 0;
+  if (product.supplier?.stopped) {
+    return { listing: withStock(listing, true, false), outOfStock: true };
+  }
+  if (!product.supplier) {
+    if (Number(product.targetStock || 0) > 0) {
+      // Есть физический FBS-остаток — точно в наличии.
+      return { listing: withStock(listing, false, false), outOfStock: false };
+    }
+    // targetStock=0, нет supplier в DB: рефреш фида делает живой PM-запрос и
+    // сохраняет актуальный outOfStock; XML-билдер доверяет этому значению.
+    const outOfStock = listing.outOfStock === true;
     return { listing: withStock(listing, outOfStock, false), outOfStock };
   }
   const hasSupplierPrice = computeAvitoSupplierPriceRub(product.supplier, pricing) > 0;
-  // targetStock=0 — физический товар кончился, снимаем независимо от наличия цены поставщика.
-  const outOfStock = Number(product.targetStock || 0) <= 0
-    || (!hasSupplierPrice && Boolean(product.archived));
+  // PM-цена = доступность для Avito (дропшипинг): если поставщик даёт цену —
+  // товар в наличии даже при targetStock=0 (FBS-остаток Ozon не ограничивает Avito).
+  const outOfStock = !hasSupplierPrice && Boolean(product.archived);
   if (!rules.autoUpdatePrices) return { listing: withStock(listing, outOfStock, hasSupplierPrice), outOfStock };
   const markupOverride = Number(listing.markupCoefficient) > 0 ? Number(listing.markupCoefficient) : 0;
   const priceRub = resolveAvitoListingPriceRub(product, product.supplier, rules, pricing, markupOverride) || listing.priceRub;

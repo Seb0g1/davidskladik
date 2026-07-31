@@ -7302,10 +7302,10 @@ test("Avito feed restores <Stock> to default while supplier gives a price (пр�
   assert.equal(withSupplier.listing.stockQuantity, 5);
   // Тег <Stock> попадает в XML объявления.
   assert.ok(buildAvitoAdXml(withSupplier.listing, rules.feedDefaults).includes("<Stock>5</Stock>"));
-  // targetStock=0 → товар закончился физически, выходим в 0 даже с ценой поставщика.
-  const soldOut = applyAvitoLiveState(listing, { ...live, targetStock: 0 }, rules, pricing);
-  assert.equal(soldOut.outOfStock, true);
-  assert.equal(soldOut.listing.stockQuantity, 0);
+  // targetStock=0 + PM-цена есть → на Avito в наличии (дропшипинг: PM-доступность важнее FBS-остатка Ozon).
+  const supplierZeroFbs = applyAvitoLiveState(listing, { ...live, targetStock: 0 }, rules, pricing);
+  assert.equal(supplierZeroFbs.outOfStock, false);
+  assert.equal(supplierZeroFbs.listing.stockQuantity, 5);
   // Нет поставщика → остаток 0.
   const gone = applyAvitoLiveState({ ...listing, outOfStock: true }, { ...live, supplier: null, targetStock: 0 }, rules, pricing);
   assert.equal(gone.outOfStock, true);

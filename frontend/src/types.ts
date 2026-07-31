@@ -994,6 +994,17 @@ export const ConsignmentPmSearchSchema = z.object({
   }).passthrough()).optional().default([]),
 }).passthrough();
 
+export const ConsignmentPmSyncSchema = z.object({
+  ok: z.boolean().optional(),
+  created: z.number().optional().default(0),
+  skipped: z.number().optional().default(0),
+  skippedBefore: z.number().optional().default(0),
+  itemsCreated: z.number().optional().default(0),
+  itemsMatched: z.number().optional().default(0),
+  total: z.number().optional().default(0),
+}).passthrough();
+export type ConsignmentPmSync = z.infer<typeof ConsignmentPmSyncSchema>;
+
 export const SupplierAlternativeOptionSchema = z.object({
   partnerId: z.coerce.string().optional().default(""),
   supplierName: z.coerce.string().optional().default(""),

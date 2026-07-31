@@ -821,3 +821,142 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
     next(error);
   }
 });
+
+// Синхронизирует продажи из PriceMaster (SaleRows+SaleDocs+Products) → ConsignmentOperation.
+// Идемпотентно: sourceKey = "pm_sale_{RowID}" — повторный вызов не создаёт дубликатов.
+// ВАЖНО: для каждого ConsignmentItem импортируются только продажи PM, у которых DocDate
+// >= item.createdAt. Продажи, которые были в PM ДО добавления товара в реализацию, игнорируются.
+app.post("/api/consignment/pm-sync", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const prisma = getPrisma();
+
+    // 1. Получаем продажи из PriceMaster MySQL
+    const [saleRows] = await pool.query(`
+      SELECT
+        sr.RowID        AS rowId,
+        sr.ProductID    AS productId,
+        sr.Quantity     AS quantity,
+        sr.Price        AS price,
+        sd.DocDate      AS docDate,
+        sd.Comment      AS docComment,
+        p.ProductName   AS productName,
+        p.SalePrice     AS purchasePrice
+      FROM SaleRows sr
+      JOIN SaleDocs  sd ON sr.DocID    = sd.DocID
+      JOIN Products  p  ON sr.ProductID = p.ProductID
+      WHERE sr.ProductID > 0
+      ORDER BY sd.DocDate DESC
+      LIMIT 10000
+    `);
+
+    if (!saleRows.length) {
+      return response.json({ ok: true, created: 0, skipped: 0, skippedBefore: 0, itemsCreated: 0, itemsMatched: 0, total: 0 });
+    }
+
+    // 2. Собираем уникальные продукты из этих продаж
+    const productMap = new Map();
+    for (const row of saleRows) {
+      if (!productMap.has(row.productId)) {
+        productMap.set(row.productId, { productId: row.productId, productName: row.productName, purchasePrice: row.purchasePrice });
+      }
+    }
+
+    // 3. Находим или создаём ConsignmentItem для каждого PM-продукта.
+    // Запоминаем createdAt — он используется как нижняя граница: продажи PM
+    // раньше этой даты не импортируются (товар ещё не был в реализации).
+    const itemByProductId = new Map(); // productId → { id, createdAt }
+    let itemsCreated = 0;
+    let itemsMatched = 0;
+
+    for (const [productId, product] of productMap) {
+      const article = `pm:${productId}`;
+      let existing = await prisma.consignmentItem.findFirst({ where: { article } });
+      if (!existing) {
+        // Попробуем найти вручную добавленный товар по имени (без article pm:...)
+        existing = await prisma.consignmentItem.findFirst({
+          where: {
+            archived: false,
+            article: { not: { startsWith: "pm:" } },
+            name: { contains: cleanText(product.productName || "").slice(0, 40), mode: "insensitive" },
+          },
+        });
+      }
+      if (existing) {
+        itemByProductId.set(productId, { id: existing.id, createdAt: existing.createdAt });
+        itemsMatched++;
+        // Проставляем article чтобы следующий синк находил сразу по нему
+        if (existing.article !== article) {
+          await prisma.consignmentItem.update({ where: { id: existing.id }, data: { article } });
+        }
+      } else {
+        const now = new Date();
+        const created = await prisma.consignmentItem.create({
+          data: {
+            name: cleanText(product.productName || `PM Product ${productId}`),
+            article,
+            purchasePrice: normalizeFinanceMoney(product.purchasePrice, 0),
+            salePrice: 0,
+            quantity: 0,
+            note: "Создано автосинком из PriceMaster",
+          },
+        });
+        // createdAt = now → никакие прошлые продажи не попадут
+        itemByProductId.set(productId, { id: created.id, createdAt: created.createdAt || now });
+        itemsCreated++;
+      }
+    }
+
+    // 4. Импортируем операции продаж — только те, что произошли ПОСЛЕ добавления
+    // товара в реализацию (docDate >= item.createdAt).
+    let created = 0;
+    let skipped = 0;
+    let skippedBefore = 0;
+
+    for (const row of saleRows) {
+      const item = itemByProductId.get(row.productId);
+      if (!item) { skipped++; continue; }
+
+      const docDate = row.docDate ? new Date(row.docDate) : new Date();
+
+      // Пропускаем продажи, которые были до добавления товара в реализацию
+      if (docDate < item.createdAt) {
+        skippedBefore++;
+        continue;
+      }
+
+      const sourceKey = `pm_sale_${row.rowId}`;
+
+      try {
+        const existingOp = await prisma.consignmentOperation.findUnique({ where: { sourceKey } });
+        if (existingOp) { skipped++; continue; }
+
+        await prisma.consignmentOperation.create({
+          data: {
+            sourceKey,
+            itemId: item.id,
+            itemName: cleanText(row.productName || ""),
+            type: "sale",
+            quantity: Math.max(1, Math.round(Number(row.quantity || 1))),
+            unitPurchase: normalizeFinanceMoney(row.purchasePrice, 0),
+            unitSale: normalizeFinanceMoney(row.price, 0),
+            balanceDelta: 0,
+            sponsorDelta: 0,
+            myDelta: 0,
+            note: cleanText(row.docComment || "") || null,
+            createdBy: "pm-sync",
+            createdAt: docDate,
+          },
+        });
+        created++;
+      } catch (error) {
+        if (error?.code === "P2002") { skipped++; continue; }
+        throw error;
+      }
+    }
+
+    response.json({ ok: true, created, skipped, skippedBefore, itemsCreated, itemsMatched, total: saleRows.length });
+  } catch (error) {
+    next(error);
+  }
+});

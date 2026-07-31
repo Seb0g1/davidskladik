@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 "use strict";
+require("dotenv").config();
 
 const fs = require("node:fs");
 const path = require("node:path");

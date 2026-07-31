@@ -11,6 +11,8 @@ import {
   ConsignmentOperation,
   ConsignmentOperationsSchema,
   ConsignmentPmSearchSchema,
+  ConsignmentPmSync,
+  ConsignmentPmSyncSchema,
   ConsignmentSummarySchema,
   ConsignmentSuppliersSchema,
 } from "../types";
@@ -164,6 +166,7 @@ export function ConsignmentPage() {
   const [opSort, setOpSort] = useState("date_desc");
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
+  const [pmSyncResult, setPmSyncResult] = useState<ConsignmentPmSync | null>(null);
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["consignment"] });
 
@@ -316,6 +319,14 @@ export function ConsignmentPage() {
     })),
     onSuccess: () => {
       setTopupForm({ amount: "", note: "" });
+      invalidate();
+    },
+  });
+
+  const pmSync = useMutation({
+    mutationFn: () => fetchJson("/api/consignment/pm-sync", ConsignmentPmSyncSchema, mutationBody({})),
+    onSuccess: (data) => {
+      setPmSyncResult(data);
       invalidate();
     },
   });
@@ -486,12 +497,38 @@ export function ConsignmentPage() {
             <button className="secondary-action" type="button" onClick={openOperations}>
               <History size={16} /> Операции ({operations.data?.operations?.length ?? "…"})
             </button>
+            <button
+              className="secondary-action"
+              type="button"
+              disabled={pmSync.isPending}
+              onClick={() => { setPmSyncResult(null); pmSync.mutate(); }}
+              title="Импортировать продажи из PriceMaster автоматически"
+            >
+              {pmSync.isPending ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
+              {pmSync.isPending ? "Синк PM…" : "Синк PM"}
+            </button>
             <button className="secondary-action" type="button" onClick={invalidate}>
               <RefreshCw size={16} /> Обновить
             </button>
           </div>
         )}
       />
+      {pmSyncResult && (
+        <div className="inline-success" style={{ marginBottom: 12 }}>
+          Синк завершён: добавлено <strong>{pmSyncResult.created}</strong> продаж
+          {(pmSyncResult.skippedBefore ?? 0) > 0 ? `, пропущено (до добавления в реализацию) ${pmSyncResult.skippedBefore}` : ""}
+          {pmSyncResult.skipped ? `, дублей ${pmSyncResult.skipped}` : ""}
+          {pmSyncResult.itemsCreated ? `, создано товаров ${pmSyncResult.itemsCreated}` : ""}
+          {pmSyncResult.itemsMatched ? `, сопоставлено товаров ${pmSyncResult.itemsMatched}` : ""}
+          {" "}(всего в PM: {pmSyncResult.total}).
+          <button className="icon-action" type="button" style={{ marginLeft: 8 }} onClick={() => setPmSyncResult(null)}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+      {pmSync.error && (
+        <div className="inline-error" style={{ marginBottom: 12 }}>{errorMessage(pmSync.error)}</div>
+      )}
 
       <section className="dashboard-metrics">
         <Stat label="Капитализация (по закупке)" value={money(s?.capitalization)} tone="accent" icon={<Boxes size={18} />} />
