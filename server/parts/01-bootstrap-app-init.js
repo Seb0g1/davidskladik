@@ -104,7 +104,7 @@ const {
 const sessionCookieName = "pm_session";
 const sessionTtlMs = 1000 * 60 * 60 * 12;
 const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || process.env.DEFAULT_AUTO_SYNC_MINUTES || 30);
-const autoSyncInitialDelaySeconds = Math.max(30, Number(process.env.AUTO_SYNC_INITIAL_DELAY_SECONDS || 600) || 600);
+const autoSyncInitialDelaySeconds = Math.max(30, Number(process.env.AUTO_SYNC_INITIAL_DELAY_SECONDS || 120) || 120);
 const warehouseWarmOnStartup = process.env.WAREHOUSE_WARM_ON_STARTUP === "true";
 const warehouseFullMemoryLoadEnabled = process.env.WAREHOUSE_FULL_MEMORY_LOAD_ENABLED === "true";
 const backgroundJobsEnabled = process.env.BACKGROUND_JOBS_ENABLED === "true";
@@ -185,7 +185,7 @@ const linkedReconcilerMaxProductsPerTick = Math.max(
   linkedReconcilerBatchSize,
   Math.min(5000, Number(process.env.LINKED_RECONCILER_MAX_PRODUCTS_PER_TICK || 300) || 300),
 );
-const linkedReconcilerInitialDelaySeconds = Math.max(30, Number(process.env.LINKED_RECONCILER_INITIAL_DELAY_SECONDS || 420) || 420);
+const linkedReconcilerInitialDelaySeconds = Math.max(30, Number(process.env.LINKED_RECONCILER_INITIAL_DELAY_SECONDS || 120) || 120);
 const linkedReconcilerDeferRetryMs = Math.max(60_000, Number(process.env.LINKED_RECONCILER_DEFER_RETRY_MS || 300000) || 300000);
 const linkedReconcilerSendTargetStock = process.env.LINKED_RECONCILER_SEND_TARGET_STOCK !== "false";
 // Daily full marketplace import controls (the heavy buildWarehouseView({sync:true}) path).
@@ -215,11 +215,11 @@ const ozonUnarchiveDailyLimit = configuredOzonUnarchiveDailyLimit > 0
 const ozonUnarchiveQueueBatchLimit = Math.max(1, Math.min(1000, Number(process.env.OZON_UNARCHIVE_QUEUE_BATCH_LIMIT || 100) || 100));
 const ozonUnarchiveQueueAutoEnabled = process.env.OZON_UNARCHIVE_QUEUE_AUTO_ENABLED !== "false";
 const ozonUnarchiveQueueAutoIntervalMinutes = Math.max(5, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INTERVAL_MINUTES || 30) || 30);
-const ozonUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 180) || 180);
+const ozonUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.OZON_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 45) || 45);
 const yandexUnarchiveQueueAutoEnabled = process.env.YANDEX_UNARCHIVE_QUEUE_AUTO_ENABLED !== "false";
 const yandexUnarchiveQueueBatchLimit = Math.max(1, Math.min(500, Number(process.env.YANDEX_UNARCHIVE_QUEUE_BATCH_LIMIT || 200) || 200));
 const yandexUnarchiveQueueAutoIntervalMinutes = Math.max(1, Number(process.env.YANDEX_UNARCHIVE_QUEUE_AUTO_INTERVAL_MINUTES || 15) || 15);
-const yandexUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.YANDEX_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 120) || 120);
+const yandexUnarchiveQueueAutoInitialDelaySeconds = Math.max(30, Number(process.env.YANDEX_UNARCHIVE_QUEUE_AUTO_INITIAL_DELAY_SECONDS || 45) || 45);
 const yandexUnarchiveMaxAttempts = Math.max(1, Number(process.env.YANDEX_UNARCHIVE_MAX_ATTEMPTS || 8) || 8);
 const yandexUnarchiveRetryMinutes = [1, 5, 15, 60, 240, 1440];
 const autoPricePushHeartbeatLogMs = Math.max(15000, Number(process.env.AUTO_PRICE_PUSH_HEARTBEAT_MS || 30000) || 30000);
