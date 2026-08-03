@@ -419,7 +419,8 @@ app.post("/api/ozon-yandex-import/sync-names", requireAdmin, async (request, res
 app.post("/api/ozon-yandex-import/auto-run", requireAdmin, async (request, response, next) => {
   try {
     const limit = Math.max(1, Math.min(5000, Number(request.body?.limit || 0) || ozonYandexAutoImportPerRunLimit));
-    const result = await runOzonYandexAutoImport({ limit, source: "manual" });
+    const onlyLinked = request.body?.onlyLinked === true;
+    const result = await runOzonYandexAutoImport({ limit, source: "manual", onlyLinked });
     response.json(result);
   } catch (error) {
     next(error);

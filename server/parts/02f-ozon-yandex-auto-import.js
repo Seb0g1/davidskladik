@@ -72,7 +72,7 @@ async function exportOzonProductsToYandex(products = [], shops = null, { reason 
   };
 }
 
-async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit, source = "auto" } = {}) {
+async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit, source = "auto", onlyLinked = false } = {}) {
   if (ozonYandexAutoImportRunning) return { status: "already_running" };
   const prisma = getPrisma();
   if (!prisma || !shouldUsePostgresStorage()) return { status: "postgres_disabled" };
@@ -90,11 +90,15 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
     const selected = [];
     let skippedBlocked = 0;
     let skippedExisting = 0;
+    let skippedUnlinked = 0;
     let scanned = 0;
     let cursorId = null;
+    const baseWhere = onlyLinked
+      ? { marketplace: "ozon", archived: false, links: { some: {} } }
+      : { marketplace: "ozon", archived: false };
     while (selected.length < limit) {
       const page = await prisma.warehouseProduct.findMany({
-        where: { marketplace: "ozon", archived: false },
+        where: { ...baseWhere, ...(cursorId ? {} : {}) },
         include: { links: true },
         orderBy: { id: "asc" },
         take: 1000,
@@ -108,6 +112,10 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
         if (!offerKey) continue;
         if (existingOfferIds.has(offerKey)) {
           skippedExisting += 1;
+          continue;
+        }
+        if (onlyLinked && !row.links?.length) {
+          skippedUnlinked += 1;
           continue;
         }
         const product = productFromPostgres(row);
@@ -125,7 +133,7 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
 
     if (!selected.length) {
       logger.info("ozon yandex auto import: nothing to import", { source, scanned, skippedExisting, skippedBlocked });
-      return { status: "ok", sent: 0, scanned, skippedExisting, skippedBlocked };
+      return { status: "ok", sent: 0, scanned, skippedExisting, skippedBlocked, skippedUnlinked };
     }
 
     const exportResult = await exportOzonProductsToYandex(selected, shops, { reason: "ozon_yandex_auto_import" });
@@ -135,6 +143,7 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
     const failed = exportResult.failed;
     logger.info("ozon_yandex_auto_import_complete", {
       source,
+      onlyLinked,
       scanned,
       selected: selected.length,
       sent: sentOfferIds.size,
@@ -143,6 +152,7 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
       stockSent: Number(stockStage.sent || 0),
       skippedExisting,
       skippedBlocked,
+      skippedUnlinked,
       elapsedMs: Date.now() - startedAt,
     });
     return {
@@ -155,6 +165,7 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
       stockSent: Number(stockStage.sent || 0),
       skippedExisting,
       skippedBlocked,
+      skippedUnlinked,
     };
   } catch (error) {
     logger.warn("ozon yandex auto import failed", { detail: error?.message || String(error) });
