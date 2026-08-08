@@ -91,6 +91,26 @@ function normalizeSupplierCartPreviewRow(input = {}) {
 }
 
 function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartnerIds = new Set(), now = new Date()) {
+  const isSorinSupplier = (row) => /сорин/i.test(cleanText(row.partnerName || row.supplierName || ""));
+
+  // Sorin override: if Сорин has stock available and a price, pick him first.
+  // Requires available=true so out-of-stock items go to other suppliers.
+  for (const [linkId, rows] of matches.entries()) {
+    for (const row of rows || []) {
+      if (!isSorinSupplier(row)) continue;
+      if (!row?.available) continue;
+      if (Number(row.price || 0) <= 0) continue;
+      const partnerId = cleanText(row.partnerId).toLowerCase();
+      if (blockedPartnerIds.has(partnerId)) continue;
+      return {
+        selected: { ...row, linkId },
+        stockOnlyFallback: false,
+        blockedAvailable: 0,
+        cutoffPassedAvailable: 0,
+      };
+    }
+  }
+
   const candidates = [];
   let blockedAvailable = 0;
   let cutoffPassedAvailable = 0;
@@ -114,7 +134,6 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
     }
   }
 
-  const isSorinSupplier = (row) => /сорин/i.test(cleanText(row.partnerName || row.supplierName || ""));
   candidates.sort((left, right) =>
     (isSorinSupplier(left) ? 0 : 1) - (isSorinSupplier(right) ? 0 : 1)
     || supplierCartOrderScore(left, now) - supplierCartOrderScore(right, now)
@@ -199,7 +218,16 @@ function normalizeOzonSupplierCartPostings(data = {}, account = {}) {
       if (line.offerId) lines.push(line);
     }
   }
-  return lines;
+  // Sum quantities for duplicate keys (same posting + same SKU)
+  const byKey = new Map();
+  for (const line of lines) {
+    if (byKey.has(line.key)) {
+      byKey.get(line.key).quantity += line.quantity;
+    } else {
+      byKey.set(line.key, { ...line });
+    }
+  }
+  return Array.from(byKey.values());
 }
 
 function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
@@ -233,7 +261,16 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
       if (line.offerId) lines.push(line);
     }
   }
-  return lines;
+  // Sum quantities for duplicate keys (same order + same SKU)
+  const byKey = new Map();
+  for (const line of lines) {
+    if (byKey.has(line.key)) {
+      byKey.get(line.key).quantity += line.quantity;
+    } else {
+      byKey.set(line.key, { ...line });
+    }
+  }
+  return Array.from(byKey.values());
 }
 
 async function fetchOzonSupplierCartLines({ from, to, limit, statuses } = {}) {
@@ -324,6 +361,7 @@ function normalizeWbSupplierCartOrders(data = {}, account = {}) {
     });
     if (line.offerId) lines.push(line);
   }
+  // WB orders each have a unique order ID, so no dedup needed — but group by article+status for safety
   return lines;
 }
 
@@ -381,13 +419,24 @@ function findSupplierCartWarehouseProduct(warehouse = {}, line = {}) {
   if (!candidates.length) return null;
   const marketplace = cleanText(line.marketplace).toLowerCase();
   const target = cleanText(line.accountId || line.campaignId).toLowerCase();
-  return candidates.find((product) => {
-    const normalized = normalizeWarehouseProduct(product);
-    if (normalized.marketplace !== marketplace) return false;
-    if (!target) return true;
-    if (marketplace === "ozon") return matchesOzonTarget(product.target, target) || cleanText(product.target).toLowerCase() === target;
-    return matchesYandexTarget(product.target, target) || cleanText(product.target).toLowerCase() === target;
-  }) || candidates.find((product) => normalizeWarehouseProduct(product).marketplace === marketplace) || candidates[0];
+  // Exact target match first — prevents primary "ozon" account products from being selected
+  // when the same offerId exists on both Ozon accounts (matchesOzonTarget returns true for
+  // target="ozon" regardless of which account is being looked up).
+  return (
+    (target && candidates.find((product) => {
+      if (normalizeWarehouseProduct(product).marketplace !== marketplace) return false;
+      return cleanText(product.target).toLowerCase() === target;
+    })) ||
+    candidates.find((product) => {
+      const normalized = normalizeWarehouseProduct(product);
+      if (normalized.marketplace !== marketplace) return false;
+      if (!target) return true;
+      if (marketplace === "ozon") return matchesOzonTarget(product.target, target);
+      return matchesYandexTarget(product.target, target);
+    }) ||
+    candidates.find((product) => normalizeWarehouseProduct(product).marketplace === marketplace) ||
+    candidates[0]
+  );
 }
 
 async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}) {

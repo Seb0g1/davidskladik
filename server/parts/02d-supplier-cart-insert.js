@@ -166,30 +166,40 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
     let nextDocId = Number(docMax?.maxDocId || 0) + 1;
     let nextRowId = Number(rowMax?.maxRowId || 0) + 1;
     for (const [partnerId, partnerRows] of byPartner.entries()) {
-      const docId = nextDocId++;
-      const isManualBatch = partnerRows.every((row) => row.marketplace === "manual");
-      const comment = isManualBatch
-        ? `ДавидСклад ручной заказ ${new Date().toLocaleString("ru-RU")}`
-        : `ДавидСклад автокорзина ${new Date().toLocaleString("ru-RU")}`;
-      await connection.query(
-        "INSERT INTO RequestDocs (DocID, DocDate, PartnerID, Sended, Recieved, Comment, Registered) VALUES (?, NOW(), ?, 0, 0, ?, 1)",
-        [docId, Number(partnerId), comment],
+      // Reuse an open doc for this supplier from today if one exists
+      let docId;
+      const [[existingDoc]] = await connection.query(
+        "SELECT DocID FROM RequestDocs WHERE PartnerID=? AND Sended=0 AND Recieved=0 AND DATE(DocDate)=CURDATE() ORDER BY DocID DESC LIMIT 1",
+        [Number(partnerId)],
       );
+      if (existingDoc?.DocID) {
+        docId = Number(existingDoc.DocID);
+      } else {
+        docId = nextDocId++;
+        const comment = new Date().toLocaleDateString("ru-RU");
+        await connection.query(
+          "INSERT INTO RequestDocs (DocID, DocDate, PartnerID, Sended, Recieved, Comment, Registered) VALUES (?, NOW(), ?, 0, 0, ?, 1)",
+          [docId, Number(partnerId), comment],
+        );
+      }
       docIds.push(docId);
+      // Merge rows with the same offerRowId to avoid duplicate-line errors in PriceMaster
+      const mergedByOfferRowId = new Map();
       for (const row of partnerRows) {
+        const key = String(row.offerRowId);
+        if (mergedByOfferRowId.has(key)) {
+          mergedByOfferRowId.get(key).quantity += Math.max(1, Math.round(Number(row.quantity || 1)));
+        } else {
+          mergedByOfferRowId.set(key, { ...row, quantity: Math.max(1, Math.round(Number(row.quantity || 1))) });
+        }
+      }
+      for (const row of mergedByOfferRowId.values()) {
         const requestRowId = nextRowId++;
         const manualNote = cleanText(row.manualNote || "");
-        const rowComment = row.marketplace === "manual"
-          ? ["ДавидСклад", "ручной", row.offerId, manualNote].filter(Boolean).join(" · ").slice(0, 250)
-          : [
-              "ДавидСклад",
-              row.marketplace,
-              row.orderId || row.postingNumber,
-              row.offerId,
-            ].filter(Boolean).join(" · ").slice(0, 250);
+        const rowComment = manualNote.slice(0, 250);
         await connection.query(
           "INSERT INTO RequestRows (RowID, OfferRowID, RequestQuant, RequestPrice, RequestComment, DocID) VALUES (?, ?, ?, 0.00, ?, ?)",
-          [requestRowId, Number(row.offerRowId), Math.max(1, Math.round(Number(row.quantity || 1))), rowComment, docId],
+          [requestRowId, Number(row.offerRowId), row.quantity, rowComment, docId],
         );
         inserted.push({
           ...row,

@@ -1,0 +1,1 @@
+import{Sr as e,yr as t}from"./index-lEOoZC1C.js";function n({title:e,subtitle:t,action:n}){return(0,r.jsxs)(`section`,{className:`page-heading`,children:[(0,r.jsxs)(`div`,{children:[(0,r.jsx)(`span`,{className:`eyebrow`,children:`ДавидСклад 2.0`}),(0,r.jsx)(`h1`,{children:e}),(0,r.jsx)(`p`,{children:t})]}),n]})}var r,i=e((()=>{r=t()}));export{i as n,n as t};

@@ -2488,6 +2488,54 @@ button:disabled {
   gap: 6px;
 }
 
+.picking-product-group {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--blue-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.picking-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(var(--accent-rgb), 0.07);
+  cursor: pointer;
+  user-select: none;
+}
+.picking-group-header:hover { background: rgba(var(--accent-rgb), 0.12); }
+
+.picking-group-header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.picking-group-header-left strong {
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picking-group-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.picking-row.in-group {
+  border-radius: 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0;
+}
+
 .picking-row {
   display: grid;
   gap: 7px;
@@ -2549,6 +2597,31 @@ button:disabled {
   gap: 10px;
 }
 
+.invoices-toggle-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background: rgba(var(--accent-rgb), 0.07);
+  border: 1px solid rgba(var(--accent-rgb), 0.18);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.invoices-toggle-header:hover {
+  background: rgba(var(--accent-rgb), 0.13);
+}
+
+.invoices-toggle-title {
+  font-size: 1rem;
+  font-weight: 700;
+  display: block;
+  margin-top: 2px;
+}
+
 .picking-invoice-list {
   display: grid;
   gap: 8px;
@@ -2556,7 +2629,7 @@ button:disabled {
 
 .picking-invoice-row {
   display: grid;
-  grid-template-columns: 120px 180px 140px minmax(0, 1fr) 70px 100px;
+  grid-template-columns: 100px 160px minmax(0, 1fr) 60px 90px;
   gap: 8px;
   align-items: center;
   min-width: 0;
@@ -2568,6 +2641,14 @@ button:disabled {
 .picking-invoice-row strong {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.picking-supplier-name-block h3 {
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+  margin: 2px 0 0;
 }
 
 .inline-retry {
@@ -2626,8 +2707,10 @@ button:disabled {
 }
 
 .supplier-payment-row {
+  display: grid;
   grid-template-columns: minmax(120px, 180px) minmax(180px, 1fr) auto;
   align-items: end;
+  gap: 8px;
   margin: 8px 0 12px;
 }
 
@@ -5033,6 +5116,9 @@ textarea {
 :root {
   --border: rgba(98, 132, 184, 0.18);
   --blue-border: rgba(var(--accent-rgb), 0.34);
+  --surface: #111c2e;
+  --surface2: #16243a;
+  --fg: #eef4ff;
 }
 
 .table-panel,
@@ -8538,10 +8624,12 @@ textarea:focus-visible,
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   transition: background .1s;
+  background: var(--surface2);
 }
-.pm-search-item:hover { background: rgba(255,255,255,0.04); }
-.pm-search-item--selected { background: rgba(121,184,255,0.08); }
-.pm-search-item--selected:hover { background: rgba(121,184,255,0.12); }
+.pm-search-item:nth-child(even) { background: var(--surface); }
+.pm-search-item:hover { background: rgba(121,184,255,0.10); }
+.pm-search-item--selected { background: rgba(121,184,255,0.22) !important; }
+.pm-search-item--selected:hover { background: rgba(121,184,255,0.28) !important; }
 .pm-search-item-check { padding-top: 3px; flex-shrink: 0; }
 .pm-search-item-check input[type="checkbox"] { accent-color: var(--accent); }
 .pm-search-item-body { flex: 1 1 auto; min-width: 0; }
@@ -8590,9 +8678,128 @@ textarea:focus-visible,
   justify-content: center;
 }
 
+.picking-action-pick-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.picking-qty-input {
+  width: 64px;
+  padding: 5px 8px;
+  font-size: 0.82rem;
+  border-radius: 6px;
+  border: 1.5px solid var(--accent);
+  background: var(--surface2);
+  color: var(--fg);
+  text-align: center;
+}
+.picking-row-sale {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: #4ed39a;
+  white-space: nowrap;
+}
+
+/* Price paid override input in picking row */
+.picking-price-input {
+  width: 110px;
+  padding: 5px 8px;
+  font-size: 0.82rem;
+  border-radius: 6px;
+  border: 1.5px solid rgba(251, 191, 36, 0.5);
+  background: var(--surface2);
+  color: var(--fg);
+  text-align: center;
+}
+
+/* End-of-day picker cash summary */
+.picker-day-summary {
+  display: grid;
+  gap: 4px;
+  margin: 8px 0 10px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.picker-day-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.82rem;
+  gap: 12px;
+}
+.picker-day-row span:last-child { font-weight: 700; }
+
+/* Return cash section in admin balance panel */
+.picker-return-body {
+  padding: 12px 16px 10px;
+  border-top: 1px solid var(--border);
+  background: rgba(255,92,122,.03);
+}
+
 @media (max-width: 640px) {
+  /* Prevent any element inside the picking page from causing horizontal scroll */
+  .picking-page { overflow-x: hidden; }
+  .picking-supplier-card { max-width: 100%; overflow: hidden; }
   .pm-search-panel { width: 100vw; }
-  .picker-balance-chip span { display: none; }
-  .supplier-ledger-row { grid-template-columns: repeat(2, 1fr); }
+  .picker-balance-chip { font-size: 0.78rem; padding: 5px 9px; }
+  /* Ledger 2-col on mobile, tighter padding */
+  .supplier-ledger-row { grid-template-columns: repeat(2, 1fr); padding: 6px 8px; }
+  /* PM supplier price hidden — sale price shown instead */
   .picking-row-price { display: none; }
+  /* Compact picking row; overflow:hidden clips any oversized child */
+  .picking-row { padding: 5px 8px; max-width: 100%; overflow: hidden; }
+  /* Hide article/marketplace sub-line on mobile — show only name + price */
+  .picking-row-sub { display: none; }
+  /* Header left: truncate long product names */
+  .picking-row-header { flex-wrap: nowrap; gap: 4px; align-items: center; overflow: hidden; }
+  .picking-row-header-left { min-width: 0; flex: 1 1 0; overflow: hidden; }
+  .picking-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; font-size: 0.84rem; }
+  .picking-row-header-right { flex-wrap: nowrap; justify-content: flex-end; gap: 3px; flex-shrink: 0; }
+  .picking-row-status-badge { font-size: 0.65rem; padding: 2px 4px; max-width: 66px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Hide sale price on mobile (shown in actions area if needed) */
+  .picking-row-sale { display: none; }
+  .picking-qty-input { width: 46px; font-size: 0.82rem; }
+  /* ── PICKING ACTIONS: CSS grid overrides the flex-direction:column from earlier block ── */
+  .picking-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    align-items: stretch;
+  }
+  /* Critical: grid items must be allowed to shrink below content width */
+  .picking-actions > * { min-width: 0; }
+  /* "Собрал" group: spans full width; button fills remaining space */
+  .picking-action-pick-group { grid-column: 1 / -1; min-height: 44px; flex: none; overflow: hidden; }
+  .picking-action-main { flex: 1; min-height: 44px; justify-content: center; min-width: 0; overflow: hidden; }
+  /* Price input: full width row below the Собрал button */
+  .picking-price-input { grid-column: 1 / -1; width: 100%; height: 40px; font-size: 0.82rem; box-sizing: border-box; }
+  /* All action buttons fill their cell; overflow:hidden clips text gracefully */
+  .picking-actions .primary-action,
+  .picking-actions .secondary-action {
+    width: 100%;
+    min-height: 44px;
+    min-width: 0;
+    justify-content: center;
+    font-size: 0.78rem;
+    flex: none;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  /* ── SUPPLIER PAYMENT ROW: amount + button side-by-side, note below ── */
+  .supplier-payment-row { grid-template-columns: 1fr auto; gap: 6px; }
+  .supplier-payment-row button { order: 1; }
+  .supplier-payment-note { order: 2; grid-column: 1 / -1; }
+  .supplier-payment-row .primary-action { min-height: 44px; }
+  /* Supplier cart actions */
+  .supplier-cart-actions { flex-direction: column; align-items: stretch; }
+  .supplier-cart-actions > button { justify-content: center; min-height: 44px; }
+}
+
+/* Landscape phones — allow product names to wrap instead of truncating */
+@media (orientation: landscape) and (max-height: 550px) {
+  .picking-row-name { white-space: normal; overflow-wrap: anywhere; overflow: visible; text-overflow: unset; }
+  .picking-row-header-left { overflow: visible; }
+  .picking-row-header { overflow: visible; }
 }
