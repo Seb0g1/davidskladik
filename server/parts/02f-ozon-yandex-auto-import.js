@@ -93,9 +93,13 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
     let skippedUnlinked = 0;
     let scanned = 0;
     let cursorId = null;
+    // Only import from Ozon accounts with importEnabled (i.e. Ozon 1, not Ozon 2).
+    const importTargets = getOzonAccounts()
+      .filter((a) => a.importEnabled !== false)
+      .map((a) => a.id);
     const baseWhere = onlyLinked
-      ? { marketplace: "ozon", archived: false, links: { some: {} } }
-      : { marketplace: "ozon", archived: false };
+      ? { marketplace: "ozon", archived: false, target: { in: importTargets }, links: { some: {} } }
+      : { marketplace: "ozon", archived: false, target: { in: importTargets } };
     while (selected.length < limit) {
       const page = await prisma.warehouseProduct.findMany({
         where: { ...baseWhere, ...(cursorId ? {} : {}) },

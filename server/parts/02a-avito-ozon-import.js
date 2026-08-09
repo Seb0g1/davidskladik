@@ -186,7 +186,7 @@ function evaluateAvitoImportCandidate(product = {}, rules = {}, pricing = {}) {
   const matchTitle = normalizeAvitoMatchText(title);
   const matchBrand = normalizeAvitoMatchText(product.brand);
 
-  if (!title) reasons.push("no_title");
+  if (!title || isWeakProductName(title, product.offerId)) reasons.push("no_title");
   if (rules.skipArchived && product.archived) reasons.push("archived");
 
   const excludeWord = (rules.excludeTitleWords || []).find((word) => matchTitle.includes(word));
@@ -244,7 +244,7 @@ function evaluateAvitoImportCandidate(product = {}, rules = {}, pricing = {}) {
     ok: true,
     reasons: [],
     listing: {
-      adId: `oz-${cleanText(product.offerId) || cleanText(product.id)}`,
+      adId: `oz-${cleanText(product.offerId) || cleanText(product.id)}-r1`,
       sourceProductId: cleanText(product.id),
       sourceOfferId: cleanText(product.offerId),
       source: "ozon",
@@ -423,25 +423,31 @@ async function syncAvitoOzonListings({ rules = null } = {}) {
   }
 
   const currentState = await readAvitoListingsFile();
-  // Временный no_price (таймаут PriceMaster, пустой/карантинный снапшот) — не
-  // повод снимать объявление: фид показывает последнюю сохранённую цену, а
-  // удаление отправляет объявление в архив Avito до пересоздания следующим
-  // синком (мигание 700–1300 объявлений каждые 4 часа). Удаляем только за
-  // структурные причины (дубль, стоп-слово, объём, нет фото и т.п.).
+  // Временные причины пропуска — не повод снимать объявление:
+  //  • no_price — таймаут PriceMaster, пустой/карантинный снапшот; фид
+  //    показывает последнюю сохранённую цену.
+  //  • no_images — колонка images в Postgres временно пуста (напр. после
+  //    деплоя с перезаписью строк); бэкфилл (backfillAvitoListingImages)
+  //    постепенно восстанавливает фото из Ozon API; фид сам скрывает
+  //    объявления без imageUrls.
+  // Удаление при временной причине вызывает мигание (archive→re-create)
+  // 700–1300 объявлений каждые 4 часа без пользы.
+  // Удаляем только за структурные причины (дубль, стоп-слово, объём и т.п.).
+  const TRANSIENT_SKIP_REASONS = new Set(["no_price", "no_images"]);
   const transientSkipIds = new Set(
     result.skipped
       .filter((item) => (item.reasons || []).length
-        && item.reasons.every((reason) => String(reason).split(":")[0] === "no_price"))
+        && item.reasons.every((reason) => TRANSIENT_SKIP_REASONS.has(String(reason).split(":")[0])))
       .map((item) => cleanText(item.id))
       .filter(Boolean),
   );
-  let keptNoPrice = 0;
+  let keptTransient = 0;
   const toRemoveAdIds = currentState.items
     .filter((item) => {
       const sourceProductId = cleanText(item.sourceProductId);
       if (item.source !== "ozon" || !sourceProductId || matchedIds.has(sourceProductId)) return false;
       if (transientSkipIds.has(sourceProductId)) {
-        keptNoPrice += 1;
+        keptTransient += 1;
         return false;
       }
       return true;
@@ -464,7 +470,7 @@ async function syncAvitoOzonListings({ rules = null } = {}) {
     created: upsertResult.created,
     updated: upsertResult.updated,
     removed,
-    keptNoPrice,
+    keptTransient,
     totalListings: upsertResult.total - removed,
   };
 }
