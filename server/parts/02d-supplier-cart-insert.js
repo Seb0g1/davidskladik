@@ -305,6 +305,15 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
     },
   ].slice(-1000);
   await writeSupplierCartState(nextState);
+  // Накапливаем дневной итог заказа (price * quantity по каждой вставленной строке)
+  try {
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const addTotal = inserted.reduce((sum, row) => sum + (Number(row.price) || 0) * Math.max(1, Math.round(Number(row.quantity || 1))), 0);
+    const addItems = inserted.reduce((sum, row) => sum + Math.max(1, Math.round(Number(row.quantity || 1))), 0);
+    if (addTotal > 0 || addItems > 0) await adjustDailyCartTotal(todayKey, addTotal, addItems);
+  } catch (e) {
+    logger.warn("daily_cart_total accumulate failed", { detail: e?.message || String(e) });
+  }
   await appendAudit(request || { session: { username: "system", role: "admin" } }, "supplier_cart.commit", {
     entityType: "supplier_cart",
     entityId: "pricemaster",

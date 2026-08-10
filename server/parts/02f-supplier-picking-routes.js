@@ -160,6 +160,11 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       const sourceCartKey = current.replacementFor || current.key.replace(/\|retry:.+$/, "");
       if (cartState.processed?.[sourceCartKey]) delete cartState.processed[sourceCartKey];
       await writeSupplierCartState(cartState);
+      // Вычитаем из дневного итога: товар «не было» — заказ не состоялся
+      try {
+        const rowDate = (current.createdAt || now.toISOString()).slice(0, 10);
+        await adjustDailyCartTotal(rowDate, -((Number(current.price) || 0) * Math.max(1, Math.round(Number(current.quantity || 1)))), -Math.max(1, Math.round(Number(current.quantity || 1))));
+      } catch (e) { logger.warn("daily_cart_total subtract (missing) failed", { key, detail: e?.message || String(e) }); }
       await appendAudit(request, "supplier_cart.supplier_blocked", {
         entityType: "supplier_cart",
         entityId: blockKey,
@@ -326,6 +331,11 @@ app.post("/api/supplier-picking-list/:key/cancel-cart", requireAdmin, async (req
     delete state.rows[key];
     await writeSupplierPickingState(state);
     await deleteSupplierPickingStateRow(key);
+    // Вычитаем из дневного итога: отмена заказа
+    try {
+      const rowDate = (current.createdAt || new Date().toISOString()).slice(0, 10);
+      await adjustDailyCartTotal(rowDate, -((Number(current.price) || 0) * Math.max(1, Math.round(Number(current.quantity || 1)))), -Math.max(1, Math.round(Number(current.quantity || 1))));
+    } catch (e) { logger.warn("daily_cart_total subtract (cancel-cart) failed", { key, detail: e?.message || String(e) }); }
 
     await appendAudit(request, "supplier_cart.cancel_committed", {
       entityType: "supplier_cart",

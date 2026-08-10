@@ -629,6 +629,23 @@ export const PickerBalancesSchema = z.object({
   })).optional().default([]),
 }).passthrough();
 
+export const PickerMyDaySchema = z.object({
+  ok: z.boolean().optional(),
+  date: z.coerce.string().optional().default(""),
+  username: z.coerce.string().optional().default(""),
+  issuedToday: z.number().optional().default(0),
+  spentToday: z.number().optional().default(0),
+  returnAmount: z.number().optional().default(0),
+}).passthrough();
+
+export const DailyCartTotalSchema = z.object({
+  ok: z.boolean().optional(),
+  date: z.coerce.string().optional().default(""),
+  total: z.number().optional().default(0),
+  items: z.number().optional().default(0),
+  updatedAt: z.coerce.string().nullable().optional(),
+}).passthrough();
+
 export const SupplierCartRowSchema = z.object({
   key: z.coerce.string(),
   marketplace: z.coerce.string().optional().default(""),
@@ -643,6 +660,7 @@ export const SupplierCartRowSchema = z.object({
   offerRowId: z.coerce.string().optional().default(""),
   price: z.number().optional().default(0),
   priceCurrency: z.coerce.string().optional().default("USD"),
+  saleAmount: z.number().nullable().optional(),
   trustFactor: z.number().optional().default(100),
   orderCutoffTime: z.coerce.string().optional().default(""),
   reseller: z.boolean().optional().default(false),
@@ -727,6 +745,8 @@ export const SupplierPickingRowSchema = z.object({
   offerRowId: z.coerce.string().optional().default(""),
   price: z.number().optional().default(0),
   priceCurrency: z.coerce.string().optional().default("USD"),
+  saleAmount: z.number().nullable().optional(),
+  payoutAmount: z.number().nullable().optional(),
   trustFactor: z.number().optional().default(100),
   orderCutoffTime: z.coerce.string().optional().default(""),
   reseller: z.boolean().optional().default(false),
@@ -734,6 +754,8 @@ export const SupplierPickingRowSchema = z.object({
   isExpress: z.boolean().optional().default(false),
   requestDocId: z.coerce.string().optional().default(""),
   requestRowId: z.coerce.string().optional().default(""),
+  pickedQuantity: z.number().nullable().optional(),
+  pricePaidRub: z.number().nullable().optional(),
   status: z.coerce.string().optional().default("open"),
   createdAt: z.coerce.string().optional().default(""),
   pickedBy: z.coerce.string().optional().default(""),
@@ -749,6 +771,7 @@ export const SupplierPickingRowSchema = z.object({
   returnedBy: z.coerce.string().optional().default(""),
   returnedAt: z.coerce.string().optional().nullable(),
   wbSupplyId: z.coerce.string().optional().default(""),
+  deferredUntil: z.coerce.string().optional().nullable(),
 }).passthrough();
 
 export const SupplierPickingListSchema = z.object({

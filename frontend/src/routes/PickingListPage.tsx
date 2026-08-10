@@ -9,7 +9,7 @@ import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
-import { PickerBalanceSchema, PickerBalancesSchema, PickerMyDaySchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
+import { DailyCartTotalSchema, PickerBalanceSchema, PickerBalancesSchema, PickerMyDaySchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { PmSearchPanel } from "./SupplierCartPage";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
@@ -164,6 +164,24 @@ export function PickingListPage() {
     queryFn: () => fetchJson("/api/picker-cash/balance/my-day", PickerMyDaySchema),
     refetchInterval: 60_000,
   });
+
+  const dailyTotalQuery = useQuery({
+    queryKey: ["daily-cart-total"],
+    queryFn: () => fetchJson("/api/picker-cash/daily-total", DailyCartTotalSchema),
+    refetchInterval: 30_000,
+  });
+
+  const resetAllBalancesMutation = useMutation({
+    mutationFn: () => fetchJson("/api/picker-cash/balances/reset-all", z.object({ ok: z.boolean(), deletedBalances: z.number().optional(), deletedTotal: z.number().optional() }).passthrough(), { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-balance"] });
+      void queryClient.invalidateQueries({ queryKey: ["picker-my-day"] });
+      void queryClient.invalidateQueries({ queryKey: ["daily-cart-total"] });
+    },
+  });
+
+  const [resetConfirm, setResetConfirm] = useState(false);
 
   const updateMutation = useMutation({
     mutationFn: ({ key, nextStatus, snoozeDays, permanent, pickedQuantity, pricePaidRub }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean; pickedQuantity?: number; pricePaidRub?: number }) =>
@@ -327,6 +345,8 @@ export function PickingListPage() {
 
   const balanceTone = myBalance > 500 ? "success" : myBalance > 0 ? "warn" : myBalance < 0 ? "danger" : "";
   const balanceStr = (n: number) => `$${Math.round(n).toLocaleString("ru-RU")}`;
+  const dailyTotal = dailyTotalQuery.data?.total ?? 0;
+  const dailyItems = dailyTotalQuery.data?.items ?? 0;
 
   return (
     <section className="page-section picking-page">
@@ -335,6 +355,14 @@ export function PickingListPage() {
         subtitle="Лист закупки: собрать товар у поставщика или отметить, что товара не было."
         action={
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {/* Daily order total chip */}
+            {(dailyTotal > 0 || dailyItems > 0) ? (
+              <div className="picker-balance-chip picker-balance-chip--neutral" title={`Суммарный заказ сегодня: ${dailyItems} поз.`}>
+                <ClipboardList size={14} />
+                <span>{balanceStr(dailyTotal)}</span>
+                {dailyItems > 0 ? <span style={{ opacity: 0.6, fontSize: "0.8em" }}>{dailyItems} поз.</span> : null}
+              </div>
+            ) : null}
             {/* Balance chip — visible to all */}
             <button
               className={`picker-balance-chip${balanceTone ? ` picker-balance-chip--${balanceTone}` : ""}`}
@@ -367,19 +395,21 @@ export function PickingListPage() {
             {/* End-of-day summary */}
             {myDayQuery.data ? (() => {
               const d = myDayQuery.data;
+              const hasActivity = d.issuedToday > 0 || d.spentToday > 0;
               return (
                 <div className="picker-day-summary">
+                  {hasActivity ? <div className="picker-select-label" style={{ paddingTop: 0, marginBottom: 4 }}>Отчёт за сегодня</div> : null}
                   <div className="picker-day-row">
-                    <span className="muted-note">Выдано сегодня</span>
+                    <span className="muted-note">Выдано</span>
                     <span className="tone-success">{balanceStr(d.issuedToday)}</span>
                   </div>
                   <div className="picker-day-row">
-                    <span className="muted-note">Потрачено сегодня</span>
+                    <span className="muted-note">Потрачено</span>
                     <span className="tone-warn">{balanceStr(d.spentToday)}</span>
                   </div>
-                  <div className="picker-day-row">
-                    <span className="muted-note">К возврату</span>
-                    <span className={d.returnAmount > 0 ? "tone-danger" : ""}>{balanceStr(d.returnAmount)}</span>
+                  <div className="picker-day-row" style={{ fontWeight: 600 }}>
+                    <span>Остаток</span>
+                    <span className={d.returnAmount > 0 ? "tone-danger" : d.returnAmount < 0 ? "tone-success" : ""}>{balanceStr(d.returnAmount)}</span>
                   </div>
                 </div>
               );
@@ -570,6 +600,51 @@ export function PickingListPage() {
                   </div>
                 );
               })()}
+
+              {/* Daily order total summary */}
+              {(dailyTotal > 0 || dailyItems > 0) ? (
+                <div className="picker-day-summary" style={{ marginTop: 12, borderTop: "1px solid var(--border-soft)", paddingTop: 10 }}>
+                  <div className="picker-select-label" style={{ paddingTop: 0 }}><ClipboardList size={13} /> Итог заказа сегодня</div>
+                  <div className="picker-day-row">
+                    <span className="muted-note">Заказано (накоплено)</span>
+                    <span className="tone-success">{balanceStr(dailyTotal)}</span>
+                  </div>
+                  {dailyItems > 0 ? (
+                    <div className="picker-day-row">
+                      <span className="muted-note">Позиций</span>
+                      <span>{dailyItems}</span>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* Reset all balances */}
+              <div style={{ marginTop: 12, borderTop: "1px solid var(--border-soft)", paddingTop: 10 }}>
+                {resetConfirm ? (
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <span className="muted-note" style={{ fontSize: "0.85em" }}>Обнулить все балансы?</span>
+                    <button
+                      className="danger-action"
+                      type="button"
+                      disabled={resetAllBalancesMutation.isPending}
+                      onClick={() => { resetAllBalancesMutation.mutate(); setResetConfirm(false); }}
+                    >
+                      {resetAllBalancesMutation.isPending ? <Loader2 className="spin" size={13} /> : <Check size={13} />} Да, обнулить
+                    </button>
+                    <button className="secondary-action" type="button" onClick={() => setResetConfirm(false)}><X size={13} /></button>
+                  </div>
+                ) : (
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    style={{ width: "100%" }}
+                    onClick={() => setResetConfirm(true)}
+                  >
+                    <Trash2 size={13} /> Обнулить все балансы
+                  </button>
+                )}
+                {resetAllBalancesMutation.error ? <div className="inline-error" style={{ marginTop: 4 }}>{errorMessage(resetAllBalancesMutation.error)}</div> : null}
+              </div>
             </div>
           ) : null}
         </div>

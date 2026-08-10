@@ -8122,6 +8122,7 @@ textarea:focus-visible,
 .picker-balance-chip--success { border-color: rgba(78, 211, 154, 0.5); color: #4ed39a; }
 .picker-balance-chip--warn    { border-color: rgba(251, 191, 36, 0.45); color: #fbbf24; }
 .picker-balance-chip--danger  { border-color: rgba(255, 92, 122, 0.5); color: #ff5c7a; }
+.picker-balance-chip--neutral { border-color: rgba(120, 180, 255, 0.35); color: #78b4ff; cursor: default; }
 
 .picker-balance-panel {
   background: var(--surface2);

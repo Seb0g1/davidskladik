@@ -159,8 +159,8 @@ app.post("/api/picker-cash/balance", requireAdmin, async (request, response, nex
   try {
     const pickerUsername = cleanText(request.body?.pickerUsername || "");
     if (!pickerUsername) return response.status(400).json({ error: "Укажите имя сборщика." });
-    const amount = normalizeFinanceMoney(request.body?.amount, 0);
-    if (!(amount > 0)) return response.status(400).json({ error: "Укажите сумму больше нуля." });
+    const amount = normalizeFinanceMoney(request.body?.amount, null);
+    if (amount === null || amount === 0) return response.status(400).json({ error: "Укажите ненулевую сумму." });
     const balance = await loadPickerBalance(pickerUsername);
     balance.credits.push({
       id: crypto.randomUUID(),
@@ -171,6 +171,50 @@ app.post("/api/picker-cash/balance", requireAdmin, async (request, response, nex
     });
     await savePickerBalance(pickerUsername, balance);
     response.json(pickerBalanceBody(pickerUsername, balance));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Daily summary for the current user: how much was issued today vs. spent today
+app.get("/api/picker-cash/balance/my-day", requireStaff, async (request, response, next) => {
+  try {
+    const username = requestUsername(request);
+    if (!username) return response.status(400).json({ error: "Нет имени пользователя." });
+    const dateStr = pickerCashDateKey(cleanText(request.query.date || ""));
+    const start = new Date(`${dateStr}T00:00:00.000Z`);
+    const end = new Date(`${dateStr}T23:59:59.999Z`);
+    // Credits issued to this picker today
+    const balance = await loadPickerBalance(username);
+    const creditsToday = balance.credits.filter((c) => {
+      const d = new Date(c.createdAt || 0);
+      return d >= start && d <= end;
+    });
+    const issuedToday = creditsToday.reduce((sum, c) => sum + Number(c.amount || 0), 0);
+    // Supplier ledger purchase_debt entries for today attributed to this picker
+    let spentToday = 0;
+    try {
+      if (shouldUsePostgresStorage()) {
+        const entries = await getPrisma().supplierLedgerEntry.findMany({
+          where: {
+            entryType: "purchase_debt",
+            status: "active",
+            occurredAt: { gte: start, lte: end },
+            raw: { path: ["picking", "pickedBy"], equals: username },
+          },
+          select: { amount: true },
+        });
+        spentToday = Math.round(entries.reduce((sum, e) => sum + Math.abs(normalizeFinanceMoney(e.amount, 0)), 0));
+      }
+    } catch { /* ledger query optional */ }
+    response.json({
+      ok: true,
+      date: dateStr,
+      username,
+      issuedToday: Math.round(issuedToday),
+      spentToday,
+      returnAmount: Math.round(issuedToday - spentToday),
+    });
   } catch (error) {
     next(error);
   }
@@ -206,6 +250,64 @@ app.delete("/api/picker-cash/balance/:username/:id", requireAdmin, async (reques
     balance.credits = balance.credits.filter((c) => String(c.id) !== request.params.id);
     await savePickerBalance(pickerUsername, balance);
     response.json(pickerBalanceBody(pickerUsername, balance));
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── Daily committed cart total ───────────────────────────────────────────────
+
+async function loadDailyCartTotal(dateStr) {
+  const key = `daily_cart_total:${dateStr || new Date().toISOString().slice(0, 10)}`;
+  try {
+    const setting = await getPrisma()?.appSetting.findUnique({ where: { key } });
+    const raw = setting?.value;
+    return { total: Number(raw?.total || 0) || 0, items: Number(raw?.items || 0) || 0, updatedAt: raw?.updatedAt || null };
+  } catch {
+    return { total: 0, items: 0, updatedAt: null };
+  }
+}
+
+async function adjustDailyCartTotal(dateStr, deltaTotal, deltaItems) {
+  const prisma = getPrisma();
+  if (!prisma) return;
+  const key = `daily_cart_total:${dateStr}`;
+  try {
+    const existing = await loadDailyCartTotal(dateStr);
+    const newTotal = Math.max(0, (existing.total || 0) + deltaTotal);
+    const newItems = Math.max(0, (existing.items || 0) + deltaItems);
+    const newData = { total: newTotal, items: newItems, updatedAt: new Date().toISOString() };
+    await prisma.appSetting.upsert({
+      where: { key },
+      create: { key, value: newData },
+      update: { value: newData },
+    });
+  } catch (error) {
+    logger.warn("daily_cart_total adjust failed", { date: dateStr, delta: deltaTotal, detail: error?.message || String(error) });
+  }
+}
+
+app.get("/api/picker-cash/daily-total", requireStaff, async (request, response, next) => {
+  try {
+    const dateStr = pickerCashDateKey(cleanText(request.query.date || ""));
+    const data = await loadDailyCartTotal(dateStr);
+    response.json({ ok: true, date: dateStr, total: data.total, items: data.items, updatedAt: data.updatedAt });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Сбросить все балансы сборщиков и дневной итог к нулю
+app.post("/api/picker-cash/balances/reset-all", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "База данных недоступна." });
+    const [deletedBalances, deletedTotal] = await Promise.all([
+      prisma.appSetting.deleteMany({ where: { key: { startsWith: "picker_balance:" } } }),
+      prisma.appSetting.deleteMany({ where: { key: { startsWith: "daily_cart_total:" } } }),
+    ]);
+    logger.info("picker balances reset", { deletedBalances: deletedBalances.count, deletedTotal: deletedTotal.count, by: request.session?.username });
+    response.json({ ok: true, deletedBalances: deletedBalances.count, deletedTotal: deletedTotal.count });
   } catch (error) {
     next(error);
   }
