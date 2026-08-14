@@ -90,7 +90,11 @@ function scheduleOzonNewOfferDiscovery(delayMs = null) {
   ozonNewOfferDiscoveryTimer = setTimeout(async () => {
     let deferred = false;
     try {
-      if (heavyBackgroundWorkShouldDefer("ozon_new_offer_discovery")) {
+      // Only defer on memory/HTTP pressure — do NOT defer when autoSync is running.
+      // Discovery is a read-only light job (list + info for NEW offers only); blocking
+      // it on autoSyncRunning caused new products to never be imported while the
+      // multi-hour autoSync was in progress.
+      if (serverUnderMemoryPressure() || serverUnderHttpLoad()) {
         logger.info("ozon new offer discovery deferred under load");
         deferred = true;
         return;
