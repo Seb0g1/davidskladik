@@ -134,3 +134,90 @@ async function backfillAvitoListingImages({ limit = avitoImageBackfillPerRun, so
     avitoImageBackfillRunning = false;
   }
 }
+
+let warehouseImageDbRestoreRunning = false;
+let warehouseImageDbRestoreLastResult = null;
+
+// Восстанавливает колонку images в warehouse_products для всех Ozon-товаров,
+// у которых images пуст ({}). Использует Ozon API /v3/product/info/list.
+// Используется для массового восстановления после ошибочного обнуления колонки.
+async function restoreWarehouseProductImagesFromOzon({ limit = 500, source = "manual" } = {}) {
+  if (warehouseImageDbRestoreRunning) return { status: "already_running" };
+  const prisma = getPrisma();
+  if (!prisma) return { status: "postgres_unavailable" };
+  warehouseImageDbRestoreRunning = true;
+  try {
+    // Find products with empty images column
+    const rows = await prisma.$queryRaw`
+      SELECT id, offer_id AS "offerId", target
+      FROM warehouse_products
+      WHERE marketplace = 'ozon'
+        AND archived = false
+        AND (images IS NULL OR images = '{}'::jsonb OR images = 'null'::jsonb)
+      ORDER BY updated_at DESC
+      LIMIT ${limit}
+    `;
+    if (!rows.length) {
+      const result = { status: "done", source, updated: 0, remaining: 0, at: new Date().toISOString() };
+      warehouseImageDbRestoreLastResult = result;
+      return result;
+    }
+    const rowsByTarget = new Map();
+    for (const row of rows) {
+      const target = cleanText(row.target) || "ozon";
+      if (!rowsByTarget.has(target)) rowsByTarget.set(target, []);
+      rowsByTarget.get(target).push(row);
+    }
+    let updated = 0;
+    let apiErrors = 0;
+    let lastError = "";
+    for (const [target, targetRows] of rowsByTarget) {
+      const account = getOzonAccountByTarget(target);
+      if (!account) continue;
+      let infoMap;
+      try {
+        infoMap = await getOzonProductInfoMap(targetRows.map((r) => r.offerId), account, { continueOnError: true });
+      } catch (error) {
+        apiErrors += 1;
+        lastError = error?.message || String(error);
+        continue;
+      }
+      for (const row of targetRows) {
+        const info = getOzonOfferMapValue(infoMap, row.offerId);
+        if (!info) continue;
+        const urls = extractOzonInfoImageUrls(info);
+        if (!urls.length) continue;
+        try {
+          await prisma.warehouseProduct.update({
+            where: { id: row.id },
+            data: { images: { imageUrl: urls[0], images: urls } },
+          });
+          updated += 1;
+        } catch (error) {
+          logger.warn("warehouse image db restore persist failed", { productId: row.id, detail: error?.message || String(error) });
+        }
+      }
+    }
+    // Check remaining
+    const remaining = await prisma.$queryRaw`
+      SELECT COUNT(*)::int AS cnt FROM warehouse_products
+      WHERE marketplace = 'ozon' AND archived = false
+        AND (images IS NULL OR images = '{}'::jsonb OR images = 'null'::jsonb)
+    `;
+    const result = {
+      status: "ok",
+      source,
+      scanned: rows.length,
+      updated,
+      apiErrors,
+      ...(lastError ? { lastError } : {}),
+      remaining: Number(remaining[0]?.cnt || 0),
+      at: new Date().toISOString(),
+    };
+    warehouseImageDbRestoreLastResult = result;
+    logger.info("warehouse image db restore", result);
+    return result;
+  } finally {
+    warehouseImageDbRestoreRunning = false;
+  }
+}

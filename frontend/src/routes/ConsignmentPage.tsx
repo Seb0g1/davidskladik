@@ -28,6 +28,9 @@ const money = (value: unknown) => {
   return `${(Math.round(n * 100) / 100).toLocaleString("ru-RU")} $`;
 };
 
+const displayArticle = (article: string | null | undefined) =>
+  article ? article.replace(/^pm:/, "") || "-" : "-";
+
 const pmPriceText = (row: { price?: number | null; currency?: string }) => {
   if (row.price === null || row.price === undefined) return "-";
   const symbol = ["RUB", "RUR"].includes(String(row.currency || "USD").toUpperCase()) ? "₽" : "$";
@@ -770,7 +773,7 @@ export function ConsignmentPage() {
             return (
               <div className={lot ? "table-row consignment-group-lot" : "table-row"} key={item.id}>
                 <span data-label="Товар">{item.name}</span>
-                <span data-label="Артикул">{item.article || "-"}</span>
+                <span data-label="Артикул">{displayArticle(item.article)}</span>
                 <span data-label="Поставщик">{item.supplierName || "-"}</span>
                 <span data-label="Закупка">{money(item.purchasePrice)}</span>
                 <span data-label="Продажа" className="finance-inline-edit">
@@ -816,7 +819,7 @@ export function ConsignmentPage() {
                     {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />} {group.items[0].name}
                   </button>
                 </span>
-                <span data-label="Артикул">{group.article || "-"}</span>
+                <span data-label="Артикул">{displayArticle(group.article)}</span>
                 <span data-label="Поставщик">{supplierNames || "-"}</span>
                 <span data-label="Закупка" title="Средняя цена закупки по партиям">{money(group.avgPurchasePrice)} <span className="muted-note">сред.</span></span>
                 <span data-label="Продажа" title="Средняя цена продажи по партиям">{money(group.avgSalePrice)} <span className="muted-note">сред.</span></span>

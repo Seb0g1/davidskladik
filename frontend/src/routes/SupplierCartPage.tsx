@@ -150,10 +150,20 @@ const MpOrderResultSchema = z.object({
   supplierName: z.coerce.string().optional().default(""),
 }).passthrough();
 
+const BatchOrderResultSchema = z.object({
+  ok: z.boolean().optional(),
+  inserted: z.number().optional().default(0),
+  failed: z.number().optional().default(0),
+  docIds: z.array(z.unknown()).optional().default([]),
+  pickingCreated: z.number().optional().default(0),
+  failedDetails: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+}).passthrough();
+
 function ReadyToShipPanel() {
   const [q, setQ] = useState("");
   const [replaceKey, setReplaceKey] = useState<string | null>(null);
   const [mpReplaceKey, setMpReplaceKey] = useState<string | null>(null);
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const queryClient = useQueryClient();
 
   const sessionQuery = useQuery({
@@ -197,6 +207,27 @@ function ReadyToShipPanel() {
       setMpReplaceKey(null);
       void marketplaceQuery.refetch();
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+    },
+  });
+
+  const batchOrderMutation = useMutation({
+    mutationFn: (lines: ReadyToShipLine[]) =>
+      fetchJson("/api/ready-to-ship/batch-order", BatchOrderResultSchema, mutationBody({
+        lines: lines.map((l) => ({
+          key: l.key,
+          offerId: l.offerId,
+          quantity: l.quantity,
+          marketplace: l.marketplace,
+          orderId: l.orderId || l.postingNumber,
+          accountId: l.accountId,
+          accountName: l.accountName,
+        })),
+      })),
+    onSuccess: () => {
+      setSelectedKeys(new Set());
+      void marketplaceQuery.refetch();
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
     },
   });
 
@@ -279,7 +310,33 @@ function ReadyToShipPanel() {
       {/* Live marketplace orders */}
       <div className="section-title compact-title" style={{ marginTop: "12px" }}>
         <div><span>Маркетплейсы</span><h3>Заказы ожидающие отгрузки — {mpLines.length} шт.</h3></div>
+        {filteredMpLines.length > 0 ? (
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {selectedKeys.size > 0 ? (
+              <button
+                className="primary-action"
+                type="button"
+                disabled={batchOrderMutation.isPending}
+                onClick={() => batchOrderMutation.mutate(filteredMpLines.filter((l) => selectedKeys.has(l.key)))}
+              >
+                {batchOrderMutation.isPending ? <Loader2 className="spin" size={14} /> : <Package size={14} />}
+                В PM — {selectedKeys.size} шт.
+              </button>
+            ) : null}
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => setSelectedKeys(selectedKeys.size === filteredMpLines.length ? new Set() : new Set(filteredMpLines.map((l) => l.key)))}
+            >
+              {selectedKeys.size === filteredMpLines.length ? "Снять всё" : "Выбрать всё"}
+            </button>
+          </div>
+        ) : null}
       </div>
+      {batchOrderMutation.isSuccess ? (
+        <div className="success-strip">Добавлено в PM: {batchOrderMutation.data?.inserted} · Не удалось: {batchOrderMutation.data?.failed} · Документы: {(batchOrderMutation.data?.docIds || []).join(", ") || "-"}</div>
+      ) : null}
+      {batchOrderMutation.isError ? <div className="inline-error">Пакетный заказ: {errorMessage(batchOrderMutation.error)}</div> : null}
       {mpErrors.map((err) => <div key={err} className="inline-error">{err}</div>)}
       {marketplaceQuery.error ? <div className="inline-error">{errorMessage(marketplaceQuery.error)}</div> : null}
       <div className="supplier-cart-list">
@@ -288,9 +345,19 @@ function ReadyToShipPanel() {
           const isMissingPending = mpMissingMutation.isPending && (mpMissingMutation.variables as ReadyToShipLine)?.key === line.key;
           const missingSuccess = mpMissingMutation.isSuccess && (mpMissingMutation.variables as ReadyToShipLine)?.key === line.key;
           const isOrderPending = mpOrderMutation.isPending && (mpOrderMutation.variables as { line: ReadyToShipLine })?.line?.key === line.key;
+          const isSelected = selectedKeys.has(line.key);
           return (
-            <article className="supplier-cart-row" key={line.key}>
+            <article className={`supplier-cart-row${isSelected ? " selected" : ""}`} key={line.key}>
               <span className="checkline">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => setSelectedKeys((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(line.key)) next.delete(line.key); else next.add(line.key);
+                    return next;
+                  })}
+                />
                 <span className={`market-badge market-${line.marketplace}`}>{marketplaceBadge(line.marketplace)}</span>
                 {line.isExpress ? <span className="pill warn">Экспресс</span> : null}
                 <span>{line.orderId || line.postingNumber || "-"} · {line.offerId}</span>
@@ -447,7 +514,7 @@ function ReadyToShipPanel() {
 
 type SortMode = "price_asc" | "price_desc" | "name_asc" | "supplier_asc";
 
-function PmSearchPanel({ onClose }: { onClose: () => void }) {
+export function PmSearchPanel({ onClose }: { onClose: () => void }) {
   const [searchQ, setSearchQ] = useState("");
   const [activeQ, setActiveQ] = useState("");
   const [selected, setSelected] = useState<Record<string, { qty: number; item: PmSearchItem }>>({});

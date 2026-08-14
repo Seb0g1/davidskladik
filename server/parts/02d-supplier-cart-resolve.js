@@ -212,7 +212,7 @@ function normalizeOzonSupplierCartPostings(data = {}, account = {}) {
         orderedAt: posting.in_process_at || posting.created_at,
         status: posting.status,
         isExpress,
-        ozonProductId: Number(product.sku) || 0,
+        ozonProductId: Number(product.product_id || product.sku) || 0,
         raw: { postingNumber: posting.posting_number, product, isExpress },
       });
       if (line.offerId) lines.push(line);

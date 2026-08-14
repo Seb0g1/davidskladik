@@ -184,35 +184,20 @@ app.get("/api/picker-cash/balance/my-day", requireStaff, async (request, respons
     const dateStr = pickerCashDateKey(cleanText(request.query.date || ""));
     const start = new Date(`${dateStr}T00:00:00.000Z`);
     const end = new Date(`${dateStr}T23:59:59.999Z`);
-    // Credits issued to this picker today
+    // Credits issued to this picker today (positive) + spent (negative deductions from picking)
     const balance = await loadPickerBalance(username);
     const creditsToday = balance.credits.filter((c) => {
       const d = new Date(c.createdAt || 0);
       return d >= start && d <= end;
     });
-    const issuedToday = creditsToday.reduce((sum, c) => sum + Number(c.amount || 0), 0);
-    // Supplier ledger purchase_debt entries for today attributed to this picker
-    let spentToday = 0;
-    try {
-      if (shouldUsePostgresStorage()) {
-        const entries = await getPrisma().supplierLedgerEntry.findMany({
-          where: {
-            entryType: "purchase_debt",
-            status: "active",
-            occurredAt: { gte: start, lte: end },
-            raw: { path: ["picking", "pickedBy"], equals: username },
-          },
-          select: { amount: true },
-        });
-        spentToday = Math.round(entries.reduce((sum, e) => sum + Math.abs(normalizeFinanceMoney(e.amount, 0)), 0));
-      }
-    } catch { /* ledger query optional */ }
+    const issuedToday = creditsToday.filter((c) => Number(c.amount || 0) > 0).reduce((sum, c) => sum + Number(c.amount || 0), 0);
+    const spentToday = creditsToday.filter((c) => Number(c.amount || 0) < 0).reduce((sum, c) => sum + Math.abs(Number(c.amount || 0)), 0);
     response.json({
       ok: true,
       date: dateStr,
       username,
       issuedToday: Math.round(issuedToday),
-      spentToday,
+      spentToday: Math.round(spentToday),
       returnAmount: Math.round(issuedToday - spentToday),
     });
   } catch (error) {

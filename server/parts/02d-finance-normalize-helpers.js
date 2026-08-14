@@ -19,6 +19,9 @@ function financeOrderIdForPicking(row = {}) {
 }
 
 async function financePurchaseCostRubFromPicking(row = {}) {
+  // Picker may enter actual paid amount in RUB (overrides PM price calculation)
+  const pricePaidRub = normalizeFinanceMoney(row.pricePaidRub, 0);
+  if (pricePaidRub > 0) return pricePaidRub;
   const quantity = Math.max(1, Math.round(Number(row.quantity || 1) || 1));
   const price = normalizeFinanceMoney(row.price, 0);
   if (!(price > 0)) return null;

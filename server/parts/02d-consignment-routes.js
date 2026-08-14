@@ -823,80 +823,94 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
 });
 
 // Синхронизирует продажи из PriceMaster (SaleRows+SaleDocs+Products) → ConsignmentOperation.
-// Идемпотентно: sourceKey = "pm_sale_{RowID}" — повторный вызов не создаёт дубликатов.
-// ВАЖНО: для каждого ConsignmentItem импортируются только продажи PM, у которых DocDate
-// >= item.createdAt. Продажи, которые были в PM ДО добавления товара в реализацию, игнорируются.
+// Инкрементно: при каждом запуске берёт только строки PM с RowID > уже обработанных.
+// Матчит строго по article = "pm:{productId}" — нечёткий матч по имени убран (давал ложные совпадения).
+// Продажи ДО item.createdAt игнорируются. Каждая продажа:
+//   - декрементирует item.quantity (clamp to 0)
+//   - balanceDelta = purchasePrice * quantity (возврат себестоимости на баланс)
+//   - sponsorDelta / myDelta = прибыль пополам
 async function runConsignmentPmSync() {
   const prisma = getPrisma();
   if (!prisma || !shouldUsePostgresStorage()) throw new Error("Postgres недоступен");
 
-  const [saleRows] = await pool.query(`
-    SELECT
-      sr.RowID        AS rowId,
-      sr.ProductID    AS productId,
-      sr.Quantity     AS quantity,
-      sr.Price        AS price,
-      sd.DocDate      AS docDate,
-      sd.Comment      AS docComment,
-      p.ProductName   AS productName,
-      p.SalePrice     AS purchasePrice
-    FROM SaleRows sr
-    JOIN SaleDocs  sd ON sr.DocID    = sd.DocID
-    JOIN Products  p  ON sr.ProductID = p.ProductID
-    WHERE sr.ProductID > 0
-    ORDER BY sd.DocDate DESC
-    LIMIT 10000
-  `);
+  // Инкрементный watermark: max RowID уже обработанных строк
+  const lastIdResult = await prisma.$queryRaw`
+    SELECT MAX(CAST(SUBSTRING(source_key, 9) AS INTEGER)) AS max_id
+    FROM consignment_operations
+    WHERE source_key LIKE 'pm_sale_%'
+      AND source_key ~ '^pm_sale_[0-9]+$'
+  `;
+  const lastRowId = Number(lastIdResult[0]?.max_id || 0);
+
+  // При lastRowId=0 (первый запуск / после reset) начинаем с даты самого раннего
+  // товара реализации — иначе запрос уходит в далёкую историю PM и все строки
+  // оказываются старше item.createdAt → skippedBefore=все, created=0.
+  let saleRows;
+  if (lastRowId === 0) {
+    const earliest = await prisma.consignmentItem.findFirst({
+      where: { article: { startsWith: "pm:" } },
+      orderBy: { createdAt: "asc" },
+      select: { createdAt: true },
+    });
+    const cutoff = earliest
+      ? new Date(earliest.createdAt.getTime() - 24 * 60 * 60 * 1000) // за день до первого товара
+      : new Date(Date.now() - 90 * 24 * 60 * 60 * 1000); // fallback: 90 дней
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    [saleRows] = await pool.query(`
+      SELECT
+        sr.RowID        AS rowId,
+        sr.ProductID    AS productId,
+        sr.Quantity     AS quantity,
+        sr.Price        AS price,
+        sd.DocDate      AS docDate,
+        sd.Comment      AS docComment,
+        p.ProductName   AS productName,
+        p.SalePrice     AS purchasePrice
+      FROM SaleRows sr
+      JOIN SaleDocs  sd ON sr.DocID    = sd.DocID
+      JOIN Products  p  ON sr.ProductID = p.ProductID
+      WHERE sr.ProductID > 0
+        AND sd.DocDate >= ?
+      ORDER BY sr.RowID ASC
+      LIMIT 2000
+    `, [cutoffStr]);
+  } else {
+    [saleRows] = await pool.query(`
+      SELECT
+        sr.RowID        AS rowId,
+        sr.ProductID    AS productId,
+        sr.Quantity     AS quantity,
+        sr.Price        AS price,
+        sd.DocDate      AS docDate,
+        sd.Comment      AS docComment,
+        p.ProductName   AS productName,
+        p.SalePrice     AS purchasePrice
+      FROM SaleRows sr
+      JOIN SaleDocs  sd ON sr.DocID    = sd.DocID
+      JOIN Products  p  ON sr.ProductID = p.ProductID
+      WHERE sr.ProductID > 0
+        AND sr.RowID > ?
+      ORDER BY sr.RowID ASC
+      LIMIT 2000
+    `, [lastRowId]);
+  }
 
   if (!saleRows.length) {
-    return { ok: true, created: 0, skipped: 0, skippedBefore: 0, itemsCreated: 0, itemsMatched: 0, total: 0 };
+    return { ok: true, created: 0, skipped: 0, skippedBefore: 0, itemsMatched: 0, total: 0 };
   }
 
-  const productMap = new Map();
-  for (const row of saleRows) {
-    if (!productMap.has(row.productId)) {
-      productMap.set(row.productId, { productId: row.productId, productName: row.productName, purchasePrice: row.purchasePrice });
-    }
-  }
-
+  // Матч только по article = "pm:{productId}" — нет fuzzy-матча по имени
+  const productIds = [...new Set(saleRows.map((r) => r.productId))];
   const itemByProductId = new Map();
-  let itemsCreated = 0;
-  let itemsMatched = 0;
-
-  for (const [productId, product] of productMap) {
+  for (const productId of productIds) {
     const article = `pm:${productId}`;
-    let existing = await prisma.consignmentItem.findFirst({ where: { article } });
-    if (!existing) {
-      existing = await prisma.consignmentItem.findFirst({
-        where: {
-          archived: false,
-          article: { not: { startsWith: "pm:" } },
-          name: { contains: cleanText(product.productName || "").slice(0, 40), mode: "insensitive" },
-        },
-      });
-    }
-    if (existing) {
-      itemByProductId.set(productId, { id: existing.id, createdAt: existing.createdAt });
-      itemsMatched++;
-      if (existing.article !== article) {
-        await prisma.consignmentItem.update({ where: { id: existing.id }, data: { article } });
-      }
-    } else {
-      const now = new Date();
-      const created = await prisma.consignmentItem.create({
-        data: {
-          name: cleanText(product.productName || `PM Product ${productId}`),
-          article,
-          purchasePrice: normalizeFinanceMoney(product.purchasePrice, 0),
-          salePrice: 0,
-          quantity: 0,
-          note: "Создано автосинком из PriceMaster",
-        },
-      });
-      itemByProductId.set(productId, { id: created.id, createdAt: created.createdAt || now });
-      itemsCreated++;
-    }
+    const existing = await prisma.consignmentItem.findFirst({
+      where: { article },
+      select: { id: true, createdAt: true, purchasePrice: true },
+    });
+    if (existing) itemByProductId.set(productId, existing);
   }
+  const itemsMatched = itemByProductId.size;
 
   let created = 0;
   let skipped = 0;
@@ -909,24 +923,36 @@ async function runConsignmentPmSync() {
     if (docDate < item.createdAt) { skippedBefore++; continue; }
     const sourceKey = `pm_sale_${row.rowId}`;
     try {
-      const existingOp = await prisma.consignmentOperation.findUnique({ where: { sourceKey } });
-      if (existingOp) { skipped++; continue; }
-      await prisma.consignmentOperation.create({
-        data: {
-          sourceKey,
-          itemId: item.id,
-          itemName: cleanText(row.productName || ""),
-          type: "sale",
-          quantity: Math.max(1, Math.round(Number(row.quantity || 1))),
-          unitPurchase: normalizeFinanceMoney(row.purchasePrice, 0),
-          unitSale: normalizeFinanceMoney(row.price, 0),
-          balanceDelta: 0,
-          sponsorDelta: 0,
-          myDelta: 0,
-          note: cleanText(row.docComment || "") || null,
-          createdBy: "pm-sync",
-          createdAt: docDate,
-        },
+      const quantity = Math.max(1, Math.round(Number(row.quantity || 1)));
+      const unitPurchase = normalizeFinanceMoney(item.purchasePrice, 0);
+      const unitSale = normalizeFinanceMoney(row.price, 0);
+      const profit = normalizeFinanceMoney((unitSale - unitPurchase) * quantity, 0);
+      const sponsorHalf = normalizeFinanceMoney(profit / 2, 0);
+      const myHalf = normalizeFinanceMoney(profit - sponsorHalf, 0);
+
+      await prisma.$transaction(async (tx) => {
+        const current = await tx.consignmentItem.findUnique({ where: { id: item.id }, select: { quantity: true } });
+        await tx.consignmentItem.update({
+          where: { id: item.id },
+          data: { quantity: Math.max(0, (current?.quantity || 0) - quantity) },
+        });
+        await tx.consignmentOperation.create({
+          data: {
+            sourceKey,
+            itemId: item.id,
+            itemName: cleanText(row.productName || ""),
+            type: "sale",
+            quantity,
+            unitPurchase,
+            unitSale,
+            balanceDelta: normalizeFinanceMoney(unitPurchase * quantity, 0),
+            sponsorDelta: sponsorHalf,
+            myDelta: myHalf,
+            note: cleanText(row.docComment || "") || null,
+            createdBy: "pm-sync",
+            createdAt: docDate,
+          },
+        });
       });
       created++;
     } catch (error) {
@@ -935,7 +961,7 @@ async function runConsignmentPmSync() {
     }
   }
 
-  return { ok: true, created, skipped, skippedBefore, itemsCreated, itemsMatched, total: saleRows.length };
+  return { ok: true, created, skipped, skippedBefore, itemsMatched, total: saleRows.length };
 }
 
 // Автопланировщик: импорт продаж PM в реализацию каждые N часов.
@@ -978,6 +1004,72 @@ app.post("/api/consignment/pm-sync", requireAdmin, async (request, response, nex
     if (consignmentStorageUnavailable(response)) return;
     const result = await runConsignmentPmSync();
     response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Удаляет позиции реализации автоматически созданные синком PM (те, что помечены
+// "Создано автосинком из PriceMaster"). Операции этих позиций тоже удаляются.
+app.post("/api/consignment/pm-sync/cleanup", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const prisma = getPrisma();
+    const autoItems = await prisma.consignmentItem.findMany({
+      where: { note: "Создано автосинком из PriceMaster" },
+      select: { id: true },
+    });
+    if (!autoItems.length) return response.json({ ok: true, removedItems: 0, removedOperations: 0 });
+    const ids = autoItems.map((i) => i.id);
+    const opsResult = await prisma.consignmentOperation.deleteMany({ where: { itemId: { in: ids } } });
+    const itemsResult = await prisma.consignmentItem.deleteMany({ where: { id: { in: ids } } });
+    response.json({ ok: true, removedItems: itemsResult.count, removedOperations: opsResult.count });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Полный сброс PM-продаж: удаляет все операции с sourceKey = "pm_sale_*" и
+// восстанавливает остатки товаров (т.к. они были декрементированы этими продажами).
+// После вызова — запускай /api/consignment/pm-sync чтобы заново выгрузить из PM.
+app.post("/api/consignment/pm-sync/reset", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const prisma = getPrisma();
+
+    // Найти все PM-операции и сгруппировать по itemId для восстановления остатков
+    const pmOps = await prisma.consignmentOperation.findMany({
+      where: { sourceKey: { startsWith: "pm_sale_" } },
+      select: { id: true, itemId: true, quantity: true },
+    });
+
+    if (!pmOps.length) {
+      return response.json({ ok: true, removedOperations: 0, restoredItems: 0 });
+    }
+
+    // Восстановить остатки: для каждого товара суммируем удалённые продажи
+    const quantityToRestore = new Map();
+    for (const op of pmOps) {
+      quantityToRestore.set(op.itemId, (quantityToRestore.get(op.itemId) || 0) + op.quantity);
+    }
+
+    const opIds = pmOps.map((op) => op.id);
+    let restoredItems = 0;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.consignmentOperation.deleteMany({ where: { id: { in: opIds } } });
+      for (const [itemId, qty] of quantityToRestore) {
+        try {
+          const current = await tx.consignmentItem.findUnique({ where: { id: itemId }, select: { quantity: true } });
+          if (current) {
+            await tx.consignmentItem.update({ where: { id: itemId }, data: { quantity: current.quantity + qty } });
+            restoredItems++;
+          }
+        } catch { /* item might have been deleted, skip */ }
+      }
+    });
+
+    response.json({ ok: true, removedOperations: pmOps.length, restoredItems });
   } catch (error) {
     next(error);
   }

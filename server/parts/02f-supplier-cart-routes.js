@@ -264,7 +264,7 @@ app.post("/api/supplier-cart/pm-manual-commit", requireAdmin, async (request, re
       })
       .filter(Boolean);
     if (!cartRows.length) return response.status(400).json({ ok: false, error: "No valid rows found in PriceMaster snapshot." });
-    const result = await insertSupplierCartRowsIntoPriceMaster(cartRows, request, { initialStatus: "picked" });
+    const result = await insertSupplierCartRowsIntoPriceMaster(cartRows, request);
     response.json({
       ok: true,
       inserted: result.inserted.length,
@@ -409,6 +409,70 @@ app.post("/api/ready-to-ship/order", requireStaff, async (request, response, nex
       pickingCreated: result.pickingCreated?.length || 0,
       supplierName: option.supplierName,
       row: result.inserted[0] || null,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Пакетный заказ: несколько маркетплейсовых заказов → PM, авто-поставщик, группировка по поставщику.
+app.post("/api/ready-to-ship/batch-order", requireAdmin, async (request, response, next) => {
+  try {
+    const lines = Array.isArray(request.body?.lines) ? request.body.lines : [];
+    if (!lines.length) return response.status(400).json({ ok: false, error: "No lines provided.", code: "missing_lines" });
+
+    const allOfferIds = [...new Set(lines.map((l) => cleanText(l.offerId)).filter(Boolean))];
+    const warehouse = await hydrateSupplierCartWarehouse(await readWarehouse(), allOfferIds);
+    const state = await readSupplierCartState();
+
+    const cartRows = [];
+    const failed = [];
+    for (const line of lines) {
+      const offerId = cleanText(line.offerId);
+      const quantity = Math.max(1, Math.round(Number(line.quantity || 1) || 1));
+      const marketplace = cleanText(line.marketplace || "ozon").toLowerCase();
+      const orderId = cleanText(line.orderId || line.postingNumber || "");
+      const accountId = cleanText(line.accountId || "");
+      const accountName = cleanText(line.accountName || "");
+      const lineKey = cleanText(line.key) || `ready-to-ship|${marketplace}|${orderId || Date.now()}|${offerId}`;
+      if (!offerId) { failed.push({ key: lineKey, reason: "missing_offer_id" }); continue; }
+      if (state.processed?.[lineKey]) { failed.push({ key: lineKey, offerId, reason: "already_committed" }); continue; }
+
+      const product = findSupplierCartWarehouseProduct(warehouse, { offerId, marketplace, accountId });
+      if (!product) { failed.push({ key: lineKey, offerId, reason: "product_not_found" }); continue; }
+
+      const normalizedLine = normalizeSupplierCartLine({ marketplace, accountId, orderId, offerId, quantity });
+      const row = await resolveSupplierCartRow(warehouse, normalizedLine, state);
+      if (!row.ready) { failed.push({ key: lineKey, offerId, reason: row.skipReason || "no_supplier" }); continue; }
+
+      cartRows.push(normalizeSupplierCartPreviewRow({
+        ...row,
+        key: lineKey,
+        marketplace,
+        accountId: accountId || marketplace,
+        accountName: accountName || marketplace,
+        orderId: orderId || `mp-${Date.now()}`,
+        quantity,
+        warehouseProductId: product.id,
+        groupKey: warehouseProductPageGroupKey(product),
+        groupOfferId: product.offerId,
+        available: true,
+        ready: true,
+      }));
+    }
+
+    if (!cartRows.length) {
+      return response.status(400).json({ ok: false, error: "No orders could be resolved.", failed });
+    }
+
+    const result = await insertSupplierCartRowsIntoPriceMaster(cartRows, request);
+    response.json({
+      ok: true,
+      inserted: result.inserted.length,
+      failed: failed.length,
+      failedDetails: failed,
+      docIds: result.docIds,
+      pickingCreated: result.pickingCreated?.length || 0,
     });
   } catch (error) {
     next(error);

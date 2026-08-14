@@ -183,30 +183,41 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
         );
       }
       docIds.push(docId);
-      // Merge rows with the same offerRowId to avoid duplicate-line errors in PriceMaster
-      const mergedByOfferRowId = new Map();
+      // Merge rows for the same product (offerId) from the same supplier into one PM line
+      // with summed quantity. PM sometimes has multiple OfferRows for the same article, so
+      // merging by offerRowId alone misses orders that resolved to different row IDs.
+      // We use offerId as the canonical merge key and keep the first-resolved offerRowId.
+      const mergedByOfferId = new Map();
       for (const row of partnerRows) {
-        const key = String(row.offerRowId);
-        if (mergedByOfferRowId.has(key)) {
-          mergedByOfferRowId.get(key).quantity += Math.max(1, Math.round(Number(row.quantity || 1)));
+        const key = cleanText(row.offerId).toLowerCase() || String(row.offerRowId);
+        const qty = Math.max(1, Math.round(Number(row.quantity || 1)));
+        if (mergedByOfferId.has(key)) {
+          const entry = mergedByOfferId.get(key);
+          entry.totalQuantity += qty;
+          entry.sourceRows.push({ ...row, quantity: qty });
         } else {
-          mergedByOfferRowId.set(key, { ...row, quantity: Math.max(1, Math.round(Number(row.quantity || 1))) });
+          mergedByOfferId.set(key, { ...row, totalQuantity: qty, sourceRows: [{ ...row, quantity: qty }] });
         }
       }
-      for (const row of mergedByOfferRowId.values()) {
+      for (const entry of mergedByOfferId.values()) {
         const requestRowId = nextRowId++;
-        const manualNote = cleanText(row.manualNote || "");
+        const manualNote = cleanText(entry.manualNote || "");
         const rowComment = manualNote.slice(0, 250);
         await connection.query(
           "INSERT INTO RequestRows (RowID, OfferRowID, RequestQuant, RequestPrice, RequestComment, DocID) VALUES (?, ?, ?, 0.00, ?, ?)",
-          [requestRowId, Number(row.offerRowId), row.quantity, rowComment, docId],
+          [requestRowId, Number(entry.offerRowId), entry.totalQuantity, rowComment, docId],
         );
-        inserted.push({
-          ...row,
-          requestDocId: String(docId),
-          requestRowId: String(requestRowId),
-          committedAt: new Date().toISOString(),
-        });
+        // Include every source order as a separate inserted entry sharing the same PM row.
+        // This ensures each order key is marked processed and gets its own picking row.
+        const committedAt = new Date().toISOString();
+        for (const sourceRow of entry.sourceRows) {
+          inserted.push({
+            ...sourceRow,
+            requestDocId: String(docId),
+            requestRowId: String(requestRowId),
+            committedAt,
+          });
+        }
       }
     }
     await connection.commit();

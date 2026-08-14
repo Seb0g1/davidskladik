@@ -5,6 +5,13 @@ function buildYandexOfferMapping(product, overrides = {}) {
     ...(normalized.yandex || {}),
     ...(overrides.yandex || {}),
   };
+
+  // Use approved AI content draft when available — provides better names and descriptions
+  // than raw Ozon data. Inline lookup (latestAiContentDraft loads after this file).
+  const approvedDraft = [...(normalized.aiContentDrafts || [])]
+    .filter((d) => d.status === "approved" && d.marketplace !== "ozon")
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] || null;
+
   const pictures = Array.from(
     new Set([
       cleanText(normalized.imageUrl),
@@ -28,13 +35,23 @@ function buildYandexOfferMapping(product, overrides = {}) {
   const { weightDimensions: _cachedDims, ...extraRest } = extra;
   const weightDimensions = resolveYandexWeightDimensionsFromProduct(normalized);
   const vendor = resolveYandexVendorFromProduct(normalized) || "Без бренда";
+
+  // Description priority: manual yandex override → approved AI draft → Ozon description →
+  // AI draft bullet points as fallback. Never fall back to product name — that produces
+  // duplicate name/description pairs that Yandex penalises.
+  const descriptionRaw =
+    yandex.description ||
+    approvedDraft?.description ||
+    ozon.description ||
+    (approvedDraft?.bulletPoints?.length ? approvedDraft.bulletPoints.join(". ") : "");
+
   const offer = compactObject({
     offerId: cleanText(overrides.offerId || yandex.offerId || normalized.offerId),
-    name: cleanText(overrides.name || yandex.name || ozon.name || normalized.name),
+    name: cleanText(overrides.name || yandex.name || approvedDraft?.name || ozon.name || normalized.name),
     marketCategoryId: Number(yandex.marketCategoryId || ozon.marketCategoryId || 0) || undefined,
     pictures,
     vendor,
-    description: cleanText(yandex.description || ozon.description || normalized.name),
+    description: cleanText(descriptionRaw) || undefined,
     barcodes,
     weightDimensions,
     basicPrice: price > 0 ? { value: roundPrice(price), currencyId: "RUR" } : undefined,

@@ -600,6 +600,19 @@ app.post("/api/avito/images/backfill", requireAdmin, async (request, response, n
   }
 });
 
+// Массовое восстановление колонки images из Ozon API для товаров склада,
+// у которых images пуст. Нужно после случайного обнуления колонки reconciler'ом.
+app.post("/api/avito/images/db-restore", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = Math.min(2000, Math.max(1, Number(request.body?.limit || 500) || 500));
+    const result = await restoreWarehouseProductImagesFromOzon({ limit, source: "manual" });
+    await appendAudit(request, "avito.images.db_restore", { newValue: result });
+    response.json({ ok: result.status === "ok" || result.status === "done", ...result });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Полный ручной синк: добавляет новые привязанные товары, удаляет потерявшие
 // поставщика. Эквивалент авто-синка по расписанию.
 app.post("/api/avito/feed/sync", requireAdmin, async (request, response, next) => {

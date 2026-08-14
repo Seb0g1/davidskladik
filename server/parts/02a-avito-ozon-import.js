@@ -174,7 +174,17 @@ function resolveAvitoListingPriceRub(product = {}, supplier, rules = {}, pricing
   const targetPrice = Number(product.targetPrice || product.target_price || 0);
   if (targetPrice > 0) {
     if (productMarkup > 0) return Math.round(targetPrice * productMarkup);
-    return Math.round(targetPrice * avitoPriceCoefficientFor(targetPrice, rules));
+    const importCoeff = avitoPriceCoefficientFor(targetPrice, rules);
+    // Если priceCoefficient не настроен (=1) и priceRules пусты, применяем
+    // соотношение Avito/Ozon-наценки из общих настроек. targetPrice рассчитан
+    // по Ozon-наценке; делим и умножаем на Avito-наценку чтобы не показывать
+    // цену Ozon напрямую на Avito (новые товары, временный сбой PM).
+    if (importCoeff === 1 && !(Array.isArray(rules.priceRules) && rules.priceRules.length) && pricing?.appSettings) {
+      const ozonMarkup = Number(pricing.appSettings.defaultMarkups?.ozon || process.env.DEFAULT_OZON_MARKUP || 1.7) || 1.7;
+      const avitoMarkup = Number(pricing.appSettings.defaultMarkups?.avito || process.env.DEFAULT_AVITO_MARKUP || 1.6) || 1.6;
+      if (Math.abs(avitoMarkup - ozonMarkup) > 0.001) return Math.round(targetPrice * avitoMarkup / ozonMarkup);
+    }
+    return Math.round(targetPrice * importCoeff);
   }
   return 0;
 }

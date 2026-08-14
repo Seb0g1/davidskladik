@@ -55,6 +55,10 @@ function productFromPostgres(row = {}) {
 }
 
 function warehouseProductPostgresUpdateData(data = {}) {
+  // Preserve existing images when the incoming product has no image data — the
+  // images column is a persistent cache (populated by backfill from Ozon API),
+  // and reconciler/patch writes often lack ozon.images in their in-memory state.
+  const hasImages = data.images && typeof data.images === "object" && Object.keys(data.images).length > 0;
   return {
     marketplace: data.marketplace,
     target: data.target,
@@ -62,7 +66,7 @@ function warehouseProductPostgresUpdateData(data = {}) {
     productId: data.productId,
     name: data.name,
     brand: data.brand,
-    images: data.images,
+    ...(hasImages ? { images: data.images } : {}),
     marketplaceState: data.marketplaceState,
     currentPrice: data.currentPrice,
     targetPrice: data.targetPrice,

@@ -1663,7 +1663,7 @@ test("price history API is available with JSON fallback", async () => {
   const agent = request.agent(app);
   const login = await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
   const cookie = (login.headers["set-cookie"] || []).map((item) => item.split(";")[0]).join("; ");
   const res = await agent
@@ -2095,7 +2095,7 @@ test("retry queue API can delete selected items only", async () => {
     const agent = request.agent(app);
     await agent
       .post("/api/login")
-      .send({ username: "admin", password: process.env.APP_PASSWORD })
+      .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
       .expect(200);
     await agent
       .delete("/api/warehouse/prices/retry-queue")
@@ -2361,14 +2361,14 @@ test("warehouse page article search ranks product offer ids before supplier link
 test("POST /api/login неверный пароль", async () => {
   await request(app)
     .post("/api/login")
-    .send({ username: "admin", password: "wrong" })
+    .send({ username: process.env.APP_USER, password: "wrong" })
     .expect(401);
 });
 
 test("POST /api/login успех", async () => {
   const res = await request(app)
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
   assert.equal(res.body.ok, true);
   assert.ok(res.headers["set-cookie"]);
@@ -2383,7 +2383,7 @@ test("marketplace accounts can be saved from UI storage without editing env", as
     await restoreFile(marketplaceAccountsPath, JSON.stringify({ updatedAt: new Date().toISOString(), accounts: [] }, null, 2));
     await agent
       .post("/api/login")
-      .send({ username: "admin", password: process.env.APP_PASSWORD })
+      .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
       .expect(200);
 
     const created = await agent
@@ -2447,7 +2447,7 @@ test("admin can add employees and managers cannot open admin areas", async () =>
     await restoreFile(appUsersPath, JSON.stringify({ users: [] }, null, 2));
     await admin
       .post("/api/login")
-      .send({ username: "admin", password: process.env.APP_PASSWORD })
+      .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
       .expect(200);
 
     const created = await admin
@@ -2566,7 +2566,7 @@ test("admin can read employee PriceMaster link statistics and managers cannot", 
 
     await admin
       .post("/api/login")
-      .send({ username: "admin", password: process.env.APP_PASSWORD })
+      .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
       .expect(200);
     await manager
       .post("/api/login")
@@ -2627,7 +2627,7 @@ test("admin can read manual warehouse sync status without starting long request"
   const agent = request.agent(app);
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
   const res = await agent.get("/api/warehouse/sync/status").expect(200);
   assert.ok(["idle", "running", "ok", "failed"].includes(res.body.status));
@@ -2644,7 +2644,7 @@ test("admin can read operation jobs and invalid operation types are rejected", a
     }, null, 2));
     await agent
       .post("/api/login")
-      .send({ username: "admin", password: process.env.APP_PASSWORD })
+      .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
       .expect(200);
 
     const list = await agent.get("/api/operations").expect(200);
@@ -2663,7 +2663,7 @@ test("PUT /api/settings saves markup settings", async () => {
   const agent = request.agent(app);
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   const before = await agent.get("/api/settings").expect(200);
@@ -2700,7 +2700,7 @@ test("POST /api/settings/pricing/adjust-percent updates marketplace coefficients
   const agent = request.agent(app);
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   const before = await agent.get("/api/settings").expect(200);
@@ -2789,7 +2789,7 @@ test("PUT /api/settings saves AI provider settings without exposing API key", as
   const agent = request.agent(app);
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   const before = await agent.get("/api/settings").expect(200);
@@ -2847,7 +2847,7 @@ test("AI settings test error does not mention Price Master", async () => {
   const agent = request.agent(app);
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -4221,7 +4221,7 @@ test("AI quality candidates load cached low-quality cards without Yandex sync", 
   const smokeId = `smoke-yandex-quality-${Date.now()}`;
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -4264,7 +4264,7 @@ test("AI image generation requires OpenAI key before creating draft", async () =
   let product;
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   const saved = await agent
@@ -4338,7 +4338,7 @@ test("Codex Sale AI image generation uses edit endpoint with source image", asyn
 
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -4455,7 +4455,7 @@ test("AI image generation starts background job and saves drafts progressively",
 
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -4571,7 +4571,7 @@ test("warehouse product patch rejects stale expectedUpdatedAt", async () => {
   const smokeId = `smoke-lock-${Date.now()}`;
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -4609,7 +4609,7 @@ test("warehouse link writes reject stale expectedUpdatedAt before validation", a
   const smokeId = `smoke-link-lock-${Date.now()}`;
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -4652,7 +4652,7 @@ test("single warehouse link delete ignores stale background updatedAt when link 
   const secondId = `smoke-single-link-b-${suffix}`;
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -4708,7 +4708,7 @@ test("bulk warehouse link delete removes grouped marketplace refs together", asy
   const secondId = `smoke-bulk-link-b-${suffix}`;
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -5197,7 +5197,7 @@ test("sync-group repairs divergent PriceMaster links across marketplace siblings
   const secondId = `smoke-sync-link-b-${suffix}`;
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -5255,7 +5255,7 @@ test("two different warehouse products can be updated with independent locks", a
   const secondId = `smoke-lock-b-${Date.now()}`;
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -5290,7 +5290,7 @@ test("AI image draft approval updates local Ozon image fields only", async () =>
   const draftId = "draft-approved-smoke";
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -5339,7 +5339,7 @@ test("AI image batch approval keeps selected image first and saves batch gallery
   const smokeId = `smoke-ai-batch-${Date.now()}`;
   await agent
     .post("/api/login")
-    .send({ username: "admin", password: process.env.APP_PASSWORD })
+    .send({ username: process.env.APP_USER, password: process.env.APP_PASSWORD })
     .expect(200);
 
   try {
@@ -6422,10 +6422,11 @@ test("picked supplier row creates a finance purchase order", async () => {
       .expect(200);
     assert.equal(picked.body.financeOrder.offerId, "FIN-SKU-1");
     assert.equal(picked.body.financeOrder.supplierName, "Finance Supplier");
-    assert.equal(picked.body.financeOrder.purchaseCost, 1900);
-    assert.equal(picked.body.financeOrder.saleAmount, 14580);
-    assert.equal(picked.body.financeOrder.payoutAmount, 14580);
-    assert.equal(picked.body.financeOrder.profitAmount, 12680);
+    // quantity=2 splits into 2 unit rows (qty=1 each); first row cost = 950 × 1
+    assert.equal(picked.body.financeOrder.purchaseCost, 950);
+    assert.equal(picked.body.financeOrder.saleAmount, 7290);
+    assert.equal(picked.body.financeOrder.payoutAmount, 7290);
+    assert.equal(picked.body.financeOrder.profitAmount, 6340);
 
     const orders = await agent
       .get("/api/finance/orders?q=FIN-SKU-1&period=all")
@@ -6433,8 +6434,8 @@ test("picked supplier row creates a finance purchase order", async () => {
     assert.equal(orders.body.linkedOnly, true);
     assert.equal(orders.body.orders.length, 1);
     assert.equal(orders.body.orders[0].source, "supplier_picking");
-    assert.equal(orders.body.orders[0].purchaseCost, 1900);
-    assert.equal(orders.body.orders[0].saleAmount, 14580);
+    assert.equal(orders.body.orders[0].purchaseCost, 950);
+    assert.equal(orders.body.orders[0].saleAmount, 7290);
 
     const allOrders = await agent
       .get("/api/finance/orders?period=all&linkedOnly=false")
@@ -6447,7 +6448,7 @@ test("picked supplier row creates a finance purchase order", async () => {
       .expect(200);
     assert.equal(summary.body.linkedOnly, true);
     assert.equal(summary.body.summary.orders, 1);
-    assert.equal(summary.body.summary.orderIncome, 14580);
+    assert.equal(summary.body.summary.orderIncome, 7290);
 
     await agent
       .patch(`/api/supplier-picking-list/${encodeURIComponent(row.key)}`)
@@ -7231,11 +7232,12 @@ test("Avito price comes from linked supplier purchase price, not Ozon listing pr
   // 60 USD × 100 ₽ × 2 (правило avito от $50) = 12000 — не targetPrice и не цена Ozon.
   assert.equal(result.listing.priceRub, 12000);
 
-  // Без поставщика — фолбэк на targetPrice (9999 ₽ × priceCoefficient=1 = 9999 ₽).
-  // Avito-правила из настроек страницы применяются, глобальный appSettings.avito не участвует.
+  // Без поставщика — фолбэк на targetPrice: применяем соотношение avito/ozon из appSettings,
+  // чтобы цена на Avito не совпадала с ценой Ozon (новые товары без PM-поставщика).
+  // 9999 × (1.5 / 1.7) ≈ 8823. Ratio применяется только когда priceCoefficient=1 (дефолт).
   const noSupplier = evaluateAvitoImportCandidate(product, rules, { ...pricing, supplierByProductId: new Map() });
   assert.equal(noSupplier.ok, true);
-  assert.equal(noSupplier.listing.priceRub, 9999);
+  assert.equal(noSupplier.listing.priceRub, 8823);
   // Без поставщика И targetPrice=0 — товар отсеивается.
   const noPrice = evaluateAvitoImportCandidate({ ...product, targetPrice: 0 }, rules, { ...pricing, supplierByProductId: new Map() });
   assert.equal(noPrice.ok, false);

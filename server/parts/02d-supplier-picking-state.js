@@ -35,6 +35,8 @@ function normalizeSupplierPickingRow(input = {}) {
     campaignId: cleanText(input.campaignId || input.campaign_id),
     requestDocId: cleanText(input.requestDocId || input.docId),
     requestRowId: cleanText(input.requestRowId || input.rowId),
+    pickedQuantity: input.pickedQuantity != null ? Math.max(1, Math.round(Number(input.pickedQuantity) || 1)) : null,
+    pricePaidRub: input.pricePaidRub != null ? (normalizeFinanceMoney(input.pricePaidRub, 0) || null) : null,
     status,
     createdAt: input.createdAt || new Date().toISOString(),
     createdBy: cleanText(input.createdBy || input.committedBy),
@@ -52,6 +54,7 @@ function normalizeSupplierPickingRow(input = {}) {
     returnedBy: cleanText(input.returnedBy),
     returnedAt: input.returnedAt || null,
     wbSupplyId: cleanText(input.wbSupplyId || input.wb_supply_id),
+    deferredUntil: input.deferredUntil || null,
   };
 }
 
@@ -255,31 +258,39 @@ async function createSupplierPickingRows(inserted = [], request = null, options 
   const created = [];
   const initialStatus = options.initialStatus || "open";
   for (const row of rows) {
-    const existing = state.rows[row.key] ? normalizeSupplierPickingRow(state.rows[row.key]) : null;
-    if (existing && existing.status !== "missing") continue;
-    const pickingKey = existing?.status === "missing"
-      ? `${row.key}|retry:${row.requestRowId || Date.now()}`
-      : row.key;
-    if (state.rows[pickingKey]) continue;
-    const now = new Date().toISOString();
-    const pickingRow = normalizeSupplierPickingRow({
-      ...row,
-      key: pickingKey,
-      status: initialStatus,
-      createdAt: row.committedAt || now,
-      createdBy: requestUsername(request),
-      replacementFor: existing?.status === "missing" ? existing.key : "",
-      ...(initialStatus === "picked" ? { pickedAt: now, pickedBy: requestUsername(request) || "manual" } : {}),
-    });
-    state.rows[pickingRow.key] = pickingRow;
-    if (existing?.status === "missing") {
-      state.rows[existing.key] = normalizeSupplierPickingRow({
-        ...existing,
-        status: "reordered",
-        replacementKey: pickingRow.key,
+    const totalQty = Math.max(1, Math.round(Number(row.quantity || 1) || 1));
+    const units = totalQty > 1 ? totalQty : 1;
+    for (let unitIdx = 0; unitIdx < units; unitIdx++) {
+      const unitKey = units > 1 ? `${row.key}:u${unitIdx}` : row.key;
+      const existing = state.rows[unitKey] ? normalizeSupplierPickingRow(state.rows[unitKey]) : null;
+      if (existing && existing.status !== "missing") continue;
+      const pickingKey = existing?.status === "missing"
+        ? `${unitKey}|retry:${row.requestRowId || Date.now()}`
+        : unitKey;
+      if (state.rows[pickingKey]) continue;
+      const now = new Date().toISOString();
+      const pickingRow = normalizeSupplierPickingRow({
+        ...row,
+        key: pickingKey,
+        quantity: 1,
+        saleAmount: undefined,
+        payoutAmount: undefined,
+        status: initialStatus,
+        createdAt: row.committedAt || now,
+        createdBy: requestUsername(request),
+        replacementFor: existing?.status === "missing" ? existing.key : "",
+        ...(initialStatus === "picked" ? { pickedAt: now, pickedBy: requestUsername(request) || "manual" } : {}),
       });
+      state.rows[pickingRow.key] = pickingRow;
+      if (existing?.status === "missing") {
+        state.rows[existing.key] = normalizeSupplierPickingRow({
+          ...existing,
+          status: "reordered",
+          replacementKey: pickingRow.key,
+        });
+      }
+      created.push(pickingRow);
     }
-    created.push(pickingRow);
   }
   if (created.length) await writeSupplierPickingState(state);
   for (const row of created) {

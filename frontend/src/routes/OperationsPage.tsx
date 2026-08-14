@@ -9,7 +9,7 @@ import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
-import { asRecord, compactDate, copyPlainText, errorMessage, numberValue } from "../lib/common";
+import { asRecord, compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
 function jobStatusLabel(status: unknown): string {
   return ({ queued: "Ожидает", running: "В работе", completed: "Готово", failed: "Ошибка" } as Record<string, string>)[String(status || "")] || String(status || "-");
@@ -417,6 +417,7 @@ export function SupplierCartPanel() {
                   <strong>{row.productName || row.offerId}</strong>
                   <div className="meta-grid">
                     <span>Кол-во: {row.quantity}</span>
+                    {row.saleAmount ? <span className="tone-success">Продажа: {money(row.saleAmount)}</span> : null}
                     <span>Поставщик: {row.supplierName || "-"}</span>
                     <span>PM row: {row.offerRowId || "-"}</span>
                     <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>

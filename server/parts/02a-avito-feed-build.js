@@ -183,7 +183,12 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}) {
   const hasSupplierPrice = computeAvitoSupplierPriceRub(product.supplier, pricing) > 0;
   // PM-цена = доступность для Avito (дропшипинг): если поставщик даёт цену —
   // товар в наличии даже при targetStock=0 (FBS-остаток Ozon не ограничивает Avito).
-  const outOfStock = !hasSupplierPrice && Boolean(product.archived);
+  // Поставщики «Наш склад» (stock-only) цены не дают — доступность определяем
+  // по физическому остатку (targetStock), а не по PM-цене.
+  const isStockOnlySupplier = supplierUsesStockOnlyPricing(null, product.supplier);
+  const outOfStock = isStockOnlySupplier
+    ? Number(product.targetStock || 0) <= 0
+    : !hasSupplierPrice;
   if (!rules.autoUpdatePrices) return { listing: withStock(listing, outOfStock, hasSupplierPrice), outOfStock };
   const markupOverride = Number(listing.markupCoefficient) > 0 ? Number(listing.markupCoefficient) : 0;
   const priceRub = resolveAvitoListingPriceRub(product, product.supplier, rules, pricing, markupOverride) || listing.priceRub;
