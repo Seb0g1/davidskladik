@@ -7,10 +7,10 @@ import { useAuth } from "../AuthContext";
 import AuthModal from "./AuthModal";
 
 const BOT_NAV = [
-  { label: "Главная",  to: "/",        icon: Home },
-  { label: "Каталог",  to: "/catalog",  icon: LayoutGrid },
-  { label: "Бренды",   to: "/brands",   icon: Sparkles },
-  { label: "Корзина",  to: "/cart",     icon: ShoppingBag, cart: true },
+  { label: "Главная",  to: "/",       icon: Home },
+  { label: "Каталог",  to: "/catalog", icon: LayoutGrid },
+  { label: "Бренды",   to: "/brands",  icon: Sparkles },
+  { label: "Корзина",  to: "/cart",    icon: ShoppingBag, cart: true },
 ];
 
 export default function Header() {
@@ -20,8 +20,8 @@ export default function Header() {
   const location = useLocation();
 
   const [q, setQ] = useState("");
-  const [searchOpen, setSearchOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [authModal, setAuthModal] = useState<{ open: boolean; tab: "login" | "register" }>({ open: false, tab: "login" });
 
@@ -29,16 +29,13 @@ export default function Header() {
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const fn = () => setScrolled(window.scrollY > 4);
+    const fn = () => setScrolled(window.scrollY > 60);
     window.addEventListener("scroll", fn, { passive: true });
     return () => window.removeEventListener("scroll", fn);
   }, []);
 
   useEffect(() => { setSearchOpen(false); }, [location.pathname]);
-
-  useEffect(() => {
-    if (searchOpen) setTimeout(() => searchRef.current?.focus(), 60);
-  }, [searchOpen]);
+  useEffect(() => { if (searchOpen) setTimeout(() => searchRef.current?.focus(), 60); }, [searchOpen]);
 
   useEffect(() => {
     if (!userMenuOpen) return;
@@ -51,118 +48,154 @@ export default function Header() {
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
-    const trimmed = q.trim();
-    if (trimmed) { navigate(`/catalog?q=${encodeURIComponent(trimmed)}`); setSearchOpen(false); setQ(""); }
+    const t = q.trim();
+    if (t) { navigate(`/catalog?q=${encodeURIComponent(t)}`); setSearchOpen(false); setQ(""); }
   }
 
   const path = location.pathname;
   const isActive = (to: string) => to === "/" ? path === "/" : path.startsWith(to);
 
+  const headerBg = scrolled
+    ? "rgba(9,6,15,0.92)"
+    : "transparent";
+  const headerBorder = scrolled ? "1px solid rgba(255,255,255,0.07)" : "1px solid transparent";
+
   return (
     <>
-      {/* ── Top bar ── */}
-      <header
-        className={clsx(
-          "sticky top-0 z-40 transition-all duration-200",
-          scrolled ? "bg-white/95 backdrop-blur-xl shadow-[0_1px_0_#EBEBEB]" : "bg-white border-b border-[#EBEBEB]"
-        )}
-      >
-        <div className="flex items-center h-14 px-4 max-w-7xl mx-auto gap-3">
+      <header style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 40,
+        background: headerBg,
+        borderBottom: headerBorder,
+        backdropFilter: scrolled ? "blur(24px)" : "none",
+        WebkitBackdropFilter: scrolled ? "blur(24px)" : "none",
+        transition: "background 0.3s ease, border-color 0.3s ease, backdrop-filter 0.3s ease",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", height: 60, padding: "0 clamp(16px,4vw,32px)", maxWidth: 1280, margin: "0 auto", gap: 16 }}>
 
           {/* Logo */}
-          <Link to="/" className="flex items-center gap-2 flex-shrink-0 group">
-            <div
-              className="w-8 h-8 rounded-[10px] flex items-center justify-center text-white text-[11px] font-bold tracking-tight flex-shrink-0"
-              style={{ background: "linear-gradient(135deg, #6D28D9, #7C3AED)" }}
-            >
-              MV
-            </div>
-            <span className="font-bold text-[15px] tracking-tight text-[#111] group-hover:text-violet-700 transition-colors hidden sm:block">
-              Magic Vibes
-            </span>
+          <Link to="/" style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0, textDecoration: "none" }}>
+            <div style={{
+              width: 34, height: 34, borderRadius: 10,
+              background: "linear-gradient(135deg, #6D28D9, #8B5CF6)",
+              boxShadow: "0 0 20px rgba(124,58,237,0.5)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 11, fontWeight: 800, color: "#fff", letterSpacing: "-0.02em",
+              flexShrink: 0,
+            }}>MV</div>
+            <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: "-0.02em", color: "var(--text)" }}
+              className="hidden sm:block">Magic Vibes</span>
           </Link>
 
           {/* Desktop nav */}
-          <nav className="hidden md:flex items-center gap-0.5 ml-6 flex-1">
+          <nav className="hidden md:flex" style={{ flex: 1, justifyContent: "center", gap: 2, marginLeft: 24 }}>
             {[
               { label: "Каталог", to: "/catalog" },
-              { label: "Бренды",  to: "/brands"  },
+              { label: "Бренды",  to: "/brands" },
               { label: "Новинки", to: "/catalog?sort=price_desc" },
               { label: "Акции",   to: "/catalog?inStock=true&sort=price_asc", accent: true },
             ].map((link) => (
               <Link
                 key={link.to}
                 to={link.to}
-                className={clsx(
-                  "px-3.5 py-2 rounded-xl text-[13.5px] font-medium transition-colors",
-                  link.accent
-                    ? "text-violet-600 hover:bg-violet-50"
-                    : "text-[#555] hover:text-[#111] hover:bg-[#F5F5F3]"
-                )}
+                style={{
+                  padding: "7px 14px",
+                  borderRadius: 10,
+                  fontSize: 13.5,
+                  fontWeight: 500,
+                  textDecoration: "none",
+                  color: link.accent ? "var(--accent3)" : "var(--muted)",
+                  transition: "color 0.15s ease, background 0.15s ease",
+                }}
+                onMouseEnter={e => {
+                  (e.currentTarget as HTMLElement).style.color = link.accent ? "#C4B5FD" : "var(--text)";
+                  (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)";
+                }}
+                onMouseLeave={e => {
+                  (e.currentTarget as HTMLElement).style.color = link.accent ? "var(--accent3)" : "var(--muted)";
+                  (e.currentTarget as HTMLElement).style.background = "transparent";
+                }}
               >
                 {link.label}
               </Link>
             ))}
           </nav>
 
-          {/* Right actions */}
-          <div className="flex items-center gap-1 ml-auto">
+          {/* Right */}
+          <div style={{ display: "flex", alignItems: "center", gap: 4, marginLeft: "auto" }}>
             {/* Search */}
             <button
               onClick={() => setSearchOpen((s) => !s)}
-              className="p-2.5 rounded-xl text-[#666] hover:text-[#111] hover:bg-[#F5F5F3] transition-colors"
-              aria-label="Поиск"
+              style={{ padding: 10, borderRadius: 10, color: "var(--muted)", background: "transparent", border: "none", display: "flex", transition: "color 0.15s ease, background 0.15s ease" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "var(--text)"; (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "var(--muted)"; (e.currentTarget as HTMLElement).style.background = "transparent"; }}
             >
-              <Search size={19} strokeWidth={2} />
+              <Search size={20} strokeWidth={1.8} />
             </button>
 
-            {/* Profile (desktop only) */}
-            <div className="relative hidden md:block" ref={userMenuRef}>
+            {/* Profile (desktop) */}
+            <div className="hidden md:block" ref={userMenuRef} style={{ position: "relative" }}>
               {customer ? (
                 <button
                   onClick={() => setUserMenuOpen((s) => !s)}
-                  className="p-2.5 rounded-xl text-[#666] hover:text-[#111] hover:bg-[#F5F5F3] transition-colors"
+                  style={{ padding: 10, borderRadius: 10, color: "var(--muted)", background: "transparent", border: "none", display: "flex", transition: "color 0.15s ease, background 0.15s ease" }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "var(--text)"; (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "var(--muted)"; (e.currentTarget as HTMLElement).style.background = "transparent"; }}
                 >
-                  <User size={19} strokeWidth={2} />
+                  <User size={20} strokeWidth={1.8} />
                 </button>
               ) : (
                 <button
                   onClick={() => setAuthModal({ open: true, tab: "login" })}
-                  className="px-4 py-2 rounded-xl text-[13px] font-semibold text-[#555] hover:text-[#111] hover:bg-[#F5F5F3] transition-colors"
+                  style={{ padding: "7px 16px", borderRadius: 10, fontSize: 13, fontWeight: 600, color: "var(--muted)", background: "transparent", border: "1px solid var(--border)", cursor: "pointer", transition: "all 0.15s ease" }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "var(--text)"; (e.currentTarget as HTMLElement).style.borderColor = "var(--border-md)"; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "var(--muted)"; (e.currentTarget as HTMLElement).style.borderColor = "var(--border)"; }}
                 >
                   Войти
                 </button>
               )}
               {userMenuOpen && customer && (
-                <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.12)] border border-[#F0F0F0] py-1.5 anim-scale-in">
-                  <div className="px-4 py-2.5 border-b border-[#F5F5F5] mb-1">
-                    <div className="text-[13px] font-semibold text-[#111] truncate">{customer.firstName || customer.email}</div>
-                    <div className="text-[11px] text-[#888] truncate mt-0.5">{customer.email}</div>
+                <div className="modal-content" style={{
+                  position: "absolute", right: 0, top: "calc(100% + 8px)",
+                  width: 220, background: "var(--surface2)", borderRadius: 16,
+                  border: "1px solid var(--border-md)",
+                  boxShadow: "0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.05)",
+                  padding: "6px 0", overflow: "hidden",
+                }}>
+                  <div style={{ padding: "12px 16px 10px", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{customer.firstName || customer.email}</div>
+                    <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>{customer.email}</div>
                   </div>
-                  <Link to="/orders" onClick={() => setUserMenuOpen(false)}
-                    className="flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-[#333] hover:bg-[#F7F7F7] transition-colors">
-                    <Package size={15} className="text-[#888]" /> Мои заказы
-                  </Link>
-                  <Link to="/account" onClick={() => setUserMenuOpen(false)}
-                    className="flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-[#333] hover:bg-[#F7F7F7] transition-colors">
-                    <Settings size={15} className="text-[#888]" /> Профиль
-                  </Link>
-                  <button onClick={() => { logout(); setUserMenuOpen(false); }}
-                    className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-red-500 hover:bg-red-50 transition-colors">
-                    <LogOut size={15} /> Выйти
+                  {[
+                    { to: "/orders",  icon: <Package size={14} />, label: "Мои заказы" },
+                    { to: "/account", icon: <Settings size={14} />, label: "Профиль" },
+                  ].map(({ to, icon, label }) => (
+                    <Link key={to} to={to} onClick={() => setUserMenuOpen(false)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", fontSize: 13, color: "var(--muted)", textDecoration: "none", transition: "background 0.12s ease, color 0.12s ease" }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.05)"; (e.currentTarget as HTMLElement).style.color = "var(--text)"; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "var(--muted)"; }}
+                    >
+                      {icon}{label}
+                    </Link>
+                  ))}
+                  <button onClick={() => { logout(); setUserMenuOpen(false); }} style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", fontSize: 13, color: "#F87171", background: "transparent", border: "none", cursor: "pointer", transition: "background 0.12s ease" }}
+                    onMouseEnter={e => (e.currentTarget.style.background = "rgba(239,68,68,0.08)")}
+                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <LogOut size={14} /> Выйти
                   </button>
                 </div>
               )}
             </div>
 
             {/* Cart (desktop) */}
-            <Link
-              to="/cart"
-              className="relative hidden md:flex p-2.5 rounded-xl text-[#666] hover:text-[#111] hover:bg-[#F5F5F3] transition-colors"
+            <Link to="/cart" className="hidden md:flex" style={{ position: "relative", padding: 10, borderRadius: 10, color: "var(--muted)", textDecoration: "none", transition: "color 0.15s ease, background 0.15s ease" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "var(--text)"; (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "var(--muted)"; (e.currentTarget as HTMLElement).style.background = "transparent"; }}
             >
-              <ShoppingBag size={19} strokeWidth={2} />
+              <ShoppingBag size={20} strokeWidth={1.8} />
               {totalItems > 0 && (
-                <span className="absolute top-1.5 right-1.5 w-4 h-4 bg-violet-600 text-white text-[9px] font-bold rounded-full flex items-center justify-center leading-none">
+                <span style={{ position: "absolute", top: 6, right: 6, width: 16, height: 16, background: "var(--accent)", color: "#fff", fontSize: 9, fontWeight: 800, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 8px rgba(124,58,237,0.5)" }}>
                   {totalItems > 9 ? "9+" : totalItems}
                 </span>
               )}
@@ -172,46 +205,29 @@ export default function Header() {
 
         {/* Search bar */}
         {searchOpen && (
-          <div className="border-t border-[#F0F0F0] anim-fade-in">
-            <div className="max-w-2xl mx-auto px-4 py-2.5">
-              <form onSubmit={handleSearch} className="relative">
-                <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#ABABAB] pointer-events-none" />
-                <input
-                  ref={searchRef}
-                  type="text"
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                  placeholder="Бренд, название, аромат..."
-                  className="input-base pl-9 pr-10"
-                />
-                {q ? (
-                  <button type="button" onClick={() => setQ("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#ABABAB] hover:text-[#333]">
-                    <X size={15} />
-                  </button>
-                ) : (
-                  <button type="button" onClick={() => setSearchOpen(false)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#ABABAB] hover:text-[#333]">
-                    <X size={15} />
-                  </button>
-                )}
+          <div className="anim-fade-in" style={{ borderTop: "1px solid var(--border)", background: "rgba(9,6,15,0.95)", backdropFilter: "blur(24px)" }}>
+            <div style={{ maxWidth: 600, margin: "0 auto", padding: "10px 16px" }}>
+              <form onSubmit={handleSearch} style={{ position: "relative" }}>
+                <Search size={15} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--subtle)", pointerEvents: "none" }} />
+                <input ref={searchRef} type="text" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Бренд, название, аромат..." className="input-base" style={{ paddingLeft: 40, paddingRight: 40 }} />
+                <button type="button" onClick={() => setSearchOpen(false)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--subtle)", cursor: "pointer" }}>
+                  <X size={16} />
+                </button>
               </form>
             </div>
           </div>
         )}
       </header>
 
-      {/* ── Bottom nav (mobile only) ── */}
+      {/* ── Bottom nav (mobile) ── */}
       <nav className="bottom-nav md:hidden">
         <div className="bottom-nav-inner">
           {BOT_NAV.map(({ label, to, icon: Icon, cart }) => (
-            <Link
-              key={to}
-              to={to}
-              className={clsx("bottom-nav-item", isActive(to) && "active")}
-            >
-              <div className="relative">
-                <Icon size={22} strokeWidth={isActive(to) ? 2.5 : 1.8} />
+            <Link key={to} to={to} className={clsx("bottom-nav-item", isActive(to) && "active")}>
+              <div style={{ position: "relative" }}>
+                <Icon size={22} strokeWidth={isActive(to) ? 2.3 : 1.7} />
                 {cart && totalItems > 0 && (
-                  <span className="absolute -top-1.5 -right-2 w-4 h-4 bg-violet-600 text-white text-[8px] font-bold rounded-full flex items-center justify-center leading-none">
+                  <span style={{ position: "absolute", top: -6, right: -8, width: 16, height: 16, background: "var(--accent)", color: "#fff", fontSize: 8, fontWeight: 800, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 8px rgba(124,58,237,0.5)" }}>
                     {totalItems > 9 ? "9+" : totalItems}
                   </span>
                 )}

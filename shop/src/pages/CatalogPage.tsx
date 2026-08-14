@@ -23,12 +23,12 @@ const PAGE_SIZE = 24;
 
 function CardSkeleton() {
   return (
-    <div className="product-card">
-      <div className="skeleton" style={{ aspectRatio: "4/5" }} />
-      <div className="p-3 space-y-2">
-        <div className="h-2 skeleton rounded w-1/2" />
-        <div className="h-3 skeleton rounded" />
-        <div className="h-4 skeleton rounded w-2/3 mt-2" />
+    <div style={{ background: "var(--surface)", borderRadius: 16, border: "1px solid var(--border)", overflow: "hidden" }}>
+      <div style={{ aspectRatio: "4/5", background: "rgba(255,255,255,0.03)" }} className="skeleton" />
+      <div style={{ padding: "10px 12px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
+        <div className="skeleton" style={{ height: 8, width: "45%", borderRadius: 6 }} />
+        <div className="skeleton" style={{ height: 12, width: "80%", borderRadius: 6 }} />
+        <div className="skeleton" style={{ height: 14, width: "55%", borderRadius: 6, marginTop: 4 }} />
       </div>
     </div>
   );
@@ -51,38 +51,42 @@ function CategoryCarouselRow({ cat, index }: { cat: AutoCategory; index: number 
   }, []);
 
   return (
-    <section className="anim-slide-up" style={{ animationDelay: `${index * 0.07}s` }}>
-      <div className="section-header px-4 pt-5 pb-3">
+    <section className="anim-slide-up" style={{ animationDelay: `${index * 0.06}s` }}>
+      {/* Category header */}
+      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", padding: "20px 16px 12px" }}>
         <div>
-          <h2 className="text-[16px] font-bold text-[#111] tracking-tight">
+          <h2 style={{ fontSize: 17, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.025em" }}>
             {CAT_LABELS[cat.slug] || cat.label}
           </h2>
-          <p className="text-[11px] text-[#ABABAB] mt-0.5">{cat.count.toLocaleString("ru-RU")} товаров</p>
+          <p style={{ fontSize: 11, color: "var(--subtle)", marginTop: 2 }}>{cat.count.toLocaleString("ru-RU")} товаров</p>
         </div>
         <Link to={`/catalog?category=${cat.slug}`}
-          className="text-[13px] font-semibold text-violet-600 flex items-center gap-1 whitespace-nowrap hover:text-violet-800 transition-colors">
+          style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12.5, fontWeight: 600, color: "var(--accent2)", textDecoration: "none", whiteSpace: "nowrap", transition: "color 0.15s ease" }}
+          onMouseEnter={e => (e.currentTarget.style.color = "var(--accent3)")}
+          onMouseLeave={e => (e.currentTarget.style.color = "var(--accent2)")}
+        >
           Все <ArrowRight size={13} strokeWidth={2.5} />
         </Link>
       </div>
 
-      <div className="relative">
-        <div ref={trackRef} className="scroll-x flex gap-3 px-4 pb-4" onScroll={syncArrows}>
+      <div style={{ position: "relative" }}>
+        <div ref={trackRef} className="scroll-x" style={{ display: "flex", gap: 12, padding: "0 16px 16px" }} onScroll={syncArrows}>
           {isLoading
             ? Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="flex-shrink-0" style={{ width: 152 }}><CardSkeleton /></div>
+                <div key={i} style={{ flexShrink: 0, width: 152 }}><CardSkeleton /></div>
               ))
             : data?.products.map((p) => (
-                <div key={p.offerId} className="flex-shrink-0" style={{ width: 152 }}>
+                <div key={p.offerId} style={{ flexShrink: 0, width: 152 }}>
                   <ProductCard product={p} />
                 </div>
               ))}
         </div>
         {canRight && (
-          <div className="absolute right-0 top-0 bottom-4 w-10 bg-gradient-to-l from-white to-transparent pointer-events-none" />
+          <div style={{ position: "absolute", right: 0, top: 0, bottom: 16, width: 48, background: "linear-gradient(to left, var(--bg) 20%, transparent)", pointerEvents: "none" }} />
         )}
       </div>
 
-      <div className="mx-4 border-b border-[#F0F0F0]" />
+      <div style={{ margin: "0 16px", borderBottom: "1px solid var(--border)" }} />
     </section>
   );
 }
@@ -99,11 +103,11 @@ function Pagination({ page, total, onPage }: { page: number; total: number; onPa
     pages.push(total);
   }
   return (
-    <div className="flex items-center gap-1.5 justify-center mt-8 pb-2">
+    <div style={{ display: "flex", alignItems: "center", gap: 6, justifyContent: "center", marginTop: 32, paddingBottom: 8 }}>
       <button disabled={page === 1} onClick={() => onPage(page - 1)} className="pg-btn">‹</button>
       {pages.map((p, i) =>
         p === "…"
-          ? <span key={`d${i}`} className="w-9 h-9 flex items-center justify-center text-[#888] text-sm">…</span>
+          ? <span key={`d${i}`} style={{ width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--subtle)", fontSize: 13 }}>…</span>
           : <button key={p} onClick={() => onPage(p as number)} className={clsx("pg-btn", p === page && "current")}>{p}</button>
       )}
       <button disabled={page === total} onClick={() => onPage(page + 1)} className="pg-btn">›</button>
@@ -157,49 +161,51 @@ export default function CatalogPage() {
     : "Весь каталог";
 
   return (
-    <div className="bg-white min-h-screen">
+    <div style={{ background: "var(--bg)", minHeight: "100vh" }}>
 
       {/* ── Sticky top strip ── */}
-      <div className="sticky top-14 z-30 bg-white/95 backdrop-blur-sm border-b border-[#EBEBEB]">
+      <div style={{ position: "sticky", top: 60, zIndex: 30, background: "rgba(9,6,15,0.92)", backdropFilter: "blur(20px)", WebkitBackdropFilter: "blur(20px)", borderBottom: "1px solid var(--border)" }}>
 
         {/* Search + filter row */}
-        <div className="flex items-center gap-2 px-3 py-2.5">
-          <div className="relative flex-1">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#ABABAB] pointer-events-none" />
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px" }}>
+          <div style={{ position: "relative", flex: 1 }}>
+            <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--subtle)", pointerEvents: "none" }} />
             <input
               type="text"
               value={q}
               onChange={(e) => setParam("q", e.target.value || null)}
               placeholder="Поиск по каталогу..."
-              className="input-base pl-8 pr-7 py-2.5 text-[13px]"
-              style={{ padding: "9px 30px 9px 32px" }}
+              className="input-base"
+              style={{ paddingLeft: 36, paddingRight: q ? 36 : 14, paddingTop: 10, paddingBottom: 10, fontSize: 13 }}
             />
             {q && (
-              <button onClick={() => setParam("q", null)} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#ABABAB] hover:text-[#333]">
+              <button onClick={() => setParam("q", null)} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--subtle)", display: "flex" }}>
                 <X size={14} />
               </button>
             )}
           </div>
           <button
             onClick={() => setFiltersOpen(true)}
-            className={clsx(
-              "flex-shrink-0 flex items-center gap-1.5 px-3.5 py-[9px] rounded-xl text-[13px] font-semibold transition-all",
-              activeFilterCount
-                ? "bg-violet-600 text-white"
-                : "bg-[#F5F5F3] text-[#555] hover:text-[#111]"
-            )}
+            style={{
+              flexShrink: 0, display: "flex", alignItems: "center", gap: 6,
+              padding: "10px 14px", borderRadius: 12, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer",
+              background: activeFilterCount ? "var(--accent)" : "var(--surface2)",
+              color: activeFilterCount ? "#fff" : "var(--muted)",
+              boxShadow: activeFilterCount ? "0 0 16px rgba(124,58,237,0.35)" : "none",
+              transition: "all 0.15s ease",
+            }}
           >
             <SlidersHorizontal size={14} strokeWidth={2} />
-            {activeFilterCount > 0 ? activeFilterCount : ""}
+            {activeFilterCount > 0 && activeFilterCount}
           </button>
         </div>
 
         {/* Category chips */}
-        <div className="scroll-x flex gap-2 px-3 pb-2.5">
+        <div className="scroll-x" style={{ display: "flex", gap: 8, padding: "0 12px 10px" }}>
           <Link
             to="/catalog"
-            className={clsx("chip flex-shrink-0 py-1.5 text-[12.5px]", !category && !showGrid && "active")}
-            style={{ padding: "5px 13px" }}
+            className={clsx("chip", !category && !showGrid && "active")}
+            style={{ flexShrink: 0 }}
           >
             Все
           </Link>
@@ -207,8 +213,8 @@ export default function CatalogPage() {
             <Link
               key={cat.slug}
               to={`/catalog?category=${cat.slug}${brand ? `&brand=${encodeURIComponent(brand)}` : ""}${inStock ? "&inStock=true" : ""}`}
-              className={clsx("chip flex-shrink-0 py-1.5 text-[12.5px]", category === cat.slug && "active")}
-              style={{ padding: "5px 13px" }}
+              className={clsx("chip", category === cat.slug && "active")}
+              style={{ flexShrink: 0 }}
             >
               {CAT_LABELS[cat.slug] || cat.label}
             </Link>
@@ -218,11 +224,11 @@ export default function CatalogPage() {
 
       {/* ══════ CAROUSEL MODE ══════ */}
       {!showGrid ? (
-        <div className="pb-6">
+        <div style={{ paddingBottom: 24 }}>
           {autoCategories && autoCategories.length > 0 ? (
             autoCategories.map((cat, i) => <CategoryCarouselRow key={cat.slug} cat={cat} index={i} />)
           ) : (
-            <div className="px-4 py-8 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+            <div style={{ padding: "16px 12px", display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }}>
               {Array.from({ length: 12 }).map((_, i) => <CardSkeleton key={i} />)}
             </div>
           )}
@@ -230,48 +236,50 @@ export default function CatalogPage() {
 
       ) : (
         /* ══════ GRID MODE ══════ */
-        <div className="px-3 py-3">
+        <div style={{ padding: "14px 12px" }}>
           {/* Header */}
-          <div className="flex items-center justify-between mb-3 anim-slide-up">
+          <div className="anim-slide-up" style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 14 }}>
             <div>
-              <h1 className="text-[16px] font-bold text-[#111] tracking-tight">{pageTitle}</h1>
+              <h1 style={{ fontSize: 17, fontWeight: 700, color: "var(--text)", letterSpacing: "-0.025em" }}>{pageTitle}</h1>
               {data && (
-                <p className="text-[11px] text-[#888] mt-0.5">{data.total.toLocaleString("ru-RU")} товаров</p>
+                <p style={{ fontSize: 11, color: "var(--subtle)", marginTop: 2 }}>{data.total.toLocaleString("ru-RU")} товаров</p>
               )}
             </div>
             {/* Desktop sort */}
-            <div className="relative hidden md:block">
+            <div className="hidden md:block" style={{ position: "relative" }}>
               <select value={sort} onChange={(e) => setParam("sort", e.target.value)}
-                className="appearance-none pl-3 pr-7 py-2 bg-[#F5F5F3] border border-transparent rounded-xl text-[13px] font-medium text-[#333] focus:outline-none focus:border-violet-400 cursor-pointer">
+                style={{ appearance: "none", padding: "8px 28px 8px 12px", background: "var(--surface2)", border: "1px solid var(--border)", borderRadius: 10, fontSize: 12.5, fontWeight: 500, color: "var(--muted)", cursor: "pointer" }}>
                 <option value="name">По названию</option>
                 <option value="price_asc">Сначала дешевле</option>
                 <option value="price_desc">Сначала дороже</option>
               </select>
-              <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#888] pointer-events-none" />
+              <ChevronDown size={12} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", color: "var(--subtle)", pointerEvents: "none" }} />
             </div>
           </div>
 
           {/* Active filter chips */}
           {hasActiveFilters && (
-            <div className="flex flex-wrap gap-1.5 mb-3 anim-fade-in">
+            <div className="anim-fade-in" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
               {brand && (
-                <span className="inline-flex items-center gap-1 bg-violet-50 text-violet-700 border border-violet-200 text-[11px] font-semibold px-2.5 py-1 rounded-full">
-                  {brand}<button onClick={() => setParam("brand", null)} className="ml-0.5"><X size={10} /></button>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(124,58,237,0.12)", color: "var(--accent3)", border: "1px solid rgba(124,58,237,0.2)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 100 }}>
+                  {brand}<button onClick={() => setParam("brand", null)} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", display: "flex" }}><X size={10} /></button>
                 </span>
               )}
               {q && (
-                <span className="inline-flex items-center gap-1 bg-violet-50 text-violet-700 border border-violet-200 text-[11px] font-semibold px-2.5 py-1 rounded-full">
-                  «{q}»<button onClick={() => setParam("q", null)} className="ml-0.5"><X size={10} /></button>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(124,58,237,0.12)", color: "var(--accent3)", border: "1px solid rgba(124,58,237,0.2)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 100 }}>
+                  «{q}»<button onClick={() => setParam("q", null)} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", display: "flex" }}><X size={10} /></button>
                 </span>
               )}
               {inStock && (
-                <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-semibold px-2.5 py-1 rounded-full">
-                  В наличии<button onClick={() => setParam("inStock", null)} className="ml-0.5"><X size={10} /></button>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(16,185,129,0.1)", color: "#6EE7B7", border: "1px solid rgba(16,185,129,0.2)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 100 }}>
+                  В наличии<button onClick={() => setParam("inStock", null)} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", display: "flex" }}><X size={10} /></button>
                 </span>
               )}
               <button
                 onClick={() => setSearchParams(new URLSearchParams(category ? { category } : {}))}
-                className="text-[11px] text-[#888] hover:text-red-500 transition-colors px-1"
+                style={{ fontSize: 11, color: "var(--subtle)", background: "none", border: "none", cursor: "pointer", padding: "4px 6px", transition: "color 0.15s ease" }}
+                onMouseEnter={e => (e.currentTarget.style.color = "#F87171")}
+                onMouseLeave={e => (e.currentTarget.style.color = "var(--subtle)")}
               >
                 Сбросить
               </button>
@@ -280,12 +288,12 @@ export default function CatalogPage() {
 
           {/* Grid */}
           {isLoading ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }} className="sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
               {Array.from({ length: PAGE_SIZE }).map((_, i) => <CardSkeleton key={i} />)}
             </div>
           ) : data?.products.length ? (
             <>
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-3">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }} className="sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
                 {data.products.map((p, i) => (
                   <div key={p.offerId} className="anim-slide-up" style={{ animationDelay: `${Math.min(i, 12) * 0.03}s` }}>
                     <ProductCard product={p} />
@@ -297,13 +305,14 @@ export default function CatalogPage() {
               )}
             </>
           ) : (
-            <div className="flex flex-col items-center justify-center py-20 text-center anim-fade-in">
-              <div className="w-16 h-16 rounded-3xl mb-5 flex items-center justify-center text-2xl bg-violet-50">🔍</div>
-              <p className="text-[16px] font-bold text-[#111] mb-1">Товары не найдены</p>
-              <p className="text-[13px] text-[#888] mb-6 max-w-xs leading-relaxed">Попробуйте изменить фильтры или выбрать другую категорию</p>
+            <div className="anim-fade-in" style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 20px", textAlign: "center" }}>
+              <div style={{ width: 64, height: 64, borderRadius: 20, marginBottom: 20, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, background: "var(--surface2)", border: "1px solid var(--border)" }}>🔍</div>
+              <p style={{ fontSize: 17, fontWeight: 700, color: "var(--text)", marginBottom: 6 }}>Товары не найдены</p>
+              <p style={{ fontSize: 13, color: "var(--muted)", marginBottom: 24, maxWidth: 280, lineHeight: 1.6 }}>Попробуйте изменить фильтры или выбрать другую категорию</p>
               <button
                 onClick={() => setSearchParams(new URLSearchParams(category ? { category } : {}))}
-                className="btn-primary px-6 py-3 text-[13px]"
+                className="btn-primary"
+                style={{ padding: "12px 24px", fontSize: 13 }}
               >
                 Сбросить фильтры
               </button>
@@ -314,40 +323,40 @@ export default function CatalogPage() {
 
       {/* ── Filter sheet (mobile) ── */}
       {filtersOpen && (
-        <div className="fixed inset-0 z-50 flex flex-col justify-end">
-          <div className="absolute inset-0 bg-black/40 modal-overlay" onClick={() => setFiltersOpen(false)} />
-          <div ref={drawerRef} className="relative bg-white rounded-t-3xl sheet-content max-h-[85vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white rounded-t-3xl border-b border-[#F0F0F0] px-5 py-4 flex items-center justify-between">
+        <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", flexDirection: "column", justifyContent: "flex-end" }}>
+          <div className="modal-overlay" style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.7)" }} onClick={() => setFiltersOpen(false)} />
+          <div ref={drawerRef} className="sheet-content" style={{ position: "relative", background: "var(--surface)", borderRadius: "24px 24px 0 0", maxHeight: "88vh", overflowY: "auto", border: "1px solid var(--border-md)", borderBottom: "none" }}>
+            <div style={{ position: "sticky", top: 0, background: "var(--surface)", borderRadius: "24px 24px 0 0", borderBottom: "1px solid var(--border)", padding: "18px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <div>
-                <h3 className="font-bold text-[#111] text-base">Фильтры</h3>
-                {activeFilterCount > 0 && <p className="text-[11px] text-violet-600 mt-0.5">{activeFilterCount} выбрано</p>}
+                <h3 style={{ fontWeight: 700, color: "var(--text)", fontSize: 16 }}>Фильтры</h3>
+                {activeFilterCount > 0 && <p style={{ fontSize: 11, color: "var(--accent2)", marginTop: 2 }}>{activeFilterCount} выбрано</p>}
               </div>
               <button onClick={() => setFiltersOpen(false)}
-                className="w-8 h-8 flex items-center justify-center rounded-full bg-[#F5F5F3] hover:bg-[#EBEBEB] transition-colors">
-                <X size={16} />
+                style={{ width: 32, height: 32, display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "50%", background: "var(--surface2)", border: "1px solid var(--border)", cursor: "pointer", color: "var(--muted)" }}>
+                <X size={15} />
               </button>
             </div>
 
-            <div className="px-5 py-5 space-y-5 pb-8">
+            <div style={{ padding: "20px 20px 32px", display: "flex", flexDirection: "column", gap: 22 }}>
               {/* Brand */}
               {(data?.brands?.length ?? 0) > 0 && (
                 <div>
-                  <p className="text-[11px] font-bold uppercase tracking-wider text-[#888] mb-2">Бренд</p>
-                  <div className="relative">
+                  <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--subtle)", marginBottom: 8 }}>Бренд</p>
+                  <div style={{ position: "relative" }}>
                     <select value={brand} onChange={(e) => setParam("brand", e.target.value || null)}
-                      className="input-base appearance-none pr-8">
+                      className="input-base" style={{ appearance: "none", paddingRight: 32 }}>
                       <option value="">Все бренды</option>
                       {data?.brands.map((b) => <option key={b} value={b}>{b}</option>)}
                     </select>
-                    <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#ABABAB] pointer-events-none" />
+                    <ChevronDown size={13} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", color: "var(--subtle)", pointerEvents: "none" }} />
                   </div>
                 </div>
               )}
 
               {/* Sort */}
               <div>
-                <p className="text-[11px] font-bold uppercase tracking-wider text-[#888] mb-2">Сортировка</p>
-                <div className="flex flex-col gap-2">
+                <p style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: "var(--subtle)", marginBottom: 8 }}>Сортировка</p>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   {[
                     { value: "name",       label: "По названию" },
                     { value: "price_asc",  label: "Сначала дешевле" },
@@ -356,12 +365,13 @@ export default function CatalogPage() {
                     <button
                       key={opt.value}
                       onClick={() => setParam("sort", opt.value)}
-                      className={clsx(
-                        "w-full text-left px-4 py-3 rounded-xl text-[13px] font-medium transition-all border",
-                        sort === opt.value
-                          ? "bg-violet-50 border-violet-300 text-violet-700"
-                          : "bg-[#F5F5F3] border-transparent text-[#333] hover:border-[#E0E0E0]"
-                      )}
+                      style={{
+                        width: "100%", textAlign: "left", padding: "12px 16px", borderRadius: 12, fontSize: 13.5, fontWeight: 500,
+                        background: sort === opt.value ? "rgba(124,58,237,0.12)" : "var(--surface2)",
+                        border: `1px solid ${sort === opt.value ? "rgba(124,58,237,0.3)" : "var(--border)"}`,
+                        color: sort === opt.value ? "var(--accent3)" : "var(--muted)",
+                        cursor: "pointer", transition: "all 0.15s ease",
+                      }}
                     >
                       {opt.label}
                     </button>
@@ -370,25 +380,27 @@ export default function CatalogPage() {
               </div>
 
               {/* In stock toggle */}
-              <label className="flex items-center justify-between py-1 cursor-pointer">
-                <span className="text-[14px] font-medium text-[#111]">Только в наличии</span>
-                <div className="relative flex-shrink-0">
+              <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer" }}>
+                <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text)" }}>Только в наличии</span>
+                <div style={{ position: "relative", flexShrink: 0 }}>
                   <input type="checkbox" checked={inStock} onChange={(e) => setParam("inStock", e.target.checked ? "true" : null)} className="sr-only" />
-                  <div className={clsx("w-11 h-6 rounded-full transition-colors duration-200", inStock ? "bg-violet-600" : "bg-[#E0E0E0]")}>
-                    <div className={clsx("absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-transform duration-200", inStock ? "translate-x-6" : "translate-x-1")} />
+                  <div style={{ width: 44, height: 24, borderRadius: 100, background: inStock ? "var(--accent)" : "var(--surface2)", border: `1px solid ${inStock ? "transparent" : "var(--border)"}`, transition: "background 0.2s ease", boxShadow: inStock ? "0 0 12px rgba(124,58,237,0.4)" : "none" }}>
+                    <div style={{ position: "absolute", top: 4, left: inStock ? 24 : 4, width: 16, height: 16, background: inStock ? "#fff" : "var(--muted)", borderRadius: "50%", transition: "left 0.2s ease, background 0.2s ease" }} />
                   </div>
                 </div>
               </label>
 
               {/* Apply */}
-              <button onClick={() => setFiltersOpen(false)} className="btn-primary w-full py-3.5">
+              <button onClick={() => setFiltersOpen(false)} className="btn-primary" style={{ width: "100%", padding: "14px", fontSize: 14 }}>
                 Применить
               </button>
 
               {hasActiveFilters && (
                 <button
                   onClick={() => { setSearchParams(new URLSearchParams(category ? { category } : {})); setFiltersOpen(false); }}
-                  className="w-full py-3 text-[13px] font-semibold text-red-500 hover:text-red-600 transition-colors"
+                  style={{ width: "100%", padding: "12px", fontSize: 13, fontWeight: 600, color: "#F87171", background: "none", border: "none", cursor: "pointer", transition: "color 0.15s ease" }}
+                  onMouseEnter={e => (e.currentTarget.style.color = "#FCA5A5")}
+                  onMouseLeave={e => (e.currentTarget.style.color = "#F87171")}
                 >
                   Сбросить всё
                 </button>
