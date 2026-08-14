@@ -1,16 +1,16 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { Search, ShoppingBag, User, X, Menu, LogOut, Package, Settings } from "lucide-react";
+import { Search, ShoppingBag, User, X, LayoutGrid, Sparkles, Home, LogOut, Package, Settings } from "lucide-react";
 import clsx from "clsx";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
 import AuthModal from "./AuthModal";
 
-const NAV = [
-  { label: "Каталог", to: "/catalog" },
-  { label: "Бренды", to: "/brands" },
-  { label: "Новинки", to: "/catalog?sort=price_desc" },
-  { label: "Акции", to: "/catalog?inStock=true&sort=price_asc", accent: true },
+const BOT_NAV = [
+  { label: "Главная",  to: "/",        icon: Home },
+  { label: "Каталог",  to: "/catalog",  icon: LayoutGrid },
+  { label: "Бренды",   to: "/brands",   icon: Sparkles },
+  { label: "Корзина",  to: "/cart",     icon: ShoppingBag, cart: true },
 ];
 
 export default function Header() {
@@ -20,9 +20,8 @@ export default function Header() {
   const location = useLocation();
 
   const [q, setQ] = useState("");
-  const [scrolled, setScrolled] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [authModal, setAuthModal] = useState<{ open: boolean; tab: "login" | "register" }>({ open: false, tab: "login" });
 
@@ -30,15 +29,15 @@ export default function Header() {
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const fn = () => setScrolled(window.scrollY > 8);
+    const fn = () => setScrolled(window.scrollY > 4);
     window.addEventListener("scroll", fn, { passive: true });
     return () => window.removeEventListener("scroll", fn);
   }, []);
 
-  useEffect(() => { setMenuOpen(false); setSearchOpen(false); }, [location.pathname]);
+  useEffect(() => { setSearchOpen(false); }, [location.pathname]);
 
   useEffect(() => {
-    if (searchOpen) setTimeout(() => searchRef.current?.focus(), 80);
+    if (searchOpen) setTimeout(() => searchRef.current?.focus(), 60);
   }, [searchOpen]);
 
   useEffect(() => {
@@ -52,39 +51,53 @@ export default function Header() {
 
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
-    if (q.trim()) { navigate(`/catalog?q=${encodeURIComponent(q.trim())}`); setSearchOpen(false); setQ(""); }
+    const trimmed = q.trim();
+    if (trimmed) { navigate(`/catalog?q=${encodeURIComponent(trimmed)}`); setSearchOpen(false); setQ(""); }
   }
+
+  const path = location.pathname;
+  const isActive = (to: string) => to === "/" ? path === "/" : path.startsWith(to);
 
   return (
     <>
-      <header className={clsx(
-        "sticky top-0 z-50 transition-all duration-300",
-        scrolled
-          ? "bg-white/90 backdrop-blur-xl border-b border-gray-100 shadow-sm"
-          : "bg-white border-b border-gray-100"
-      )}>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center gap-4">
+      {/* ── Top bar ── */}
+      <header
+        className={clsx(
+          "sticky top-0 z-40 transition-all duration-200",
+          scrolled ? "bg-white/95 backdrop-blur-xl shadow-[0_1px_0_#EBEBEB]" : "bg-white border-b border-[#EBEBEB]"
+        )}
+      >
+        <div className="flex items-center h-14 px-4 max-w-7xl mx-auto gap-3">
+
           {/* Logo */}
-          <Link to="/" className="flex-shrink-0 flex items-center gap-2 group">
-            <div className="w-8 h-8 rounded-xl bg-violet-600 flex items-center justify-center">
-              <span className="text-white text-xs font-bold tracking-tight">MV</span>
+          <Link to="/" className="flex items-center gap-2 flex-shrink-0 group">
+            <div
+              className="w-8 h-8 rounded-[10px] flex items-center justify-center text-white text-[11px] font-bold tracking-tight flex-shrink-0"
+              style={{ background: "linear-gradient(135deg, #6D28D9, #7C3AED)" }}
+            >
+              MV
             </div>
-            <span className="font-bold text-[15px] tracking-tight text-apple-black group-hover:text-violet-600 transition-colors hidden sm:block">
+            <span className="font-bold text-[15px] tracking-tight text-[#111] group-hover:text-violet-700 transition-colors hidden sm:block">
               Magic Vibes
             </span>
           </Link>
 
           {/* Desktop nav */}
-          <nav className="hidden lg:flex items-center gap-1 flex-1 justify-center">
-            {NAV.map((link) => (
+          <nav className="hidden md:flex items-center gap-0.5 ml-6 flex-1">
+            {[
+              { label: "Каталог", to: "/catalog" },
+              { label: "Бренды",  to: "/brands"  },
+              { label: "Новинки", to: "/catalog?sort=price_desc" },
+              { label: "Акции",   to: "/catalog?inStock=true&sort=price_asc", accent: true },
+            ].map((link) => (
               <Link
                 key={link.to}
                 to={link.to}
                 className={clsx(
-                  "px-4 py-2 rounded-lg text-[13px] font-medium transition-colors",
+                  "px-3.5 py-2 rounded-xl text-[13.5px] font-medium transition-colors",
                   link.accent
-                    ? "text-rose-500 hover:bg-rose-50"
-                    : "text-apple-black/70 hover:text-apple-black hover:bg-gray-100"
+                    ? "text-violet-600 hover:bg-violet-50"
+                    : "text-[#555] hover:text-[#111] hover:bg-[#F5F5F3]"
                 )}
               >
                 {link.label}
@@ -92,47 +105,47 @@ export default function Header() {
             ))}
           </nav>
 
-          {/* Actions */}
+          {/* Right actions */}
           <div className="flex items-center gap-1 ml-auto">
-            {/* Search toggle */}
+            {/* Search */}
             <button
-              onClick={() => setSearchOpen(!searchOpen)}
-              className="p-2.5 rounded-xl text-apple-black/60 hover:text-apple-black hover:bg-gray-100 transition-colors"
+              onClick={() => setSearchOpen((s) => !s)}
+              className="p-2.5 rounded-xl text-[#666] hover:text-[#111] hover:bg-[#F5F5F3] transition-colors"
+              aria-label="Поиск"
             >
-              <Search size={18} />
+              <Search size={19} strokeWidth={2} />
             </button>
 
-            {/* User */}
-            <div className="relative" ref={userMenuRef}>
+            {/* Profile (desktop only) */}
+            <div className="relative hidden md:block" ref={userMenuRef}>
               {customer ? (
                 <button
-                  onClick={() => setUserMenuOpen(!userMenuOpen)}
-                  className="p-2.5 rounded-xl text-apple-black/60 hover:text-apple-black hover:bg-gray-100 transition-colors"
+                  onClick={() => setUserMenuOpen((s) => !s)}
+                  className="p-2.5 rounded-xl text-[#666] hover:text-[#111] hover:bg-[#F5F5F3] transition-colors"
                 >
-                  <User size={18} />
+                  <User size={19} strokeWidth={2} />
                 </button>
               ) : (
                 <button
                   onClick={() => setAuthModal({ open: true, tab: "login" })}
-                  className="hidden sm:flex items-center gap-1.5 px-3.5 py-2 text-[13px] font-medium text-apple-black/70 hover:text-apple-black hover:bg-gray-100 rounded-xl transition-colors"
+                  className="px-4 py-2 rounded-xl text-[13px] font-semibold text-[#555] hover:text-[#111] hover:bg-[#F5F5F3] transition-colors"
                 >
-                  <User size={16} /> Войти
+                  Войти
                 </button>
               )}
-
               {userMenuOpen && customer && (
-                <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-xl-soft border border-gray-100 py-2 animate-scale-in">
-                  <div className="px-4 py-2 border-b border-gray-100 mb-1">
-                    <div className="text-[13px] font-semibold text-apple-black truncate">{customer.firstName || customer.email}</div>
-                    <div className="text-xs text-apple-gray truncate">{customer.email}</div>
+                <div className="absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.12)] border border-[#F0F0F0] py-1.5 anim-scale-in">
+                  <div className="px-4 py-2.5 border-b border-[#F5F5F5] mb-1">
+                    <div className="text-[13px] font-semibold text-[#111] truncate">{customer.firstName || customer.email}</div>
+                    <div className="text-[11px] text-[#888] truncate mt-0.5">{customer.email}</div>
                   </div>
                   <Link to="/orders" onClick={() => setUserMenuOpen(false)}
-                    className="flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-apple-black hover:bg-gray-50 transition-colors">
-                    <Package size={15} className="text-apple-gray" /> Мои заказы
+                    className="flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-[#333] hover:bg-[#F7F7F7] transition-colors">
+                    <Package size={15} className="text-[#888]" /> Мои заказы
                   </Link>
                   <Link to="/account" onClick={() => setUserMenuOpen(false)}
-                    className="flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-apple-black hover:bg-gray-50 transition-colors">
-                    <Settings size={15} className="text-apple-gray" /> Профиль
+                    className="flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-[#333] hover:bg-[#F7F7F7] transition-colors">
+                    <Settings size={15} className="text-[#888]" /> Профиль
                   </Link>
                   <button onClick={() => { logout(); setUserMenuOpen(false); }}
                     className="w-full flex items-center gap-2.5 px-4 py-2.5 text-[13px] text-red-500 hover:bg-red-50 transition-colors">
@@ -142,74 +155,72 @@ export default function Header() {
               )}
             </div>
 
-            {/* Cart */}
+            {/* Cart (desktop) */}
             <Link
               to="/cart"
-              className="relative p-2.5 rounded-xl text-apple-black/60 hover:text-apple-black hover:bg-gray-100 transition-colors"
+              className="relative hidden md:flex p-2.5 rounded-xl text-[#666] hover:text-[#111] hover:bg-[#F5F5F3] transition-colors"
             >
-              <ShoppingBag size={18} />
+              <ShoppingBag size={19} strokeWidth={2} />
               {totalItems > 0 && (
-                <span className="absolute top-1 right-1 w-4 h-4 bg-violet-600 text-white text-[9px] font-bold rounded-full flex items-center justify-center leading-none">
+                <span className="absolute top-1.5 right-1.5 w-4 h-4 bg-violet-600 text-white text-[9px] font-bold rounded-full flex items-center justify-center leading-none">
                   {totalItems > 9 ? "9+" : totalItems}
                 </span>
               )}
             </Link>
-
-            {/* Mobile menu */}
-            <button
-              onClick={() => setMenuOpen(!menuOpen)}
-              className="lg:hidden p-2.5 rounded-xl text-apple-black/60 hover:text-apple-black hover:bg-gray-100 transition-colors"
-            >
-              {menuOpen ? <X size={18} /> : <Menu size={18} />}
-            </button>
           </div>
         </div>
 
         {/* Search bar */}
         {searchOpen && (
-          <div className="border-t border-gray-100 bg-white/95 backdrop-blur-xl animate-fade-in">
-            <div className="max-w-3xl mx-auto px-4 py-3">
+          <div className="border-t border-[#F0F0F0] anim-fade-in">
+            <div className="max-w-2xl mx-auto px-4 py-2.5">
               <form onSubmit={handleSearch} className="relative">
-                <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-apple-gray" />
+                <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-[#ABABAB] pointer-events-none" />
                 <input
                   ref={searchRef}
                   type="text"
                   value={q}
                   onChange={(e) => setQ(e.target.value)}
-                  placeholder="Название, бренд, артикул..."
-                  className="w-full pl-10 pr-12 py-3 bg-apple-gray-bg rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 transition-all"
+                  placeholder="Бренд, название, аромат..."
+                  className="input-base pl-9 pr-10"
                 />
-                {q && (
-                  <button type="button" onClick={() => setQ("")} className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-apple-gray hover:text-apple-black">
-                    <X size={14} />
+                {q ? (
+                  <button type="button" onClick={() => setQ("")} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#ABABAB] hover:text-[#333]">
+                    <X size={15} />
+                  </button>
+                ) : (
+                  <button type="button" onClick={() => setSearchOpen(false)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#ABABAB] hover:text-[#333]">
+                    <X size={15} />
                   </button>
                 )}
               </form>
             </div>
           </div>
         )}
-
-        {/* Mobile nav */}
-        {menuOpen && (
-          <nav className="lg:hidden border-t border-gray-100 bg-white animate-fade-in">
-            <div className="max-w-7xl mx-auto px-4 py-3 flex flex-col gap-1">
-              {NAV.map((link) => (
-                <Link key={link.to} to={link.to}
-                  className={clsx("px-4 py-3 rounded-xl text-sm font-medium transition-colors", link.accent ? "text-rose-500" : "text-apple-black hover:bg-gray-50")}
-                >
-                  {link.label}
-                </Link>
-              ))}
-              {!customer && (
-                <button onClick={() => { setMenuOpen(false); setAuthModal({ open: true, tab: "login" }); }}
-                  className="flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-medium text-violet-600 hover:bg-violet-50 transition-colors">
-                  <User size={16} /> Войти / Регистрация
-                </button>
-              )}
-            </div>
-          </nav>
-        )}
       </header>
+
+      {/* ── Bottom nav (mobile only) ── */}
+      <nav className="bottom-nav md:hidden">
+        <div className="bottom-nav-inner">
+          {BOT_NAV.map(({ label, to, icon: Icon, cart }) => (
+            <Link
+              key={to}
+              to={to}
+              className={clsx("bottom-nav-item", isActive(to) && "active")}
+            >
+              <div className="relative">
+                <Icon size={22} strokeWidth={isActive(to) ? 2.5 : 1.8} />
+                {cart && totalItems > 0 && (
+                  <span className="absolute -top-1.5 -right-2 w-4 h-4 bg-violet-600 text-white text-[8px] font-bold rounded-full flex items-center justify-center leading-none">
+                    {totalItems > 9 ? "9+" : totalItems}
+                  </span>
+                )}
+              </div>
+              <span>{label}</span>
+            </Link>
+          ))}
+        </div>
+      </nav>
 
       <AuthModal
         open={authModal.open}

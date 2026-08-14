@@ -30,9 +30,8 @@ export default {
         },
       },
       fontFamily: {
-        sans: ["Space Grotesk", "Inter", "system-ui", "-apple-system", "sans-serif"],
-        display: ["Space Grotesk", "Inter", "system-ui", "-apple-system", "sans-serif"],
-        mono: ["JetBrains Mono", "SF Mono", "monospace"],
+        sans: ["Space Grotesk", "system-ui", "-apple-system", "sans-serif"],
+        display: ["Space Grotesk", "system-ui", "-apple-system", "sans-serif"],
       },
       fontSize: {
         "2xs": "0.625rem",

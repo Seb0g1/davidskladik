@@ -13,16 +13,12 @@ function RevealObserver() {
   const { pathname } = useLocation();
   useEffect(() => {
     const obs = new IntersectionObserver(
-      (entries) => entries.forEach(e => {
-        if (e.isIntersecting) {
-          e.target.classList.add("is-visible");
-          obs.unobserve(e.target);
-        }
+      (entries) => entries.forEach((e) => {
+        if (e.isIntersecting) { e.target.classList.add("is-visible"); obs.unobserve(e.target); }
       }),
-      { threshold: 0.08, rootMargin: "0px 0px -40px 0px" }
+      { threshold: 0.06, rootMargin: "0px 0px -32px 0px" }
     );
-    const targets = document.querySelectorAll(".reveal-section");
-    targets.forEach(el => obs.observe(el));
+    document.querySelectorAll(".reveal-section").forEach((el) => obs.observe(el));
     return () => obs.disconnect();
   }, [pathname]);
   return null;
@@ -30,7 +26,8 @@ function RevealObserver() {
 
 export default function Layout() {
   return (
-    <div className="min-h-screen flex flex-col">
+    /* pb-14 on mobile reserves space for the fixed bottom nav */
+    <div className="min-h-screen flex flex-col pb-14 md:pb-0">
       <ScrollToTop />
       <RevealObserver />
       <Header />
