@@ -137,6 +137,15 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
   const [searched, setSearched] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mobileView, setMobileView] = useState<"map" | "list">("map");
+  const [winW, setWinW] = useState(() => (typeof window !== "undefined" ? window.innerWidth : 1024));
+
+  useEffect(() => {
+    const onResize = () => setWinW(window.innerWidth);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const isMobile = winW < 1024;
 
   const mapDivRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<L.Map | null>(null);
@@ -220,12 +229,14 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  // When mobile view switches to map, Leaflet needs invalidateSize
-  // because the container was display:none and had zero dimensions
+  // When mobile view switches to map, give browser one frame to paint
+  // the container (it was display:none), then invalidate Leaflet size
   useEffect(() => {
     if (mobileView === "map" && mapRef.current) {
-      setTimeout(() => mapRef.current?.invalidateSize(), 50);
-      setTimeout(() => mapRef.current?.invalidateSize(), 200);
+      requestAnimationFrame(() => {
+        mapRef.current?.invalidateSize();
+        setTimeout(() => mapRef.current?.invalidateSize(), 150);
+      });
     }
   }, [mobileView]);
 
@@ -375,19 +386,21 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
           </div>
         </div>
 
-        {/* Mobile toggle */}
-        <div style={{ display: "flex", gap: 4, padding: 4, borderRadius: 12, background: "rgba(255,255,255,0.06)" }} className="lg:hidden">
-          {(["map", "list"] as const).map((v) => (
-            <button key={v} type="button" onClick={() => setMobileView(v)} style={{
-              padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "none",
-              background: mobileView === v ? S.surface2 : "transparent",
-              color: mobileView === v ? S.accent3 : S.muted,
-              transition: "all 0.15s ease",
-            }}>
-              {v === "map" ? "Карта" : <>Список {pvzList.length > 0 && <span style={{ marginLeft: 4, background: "rgba(124,58,237,0.2)", color: S.accent3, padding: "1px 6px", borderRadius: 6, fontSize: 10 }}>{pvzList.length}</span>}</>}
-            </button>
-          ))}
-        </div>
+        {/* Mobile toggle — shown only when narrow */}
+        {isMobile && (
+          <div style={{ display: "flex", gap: 4, padding: 4, borderRadius: 12, background: "rgba(255,255,255,0.06)", flexShrink: 0 }}>
+            {(["map", "list"] as const).map((v) => (
+              <button key={v} type="button" onClick={() => setMobileView(v)} style={{
+                padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "none",
+                background: mobileView === v ? S.surface2 : "transparent",
+                color: mobileView === v ? S.accent3 : S.muted,
+                transition: "all 0.15s ease",
+              }}>
+                {v === "map" ? "Карта" : <>Список {pvzList.length > 0 && <span style={{ marginLeft: 4, background: "rgba(124,58,237,0.2)", color: S.accent3, padding: "1px 6px", borderRadius: 6, fontSize: 10 }}>{pvzList.length}</span>}</>}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── SEARCH BAR ── */}
@@ -437,9 +450,14 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
       {/* ── MAIN CONTENT ── */}
       <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
 
-        {/* ── MAP ── */}
-        <div style={{ position: "relative", flex: 1, minWidth: 0, display: mobileView !== "map" ? undefined : "block" }}
-          className={mobileView !== "map" ? "hidden lg:block" : "block"}>
+        {/* ── MAP ── hidden on mobile in list mode */}
+        <div style={{
+          position: "relative",
+          flex: 1,
+          minWidth: 0,
+          display: isMobile && mobileView !== "map" ? "none" : "flex",
+          flexDirection: "column",
+        }}>
           <div ref={mapDivRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
 
           {/* Loading overlay */}
@@ -452,14 +470,14 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
             </div>
           )}
 
-          {/* Selected PVZ floating card (desktop) */}
-          {selectedPvz && (
+          {/* Selected PVZ floating card (desktop only) */}
+          {selectedPvz && !isMobile && (
             <div style={{
               position: "absolute", bottom: 24, left: 24, zIndex: 20,
               background: "rgba(19,15,29,0.97)", backdropFilter: "blur(20px)",
               borderRadius: 20, padding: "20px 24px", boxShadow: "0 16px 48px rgba(0,0,0,0.6)",
               maxWidth: 320, border: `1px solid rgba(124,58,237,0.25)`,
-            }} className="hidden lg:block">
+            }}>
               <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 16 }}>
                 <div style={{ width: 36, height: 36, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: "rgba(124,58,237,0.2)", border: `1px solid rgba(124,58,237,0.3)` }}>
                   <Building2 size={18} style={{ color: S.accent3 }} />
@@ -489,15 +507,15 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
           )}
         </div>
 
-        {/* ── SIDEBAR LIST ── */}
-        {/* display controlled entirely by className — inline display: flex would override hidden */}
+        {/* ── SIDEBAR LIST ── hidden on mobile in map mode */}
         <div
           style={{
+            display: isMobile && mobileView !== "list" ? "none" : "flex",
             flexDirection: "column", overflow: "hidden",
             borderLeft: `1px solid ${S.border}`, background: S.surface,
-            width: "100%",
+            width: isMobile ? "100%" : 380,
+            flexShrink: 0,
           }}
-          className={mobileView !== "list" ? "hidden lg:flex lg:w-[380px] lg:flex-shrink-0" : "flex"}
         >
           {!loading && !searched && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 32px", textAlign: "center", flex: 1 }}>
