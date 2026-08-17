@@ -161,6 +161,7 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
     userMarkerRef.current = null;
 
     const container = mapDivRef.current;
+    let resizeObserver: ResizeObserver | null = null;
     if (container && !mapRef.current) {
       const map = L.map(container, {
         center: [55.75, 37.62],
@@ -168,17 +169,26 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
         zoomControl: false,
         attributionControl: false,
       });
-      // Dark CartoDB tiles — matches site dark theme
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      // CartoDB Voyager — clean, readable, matches purple UI better than Dark Matter
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
         maxZoom: 19,
         subdomains: "abcd",
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       }).addTo(map);
       L.control.zoom({ position: "topright" }).addTo(map);
       mapRef.current = map;
-      // Leaflet reads container dimensions synchronously; force recalc after layout settles.
+      // invalidateSize multiple times to handle flex layout settling
       setTimeout(() => map.invalidateSize(), 0);
+      setTimeout(() => map.invalidateSize(), 150);
+      setTimeout(() => map.invalidateSize(), 400);
+      // ResizeObserver keeps map in sync if container changes size after mount
+      if (typeof ResizeObserver !== "undefined") {
+        resizeObserver = new ResizeObserver(() => map.invalidateSize());
+        resizeObserver.observe(container);
+      }
     } else if (mapRef.current) {
-      mapRef.current.invalidateSize();
+      setTimeout(() => mapRef.current?.invalidateSize(), 0);
+      setTimeout(() => mapRef.current?.invalidateSize(), 150);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -187,17 +197,20 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
       if (pvz) { onSelectRef.current(pvz); onCloseRef.current(); }
     };
 
-    // Try geolocation first; if denied, just show the map — don't auto-load any city
+    // Try geolocation; if denied/unavailable — auto-load Moscow as fallback
     if (navigator.geolocation) {
       setGeoLoading(true);
       navigator.geolocation.getCurrentPosition(
         (pos) => { setGeoLoading(false); void doLoadByCoords(pos.coords.latitude, pos.coords.longitude); },
-        () => { setGeoLoading(false); },
+        () => { setGeoLoading(false); void doLoadByCity("Москва"); },
         { timeout: 5000, maximumAge: 60000 }
       );
+    } else {
+      void doLoadByCity("Москва");
     }
 
     return () => {
+      resizeObserver?.disconnect();
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
       markersRef.current.clear();
       userMarkerRef.current = null;
@@ -206,6 +219,15 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // When mobile view switches to map, Leaflet needs invalidateSize
+  // because the container was display:none and had zero dimensions
+  useEffect(() => {
+    if (mobileView === "map" && mapRef.current) {
+      setTimeout(() => mapRef.current?.invalidateSize(), 50);
+      setTimeout(() => mapRef.current?.invalidateSize(), 200);
+    }
+  }, [mobileView]);
 
   function buildPopupHtml(pvz: PvzPoint) {
     const sched = pvz.schedule
@@ -277,6 +299,7 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
 
   async function doLoadByCity(city: string) {
     if (!city.trim()) return;
+    setCityInput(city);
     setLoading(true); setSearched(false); setPvzList([]); setSelectedId(null);
     try {
       const res = await fetch(`${API_BASE}/delivery/pvz?city=${encodeURIComponent(city.trim())}`);

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageCircleHeart, Send, Check, RefreshCw, ChevronRight, Clock, User, Headphones, X } from "lucide-react";
+import { MessageCircleHeart, Send, Check, RefreshCw, ChevronRight, Clock, User, Headphones, X, ArrowLeft } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { fetchJson } from "../api";
 import { z } from "zod";
@@ -34,10 +34,10 @@ function timeAgo(iso: string) {
   const ms = Date.now() - new Date(iso).getTime();
   const m = Math.floor(ms / 60_000);
   if (m < 1) return "только что";
-  if (m < 60) return `${m} мин назад`;
+  if (m < 60) return `${m} мин`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h} ч назад`;
-  return `${Math.floor(h / 24)} д назад`;
+  if (h < 24) return `${h} ч`;
+  return `${Math.floor(h / 24)} д`;
 }
 
 export function SupportChatsPage() {
@@ -45,6 +45,7 @@ export function SupportChatsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<"open" | "closed" | "all">("open");
   const [reply, setReply] = useState("");
+  const [mobileView, setMobileView] = useState<"list" | "thread">("list");
 
   const listQuery = useQuery({
     queryKey: ["support-chats", statusFilter],
@@ -94,47 +95,43 @@ export function SupportChatsPage() {
     replyMutation.mutate(reply.trim());
   }
 
-  function renderChat(item: ChatListItem) {
+  function renderChatItem(item: ChatListItem) {
     const isSelected = selectedId === item.id;
     return (
       <button
         key={item.id}
         type="button"
-        onClick={() => setSelectedId(item.id)}
-        className={`w-full text-left px-4 py-3 border-b border-white/5 transition-colors ${isSelected ? "bg-violet-600/15" : "hover:bg-white/4"}`}
+        onClick={() => { setSelectedId(item.id); setMobileView("thread"); }}
+        className={`chat-item${isSelected ? " is-active" : ""}${item.unreadAdmin && item.status === "open" ? " has-unread" : ""}`}
       >
-        <div className="flex items-start gap-3">
-          <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold ${item.unreadAdmin && item.status === "open" ? "bg-violet-600 text-white" : "bg-white/10 text-white/50"}`}>
-            {item.visitorName.slice(0, 1).toUpperCase()}
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-0.5">
-              <span className="text-sm font-semibold text-white truncate">{item.visitorName}</span>
-              {item.unreadAdmin && item.status === "open" && (
-                <span className="w-2 h-2 rounded-full bg-violet-400 flex-shrink-0" />
-              )}
-              {item.status === "closed" && (
-                <span className="text-[10px] bg-white/10 text-white/40 px-1.5 py-0.5 rounded-full">закрыт</span>
-              )}
-            </div>
-            <div className="text-[11px] text-violet-300/70 mb-1">{item.category}</div>
-            {item.lastMessage && (
-              <p className="text-xs text-white/40 truncate">
-                {item.lastMessage.role === "admin" ? "Вы: " : ""}{item.lastMessage.body}
-              </p>
-            )}
-          </div>
-          <div className="flex flex-col items-end gap-1 flex-shrink-0">
-            <span className="text-[10px] text-white/30">{item.lastMessageAt ? timeAgo(item.lastMessageAt) : ""}</span>
-            <ChevronRight size={12} className="text-white/20" />
-          </div>
-        </div>
+        <span className="chat-item-top">
+          <span className="market-badge" style={{ background: "rgba(124,58,237,0.2)", color: "#c4b5fd", border: "1px solid rgba(124,58,237,0.25)", fontSize: 10 }}>
+            {item.category}
+          </span>
+          <strong>{item.visitorName}</strong>
+          {item.unreadAdmin && item.status === "open" && (
+            <span className="notify-badge chat-unread" />
+          )}
+        </span>
+        <span className="chat-item-bottom">
+          <small className="chat-subtitle">
+            {item.lastMessage
+              ? (item.lastMessage.role === "admin" ? "Вы: " : "") + item.lastMessage.body
+              : ""}
+          </small>
+          <small style={{ color: "var(--muted-soft)", fontSize: 10, flexShrink: 0 }}>
+            {item.lastMessageAt ? timeAgo(item.lastMessageAt) : ""}
+          </small>
+        </span>
+        {item.status === "closed" && (
+          <small style={{ color: "var(--muted-soft)", fontSize: 10, marginTop: 2, display: "block" }}>закрыт</small>
+        )}
       </button>
     );
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <section className="page-section">
       <PageHeader
         title="Поддержка сайта"
         subtitle={unreadCount > 0 ? `${unreadCount} новых обращений` : "Обращения покупателей"}
@@ -142,130 +139,132 @@ export function SupportChatsPage() {
           <button
             type="button"
             onClick={() => void qc.invalidateQueries({ queryKey: ["support-chats"] })}
-            className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-white/50 hover:text-white"
+            className="secondary-action icon-action"
           >
-            <RefreshCw size={14} />
+            <RefreshCw size={14} className={listQuery.isFetching ? "spin" : ""} />
           </button>
         }
       />
 
-      <div className="flex flex-1 min-h-0 overflow-hidden">
-        {/* Chat list */}
-        <div className="flex flex-col w-72 flex-shrink-0 border-r border-white/5">
-          {/* Tabs */}
-          <div className="flex gap-1 p-2 border-b border-white/5">
+      <div className="chats-layout">
+        {/* ── LEFT LIST ── */}
+        <div className={`chats-list${mobileView === "thread" ? " mobile-hidden" : ""}`} style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+          {/* Filter tabs */}
+          <div className="settings-tabs" style={{ marginBottom: 8, padding: "0 0 8px 0", borderBottom: "1px solid var(--line)" }}>
             {(["open", "closed", "all"] as const).map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => setStatusFilter(s)}
-                className={`flex-1 text-xs py-1.5 rounded-md font-medium transition-colors ${statusFilter === s ? "bg-violet-600 text-white" : "text-white/40 hover:text-white/70"}`}
+                className={`secondary-action${statusFilter === s ? " is-active" : ""}`}
+                style={{ fontSize: 12 }}
               >
                 {s === "open" ? "Открытые" : s === "closed" ? "Закрытые" : "Все"}
               </button>
             ))}
           </div>
-          <div className="flex-1 overflow-y-auto">
-            {listQuery.isLoading && (
-              <div className="flex items-center justify-center py-12 text-white/30 text-sm">Загрузка…</div>
-            )}
-            {!listQuery.isLoading && chats.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-12 text-center px-4">
-                <MessageCircleHeart size={32} className="text-white/20 mb-3" />
-                <p className="text-sm text-white/30">Обращений нет</p>
-              </div>
-            )}
-            {chats.map(renderChat)}
+
+          {listQuery.isLoading && (
+            <div className="empty-state">Загрузка…</div>
+          )}
+          {!listQuery.isLoading && chats.length === 0 && (
+            <div className="empty-state"><MessageCircleHeart size={18} /> Обращений нет</div>
+          )}
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowY: "auto", flex: 1 }}>
+            {chats.map(renderChatItem)}
           </div>
         </div>
 
-        {/* Chat detail */}
-        {!selectedId && (
-          <div className="flex-1 flex flex-col items-center justify-center text-center p-8">
-            <Headphones size={48} className="text-white/10 mb-4" />
-            <p className="text-white/30 text-sm">Выберите обращение слева</p>
-          </div>
-        )}
+        {/* ── RIGHT THREAD ── */}
+        <div className={`chat-thread${mobileView === "list" ? " mobile-hidden" : ""}`} style={{ display: "flex", flexDirection: "column", minHeight: 520 }}>
+          {!selectedId && (
+            <div className="chat-placeholder">
+              <Headphones size={34} />
+              <span>Выберите обращение слева</span>
+            </div>
+          )}
 
-        {selectedId && (
-          <div className="flex-1 flex flex-col min-w-0">
-            {detailQuery.isLoading && (
-              <div className="flex items-center justify-center flex-1 text-white/30 text-sm">Загрузка…</div>
-            )}
-            {chat && (
-              <>
-                {/* Chat header */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-white/5 flex-shrink-0">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <User size={14} className="text-violet-300" />
-                      <span className="font-semibold text-white text-sm">{chat.visitorName}</span>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${chat.status === "open" ? "bg-green-500/20 text-green-400" : "bg-white/10 text-white/40"}`}>
-                        {chat.status === "open" ? "открыт" : "закрыт"}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-[11px] text-violet-300/60">{chat.category}</span>
-                      <span className="text-[10px] text-white/20"><Clock size={9} className="inline mr-0.5" />{timeAgo(chat.createdAt)}</span>
-                    </div>
+          {selectedId && detailQuery.isLoading && (
+            <div className="chat-placeholder">Загрузка…</div>
+          )}
+
+          {selectedId && chat && (
+            <>
+              {/* Header */}
+              <div className="chat-thread-head">
+                <button type="button" className="chat-back-btn" onClick={() => setMobileView("list")} title="Назад">
+                  <ArrowLeft size={18} />
+                </button>
+                <User size={15} style={{ color: "#c4b5fd", flexShrink: 0 }} />
+                <strong>{chat.visitorName}</strong>
+                <span style={{ fontSize: 11, color: "var(--muted-soft)" }}>{chat.category}</span>
+                <span
+                  style={{
+                    fontSize: 10, padding: "2px 8px", borderRadius: 8, marginLeft: "auto",
+                    background: chat.status === "open" ? "rgba(74,222,128,0.15)" : "rgba(255,255,255,0.08)",
+                    color: chat.status === "open" ? "#4ade80" : "var(--muted-soft)",
+                  }}
+                >
+                  {chat.status === "open" ? "открыт" : "закрыт"}
+                </span>
+                <span style={{ color: "var(--muted-soft)", fontSize: 10, display: "flex", alignItems: "center", gap: 4 }}>
+                  <Clock size={10} />{timeAgo(chat.createdAt)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => statusMutation.mutate(chat.status === "open" ? "closed" : "open")}
+                  disabled={statusMutation.isPending}
+                  className="secondary-action"
+                  style={{ fontSize: 12, padding: "4px 10px", marginLeft: 4 }}
+                >
+                  {chat.status === "open" ? <><X size={12} /> Закрыть</> : <><Check size={12} /> Открыть</>}
+                </button>
+              </div>
+
+              {/* Messages */}
+              <div className="chat-messages" style={{ maxHeight: "none", flex: 1, minHeight: 200, overflowY: "auto", padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8 }}>
+                {chat.messages.map((msg) => (
+                  <div key={msg.id} className={`chat-bubble${msg.role === "admin" ? " mine" : ""}`}>
+                    <p className="chat-text">{msg.body}</p>
+                    <small>{new Date(msg.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</small>
                   </div>
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => statusMutation.mutate(chat.status === "open" ? "closed" : "open")}
-                      disabled={statusMutation.isPending}
-                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${chat.status === "open" ? "bg-white/5 hover:bg-white/10 text-white/50" : "bg-green-500/20 hover:bg-green-500/30 text-green-400"}`}
-                    >
-                      {chat.status === "open" ? <><X size={12} /> Закрыть</> : <><Check size={12} /> Открыть</>}
-                    </button>
-                  </div>
-                </div>
+                ))}
+                {chat.messages.length === 0 && (
+                  <div style={{ color: "var(--muted-soft)", fontSize: 13, textAlign: "center", marginTop: 16 }}>Сообщений нет</div>
+                )}
+              </div>
 
-                {/* Messages */}
-                <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                  {chat.messages.map((msg) => (
-                    <div key={msg.id} className={`flex ${msg.role === "admin" ? "justify-end" : "justify-start"}`}>
-                      <div className={`max-w-[75%] rounded-2xl px-3.5 py-2.5 ${msg.role === "admin" ? "bg-violet-600 text-white" : "bg-white/8 text-white/90"}`}>
-                        <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">{msg.body}</p>
-                        <p className={`text-[10px] mt-1 ${msg.role === "admin" ? "text-violet-200/60" : "text-white/30"}`}>
-                          {new Date(msg.createdAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Reply input */}
-                {chat.status === "open" && (
-                  <form onSubmit={handleSend} className="flex gap-2 p-3 border-t border-white/5 flex-shrink-0">
+              {/* Reply input */}
+              {chat.status === "open" ? (
+                <form onSubmit={handleSend} className="chat-composer">
+                  <div className="chat-input-row">
                     <textarea
                       value={reply}
                       onChange={(e) => setReply(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(e); } }}
                       placeholder="Напишите ответ…"
-                      rows={1}
-                      className="flex-1 resize-none bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-sm text-white placeholder-white/30 outline-none focus:border-violet-500/50 transition-colors"
-                      style={{ maxHeight: 120, overflowY: "auto" }}
+                      rows={2}
+                      style={{ resize: "vertical" }}
                     />
                     <button
                       type="submit"
                       disabled={!reply.trim() || replyMutation.isPending}
-                      className="p-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                      className="primary-action"
+                      style={{ height: 44, padding: "0 14px" }}
                     >
-                      <Send size={15} className="text-white" />
+                      <Send size={15} />
                     </button>
-                  </form>
-                )}
-                {chat.status === "closed" && (
-                  <div className="px-4 py-3 border-t border-white/5 text-xs text-white/30 text-center flex-shrink-0">
-                    Чат закрыт. Откройте его чтобы ответить.
                   </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
+                </form>
+              ) : (
+                <div className="chat-composer" style={{ textAlign: "center", color: "var(--muted-soft)", fontSize: 12 }}>
+                  Чат закрыт. Нажмите «Открыть» чтобы ответить.
+                </div>
+              )}
+            </>
+          )}
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
