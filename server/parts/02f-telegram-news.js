@@ -3,10 +3,8 @@
 // Photos are downloaded and served as /uploads/tg-news/.
 // Env vars: TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID (default -1001234567890)
 
-const _tgFetch = require("node-fetch");
-const _tgFs    = require("fs");
-const _tgPath  = require("path");
-const _tgHttps = require("https");
+const _tgFs   = require("fs");
+const _tgPath = require("path");
 
 const TG_TOKEN   = process.env.TELEGRAM_BOT_TOKEN || "8691183442:AAFoWdQuuNHwYdFUAoJmv3ipvFOVnRkJ83c";
 const TG_CHANNEL = process.env.TELEGRAM_CHANNEL   || "@magicvibes_ru";
@@ -150,7 +148,7 @@ app.get("/api/shop/admin/news", requireAdmin, async (request, response, next) =>
 });
 
 // ─── Scheduler: poll every 30 minutes ────────────────────────────────────────
-if (backgroundJobsEnabled()) {
+if (backgroundJobsEnabled) {
   setInterval(() => void pollTelegramNews(), 30 * 60 * 1000);
   // Initial poll after 15s to let server fully start
   setTimeout(() => void pollTelegramNews(), 15_000);
