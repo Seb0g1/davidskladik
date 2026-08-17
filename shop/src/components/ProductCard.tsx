@@ -108,10 +108,12 @@ export default function ProductCard({ product, showBrand = true }: Props) {
           <p style={{ fontSize: 11, color: "var(--subtle)", marginTop: 1 }}>{product.volume}</p>
         )}
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-          <span style={{ fontSize: 15, fontWeight: 700, color: "var(--accent3)", letterSpacing: "-0.02em" }}>
-            {product.priceRub.toLocaleString("ru-RU")} ₽
-          </span>
-          {product.oldPriceRub && (
+          {(product.priceRub ?? 0) > 0 && (
+            <span style={{ fontSize: 15, fontWeight: 700, color: "var(--accent3)", letterSpacing: "-0.02em" }}>
+              {product.priceRub.toLocaleString("ru-RU")} ₽
+            </span>
+          )}
+          {product.oldPriceRub && product.oldPriceRub > 0 && (
             <span style={{ fontSize: 11, color: "var(--subtle)", textDecoration: "line-through" }}>
               {product.oldPriceRub.toLocaleString("ru-RU")} ₽
             </span>

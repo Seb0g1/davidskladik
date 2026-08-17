@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
-import { ChevronLeft, Loader2, Shield, Lock, MapPin, Truck, ChevronRight } from "lucide-react";
+import { ChevronLeft, Loader2, Shield, Lock, MapPin, ChevronRight } from "lucide-react";
 import { api } from "../api";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
@@ -18,8 +18,6 @@ interface FormData {
   postalCode: string;
   comment: string;
 }
-
-type DeliveryType = "courier" | "pickup";
 
 const INITIAL: FormData = { firstName: "", lastName: "", phone: "", email: "", address: "", city: "", postalCode: "", comment: "" };
 
@@ -41,16 +39,10 @@ function Field({ label, required, ...props }: { label: string; required?: boolea
   );
 }
 
-const DELIVERY_OPTIONS: { type: DeliveryType; title: string; subtitle: string; icon: typeof Truck }[] = [
-  { type: "pickup", title: "Пункт выдачи Ozon", subtitle: "Бесплатно — выберите удобный ПВЗ в городе", icon: MapPin },
-  { type: "courier", title: "Курьер", subtitle: "350 ₽ · бесплатно при заказе от 3 000 ₽", icon: Truck },
-];
-
 export default function CheckoutPage() {
   const { items, totalRub, clear } = useCart();
   const { customer, token } = useAuth();
   const navigate = useNavigate();
-  const [deliveryType, setDeliveryType] = useState<DeliveryType>("pickup");
   const [pvzOpen, setPvzOpen] = useState(false);
   const [selectedPvz, setSelectedPvz] = useState<PvzPoint | null>(null);
   const [form, setForm] = useState<FormData>({
@@ -61,7 +53,7 @@ export default function CheckoutPage() {
     phone: customer?.phone || "",
   });
 
-  const deliveryCost = deliveryType === "pickup" ? 0 : (totalRub >= 3000 ? 0 : 350);
+  const deliveryCost = 0;
   const pickupAddress = selectedPvz ? selectedPvz.address : "";
   const total = totalRub + deliveryCost;
 
@@ -69,15 +61,14 @@ export default function CheckoutPage() {
     mutationFn: () => api.createOrder({
       items: items.map((i) => ({ offerId: i.product.offerId, quantity: i.quantity, priceRub: i.product.priceRub })),
       delivery: {
-        type: deliveryType,
+        type: "pickup",
         firstName: form.firstName,
         lastName: form.lastName,
         phone: form.phone,
         email: form.email,
-        city: form.city,
-        ...(deliveryType === "courier"
-          ? { address: form.address, postalCode: form.postalCode }
-          : { address: pickupAddress, pvzId: selectedPvz?.id }),
+        city: selectedPvz?.city || form.city || "",
+        address: pickupAddress,
+        pvzId: selectedPvz?.id,
       },
       comment: form.comment || undefined,
     }, token ?? undefined),
@@ -96,8 +87,7 @@ export default function CheckoutPage() {
       setForm((f) => ({ ...f, [key]: e.target.value }));
   }
 
-  const valid = form.firstName && form.phone && form.email && form.city &&
-    (deliveryType === "pickup" ? !!selectedPvz : !!form.address);
+  const valid = form.firstName && form.phone && form.email && !!selectedPvz;
 
   if (!items.length) {
     return (
@@ -139,107 +129,40 @@ export default function CheckoutPage() {
               </div>
             </div>
 
-            {/* Delivery method selector */}
+            {/* Delivery — pickup only */}
             <div className="bg-white rounded-2xl p-6" style={{ boxShadow: "0 1px 4px rgba(0,0,0,0.05)" }}>
-              <h3 className="font-bold text-apple-black mb-4 text-[15px]">Способ доставки</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
-                {DELIVERY_OPTIONS.map(({ type, title, subtitle, icon: Icon }) => {
-                  const active = deliveryType === type;
-                  return (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => setDeliveryType(type)}
-                      className={clsx(
-                        "relative text-left p-4 rounded-xl border-2 transition-all duration-200",
-                        active
-                          ? "border-violet-500 bg-violet-50"
-                          : "border-gray-100 hover:border-gray-200 bg-white"
-                      )}
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className={clsx(
-                          "w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 transition-colors",
-                          active ? "bg-violet-100" : "bg-gray-100"
-                        )}>
-                          <Icon size={17} className={active ? "text-violet-600" : "text-apple-gray"} />
-                        </div>
-                        <div>
-                          <div className={clsx("font-semibold text-[13px] leading-tight mb-0.5", active ? "text-violet-700" : "text-apple-black")}>
-                            {title}
-                          </div>
-                          <div className="text-[11px] text-apple-gray leading-snug">{subtitle}</div>
-                        </div>
-                      </div>
-                      {active && (
-                        <div className="absolute top-3 right-3 w-4 h-4 rounded-full bg-violet-600 flex items-center justify-center">
-                          <div className="w-1.5 h-1.5 rounded-full bg-white" />
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Pickup: city + PVZ map selector */}
-              {deliveryType === "pickup" && (
-                <div className="space-y-3">
-                  <Field
-                    label="Город *"
-                    required
-                    value={form.city}
-                    onChange={e => { set("city")(e); setSelectedPvz(null); }}
-                    placeholder="Москва"
-                  />
-                  {/* PVZ selector button */}
-                  {form.city.trim() ? (
-                    <button
-                      type="button"
-                      onClick={() => setPvzOpen(true)}
-                      className={clsx(
-                        "w-full flex items-center gap-3 p-4 rounded-xl border-2 text-left transition-all",
-                        selectedPvz
-                          ? "border-emerald-400 bg-emerald-50"
-                          : "border-dashed border-gray-300 hover:border-violet-400 bg-gray-50 hover:bg-violet-50"
-                      )}
-                    >
-                      <div className={clsx(
-                        "w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0",
-                        selectedPvz ? "bg-emerald-100" : "bg-orange-100"
-                      )}>
-                        <MapPin size={16} className={selectedPvz ? "text-emerald-600" : "text-orange-500"} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        {selectedPvz ? (
-                          <>
-                            <p className="text-[12px] font-semibold text-emerald-700 mb-0.5">Пункт выдачи выбран</p>
-                            <p className="text-[12px] text-apple-gray truncate">{selectedPvz.address}</p>
-                          </>
-                        ) : (
-                          <>
-                            <p className="text-[13px] font-semibold text-apple-black">Выбрать пункт выдачи Ozon</p>
-                            <p className="text-[11px] text-apple-gray">Откроется карта с ПВЗ в {form.city}</p>
-                          </>
-                        )}
-                      </div>
-                      <ChevronRight size={15} className="text-apple-gray flex-shrink-0" />
-                    </button>
+              <h3 className="font-bold text-apple-black mb-4 text-[15px]">Пункт выдачи Ozon</h3>
+              <button
+                type="button"
+                onClick={() => setPvzOpen(true)}
+                className={clsx(
+                  "w-full flex items-center gap-3 p-4 rounded-xl border-2 text-left transition-all",
+                  selectedPvz
+                    ? "border-emerald-400 bg-emerald-50"
+                    : "border-dashed border-gray-200 hover:border-violet-400 bg-gray-50 hover:bg-violet-50"
+                )}
+              >
+                <div className={clsx(
+                  "w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0",
+                  selectedPvz ? "bg-emerald-100" : "bg-orange-100"
+                )}>
+                  <MapPin size={16} className={selectedPvz ? "text-emerald-600" : "text-orange-500"} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  {selectedPvz ? (
+                    <>
+                      <p className="text-[12px] font-semibold text-emerald-700 mb-0.5">Пункт выдачи выбран ✓</p>
+                      <p className="text-[12px] text-apple-gray truncate">{selectedPvz.address}</p>
+                    </>
                   ) : (
-                    <div className="px-4 py-3 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-                      <p className="text-[12px] text-apple-gray text-center">Введите город для выбора пункта выдачи</p>
-                    </div>
+                    <>
+                      <p className="text-[13px] font-semibold text-apple-black">Выбрать пункт выдачи Ozon</p>
+                      <p className="text-[11px] text-apple-gray">Бесплатно — откроется карта с ПВЗ</p>
+                    </>
                   )}
                 </div>
-              )}
-
-              {/* Courier fields */}
-              {deliveryType === "courier" && (
-                <div className="space-y-4">
-                  <Field label="Город" required value={form.city} onChange={set("city")} placeholder="Москва" />
-                  <Field label="Адрес (улица, дом, кв.)" required value={form.address} onChange={set("address")} placeholder="ул. Ленина, д. 1, кв. 1" />
-                  <Field label="Индекс" value={form.postalCode} onChange={set("postalCode")} placeholder="123456" />
-                </div>
-              )}
+                <ChevronRight size={15} className="text-apple-gray flex-shrink-0" />
+              </button>
             </div>
 
             {/* Comment */}

@@ -73,10 +73,10 @@ function CategoryCarouselRow({ cat, index }: { cat: AutoCategory; index: number 
         <div ref={trackRef} className="scroll-x" style={{ display: "flex", gap: 12, padding: "0 16px 16px" }} onScroll={syncArrows}>
           {isLoading
             ? Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} style={{ flexShrink: 0, width: 152 }}><CardSkeleton /></div>
+                <div key={i} style={{ flexShrink: 0, width: 140 }}><CardSkeleton /></div>
               ))
             : data?.products.map((p) => (
-                <div key={p.offerId} style={{ flexShrink: 0, width: 152 }}>
+                <div key={p.offerId} style={{ flexShrink: 0, width: 140 }}>
                   <ProductCard product={p} />
                 </div>
               ))}
@@ -288,12 +288,12 @@ export default function CatalogPage() {
 
           {/* Grid */}
           {isLoading ? (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }} className="sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))", gap: 10 }}>
               {Array.from({ length: PAGE_SIZE }).map((_, i) => <CardSkeleton key={i} />)}
             </div>
           ) : data?.products.length ? (
             <>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12 }} className="sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(148px, 1fr))", gap: 10 }}>
                 {data.products.map((p, i) => (
                   <div key={p.offerId} className="anim-slide-up" style={{ animationDelay: `${Math.min(i, 12) * 0.03}s` }}>
                     <ProductCard product={p} />

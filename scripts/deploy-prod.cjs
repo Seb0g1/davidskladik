@@ -8,9 +8,19 @@ const { execSync } = require("node:child_process");
 const { Client } = require("ssh2");
 
 const password = process.env.DEPLOY_PASSWORD;
-if (!password) {
-  console.error("DEPLOY_PASSWORD is required");
+const os = require("node:os");
+const defaultKeyPath = path.join(os.homedir(), ".ssh", "davidsklad_deploy");
+const sshKeyPath = process.env.DEPLOY_SSH_KEY || (fs.existsSync(defaultKeyPath) ? defaultKeyPath : null);
+const privateKey = sshKeyPath ? fs.readFileSync(sshKeyPath) : null;
+
+if (!privateKey && !password) {
+  console.error("Either DEPLOY_PASSWORD or SSH key at ~/.ssh/davidsklad_deploy is required");
   process.exit(1);
+}
+if (privateKey) {
+  console.log(`Using SSH key: ${sshKeyPath}`);
+} else {
+  console.log("Using password auth");
 }
 
 const root = path.resolve(__dirname, "..");
@@ -169,14 +179,19 @@ async function main() {
 
   const conn = new Client();
   await new Promise((resolve, reject) => {
-    conn.on("ready", resolve).on("error", reject).connect({
+    const connectConfig = {
       host: "81.17.154.153",
       username: "root",
-      password,
       readyTimeout: 60000,
       keepaliveInterval: 10000,
       keepaliveCountMax: 24,
-    });
+    };
+    if (privateKey) {
+      connectConfig.privateKey = privateKey;
+    } else {
+      connectConfig.password = password;
+    }
+    conn.on("ready", resolve).on("error", reject).connect(connectConfig);
   });
 
   try {

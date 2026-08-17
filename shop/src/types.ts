@@ -68,8 +68,9 @@ export interface ShopOrderPayload {
     phone: string;
     email: string;
     address?: string;
-    city: string;
+    city?: string;
     postalCode?: string;
+    pvzId?: string;
   };
   comment?: string;
 }

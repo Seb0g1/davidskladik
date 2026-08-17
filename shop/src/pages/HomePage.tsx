@@ -95,6 +95,17 @@ function useParticles(ref: React.RefObject<HTMLCanvasElement | null>) {
   }, [ref]);
 }
 
+/* ── Scroll parallax hook ─────────────────────────────────────── */
+function useScrollY() {
+  const [y, setY] = useState(0);
+  useEffect(() => {
+    const handler = () => setY(window.scrollY);
+    window.addEventListener("scroll", handler, { passive: true });
+    return () => window.removeEventListener("scroll", handler);
+  }, []);
+  return y;
+}
+
 /* ── 3D tilt hook ─────────────────────────────────────────────── */
 function useTilt() {
   const [style, setStyle] = useState<React.CSSProperties>({});
@@ -171,24 +182,59 @@ const CAT_LABELS: Record<string, string> = {
 const CAT_ICONS: Record<string, string> = {
   parfum: "🖤", edp: "💜", edt: "🌊", sets: "🎁", testers: "✨", body: "🌿", home: "🏠", deo: "💧",
 };
+const CAT_GRADIENTS: Record<string, [string, string]> = {
+  parfum:  ["rgba(109,40,217,0.25)",  "rgba(91,33,182,0.08)"],
+  edp:     ["rgba(124,58,237,0.22)",  "rgba(99,43,210,0.06)"],
+  edt:     ["rgba(14,116,144,0.22)",  "rgba(6,78,119,0.08)"],
+  sets:    ["rgba(180,83,9,0.22)",    "rgba(120,53,15,0.08)"],
+  testers: ["rgba(79,70,229,0.22)",   "rgba(55,48,163,0.08)"],
+  body:    ["rgba(21,128,61,0.22)",   "rgba(6,78,59,0.08)"],
+  home:    ["rgba(3,105,161,0.22)",   "rgba(7,89,133,0.08)"],
+  deo:     ["rgba(107,33,168,0.22)",  "rgba(76,29,149,0.08)"],
+};
 const BRANDS = ["Chanel","Dior","Tom Ford","Hermès","Byredo","Jo Malone","Creed","Guerlain","Givenchy","Prada","Valentino","Burberry","Versace","Hugo Boss","Montale","Kilian","YSL","Bvlgari","Lancôme","Moschino"];
 
-/* ── Category card with 3D tilt ───────────────────────────────── */
-function CatCard({ cat }: { cat: AutoCategory }) {
+/* ── Category card ────────────────────────────────────────────── */
+function CatCard({ cat, index }: { cat: AutoCategory; index: number }) {
   const tilt = useTilt();
+  const [g0, g1] = CAT_GRADIENTS[cat.slug] ?? ["rgba(124,58,237,0.18)", "rgba(91,33,182,0.05)"];
   return (
     <Link
       to={`/catalog?category=${cat.slug}`}
-      className="product-card-3d glass-hover flex-shrink-0"
-      style={{ width: 140, padding: "16px 14px", ...tilt.style }}
+      className="flex-shrink-0"
+      style={{
+        display: "flex", flexDirection: "column", gap: 0, textDecoration: "none",
+        width: 148, padding: "18px 16px 16px",
+        borderRadius: 20, border: "1px solid rgba(255,255,255,0.08)",
+        background: `linear-gradient(145deg, ${g0}, ${g1})`,
+        backdropFilter: "blur(12px)",
+        position: "relative", overflow: "hidden",
+        transition: "border-color 0.25s, box-shadow 0.25s",
+        animation: `slideUp 0.5s cubic-bezier(0.22,1,0.36,1) ${index * 0.05}s both`,
+        ...tilt.style,
+      }}
       onMouseMove={tilt.onMouseMove}
       onMouseLeave={tilt.onMouseLeave}
+      onMouseEnter={e => {
+        (e.currentTarget as HTMLElement).style.borderColor = "rgba(167,139,250,0.25)";
+        (e.currentTarget as HTMLElement).style.boxShadow = "0 8px 32px rgba(124,58,237,0.2)";
+      }}
+      onMouseOut={e => {
+        (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.08)";
+        (e.currentTarget as HTMLElement).style.boxShadow = "none";
+      }}
     >
-      <div style={{ fontSize: 28, marginBottom: 10 }}>{CAT_ICONS[cat.slug] ?? "✦"}</div>
-      <p style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", lineHeight: 1.25, marginBottom: 4 }}>
+      {/* Glow blob */}
+      <div style={{ position: "absolute", width: 80, height: 80, borderRadius: "50%", background: g0, filter: "blur(24px)", top: -20, right: -20, pointerEvents: "none" }} />
+      <div style={{ fontSize: 32, marginBottom: 14, position: "relative", zIndex: 1, filter: "drop-shadow(0 2px 8px rgba(0,0,0,0.3))" }}>
+        {CAT_ICONS[cat.slug] ?? "✦"}
+      </div>
+      <p style={{ fontSize: 13, fontWeight: 700, color: "var(--text)", lineHeight: 1.3, marginBottom: 5, position: "relative", zIndex: 1 }}>
         {CAT_LABELS[cat.slug] || cat.label}
       </p>
-      <p style={{ fontSize: 11, color: "var(--muted)" }}>{cat.count.toLocaleString("ru-RU")} шт</p>
+      <p style={{ fontSize: 10.5, color: "rgba(240,235,255,0.4)", fontWeight: 500, position: "relative", zIndex: 1 }}>
+        {cat.count.toLocaleString("ru-RU")} товаров
+      </p>
     </Link>
   );
 }
@@ -211,6 +257,7 @@ function CardSkeleton() {
 export default function HomePage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useParticles(canvasRef);
+  const scrollY = useScrollY();
 
   const { data: catalog, isLoading } = useQuery({
     queryKey: ["shop-home"],
@@ -233,13 +280,14 @@ export default function HomePage() {
         {/* Canvas */}
         <canvas ref={canvasRef} className="hero-canvas" />
 
-        {/* Background orbs */}
-        <div className="orb orb-1" style={{ width: 500, height: 500, background: "radial-gradient(circle, rgba(109,40,217,0.5) 0%, transparent 70%)", top: "5%", left: "10%" }} />
-        <div className="orb orb-2" style={{ width: 400, height: 400, background: "radial-gradient(circle, rgba(79,70,229,0.4) 0%, transparent 70%)", bottom: "10%", right: "5%" }} />
-        <div className="orb orb-3" style={{ width: 300, height: 300, background: "radial-gradient(circle, rgba(167,139,250,0.25) 0%, transparent 70%)", top: "40%", right: "20%" }} />
+        {/* Background orbs — parallax layers */}
+        <div className="orb orb-1" style={{ width: 600, height: 600, background: "radial-gradient(circle, rgba(109,40,217,0.55) 0%, transparent 70%)", top: "5%", left: "8%", transform: `translateY(${scrollY * 0.18}px)` }} />
+        <div className="orb orb-2" style={{ width: 450, height: 450, background: "radial-gradient(circle, rgba(79,70,229,0.45) 0%, transparent 70%)", bottom: "10%", right: "3%", transform: `translateY(${-scrollY * 0.12}px)` }} />
+        <div className="orb orb-3" style={{ width: 320, height: 320, background: "radial-gradient(circle, rgba(167,139,250,0.3) 0%, transparent 70%)", top: "38%", right: "18%", transform: `translateY(${scrollY * 0.08}px)` }} />
+        <div className="orb" style={{ width: 200, height: 200, background: "radial-gradient(circle, rgba(236,72,153,0.2) 0%, transparent 70%)", top: "60%", left: "5%", animation: "orbPulse 13s ease-in-out infinite 6s", transform: `translateY(${-scrollY * 0.1}px)` }} />
 
-        {/* Content */}
-        <div style={{ position: "relative", zIndex: 10, textAlign: "center", padding: "0 20px", maxWidth: 900, margin: "0 auto", width: "100%" }}>
+        {/* Content — slight counter-parallax for depth */}
+        <div style={{ position: "relative", zIndex: 10, textAlign: "center", padding: "0 20px", maxWidth: 900, margin: "0 auto", width: "100%", transform: `translateY(${-scrollY * 0.08}px)` }}>
           {/* Badge */}
           <div className="anim-fade-in" style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "rgba(124,58,237,0.12)", border: "1px solid rgba(167,139,250,0.2)", borderRadius: 100, padding: "6px 16px", marginBottom: 32, animationDelay: "0.1s" }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ADE80", display: "inline-block", boxShadow: "0 0 8px #4ADE80" }} />
@@ -341,19 +389,22 @@ export default function HomePage() {
       {autoCategories && autoCategories.length > 0 && (
         <section className="reveal-section" style={{ padding: "clamp(48px,6vw,80px) 0" }}>
           <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 clamp(16px,4vw,48px)" }}>
-            <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 28 }}>
+            <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 32 }}>
               <div>
-                <p style={{ fontSize: 11, fontWeight: 700, color: "var(--muted)", letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 6 }}>✦ Коллекция</p>
-                <h2 style={{ fontSize: "clamp(26px,4vw,44px)", fontWeight: 700, letterSpacing: "-0.035em", lineHeight: 1.1 }}>Выберите категорию</h2>
+                <p style={{ fontSize: 10, fontWeight: 700, color: "var(--accent3)", letterSpacing: "0.16em", textTransform: "uppercase", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ display: "inline-block", width: 16, height: 1, background: "var(--accent)" }} />
+                  Коллекция
+                </p>
+                <h2 className="grad-text" style={{ fontSize: "clamp(28px,4vw,48px)", fontWeight: 700, letterSpacing: "-0.04em", lineHeight: 1.05 }}>Категории</h2>
               </div>
               <Link to="/catalog" className="btn-ghost" style={{ flexShrink: 0 }}>
-                Всё <ArrowRight size={14} strokeWidth={2.5} />
+                Все товары <ArrowRight size={14} strokeWidth={2.5} />
               </Link>
             </div>
           </div>
-          <div className="scroll-x" style={{ padding: "0 clamp(16px,4vw,48px)", paddingBottom: 8 }}>
-            <div style={{ display: "flex", gap: 12, width: "max-content" }}>
-              {autoCategories.map((cat) => <CatCard key={cat.slug} cat={cat} />)}
+          <div className="scroll-x" style={{ padding: "0 clamp(16px,4vw,48px)", paddingBottom: 12 }}>
+            <div style={{ display: "flex", gap: 10, width: "max-content" }}>
+              {autoCategories.map((cat, i) => <CatCard key={cat.slug} cat={cat} index={i} />)}
             </div>
           </div>
         </section>
@@ -398,7 +449,7 @@ export default function HomePage() {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 14 }}>
             {[
               { icon: <BadgeCheck size={22} />, title: "100% оригинал", text: "Прямые поставки от авторизованных дистрибьюторов. Сертификаты на каждый бренд." },
-              { icon: <Truck size={22} />,      title: "Быстрая доставка", text: "Доставка через Ozon по всей России за 1–5 дней. Бесплатно от 3 000 ₽." },
+              { icon: <Truck size={22} />,      title: "Быстрая доставка", text: "Доставка через Ozon по всей России за 1–5 дней." },
               { icon: <Star size={22} />,       title: "4.9 на Ozon", text: "Тысячи довольных покупателей. Рейтинг 4.9 из 5 на маркетплейсе." },
               { icon: <Sparkles size={22} />,   title: "Эксклюзивный выбор", text: "Более 22 000 ароматов от 200+ брендов — от масс-маркета до нишевой парфюмерии." },
             ].map(({ icon, title, text }, i) => {

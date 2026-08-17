@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import L from "leaflet";
 import { X, Search, MapPin, Loader2, Navigation, Clock, CheckCircle, Building2, ArrowLeft } from "lucide-react";
-import clsx from "clsx";
 
 export interface PvzPoint {
   id: string;
@@ -23,13 +22,25 @@ interface Props {
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "") + "/api/shop";
 
-/* ── Custom SVG marker icons ─────────────────────────────────────── */
+const S = {
+  bg:      "#09060F",
+  surface: "#130F1D",
+  surface2:"#1C1630",
+  border:  "rgba(255,255,255,0.07)",
+  borderMd:"rgba(255,255,255,0.12)",
+  text:    "#F0EBFF",
+  muted:   "rgba(240,235,255,0.45)",
+  subtle:  "rgba(240,235,255,0.2)",
+  accent:  "#7C3AED",
+  accent3: "#C4B5FD",
+};
+
 const mkIcon = (color: string, size = 32, shadow = false) =>
   L.divIcon({
     className: "",
     html: `<div style="position:relative;width:${size}px;height:${size}px">
-      ${shadow ? `<div style="position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);width:${size * 0.6}px;height:8px;background:rgba(0,0,0,0.2);border-radius:50%;filter:blur(4px)"></div>` : ""}
-      <svg viewBox="0 0 32 40" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:${size}px;height:${size * 1.25}px;filter:drop-shadow(0 3px 8px rgba(0,0,0,0.3))">
+      ${shadow ? `<div style="position:absolute;bottom:-4px;left:50%;transform:translateX(-50%);width:${size * 0.6}px;height:8px;background:rgba(0,0,0,0.4);border-radius:50%;filter:blur(4px)"></div>` : ""}
+      <svg viewBox="0 0 32 40" fill="none" xmlns="http://www.w3.org/2000/svg" style="width:${size}px;height:${size * 1.25}px;filter:drop-shadow(0 3px 8px rgba(0,0,0,0.5))">
         <path d="M16 0C8.268 0 2 6.268 2 14c0 9.333 12 26 14 26s14-16.667 14-26C30 6.268 23.732 0 16 0z" fill="${color}"/>
         <circle cx="16" cy="14" r="6" fill="white" opacity="0.9"/>
         <circle cx="16" cy="14" r="3" fill="${color}"/>
@@ -44,68 +55,71 @@ const mkUserIcon = () =>
   L.divIcon({
     className: "",
     html: `<div style="position:relative">
-      <div style="width:20px;height:20px;background:#3b82f6;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(59,130,246,0.5)"></div>
-      <div style="position:absolute;inset:-6px;border-radius:50%;background:rgba(59,130,246,0.2);animation:none"></div>
+      <div style="width:20px;height:20px;background:#3b82f6;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 8px rgba(59,130,246,0.6)"></div>
+      <div style="position:absolute;inset:-6px;border-radius:50%;background:rgba(59,130,246,0.2)"></div>
     </div>`,
     iconSize: [20, 20],
     iconAnchor: [10, 10],
   });
 
-/* ── PVZ List Item ────────────────────────────────────────────────── */
 function PvzItem({ pvz, selected, onClick }: { pvz: PvzPoint; selected: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
       data-id={pvz.id}
       onClick={onClick}
-      className={clsx("pvz-item w-full text-left px-5 py-4 transition-all group", selected && "selected")}
       style={{
-        borderBottom: "1px solid rgba(0,0,0,0.04)",
-        background: selected ? "linear-gradient(135deg,#f5f3ff,#ede9fe)" : undefined,
+        width: "100%", textAlign: "left", padding: "14px 16px",
+        background: selected ? "rgba(124,58,237,0.15)" : "transparent",
+        borderBottom: `1px solid ${S.border}`,
+        border: "none",
+        borderBottomColor: S.border,
+        cursor: "pointer",
+        transition: "background 0.15s ease",
+        display: "block",
       }}
+      onMouseEnter={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.04)"; }}
+      onMouseLeave={e => { if (!selected) (e.currentTarget as HTMLElement).style.background = "transparent"; }}
     >
-      <div className="flex items-start gap-3">
-        <div className={clsx(
-          "w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 mt-0.5 transition-all",
-          selected ? "bg-violet-100" : "bg-gray-100 group-hover:bg-violet-50"
-        )}>
-          <Building2 size={16} className={selected ? "text-violet-600" : "text-gray-400 group-hover:text-violet-400"} />
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+        <div style={{
+          width: 36, height: 36, borderRadius: 10, flexShrink: 0, marginTop: 1,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          background: selected ? "rgba(124,58,237,0.25)" : "rgba(255,255,255,0.06)",
+          border: `1px solid ${selected ? "rgba(124,58,237,0.3)" : S.border}`,
+          transition: "all 0.15s ease",
+        }}>
+          <Building2 size={16} style={{ color: selected ? S.accent3 : S.muted }} />
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap mb-0.5">
-            <span className="text-[13px] font-semibold text-gray-900 leading-tight">{pvz.name}</span>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 2 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: S.text, lineHeight: 1.3 }}>{pvz.name}</span>
             {pvz.type && pvz.type !== "ПВЗ" && (
-              <span className="text-[10px] bg-orange-100 text-orange-600 px-1.5 py-0.5 rounded-md font-semibold leading-tight">{pvz.type}</span>
+              <span style={{ fontSize: 10, background: "rgba(249,115,22,0.15)", color: "#fb923c", padding: "2px 7px", borderRadius: 6, fontWeight: 600 }}>{pvz.type}</span>
             )}
           </div>
-          <p className="text-[12px] text-gray-400 leading-snug line-clamp-2">{pvz.address}</p>
+          <p style={{ fontSize: 12, color: S.muted, lineHeight: 1.5, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{pvz.address}</p>
           {pvz.schedule && (
-            <div className="flex items-center gap-1.5 mt-1.5">
-              <Clock size={10} className="text-emerald-500 flex-shrink-0" />
-              <span className="text-[11px] text-emerald-600 font-medium">Сегодня {pvz.schedule}</span>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+              <Clock size={10} style={{ color: "#4ade80", flexShrink: 0 }} />
+              <span style={{ fontSize: 11, color: "#4ade80", fontWeight: 500 }}>Сегодня {pvz.schedule}</span>
             </div>
           )}
         </div>
-        {selected && (
-          <div className="flex-shrink-0">
-            <CheckCircle size={18} className="text-violet-600" />
-          </div>
-        )}
+        {selected && <CheckCircle size={18} style={{ color: S.accent3, flexShrink: 0 }} />}
       </div>
 
-      {/* Select button when selected */}
       {selected && (
-        <div className="mt-3 pl-12">
+        <div style={{ marginTop: 12, paddingLeft: 48 }}>
           <button
             type="button"
-            onClick={(e) => e.stopPropagation()}
-            className="w-full py-2.5 rounded-xl text-[13px] font-semibold text-white transition-all duration-200 hover:shadow-lg"
+            onClick={e => e.stopPropagation()}
             style={{
+              width: "100%", padding: "10px", borderRadius: 12, fontSize: 13, fontWeight: 700,
+              color: "#fff", border: "none", cursor: "pointer",
               background: "linear-gradient(135deg, #7c3aed, #9333ea)",
-              boxShadow: "0 4px 16px rgba(124,58,237,0.3)",
+              boxShadow: "0 4px 16px rgba(124,58,237,0.4)",
             }}
-            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-1px)"; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.transform = ""; }}
           >
             Выбрать этот пункт
           </button>
@@ -152,14 +166,13 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
         center: [55.75, 37.62],
         zoom: 11,
         zoomControl: false,
+        attributionControl: false,
       });
-      // CartoDB Positron — clean minimal look
-      L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-        attribution: "© CartoDB © OSM",
+      // Dark CartoDB tiles — matches site dark theme
+      L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
         maxZoom: 19,
         subdomains: "abcd",
       }).addTo(map);
-      // Custom zoom position
       L.control.zoom({ position: "topright" }).addTo(map);
       mapRef.current = map;
     } else if (mapRef.current) {
@@ -172,15 +185,14 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
       if (pvz) { onSelectRef.current(pvz); onCloseRef.current(); }
     };
 
+    // Try geolocation first; if denied, just show the map — don't auto-load any city
     if (navigator.geolocation) {
       setGeoLoading(true);
       navigator.geolocation.getCurrentPosition(
         (pos) => { setGeoLoading(false); void doLoadByCoords(pos.coords.latitude, pos.coords.longitude); },
-        () => { setGeoLoading(false); void doLoadByCity(defaultCity || "Москва"); },
+        () => { setGeoLoading(false); },
         { timeout: 5000, maximumAge: 60000 }
       );
-    } else {
-      void doLoadByCity(defaultCity || "Москва");
     }
 
     return () => {
@@ -195,25 +207,25 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
 
   function buildPopupHtml(pvz: PvzPoint) {
     const sched = pvz.schedule
-      ? `<div style="display:flex;align-items:center;gap:5px;margin-top:4px">
-          <span style="width:6px;height:6px;border-radius:50%;background:#059669;flex-shrink:0"></span>
-          <span style="color:#059669;font-size:11px;font-weight:500">Сегодня ${pvz.schedule}</span>
+      ? `<div style="display:flex;align-items:center;gap:5px;margin-top:6px">
+          <span style="width:6px;height:6px;border-radius:50%;background:#4ade80;flex-shrink:0"></span>
+          <span style="color:#4ade80;font-size:11px;font-weight:500">Сегодня ${pvz.schedule}</span>
          </div>`
       : "";
     const badge = pvz.type && pvz.type !== "ПВЗ"
-      ? `<span style="display:inline-block;background:#fff7ed;color:#c2410c;font-size:10px;padding:2px 6px;border-radius:5px;font-weight:600;margin-left:4px">${pvz.type}</span>`
+      ? `<span style="display:inline-block;background:rgba(249,115,22,0.15);color:#fb923c;font-size:10px;padding:2px 7px;border-radius:6px;font-weight:600;margin-left:4px">${pvz.type}</span>`
       : "";
-    return `<div style="font-family:Inter,system-ui,sans-serif;min-width:210px;max-width:240px;padding:4px 2px">
-      <div style="display:flex;align-items:flex-start;gap:6px;margin-bottom:6px">
-        <div style="width:8px;height:8px;border-radius:50%;background:#7c3aed;flex-shrink:0;margin-top:4px"></div>
+    return `<div style="font-family:Inter,system-ui,sans-serif;min-width:210px;max-width:240px;padding:2px 0;background:transparent">
+      <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px">
+        <div style="width:8px;height:8px;border-radius:50%;background:#7c3aed;flex-shrink:0;margin-top:5px"></div>
         <div>
-          <span style="font-weight:700;font-size:13px;color:#1d1d1f;line-height:1.3">${pvz.name}</span>${badge}
+          <span style="font-weight:700;font-size:13px;color:#F0EBFF;line-height:1.3">${pvz.name}</span>${badge}
         </div>
       </div>
-      <p style="color:#6b7280;font-size:11px;line-height:1.5;margin-bottom:4px">${pvz.address}</p>
+      <p style="color:rgba(240,235,255,0.5);font-size:11px;line-height:1.5;margin-bottom:4px">${pvz.address}</p>
       ${sched}
       <button onclick="window.__pvzPick('${pvz.id}')"
-        style="margin-top:10px;width:100%;background:linear-gradient(135deg,#7c3aed,#9333ea);color:#fff;border:none;border-radius:10px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:0.01em;box-shadow:0 4px 12px rgba(124,58,237,0.35)">
+        style="margin-top:12px;width:100%;background:linear-gradient(135deg,#7c3aed,#9333ea);color:#fff;border:none;border-radius:10px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:0.01em;box-shadow:0 4px 12px rgba(124,58,237,0.4)">
         Выбрать пункт
       </button>
     </div>`;
@@ -231,7 +243,7 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
       const marker = L.marker([pvz.lat, pvz.lng], { icon: defaultIcon }).addTo(map);
       marker.bindPopup(buildPopupHtml(pvz), {
         maxWidth: 260,
-        className: "pvz-leaflet-popup",
+        className: "pvz-dark-popup",
         closeButton: true,
       });
       marker.on("click", () => highlightPvz(pvz, false));
@@ -309,161 +321,142 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
   const selectedPvz = pvzList.find((p) => p.id === selectedId);
 
   return (
-    <div className="pvz-overlay fixed inset-0 z-[200] flex flex-col" style={{ background: "#f8f7ff" }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", flexDirection: "column", background: S.bg }}>
 
-      {/* ── TOP HEADER ── */}
-      <div className="flex items-center gap-3 px-4 py-3 flex-shrink-0" style={{
-        background: "rgba(255,255,255,0.95)",
-        backdropFilter: "blur(20px)",
-        borderBottom: "1px solid rgba(0,0,0,0.07)",
-        boxShadow: "0 1px 12px rgba(0,0,0,0.06)",
+      {/* ── HEADER ── */}
+      <div style={{
+        display: "flex", alignItems: "center", gap: 12, padding: "12px 16px", flexShrink: 0,
+        background: "rgba(19,15,29,0.95)", backdropFilter: "blur(20px)",
+        borderBottom: `1px solid ${S.border}`, boxShadow: "0 1px 24px rgba(0,0,0,0.3)",
       }}>
-        <button
-          onClick={onClose}
-          className="p-2 rounded-xl hover:bg-gray-100 transition-colors text-gray-500 flex items-center gap-1.5"
+        <button onClick={onClose} style={{
+          padding: "8px", borderRadius: 12, background: "rgba(255,255,255,0.06)", border: `1px solid ${S.border}`,
+          color: S.muted, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, transition: "all 0.15s",
+        }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.1)"; (e.currentTarget as HTMLElement).style.color = S.text; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)"; (e.currentTarget as HTMLElement).style.color = S.muted; }}
         >
           <ArrowLeft size={18} />
         </button>
-        <div className="flex items-center gap-2.5 flex-1">
-          <div
-            className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: "linear-gradient(135deg,#ff6a00,#ee0979)" }}
-          >
-            <MapPin size={14} className="text-white" />
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flex: 1 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg,#ff6a00,#ee0979)", flexShrink: 0 }}>
+            <MapPin size={15} style={{ color: "#fff" }} />
           </div>
           <div>
-            <div className="font-bold text-[14px] text-gray-900 leading-tight">Пункты выдачи Ozon</div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: S.text }}>Пункты выдачи Ozon</div>
             {pvzList.length > 0 && (
-              <div className="text-[11px] text-gray-400">{pvzList.length} точк{pvzList.length === 1 ? "а" : pvzList.length < 5 ? "и" : ""} рядом</div>
+              <div style={{ fontSize: 11, color: S.muted }}>{pvzList.length} пункт{pvzList.length < 5 ? "а" : "ов"} рядом</div>
             )}
           </div>
         </div>
 
         {/* Mobile toggle */}
-        <div className="flex lg:hidden gap-1 p-1 rounded-xl" style={{ background: "#f3f4f6" }}>
-          <button
-            type="button"
-            onClick={() => setMobileView("map")}
-            className={clsx("px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all", mobileView === "map" ? "bg-white text-violet-700 shadow-sm" : "text-gray-500")}
-          >Карта</button>
-          <button
-            type="button"
-            onClick={() => setMobileView("list")}
-            className={clsx("px-3 py-1.5 rounded-lg text-[12px] font-semibold transition-all", mobileView === "list" ? "bg-white text-violet-700 shadow-sm" : "text-gray-500")}
-          >
-            Список {pvzList.length > 0 && <span className="ml-1 bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded-md text-[10px]">{pvzList.length}</span>}
-          </button>
+        <div style={{ display: "flex", gap: 4, padding: 4, borderRadius: 12, background: "rgba(255,255,255,0.06)" }} className="lg:hidden">
+          {(["map", "list"] as const).map((v) => (
+            <button key={v} type="button" onClick={() => setMobileView(v)} style={{
+              padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer", border: "none",
+              background: mobileView === v ? S.surface2 : "transparent",
+              color: mobileView === v ? S.accent3 : S.muted,
+              transition: "all 0.15s ease",
+            }}>
+              {v === "map" ? "Карта" : <>Список {pvzList.length > 0 && <span style={{ marginLeft: 4, background: "rgba(124,58,237,0.2)", color: S.accent3, padding: "1px 6px", borderRadius: 6, fontSize: 10 }}>{pvzList.length}</span>}</>}
+            </button>
+          ))}
         </div>
       </div>
 
       {/* ── SEARCH BAR ── */}
-      <form onSubmit={handleSearch} className="flex items-center gap-2 px-4 py-3 flex-shrink-0" style={{
-        background: "rgba(255,255,255,0.9)",
-        backdropFilter: "blur(12px)",
-        borderBottom: "1px solid rgba(0,0,0,0.05)",
+      <form onSubmit={handleSearch} style={{
+        display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", flexShrink: 0,
+        background: "rgba(19,15,29,0.9)", backdropFilter: "blur(12px)",
+        borderBottom: `1px solid ${S.border}`,
       }}>
-        <div className="relative flex-1">
-          <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+        <div style={{ position: "relative", flex: 1 }}>
+          <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: S.subtle, pointerEvents: "none" }} />
           <input
             type="text"
             value={cityInput}
             onChange={(e) => setCityInput(e.target.value)}
             placeholder="Введите ваш город..."
-            className="w-full pl-10 pr-4 py-2.5 text-sm font-medium focus:outline-none transition-all rounded-xl"
             style={{
-              background: "#f8f8fc",
-              border: "1.5px solid #e5e7eb",
-              color: "#1d1d1f",
+              width: "100%", paddingLeft: 38, paddingRight: 14, paddingTop: 10, paddingBottom: 10,
+              fontSize: 13, fontWeight: 500, fontFamily: "inherit",
+              background: "rgba(255,255,255,0.05)", border: `1.5px solid ${S.border}`,
+              borderRadius: 12, color: S.text, outline: "none", transition: "all 0.15s ease",
             }}
-            onFocus={e => { (e.target as HTMLInputElement).style.borderColor = "#7c3aed"; (e.target as HTMLInputElement).style.background = "#fff"; }}
-            onBlur={e => { (e.target as HTMLInputElement).style.borderColor = "#e5e7eb"; (e.target as HTMLInputElement).style.background = "#f8f8fc"; }}
-            autoFocus={!defaultCity}
+            onFocus={e => { (e.target as HTMLInputElement).style.borderColor = "rgba(167,139,250,0.4)"; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.08)"; }}
+            onBlur={e => { (e.target as HTMLInputElement).style.borderColor = S.border; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.05)"; }}
           />
         </div>
-        <button
-          type="submit"
-          disabled={!cityInput.trim() || loading}
-          className="px-4 py-2.5 text-white text-sm font-semibold rounded-xl transition-all disabled:opacity-40 flex items-center gap-1.5 flex-shrink-0"
-          style={{ background: "linear-gradient(135deg,#7c3aed,#9333ea)", boxShadow: "0 2px 8px rgba(124,58,237,0.3)" }}
-        >
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+        <button type="submit" disabled={!cityInput.trim() || loading} style={{
+          padding: "10px 16px", color: "#fff", fontSize: 13, fontWeight: 600, borderRadius: 12, border: "none", cursor: "pointer",
+          background: "linear-gradient(135deg,#7c3aed,#9333ea)", boxShadow: "0 2px 12px rgba(124,58,237,0.3)",
+          display: "flex", alignItems: "center", gap: 6, flexShrink: 0, opacity: (!cityInput.trim() || loading) ? 0.5 : 1,
+        }}>
+          {loading ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Search size={14} />}
           Найти
         </button>
-        <button
-          type="button"
-          onClick={handleGeo}
-          disabled={geoLoading || loading}
-          title="Моё местоположение"
-          className="p-2.5 rounded-xl transition-all disabled:opacity-40 flex-shrink-0"
-          style={{
-            background: "#eff6ff",
-            border: "1.5px solid #bfdbfe",
-            color: "#3b82f6",
-          }}
-          onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "#dbeafe"; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "#eff6ff"; }}
+        <button type="button" onClick={handleGeo} disabled={geoLoading || loading} title="Моё местоположение" style={{
+          padding: 10, borderRadius: 12, border: `1.5px solid rgba(59,130,246,0.25)`, cursor: "pointer",
+          background: "rgba(59,130,246,0.1)", color: "#60a5fa",
+          display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+          opacity: (geoLoading || loading) ? 0.5 : 1, transition: "all 0.15s",
+        }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(59,130,246,0.2)"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "rgba(59,130,246,0.1)"; }}
         >
-          {geoLoading ? <Loader2 size={16} className="animate-spin" /> : <Navigation size={16} />}
+          {geoLoading ? <Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> : <Navigation size={16} />}
         </button>
       </form>
 
       {/* ── MAIN CONTENT ── */}
-      <div className="flex flex-1 min-h-0 overflow-hidden">
+      <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
 
-        {/* ── MAP (left/main on desktop, toggle on mobile) ── */}
-        <div
-          className={clsx("relative flex-1", mobileView !== "map" ? "hidden lg:block" : "block")}
-          style={{ minWidth: 0 }}
-        >
-          <div
-            ref={mapDivRef}
-            style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
-          />
+        {/* ── MAP ── */}
+        <div style={{ position: "relative", flex: 1, minWidth: 0, display: mobileView !== "map" ? undefined : "block" }}
+          className={mobileView !== "map" ? "hidden lg:block" : "block"}>
+          <div ref={mapDivRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }} />
 
-          {/* Loading overlay on map */}
+          {/* Loading overlay */}
           {loading && (
-            <div className="absolute inset-0 flex items-center justify-center z-20" style={{ background: "rgba(255,255,255,0.7)", backdropFilter: "blur(8px)" }}>
-              <div className="flex items-center gap-3 px-6 py-4 rounded-2xl" style={{ background: "#fff", boxShadow: "0 8px 32px rgba(0,0,0,0.12)" }}>
-                <Loader2 size={20} className="animate-spin text-violet-600" />
-                <span className="text-[14px] font-medium text-gray-700">Ищем пункты выдачи…</span>
+            <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 20, background: "rgba(9,6,15,0.7)", backdropFilter: "blur(8px)" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 24px", borderRadius: 16, background: S.surface, border: `1px solid ${S.borderMd}`, boxShadow: "0 8px 32px rgba(0,0,0,0.5)" }}>
+                <Loader2 size={20} style={{ color: S.accent3, animation: "spin 1s linear infinite" }} />
+                <span style={{ fontSize: 14, fontWeight: 500, color: S.muted }}>Ищем пункты выдачи…</span>
               </div>
             </div>
           )}
 
-          {/* Selected PVZ floating card on map (desktop) */}
+          {/* Selected PVZ floating card (desktop) */}
           {selectedPvz && (
-            <div
-              className="absolute bottom-6 left-6 z-20 hidden lg:block"
-              style={{
-                background: "rgba(255,255,255,0.97)",
-                backdropFilter: "blur(20px)",
-                borderRadius: 20,
-                padding: "20px 24px",
-                boxShadow: "0 16px 48px rgba(0,0,0,0.15)",
-                maxWidth: 320,
-                border: "1px solid rgba(124,58,237,0.2)",
-              }}
-            >
-              <div className="flex items-start gap-3 mb-4">
-                <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: "#f5f3ff" }}>
-                  <Building2 size={18} style={{ color: "#7c3aed" }} />
+            <div style={{
+              position: "absolute", bottom: 24, left: 24, zIndex: 20,
+              background: "rgba(19,15,29,0.97)", backdropFilter: "blur(20px)",
+              borderRadius: 20, padding: "20px 24px", boxShadow: "0 16px 48px rgba(0,0,0,0.6)",
+              maxWidth: 320, border: `1px solid rgba(124,58,237,0.25)`,
+            }} className="hidden lg:block">
+              <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 16 }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: "rgba(124,58,237,0.2)", border: `1px solid rgba(124,58,237,0.3)` }}>
+                  <Building2 size={18} style={{ color: S.accent3 }} />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-bold text-[14px] text-gray-900 leading-tight">{selectedPvz.name}</div>
-                  <div className="text-[12px] text-gray-400 mt-0.5 leading-snug">{selectedPvz.address}</div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14, color: S.text }}>{selectedPvz.name}</div>
+                  <div style={{ fontSize: 12, color: S.muted, marginTop: 2 }}>{selectedPvz.address}</div>
                   {selectedPvz.schedule && (
-                    <div className="flex items-center gap-1.5 mt-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      <span className="text-[11px] text-emerald-600 font-medium">Сегодня {selectedPvz.schedule}</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 6 }}>
+                      <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80" }} />
+                      <span style={{ fontSize: 11, color: "#4ade80", fontWeight: 500 }}>Сегодня {selectedPvz.schedule}</span>
                     </div>
                   )}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => { onSelect(selectedPvz); onClose(); }}
-                className="w-full py-3 rounded-xl text-[13px] font-bold text-white transition-all hover:-translate-y-0.5"
-                style={{ background: "linear-gradient(135deg,#7c3aed,#9333ea)", boxShadow: "0 6px 20px rgba(124,58,237,0.4)" }}
+              <button type="button" onClick={() => { onSelect(selectedPvz); onClose(); }} style={{
+                width: "100%", padding: "12px", borderRadius: 12, fontSize: 13, fontWeight: 700, color: "#fff",
+                background: "linear-gradient(135deg,#7c3aed,#9333ea)", border: "none", cursor: "pointer",
+                boxShadow: "0 6px 20px rgba(124,58,237,0.4)", transition: "transform 0.15s ease",
+              }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = "translateY(-1px)"; }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = ""; }}
               >
                 Выбрать этот пункт
               </button>
@@ -471,63 +464,56 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
           )}
         </div>
 
-        {/* ── SIDEBAR / LIST ── */}
+        {/* ── SIDEBAR LIST ── */}
         <div
-          className={clsx(
-            "flex flex-col overflow-hidden",
-            mobileView !== "list" ? "hidden lg:flex" : "flex w-full",
-            "lg:w-[380px] lg:flex-shrink-0"
-          )}
-          style={{ borderLeft: "1px solid rgba(0,0,0,0.06)", background: "#fff" }}
+          style={{
+            display: "flex", flexDirection: "column", overflow: "hidden",
+            borderLeft: `1px solid ${S.border}`, background: S.surface,
+            width: "100%",
+          }}
+          className={mobileView !== "list" ? "hidden lg:flex lg:w-[380px] lg:flex-shrink-0" : "flex"}
         >
-          {/* Empty states */}
           {!loading && !searched && (
-            <div className="flex flex-col items-center justify-center py-20 px-8 text-center flex-1">
-              <div className="w-16 h-16 rounded-3xl flex items-center justify-center mb-5" style={{ background: "linear-gradient(135deg,#f5f3ff,#ede9fe)" }}>
-                <Navigation size={28} style={{ color: "#7c3aed" }} />
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 32px", textAlign: "center", flex: 1 }}>
+              <div style={{ width: 64, height: 64, borderRadius: 24, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20, background: "rgba(124,58,237,0.1)", border: `1px solid rgba(124,58,237,0.2)` }}>
+                <Navigation size={28} style={{ color: S.accent3 }} />
               </div>
-              <p className="text-[15px] font-semibold text-gray-900 mb-2">Найдите ближайший пункт</p>
-              <p className="text-[13px] text-gray-400 leading-relaxed">Введите город или нажмите кнопку геолокации</p>
+              <p style={{ fontSize: 15, fontWeight: 600, color: S.text, marginBottom: 8 }}>Найдите ближайший пункт</p>
+              <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.6 }}>Введите город или нажмите кнопку геолокации</p>
             </div>
           )}
 
           {loading && (
-            <div className="flex flex-col items-center justify-center py-20 gap-4 flex-1">
-              <Loader2 size={28} className="animate-spin" style={{ color: "#7c3aed" }} />
-              <p className="text-[13px] font-medium text-gray-500">Ищем пункты рядом с вами…</p>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 20px", gap: 16, flex: 1 }}>
+              <Loader2 size={28} style={{ color: S.accent3, animation: "spin 1s linear infinite" }} />
+              <p style={{ fontSize: 13, fontWeight: 500, color: S.muted }}>Ищем пункты рядом с вами…</p>
             </div>
           )}
 
           {!loading && searched && pvzList.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-20 px-8 text-center flex-1">
-              <div className="w-16 h-16 rounded-3xl flex items-center justify-center mb-5" style={{ background: "#fff7f0" }}>
-                <MapPin size={28} style={{ color: "#f97316" }} />
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 32px", textAlign: "center", flex: 1 }}>
+              <div style={{ width: 64, height: 64, borderRadius: 24, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20, background: "rgba(249,115,22,0.1)", border: "1px solid rgba(249,115,22,0.2)" }}>
+                <MapPin size={28} style={{ color: "#fb923c" }} />
               </div>
-              <p className="text-[15px] font-semibold text-gray-900 mb-2">Пункты не найдены</p>
-              <p className="text-[13px] text-gray-400">Попробуйте другой город или используйте геолокацию</p>
+              <p style={{ fontSize: 15, fontWeight: 600, color: S.text, marginBottom: 8 }}>Пункты не найдены</p>
+              <p style={{ fontSize: 13, color: S.muted }}>Попробуйте другой город или используйте геолокацию</p>
             </div>
           )}
 
           {!loading && pvzList.length > 0 && (
             <>
-              {/* Count header */}
-              <div className="px-5 py-3 flex-shrink-0 flex items-center justify-between" style={{ background: "#fafafa", borderBottom: "1px solid rgba(0,0,0,0.05)" }}>
-                <span className="text-[12px] font-bold text-gray-500 uppercase tracking-wider">
-                  {pvzList.length} пункт{pvzList.length === 1 ? "" : pvzList.length < 5 ? "а" : "ов"} выдачи
+              <div style={{ padding: "10px 16px", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", background: "rgba(255,255,255,0.03)", borderBottom: `1px solid ${S.border}` }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: S.subtle, textTransform: "uppercase", letterSpacing: "0.08em" }}>
+                  {pvzList.length} пункт{pvzList.length < 5 ? "а" : "ов"} выдачи
                 </span>
                 {selectedId && (
-                  <button
-                    type="button"
-                    onClick={() => { const pvz = pvzList.find(p => p.id === selectedId); if (pvz) { onSelect(pvz); onClose(); } }}
-                    className="text-[12px] font-bold text-violet-600 hover:text-violet-800 transition-colors"
-                  >
+                  <button type="button" onClick={() => { const pvz = pvzList.find(p => p.id === selectedId); if (pvz) { onSelect(pvz); onClose(); } }}
+                    style={{ fontSize: 12, fontWeight: 700, color: S.accent3, background: "none", border: "none", cursor: "pointer" }}>
                     Подтвердить →
                   </button>
                 )}
               </div>
-
-              {/* List */}
-              <div ref={listRef} className="flex-1 overflow-y-auto" style={{ scrollbarWidth: "thin", scrollbarColor: "#e5e7eb transparent" }}>
+              <div ref={listRef} style={{ flex: 1, overflowY: "auto", scrollbarWidth: "thin", scrollbarColor: `${S.border} transparent` }}>
                 {pvzList.map((pvz) => (
                   <PvzItem
                     key={pvz.id}
