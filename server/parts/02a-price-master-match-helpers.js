@@ -344,3 +344,28 @@ function hasDraftInput(input = {}) {
   }));
 }
 
+// When a selected_row link has a pinned sourceRowId, the staleness-fallback article
+// search (priceMasterRowMatchesLink check #3) returns OTHER rows from the same supplier
+// that share the article — e.g. Далик has both ALHAMBRA and LATTAFA QUEEN under LQOA100.
+// All those rows end up in rawSuppliers and pickWarehouseSupplier picks the cheapest,
+// ignoring the user's explicit pin.
+// This function keeps only the exact rowId match when it is present; falls back to
+// exactName matches; and only uses all article matches (staleness fallback) when the
+// pinned row is truly gone (supplier re-uploaded with a new RowID).
+function filterSelectedRowMatchesToBestPin(link, matches) {
+  if (!Array.isArray(matches) || matches.length <= 1) return matches;
+  if (link.matchType !== "selected_row" || !link.sourceRowId) return matches;
+
+  const byRowId = matches.filter((m) => String(m.rowId || "") === String(link.sourceRowId));
+  if (byRowId.length) return byRowId;
+
+  if (link.exactName) {
+    const byName = matches.filter((m) => exactPriceMasterNameMatches(
+      cleanText(m.name || m.nativeName || ""), link.exactName,
+    ));
+    if (byName.length) return byName;
+  }
+
+  return matches;
+}
+

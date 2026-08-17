@@ -24,7 +24,7 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
       const exactName = cleanText(link.exactName || link.article).toLowerCase();
       candidateRows = exactName ? (snapshotIndexes.byName.get(exactName) || []) : snapshotIndexes.rows;
     }
-    const matches = candidateRows
+    const rawMatches = candidateRows
       .filter((row) => priceMasterRowMatchesLink(row, link))
       .map((row) => {
         const fields = priceMasterSnapshotRowFields(row);
@@ -61,7 +61,7 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
           docDate: fields.docDate,
         };
       });
-    map.set(link.id, matches);
+    map.set(link.id, filterSelectedRowMatchesToBestPin(link, rawMatches));
   }
 
   return map;
@@ -117,7 +117,7 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
     `,
     params,
   );
-  return rows
+  const mapped = rows
     .filter((row) => priceMasterRowMatchesLink(row, link))
     .map((row) => {
       const priceCurrency = resolvePriceMasterRowCurrency(row, link, supplierMaps, usdRate);
@@ -139,6 +139,7 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
         available: Boolean(row.active) && (pricingMeta.stockOnly || Number(priceData.price || 0) > 0),
       };
     });
+  return filterSelectedRowMatchesToBestPin(link, mapped);
 }
 
 function priceMasterSnapshotLinkRow(row = {}, link = {}, usdRate, supplierMaps = managedSupplierMaps()) {
@@ -204,9 +205,10 @@ async function findPriceMasterSnapshotRowsForLink(linkInput, usdRate, managedSup
     orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
     take: 50,
   });
-  return rows
+  const snapshotMapped = rows
     .map((row) => priceMasterSnapshotLinkRow(row, link, usdRate, supplierMaps))
     .filter((row) => priceMasterRowMatchesLink(row, link));
+  return filterSelectedRowMatchesToBestPin(link, snapshotMapped);
 }
 
 async function getLivePriceMasterMatchesForLinks(links, managedSuppliers = [], usdRate) {
