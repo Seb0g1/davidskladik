@@ -507,151 +507,127 @@ app.get("/api/shop/settings", shopCors, async (_request, response, next) => {
   }
 });
 
-// CDEK PVZ — OAuth token cache + per-city PVZ cache
-// Production credentials: CDEK_CLIENT_ID / CDEK_CLIENT_SECRET / CDEK_API_URL env vars
-// Defaults are CDEK's public test credentials (read-only, real pickup point data)
-const _CDEK_BASE = process.env.CDEK_API_URL || "https://api.edu.cdek.ru/v2";
-const _CDEK_CLIENT_ID = process.env.CDEK_CLIENT_ID || "EMscd6r9JnFiQ3bLoyjJY6eM";
-const _CDEK_CLIENT_SECRET = process.env.CDEK_CLIENT_SECRET || "PjLZkKBHEiLK3Tlwr6AnTCNZ";
-let _cdekToken = null;
-let _cdekTokenExp = 0;
+// Ozon PVZ — кэш полного списка точек (~93K, только координаты), TTL 24 ч
+let _ozonPvzAllCache = null;
+let _ozonPvzAllCacheAt = 0;
+const _OZON_PVZ_LIST_TTL_MS = 24 * 60 * 60 * 1000;
 
-async function _cdekAuth() {
-  if (_cdekToken && Date.now() < _cdekTokenExp - 30000) return _cdekToken;
+async function _loadOzonPvzAll() {
+  if (_ozonPvzAllCache && Date.now() - _ozonPvzAllCacheAt < _OZON_PVZ_LIST_TTL_MS) {
+    return _ozonPvzAllCache;
+  }
+  const account = getOzonAccountByTarget("ozon");
+  if (!account?.clientId || !account?.apiKey) return [];
   try {
-    const res = await fetch(
-      `${_CDEK_BASE}/oauth/token?grant_type=client_credentials&client_id=${_CDEK_CLIENT_ID}&client_secret=${_CDEK_CLIENT_SECRET}`,
-      { method: "POST", signal: AbortSignal.timeout(10000) }
-    );
-    if (!res.ok) return null;
-    const d = await res.json();
-    _cdekToken = d.access_token;
-    _cdekTokenExp = Date.now() + (d.expires_in || 3600) * 1000;
-    return _cdekToken;
-  } catch {
-    return null;
+    const res = await fetch("https://api-seller.ozon.ru/v1/delivery/point/list", {
+      method: "POST",
+      headers: { "Client-Id": account.clientId, "Api-Key": account.apiKey, "Content-Type": "application/json" },
+      body: "{}",
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) {
+      logger.warn("ozon pvz list failed", { status: res.status });
+      return _ozonPvzAllCache || [];
+    }
+    const data = await res.json();
+    const points = data.points || [];
+    _ozonPvzAllCache = points.map(p => ({ id: p.map_point_id, lat: p.coordinate?.lat ?? 0, lng: p.coordinate?.long ?? 0 }));
+    _ozonPvzAllCacheAt = Date.now();
+    logger.info("ozon pvz list loaded", { count: _ozonPvzAllCache.length });
+    return _ozonPvzAllCache;
+  } catch (err) {
+    logger.warn("ozon pvz list error", { detail: err?.message });
+    return _ozonPvzAllCache || [];
   }
 }
 
-const _cdekPvzCache = new Map(); // cityKey → { points, ts }
-const _CDEK_PVZ_TTL = 6 * 60 * 60 * 1000;
+function _pvzWorkingHoursToday(workingHours = []) {
+  if (!workingHours.length) return null;
+  const periods = workingHours[0]?.periods || [];
+  if (!periods.length) return null;
+  const p = periods[0];
+  const fmt = (t) => `${String(t?.hours ?? 0).padStart(2, "0")}:${String(t?.minutes ?? 0).padStart(2, "0")}`;
+  return `${fmt(p.min)}–${fmt(p.max)}`;
+}
 
-async function _loadCdekPvz(cityName) {
-  const key = cityName.toLowerCase().trim();
-  const cached = _cdekPvzCache.get(key);
-  if (cached && Date.now() - cached.ts < _CDEK_PVZ_TTL) return cached.points;
-
-  const token = await _cdekAuth();
-  if (!token) return [];
-
-  const hdrs = { Authorization: `Bearer ${token}` };
-
-  try {
-    // Step 1: resolve city name → CDEK city code
-    const cityRes = await fetch(
-      `${_CDEK_BASE}/location/cities?country_codes=RU&q=${encodeURIComponent(cityName)}&size=3`,
-      { headers: hdrs, signal: AbortSignal.timeout(8000) }
-    );
-    if (!cityRes.ok) return [];
-    const cities = await cityRes.json();
-    if (!Array.isArray(cities) || !cities.length) return [];
-    const cityCode = cities[0].code;
-
-    // Step 2: get all pickup points for this city (is_handout = can receive parcels)
-    const pvzRes = await fetch(
-      `${_CDEK_BASE}/deliverypoints?country_codes=RU&city_code=${cityCode}&is_handout=true&size=500`,
-      { headers: hdrs, signal: AbortSignal.timeout(15000) }
-    );
-    if (!pvzRes.ok) return [];
-    const pvzData = await pvzRes.json();
-    if (!Array.isArray(pvzData)) return [];
-
-    const points = pvzData
-      .filter(p => p.location?.latitude && p.location?.longitude)
-      .map(p => ({
-        id: String(p.code),
-        name: cleanText(p.name) || "ПВЗ",
-        address: cleanText(p.location?.address_full || p.location?.address) || "",
-        lat: p.location.latitude,
-        lng: p.location.longitude,
-        schedule: cleanText(p.work_time) || null,
-        type: p.type === "POSTAMAT" ? "Постамат" : "ПВЗ",
-        city: cleanText(p.location?.city) || cityName,
-      }));
-
-    _cdekPvzCache.set(key, { points, ts: Date.now() });
-    logger.info("cdek pvz cached", { city: cityName, cityCode, count: points.length });
-    return points;
-  } catch (err) {
-    logger.warn("cdek pvz load failed", { city: cityName, detail: err?.message });
-    return [];
+async function _fetchOzonPvzDetails(mapPointIds = []) {
+  if (!mapPointIds.length) return [];
+  const account = getOzonAccountByTarget("ozon");
+  if (!account?.clientId || !account?.apiKey) return [];
+  const results = [];
+  for (let i = 0; i < mapPointIds.length; i += 80) {
+    const batch = mapPointIds.slice(i, i + 80);
+    try {
+      const res = await fetch("https://api-seller.ozon.ru/v1/delivery/point/info", {
+        method: "POST",
+        headers: { "Client-Id": account.clientId, "Api-Key": account.apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ map_point_ids: batch }),
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) continue;
+      const data = await res.json();
+      for (const point of (data.points || [])) {
+        if (!point.enabled) continue;
+        const dm = point.delivery_method || {};
+        const addr = dm.address_details || {};
+        const hoursToday = _pvzWorkingHoursToday(dm.working_hours);
+        results.push({
+          id: String(dm.map_point_id),
+          name: cleanText(dm.name) || "Ozon ПВЗ",
+          address: cleanText(dm.address) || [addr.city, addr.street, addr.house].filter(Boolean).join(", "),
+          lat: dm.coordinates?.lat ?? 0,
+          lng: dm.coordinates?.long ?? 0,
+          schedule: hoursToday,
+          type: cleanText(dm.delivery_type?.name) || "ПВЗ",
+          city: cleanText(addr.city),
+        });
+      }
+    } catch (error) {
+      logger.warn("ozon pvz info batch failed", { detail: error?.message });
+    }
   }
+  return results;
 }
 
 // GET /api/shop/delivery/pvz?city=Москва  OR  ?lat=55.75&lng=37.62
-// CDEK API: resolves city name → CDEK city code → pickup points (TTL 6h per city)
+// Ozon Seller API: /v1/delivery/point/list (cached 24h) + /v1/delivery/point/info для деталей
 app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
   try {
-    const cityParam = String(request.query.city || "").trim().slice(0, 100);
+    const city = String(request.query.city || "").trim().slice(0, 100);
     const latParam = parseFloat(String(request.query.lat || ""));
     const lngParam = parseFloat(String(request.query.lng || ""));
     const hasCoords = Number.isFinite(latParam) && Number.isFinite(lngParam);
-    if (!cityParam && !hasCoords) return response.status(400).json({ error: "city or lat/lng required" });
+    if (!city && !hasCoords) return response.status(400).json({ error: "city or lat/lng required" });
 
-    let centerLat, centerLng, resolvedCity;
-
+    let centerLat, centerLng;
     if (hasCoords) {
       centerLat = latParam;
       centerLng = lngParam;
-      // Reverse geocode coords → city name for CDEK lookup
-      try {
-        const revRes = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?lat=${latParam}&lon=${lngParam}&format=json&accept-language=ru`,
-          { headers: { "User-Agent": "MagicVibesShop/1.0 (noreply@magicvibes.ru)" }, signal: AbortSignal.timeout(8000) }
-        );
-        if (revRes.ok) {
-          const rev = await revRes.json();
-          resolvedCity = rev.address?.city || rev.address?.town || rev.address?.village || "Москва";
-        }
-      } catch { /* ignore */ }
-      resolvedCity = resolvedCity || "Москва";
     } else {
-      resolvedCity = cityParam;
-      // Forward geocode to get city center coords (for radius sort)
-      try {
-        const geoRes = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cityParam + ", Россия")}&format=json&limit=1&featuretype=city`,
-          { headers: { "User-Agent": "MagicVibesShop/1.0 (noreply@magicvibes.ru)" }, signal: AbortSignal.timeout(8000) }
-        );
-        if (geoRes.ok) {
-          const geoData = await geoRes.json();
-          if (geoData.length) { centerLat = parseFloat(geoData[0].lat); centerLng = parseFloat(geoData[0].lon); }
-        }
-      } catch { /* ignore */ }
+      const geoRes = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city + ", Россия")}&format=json&limit=1&featuretype=city`,
+        { headers: { "User-Agent": "MagicVibesShop/1.0 (noreply@magicvibes.ru)" }, signal: AbortSignal.timeout(8000) }
+      );
+      if (!geoRes.ok) return response.json({ pvz: [], city, error: "geocode_failed" });
+      const geoData = await geoRes.json();
+      if (!geoData.length) return response.json({ pvz: [], city, error: "city_not_found" });
+      centerLat = parseFloat(geoData[0].lat);
+      centerLng = parseFloat(geoData[0].lon);
     }
 
-    // Load all CDEK pickup points for the resolved city
-    let allPoints = await _loadCdekPvz(resolvedCity);
+    const allPoints = await _loadOzonPvzAll();
+    const radiusLat = 0.27; // ~30 км по широте
+    const radiusLng = radiusLat / Math.max(0.3, Math.cos((centerLat * Math.PI) / 180));
+    const nearby = allPoints
+      .filter(p => p.lat && p.lng && Math.abs(p.lat - centerLat) < radiusLat && Math.abs(p.lng - centerLng) < radiusLng)
+      .map(p => ({ ...p, dist: Math.pow(p.lat - centerLat, 2) + Math.pow((p.lng - centerLng) * Math.cos((centerLat * Math.PI) / 180), 2) }))
+      .sort((a, b) => a.dist - b.dist)
+      .slice(0, 60);
 
-    // If 0 results and resolvedCity is a suburb, try fallback to "Москва"
-    if (!allPoints.length && resolvedCity !== "Москва" && hasCoords) {
-      allPoints = await _loadCdekPvz("Москва");
-      resolvedCity = "Москва";
-    }
+    if (!nearby.length) return response.json({ pvz: [], city, source: "ozon", center: { lat: centerLat, lng: centerLng } });
 
-    // Sort by distance from center (if coords available), cap at 80 points
-    let pvz;
-    if (centerLat && centerLng) {
-      pvz = allPoints
-        .map(p => ({ ...p, _d: Math.pow(p.lat - centerLat, 2) + Math.pow((p.lng - centerLng) * Math.cos((centerLat * Math.PI) / 180), 2) }))
-        .sort((a, b) => a._d - b._d)
-        .slice(0, 80)
-        .map(({ _d, ...p }) => p);
-    } else {
-      pvz = allPoints.slice(0, 80);
-    }
-
-    response.json({ pvz, city: resolvedCity, count: pvz.length, source: "cdek", center: centerLat ? { lat: centerLat, lng: centerLng } : undefined });
+    const pvz = await _fetchOzonPvzDetails(nearby.map(p => p.id));
+    response.json({ pvz, city, count: pvz.length, source: "ozon" });
   } catch (error) {
     next(error);
   }
