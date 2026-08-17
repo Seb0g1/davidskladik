@@ -590,8 +590,37 @@ async function _fetchOzonPvzDetails(mapPointIds = []) {
 }
 
 // GET /api/shop/delivery/pvz?city=Москва  OR  ?lat=55.75&lng=37.62
-// Ozon Seller API: /v1/delivery/point/list (cached 24h) + /v1/delivery/point/info для деталей
-// Фильтрация — по boundingbox города (Nominatim), а не по фиксированному радиусу от centroid
+// Ozon Seller API: /v1/delivery/point/list (cached 24h) + /v1/delivery/point/info
+// City search: grid-sampling by bbox (равномерное покрытие города)
+// Coords search: 80 ближайших к пользователю
+
+function _gridSamplePvz(points, bboxS, bboxN, bboxW, bboxE, maxPoints = 80) {
+  if (!points.length) return [];
+  // Вычисляем размер сетки пропорционально bbox
+  const aspect = Math.max(0.1, (bboxE - bboxW) / (bboxN - bboxS));
+  const gridH = Math.max(1, Math.round(Math.sqrt(maxPoints / aspect)));
+  const gridW = Math.max(1, Math.round(maxPoints / gridH));
+  const cellH = (bboxN - bboxS) / gridH;
+  const cellW = (bboxE - bboxW) / gridW;
+  const used = new Set();
+  const result = [];
+  for (let row = 0; row < gridH && result.length < maxPoints; row++) {
+    for (let col = 0; col < gridW && result.length < maxPoints; col++) {
+      const clat = bboxS + (row + 0.5) * cellH;
+      const clng = bboxW + (col + 0.5) * cellW;
+      const cosLat = Math.cos((clat * Math.PI) / 180);
+      let best = null, bestDist = Infinity;
+      for (const p of points) {
+        if (used.has(p.id)) continue;
+        const d = Math.pow(p.lat - clat, 2) + Math.pow((p.lng - clng) * cosLat, 2);
+        if (d < bestDist) { bestDist = d; best = p; }
+      }
+      if (best) { used.add(best.id); result.push(best); }
+    }
+  }
+  return result;
+}
+
 app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
   try {
     const city = String(request.query.city || "").trim().slice(0, 100);
@@ -600,17 +629,23 @@ app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
     const hasCoords = Number.isFinite(latParam) && Number.isFinite(lngParam);
     if (!city && !hasCoords) return response.status(400).json({ error: "city or lat/lng required" });
 
-    let centerLat, centerLng, bboxS, bboxN, bboxW, bboxE;
+    const allPoints = await _loadOzonPvzAll();
+    let nearby;
 
     if (hasCoords) {
-      centerLat = latParam;
-      centerLng = lngParam;
-      // Фиксированный радиус ~30 км для геолокации
+      // Геолокация: 80 ближайших к пользователю в радиусе ~30 км
+      const cLat = latParam, cLng = lngParam;
       const r = 0.27;
-      const rLng = r / Math.max(0.3, Math.cos((centerLat * Math.PI) / 180));
-      bboxS = centerLat - r; bboxN = centerLat + r;
-      bboxW = centerLng - rLng; bboxE = centerLng + rLng;
+      const rLng = r / Math.max(0.3, Math.cos((cLat * Math.PI) / 180));
+      const cosLat = Math.cos((cLat * Math.PI) / 180);
+      nearby = allPoints
+        .filter(p => p.lat && p.lng && Math.abs(p.lat - cLat) < r && Math.abs(p.lng - cLng) < rLng)
+        .map(p => ({ ...p, dist: Math.pow(p.lat - cLat, 2) + Math.pow((p.lng - cLng) * cosLat, 2) }))
+        .sort((a, b) => a.dist - b.dist)
+        .slice(0, 80);
+      if (!nearby.length) return response.json({ pvz: [], city, source: "ozon", center: { lat: cLat, lng: cLng } });
     } else {
+      // Поиск по городу: геокодируем → bbox → grid-sampling для равномерного охвата
       const geoRes = await fetch(
         `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city + ", Россия")}&format=json&limit=1&featuretype=city`,
         { headers: { "User-Agent": "MagicVibesShop/1.0 (noreply@magicvibes.ru)" }, signal: AbortSignal.timeout(8000) }
@@ -619,30 +654,19 @@ app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
       const geoData = await geoRes.json();
       if (!geoData.length) return response.json({ pvz: [], city, error: "city_not_found" });
       const g = geoData[0];
-      centerLat = parseFloat(g.lat);
-      centerLng = parseFloat(g.lon);
-      // Используем boundingbox Nominatim чтобы покрыть весь город, а не только 30 км от centroid
+      let bboxS, bboxN, bboxW, bboxE;
       if (Array.isArray(g.boundingbox) && g.boundingbox.length === 4) {
         [bboxS, bboxN, bboxW, bboxE] = g.boundingbox.map(Number);
       } else {
-        const r = 0.27;
-        const rLng = r / Math.max(0.3, Math.cos((centerLat * Math.PI) / 180));
-        bboxS = centerLat - r; bboxN = centerLat + r;
-        bboxW = centerLng - rLng; bboxE = centerLng + rLng;
+        const lat = parseFloat(g.lat), lng = parseFloat(g.lon);
+        const r = 0.27, rLng = r / Math.max(0.3, Math.cos((lat * Math.PI) / 180));
+        bboxS = lat - r; bboxN = lat + r; bboxW = lng - rLng; bboxE = lng + rLng;
       }
+      const inBox = allPoints.filter(p => p.lat && p.lng && p.lat >= bboxS && p.lat <= bboxN && p.lng >= bboxW && p.lng <= bboxE);
+      if (!inBox.length) return response.json({ pvz: [], city, error: "no_pvz_in_city" });
+      // Равномерная сетка — 80 точек по всему городу
+      nearby = _gridSamplePvz(inBox, bboxS, bboxN, bboxW, bboxE, 80);
     }
-
-    const allPoints = await _loadOzonPvzAll();
-    const inBox = allPoints.filter(p => p.lat && p.lng && p.lat >= bboxS && p.lat <= bboxN && p.lng >= bboxW && p.lng <= bboxE);
-
-    // Сортируем по расстоянию от центра, берём до 80 точек
-    const cosLat = Math.cos((centerLat * Math.PI) / 180);
-    const nearby = inBox
-      .map(p => ({ ...p, dist: Math.pow(p.lat - centerLat, 2) + Math.pow((p.lng - centerLng) * cosLat, 2) }))
-      .sort((a, b) => a.dist - b.dist)
-      .slice(0, 80);
-
-    if (!nearby.length) return response.json({ pvz: [], city, source: "ozon", center: { lat: centerLat, lng: centerLng } });
 
     const pvz = await _fetchOzonPvzDetails(nearby.map(p => p.id));
     response.json({ pvz, city, count: pvz.length, source: "ozon" });
