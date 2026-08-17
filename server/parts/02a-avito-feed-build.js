@@ -175,10 +175,9 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}) {
       // Есть физический FBS-остаток — точно в наличии.
       return { listing: withStock(listing, false, false), outOfStock: false };
     }
-    // targetStock=0, нет supplier в DB: рефреш фида делает живой PM-запрос и
-    // сохраняет актуальный outOfStock; XML-билдер доверяет этому значению.
-    const outOfStock = listing.outOfStock === true;
-    return { listing: withStock(listing, outOfStock, false), outOfStock };
+    // Нет поставщика и нет остатка → нет в наличии.
+    // Рефреш вернёт товар в наличии, когда PM снова даст поставщика.
+    return { listing: withStock(listing, true, false), outOfStock: true };
   }
   const hasSupplierPrice = computeAvitoSupplierPriceRub(product.supplier, pricing) > 0;
   // PM-цена = доступность для Avito (дропшипинг): если поставщик даёт цену —

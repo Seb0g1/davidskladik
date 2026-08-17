@@ -24,9 +24,14 @@ function parseOzonStockWarehouseIds(account = {}) {
   const accountKey = cleanText(account.id || account.name || "ozon")
     .replace(/[^a-z0-9]/gi, "_")
     .toUpperCase();
+  const accountSpecific = splitList(process.env[`OZON_STOCK_WAREHOUSE_IDS_${accountKey}`] || "");
+  if (accountSpecific.length) return accountSpecific;
+  // Only fall back to the generic env vars for the primary account ("OZON").
+  // Secondary accounts must use their own OZON_STOCK_WAREHOUSE_IDS_<KEY> env var;
+  // leaking Ozon1 warehouse IDs to Ozon2 causes "warehouse not found" API errors.
+  if (accountKey !== "OZON") return [];
   return splitList(
-    process.env[`OZON_STOCK_WAREHOUSE_IDS_${accountKey}`]
-      || process.env.OZON_STOCK_WAREHOUSE_IDS
+    process.env.OZON_STOCK_WAREHOUSE_IDS
       || process.env.OZON_STOCK_WAREHOUSE_ID
       || "",
   );
@@ -36,11 +41,10 @@ function parseOzonStockWarehouseNames(account = {}) {
   const accountKey = cleanText(account.id || account.name || "ozon")
     .replace(/[^a-z0-9]/gi, "_")
     .toUpperCase();
-  return splitList(
-    process.env[`OZON_STOCK_WAREHOUSE_NAMES_${accountKey}`]
-      || process.env.OZON_STOCK_WAREHOUSE_NAMES
-      || "",
-  ).map((name) => normalizeSupplierName(name));
+  const accountSpecific = splitList(process.env[`OZON_STOCK_WAREHOUSE_NAMES_${accountKey}`] || "");
+  if (accountSpecific.length) return accountSpecific.map((name) => normalizeSupplierName(name));
+  if (accountKey !== "OZON") return [];
+  return splitList(process.env.OZON_STOCK_WAREHOUSE_NAMES || "").map((name) => normalizeSupplierName(name));
 }
 
 async function getOzonWarehouses(account = null, { refresh = false } = {}) {
@@ -78,7 +82,11 @@ async function resolveOzonStockWarehouses(account = null, product = null) {
     }
   }
 
-  if (!ozonWarehouseListEnabled) return [];
+  // For the primary account the operator has already configured OZON_STOCK_WAREHOUSE_IDS,
+  // so respect the flag. For secondary accounts (Ozon2, Ozon3 …) there is no stored data
+  // from import, so we must fetch from the API to get the correct warehouse_id.
+  const isPrimaryAccount = !account?.id || account.id === "ozon";
+  if (!ozonWarehouseListEnabled && isPrimaryAccount) return [];
 
   try {
     const warehouses = await getOzonWarehouses(account);
