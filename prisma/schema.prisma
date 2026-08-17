@@ -564,7 +564,8 @@ model ShopCustomer {
   createdAt DateTime    @default(now()) @map("created_at")
   updatedAt DateTime    @updatedAt @map("updated_at")
 
-  orders ShopOrder[]
+  orders  ShopOrder[]
+  reviews ShopReview[]
 
   @@map("shop_customers")
 }
@@ -599,6 +600,69 @@ model SyncRun {
   @@index([status])
   @@index([startedAt])
   @@map("sync_runs")
+}
+
+model TelegramNewsPost {
+  id          String   @id @default(cuid())
+  messageId   Int      @unique @map("message_id")
+  text        String?
+  photoUrl    String?  @map("photo_url")
+  publishedAt DateTime @map("published_at")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([active, publishedAt])
+  @@map("telegram_news_posts")
+}
+
+model ShopReview {
+  id          String    @id @default(cuid())
+  customerId  String    @map("customer_id")
+  offerId     String?   @map("offer_id")
+  productName String?   @map("product_name")
+  productImg  String?   @map("product_img")
+  rating      Int       @default(5)
+  text        String
+  approved    Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  customer ShopCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([approved, createdAt])
+  @@index([customerId])
+  @@map("shop_reviews")
+}
+
+model SupportChat {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  visitorName  String   @map("visitor_name")
+  category     String
+  status       String   @default("open")
+  unreadAdmin  Boolean  @default(true)  @map("unread_admin")
+  unreadUser   Boolean  @default(false) @map("unread_user")
+  lastMessageAt DateTime? @map("last_message_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  messages SupportMessage[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("support_chats")
+}
+
+model SupportMessage {
+  id        String   @id @default(cuid())
+  chatId    String   @map("chat_id")
+  role      String
+  body      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  chat SupportChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, createdAt])
+  @@map("support_messages")
 }
 
 model PriceMasterSnapshotItem {

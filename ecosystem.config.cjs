@@ -86,6 +86,8 @@ const workerOnlyEnv = {
   // и синк фида Avito каждые 3 часа вместо дефолтных 6/4.
   OZON_YANDEX_AUTO_IMPORT_INTERVAL_HOURS: "3",
   AVITO_AUTO_SYNC_HOURS: "3",
+  TELEGRAM_BOT_TOKEN: "8691183442:AAFoWdQuuNHwYdFUAoJmv3ipvFOVnRkJ83c",
+  TELEGRAM_CHANNEL: "@magicvibes_ru",
   OZON_PRICE_BATCH_SIZE: "500",
   OZON_PRICE_BATCH_DELAY_MS: "300",
   // 200 → 100: halves per-job memory footprint for auto-price-push jobs,

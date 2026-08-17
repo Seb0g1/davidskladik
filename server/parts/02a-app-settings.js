@@ -1,3 +1,7 @@
+function defaultSupportCategories() {
+  return ["Заказ и оплата", "Доставка", "Возврат", "Качество товара", "Другое"];
+}
+
 function parseJsonField(value, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
   if (typeof value === "object") return value;
@@ -213,6 +217,11 @@ function normalizeAppSettings(input = {}) {
     tnved: {
       code: cleanText((input.tnved?.code ?? input.tnvedCode) || "").slice(0, 20),
       autoEnabled: parseBooleanSetting(input.tnved?.autoEnabled, true),
+    },
+    support: {
+      categories: Array.isArray(input.support?.categories)
+        ? input.support.categories.map((c) => cleanText(c)).filter(Boolean).slice(0, 20)
+        : defaultSupportCategories(),
     },
   };
 }

@@ -9,6 +9,7 @@ import OrderSuccessPage from "./pages/OrderSuccessPage";
 import OrderFailedPage from "./pages/OrderFailedPage";
 import AccountPage from "./pages/AccountPage";
 import BrandsPage from "./pages/BrandsPage";
+import SupportChatWidget from "./components/SupportChatWidget";
 
 export default function App() {
   return (
@@ -28,6 +29,7 @@ export default function App() {
           <Route path="/brands" element={<BrandsPage />} />
         </Route>
       </Routes>
+      <SupportChatWidget />
     </BrowserRouter>
   );
 }

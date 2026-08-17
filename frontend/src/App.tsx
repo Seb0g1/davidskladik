@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, RefreshCcw, Search, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, Tag, UserCircle, Upload } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, RefreshCcw, Search, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, MessageCircleHeart, Tag, UserCircle, Upload } from "lucide-react";
 import { lazy, ReactNode, Suspense, useEffect, useRef, useState } from "react";
 import { NotificationsBell } from "./components/NotificationsBell";
 import { SystemHealthIndicator } from "./components/SystemHealthIndicator";
@@ -30,8 +30,9 @@ const ConsignmentPage = lazy(() => import("./routes/ConsignmentPage").then((m) =
 const NewProductsPage = lazy(() => import("./routes/NewProductsPage").then((m) => ({ default: m.NewProductsPage })));
 const ShopAdminPage = lazy(() => import("./routes/ShopAdminPage").then((m) => ({ default: m.default })));
 const TnvedPage = lazy(() => import("./routes/TnvedPage").then((m) => ({ default: m.TnvedPage })));
+const SupportChatsPage = lazy(() => import("./routes/SupportChatsPage").then((m) => ({ default: m.SupportChatsPage })));
 
-type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved";
+type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -43,6 +44,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "reviews", href: "/app/reviews", label: "Отзывы", icon: <Star size={16} /> },
   { route: "chats", href: "/app/chats", label: "Чаты", icon: <MessageCircle size={16} /> },
   { route: "questions", href: "/app/questions", label: "Вопросы", icon: <HelpCircle size={16} /> },
+  { route: "support", href: "/app/support", label: "Поддержка сайта", icon: <MessageCircleHeart size={16} /> },
   { route: "settings", href: "/app/settings", label: "Настройки", icon: <Settings size={16} /> },
   { route: "system", href: "/app/system", label: "Система", icon: <Activity size={16} /> },
   { route: "ai-drafts", href: "/app/ai-drafts", label: "AI drafts", icon: <Sparkles size={16} /> },
@@ -64,7 +66,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
 // Сайдбар: первые пять пунктов — без заголовка, дальше сворачиваемые группы.
 const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
   { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
-  { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions"] },
+  { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions", "support"] },
   { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "no-supplier", "operations", "recovery-queue"] },
   { id: "extra", title: "Дополнительное", routes: ["suppliers", "shop", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products", "tnved"] },
 ];
@@ -80,6 +82,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/reviews")) return "reviews";
   if (path.startsWith("/app/questions")) return "questions";
   if (path.startsWith("/app/chats")) return "chats";
+  if (path.startsWith("/app/support")) return "support";
   if (path.startsWith("/app/import")) return "import";
   if (path.startsWith("/app/avito")) return "avito";
   if (path.startsWith("/app/shop")) return "shop";
@@ -323,6 +326,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "reviews" ? <ReviewsPage /> : null}
       {sessionReady && !accessDenied && route === "questions" ? <QuestionsPage /> : null}
       {sessionReady && !accessDenied && route === "chats" ? <ChatsPage /> : null}
+      {sessionReady && !accessDenied && route === "support" ? <SupportChatsPage /> : null}
       {sessionReady && !accessDenied && route === "import" ? <ImportPage /> : null}
       {sessionReady && !accessDenied && route === "avito" ? <AvitoPage /> : null}
       {sessionReady && !accessDenied && route === "shop" ? <ShopAdminPage /> : null}

@@ -5,7 +5,7 @@ import {
   Plus, Trash2, Edit2, Save, X, Loader2, Image as ImageIcon,
   ChevronLeft, ChevronRight, Check, RefreshCw,
   LayoutDashboard, Settings, Tag, Image, ClipboardList, UserCheck,
-  ChevronDown, ChevronUp,
+  ChevronDown, ChevronUp, Newspaper, Star, Eye, EyeOff, MessageSquare,
 } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
@@ -692,9 +692,169 @@ function SettingsTab() {
   );
 }
 
+// ── News Tab ──────────────────────────────────────────────────────────────────
+
+interface TgNewsPost {
+  id: string; text: string; photoUrl?: string | null;
+  publishedAt: string; active: boolean;
+}
+
+function NewsTab() {
+  const qc = useQueryClient();
+  const { data, isLoading, refetch } = useQuery<{ ok: boolean; posts: TgNewsPost[] }>({
+    queryKey: ["shop-admin-news"],
+    queryFn: () => apiFetch<{ ok: boolean; posts: TgNewsPost[] }>("/api/shop/admin/news"),
+  });
+  const importMut = useMutation({
+    mutationFn: () => apiFetch<{ ok: boolean }>("/api/shop/admin/news/import", { method: "POST" }),
+    onSuccess: () => setTimeout(() => void refetch(), 2000),
+  });
+  const toggleMut = useMutation({
+    mutationFn: ({ id, active }: { id: string; active: boolean }) =>
+      apiFetch<{ ok: boolean }>(`/api/shop/admin/news/${id}`, { method: "PATCH", body: JSON.stringify({ active }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["shop-admin-news"] }),
+  });
+
+  return (
+    <div className="page-section">
+      <div className="section-title">
+        <div><h2>Новости из Telegram</h2><p style={{ color: "var(--muted)", fontSize: 13, marginTop: 4 }}>Посты с хэштегом #новости из канала @magicvibes_ru</p></div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={() => void importMut.mutate()} disabled={importMut.isPending} className="secondary-action" type="button">
+            <RefreshCw size={14} className={importMut.isPending ? "spin" : ""} /> Импортировать
+          </button>
+          <button onClick={() => void refetch()} disabled={isLoading} className="secondary-action" type="button">
+            <RefreshCw size={14} className={isLoading ? "spin" : ""} /> Обновить
+          </button>
+        </div>
+      </div>
+
+      {importMut.isSuccess && (
+        <div style={{ padding: "10px 14px", borderRadius: 8, background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.2)", fontSize: 13, color: "var(--success)", marginBottom: 12 }}>
+          Импорт запущен. Новые посты появятся через несколько секунд.
+        </div>
+      )}
+
+      {isLoading && <div className="soft-empty"><Loader2 size={18} className="spin" /> Загрузка…</div>}
+
+      {!isLoading && !data?.posts.length && (
+        <div className="soft-empty"><Newspaper size={18} /> Новостей нет. Нажмите «Импортировать» чтобы загрузить посты из Telegram.</div>
+      )}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 14 }}>
+        {data?.posts.map((post) => (
+          <div key={post.id} className="card-panel" style={{ opacity: post.active ? 1 : 0.5 }}>
+            {post.photoUrl && (
+              <img src={post.photoUrl} alt="" style={{ width: "100%", aspectRatio: "16/9", objectFit: "cover", borderRadius: 8, marginBottom: 10 }} />
+            )}
+            <p style={{ fontSize: 11, color: "var(--muted)", marginBottom: 6 }}>
+              {new Date(post.publishedAt).toLocaleString("ru-RU")}
+            </p>
+            <p style={{ fontSize: 13, color: "var(--text)", lineHeight: 1.55, marginBottom: 12 }}>
+              {post.text.slice(0, 200)}{post.text.length > 200 && "…"}
+            </p>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span className={`pill ${post.active ? "success" : ""}`}>{post.active ? "Показывается" : "Скрыт"}</span>
+              <button
+                onClick={() => void toggleMut.mutate({ id: post.id, active: !post.active })}
+                disabled={toggleMut.isPending}
+                className="secondary-action icon-action"
+                type="button"
+              >
+                {post.active ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Reviews Tab ───────────────────────────────────────────────────────────────
+
+interface AdminReview {
+  id: string; offerId?: string | null; productName?: string | null;
+  rating: number; text: string; createdAt: string; approved: boolean;
+  customer?: { email: string } | null;
+}
+
+function ReviewsTab() {
+  const qc = useQueryClient();
+  const { data, isLoading, refetch } = useQuery<{ ok: boolean; reviews: AdminReview[] }>({
+    queryKey: ["shop-admin-reviews"],
+    queryFn: () => apiFetch<{ ok: boolean; reviews: AdminReview[] }>("/api/shop/admin/reviews"),
+  });
+  const toggleMut = useMutation({
+    mutationFn: ({ id, approved }: { id: string; approved: boolean }) =>
+      apiFetch<{ ok: boolean }>(`/api/shop/admin/reviews/${id}`, { method: "PATCH", body: JSON.stringify({ approved }) }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["shop-admin-reviews"] }),
+  });
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => apiFetch<{ ok: boolean }>(`/api/shop/admin/reviews/${id}`, { method: "DELETE" }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["shop-admin-reviews"] }),
+  });
+
+  return (
+    <div className="page-section">
+      <div className="section-title">
+        <div><h2>Отзывы покупателей</h2></div>
+        <button onClick={() => void refetch()} disabled={isLoading} className="secondary-action" type="button">
+          <RefreshCw size={14} className={isLoading ? "spin" : ""} /> Обновить
+        </button>
+      </div>
+
+      {isLoading && <div className="soft-empty"><Loader2 size={18} className="spin" /> Загрузка…</div>}
+      {!isLoading && !data?.reviews.length && (
+        <div className="soft-empty"><MessageSquare size={18} /> Отзывов пока нет</div>
+      )}
+
+      <div className="table-panel">
+        {data?.reviews.map((r) => (
+          <div key={r.id} className="table-row" style={{ display: "grid", gridTemplateColumns: "minmax(120px,.8fr) minmax(80px,.5fr) minmax(200px,2fr) minmax(120px,.7fr) auto", gap: 12, alignItems: "center" }}>
+            <span>
+              <div style={{ fontSize: 12, fontWeight: 600 }}>{r.customer?.email ?? "—"}</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{fmtDate(r.createdAt)}</div>
+            </span>
+            <span style={{ display: "flex", gap: 2 }}>
+              {Array.from({ length: 5 }).map((_, i) => (
+                <Star key={i} size={11} fill={i < r.rating ? "gold" : "none"} stroke={i < r.rating ? "gold" : "var(--border-md)"} />
+              ))}
+            </span>
+            <span>
+              {r.productName && <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 3 }}>{r.productName}</div>}
+              <div style={{ fontSize: 13 }}>{r.text.slice(0, 120)}{r.text.length > 120 && "…"}</div>
+            </span>
+            <span><span className={`pill ${r.approved ? "success" : "warn"}`}>{r.approved ? "Показывается" : "Скрыт"}</span></span>
+            <span style={{ display: "flex", gap: 6 }}>
+              <button
+                onClick={() => void toggleMut.mutate({ id: r.id, approved: !r.approved })}
+                disabled={toggleMut.isPending}
+                className="secondary-action icon-action"
+                type="button"
+                title={r.approved ? "Скрыть" : "Показать"}
+              >
+                {r.approved ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+              <button
+                onClick={() => { if (confirm("Удалить отзыв?")) void deleteMut.mutate(r.id); }}
+                disabled={deleteMut.isPending}
+                className="secondary-action icon-action danger"
+                type="button"
+              >
+                <Trash2 size={13} />
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-type Tab = "dashboard" | "orders" | "customers" | "banners" | "categories" | "settings";
+type Tab = "dashboard" | "orders" | "customers" | "banners" | "categories" | "news" | "reviews" | "settings";
 
 const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
   { id: "dashboard", label: "Обзор", icon: LayoutDashboard },
@@ -702,6 +862,8 @@ const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number 
   { id: "customers", label: "Покупатели", icon: UserCheck },
   { id: "banners", label: "Баннеры", icon: Image },
   { id: "categories", label: "Категории", icon: Tag },
+  { id: "news", label: "Новости", icon: Newspaper },
+  { id: "reviews", label: "Отзывы", icon: Star },
   { id: "settings", label: "Настройки", icon: Settings },
 ];
 
@@ -739,6 +901,8 @@ export default function ShopAdminPage() {
       {tab === "customers" && <CustomersTab />}
       {tab === "banners" && <BannersTab />}
       {tab === "categories" && <CategoriesTab />}
+      {tab === "news" && <NewsTab />}
+      {tab === "reviews" && <ReviewsTab />}
       {tab === "settings" && <SettingsTab />}
     </section>
   );

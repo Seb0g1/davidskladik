@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { ArrowRight, BadgeCheck, Truck, Star, Sparkles, ChevronDown } from "lucide-react";
+import { ArrowRight, BadgeCheck, Truck, Star, Sparkles, ChevronDown, Newspaper, Quote } from "lucide-react";
 import { api } from "../api";
 import type { AutoCategory } from "../types";
 import ProductCard from "../components/ProductCard";
@@ -266,6 +266,18 @@ export default function HomePage() {
   const { data: autoCategories } = useQuery({
     queryKey: ["shop-auto-categories"],
     queryFn:  () => api.autoCategories(),
+    staleTime: 5 * 60_000,
+  });
+
+  const { data: newsData } = useQuery({
+    queryKey: ["shop-news"],
+    queryFn:  () => api.news(6),
+    staleTime: 5 * 60_000,
+  });
+
+  const { data: reviewsData } = useQuery({
+    queryKey: ["shop-reviews"],
+    queryFn:  () => api.reviews(8),
     staleTime: 5 * 60_000,
   });
 
@@ -539,6 +551,119 @@ export default function HomePage() {
         </div>
         <div className="section-divider" style={{ marginTop: 28 }} />
       </section>
+
+      {/* ════════════════════ REVIEWS ════════════════════ */}
+      {reviewsData && reviewsData.reviews.length > 0 && (
+        <section className="reveal-section" style={{ padding: "clamp(48px,6vw,80px) 0" }}>
+          <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 clamp(16px,4vw,48px)", marginBottom: 32 }}>
+            <p style={{ fontSize: 10, fontWeight: 700, color: "var(--accent3)", letterSpacing: "0.16em", textTransform: "uppercase", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ display: "inline-block", width: 16, height: 1, background: "var(--accent)" }} />
+              Отзывы покупателей
+            </p>
+            <h2 className="grad-text" style={{ fontSize: "clamp(28px,4vw,48px)", fontWeight: 700, letterSpacing: "-0.04em", lineHeight: 1.05, marginBottom: 0 }}>
+              Что говорят клиенты
+            </h2>
+          </div>
+          <div className="scroll-x" style={{ padding: "0 clamp(16px,4vw,48px)", paddingBottom: 16 }}>
+            <div style={{ display: "flex", gap: 14, width: "max-content" }}>
+              {reviewsData.reviews.map((r) => (
+                <div
+                  key={r.id}
+                  className="glass-hover"
+                  style={{
+                    width: 280, flexShrink: 0, padding: "22px 20px",
+                    borderRadius: 18, border: "1px solid var(--border)",
+                    background: "rgba(255,255,255,0.03)", position: "relative",
+                  }}
+                >
+                  <Quote size={18} style={{ color: "rgba(167,139,250,0.35)", marginBottom: 10 }} />
+                  <div style={{ display: "flex", gap: 3, marginBottom: 10 }}>
+                    {Array.from({ length: 5 }).map((_, i) => (
+                      <Star key={i} size={12} fill={i < r.rating ? "var(--accent3)" : "none"} stroke={i < r.rating ? "var(--accent3)" : "var(--border-md)"} />
+                    ))}
+                  </div>
+                  {r.productName && (
+                    <p style={{ fontSize: 10, fontWeight: 700, color: "var(--subtle)", letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 6 }}>{r.productName}</p>
+                  )}
+                  <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.65, marginBottom: 14 }}>
+                    {r.text.length > 200 ? r.text.slice(0, 200) + "…" : r.text}
+                  </p>
+                  <p style={{ fontSize: 12, fontWeight: 600, color: "var(--text)" }}>{r.author ?? "Покупатель"}</p>
+                  <p style={{ fontSize: 10, color: "var(--subtle)", marginTop: 2 }}>
+                    {new Date(r.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="section-divider" style={{ marginTop: 28 }} />
+        </section>
+      )}
+
+      {/* ════════════════════ NEWS ════════════════════ */}
+      {newsData && newsData.posts.length > 0 && (
+        <section className="reveal-section" style={{ padding: "clamp(48px,6vw,80px) 0" }}>
+          <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 clamp(16px,4vw,48px)", marginBottom: 32 }}>
+            <p style={{ fontSize: 10, fontWeight: 700, color: "var(--accent3)", letterSpacing: "0.16em", textTransform: "uppercase", marginBottom: 10, display: "flex", alignItems: "center", gap: 6 }}>
+              <Newspaper size={13} />
+              Новости
+            </p>
+            <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between" }}>
+              <h2 className="grad-text" style={{ fontSize: "clamp(28px,4vw,48px)", fontWeight: 700, letterSpacing: "-0.04em", lineHeight: 1.05, marginBottom: 0 }}>
+                Новости Magic Vibes
+              </h2>
+              <a href="https://t.me/magicvibes_ru" target="_blank" rel="noreferrer" className="btn-ghost" style={{ flexShrink: 0, textDecoration: "none" }}>
+                Telegram <ArrowRight size={14} strokeWidth={2.5} />
+              </a>
+            </div>
+          </div>
+          <div style={{ maxWidth: 1200, margin: "0 auto", padding: "0 clamp(16px,4vw,48px)" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+              {newsData.posts.map((post) => (
+                <a
+                  key={post.id}
+                  href="https://t.me/magicvibes_ru"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="glass-hover"
+                  style={{
+                    borderRadius: 18, border: "1px solid var(--border)",
+                    background: "rgba(255,255,255,0.03)", overflow: "hidden",
+                    textDecoration: "none", display: "flex", flexDirection: "column",
+                    transition: "border-color 0.2s, box-shadow 0.2s",
+                  }}
+                  onMouseEnter={e => {
+                    (e.currentTarget as HTMLElement).style.borderColor = "rgba(167,139,250,0.25)";
+                    (e.currentTarget as HTMLElement).style.boxShadow = "0 8px 32px rgba(124,58,237,0.15)";
+                  }}
+                  onMouseLeave={e => {
+                    (e.currentTarget as HTMLElement).style.borderColor = "var(--border)";
+                    (e.currentTarget as HTMLElement).style.boxShadow = "none";
+                  }}
+                >
+                  {post.photoUrl && (
+                    <div style={{ width: "100%", aspectRatio: "16/9", overflow: "hidden", background: "rgba(255,255,255,0.04)" }}>
+                      <img src={post.photoUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} loading="lazy" />
+                    </div>
+                  )}
+                  <div style={{ padding: "18px 18px 20px", flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
+                    <p style={{ fontSize: 10, fontWeight: 600, color: "var(--subtle)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                      {new Date(post.publishedAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long" })}
+                    </p>
+                    <p style={{ fontSize: 13.5, color: "var(--muted)", lineHeight: 1.65, flex: 1 }}>
+                      {post.text.replace(/#\S+/g, "").trim().slice(0, 220)}
+                      {post.text.length > 220 && "…"}
+                    </p>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: "var(--accent3)", display: "flex", alignItems: "center", gap: 5 }}>
+                      Читать в Telegram <ArrowRight size={12} />
+                    </span>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
     </div>
   );

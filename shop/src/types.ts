@@ -100,6 +100,24 @@ export interface ShopOrder {
   comment?: string;
 }
 
+export interface TelegramNewsPost {
+  id: string;
+  text: string;
+  photoUrl?: string | null;
+  publishedAt: string;
+}
+
+export interface ShopReview {
+  id: string;
+  offerId?: string | null;
+  productName?: string | null;
+  productImg?: string | null;
+  rating: number;
+  text: string;
+  createdAt: string;
+  author?: string;
+}
+
 export interface CatalogResponse {
   products: ShopProduct[];
   total: number;

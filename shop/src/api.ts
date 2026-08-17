@@ -1,4 +1,4 @@
-import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse, AutoCategory } from "./types";
+import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse, AutoCategory, TelegramNewsPost, ShopReview } from "./types";
 
 // В dev Vite-прокси перенаправляет /api/shop → davidsklad.ru.
 // В production установите VITE_API_BASE=https://davidsklad.ru
@@ -75,6 +75,18 @@ export const api = {
   updateProfile(data: { firstName?: string; lastName?: string; phone?: string }, token: string): Promise<{ ok: boolean; customer: import("./AuthContext").ShopCustomer }> {
     return req<{ ok: boolean; customer: import("./AuthContext").ShopCustomer }>("/auth/profile", { method: "PATCH", body: JSON.stringify(data) }, token);
   },
+
+  news(limit = 12): Promise<{ ok: boolean; posts: import("./types").TelegramNewsPost[] }> {
+    return req<{ ok: boolean; posts: import("./types").TelegramNewsPost[] }>(`/news?limit=${limit}`);
+  },
+
+  reviews(limit = 8): Promise<{ ok: boolean; reviews: import("./types").ShopReview[] }> {
+    return req<{ ok: boolean; reviews: import("./types").ShopReview[] }>(`/reviews?limit=${limit}`);
+  },
+
+  postReview(data: { offerId?: string; productName?: string; productImg?: string; rating: number; text: string }, token: string): Promise<{ ok: boolean; review: import("./types").ShopReview }> {
+    return req<{ ok: boolean; review: import("./types").ShopReview }>("/reviews", { method: "POST", body: JSON.stringify(data) }, token);
+  },
 };
 
 export const adminApi = {
@@ -114,5 +126,29 @@ export const adminApi = {
 
   saveSettings(s: Partial<ShopSettings>): Promise<ShopSettings> {
     return req<ShopSettings>("/admin/settings", { method: "PATCH", body: JSON.stringify(s) });
+  },
+
+  getNews(): Promise<{ ok: boolean; posts: (import("./types").TelegramNewsPost & { active: boolean })[] }> {
+    return req<{ ok: boolean; posts: (import("./types").TelegramNewsPost & { active: boolean })[] }>("/admin/news");
+  },
+
+  importNews(): Promise<{ ok: boolean; message: string }> {
+    return req<{ ok: boolean; message: string }>("/admin/news/import", { method: "POST" });
+  },
+
+  toggleNews(id: string, active: boolean): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(`/admin/news/${id}`, { method: "PATCH", body: JSON.stringify({ active }) });
+  },
+
+  getReviews(): Promise<{ ok: boolean; reviews: (import("./types").ShopReview & { approved: boolean; customer?: { email: string } })[] }> {
+    return req<{ ok: boolean; reviews: (import("./types").ShopReview & { approved: boolean; customer?: { email: string } })[] }>("/admin/reviews");
+  },
+
+  toggleReview(id: string, approved: boolean): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(`/admin/reviews/${id}`, { method: "PATCH", body: JSON.stringify({ approved }) });
+  },
+
+  deleteReview(id: string): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>(`/admin/reviews/${id}`, { method: "DELETE" });
   },
 };
