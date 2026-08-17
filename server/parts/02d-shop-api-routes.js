@@ -591,6 +591,7 @@ async function _fetchOzonPvzDetails(mapPointIds = []) {
 
 // GET /api/shop/delivery/pvz?city=Москва  OR  ?lat=55.75&lng=37.62
 // Ozon Seller API: /v1/delivery/point/list (cached 24h) + /v1/delivery/point/info для деталей
+// Фильтрация — по boundingbox города (Nominatim), а не по фиксированному радиусу от centroid
 app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
   try {
     const city = String(request.query.city || "").trim().slice(0, 100);
@@ -599,10 +600,16 @@ app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
     const hasCoords = Number.isFinite(latParam) && Number.isFinite(lngParam);
     if (!city && !hasCoords) return response.status(400).json({ error: "city or lat/lng required" });
 
-    let centerLat, centerLng;
+    let centerLat, centerLng, bboxS, bboxN, bboxW, bboxE;
+
     if (hasCoords) {
       centerLat = latParam;
       centerLng = lngParam;
+      // Фиксированный радиус ~30 км для геолокации
+      const r = 0.27;
+      const rLng = r / Math.max(0.3, Math.cos((centerLat * Math.PI) / 180));
+      bboxS = centerLat - r; bboxN = centerLat + r;
+      bboxW = centerLng - rLng; bboxE = centerLng + rLng;
     } else {
       const geoRes = await fetch(
         `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(city + ", Россия")}&format=json&limit=1&featuretype=city`,
@@ -611,18 +618,29 @@ app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
       if (!geoRes.ok) return response.json({ pvz: [], city, error: "geocode_failed" });
       const geoData = await geoRes.json();
       if (!geoData.length) return response.json({ pvz: [], city, error: "city_not_found" });
-      centerLat = parseFloat(geoData[0].lat);
-      centerLng = parseFloat(geoData[0].lon);
+      const g = geoData[0];
+      centerLat = parseFloat(g.lat);
+      centerLng = parseFloat(g.lon);
+      // Используем boundingbox Nominatim чтобы покрыть весь город, а не только 30 км от centroid
+      if (Array.isArray(g.boundingbox) && g.boundingbox.length === 4) {
+        [bboxS, bboxN, bboxW, bboxE] = g.boundingbox.map(Number);
+      } else {
+        const r = 0.27;
+        const rLng = r / Math.max(0.3, Math.cos((centerLat * Math.PI) / 180));
+        bboxS = centerLat - r; bboxN = centerLat + r;
+        bboxW = centerLng - rLng; bboxE = centerLng + rLng;
+      }
     }
 
     const allPoints = await _loadOzonPvzAll();
-    const radiusLat = 0.27; // ~30 км по широте
-    const radiusLng = radiusLat / Math.max(0.3, Math.cos((centerLat * Math.PI) / 180));
-    const nearby = allPoints
-      .filter(p => p.lat && p.lng && Math.abs(p.lat - centerLat) < radiusLat && Math.abs(p.lng - centerLng) < radiusLng)
-      .map(p => ({ ...p, dist: Math.pow(p.lat - centerLat, 2) + Math.pow((p.lng - centerLng) * Math.cos((centerLat * Math.PI) / 180), 2) }))
+    const inBox = allPoints.filter(p => p.lat && p.lng && p.lat >= bboxS && p.lat <= bboxN && p.lng >= bboxW && p.lng <= bboxE);
+
+    // Сортируем по расстоянию от центра, берём до 80 точек
+    const cosLat = Math.cos((centerLat * Math.PI) / 180);
+    const nearby = inBox
+      .map(p => ({ ...p, dist: Math.pow(p.lat - centerLat, 2) + Math.pow((p.lng - centerLng) * cosLat, 2) }))
       .sort((a, b) => a.dist - b.dist)
-      .slice(0, 60);
+      .slice(0, 80);
 
     if (!nearby.length) return response.json({ pvz: [], city, source: "ozon", center: { lat: centerLat, lng: centerLng } });
 

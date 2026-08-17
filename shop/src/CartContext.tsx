@@ -1,5 +1,7 @@
-import { createContext, useContext, useReducer, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useReducer, useCallback, useEffect, type ReactNode } from "react";
 import type { CartItem, ShopProduct } from "./types";
+
+const CART_STORAGE_KEY = "mv_cart_v1";
 
 interface CartState {
   items: CartItem[];
@@ -43,6 +45,16 @@ function cartReducer(state: CartState, action: CartAction): CartState {
   }
 }
 
+function loadFromStorage(): CartState {
+  try {
+    const raw = localStorage.getItem(CART_STORAGE_KEY);
+    if (!raw) return { items: [] };
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed?.items)) return { items: parsed.items };
+  } catch { /* ignore */ }
+  return { items: [] };
+}
+
 interface CartCtx {
   items: CartItem[];
   totalItems: number;
@@ -56,7 +68,13 @@ interface CartCtx {
 const CartContext = createContext<CartCtx | null>(null);
 
 export function CartProvider({ children }: { children: ReactNode }) {
-  const [state, dispatch] = useReducer(cartReducer, { items: [] });
+  const [state, dispatch] = useReducer(cartReducer, undefined, loadFromStorage);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(CART_STORAGE_KEY, JSON.stringify({ items: state.items }));
+    } catch { /* ignore quota errors */ }
+  }, [state.items]);
 
   const add = useCallback((product: ShopProduct, qty?: number) => dispatch({ type: "ADD", product, qty }), []);
   const remove = useCallback((offerId: string) => dispatch({ type: "REMOVE", offerId }), []);
