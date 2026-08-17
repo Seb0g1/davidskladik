@@ -162,31 +162,18 @@ async function processSupplierCartAutoGenerate({ source = "scheduler" } = {}) {
     }
     const systemRequest = { session: { username: "system", role: "admin" } };
     const result = await generateSupplierCartDraft({ marketplace: "all", limit: Number(process.env.SUPPLIER_CART_AUTO_LIMIT || 300) || 300 }, systemRequest);
-    // mode "draft" (по умолчанию): планировщик только формирует список — в PriceMaster строки
-    // уходят вручную кнопкой «Добавить выбранное в PriceMaster». mode "auto": сразу коммитим.
-    const autoCommit = settings.mode === "auto";
-    const commit = autoCommit
-      ? await insertSupplierCartRowsIntoPriceMaster(result.rows || [], systemRequest)
-      : { inserted: [], skipped: 0, docIds: [], pickingCreated: [], verification: null };
     supplierCartAutoLastResult = {
       ok: true,
       source,
-      mode: settings.mode,
-      autoCommit,
+      mode: "draft",
       draftId: result.draftId,
       total: result.total,
       ready: result.ready,
       skipped: result.skipped,
       alreadyCommitted: result.alreadyCommitted,
-      inserted: commit.inserted.length,
-      docIds: commit.docIds,
-      pickingCreated: commit.pickingCreated?.length || 0,
-      verifiedInPriceMaster: Boolean(commit.verification?.ok),
-      verifiedRows: Number(commit.verification?.verifiedRows || 0),
-      priceMasterDb: commit.verification?.db || "",
       at: new Date().toISOString(),
     };
-    logger.info(autoCommit ? "supplier cart auto draft generated and committed" : "supplier cart auto draft generated (manual commit mode)", supplierCartAutoLastResult);
+    logger.info("supplier cart draft generated (manual commit)", supplierCartAutoLastResult);
     return { ...supplierCartAutoLastResult, ...supplierCartAutomationPublic() };
   } catch (error) {
     supplierCartAutoLastResult = { ok: false, source, error: error?.message || String(error), at: new Date().toISOString() };

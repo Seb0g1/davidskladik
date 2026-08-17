@@ -6,32 +6,34 @@ export default function OrderFailedPage() {
   const orderId = params.get("id");
 
   return (
-    <div className="bg-apple-gray-bg min-h-screen flex items-center justify-center">
-      <div className="text-center py-16 max-w-md mx-auto px-4">
-        <div className="w-20 h-20 bg-red-100 rounded-3xl flex items-center justify-center mx-auto mb-6">
-          <XCircle size={40} className="text-red-500" />
+    <div style={{ background: "#09060F", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <div style={{ textAlign: "center", padding: "64px 24px", maxWidth: 420, width: "100%" }}>
+        <div style={{
+          width: 80, height: 80, borderRadius: 28, display: "flex", alignItems: "center", justifyContent: "center",
+          margin: "0 auto 28px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)",
+          boxShadow: "0 0 40px rgba(239,68,68,0.1)",
+        }}>
+          <XCircle size={40} style={{ color: "#f87171" }} strokeWidth={1.5} />
         </div>
-        <h1 className="text-2xl font-bold text-apple-black tracking-tight mb-2">Оплата не прошла</h1>
+
+        <h1 style={{ fontSize: 26, fontWeight: 700, color: "#F0EBFF", letterSpacing: "-0.04em", marginBottom: 10 }}>
+          Оплата не прошла
+        </h1>
         {orderId && (
-          <p className="text-sm text-apple-gray mb-1">
-            Заказ <span className="font-mono font-bold text-apple-black">{orderId}</span> сохранён
+          <p style={{ fontSize: 13, color: "rgba(240,235,255,0.5)", marginBottom: 6 }}>
+            Заказ <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#C4B5FD" }}>{orderId}</span> сохранён
           </p>
         )}
-        <p className="text-sm text-apple-gray mb-10 leading-relaxed">
+        <p style={{ fontSize: 13, color: "rgba(240,235,255,0.45)", lineHeight: 1.7, marginBottom: 40 }}>
           Платёж был отклонён или отменён.<br />
           Попробуйте ещё раз — заказ не потерян.
         </p>
-        <div className="flex flex-col sm:flex-row gap-3 justify-center">
-          <Link
-            to="/checkout"
-            className="inline-flex items-center justify-center gap-2 bg-violet-600 hover:bg-violet-700 text-white px-7 py-3.5 rounded-2xl font-semibold text-sm transition-all shadow-lg shadow-violet-200"
-          >
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "center" }}>
+          <Link to="/checkout" className="btn-primary" style={{ fontSize: 14, padding: "13px 32px", width: "100%", justifyContent: "center" }}>
             <RefreshCw size={16} /> Попробовать снова
           </Link>
-          <Link
-            to="/cart"
-            className="inline-flex items-center justify-center gap-2 bg-white hover:bg-gray-50 border border-gray-200 text-apple-black px-7 py-3.5 rounded-2xl font-semibold text-sm transition-all"
-          >
+          <Link to="/cart" className="btn-ghost" style={{ fontSize: 13, padding: "11px 24px", width: "100%", justifyContent: "center" }}>
             <ShoppingCart size={16} /> В корзину
           </Link>
         </div>

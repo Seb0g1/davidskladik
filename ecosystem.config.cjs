@@ -26,6 +26,7 @@ const sharedStabilityEnv = {
 const apiOnlyEnv = {
   ...sharedStabilityEnv,
   SERVER_ROLE: "api",
+  SHOP_ORIGINS: "https://magicvibes.ru,https://www.magicvibes.ru",
   NODE_OPTIONS: "--max-old-space-size=3072",
   BACKGROUND_JOBS_ENABLED: "false",
   BULLMQ_ENABLED: "true",

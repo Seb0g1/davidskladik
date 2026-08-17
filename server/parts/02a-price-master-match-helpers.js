@@ -357,7 +357,10 @@ function filterSelectedRowMatchesToBestPin(link, matches) {
   if (link.matchType !== "selected_row" || !link.sourceRowId) return matches;
 
   const byRowId = matches.filter((m) => String(m.rowId || "") === String(link.sourceRowId));
-  if (byRowId.length) return byRowId;
+  // Return the pinned row only when it's still active. If the supplier deactivated the
+  // pinned row (re-uploaded with a new RowID), fall through to the staleness fallback
+  // so the new active row is found instead of returning a dead row with no price.
+  if (byRowId.some((m) => m.active !== false)) return byRowId;
 
   if (link.exactName) {
     const byName = matches.filter((m) => exactPriceMasterNameMatches(

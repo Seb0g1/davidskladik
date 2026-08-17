@@ -1,10 +1,22 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Package, User, ChevronRight, Loader2, CheckCircle, Clock, Truck, LogOut, Save } from "lucide-react";
+import { Package, User, Loader2, CheckCircle, Clock, Truck, LogOut, Save, ChevronRight } from "lucide-react";
 import { useAuth } from "../AuthContext";
 import { api } from "../api";
 import type { ShopOrder } from "../types";
-import clsx from "clsx";
+
+const S = {
+  bg:      "#09060F",
+  surface: "#130F1D",
+  surface2:"#1C1630",
+  border:  "rgba(255,255,255,0.07)",
+  borderMd:"rgba(255,255,255,0.12)",
+  text:    "#F0EBFF",
+  muted:   "rgba(240,235,255,0.45)",
+  subtle:  "rgba(240,235,255,0.2)",
+  accent:  "#7C3AED",
+  accent3: "#C4B5FD",
+};
 
 const STATUS_MAP: Record<string, { label: string; color: string; icon: typeof Package }> = {
   pending:    { label: "Принят",       color: "#f59e0b", icon: Clock },
@@ -19,8 +31,7 @@ function StatusBadge({ status }: { status: string }) {
   const s = STATUS_MAP[status] || { label: status, color: "#6e6e73", icon: Package };
   const Icon = s.icon;
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1 rounded-full"
-      style={{ background: s.color + "18", color: s.color }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, padding: "3px 10px", borderRadius: 100, background: s.color + "1a", color: s.color }}>
       <Icon size={11} strokeWidth={2.5} />
       {s.label}
     </span>
@@ -31,33 +42,33 @@ function OrderCard({ order }: { order: ShopOrder }) {
   const date = new Date(order.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
   const items = order.items || [];
   return (
-    <div className="bg-white rounded-2xl overflow-hidden" style={{ border: "1px solid #f0f0f2", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-      <div className="flex items-start justify-between gap-4 p-5 border-b border-gray-50">
+    <div style={{ background: S.surface, borderRadius: 18, border: `1px solid ${S.border}`, overflow: "hidden" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, padding: "16px 20px", borderBottom: `1px solid ${S.border}` }}>
         <div>
-          <div className="text-[11px] text-apple-gray mb-1">{date}</div>
-          <div className="text-[13px] font-mono text-apple-gray">#{order.id.slice(-8).toUpperCase()}</div>
+          <div style={{ fontSize: 11, color: S.muted, marginBottom: 4 }}>{date}</div>
+          <div style={{ fontSize: 12, fontFamily: "monospace", color: S.subtle }}>#{order.id.slice(-8).toUpperCase()}</div>
         </div>
-        <div className="text-right flex flex-col items-end gap-2">
+        <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 8 }}>
           <StatusBadge status={order.status} />
-          <div className="text-[15px] font-bold text-apple-black">{order.totalRub.toLocaleString("ru-RU")} ₽</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: S.text }}>{order.totalRub.toLocaleString("ru-RU")} ₽</div>
         </div>
       </div>
       {items.length > 0 && (
-        <div className="p-4 space-y-2">
+        <div style={{ padding: "12px 20px", display: "flex", flexDirection: "column", gap: 6 }}>
           {items.slice(0, 3).map((item, i) => (
-            <div key={i} className="flex justify-between text-[12px]">
-              <span className="text-apple-gray line-clamp-1 flex-1">{item.name || item.offerId}</span>
-              <span className="text-apple-gray ml-3 flex-shrink-0">×{item.quantity}</span>
-              <span className="font-medium text-apple-black ml-3 flex-shrink-0">{(item.priceRub * item.quantity).toLocaleString("ru-RU")} ₽</span>
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+              <span style={{ color: S.muted, flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{(item as { name?: string; offerId: string }).name || (item as { offerId: string }).offerId}</span>
+              <span style={{ color: S.subtle, marginLeft: 12, flexShrink: 0 }}>×{(item as { quantity: number }).quantity}</span>
+              <span style={{ fontWeight: 600, color: S.text, marginLeft: 12, flexShrink: 0 }}>{((item as { priceRub: number; quantity: number }).priceRub * (item as { quantity: number }).quantity).toLocaleString("ru-RU")} ₽</span>
             </div>
           ))}
           {items.length > 3 && (
-            <div className="text-[11px] text-apple-gray">+ещё {items.length - 3} товара</div>
+            <div style={{ fontSize: 11, color: S.subtle }}>+ещё {items.length - 3} товара</div>
           )}
         </div>
       )}
       {order.delivery?.city && (
-        <div className="px-5 pb-4 text-[11px] text-apple-gray flex items-center gap-1">
+        <div style={{ padding: "0 20px 14px", fontSize: 11, color: S.subtle, display: "flex", alignItems: "center", gap: 6 }}>
           <Truck size={11} />
           {[order.delivery.city, order.delivery.address].filter(Boolean).join(", ")}
         </div>
@@ -74,36 +85,49 @@ function OrdersTab({ token }: { token: string }) {
   useEffect(() => {
     api.getOrders(token)
       .then((r) => setOrders(r.orders))
-      .catch((e) => setError(e.message))
+      .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
   }, [token]);
 
   if (loading) return (
-    <div className="flex items-center justify-center py-16 gap-2 text-apple-gray text-sm">
-      <Loader2 size={18} className="animate-spin" /> Загружаем заказы...
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, padding: "80px 20px", fontSize: 13, color: S.muted }}>
+      <Loader2 size={18} style={{ animation: "spin 1s linear infinite" }} /> Загружаем заказы...
     </div>
   );
 
   if (error) return (
-    <div className="bg-red-50 text-red-600 rounded-2xl px-5 py-4 text-sm">{error}</div>
+    <div style={{ background: "rgba(239,68,68,0.08)", color: "#f87171", borderRadius: 16, padding: "14px 18px", fontSize: 13, border: "1px solid rgba(239,68,68,0.15)" }}>{error}</div>
   );
 
   if (!orders.length) return (
-    <div className="text-center py-16">
-      <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: "#f5f3ff" }}>
-        <Package size={24} style={{ color: "#7c3aed" }} strokeWidth={1.5} />
+    <div style={{ textAlign: "center", padding: "80px 20px" }}>
+      <div style={{ width: 56, height: 56, borderRadius: 18, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", background: "rgba(124,58,237,0.1)", border: "1px solid rgba(124,58,237,0.2)" }}>
+        <Package size={24} style={{ color: S.accent3 }} strokeWidth={1.5} />
       </div>
-      <div className="text-[15px] font-semibold text-apple-black mb-1">Заказов пока нет</div>
-      <div className="text-sm text-apple-gray mb-6">Ваши заказы появятся здесь</div>
-      <Link to="/catalog" className="text-sm font-medium text-violet-600 hover:text-violet-700 transition-colors">
+      <div style={{ fontSize: 15, fontWeight: 600, color: S.text, marginBottom: 6 }}>Заказов пока нет</div>
+      <div style={{ fontSize: 13, color: S.muted, marginBottom: 24 }}>Ваши заказы появятся здесь</div>
+      <Link to="/catalog" style={{ fontSize: 13, fontWeight: 600, color: S.accent3, textDecoration: "none", transition: "color 0.15s" }}
+        onMouseEnter={e => (e.currentTarget.style.color = "#A78BFA")}
+        onMouseLeave={e => (e.currentTarget.style.color = S.accent3)}>
         Перейти в каталог
       </Link>
     </div>
   );
 
   return (
-    <div className="space-y-3">
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {orders.map((o) => <OrderCard key={o.id} order={o} />)}
+    </div>
+  );
+}
+
+function DarkInput({ label, ...props }: { label: string } & React.InputHTMLAttributes<HTMLInputElement>) {
+  return (
+    <div>
+      <label style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: S.subtle, marginBottom: 6 }}>{label}</label>
+      <input {...props} style={{ width: "100%", padding: "11px 14px", background: "rgba(255,255,255,0.05)", border: `1.5px solid ${S.border}`, borderRadius: 12, fontSize: 13, fontFamily: "inherit", color: S.text, outline: "none", transition: "all 0.15s ease" }}
+        onFocus={e => { (e.target as HTMLInputElement).style.borderColor = "rgba(167,139,250,0.4)"; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.08)"; }}
+        onBlur={e => { (e.target as HTMLInputElement).style.borderColor = S.border; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.05)"; }} />
     </div>
   );
 }
@@ -119,11 +143,8 @@ function ProfileTab() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
 
-  function set(k: keyof typeof form) {
-    return (e: React.ChangeEvent<HTMLInputElement>) => {
-      setForm((f) => ({ ...f, [k]: e.target.value }));
-      setSaved(false);
-    };
+  function setF(k: keyof typeof form) {
+    return (e: React.ChangeEvent<HTMLInputElement>) => { setForm((f) => ({ ...f, [k]: e.target.value })); setSaved(false); };
   }
 
   async function handleSave(e: React.FormEvent) {
@@ -141,69 +162,38 @@ function ProfileTab() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="bg-white rounded-2xl p-5" style={{ border: "1px solid #f0f0f2", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-        <h3 className="text-[13px] font-semibold text-apple-gray uppercase tracking-wider mb-4">Email</h3>
-        <div className="flex items-center gap-3 px-4 py-3 bg-gray-50 rounded-xl">
-          <span className="text-sm text-apple-black">{customer?.email}</span>
-          <span className="ml-auto text-[11px] text-apple-gray bg-white px-2 py-0.5 rounded-full border border-gray-100">подтверждён</span>
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* Email */}
+      <div style={{ background: S.surface, borderRadius: 18, padding: "18px 20px", border: `1px solid ${S.border}` }}>
+        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: S.subtle, marginBottom: 12 }}>Email</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: S.surface2, borderRadius: 12, border: `1px solid ${S.border}` }}>
+          <span style={{ fontSize: 13, color: S.text }}>{customer?.email}</span>
+          <span style={{ marginLeft: "auto", fontSize: 10, color: "#4ade80", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.2)", padding: "2px 8px", borderRadius: 100 }}>подтверждён</span>
         </div>
       </div>
 
-      <form onSubmit={handleSave} className="bg-white rounded-2xl p-5 space-y-4" style={{ border: "1px solid #f0f0f2", boxShadow: "0 1px 4px rgba(0,0,0,0.04)" }}>
-        <h3 className="text-[13px] font-semibold text-apple-gray uppercase tracking-wider">Личные данные</h3>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div>
-            <label className="text-[11px] font-semibold text-apple-gray uppercase tracking-wider block mb-1.5">Имя</label>
-            <input
-              type="text"
-              value={form.firstName}
-              onChange={set("firstName")}
-              placeholder="Иван"
-              className="w-full px-4 py-3 bg-gray-50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 transition-all"
-              style={{ border: "1px solid #e8e8ec" }}
-            />
-          </div>
-          <div>
-            <label className="text-[11px] font-semibold text-apple-gray uppercase tracking-wider block mb-1.5">Фамилия</label>
-            <input
-              type="text"
-              value={form.lastName}
-              onChange={set("lastName")}
-              placeholder="Иванов"
-              className="w-full px-4 py-3 bg-gray-50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 transition-all"
-              style={{ border: "1px solid #e8e8ec" }}
-            />
-          </div>
+      {/* Profile form */}
+      <form onSubmit={handleSave} style={{ background: S.surface, borderRadius: 18, padding: "18px 20px", border: `1px solid ${S.border}`, display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: S.subtle }}>Личные данные</div>
+        <style>{`@media(min-width:480px){.profile-grid{grid-template-columns:1fr 1fr!important;}}`}</style>
+        <div className="profile-grid" style={{ display: "grid", gridTemplateColumns: "1fr", gap: 12 }}>
+          <DarkInput label="Имя" type="text" value={form.firstName} onChange={setF("firstName")} placeholder="Иван" />
+          <DarkInput label="Фамилия" type="text" value={form.lastName} onChange={setF("lastName")} placeholder="Иванов" />
         </div>
+        <DarkInput label="Телефон" type="tel" value={form.phone} onChange={setF("phone")} placeholder="+7 900 000-00-00" />
 
-        <div>
-          <label className="text-[11px] font-semibold text-apple-gray uppercase tracking-wider block mb-1.5">Телефон</label>
-          <input
-            type="tel"
-            value={form.phone}
-            onChange={set("phone")}
-            placeholder="+7 900 000-00-00"
-            className="w-full px-4 py-3 bg-gray-50 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 transition-all"
-            style={{ border: "1px solid #e8e8ec" }}
-          />
-        </div>
+        {error && (
+          <div style={{ fontSize: 12, color: "#f87171", background: "rgba(239,68,68,0.08)", borderRadius: 10, padding: "10px 14px", border: "1px solid rgba(239,68,68,0.15)" }}>{error}</div>
+        )}
 
-        {error && <div className="text-sm text-red-600 bg-red-50 rounded-xl px-4 py-3">{error}</div>}
-
-        <button
-          type="submit"
-          disabled={saving}
-          className={clsx(
-            "flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-semibold transition-all duration-200",
-            saved
-              ? "bg-emerald-500 text-white"
-              : "text-white disabled:opacity-60"
-          )}
-          style={saved ? {} : { background: "linear-gradient(135deg, #7c3aed, #9333ea)" }}
-        >
-          {saving ? <Loader2 size={15} className="animate-spin" /> : saved ? <CheckCircle size={15} /> : <Save size={15} />}
+        <button type="submit" disabled={saving} style={{
+          display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 20px", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: saving ? "not-allowed" : "pointer",
+          background: saved ? "rgba(74,222,128,0.15)" : "linear-gradient(135deg, #7c3aed, #9333ea)",
+          color: saved ? "#4ade80" : "#fff",
+          border: saved ? "1px solid rgba(74,222,128,0.25)" : "none",
+          opacity: saving ? 0.7 : 1, alignSelf: "flex-start", transition: "all 0.2s ease",
+        } as React.CSSProperties}>
+          {saving ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : saved ? <CheckCircle size={15} /> : <Save size={15} />}
           {saving ? "Сохраняем..." : saved ? "Сохранено" : "Сохранить"}
         </button>
       </form>
@@ -223,8 +213,8 @@ export default function AccountPage() {
   }, [loading, customer, navigate]);
 
   if (loading) return (
-    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-      <Loader2 size={24} className="animate-spin text-apple-gray" />
+    <div style={{ minHeight: "100vh", background: S.bg, display: "flex", alignItems: "center", justifyContent: "center" }}>
+      <Loader2 size={24} style={{ animation: "spin 1s linear infinite", color: S.muted }} />
     </div>
   );
 
@@ -233,57 +223,54 @@ export default function AccountPage() {
   const displayName = [customer.firstName, customer.lastName].filter(Boolean).join(" ") || customer.email;
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="max-w-2xl mx-auto px-4 sm:px-6 py-8">
+    <div style={{ minHeight: "100vh", background: S.bg }}>
+      <div style={{ maxWidth: 640, margin: "0 auto", padding: "clamp(24px,4vw,48px) clamp(16px,4vw,32px)" }}>
 
         {/* User header */}
-        <div className="flex items-center gap-4 mb-6">
-          <div className="w-12 h-12 rounded-2xl flex items-center justify-center font-bold text-lg text-white flex-shrink-0"
-            style={{ background: "linear-gradient(135deg, #7c3aed, #9333ea)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 28 }}>
+          <div style={{
+            width: 48, height: 48, borderRadius: 16, display: "flex", alignItems: "center", justifyContent: "center",
+            fontWeight: 800, fontSize: 18, color: "#fff", flexShrink: 0,
+            background: "linear-gradient(135deg, #7c3aed, #9333ea)",
+            boxShadow: "0 0 24px rgba(124,58,237,0.4)",
+          }}>
             {(customer.firstName || customer.email)[0].toUpperCase()}
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="font-bold text-apple-black text-[15px] truncate">{displayName}</div>
-            <div className="text-xs text-apple-gray truncate">{customer.email}</div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 15, color: S.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{displayName}</div>
+            <div style={{ fontSize: 12, color: S.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{customer.email}</div>
           </div>
-          <button onClick={() => { logout(); navigate("/"); }}
-            className="flex items-center gap-1.5 text-[13px] text-apple-gray hover:text-red-500 transition-colors px-3 py-2 rounded-xl hover:bg-red-50">
-            <LogOut size={15} /> Выйти
+          <button onClick={() => { logout(); navigate("/"); }} style={{
+            display: "flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 12, fontSize: 12, fontWeight: 600,
+            background: "rgba(239,68,68,0.08)", color: "#f87171", border: "1px solid rgba(239,68,68,0.15)", cursor: "pointer", transition: "all 0.15s",
+          }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.15)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "rgba(239,68,68,0.08)"; }}>
+            <LogOut size={13} /> Выйти
           </button>
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-1 bg-white rounded-2xl p-1 mb-5" style={{ border: "1px solid #f0f0f2" }}>
+        {/* Tab nav */}
+        <div style={{ display: "flex", gap: 4, marginBottom: 20, padding: 4, background: S.surface, borderRadius: 16, border: `1px solid ${S.border}` }}>
           {([
-            { key: "orders", label: "Мои заказы", icon: Package, to: "/orders" },
-            { key: "profile", label: "Профиль", icon: User, to: "/account" },
-          ] as const).map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <Link key={tab.key} to={tab.to} replace
-                className={clsx(
-                  "flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl text-[13px] font-semibold transition-all duration-200",
-                  activeTab === tab.key
-                    ? "bg-violet-600 text-white shadow-sm"
-                    : "text-apple-gray hover:text-apple-black"
-                )}>
-                <Icon size={15} />
-                {tab.label}
-              </Link>
-            );
-          })}
+            { to: "/account", key: "profile", icon: User,    label: "Профиль" },
+            { to: "/orders",  key: "orders",  icon: Package, label: "Заказы" },
+          ] as const).map(({ to, key, icon: Icon, label }) => (
+            <Link key={to} to={to} style={{
+              flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+              padding: "10px", borderRadius: 12, fontSize: 13, fontWeight: 600, textDecoration: "none",
+              background: activeTab === key ? S.surface2 : "transparent",
+              color: activeTab === key ? S.text : S.muted,
+              border: activeTab === key ? `1px solid ${S.border}` : "1px solid transparent",
+              transition: "all 0.15s ease",
+            }}>
+              <Icon size={15} /> {label}
+              {activeTab === key && <ChevronRight size={12} />}
+            </Link>
+          ))}
         </div>
 
-        {/* Content */}
         {activeTab === "orders" ? <OrdersTab token={token} /> : <ProfileTab />}
-
-        {/* Back to shop */}
-        <div className="mt-6 text-center">
-          <Link to="/" className="inline-flex items-center gap-1.5 text-sm text-apple-gray hover:text-apple-black transition-colors">
-            <ChevronRight size={14} className="rotate-180" />
-            Вернуться в магазин
-          </Link>
-        </div>
       </div>
     </div>
   );

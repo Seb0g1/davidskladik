@@ -135,7 +135,7 @@ function normalizeSupplierCartSettings(input = {}, fallback = defaultAppSettings
       .filter(Boolean)
       .slice(0, 10),
     timezone: cleanText(raw.timezone || fallback.timezone || "Europe/Moscow") || "Europe/Moscow",
-    mode: cleanText(raw.mode).toLowerCase() === "auto" ? "auto" : "draft",
+    mode: "draft",
     marketplaces: marketplaces.length ? Array.from(new Set(marketplaces)) : ["ozon", "yandex", "wb"],
     lookbackHours: Number.isFinite(lookbackHours) && lookbackHours > 0 ? Math.min(720, Math.round(lookbackHours)) : fallback.lookbackHours,
     includeOzonStatuses: normalizeStatuses(raw.includeOzonStatuses || raw.include_ozon_statuses, fallback.includeOzonStatuses),

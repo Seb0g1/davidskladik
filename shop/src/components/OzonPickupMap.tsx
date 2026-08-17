@@ -175,6 +175,8 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
       }).addTo(map);
       L.control.zoom({ position: "topright" }).addTo(map);
       mapRef.current = map;
+      // Leaflet reads container dimensions synchronously; force recalc after layout settles.
+      setTimeout(() => map.invalidateSize(), 0);
     } else if (mapRef.current) {
       mapRef.current.invalidateSize();
     }
@@ -465,9 +467,10 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
         </div>
 
         {/* ── SIDEBAR LIST ── */}
+        {/* display controlled entirely by className — inline display: flex would override hidden */}
         <div
           style={{
-            display: "flex", flexDirection: "column", overflow: "hidden",
+            flexDirection: "column", overflow: "hidden",
             borderLeft: `1px solid ${S.border}`, background: S.surface,
             width: "100%",
           }}

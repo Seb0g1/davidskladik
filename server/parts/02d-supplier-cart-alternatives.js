@@ -155,8 +155,8 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
     const state = await readSupplierPickingState();
     const current = state.rows[key] ? normalizeSupplierPickingRow(state.rows[key]) : null;
     if (!current) return response.status(404).json({ error: "Picking row not found.", code: "supplier_picking_not_found" });
-    if (!["open", "missing"].includes(current.status)) {
-      return response.status(409).json({ error: "Заменить поставщика можно только для строк «к сборке» или «не было».", code: "supplier_picking_finalized" });
+    if (!["open", "missing", "picked"].includes(current.status)) {
+      return response.status(409).json({ error: "Заменить поставщика можно только для строк «к сборке», «не было» или «собрано».", code: "supplier_picking_finalized" });
     }
     if (cleanText(current.partnerId).toLowerCase() === partnerId.toLowerCase()) {
       return response.status(400).json({ error: "Это текущий поставщик строки.", code: "supplier_option_same" });

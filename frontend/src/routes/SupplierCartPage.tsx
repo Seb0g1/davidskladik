@@ -248,10 +248,8 @@ function ReadyToShipPanel() {
   });
 
   const revertAndReplaceMutation = useMutation({
-    mutationFn: async ({ key, partnerId, rowId }: { key: string; partnerId: string; rowId: string }) => {
-      await fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({ status: "open" }));
-      return fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/replace-supplier`, SupplierReplaceResponseSchema, mutationBody({ partnerId, rowId }));
-    },
+    mutationFn: ({ key, partnerId, rowId }: { key: string; partnerId: string; rowId: string }) =>
+      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/replace-supplier`, SupplierReplaceResponseSchema, mutationBody({ partnerId, rowId })),
     onSuccess: () => {
       setReplaceKey(null);
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
@@ -899,7 +897,8 @@ export function SupplierCartPage() {
             </div>
             {last ? (
               <div className="success-strip" style={{ marginTop: 8 }}>
-                Последний запуск: всего {Number(last.total || 0)}, готово {Number(last.ready || 0)}, добавлено в PM {Number(last.inserted || 0)}, строк сборки {Number(last.pickingCreated || 0)}, пропущено {Number(last.skipped || 0)}.
+                Последний запуск: всего {Number(last.total || 0)}, готово к заказу {Number(last.ready || 0)}, пропущено {Number(last.skipped || 0)}.
+                {Number(last.alreadyCommitted || 0) > 0 ? ` Уже в PM: ${Number(last.alreadyCommitted)}.` : ""}
               </div>
             ) : null}
           </section>

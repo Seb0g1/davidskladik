@@ -146,7 +146,13 @@ async function loadAvitoLiveProductStates(listings) {
 //    (рефреш фида делает живой запрос в PM и обновляет значение каждые 30 мин;
 //    XML-билдер этого PM-запроса не делает — не тратим 26 запросов на каждый GET)
 //  • supplier stopped → outOfStock = true
-function applyAvitoLiveState(listing, product, rules, pricing = {}) {
+// trustStoredOutOfStock: XML builder does not run a live PM lookup — it relies on the
+// outOfStock value that runAvitoFeedRefresh computed (with loadAvitoSupplierPricingMap)
+// and saved to JSON. Pass true from the XML builder so we don't mark PM-supplied
+// products OOS just because their DB selectedSupplier hasn't been refreshed yet.
+// runAvitoFeedRefresh passes false (default) because it already resolved PM suppliers
+// before calling this function, so the no-supplier branch truly means "no PM supplier".
+function applyAvitoLiveState(listing, product, rules, pricing = {}, { trustStoredOutOfStock = false } = {}) {
   if (!listing.sourceProductId) return { listing, outOfStock: false };
   if (!product) return { listing: { ...listing, stockQuantity: 0 }, outOfStock: true };
   // Product-specific Avito photos override the listing's imageUrls (sourced from Ozon import).
@@ -175,8 +181,15 @@ function applyAvitoLiveState(listing, product, rules, pricing = {}) {
       // Есть физический FBS-остаток — точно в наличии.
       return { listing: withStock(listing, false, false), outOfStock: false };
     }
-    // Нет поставщика и нет остатка → нет в наличии.
-    // Рефреш вернёт товар в наличии, когда PM снова даст поставщика.
+    if (trustStoredOutOfStock) {
+      // XML builder: refresh already did the live PM lookup and saved the correct
+      // outOfStock. Trust it — marking true here would hide PM-supplied products
+      // whose DB selectedSupplier hasn't synced yet.
+      const outOfStock = listing.outOfStock === true;
+      return { listing: withStock(listing, outOfStock, false), outOfStock };
+    }
+    // Feed refresh: loadAvitoSupplierPricingMap already ran above — if no supplier was
+    // found, the product truly has no PM supplier right now → mark OOS.
     return { listing: withStock(listing, true, false), outOfStock: true };
   }
   const hasSupplierPrice = computeAvitoSupplierPriceRub(product.supplier, pricing) > 0;
@@ -213,7 +226,7 @@ function renderAvitoStockCsv(listings, rules, liveStates, pricing, now = new Dat
   for (const item of listings) {
     const { listing, outOfStock } = liveStates === null
       ? { listing: item, outOfStock: item.outOfStock === true }
-      : applyAvitoLiveState(item, liveStates.get(cleanText(item.sourceProductId)), rules, pricing);
+      : applyAvitoLiveState(item, liveStates.get(cleanText(item.sourceProductId)), rules, pricing, { trustStoredOutOfStock: true });
     const hasQuantity = listing.stockQuantity !== null && listing.stockQuantity !== undefined
       && Number.isFinite(Number(listing.stockQuantity));
     const stock = outOfStock
@@ -262,7 +275,7 @@ async function buildAvitoFeedXml() {
     // outOfStock из фонового рефреша.
     const { listing, outOfStock } = liveStates === null
       ? { listing: item, outOfStock: item.outOfStock === true }
-      : applyAvitoLiveState(item, liveStates.get(cleanText(item.sourceProductId)), rules, pricing);
+      : applyAvitoLiveState(item, liveStates.get(cleanText(item.sourceProductId)), rules, pricing, { trustStoredOutOfStock: true });
     if (rules.hideOutOfStock && outOfStock) {
       hiddenOutOfStock += 1;
       continue;
