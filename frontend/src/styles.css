@@ -1597,11 +1597,10 @@ button:disabled {
   left: 0;
   right: 0;
   z-index: 250;
-  background: var(--bg-card);
-  border: 1px solid rgba(var(--accent-rgb), .6);
+  background: #0d1b2e;
+  border: 1px solid rgba(var(--accent-rgb), .5);
   border-radius: 8px;
-  box-shadow: 0 10px 32px rgba(0,0,0,.6);
-  overflow: hidden;
+  box-shadow: 0 12px 36px rgba(0,0,0,.75);
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -1611,21 +1610,21 @@ button:disabled {
 }
 
 .pm-word-option {
-  background: var(--bg-hover, rgba(255,255,255,.06));
-  border: 1px solid var(--border);
-  color: var(--text);
+  background: rgba(255,255,255,.07);
+  border: 1px solid rgba(255,255,255,.12);
+  color: #c8d8f0;
   border-radius: 20px;
-  padding: 4px 12px;
+  padding: 3px 11px;
   font-size: 12px;
   font-family: monospace;
   cursor: pointer;
   white-space: nowrap;
-  transition: background .1s, border-color .1s;
+  transition: background .1s, border-color .1s, color .1s;
 }
 .pm-word-option:hover {
-  background: rgba(var(--accent-rgb), .25);
+  background: rgba(var(--accent-rgb), .28);
   border-color: var(--accent);
-  color: var(--accent);
+  color: #fff;
 }
 
 .info-strip {
