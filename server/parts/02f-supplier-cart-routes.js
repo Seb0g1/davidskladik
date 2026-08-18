@@ -183,19 +183,19 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     if (!prisma) return response.status(503).json({ ok: false, error: "Database not available" });
     const where = { active: true, price: { not: null, gt: 0 } };
     if (q) {
-      const tokens = q.split(/\s+/).filter(Boolean);
-      if (tokens.length === 1) {
-        where.OR = [
-          { nativeName: { contains: tokens[0], mode: "insensitive" } },
-          { article: { contains: tokens[0], mode: "insensitive" } },
-        ];
-      } else {
-        where.AND = tokens.map((token) => ({
-          OR: [
-            { nativeName: { contains: token, mode: "insensitive" } },
-            { article: { contains: token, mode: "insensitive" } },
-          ],
+      const tokenGroups = pmQueryToTokenGroups(q);
+      if (tokenGroups.length) {
+        where.AND = tokenGroups.map((group) => ({
+          OR: group.flatMap((synonym) => [
+            { nativeName: { contains: synonym, mode: "insensitive" } },
+            { article: { contains: synonym, mode: "insensitive" } },
+          ]),
         }));
+      } else {
+        where.OR = [
+          { nativeName: { contains: q, mode: "insensitive" } },
+          { article: { contains: q, mode: "insensitive" } },
+        ];
       }
     }
     if (partnerId) where.partnerId = partnerId;

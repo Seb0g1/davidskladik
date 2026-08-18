@@ -18,11 +18,11 @@ async function buildSupplierCartPreview(params = {}) {
       warnings.push({ marketplace: "ozon", error: error?.message || String(error) });
     }
   }
-  if ((marketplace === "all" || marketplace === "yandex") && enabledMarketplaces.has("yandex") && lines.length < limit) {
+  if ((marketplace === "all" || marketplace === "yandex") && enabledMarketplaces.has("yandex")) {
     try {
       lines.push(...await fetchYandexSupplierCartLines({
         ...range,
-        limit: Math.max(1, limit - lines.length),
+        limit,
         statuses: settings.includeYandexStatuses,
         substatuses: settings.includeYandexSubstatuses,
       }));
@@ -30,11 +30,11 @@ async function buildSupplierCartPreview(params = {}) {
       warnings.push({ marketplace: "yandex", error: error?.message || String(error) });
     }
   }
-  if ((marketplace === "all" || marketplace === "wb") && enabledMarketplaces.has("wb") && lines.length < limit) {
+  if ((marketplace === "all" || marketplace === "wb") && enabledMarketplaces.has("wb")) {
     try {
       lines.push(...await fetchWbSupplierCartLines({
         ...range,
-        limit: Math.max(1, limit - lines.length),
+        limit,
       }));
     } catch (error) {
       warnings.push({ marketplace: "wb", error: error?.message || String(error) });

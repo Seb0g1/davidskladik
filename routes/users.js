@@ -348,6 +348,17 @@ async function buildUsersStatsResponse(options = {}) {
   };
 }
 
+app.get("/api/audit-log", requireAdmin, async (request, response, next) => {
+  try {
+    const limit = Math.max(1, Math.min(500, Number(request.query.limit || 120) || 120));
+    const q = cleanText(request.query.q || "");
+    const audit = await readAuditFiltered(q ? { q } : {}, limit);
+    response.json({ audit, total: audit.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/users", requireAdmin, async (_request, response, next) => {
   try {
     response.json({ users: (await configuredUsersForAdminAsync()).map(publicAppUser) });

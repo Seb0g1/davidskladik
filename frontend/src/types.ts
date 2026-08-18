@@ -241,6 +241,11 @@ export const PriceMasterSearchSchema = z.object({
   total: z.number().optional().default(0),
 }).passthrough();
 
+export const PmWordSuggestSchema = z.object({
+  ok: z.boolean().optional(),
+  words: z.array(z.string()).optional().default([]),
+}).passthrough();
+
 export const OperationsSchema = z.object({
   ok: z.boolean().optional(),
   jobs: z.array(z.record(z.string(), z.unknown())).optional().default([]),

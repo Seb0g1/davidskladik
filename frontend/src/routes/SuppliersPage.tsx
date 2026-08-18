@@ -8,7 +8,7 @@ import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { SupplierLedgerEntrySchema, SupplierLedgerPaymentSchema, SupplierProfileResponseSchema, SupplierSchema, SuppliersResponseSchema } from "../types";
-import { asRecord, compactDate, errorMessage, money, numberValue } from "../lib/common";
+import { asRecord, compactDate, errorMessage, numberValue } from "../lib/common";
 
 type Supplier = z.infer<typeof SupplierSchema>;
 type LedgerEntry = z.infer<typeof SupplierLedgerEntrySchema>;
@@ -38,11 +38,17 @@ type InactiveDraft = {
 const MutationResultSchema = z.object({ ok: z.boolean().optional().default(true) }).passthrough();
 const emptySupplierForm: SupplierForm = { id: "", name: "", note: "", stopReason: "", priceCurrency: "USD" };
 
+const moneyUsd = (value: unknown) => {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n <= 0) return "-";
+  return `${Math.round(n).toLocaleString("ru-RU")} $`;
+};
+
 const moneySigned = (value: unknown) => {
   const n = Number(value || 0);
-  if (!Number.isFinite(n) || n === 0) return "0 ₽";
+  if (!Number.isFinite(n) || n === 0) return "0 $";
   const sign = n > 0 ? "+" : "-";
-  return `${sign}${Math.round(Math.abs(n)).toLocaleString("ru-RU")} ₽`;
+  return `${sign}${Math.abs(n).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
 };
 
 function supplierId(supplier: Supplier) {
@@ -190,6 +196,7 @@ export function SuppliersPage() {
         supplierName: supplier.name || "",
         partnerId: supplier.partnerId || "",
         amount,
+        currency: "USD",
         note,
       })),
     onSuccess: (_data, variables) => {
@@ -219,6 +226,7 @@ export function SuppliersPage() {
         supplierName: supplier.name || "",
         partnerId: supplier.partnerId || "",
         amount,
+        currency: "USD",
         note,
       })),
     onSuccess: (_data, variables) => {
@@ -444,7 +452,7 @@ export function SuppliersPage() {
                       type="number"
                       min="0"
                       step="0.01"
-                      placeholder="Сумма оплаты, ₽"
+                      placeholder="Сумма оплаты, $"
                       value={paymentAmount}
                       onChange={(event) => setPaymentDrafts((current) => ({ ...current, [id]: event.target.value }))}
                     />
@@ -529,7 +537,7 @@ export function SuppliersPage() {
                                       {row.offerId ? <small className="muted-note">{row.offerId}</small> : null}
                                     </div>
                                     <span className="supplier-order-amount">
-                                      {amountRub !== null ? money(amountRub) : `${row.price} ${row.priceCurrency}`}
+                                      {amountRub !== null ? moneyUsd(amountRub) : `${row.price} ${row.priceCurrency}`}
                                     </span>
                                     <span className="muted-note">{compactDate(row.pickedAt ?? null)}</span>
                                     {isReturned ? (
@@ -562,7 +570,7 @@ export function SuppliersPage() {
                                 type="number"
                                 min="0"
                                 step="0.01"
-                                placeholder="Сумма возврата, ₽"
+                                placeholder="Сумма возврата, $"
                                 value={returnDrafts[id] || ""}
                                 onChange={(event) => setReturnDrafts((current) => ({ ...current, [id]: event.target.value }))}
                               />

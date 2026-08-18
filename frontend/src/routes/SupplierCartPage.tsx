@@ -4,7 +4,9 @@ import { AlertTriangle, CalendarClock, ChevronDown, ChevronUp, Clock3, Database,
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
+import { PmChipInput } from "../components/PmChipInput";
 import { SupplierAltPicker, type SupplierAltOption } from "../components/SupplierAltPicker";
+import { pmSearchStore } from "../lib/pmSearchStore";
 import { SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { SupplierCartPanel } from "./OperationsPage";
 import { compactDate, errorMessage } from "../lib/common";
@@ -519,7 +521,6 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
   const [sortMode, setSortMode] = useState<SortMode>("price_asc");
   const [supplierFilter, setSupplierFilter] = useState("");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
   useEffect(() => {
@@ -530,8 +531,6 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
   }, [searchQ]);
 
-  // Auto-focus when panel opens
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 80); }, []);
 
   const searchQuery = useQuery({
     queryKey: ["pm-search", activeQ],
@@ -592,17 +591,15 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
       {/* Search input */}
       <div className="pm-search-input-wrap">
         <Search size={15} className="pm-search-icon" />
-        <input
-          ref={inputRef}
-          className="pm-search-input"
-          value={searchQ}
-          onChange={(e) => setSearchQ(e.target.value)}
+        <PmChipInput
+          onQueryChange={(q) => setSearchQ(q)}
           placeholder="Chanel No5, Dior Sauvage, артикул…"
+          inputClassName="pm-search-input"
         />
         {isSearching ? (
           <Loader2 className="spin pm-search-spinner" size={14} />
         ) : searchQ ? (
-          <button className="pm-search-clear" type="button" onClick={() => { setSearchQ(""); setActiveQ(""); inputRef.current?.focus(); }}>
+          <button className="pm-search-clear" type="button" onClick={() => { setSearchQ(""); setActiveQ(""); pmSearchStore.clear(); }}>
             <X size={14} />
           </button>
         ) : null}

@@ -790,14 +790,22 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
     if (consignmentStorageUnavailable(response)) return;
     const q = cleanText(request.query.q || "");
     if (q.length < 2) return response.json({ ok: true, items: [] });
+    const tokenGroups = pmQueryToTokenGroups(q);
+    const and = [{ active: true }];
+    if (tokenGroups.length) {
+      for (const group of tokenGroups) {
+        and.push({
+          OR: group.flatMap((synonym) => [
+            { article: { contains: synonym, mode: "insensitive" } },
+            { nativeName: { contains: synonym, mode: "insensitive" } },
+          ]),
+        });
+      }
+    } else {
+      and.push({ OR: [{ article: { contains: q, mode: "insensitive" } }, { nativeName: { contains: q, mode: "insensitive" } }] });
+    }
     const rows = await getPrisma().priceMasterSnapshotItem.findMany({
-      where: {
-        active: true,
-        OR: [
-          { article: { contains: q, mode: "insensitive" } },
-          { nativeName: { contains: q, mode: "insensitive" } },
-        ],
-      },
+      where: { AND: and },
       orderBy: { updatedAt: "desc" },
       take: 20,
     });

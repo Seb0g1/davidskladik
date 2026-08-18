@@ -5,6 +5,7 @@ import { AlertTriangle, Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, Pack
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
+import { PmChipInput } from "../components/PmChipInput";
 import { BrandPicker } from "../components/BrandPicker";
 import { SelectField } from "../components/SelectField";
 import { CatalogSkeleton } from "../components/Skeleton";
@@ -776,7 +777,11 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
       <div className="draft-box">
         <div className="section-subtitle">Найти строку PriceMaster</div>
         <div className="draft-grid single-field">
-          <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Артикул, название или штрихкод" disabled={readOnly} />
+          <PmChipInput
+            onQueryChange={setSearch}
+            placeholder="Артикул, название или штрихкод"
+            disabled={readOnly}
+          />
         </div>
         {searchQuery.data?.rows.length ? (
           <div className="pm-search-actions">

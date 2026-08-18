@@ -85,6 +85,7 @@ const partFiles = [
   "02a-yandex-stock-send-chunk.js",
   "02a-yandex-stock-send-bulk.js",
   "02a-ozon-preview-price-search.js",
+  "02a-pm-word-search.js",
   "02a-snapshot-core.js",
   "02a-ozon-unarchive-queue-helpers.js",
   "02a-ozon-unarchive-queue-io.js",

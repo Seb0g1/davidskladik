@@ -1,3 +1,15 @@
+// Слова из имён PriceMaster для автодополнения (по префиксу)
+app.get("/api/pricemaster/words", async (request, response, next) => {
+  try {
+    const prefix = cleanText(request.query.prefix || "").toLowerCase();
+    if (!prefix || prefix.length < 1) return response.json({ ok: true, words: [] });
+    const words = await getPmWordIndex();
+    response.json({ ok: true, words: words.filter((w) => w.startsWith(prefix)).slice(0, 20) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/pricemaster/search", async (request, response, next) => {
   try {
     const q = cleanText(request.query.q || request.query.search || "");
@@ -21,9 +33,26 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
       const conditions = ["r.Ignored = 0"];
       if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`);
       if (q) {
-        conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
-        const like = likeSearch(q);
-        params.push(like, like, like, like);
+        const tokenGroups = pmQueryToTokenGroups(q);
+        if (tokenGroups.length) {
+          for (let i = 0; i < tokenGroups.length; i++) {
+            const group = tokenGroups[i];
+            const nameConds = group.map(() => "r.NativeName LIKE ?");
+            if (i === 0) {
+              // First token also checks article, barcode, supplier
+              const extraConds = group.flatMap(() => ["r.NativeID LIKE ?", "r.BarCode LIKE ?", "p.PartnerName LIKE ?"]);
+              conditions.push(`(${[...nameConds, ...extraConds].join(" OR ")})`);
+              params.push(...group.map(likeSearch), ...group.flatMap((t) => [likeSearch(t), likeSearch(t), likeSearch(t)]));
+            } else {
+              conditions.push(`(${nameConds.join(" OR ")})`);
+              params.push(...group.map(likeSearch));
+            }
+          }
+        } else {
+          conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
+          const like = likeSearch(q);
+          params.push(like, like, like, like);
+        }
       }
       if (supplier) {
         conditions.push("p.PartnerName LIKE ?");
@@ -72,6 +101,7 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
       partner: supplier,
       limit: limit * 2,
       usdRate,
+      tokenGroups: q ? pmQueryToTokenGroups(q) : null,
     });
     if (snapshotRows?.length) {
       const seenRowIds = new Set(rows.map((row) => cleanText(row.rowId)));

@@ -1533,6 +1533,97 @@ button:disabled {
   white-space: nowrap;
 }
 
+/* ── PM chip input ─────────────────────────────────────────────────────────── */
+.pm-chip-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  min-height: 38px;
+  background: var(--bg-input, var(--bg-card));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: text;
+  transition: border-color .15s;
+}
+.pm-chip-wrap.is-focused { border-color: var(--accent); }
+.pm-chip-wrap.is-disabled { opacity: .5; pointer-events: none; }
+
+.pm-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(var(--accent-rgb), .18);
+  border: 1px solid rgba(var(--accent-rgb), .35);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 2px 6px 2px 8px;
+  font-size: 12px;
+  font-family: monospace;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.pm-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--muted);
+  padding: 0;
+  cursor: pointer;
+  border-radius: 2px;
+  line-height: 1;
+}
+.pm-chip-remove:hover { color: var(--danger, #f44); }
+
+.pm-chip-input {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+  padding: 2px 0;
+}
+
+/* Word autocomplete dropdown */
+.pm-word-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 120;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.pm-word-option {
+  background: rgba(var(--accent-rgb), .10);
+  border: 1px solid rgba(var(--accent-rgb), .22);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 3px 9px;
+  font-size: 12px;
+  font-family: monospace;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .12s;
+}
+.pm-word-option:hover {
+  background: rgba(var(--accent-rgb), .28);
+  border-color: var(--accent);
+}
+
 .info-strip {
   border: 1px solid rgba(var(--accent-rgb), .3);
   background: rgba(var(--accent-rgb), .08);
@@ -2442,6 +2533,7 @@ button:disabled {
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
   background: rgba(12, 25, 43, 0.72);
 }
 
@@ -8753,12 +8845,13 @@ textarea:focus-visible,
   .picking-row { padding: 5px 8px; max-width: 100%; overflow: hidden; }
   /* Hide article/marketplace sub-line on mobile — show only name + price */
   .picking-row-sub { display: none; }
-  /* Header left: truncate long product names */
-  .picking-row-header { flex-wrap: nowrap; gap: 4px; align-items: center; overflow: hidden; }
-  .picking-row-header-left { min-width: 0; flex: 1 1 0; overflow: hidden; }
-  .picking-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; font-size: 0.84rem; }
-  .picking-row-header-right { flex-wrap: nowrap; justify-content: flex-end; gap: 3px; flex-shrink: 0; }
-  .picking-row-status-badge { font-size: 0.65rem; padding: 2px 4px; max-width: 66px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Header left: allow product names to wrap fully on mobile */
+  .picking-row-header { flex-wrap: nowrap; gap: 4px; align-items: flex-start; overflow: hidden; }
+  .picking-row-header-left { min-width: 0; flex: 1 1 0; }
+  .picking-row-name { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; display: block; font-size: 0.82rem; line-height: 1.25; }
+  .picking-row-header-right { flex-wrap: nowrap; justify-content: flex-end; gap: 3px; flex-shrink: 0; align-items: flex-start; }
+  /* Hide status badge on mobile — saves space, status shown by card color */
+  .picking-row-status-badge { display: none; }
   /* Hide sale price on mobile (shown in actions area if needed) */
   .picking-row-sale { display: none; }
   .picking-qty-input { width: 46px; font-size: 0.82rem; }
@@ -8796,11 +8889,16 @@ textarea:focus-visible,
   /* Supplier cart actions */
   .supplier-cart-actions { flex-direction: column; align-items: stretch; }
   .supplier-cart-actions > button { justify-content: center; min-height: 44px; }
+  /* Compact supplier card on mobile: tighter padding, hide ledger details */
+  .picking-supplier-card { padding: 8px; gap: 6px; }
+  .picking-supplier-toolbar { gap: 6px; padding-bottom: 6px; }
+  .picking-supplier-head { gap: 6px; }
+  .picking-supplier-name-block h3 { font-size: 1rem; }
+  /* Hide secondary ledger stats; keep only balance */
+  .supplier-ledger-row .diagnostic-value:not(:first-child) { display: none; }
+  .supplier-ledger-row { grid-template-columns: 1fr; padding: 4px 0; }
+  /* Reduce picking row gap */
+  .picking-row-list { gap: 4px; }
+  .picking-row { padding: 4px 6px; }
 }
 
-/* Landscape phones — allow product names to wrap instead of truncating */
-@media (orientation: landscape) and (max-height: 550px) {
-  .picking-row-name { white-space: normal; overflow-wrap: anywhere; overflow: visible; text-overflow: unset; }
-  .picking-row-header-left { overflow: visible; }
-  .picking-row-header { overflow: visible; }
-}

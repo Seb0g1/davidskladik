@@ -75,7 +75,7 @@ async function searchPriceMasterSnapshotPartners(query, limit = 25) {
   }
 }
 
-async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limit = 150, usdRate } = {}) {
+async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limit = 150, usdRate, tokenGroups = null } = {}) {
   if (!shouldUsePostgresStorage()) return null;
   const prisma = getPrisma();
   if (!prisma) return null;
@@ -84,7 +84,17 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
   const take = cleanLimit(limit, 150, 500);
   const and = [{ active: true }];
 
-  if (q) {
+  const groups = tokenGroups && tokenGroups.length ? tokenGroups : (q ? pmQueryToTokenGroups(q) : null);
+  if (groups && groups.length) {
+    for (const group of groups) {
+      and.push({
+        OR: group.flatMap((synonym) => [
+          { article: { contains: synonym, mode: "insensitive" } },
+          { nativeName: { contains: synonym, mode: "insensitive" } },
+        ]),
+      });
+    }
+  } else if (q) {
     and.push({
       OR: [
         { article: { contains: q, mode: "insensitive" } },

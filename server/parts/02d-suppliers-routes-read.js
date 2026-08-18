@@ -292,6 +292,25 @@ app.post("/api/supplier-ledger/return-picking", requireAdmin, async (request, re
   }
 });
 
+app.delete("/api/supplier-ledger/reset-all", requireAdmin, async (request, response, next) => {
+  try {
+    if (!shouldUsePostgresStorage()) {
+      return response.status(503).json({ error: "Supplier ledger requires PostgreSQL.", code: "supplier_ledger_postgres_required" });
+    }
+    const result = await getPrisma().supplierLedgerEntry.deleteMany({});
+    suppliersListCache = null;
+    logger.info("supplier ledger reset", { deleted: result.count, by: request.session?.username });
+    await appendAudit(request, "supplier_ledger.reset_all", {
+      entityType: "supplier_ledger",
+      entityId: "all",
+      newValue: { deleted: result.count },
+    }).catch((error) => logger.warn("supplier ledger reset audit failed", { detail: error?.message || String(error) }));
+    response.json({ ok: true, deleted: result.count });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/supplier-ledger/returns", requireAdmin, async (request, response, next) => {
   try {
     if (!shouldUsePostgresStorage()) {

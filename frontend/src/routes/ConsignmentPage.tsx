@@ -2,6 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Banknote, Boxes, Check, ChevronDown, ChevronRight, HandCoins, History, ListPlus, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, Trash2, TrendingUp, Upload, Wallet, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
+import { PmChipInput } from "../components/PmChipInput";
 import {
   ConsignmentBulkCreateSchema,
   ConsignmentGroupMutationSchema,
@@ -208,7 +209,6 @@ export function ConsignmentPage() {
     })),
     onSuccess: () => {
       setAddForm(emptyAddForm);
-      setPmQuery("");
       invalidate();
     },
   });
@@ -236,7 +236,6 @@ export function ConsignmentPage() {
     if (!addForm.name.trim()) return;
     setDraftItems((current) => [...current, { ...addForm, draftId: crypto.randomUUID() }]);
     setAddForm(emptyAddForm);
-    setPmQuery("");
   };
 
   const savePrice = useMutation({
@@ -559,14 +558,9 @@ export function ConsignmentPage() {
           </div>
         </div>
         <div className="settings-form-row" style={{ position: "relative" }}>
-          <input
+          <PmChipInput
+            onQueryChange={(q) => { setPmQuery(q); if (q.trim()) setPmOpen(true); }}
             placeholder="Поиск по базе (артикул или наименование)"
-            value={pmQuery}
-            onChange={(event) => {
-              setPmQuery(event.target.value);
-              setPmOpen(true);
-            }}
-            onFocus={() => setPmOpen(true)}
           />
           <span className="muted-note"><Search size={14} /> Подставит наименование, артикул и поставщика из номенклатуры</span>
         </div>

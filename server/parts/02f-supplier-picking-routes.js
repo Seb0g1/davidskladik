@@ -23,13 +23,12 @@ app.get("/api/supplier-picking-list", requireStaff, async (request, response, ne
     }
     if (supplier) rows = rows.filter((row) => cleanText(row.supplierName).toLowerCase().includes(supplier));
     if (q) {
-      rows = rows.filter((row) => [
-        row.productName,
-        row.offerId,
-        row.orderId,
-        row.postingNumber,
-        row.supplierName,
-      ].some((value) => cleanText(value).toLowerCase().includes(q)));
+      const qWords = q.split(/\s+/).filter(Boolean);
+      rows = rows.filter((row) => {
+        const text = [row.productName, row.offerId, row.orderId, row.postingNumber, row.supplierName]
+          .map((v) => cleanText(v).toLowerCase()).join(" ");
+        return qWords.every((w) => text.includes(w));
+      });
     }
     rows.sort(compareSupplierPickingRows);
     const allRows = Object.values(state.rows || {}).map(normalizeSupplierPickingRow);
@@ -74,10 +73,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     if (!current) return response.status(404).json({ error: "Picking row not found.", code: "supplier_picking_not_found" });
     const now = new Date();
     const username = requestUsername(request);
-    // Rollback to open: admin can always do it; picker can undo their own row
-    if (status === "open" && !admin && cleanText(current.pickedBy) !== cleanText(username)) {
-      return response.status(403).json({ error: "Only admin can roll back rows picked by others.", code: "admin_required" });
-    }
+    // Rollback to open: any staff can undo any row (not restricted to own rows)
     // Allow picked→returned (item came back from ПВЗ); all other cross-status transitions blocked
     if (current.status !== "open" && status !== "open" && !(current.status === "picked" && status === "returned")) {
       return response.status(409).json({
@@ -176,27 +172,6 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     }
 
     // Ozon: подтвердить упаковку при физической сборке (и экспресс, и обычные).
-    // Это резервный вызов — confirmMarketplaceOrdersAfterInsert делает то же при формировании корзины,
-    // но только если ozonProductId был известен на тот момент. При сборке он точно есть в nextRow.
-    if (status === "picked" && nextRow.marketplace === "ozon" && nextRow.postingNumber && nextRow.ozonProductId) {
-      await confirmOzonPostingPackaged(nextRow.postingNumber, [{
-        product_id: Number(nextRow.ozonProductId),
-        quantity: Math.max(1, Math.round(Number(nextRow.pickedQuantity || nextRow.quantity || 1))),
-      }]).catch((error) => {
-        logger.warn("ozon posting package confirm failed at picking", {
-          key, postingNumber: nextRow.postingNumber, detail: error?.message || String(error),
-        });
-      });
-    }
-    // Yandex экспресс: READY_TO_SHIP только после физической сборки.
-    if (status === "picked" && nextRow.isExpress && nextRow.marketplace === "yandex" && nextRow.orderId) {
-      await confirmYandexOrderReadyToShip(nextRow.orderId, nextRow.campaignId).catch((error) => {
-        logger.warn("express yandex order ready-to-ship failed", {
-          key, orderId: nextRow.orderId, detail: error?.message || String(error),
-        });
-      });
-    }
-
     // WB FBS: при сборке создать поставку, если ещё нет (напр. строка добавлена вручную/автокорзиной без поставки)
     let wbShipment = null;
     if (status === "picked" && nextRow.marketplace === "wb" && nextRow.orderId && !nextRow.wbSupplyId) {
@@ -283,7 +258,34 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     });
     response.json({ ok: true, row: nextRow, financeOrder, supplierLedgerEntry, stockRecovery: null, linkSnooze, wbShipment });
 
-    // Stock recovery runs in background so "Собрал" responds immediately
+    // Marketplace confirmations + stock recovery run in background so "Собрал" responds immediately
+    if (status === "picked") {
+      // Это резервный вызов — confirmMarketplaceOrdersAfterInsert делает то же при формировании корзины,
+      // но только если ozonProductId был известен на тот момент. При сборке он точно есть в nextRow.
+      if (nextRow.marketplace === "ozon" && nextRow.postingNumber && nextRow.ozonProductId) {
+        setImmediate(() => {
+          confirmOzonPostingPackaged(nextRow.postingNumber, [{
+            product_id: Number(nextRow.ozonProductId),
+            quantity: Math.max(1, Math.round(Number(nextRow.pickedQuantity || nextRow.quantity || 1))),
+          }]).catch((error) => {
+            logger.warn("ozon posting package confirm failed at picking", {
+              key, postingNumber: nextRow.postingNumber, detail: error?.message || String(error),
+            });
+          });
+        });
+      }
+      // Yandex экспресс: READY_TO_SHIP только после физической сборки.
+      if (nextRow.isExpress && nextRow.marketplace === "yandex" && nextRow.orderId) {
+        setImmediate(() => {
+          confirmYandexOrderReadyToShip(nextRow.orderId, nextRow.campaignId).catch((error) => {
+            logger.warn("express yandex order ready-to-ship failed", {
+              key, orderId: nextRow.orderId, detail: error?.message || String(error),
+            });
+          });
+        });
+      }
+    }
+
     if (status === "picked" && nextRow.warehouseProductId) {
       const bgProductIds = [nextRow.warehouseProductId];
       const bgQuantity = nextRow.quantity;

@@ -1,5 +1,17 @@
 // ─── Magic Vibes Shop API ──────────────────────────────────────────────────
 const _shopCrypto = require("crypto");
+
+const shopLoginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    const email = cleanText((req.body?.email || "")).toLowerCase().slice(0, 100);
+    return `${req.ip}:${email}`;
+  },
+  handler: (_req, res) => res.status(429).json({ error: "Слишком много попыток. Попробуйте через 15 минут." }),
+});
 const _shopScryptAsync = require("util").promisify(_shopCrypto.scrypt);
 
 async function _shopHashPassword(pw) {
@@ -806,20 +818,26 @@ app.post("/api/shop/payment/notification", async (request, response, next) => {
     const notificationSecretKey = process.env.OZON_PAY_NOTIFICATION_SECRET;
     const body = request.body || {};
 
-    if (accessKey && notificationSecretKey && body.requestSign) {
-      const expected = _ozonPayNotificationSign({
-        accessKey,
-        orderID: body.orderID || "",
-        transactionID: body.transactionID,
-        extOrderID: body.extOrderID || "",
-        amount: String(body.amount || ""),
-        currencyCode: String(body.currencyCode || ""),
-        notificationSecretKey,
-      });
-      if (body.requestSign !== expected) {
-        logger.warn("ozon pay notification bad signature", { extOrderID: body.extOrderID });
-        return response.status(400).json({ error: "Bad signature" });
-      }
+    if (!accessKey || !notificationSecretKey) {
+      logger.warn("ozon pay notification received but OZON_PAY_ACCESS_KEY/OZON_PAY_NOTIFICATION_SECRET not configured — rejecting");
+      return response.status(503).json({ error: "Payment notifications not configured" });
+    }
+    if (!body.requestSign) {
+      logger.warn("ozon pay notification missing requestSign", { extOrderID: body.extOrderID });
+      return response.status(400).json({ error: "Missing signature" });
+    }
+    const expected = _ozonPayNotificationSign({
+      accessKey,
+      orderID: body.orderID || "",
+      transactionID: body.transactionID,
+      extOrderID: body.extOrderID || "",
+      amount: String(body.amount || ""),
+      currencyCode: String(body.currencyCode || ""),
+      notificationSecretKey,
+    });
+    if (body.requestSign !== expected) {
+      logger.warn("ozon pay notification bad signature", { extOrderID: body.extOrderID });
+      return response.status(400).json({ error: "Bad signature" });
     }
 
     const { extOrderID, status, orderID } = body;
@@ -979,20 +997,18 @@ app.post("/api/shop/auth/send-code", shopCors, async (request, response, next) =
     if (!process.env.SHOP_SMTP_HOST) return response.status(503).json({ error: "Email-сервис не настроен" });
 
     const redis = shopOtpRedis();
+    if (!redis) return response.status(503).json({ error: "Сервис временно недоступен. Попробуйте позже." });
+
     const normalEmail = email.toLowerCase().trim();
     const emailKey = `shop:otp:${normalEmail}`;
     const rateLimitKey = `shop:otp:rl:${normalEmail}`;
 
-    if (redis) {
-      const rl = await redis.get(rateLimitKey);
-      if (rl) return response.status(429).json({ error: "Подождите 60 секунд перед повторной отправкой", retryAfter: 60 });
-    }
+    const rl = await redis.get(rateLimitKey);
+    if (rl) return response.status(429).json({ error: "Подождите 60 секунд перед повторной отправкой", retryAfter: 60 });
 
     const code = String(Math.floor(100000 + Math.random() * 900000));
-    if (redis) {
-      await redis.set(emailKey, JSON.stringify({ code, attempts: 0 }), "EX", 600);
-      await redis.set(rateLimitKey, "1", "EX", 60);
-    }
+    await redis.set(emailKey, JSON.stringify({ code, attempts: 0 }), "EX", 600);
+    await redis.set(rateLimitKey, "1", "EX", 60);
 
     await shopSendEmail({
       to: normalEmail,
@@ -1017,7 +1033,7 @@ app.post("/api/shop/auth/verify-code", shopCors, async (request, response, next)
     let otpData = null;
     if (redis) {
       const raw = await redis.get(emailKey);
-      if (raw) otpData = JSON.parse(raw);
+      if (raw) try { otpData = JSON.parse(raw); } catch { otpData = null; }
     }
 
     if (!otpData) return response.status(400).json({ error: "Код истёк или не найден. Запросите новый." });
@@ -1076,7 +1092,7 @@ app.post("/api/shop/auth/register", shopCors, async (request, response, next) =>
   } catch (error) { next(error); }
 });
 
-app.post("/api/shop/auth/login", shopCors, async (request, response, next) => {
+app.post("/api/shop/auth/login", shopCors, shopLoginLimiter, async (request, response, next) => {
   try {
     const prisma = getPrisma();
     if (!prisma) return response.status(503).json({ error: "База данных недоступна" });

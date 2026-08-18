@@ -54,7 +54,7 @@ async function insertAppNotification({ type, marketplace, title, body = "", exte
   return rows.length > 0;
 }
 
-app.get("/api/notifications", async (request, response, next) => {
+app.get("/api/notifications", requireStaff, async (request, response, next) => {
   try {
     const prisma = getPrisma();
     if (!prisma || !(await ensureNotificationsTable())) return response.json({ ok: true, rows: [], unread: 0 });
@@ -73,7 +73,7 @@ app.get("/api/notifications", async (request, response, next) => {
   }
 });
 
-app.post("/api/notifications/read", async (request, response, next) => {
+app.post("/api/notifications/read", requireStaff, async (request, response, next) => {
   try {
     const prisma = getPrisma();
     if (!prisma || !(await ensureNotificationsTable())) return response.json({ ok: true, updated: 0 });
@@ -99,7 +99,7 @@ app.post("/api/notifications/read", async (request, response, next) => {
 });
 
 // SSE: tails new notification rows so any open admin page reacts instantly.
-app.get("/api/notifications/stream", async (request, response) => {
+app.get("/api/notifications/stream", requireStaff, async (request, response) => {
   const prisma = getPrisma();
   if (!prisma || !(await ensureNotificationsTable().catch(() => false))) {
     return response.status(503).end();

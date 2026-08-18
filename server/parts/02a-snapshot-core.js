@@ -3,10 +3,13 @@ function priceMasterSnapshotSearchHaystack(row = {}) {
   return normalizeSearchText([fields.article, fields.name, fields.partnerName].join(" "));
 }
 
-function snapshotRowMatchesPriceMasterSearch(row = {}, { q = "", supplier = "" } = {}) {
+function snapshotRowMatchesPriceMasterSearch(row = {}, { q = "", supplier = "", tokenGroups = null } = {}) {
   const fields = priceMasterSnapshotRowFields(row);
   const supplierLower = normalizeSearchText(supplier);
   if (supplierLower && !normalizeSearchText(fields.partnerName).includes(supplierLower)) return false;
+  if (tokenGroups && tokenGroups.length) {
+    return pmWordMatch([fields.name, fields.article].join(" "), tokenGroups);
+  }
   const search = normalizeSearchText(q);
   if (!search) return true;
   const source = priceMasterSnapshotSearchHaystack(row);
@@ -14,9 +17,10 @@ function snapshotRowMatchesPriceMasterSearch(row = {}, { q = "", supplier = "" }
 }
 
 function searchPriceMasterSnapshotJsonRows(rows = [], { q = "", supplier = "", limit = 100, usdRate = 95 } = {}) {
+  const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
   const unique = new Map();
   for (const row of rows) {
-    if (!snapshotRowMatchesPriceMasterSearch(row, { q, supplier })) continue;
+    if (!snapshotRowMatchesPriceMasterSearch(row, { q, supplier, tokenGroups })) continue;
     const mapped = mapPriceMasterSearchResponseRow(row, usdRate);
     const key = [mapped.rowId, mapped.article, mapped.supplierName, mapped.name].join("|");
     if (!unique.has(key)) unique.set(key, mapped);
