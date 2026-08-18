@@ -68,7 +68,9 @@ function buildYandexOfferMapping(product, overrides = {}) {
     missing.push("weightDimensions");
   }
 
-  return { offer, missing, ready: missing.length === 0 };
+  // description is informational — Yandex doesn't require it, so don't block export.
+  const blockingMissing = missing.filter((field) => field !== "description");
+  return { offer, missing, ready: blockingMissing.length === 0 };
 }
 
 async function sendApprovedYandexProductContent(product = {}, options = {}) {
