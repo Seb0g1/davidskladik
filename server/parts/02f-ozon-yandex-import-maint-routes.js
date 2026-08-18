@@ -415,6 +415,111 @@ app.post("/api/ozon-yandex-import/sync-names", requireAdmin, async (request, res
   }
 });
 
+// Backfill descriptions for Yandex products that lack them, sourcing from their Ozon
+// counterparts in Postgres. Run after an Ozon refresh (to populate ozon.description in DB).
+app.post("/api/ozon-yandex-import/repair-yandex-descriptions", requireAdmin, async (request, response, next) => {
+  try {
+    const dryRun = request.body?.dryRun !== false;
+    const requestedLimit = Math.max(1, Math.min(50000, Number(request.body?.limit || 5000) || 5000));
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "Postgres недоступен." });
+    const { Prisma } = require("@prisma/client");
+
+    // Find Yandex products missing descriptions where the Ozon counterpart has one.
+    const rows = await prisma.$queryRaw`
+      SELECT
+        yp.id   AS "yandexId",
+        yp.offer_id AS "offerId",
+        yp.raw  AS "yandexRaw",
+        op.raw  AS "ozonRaw"
+      FROM warehouse_products yp
+      JOIN warehouse_products op
+        ON op.marketplace = 'ozon'
+        AND LOWER(op.offer_id) = LOWER(yp.offer_id)
+        AND op.archived = false
+      WHERE yp.marketplace = 'yandex'
+        AND COALESCE(TRIM(yp.raw->'yandex'->>'description'), '') = ''
+        AND TRIM(COALESCE(op.raw->'ozon'->>'description', '')) != ''
+      LIMIT ${requestedLimit}
+    `;
+
+    if (dryRun) {
+      return response.json({
+        ok: true,
+        dryRun: true,
+        candidates: rows.length,
+        sample: rows.slice(0, 10).map((r) => ({
+          offerId: r.offerId,
+          description: String(r.ozonRaw?.ozon?.description || "").slice(0, 80),
+        })),
+      });
+    }
+
+    const shops = uniqueYandexShopsByBusiness();
+    if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
+    const shopByTarget = new Map(shops.map((shop) => [shop.id, shop]));
+
+    const batchByShop = new Map();
+    const updatedRecords = [];
+
+    for (const row of rows) {
+      const yandexProduct = normalizeWarehouseProduct(
+        row.yandexRaw && typeof row.yandexRaw === "object" ? row.yandexRaw : { offerId: row.offerId },
+      );
+      const ozonProduct = normalizeWarehouseProduct(
+        row.ozonRaw && typeof row.ozonRaw === "object" ? row.ozonRaw : { offerId: row.offerId },
+      );
+      const description = cleanText(ozonProduct.ozon?.description || "");
+      if (!description) continue;
+
+      const target = cleanText(yandexProduct.target);
+      const shop = shopByTarget.get(target) || shops[0];
+      if (!shop) continue;
+
+      const built = buildYandexOfferMapping({ ...yandexProduct, ozon: { ...(yandexProduct.ozon || {}), description } });
+      if (!batchByShop.has(shop.id)) batchByShop.set(shop.id, { shop, offers: [] });
+      batchByShop.get(shop.id).offers.push(compactObject({
+        offerId: cleanText(row.offerId),
+        description: built.offer?.description,
+        vendor: built.offer?.vendor,
+      }));
+      updatedRecords.push({ id: row.yandexId, description });
+    }
+
+    const results = [];
+    for (const { shop, offers } of batchByShop.values()) {
+      for (const chunk of chunkArray(offers, 500)) {
+        const sent = await sendYandexOfferMappings(shop, chunk);
+        results.push(...sent.map((item) => ({ ...item, target: shop.id })));
+      }
+    }
+
+    // Persist description into Yandex product records in Postgres.
+    const sentOfferIds = new Set(results.filter((item) => item.ok).map((item) => cleanText(item.offerId).toLowerCase()).filter(Boolean));
+    const toPersist = updatedRecords.filter((rec) => {
+      const yandexRaw = rows.find((r) => r.yandexId === rec.id)?.yandexRaw;
+      return yandexRaw && sentOfferIds.has(cleanText(yandexRaw.offerId).toLowerCase());
+    });
+    for (const rec of toPersist) {
+      await prisma.warehouseProduct.update({
+        where: { id: rec.id },
+        data: { raw: { ...(rows.find((r) => r.yandexId === rec.id)?.yandexRaw || {}), yandex: { ...(rows.find((r) => r.yandexId === rec.id)?.yandexRaw?.yandex || {}), description: rec.description } } },
+      }).catch(() => {});
+    }
+
+    response.json({
+      ok: results.every((item) => item.ok),
+      dryRun: false,
+      candidates: rows.length,
+      sent: results.filter((item) => item.ok).length,
+      failed: results.filter((item) => !item.ok).length,
+      persisted: toPersist.length,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Manual trigger for the Postgres-backed auto import (also runs on schedule).
 app.post("/api/ozon-yandex-import/auto-run", requireAdmin, async (request, response, next) => {
   try {

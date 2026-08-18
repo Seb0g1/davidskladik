@@ -140,6 +140,34 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
       return { status: "ok", sent: 0, scanned, skippedExisting, skippedBlocked, skippedUnlinked };
     }
 
+    // Fetch fresh descriptions from Ozon API for products that lack them in DB.
+    // Groups by account so we make one batched API call per account, not per product.
+    const missingDescByTarget = {};
+    for (const product of selected) {
+      if (cleanText(product.ozon?.description)) continue;
+      const target = product.target || "ozon";
+      if (!missingDescByTarget[target]) missingDescByTarget[target] = [];
+      missingDescByTarget[target].push(product);
+    }
+    for (const [target, accountProducts] of Object.entries(missingDescByTarget)) {
+      const account = getOzonAccounts().find((a) => a.id === target);
+      if (!account?.clientId || !account?.apiKey) continue;
+      const offerIds = accountProducts.map((p) => cleanText(p.offerId)).filter(Boolean);
+      if (!offerIds.length) continue;
+      try {
+        const infoMap = await getOzonProductInfoMap(offerIds, account, { continueOnError: true });
+        for (const product of accountProducts) {
+          const info = getOzonOfferMapValue(infoMap, product.offerId);
+          if (cleanText(info?.description)) {
+            product.ozon = { ...(product.ozon || {}), description: cleanText(info.description) };
+          }
+        }
+        logger.info("ozon yandex auto import: fetched descriptions", { target, requested: offerIds.length, resolved: infoMap.size });
+      } catch (descError) {
+        logger.warn("ozon yandex auto import: description fetch failed", { target, detail: descError?.message || String(descError) });
+      }
+    }
+
     const exportResult = await exportOzonProductsToYandex(selected, shops, { reason: "ozon_yandex_auto_import" });
     const sentOfferIds = exportResult.sentOfferIds;
     const priceStage = exportResult.priceStage;
