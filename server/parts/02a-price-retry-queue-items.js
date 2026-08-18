@@ -72,12 +72,12 @@ async function writePrismaStateChunks(rows = [], chunkSize = 100, buildOperation
       );
     } catch (error) {
       const detail = error?.message || String(error);
-      if (!/Transaction already closed|expired transaction|timeout|timed out/i.test(detail)) throw error;
-      logger.warn("state postgres transaction timed out, retrying writes one by one", {
+      if (!/Transaction already closed|expired transaction|timeout|timed out|deadlock|40P01/i.test(detail)) throw error;
+      logger.warn("state postgres transaction failed (deadlock/timeout), retrying writes one by one", {
         rows: chunk.length,
-        detail,
+        detail: detail.slice(0, 300),
       });
-      rememberStateWarning("state_postgres_transaction_timeout", error, { rows: chunk.length });
+      rememberStateWarning("state_postgres_transaction_deadlock_or_timeout", error, { rows: chunk.length });
       for (const item of chunk) {
         await buildOperation(item);
       }

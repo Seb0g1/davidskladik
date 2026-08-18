@@ -1591,37 +1591,38 @@ button:disabled {
 /* Word autocomplete dropdown */
 .pm-word-dropdown {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   left: 0;
-  right: 0;
-  z-index: 120;
+  min-width: 180px;
+  max-width: 320px;
+  z-index: 200;
   background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 6px 20px rgba(0,0,0,.35);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0,0,0,.55), 0 0 0 1px rgba(var(--accent-rgb),.15);
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 8px;
-  max-height: 160px;
+  flex-direction: column;
+  padding: 4px;
+  max-height: 220px;
   overflow-y: auto;
 }
 
 .pm-word-option {
-  background: rgba(var(--accent-rgb), .10);
-  border: 1px solid rgba(var(--accent-rgb), .22);
+  background: none;
+  border: none;
   color: var(--text);
-  border-radius: 4px;
-  padding: 3px 9px;
-  font-size: 12px;
+  border-radius: 5px;
+  padding: 7px 12px;
+  font-size: 13px;
   font-family: monospace;
   cursor: pointer;
   white-space: nowrap;
-  transition: background .12s;
+  text-align: left;
+  transition: background .1s;
 }
 .pm-word-option:hover {
-  background: rgba(var(--accent-rgb), .28);
-  border-color: var(--accent);
+  background: rgba(var(--accent-rgb), .18);
+  color: var(--accent);
 }
 
 .info-strip {
