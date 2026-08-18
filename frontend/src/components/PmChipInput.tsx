@@ -18,7 +18,6 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Notify parent whenever chips change (from any page)
   useEffect(() => {
     onQueryChange(chips.join(" "));
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -59,7 +58,6 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setInputVal(val);
-    // Notify with current chips + partial input so live search still works while typing
     onQueryChange([...chips, val.trim()].filter(Boolean).join(" "));
   };
 
@@ -84,34 +82,33 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
         </span>
       ))}
 
-      <div style={{ position: "relative", flex: 1, minWidth: 80 }}>
-        <input
-          ref={inputRef}
-          className={`pm-chip-input${inputClassName ? ` ${inputClassName}` : ""}`}
-          value={inputVal}
-          onChange={handleChange}
-          onKeyDown={handleKeyDown}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          placeholder={chips.length ? "" : placeholder}
-          disabled={disabled}
-          autoComplete="off"
-        />
-        {showDropdown && (
-          <div className="pm-word-dropdown">
-            {(wordSuggest.data?.words ?? []).map((w) => (
-              <button
-                key={w}
-                type="button"
-                className="pm-word-option"
-                onMouseDown={(e) => { e.preventDefault(); commitWord(w); }}
-              >
-                {w}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      <input
+        ref={inputRef}
+        className={`pm-chip-input${inputClassName ? ` ${inputClassName}` : ""}`}
+        value={inputVal}
+        onChange={handleChange}
+        onKeyDown={handleKeyDown}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        placeholder={chips.length ? "" : placeholder}
+        disabled={disabled}
+        autoComplete="off"
+      />
+
+      {showDropdown && (
+        <div className="pm-word-dropdown">
+          {(wordSuggest.data?.words ?? []).map((w) => (
+            <button
+              key={w}
+              type="button"
+              className="pm-word-option"
+              onMouseDown={(e) => { e.preventDefault(); commitWord(w); }}
+            >
+              {w}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
