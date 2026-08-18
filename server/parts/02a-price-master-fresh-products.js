@@ -84,10 +84,16 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
           usdRate: rate,
           appSettings,
         });
+        // Pinned: selected_row link whose exact sourceRowId matched the PM row.
+        // pickWarehouseSupplier prefers pinned suppliers over cheaper non-pinned ones.
+        const pinnedRow = match.matchType === "selected_row"
+          && Boolean(match.sourceRowId)
+          && String(match.rowId || "") === String(match.sourceRowId);
         return {
           ...match,
           markupCoefficient,
           calculatedPrice: calculateRubPrice(match.price, rate, markupCoefficient, match),
+          pinnedRow,
         };
       });
     });

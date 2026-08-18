@@ -71,14 +71,18 @@ function pickWarehouseSupplier(matches) {
       && !supplierUsesStockOnlyPricing(null, match))
     .sort(compareWarehouseSupplierPrices);
   if (!eligible.length) return null;
+  // If the operator pinned a specific PM row (selected_row link with matched sourceRowId),
+  // restrict the pool to pinned candidates so the explicit choice beats cheaper alternatives.
+  const pinned = eligible.filter((m) => m.pinnedRow);
+  const pool = pinned.length ? pinned : eligible;
   const { ratio, minPeers } = supplierPriceOutlierConfig();
-  if (!(ratio > 0)) return eligible[0];
-  for (let index = 0; index < eligible.length; index += 1) {
-    const candidate = eligible[index];
+  if (!(ratio > 0)) return pool[0];
+  for (let index = 0; index < pool.length; index += 1) {
+    const candidate = pool[index];
     const purchase = warehouseSupplierPurchaseRubPrice(candidate);
     if (!(purchase > 0) || purchase >= Number.MAX_SAFE_INTEGER) return candidate;
-    // eligible отсортирован по закупке — peers уже по возрастанию.
-    const peers = eligible.slice(index + 1)
+    // pool отсортирован по закупке — peers уже по возрастанию.
+    const peers = pool.slice(index + 1)
       .map((supplier) => warehouseSupplierPurchaseRubPrice(supplier))
       .filter((price) => price > 0 && price < Number.MAX_SAFE_INTEGER);
     if (peers.length < minPeers) return candidate;
@@ -87,7 +91,7 @@ function pickWarehouseSupplier(matches) {
     candidate.priceOutlier = true;
   }
   // Сюда не доходим: у последних кандидатов не хватает peers и цикл вернул их.
-  return eligible[eligible.length - 1];
+  return pool[pool.length - 1];
 }
 
 function pickWarehouseStockOnlySupplier(matches) {
