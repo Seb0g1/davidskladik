@@ -70,9 +70,11 @@ async function importOzonWarehouseProducts(limit = Number.POSITIVE_INFINITY, exi
       let stockMap = new Map();
       let priceMap = new Map();
       try {
-        const configuredDetailLimit = process.env.OZON_SYNC_DETAIL_LIMIT !== undefined
-          ? Number(process.env.OZON_SYNC_DETAIL_LIMIT)
-          : Number(process.env.OZON_SYNC_INFO_LIMIT || 800);
+        const configuredDetailLimit = options.detailRefreshLimit !== undefined
+          ? Number(options.detailRefreshLimit)
+          : process.env.OZON_SYNC_DETAIL_LIMIT !== undefined
+            ? Number(process.env.OZON_SYNC_DETAIL_LIMIT)
+            : Number(process.env.OZON_SYNC_INFO_LIMIT || 800);
         const infoLimit = Math.max(0, Number.isFinite(configuredDetailLimit) ? configuredDetailLimit : 800);
         const infoOfferIds = pickOzonDetailOfferIds(products, existingByOffer, infoLimit);
         logger.info("ozon product list loaded", {
