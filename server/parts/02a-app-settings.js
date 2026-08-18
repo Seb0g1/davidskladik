@@ -51,7 +51,7 @@ function defaultAppSettings() {
       mode: "draft",
       marketplaces: ["ozon", "yandex", "wb"],
       lookbackHours: 48,
-      includeOzonStatuses: ["awaiting_packaging"],
+      includeOzonStatuses: ["awaiting_packaging", "awaiting_deliver"],
       includeYandexStatuses: ["PROCESSING"],
       includeYandexSubstatuses: ["STARTED", "PACKAGING", "READY_TO_SHIP"],
     },

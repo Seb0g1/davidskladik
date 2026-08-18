@@ -61,12 +61,22 @@ const pool = mysql.createPool({
   password: process.env.PM_DB_PASSWORD,
   database: process.env.PM_DB_NAME,
   waitForConnections: true,
-  connectionLimit: pmDbPoolSize,
+  connectionLimit: 0,
+  maxIdle: Math.max(2, pmDbPoolSize),
   connectTimeout: pmDbConnectTimeoutMs,
   enableKeepAlive: true,
   keepAliveInitialDelay: 60000,
   decimalNumbers: true,
   dateStrings: true,
+});
+
+// READ UNCOMMITTED: our SELECTs are snapshot-based and do not need strict isolation.
+// This prevents our heavy full-scan queries from acquiring shared locks that could
+// delay Ginger PM's INSERT/UPDATE operations on the same tables.
+pool.on("connection", (connection) => {
+  connection.query("SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED", (err) => {
+    if (err) logger.warn("PM pool: failed to set READ UNCOMMITTED", { detail: err?.message });
+  });
 });
 
 // Retry once on stale-connection errors (ECONNRESET, Query inactivity timeout, etc.).
