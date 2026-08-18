@@ -442,6 +442,7 @@ app.post("/api/ozon-yandex-import/repair-yandex-descriptions", requireAdmin, asy
         AND op.archived = false
       WHERE yp.marketplace = 'yandex'
         AND COALESCE(TRIM(yp.raw->'yandex'->>'description'), '') = ''
+        AND (yp.raw->'yandex'->'_descriptionChecked') IS NULL
       LIMIT ${requestedLimit}
     `;
 
@@ -506,7 +507,18 @@ app.post("/api/ozon-yandex-import/repair-yandex-descriptions", requireAdmin, asy
         }
       }
 
-      if (!description) continue;
+      if (!description) {
+        // Ozon has no description for this product — mark it so the repair loop
+        // doesn't keep retrying. The _descriptionChecked flag is internal-only,
+        // never sent to Yandex.
+        await prisma.$executeRaw`
+          UPDATE warehouse_products
+          SET raw = jsonb_set(raw, '{yandex,_descriptionChecked}', 'true'::jsonb, true),
+              updated_at = NOW()
+          WHERE id = ${row.yandexId}
+        `.catch(() => {});
+        continue;
+      }
 
       const target = cleanText(yandexProduct.target);
       const shop = shopByTarget.get(target) || shops[0];
