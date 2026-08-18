@@ -20,6 +20,7 @@ function ozonProductNeedsDetailRefresh(product = {}) {
   if (!cleanText(product.productId || product.ozon?.productId)) return true;
   if (!cleanText(product.marketplaceState?.code) || product.marketplaceState?.partial) return true;
   if (!Number(product.marketplacePrice || product.ozon?.price || 0)) return true;
+  if (!cleanText(product.ozon?.description)) return true;
   return false;
 }
 

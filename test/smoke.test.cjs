@@ -1977,6 +1977,7 @@ test("Ozon sync refreshes details only for new or incomplete products", () => {
     imageUrl: "https://example.test/image.jpg",
     marketplacePrice: 1234,
     marketplaceState: { code: "active" },
+    ozon: { description: "A great perfume with floral notes." },
   });
   const existingWeak = normalizeWarehouseProduct({
     target: "ozon",
@@ -1998,22 +1999,23 @@ test("Ozon sync refreshes details only for new or incomplete products", () => {
 
   assert.equal(ozonProductNeedsDetailRefresh(existingComplete), false);
   assert.equal(ozonProductNeedsDetailRefresh(existingWeak), true);
+  // No description → needs refresh even if other fields are present
   assert.equal(ozonProductNeedsDetailRefresh(normalizeWarehouseProduct({
     target: "ozon",
     marketplace: "ozon",
-    offerId: "generic",
+    offerId: "no-desc",
     productId: "3",
-    name: "Товар Ozon",
-    marketplacePrice: 1000,
+    name: "Christian Dior Sauvage EDP 100ml",
+    imageUrl: "https://cdn.example.com/image.jpg",
+    marketplacePrice: 5000,
     marketplaceState: { code: "active" },
   })), true);
   assert.equal(ozonProductNeedsDetailRefresh(normalizeWarehouseProduct({
     target: "ozon",
     marketplace: "ozon",
-    offerId: "real-generic",
+    offerId: "generic",
     productId: "4",
     name: "Товар Ozon",
-    imageUrl: "https://cdn.example.com/generic.jpg",
     marketplacePrice: 1000,
     marketplaceState: { code: "active" },
   })), true);
@@ -2031,6 +2033,7 @@ test("weak Ozon repair picker selects only incomplete warehouse cards", () => {
     imageUrl: "https://example.test/image.jpg",
     marketplacePrice: 1234,
     marketplaceState: { code: "active" },
+    ozon: { description: "A complete product description." },
   });
   const weakName = normalizeWarehouseProduct({
     id: "weak-name",
