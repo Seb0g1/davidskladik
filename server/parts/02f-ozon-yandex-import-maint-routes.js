@@ -425,7 +425,10 @@ app.post("/api/ozon-yandex-import/repair-yandex-descriptions", requireAdmin, asy
     if (!prisma) return response.status(503).json({ error: "Postgres недоступен." });
     const { Prisma } = require("@prisma/client");
 
-    // Find Yandex products missing descriptions where the Ozon counterpart has one.
+    // Find Yandex products missing descriptions where an Ozon sibling exists.
+    // Note: we do NOT filter by op.raw->'ozon'->>'description' here because descriptions
+    // are not stored by the regular Ozon import (/v3/product/info/list omits them).
+    // We fetch them on-demand below via /v1/product/info/description.
     const rows = await prisma.$queryRaw`
       SELECT
         yp.id   AS "yandexId",
@@ -439,7 +442,6 @@ app.post("/api/ozon-yandex-import/repair-yandex-descriptions", requireAdmin, asy
         AND op.archived = false
       WHERE yp.marketplace = 'yandex'
         AND COALESCE(TRIM(yp.raw->'yandex'->>'description'), '') = ''
-        AND TRIM(COALESCE(op.raw->'ozon'->>'description', '')) != ''
       LIMIT ${requestedLimit}
     `;
 
@@ -450,7 +452,7 @@ app.post("/api/ozon-yandex-import/repair-yandex-descriptions", requireAdmin, asy
         candidates: rows.length,
         sample: rows.slice(0, 10).map((r) => ({
           offerId: r.offerId,
-          description: String(r.ozonRaw?.ozon?.description || "").slice(0, 80),
+          storedOzonDesc: String(r.ozonRaw?.ozon?.description || "").slice(0, 80),
         })),
       });
     }
@@ -461,7 +463,10 @@ app.post("/api/ozon-yandex-import/repair-yandex-descriptions", requireAdmin, asy
 
     const batchByShop = new Map();
     const updatedRecords = [];
+    let apiCalls = 0;
+    let apiErrors = 0;
 
+    const descDelayMs = 60; // stay well within Ozon rate limits (~15 req/s)
     for (const row of rows) {
       const yandexProduct = normalizeWarehouseProduct(
         row.yandexRaw && typeof row.yandexRaw === "object" ? row.yandexRaw : { offerId: row.offerId },
@@ -469,7 +474,38 @@ app.post("/api/ozon-yandex-import/repair-yandex-descriptions", requireAdmin, asy
       const ozonProduct = normalizeWarehouseProduct(
         row.ozonRaw && typeof row.ozonRaw === "object" ? row.ozonRaw : { offerId: row.offerId },
       );
-      const description = cleanText(ozonProduct.ozon?.description || "");
+
+      // Use description stored in DB if available; otherwise fetch from Ozon API.
+      let description = cleanText(ozonProduct.ozon?.description || "");
+      if (!description) {
+        const ozonAccount = getOzonAccountByTarget(cleanText(ozonProduct.target || "ozon"));
+        if (ozonAccount) {
+          try {
+            const body = ozonProduct.productId
+              ? { product_id: Number(ozonProduct.productId) || undefined, offer_id: cleanText(row.offerId) }
+              : { offer_id: cleanText(row.offerId) };
+            const data = await ozonRequest("/v1/product/info/description", body, ozonAccount);
+            description = cleanText(data?.result?.description || "");
+            apiCalls += 1;
+            // Persist back to Ozon product DB record so future runs skip the API call.
+            if (description) {
+              await prisma.$executeRaw`
+                UPDATE warehouse_products
+                SET raw = jsonb_set(raw, '{ozon,description}', ${JSON.stringify(description)}::jsonb, true),
+                    updated_at = NOW()
+                WHERE marketplace = 'ozon'
+                  AND LOWER(offer_id) = LOWER(${cleanText(row.offerId)})
+                  AND archived = false
+              `.catch(() => {});
+            }
+          } catch (e) {
+            apiErrors += 1;
+            if (apiErrors >= 10) break; // abort on repeated failures to protect rate limits
+          }
+          if (descDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, descDelayMs));
+        }
+      }
+
       if (!description) continue;
 
       const target = cleanText(yandexProduct.target);
@@ -511,6 +547,8 @@ app.post("/api/ozon-yandex-import/repair-yandex-descriptions", requireAdmin, asy
       ok: results.every((item) => item.ok),
       dryRun: false,
       candidates: rows.length,
+      apiCalls,
+      apiErrors,
       sent: results.filter((item) => item.ok).length,
       failed: results.filter((item) => !item.ok).length,
       persisted: toPersist.length,
