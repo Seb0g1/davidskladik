@@ -791,25 +791,24 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
     const q = cleanText(request.query.q || "");
     if (q.length < 2) return response.json({ ok: true, items: [] });
     const tokenGroups = pmQueryToTokenGroups(q);
+    // OR pre-filter casts a wide net so n-1 tolerance in pmPassesSearchFilter can work.
     const and = [{ active: true }];
     if (tokenGroups.length) {
-      for (const group of tokenGroups) {
-        and.push({
-          OR: group.flatMap((synonym) => [
-            { article: { contains: synonym, mode: "insensitive" } },
-            { nativeName: { contains: synonym, mode: "insensitive" } },
-          ]),
-        });
-      }
+      const orTerms = tokenGroups.flatMap((group) =>
+        group.flatMap((synonym) => [
+          { article: { contains: synonym, mode: "insensitive" } },
+          { nativeName: { contains: synonym, mode: "insensitive" } },
+        ]),
+      );
+      and.push({ OR: orTerms });
     } else {
       and.push({ OR: [{ article: { contains: q, mode: "insensitive" } }, { nativeName: { contains: q, mode: "insensitive" } }] });
     }
     let rows = await getPrisma().priceMasterSnapshotItem.findMany({
       where: { AND: and },
       orderBy: { updatedAt: "desc" },
-      take: 100,
+      take: 500,
     });
-    // Post-filter enforces word-boundary for numeric tokens (e.g. "5" must not match "50").
     if (tokenGroups.length) {
       rows = rows.filter((row) => {
         const hay = [cleanText(row.nativeName || ""), cleanText(row.article || "")].join(" ");

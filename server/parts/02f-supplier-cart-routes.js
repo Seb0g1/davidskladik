@@ -242,10 +242,12 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     }
 
     const sel = { id: true, rowId: true, article: true, partnerId: true, partnerName: true, nativeName: true, price: true, currency: true, docDate: true };
-    let items = await prisma.priceMasterSnapshotItem.findMany({ where: buildWhere(tokenGroups), orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }], take: limit * 3, select: sel });
+    // Fetch a large candidate pool so older products (e.g. Dior items from past docs) are not
+    // cut off before post-filter. OR-based SQL pre-filter casts a wide net; JS does precision.
+    let items = await prisma.priceMasterSnapshotItem.findMany({ where: buildWhere(tokenGroups), orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }], take: Math.min(limit * 15, 2000), select: sel });
 
     // Post-filter: apply quality bar (required keywords must match; numbers/units are optional).
-    if (tokenGroups && tokenGroups.length >= 2) {
+    if (tokenGroups && tokenGroups.length >= 1) {
       items = items.filter((item) => {
         const hay = [cleanText(item.nativeName || ""), cleanText(item.article || "")].join(" ");
         return pmPassesSearchFilter(hay, tokenGroups);

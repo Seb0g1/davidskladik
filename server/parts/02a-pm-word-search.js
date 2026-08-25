@@ -54,9 +54,10 @@ function pmQueryToTokenGroups(query) {
 // Numeric tokens use word-boundary matching so "5" doesn't match "50" or "500".
 function pmTokenMatchesText(lower, token) {
   if (/^\d+$/.test(token)) {
-    // Must not be preceded or followed by another digit.
+    // Right-boundary only: "5" matches "1.5ml" and "5ml" but NOT "50ml" or "500ml".
+    // This mirrors GingerPM behaviour where a volume search for "5" includes "1.5 ml" results.
     const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`(?<!\\d)${escaped}(?!\\d)`).test(lower);
+    return new RegExp(`${escaped}(?!\\d)`).test(lower);
   }
   return lower.includes(token);
 }
