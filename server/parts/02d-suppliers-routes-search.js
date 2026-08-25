@@ -45,8 +45,8 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
           // Optional groups (numbers, short units like "ml") are so common that including
           // them in the SQL OR-list drowns out the primary-keyword candidates under LIMIT.
           // JS post-filter enforces optional groups with word-boundary precision after fetch.
-          const sqlGroups = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g));
-          const activeGroups = sqlGroups.length ? sqlGroups : tokenGroups; // fallback: all-optional query
+          const sqlGroups = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g) && !g._compound);
+          const activeGroups = sqlGroups.length ? sqlGroups : tokenGroups.filter((g) => !g._compound); // fallback: all-optional query
           const nameConds = activeGroups.flatMap((group) => group.map(() => "r.NativeName LIKE ?"));
           const extraConds = activeGroups[0].flatMap(() => ["r.NativeID LIKE ?", "r.BarCode LIKE ?", "p.PartnerName LIKE ?"]);
           conditions.push(`(${[...nameConds, ...extraConds].join(" OR ")})`);

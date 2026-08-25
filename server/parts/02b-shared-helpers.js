@@ -92,8 +92,8 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
       // Use only REQUIRED groups (len>3, non-numeric) for SQL — optional groups like "50"/"ml"
       // are so broad they drown out primary-keyword candidates under ORDER BY + LIMIT.
       // JS post-filter enforces optional groups with word-boundary precision after fetch.
-      const sqlGroups = allGroups.filter((g) => !pmTokenGroupIsOptional(g));
-      const activeGroups = sqlGroups.length ? sqlGroups : allGroups;
+      const sqlGroups = allGroups.filter((g) => !pmTokenGroupIsOptional(g) && !g._compound);
+      const activeGroups = sqlGroups.length ? sqlGroups : allGroups.filter((g) => !g._compound);
       const orTerms = activeGroups.flatMap((group) =>
         group.flatMap((synonym) => [
           { article: { contains: synonym, mode: "insensitive" } },
@@ -130,12 +130,62 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
     }
     rows = rows.slice(0, take);
 
+    // Fuzzy fallback: if exact search found very few results, try word_similarity via pg_trgm.
+    if (rows.length < 5 && q && groups && groups.length) {
+      const fuzzy = await fuzzySearchPmSnapshotItems(prisma, groups, take - rows.length);
+      const existingIds = new Set(rows.map((r) => r.id));
+      for (const fr of fuzzy) {
+        if (!existingIds.has(fr.id)) rows.push(fr);
+      }
+    }
+
     return rows.map((row) => priceMasterSnapshotOffer(row, usdRate));
   } catch (error) {
     logger.warn("PriceMaster snapshot offer search failed, trying live", { detail: error?.message || String(error) });
     return null;
   }
 }
+
+// Fuzzy fallback search using pg_trgm word_similarity().
+// Triggered when exact ILIKE search returns few results (likely a typo in the query).
+async function fuzzySearchPmSnapshotItems(prisma, tokenGroups, limit = 50) {
+  if (!prisma || !tokenGroups || !tokenGroups.length) return [];
+  const required = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g) && !g._compound);
+  if (!required.length) return [];
+  const long = required.filter((g) => g[0] && g[0].length >= 4);
+  if (!long.length) return [];
+
+  const params = [];
+  const conditions = long.map((group) => {
+    const groupConds = group.map((t) => {
+      params.push(t);
+      return `word_similarity($${params.length}, native_name) > 0.4`;
+    });
+    return `(${groupConds.join(" OR ")})`;
+  });
+  const orderTerms = long.map((group) => {
+    params.push(group[0]);
+    return `word_similarity($${params.length}, native_name)`;
+  });
+  params.push(Math.min(limit * 5, 500));
+  const sql = `
+    SELECT id, row_id, article, partner_id, partner_name, native_name, price, currency, doc_date, updated_at
+    FROM pm_snapshot_items
+    WHERE active = true AND price > 0 AND price IS NOT NULL
+      AND ${conditions.join(" AND ")}
+    ORDER BY (${orderTerms.join(" + ")}) DESC
+    LIMIT $${params.length}
+  `;
+  try {
+    const rows = await prisma.$queryRawUnsafe(sql, ...params);
+    return rows.map((r) => ({
+      id: r.id, rowId: r.row_id, article: r.article, partnerId: r.partner_id,
+      partnerName: r.partner_name, nativeName: r.native_name, price: r.price,
+      currency: r.currency, docDate: r.doc_date, updatedAt: r.updated_at, active: true,
+    }));
+  } catch { return []; }
+}
+
 function auditEntryProductIds(entry = {}) {
   const details = entry.details || {};
   const values = [

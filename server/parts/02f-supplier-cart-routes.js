@@ -227,8 +227,8 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
       if (groups && groups.length) {
         // Only required groups in SQL — optional (numbers, "ml") are so broad they flood
         // the LIMIT window and bury primary-keyword items. JS post-filter handles them.
-        const sqlGroups = groups.filter((g) => !pmTokenGroupIsOptional(g));
-        const activeGroups = sqlGroups.length ? sqlGroups : groups;
+        const sqlGroups = groups.filter((g) => !pmTokenGroupIsOptional(g) && !g._compound);
+        const activeGroups = sqlGroups.length ? sqlGroups : groups.filter((g) => !g._compound);
         const orTerms = activeGroups.flatMap((group) => group.flatMap((synonym) => [
           { nativeName: { contains: synonym, mode: "insensitive" } },
           { article: { contains: synonym, mode: "insensitive" } },
@@ -256,6 +256,16 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
         return pmPassesSearchFilter(hay, tokenGroups);
       });
     }
+
+    // Fuzzy fallback: when exact search finds very few results (likely a typo), try word_similarity.
+    if (items.length < 5 && q && tokenGroups && tokenGroups.length) {
+      const fuzzy = await fuzzySearchPmSnapshotItems(prisma, tokenGroups, limit);
+      const existingIds = new Set(items.map((i) => i.id));
+      for (const fr of fuzzy) {
+        if (!existingIds.has(fr.id)) items.push(fr);
+      }
+    }
+
     items = items.slice(0, limit);
 
     const usdRate = await getUsdRate();

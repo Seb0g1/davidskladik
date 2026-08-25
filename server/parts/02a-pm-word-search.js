@@ -44,20 +44,49 @@ function pmWordExpand(token) {
 // Returns [[token, ...synonyms], ...] — one group per input token.
 // Search is AND across groups, OR within each group.
 // Pure-numeric tokens (e.g. "6" for 6 ml) or single letters pass through.
+// Alphanumeric compounds (e.g. "no5", "h24") get an extra required group with _compound=true
+// that matches with optional whitespace between the alpha and digit parts.
 function pmQueryToTokenGroups(query) {
-  return pmWordTokenize(query)
+  const lower = String(query || "").toLowerCase().replace(/ё/g, "е");
+  const rawWords = lower.replace(/[^a-zа-я0-9]+/g, " ").split(/\s+/).filter(Boolean);
+
+  const baseGroups = pmWordTokenize(query)
     .filter((t) => t.length >= 2 || /^\d+$/.test(t) || t.length === 1)
     .map(pmWordExpand);
+
+  const existingTokens = new Set(baseGroups.flat());
+  const compoundGroups = rawWords
+    .filter((w) => w.length >= 2 && /[a-zа-я]/.test(w) && /\d/.test(w) && !existingTokens.has(w))
+    .map((w) => {
+      const arr = [w];
+      arr._compound = true;
+      return arr;
+    });
+
+  return [...baseGroups, ...compoundGroups];
 }
 
 // Match a single token against lowercased text.
-// Numeric tokens use word-boundary matching so "5" doesn't match "50" or "500".
 function pmTokenMatchesText(lower, token) {
   if (/^\d+$/.test(token)) {
-    // Right-boundary only: "5" matches "1.5ml" and "5ml" but NOT "50ml" or "500ml".
-    // This mirrors GingerPM behaviour where a volume search for "5" includes "1.5 ml" results.
-    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    return new RegExp(`${escaped}(?!\\d)`).test(lower);
+    // Both-boundary digit matching: "5" matches "5ml", "1.5ml" but NOT "50ml", "495ml", "15ml".
+    // Left boundary is non-digit (so "1.5" still passes — "." is not \d).
+    const esc = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?<!\\d)${esc}(?!\\d)`).test(lower);
+  }
+  // Short pure-alpha tokens (≤3 chars like "ml", "no", "de"): require letter-word boundaries
+  // to prevent "no" matching "noir", "ml" matching "mlm", etc.
+  if (token.length <= 3 && /^[a-zа-я]+$/.test(token)) {
+    const esc = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?<![a-zа-я])${esc}(?![a-zа-я])`).test(lower);
+  }
+  // Alphanumeric compound ("no5", "h24"): match exact substring OR with optional space between letter/digit parts.
+  if (/[a-zа-я]/.test(token) && /\d/.test(token)) {
+    if (lower.includes(token)) return true;
+    const flex = token
+      .replace(/([a-zа-я])(\d)/g, "$1\\s*$2")
+      .replace(/(\d)([a-zа-я])/g, "$1\\s*$2");
+    try { return new RegExp(flex).test(lower); } catch { return false; }
   }
   return lower.includes(token);
 }
@@ -80,7 +109,9 @@ function pmWordMatchScore(text, tokenGroups) {
 // A token group is "optional" if every synonym in it is either a pure number or ≤3 chars.
 // Numbers ("50", "100") and short units ("ml", "мл") are extremely common and would match
 // thousands of unrelated products if required — they contribute to scoring but not to minMatch.
+// Compound groups (e.g. ["no5"] with _compound flag) are always required.
 function pmTokenGroupIsOptional(group) {
+  if (group._compound) return false;
   return group.every((t) => /^\d+$/.test(t) || t.length <= 3);
 }
 

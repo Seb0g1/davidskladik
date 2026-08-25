@@ -794,13 +794,14 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
     // OR pre-filter casts a wide net so n-1 tolerance in pmPassesSearchFilter can work.
     const and = [{ active: true }];
     if (tokenGroups.length) {
-      const orTerms = tokenGroups.flatMap((group) =>
+      const sqlGroups = tokenGroups.filter((g) => !g._compound);
+      const orTerms = sqlGroups.flatMap((group) =>
         group.flatMap((synonym) => [
           { article: { contains: synonym, mode: "insensitive" } },
           { nativeName: { contains: synonym, mode: "insensitive" } },
         ]),
       );
-      and.push({ OR: orTerms });
+      if (orTerms.length) and.push({ OR: orTerms });
     } else {
       and.push({ OR: [{ article: { contains: q, mode: "insensitive" } }, { nativeName: { contains: q, mode: "insensitive" } }] });
     }
