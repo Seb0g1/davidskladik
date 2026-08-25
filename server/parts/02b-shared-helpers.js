@@ -117,8 +117,8 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
       take: take * 3,
     });
 
-    // Post-filter: apply quality bar (required keywords must match; numbers/units are optional).
-    if (groups && groups.length >= 2) {
+    // Post-filter: run for any non-empty query so single numeric chips also enforce word-boundary.
+    if (groups && groups.length >= 1) {
       rows = rows.filter((row) => {
         const hay = [cleanText(row.nativeName || ""), cleanText(row.article || "")].join(" ");
         return pmPassesSearchFilter(hay, groups);

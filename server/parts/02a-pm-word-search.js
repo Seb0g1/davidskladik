@@ -94,19 +94,23 @@ function pmMinMatchCount(tokenGroups) {
 
 // Returns true when text satisfies the search quality bar for the given token groups.
 // Required groups (>3 chars, non-numeric) must all match up to (n-1) — same n-1 rule as before.
-// When ALL groups are optional (short codes, numbers, units) ALL must match (AND) so that "5 ml"
-// doesn't match products containing only "ml" or only "50 ml" (wrong number boundary).
+// Optional groups (numbers, short units) the user explicitly provided must ALSO match — so
+// "5 ml" with "Christian Dior" requires the "5" to be present as a standalone number, not "50".
 function pmPassesSearchFilter(text, tokenGroups) {
   if (!tokenGroups || !tokenGroups.length) return true;
   const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
   const required = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g));
+  const optional = tokenGroups.filter((g) => pmTokenGroupIsOptional(g));
   if (required.length === 0) {
     // e.g. "5 ml" or "GTT81" — all short/numeric; ALL token groups must match (AND).
     return tokenGroups.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));
   }
+  // Required groups use the n-1 tolerance rule for long queries.
   const minMatch = required.length <= 2 ? required.length : required.length - 1;
   const score = required.reduce((n, group) => n + (group.some((t) => pmTokenMatchesText(lower, t)) ? 1 : 0), 0);
-  return score >= minMatch;
+  if (score < minMatch) return false;
+  // Numeric/unit groups the user explicitly provided must also be present (word-boundary for numbers).
+  return optional.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));
 }
 
 // Build sorted word list from PM row names (for autocomplete).
@@ -116,7 +120,8 @@ function buildPmWordIndex(rows = []) {
     const name = String(row.name || row.NativeName || row.nativeName || "");
     if (!name) continue;
     for (const token of pmWordTokenize(name)) {
-      if (token.length >= 2) words.add(token);
+      // Include single-digit numeric tokens (e.g. "5" from "5 ml") so users can chip them.
+      if (token.length >= 2 || /^\d+$/.test(token)) words.add(token);
     }
   }
   for (const group of PM_SYNONYM_GROUPS) {

@@ -89,8 +89,9 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
         seenOffer.add(offerKey);
         rows.push(mapPriceMasterSearchResponseRow(row, usdRate));
       }
-      // Post-filter: apply quality bar (required keywords must match; numbers/units are optional).
-      if (tokenGroups && tokenGroups.length >= 2) {
+      // Post-filter: apply quality bar. Run for any non-empty query so single numeric
+      // chips (e.g. "5") also enforce word-boundary matching via pmPassesSearchFilter.
+      if (tokenGroups && tokenGroups.length >= 1) {
         rows = rows.filter((row) => {
           const hay = [cleanText(row.name || ""), cleanText(row.article || "")].join(" ");
           return pmPassesSearchFilter(hay, tokenGroups);

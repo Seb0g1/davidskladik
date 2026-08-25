@@ -57,6 +57,14 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
     }
   };
 
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData("text");
+    if (text.trim()) {
+      e.preventDefault();
+      commitWord(text);
+    }
+  };
+
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setInputVal(val);
@@ -101,6 +109,7 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
         value={inputVal}
         onChange={handleChange}
         onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         placeholder={chips.length ? "" : placeholder}

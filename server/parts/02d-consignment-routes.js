@@ -804,11 +804,20 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
     } else {
       and.push({ OR: [{ article: { contains: q, mode: "insensitive" } }, { nativeName: { contains: q, mode: "insensitive" } }] });
     }
-    const rows = await getPrisma().priceMasterSnapshotItem.findMany({
+    let rows = await getPrisma().priceMasterSnapshotItem.findMany({
       where: { AND: and },
       orderBy: { updatedAt: "desc" },
-      take: 20,
+      take: 100,
     });
+    // Post-filter enforces word-boundary for numeric tokens (e.g. "5" must not match "50").
+    if (tokenGroups.length) {
+      rows = rows.filter((row) => {
+        const hay = [cleanText(row.nativeName || ""), cleanText(row.article || "")].join(" ");
+        return pmPassesSearchFilter(hay, tokenGroups);
+      }).slice(0, 20);
+    } else {
+      rows = rows.slice(0, 20);
+    }
     const ratePayload = await getUsdRate().catch(() => null);
     const usdRate = Number(ratePayload?.rate || ratePayload || process.env.DEFAULT_USD_RATE || 95) || 95;
     const items = rows.map((row) => {
