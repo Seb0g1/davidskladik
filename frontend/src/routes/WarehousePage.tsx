@@ -572,19 +572,6 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
 
   // Per-product markup coefficient override (persists on the first product in group)
   const primaryProduct = products.length ? preferredGroupPrimary(products) : products[0];
-  const currentMarkup = Number((primaryProduct as any)?.markup || 0) || 0;
-  const [markupInput, setMarkupInput] = useState(() => currentMarkup > 0 ? String(currentMarkup) : "");
-  useEffect(() => { setMarkupInput(currentMarkup > 0 ? String(currentMarkup) : ""); }, [draftScopeKey]);
-  const markupMutation = useMutation({
-    mutationFn: async (value: number) => {
-      if (!primaryProduct) throw new Error("Нет товара");
-      return fetchJson(`/api/warehouse/products/${encodeURIComponent(primaryProduct.id)}`, MutationProductResponseSchema, patchBody({
-        markup: value,
-        expectedUpdatedAt: primaryProduct.updatedAt || undefined,
-      }));
-    },
-    onSuccess: (payload) => refreshAfterMutation(payload),
-  });
 
   // Лимиты авто-цены (мин/макс) остались от старого интерфейса и молча
   // ограничивают расчёт от поставщика — показываем их и даём сбросить.
@@ -701,35 +688,6 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
         {manualPricesMutation.error && <div className="inline-error">{errorMessage(manualPricesMutation.error)}</div>}
       </div>
 
-      <div className="markup-override-box">
-        <div>
-          <strong>Личный коэффициент наценки</strong>
-          <span>Переопределяет базовую наценку из настроек для этой карточки. 0 или пусто — использовать настройки.</span>
-        </div>
-        <div className="markup-override-row">
-          <input
-            type="number" min="0.0001" step="0.01" placeholder={`база: ${primaryProduct ? ((primaryProduct as any)?.markupCoefficient || "из настроек") : "—"}`}
-            value={markupInput}
-            onChange={(event) => setMarkupInput(event.target.value)}
-            disabled={readOnly}
-            aria-label="Личный коэффициент наценки"
-          />
-          <button className="secondary-action" type="button"
-            disabled={readOnly || markupMutation.isPending || !markupInput || Number(markupInput) <= 0}
-            onClick={() => markupMutation.mutate(Number(markupInput))}>
-            {markupMutation.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить
-          </button>
-          {currentMarkup > 0 && (
-            <button className="secondary-action danger" type="button"
-              disabled={readOnly || markupMutation.isPending}
-              onClick={() => { setMarkupInput(""); markupMutation.mutate(0); }}
-              title="Сбросить личный коэффициент, использовать базовые настройки">
-              Сброс (×{currentMarkup})
-            </button>
-          )}
-        </div>
-        {markupMutation.error && <div className="inline-error">{errorMessage(markupMutation.error)}</div>}
-      </div>
 
       {priceLimitProducts.length > 0 ? (
         <div className="warning-strip compact">

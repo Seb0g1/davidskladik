@@ -1,0 +1,1 @@
+import{Ar as e,Nr as t}from"./index-Cx3jyKe1.js";function n({label:e,value:t,tone:n}){let i=t===!0?`да`:t===!1?`нет`:String(t??`-`);return(0,r.jsxs)(`div`,{className:`diagnostic-value ${n||``}`,children:[(0,r.jsx)(`span`,{children:e}),(0,r.jsx)(`strong`,{children:i})]})}var r,i=t((()=>{r=e()}));export{i as n,n as t};
