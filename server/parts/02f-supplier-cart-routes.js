@@ -271,29 +271,61 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
       const n = cleanText(name || "").toLowerCase();
       return n.includes("отливант") || /\btest(?:er|ep|or|r)?\b/.test(n) || n.includes("тест");
     };
+    // Relevance score for a name given the token groups:
+    //   +2 per required group that matches
+    //   +1 per optional group that matches (numbers/units)
+    //   +1 bonus when a numeric token matches with BOTH-sides word boundary
+    //      (exact volume: "5ml" scores higher than "1.5ml" or "15ml")
+    const computeRelevance = (name, article) => {
+      if (!tokenGroups || !tokenGroups.length) return 0;
+      const hay = [name, article].join(" ").toLowerCase().replace(/ё/g, "е");
+      let score = 0;
+      for (const group of tokenGroups) {
+        const isOptional = pmTokenGroupIsOptional(group);
+        const matches = group.some((t) => pmTokenMatchesText(hay, t));
+        if (!matches) continue;
+        score += isOptional ? 1 : 2;
+        // Extra +1 when a numeric token is a true standalone number (both boundaries)
+        if (isOptional && group.some((t) => /^\d+$/.test(t))) {
+          const exactMatch = group.some((t) => {
+            if (!/^\d+$/.test(t)) return false;
+            const esc = t.replace(/[-[\]/{}()*+?.\\^$|]/g, "\\$&");
+            return new RegExp(`(?<!\\d)${esc}(?!\\d)`).test(hay);
+          });
+          if (exactMatch) score += 1;
+        }
+      }
+      return score;
+    };
+
     const mapped = items.map((item) => {
       const currency = cleanText(item.currency || "USD");
       const price = Number(item.price || 0);
       const partnerName = cleanText(item.partnerName || "");
+      const name = cleanText(item.nativeName || "");
+      const article = cleanText(item.article || "");
       return {
         id: item.id,
         rowId: cleanText(item.rowId || ""),
-        article: cleanText(item.article || ""),
+        article,
         partnerId: cleanText(item.partnerId || ""),
         supplierName: partnerName,
-        name: cleanText(item.nativeName || ""),
+        name,
         price,
         currency: isInnaSupplierName(partnerName) ? "RUB" : currency,
         priceRub: toRub(price, currency, partnerName),
         isTester: isTesterName(item.nativeName || ""),
         docDate: item.docDate?.toISOString?.()?.slice(0, 10) || null,
+        _relevance: computeRelevance(name, article),
       };
     });
-    // Sort: testers last, then by priceRub ascending (RUB prices already comparable)
+    // Sort: testers/отливанты last; then by relevance desc; then price asc
     mapped.sort((a, b) => {
       if (a.isTester !== b.isTester) return a.isTester ? 1 : -1;
+      if (b._relevance !== a._relevance) return b._relevance - a._relevance;
       return a.priceRub - b.priceRub;
     });
+    mapped.forEach((item) => { delete item._relevance; });
     response.json({
       ok: true,
       total: mapped.length,
