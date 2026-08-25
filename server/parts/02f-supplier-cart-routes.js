@@ -222,7 +222,7 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     if (partnerId) baseWhere.partnerId = partnerId;
 
     const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
-    const minMatchCount = tokenGroups ? (tokenGroups.length <= 2 ? tokenGroups.length : tokenGroups.length - 1) : 0;
+    const minMatchCount = tokenGroups ? pmMinMatchCount(tokenGroups) : 0;
     function buildWhere(groups) {
       if (groups && groups.length) {
         // OR across all tokens — JS post-filter enforces minMatchCount
@@ -244,11 +244,11 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     const sel = { id: true, rowId: true, article: true, partnerId: true, partnerName: true, nativeName: true, price: true, currency: true, docDate: true };
     let items = await prisma.priceMasterSnapshotItem.findMany({ where: buildWhere(tokenGroups), orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }], take: limit * 3, select: sel });
 
-    // Post-filter: require at least minMatchCount token groups to match
+    // Post-filter: apply quality bar (required keywords must match; numbers/units are optional).
     if (tokenGroups && tokenGroups.length >= 2) {
       items = items.filter((item) => {
         const hay = [cleanText(item.nativeName || ""), cleanText(item.article || "")].join(" ");
-        return pmWordMatchScore(hay, tokenGroups) >= minMatchCount;
+        return pmPassesSearchFilter(hay, tokenGroups);
       });
     }
     items = items.slice(0, limit);

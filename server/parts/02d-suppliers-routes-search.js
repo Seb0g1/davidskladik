@@ -26,7 +26,7 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
     // OR-across-tokens approach (matches GingerPM word search): WHERE uses any-word OR,
     // post-filter enforces minimum match count so 1-word false positives are excluded.
     const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
-    const minMatchCount = tokenGroups ? (tokenGroups.length <= 2 ? tokenGroups.length : tokenGroups.length - 1) : 0;
+    const minMatchCount = tokenGroups ? pmMinMatchCount(tokenGroups) : 0;
 
     // Live PriceMaster is the source of truth — query it FIRST so the linking dialog
     // sees every current offer. The snapshot only supplements (it lags syncs and hides
@@ -89,11 +89,11 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
         seenOffer.add(offerKey);
         rows.push(mapPriceMasterSearchResponseRow(row, usdRate));
       }
-      // Post-filter: each row must match at least minMatchCount token groups in name+article
+      // Post-filter: apply quality bar (required keywords must match; numbers/units are optional).
       if (tokenGroups && tokenGroups.length >= 2) {
         rows = rows.filter((row) => {
           const hay = [cleanText(row.name || ""), cleanText(row.article || "")].join(" ");
-          return pmWordMatchScore(hay, tokenGroups) >= minMatchCount;
+          return pmPassesSearchFilter(hay, tokenGroups);
         });
       }
       liveOk = true;

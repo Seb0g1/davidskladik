@@ -65,6 +65,38 @@ function pmWordMatchScore(text, tokenGroups) {
   return tokenGroups.reduce((n, group) => n + (group.some((token) => lower.includes(token)) ? 1 : 0), 0);
 }
 
+// A token group is "optional" if every synonym in it is either a pure number or ≤3 chars.
+// Numbers ("50", "100") and short units ("ml", "мл") are extremely common and would match
+// thousands of unrelated products if required — they contribute to scoring but not to minMatch.
+function pmTokenGroupIsOptional(group) {
+  return group.every((t) => /^\d+$/.test(t) || t.length <= 3);
+}
+
+// Minimum number of REQUIRED token groups that must match for a row to be included.
+// Optional groups (numbers, short units) are excluded from the minimum calculation.
+function pmMinMatchCount(tokenGroups) {
+  if (!tokenGroups || !tokenGroups.length) return 0;
+  const required = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g));
+  if (required.length === 0) return 1;
+  return required.length <= 2 ? required.length : required.length - 1;
+}
+
+// Returns true when text satisfies the search quality bar for the given token groups.
+// Required groups (>3 chars, non-numeric) must all match up to (n-1) — same n-1 rule as before.
+// When ALL groups are optional (short codes, numbers, units) we fall back to "any token matches".
+function pmPassesSearchFilter(text, tokenGroups) {
+  if (!tokenGroups || !tokenGroups.length) return true;
+  const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
+  const required = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g));
+  if (required.length === 0) {
+    // e.g. query "GTT81" or "50 ml" — all short/numeric; just need any token to match
+    return tokenGroups.some((group) => group.some((t) => lower.includes(t)));
+  }
+  const minMatch = required.length <= 2 ? required.length : required.length - 1;
+  const score = required.reduce((n, group) => n + (group.some((t) => lower.includes(t)) ? 1 : 0), 0);
+  return score >= minMatch;
+}
+
 // Build sorted word list from PM row names (for autocomplete).
 function buildPmWordIndex(rows = []) {
   const words = new Set();

@@ -84,7 +84,7 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
   const take = cleanLimit(limit, 150, 500);
 
   const groups = tokenGroups && tokenGroups.length ? tokenGroups : (q ? pmQueryToTokenGroups(q) : null);
-  const minMatchCount = groups ? (groups.length <= 2 ? groups.length : groups.length - 1) : 0;
+  const minMatchCount = groups ? pmMinMatchCount(groups) : 0;
 
   function buildQuery(groupSubset) {
     const and = [{ active: true }];
@@ -117,11 +117,11 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
       take: take * 3,
     });
 
-    // Post-filter: require at least minMatchCount token groups to match in name+article
+    // Post-filter: apply quality bar (required keywords must match; numbers/units are optional).
     if (groups && groups.length >= 2) {
       rows = rows.filter((row) => {
         const hay = [cleanText(row.nativeName || ""), cleanText(row.article || "")].join(" ");
-        return pmWordMatchScore(hay, groups) >= minMatchCount;
+        return pmPassesSearchFilter(hay, groups);
       });
     }
     rows = rows.slice(0, take);

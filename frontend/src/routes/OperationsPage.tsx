@@ -365,38 +365,32 @@ export function SupplierCartPanel() {
             </label>
           </div>
           {debouncedManualOfferId.length >= 2 && (
-            <div className="manual-order-suppliers">
-              <div className="manual-order-suppliers-title">
-                Поставщики{manualSuppliersQuery.isFetching ? <Loader2 className="spin" size={13} /> : null}
-                {manualPartnerId ? <span className="manual-supplier-selected-label"> · выбран</span> : <span className="manual-supplier-auto-label"> · авто</span>}
-              </div>
-              {manualOptions.length === 0 && !manualSuppliersQuery.isFetching && (
-                <div className="muted-hint">{manualSuppliersQuery.data?.skipReason || "Нет поставщиков для этого артикула"}</div>
-              )}
-              <div className="manual-order-supplier-list">
+            <label>
+              Поставщик{manualSuppliersQuery.isFetching ? <Loader2 className="spin" size={13} style={{ marginLeft: 6 }} /> : null}
+              <select
+                value={manualPartnerId ? `${manualPartnerId}|${manualRowId}` : ""}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (!val) { setManualPartnerId(""); setManualRowId(""); }
+                  else { const [pid, ...rest] = val.split("|"); setManualPartnerId(pid); setManualRowId(rest.join("|") || ""); }
+                }}
+              >
+                <option value="">Авто (по приоритету)</option>
                 {manualOptions.map((opt) => {
-                  const isPriority = /сорин|инна/i.test(opt.supplierName);
-                  const isSelected = manualPartnerId === opt.partnerId && (!manualRowId || manualRowId === opt.rowId);
-                  const unavailable = !opt.orderable || opt.blocked || opt.cutoffPassed;
+                  const star = /сорин|инна/i.test(opt.supplierName) ? "★ " : "";
+                  const price = opt.price > 0 ? ` — ${opt.price} ${opt.priceCurrency}` : "";
+                  const status = opt.blocked ? " [блок]" : opt.cutoffPassed ? " [поздно]" : !opt.available ? " [нет]" : "";
                   return (
-                    <button
-                      key={`${opt.partnerId}|${opt.rowId}`}
-                      type="button"
-                      className={`manual-supplier-option${isSelected ? " selected" : ""}${unavailable ? " unavailable" : ""}${isPriority ? " priority" : ""}`}
-                      onClick={() => { setManualPartnerId(isSelected ? "" : opt.partnerId); setManualRowId(isSelected ? "" : opt.rowId); }}
-                      title={opt.blocked ? "Заблокирован" : opt.cutoffPassed ? "Время заказа прошло" : !opt.available ? "Нет наличия" : ""}
-                    >
-                      <span className="supplier-opt-name">{opt.supplierName || opt.partnerId}</span>
-                      {isPriority && <span className="supplier-priority-badge">★</span>}
-                      {opt.price > 0 && <span className="supplier-opt-price">{opt.price} {opt.priceCurrency}</span>}
-                      {opt.blocked && <span className="supplier-opt-tag blocked">блок</span>}
-                      {opt.cutoffPassed && <span className="supplier-opt-tag cutoff">поздно</span>}
-                      {!opt.available && !opt.blocked && <span className="supplier-opt-tag nostock">нет</span>}
-                    </button>
+                    <option key={`${opt.partnerId}|${opt.rowId}`} value={`${opt.partnerId}|${opt.rowId}`} disabled={opt.blocked}>
+                      {star}{opt.supplierName || opt.partnerId}{price}{status}
+                    </option>
                   );
                 })}
-              </div>
-            </div>
+              </select>
+              {manualOptions.length === 0 && !manualSuppliersQuery.isFetching && (
+                <span className="muted-hint" style={{ fontSize: 12 }}>{manualSuppliersQuery.data?.skipReason || "Нет поставщиков для этого артикула"}</span>
+              )}
+            </label>
           )}
           <div className="supplier-cart-actions">
             <button
