@@ -50,11 +50,22 @@ function pmQueryToTokenGroups(query) {
     .map(pmWordExpand);
 }
 
+// Match a single token against lowercased text.
+// Numeric tokens use word-boundary matching so "5" doesn't match "50" or "500".
+function pmTokenMatchesText(lower, token) {
+  if (/^\d+$/.test(token)) {
+    // Must not be preceded or followed by another digit.
+    const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(?<!\\d)${escaped}(?!\\d)`).test(lower);
+  }
+  return lower.includes(token);
+}
+
 // True when text contains at least one term from each group.
 function pmWordMatch(text, tokenGroups) {
   if (!tokenGroups || !tokenGroups.length) return true;
   const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
-  return tokenGroups.every((group) => group.some((token) => lower.includes(token)));
+  return tokenGroups.every((group) => group.some((token) => pmTokenMatchesText(lower, token)));
 }
 
 // Count how many token groups match (0..tokenGroups.length).
@@ -62,7 +73,7 @@ function pmWordMatch(text, tokenGroups) {
 function pmWordMatchScore(text, tokenGroups) {
   if (!tokenGroups || !tokenGroups.length) return 0;
   const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
-  return tokenGroups.reduce((n, group) => n + (group.some((token) => lower.includes(token)) ? 1 : 0), 0);
+  return tokenGroups.reduce((n, group) => n + (group.some((token) => pmTokenMatchesText(lower, token)) ? 1 : 0), 0);
 }
 
 // A token group is "optional" if every synonym in it is either a pure number or ≤3 chars.
@@ -83,17 +94,18 @@ function pmMinMatchCount(tokenGroups) {
 
 // Returns true when text satisfies the search quality bar for the given token groups.
 // Required groups (>3 chars, non-numeric) must all match up to (n-1) — same n-1 rule as before.
-// When ALL groups are optional (short codes, numbers, units) we fall back to "any token matches".
+// When ALL groups are optional (short codes, numbers, units) ALL must match (AND) so that "5 ml"
+// doesn't match products containing only "ml" or only "50 ml" (wrong number boundary).
 function pmPassesSearchFilter(text, tokenGroups) {
   if (!tokenGroups || !tokenGroups.length) return true;
   const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
   const required = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g));
   if (required.length === 0) {
-    // e.g. query "GTT81" or "50 ml" — all short/numeric; just need any token to match
-    return tokenGroups.some((group) => group.some((t) => lower.includes(t)));
+    // e.g. "5 ml" or "GTT81" — all short/numeric; ALL token groups must match (AND).
+    return tokenGroups.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));
   }
   const minMatch = required.length <= 2 ? required.length : required.length - 1;
-  const score = required.reduce((n, group) => n + (group.some((t) => lower.includes(t)) ? 1 : 0), 0);
+  const score = required.reduce((n, group) => n + (group.some((t) => pmTokenMatchesText(lower, t)) ? 1 : 0), 0);
   return score >= minMatch;
 }
 

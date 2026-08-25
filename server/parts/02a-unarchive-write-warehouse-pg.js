@@ -15,7 +15,9 @@ async function writeWarehouseToPostgresInner(prisma, payload) {
   await loadWarehousePgWrittenCache();
   const products = Array.isArray(payload.products) ? payload.products : [];
   const suppliers = Array.isArray(payload.suppliers) ? payload.suppliers : [];
-  const chunkSize = Math.max(10, Math.min(100, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 50) || 50));
+  // Cap at 25 so that each chunk of product writes is shorter (~2-3 s) and setImmediate
+  // yields between chunks keep the event loop responsive (prevents BullMQ job stalls).
+  const chunkSize = Math.max(5, Math.min(25, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 25) || 25));
   // Стриминговый фильтр без pre-allocation массива changedProducts:
   // при дельте 8-11k предварительная фильтрация держала 400-800 МБ в памяти
   // параллельно с полным каталогом reconciler'а → heap 4+ GB → GC-паузы 22 с.

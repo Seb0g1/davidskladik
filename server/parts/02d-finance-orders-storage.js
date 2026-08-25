@@ -62,56 +62,55 @@ async function upsertFinanceOrderFromPickingRow(row = {}, request = null) {
   });
   if (shouldUsePostgresStorage()) {
     try {
-      const row = await getPrisma().financeOrder.upsert({
-        where: { id: financeOrder.id },
-        create: {
-          id: financeOrder.id,
-          marketplace: financeOrder.marketplace || null,
-          target: financeOrder.target || null,
-          orderId: financeOrder.orderId,
-          postingNumber: financeOrder.postingNumber || null,
-          offerId: financeOrder.offerId || null,
-          productName: financeOrder.productName || null,
-          quantity: financeOrder.quantity,
-          saleAmount: financeOrder.saleAmount,
-          payoutAmount: financeOrder.payoutAmount,
-          purchaseCost: financeOrder.purchaseCost,
-          profitAmount: financeOrderProfit(financeOrder),
-          supplierName: financeOrder.supplierName || null,
-          partnerId: financeOrder.partnerId || null,
-          source: financeOrder.source,
-          status: financeOrder.status,
-          soldAt: toDateOrNull(financeOrder.soldAt),
-          receivedAt: toDateOrNull(financeOrder.receivedAt),
-          raw: financeOrder.raw,
-        },
-        update: {
-          marketplace: financeOrder.marketplace || null,
-          target: financeOrder.target || null,
-          orderId: financeOrder.orderId,
-          postingNumber: financeOrder.postingNumber || null,
-          offerId: financeOrder.offerId || null,
-          productName: financeOrder.productName || null,
-          quantity: financeOrder.quantity,
-          saleAmount: financeOrder.saleAmount,
-          payoutAmount: financeOrder.payoutAmount,
-          purchaseCost: financeOrder.purchaseCost,
-          profitAmount: financeOrderProfit(financeOrder),
-          supplierName: financeOrder.supplierName || null,
-          partnerId: financeOrder.partnerId || null,
-          source: financeOrder.source,
-          status: financeOrder.status,
-          soldAt: toDateOrNull(financeOrder.soldAt),
-          receivedAt: toDateOrNull(financeOrder.receivedAt),
-          raw: financeOrder.raw,
-        },
-      });
+      const updatePayload = {
+        marketplace: financeOrder.marketplace || null,
+        target: financeOrder.target || null,
+        orderId: financeOrder.orderId,
+        postingNumber: financeOrder.postingNumber || null,
+        offerId: financeOrder.offerId || null,
+        productName: financeOrder.productName || null,
+        quantity: financeOrder.quantity,
+        saleAmount: financeOrder.saleAmount,
+        payoutAmount: financeOrder.payoutAmount,
+        purchaseCost: financeOrder.purchaseCost,
+        profitAmount: financeOrderProfit(financeOrder),
+        supplierName: financeOrder.supplierName || null,
+        partnerId: financeOrder.partnerId || null,
+        source: financeOrder.source,
+        status: financeOrder.status,
+        soldAt: toDateOrNull(financeOrder.soldAt),
+        receivedAt: toDateOrNull(financeOrder.receivedAt),
+        raw: financeOrder.raw,
+      };
+      let dbRow;
+      try {
+        dbRow = await getPrisma().financeOrder.upsert({
+          where: { id: financeOrder.id },
+          create: { id: financeOrder.id, ...updatePayload },
+          update: updatePayload,
+        });
+      } catch (upsertError) {
+        if (upsertError?.code !== "P2002") throw upsertError;
+        // Same logical order exists with a different id (e.g. key changed or race) —
+        // find by composite unique key and update in-place.
+        const existing = await getPrisma().financeOrder.findFirst({
+          where: {
+            marketplace: financeOrder.marketplace || null,
+            target: financeOrder.target || null,
+            orderId: financeOrder.orderId,
+            offerId: financeOrder.offerId || null,
+          },
+          select: { id: true },
+        });
+        if (!existing) throw upsertError;
+        dbRow = await getPrisma().financeOrder.update({ where: { id: existing.id }, data: updatePayload });
+      }
       await appendAudit(request || { session: { username: "system", role: "admin" } }, "finance.order.purchase_from_picking", {
         entityType: "finance_order",
         entityId: financeOrder.id,
         newValue: financeOrder,
       }).catch((error) => logger.warn("finance picking audit failed", { detail: error?.message || String(error) }));
-      return financeOrderFromPostgres(row);
+      return financeOrderFromPostgres(dbRow);
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
       logger.warn("finance picking postgres write failed, using JSON fallback", { detail: error?.message || String(error) });
