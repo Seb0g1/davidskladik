@@ -86,11 +86,15 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
   const groups = tokenGroups && tokenGroups.length ? tokenGroups : (q ? pmQueryToTokenGroups(q) : null);
   const minMatchCount = groups ? pmMinMatchCount(groups) : 0;
 
-  function buildQuery(groupSubset) {
+  function buildQuery(allGroups) {
     const and = [{ active: true }];
-    if (groupSubset && groupSubset.length) {
-      // OR across all tokens from all groups — JS post-filter enforces minimum match count
-      const orTerms = groupSubset.flatMap((group) =>
+    if (allGroups && allGroups.length) {
+      // Use only REQUIRED groups (len>3, non-numeric) for SQL — optional groups like "50"/"ml"
+      // are so broad they drown out primary-keyword candidates under ORDER BY + LIMIT.
+      // JS post-filter enforces optional groups with word-boundary precision after fetch.
+      const sqlGroups = allGroups.filter((g) => !pmTokenGroupIsOptional(g));
+      const activeGroups = sqlGroups.length ? sqlGroups : allGroups;
+      const orTerms = activeGroups.flatMap((group) =>
         group.flatMap((synonym) => [
           { article: { contains: synonym, mode: "insensitive" } },
           { nativeName: { contains: synonym, mode: "insensitive" } },

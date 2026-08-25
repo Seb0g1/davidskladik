@@ -6,7 +6,7 @@ import { fetchJson, mutationBody, patchBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { PmChipInput } from "../components/PmChipInput";
 import { SupplierAltPicker, type SupplierAltOption } from "../components/SupplierAltPicker";
-import { pmSearchStore } from "../lib/pmSearchStore";
+import { getPmSearchStore } from "../lib/pmSearchStore";
 import { SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { SupplierCartPanel } from "./OperationsPage";
 import { compactDate, errorMessage } from "../lib/common";
@@ -602,6 +602,7 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
       <div className="pm-search-input-wrap">
         <Search size={15} className="pm-search-icon" />
         <PmChipInput
+          storeKey="supplier-cart"
           onQueryChange={(q) => setSearchQ(q)}
           placeholder="Chanel No5, Dior Sauvage, артикул…"
           inputClassName="pm-search-input"
@@ -609,7 +610,7 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
         {isSearching ? (
           <Loader2 className="spin pm-search-spinner" size={14} />
         ) : searchQ ? (
-          <button className="pm-search-clear" type="button" onClick={() => { setSearchQ(""); setActiveQ(""); pmSearchStore.clear(); }}>
+          <button className="pm-search-clear" type="button" onClick={() => { setSearchQ(""); setActiveQ(""); getPmSearchStore("supplier-cart").clear(); }}>
             <X size={14} />
           </button>
         ) : null}

@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { fetchJson } from "../api";
 import { PmWordSuggestSchema } from "../types";
-import { pmSearchStore, usePmChips } from "../lib/pmSearchStore";
+import { getPmSearchStore, usePmChips } from "../lib/pmSearchStore";
 
 const MIN_PREFIX_LEN = 1;
 
@@ -12,10 +12,12 @@ interface PmChipInputProps {
   placeholder?: string;
   disabled?: boolean;
   inputClassName?: string;
+  storeKey?: string;
 }
 
-export function PmChipInput({ onQueryChange, placeholder = "Введите слово…", disabled, inputClassName }: PmChipInputProps) {
-  const chips = usePmChips();
+export function PmChipInput({ onQueryChange, placeholder = "Введите слово…", disabled, inputClassName, storeKey = "global" }: PmChipInputProps) {
+  const store = getPmSearchStore(storeKey);
+  const chips = usePmChips(storeKey);
   const [inputVal, setInputVal] = useState("");
   const [focused, setFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -36,13 +38,13 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
   const commitWord = (word: string) => {
     const words = word.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return;
-    for (const w of words) pmSearchStore.addChip(w);
+    for (const w of words) store.addChip(w);
     setInputVal("");
     inputRef.current?.focus();
   };
 
   const removeChip = (idx: number) => {
-    pmSearchStore.removeChip(idx);
+    store.removeChip(idx);
     inputRef.current?.focus();
   };
 
@@ -97,7 +99,7 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
           className="pm-chip-clear-all"
           tabIndex={-1}
           title="Сбросить все фильтры"
-          onMouseDown={(e) => { e.preventDefault(); pmSearchStore.clear(); inputRef.current?.focus(); }}
+          onMouseDown={(e) => { e.preventDefault(); store.clear(); inputRef.current?.focus(); }}
         >
           <X size={12} />
         </button>

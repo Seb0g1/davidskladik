@@ -225,8 +225,11 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     const minMatchCount = tokenGroups ? pmMinMatchCount(tokenGroups) : 0;
     function buildWhere(groups) {
       if (groups && groups.length) {
-        // OR across all tokens — JS post-filter enforces minMatchCount
-        const orTerms = groups.flatMap((group) => group.flatMap((synonym) => [
+        // Only required groups in SQL — optional (numbers, "ml") are so broad they flood
+        // the LIMIT window and bury primary-keyword items. JS post-filter handles them.
+        const sqlGroups = groups.filter((g) => !pmTokenGroupIsOptional(g));
+        const activeGroups = sqlGroups.length ? sqlGroups : groups;
+        const orTerms = activeGroups.flatMap((group) => group.flatMap((synonym) => [
           { nativeName: { contains: synonym, mode: "insensitive" } },
           { article: { contains: synonym, mode: "insensitive" } },
         ]));

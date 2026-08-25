@@ -41,13 +41,18 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
       if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`);
       if (q) {
         if (tokenGroups && tokenGroups.length) {
-          // Single OR condition across all token synonyms — post-filter enforces minMatchCount
-          const nameConds = tokenGroups.flatMap((group) => group.map(() => "r.NativeName LIKE ?"));
-          const extraConds = tokenGroups[0].flatMap(() => ["r.NativeID LIKE ?", "r.BarCode LIKE ?", "p.PartnerName LIKE ?"]);
+          // Use only REQUIRED token groups for SQL (non-optional, len>3, non-numeric).
+          // Optional groups (numbers, short units like "ml") are so common that including
+          // them in the SQL OR-list drowns out the primary-keyword candidates under LIMIT.
+          // JS post-filter enforces optional groups with word-boundary precision after fetch.
+          const sqlGroups = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g));
+          const activeGroups = sqlGroups.length ? sqlGroups : tokenGroups; // fallback: all-optional query
+          const nameConds = activeGroups.flatMap((group) => group.map(() => "r.NativeName LIKE ?"));
+          const extraConds = activeGroups[0].flatMap(() => ["r.NativeID LIKE ?", "r.BarCode LIKE ?", "p.PartnerName LIKE ?"]);
           conditions.push(`(${[...nameConds, ...extraConds].join(" OR ")})`);
           params.push(
-            ...tokenGroups.flatMap((group) => group.map(likeSearch)),
-            ...tokenGroups[0].flatMap((t) => [likeSearch(t), likeSearch(t), likeSearch(t)]),
+            ...activeGroups.flatMap((group) => group.map(likeSearch)),
+            ...activeGroups[0].flatMap((t) => [likeSearch(t), likeSearch(t), likeSearch(t)]),
           );
         } else {
           conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");

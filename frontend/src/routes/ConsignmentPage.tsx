@@ -591,6 +591,7 @@ export function ConsignmentPage() {
         </div>
         <div className="settings-form-row" style={{ position: "relative" }}>
           <PmChipInput
+            storeKey="consignment"
             onQueryChange={(q) => { setPmQuery(q); if (q.trim()) setPmOpen(true); }}
             placeholder="Поиск по базе (артикул или наименование)"
           />
