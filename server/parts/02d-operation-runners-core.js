@@ -114,16 +114,18 @@ async function runRestoreYandexMarkupsOperation(payload = {}) {
   // Step 2: get articles from links table for these products
   const productIds = productRows.map((r) => String(r.id));
   const linkRows = await prisma.$queryRawUnsafe(`
-    SELECT product_id AS "productId", supplier_article AS article
+    SELECT product_id AS "productId", supplier_article AS article, supplier_name AS "supplierName"
     FROM product_links
     WHERE product_id = ANY($1) AND supplier_article IS NOT NULL AND supplier_article != ''
   `, productIds);
-  // Map productId → [articles]
+  // Map productId → [articles]; also track which articles are from Инна (RUB-native)
   const articlesByProduct = new Map();
+  const innaArticles = new Set(); // articles linked to Инна — prices in PM are in RUB, not USD
   for (const link of linkRows) {
     const pid = String(link.productId);
     if (!articlesByProduct.has(pid)) articlesByProduct.set(pid, []);
     articlesByProduct.get(pid).push(cleanText(link.article));
+    if (isInnaSupplierName(link.supplierName || "")) innaArticles.add(cleanText(link.article));
   }
   // Also check raw.links fallback (for Yandex products linked via raw JSON only)
   for (const row of productRows) {
@@ -205,7 +207,8 @@ async function runRestoreYandexMarkupsOperation(payload = {}) {
     for (const article of articles) {
       const pmPrice = pmPriceByArticle.get(article);
       if (!pmPrice || pmPrice <= 0) continue;
-      const rubEquiv = pmPrice * usdRate; // PM prices are in USD
+      // Инна prices in PM are in RUB — use as-is. All other suppliers price in USD.
+      const rubEquiv = innaArticles.has(article) ? pmPrice : pmPrice * usdRate;
       if (bestPmRub === null || rubEquiv < bestPmRub) bestPmRub = rubEquiv;
     }
 
