@@ -34,9 +34,9 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
   });
 
   const commitWord = (word: string) => {
-    const w = word.trim().toLowerCase();
-    if (!w) return;
-    pmSearchStore.addChip(w);
+    const words = word.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return;
+    for (const w of words) pmSearchStore.addChip(w);
     setInputVal("");
     inputRef.current?.focus();
   };
