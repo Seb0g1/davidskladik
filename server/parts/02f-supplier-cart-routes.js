@@ -254,9 +254,13 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     items = items.slice(0, limit);
 
     const usdRate = await getUsdRate();
-    const toRub = (price, currency) => {
+    // Инна prices in PM snapshot are stored with currency="USD" (snapshot has no managed-supplier
+    // awareness), but they are actually in RUB — detect by partner name so sorting is correct.
+    const toRub = (price, currency, partnerName) => {
       const p = Number(price || 0);
-      return cleanText(currency || "USD").toUpperCase() === "RUB" ? p : p * usdRate;
+      if (cleanText(currency || "USD").toUpperCase() === "RUB") return p;
+      if (isInnaSupplierName(partnerName || "")) return p;
+      return p * usdRate;
     };
     const isTesterName = (name) => {
       const n = cleanText(name || "").toLowerCase();
@@ -265,16 +269,17 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     const mapped = items.map((item) => {
       const currency = cleanText(item.currency || "USD");
       const price = Number(item.price || 0);
+      const partnerName = cleanText(item.partnerName || "");
       return {
         id: item.id,
         rowId: cleanText(item.rowId || ""),
         article: cleanText(item.article || ""),
         partnerId: cleanText(item.partnerId || ""),
-        supplierName: cleanText(item.partnerName || ""),
+        supplierName: partnerName,
         name: cleanText(item.nativeName || ""),
         price,
-        currency,
-        priceRub: toRub(price, currency),
+        currency: isInnaSupplierName(partnerName) ? "RUB" : currency,
+        priceRub: toRub(price, currency, partnerName),
         isTester: isTesterName(item.nativeName || ""),
         docDate: item.docDate?.toISOString?.()?.slice(0, 10) || null,
       };
