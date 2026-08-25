@@ -48,11 +48,10 @@ function normalizeManagedSupplier(input = {}) {
   const stopped = Boolean(input.stopped);
   const name = cleanText(input.name);
   const priceCurrencyInput = cleanText(input.priceCurrency || input.price_currency || input.currency).toUpperCase();
-  const priceCurrency = priceCurrencyInput === "RUB" || priceCurrencyInput === "RUR"
+  // Инна always prices in RUB — name detection overrides explicit "USD" saved by form default.
+  const priceCurrency = priceCurrencyInput === "RUB" || priceCurrencyInput === "RUR" || isInnaSupplierName(name)
     ? "RUB"
-    : priceCurrencyInput === "USD"
-      ? "USD"
-      : (isInnaSupplierName(name) ? "RUB" : "USD");
+    : "USD";
   const pricingMode = normalizeSupplierPricingMode(input);
   const raw = input.raw && typeof input.raw === "object" && !Array.isArray(input.raw) ? input.raw : {};
   return {

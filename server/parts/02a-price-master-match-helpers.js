@@ -182,7 +182,9 @@ function isInnaSupplierName(partnerName = "") {
 function managedSupplierPriceCurrency(supplier = null, row = {}, link = {}) {
   const explicit = cleanText(supplier?.priceCurrency || supplier?.defaultCurrency).toUpperCase();
   if (explicit === "RUB" || explicit === "RUR") return "RUB";
-  if (explicit === "USD") return "USD";
+  // Check name before falling back to explicit "USD" — Инна's supplier record was created
+  // with the form default "USD" which overrode name-based detection and caused 850 RUB to
+  // be treated as $850 USD in markup rule lookup.
   const partnerName = normalizeSupplierName(
     supplier?.name
     || supplier?.partnerName
@@ -192,7 +194,9 @@ function managedSupplierPriceCurrency(supplier = null, row = {}, link = {}) {
     || link.supplierName
     || "",
   );
-  return isInnaSupplierName(partnerName) ? "RUB" : "USD";
+  if (isInnaSupplierName(partnerName)) return "RUB";
+  if (explicit === "USD") return "USD";
+  return "USD";
 }
 
 function supplierUsesRubPriceMasterPricing(supplier = null, row = {}) {
