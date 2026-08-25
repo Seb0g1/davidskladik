@@ -1,16 +1,19 @@
 async function confirmOzonPostingPackaged(postingNumber, products = [], account = null) {
   if (!postingNumber || !products.length) return null;
   try {
-    const result = await ozonRequest("/v1/posting/fbs/package", {
+    const result = await ozonRequest("/v4/posting/fbs/ship", {
       posting_number: postingNumber,
       packages: [{ products }],
     }, account);
-    logger.info("ozon posting packaged", { postingNumber, products: products.length });
+    logger.info("ozon posting shipped to awaiting_deliver", { postingNumber, products: products.length, accountId: account?.id });
     return { ok: true, postingNumber, result };
   } catch (error) {
     logger.warn("ozon posting package confirmation failed", {
       postingNumber,
+      accountId: account?.id,
+      products,
       detail: error?.message || String(error),
+      ozonResponse: error?.ozon || null,
     });
     return { ok: false, postingNumber, error: error?.message || String(error) };
   }
@@ -78,7 +81,13 @@ async function confirmMarketplaceOrdersAfterInsert(inserted = []) {
   // Ozon: сгруппировать не-экспресс строки по postingNumber, подтвердить упаковку с правильным кабинетом
   const byPosting = new Map();
   for (const row of inserted) {
-    if (row.marketplace !== "ozon" || row.isExpress || !row.postingNumber || !row.ozonProductId) continue;
+    if (row.marketplace !== "ozon" || row.isExpress || !row.postingNumber || !row.ozonProductId) {
+      if (row.marketplace === "ozon") {
+        const skipReason = row.isExpress ? "express" : !row.postingNumber ? "no_posting_number" : "no_ozon_product_id";
+        logger.warn("ozon posting confirm skipped", { postingNumber: row.postingNumber, ozonProductId: row.ozonProductId, isExpress: row.isExpress, offerId: row.offerId, reason: skipReason });
+      }
+      continue;
+    }
     if (!byPosting.has(row.postingNumber)) byPosting.set(row.postingNumber, { products: [], accountId: cleanText(row.accountId || "") });
     byPosting.get(row.postingNumber).products.push({
       product_id: Number(row.ozonProductId),

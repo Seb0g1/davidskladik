@@ -18,6 +18,17 @@ function financeOrderIdForPicking(row = {}) {
   return `picking:${crypto.createHash("sha1").update(key || crypto.randomUUID()).digest("hex")}`;
 }
 
+function resolvePickingRowCurrency(row = {}) {
+  const explicit = cleanText(row.priceCurrency || row.currency || "").toUpperCase();
+  if (explicit === "RUB" || explicit === "RUR") return "RUB";
+  if (explicit === "USD") {
+    // Inna's PM prices are in RUB; old rows were stored with the default priceCurrency="USD"
+    const supplierName = normalizeSupplierName(row.supplierName || row.partnerName || "");
+    if (isInnaSupplierName(supplierName)) return "RUB";
+  }
+  return explicit || "USD";
+}
+
 async function financePurchaseCostRubFromPicking(row = {}) {
   // Picker may enter actual paid amount in RUB (overrides PM price calculation)
   const pricePaidRub = normalizeFinanceMoney(row.pricePaidRub, 0);
@@ -25,7 +36,10 @@ async function financePurchaseCostRubFromPicking(row = {}) {
   const quantity = Math.max(1, Math.round(Number(row.quantity || 1) || 1));
   const price = normalizeFinanceMoney(row.price, 0);
   if (!(price > 0)) return null;
-  const currency = cleanText(row.priceCurrency || row.currency || "USD").toUpperCase();
+  // resolvePickingRowCurrency cross-checks with managed supplier maps so that
+  // RUB suppliers (e.g. Inna) aren't inflated by the USD→RUB rate even when
+  // old picking rows were stored with the default priceCurrency="USD".
+  const currency = resolvePickingRowCurrency(row);
   if (currency === "RUB" || currency === "RUR") return normalizeFinanceMoney(price * quantity, 0);
   const ratePayload = await getUsdRate().catch(() => ({ rate: Number(process.env.DEFAULT_USD_RATE || 95) || 95 }));
   const usdRate = Number(ratePayload?.rate || ratePayload || process.env.DEFAULT_USD_RATE || 95) || 95;

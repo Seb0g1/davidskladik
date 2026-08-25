@@ -302,40 +302,43 @@ async function restoreStocksOnMarketplaces(products = []) {
     byTarget.get(key).push(product);
   }
 
+  // Ozon: mirror price-send — iterate all accounts, match by target so that
+  // target="ozon" products reach every Ozon account (including secondary accounts).
+  const allOzonItems = [...byTarget.entries()]
+    .filter(([key]) => key.startsWith("ozon:"))
+    .flatMap(([, items]) => items);
+  for (const account of getOzonAccounts()) {
+    const accountItems = allOzonItems.filter((item) => matchesOzonTarget(item.target, account.id));
+    if (!accountItems.length) continue;
+    for (const chunk of chunkArray(accountItems, 100)) {
+      const payload = {
+        stocks: await buildOzonStockPayloadItems(
+          chunk,
+          account,
+          (item) => Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
+        ),
+      };
+      if (!payload.stocks.length) continue;
+      try {
+        for (const stockChunk of chunkArray(payload.stocks, 100)) {
+          await ozonRequest("/v2/products/stocks", { stocks: stockChunk }, account);
+        }
+        actions.push(...chunk.map((item) => ({
+          id: item.id,
+          type: "restore_stock",
+          stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
+          ok: true,
+        })));
+      } catch (error) {
+        const detail = error?.message || "restore_stock_failed";
+        actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: false, error: detail })));
+      }
+    }
+  }
+
   for (const [key, items] of byTarget.entries()) {
     const [marketplace, target] = key.split(":");
-    if (marketplace === "ozon") {
-      const account = getOzonAccountByTarget(target);
-      if (!account) {
-        actions.push(...items.map((item) => ({ id: item.id, type: "restore_stock", target, ok: false, error: "ozon_account_not_found" })));
-        continue;
-      }
-      for (const chunk of chunkArray(items, 100)) {
-        const payload = {
-          stocks: await buildOzonStockPayloadItems(
-            chunk,
-            account,
-            (item) => Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
-          ),
-        };
-        if (!payload.stocks.length) continue;
-        try {
-          for (const stockChunk of chunkArray(payload.stocks, 100)) {
-            await ozonRequest("/v2/products/stocks", { stocks: stockChunk }, account);
-          }
-          actions.push(...chunk.map((item) => ({
-            id: item.id,
-            type: "restore_stock",
-            stock: Math.max(1, Math.round(Number(item.targetStock || item.marketplaceState?.stock || 1))),
-            ok: true,
-          })));
-        } catch (error) {
-          const detail = error?.message || "restore_stock_failed";
-          actions.push(...chunk.map((item) => ({ id: item.id, type: "restore_stock", ok: false, error: detail })));
-        }
-      }
-      continue;
-    }
+    if (marketplace === "ozon") continue; // handled above
     if (marketplace === "yandex") {
       const shop = getYandexShopByTarget(target);
       if (!shop) {

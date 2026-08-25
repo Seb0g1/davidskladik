@@ -43,6 +43,7 @@ export const SupplierSchema = z.object({
 export const SuppliersResponseSchema = z.object({
   suppliers: z.array(SupplierSchema).optional().default([]),
   supplierSync: z.record(z.string(), z.unknown()).optional().default({}),
+  usdRate: z.number().optional().default(95),
 }).passthrough();
 
 export const AiImageSchema = z.object({
@@ -783,6 +784,7 @@ export const SupplierPickingListSchema = z.object({
   ok: z.boolean().optional(),
   updatedAt: z.coerce.string().optional().nullable(),
   total: z.number().optional().default(0),
+  usdRate: z.number().optional().default(95),
   rows: z.array(SupplierPickingRowSchema).optional().default([]),
   suppliers: z.array(z.string()).optional().default([]),
   supplierLedger: z.record(z.string(), SupplierLedgerSummarySchema).optional().default({}),

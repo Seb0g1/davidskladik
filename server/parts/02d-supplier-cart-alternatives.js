@@ -51,16 +51,27 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
         stockOnly,
         blocked: blockedPartnerIds.has(partnerId.toLowerCase()),
         cutoffPassed: supplierOrderCutoffPassed(row.orderCutoffTime, now),
-        score: supplierCartOrderScore(row, now),
+        score: supplierCartOrderScore(row, usdRate, now),
         orderable: available && (stockOnly || price > 0),
       });
     }
   }
+  const toUsd = (opt) => {
+    const p = Number(opt.price || Number.POSITIVE_INFINITY);
+    return opt.priceCurrency === "RUB" ? p / usdRate : p;
+  };
   const usableRank = (option) => (option.orderable && !option.blocked && !option.cutoffPassed && !option.stockOnly ? 0 : (option.orderable && !option.blocked ? 1 : 2));
+  const priorityRank = (option) => {
+    const name = cleanText(option.supplierName || "");
+    if (/сорин/i.test(name)) return 0;
+    if (/инна/i.test(name)) return 1;
+    return 2;
+  };
   options.sort((left, right) =>
     usableRank(left) - usableRank(right)
+    || priorityRank(left) - priorityRank(right)
     || left.score - right.score
-    || (left.price || Number.POSITIVE_INFINITY) - (right.price || Number.POSITIVE_INFINITY)
+    || toUsd(left) - toUsd(right)
     || left.supplierName.localeCompare(right.supplierName, "ru", { sensitivity: "base" }),
   );
   return { options, blockedPartnerIds: [...blockedPartnerIds] };
@@ -168,16 +179,48 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
 
     const now = new Date();
     const username = requestUsername(request);
-    // 1) Старый поставщик считается «не было»: блок по SKU + заказ снова свободен в автокорзине.
+
+    // Find all sibling unit rows that share the same PM RequestRow (requestRowId).
+    // When an order has quantity>1, createSupplierPickingRows splits it into :u0, :u1, …
+    // — all pointing to the same PM row. We must replace them all at once so none are
+    // left as orphans pointing to the deleted PM row.
+    const siblingRows = [];
+    if (current.requestRowId) {
+      for (const [sibKey, sibData] of Object.entries(state.rows)) {
+        if (sibKey === key) continue;
+        const sib = normalizeSupplierPickingRow(sibData);
+        if (
+          cleanText(sib.requestRowId) === cleanText(current.requestRowId)
+          && ["open", "picked"].includes(sib.status)
+        ) {
+          siblingRows.push(sib);
+        }
+      }
+    }
+    // Total units = current + all open siblings sharing the same PM row.
+    const totalQuantity = [current, ...siblingRows].reduce((sum, r) => sum + Math.max(1, Number(r.quantity || 1)), 0);
+
+    // 1) Mark current and all siblings as «не было»: block old supplier + free cart slot.
+    const nextRetryAt = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString();
     const missingRow = normalizeSupplierPickingRow({
       ...current,
       status: "missing",
       missingBy: current.missingBy || username,
       missingAt: current.missingAt || now.toISOString(),
       missingReason: current.missingReason || cleanText(request.body?.reason || "supplier_replaced"),
-      nextRetryAt: current.nextRetryAt || new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      nextRetryAt: current.nextRetryAt || nextRetryAt,
     });
     state.rows[key] = missingRow;
+    for (const sib of siblingRows) {
+      state.rows[sib.key] = normalizeSupplierPickingRow({
+        ...sib,
+        status: "missing",
+        missingBy: username,
+        missingAt: now.toISOString(),
+        missingReason: "supplier_replaced_sibling",
+        nextRetryAt,
+      });
+    }
     await writeSupplierPickingState(state);
     const cartState = await readSupplierCartState();
     if (current.offerId && current.partnerId) {
@@ -196,9 +239,14 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
     const sourceCartKey = supplierCartSourceKeyForPickingRow(current);
     if (cartState.processed?.[sourceCartKey]) delete cartState.processed[sourceCartKey];
     if (cartState.processed?.[current.key]) delete cartState.processed[current.key];
+    for (const sib of siblingRows) {
+      const sibCartKey = supplierCartSourceKeyForPickingRow(sib);
+      if (cartState.processed?.[sibCartKey]) delete cartState.processed[sibCartKey];
+      if (cartState.processed?.[sib.key]) delete cartState.processed[sib.key];
+    }
     await writeSupplierCartState(cartState);
 
-    // 2) Убираем старую заявку из корзины PriceMaster, чтобы не задвоить заказ.
+    // 2) Убираем старую PM-строку (одна на все unit-ряды).
     let priceMasterCleanup = null;
     if (current.requestRowId) {
       priceMasterCleanup = await deleteSupplierCartPriceMasterRow(current).catch((error) => {
@@ -207,8 +255,9 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
       });
     }
 
-    // 3) Новая заявка новому поставщику. key = current.key, чтобы createSupplierPickingRows
-    // создал retry-строку и пометил текущую как «перезаказано» (replacementFor/replacementKey).
+    // 3) Новая заявка новому поставщику — ОДНА строка с суммарным quantity всех unit-рядов.
+    // key = current.key, чтобы createSupplierPickingRows создал retry-строку и пометил
+    // текущую как «перезаказано» (replacementFor/replacementKey).
     const newCartRow = normalizeSupplierCartPreviewRow({
       key: current.key,
       marketplace: current.marketplace,
@@ -218,7 +267,7 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
       itemId: current.offerId,
       offerId: current.offerId,
       productName: current.productName,
-      quantity: current.quantity,
+      quantity: totalQuantity,
       warehouseProductId: current.warehouseProductId,
       supplierName: chosen.supplierName,
       partnerId: chosen.partnerId,
@@ -260,6 +309,8 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
         newPickingKey: newPickingRow?.key || "",
         docIds: commit.docIds,
         priceMasterCleanup,
+        siblingKeysReplaced: siblingRows.map((s) => s.key),
+        totalQuantity,
       },
     });
     response.json({
@@ -271,6 +322,8 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
       docIds: commit.docIds,
       verifiedInPriceMaster: Boolean(commit.verification?.ok),
       priceMasterCleanup,
+      siblingKeysReplaced: siblingRows.map((s) => s.key),
+      totalQuantity,
     });
   } catch (error) {
     next(error);

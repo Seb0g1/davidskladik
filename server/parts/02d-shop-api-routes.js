@@ -1,14 +1,15 @@
 // ─── Magic Vibes Shop API ──────────────────────────────────────────────────
 const _shopCrypto = require("crypto");
+const { ipKeyGenerator: _shopIpKeyGenerator } = require("express-rate-limit");
 
 const shopLoginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => {
+  keyGenerator: (req, res) => {
     const email = cleanText((req.body?.email || "")).toLowerCase().slice(0, 100);
-    return `${req.ip}:${email}`;
+    return `${_shopIpKeyGenerator(req, res)}:${email}`;
   },
   handler: (_req, res) => res.status(429).json({ error: "Слишком много попыток. Попробуйте через 15 минут." }),
 });
@@ -155,7 +156,7 @@ function nanoid8() {
 
 // ── price calculation ──────────────────────────────────────────────────────
 
-async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page, pageSize }) {
+async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page, pageSize, createdAfter }) {
   const prisma = getPrisma();
   if (!prisma) return { products: [], total: 0, brands: [] };
 
@@ -176,6 +177,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     NOT: { status: "deleted" },
     currentPrice: { gt: 0 },
     links: { some: {} },
+    ...(createdAfter ? { createdAt: { gte: createdAfter } } : {}),
   };
   if (q) {
     where.OR = [
@@ -484,6 +486,16 @@ app.get("/api/shop/auto-categories", shopCors, async (_request, response, next) 
   } catch (error) { next(error); }
 });
 
+app.get("/api/shop/new", shopCors, async (request, response, next) => {
+  try {
+    const days = Math.max(1, Math.min(90, Number(request.query.days || 14) || 14));
+    const pageSize = Math.max(1, Math.min(96, Number(request.query.pageSize || 24) || 24));
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const result = await buildShopProductsFromDb({ q: "", brand: "", category: "", inStock: false, sort: "name", page: 1, pageSize, createdAfter: cutoff });
+    response.json({ ok: true, ...result, days });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/shop/brands", shopCors, async (_request, response, next) => {
   try {
     const prisma = getPrisma();
@@ -567,8 +579,8 @@ async function _fetchOzonPvzDetails(mapPointIds = []) {
   const account = getOzonAccountByTarget("ozon");
   if (!account?.clientId || !account?.apiKey) return [];
   const results = [];
-  for (let i = 0; i < mapPointIds.length; i += 80) {
-    const batch = mapPointIds.slice(i, i + 80);
+  for (let i = 0; i < mapPointIds.length; i += 100) {
+    const batch = mapPointIds.slice(i, i + 100);
     try {
       const res = await fetch("https://api-seller.ozon.ru/v1/delivery/point/info", {
         method: "POST",
@@ -645,7 +657,7 @@ app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
     let nearby;
 
     if (hasCoords) {
-      // Геолокация: 80 ближайших к пользователю в радиусе ~30 км
+      // Геолокация: 200 ближайших к пользователю в радиусе ~30 км
       const cLat = latParam, cLng = lngParam;
       const r = 0.27;
       const rLng = r / Math.max(0.3, Math.cos((cLat * Math.PI) / 180));
@@ -654,7 +666,7 @@ app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
         .filter(p => p.lat && p.lng && Math.abs(p.lat - cLat) < r && Math.abs(p.lng - cLng) < rLng)
         .map(p => ({ ...p, dist: Math.pow(p.lat - cLat, 2) + Math.pow((p.lng - cLng) * cosLat, 2) }))
         .sort((a, b) => a.dist - b.dist)
-        .slice(0, 80);
+        .slice(0, 200);
       if (!nearby.length) return response.json({ pvz: [], city, source: "ozon", center: { lat: cLat, lng: cLng } });
     } else {
       // Поиск по городу: геокодируем → bbox → grid-sampling для равномерного охвата
@@ -676,8 +688,8 @@ app.get("/api/shop/delivery/pvz", shopCors, async (request, response, next) => {
       }
       const inBox = allPoints.filter(p => p.lat && p.lng && p.lat >= bboxS && p.lat <= bboxN && p.lng >= bboxW && p.lng <= bboxE);
       if (!inBox.length) return response.json({ pvz: [], city, error: "no_pvz_in_city" });
-      // Равномерная сетка — 80 точек по всему городу
-      nearby = _gridSamplePvz(inBox, bboxS, bboxN, bboxW, bboxE, 80);
+      // Равномерная сетка — 200 точек по всему городу
+      nearby = _gridSamplePvz(inBox, bboxS, bboxN, bboxW, bboxE, 200);
     }
 
     const pvz = await _fetchOzonPvzDetails(nearby.map(p => p.id));
@@ -1349,5 +1361,37 @@ app.get("/api/shop/admin/stats", requireAdmin, async (_request, response, next) 
       totalRevenue: revenueAgg._sum.totalRub || 0,
       weekRevenue: weekRevenueAgg._sum.totalRub || 0,
     });
+  } catch (error) { next(error); }
+});
+
+// ── Stock alerts (back-in-stock notifications) ────────────────────────────────
+app.post("/api/shop/stock-alert", shopCors, async (request, response, next) => {
+  try {
+    const db = getPrisma();
+    if (!db) return response.status(503).json({ error: "База данных недоступна" });
+    const offerId = cleanText(request.body?.offerId || "");
+    const email = cleanText(request.body?.email || "").toLowerCase();
+    if (!offerId) return response.status(400).json({ error: "offerId обязателен" });
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return response.status(400).json({ error: "Некорректный email" });
+    await db.stockAlert.upsert({
+      where: { offerId_email: { offerId, email } },
+      create: { offerId, email },
+      update: { notifiedAt: null },
+    });
+    response.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/shop/admin/stock-alerts", requireAdmin, async (request, response, next) => {
+  try {
+    const db = getPrisma();
+    if (!db) return response.json({ ok: true, alerts: [] });
+    const offerId = cleanText(request.query.offerId || "");
+    const alerts = await db.stockAlert.findMany({
+      where: { ...(offerId ? { offerId } : {}), notifiedAt: null },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    });
+    response.json({ ok: true, alerts });
   } catch (error) { next(error); }
 });

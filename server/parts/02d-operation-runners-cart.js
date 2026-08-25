@@ -41,6 +41,7 @@ function operationTitle(type = "") {
     "problem-products-repair": "Repair problem products",
     "brand-index-rebuild": "Rebuild brand index",
     "health-deep": "Deep health check",
+    "restore-yandex-markups": "Восстановить наценки Яндекса из истории цен",
   };
   return titles[type] || type || "Operation";
 }

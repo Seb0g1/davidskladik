@@ -3897,7 +3897,7 @@ test("runtime config keys: ecosystem.config.cjs is the source of truth for effec
   const byApp = ecosystemEnvByApp();
   assert.ok(byApp["davidsklad-api"]);
   assert.ok(byApp["davidsklad-worker"]);
-  assert.equal(byApp["davidsklad-worker"].BULLMQ_WORKER_CONCURRENCY, "3");
+  assert.equal(byApp["davidsklad-worker"].BULLMQ_WORKER_CONCURRENCY, "8");
 
   // Snapshot reflects whatever is in process.env right now (the value actually in
   // effect for this process), falling back to null when a key isn't set at all.
@@ -4045,9 +4045,9 @@ test("supplier cart scoring respects trust, reseller flag and Moscow cutoff", ()
   assert.equal(supplierOrderCutoffPassed("13:00", new Date("2026-05-25T11:30:00.000Z")), true);
   assert.equal(supplierOrderCutoffPassed("15:00", new Date("2026-05-25T11:30:00.000Z")), false);
 
-  const trusted = supplierCartOrderScore({ price: 100, trustFactor: 100, orderCutoffTime: "15:00" }, new Date("2026-05-25T08:00:00.000Z"));
-  const reseller = supplierCartOrderScore({ price: 100, trustFactor: 100, reseller: true, orderCutoffTime: "15:00" }, new Date("2026-05-25T08:00:00.000Z"));
-  const late = supplierCartOrderScore({ price: 100, trustFactor: 100, orderCutoffTime: "13:00" }, new Date("2026-05-25T11:30:00.000Z"));
+  const trusted = supplierCartOrderScore({ price: 100, trustFactor: 100, orderCutoffTime: "15:00" }, 95, new Date("2026-05-25T08:00:00.000Z"));
+  const reseller = supplierCartOrderScore({ price: 100, trustFactor: 100, reseller: true, orderCutoffTime: "15:00" }, 95, new Date("2026-05-25T08:00:00.000Z"));
+  const late = supplierCartOrderScore({ price: 100, trustFactor: 100, orderCutoffTime: "13:00" }, 95, new Date("2026-05-25T11:30:00.000Z"));
   assert.ok(trusted < reseller);
   assert.ok(late > reseller);
 });
@@ -4092,7 +4092,7 @@ test("selectSupplierCartSupplierFromMatches prefers regular suppliers over stock
       { partnerId: "real", partnerName: "Авангард", available: true, active: true, price: 90, docDate: "2026-01-02", priceEligible: true, trustFactor: 100, orderCutoffTime: "15:00" },
     ]],
   ]);
-  const result = selectSupplierCartSupplierFromMatches(matches, new Set(), now);
+  const result = selectSupplierCartSupplierFromMatches(matches, new Set(), 95, now);
   assert.equal(result.selected?.partnerName, "Авангард");
   assert.equal(result.stockOnlyFallback, false);
 });
@@ -4104,7 +4104,7 @@ test("selectSupplierCartSupplierFromMatches falls back to stock-only when no reg
       { partnerId: "stock", partnerName: "Наш склад", available: true, active: true, price: 0, docDate: "2026-01-03", stockOnly: true, priceEligible: false },
     ]],
   ]);
-  const result = selectSupplierCartSupplierFromMatches(matches, new Set(), now);
+  const result = selectSupplierCartSupplierFromMatches(matches, new Set(), 95, now);
   assert.equal(result.selected?.partnerName, "Наш склад");
   assert.equal(result.stockOnlyFallback, true);
   assert.equal(result.skipReason, "stock_only_fallback");
@@ -4118,7 +4118,7 @@ test("selectSupplierCartSupplierFromMatches uses stock-only after supplier block
       { partnerId: "stock", partnerName: "Наш склад", available: true, active: true, price: 0, docDate: "2026-01-03", stockOnly: true, priceEligible: false },
     ]],
   ]);
-  const result = selectSupplierCartSupplierFromMatches(matches, new Set(["real"]), now);
+  const result = selectSupplierCartSupplierFromMatches(matches, new Set(["real"]), 95, now);
   assert.equal(result.selected?.partnerName, "Наш склад");
   assert.equal(result.stockOnlyFallback, true);
   assert.equal(result.skipReason, "stock_only_fallback_after_supplier_blocked");
@@ -7071,7 +7071,7 @@ test("pm2 split entry files and immediate link activation hooks exist", async ()
   assert.doesNotMatch(ecosystem, /name: "davidsklad"/);
   assert.match(ecosystem, /max-old-space-size=3072/);
   assert.doesNotMatch(ecosystem, /max-old-space-size=5120/);
-  assert.match(ecosystem, /AUTHORITATIVE_REPRICE_BATCH_SIZE: "100"/);
+  assert.match(ecosystem, /AUTHORITATIVE_REPRICE_BATCH_SIZE: "50"/);
   assert.match(ecosystem, /max_memory_restart: "5120M"/);
   assert.match(ecosystem, /MALLOC_ARENA_MAX: "2"/);
   assert.match(ecosystem, /max_memory_restart: "6144M"/);

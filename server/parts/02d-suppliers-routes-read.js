@@ -30,7 +30,11 @@ app.get("/api/suppliers", async (request, response, next) => {
     }
     const impactCounts = supplierImpactCountMap(warehouse, warehouse.suppliers || []);
     const normalizedSuppliers = (warehouse.suppliers || []).map(normalizeManagedSupplier);
-    const ledgerMap = await supplierLedgerSummaryMapForSuppliers(normalizedSuppliers);
+    const [ledgerMap, ratePayload] = await Promise.all([
+      supplierLedgerSummaryMapForSuppliers(normalizedSuppliers),
+      getUsdRate().catch(() => ({ rate: Number(process.env.DEFAULT_USD_RATE || 95) || 95 })),
+    ]);
+    const usdRate = Number(ratePayload?.rate || ratePayload || process.env.DEFAULT_USD_RATE || 95) || 95;
     const payload = {
       suppliers: normalizedSuppliers.map((supplier) => ({
         ...supplier,
@@ -38,6 +42,7 @@ app.get("/api/suppliers", async (request, response, next) => {
         ledger: ledgerMap.get(cleanText(supplier.id || supplier.partnerId || supplier.name)) || supplierLedgerSummaryFromEntries([]),
       })),
       supplierSync,
+      usdRate,
     };
     suppliersListCache = { at: Date.now(), value: cloneAuditValue(payload) };
     response.json(payload);
@@ -292,6 +297,62 @@ app.post("/api/supplier-ledger/return-picking", requireAdmin, async (request, re
   }
 });
 
+// Пересчёт долгов поставщика с неверной валютой (например, Инна — цены в ₽ но хранились как USD)
+app.post("/api/supplier-ledger/fix-rub-amounts", requireAdmin, async (request, response, next) => {
+  try {
+    if (!shouldUsePostgresStorage()) {
+      return response.status(503).json({ error: "Supplier ledger requires PostgreSQL.", code: "supplier_ledger_postgres_required" });
+    }
+    const supplierName = cleanText(request.body?.supplierName || "");
+    const partnerId = cleanText(request.body?.partnerId || "");
+    if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required." });
+    // Load all active purchase_debt entries for this supplier
+    const where = {
+      AND: [
+        supplierLedgerIdentityWhere({ supplierName, partnerId }),
+        { status: "active" },
+        { entryType: "purchase_debt" },
+      ],
+    };
+    const rows = await getPrisma().supplierLedgerEntry.findMany({ where });
+    let fixed = 0;
+    let skipped = 0;
+    const details = [];
+    for (const row of rows) {
+      const raw = row.raw || {};
+      const picking = raw.picking || {};
+      const currency = String(picking.priceCurrency || picking.currency || "").toUpperCase();
+      // Only fix entries that were NOT explicitly stored as RUB
+      if (currency === "RUB" || currency === "RUR") { skipped++; continue; }
+      const price = Number(picking.price || 0);
+      const qty = Math.max(1, Math.round(Number(picking.quantity || 1)));
+      if (!(price > 0)) { skipped++; continue; }
+      const correctAmount = -normalizeFinanceMoney(price * qty, 0);
+      const oldAmount = Number(row.amount);
+      if (Math.abs(correctAmount - oldAmount) < 0.01) { skipped++; continue; }
+      await getPrisma().supplierLedgerEntry.update({
+        where: { id: row.id },
+        data: {
+          amount: correctAmount,
+          raw: { ...raw, picking: { ...picking, priceCurrency: "RUB", _fixedFromCurrency: currency, _fixedAt: new Date().toISOString() } },
+        },
+      });
+      details.push({ id: row.id, sourceKey: row.sourceKey, oldAmount, newAmount: correctAmount });
+      fixed++;
+    }
+    suppliersListCache = null;
+    await appendAudit(request, "supplier_ledger.fix_rub_amounts", {
+      entityType: "supplier_ledger",
+      entityId: supplierName || partnerId,
+      newValue: { fixed, skipped, total: rows.length },
+    }).catch(() => {});
+    logger.info("supplier ledger fix-rub-amounts", { supplierName, partnerId, fixed, skipped, total: rows.length, by: request.session?.username });
+    response.json({ ok: true, fixed, skipped, total: rows.length, details });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete("/api/supplier-ledger/reset-all", requireAdmin, async (request, response, next) => {
   try {
     if (!shouldUsePostgresStorage()) {
@@ -306,6 +367,67 @@ app.delete("/api/supplier-ledger/reset-all", requireAdmin, async (request, respo
       newValue: { deleted: result.count },
     }).catch((error) => logger.warn("supplier ledger reset audit failed", { detail: error?.message || String(error) }));
     response.json({ ok: true, deleted: result.count });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Корректировка: устанавливает баланс в targetBalance, создавая запись balance_correction
+app.post("/api/supplier-ledger/adjust", requireAdmin, async (request, response, next) => {
+  try {
+    if (!shouldUsePostgresStorage()) {
+      return response.status(503).json({ error: "Supplier ledger requires PostgreSQL.", code: "supplier_ledger_postgres_required" });
+    }
+    const supplierName = cleanText(request.body?.supplierName || request.body?.supplier || "");
+    const partnerId = cleanText(request.body?.partnerId || "");
+    const targetBalance = normalizeFinanceMoney(request.body?.targetBalance, null);
+    const note = cleanText(request.body?.note || "");
+    const currency = cleanText(request.body?.currency || "RUB").toUpperCase() || "RUB";
+    if (!supplierName && !partnerId) return response.status(400).json({ error: "supplierName or partnerId is required.", code: "supplier_ledger_identity_required" });
+    if (targetBalance === null || !Number.isFinite(targetBalance)) return response.status(400).json({ error: "targetBalance is required.", code: "target_balance_required" });
+    const current = await listSupplierLedgerEntries({ supplierName, partnerId, status: "active", limit: 1000, period: "all" });
+    const currentBalance = normalizeFinanceMoney(current.summary.balance, 0);
+    const delta = targetBalance - currentBalance;
+    if (Math.abs(delta) < 0.005) {
+      return response.json({ ok: true, skipped: true, currentBalance, targetBalance, delta: 0, message: "Баланс уже совпадает, корректировка не нужна." });
+    }
+    const entry = normalizeSupplierLedgerEntry({
+      sourceKey: `balance_correction:${crypto.randomUUID()}`,
+      entryType: "balance_correction",
+      supplierName,
+      partnerId,
+      amount: delta,
+      currency,
+      note: note || `Корректировка баланса: ${currentBalance} → ${targetBalance}`,
+      occurredAt: new Date().toISOString(),
+      createdBy: requestUsername(request),
+      raw: { source: "balance_correction", supplierName, partnerId, currentBalance, targetBalance, delta, note },
+    });
+    const row = await getPrisma().supplierLedgerEntry.create({
+      data: {
+        id: entry.id,
+        sourceKey: entry.sourceKey,
+        entryType: entry.entryType,
+        supplierName: entry.supplierName || null,
+        partnerId: entry.partnerId || null,
+        amount: entry.amount,
+        currency: entry.currency,
+        note: entry.note || null,
+        status: "active",
+        occurredAt: toDateOrNull(entry.occurredAt) || new Date(),
+        createdBy: entry.createdBy || null,
+        raw: entry.raw,
+      },
+    });
+    const saved = supplierLedgerEntryFromPostgres(row);
+    suppliersListCache = null;
+    await appendAudit(request, "supplier_ledger.balance_adjust", {
+      entityType: "supplier_ledger",
+      entityId: saved.id,
+      newValue: { ...saved, currentBalance, targetBalance, delta },
+    }).catch((error) => logger.warn("supplier ledger adjust audit failed", { detail: error?.message || String(error) }));
+    const summary = await listSupplierLedgerEntries({ supplierName, partnerId, status: "active", limit: 100, period: "all" });
+    response.status(201).json({ ok: true, entry: saved, summary: summary.summary, currentBalance, targetBalance, delta });
   } catch (error) {
     next(error);
   }

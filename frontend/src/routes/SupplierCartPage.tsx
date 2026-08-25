@@ -59,6 +59,8 @@ const PmSearchItemSchema = z.object({
   name: z.coerce.string().optional().default(""),
   price: z.number().optional().default(0),
   currency: z.coerce.string().optional().default("USD"),
+  priceRub: z.number().optional().nullable(),
+  isTester: z.boolean().optional().default(false),
   docDate: z.coerce.string().optional().nullable(),
 }).passthrough();
 
@@ -265,21 +267,25 @@ function ReadyToShipPanel() {
   const mpErrors: string[] = marketplaceQuery.data?.errors || [];
 
   const filteredMpLines = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return needle
-      ? mpLines.filter((line) =>
-          [line.productName, line.offerId, line.orderId, line.postingNumber, line.accountName]
-            .join(" ").toLowerCase().includes(needle))
+    const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return words.length
+      ? mpLines.filter((line) => {
+          const text = [line.productName, line.offerId, line.orderId, line.postingNumber, line.accountName]
+            .join(" ").toLowerCase();
+          return words.every((w) => text.includes(w));
+        })
       : mpLines;
   }, [q, mpLines]);
 
   const rows = listQuery.data?.rows || [];
   const filteredRows = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return needle
-      ? rows.filter((row: PickingRow) =>
-          [row.productName, row.offerId, row.orderId, row.postingNumber, row.supplierName]
-            .join(" ").toLowerCase().includes(needle))
+    const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return words.length
+      ? rows.filter((row: PickingRow) => {
+          const text = [row.productName, row.offerId, row.orderId, row.postingNumber, row.supplierName]
+            .join(" ").toLowerCase();
+          return words.every((w) => text.includes(w));
+        })
       : rows;
   }, [q, rows]);
 
@@ -554,13 +560,17 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
   const allItems = searchQuery.data?.items ?? [];
   const supplierNames = useMemo(() => [...new Set(allItems.map((i) => i.supplierName).filter(Boolean))].sort(), [allItems]);
 
+  const isTester = (item: PmSearchItem) => item.isTester || /\btest(?:er|ep|or|r)?\b|тестер/i.test(`${item.name} ${item.article}`);
+  // priceRub from server (corrects RUB vs USD comparison); fallback to raw price for legacy
+  const priceRub = (item: PmSearchItem) => item.priceRub ?? item.price ?? 0;
+
   const sortedItems = useMemo(() => {
     let list = supplierFilter ? allItems.filter((i) => i.supplierName === supplierFilter) : allItems;
-    if (sortMode === "price_asc") list = [...list].sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
-    else if (sortMode === "price_desc") list = [...list].sort((a, b) => (b.price ?? 0) - (a.price ?? 0));
+    if (sortMode === "price_asc") list = [...list].sort((a, b) => priceRub(a) - priceRub(b));
+    else if (sortMode === "price_desc") list = [...list].sort((a, b) => priceRub(b) - priceRub(a));
     else if (sortMode === "name_asc") list = [...list].sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru"));
     else if (sortMode === "supplier_asc") list = [...list].sort((a, b) => (a.supplierName || "").localeCompare(b.supplierName || "", "ru"));
-    return list;
+    return [...list].sort((a, b) => Number(isTester(a)) - Number(isTester(b)));
   }, [allItems, sortMode, supplierFilter]);
 
   const selectedCount = Object.keys(selected).length;

@@ -417,154 +417,163 @@ app.post("/api/ozon-yandex-import/sync-names", requireAdmin, async (request, res
 
 // Backfill descriptions for Yandex products that lack them, sourcing from their Ozon
 // counterparts in Postgres. Run after an Ozon refresh (to populate ozon.description in DB).
+async function repairYandexDescriptions(prisma, { dryRun = false, limit = 5000 } = {}) {
+  const requestedLimit = Math.max(1, Math.min(50000, Number(limit) || 5000));
+
+  // Find Yandex products missing descriptions where an Ozon sibling exists.
+  // Note: we do NOT filter by op.raw->'ozon'->>'description' here because descriptions
+  // are not stored by the regular Ozon import (/v3/product/info/list omits them).
+  // We fetch them on-demand below via /v1/product/info/description.
+  const rows = await prisma.$queryRaw`
+    SELECT
+      yp.id   AS "yandexId",
+      yp.offer_id AS "offerId",
+      yp.raw  AS "yandexRaw",
+      op.raw  AS "ozonRaw"
+    FROM warehouse_products yp
+    JOIN warehouse_products op
+      ON op.marketplace = 'ozon'
+      AND LOWER(op.offer_id) = LOWER(yp.offer_id)
+      AND op.archived = false
+    WHERE yp.marketplace = 'yandex'
+      AND COALESCE(TRIM(yp.raw->'yandex'->>'description'), '') = ''
+      AND (yp.raw->'yandex'->'_descriptionChecked') IS NULL
+    LIMIT ${requestedLimit}
+  `;
+
+  if (dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      candidates: rows.length,
+      sample: rows.slice(0, 10).map((r) => ({
+        offerId: r.offerId,
+        storedOzonDesc: String(r.ozonRaw?.ozon?.description || "").slice(0, 80),
+      })),
+    };
+  }
+
+  const shops = uniqueYandexShopsByBusiness();
+  if (!shops.length) return { ok: false, error: "Yandex Market не настроен.", candidates: rows.length };
+  const shopByTarget = new Map(shops.map((shop) => [shop.id, shop]));
+
+  const batchByShop = new Map();
+  const updatedRecords = [];
+  let apiCalls = 0;
+  let apiErrors = 0;
+
+  const descDelayMs = 60; // stay well within Ozon rate limits (~15 req/s)
+  for (const row of rows) {
+    const yandexProduct = normalizeWarehouseProduct(
+      row.yandexRaw && typeof row.yandexRaw === "object" ? row.yandexRaw : { offerId: row.offerId },
+    );
+    const ozonProduct = normalizeWarehouseProduct(
+      row.ozonRaw && typeof row.ozonRaw === "object" ? row.ozonRaw : { offerId: row.offerId },
+    );
+
+    // Use description stored in DB if available; otherwise fetch from Ozon API.
+    let description = cleanText(ozonProduct.ozon?.description || "");
+    if (!description) {
+      const ozonAccount = getOzonAccountByTarget(cleanText(ozonProduct.target || "ozon"));
+      if (ozonAccount) {
+        try {
+          const body = ozonProduct.productId
+            ? { product_id: Number(ozonProduct.productId) || undefined, offer_id: cleanText(row.offerId) }
+            : { offer_id: cleanText(row.offerId) };
+          const data = await ozonRequest("/v1/product/info/description", body, ozonAccount);
+          description = cleanText(data?.result?.description || "");
+          apiCalls += 1;
+          // Persist back to Ozon product DB record so future runs skip the API call.
+          if (description) {
+            await prisma.$executeRaw`
+              UPDATE warehouse_products
+              SET raw = jsonb_set(raw, '{ozon,description}', ${JSON.stringify(description)}::jsonb, true),
+                  updated_at = NOW()
+              WHERE marketplace = 'ozon'
+                AND LOWER(offer_id) = LOWER(${cleanText(row.offerId)})
+                AND archived = false
+            `.catch(() => {});
+          }
+        } catch (e) {
+          apiErrors += 1;
+          if (apiErrors >= 10) break; // abort on repeated failures to protect rate limits
+        }
+        if (descDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, descDelayMs));
+      }
+    }
+
+    if (!description) {
+      // Ozon has no description for this product — mark it so the repair loop
+      // doesn't keep retrying. The _descriptionChecked flag is internal-only,
+      // never sent to Yandex.
+      await prisma.$executeRaw`
+        UPDATE warehouse_products
+        SET raw = jsonb_set(raw, '{yandex,_descriptionChecked}', 'true'::jsonb, true),
+            updated_at = NOW()
+        WHERE id = ${row.yandexId}
+      `.catch(() => {});
+      continue;
+    }
+
+    const target = cleanText(yandexProduct.target);
+    const shop = shopByTarget.get(target) || shops[0];
+    if (!shop) continue;
+
+    const built = buildYandexOfferMapping({ ...yandexProduct, ozon: { ...(yandexProduct.ozon || {}), description } });
+    if (!batchByShop.has(shop.id)) batchByShop.set(shop.id, { shop, offers: [] });
+    batchByShop.get(shop.id).offers.push(compactObject({
+      offerId: cleanText(row.offerId),
+      description: built.offer?.description,
+      vendor: built.offer?.vendor,
+    }));
+    updatedRecords.push({ id: row.yandexId, description });
+  }
+
+  const results = [];
+  for (const { shop, offers } of batchByShop.values()) {
+    for (const chunk of chunkArray(offers, 500)) {
+      const sent = await sendYandexOfferMappings(shop, chunk);
+      results.push(...sent.map((item) => ({ ...item, target: shop.id })));
+    }
+  }
+
+  // Persist description into Yandex product records in Postgres.
+  const sentOfferIds = new Set(results.filter((item) => item.ok).map((item) => cleanText(item.offerId).toLowerCase()).filter(Boolean));
+  const toPersist = updatedRecords.filter((rec) => {
+    const yandexRaw = rows.find((r) => r.yandexId === rec.id)?.yandexRaw;
+    return yandexRaw && sentOfferIds.has(cleanText(yandexRaw.offerId).toLowerCase());
+  });
+  for (const rec of toPersist) {
+    await prisma.warehouseProduct.update({
+      where: { id: rec.id },
+      data: { raw: { ...(rows.find((r) => r.yandexId === rec.id)?.yandexRaw || {}), yandex: { ...(rows.find((r) => r.yandexId === rec.id)?.yandexRaw?.yandex || {}), description: rec.description } } },
+    }).catch(() => {});
+  }
+
+  return {
+    ok: results.every((item) => item.ok),
+    dryRun: false,
+    candidates: rows.length,
+    apiCalls,
+    apiErrors,
+    sent: results.filter((item) => item.ok).length,
+    failed: results.filter((item) => !item.ok).length,
+    persisted: toPersist.length,
+  };
+}
+
 app.post("/api/ozon-yandex-import/repair-yandex-descriptions", requireAdmin, async (request, response, next) => {
   try {
     const dryRun = request.body?.dryRun !== false;
-    const requestedLimit = Math.max(1, Math.min(50000, Number(request.body?.limit || 5000) || 5000));
+    const limit = Math.max(1, Math.min(50000, Number(request.body?.limit || 5000) || 5000));
     const prisma = getPrisma();
     if (!prisma) return response.status(503).json({ error: "Postgres недоступен." });
-    const { Prisma } = require("@prisma/client");
-
-    // Find Yandex products missing descriptions where an Ozon sibling exists.
-    // Note: we do NOT filter by op.raw->'ozon'->>'description' here because descriptions
-    // are not stored by the regular Ozon import (/v3/product/info/list omits them).
-    // We fetch them on-demand below via /v1/product/info/description.
-    const rows = await prisma.$queryRaw`
-      SELECT
-        yp.id   AS "yandexId",
-        yp.offer_id AS "offerId",
-        yp.raw  AS "yandexRaw",
-        op.raw  AS "ozonRaw"
-      FROM warehouse_products yp
-      JOIN warehouse_products op
-        ON op.marketplace = 'ozon'
-        AND LOWER(op.offer_id) = LOWER(yp.offer_id)
-        AND op.archived = false
-      WHERE yp.marketplace = 'yandex'
-        AND COALESCE(TRIM(yp.raw->'yandex'->>'description'), '') = ''
-        AND (yp.raw->'yandex'->'_descriptionChecked') IS NULL
-      LIMIT ${requestedLimit}
-    `;
-
-    if (dryRun) {
-      return response.json({
-        ok: true,
-        dryRun: true,
-        candidates: rows.length,
-        sample: rows.slice(0, 10).map((r) => ({
-          offerId: r.offerId,
-          storedOzonDesc: String(r.ozonRaw?.ozon?.description || "").slice(0, 80),
-        })),
-      });
+    if (!dryRun) {
+      const shops = uniqueYandexShopsByBusiness();
+      if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
     }
-
-    const shops = uniqueYandexShopsByBusiness();
-    if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
-    const shopByTarget = new Map(shops.map((shop) => [shop.id, shop]));
-
-    const batchByShop = new Map();
-    const updatedRecords = [];
-    let apiCalls = 0;
-    let apiErrors = 0;
-
-    const descDelayMs = 60; // stay well within Ozon rate limits (~15 req/s)
-    for (const row of rows) {
-      const yandexProduct = normalizeWarehouseProduct(
-        row.yandexRaw && typeof row.yandexRaw === "object" ? row.yandexRaw : { offerId: row.offerId },
-      );
-      const ozonProduct = normalizeWarehouseProduct(
-        row.ozonRaw && typeof row.ozonRaw === "object" ? row.ozonRaw : { offerId: row.offerId },
-      );
-
-      // Use description stored in DB if available; otherwise fetch from Ozon API.
-      let description = cleanText(ozonProduct.ozon?.description || "");
-      if (!description) {
-        const ozonAccount = getOzonAccountByTarget(cleanText(ozonProduct.target || "ozon"));
-        if (ozonAccount) {
-          try {
-            const body = ozonProduct.productId
-              ? { product_id: Number(ozonProduct.productId) || undefined, offer_id: cleanText(row.offerId) }
-              : { offer_id: cleanText(row.offerId) };
-            const data = await ozonRequest("/v1/product/info/description", body, ozonAccount);
-            description = cleanText(data?.result?.description || "");
-            apiCalls += 1;
-            // Persist back to Ozon product DB record so future runs skip the API call.
-            if (description) {
-              await prisma.$executeRaw`
-                UPDATE warehouse_products
-                SET raw = jsonb_set(raw, '{ozon,description}', ${JSON.stringify(description)}::jsonb, true),
-                    updated_at = NOW()
-                WHERE marketplace = 'ozon'
-                  AND LOWER(offer_id) = LOWER(${cleanText(row.offerId)})
-                  AND archived = false
-              `.catch(() => {});
-            }
-          } catch (e) {
-            apiErrors += 1;
-            if (apiErrors >= 10) break; // abort on repeated failures to protect rate limits
-          }
-          if (descDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, descDelayMs));
-        }
-      }
-
-      if (!description) {
-        // Ozon has no description for this product — mark it so the repair loop
-        // doesn't keep retrying. The _descriptionChecked flag is internal-only,
-        // never sent to Yandex.
-        await prisma.$executeRaw`
-          UPDATE warehouse_products
-          SET raw = jsonb_set(raw, '{yandex,_descriptionChecked}', 'true'::jsonb, true),
-              updated_at = NOW()
-          WHERE id = ${row.yandexId}
-        `.catch(() => {});
-        continue;
-      }
-
-      const target = cleanText(yandexProduct.target);
-      const shop = shopByTarget.get(target) || shops[0];
-      if (!shop) continue;
-
-      const built = buildYandexOfferMapping({ ...yandexProduct, ozon: { ...(yandexProduct.ozon || {}), description } });
-      if (!batchByShop.has(shop.id)) batchByShop.set(shop.id, { shop, offers: [] });
-      batchByShop.get(shop.id).offers.push(compactObject({
-        offerId: cleanText(row.offerId),
-        description: built.offer?.description,
-        vendor: built.offer?.vendor,
-      }));
-      updatedRecords.push({ id: row.yandexId, description });
-    }
-
-    const results = [];
-    for (const { shop, offers } of batchByShop.values()) {
-      for (const chunk of chunkArray(offers, 500)) {
-        const sent = await sendYandexOfferMappings(shop, chunk);
-        results.push(...sent.map((item) => ({ ...item, target: shop.id })));
-      }
-    }
-
-    // Persist description into Yandex product records in Postgres.
-    const sentOfferIds = new Set(results.filter((item) => item.ok).map((item) => cleanText(item.offerId).toLowerCase()).filter(Boolean));
-    const toPersist = updatedRecords.filter((rec) => {
-      const yandexRaw = rows.find((r) => r.yandexId === rec.id)?.yandexRaw;
-      return yandexRaw && sentOfferIds.has(cleanText(yandexRaw.offerId).toLowerCase());
-    });
-    for (const rec of toPersist) {
-      await prisma.warehouseProduct.update({
-        where: { id: rec.id },
-        data: { raw: { ...(rows.find((r) => r.yandexId === rec.id)?.yandexRaw || {}), yandex: { ...(rows.find((r) => r.yandexId === rec.id)?.yandexRaw?.yandex || {}), description: rec.description } } },
-      }).catch(() => {});
-    }
-
-    response.json({
-      ok: results.every((item) => item.ok),
-      dryRun: false,
-      candidates: rows.length,
-      apiCalls,
-      apiErrors,
-      sent: results.filter((item) => item.ok).length,
-      failed: results.filter((item) => !item.ok).length,
-      persisted: toPersist.length,
-    });
+    const result = await repairYandexDescriptions(prisma, { dryRun, limit });
+    response.json(result);
   } catch (error) {
     next(error);
   }

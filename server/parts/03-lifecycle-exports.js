@@ -293,6 +293,7 @@ module.exports = {
   supplierLedgerSummaryFromEntries,
   upsertSupplierLedgerDebtFromPickingRow,
   voidSupplierLedgerDebtForPickingRow,
+  fixRubSupplierLedgerAmounts,
   supplierBlockKey,
   activeSupplierBlocksForOffer,
   normalizeSupplierTrustFactor,
@@ -367,5 +368,6 @@ module.exports = {
   publicAiImageJob,
   runAiImageGenerationJob,
   aiImageJobsPath,
+  repairYandexDescriptions,
 };
 

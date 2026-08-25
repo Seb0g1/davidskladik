@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { X, Mail, ArrowRight, Loader2, CheckCircle, RefreshCw } from "lucide-react";
 import { useAuth } from "../AuthContext";
-import clsx from "clsx";
 
 interface Props {
   open: boolean;
@@ -131,139 +130,177 @@ export default function AuthModal({ open, onClose }: Props) {
   }
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center" onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm modal-overlay" onClick={onClose} />
-      <div className="relative bg-white w-full sm:max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl modal-content overflow-hidden">
+    <div
+      style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+      className="sm:items-center"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      {/* Backdrop */}
+      <div
+        className="modal-overlay"
+        style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)", backdropFilter: "blur(6px)" }}
+        onClick={onClose}
+      />
 
-        {/* Header gradient bar */}
-        <div style={{ height: 4, background: "linear-gradient(90deg, #7c3aed, #9333ea, #c026d3)" }} />
+      {/* Panel */}
+      <div
+        className="modal-content"
+        style={{
+          position: "relative",
+          width: "100%", maxWidth: 440,
+          background: "var(--surface2)",
+          borderRadius: "20px 20px 0 0",
+          border: "1px solid var(--border-md)",
+          borderBottom: "none",
+          overflow: "hidden",
+          boxShadow: "0 -20px 60px rgba(0,0,0,0.5)",
+        }}
+      >
+        <style>{`@media(min-width:640px){.auth-panel{border-radius:16px!important;border-bottom:1px solid var(--border-md)!important;}}`}</style>
+        <div className="auth-panel">
+          {/* Gold top accent */}
+          <div style={{ height: 2, background: "linear-gradient(90deg, transparent, var(--accent), transparent)" }} />
 
-        <div className="p-7 pb-8">
-          {/* Close */}
-          <button onClick={onClose} className="absolute top-5 right-5 p-2 rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
-            <X size={18} />
-          </button>
+          <div style={{ padding: "28px 28px 32px" }}>
+            {/* Close */}
+            <button
+              onClick={onClose}
+              style={{ position: "absolute", top: 14, right: 14, padding: 8, borderRadius: 8, color: "var(--subtle)", background: "transparent", border: "none", cursor: "pointer", display: "flex", transition: "color 0.15s" }}
+              onMouseEnter={e => (e.currentTarget.style.color = "var(--text)")}
+              onMouseLeave={e => (e.currentTarget.style.color = "var(--subtle)")}
+            >
+              <X size={17} />
+            </button>
 
-          {/* STEP: email */}
-          {step === "email" && (
-            <form onSubmit={handleSendCode}>
-              <div className="mb-6">
-                <div className="w-11 h-11 rounded-2xl flex items-center justify-center mb-4" style={{ background: "#f5f3ff" }}>
-                  <Mail size={20} style={{ color: "#7c3aed" }} strokeWidth={1.8} />
+            {/* STEP: email */}
+            {step === "email" && (
+              <form onSubmit={handleSendCode}>
+                <div style={{ marginBottom: 24 }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18, background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.2)" }}>
+                    <Mail size={19} style={{ color: "var(--accent)" }} strokeWidth={1.7} />
+                  </div>
+                  <h2 className="serif" style={{ fontSize: 20, fontWeight: 500, color: "var(--text)", marginBottom: 6, fontStyle: "italic" }}>Вход или регистрация</h2>
+                  <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>Введите email — пришлём код для входа</p>
                 </div>
-                <h2 className="text-xl font-bold text-apple-black tracking-tight">Вход или регистрация</h2>
-                <p className="text-sm text-apple-gray mt-1">Введите email — пришлём код для входа</p>
-              </div>
 
-              <input
-                ref={emailInputRef}
-                type="email"
-                placeholder="your@email.com"
-                required
-                value={email}
-                onChange={(e) => { setEmail(e.target.value); setError(""); }}
-                className="w-full px-4 py-3.5 bg-gray-50 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-400 transition-all mb-3"
-                style={{ border: "1px solid #e8e8ec" }}
-              />
+                <input
+                  ref={emailInputRef}
+                  type="email"
+                  placeholder="your@email.com"
+                  required
+                  value={email}
+                  onChange={(e) => { setEmail(e.target.value); setError(""); }}
+                  className="input-base"
+                  style={{ marginBottom: 12 }}
+                />
 
-              {error && (
-                <div className="text-sm text-red-600 bg-red-50 rounded-xl px-4 py-3 mb-3">{error}</div>
-              )}
+                {error && (
+                  <div style={{ fontSize: 13, color: "#F87171", background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>{error}</div>
+                )}
 
-              <button
-                type="submit"
-                disabled={loading || !email.trim()}
-                className="w-full py-3.5 rounded-2xl font-semibold text-sm text-white flex items-center justify-center gap-2 transition-all duration-200 disabled:opacity-60"
-                style={{ background: "linear-gradient(135deg, #7c3aed, #9333ea)" }}
-              >
-                {loading ? <Loader2 size={16} className="animate-spin" /> : <ArrowRight size={16} />}
-                Получить код
-              </button>
-
-              <p className="text-center text-xs text-apple-gray mt-4">
-                Нажимая кнопку, вы соглашаетесь с&nbsp;
-                <a href="/privacy" className="text-violet-600 hover:underline">политикой конфиденциальности</a>
-              </p>
-            </form>
-          )}
-
-          {/* STEP: code */}
-          {step === "code" && (
-            <div>
-              <div className="mb-6">
-                <div className="w-11 h-11 rounded-2xl flex items-center justify-center mb-4" style={{ background: "#f5f3ff" }}>
-                  <Mail size={20} style={{ color: "#7c3aed" }} strokeWidth={1.8} />
-                </div>
-                <h2 className="text-xl font-bold text-apple-black tracking-tight">Введите код</h2>
-                <p className="text-sm text-apple-gray mt-1">
-                  Отправили 6-значный код на{" "}
-                  <button onClick={() => { setStep("email"); setError(""); }} className="text-violet-600 font-medium hover:underline">{email}</button>
-                </p>
-              </div>
-
-              {/* OTP input boxes */}
-              <div className="flex gap-2 justify-between mb-4" onPaste={handleDigitPaste}>
-                {digits.map((d, i) => (
-                  <input
-                    key={i}
-                    ref={(el) => { inputRefs.current[i] = el; }}
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={1}
-                    value={d}
-                    onChange={(e) => handleDigitChange(i, e.target.value)}
-                    onKeyDown={(e) => handleDigitKeyDown(i, e)}
-                    disabled={loading}
-                    className={clsx(
-                      "w-[13%] aspect-square text-center text-xl font-bold rounded-2xl transition-all duration-150 focus:outline-none",
-                      error ? "ring-2 ring-red-400" : "focus:ring-2 focus:ring-violet-400",
-                      d ? "bg-violet-50 text-violet-700" : "bg-gray-50 text-apple-black"
-                    )}
-                    style={{ border: error ? "1px solid #fca5a5" : d ? "1px solid #ddd6fe" : "1px solid #e8e8ec" }}
-                  />
-                ))}
-              </div>
-
-              {loading && (
-                <div className="flex items-center justify-center gap-2 text-sm text-apple-gray mb-3">
-                  <Loader2 size={14} className="animate-spin" />
-                  Проверяем...
-                </div>
-              )}
-
-              {error && (
-                <div className="text-sm text-red-600 bg-red-50 rounded-xl px-4 py-3 mb-3">{error}</div>
-              )}
-
-              <div className="flex items-center justify-between text-sm mt-2">
                 <button
-                  onClick={handleResend}
-                  disabled={countdown > 0 || loading}
-                  className={clsx(
-                    "flex items-center gap-1.5 font-medium transition-colors",
-                    countdown > 0 ? "text-apple-gray cursor-default" : "text-violet-600 hover:text-violet-700"
-                  )}
+                  type="submit"
+                  disabled={loading || !email.trim()}
+                  className="btn-primary"
+                  style={{ width: "100%", justifyContent: "center", opacity: (loading || !email.trim()) ? 0.6 : 1 }}
                 >
-                  <RefreshCw size={13} strokeWidth={2} />
-                  {countdown > 0 ? `Отправить снова (${countdown}с)` : "Отправить снова"}
+                  {loading ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <ArrowRight size={15} />}
+                  Получить код
                 </button>
-                <button onClick={() => { setStep("email"); setError(""); setDigits(Array(CODE_LEN).fill("")); }} className="text-apple-gray hover:text-apple-black transition-colors">
-                  Изменить email
-                </button>
-              </div>
-            </div>
-          )}
 
-          {/* STEP: done */}
-          {step === "done" && (
-            <div className="flex flex-col items-center py-6 gap-3">
-              <div className="w-14 h-14 rounded-full flex items-center justify-center" style={{ background: "#ecfdf5" }}>
-                <CheckCircle size={28} style={{ color: "#10b981" }} strokeWidth={1.8} />
+                <p style={{ textAlign: "center", fontSize: 11, color: "var(--subtle)", marginTop: 16 }}>
+                  Нажимая кнопку, вы соглашаетесь с{" "}
+                  <a href="/privacy" style={{ color: "var(--accent)", textDecoration: "none" }}>политикой конфиденциальности</a>
+                </p>
+              </form>
+            )}
+
+            {/* STEP: code */}
+            {step === "code" && (
+              <div>
+                <div style={{ marginBottom: 24 }}>
+                  <div style={{ width: 42, height: 42, borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 18, background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.2)" }}>
+                    <Mail size={19} style={{ color: "var(--accent)" }} strokeWidth={1.7} />
+                  </div>
+                  <h2 className="serif" style={{ fontSize: 20, fontWeight: 500, color: "var(--text)", marginBottom: 6, fontStyle: "italic" }}>Введите код</h2>
+                  <p style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
+                    Отправили 6-значный код на{" "}
+                    <button onClick={() => { setStep("email"); setError(""); }} style={{ color: "var(--accent)", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, padding: 0 }}>{email}</button>
+                  </p>
+                </div>
+
+                {/* OTP boxes */}
+                <div style={{ display: "flex", gap: 8, justifyContent: "space-between", marginBottom: 14 }} onPaste={handleDigitPaste}>
+                  {digits.map((d, i) => (
+                    <input
+                      key={i}
+                      ref={(el) => { inputRefs.current[i] = el; }}
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={1}
+                      value={d}
+                      onChange={(e) => handleDigitChange(i, e.target.value)}
+                      onKeyDown={(e) => handleDigitKeyDown(i, e)}
+                      disabled={loading}
+                      style={{
+                        width: "13.5%", aspectRatio: "1", textAlign: "center",
+                        fontSize: 22, fontWeight: 600, borderRadius: 10,
+                        background: d ? "rgba(201,169,110,0.1)" : "rgba(255,252,245,0.04)",
+                        border: error ? "1px solid rgba(248,113,113,0.5)" : d ? "1px solid rgba(201,169,110,0.35)" : "1px solid var(--border)",
+                        color: d ? "var(--accent3)" : "var(--text)",
+                        outline: "none",
+                        transition: "border-color 0.15s, background 0.15s",
+                        fontFamily: "inherit",
+                      }}
+                      onFocus={e => { if (!error) (e.target as HTMLInputElement).style.borderColor = "rgba(201,169,110,0.5)"; }}
+                      onBlur={e => { (e.target as HTMLInputElement).style.borderColor = error ? "rgba(248,113,113,0.5)" : digits[i] ? "rgba(201,169,110,0.35)" : "var(--border)"; }}
+                    />
+                  ))}
+                </div>
+
+                {loading && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13, color: "var(--muted)", marginBottom: 10 }}>
+                    <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} />
+                    Проверяем...
+                  </div>
+                )}
+
+                {error && (
+                  <div style={{ fontSize: 13, color: "#F87171", background: "rgba(248,113,113,0.08)", border: "1px solid rgba(248,113,113,0.2)", borderRadius: 8, padding: "10px 14px", marginBottom: 12 }}>{error}</div>
+                )}
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", fontSize: 13, marginTop: 8 }}>
+                  <button
+                    onClick={handleResend}
+                    disabled={countdown > 0 || loading}
+                    style={{ display: "flex", alignItems: "center", gap: 5, color: countdown > 0 ? "var(--subtle)" : "var(--accent)", background: "none", border: "none", cursor: countdown > 0 ? "default" : "pointer", fontFamily: "inherit", fontSize: 13, padding: 0, transition: "color 0.15s" }}
+                  >
+                    <RefreshCw size={12} strokeWidth={2} />
+                    {countdown > 0 ? `Снова (${countdown}с)` : "Отправить снова"}
+                  </button>
+                  <button
+                    onClick={() => { setStep("email"); setError(""); setDigits(Array(CODE_LEN).fill("")); }}
+                    style={{ color: "var(--subtle)", background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 13, padding: 0, transition: "color 0.15s" }}
+                    onMouseEnter={e => (e.currentTarget.style.color = "var(--text)")}
+                    onMouseLeave={e => (e.currentTarget.style.color = "var(--subtle)")}
+                  >
+                    Изменить email
+                  </button>
+                </div>
               </div>
-              <h2 className="text-xl font-bold text-apple-black">Вы вошли!</h2>
-              <p className="text-sm text-apple-gray">Добро пожаловать в Magic Vibes</p>
-            </div>
-          )}
+            )}
+
+            {/* STEP: done */}
+            {step === "done" && (
+              <div style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "24px 0 8px", gap: 12 }}>
+                <div style={{ width: 56, height: 56, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(74,222,128,0.1)", border: "1px solid rgba(74,222,128,0.2)" }}>
+                  <CheckCircle size={28} style={{ color: "#4ade80" }} strokeWidth={1.5} />
+                </div>
+                <h2 className="serif" style={{ fontSize: 20, fontWeight: 500, color: "var(--text)", fontStyle: "italic" }}>Вы вошли</h2>
+                <p style={{ fontSize: 13, color: "var(--muted)" }}>Добро пожаловать в Magic Vibes</p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

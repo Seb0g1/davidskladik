@@ -191,7 +191,7 @@ export default function CatalogPage() {
               padding: "10px 14px", borderRadius: 12, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer",
               background: activeFilterCount ? "var(--accent)" : "var(--surface2)",
               color: activeFilterCount ? "#fff" : "var(--muted)",
-              boxShadow: activeFilterCount ? "0 0 16px rgba(124,58,237,0.35)" : "none",
+              boxShadow: activeFilterCount ? "0 0 16px rgba(201,169,110,0.35)" : "none",
               transition: "all 0.15s ease",
             }}
           >
@@ -261,12 +261,12 @@ export default function CatalogPage() {
           {hasActiveFilters && (
             <div className="anim-fade-in" style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 14 }}>
               {brand && (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(124,58,237,0.12)", color: "var(--accent3)", border: "1px solid rgba(124,58,237,0.2)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 100 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(201,169,110,0.1)", color: "var(--accent3)", border: "1px solid rgba(124,58,237,0.2)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 100 }}>
                   {brand}<button onClick={() => setParam("brand", null)} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", display: "flex" }}><X size={10} /></button>
                 </span>
               )}
               {q && (
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(124,58,237,0.12)", color: "var(--accent3)", border: "1px solid rgba(124,58,237,0.2)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 100 }}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, background: "rgba(201,169,110,0.1)", color: "var(--accent3)", border: "1px solid rgba(124,58,237,0.2)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 100 }}>
                   «{q}»<button onClick={() => setParam("q", null)} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", display: "flex" }}><X size={10} /></button>
                 </span>
               )}
@@ -367,8 +367,8 @@ export default function CatalogPage() {
                       onClick={() => setParam("sort", opt.value)}
                       style={{
                         width: "100%", textAlign: "left", padding: "12px 16px", borderRadius: 12, fontSize: 13.5, fontWeight: 500,
-                        background: sort === opt.value ? "rgba(124,58,237,0.12)" : "var(--surface2)",
-                        border: `1px solid ${sort === opt.value ? "rgba(124,58,237,0.3)" : "var(--border)"}`,
+                        background: sort === opt.value ? "rgba(201,169,110,0.1)" : "var(--surface2)",
+                        border: `1px solid ${sort === opt.value ? "rgba(201,169,110,0.3)" : "var(--border)"}`,
                         color: sort === opt.value ? "var(--accent3)" : "var(--muted)",
                         cursor: "pointer", transition: "all 0.15s ease",
                       }}
@@ -384,7 +384,7 @@ export default function CatalogPage() {
                 <span style={{ fontSize: 14, fontWeight: 500, color: "var(--text)" }}>Только в наличии</span>
                 <div style={{ position: "relative", flexShrink: 0 }}>
                   <input type="checkbox" checked={inStock} onChange={(e) => setParam("inStock", e.target.checked ? "true" : null)} className="sr-only" />
-                  <div style={{ width: 44, height: 24, borderRadius: 100, background: inStock ? "var(--accent)" : "var(--surface2)", border: `1px solid ${inStock ? "transparent" : "var(--border)"}`, transition: "background 0.2s ease", boxShadow: inStock ? "0 0 12px rgba(124,58,237,0.4)" : "none" }}>
+                  <div style={{ width: 44, height: 24, borderRadius: 100, background: inStock ? "var(--accent)" : "var(--surface2)", border: `1px solid ${inStock ? "transparent" : "var(--border)"}`, transition: "background 0.2s ease", boxShadow: inStock ? "0 0 12px rgba(201,169,110,0.25)" : "none" }}>
                     <div style={{ position: "absolute", top: 4, left: inStock ? 24 : 4, width: 16, height: 16, background: inStock ? "#fff" : "var(--muted)", borderRadius: "50%", transition: "left 0.2s ease, background 0.2s ease" }} />
                   </div>
                 </div>

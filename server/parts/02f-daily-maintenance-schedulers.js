@@ -117,6 +117,8 @@ function scheduleDailySync() {
   if (dailySyncTimer) clearTimeout(dailySyncTimer);
   const delay = msUntilNextDailyRun(dailySyncTime);
   dailySyncNextRunAt = new Date(Date.now() + delay).toISOString();
+  // Persist nextRunAt so the API process can read it from daily-sync.json
+  writeDailySyncState({}).catch(() => {});
   dailySyncTimer = setTimeout(async () => {
     try {
       const result = await runDailyRefresh("schedule");

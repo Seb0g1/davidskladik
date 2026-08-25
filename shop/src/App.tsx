@@ -9,6 +9,8 @@ import OrderSuccessPage from "./pages/OrderSuccessPage";
 import OrderFailedPage from "./pages/OrderFailedPage";
 import AccountPage from "./pages/AccountPage";
 import BrandsPage from "./pages/BrandsPage";
+import NewProductsPage from "./pages/NewProductsPage";
+import NewsPage from "./pages/NewsPage";
 import SupportChatWidget from "./components/SupportChatWidget";
 
 export default function App() {
@@ -27,6 +29,8 @@ export default function App() {
           <Route path="/orders" element={<AccountPage />} />
           <Route path="/account" element={<AccountPage />} />
           <Route path="/brands" element={<BrandsPage />} />
+          <Route path="/new" element={<NewProductsPage />} />
+          <Route path="/news" element={<NewsPage />} />
         </Route>
       </Routes>
       <SupportChatWidget />

@@ -58,6 +58,13 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
         return new Map();
       });
     }
+    // If live PM timed out or returned nothing, fall back to postgres PM snapshot so
+    // prices can still be computed and sent (avoids mass "no supplier" on PM timeouts).
+    if (!matchMap.size && links.length) {
+      logger.info("live PM returned no matches, falling back to postgres PM snapshot", { links: links.length });
+      matchMap = await getPriceMasterMatchesForLinks(links, warehouse.suppliers, rate).catch(() => new Map());
+      if (matchMap.size) priceMasterSourceError = null;
+    }
   } else {
     matchMap = await getPriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
   }

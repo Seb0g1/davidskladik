@@ -26,7 +26,7 @@ function pickTargetStockSendProducts(products = []) {
       product?.id
       && product.offerId
       && product.target
-      && shouldSendTargetStockForProduct(product)
+      && (product._forceStock || shouldSendTargetStockForProduct(product))
     )
     .map((product) => ({
       ...product,

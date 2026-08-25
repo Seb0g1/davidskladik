@@ -2,6 +2,18 @@
 // («Отложить поставщика» → отмена) или вернув строку сборки в статус «к сборке».
 const PICKING_PERMANENT_SNOOZE_DAYS = 3650;
 
+let _pickingRedis = null;
+function pickingRedis() {
+  if (_pickingRedis) return _pickingRedis;
+  if (!redisUrl) return null;
+  try {
+    const Redis = require("ioredis");
+    _pickingRedis = new Redis(redisUrl, { maxRetriesPerRequest: 2, enableReadyCheck: false, lazyConnect: false });
+    _pickingRedis.on("error", () => {});
+    return _pickingRedis;
+  } catch { return null; }
+}
+
 app.get("/api/supplier-picking-list", requireStaff, async (request, response, next) => {
   try {
     const state = await readSupplierPickingState();
@@ -39,11 +51,14 @@ app.get("/api/supplier-picking-list", requireStaff, async (request, response, ne
     const suppliers = Array.from(new Set(supplierSourceRows.map((row) => row.supplierName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
     const supplierLedgerMap = await supplierLedgerSummaryMapForSuppliers(suppliers.map((name) => ({ id: name, name })));
     const supplierLedger = Object.fromEntries(suppliers.map((name) => [name, supplierLedgerMap.get(name) || supplierLedgerSummaryFromEntries([])]));
+    const ratePayload = await getUsdRate().catch(() => null);
+    const usdRate = Number(ratePayload?.rate || process.env.DEFAULT_USD_RATE || 95) || 95;
     response.json({
       ok: true,
       updatedAt: state.updatedAt,
       rows: rows.slice(0, limit),
       total: rows.length,
+      usdRate,
       suppliers,
       supplierLedger,
       summary: {
@@ -191,8 +206,11 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     if (status === "picked") {
       financeOrder = await upsertFinanceOrderFromPickingRow(nextRow, request);
       supplierLedgerEntry = await upsertSupplierLedgerDebtFromPickingRow(nextRow, financeOrder, request);
-      // Deduct pricePaidRub from picker's persistent balance so they see remaining cash
-      if (nextRow.pricePaidRub > 0 && nextRow.pickedBy) {
+      // Deduct from picker's persistent balance (tracked in supplier native currency, usually USD)
+      const pickerDeductAmt = nextRow.price > 0
+        ? nextRow.price * Math.max(1, Math.round(Number(nextRow.quantity || 1)))
+        : 0;
+      if (pickerDeductAmt > 0 && nextRow.pickedBy) {
         try {
           const pickerBal = await loadPickerBalance(nextRow.pickedBy);
           // Use picking key as deduction ID so we can reverse it on rollback
@@ -200,7 +218,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
           if (!pickerBal.credits.some((c) => String(c.id) === debitId)) {
             pickerBal.credits.push({
               id: debitId,
-              amount: -nextRow.pricePaidRub,
+              amount: -pickerDeductAmt,
               note: `Оплата: ${nextRow.productName || nextRow.offerId || key}`,
               createdAt: now.toISOString(),
               createdBy: "system",
@@ -384,5 +402,31 @@ app.post("/api/supplier-picking-list/:key/defer", requireStaff, async (request, 
   } catch (error) {
     next(error);
   }
+});
+
+// ── Picking list viewers (coordination heartbeat) ────────────────────────────
+// Stores {username, viewedAt} in Redis with 45s TTL. GET returns all active viewers.
+app.put("/api/supplier-picking-list/heartbeat", requireStaff, async (request, response, next) => {
+  try {
+    const username = requestUsername(request) || "неизвестно";
+    const redis = pickingRedis();
+    if (!redis) return response.json({ ok: true });
+    await redis.set(`picking:viewer:${username}`, JSON.stringify({ username, viewedAt: new Date().toISOString() }), "EX", 45);
+    response.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+app.get("/api/supplier-picking-list/viewers", requireStaff, async (_request, response, next) => {
+  try {
+    const redis = pickingRedis();
+    if (!redis) return response.json({ ok: true, viewers: [] });
+    const keys = await redis.keys("picking:viewer:*");
+    if (!keys.length) return response.json({ ok: true, viewers: [] });
+    const vals = await redis.mget(keys);
+    const viewers = vals.flatMap((v) => {
+      try { return v ? [JSON.parse(v)] : []; } catch { return []; }
+    });
+    response.json({ ok: true, viewers });
+  } catch (error) { next(error); }
 });
 

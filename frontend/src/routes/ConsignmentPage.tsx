@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, Banknote, Boxes, Check, ChevronDown, ChevronRight, HandCoins, History, ListPlus, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, Trash2, TrendingUp, Upload, Wallet, X } from "lucide-react";
@@ -333,6 +334,16 @@ export function ConsignmentPage() {
     },
   });
 
+  const pmCleanup = useMutation({
+    mutationFn: () => fetchJson("/api/consignment/pm-sync/cleanup", z.object({ ok: z.boolean().optional(), removedItems: z.number().optional().default(0), removedOperations: z.number().optional().default(0) }).passthrough(), mutationBody({})),
+    onSuccess: () => invalidate(),
+  });
+
+  const pmReset = useMutation({
+    mutationFn: () => fetchJson("/api/consignment/pm-sync/reset", z.object({ ok: z.boolean().optional(), removedOperations: z.number().optional().default(0), restoredItems: z.number().optional().default(0) }).passthrough(), mutationBody({})),
+    onSuccess: () => invalidate(),
+  });
+
   const s = summary.data?.summary || ({} as NonNullable<typeof summary.data>["summary"] & Record<string, number>);
   const openAction = (item: ConsignmentItem, mode: StockAction["mode"]) => {
     setAction({ item, mode });
@@ -509,6 +520,16 @@ export function ConsignmentPage() {
               {pmSync.isPending ? <Loader2 className="spin" size={16} /> : <Upload size={16} />}
               {pmSync.isPending ? "Синк PM…" : "Синк PM"}
             </button>
+            <button
+              className="secondary-action"
+              type="button"
+              disabled={pmReset.isPending}
+              onClick={() => { if (confirm("Удалить все PM-продажи и восстановить остатки?")) pmReset.mutate(); }}
+              title="Удалить все операции pm_sale_* и восстановить остатки товаров"
+            >
+              {pmReset.isPending ? <Loader2 className="spin" size={16} /> : <RotateCcw size={16} />}
+              Сброс PM
+            </button>
             <button className="secondary-action" type="button" onClick={invalidate}>
               <RefreshCw size={16} /> Обновить
             </button>
@@ -530,6 +551,17 @@ export function ConsignmentPage() {
       )}
       {pmSync.error && (
         <div className="inline-error" style={{ marginBottom: 12 }}>{errorMessage(pmSync.error)}</div>
+      )}
+      {pmReset.isSuccess && pmReset.data && (
+        <div className="inline-success" style={{ marginBottom: 12 }}>
+          Сброс PM: удалено <strong>{pmReset.data.removedOperations}</strong> продаж, восстановлено остатков: <strong>{pmReset.data.restoredItems}</strong>.
+          <button className="icon-action" type="button" style={{ marginLeft: 8 }} onClick={() => pmReset.reset()}>
+            <X size={14} />
+          </button>
+        </div>
+      )}
+      {pmReset.error && (
+        <div className="inline-error" style={{ marginBottom: 12 }}>{errorMessage(pmReset.error)}</div>
       )}
 
       <section className="dashboard-metrics">
@@ -567,7 +599,7 @@ export function ConsignmentPage() {
         {pmOpen && pmQuery.trim().length >= 2 ? (
           <div className="consignment-pm-results">
             {pmSearch.isLoading ? <div className="empty-state">Ищу в номенклатуре…</div> : null}
-            {(pmSearch.data?.items || []).map((row, index) => (
+            {[...(pmSearch.data?.items || [])].sort((a, b) => Number(/\btest(?:er|ep|or|r)?\b|тестер/i.test(`${a.name} ${a.article}`)) - Number(/\btest(?:er|ep|or|r)?\b|тестер/i.test(`${b.name} ${b.article}`))).map((row, index) => (
               <button
                 key={`${row.article}-${index}`}
                 type="button"

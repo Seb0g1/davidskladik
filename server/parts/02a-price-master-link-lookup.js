@@ -186,7 +186,7 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
           docDate: row.docDate,
         };
       });
-    map.set(link.id, matches);
+    map.set(link.id, filterSelectedRowMatchesToBestPin(link, matches));
   }
   return map;
 }

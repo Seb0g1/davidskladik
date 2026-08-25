@@ -145,9 +145,14 @@ function priceRetryDelayMs(attempts = 1, error = null) {
 
 function buildPriceRetryItem(item = {}, error = null, now = new Date()) {
   const attempts = Number(item.attempts || 0) + 1;
+  const delayedByLimitCheck = isOzonPerItemPriceLimitError(error);
+  // Drop general failures after 20 attempts to prevent the queue from getting stuck forever.
+  // Per-item-price-limit errors are exempt — Ozon unlocks them after ~65 min and they will succeed.
+  const MAX_ATTEMPTS = Number(process.env.PRICE_RETRY_MAX_ATTEMPTS || 20) || 20;
+  if (!delayedByLimitCheck && attempts > MAX_ATTEMPTS) return null;
   const delayMs = priceRetryDelayMs(attempts, error);
   const nextRetryAt = new Date(now.getTime() + delayMs).toISOString();
-  const delayedByLimit = isOzonPerItemPriceLimitError(error);
+  const delayedByLimit = delayedByLimitCheck;
   const discountQuarantine = isOzonPriceDiscountQuarantineError(error);
   const oldPriceLess = isOzonOldPriceLessError(error);
   const oldPriceAdjusted = oldPriceLess || discountQuarantine;

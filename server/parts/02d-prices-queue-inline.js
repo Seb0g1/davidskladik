@@ -223,12 +223,24 @@ function initMarketplaceQueue() {
     );
     // Clean the stale price-job backlog BEFORE the worker starts consuming, otherwise a
     // multi-thousand-job backlog pins the event loop at 100% CPU right after startup.
+    // Also remove accumulated failed jobs (>24 h) and completed jobs (>7 d) to keep Redis lean.
     void cleanStaleMarketplacePriceJobs()
       .catch(() => {})
+      .then(() => Promise.all([
+        marketplaceQueue.clean(24 * 60 * 60 * 1000, 500, "failed").catch(() => {}),
+        marketplaceQueue.clean(7 * 24 * 60 * 60 * 1000, 200, "completed").catch(() => {}),
+      ]))
       .then(() => {
         if (marketplaceWorker) marketplaceWorker.run().catch((error) => {
           logger.warn("marketplace worker run failed", { detail: error?.message || String(error) });
         });
+        // Periodic nightly cleanup so failed jobs never accumulate beyond a day
+        setInterval(() => {
+          if (marketplaceQueue) {
+            marketplaceQueue.clean(24 * 60 * 60 * 1000, 500, "failed").catch(() => {});
+            marketplaceQueue.clean(7 * 24 * 60 * 60 * 1000, 200, "completed").catch(() => {});
+          }
+        }, 24 * 60 * 60 * 1000);
       });
     marketplaceWorker.on("failed", (job, error) => {
       logger.warn("marketplace job failed", { job: job?.name, detail: error?.message || String(error) });

@@ -4,15 +4,15 @@ import { MessageCircleHeart, X, Send, ChevronDown, Loader2, CheckCheck, Clock } 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "") + "/api/shop/support";
 
 const S = {
-  bg:      "#09060F",
-  surface: "#130F1D",
-  surface2:"#1C1630",
-  border:  "rgba(255,255,255,0.07)",
-  borderMd:"rgba(255,255,255,0.12)",
-  text:    "#F0EBFF",
-  muted:   "rgba(240,235,255,0.45)",
-  accent:  "#7C3AED",
-  accentLight: "#A78BFA",
+  bg:      "#0E0D0B",
+  surface: "#161512",
+  surface2:"#1D1C18",
+  border:  "rgba(255,252,245,0.07)",
+  borderMd:"rgba(255,252,245,0.13)",
+  text:    "#F4EFE6",
+  muted:   "rgba(244,239,230,0.48)",
+  accent:  "#C9A96E",
+  accentLight: "#D9BF8F",
   success: "#4ade80",
 };
 
@@ -142,21 +142,21 @@ export default function SupportChatWidget() {
           style={{
             position: "fixed", bottom: 24, right: 24, zIndex: 9999,
             width: btnSize, height: btnSize, borderRadius: "50%",
-            background: "linear-gradient(135deg, #7c3aed, #9333ea)",
-            boxShadow: "0 8px 32px rgba(124,58,237,0.45), 0 2px 8px rgba(0,0,0,0.3)",
+            background: "linear-gradient(135deg, #C9A96E, #B89050)",
+            boxShadow: "0 8px 32px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3)",
             border: "none", cursor: "pointer",
             display: "flex", alignItems: "center", justifyContent: "center",
             transition: "transform 0.2s ease, box-shadow 0.2s ease",
           }}
-          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = "scale(1.08)"; (e.currentTarget as HTMLElement).style.boxShadow = "0 12px 40px rgba(124,58,237,0.55), 0 2px 8px rgba(0,0,0,0.3)"; }}
-          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = ""; (e.currentTarget as HTMLElement).style.boxShadow = "0 8px 32px rgba(124,58,237,0.45), 0 2px 8px rgba(0,0,0,0.3)"; }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = "scale(1.08)"; (e.currentTarget as HTMLElement).style.boxShadow = "0 12px 40px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3)"; }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = ""; (e.currentTarget as HTMLElement).style.boxShadow = "0 8px 32px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3)"; }}
         >
           <MessageCircleHeart size={24} style={{ color: "#fff" }} />
           {unread && (
             <span style={{
               position: "absolute", top: 4, right: 4, width: 12, height: 12,
               borderRadius: "50%", background: "#f43f5e",
-              border: "2px solid #09060F",
+              border: "2px solid #0E0D0B",
             }} />
           )}
         </button>
@@ -171,18 +171,18 @@ export default function SupportChatWidget() {
           display: "flex", flexDirection: "column",
           background: S.surface, borderRadius: 20,
           border: `1px solid ${S.borderMd}`,
-          boxShadow: "0 24px 64px rgba(0,0,0,0.5), 0 4px 16px rgba(124,58,237,0.15)",
+          boxShadow: "0 24px 64px rgba(0,0,0,0.5), 0 4px 16px rgba(201,169,110,0.1)",
           overflow: "hidden",
         }}>
           {/* Header */}
           <div style={{
             display: "flex", alignItems: "center", gap: 10, padding: "12px 16px",
-            background: "linear-gradient(135deg, rgba(124,58,237,0.25), rgba(147,51,234,0.15))",
+            background: "rgba(201,169,110,0.08)",
             borderBottom: `1px solid ${S.border}`, flexShrink: 0,
           }}>
             <div style={{
               width: 36, height: 36, borderRadius: 12, flexShrink: 0,
-              background: "linear-gradient(135deg, #7c3aed, #9333ea)",
+              background: "linear-gradient(135deg, #C9A96E, #B89050)",
               display: "flex", alignItems: "center", justifyContent: "center",
             }}>
               <MessageCircleHeart size={18} style={{ color: "#fff" }} />
@@ -216,7 +216,7 @@ export default function SupportChatWidget() {
                       background: S.surface2, border: `1.5px solid ${S.border}`, color: S.text,
                       outline: "none", fontFamily: "inherit", boxSizing: "border-box",
                     }}
-                    onFocus={e => (e.target.style.borderColor = "rgba(124,58,237,0.5)")}
+                    onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.45)")}
                     onBlur={e => (e.target.style.borderColor = S.border)}
                   />
                 </div>
@@ -230,7 +230,7 @@ export default function SupportChatWidget() {
                       outline: "none", fontFamily: "inherit", cursor: "pointer", boxSizing: "border-box",
                       appearance: "none",
                     }}
-                    onFocus={e => (e.target.style.borderColor = "rgba(124,58,237,0.5)")}
+                    onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.45)")}
                     onBlur={e => (e.target.style.borderColor = S.border)}
                   >
                     <option value="">Выберите категорию</option>
@@ -248,7 +248,7 @@ export default function SupportChatWidget() {
                       background: S.surface2, border: `1.5px solid ${S.border}`, color: S.text,
                       outline: "none", fontFamily: "inherit", resize: "none", boxSizing: "border-box",
                     }}
-                    onFocus={e => (e.target.style.borderColor = "rgba(124,58,237,0.5)")}
+                    onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.45)")}
                     onBlur={e => (e.target.style.borderColor = S.border)}
                   />
                 </div>
@@ -257,7 +257,7 @@ export default function SupportChatWidget() {
                   type="submit" disabled={submitting}
                   style={{
                     padding: "11px", borderRadius: 12, fontSize: 13, fontWeight: 700, color: "#fff",
-                    background: "linear-gradient(135deg, #7c3aed, #9333ea)", border: "none", cursor: "pointer",
+                    background: "linear-gradient(135deg, #C9A96E, #B89050)", border: "none", cursor: "pointer",
                     boxShadow: "0 4px 16px rgba(124,58,237,0.4)", opacity: submitting ? 0.6 : 1,
                     display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
                   }}
@@ -282,7 +282,7 @@ export default function SupportChatWidget() {
                     {msg.role === "admin" && (
                       <div style={{
                         width: 24, height: 24, borderRadius: "50%", flexShrink: 0, marginRight: 6, marginTop: 2,
-                        background: "linear-gradient(135deg, #7c3aed, #9333ea)",
+                        background: "linear-gradient(135deg, #C9A96E, #B89050)",
                         display: "flex", alignItems: "center", justifyContent: "center",
                       }}>
                         <MessageCircleHeart size={12} style={{ color: "#fff" }} />
@@ -290,7 +290,7 @@ export default function SupportChatWidget() {
                     )}
                     <div style={{
                       maxWidth: "78%", padding: "9px 12px", borderRadius: msg.role === "user" ? "16px 16px 4px 16px" : "16px 16px 16px 4px",
-                      background: msg.role === "user" ? "linear-gradient(135deg, #7c3aed, #9333ea)" : S.surface2,
+                      background: msg.role === "user" ? "linear-gradient(135deg, #C9A96E, #B89050)" : S.surface2,
                       border: msg.role === "admin" ? `1px solid ${S.border}` : "none",
                     }}>
                       <p style={{ fontSize: 13, color: S.text, lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word", margin: 0 }}>{msg.body}</p>
@@ -325,12 +325,12 @@ export default function SupportChatWidget() {
                       background: S.surface2, border: `1.5px solid ${S.border}`, color: S.text,
                       outline: "none", fontFamily: "inherit",
                     }}
-                    onFocus={e => (e.target.style.borderColor = "rgba(124,58,237,0.5)")}
+                    onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.45)")}
                     onBlur={e => (e.target.style.borderColor = S.border)}
                   />
                   <button type="submit" disabled={!reply.trim() || sending} style={{
                     padding: "9px 10px", borderRadius: 10, border: "none", cursor: "pointer",
-                    background: "linear-gradient(135deg, #7c3aed, #9333ea)",
+                    background: "linear-gradient(135deg, #C9A96E, #B89050)",
                     display: "flex", alignItems: "center", justifyContent: "center",
                     opacity: (!reply.trim() || sending) ? 0.4 : 1, flexShrink: 0,
                   }}>
@@ -341,7 +341,7 @@ export default function SupportChatWidget() {
                 <div style={{ padding: "10px 12px", borderTop: `1px solid ${S.border}`, flexShrink: 0 }}>
                   <button type="button" onClick={startNew} style={{
                     width: "100%", padding: "9px", borderRadius: 10, fontSize: 12, fontWeight: 600,
-                    color: S.accentLight, background: "rgba(124,58,237,0.1)", border: `1px solid rgba(124,58,237,0.2)`,
+                    color: S.accentLight, background: "rgba(201,169,110,0.08)", border: `1px solid rgba(124,58,237,0.2)`,
                     cursor: "pointer",
                   }}>
                     Открыть новое обращение

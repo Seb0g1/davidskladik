@@ -15,7 +15,9 @@ function linkedWarehouseProductsForReprice(warehouse = {}, { productIds, marketp
 async function readLinkedProductsForReprice({ productIds, marketplace = "all", limit = 0 } = {}) {
   const warehouse = await readWarehouse();
   const fromMemory = linkedWarehouseProductsForReprice(warehouse, { productIds, marketplace, limit });
-  if (fromMemory.length || !shouldUsePostgresStorage()) return fromMemory;
+  // API server holds a partial in-memory warehouse (individual product updates only, not the full set).
+  // Always fall through to Postgres on the API server so reprice covers all linked products.
+  if (!isApiServer && (fromMemory.length || !shouldUsePostgresStorage())) return fromMemory;
   const prisma = getPrisma();
   if (!prisma) return fromMemory;
   const idSet = Array.isArray(productIds) && productIds.length

@@ -665,6 +665,19 @@ model SupportMessage {
   @@map("support_messages")
 }
 
+model StockAlert {
+  id          String    @id @default(cuid())
+  offerId     String    @map("offer_id")
+  email       String
+  createdAt   DateTime  @default(now()) @map("created_at")
+  notifiedAt  DateTime? @map("notified_at")
+
+  @@index([offerId])
+  @@index([notifiedAt])
+  @@unique([offerId, email])
+  @@map("stock_alerts")
+}
+
 model PriceMasterSnapshotItem {
   id          String        @id @default(cuid())
   rowId       String?       @map("row_id")

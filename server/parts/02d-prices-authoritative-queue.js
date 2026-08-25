@@ -50,6 +50,15 @@ async function queueAuthoritativePriceReprice({
   priceMasterSearchCache.clear();
   invalidateWarehouseViewCache();
   const products = await readLinkedProductsForReprice({ productIds, marketplace, limit });
+  // Cheap items (testers, probes) first — they have lower marketplace prices and need urgent updates.
+  products.sort((a, b) => {
+    const ap = Number(a.currentPrice || a.targetPrice || 0) || 0;
+    const bp = Number(b.currentPrice || b.targetPrice || 0) || 0;
+    if (!ap && !bp) return 0;
+    if (!ap) return 1;
+    if (!bp) return -1;
+    return ap - bp;
+  });
   const ids = products.map((product) => String(product.id)).filter(Boolean);
   const priceIntentId = crypto.randomUUID();
   if (!ids.length) {

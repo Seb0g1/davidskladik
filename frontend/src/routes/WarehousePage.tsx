@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, PackageCheck, RefreshCw, Save, Search, Sparkles, Star, Trash2, Users, X } from "lucide-react";
+import { AlertTriangle, Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, Package, PackageCheck, RefreshCw, Save, Search, Sparkles, Star, Trash2, Users, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
-import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
+import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceHistorySchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { PmChipInput } from "../components/PmChipInput";
 import { BrandPicker } from "../components/BrandPicker";
@@ -506,7 +507,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
       `/api/pricemaster/search?q=${encodeURIComponent(debouncedSearch)}&limit=100`,
       PriceMasterSearchSchema,
     ),
-    enabled: !readOnly && debouncedSearch.trim().length >= 2,
+    enabled: !readOnly && debouncedSearch.trim().length >= 1,
     staleTime: 30_000,
   });
 
@@ -566,6 +567,22 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
         yandex: numberValue(manualPrices.yandex, 0) || null,
       },
     })),
+    onSuccess: (payload) => refreshAfterMutation(payload),
+  });
+
+  // Per-product markup coefficient override (persists on the first product in group)
+  const primaryProduct = products.length ? preferredGroupPrimary(products) : products[0];
+  const currentMarkup = Number((primaryProduct as any)?.markup || 0) || 0;
+  const [markupInput, setMarkupInput] = useState(() => currentMarkup > 0 ? String(currentMarkup) : "");
+  useEffect(() => { setMarkupInput(currentMarkup > 0 ? String(currentMarkup) : ""); }, [draftScopeKey]);
+  const markupMutation = useMutation({
+    mutationFn: async (value: number) => {
+      if (!primaryProduct) throw new Error("Нет товара");
+      return fetchJson(`/api/warehouse/products/${encodeURIComponent(primaryProduct.id)}`, MutationProductResponseSchema, patchBody({
+        markup: value,
+        expectedUpdatedAt: primaryProduct.updatedAt || undefined,
+      }));
+    },
     onSuccess: (payload) => refreshAfterMutation(payload),
   });
 
@@ -684,6 +701,36 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
         {manualPricesMutation.error && <div className="inline-error">{errorMessage(manualPricesMutation.error)}</div>}
       </div>
 
+      <div className="markup-override-box">
+        <div>
+          <strong>Личный коэффициент наценки</strong>
+          <span>Переопределяет базовую наценку из настроек для этой карточки. 0 или пусто — использовать настройки.</span>
+        </div>
+        <div className="markup-override-row">
+          <input
+            type="number" min="0.0001" step="0.01" placeholder={`база: ${primaryProduct ? ((primaryProduct as any)?.markupCoefficient || "из настроек") : "—"}`}
+            value={markupInput}
+            onChange={(event) => setMarkupInput(event.target.value)}
+            disabled={readOnly}
+            aria-label="Личный коэффициент наценки"
+          />
+          <button className="secondary-action" type="button"
+            disabled={readOnly || markupMutation.isPending || !markupInput || Number(markupInput) <= 0}
+            onClick={() => markupMutation.mutate(Number(markupInput))}>
+            {markupMutation.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить
+          </button>
+          {currentMarkup > 0 && (
+            <button className="secondary-action danger" type="button"
+              disabled={readOnly || markupMutation.isPending}
+              onClick={() => { setMarkupInput(""); markupMutation.mutate(0); }}
+              title="Сбросить личный коэффициент, использовать базовые настройки">
+              Сброс (×{currentMarkup})
+            </button>
+          )}
+        </div>
+        {markupMutation.error && <div className="inline-error">{errorMessage(markupMutation.error)}</div>}
+      </div>
+
       {priceLimitProducts.length > 0 ? (
         <div className="warning-strip compact">
           <span>
@@ -795,7 +842,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
           <div className="pm-results">
             {searchQuery.isFetching && <div className="soft-empty compact"><Loader2 className="spin" size={16} /> Ищу в PriceMaster...</div>}
             {searchQuery.error && <div className="inline-error">{errorMessage(searchQuery.error)}</div>}
-            {searchQuery.data?.rows.map((row) => {
+            {[...(searchQuery.data?.rows ?? [])].sort((a, b) => Number(a.isTester || a.isOtlivant) - Number(b.isTester || b.isOtlivant)).map((row) => {
               const rowDraft = draftFromSearchRow(row);
               const alreadySelected = draftKeys.has(linkPrimarySignature(rowDraft));
               return (
@@ -2178,6 +2225,13 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
     queryFn: () => fetchJson(`/api/warehouse/products/diagnostics?sku=${encodeURIComponent(primary?.offerId || "")}`, DiagnosticsSchema),
     enabled: diagnosticsOpen && Boolean(primary?.offerId),
   });
+  const [priceHistoryExpanded, setPriceHistoryExpanded] = useState(false);
+  const priceHistoryQuery = useQuery({
+    queryKey: ["price-history", primary?.id, priceHistoryExpanded],
+    queryFn: () => fetchJson(`/api/warehouse/prices/history?productId=${encodeURIComponent(String(primary?.id || ""))}&limit=${priceHistoryExpanded ? 30 : 5}`, PriceHistorySchema),
+    enabled: Boolean(primary?.id),
+    staleTime: 5 * 60_000,
+  });
   const detailGroup = useMemo(() => {
     if (!products.length) return undefined;
     const grouped = groupProductsForList(products);
@@ -2260,6 +2314,31 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
         <Stat label="Остаток" value={primary.targetStock || primary.stock || "-"} />
         <Stat label="Привязки" value={groupLinkCount} />
       </div>
+      {priceHistoryQuery.data?.items?.length ? (
+        <div className="price-history-mini">
+          <div className="price-history-header">
+            <span className="section-label">История цен</span>
+            <button type="button" className="link-action" onClick={() => setPriceHistoryExpanded((e) => !e)}>
+              {priceHistoryExpanded ? "Свернуть" : `Все (${priceHistoryQuery.data.items.length < 5 ? priceHistoryQuery.data.items.length : "30+"})`}
+            </button>
+          </div>
+          {priceHistoryQuery.data.items.map((item, i, arr) => {
+            const raw = item as Record<string, unknown>;
+            const price = Number(raw.newPrice || raw.price || 0);
+            const prevPrice = i + 1 < arr.length ? Number((arr[i + 1] as Record<string, unknown>).newPrice || (arr[i + 1] as Record<string, unknown>).price || 0) : 0;
+            const delta = prevPrice > 0 ? price - prevPrice : 0;
+            const mp = String(raw.marketplace || raw.market || "");
+            const mpLabel = mp === "ozon" ? "Ozon" : mp === "yandex" ? "ЯМ" : mp === "wb" ? "WB" : mp || "";
+            return (
+              <div key={i} className="price-history-item">
+                <span className="muted-note">{compactDate(String(raw.createdAt || raw.at || ""))}</span>
+                <span className={delta > 0 ? "price-up" : delta < 0 ? "price-down" : ""}>{money(price)}{delta !== 0 && <span className="price-delta">{delta > 0 ? `+${money(delta)}` : money(delta)}</span>}</span>
+                <span className="muted-note">{mpLabel && <span className="mp-badge">{mpLabel}</span>}{String(raw.reason || raw.status || raw.source || "").slice(0, 32)}</span>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
       {!demoMode && (liveRefresh.isPending || liveRefreshedAt) ? (
         <small className="live-refresh-note">
           {liveRefresh.isPending ? (
@@ -2304,6 +2383,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const debouncedQ = useDebounced(filters.q, 450);
   const effectiveFilters = { ...filters, q: debouncedQ };
   const parentRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const brandsQuery = useQuery({
     queryKey: ["warehouse", "brands"],
     queryFn: () => fetchJson("/api/warehouse/brands", WarehouseBrandsSchema),
@@ -2331,6 +2411,27 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   useEffect(() => {
     writeWarehouseLocation(filters, selectedGroup, true);
   }, [filters, selectedGroup]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "/") return;
+      const tag = (document.activeElement as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      e.preventDefault();
+      searchInputRef.current?.focus();
+      searchInputRef.current?.select();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const ordersCountQuery = useQuery({
+    queryKey: ["ready-to-ship"],
+    queryFn: () => fetchJson("/api/ready-to-ship?days=3&limit=200", z.object({ total: z.number().optional().default(0), lines: z.array(z.unknown()).optional().default([]) }).passthrough()),
+    staleTime: 2 * 60_000,
+    refetchInterval: 5 * 60_000,
+  });
+  const activeOrdersCount = ordersCountQuery.data?.total ?? (ordersCountQuery.data?.lines?.length ?? null);
 
   const pageQuery = useQuery({
     queryKey: ["warehouse", "page", effectiveFilters],
@@ -2440,12 +2541,19 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
       <PageHeader
         title="Новый каталог"
         subtitle="Быстрый поиск, привязки PriceMaster, остатки, цены, AI-фото и диагностика в одном рабочем экране."
-        action={<button className="secondary-action" type="button" onClick={() => pageQuery.refetch()}><RefreshCw size={16} /> Обновить</button>}
+        action={<>
+          {activeOrdersCount !== null ? (
+            <span className={`orders-count-badge ${activeOrdersCount > 0 ? "has-orders" : ""}`}>
+              <Package size={14} /> {activeOrdersCount} заказов ждут сборки
+            </span>
+          ) : null}
+          <button className="secondary-action" type="button" onClick={() => pageQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
+        </>}
       />
       <section className="toolbar">
         <label className="search-box">
           <Search size={18} />
-          <input value={filters.q} onChange={(event) => setFilter("q", event.target.value)} placeholder="Поиск: 41059, CC-AASH5001, НФ-00004538" />
+          <input ref={searchInputRef} value={filters.q} onChange={(event) => setFilter("q", event.target.value)} placeholder="Поиск: 41059, CC-AASH5001, НФ-00004538" />
         </label>
         <SelectField
           ariaLabel="Маркетплейс"

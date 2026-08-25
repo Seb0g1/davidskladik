@@ -6,25 +6,27 @@ import { api } from "../api";
 import type { ShopOrder } from "../types";
 
 const S = {
-  bg:      "#09060F",
-  surface: "#130F1D",
-  surface2:"#1C1630",
-  border:  "rgba(255,255,255,0.07)",
-  borderMd:"rgba(255,255,255,0.12)",
-  text:    "#F0EBFF",
-  muted:   "rgba(240,235,255,0.45)",
-  subtle:  "rgba(240,235,255,0.2)",
-  accent:  "#7C3AED",
-  accent3: "#C4B5FD",
+  bg:      "#0E0D0B",
+  surface: "#161512",
+  surface2:"#1D1C18",
+  border:  "rgba(255,252,245,0.07)",
+  borderMd:"rgba(255,252,245,0.13)",
+  text:    "#F4EFE6",
+  muted:   "rgba(244,239,230,0.48)",
+  subtle:  "rgba(244,239,230,0.22)",
+  accent:  "#C9A96E",
+  accent3: "#EDD9B0",
 };
 
 const STATUS_MAP: Record<string, { label: string; color: string; icon: typeof Package }> = {
-  pending:    { label: "Принят",       color: "#f59e0b", icon: Clock },
-  processing: { label: "В обработке",  color: "#3b82f6", icon: Clock },
-  picking:    { label: "Собирается",   color: "#8b5cf6", icon: Package },
-  shipped:    { label: "Отправлен",    color: "#0ea5e9", icon: Truck },
-  delivered:  { label: "Доставлен",    color: "#10b981", icon: CheckCircle },
-  cancelled:  { label: "Отменён",      color: "#ef4444", icon: Package },
+  pending:         { label: "Принят",           color: "#f59e0b", icon: Clock },
+  payment_pending: { label: "Ожидает оплаты",   color: "#f59e0b", icon: Clock },
+  paid:            { label: "Оплачен",           color: "#10b981", icon: CheckCircle },
+  confirmed:       { label: "Подтверждён",       color: "#3b82f6", icon: Clock },
+  picking:         { label: "Собирается",        color: "#8b5cf6", icon: Package },
+  shipped:         { label: "Отправлен",         color: "#0ea5e9", icon: Truck },
+  delivered:       { label: "Доставлен",         color: "#10b981", icon: CheckCircle },
+  cancelled:       { label: "Отменён",           color: "#ef4444", icon: Package },
 };
 
 function StatusBadge({ status }: { status: string }) {
@@ -101,13 +103,13 @@ function OrdersTab({ token }: { token: string }) {
 
   if (!orders.length) return (
     <div style={{ textAlign: "center", padding: "80px 20px" }}>
-      <div style={{ width: 56, height: 56, borderRadius: 18, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", background: "rgba(124,58,237,0.1)", border: "1px solid rgba(124,58,237,0.2)" }}>
+      <div style={{ width: 56, height: 56, borderRadius: 18, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px", background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.15)" }}>
         <Package size={24} style={{ color: S.accent3 }} strokeWidth={1.5} />
       </div>
       <div style={{ fontSize: 15, fontWeight: 600, color: S.text, marginBottom: 6 }}>Заказов пока нет</div>
       <div style={{ fontSize: 13, color: S.muted, marginBottom: 24 }}>Ваши заказы появятся здесь</div>
       <Link to="/catalog" style={{ fontSize: 13, fontWeight: 600, color: S.accent3, textDecoration: "none", transition: "color 0.15s" }}
-        onMouseEnter={e => (e.currentTarget.style.color = "#A78BFA")}
+        onMouseEnter={e => (e.currentTarget.style.color = "var(--accent)")}
         onMouseLeave={e => (e.currentTarget.style.color = S.accent3)}>
         Перейти в каталог
       </Link>
@@ -126,7 +128,7 @@ function DarkInput({ label, ...props }: { label: string } & React.InputHTMLAttri
     <div>
       <label style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.1em", color: S.subtle, marginBottom: 6 }}>{label}</label>
       <input {...props} style={{ width: "100%", padding: "11px 14px", background: "rgba(255,255,255,0.05)", border: `1.5px solid ${S.border}`, borderRadius: 12, fontSize: 13, fontFamily: "inherit", color: S.text, outline: "none", transition: "all 0.15s ease" }}
-        onFocus={e => { (e.target as HTMLInputElement).style.borderColor = "rgba(167,139,250,0.4)"; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.08)"; }}
+        onFocus={e => { (e.target as HTMLInputElement).style.borderColor = "rgba(201,169,110,0.4)"; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.08)"; }}
         onBlur={e => { (e.target as HTMLInputElement).style.borderColor = S.border; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.05)"; }} />
     </div>
   );
@@ -232,7 +234,7 @@ export default function AccountPage() {
             width: 48, height: 48, borderRadius: 16, display: "flex", alignItems: "center", justifyContent: "center",
             fontWeight: 800, fontSize: 18, color: "#fff", flexShrink: 0,
             background: "linear-gradient(135deg, #7c3aed, #9333ea)",
-            boxShadow: "0 0 24px rgba(124,58,237,0.4)",
+            boxShadow: "0 0 24px rgba(201,169,110,0.3)",
           }}>
             {(customer.firstName || customer.email)[0].toUpperCase()}
           </div>

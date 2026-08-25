@@ -50,7 +50,7 @@ function defaultAppSettings() {
       timezone: "Europe/Moscow",
       mode: "draft",
       marketplaces: ["ozon", "yandex", "wb"],
-      lookbackHours: 48,
+      lookbackHours: 168,
       includeOzonStatuses: ["awaiting_packaging", "awaiting_deliver"],
       includeYandexStatuses: ["PROCESSING"],
       includeYandexSubstatuses: ["STARTED", "PACKAGING", "READY_TO_SHIP"],

@@ -3,16 +3,16 @@ import { Trash2, Plus, Minus, ShoppingBag, ArrowRight, Package } from "lucide-re
 import { useCart } from "../CartContext";
 
 const S = {
-  bg:      "#09060F",
-  surface: "#130F1D",
-  surface2:"#1C1630",
-  border:  "rgba(255,255,255,0.07)",
-  borderMd:"rgba(255,255,255,0.12)",
-  text:    "#F0EBFF",
-  muted:   "rgba(240,235,255,0.45)",
-  subtle:  "rgba(240,235,255,0.2)",
-  accent:  "#7C3AED",
-  accent3: "#C4B5FD",
+  bg:      "#0E0D0B",
+  surface: "#161512",
+  surface2:"#1D1C18",
+  border:  "rgba(255,252,245,0.07)",
+  borderMd:"rgba(255,252,245,0.13)",
+  text:    "#F4EFE6",
+  muted:   "rgba(244,239,230,0.48)",
+  subtle:  "rgba(244,239,230,0.22)",
+  accent:  "#C9A96E",
+  accent3: "#EDD9B0",
 };
 
 export default function CartPage() {
@@ -24,7 +24,7 @@ export default function CartPage() {
         <div style={{ textAlign: "center", padding: "80px 20px" }}>
           <div style={{
             width: 72, height: 72, borderRadius: 24, display: "flex", alignItems: "center", justifyContent: "center",
-            margin: "0 auto 24px", background: "rgba(124,58,237,0.1)", border: "1px solid rgba(124,58,237,0.2)",
+            margin: "0 auto 24px", background: "rgba(201,169,110,0.1)", border: "1px solid rgba(201,169,110,0.2)",
           }}>
             <ShoppingBag size={32} style={{ color: S.accent3 }} strokeWidth={1.5} />
           </div>
@@ -38,7 +38,7 @@ export default function CartPage() {
     );
   }
 
-  const delivery = totalRub >= 3000 ? 0 : 350;
+  const delivery = 0;
   const total = totalRub + delivery;
 
   return (
@@ -128,15 +128,8 @@ export default function CartPage() {
                 </div>
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, color: S.muted }}>
                   <span>Доставка Ozon</span>
-                  {delivery === 0
-                    ? <span style={{ color: "#4ade80", fontWeight: 600 }}>Бесплатно</span>
-                    : <span style={{ color: S.text, fontWeight: 500 }}>{delivery} ₽</span>}
+                  <span style={{ color: "#4ade80", fontWeight: 600 }}>Бесплатно</span>
                 </div>
-                {delivery > 0 && (
-                  <div style={{ fontSize: 11, color: "#f59e0b", background: "rgba(245,158,11,0.1)", borderRadius: 10, padding: "8px 12px", border: "1px solid rgba(245,158,11,0.15)" }}>
-                    До бесплатной доставки: {(3000 - totalRub).toLocaleString("ru-RU")} ₽
-                  </div>
-                )}
               </div>
 
               <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 16, marginBottom: 20 }}>

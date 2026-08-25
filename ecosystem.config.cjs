@@ -54,7 +54,7 @@ const workerOnlyEnv = {
   WORKER_HEALTH_PORT: "3001",
   BACKGROUND_JOBS_ENABLED: "true",
   BULLMQ_ENABLED: "true",
-  BULLMQ_WORKER_CONCURRENCY: "3",
+  BULLMQ_WORKER_CONCURRENCY: "8",
   AUTO_SYNC_MINUTES: "10",
   AUTO_SYNC_INITIAL_DELAY_SECONDS: "120",
   AUTO_SYNC_STOCK_RECONCILE_ENABLED: "true",
@@ -92,7 +92,7 @@ const workerOnlyEnv = {
   OZON_PRICE_BATCH_DELAY_MS: "300",
   // 200 → 100: halves per-job memory footprint for auto-price-push jobs,
   // reducing concurrent heap pressure when multiple jobs run alongside warehouse write.
-  AUTHORITATIVE_REPRICE_BATCH_SIZE: "100",
+  AUTHORITATIVE_REPRICE_BATCH_SIZE: "50",
 };
 
 module.exports = {

@@ -78,13 +78,20 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
     });
     const existingOfferIds = new Set(yandexRows.map((row) => cleanText(row.offerId).toLowerCase()).filter(Boolean));
 
+    // Tokenize query: each token must appear in offerId OR name (AND across tokens).
+    // "Sauvage 100" → finds "Dior Sauvage EDP 100ml", not just literal "Sauvage 100" substring.
+    const qTokens = q ? q.split(/\s+/).map(t => t.trim()).filter(t => t.length >= 2) : [];
+    const searchTokens = qTokens.length > 0 ? qTokens : (q ? [q] : []);
+
     const where = { marketplace: "ozon", archived: false };
-    if (q) {
-      where.OR = [
-        { offerId: { contains: q, mode: "insensitive" } },
-        { name: { contains: q, mode: "insensitive" } },
-        { productId: { contains: q, mode: "insensitive" } },
-      ];
+    if (searchTokens.length > 0) {
+      where.AND = searchTokens.map(token => ({
+        OR: [
+          { offerId: { contains: token, mode: "insensitive" } },
+          { name: { contains: token, mode: "insensitive" } },
+          { productId: { contains: token, mode: "insensitive" } },
+        ],
+      }));
     }
     if (brand) where.brand = { contains: brand, mode: "insensitive" };
 
@@ -101,8 +108,12 @@ app.get("/api/ozon-yandex-import/candidates", requireAdmin, async (request, resp
     if (onlyEligible) {
       const scanLimit = 50000;
       const chunkSize = 1000;
-      const qFilter = q
-        ? Prisma.sql`AND (LOWER(wp.offer_id) LIKE ${`%${q.toLowerCase()}%`} OR LOWER(wp.name) LIKE ${`%${q.toLowerCase()}%`})`
+      // Build AND filter per token: each token must match offer_id OR name
+      const qFilter = searchTokens.length > 0
+        ? searchTokens.reduce((acc, token) => {
+            const like = `%${token.toLowerCase()}%`;
+            return Prisma.sql`${acc} AND (LOWER(wp.offer_id) LIKE ${like} OR LOWER(wp.name) LIKE ${like})`;
+          }, Prisma.empty)
         : Prisma.empty;
       const brandFilter = brand
         ? Prisma.sql`AND LOWER(wp.brand) LIKE ${`%${brand.toLowerCase()}%`}`

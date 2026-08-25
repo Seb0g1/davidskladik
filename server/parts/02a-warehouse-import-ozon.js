@@ -30,7 +30,7 @@ function buildOzonImportedWarehouseProduct(account, product, { info = {}, stockI
     marketplaceState,
     ozon: {
       offerId: product.offer_id,
-      vendor: cleanText(info.brand || info.vendor || ""),
+      vendor: cleanText(info.brand || info.vendor || extractBrandFromAttributes(info.attributes || info.complex_attributes?.[0]?.attributes || [])),
       name: info.name || product.name || product.offer_id,
       description: info.description || "",
       categoryId: info.description_category_id || info.category_id,

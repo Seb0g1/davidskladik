@@ -1,6 +1,5 @@
 import { Outlet, useLocation } from "react-router-dom";
 import { useEffect } from "react";
-import { MessageCircle } from "lucide-react";
 import Header from "./Header";
 import Footer from "./Footer";
 
@@ -36,16 +35,6 @@ export default function Layout() {
         <Outlet />
       </main>
       <Footer />
-      {/* Floating support button */}
-      <a
-        href="https://davidsklad.ru"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="support-fab"
-        title="Техподдержка"
-      >
-        <MessageCircle size={20} />
-      </a>
     </div>
   );
 }

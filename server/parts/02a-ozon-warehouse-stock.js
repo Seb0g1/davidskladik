@@ -52,11 +52,73 @@ async function getOzonWarehouses(account = null, { refresh = false } = {}) {
   const cacheKey = cleanText(selectedAccount?.id || selectedAccount?.clientId || "ozon");
   const cached = ozonWarehouseCache.get(cacheKey);
   if (!refresh && cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.items;
-  const data = await ozonRequest("/v1/warehouse/list", {}, selectedAccount);
-  const raw = data.result || data.warehouses || data.items || [];
-  const items = (Array.isArray(raw) ? raw : raw.warehouses || raw.items || [])
-    .map(normalizeOzonWarehouse)
-    .filter(Boolean);
+  let items = [];
+  try {
+    const data = await ozonRequest("/v1/warehouse/list", {}, selectedAccount);
+    const raw = data.result || data.warehouses || data.items || [];
+    items = (Array.isArray(raw) ? raw : raw.warehouses || raw.items || [])
+      .map(normalizeOzonWarehouse)
+      .filter(Boolean);
+  } catch (warehouseListError) {
+    // /v1/warehouse/list is marked obsolete for some account types — fall back to delivery methods
+    if (!String(warehouseListError?.message || "").includes("obsolete")) {
+      // Always cache to avoid spamming the API on repeated failures
+      ozonWarehouseCache.set(cacheKey, { at: Date.now(), items: [] });
+      throw warehouseListError;
+    }
+    // Try several fallback endpoints to discover FBS warehouse IDs
+    const fallbackEndpoints = [
+      { path: "/v1/delivery-method/list", body: { filter: { status: "ACTIVE" }, limit: 50, offset: 0 }, extract: (d) => (Array.isArray(d.result) ? d.result : []).map((m) => ({ warehouseId: cleanText(String(m.warehouse_id || "")), warehouseName: cleanText(m.warehouse_name || m.name || "") })) },
+      { path: "/v2/warehouse/list", body: {}, extract: (d) => { const raw = d.result || d.warehouses || d.items || []; return (Array.isArray(raw) ? raw : []).map((w) => ({ warehouseId: cleanText(String(w.warehouse_id || w.id || "")), warehouseName: cleanText(w.warehouse_name || w.name || "") })); } },
+    ];
+    let fallbackUsed = "";
+    for (const { path, body, extract } of fallbackEndpoints) {
+      try {
+        const data = await ozonRequest(path, body, selectedAccount);
+        const extracted = extract(data);
+        const seen = new Set();
+        for (const { warehouseId, warehouseName } of extracted) {
+          if (warehouseId && !seen.has(warehouseId)) {
+            seen.add(warehouseId);
+            items.push({ warehouseId, warehouseName });
+          }
+        }
+        fallbackUsed = path;
+        break;
+      } catch (fallbackError) {
+        logger.warn("ozon warehouse fallback endpoint failed", { account: cacheKey, path, detail: fallbackError?.message || String(fallbackError) });
+      }
+    }
+    // Last resort: discover warehouse from an existing product's stock data
+    if (!items.length) {
+      try {
+        const productList = await ozonRequest("/v3/product/list", { filter: { visibility: "ALL" }, limit: 1, last_id: "" }, selectedAccount);
+        const firstOfferId = productList.result?.items?.[0]?.offer_id;
+        if (firstOfferId) {
+          const stockData = await ozonRequest("/v4/product/info/stocks", { filter: { offer_id: [firstOfferId], visibility: "ALL" }, limit: 1, last_id: "" }, selectedAccount);
+          const seen = new Set();
+          for (const stockItem of stockData.result?.items || []) {
+            for (const stockEntry of stockItem.stocks || []) {
+              const warehouseId = cleanText(String(stockEntry.warehouse_id || ""));
+              if (warehouseId && warehouseId !== "0" && !seen.has(warehouseId)) {
+                seen.add(warehouseId);
+                items.push({ warehouseId, warehouseName: cleanText(stockEntry.warehouse_name || "") });
+              }
+            }
+          }
+          if (items.length) fallbackUsed = "/v4/product/info/stocks";
+        }
+      } catch (stockError) {
+        logger.warn("ozon warehouse fallback endpoint failed", { account: cacheKey, path: "/v4/product/info/stocks", detail: stockError?.message || String(stockError) });
+      }
+    }
+    if (items.length) {
+      logger.info("ozon warehouse discovery via fallback", { account: cacheKey, fallback: fallbackUsed, warehouses: items.length, warehouseIds: items.map((w) => w.warehouseId) });
+    } else {
+      logger.warn("ozon warehouse discovery failed — set OZON_STOCK_WAREHOUSE_IDS_OZON_3D10EC43 in env to configure manually", { account: cacheKey });
+    }
+  }
+  // Always cache result (even empty) to avoid re-hitting the API on every product call
   ozonWarehouseCache.set(cacheKey, { at: Date.now(), items });
   return items;
 }

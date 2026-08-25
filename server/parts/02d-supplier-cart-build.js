@@ -46,13 +46,19 @@ async function buildSupplierCartPreview(params = {}) {
     uniqueLines.map((line) => line.offerId),
   );
   const state = await readSupplierCartState();
+  // Pre-fetch all PM matches in one batch to avoid N+1 MySQL queries per order row.
+  const preloadedUsdRate = await getUsdRate();
+  const allWarehouseLinks = (warehouse.products || []).flatMap((p) => p.links || []);
+  const preloadedMatches = allWarehouseLinks.length
+    ? await getBatchPriceMasterMatchesForLinks(allWarehouseLinks, warehouse.suppliers || [], preloadedUsdRate, { timeoutMs: 8000 }).catch(() => null)
+    : null;
   const rows = [];
   const RESOLVE_BATCH = 20;
   for (let batchStart = 0; batchStart < uniqueLines.length; batchStart += RESOLVE_BATCH) {
     const batch = uniqueLines.slice(batchStart, batchStart + RESOLVE_BATCH);
     for (const line of batch) {
       try {
-        rows.push(await resolveSupplierCartRow(warehouse, line, state));
+        rows.push(await resolveSupplierCartRow(warehouse, line, state, { preloadedMatches, preloadedUsdRate }));
       } catch (error) {
         rows.push(normalizeSupplierCartPreviewRow({
           ...line,
@@ -161,7 +167,7 @@ async function processSupplierCartAutoGenerate({ source = "scheduler" } = {}) {
       return { ...supplierCartAutoLastResult, ...supplierCartAutomationPublic() };
     }
     const systemRequest = { session: { username: "system", role: "admin" } };
-    const result = await generateSupplierCartDraft({ marketplace: "all", limit: Number(process.env.SUPPLIER_CART_AUTO_LIMIT || 300) || 300 }, systemRequest);
+    const result = await generateSupplierCartDraft({ marketplace: "all", limit: Number(process.env.SUPPLIER_CART_AUTO_LIMIT || 500) || 500 }, systemRequest);
     supplierCartAutoLastResult = {
       ok: true,
       source,

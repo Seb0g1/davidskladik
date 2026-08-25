@@ -40,7 +40,7 @@ async function runStockSweep({ source = "schedule" } = {}) {
           OR (p.marketplace = 'yandex' AND jsonb_array_length(COALESCE(p.raw->'links', '[]'::jsonb)) > 0)
         )
         AND (
-          COALESCE(p.target_stock, 0) <= 0
+          p.target_stock IS NULL
           OR COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) < p.target_stock
         )
       ORDER BY p.updated_at DESC
@@ -78,10 +78,14 @@ async function runStockSweep({ source = "schedule" } = {}) {
       });
     const now = new Date().toISOString();
     const products = builtProducts
-      .filter((product) => product?.selectedSupplier && product.hasLinks && !product.hasSnoozedLinks)
+      .filter((product) => product?.selectedSupplier && product.hasLinks && !product.hasSnoozedLinks
+        // Skip products with explicit targetStock=0 — they were intentionally zeroed (e.g. brand ban).
+        && !(Number(product.targetStock) === 0))
       .map((product) => ({
         ...product,
-        targetStock: Math.max(linkedDefaultTargetStock, Math.round(Number(product.targetStock || 0)) || 0),
+        targetStock: product.targetStock != null && product.targetStock > 0
+          ? Math.round(Number(product.targetStock))
+          : linkedDefaultTargetStock,
         updatedAt: now,
       }));
     if (!products.length) return { status: "ok", candidates: rows.length, sent: 0 };

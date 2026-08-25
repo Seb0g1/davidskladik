@@ -1,15 +1,15 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, Plus, RefreshCw, Repeat2, Search, Zap } from "lucide-react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
-import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartOverrideSchema, SupplierCartPreviewSchema, SupplierCartScheduleSchema } from "../types";
+import { OperationCreateSchema, OperationDetailSchema, OperationsSchema, SupplierAlternativesSchema, SupplierCartCommitSchema, SupplierCartHistorySchema, SupplierCartOverrideSchema, SupplierCartPreviewSchema, SupplierCartScheduleSchema } from "../types";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
 import { DiagnosticValue } from "../components/DiagnosticValue";
-import { asRecord, compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
+import { asRecord, compactDate, copyPlainText, errorMessage, money, numberValue, useDebounced } from "../lib/common";
 
 function jobStatusLabel(status: unknown): string {
   return ({ queued: "Ожидает", running: "В работе", completed: "Готово", failed: "Ошибка" } as Record<string, string>)[String(status || "")] || String(status || "-");
@@ -38,7 +38,8 @@ function jobSummary(job: Record<string, unknown>): string {
 
 function operationIssueType(value: unknown): "pending" | "expected marketplace block" | "queue error" | "hard error" {
   const text = JSON.stringify(value || {}).toLowerCase();
-  if (text.includes("pending") || text.includes("not_visible_after_api") || text.includes("accepted")) return "pending";
+  // Use includes('"pending"') to avoid matching "payment_pending", "price_pending" etc.
+  if (text.includes('"pending"') || text.includes("not_visible_after_api") || text.includes("accepted")) return "pending";
   if (text.includes("fbo") || text.includes("forbidden") || text.includes("marketplace block") || text.includes("already")) return "expected marketplace block";
   if (text.includes("queue") || text.includes("stalled") || text.includes("bullmq") || text.includes("redis")) return "queue error";
   return "hard error";
@@ -191,10 +192,14 @@ export function SupplierCartPanel() {
   const [manualQty, setManualQty] = useState(1);
   const [manualMp, setManualMp] = useState("ozon");
   const [manualNote, setManualNote] = useState("");
+  const [manualPartnerId, setManualPartnerId] = useState("");
+  const [manualRowId, setManualRowId] = useState("");
+  const debouncedManualOfferId = useDebounced(manualOfferId.trim(), 400);
   const queryClient = useQueryClient();
   const draftQuery = useQuery({
     queryKey: ["supplier-cart-draft"],
     queryFn: () => fetchJson("/api/supplier-cart/draft", SupplierCartPreviewSchema),
+    refetchInterval: 5 * 60 * 1000,
   });
   const generateMutation = useMutation({
     mutationFn: () => fetchJson("/api/supplier-cart/generate", SupplierCartPreviewSchema, mutationBody({ marketplace, limit })),
@@ -203,6 +208,7 @@ export function SupplierCartPanel() {
       setSelected(new Set((payload.rows || []).filter((row) => row.ready && !row.alreadyCommitted).map((row) => row.key)));
     },
   });
+  useEffect(() => { void generateMutation.mutate(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const commitMutation = useMutation({
     mutationFn: () => fetchJson("/api/supplier-cart/commit", SupplierCartCommitSchema, mutationBody({
       rows: (generateMutation.data || draftQuery.data)?.rows || [],
@@ -224,17 +230,28 @@ export function SupplierCartPanel() {
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
     },
   });
+  const manualSuppliersQuery = useQuery({
+    queryKey: ["manual-order-suppliers", debouncedManualOfferId],
+    queryFn: () => fetchJson(`/api/supplier-cart/alternatives?offerId=${encodeURIComponent(debouncedManualOfferId)}`, SupplierAlternativesSchema),
+    enabled: debouncedManualOfferId.length >= 2 && showManualOrder,
+    staleTime: 30_000,
+  });
+  const manualOptions = manualSuppliersQuery.data?.options ?? [];
+
   const manualOrderMutation = useMutation({
     mutationFn: () => fetchJson("/api/supplier-cart/manual-order", ManualOrderResultSchema, mutationBody({
       offerId: manualOfferId.trim(),
       quantity: manualQty,
       marketplace: manualMp,
       note: manualNote.trim(),
+      ...(manualPartnerId ? { partnerId: manualPartnerId, rowId: manualRowId } : {}),
     })),
     onSuccess: () => {
       setManualOfferId("");
       setManualQty(1);
       setManualNote("");
+      setManualPartnerId("");
+      setManualRowId("");
       setShowManualOrder(false);
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
     },
@@ -282,7 +299,7 @@ export function SupplierCartPanel() {
             <Plus size={16} /> Ручной заказ
           </button>
           <button className="secondary-action" type="button" onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
-            {generateMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Сгенерировать корзину
+            {generateMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить корзину
           </button>
         </div>
       </div>
@@ -322,11 +339,11 @@ export function SupplierCartPanel() {
         <div className="table-panel supplier-cart-manual-form">
           <div className="section-title compact-title">
             <div><span>Ручной заказ</span><h3>Добавить товар без заказа маркетплейса</h3></div>
-            <button className="secondary-action" type="button" onClick={() => setShowManualOrder(false)}>Закрыть</button>
+            <button className="secondary-action" type="button" onClick={() => { setShowManualOrder(false); setManualOfferId(""); setManualPartnerId(""); setManualRowId(""); }}>Закрыть</button>
           </div>
           <div className="control-grid compact-controls">
             <label>SKU (артикул)
-              <input value={manualOfferId} onChange={(e) => setManualOfferId(e.target.value)} placeholder="Артикул товара" />
+              <input value={manualOfferId} onChange={(e) => { setManualOfferId(e.target.value); setManualPartnerId(""); setManualRowId(""); }} placeholder="Артикул товара" />
             </label>
             <label>Количество
               <input type="number" min="1" value={manualQty} onChange={(e) => setManualQty(Math.max(1, Number(e.target.value) || 1))} />
@@ -347,6 +364,40 @@ export function SupplierCartPanel() {
               <input value={manualNote} onChange={(e) => setManualNote(e.target.value)} placeholder="Комментарий к заказу" />
             </label>
           </div>
+          {debouncedManualOfferId.length >= 2 && (
+            <div className="manual-order-suppliers">
+              <div className="manual-order-suppliers-title">
+                Поставщики{manualSuppliersQuery.isFetching ? <Loader2 className="spin" size={13} /> : null}
+                {manualPartnerId ? <span className="manual-supplier-selected-label"> · выбран</span> : <span className="manual-supplier-auto-label"> · авто</span>}
+              </div>
+              {manualOptions.length === 0 && !manualSuppliersQuery.isFetching && (
+                <div className="muted-hint">{manualSuppliersQuery.data?.skipReason || "Нет поставщиков для этого артикула"}</div>
+              )}
+              <div className="manual-order-supplier-list">
+                {manualOptions.map((opt) => {
+                  const isPriority = /сорин|инна/i.test(opt.supplierName);
+                  const isSelected = manualPartnerId === opt.partnerId && (!manualRowId || manualRowId === opt.rowId);
+                  const unavailable = !opt.orderable || opt.blocked || opt.cutoffPassed;
+                  return (
+                    <button
+                      key={`${opt.partnerId}|${opt.rowId}`}
+                      type="button"
+                      className={`manual-supplier-option${isSelected ? " selected" : ""}${unavailable ? " unavailable" : ""}${isPriority ? " priority" : ""}`}
+                      onClick={() => { setManualPartnerId(isSelected ? "" : opt.partnerId); setManualRowId(isSelected ? "" : opt.rowId); }}
+                      title={opt.blocked ? "Заблокирован" : opt.cutoffPassed ? "Время заказа прошло" : !opt.available ? "Нет наличия" : ""}
+                    >
+                      <span className="supplier-opt-name">{opt.supplierName || opt.partnerId}</span>
+                      {isPriority && <span className="supplier-priority-badge">★</span>}
+                      {opt.price > 0 && <span className="supplier-opt-price">{opt.price} {opt.priceCurrency}</span>}
+                      {opt.blocked && <span className="supplier-opt-tag blocked">блок</span>}
+                      {opt.cutoffPassed && <span className="supplier-opt-tag cutoff">поздно</span>}
+                      {!opt.available && !opt.blocked && <span className="supplier-opt-tag nostock">нет</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           <div className="supplier-cart-actions">
             <button
               className="primary-action"
@@ -354,7 +405,10 @@ export function SupplierCartPanel() {
               disabled={!manualOfferId.trim() || manualOrderMutation.isPending}
               onClick={() => manualOrderMutation.mutate()}
             >
-              {manualOrderMutation.isPending ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Заказать у поставщика
+              {manualOrderMutation.isPending ? <Loader2 className="spin" size={16} /> : <Plus size={16} />}
+              {manualPartnerId
+                ? `Заказать у ${manualOptions.find((o) => o.partnerId === manualPartnerId)?.supplierName || manualPartnerId}`
+                : "Заказать у поставщика (авто)"}
             </button>
           </div>
           {manualOrderMutation.data ? (
@@ -384,6 +438,7 @@ export function SupplierCartPanel() {
           <DiagnosticValue label="Уже в PM" value={previewData.alreadyCommitted} />
           <DiagnosticValue label="Пропущено" value={previewData.skipped} tone={previewData.skipped ? "warning" : ""} />
           <DiagnosticValue label="Черновик" value={previewData.generatedAt ? compactDate(previewData.generatedAt) : "-"} />
+          {previewData.generatedBy ? <DiagnosticValue label="Кем" value={previewData.generatedBy} /> : null}
         </div>
       ) : null}
       {previewData?.warnings?.length ? (
@@ -453,7 +508,7 @@ export function SupplierCartPanel() {
             })}
           </div>
         </>
-      ) : previewData ? <div className="soft-empty">Новых заказов для автокорзины не найдено.</div> : <div className="soft-empty">Утром после обновления прайсов нажмите “Сгенерировать корзину”: заказы сохранятся в черновик, и их можно будет спокойно отправить в PriceMaster позже.</div>}
+      ) : previewData ? <div className="soft-empty">Новых заказов для автокорзины не найдено.</div> : <div className="soft-empty">Загружаю заказы...</div>}
       {commitMutation.data ? <div className="success-strip">Добавлено в PriceMaster: {commitMutation.data.inserted}. Проверено в PM: {commitMutation.data.verifiedRows}. База: {commitMutation.data.priceMasterDb || "-"}. Документы: {commitMutation.data.docIds.join(", ") || "-"}</div> : null}
       {generateMutation.error && <div className="inline-error">{errorMessage(generateMutation.error)}</div>}
       {commitMutation.error && <div className="inline-error">{errorMessage(commitMutation.error)}</div>}

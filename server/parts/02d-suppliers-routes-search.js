@@ -1,10 +1,12 @@
-// Слова из имён PriceMaster для автодополнения (по префиксу)
+// Слова из имён PriceMaster для автодополнения (по префиксу, затем по вхождению)
 app.get("/api/pricemaster/words", async (request, response, next) => {
   try {
     const prefix = cleanText(request.query.prefix || "").toLowerCase();
     if (!prefix || prefix.length < 1) return response.json({ ok: true, words: [] });
     const words = await getPmWordIndex();
-    response.json({ ok: true, words: words.filter((w) => w.startsWith(prefix)).slice(0, 20) });
+    const exact = words.filter((w) => w.startsWith(prefix));
+    const contains = words.filter((w) => !w.startsWith(prefix) && w.includes(prefix));
+    response.json({ ok: true, words: [...exact, ...contains].slice(0, 40) });
   } catch (error) {
     next(error);
   }
@@ -21,6 +23,11 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
     const cached = getPriceMasterSearchCache(cacheKey);
     if (cached) return response.json(cached);
 
+    // OR-across-tokens approach (matches GingerPM word search): WHERE uses any-word OR,
+    // post-filter enforces minimum match count so 1-word false positives are excluded.
+    const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
+    const minMatchCount = tokenGroups ? (tokenGroups.length <= 2 ? tokenGroups.length : tokenGroups.length - 1) : 0;
+
     // Live PriceMaster is the source of truth — query it FIRST so the linking dialog
     // sees every current offer. The snapshot only supplements (it lags syncs and hides
     // inactive rows, which used to make articles "lose" suppliers in the search).
@@ -33,21 +40,15 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
       const conditions = ["r.Ignored = 0"];
       if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`);
       if (q) {
-        const tokenGroups = pmQueryToTokenGroups(q);
-        if (tokenGroups.length) {
-          for (let i = 0; i < tokenGroups.length; i++) {
-            const group = tokenGroups[i];
-            const nameConds = group.map(() => "r.NativeName LIKE ?");
-            if (i === 0) {
-              // First token also checks article, barcode, supplier
-              const extraConds = group.flatMap(() => ["r.NativeID LIKE ?", "r.BarCode LIKE ?", "p.PartnerName LIKE ?"]);
-              conditions.push(`(${[...nameConds, ...extraConds].join(" OR ")})`);
-              params.push(...group.map(likeSearch), ...group.flatMap((t) => [likeSearch(t), likeSearch(t), likeSearch(t)]));
-            } else {
-              conditions.push(`(${nameConds.join(" OR ")})`);
-              params.push(...group.map(likeSearch));
-            }
-          }
+        if (tokenGroups && tokenGroups.length) {
+          // Single OR condition across all token synonyms — post-filter enforces minMatchCount
+          const nameConds = tokenGroups.flatMap((group) => group.map(() => "r.NativeName LIKE ?"));
+          const extraConds = tokenGroups[0].flatMap(() => ["r.NativeID LIKE ?", "r.BarCode LIKE ?", "p.PartnerName LIKE ?"]);
+          conditions.push(`(${[...nameConds, ...extraConds].join(" OR ")})`);
+          params.push(
+            ...tokenGroups.flatMap((group) => group.map(likeSearch)),
+            ...tokenGroups[0].flatMap((t) => [likeSearch(t), likeSearch(t), likeSearch(t)]),
+          );
         } else {
           conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
           const like = likeSearch(q);
@@ -58,9 +59,8 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
         conditions.push("p.PartnerName LIKE ?");
         params.push(likeSearch(supplier));
       }
-      // Extra headroom: the same partner posts the same article in many docs; after the
-      // per-partner dedup below a bare LIMIT would crowd out other suppliers.
-      params.push(limit * 5);
+      // Extra headroom: OR-query pulls in more candidates; JS post-filter trims to minMatchCount.
+      params.push(limit * 15);
       const [liveRows] = await pool.query(
         `
         SELECT
@@ -88,6 +88,13 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
         if (seenOffer.has(offerKey)) continue;
         seenOffer.add(offerKey);
         rows.push(mapPriceMasterSearchResponseRow(row, usdRate));
+      }
+      // Post-filter: each row must match at least minMatchCount token groups in name+article
+      if (tokenGroups && tokenGroups.length >= 2) {
+        rows = rows.filter((row) => {
+          const hay = [cleanText(row.name || ""), cleanText(row.article || "")].join(" ");
+          return pmWordMatchScore(hay, tokenGroups) >= minMatchCount;
+        });
       }
       liveOk = true;
     } catch (error) {
@@ -126,15 +133,16 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
       }
     }
 
-    // Linking UX: cheapest rows first; testers AND otlivants ALWAYS at the bottom (so they
-    // can't be linked by accident), inactive rows after active within each group.
-    // Tester markers per business: TEST, TESTEP, tester, TESTOR, Testr, -tst, тест, Тестер.
+    // Linking UX: relevance first, cheapest rows within same relevance;
+    // testers AND otlivants ALWAYS at the bottom, inactive rows after active.
+    const tokenGroupsForScore = tokenGroups;
+    const qLower = q.toLowerCase();
     const rowMarker = (row) => {
       const name = cleanText(row?.name || "").toLowerCase();
       if (name.includes("отливант")) return "otlivant";
       if (
-        name.includes("тест") // тест, тестер, тестep…
-        || name.includes("test") // test, tester, testor, testep, testr…
+        name.includes("тест")
+        || name.includes("test")
         || name.includes("-tst")
         || /(^|[^a-z0-9])tst([^a-z0-9]|$)/u.test(name)
       ) return "tester";
@@ -144,16 +152,44 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
       const price = Number(row?.price || 0) || 0;
       return cleanText(row?.priceCurrency || row?.currency).toUpperCase() === "USD" ? price * usdRate : price;
     };
+    // Relevance tiers (higher = better match):
+    //   1000 exact article | 900 article prefix | 800 article contains
+    //   matchScore*10 + wordBoundaryBonus*5 for name-based matches
+    // Word-boundary bonus: token appears as whole word in name (not mid-word like "oud" in "cloud")
+    const computeRelevance = (row) => {
+      const article = cleanText(row?.article || "").toLowerCase();
+      const name = cleanText(row?.name || "").toLowerCase();
+      if (qLower && article === qLower) return 1000;
+      if (qLower && article.startsWith(qLower)) return 900;
+      if (qLower && article.includes(qLower)) return 800;
+      const matchScore = tokenGroupsForScore
+        ? pmWordMatchScore([name, article].join(" "), tokenGroupsForScore)
+        : 0;
+      const wbScore = tokenGroupsForScore
+        ? tokenGroupsForScore.reduce((n, group) => {
+            const hasWB = group.some(token => {
+              const idx = name.indexOf(token);
+              if (idx === -1) return false;
+              const c0 = name[idx - 1];
+              const c1 = name[idx + token.length];
+              return (!c0 || !/[a-zа-яё0-9]/i.test(c0)) && (!c1 || !/[a-zа-яё0-9]/i.test(c1));
+            });
+            return n + (hasWB ? 1 : 0);
+          }, 0)
+        : 0;
+      return matchScore * 10 + wbScore * 5;
+    };
     const sortedRows = rows
       .map((row) => {
         const marker = rowMarker(row);
-        return { ...row, isTester: marker === "tester", isOtlivant: marker === "otlivant" };
+        return { ...row, isTester: marker === "tester", isOtlivant: marker === "otlivant", matchScore: computeRelevance(row) };
       })
       .sort((a, b) => {
         const aSink = a.isTester || a.isOtlivant;
         const bSink = b.isTester || b.isOtlivant;
         if (aSink !== bSink) return aSink ? 1 : -1;
         if (Boolean(a.active) !== Boolean(b.active)) return a.active ? -1 : 1;
+        if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
         return rubPrice(a) - rubPrice(b);
       });
 

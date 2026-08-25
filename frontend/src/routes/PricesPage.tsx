@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, BadgeDollarSign, CheckCircle2, Loader2, RefreshCcw, Send, Zap } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
@@ -92,6 +92,11 @@ export function PricesPage() {
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
     },
   });
+
+  useEffect(() => {
+    run.mutate({ marketplace: "all", force: true, onlyChanged: false, reason: "prices_page_open_auto" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const reasons = summary.data?.reasons || {};
   const reasonOptions = useMemo(() => Object.entries(reasons).sort((a, b) => b[1] - a[1]), [reasons]);
@@ -187,6 +192,9 @@ export function PricesPage() {
         </label>
         <button className="primary-action danger-action" type="button" onClick={() => run.mutate({ marketplace, force: true, onlyChanged: false, reason: "sales_automation_reprice_selected" })} disabled={run.isPending}>
           {run.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Пересчитать выбранное
+        </button>
+        <button className="primary-action" type="button" onClick={() => run.mutate({ marketplace: "all", force: true, onlyChanged: false, reason: "force_all_immediate" })} disabled={run.isPending} style={{ background: "#dc2626", color: "#fff", fontWeight: 700 }}>
+          {run.isPending ? <Loader2 className="spin" size={16} /> : <Zap size={16} />} ОТПРАВИТЬ ВСЕ СЕЙЧАС
         </button>
         <button className="secondary-action danger-action" type="button" onClick={() => run.mutate({ marketplace: "ozon", force: true, onlyChanged: false, reason: "sales_automation_force_ozon" })} disabled={run.isPending}>
           <BadgeDollarSign size={16} /> Force Ozon

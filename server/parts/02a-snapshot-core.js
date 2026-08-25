@@ -8,7 +8,9 @@ function snapshotRowMatchesPriceMasterSearch(row = {}, { q = "", supplier = "", 
   const supplierLower = normalizeSearchText(supplier);
   if (supplierLower && !normalizeSearchText(fields.partnerName).includes(supplierLower)) return false;
   if (tokenGroups && tokenGroups.length) {
-    return pmWordMatch([fields.name, fields.article].join(" "), tokenGroups);
+    const hay = [fields.name, fields.article].join(" ");
+    const minMatch = tokenGroups.length <= 2 ? tokenGroups.length : tokenGroups.length - 1;
+    return pmWordMatchScore(hay, tokenGroups) >= minMatch;
   }
   const search = normalizeSearchText(q);
   if (!search) return true;

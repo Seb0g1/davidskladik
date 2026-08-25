@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, Users, Wallet, X, Zap } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { DiagnosticValue } from "../components/DiagnosticValue";
@@ -36,17 +36,20 @@ const rowSearchText = (row: PickingRow) => [
   row.supplierName,
 ].join(" ").toLowerCase();
 
-const moneyUsd = (value: unknown) => {
+const currencySymbol = (currency: string) => (String(currency || "USD").toUpperCase() === "RUB" ? "₽" : "$");
+
+const moneyAmount = (value: unknown, currency = "USD") => {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return "-";
-  return `$${Math.round(n).toLocaleString("ru-RU")}`;
+  return `${Math.round(n).toLocaleString("ru-RU")} ${currencySymbol(currency)}`;
 };
 
-const moneySigned = (value: unknown) => {
+const moneySigned = (value: unknown, currency = "USD") => {
   const n = Number(value || 0);
-  if (!Number.isFinite(n) || n === 0) return "$0";
+  const sym = currencySymbol(currency);
+  if (!Number.isFinite(n) || n === 0) return `0 ${sym}`;
   const sign = n > 0 ? "+" : "-";
-  return `${sign}$${Math.round(Math.abs(n)).toLocaleString("ru-RU")}`;
+  return `${sign}${Math.round(Math.abs(n)).toLocaleString("ru-RU")} ${sym}`;
 };
 
 const currentGroupTotal = (rows: PickingRow[]) => rows.reduce((sum, row) => {
@@ -55,11 +58,19 @@ const currentGroupTotal = (rows: PickingRow[]) => rows.reduce((sum, row) => {
   return sum + price * quantity;
 }, 0);
 
+const currentGroupTotalRub = (rows: PickingRow[], rate: number) => rows.reduce((sum, row) => {
+  const price = Number(row.price || 0);
+  const quantity = Number(row.quantity || 1) || 1;
+  const priceRub = String(row.priceCurrency || "").toUpperCase() === "RUB" ? price : price * rate;
+  return sum + priceRub * quantity;
+}, 0);
+
 export function PickingListPage() {
   const [view, setView] = useState<"list" | "sheets">("list");
   const [status, setStatus] = useState("open");
   const [supplier, setSupplier] = useState("");
   const [q, setQ] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
   const [period, setPeriod] = useState("1d");
   const [invoicesOpen, setInvoicesOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -232,8 +243,8 @@ export function PickingListPage() {
     },
   });
   const paymentMutation = useMutation({
-    mutationFn: ({ supplierName, amount, note }: { supplierName: string; amount: number; note: string }) =>
-      fetchJson("/api/supplier-ledger/payments", SupplierLedgerPaymentSchema, mutationBody({ supplierName, amount, note })),
+    mutationFn: ({ supplierName, partnerId, amount, note }: { supplierName: string; partnerId?: string; amount: number; note: string }) =>
+      fetchJson("/api/supplier-ledger/payments", SupplierLedgerPaymentSchema, mutationBody({ supplierName, partnerId, amount, note })),
     onSuccess: (_data, variables) => {
       setPaymentDrafts((current) => ({ ...current, [variables.supplierName]: "" }));
       setPaymentNotes((current) => ({ ...current, [variables.supplierName]: "" }));
@@ -256,7 +267,50 @@ export function PickingListPage() {
     },
   });
 
+  const usdRate = listQuery.data?.usdRate ?? 95;
+
   const rows = listQuery.data?.rows || [];
+
+  const stalledCount = useMemo(() => {
+    if (status !== "open") return 0;
+    const cutoff = Date.now() - 24 * 3600 * 1000;
+    return rows.filter((r) => r.createdAt && new Date(r.createdAt).getTime() < cutoff).length;
+  }, [rows, status]);
+
+  useEffect(() => {
+    const openCount = (listQuery.data?.summary as Record<string, number> | undefined)?.open ?? 0;
+    const prev = document.title.replace(/^\(\d+\)\s*/, "");
+    document.title = openCount > 0 ? `(${openCount}) ${prev}` : prev;
+    return () => { document.title = document.title.replace(/^\(\d+\)\s*/, ""); };
+  }, [listQuery.data?.summary]);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "/") return;
+      const tag = (document.activeElement as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      e.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
+  const viewersQuery = useQuery({
+    queryKey: ["picking-list-viewers"],
+    queryFn: () => fetchJson("/api/supplier-picking-list/viewers", z.object({ ok: z.boolean(), viewers: z.array(z.object({ username: z.string() })) }).passthrough()),
+    refetchInterval: 30_000,
+  });
+
+  useEffect(() => {
+    const beat = () => {
+      void fetchJson("/api/supplier-picking-list/heartbeat", z.object({ ok: z.boolean() }).passthrough(), { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+    };
+    beat();
+    const id = setInterval(beat, 30_000);
+    return () => clearInterval(id);
+  }, []);
   const filteredRows = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return rows;
@@ -296,6 +350,31 @@ export function PickingListPage() {
         totalPaid: Array.from(supplierMap.values()).flat().reduce((s, r) => s + (Number(r.pricePaidRub) || 0), 0),
       }));
   }, [filteredRows, status]);
+  const deferredByDay = useMemo(() => {
+    if (status !== "open") return [];
+    const now = new Date();
+    const deferred = rows.filter((r) => r.deferredUntil && new Date(r.deferredUntil) > now);
+    const dayMap = new Map<string, PickingRow[]>();
+    for (const row of deferred) {
+      const dateKey = String(row.deferredUntil ?? "").slice(0, 10);
+      if (!dayMap.has(dateKey)) dayMap.set(dateKey, []);
+      dayMap.get(dateKey)!.push(row);
+    }
+    const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+    const dayAfter = new Date(now); dayAfter.setDate(dayAfter.getDate() + 2);
+    const fmt = (d: string) => {
+      const dt = new Date(d + "T12:00:00");
+      const tomorrowStr = tomorrow.toISOString().slice(0, 10);
+      const dayAfterStr = dayAfter.toISOString().slice(0, 10);
+      if (d === tomorrowStr) return "Завтра";
+      if (d === dayAfterStr) return "Послезавтра";
+      return dt.toLocaleDateString("ru-RU", { weekday: "short", day: "numeric", month: "short" });
+    };
+    return Array.from(dayMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([dateKey, dateRows]) => ({ dateKey, label: fmt(dateKey), rows: dateRows }));
+  }, [rows, status]);
+
   const sheets = useMemo(() => {
     const pickedRows = sheetsQuery.data?.rows || [];
     const groups = new Map<string, PickingRow[]>();
@@ -355,6 +434,21 @@ export function PickingListPage() {
         subtitle="Лист закупки: собрать товар у поставщика или отметить, что товара не было."
         action={
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {(() => {
+              const others = (viewersQuery.data?.viewers || []).filter((v) => v.username !== myUsername);
+              return others.length > 0 ? (
+                <div className="picker-balance-chip picker-balance-chip--neutral" title={others.map((v) => v.username).join(", ")}>
+                  <Users size={13} />
+                  <span>{others.map((v) => v.username).join(", ")}</span>
+                </div>
+              ) : null;
+            })()}
+            {stalledCount > 0 ? (
+              <div className="picker-balance-chip picker-balance-chip--danger" title={`${stalledCount} позиций ожидают сборки более 24 часов`}>
+                <AlertTriangle size={13} />
+                <span>{stalledCount} зависли</span>
+              </div>
+            ) : null}
             {/* Daily order total chip */}
             {(dailyTotal > 0 || dailyItems > 0) ? (
               <div className="picker-balance-chip picker-balance-chip--neutral" title={`Суммарный заказ сегодня: ${dailyItems} поз.`}>
@@ -694,7 +788,7 @@ export function PickingListPage() {
           />
         </label>
         <label>Поиск
-          <input value={q} onChange={(event) => setQ(event.target.value)} placeholder="SKU, товар, заказ" />
+          <input ref={searchRef} value={q} onChange={(event) => setQ(event.target.value)} placeholder="SKU, товар, заказ" />
         </label>
       </div>
 
@@ -730,7 +824,7 @@ export function PickingListPage() {
                   <div>
                     <span className="assembly-sheet-date">{dateLabel}</span>
                     <span className="assembly-sheet-meta">
-                      {sheetRows.length} позиций · {supplierSet.size} поставщ. · {moneyUsd(totalCost)}
+                      {sheetRows.length} позиций · {supplierSet.size} поставщ. · {moneyAmount(totalCost)}
                     </span>
                   </div>
                   <span className="sheet-toggle">{expanded ? "▲" : "▼"}</span>
@@ -767,6 +861,17 @@ export function PickingListPage() {
 
       {view === "list" ? (
         <>
+          {deferredByDay.length > 0 ? (
+            <div className="deferred-calendar-row">
+              <span className="deferred-calendar-label"><CalendarDays size={13} /> На ближайшие дни:</span>
+              {deferredByDay.map(({ dateKey, label, rows: dRows }) => (
+                <span key={dateKey} className="deferred-calendar-chip">
+                  <strong>{label}</strong>
+                  <span>{dRows.length} поз.</span>
+                </span>
+              ))}
+            </div>
+          ) : null}
           <div className="picking-groups">
             {groupedByDay ? (
               // Picked status: group by date descending, then by supplier within each day
@@ -774,9 +879,11 @@ export function PickingListPage() {
                 <div key={dateKey} className="picking-day-group">
                   <div className="picking-day-header">
                     <span className="picking-day-label">{dateLabel}</span>
-                    {totalPaid > 0 ? <span className="picking-day-paid">Оплачено: {moneyUsd(totalPaid)}</span> : null}
+                    {totalPaid > 0 ? <span className="picking-day-paid">Оплачено: {moneyAmount(totalPaid)}</span> : null}
                   </div>
-                  {suppliers.map(([supplierName, supplierRows]) => (
+                  {suppliers.map(([supplierName, supplierRows]) => {
+                    const pickedCurrency = String(supplierRows[0]?.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
+                    return (
                     <article className="picking-supplier-card" key={`${dateKey}||${supplierName}`}>
                       <div className="picking-supplier-toolbar">
                         <div className="picking-supplier-head">
@@ -786,7 +893,7 @@ export function PickingListPage() {
                           </div>
                           <div className="picking-supplier-head-meta">
                             <span className="picking-supplier-count">{supplierRows.length} поз.</span>
-                            <span className="muted-note">{moneyUsd(supplierRows.reduce((s, r) => s + (Number(r.pricePaidRub) || 0), 0))} оплачено</span>
+                            <span className="muted-note">{moneyAmount(supplierRows.reduce((s, r) => s + (Number(r.pricePaidRub) || 0), 0), "RUB")} оплачено</span>
                           </div>
                         </div>
                       </div>
@@ -802,15 +909,17 @@ export function PickingListPage() {
                                 </div>
                                 <div className="picking-row-header-right">
                                   <span className="picking-row-qty">×{row.pickedQuantity && row.pickedQuantity !== row.quantity ? `${row.pickedQuantity}/${row.quantity}` : row.quantity}</span>
-                                  {row.pricePaidRub ? <span className="picking-row-price tone-warn">{moneyUsd(row.pricePaidRub)}</span> : row.price ? <span className="picking-row-price">{row.price} {row.priceCurrency}</span> : null}
+                                  {row.pricePaidRub ? <span className="picking-row-price tone-warn">{moneyAmount(row.pricePaidRub, pickedCurrency)}</span> : row.price ? <span className="picking-row-price">{row.price} {row.priceCurrency}</span> : null}
                                   <ChevronDown size={14} className="picking-row-expand-icon" style={{ transform: rowExpanded ? "rotate(180deg)" : "none", transition: "transform .2s", opacity: 0.5 }} />
                                 </div>
                               </div>
                               {rowExpanded ? (
                                 <div className="picking-row-meta">
-                                  <span>Заказ: {row.orderId || row.postingNumber || "-"}</span>
+                                  <span>Заказ: {row.marketplace === "ozon" && (row.orderId || row.postingNumber)
+                                    ? <a href={`https://seller.ozon.ru/app/orders/${row.orderId || row.postingNumber}`} target="_blank" rel="noopener noreferrer" className="link-plain">{row.orderId || row.postingNumber}</a>
+                                    : (row.orderId || row.postingNumber || "-")}</span>
                                   <span>Собрал: {row.pickedBy || "-"}</span>
-                                  {row.saleAmount ? <span className="tone-success">Продажа: {moneyUsd(row.saleAmount)}</span> : null}
+                                  {row.saleAmount ? <span className="tone-success">Продажа: {moneyAmount(row.saleAmount, pickedCurrency)}</span> : null}
                                   <span className="muted-note">Doc/Row: {row.requestDocId || "-"}/{row.requestRowId || "-"}</span>
                                 </div>
                               ) : null}
@@ -836,7 +945,8 @@ export function PickingListPage() {
                         })}
                       </div>
                     </article>
-                  ))}
+                    );
+                  })}
                 </div>
               ))
             ) : grouped.map(([supplierName, supplierRows]) => {
@@ -845,6 +955,9 @@ export function PickingListPage() {
               const draftAmount = paymentDrafts[supplierName] || "";
               const draftNote = paymentNotes[supplierName] || "";
               const total = currentGroupTotal(supplierRows);
+              const totalRub = currentGroupTotalRub(supplierRows, usdRate);
+              const supplierCurrency = String(supplierRows[0]?.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
+              const totalQtyAll = supplierRows.reduce((s, r) => s + (r.quantity || 1), 0);
               return (
                 <article className="picking-supplier-card" key={supplierName}>
                   <div className="picking-supplier-toolbar">
@@ -854,15 +967,22 @@ export function PickingListPage() {
                         <h3>{supplierName}</h3>
                       </div>
                       <div className="picking-supplier-head-meta">
-                        <span className="picking-supplier-count">{supplierRows.length} поз.</span>
-                        <span className={`picking-supplier-total-price${total > 0 ? " tone-warn" : ""}`}>{moneyUsd(total)}</span>
+                        <span className="picking-supplier-count">{supplierRows.length} поз.{totalQtyAll !== supplierRows.length ? ` · ${totalQtyAll} шт.` : ""}</span>
+                        {supplierCurrency === "RUB"
+                          ? <span className={`picking-supplier-total-price${total > 0 ? " tone-warn" : ""}`}>{moneyAmount(total, "RUB")}</span>
+                          : <span className={`picking-supplier-total-price${total > 0 ? " tone-warn" : ""}`}>{moneyAmount(total, "USD")} <span style={{ fontSize: "0.8em", opacity: 0.7 }}>≈{moneyAmount(totalRub, "RUB")}</span></span>
+                        }
                       </div>
                     </div>
                     <div className="supplier-ledger-row">
-                      <DiagnosticValue label={balance < 0 ? "Долг" : "Аванс"} value={moneySigned(balance)} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
-                      <DiagnosticValue label="В долг" value={moneySigned(-Number(ledger.debtTotal || 0))} />
-                      <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0))} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
-                      <DiagnosticValue label="Сборка" value={moneySigned(total)} />
+                      {supplierCurrency === "USD" ? (
+                        <DiagnosticValue label={Number(ledger.debtTotalUsd || 0) > 0 ? "Долг" : "Аванс"} value={moneySigned(-Number(ledger.debtTotalUsd || 0), "USD")} tone={Number(ledger.debtTotalUsd || 0) > 0 ? "danger" : "success"} />
+                      ) : (
+                        <DiagnosticValue label={balance < 0 ? "Долг" : "Аванс"} value={moneySigned(balance, "RUB")} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
+                      )}
+                      <DiagnosticValue label="В долг" value={supplierCurrency === "USD" ? moneyAmount(Number(ledger.debtTotalUsd || 0), "USD") : moneyAmount(Number(ledger.debtTotal || 0), "RUB")} />
+                      <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0), "RUB")} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
+                      <DiagnosticValue label="Сборка" value={supplierCurrency === "RUB" ? moneyAmount(total, "RUB") : `${moneyAmount(total, "USD")} / ≈${moneyAmount(totalRub, "RUB")}`} />
                     </div>
                   </div>
                   <div className="supplier-payment-row">
@@ -870,7 +990,7 @@ export function PickingListPage() {
                       type="number"
                       min="0"
                       step="0.01"
-                      placeholder="Оплата, $"
+                      placeholder={supplierCurrency === "USD" ? "Оплата, $" : "Оплата, ₽"}
                       value={draftAmount}
                       onChange={(event) => setPaymentDrafts((current) => ({ ...current, [supplierName]: event.target.value }))}
                     />
@@ -884,7 +1004,7 @@ export function PickingListPage() {
                       className="primary-action"
                       type="button"
                       disabled={paymentMutation.isPending || !(Number(draftAmount) > 0)}
-                      onClick={() => paymentMutation.mutate({ supplierName, amount: Number(draftAmount || 0), note: draftNote })}
+                      onClick={() => paymentMutation.mutate({ supplierName, partnerId: supplierRows[0]?.partnerId || "", amount: supplierCurrency === "USD" ? Math.round(Number(draftAmount || 0) * usdRate) : Number(draftAmount || 0), note: draftNote })}
                     >
                       {paymentMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Заплатил
                     </button>
@@ -921,6 +1041,14 @@ export function PickingListPage() {
                                   <strong>{pRows[0].productName || pKey}</strong>
                                   <span className="picking-row-sub">{pKey} · {pRows[0].marketplace.toUpperCase()} · {pRows.length} заказа</span>
                                 </div>
+                                <button
+                                  type="button"
+                                  className="icon-action picking-copy-btn"
+                                  title="Копировать название"
+                                  onClick={(e) => { e.stopPropagation(); void copyPlainText(pRows[0].productName || pKey); }}
+                                >
+                                  <Copy size={13} />
+                                </button>
                                 <div className="picking-group-header-right">
                                   <span className="picking-row-qty">×{totalQty}</span>
                                   {pickedCount > 0 && pickedCount < pRows.length ? <span className="picking-row-status-badge status-picked">{pickedCount}/{pRows.length} собрано</span> : null}
@@ -942,31 +1070,51 @@ export function PickingListPage() {
                             ) : null}
                             {rowsToShow.map((row) => {
                               const rowExpanded = expandedRows.has(row.key);
+                              const rowQty = row.pickedQuantity && row.pickedQuantity !== row.quantity ? `${row.pickedQuantity}/${row.quantity}` : String(row.quantity);
+                              const isUsd = String(row.priceCurrency || "").toUpperCase() !== "RUB";
+                              const priceRub = row.price && isUsd ? Math.round(row.price * usdRate) : null;
                               return (
                                 <div className={`picking-row status-${row.status}${isMulti ? " in-group" : ""}`} key={row.key}>
                                   <div className="picking-row-header" onClick={() => toggleRowExpand(row.key)}>
                                     <div className="picking-row-header-left">
                                       <strong className="picking-row-name">
-                                        {isMulti ? (row.orderId || row.postingNumber || row.offerId) : (row.productName || row.offerId)}
+                                        {row.productName || row.offerId}
                                       </strong>
+                                      <button
+                                        type="button"
+                                        className="icon-action picking-copy-btn"
+                                        title="Копировать название"
+                                        onClick={(e) => { e.stopPropagation(); void copyPlainText(row.productName || row.offerId); }}
+                                      >
+                                        <Copy size={12} />
+                                      </button>
                                       <span className="picking-row-sub">
-                                        {isMulti ? `${row.marketplace.toUpperCase()} · заказ` : row.marketplace.toUpperCase()}
-                                        {row.isExpress ? <span className="express-badge"><Zap size={11} /> Экспресс</span> : null}
+                                        {isMulti
+                                          ? `${row.orderId || row.postingNumber || row.offerId} · ${row.marketplace.toUpperCase()}`
+                                          : row.marketplace.toUpperCase()}
                                       </span>
                                     </div>
                                     <div className="picking-row-header-right">
-                                      <span className="picking-row-qty">×{row.pickedQuantity && row.pickedQuantity !== row.quantity ? `${row.pickedQuantity}/${row.quantity}` : row.quantity}</span>
-                                      {row.saleAmount ? <span className="picking-row-sale">{moneyUsd(row.saleAmount)}</span> : null}
-                                      {row.price ? <span className="picking-row-price">{row.price} {row.priceCurrency}</span> : null}
+                                      {row.isExpress ? <span className="express-badge picking-express-inline"><Zap size={11} /></span> : null}
+                                      <span className={`picking-row-qty${row.quantity > 1 ? " picking-row-qty--multi" : ""}`}>×{rowQty}</span>
+                                      {row.saleAmount ? <span className="picking-row-sale">{moneyAmount(row.saleAmount, supplierCurrency)}</span> : null}
+                                      {row.price ? (
+                                        <span className="picking-row-price">
+                                          {row.price} {row.priceCurrency}
+                                          {priceRub ? <span className="picking-row-price-rub">≈{priceRub.toLocaleString("ru-RU")} ₽</span> : null}
+                                        </span>
+                                      ) : null}
                                       <span className={`picking-row-status-badge status-${row.status}`}>{statusLabel(row.status)}</span>
                                       <ChevronDown size={14} className="picking-row-expand-icon" style={{ transform: rowExpanded ? "rotate(180deg)" : "none", transition: "transform .2s", opacity: 0.5 }} />
                                     </div>
                                   </div>
                                   {rowExpanded ? (
                                     <div className="picking-row-meta">
-                                      <span>Заказ: {row.orderId || row.postingNumber || "-"}</span>
-                                      {row.saleAmount ? <span className="tone-success">Продажа: {moneyUsd(row.saleAmount)}</span> : null}
-                                      {row.pricePaidRub ? <span className="tone-warn">Оплачено: {moneyUsd(row.pricePaidRub)}</span> : null}
+                                      <span>Заказ: {row.marketplace === "ozon" && (row.orderId || row.postingNumber)
+                                        ? <a href={`https://seller.ozon.ru/app/orders/${row.orderId || row.postingNumber}`} target="_blank" rel="noopener noreferrer" className="link-plain">{row.orderId || row.postingNumber}</a>
+                                        : (row.orderId || row.postingNumber || "-")}</span>
+                                      {row.saleAmount ? <span className="tone-success">Продажа: {moneyAmount(row.saleAmount, supplierCurrency)}</span> : null}
+                                      {row.pricePaidRub ? <span className="tone-warn">Оплачено: {moneyAmount(row.pricePaidRub, "RUB")}</span> : null}
                                       <span>Доверие: {row.trustFactor}/100</span>
                                       {row.orderCutoffTime ? <span>До {row.orderCutoffTime}</span> : null}
                                       {row.reseller ? <span className="tone-warn">Перекупщик</span> : null}
@@ -998,7 +1146,9 @@ export function PickingListPage() {
                                         onClick={() => {
                                           const qty = pickQtyDrafts[row.key] ? Math.min(row.quantity, Math.max(1, parseInt(pickQtyDrafts[row.key], 10) || 1)) : undefined;
                                           const priceRaw = priceDrafts[row.key] ? Number(priceDrafts[row.key].replace(",", ".")) : undefined;
-                                          const pricePaidRub = priceRaw && priceRaw > 0 ? priceRaw : undefined;
+                                          const pricePaidRub = priceRaw && priceRaw > 0
+                                            ? (isUsd ? Math.round(priceRaw * usdRate) : priceRaw)
+                                            : undefined;
                                           updateMutation.mutate({ key: row.key, nextStatus: "picked", pickedQuantity: qty, pricePaidRub });
                                         }}
                                       >
@@ -1019,17 +1169,25 @@ export function PickingListPage() {
                                       ) : null}
                                     </div>
                                     {row.status === "open" ? (
-                                      <input
-                                        className="picking-price-input"
-                                        type="number"
-                                        min={0}
-                                        step={0.01}
-                                        placeholder="Сумма, $"
-                                        value={priceDrafts[row.key] || ""}
-                                        onChange={(e) => setPriceDrafts((p) => ({ ...p, [row.key]: e.target.value }))}
-                                        onClick={(e) => e.stopPropagation()}
-                                        title="Фактическая сумма оплаты поставщику (опционально, если отличается от PM цены)"
-                                      />
+                                      <div className="picking-price-wrap" onClick={(e) => e.stopPropagation()}>
+                                        {row.price ? (
+                                          <span className="picking-price-hint">
+                                            {isUsd
+                                              ? `Цена: ${row.price} $${priceRub ? ` ≈ ${priceRub.toLocaleString("ru-RU")} ₽` : ""}`
+                                              : `Цена: ${row.price} ₽`}
+                                          </span>
+                                        ) : null}
+                                        <input
+                                          className="picking-price-input"
+                                          type="number"
+                                          min={0}
+                                          step={0.01}
+                                          placeholder={isUsd ? (row.price ? `${row.price} $` : "Сумма, $") : (priceRub ? `${priceRub.toLocaleString("ru-RU")} ₽` : "Сумма, ₽")}
+                                          value={priceDrafts[row.key] || ""}
+                                          onChange={(e) => setPriceDrafts((p) => ({ ...p, [row.key]: e.target.value }))}
+                                          title={isUsd ? "Сумма в USD — автоматически конвертируется в рубли" : "Фактическая сумма оплаты поставщику в рублях"}
+                                        />
+                                      </div>
                                     ) : null}
                                     <button
                                       className="secondary-action danger-action"
@@ -1049,7 +1207,7 @@ export function PickingListPage() {
                                         <RotateCcw size={14} /> Возврат
                                       </button>
                                     ) : null}
-                                    {isAdmin && row.status !== "open" && row.status !== "picked" ? (
+                                    {row.status !== "open" && row.status !== "picked" ? (
                                       <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
                                         <RotateCcw size={14} /> Вернуть
                                       </button>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckSquare, ChevronDown, ChevronUp, Download, FileCode, Loader2, RefreshCw, Search, Square, Upload, Tag, ArrowLeftRight, X } from "lucide-react";
+import { CheckSquare, ChevronDown, ChevronUp, Download, FileCode, FileText, Loader2, RefreshCw, Search, Square, Upload, Tag, ArrowLeftRight, X } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 
@@ -368,6 +368,12 @@ export function ImportPage() {
       void queryClient.invalidateQueries({ queryKey: ["import-candidates"] });
     },
   });
+  const repairDescriptions = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; sent?: number; candidates?: number; apiCalls?: number; apiErrors?: number }>(
+      "/api/ozon-yandex-import/repair-yandex-descriptions",
+      { method: "POST", body: JSON.stringify({ dryRun: false, limit: 5000 }) },
+    ),
+  });
 
   const items = candidatesQuery.data?.items || [];
   const total = candidatesQuery.data?.total || 0;
@@ -420,6 +426,9 @@ export function ImportPage() {
         subtitle="Перенос товаров с Ozon на Яндекс.Маркет: обнови список, найди по артикулу, выбери и импортируй."
         action={(
           <div className="row-actions">
+            <button className="secondary-action" type="button" disabled={repairDescriptions.isPending} onClick={() => repairDescriptions.mutate()} title="Получить описания из Ozon и отправить на Яндекс для товаров без описания">
+              {repairDescriptions.isPending ? <Loader2 className="spin" size={16} /> : <FileText size={16} />} Добавить описания
+            </button>
             <button className="secondary-action" type="button" disabled={syncNames.isPending} onClick={() => syncNames.mutate()} title="Найти товары где название на Ozon отличается от Яндекс и исправить">
               {syncNames.isPending ? <Loader2 className="spin" size={16} /> : <ArrowLeftRight size={16} />} Синхронизировать названия
             </button>
@@ -449,6 +458,16 @@ export function ImportPage() {
           {refreshStatus.data.lastResult.error ? ` · ошибка: ${refreshStatus.data.lastResult.error}` : ""}
         </div>
       ) : null}
+
+      {repairDescriptions.data ? (
+        <div className={`info-strip ${repairDescriptions.data.ok !== false ? "success" : "warn"}`}>
+          Описания: найдено {repairDescriptions.data.candidates ?? 0} товаров без описания
+          {" · "}отправлено на Яндекс {repairDescriptions.data.sent ?? 0}
+          {repairDescriptions.data.apiCalls ? ` · запросов к Ozon: ${repairDescriptions.data.apiCalls}` : ""}
+          {repairDescriptions.data.apiErrors ? ` · ошибок: ${repairDescriptions.data.apiErrors}` : ""}
+        </div>
+      ) : null}
+      {repairDescriptions.error ? <div className="inline-error">{String((repairDescriptions.error as Error).message)}</div> : null}
 
       {syncNamesResult ? (
         <div className={`info-strip ${syncNamesResult.ok ? "success" : "warn"}`}>

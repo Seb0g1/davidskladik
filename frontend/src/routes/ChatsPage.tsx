@@ -46,6 +46,14 @@ type ChatContext = { postingNumber?: string; orderId?: string; buyerName?: strin
 
 const EMOJI_ROW = ["🙏", "😊", "✨", "👍", "🤝", "📦", "🚚", "❤️"];
 
+function substituteTemplate(text: string, context: ChatContext): string {
+  if (!context) return text;
+  return text
+    .replace(/\{\{name\}\}/gi, context.buyerName || "")
+    .replace(/\{\{order\}\}/gi, context.postingNumber || context.orderId || "")
+    .replace(/\{\{product\}\}/gi, context.productName || "");
+}
+
 function decodeSafe(s: string): string {
   try { return decodeURIComponent(s.replace(/\+/g, " ")); } catch { return s; }
 }
@@ -403,7 +411,10 @@ export function ChatsPage() {
                 {templates.length ? (
                   <select defaultValue="" onChange={(event) => {
                     const template = templates.find((item) => item.id === event.target.value);
-                    if (template) setText((current) => (current ? `${current}\n${template.text}` : template.text));
+                    if (template) {
+                      const resolved = substituteTemplate(template.text, historyQuery.data?.context ?? null);
+                      setText((current) => (current ? `${current}\n${resolved}` : resolved));
+                    }
                     event.target.value = "";
                   }}>
                     <option value="" disabled>Шаблон…</option>
@@ -473,7 +484,10 @@ export function ChatsPage() {
         apiBase="/api/chats/templates"
         queryKey={["chat-templates"]}
         templates={templates}
-        onInsert={selected ? (value) => setText((current) => (current ? `${current}\n${value}` : value)) : undefined}
+        onInsert={selected ? (value) => {
+          const resolved = substituteTemplate(value, historyQuery.data?.context ?? null);
+          setText((current) => (current ? `${current}\n${resolved}` : resolved));
+        } : undefined}
       />
     </section>
   );

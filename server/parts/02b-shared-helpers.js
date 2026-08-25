@@ -82,38 +82,50 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
   const q = cleanText(search);
   const partnerId = cleanText(partner);
   const take = cleanLimit(limit, 150, 500);
-  const and = [{ active: true }];
 
   const groups = tokenGroups && tokenGroups.length ? tokenGroups : (q ? pmQueryToTokenGroups(q) : null);
-  if (groups && groups.length) {
-    for (const group of groups) {
-      and.push({
-        OR: group.flatMap((synonym) => [
+  const minMatchCount = groups ? (groups.length <= 2 ? groups.length : groups.length - 1) : 0;
+
+  function buildQuery(groupSubset) {
+    const and = [{ active: true }];
+    if (groupSubset && groupSubset.length) {
+      // OR across all tokens from all groups — JS post-filter enforces minimum match count
+      const orTerms = groupSubset.flatMap((group) =>
+        group.flatMap((synonym) => [
           { article: { contains: synonym, mode: "insensitive" } },
           { nativeName: { contains: synonym, mode: "insensitive" } },
         ]),
+      );
+      and.push({ OR: orTerms });
+    } else if (q) {
+      and.push({
+        OR: [
+          { article: { contains: q, mode: "insensitive" } },
+          { nativeName: { contains: q, mode: "insensitive" } },
+          { partnerName: { contains: q, mode: "insensitive" } },
+        ],
       });
     }
-  } else if (q) {
-    and.push({
-      OR: [
-        { article: { contains: q, mode: "insensitive" } },
-        { nativeName: { contains: q, mode: "insensitive" } },
-        { partnerName: { contains: q, mode: "insensitive" } },
-      ],
-    });
-  }
-
-  if (partnerId) {
-    and.push({ partnerId });
+    if (partnerId) and.push({ partnerId });
+    return and;
   }
 
   try {
-    const rows = await prisma.priceMasterSnapshotItem.findMany({
-      where: { AND: and },
+    let rows = await prisma.priceMasterSnapshotItem.findMany({
+      where: { AND: buildQuery(groups) },
       orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
-      take,
+      take: take * 3,
     });
+
+    // Post-filter: require at least minMatchCount token groups to match in name+article
+    if (groups && groups.length >= 2) {
+      rows = rows.filter((row) => {
+        const hay = [cleanText(row.nativeName || ""), cleanText(row.article || "")].join(" ");
+        return pmWordMatchScore(hay, groups) >= minMatchCount;
+      });
+    }
+    rows = rows.slice(0, take);
+
     return rows.map((row) => priceMasterSnapshotOffer(row, usdRate));
   } catch (error) {
     logger.warn("PriceMaster snapshot offer search failed, trying live", { detail: error?.message || String(error) });

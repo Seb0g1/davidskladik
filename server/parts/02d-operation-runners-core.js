@@ -89,6 +89,221 @@ async function runYandexPricePushOperation(payload = {}) {
   };
 }
 
+async function runRestoreYandexMarkupsOperation(payload = {}) {
+  if (!shouldUsePostgresStorage()) {
+    return { ok: false, error: "postgres_required", summary: "Требуется PostgreSQL." };
+  }
+  const prisma = getPrisma();
+  if (!prisma) return { ok: false, error: "no_db", summary: "Нет подключения к БД." };
+
+  const dryRun = payload.dryRun !== false;
+  const minMarkup = Number(payload.minMarkup || 1.0) || 1.0;
+  const maxMarkup = Number(payload.maxMarkup || 6.0) || 6.0;
+
+  // Use lean SQL queries to avoid OOM from loading full Prisma objects with links.
+  // Step 1: get product IDs + raw JSON for markup/yandex fields only
+  const productRows = await prisma.$queryRawUnsafe(`
+    SELECT id, offer_id AS "offerId", raw
+    FROM warehouse_products
+    WHERE marketplace = 'yandex' AND archived = false
+  `);
+  if (!productRows.length) {
+    return { ok: true, dryRun, updated: 0, skipped: 0, total: 0, summary: "Нет Яндекс-товаров." };
+  }
+
+  // Step 2: get articles from links table for these products
+  const productIds = productRows.map((r) => String(r.id));
+  const linkRows = await prisma.$queryRawUnsafe(`
+    SELECT product_id AS "productId", supplier_article AS article
+    FROM product_links
+    WHERE product_id = ANY($1) AND supplier_article IS NOT NULL AND supplier_article != ''
+  `, productIds);
+  // Map productId → [articles]
+  const articlesByProduct = new Map();
+  for (const link of linkRows) {
+    const pid = String(link.productId);
+    if (!articlesByProduct.has(pid)) articlesByProduct.set(pid, []);
+    articlesByProduct.get(pid).push(cleanText(link.article));
+  }
+  // Also check raw.links fallback (for Yandex products linked via raw JSON only)
+  for (const row of productRows) {
+    const pid = String(row.id);
+    if (articlesByProduct.has(pid)) continue;
+    const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
+    const rawLinks = Array.isArray(raw.links) ? raw.links : [];
+    const rawArticles = rawLinks.map((l) => cleanText(l.article || l.supplierArticle || "")).filter(Boolean);
+    if (rawArticles.length) articlesByProduct.set(pid, rawArticles);
+  }
+
+  const yandexProducts = productRows
+    .filter((r) => (articlesByProduct.get(String(r.id)) || []).length > 0)
+    .map((r) => ({ id: String(r.id), offerId: cleanText(r.offerId), raw: r.raw || {} }));
+
+  if (!yandexProducts.length) {
+    return { ok: true, dryRun, updated: 0, skipped: 0, total: productRows.length, summary: "Нет Яндекс-товаров с привязкой PM." };
+  }
+
+  // Step 3: last successful Yandex price per product
+  const productIdList = yandexProducts.map((p) => p.id);
+  const historyRows = await prisma.$queryRawUnsafe(`
+    SELECT DISTINCT ON (product_id) product_id, new_price
+    FROM price_history
+    WHERE product_id = ANY($1)
+      AND marketplace = 'yandex'
+      AND status = 'success'
+    ORDER BY product_id, created_at DESC
+  `, productIdList);
+  const lastPriceById = new Map(historyRows.map((r) => [String(r.product_id), Number(r.new_price)]));
+
+  // Step 4: cheapest non-ignored PM price per article from live MySQL
+  // (pool is the PM MySQL connection; prices are in USD by default)
+  const allArticles = Array.from(new Set(
+    Array.from(articlesByProduct.values()).flat().filter(Boolean),
+  ));
+  const pmPriceByArticle = new Map();
+  if (allArticles.length) {
+    const queryTimeout = Math.max(8000, Number(process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 15000) || 15000);
+    for (const batch of chunkArray(allArticles, 500)) {
+      const placeholders = batch.map(() => "?").join(",");
+      try {
+        const [pmRows] = await pool.query({
+          sql: `SELECT BINARY TRIM(r.NativeID) AS article, MIN(r.NativePrice) AS price
+                FROM OfferRows r
+                WHERE BINARY TRIM(r.NativeID) IN (${placeholders}) AND r.Ignored = 0
+                GROUP BY BINARY TRIM(r.NativeID)`,
+          values: batch,
+          timeout: queryTimeout,
+        });
+        for (const row of pmRows) {
+          const key = String(row.article || "").trim();
+          if (!pmPriceByArticle.has(key) && Number(row.price) > 0) {
+            pmPriceByArticle.set(key, Number(row.price));
+          }
+        }
+      } catch (pmError) {
+        logger.warn("restore_yandex_markups PM batch failed", { detail: pmError?.message || String(pmError) });
+      }
+    }
+  }
+
+  // Step 5: current USD rate (getUsdRate returns { rate, source, ... })
+  const usdRateObj = await getUsdRate().catch(() => null);
+  const usdRate = Number(usdRateObj?.rate || process.env.DEFAULT_USD_RATE || 95) || 95;
+
+  const updates = [];
+  const skipped = [];
+
+  for (const product of yandexProducts) {
+    const lastPrice = lastPriceById.get(product.id);
+    if (!lastPrice || lastPrice <= 0) {
+      skipped.push({ id: product.id, offerId: product.offerId, reason: "no_price_history" });
+      continue;
+    }
+
+    const articles = articlesByProduct.get(product.id) || [];
+    let bestPmRub = null;
+    for (const article of articles) {
+      const pmPrice = pmPriceByArticle.get(article);
+      if (!pmPrice || pmPrice <= 0) continue;
+      const rubEquiv = pmPrice * usdRate; // PM prices are in USD
+      if (bestPmRub === null || rubEquiv < bestPmRub) bestPmRub = rubEquiv;
+    }
+
+    if (!bestPmRub || bestPmRub <= 0) {
+      skipped.push({ id: product.id, offerId: product.offerId, reason: "no_pm_price", lastPrice });
+      continue;
+    }
+
+    const markup = Math.round((lastPrice / bestPmRub) * 10000) / 10000;
+    if (!Number.isFinite(markup) || markup < minMarkup || markup > maxMarkup) {
+      skipped.push({ id: product.id, offerId: product.offerId, reason: "markup_out_of_range", markup: Math.round(markup * 100) / 100, lastPrice, pmRub: Math.round(bestPmRub) });
+      continue;
+    }
+
+    updates.push({ id: product.id, offerId: product.offerId, raw: product.raw, markup, lastPrice, pmRub: Math.round(bestPmRub) });
+  }
+
+  if (!dryRun && updates.length) {
+    // Single-query bulk patch via CTE to minimise round-trips and event-loop blocking.
+    // Build: WITH u(id, patch) AS (VALUES ...) UPDATE warehouse_products SET raw=raw||patch::jsonb
+    const chunkSize = 500;
+    for (let i = 0; i < updates.length; i += chunkSize) {
+      const chunk = updates.slice(i, i + chunkSize);
+      // Build a VALUES list: ('id1','{"markup":...}'), ...
+      const valuesPlaceholders = chunk.map((_, j) => `($${j * 2 + 1}, $${j * 2 + 2}::jsonb)`).join(", ");
+      const valuesArgs = chunk.flatMap(({ id, markup, raw: rawField }) => {
+        const yandex = {
+          ...(rawField.yandex && typeof rawField.yandex === "object" ? rawField.yandex : {}),
+          extra: {
+            ...(rawField.yandex?.extra && typeof rawField.yandex?.extra === "object" ? rawField.yandex.extra : {}),
+            manualMarkup: true,
+          },
+        };
+        return [id, JSON.stringify({ markup, yandex })];
+      });
+      await prisma.$executeRawUnsafe(
+        `UPDATE warehouse_products AS wp
+         SET raw = wp.raw || u.patch, updated_at = NOW()
+         FROM (VALUES ${valuesPlaceholders}) AS u(pid, patch)
+         WHERE wp.id = u.pid`,
+        ...valuesArgs,
+      );
+    }
+    // Invalidate in-memory cache so next warehouse read picks up new markups
+    invalidateWarehouseViewCache();
+    // Queue Yandex repricing in batches to avoid huge BullMQ payload
+    const repriceBatch = 500;
+    for (let i = 0; i < updates.length; i += repriceBatch) {
+      const batchIds = updates.slice(i, i + repriceBatch).map((u) => u.id);
+      await queueAuthoritativePriceReprice({
+        productIds: batchIds,
+        marketplace: "yandex",
+        reason: "restore_yandex_markups",
+        sourceEvent: "restore_yandex_markups",
+        force: true,
+        onlyChanged: false,
+      }).catch((error) => logger.warn("restore_yandex_markups reprice queue failed", { detail: error?.message || String(error) }));
+    }
+  }
+
+  const sampleUpdates = updates.slice(0, 10).map(({ offerId, markup, lastPrice, pmRub }) => ({ offerId, markup, lastPrice, pmRub }));
+
+  // Per-tier statistics (PM USD price buckets)
+  const tierBoundaries = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 120, 150, 200, 300, 500];
+  const tierStats = tierBoundaries.map((minUsd, i) => {
+    const maxUsd = tierBoundaries[i + 1] ?? Infinity;
+    const inTier = updates.filter((u) => {
+      const pmUsd = u.pmRub / usdRate;
+      return pmUsd >= minUsd && pmUsd < maxUsd;
+    });
+    if (!inTier.length) return null;
+    const markups = inTier.map((u) => u.markup).sort((a, b) => a - b);
+    const avg = markups.reduce((s, m) => s + m, 0) / markups.length;
+    const median = markups[Math.floor(markups.length / 2)];
+    return {
+      minUsd,
+      maxUsd: Number.isFinite(maxUsd) ? maxUsd : null,
+      count: inTier.length,
+      avg: Math.round(avg * 1000) / 1000,
+      median: Math.round(median * 1000) / 1000,
+    };
+  }).filter(Boolean);
+
+  return {
+    ok: true,
+    dryRun,
+    total: productRows.length,
+    withLinks: yandexProducts.length,
+    updated: updates.length,
+    skipped: skipped.length,
+    usdRate,
+    sampleUpdates,
+    sampleSkipped: skipped.slice(0, 5),
+    tierStats,
+    summary: `${dryRun ? "[DRY RUN] " : ""}Яндекс наценки: обновлено ${updates.length}, пропущено ${skipped.length} из ${yandexProducts.length}.`,
+  };
+}
+
 async function runLinkedSupplierRecoveryOperation(payload = {}) {
   const requestedLimit = Number(payload?.limit || 30000);
   const limit = Math.max(1, Math.min(50000, Number.isFinite(requestedLimit) ? Math.round(requestedLimit) : 30000));

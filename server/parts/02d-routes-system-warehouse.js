@@ -197,6 +197,28 @@ app.get("/api/warehouse/brands/index-status", requireAdmin, async (_request, res
   }
 });
 
+app.post("/api/warehouse/yandex/restore-markups", requireAdmin, async (request, response, next) => {
+  try {
+    const dryRun = request.body?.dryRun !== false;
+    const job = await upsertOperationJob({
+      id: crypto.randomUUID(),
+      type: "restore-yandex-markups",
+      title: operationTitle("restore-yandex-markups"),
+      status: "queued",
+      user: request.session?.username || "system",
+      role: request.session?.role || "admin",
+      payload: {
+        dryRun,
+        minMarkup: Number(request.body?.minMarkup || 1.0) || 1.0,
+        maxMarkup: Number(request.body?.maxMarkup || 6.0) || 6.0,
+      },
+      progress: 0,
+    });
+    startOperationJob(job);
+    response.status(202).json({ ok: true, accepted: true, jobId: job.id, statusUrl: `/api/operations/${job.id}`, job: operationJobPublic(job) });
+  } catch (error) { next(error); }
+});
+
 app.post("/api/warehouse/brands/rebuild-index", requireAdmin, async (request, response, next) => {
   try {
     if (!shouldUsePostgresStorage()) {

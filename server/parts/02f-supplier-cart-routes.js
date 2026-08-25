@@ -135,31 +135,68 @@ app.post("/api/supplier-cart/manual-order", requireAdmin, async (request, respon
     const quantity = Math.max(1, Math.round(Number(request.body?.quantity || 1) || 1));
     const marketplace = cleanText(request.body?.marketplace || "ozon").toLowerCase();
     const note = cleanText(request.body?.note || "").slice(0, 200);
+    const forcedPartnerId = cleanText(request.body?.partnerId || "");
+    const forcedRowId = cleanText(request.body?.rowId || "");
     if (!offerId) return response.status(400).json({ error: "offerId is required.", code: "manual_order_no_offer_id" });
     const warehouse = await hydrateSupplierCartWarehouse(await readWarehouse(), [offerId]);
     const product = findSupplierCartWarehouseProduct(warehouse, { offerId, marketplace, accountId: "" });
     if (!product) return response.status(404).json({ error: "Товар не найден на складе.", code: "product_not_found" });
     const state = await readSupplierCartState();
     const manualKey = `manual|manual|manual-${Date.now()}|${offerId}`;
-    const manualLine = normalizeSupplierCartLine({
-      key: manualKey,
-      marketplace: "manual",
-      offerId,
-      quantity,
-      productName: cleanText(product.productName || product.name || offerId),
-      orderId: `manual-${Date.now()}`,
-      accountId: "manual",
-      accountName: "Ручной заказ",
-    });
-    const row = await resolveSupplierCartRow(warehouse, manualLine, state);
-    if (!row.ready) {
-      return response.status(400).json({
-        error: "Не удалось подобрать поставщика.",
-        skipReason: row.skipReason || "supplier_not_found",
-        code: "manual_order_no_supplier",
+    const productName = cleanText(product.productName || product.name || offerId);
+    const orderId = `manual-${Date.now()}`;
+
+    let rowWithNote;
+    if (forcedPartnerId) {
+      const { options } = await listSupplierCartSupplierOptions(offerId);
+      const chosen = pickSupplierCartOption(options, forcedPartnerId, forcedRowId);
+      const rejection = supplierCartOptionRejection(chosen);
+      if (rejection) return response.status(rejection.status).json({ error: rejection.error, code: rejection.code });
+      rowWithNote = normalizeSupplierCartPreviewRow({
+        key: manualKey,
+        marketplace: "manual",
+        offerId,
+        quantity,
+        productName,
+        orderId,
+        accountId: "manual",
+        accountName: "Ручной заказ",
+        supplierName: chosen.supplierName,
+        partnerId: chosen.partnerId,
+        offerRowId: chosen.rowId,
+        price: chosen.price,
+        originalPrice: chosen.originalPrice,
+        priceCurrency: chosen.priceCurrency,
+        trustFactor: chosen.trustFactor,
+        orderCutoffTime: chosen.orderCutoffTime,
+        reseller: chosen.reseller,
+        stockOnlyFallback: chosen.stockOnly,
+        available: true,
+        ready: true,
+        manualNote: note,
       });
+    } else {
+      const manualLine = normalizeSupplierCartLine({
+        key: manualKey,
+        marketplace: "manual",
+        offerId,
+        quantity,
+        productName,
+        orderId,
+        accountId: "manual",
+        accountName: "Ручной заказ",
+      });
+      const row = await resolveSupplierCartRow(warehouse, manualLine, state);
+      if (!row.ready) {
+        return response.status(400).json({
+          error: "Не удалось подобрать поставщика.",
+          skipReason: row.skipReason || "supplier_not_found",
+          code: "manual_order_no_supplier",
+        });
+      }
+      rowWithNote = { ...row, quantity, manualNote: note };
     }
-    const rowWithNote = { ...row, quantity, manualNote: note };
+
     const result = await insertSupplierCartRowsIntoPriceMaster([rowWithNote], request);
     response.json({
       ok: true,
@@ -181,44 +218,76 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     const limit = cleanLimit(request.query.limit, 80, 200);
     const prisma = getPrisma();
     if (!prisma) return response.status(503).json({ ok: false, error: "Database not available" });
-    const where = { active: true, price: { not: null, gt: 0 } };
-    if (q) {
-      const tokenGroups = pmQueryToTokenGroups(q);
-      if (tokenGroups.length) {
-        where.AND = tokenGroups.map((group) => ({
-          OR: group.flatMap((synonym) => [
-            { nativeName: { contains: synonym, mode: "insensitive" } },
-            { article: { contains: synonym, mode: "insensitive" } },
-          ]),
-        }));
-      } else {
-        where.OR = [
+    const baseWhere = { active: true, price: { not: null, gt: 0 } };
+    if (partnerId) baseWhere.partnerId = partnerId;
+
+    const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
+    const minMatchCount = tokenGroups ? (tokenGroups.length <= 2 ? tokenGroups.length : tokenGroups.length - 1) : 0;
+    function buildWhere(groups) {
+      if (groups && groups.length) {
+        // OR across all tokens — JS post-filter enforces minMatchCount
+        const orTerms = groups.flatMap((group) => group.flatMap((synonym) => [
+          { nativeName: { contains: synonym, mode: "insensitive" } },
+          { article: { contains: synonym, mode: "insensitive" } },
+        ]));
+        return { ...baseWhere, OR: orTerms };
+      }
+      if (q) {
+        return { ...baseWhere, OR: [
           { nativeName: { contains: q, mode: "insensitive" } },
           { article: { contains: q, mode: "insensitive" } },
-        ];
+        ] };
       }
+      return baseWhere;
     }
-    if (partnerId) where.partnerId = partnerId;
-    const items = await prisma.priceMasterSnapshotItem.findMany({
-      where,
-      orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
-      take: limit,
-      select: { id: true, rowId: true, article: true, partnerId: true, partnerName: true, nativeName: true, price: true, currency: true, docDate: true },
-    });
-    response.json({
-      ok: true,
-      total: items.length,
-      items: items.map((item) => ({
+
+    const sel = { id: true, rowId: true, article: true, partnerId: true, partnerName: true, nativeName: true, price: true, currency: true, docDate: true };
+    let items = await prisma.priceMasterSnapshotItem.findMany({ where: buildWhere(tokenGroups), orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }], take: limit * 3, select: sel });
+
+    // Post-filter: require at least minMatchCount token groups to match
+    if (tokenGroups && tokenGroups.length >= 2) {
+      items = items.filter((item) => {
+        const hay = [cleanText(item.nativeName || ""), cleanText(item.article || "")].join(" ");
+        return pmWordMatchScore(hay, tokenGroups) >= minMatchCount;
+      });
+    }
+    items = items.slice(0, limit);
+
+    const usdRate = await getUsdRate();
+    const toRub = (price, currency) => {
+      const p = Number(price || 0);
+      return cleanText(currency || "USD").toUpperCase() === "RUB" ? p : p * usdRate;
+    };
+    const isTesterName = (name) => {
+      const n = cleanText(name || "").toLowerCase();
+      return n.includes("отливант") || /\btest(?:er|ep|or|r)?\b/.test(n) || n.includes("тест");
+    };
+    const mapped = items.map((item) => {
+      const currency = cleanText(item.currency || "USD");
+      const price = Number(item.price || 0);
+      return {
         id: item.id,
         rowId: cleanText(item.rowId || ""),
         article: cleanText(item.article || ""),
         partnerId: cleanText(item.partnerId || ""),
         supplierName: cleanText(item.partnerName || ""),
         name: cleanText(item.nativeName || ""),
-        price: Number(item.price || 0),
-        currency: cleanText(item.currency || "USD"),
+        price,
+        currency,
+        priceRub: toRub(price, currency),
+        isTester: isTesterName(item.nativeName || ""),
         docDate: item.docDate?.toISOString?.()?.slice(0, 10) || null,
-      })),
+      };
+    });
+    // Sort: testers last, then by priceRub ascending (RUB prices already comparable)
+    mapped.sort((a, b) => {
+      if (a.isTester !== b.isTester) return a.isTester ? 1 : -1;
+      return a.priceRub - b.priceRub;
+    });
+    response.json({
+      ok: true,
+      total: mapped.length,
+      items: mapped,
     });
   } catch (error) {
     next(error);
@@ -286,10 +355,12 @@ app.get("/api/ready-to-ship", requireStaff, async (request, response, next) => {
     const now = new Date();
     const from = new Date(now.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
     const to = now;
+    const appSettings = await readAppSettings();
+    const cartSettings = normalizeSupplierCartSettings(appSettings.supplierCart || {});
 
     const [ozonResult, yandexResult, wbResult] = await Promise.allSettled([
-      fetchOzonSupplierCartLines({ from, to, limit: Math.ceil(limit * 0.6), statuses: ["awaiting_packaging", "awaiting_deliver"] }),
-      fetchYandexSupplierCartLines({ from, to, limit: Math.ceil(limit * 0.3), statuses: ["PROCESSING"], substatuses: ["STARTED", "READY_TO_SHIP"] }),
+      fetchOzonSupplierCartLines({ from, to, limit: Math.ceil(limit * 0.6), statuses: cartSettings.includeOzonStatuses }),
+      fetchYandexSupplierCartLines({ from, to, limit: Math.ceil(limit * 0.3), statuses: cartSettings.includeYandexStatuses, substatuses: cartSettings.includeYandexSubstatuses }),
       fetchWbSupplierCartLines({ limit: Math.ceil(limit * 0.3) }),
     ]);
 

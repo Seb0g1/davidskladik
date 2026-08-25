@@ -83,7 +83,7 @@ export function TemplatesDrawer({
         <div className="templates-drawer-form">
           <span className="section-subtitle">Новый шаблон</span>
           <input placeholder="Название шаблона" value={draftTitle} onChange={(event) => setDraftTitle(event.target.value)} />
-          <textarea rows={3} placeholder="Текст шаблона (эмодзи приветствуются 😊)" value={draftText} onChange={(event) => setDraftText(event.target.value)} />
+          <textarea rows={3} placeholder="Текст шаблона. Переменные: {{name}}, {{order}}, {{product}}" value={draftText} onChange={(event) => setDraftText(event.target.value)} />
           <div className="emoji-row">
             {EMOJI_ROW.map((emoji) => (
               <button key={emoji} type="button" onClick={() => setDraftText((current) => current + emoji)}>{emoji}</button>

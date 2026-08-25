@@ -187,6 +187,11 @@ async function sendWarehousePrices({
       continue;
     }
     items.push(priceItem);
+    // When pushing a price, also push the stock so externally-zeroed stock is restored.
+    const forceTargetStock = Math.max(0, Math.round(Number(product.targetStock || 0)));
+    if (forceTargetStock > 0 && !stockItems.some((s) => s.id === product.id)) {
+      stockItems.push({ ...product, _forceStock: true });
+    }
   }
 
   if (!dryRun) {

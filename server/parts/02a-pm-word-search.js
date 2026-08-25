@@ -43,9 +43,10 @@ function pmWordExpand(token) {
 
 // Returns [[token, ...synonyms], ...] — one group per input token.
 // Search is AND across groups, OR within each group.
+// Pure-numeric tokens (e.g. "6" for 6 ml) or single letters pass through.
 function pmQueryToTokenGroups(query) {
   return pmWordTokenize(query)
-    .filter((t) => t.length >= 2)
+    .filter((t) => t.length >= 2 || /^\d+$/.test(t) || t.length === 1)
     .map(pmWordExpand);
 }
 
@@ -54,6 +55,14 @@ function pmWordMatch(text, tokenGroups) {
   if (!tokenGroups || !tokenGroups.length) return true;
   const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
   return tokenGroups.every((group) => group.some((token) => lower.includes(token)));
+}
+
+// Count how many token groups match (0..tokenGroups.length).
+// Used for relevance scoring: higher = better match.
+function pmWordMatchScore(text, tokenGroups) {
+  if (!tokenGroups || !tokenGroups.length) return 0;
+  const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
+  return tokenGroups.reduce((n, group) => n + (group.some((token) => lower.includes(token)) ? 1 : 0), 0);
 }
 
 // Build sorted word list from PM row names (for autocomplete).

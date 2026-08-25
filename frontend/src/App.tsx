@@ -31,8 +31,9 @@ const NewProductsPage = lazy(() => import("./routes/NewProductsPage").then((m) =
 const ShopAdminPage = lazy(() => import("./routes/ShopAdminPage").then((m) => ({ default: m.default })));
 const TnvedPage = lazy(() => import("./routes/TnvedPage").then((m) => ({ default: m.TnvedPage })));
 const SupportChatsPage = lazy(() => import("./routes/SupportChatsPage").then((m) => ({ default: m.SupportChatsPage })));
+const BrandBansPage = lazy(() => import("./routes/BrandBansPage").then((m) => ({ default: m.BrandBansPage })));
 
-type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support";
+type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -61,6 +62,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} /> },
   { route: "new-products", href: "/app/new-products", label: "Новые товары", icon: <Sparkles size={16} /> },
   { route: "tnved", href: "/app/tnved", label: "Коды ТН ВЭД", icon: <Tag size={16} /> },
+  { route: "brand-bans", href: "/app/brand-bans", label: "Запрет брендов", icon: <AlertTriangle size={16} /> },
 ];
 
 // Сайдбар: первые пять пунктов — без заголовка, дальше сворачиваемые группы.
@@ -68,7 +70,7 @@ const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = 
   { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
   { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions", "support"] },
   { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "no-supplier", "operations", "recovery-queue"] },
-  { id: "extra", title: "Дополнительное", routes: ["suppliers", "shop", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products", "tnved"] },
+  { id: "extra", title: "Дополнительное", routes: ["suppliers", "shop", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products", "tnved", "brand-bans"] },
 ];
 
 function currentRoute(): AppRoute {
@@ -97,6 +99,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/no-supplier")) return "no-supplier";
   if (path.startsWith("/app/new-products")) return "new-products";
   if (path.startsWith("/app/tnved")) return "tnved";
+  if (path.startsWith("/app/brand-bans")) return "brand-bans";
   return "warehouse";
 }
 
@@ -173,6 +176,23 @@ function AppShell() {
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const BASE_TITLE = "DavidSklad";
+    async function poll() {
+      try {
+        const res = await fetch("/api/supplier-picking-list?status=open&limit=1", { credentials: "include" });
+        if (!res.ok || cancelled) return;
+        const data = await res.json().catch(() => null);
+        const open = Number((data?.summary as Record<string,number> | undefined)?.open ?? 0);
+        if (!cancelled) document.title = open > 0 ? `(${open}) ${BASE_TITLE}` : BASE_TITLE;
+      } catch { /* ignore */ }
+    }
+    void poll();
+    const id = window.setInterval(poll, 60_000);
+    return () => { cancelled = true; clearInterval(id); document.title = BASE_TITLE; };
   }, []);
   const navigate = (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
     event.preventDefault();
@@ -267,7 +287,15 @@ function AppShell() {
           <strong>{session?.username || roleLabel}</strong>
           <small>Сегодня: каталог, привязки и сборка</small>
         </div>
-        <a className="side-logout" href="/login.html"><LogOut size={16} /> Выйти</a>
+        <button
+          className="side-logout"
+          type="button"
+          onClick={() => {
+            fetch("/api/logout", { method: "POST" }).finally(() => {
+              window.location.href = "/login.html";
+            });
+          }}
+        ><LogOut size={16} /> Выйти</button>
       </aside>
       <button className="sidebar-backdrop" type="button" aria-label="Закрыть меню" onClick={() => setSidebarOpen(false)} />
       <div className="app-content">
@@ -341,6 +369,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "no-supplier" ? <NoSupplierPage /> : null}
       {sessionReady && !accessDenied && route === "new-products" ? <NewProductsPage /> : null}
       {sessionReady && !accessDenied && route === "tnved" ? <TnvedPage /> : null}
+      {sessionReady && !accessDenied && route === "brand-bans" ? <BrandBansPage /> : null}
       {sessionReady && !accessDenied && route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
       </Suspense>
       </div>

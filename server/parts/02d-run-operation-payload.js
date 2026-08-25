@@ -140,6 +140,15 @@ async function runOperationPayload(job, options = {}) {
   if (job.type === "health-deep") {
     return collectHealthDetails({ deep: true });
   }
+  if (job.type === "restore-yandex-markups") {
+    const result = await runRestoreYandexMarkupsOperation(job.payload || {});
+    await appendAudit(auditRequest, "warehouse.yandex.restore_markups", {
+      entityType: "yandex_markups",
+      entityId: "all",
+      newValue: result,
+    });
+    return result;
+  }
   const error = new Error(`Unsupported operation type: ${job.type}`);
   error.statusCode = 400;
   throw error;

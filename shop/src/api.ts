@@ -80,12 +80,22 @@ export const api = {
     return req<{ ok: boolean; posts: import("./types").TelegramNewsPost[] }>(`/news?limit=${limit}`);
   },
 
-  reviews(limit = 8): Promise<{ ok: boolean; reviews: import("./types").ShopReview[] }> {
-    return req<{ ok: boolean; reviews: import("./types").ShopReview[] }>(`/reviews?limit=${limit}`);
+  reviews(limit = 8, offerId?: string): Promise<{ ok: boolean; reviews: import("./types").ShopReview[] }> {
+    const qs = new URLSearchParams({ limit: String(limit) });
+    if (offerId) qs.set("offerId", offerId);
+    return req<{ ok: boolean; reviews: import("./types").ShopReview[] }>(`/reviews?${qs}`);
   },
 
   postReview(data: { offerId?: string; productName?: string; productImg?: string; rating: number; text: string }, token: string): Promise<{ ok: boolean; review: import("./types").ShopReview }> {
     return req<{ ok: boolean; review: import("./types").ShopReview }>("/reviews", { method: "POST", body: JSON.stringify(data) }, token);
+  },
+
+  stockAlert(offerId: string, email: string): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>("/stock-alert", { method: "POST", body: JSON.stringify({ offerId, email }) });
+  },
+
+  newProducts(days = 14): Promise<import("./types").CatalogResponse> {
+    return req<import("./types").CatalogResponse>(`/new?days=${days}`);
   },
 };
 

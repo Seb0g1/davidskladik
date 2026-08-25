@@ -30,8 +30,9 @@ export default {
         },
       },
       fontFamily: {
-        sans: ["Space Grotesk", "system-ui", "-apple-system", "sans-serif"],
-        display: ["Space Grotesk", "system-ui", "-apple-system", "sans-serif"],
+        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
+        display: ["Playfair Display", "Georgia", "serif"],
+        serif: ["Playfair Display", "Georgia", "serif"],
       },
       fontSize: {
         "2xs": "0.625rem",

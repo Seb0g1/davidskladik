@@ -90,28 +90,31 @@ function normalizeSupplierCartPreviewRow(input = {}) {
   };
 }
 
-function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartnerIds = new Set(), now = new Date()) {
+function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartnerIds = new Set(), usdRate = 95, now = new Date()) {
   const isSorinSupplier = (row) => /сорин/i.test(cleanText(row.partnerName || row.supplierName || ""));
+  const isInnaSupplier = (row) => /инна/i.test(cleanText(row.partnerName || row.supplierName || ""));
 
-  // Sorin override: if Сорин has stock available and a price, pick him first.
-  // Requires available=true so out-of-stock items go to other suppliers.
-  for (const [linkId, rows] of matches.entries()) {
-    for (const row of rows || []) {
-      if (!isSorinSupplier(row)) continue;
-      if (!row?.available) continue;
-      if (Number(row.price || 0) <= 0) continue;
-      const partnerId = cleanText(row.partnerId).toLowerCase();
-      if (blockedPartnerIds.has(partnerId)) continue;
-      return {
-        selected: { ...row, linkId },
-        stockOnlyFallback: false,
-        blockedAvailable: 0,
-        cutoffPassedAvailable: 0,
-      };
+  // Priority overrides: Сорин → Инна. Each is picked first if available and has a price.
+  // Requires available=true so out-of-stock items fall through to other suppliers.
+  for (const isPriority of [isSorinSupplier, isInnaSupplier]) {
+    for (const [linkId, rows] of matches.entries()) {
+      for (const row of rows || []) {
+        if (!isPriority(row)) continue;
+        if (!row?.available) continue;
+        if (Number(row.price || 0) <= 0) continue;
+        const partnerId = cleanText(row.partnerId).toLowerCase();
+        if (blockedPartnerIds.has(partnerId)) continue;
+        return {
+          selected: { ...row, linkId },
+          stockOnlyFallback: false,
+          blockedAvailable: 0,
+          cutoffPassedAvailable: 0,
+        };
+      }
     }
   }
 
-  const candidates = [];
+  const rawCandidates = [];
   let blockedAvailable = 0;
   let cutoffPassedAvailable = 0;
   let stockOnlyBlocked = 0;
@@ -130,14 +133,32 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
         cutoffPassedAvailable += 1;
         continue;
       }
-      candidates.push({ ...row, linkId });
+      rawCandidates.push({ ...row, linkId });
     }
   }
 
+  // Deduplicate per (partnerId, linkId): when a supplier has multiple rows for the same
+  // article code (e.g. different products labelled with the same NativeID), keep only the
+  // most-recently uploaded one (highest rowId). This prevents the cheapest-but-wrong row
+  // from winning over the correct current row for that product.
+  const bestByPartnerLink = new Map();
+  for (const c of rawCandidates) {
+    const key = `${cleanText(c.partnerId).toLowerCase()}|${String(c.linkId || "")}`;
+    const existing = bestByPartnerLink.get(key);
+    if (!existing || Number(c.rowId || 0) > Number(existing.rowId || 0)) {
+      bestByPartnerLink.set(key, c);
+    }
+  }
+  const candidates = [...bestByPartnerLink.values()];
+
+  const toUsd = (row) => {
+    const p = Number(row.price || Number.POSITIVE_INFINITY);
+    return cleanText(row.priceCurrency || row.currency || "USD").toUpperCase() === "RUB" ? p / usdRate : p;
+  };
   candidates.sort((left, right) =>
     (isSorinSupplier(left) ? 0 : 1) - (isSorinSupplier(right) ? 0 : 1)
-    || supplierCartOrderScore(left, now) - supplierCartOrderScore(right, now)
-    || Number(left.price || Number.POSITIVE_INFINITY) - Number(right.price || Number.POSITIVE_INFINITY)
+    || supplierCartOrderScore(left, usdRate, now) - supplierCartOrderScore(right, usdRate, now)
+    || toUsd(left) - toUsd(right)
     || normalizeSupplierTrustFactor(right.trustFactor, 100) - normalizeSupplierTrustFactor(left.trustFactor, 100)
     || String(left.partnerName || "").localeCompare(String(right.partnerName || ""), "ru", { sensitivity: "base" }),
   );
@@ -212,7 +233,7 @@ function normalizeOzonSupplierCartPostings(data = {}, account = {}) {
         orderedAt: posting.in_process_at || posting.created_at,
         status: posting.status,
         isExpress,
-        ozonProductId: Number(product.product_id || product.sku) || 0,
+        ozonProductId: Number(product.sku || product.product_id) || 0,
         raw: { postingNumber: posting.posting_number, product, isExpress },
       });
       if (line.offerId) lines.push(line);
@@ -284,11 +305,14 @@ async function fetchOzonSupplierCartLines({ from, to, limit, statuses } = {}) {
       let offset = 0;
       while (lines.length < limit) {
         const pageLimit = Math.min(1000, Math.max(1, limit - lines.length));
+        // Extend the Ozon API "to" by 48 h so overdue postings whose in_process_at
+        // gets reset by Ozon to "today" or "tomorrow" are still captured.
+        const ozonTo = new Date(to.getTime() + 48 * 60 * 60 * 1000);
         const data = await ozonRequest("/v3/posting/fbs/list", {
           dir: "ASC",
           filter: {
             since: from.toISOString(),
-            to: to.toISOString(),
+            to: ozonTo.toISOString(),
             status,
           },
           limit: pageLimit,
@@ -326,8 +350,8 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
         statuses: statusList,
         substatuses: substatusList,
         dates: {
-          updateDateFrom: from.toISOString(),
-          updateDateTo: to.toISOString(),
+          fromDate: from.toISOString().slice(0, 10),
+          toDate: to.toISOString().slice(0, 10),
         },
         fake: false,
         sourcePlatforms: ["MARKET"],
@@ -439,7 +463,7 @@ function findSupplierCartWarehouseProduct(warehouse = {}, line = {}) {
   );
 }
 
-async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}) {
+async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { preloadedMatches = null, preloadedUsdRate = null } = {}) {
   const normalizedLine = normalizeSupplierCartLine(line);
   const processed = state.processed?.[normalizedLine.key];
   const product = findSupplierCartWarehouseProduct(warehouse, normalizedLine);
@@ -472,14 +496,28 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}) {
       requestRowId: processed?.requestRowId,
     });
   }
-  const usdRate = await getUsdRate();
-  const matches = await getLivePriceMasterMatchesForLinks(groupLinks, warehouse.suppliers || [], usdRate);
+  const usdRate = preloadedUsdRate ?? await getUsdRate();
+  // Use a pre-fetched batch PM map when available (avoids N+1 MySQL queries per order row).
+  // Fall back to per-link live fetch only when no preloaded map was supplied.
+  let matches;
+  if (preloadedMatches) {
+    matches = new Map();
+    for (const link of groupLinks) {
+      const linkMatches = preloadedMatches.get(link.id);
+      if (linkMatches !== undefined) matches.set(link.id, linkMatches);
+    }
+    if (!matches.size) {
+      matches = await getLivePriceMasterMatchesForLinks(groupLinks, warehouse.suppliers || [], usdRate);
+    }
+  } else {
+    matches = await getLivePriceMasterMatchesForLinks(groupLinks, warehouse.suppliers || [], usdRate);
+  }
   const blockedPartnerIds = activeSupplierBlocksForOffer(state, normalizedLine.offerId);
   const {
     selected,
     stockOnlyFallback,
     skipReason: selectionSkipReason,
-  } = selectSupplierCartSupplierFromMatches(matches, blockedPartnerIds);
+  } = selectSupplierCartSupplierFromMatches(matches, blockedPartnerIds, usdRate);
   if (!selected) {
     return normalizeSupplierCartPreviewRow({
       ...normalizedLine,
@@ -511,7 +549,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}) {
     trustFactor: selected.trustFactor,
     orderCutoffTime: selected.orderCutoffTime,
     reseller: selected.reseller,
-    supplierScore: supplierCartOrderScore(selected),
+    supplierScore: supplierCartOrderScore(selected, usdRate),
     available: true,
     ready: true,
     stockOnlyFallback,

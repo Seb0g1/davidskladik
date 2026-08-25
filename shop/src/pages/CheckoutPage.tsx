@@ -8,16 +8,16 @@ import { useAuth } from "../AuthContext";
 import OzonPickupMap, { type PvzPoint } from "../components/OzonPickupMap";
 
 const S = {
-  bg:      "#09060F",
-  surface: "#130F1D",
-  surface2:"#1C1630",
-  border:  "rgba(255,255,255,0.07)",
-  borderMd:"rgba(255,255,255,0.12)",
-  text:    "#F0EBFF",
-  muted:   "rgba(240,235,255,0.45)",
-  subtle:  "rgba(240,235,255,0.2)",
-  accent:  "#7C3AED",
-  accent3: "#C4B5FD",
+  bg:      "#0E0D0B",
+  surface: "#161512",
+  surface2:"#1D1C18",
+  border:  "rgba(255,252,245,0.07)",
+  borderMd:"rgba(255,252,245,0.13)",
+  text:    "#F4EFE6",
+  muted:   "rgba(244,239,230,0.48)",
+  subtle:  "rgba(244,239,230,0.22)",
+  accent:  "#C9A96E",
+  accent3: "#EDD9B0",
 };
 
 interface FormData {
@@ -48,10 +48,10 @@ function DarkField({
       </label>
       {textarea
         ? <textarea {...(props as React.TextareaHTMLAttributes<HTMLTextAreaElement>)} rows={3} style={inputStyle}
-            onFocus={e => { (e.target as HTMLTextAreaElement).style.borderColor = "rgba(167,139,250,0.4)"; (e.target as HTMLTextAreaElement).style.background = "rgba(255,255,255,0.08)"; }}
+            onFocus={e => { (e.target as HTMLTextAreaElement).style.borderColor = "rgba(201,169,110,0.4)"; (e.target as HTMLTextAreaElement).style.background = "rgba(255,255,255,0.08)"; }}
             onBlur={e => { (e.target as HTMLTextAreaElement).style.borderColor = S.border; (e.target as HTMLTextAreaElement).style.background = "rgba(255,255,255,0.05)"; }} />
         : <input {...(props as React.InputHTMLAttributes<HTMLInputElement>)} required={required} style={inputStyle}
-            onFocus={e => { (e.target as HTMLInputElement).style.borderColor = "rgba(167,139,250,0.4)"; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.08)"; }}
+            onFocus={e => { (e.target as HTMLInputElement).style.borderColor = "rgba(201,169,110,0.4)"; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.08)"; }}
             onBlur={e => { (e.target as HTMLInputElement).style.borderColor = S.border; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.05)"; }} />
       }
     </div>
@@ -175,8 +175,8 @@ export default function CheckoutPage() {
                 }}
                   onMouseEnter={e => {
                     if (!selectedPvz) {
-                      (e.currentTarget as HTMLElement).style.borderColor = "rgba(167,139,250,0.4)";
-                      (e.currentTarget as HTMLElement).style.background = "rgba(124,58,237,0.05)";
+                      (e.currentTarget as HTMLElement).style.borderColor = "rgba(201,169,110,0.4)";
+                      (e.currentTarget as HTMLElement).style.background = "rgba(201,169,110,0.04)";
                     }
                   }}
                   onMouseLeave={e => {

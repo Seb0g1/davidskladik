@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Boxes, CheckCircle2, ChevronDown, ChevronUp, Edit3, Loader2, Package, Plus, RefreshCw, RotateCcw, Search, Trash2, Truck, UserX, X } from "lucide-react";
+import { Boxes, CheckCircle2, ChevronDown, ChevronUp, Edit3, Loader2, Package, Plus, RefreshCw, RotateCcw, Scale, Search, Trash2, Truck, UserX, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -38,17 +38,20 @@ type InactiveDraft = {
 const MutationResultSchema = z.object({ ok: z.boolean().optional().default(true) }).passthrough();
 const emptySupplierForm: SupplierForm = { id: "", name: "", note: "", stopReason: "", priceCurrency: "USD" };
 
-const moneyUsd = (value: unknown) => {
+const currencySymbol = (currency: string) => (String(currency || "USD").toUpperCase() === "RUB" ? "₽" : "$");
+
+const moneyAmount = (value: unknown, currency = "USD") => {
   const n = Number(value || 0);
   if (!Number.isFinite(n) || n <= 0) return "-";
-  return `${Math.round(n).toLocaleString("ru-RU")} $`;
+  return `${Math.round(n).toLocaleString("ru-RU")} ${currencySymbol(currency)}`;
 };
 
-const moneySigned = (value: unknown) => {
+const moneySigned = (value: unknown, currency = "USD") => {
   const n = Number(value || 0);
-  if (!Number.isFinite(n) || n === 0) return "0 $";
+  const sym = currencySymbol(currency);
+  if (!Number.isFinite(n) || n === 0) return `0 ${sym}`;
   const sign = n > 0 ? "+" : "-";
-  return `${sign}${Math.abs(n).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $`;
+  return `${sign}${Math.abs(n).toLocaleString("ru-RU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${sym}`;
 };
 
 function supplierId(supplier: Supplier) {
@@ -97,6 +100,7 @@ export function SuppliersPage() {
   const queryClient = useQueryClient();
   const [view, setView] = useState<"active" | "inactive">("active");
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"name" | "debt">("name");
   const [form, setForm] = useState<SupplierForm>(emptySupplierForm);
   const [articleDrafts, setArticleDrafts] = useState<Record<string, ArticleDraft>>({});
   const [inactiveDraft, setInactiveDraft] = useState<InactiveDraft | null>(null);
@@ -105,6 +109,9 @@ export function SuppliersPage() {
   const [expandedHistory, setExpandedHistory] = useState<Set<string>>(new Set());
   const [returnDrafts, setReturnDrafts] = useState<Record<string, string>>({});
   const [returnNotes, setReturnNotes] = useState<Record<string, string>>({});
+  const [adjustDrafts, setAdjustDrafts] = useState<Record<string, string>>({});
+  const [adjustNotes, setAdjustNotes] = useState<Record<string, string>>({});
+  const [adjustOpen, setAdjustOpen] = useState<Set<string>>(new Set());
   const [historySupplier, setHistorySupplier] = useState<Supplier | null>(null);
 
   const suppliersQuery = useQuery({
@@ -196,7 +203,6 @@ export function SuppliersPage() {
         supplierName: supplier.name || "",
         partnerId: supplier.partnerId || "",
         amount,
-        currency: "USD",
         note,
       })),
     onSuccess: (_data, variables) => {
@@ -226,7 +232,6 @@ export function SuppliersPage() {
         supplierName: supplier.name || "",
         partnerId: supplier.partnerId || "",
         amount,
-        currency: "USD",
         note,
       })),
     onSuccess: (_data, variables) => {
@@ -239,8 +244,23 @@ export function SuppliersPage() {
     },
   });
 
+  const adjustBalance = useMutation({
+    mutationFn: ({ supplier, targetBalance, note }: { supplier: Supplier; targetBalance: number; note: string }) =>
+      fetchJson("/api/supplier-ledger/adjust", z.object({ ok: z.boolean(), skipped: z.boolean().optional(), currentBalance: z.number().optional(), targetBalance: z.number().optional(), delta: z.number().optional(), message: z.string().optional() }).passthrough(), mutationBody({
+        supplierName: supplier.name || "",
+        partnerId: supplier.partnerId || "",
+        targetBalance,
+        note,
+      })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+  });
+
   const suppliers = suppliersQuery.data?.suppliers || [];
   const sync = asRecord(suppliersQuery.data?.supplierSync);
+  const usdRate = suppliersQuery.data?.usdRate ?? 95;
   const activeCount = suppliers.filter(supplierIsActive).length;
   const inactiveCount = suppliers.length - activeCount;
   const articleCount = suppliers.reduce((sum, supplier) => sum + supplierArticles(supplier).length, 0);
@@ -251,8 +271,15 @@ export function SuppliersPage() {
     return suppliers
       .filter((supplier) => view === "active" ? supplierIsActive(supplier) : !supplierIsActive(supplier))
       .filter((supplier) => !needle || supplierSearchText(supplier).includes(needle))
-      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "ru"));
-  }, [search, suppliers, view]);
+      .sort((a, b) => {
+        if (sortBy === "debt") {
+          const debtA = -Number(asRecord(asRecord(a).ledger).balance || 0);
+          const debtB = -Number(asRecord(asRecord(b).ledger).balance || 0);
+          return debtB - debtA;
+        }
+        return String(a.name || "").localeCompare(String(b.name || ""), "ru");
+      });
+  }, [search, suppliers, view, sortBy]);
 
   const startEdit = (supplier: Supplier) => {
     setForm({
@@ -393,6 +420,10 @@ export function SuppliersPage() {
               <button className={view === "active" ? "is-active" : ""} type="button" onClick={() => setView("active")}>Активные</button>
               <button className={view === "inactive" ? "is-active" : ""} type="button" onClick={() => setView("inactive")}>Остановленные</button>
             </div>
+            <div className="settings-tabs" style={{ marginLeft: "auto" }}>
+              <button className={sortBy === "name" ? "is-active" : ""} type="button" title="Сортировка по имени" onClick={() => setSortBy("name")}>А→Я</button>
+              <button className={sortBy === "debt" ? "is-active" : ""} type="button" title="Сортировка по долгу (наибольший вверху)" onClick={() => setSortBy("debt")}><Scale size={13} /> Долг</button>
+            </div>
             <label className="supplier-search"><Search size={16} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Поиск по названию, partnerId, артикулу" /></label>
           </div>
 
@@ -406,6 +437,8 @@ export function SuppliersPage() {
               const draft = articleDrafts[id] || { article: "", note: "" };
               const ledger = asRecord(raw.ledger);
               const balance = Number(ledger.balance || 0);
+              const balanceUsd = balance / usdRate;
+              const supplierCurrency = String(raw.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
               const paymentAmount = paymentDrafts[id] || "";
               const paymentNote = paymentNotes[id] || "";
               const active = supplierIsActive(supplier);
@@ -442,9 +475,13 @@ export function SuppliersPage() {
                   </div>
 
                   <div className="summary-grid compact-summary supplier-ledger-strip">
-                    <DiagnosticValue label={balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(balance)} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
-                    <DiagnosticValue label="Собрано в долг" value={moneySigned(-Number(ledger.debtTotal || 0))} />
-                    <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0))} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
+                    {supplierCurrency === "USD" ? (
+                      <DiagnosticValue label={balanceUsd < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(balanceUsd, "USD")} tone={balanceUsd < 0 ? "danger" : balanceUsd > 0 ? "success" : ""} />
+                    ) : (
+                      <DiagnosticValue label={balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(balance, "RUB")} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
+                    )}
+                    <DiagnosticValue label="Собрано в долг" value={supplierCurrency === "USD" ? moneyAmount(Number(ledger.debtTotalUsd || 0), "USD") : moneyAmount(Number(ledger.debtTotal || 0), "RUB")} />
+                    <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0), "RUB")} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
                     <DiagnosticValue label="Последняя оплата" value={ledger.lastPaymentAt ? compactDate(String(ledger.lastPaymentAt)) : "-"} />
                   </div>
                   <div className="settings-form-row supplier-payment-row">
@@ -452,11 +489,12 @@ export function SuppliersPage() {
                       type="number"
                       min="0"
                       step="0.01"
-                      placeholder="Сумма оплаты, $"
+                      placeholder={supplierCurrency === "USD" ? "Сумма оплаты, $" : "Сумма оплаты, ₽"}
                       value={paymentAmount}
                       onChange={(event) => setPaymentDrafts((current) => ({ ...current, [id]: event.target.value }))}
                     />
                     <input
+                      className="supplier-payment-note"
                       placeholder="Комментарий"
                       value={paymentNote}
                       onChange={(event) => setPaymentNotes((current) => ({ ...current, [id]: event.target.value }))}
@@ -465,11 +503,59 @@ export function SuppliersPage() {
                       className="primary-action"
                       type="button"
                       disabled={paySupplier.isPending || !(Number(paymentAmount) > 0)}
-                      onClick={() => paySupplier.mutate({ supplier, amount: Number(paymentAmount || 0), note: paymentNote })}
+                      onClick={() => paySupplier.mutate({ supplier, amount: supplierCurrency === "USD" ? Math.round(Number(paymentAmount || 0) * usdRate) : Number(paymentAmount || 0), note: paymentNote })}
                     >
                       {paySupplier.isPending ? <Loader2 className="spin" size={16} /> : <CheckCircle2 size={16} />} Заплатил
                     </button>
                   </div>
+
+                  {/* Свести баланс */}
+                  <details open={adjustOpen.has(id)} onToggle={(e) => {
+                    const el = e.currentTarget as HTMLDetailsElement;
+                    setAdjustOpen((prev) => { const n = new Set(prev); el.open ? n.add(id) : n.delete(id); return n; });
+                  }}>
+                    <summary className="muted-note" style={{ cursor: "pointer", padding: "4px 0", display: "flex", alignItems: "center", gap: 6 }}>
+                      <Scale size={13} /> Свести баланс с поставщиком
+                    </summary>
+                    <div className="settings-form-row supplier-payment-row" style={{ marginTop: 8 }}>
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder={supplierCurrency === "USD" ? "Фактический баланс, $" : "Фактический баланс, ₽"}
+                        value={adjustDrafts[id] || ""}
+                        onChange={(e) => setAdjustDrafts((p) => ({ ...p, [id]: e.target.value }))}
+                        title={`Текущий баланс в системе: ${moneySigned(balance, "RUB")}. Введите фактическую сумму — система создаст корректирующую запись.`}
+                      />
+                      <input
+                        className="supplier-payment-note"
+                        placeholder="Комментарий"
+                        value={adjustNotes[id] || ""}
+                        onChange={(e) => setAdjustNotes((p) => ({ ...p, [id]: e.target.value }))}
+                      />
+                      <button
+                        className="primary-action"
+                        type="button"
+                        disabled={adjustBalance.isPending || adjustDrafts[id] === ""}
+                        onClick={() => {
+                          const target = Number(adjustDrafts[id] || 0);
+                          if (!Number.isFinite(target)) return;
+                          adjustBalance.mutate({ supplier, targetBalance: target, note: adjustNotes[id] || "" }, {
+                            onSuccess: () => { setAdjustDrafts((p) => ({ ...p, [id]: "" })); setAdjustNotes((p) => ({ ...p, [id]: "" })); },
+                          });
+                        }}
+                      >
+                        {adjustBalance.isPending ? <Loader2 className="spin" size={16} /> : <Scale size={16} />} Свести
+                      </button>
+                    </div>
+                    {adjustBalance.isSuccess && adjustBalance.data && (
+                      <div className="inline-success" style={{ marginTop: 6, fontSize: "0.82rem" }}>
+                        {adjustBalance.data.skipped
+                          ? adjustBalance.data.message
+                          : `Корректировка: ${moneySigned(adjustBalance.data.currentBalance ?? 0, supplierCurrency)} → ${moneySigned(adjustBalance.data.targetBalance ?? 0, supplierCurrency)} (запись на ${moneySigned(adjustBalance.data.delta ?? 0, supplierCurrency)})`}
+                      </div>
+                    )}
+                    {adjustBalance.isError && <div className="inline-error" style={{ marginTop: 6 }}>{errorMessage(adjustBalance.error)}</div>}
+                  </details>
 
                   {raw.note ? <p className="supplier-note">{String(raw.note)}</p> : null}
                   {!active ? <p className="supplier-note danger-text">Остановлен {inactiveText(supplier)}. {String(raw.inactiveComment || supplier.stopReason || "")}</p> : null}
@@ -537,7 +623,9 @@ export function SuppliersPage() {
                                       {row.offerId ? <small className="muted-note">{row.offerId}</small> : null}
                                     </div>
                                     <span className="supplier-order-amount">
-                                      {amountRub !== null ? moneyUsd(amountRub) : `${row.price} ${row.priceCurrency}`}
+                                      {supplierCurrency === "USD" && row.price
+                                        ? moneyAmount(Number(row.price) * Math.max(1, Number(row.quantity || 1)), String(row.priceCurrency || "USD"))
+                                        : amountRub !== null ? moneyAmount(amountRub, "RUB") : `${row.price} ${row.priceCurrency}`}
                                     </span>
                                     <span className="muted-note">{compactDate(row.pickedAt ?? null)}</span>
                                     {isReturned ? (
@@ -570,7 +658,7 @@ export function SuppliersPage() {
                                 type="number"
                                 min="0"
                                 step="0.01"
-                                placeholder="Сумма возврата, $"
+                                placeholder="Сумма возврата, ₽"
                                 value={returnDrafts[id] || ""}
                                 onChange={(event) => setReturnDrafts((current) => ({ ...current, [id]: event.target.value }))}
                               />

@@ -23,16 +23,16 @@ interface Props {
 const API_BASE = (import.meta.env.VITE_API_BASE ?? "") + "/api/shop";
 
 const S = {
-  bg:      "#09060F",
-  surface: "#130F1D",
-  surface2:"#1C1630",
-  border:  "rgba(255,255,255,0.07)",
-  borderMd:"rgba(255,255,255,0.12)",
-  text:    "#F0EBFF",
-  muted:   "rgba(240,235,255,0.45)",
-  subtle:  "rgba(240,235,255,0.2)",
-  accent:  "#7C3AED",
-  accent3: "#C4B5FD",
+  bg:      "#0E0D0B",
+  surface: "#161512",
+  surface2:"#1D1C18",
+  border:  "rgba(255,252,245,0.07)",
+  borderMd:"rgba(255,252,245,0.13)",
+  text:    "#F4EFE6",
+  muted:   "rgba(244,239,230,0.48)",
+  subtle:  "rgba(244,239,230,0.22)",
+  accent:  "#C9A96E",
+  accent3: "#EDD9B0",
 };
 
 const mkIcon = (color: string, size = 32, shadow = false) =>
@@ -70,7 +70,7 @@ function PvzItem({ pvz, selected, onClick }: { pvz: PvzPoint; selected: boolean;
       onClick={onClick}
       style={{
         width: "100%", textAlign: "left", padding: "14px 16px",
-        background: selected ? "rgba(124,58,237,0.15)" : "transparent",
+        background: selected ? "rgba(201,169,110,0.1)" : "transparent",
         borderBottom: `1px solid ${S.border}`,
         border: "none",
         borderBottomColor: S.border,
@@ -85,8 +85,8 @@ function PvzItem({ pvz, selected, onClick }: { pvz: PvzPoint; selected: boolean;
         <div style={{
           width: 36, height: 36, borderRadius: 10, flexShrink: 0, marginTop: 1,
           display: "flex", alignItems: "center", justifyContent: "center",
-          background: selected ? "rgba(124,58,237,0.25)" : "rgba(255,255,255,0.06)",
-          border: `1px solid ${selected ? "rgba(124,58,237,0.3)" : S.border}`,
+          background: selected ? "rgba(201,169,110,0.15)" : "rgba(255,255,255,0.06)",
+          border: `1px solid ${selected ? "rgba(201,169,110,0.25)" : S.border}`,
           transition: "all 0.15s ease",
         }}>
           <Building2 size={16} style={{ color: selected ? S.accent3 : S.muted }} />
@@ -116,9 +116,9 @@ function PvzItem({ pvz, selected, onClick }: { pvz: PvzPoint; selected: boolean;
             onClick={e => e.stopPropagation()}
             style={{
               width: "100%", padding: "10px", borderRadius: 12, fontSize: 13, fontWeight: 700,
-              color: "#fff", border: "none", cursor: "pointer",
-              background: "linear-gradient(135deg, #7c3aed, #9333ea)",
-              boxShadow: "0 4px 16px rgba(124,58,237,0.4)",
+              color: "#0E0D0B", border: "none", cursor: "pointer",
+              background: S.accent,
+              boxShadow: "0 4px 16px rgba(201,169,110,0.25)",
             }}
           >
             Выбрать этот пункт
@@ -158,6 +158,8 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
   onSelectRef.current = onSelect;
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const isAutoMoveRef = useRef(false);
+  const moveLoadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -186,6 +188,15 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
       }).addTo(map);
       L.control.zoom({ position: "topright" }).addTo(map);
       mapRef.current = map;
+      map.on("moveend", () => {
+        if (isAutoMoveRef.current) { isAutoMoveRef.current = false; return; }
+        if (moveLoadTimerRef.current) clearTimeout(moveLoadTimerRef.current);
+        moveLoadTimerRef.current = setTimeout(() => {
+          if (!mapRef.current) return;
+          const c = mapRef.current.getCenter();
+          void doLoadByCoords(c.lat, c.lng, true);
+        }, 700);
+      });
       // invalidateSize multiple times to handle flex layout settling
       setTimeout(() => map.invalidateSize(), 0);
       setTimeout(() => map.invalidateSize(), 150);
@@ -219,6 +230,7 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
     }
 
     return () => {
+      if (moveLoadTimerRef.current) clearTimeout(moveLoadTimerRef.current);
       resizeObserver?.disconnect();
       if (mapRef.current) { mapRef.current.remove(); mapRef.current = null; }
       markersRef.current.clear();
@@ -252,21 +264,21 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
       : "";
     return `<div style="font-family:Inter,system-ui,sans-serif;min-width:210px;max-width:240px;padding:2px 0;background:transparent">
       <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px">
-        <div style="width:8px;height:8px;border-radius:50%;background:#7c3aed;flex-shrink:0;margin-top:5px"></div>
+        <div style="width:8px;height:8px;border-radius:50%;background:#C9A96E;flex-shrink:0;margin-top:5px"></div>
         <div>
-          <span style="font-weight:700;font-size:13px;color:#F0EBFF;line-height:1.3">${pvz.name}</span>${badge}
+          <span style="font-weight:700;font-size:13px;color:#F4EFE6;line-height:1.3">${pvz.name}</span>${badge}
         </div>
       </div>
       <p style="color:rgba(240,235,255,0.5);font-size:11px;line-height:1.5;margin-bottom:4px">${pvz.address}</p>
       ${sched}
       <button onclick="window.__pvzPick('${pvz.id}')"
-        style="margin-top:12px;width:100%;background:linear-gradient(135deg,#7c3aed,#9333ea);color:#fff;border:none;border-radius:10px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:0.01em;box-shadow:0 4px 12px rgba(124,58,237,0.4)">
+        style="margin-top:12px;width:100%;background:#C9A96E;color:#0E0D0B;border:none;border-radius:10px;padding:9px;font-size:12px;font-weight:700;cursor:pointer;letter-spacing:0.01em">
         Выбрать пункт
       </button>
     </div>`;
   }
 
-  function placeMarkers(points: PvzPoint[]) {
+  function placeMarkers(points: PvzPoint[], fitMap = true) {
     const map = mapRef.current;
     if (!map) return;
     markersRef.current.forEach((m) => m.remove());
@@ -285,18 +297,21 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
       markersRef.current.set(pvz.id, marker);
     });
 
-    const valid = points.filter((p) => p.lat && p.lng);
-    if (valid.length > 0) {
-      map.fitBounds(
-        L.latLngBounds(valid.map((p) => [p.lat, p.lng] as [number, number])),
-        { padding: [40, 40], maxZoom: 14 }
-      );
+    if (fitMap) {
+      const valid = points.filter((p) => p.lat && p.lng);
+      if (valid.length > 0) {
+        isAutoMoveRef.current = true;
+        map.fitBounds(
+          L.latLngBounds(valid.map((p) => [p.lat, p.lng] as [number, number])),
+          { padding: [40, 40], maxZoom: 14 }
+        );
+      }
     }
   }
 
   function highlightPvz(pvz: PvzPoint, panMap = true) {
     setSelectedId(pvz.id);
-    const selectedIcon = mkIcon("#7c3aed", 38, true);
+    const selectedIcon = mkIcon("#C9A96E", 38, true);
     const defaultIcon = mkIcon("#ff6a00");
     markersRef.current.forEach((marker, id) => marker.setIcon(id === pvz.id ? selectedIcon : defaultIcon));
     if (panMap && mapRef.current && pvz.lat && pvz.lng) {
@@ -322,21 +337,22 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
     finally { setLoading(false); }
   }
 
-  async function doLoadByCoords(lat: number, lng: number) {
+  async function doLoadByCoords(lat: number, lng: number, fromMap = false) {
     setLoading(true); setSearched(false); setPvzList([]); setSelectedId(null);
     const map = mapRef.current;
-    if (map) {
+    if (map && !fromMap) {
       userMarkerRef.current?.remove();
       userMarkerRef.current = L.marker([lat, lng], { icon: mkUserIcon() }).addTo(map);
+      isAutoMoveRef.current = true;
       map.setView([lat, lng], 13, { animate: true });
     }
     try {
       const res = await fetch(`${API_BASE}/delivery/pvz?lat=${lat}&lng=${lng}`);
       const data: { pvz?: PvzPoint[]; city?: string } = await res.json();
       const list = Array.isArray(data.pvz) ? data.pvz : [];
-      if (data.city) setCityInput(data.city);
+      if (data.city && !fromMap) setCityInput(data.city);
       setPvzList(list); pvzListRef.current = list; setSearched(true);
-      placeMarkers(list);
+      placeMarkers(list, !fromMap);
     } catch { setSearched(true); }
     finally { setLoading(false); }
   }
@@ -396,7 +412,7 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
                 color: mobileView === v ? S.accent3 : S.muted,
                 transition: "all 0.15s ease",
               }}>
-                {v === "map" ? "Карта" : <>Список {pvzList.length > 0 && <span style={{ marginLeft: 4, background: "rgba(124,58,237,0.2)", color: S.accent3, padding: "1px 6px", borderRadius: 6, fontSize: 10 }}>{pvzList.length}</span>}</>}
+                {v === "map" ? "Карта" : <>Список {pvzList.length > 0 && <span style={{ marginLeft: 4, background: "rgba(201,169,110,0.14)", color: S.accent3, padding: "1px 6px", borderRadius: 6, fontSize: 10 }}>{pvzList.length}</span>}</>}
               </button>
             ))}
           </div>
@@ -422,13 +438,13 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
               background: "rgba(255,255,255,0.05)", border: `1.5px solid ${S.border}`,
               borderRadius: 12, color: S.text, outline: "none", transition: "all 0.15s ease",
             }}
-            onFocus={e => { (e.target as HTMLInputElement).style.borderColor = "rgba(167,139,250,0.4)"; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.08)"; }}
+            onFocus={e => { (e.target as HTMLInputElement).style.borderColor = "rgba(201,169,110,0.4)"; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.08)"; }}
             onBlur={e => { (e.target as HTMLInputElement).style.borderColor = S.border; (e.target as HTMLInputElement).style.background = "rgba(255,255,255,0.05)"; }}
           />
         </div>
         <button type="submit" disabled={!cityInput.trim() || loading} style={{
-          padding: "10px 16px", color: "#fff", fontSize: 13, fontWeight: 600, borderRadius: 12, border: "none", cursor: "pointer",
-          background: "linear-gradient(135deg,#7c3aed,#9333ea)", boxShadow: "0 2px 12px rgba(124,58,237,0.3)",
+          padding: "10px 16px", fontSize: 13, fontWeight: 600, borderRadius: 12, border: "none", cursor: "pointer",
+          background: "#C9A96E", color: "#0E0D0B",
           display: "flex", alignItems: "center", gap: 6, flexShrink: 0, opacity: (!cityInput.trim() || loading) ? 0.5 : 1,
         }}>
           {loading ? <Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> : <Search size={14} />}
@@ -476,10 +492,10 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
               position: "absolute", bottom: 24, left: 24, zIndex: 20,
               background: "rgba(19,15,29,0.97)", backdropFilter: "blur(20px)",
               borderRadius: 20, padding: "20px 24px", boxShadow: "0 16px 48px rgba(0,0,0,0.6)",
-              maxWidth: 320, border: `1px solid rgba(124,58,237,0.25)`,
+              maxWidth: 320, border: `1px solid rgba(201,169,110,0.15)`,
             }}>
               <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 16 }}>
-                <div style={{ width: 36, height: 36, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: "rgba(124,58,237,0.2)", border: `1px solid rgba(124,58,237,0.3)` }}>
+                <div style={{ width: 36, height: 36, borderRadius: 10, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, background: "rgba(201,169,110,0.14)", border: `1px solid rgba(201,169,110,0.25)` }}>
                   <Building2 size={18} style={{ color: S.accent3 }} />
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
@@ -494,9 +510,9 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
                 </div>
               </div>
               <button type="button" onClick={() => { onSelect(selectedPvz); onClose(); }} style={{
-                width: "100%", padding: "12px", borderRadius: 12, fontSize: 13, fontWeight: 700, color: "#fff",
-                background: "linear-gradient(135deg,#7c3aed,#9333ea)", border: "none", cursor: "pointer",
-                boxShadow: "0 6px 20px rgba(124,58,237,0.4)", transition: "transform 0.15s ease",
+                width: "100%", padding: "12px", borderRadius: 12, fontSize: 13, fontWeight: 700, color: "#0E0D0B",
+                background: S.accent, border: "none", cursor: "pointer",
+                boxShadow: "0 6px 20px rgba(201,169,110,0.3)", transition: "transform 0.15s ease",
               }}
                 onMouseEnter={e => { (e.currentTarget as HTMLElement).style.transform = "translateY(-1px)"; }}
                 onMouseLeave={e => { (e.currentTarget as HTMLElement).style.transform = ""; }}
@@ -519,7 +535,7 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
         >
           {!loading && !searched && (
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 32px", textAlign: "center", flex: 1 }}>
-              <div style={{ width: 64, height: 64, borderRadius: 24, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20, background: "rgba(124,58,237,0.1)", border: `1px solid rgba(124,58,237,0.2)` }}>
+              <div style={{ width: 64, height: 64, borderRadius: 24, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 20, background: "rgba(124,58,237,0.1)", border: `1px solid rgba(201,169,110,0.14)` }}>
                 <Navigation size={28} style={{ color: S.accent3 }} />
               </div>
               <p style={{ fontSize: 15, fontWeight: 600, color: S.text, marginBottom: 8 }}>Найдите ближайший пункт</p>

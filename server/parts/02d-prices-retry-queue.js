@@ -49,10 +49,12 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
       }
       failed.push(...ozonItems
         .filter((entry) => failedOfferIdSet.has(String(entry.payload.offer_id)))
-        .map((entry) => buildPriceRetryItem(entry.item, failedOfferIds.get(String(entry.payload.offer_id)), now)));
+        .map((entry) => buildPriceRetryItem(entry.item, failedOfferIds.get(String(entry.payload.offer_id)), now))
+        .filter(Boolean));
       failed.push(...ozonItems
         .filter((entry) => verificationFailedOfferIdSet.has(String(entry.payload.offer_id)))
-        .map((entry) => buildPriceRetryItem(entry.item, verificationFailedOfferIds.get(String(entry.payload.offer_id)), now)));
+        .map((entry) => buildPriceRetryItem(entry.item, verificationFailedOfferIds.get(String(entry.payload.offer_id)), now))
+        .filter(Boolean));
       const stagedFollowUps = [];
       for (const entry of ozonItems) {
         const offerId = String(entry.payload.offer_id || "");
@@ -111,7 +113,7 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
           error: error?.message || "send_failed",
           at: now.toISOString(),
         })));
-        failed.push(...targetItems.map((item) => buildPriceRetryItem(item, error, now)));
+        failed.push(...targetItems.map((item) => buildPriceRetryItem(item, error, now)).filter(Boolean));
       }
     }
 

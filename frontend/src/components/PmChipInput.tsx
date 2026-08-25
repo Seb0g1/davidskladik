@@ -5,6 +5,8 @@ import { fetchJson } from "../api";
 import { PmWordSuggestSchema } from "../types";
 import { pmSearchStore, usePmChips } from "../lib/pmSearchStore";
 
+const MIN_PREFIX_LEN = 1;
+
 interface PmChipInputProps {
   onQueryChange: (query: string) => void;
   placeholder?: string;
@@ -27,7 +29,7 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
   const wordSuggest = useQuery({
     queryKey: ["pm-words", prefix],
     queryFn: () => fetchJson(`/api/pricemaster/words?prefix=${encodeURIComponent(prefix)}`, PmWordSuggestSchema),
-    enabled: prefix.length >= 2,
+    enabled: prefix.length >= MIN_PREFIX_LEN,
     staleTime: 5 * 60_000,
   });
 
@@ -61,7 +63,7 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
     onQueryChange([...chips, val.trim()].filter(Boolean).join(" "));
   };
 
-  const showDropdown = focused && prefix.length >= 2 && (wordSuggest.data?.words?.length ?? 0) > 0;
+  const showDropdown = focused && prefix.length >= MIN_PREFIX_LEN && (wordSuggest.data?.words?.length ?? 0) > 0;
 
   return (
     <div
@@ -75,12 +77,23 @@ export function PmChipInput({ onQueryChange, placeholder = "Введите сл�
             type="button"
             className="pm-chip-remove"
             tabIndex={-1}
-            onClick={(e) => { e.stopPropagation(); removeChip(i); }}
+            onMouseDown={(e) => { e.preventDefault(); removeChip(i); }}
           >
             <X size={10} />
           </button>
         </span>
       ))}
+      {chips.length > 1 && (
+        <button
+          type="button"
+          className="pm-chip-clear-all"
+          tabIndex={-1}
+          title="Сбросить все фильтры"
+          onMouseDown={(e) => { e.preventDefault(); pmSearchStore.clear(); inputRef.current?.focus(); }}
+        >
+          <X size={12} />
+        </button>
+      )}
 
       <input
         ref={inputRef}

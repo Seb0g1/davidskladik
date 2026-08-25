@@ -265,8 +265,11 @@ function supplierOrderCutoffPassed(orderCutoffTime = "", now = new Date()) {
   return currentHour * 60 + currentMinute > hour * 60 + minute;
 }
 
-function supplierCartOrderScore(row = {}, now = new Date()) {
-  const price = Number(row.price || Number.POSITIVE_INFINITY);
+function supplierCartOrderScore(row = {}, usdRate = 95, now = new Date()) {
+  const rawPrice = Number(row.price || Number.POSITIVE_INFINITY);
+  const isRub = cleanText(row.priceCurrency || row.currency || "USD").toUpperCase() === "RUB";
+  // Normalize to USD for uniform comparison regardless of supplier currency
+  const price = isRub ? rawPrice / usdRate : rawPrice;
   const trust = normalizeSupplierTrustFactor(row.trustFactor, 100);
   const trustPenalty = (100 - trust) / 100 * 0.18;
   const resellerPenalty = row.reseller ? 0.12 : 0;

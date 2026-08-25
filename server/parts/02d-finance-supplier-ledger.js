@@ -7,12 +7,31 @@ function supplierLedgerIdentityWhere({ supplierName = "", partnerId = "" } = {})
   return OR.length ? { OR } : {};
 }
 
+// Detect entries where a RUB supplier's picking row was stored with priceCurrency="USD"
+// (the old default). Returns the corrected amount so UI shows the right balance without
+// requiring a DB migration to be run manually.
+function correctEntryAmountForRubSupplier(entry) {
+  if (entry.entryType !== "purchase_debt" || !(entry.amount < 0)) return entry.amount;
+  const picking = entry.raw?.picking || {};
+  const stored = String(picking.priceCurrency || picking.currency || "").toUpperCase();
+  if (stored === "RUB" || stored === "RUR") return entry.amount;
+  // stored as "USD" (or missing) — check if supplier is actually RUB-priced
+  const supplierName = cleanText(entry.supplierName || picking.supplierName || "");
+  const partnerId = cleanText(entry.partnerId || picking.partnerId || "");
+  const resolvedCurrency = resolvePickingRowCurrency({ ...picking, supplierName, partnerId });
+  if (resolvedCurrency !== "RUB") return entry.amount;
+  const price = Number(picking.price || 0);
+  const qty = Math.max(1, Math.round(Number(picking.quantity || 1)));
+  return price > 0 ? -normalizeFinanceMoney(price * qty, 0) : entry.amount;
+}
+
 function supplierLedgerSummaryFromEntries(entries = []) {
   const active = entries.filter((entry) => entry.status !== "voided");
-  const balance = active.reduce((sum, entry) => sum + normalizeFinanceMoney(entry.amount, 0), 0);
+  // Use corrected amounts for RUB suppliers whose entries were stored with wrong USD default.
+  const balance = active.reduce((sum, entry) => sum + normalizeFinanceMoney(correctEntryAmountForRubSupplier(entry), 0), 0);
   const debtTotal = active
     .filter((entry) => entry.amount < 0)
-    .reduce((sum, entry) => sum + Math.abs(normalizeFinanceMoney(entry.amount, 0)), 0);
+    .reduce((sum, entry) => sum + Math.abs(normalizeFinanceMoney(correctEntryAmountForRubSupplier(entry), 0)), 0);
   const paidTotal = active
     .filter((entry) => entry.amount > 0 && entry.entryType === "payment")
     .reduce((sum, entry) => sum + normalizeFinanceMoney(entry.amount, 0), 0);
@@ -22,10 +41,23 @@ function supplierLedgerSummaryFromEntries(entries = []) {
   const lastDebt = active
     .filter((entry) => entry.amount < 0)
     .sort((left, right) => String(right.occurredAt).localeCompare(String(left.occurredAt)))[0] || null;
+  // For USD-priced suppliers: compute native-currency debt total from raw picking data.
+  // This lets the UI show debt in USD without RUB conversion.
+  const debtTotalUsd = active
+    .filter((entry) => entry.amount < 0 && entry.entryType === "purchase_debt")
+    .reduce((sum, entry) => {
+      const picking = entry.raw?.picking || {};
+      const currency = String(picking.priceCurrency || picking.currency || "").toUpperCase();
+      if (currency === "RUB" || currency === "RUR") return sum;
+      const price = Number(picking.price || 0);
+      const qty = Math.max(1, Math.round(Number(picking.quantity || 1)));
+      return price > 0 ? sum + normalizeFinanceMoney(price * qty, 0) : sum;
+    }, 0);
   return {
-    balance: normalizeFinanceMoney(balance, 0),
-    debtTotal: normalizeFinanceMoney(debtTotal, 0),
-    paidTotal: normalizeFinanceMoney(paidTotal, 0),
+    balance: Math.round(balance),
+    debtTotal: Math.round(debtTotal),
+    paidTotal: Math.round(paidTotal),
+    debtTotalUsd: normalizeFinanceMoney(debtTotalUsd, 0),
     entries: active.length,
     lastPaymentAt: lastPayment?.occurredAt || null,
     lastDebtAt: lastDebt?.occurredAt || null,
@@ -82,7 +114,12 @@ async function supplierLedgerSummaryMapForSuppliers(suppliers = []) {
     for (const supplier of suppliers) {
       const partnerKey = supplier.partnerId ? `partner:${cleanText(supplier.partnerId).toLowerCase()}` : "";
       const nameKey = supplier.name ? `name:${normalizeSupplierName(supplier.name)}` : "";
-      const entries = partnerKey && byKey.has(partnerKey) ? byKey.get(partnerKey) : (nameKey && byKey.has(nameKey) ? byKey.get(nameKey) : []);
+      // Merge both buckets so payments recorded without partnerId are included in the balance
+      const seenIds = new Set();
+      const entries = [];
+      for (const entry of [...(partnerKey && byKey.get(partnerKey) || []), ...(nameKey && byKey.get(nameKey) || [])]) {
+        if (!seenIds.has(entry.id)) { seenIds.add(entry.id); entries.push(entry); }
+      }
       empty.set(cleanText(supplier.id || supplier.partnerId || supplier.name), supplierLedgerSummaryFromEntries(entries));
     }
   } catch (error) {
@@ -203,4 +240,42 @@ async function voidSupplierLedgerDebtForPickingRow(row = {}, request = null) {
     if (!jsonFallbackEnabled()) throw error;
     return null;
   }
+}
+
+// Startup migration: correct purchase_debt entries for RUB suppliers that were stored
+// with priceCurrency="USD" (the old default), causing 90x inflated RUB amounts.
+async function fixRubSupplierLedgerAmounts(prisma) {
+  if (!prisma || !shouldUsePostgresStorage()) return { skipped: true };
+  const rows = await prisma.supplierLedgerEntry.findMany({
+    where: { status: "active", entryType: "purchase_debt", amount: { lt: 0 } },
+  });
+  let fixed = 0;
+  for (const row of rows) {
+    const raw = row.raw || {};
+    const picking = raw.picking || {};
+    const stored = String(picking.priceCurrency || picking.currency || "").toUpperCase();
+    if (stored === "RUB" || stored === "RUR") continue;
+    const supplierName = cleanText(row.supplierName || picking.supplierName || "");
+    const partnerId = cleanText(row.partnerId || picking.partnerId || "");
+    const resolvedCurrency = resolvePickingRowCurrency({ ...picking, supplierName, partnerId });
+    if (resolvedCurrency !== "RUB") continue;
+    const price = Number(picking.price || 0);
+    const qty = Math.max(1, Math.round(Number(picking.quantity || 1)));
+    if (!(price > 0)) continue;
+    const correctAmount = -normalizeFinanceMoney(price * qty, 0);
+    if (Math.abs(correctAmount - Number(row.amount)) < 0.01) continue;
+    await prisma.supplierLedgerEntry.update({
+      where: { id: row.id },
+      data: {
+        amount: correctAmount,
+        raw: { ...raw, picking: { ...picking, priceCurrency: "RUB", _fixedAt: new Date().toISOString() } },
+      },
+    });
+    fixed++;
+  }
+  if (fixed > 0) {
+    suppliersListCache = null;
+    logger.info("rub_supplier_ledger_fix complete", { fixed, total: rows.length });
+  }
+  return { fixed, total: rows.length };
 }
