@@ -145,6 +145,52 @@ function pmPassesSearchFilter(text, tokenGroups) {
   return optional.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));
 }
 
+// Trigram similarity between two strings (mirrors Postgres pg_trgm similarity()).
+function ngramSim(a, b) {
+  function trigrams(s) {
+    const src = " " + s; // 1-space prefix padding (Postgres convention)
+    const set = new Set();
+    for (let i = 0; i + 2 < src.length; i++) set.add(src.slice(i, i + 3));
+    return set;
+  }
+  const ag = trigrams(a), bg = trigrams(b);
+  if (!ag.size && !bg.size) return 1;
+  if (!ag.size || !bg.size) return 0;
+  let common = 0;
+  for (const g of ag) if (bg.has(g)) common++;
+  return (2 * common) / (ag.size + bg.size);
+}
+
+// word_similarity JS equivalent: max trigram similarity between token and any word in text.
+function wordSimJs(token, lower) {
+  const words = lower.split(/[\s\-.,/]+/).filter(Boolean);
+  if (!words.length) return 0;
+  return Math.max(...words.map((w) => ngramSim(token, w)));
+}
+
+// Like pmPassesSearchFilter but allows long required tokens (≥5 chars) to match
+// via trigram similarity (≥0.4) when exact match fails.
+// Used for fuzzy fallback results so typos in brand names still pass.
+function pmPassesSearchFilterFuzzy(text, tokenGroups) {
+  if (!tokenGroups || !tokenGroups.length) return true;
+  const lower = String(text || "").toLowerCase().replace(/ё/g, "е");
+  const required = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g));
+  const optional = tokenGroups.filter((g) => pmTokenGroupIsOptional(g));
+  if (required.length === 0) {
+    return tokenGroups.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));
+  }
+  const minMatch = required.length <= 2 ? required.length : required.length - 1;
+  let score = 0;
+  for (const group of required) {
+    const exactHit = group.some((t) => pmTokenMatchesText(lower, t));
+    if (exactHit) { score++; continue; }
+    // Fuzzy fallback for long tokens (≥5 chars) — handles typos like "chanell"→"chanel".
+    if (!group._compound && group.some((t) => t.length >= 5 && wordSimJs(t, lower) >= 0.4)) score++;
+  }
+  if (score < minMatch) return false;
+  return optional.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));
+}
+
 // Build sorted word list from PM row names (for autocomplete).
 function buildPmWordIndex(rows = []) {
   const words = new Set();

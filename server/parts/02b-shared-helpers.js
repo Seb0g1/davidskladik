@@ -131,11 +131,13 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
     rows = rows.slice(0, take);
 
     // Fuzzy fallback: if exact search found very few results, try word_similarity via pg_trgm.
-    if (rows.length < 5 && q && groups && groups.length) {
-      const fuzzy = await fuzzySearchPmSnapshotItems(prisma, groups, take - rows.length);
+    if (rows.length < 3 && q && groups && groups.length) {
+      const fuzzy = await fuzzySearchPmSnapshotItems(prisma, groups, take);
       const existingIds = new Set(rows.map((r) => r.id));
       for (const fr of fuzzy) {
-        if (!existingIds.has(fr.id)) rows.push(fr);
+        if (existingIds.has(fr.id)) continue;
+        const hay = [cleanText(fr.nativeName || ""), cleanText(fr.article || "")].join(" ");
+        if (pmPassesSearchFilterFuzzy(hay, groups)) rows.push(fr);
       }
     }
 
@@ -163,6 +165,13 @@ async function fuzzySearchPmSnapshotItems(prisma, tokenGroups, limit = 50) {
     });
     return `(${groupConds.join(" OR ")})`;
   });
+  // Compound groups (e.g. "no5") must also match in SQL via regex (flexible spacing).
+  const compoundGroups = tokenGroups.filter((g) => g._compound);
+  for (const g of compoundGroups) {
+    const flexPat = g[0].replace(/([a-zа-я])(\d)/g, "$1\\s*$2").replace(/(\d)([a-zа-я])/g, "$1\\s*$2");
+    params.push(flexPat);
+    conditions.push(`native_name ~* $${params.length}`);
+  }
   const orderTerms = long.map((group) => {
     params.push(group[0]);
     return `word_similarity($${params.length}, native_name)`;

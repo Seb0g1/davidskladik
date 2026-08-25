@@ -258,11 +258,13 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     }
 
     // Fuzzy fallback: when exact search finds very few results (likely a typo), try word_similarity.
-    if (items.length < 5 && q && tokenGroups && tokenGroups.length) {
+    if (items.length < 3 && q && tokenGroups && tokenGroups.length) {
       const fuzzy = await fuzzySearchPmSnapshotItems(prisma, tokenGroups, limit);
       const existingIds = new Set(items.map((i) => i.id));
       for (const fr of fuzzy) {
-        if (!existingIds.has(fr.id)) items.push(fr);
+        if (existingIds.has(fr.id)) continue;
+        const hay = [cleanText(fr.nativeName || ""), cleanText(fr.article || "")].join(" ");
+        if (pmPassesSearchFilterFuzzy(hay, tokenGroups)) items.push(fr);
       }
     }
 
