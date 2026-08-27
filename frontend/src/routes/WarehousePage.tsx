@@ -460,6 +460,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
     return Array.from(byKey.values());
   }, [links]);
   const selectedSupplierCount = products.filter((item) => item.selectedSupplier).length;
+  const [linksListOpen, setLinksListOpen] = useState(uniqueGroupLinks.length === 0);
   const [drafts, setDrafts] = useState<LinkDraft[]>([]);
   const [draft, setDraft] = useState<LinkDraft>(() => emptyLinkDraft());
   const [search, setSearch] = useState("");
@@ -593,6 +594,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
   });
 
   useEffect(() => {
+    setLinksListOpen(uniqueGroupLinks.length === 0);
     setDrafts([]);
     setDraft(emptyLinkDraft());
     setSearch("");
@@ -674,7 +676,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
         ) : null}
       </div>
 
-      <div className="stock-only-price-box">
+      {false && <div className="stock-only-price-box">
         <div>
           <strong>Ручная цена складского fallback</strong>
           <span>Если обычных поставщиков нет, товар можно оставить в продаже по этой цене. Цена складского PriceMaster-поставщика не используется.</span>
@@ -688,98 +690,123 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
           </button>
         </div>
         {manualPricesMutation.error && <div className="inline-error">{errorMessage(manualPricesMutation.error)}</div>}
+      </div>}
+
+      <div className="supplier-quick-strip">
+        {(() => {
+          const sel = asRecord(primaryProduct?.selectedSupplier);
+          const name = String(sel.supplierName || "");
+          const parts = [
+            name,
+            sel.article ? String(sel.article) : "",
+            sel.price ? `PM ${String(sel.price)} ${String(sel.currency || sel.priceCurrency || "USD")}` : "",
+          ].filter(Boolean);
+          return (<>
+            {parts.length ? (
+              <span className="formula-chip">{parts.join(" · ")}</span>
+            ) : uniqueGroupLinks.length ? (
+              <span className="formula-chip muted">Поставщик не определён</span>
+            ) : null}
+            {!readOnly && uniqueGroupLinks.length > 0 && (
+              <button className="link-action" type="button" onClick={() => setLinksListOpen((v) => !v)}>
+                {linksListOpen ? "Свернуть" : `Привязки (${uniqueGroupLinks.length}) ↓`}
+              </button>
+            )}
+          </>);
+        })()}
       </div>
 
-
-      {priceLimitProducts.length > 0 ? (
-        <div className="warning-strip compact">
-          <span>
-            Лимиты авто-цены ограничивают расчёт от поставщика:{" "}
-            {priceLimitProducts.map((item) => {
-              const minLimit = Number((item as any).autoPriceMin || 0) || 0;
-              const maxLimit = Number((item as any).autoPriceMax || 0) || 0;
-              return `${String(item.marketplace || "").toUpperCase() || item.offerId}${minLimit ? ` мин ${money(minLimit)}` : ""}${maxLimit ? ` макс ${money(maxLimit)}` : ""}`;
-            }).join(" · ")}
-          </span>
-          <button className="secondary-action" type="button" onClick={() => resetPriceLimitsMutation.mutate()} disabled={readOnly || resetPriceLimitsMutation.isPending} title="Убрать мин/макс лимиты авто-цены — цена снова будет считаться только от закупки поставщика и коэффициента">
-            {resetPriceLimitsMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Сбросить лимиты
-          </button>
-          {resetPriceLimitsMutation.error ? <div className="inline-error">{errorMessage(resetPriceLimitsMutation.error)}</div> : null}
-        </div>
-      ) : null}
-
-      <div className="pm-link-toolbar">
-          <input value={linkFilter} onChange={(event) => setLinkFilter(event.target.value)} placeholder="Фильтр сохраненных поставщиков: поставщик, артикул или название" />
-          <SelectField
-            ariaLabel="Тип связи"
-            value={linkKind}
-            onChange={(next) => setLinkKind(next as "all" | "normal" | "stock_only")}
-            options={[
-              { value: "all", label: "Все связи" },
-              { value: "normal", label: "Обычные" },
-              { value: "stock_only", label: "Складские" },
-            ]}
-          />
-          <button className="secondary-action" type="button" onClick={() => copyPlainText(savedSupplierList.join("\n"))} disabled={!savedSupplierList.length}>
-            <Copy size={16} /> Скопировать поставщиков
-          </button>
-          <button className="secondary-action danger" type="button" onClick={() => bulkDeleteMutation.mutate()} disabled={readOnly || !selectedLinkIds.length || bulkDeleteMutation.isPending}>
-            {bulkDeleteMutation.isPending ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Удалить выбранные {selectedLinkIds.length || ""}
-          </button>
-      </div>
-
-      <div className="links-list">
-        {filteredLinks.length ? filteredLinks.map((link) => (
-          <div className="link-item pm-link-item" key={`${link.productId}-${link.id || linkPrimarySignature(link)}-${link.article}-${link.supplierName}`}>
-            <label className="pm-link-select" title="Выбрать привязку">
-              <input
-                type="checkbox"
-                disabled={readOnly}
-                checked={selectedLinkIds.includes(linkSelectionKey(link))}
-                onChange={(event) => setSelectedLinkIds((ids) => event.target.checked
-                  ? Array.from(new Set([...ids, linkSelectionKey(link)]))
-                  : ids.filter((id) => id !== linkSelectionKey(link)))}
-              />
-            </label>
-            <div className="pm-link-body">
-              <div className="pm-link-head">
-                <div>
-                  <strong>{link.article || link.supplierArticle || "без артикула PriceMaster"}</strong>
-                  <span>{link.supplierName || "поставщик не указан"}</span>
-                </div>
-                <span className="pm-source-pill">{linkMatchText(link)}</span>
-                {isStockOnlyLink(link) && <span className="pm-source-pill stock-only">не берет цену</span>}
-              </div>
-              <div className="pm-link-grid">
-                <span><b>Row ID</b>{linkSourceId(link) || "не сохранен"}</span>
-                <span><b>Partner ID</b>{link.partnerId || "не указан"}</span>
-                <span><b>Название/ключ</b>{linkTitleText(link)}</span>
-                <span><b>Валюта</b>{link.priceCurrency || "USD"}</span>
-                <span><b>Обновлено</b>{compactDate(link.updatedAt || link.createdAt)}</span>
-                <span><b>Кто изменил</b>{link.updatedBy || link.createdBy || "system"}</span>
-              </div>
-              <div className="pm-route-list">
-                <span className="pm-route-chip">
-                  Общая связь группы: {(link.productMarketplaces || [link.productMarketplace]).filter(Boolean).join(" + ") || "marketplace"}
-                </span>
-                <span className="pm-route-chip muted">
-                  Карточки: {(link.productOfferIds || [link.productOfferId]).filter(Boolean).join(", ") || link.productId}
-                </span>
-                <span className="pm-route-chip muted">
-                  Строк с этой связью: {link.groupCount || 1}/{products.length}
-                </span>
-                <span className="pm-route-chip muted">
-                  выбран: {supplierText((link.productSelectedSuppliers || [link.productSelectedSupplier]).find(Boolean))}
-                </span>
-              </div>
-            </div>
-            {!readOnly && link.id && <SnoozeLink productId={link.productId || products[0]?.id || ""} link={link} onDone={refreshAfterMutation} />}
-            <button className="icon-action danger" type="button" onClick={() => deleteMutation.mutate(link)} title="Удалить привязку" disabled={readOnly}>
-              <Trash2 size={16} />
+      {linksListOpen ? (<>
+        {priceLimitProducts.length > 0 ? (
+          <div className="warning-strip compact">
+            <span>
+              Лимиты авто-цены ограничивают расчёт от поставщика:{" "}
+              {priceLimitProducts.map((item) => {
+                const minLimit = Number((item as any).autoPriceMin || 0) || 0;
+                const maxLimit = Number((item as any).autoPriceMax || 0) || 0;
+                return `${String(item.marketplace || "").toUpperCase() || item.offerId}${minLimit ? ` мин ${money(minLimit)}` : ""}${maxLimit ? ` макс ${money(maxLimit)}` : ""}`;
+              }).join(" · ")}
+            </span>
+            <button className="secondary-action" type="button" onClick={() => resetPriceLimitsMutation.mutate()} disabled={readOnly || resetPriceLimitsMutation.isPending} title="Убрать мин/макс лимиты авто-цены — цена снова будет считаться только от закупки поставщика и коэффициента">
+              {resetPriceLimitsMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Сбросить лимиты
             </button>
+            {resetPriceLimitsMutation.error ? <div className="inline-error">{errorMessage(resetPriceLimitsMutation.error)}</div> : null}
           </div>
-        )) : <div className="soft-empty">{groupLinkRows.length ? "По фильтру привязки не найдены." : "У товара пока нет привязок PriceMaster."}</div>}
-      </div>
+        ) : null}
+
+        <div className="pm-link-toolbar">
+            <input value={linkFilter} onChange={(event) => setLinkFilter(event.target.value)} placeholder="Фильтр: поставщик, артикул, название" />
+            <SelectField
+              ariaLabel="Тип связи"
+              value={linkKind}
+              onChange={(next) => setLinkKind(next as "all" | "normal" | "stock_only")}
+              options={[
+                { value: "all", label: "Все" },
+                { value: "normal", label: "Обычные" },
+                { value: "stock_only", label: "Складские" },
+              ]}
+            />
+            <button className="secondary-action" type="button" onClick={() => copyPlainText(savedSupplierList.join("\n"))} disabled={!savedSupplierList.length}>
+              <Copy size={16} /> Скопировать
+            </button>
+            <button className="secondary-action danger" type="button" onClick={() => bulkDeleteMutation.mutate()} disabled={readOnly || !selectedLinkIds.length || bulkDeleteMutation.isPending}>
+              {bulkDeleteMutation.isPending ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Удалить выбранные {selectedLinkIds.length || ""}
+            </button>
+        </div>
+
+        <div className="links-list">
+          {filteredLinks.length ? filteredLinks.map((link) => (
+            <div className="link-item pm-link-item" key={`${link.productId}-${link.id || linkPrimarySignature(link)}-${link.article}-${link.supplierName}`}>
+              <label className="pm-link-select" title="Выбрать привязку">
+                <input
+                  type="checkbox"
+                  disabled={readOnly}
+                  checked={selectedLinkIds.includes(linkSelectionKey(link))}
+                  onChange={(event) => setSelectedLinkIds((ids) => event.target.checked
+                    ? Array.from(new Set([...ids, linkSelectionKey(link)]))
+                    : ids.filter((id) => id !== linkSelectionKey(link)))}
+                />
+              </label>
+              <div className="pm-link-body">
+                <div className="pm-link-head">
+                  <div>
+                    <strong>{link.article || link.supplierArticle || "без артикула PriceMaster"}</strong>
+                    <span>{link.supplierName || "поставщик не указан"}</span>
+                  </div>
+                  <span className="pm-source-pill">{linkMatchText(link)}</span>
+                  {isStockOnlyLink(link) && <span className="pm-source-pill stock-only">не берет цену</span>}
+                </div>
+                <div className="pm-link-grid">
+                  <span><b>Row ID</b>{linkSourceId(link) || "не сохранен"}</span>
+                  <span><b>Partner ID</b>{link.partnerId || "не указан"}</span>
+                  <span><b>Название/ключ</b>{linkTitleText(link)}</span>
+                  <span><b>Валюта</b>{link.priceCurrency || "USD"}</span>
+                  <span><b>Обновлено</b>{compactDate(link.updatedAt || link.createdAt)}</span>
+                  <span><b>Кто изменил</b>{link.updatedBy || link.createdBy || "system"}</span>
+                </div>
+                <div className="pm-route-list">
+                  <span className="pm-route-chip">
+                    Группа: {(link.productMarketplaces || [link.productMarketplace]).filter(Boolean).join(" + ") || "marketplace"}
+                  </span>
+                  <span className="pm-route-chip muted">
+                    Карточки: {(link.productOfferIds || [link.productOfferId]).filter(Boolean).join(", ") || link.productId}
+                  </span>
+                  <span className="pm-route-chip muted">
+                    Строк: {link.groupCount || 1}/{products.length}
+                  </span>
+                  <span className="pm-route-chip muted">
+                    выбран: {supplierText((link.productSelectedSuppliers || [link.productSelectedSupplier]).find(Boolean))}
+                  </span>
+                </div>
+              </div>
+              {!readOnly && link.id && <SnoozeLink productId={link.productId || products[0]?.id || ""} link={link} onDone={refreshAfterMutation} />}
+              <button className="icon-action danger" type="button" onClick={() => deleteMutation.mutate(link)} title="Удалить привязку" disabled={readOnly}>
+                <Trash2 size={16} />
+              </button>
+            </div>
+          )) : <div className="soft-empty">{groupLinkRows.length ? "По фильтру привязки не найдены." : "У товара пока нет привязок PriceMaster."}</div>}
+        </div>
+      </>) : null}
 
       <div className="draft-box">
         <div className="section-subtitle">Найти строку PriceMaster</div>
@@ -2181,47 +2208,53 @@ function SnoozeLink({ productId, link, onDone }: { productId: string; link: Prod
   );
 }
 
-function QuickActions({ primary, products, onDone }: { primary: Product; products: Product[]; onDone: () => void }) {
-  const start = useMutation({
-    mutationFn: (type: string) => fetchJson("/api/operations", OperationCreateSchema, mutationBody({
-      type,
-      payload: {
-        productIds: products.map((item) => item.id).filter(Boolean),
-        offerIds: Array.from(new Set(products.map((item) => item.offerId).filter(Boolean))),
-        limit: Math.max(1, products.length || 1),
-      },
+const RecoverStocksSchema = z.object({ ok: z.boolean().optional(), fresh: z.number().optional().default(0), recovery: z.record(z.string(), z.unknown()).optional().default({}) }).passthrough();
+
+function QuickActions({ products, onDone }: { primary: Product; products: Product[]; onDone: () => void }) {
+  const productIds = products.map((item) => item.id).filter(Boolean);
+  const recover = useMutation({
+    mutationFn: () => fetchJson("/api/warehouse/links/recover-stale-stocks", RecoverStocksSchema, mutationBody({ productIds })),
+    onSuccess: onDone,
+  });
+  const sendPrices = useMutation({
+    mutationFn: () => fetchJson("/api/warehouse/prices/send", OperationCreateSchema, mutationBody({
+      confirmed: true,
+      productIds,
+      force: true,
     })),
     onSuccess: onDone,
   });
-  const repair = useMutation({
-    mutationFn: () => fetchJson(`/api/warehouse/products/${encodeURIComponent(primary.id)}/repair`, ProductRepairSchema, mutationBody({})),
-    onSuccess: onDone,
-  });
+  const anyBusy = recover.isPending || sendPrices.isPending;
   return (
     <section className="detail-section">
       <div className="section-title">
         <div>
           <span>Быстрые действия</span>
-            <h3>Остаток, цена, восстановление</h3>
-          </div>
+          <h3>Остаток, цена, восстановление</h3>
         </div>
-        <div className="quick-actions">
-          <button className="primary-action" type="button" onClick={() => repair.mutate()} disabled={repair.isPending}>
-            {repair.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Проверить и починить товар
-          </button>
-          <button className="secondary-action" type="button" onClick={() => start.mutate("linked-supplier-recovery")} disabled={start.isPending}>Восстановить товар</button>
-          <button className="secondary-action" type="button" onClick={() => start.mutate("yandex-stock-sync")} disabled={start.isPending}>Отправить остаток</button>
-          <button className="secondary-action" type="button" onClick={() => start.mutate("yandex-import-send")} disabled={start.isPending}>Отправить цену</button>
+      </div>
+      <div className="quick-actions">
+        <button className="primary-action" type="button" onClick={() => recover.mutate()} disabled={anyBusy}>
+          {recover.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Проверить и починить товар
+        </button>
+        <button className="secondary-action" type="button" onClick={() => recover.mutate()} disabled={anyBusy}>
+          {recover.isPending ? <Loader2 className="spin" size={16} /> : null} Восстановить товар
+        </button>
+        <button className="secondary-action" type="button" onClick={() => recover.mutate()} disabled={anyBusy}>
+          {recover.isPending ? <Loader2 className="spin" size={16} /> : null} Отправить остаток
+        </button>
+        <button className="secondary-action" type="button" onClick={() => sendPrices.mutate()} disabled={anyBusy}>
+          {sendPrices.isPending ? <Loader2 className="spin" size={16} /> : null} Отправить цену
+        </button>
+      </div>
+      {recover.data ? (
+        <div className="success-strip compact">
+          {`Обновлено: ${recover.data.fresh ?? 0} · восстановлено: ${Number(asRecord(recover.data.recovery).recovered ?? 0)} · остатков: ${Number(asRecord(recover.data.recovery).restoredStocks ?? 0)}`}
         </div>
-        {repair.data ? (
-          <div className="success-strip compact">
-            {repair.data.accepted
-              ? `Repair queued: ${String((repair.data.job as Record<string, unknown> | undefined)?.id || "background job")}`
-              : `Links ${repair.data.linksSynced} · prices ${repair.data.priceSent} · stock ${repair.data.stockSent} · ${repair.data.pending ? "ожидает восстановления" : "готово"}`}
-          </div>
-        ) : null}
-      {start.error && <div className="inline-error">{errorMessage(start.error)}</div>}
-      {repair.error && <div className="inline-error">{errorMessage(repair.error)}</div>}
+      ) : null}
+      {sendPrices.data ? <div className="success-strip compact">Цены отправлены</div> : null}
+      {recover.error && <div className="inline-error">{errorMessage(recover.error)}</div>}
+      {sendPrices.error && <div className="inline-error">{errorMessage(sendPrices.error)}</div>}
     </section>
   );
 }
@@ -2360,10 +2393,8 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
       ) : null}
       <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} readOnly={demoMode} />
       <MarketplaceRows products={products} breakdown={breakdown} canEdit={isAdmin && !demoMode} withExternal={!demoMode} />
-      {isAdmin && !demoMode ? <GroupActions products={products} selectedGroup={selectedGroup} onDone={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <AvitoImagesPanel product={primary} onSaved={refreshDetail} /> : null}
-      {isAdmin && !demoMode ? <AiImagesPanel product={primary} products={products} onSaved={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <section className="detail-section">
         <div className="section-title">
           <div>
