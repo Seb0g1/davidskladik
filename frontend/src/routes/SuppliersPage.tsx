@@ -493,6 +493,7 @@ export function SuppliersPage() {
                       value={paymentAmount}
                       onChange={(event) => setPaymentDrafts((current) => ({ ...current, [id]: event.target.value }))}
                     />
+                    {supplierCurrency === "USD" ? <span className="muted" style={{ fontSize: 12 }}>Курс: {usdRate ?? 95}₽</span> : null}
                     <input
                       className="supplier-payment-note"
                       placeholder="Комментарий"

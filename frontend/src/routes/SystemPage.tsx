@@ -88,8 +88,6 @@ export function SystemPage() {
         />
         <StatusCard label="Slow requests" value={slowRequests.length} detail={`threshold: ${numberValue(slowEndpoints.thresholdMs)} ms`} tone={slowRequests.length ? "warn" : "success"} />
         <StatusCard label="State warnings" value={stateWarnings.length} tone={stateWarnings.length ? "warn" : "success"} />
-        <StatusCard label="Active jobs" value={active.length} tone={active.length ? "warn" : "success"} />
-        <StatusCard label="Ошибки операций" value={failed.length} tone={failed.length ? "warn" : "success"} />
       </div>
 
       <div className="table-panel system-table">
@@ -130,6 +128,22 @@ export function SystemPage() {
         ))}
         {!stateWarnings.length ? <div className="empty-state">Переходов на fallback и таймаутов записи состояния нет.</div> : null}
       </div>
+
+      {status.data?.supplierLedger ? (
+        <div className="card" style={{marginTop: 12}}>
+          <div className="section-title"><h3>Журнал поставщиков</h3></div>
+          <div style={{display:"flex", gap:16, padding:8}}>
+            {(() => {
+              const sl = asRecord(status.data?.supplierLedger);
+              return (<>
+                <span>Строк закупки: {numberValue(sl.pickedRows)}</span>
+                <span>Долгов: {numberValue(sl.debtEntries)}</span>
+                <span>Пропущено: {numberValue(sl.missingDebtEntries)}</span>
+              </>);
+            })()}
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

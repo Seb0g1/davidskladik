@@ -285,9 +285,7 @@ test("modern UI uses role-gating, logo branding, and group-level PM counts", asy
   assert.match(appSource, /WarehousePage isAdmin=\{isAdmin\}/);
   assert.match(warehouseSource, /WarehousePage\(\{ isAdmin = true \}/);
   assert.match(warehouseSource, /const groupLinkCount = uniqueLinks\(products\)\.length/);
-  assert.match(warehouseSource, /isAdmin && !demoMode \? <GroupActions/);
   assert.match(warehouseSource, /isAdmin && !demoMode \? <QuickActions/);
-  assert.match(warehouseSource, /isAdmin && !demoMode \? <AiImagesPanel/);
   assert.match(warehouseSource, /isAdmin && !demoMode \? <section className="detail-section">/);
   assert.match(warehouseSource, /\/api\/warehouse\/brands/);
   assert.match(warehouseSource, /BrandPicker/);

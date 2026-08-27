@@ -451,7 +451,7 @@ export function BrandBansPage() {
                       title="Удалить запрет"
                       disabled={deleteLoading}
                       onClick={() => {
-                        if (confirm(`Удалить запрет бренда «${ban.displayBrand}»?`)) {
+                        if (confirm(`Удалить запрет бренда «${ban.displayBrand}»? Ранее заархивированные товары останутся архивными — для восстановления используйте страницу склада.`)) {
                           deleteMutation.mutate(ban.id);
                         }
                       }}

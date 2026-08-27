@@ -151,11 +151,7 @@ export function TnvedPage() {
     }
   }, [categories]);
 
-  useEffect(() => {
-    if (report?.yandex.defaultCode && !defaultCode) {
-      setDefaultCode(report.yandex.defaultCode);
-    }
-  }, [report]);
+  useEffect(() => { if (report?.yandex.defaultCode) setDefaultCode((c) => c || (report?.yandex.defaultCode ?? "")); }, [report]);
 
   const saveAssignments = useMutation({
     mutationFn: () => {
@@ -382,7 +378,14 @@ export function TnvedPage() {
                 className="primary-action"
                 type="button"
                 disabled={saveAssignments.isPending || categoriesQuery.isFetching}
-                onClick={() => saveAssignments.mutate()}
+                onClick={() => {
+                  const invalidCodes = Object.entries(localCodes).filter(([, code]) => code && !/^\d{10}$/.test((code as string).replace(/\s/g, "")));
+                  if (invalidCodes.length > 0) {
+                    alert(`Некорректные коды ТН ВЭД: ${invalidCodes.map(([k]) => k).join(", ")}. Код должен содержать 10 цифр.`);
+                    return;
+                  }
+                  saveAssignments.mutate();
+                }}
               >
                 {saveAssignments.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />}
                 {saved ? "Сохранено ✓" : "Сохранить коды"}

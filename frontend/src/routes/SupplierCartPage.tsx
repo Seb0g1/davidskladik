@@ -755,6 +755,7 @@ const PmHistoryDocSchema = z.object({
   PartnerName: z.coerce.string().optional().nullable(),
   Comment: z.coerce.string().optional().nullable(),
   Sended: z.number().optional().default(0),
+  Recieved: z.number().optional().default(0),
   rowCount: z.number().optional().default(0),
 }).passthrough();
 
@@ -771,29 +772,40 @@ function PmHistoryPanel() {
   });
   const docs = historyQuery.data?.docs ?? [];
   if (historyQuery.isLoading) return <div style={{ padding: "24px", color: "var(--text-secondary)" }}><Loader2 className="spin" size={16} /> Загрузка истории…</div>;
-  if (!docs.length) return <div style={{ padding: "24px", color: "var(--text-secondary)" }}>Нет отправленных корзин.</div>;
   return (
     <div style={{ padding: "12px 0" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-        <thead>
-          <tr style={{ borderBottom: "1px solid var(--border)" }}>
-            <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Дата</th>
-            <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Поставщик</th>
-            <th style={{ padding: "4px 8px", textAlign: "right", color: "var(--text-secondary)", fontWeight: 500 }}>Позиций</th>
-            <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Комментарий</th>
-          </tr>
-        </thead>
-        <tbody>
-          {docs.map((doc) => (
-            <tr key={doc.DocID} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
-              <td style={{ padding: "6px 12px" }}>{doc.DocDate ? new Date(String(doc.DocDate)).toLocaleString("ru-RU") : "—"}</td>
-              <td style={{ padding: "6px 12px" }}>{doc.PartnerName || `#${doc.PartnerID}`}</td>
-              <td style={{ padding: "6px 8px", textAlign: "right" }}>{doc.rowCount}</td>
-              <td style={{ padding: "6px 12px", color: "var(--text-secondary)" }}>{doc.Comment || "—"}</td>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 12px 8px" }}>
+        <span style={{ fontWeight: 500, fontSize: 13 }}>Отправленные корзины PM</span>
+        <button className="icon-btn" type="button" onClick={() => void historyQuery.refetch()} title="Обновить" disabled={historyQuery.isFetching}>
+          {historyQuery.isFetching ? <Loader2 className="spin" size={14} /> : <RefreshCw size={14} />}
+        </button>
+      </div>
+      {!docs.length ? (
+        <div style={{ padding: "0 12px", color: "var(--text-secondary)" }}>Нет отправленных корзин.</div>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: "1px solid var(--border)" }}>
+              <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Дата</th>
+              <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Поставщик</th>
+              <th style={{ padding: "4px 8px", textAlign: "right", color: "var(--text-secondary)", fontWeight: 500 }}>Позиций</th>
+              <th style={{ padding: "4px 8px", textAlign: "center", color: "var(--text-secondary)", fontWeight: 500 }}>Получен</th>
+              <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Комментарий</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {docs.map((doc) => (
+              <tr key={doc.DocID} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+                <td style={{ padding: "6px 12px" }}>{doc.DocDate ? new Date(String(doc.DocDate)).toLocaleString("ru-RU") : "—"}</td>
+                <td style={{ padding: "6px 12px" }}>{doc.PartnerName || `#${doc.PartnerID}`}</td>
+                <td style={{ padding: "6px 8px", textAlign: "right" }}>{doc.rowCount}</td>
+                <td style={{ padding: "6px 8px", textAlign: "center" }}>{doc.Recieved ? "✓" : "—"}</td>
+                <td style={{ padding: "6px 12px", color: "var(--text-secondary)" }}>{doc.Comment || "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
@@ -845,6 +857,7 @@ export function SupplierCartPage() {
       dryRun: false,
     })),
     onSuccess: () => {
+      rollbackDryRun.reset();
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
@@ -878,7 +891,7 @@ export function SupplierCartPage() {
             <button
               className={`secondary-action${settingsOpen ? " active" : ""}`}
               type="button"
-              onClick={() => setSettingsOpen((v) => !v)}
+              onClick={() => { if (settingsOpen) rollbackDryRun.reset(); setSettingsOpen((v) => !v); }}
               title="Настройки расписания и диагностика"
             >
               <Settings2 size={15} />

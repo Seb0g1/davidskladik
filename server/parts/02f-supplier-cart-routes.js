@@ -588,7 +588,7 @@ app.post("/api/ready-to-ship/order", requireStaff, async (request, response, nex
 });
 
 // Пакетный заказ: несколько маркетплейсовых заказов → PM, авто-поставщик, группировка по поставщику.
-app.post("/api/ready-to-ship/batch-order", requireAdmin, async (request, response, next) => {
+app.post("/api/ready-to-ship/batch-order", requireStaff, async (request, response, next) => {
   try {
     const lines = Array.isArray(request.body?.lines) ? request.body.lines : [];
     if (!lines.length) return response.status(400).json({ ok: false, error: "No lines provided.", code: "missing_lines" });

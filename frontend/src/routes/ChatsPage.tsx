@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { apiJson } from "../api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, BellRing, BookOpen, Download, ImageIcon, Loader2, MessageCircle, Paperclip, RefreshCw, Send, X } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
@@ -97,16 +98,6 @@ function renderChatMarkdown(text: string): ReactNode {
   return <>{nodes}</>;
 }
 
-async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    ...(init || {}),
-    headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers || {}) },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error((data as any)?.error || `HTTP ${response.status}`);
-  return data as T;
-}
 
 function chatTime(value?: string) {
   if (!value) return "";
@@ -215,6 +206,7 @@ export function ChatsPage() {
   const [uploadingImages, setUploadingImages] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const draftRef = useRef<Map<string, string>>(new Map());
 
   const chatsQuery = useQuery({
     queryKey: ["chats", marketplace, unreadOnly],
@@ -292,6 +284,25 @@ export function ChatsPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, selected?.id]);
+
+  // Revoke object URLs when pending images are cleared on unmount
+  useEffect(() => {
+    return () => {
+      pendingImages.forEach((img: PendingImage) => URL.revokeObjectURL(img.localUrl));
+    };
+  }, [pendingImages]);
+
+  // Restore draft when switching chats
+  useEffect(() => {
+    if (selected) {
+      setText(draftRef.current.get(selected.chatId) ?? "");
+    }
+  }, [selected?.chatId]);
+
+  // Persist draft as user types
+  useEffect(() => {
+    if (selected?.chatId) draftRef.current.set(selected.chatId, text);
+  }, [text, selected?.chatId]);
 
   return (
     <section className="page-section chats-page">
@@ -460,11 +471,15 @@ export function ChatsPage() {
                     rows={2}
                     value={text}
                     placeholder="Сообщение покупателю… (Ctrl+Enter — отправить)"
+                    disabled={send.isPending}
                     onChange={(event) => setText(event.target.value)}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && (text.trim() || pendingImages.length)) send.mutate();
                     }}
                   />
+                  {selected?.marketplace === "wb" && (
+                    <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "right" }}>{text.length}/1000</div>
+                  )}
                   <button className="primary-action chat-send-btn" type="button" title="Отправить (Ctrl+Enter)" disabled={(!text.trim() && !pendingImages.length) || send.isPending || uploadingImages} onClick={() => send.mutate()}>
                     {send.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
                   </button>

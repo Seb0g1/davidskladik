@@ -135,7 +135,7 @@ app.get("/api/questions", requireAdmin, async (request, response, next) => {
     }
     elapsed.wbMs = Date.now() - startedAt - elapsed.ozonMs;
     questions.sort((a, b) => cleanText(b.createdAt).localeCompare(cleanText(a.createdAt)));
-    response.json({ ok: true, rows: questions.slice(0, limit), warnings, elapsed });
+    response.json({ ok: true, rows: questions.slice(0, limit), warnings, ...(process.env.NODE_ENV !== "production" ? { elapsed } : {}) });
   } catch (error) {
     next(error);
   }

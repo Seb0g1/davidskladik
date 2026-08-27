@@ -57,6 +57,9 @@ export function ProblemProductsPage() {
       return next;
     });
   };
+  const add = (productId: string) => setSelected((current) => new Set([...current, productId]));
+  const remove = (productId: string) => setSelected((current) => { const next = new Set(current); next.delete(productId); return next; });
+  const visibleItems = items;
 
   return (
     <section className="page-section problem-products-page">
@@ -93,6 +96,7 @@ export function ProblemProductsPage() {
         <button className="primary-action" type="button" disabled={!selected.size || repair.isPending} onClick={() => repair.mutate()}>
           {repair.isPending ? <Loader2 className="spin" size={16} /> : <Wrench size={16} />} Починить выбранные ({selected.size})
         </button>
+        {selected.size > 100 && <div className="inline-warning">Будут починены первые 100 из {selected.size} выбранных</div>}
       </div>
 
       {query.error ? <div className="inline-error">{String((query.error as Error).message || query.error)}</div> : null}
@@ -107,7 +111,10 @@ export function ProblemProductsPage() {
 
       <div className="table-panel price-table">
         <div className="table-head">
-          <span></span><span>Маркет</span><span>Артикул</span><span>Категория</span><span>Причина</span><span>Ошибка</span>
+          <span><input type="checkbox"
+            checked={visibleItems.length > 0 && visibleItems.every(i => !text(i.productId || i.id) || selected.has(text(i.productId || i.id)))}
+            onChange={e => { visibleItems.forEach(i => { const pid = text(i.productId || i.id); if (pid) { if (e.target.checked) add(pid); else remove(pid); } }); }}
+          /></span><span>Маркет</span><span>Артикул</span><span>Категория</span><span>Причина</span><span>Ошибка</span>
         </div>
         {items.map((item) => {
           const productId = text(item.productId || item.id);

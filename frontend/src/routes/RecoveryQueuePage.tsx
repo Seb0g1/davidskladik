@@ -4,7 +4,8 @@ import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { OzonUnarchiveQueueSchema } from "../types";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { z } from "zod";
 
 type YandexFastStatus = {
   ok?: boolean;
@@ -26,24 +27,6 @@ type YandexFastStatus = {
     priceQueued?: number;
   } | null;
 };
-
-function useYandexFastStatus() {
-  const [status, setStatus] = useState<YandexFastStatus | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let alive = true;
-    const load = () => {
-      fetch("/api/yandex/fast-unarchive/status", { credentials: "same-origin" })
-        .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
-        .then((data) => { if (alive) { setStatus(data); setError(""); } })
-        .catch((err) => { if (alive) setError(String(err?.message || err)); });
-    };
-    load();
-    const timer = window.setInterval(load, 30_000);
-    return () => { alive = false; window.clearInterval(timer); };
-  }, []);
-  return { status, error };
-}
 
 const text = (value: unknown) => String(value ?? "").trim();
 
@@ -160,6 +143,7 @@ function YandexFastBlock({ status, error }: { status: YandexFastStatus | null; e
 
 export function RecoveryQueuePage() {
   const queryClient = useQueryClient();
+  const [queueSearch, setQueueSearch] = useState("");
   const queue = useQuery({
     queryKey: ["ozon", "unarchive-queue"],
     queryFn: () => fetchJson("/api/ozon/unarchive-queue?limit=1000", OzonUnarchiveQueueSchema),
@@ -171,10 +155,19 @@ export function RecoveryQueuePage() {
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
     },
   });
-  const yandexFast = useYandexFastStatus();
+  const rebuildMut = useMutation({
+    mutationFn: () => fetchJson("/api/ozon/unarchive-queue/rebuild", z.unknown(), { method: "POST" }),
+  });
+  const yandexFastQuery = useQuery({
+    queryKey: ["yandex-fast-status"],
+    queryFn: () => fetchJson("/api/yandex/fast-unarchive/status", z.unknown()),
+    refetchInterval: 30_000,
+  });
+  const yandexFastStatus = yandexFastQuery.data as YandexFastStatus | undefined;
+  const yandexFastError = yandexFastQuery.error ? String((yandexFastQuery.error as Error)?.message || yandexFastQuery.error) : "";
   const data = queue.data;
   const items = data?.items || [];
-  const visibleItems = items.slice(0, 200);
+  const visibleItems = (items ?? []).filter(i => !queueSearch || String((i as Record<string, unknown>).offerId ?? "").includes(queueSearch) || String((i as Record<string, unknown>).sku ?? "").includes(queueSearch)).slice(0, 200);
   return (
     <section className="page-section">
       <PageHeader
@@ -190,9 +183,9 @@ export function RecoveryQueuePage() {
         <Stat label="Всего в очереди" value={data?.total ?? 0} tone="accent" icon={<ListChecks size={18} />} />
         <Stat label="Готовы к попытке" value={data?.due ?? 0} tone={data?.due ? "warn" : "success"} icon={<Hourglass size={18} />} />
         <Stat label="Ждут проверки Ozon" value={data?.verificationPending ?? 0} tone={data?.verificationPending ? "warn" : "success"} icon={<Clock3 size={18} />} />
-        <Stat label="В архиве Яндекс" value={yandexFast.status?.archivedLinked ?? "…"} tone="accent" icon={<Archive size={18} />} />
+        <Stat label="В архиве Яндекс" value={yandexFastStatus?.archivedLinked ?? "…"} tone="accent" icon={<Archive size={18} />} />
       </section>
-      <YandexFastBlock status={yandexFast.status} error={yandexFast.error} />
+      <YandexFastBlock status={yandexFastStatus ?? null} error={yandexFastError} />
       <div className="summary-grid">
         <div><span>Всего в очереди</span><strong>{data?.total ?? 0}</strong></div>
         <div><span>Готовы к попытке</span><strong>{data?.due ?? 0}</strong></div>
@@ -228,10 +221,15 @@ export function RecoveryQueuePage() {
       </div>
       {process.error ? <div className="inline-error">{String((process.error as Error).message || process.error)}</div> : null}
       {queue.error ? <div className="inline-error">{String((queue.error as Error).message || queue.error)}</div> : null}
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+        <button className="secondary-action" onClick={() => { if (window.confirm("Перестроить очередь Ozon?")) rebuildMut.mutate(); }} disabled={rebuildMut.isPending}>Перестроить очередь</button>
+        {rebuildMut.error ? <span className="inline-error" style={{ margin: 0 }}>{String((rebuildMut.error as Error)?.message || rebuildMut.error)}</span> : null}
+      </div>
       <div className="table-panel queue-table">
         <div className="table-head">
           <span>SKU</span><span>OfferId</span><span>Цель</span><span>Статус</span><span>Попытки</span><span>Когда</span>
         </div>
+        <input type="text" placeholder="Поиск по SKU..." value={queueSearch} onChange={e => setQueueSearch(e.target.value)} style={{marginBottom:8, padding:"4px 8px", border:"1px solid var(--border)", borderRadius:4}} />
         {items.length > visibleItems.length ? (
           <div className="table-note">Показаны первые {visibleItems.length} строк из {items.length}. Остальные останутся в очереди и обработаются автоматически по лимиту Ozon.</div>
         ) : null}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckSquare, Download, Eye, Loader2, Percent, RefreshCw, Save, Search, Square, Trash2, Upload, UserX } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -575,7 +575,7 @@ function AuditSettingsPanel() {
   const [q, setQ] = useState("");
   const auditQuery = useQuery({
     queryKey: ["audit", q],
-    queryFn: () => fetchJson(`/api/audit-log?limit=120&q=${encodeURIComponent(q)}`, AuditLogSchema),
+    queryFn: () => fetchJson(`/api/audit-log?limit=500&q=${encodeURIComponent(q)}`, AuditLogSchema),
   });
   const audit = auditQuery.data?.audit || [];
   return (
@@ -796,6 +796,7 @@ export function SettingsPage() {
   const ai = asRecord(settings.ai);
   const markups = asRecord(settings.defaultMarkups);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const isDirtyRef = useRef(false);
   const [activeTab, setActiveTab] = useState<SettingsTab>("prices");
   const [adjustMarketplace, setAdjustMarketplace] = useState("all");
   const [adjustDirection, setAdjustDirection] = useState("decrease");
@@ -811,7 +812,9 @@ export function SettingsPage() {
   };
 
   useEffect(() => {
-    if (settingsQuery.data?.settings) setDraft(settingsQuery.data.settings);
+    if (settingsQuery.data?.settings && !isDirtyRef.current) {
+      setDraft(settingsQuery.data.settings);
+    }
   }, [settingsQuery.data]);
 
   const draftAi = asRecord(draft.ai);
@@ -820,7 +823,7 @@ export function SettingsPage() {
   const availabilityRules = readAvailabilityRules(draft.availabilityRules);
   const save = useMutation({
     mutationFn: () => fetchJson("/api/settings", SettingsResponseSchema, mutationBody(settingsSavePayload(draft))),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["settings"] }),
+    onSuccess: () => { isDirtyRef.current = false; queryClient.invalidateQueries({ queryKey: ["settings"] }); },
   });
   const adjustPricing = useMutation({
     mutationFn: () => fetchJson("/api/settings/pricing/adjust-percent", SettingsResponseSchema, mutationBody({
@@ -838,7 +841,7 @@ export function SettingsPage() {
   const testAi = useMutation({
     mutationFn: () => fetchJson("/api/settings/ai/test", SettingsResponseSchema, mutationBody({ ai: draftAi })),
   });
-  const update = (patch: Record<string, unknown>) => setDraft((current) => ({ ...current, ...patch }));
+  const update = (patch: Record<string, unknown>) => { isDirtyRef.current = true; setDraft((current) => ({ ...current, ...patch })); };
   const updateAi = (patch: Record<string, unknown>) => update({ ai: { ...draftAi, ...patch } });
   const updateMarkups = (patch: Record<string, unknown>) => update({ defaultMarkups: { ...draftMarkups, ...patch } });
   const setMarkupRules = (rules: MarkupRuleDraft[]) => update({ markupRules: rules });

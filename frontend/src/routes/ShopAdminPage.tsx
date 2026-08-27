@@ -167,9 +167,11 @@ function OrdersTab() {
   });
 
   const COL = "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)";
+  const DELIVERY_LABELS: Record<string, string> = { firstName: "Имя", lastName: "Фамилия", pvz: "ПВЗ", address: "Адрес", city: "Город", zip: "Индекс", phone: "Телефон", email: "Email" };
 
   return (
     <div className="page-section">
+      {updateStatus.isError && <div className="inline-error">Ошибка: {String(updateStatus.error)}</div>}
       <div className="section-title" style={{ flexWrap: "wrap", gap: "10px" }}>
         <div><h2>Заказы</h2></div>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -228,7 +230,7 @@ function OrdersTab() {
                       <dl>
                         {Object.entries(o.delivery).map(([k, v]) => v ? (
                           <div key={k} style={{ display: "flex", gap: 8 }}>
-                            <dt style={{ width: 90, flexShrink: 0, textTransform: "capitalize" }}>{k}</dt>
+                            <dt style={{ width: 90, flexShrink: 0 }}>{DELIVERY_LABELS[k] ?? k}</dt>
                             <dd>{String(v)}</dd>
                           </div>
                         ) : null)}
@@ -403,6 +405,7 @@ function BannersTab() {
       {editing === "new" && (
         <BannerForm onSave={(d) => saveMut.mutate(d)} onCancel={() => setEditing(null)} saving={saveMut.isPending} />
       )}
+      {saveMut.isError && <div className="inline-error">Ошибка: {String(saveMut.error)}</div>}
 
       {isLoading ? (
         <div className="list-loading"><Loader2 size={16} className="spin" /> Загружаю баннеры…</div>
@@ -484,6 +487,7 @@ function CategoriesTab() {
         </button>
       </div>
 
+      {saveMut.isError && <div className="inline-error">Ошибка: {String(saveMut.error)}</div>}
       {editing && (
         <div className="mv-form-section">
           <h3>{editing === "new" ? "Новая категория" : "Редактировать категорию"}</h3>

@@ -69,10 +69,17 @@ export function AiDraftsPage() {
       <section className="table-panel">
         <div className="section-title"><div><span>Кандидаты</span><h3>Качество карточки до {threshold}</h3></div></div>
         {candidatesQuery.isLoading && <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю кандидатов...</div>}
+        {candidates.length > 80 && (
+          <div className="inline-warning">Показаны 80 из {candidatesQuery.data?.total ?? candidates.length} кандидатов</div>
+        )}
         {candidates.slice(0, 80).map((row) => {
           const product = asRecord(row.product || row);
           const quality = asRecord(row.cardQuality || product.cardQuality);
           const productId = String(product.id || row.id || "");
+          const hasDraft = draftsQuery.data?.drafts.some((d) => {
+            const dp = asRecord(d.product);
+            return String(dp.id || dp.offerId) === productId || String(dp.offerId) === String(product.offerId);
+          });
           return (
             <article className="job-row" key={productId || String(product.offerId)}>
               <div>
@@ -83,7 +90,7 @@ export function AiDraftsPage() {
                 <button className="secondary-action" onClick={() => generate.mutate(productId)} disabled={generate.isPending || !productId}>
                   {generate.isPending && generatingProductId === productId ? <Loader2 className="spin" size={16} /> : <ImagePlus size={16} />} Текст + 5 фото
                 </button>
-                <button className="primary-action" onClick={() => send.mutate(productId)} disabled={send.isPending || !productId}>Отправить</button>
+                <button className="primary-action" onClick={() => send.mutate(productId)} disabled={send.isPending || !productId || !hasDraft} title={!hasDraft ? "Сначала сгенерируйте черновик" : undefined}>Отправить</button>
               </div>
             </article>
           );
@@ -101,7 +108,16 @@ export function AiDraftsPage() {
             const imageDrafts = Array.isArray(row.imageDrafts) ? row.imageDrafts : [];
             return (
               <article className="ai-review-card" key={`${product.id}-${draft.id}`}>
-                <div className="ai-review-image">{imageUrl ? <img src={imageUrl} alt="" /> : <Bot size={22} />}</div>
+                <div className="ai-review-image">
+                  {imageDrafts.length > 1 ? (
+                    <div style={{ display: "flex", gap: 4, overflowX: "auto" }}>
+                      {imageDrafts.map((imgDraft, idx) => {
+                        const imgUrl = String(asRecord(imgDraft).resultUrl || "");
+                        return imgUrl ? <img key={idx} src={imgUrl} alt="" style={{ height: 64, width: 64, objectFit: "cover", borderRadius: 4, flexShrink: 0 }} /> : null;
+                      })}
+                    </div>
+                  ) : imageUrl ? <img src={imageUrl} alt="" /> : <Bot size={22} />}
+                </div>
                 <div>
                   <strong>{String(product.offerId || product.name || product.id)}</strong>
                   <span>{String(row.type || "draft")} · {String(draft.status || "pending")} · качество {String(asRecord(product.cardQuality).contentRating || "-")}</span>

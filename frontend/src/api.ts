@@ -66,6 +66,18 @@ export async function fetchJson<T>(url: string, schema: z.ZodType<T>, init: Requ
   }
 }
 
+/** Lightweight JSON fetch without Zod schema — for components that call ad-hoc endpoints. */
+export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...(init || {}),
+    headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers || {}) },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((data as { error?: string })?.error || `HTTP ${response.status}`);
+  return data as T;
+}
+
 export function mutationBody(input: unknown): RequestInit {
   return {
     method: "POST",

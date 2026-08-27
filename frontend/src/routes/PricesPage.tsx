@@ -63,7 +63,7 @@ export function PricesPage() {
   const summary = useQuery({
     queryKey: ["sales-automation", "summary"],
     queryFn: () => fetchJson("/api/sales-automation/summary", SalesAutomationSummarySchema),
-    refetchInterval: 30_000,
+    refetchInterval: 45_000,
   });
   const itemsQuery = useQuery({
     queryKey: ["sales-automation", "items", marketplace, reason, applyStatus],
@@ -110,8 +110,8 @@ export function PricesPage() {
   ];
   const items = itemsQuery.data?.items || [];
   const okReasons = ["ok", "unchanged", "unchanged_verified", "verified"];
-  const yandexIssues = items.filter((item) => text(item.marketplace) === "yandex" && !okReasons.includes(text(item.reason))).length;
-  const ozonIssues = items.filter((item) => text(item.marketplace) === "ozon" && !okReasons.includes(text(item.reason))).length;
+  const yandexIssues = useMemo(() => items.filter((item) => text(item.marketplace) === "yandex" && !okReasons.includes(text(item.reason))).length, [items]);
+  const ozonIssues = useMemo(() => items.filter((item) => text(item.marketplace) === "ozon" && !okReasons.includes(text(item.reason))).length, [items]);
 
   return (
     <section className="page-section price-control-page">
@@ -174,7 +174,7 @@ export function PricesPage() {
           />
         </label>
         <label>
-          Apply
+          Статус отправки
           <SelectField
             ariaLabel="Apply статус"
             value={applyStatus}
@@ -193,7 +193,7 @@ export function PricesPage() {
         <button className="primary-action danger-action" type="button" onClick={() => run.mutate({ marketplace, force: true, onlyChanged: false, reason: "sales_automation_reprice_selected" })} disabled={run.isPending}>
           {run.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Пересчитать выбранное
         </button>
-        <button className="primary-action" type="button" onClick={() => run.mutate({ marketplace: "all", force: true, onlyChanged: false, reason: "force_all_immediate" })} disabled={run.isPending} style={{ background: "#dc2626", color: "#fff", fontWeight: 700 }}>
+        <button className="primary-action danger-action" type="button" onClick={() => run.mutate({ marketplace: "all", force: true, onlyChanged: false, reason: "force_all_immediate" })} disabled={run.isPending}>
           {run.isPending ? <Loader2 className="spin" size={16} /> : <Zap size={16} />} ОТПРАВИТЬ ВСЕ СЕЙЧАС
         </button>
         <button className="secondary-action danger-action" type="button" onClick={() => run.mutate({ marketplace: "ozon", force: true, onlyChanged: false, reason: "sales_automation_force_ozon" })} disabled={run.isPending}>

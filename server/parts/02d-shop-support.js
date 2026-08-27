@@ -140,6 +140,17 @@ app.get("/api/support/chats", requireStaff, async (request, response, next) => {
   }
 });
 
+// ─── Admin: unread count (for badge) ─────────────────────────────────────────
+app.get("/api/support/chats/unread-count", requireStaff, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    const count = await prisma.supportChat.count({ where: { unreadAdmin: true, status: "open" } });
+    response.json({ ok: true, count });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // ─── Admin: get chat detail ───────────────────────────────────────────────────
 app.get("/api/support/chats/:id", requireStaff, async (request, response, next) => {
   try {
@@ -205,17 +216,6 @@ app.patch("/api/support/chats/:id/status", requireStaff, async (request, respons
     const prisma = getPrisma();
     const chat = await prisma.supportChat.update({ where: { id }, data: { status } });
     response.json({ ok: true, id: chat.id, status: chat.status });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// ─── Admin: unread count (for badge) ─────────────────────────────────────────
-app.get("/api/support/chats/unread-count", requireStaff, async (request, response, next) => {
-  try {
-    const prisma = getPrisma();
-    const count = await prisma.supportChat.count({ where: { unreadAdmin: true, status: "open" } });
-    response.json({ ok: true, count });
   } catch (error) {
     next(error);
   }

@@ -42,7 +42,7 @@ export function StatisticsPage() {
     () => [...rows].sort((a, b) => numberValue(b.actionsTotal, 0) - numberValue(a.actionsTotal, 0)),
     [rows],
   );
-  const error = users.error || finance.error || warehouse.error || picking.error;
+  const error = users.error;
   const refresh = () => {
     void users.refetch();
     void finance.refetch();
@@ -97,7 +97,7 @@ export function StatisticsPage() {
           </div>
           {sortedRows.map((row) => (
             <div className="table-row" key={row.username}>
-              <span data-label="Сотрудник"><strong>{row.username}</strong></span>
+              <span data-label="Сотрудник"><strong>{row.username}</strong>{row.deletedAt && <span className="muted" style={{fontSize:11}}> (удалён)</span>}</span>
               <span data-label="Роль">{row.role || "-"}</span>
               <span data-label="Действий">{row.actionsTotal}</span>
               <span data-label="Добавил">{row.linksAdded}</span>
@@ -115,6 +115,7 @@ export function StatisticsPage() {
             <div className="section-title compact-title">
               <div><span>Склад</span><h3>Текущие показатели</h3></div>
             </div>
+            {warehouse.error && <div className="inline-error">Данные склада недоступны</div>}
             <div className="dashboard-kpis">
               <span>Карточки <b>{warehouse.data?.groupTotal || warehouse.data?.total || 0}</b></span>
               <span>SKU <b>{warehouse.data?.rowTotal || warehouse.data?.totalAll || 0}</b></span>
@@ -126,6 +127,7 @@ export function StatisticsPage() {
             <div className="section-title compact-title">
               <div><span>Сборка</span><h3>Очередь заказов</h3></div>
             </div>
+            {picking.error && <div className="inline-error">Данные сборки недоступны</div>}
             <div className="dashboard-money">
               <strong>{picking.data?.total || 0}</strong>
               <span>строк в листе сборки</span>
@@ -135,6 +137,7 @@ export function StatisticsPage() {
             <div className="section-title compact-title">
               <div><span>Финансы</span><h3>{period}</h3></div>
             </div>
+            {finance.error && <div className="inline-error">Финансы недоступны</div>}
             <div className="dashboard-kpis">
               <span>Выручка <b>{money(financeSummary.orderIncome)}</b></span>
               <span>Заказов <b>{String(financeSummary.orders || 0)}</b></span>
@@ -146,6 +149,7 @@ export function StatisticsPage() {
       </section>
 
       {error ? <div className="inline-error">{errorMessage(error)}</div> : null}
+
     </section>
   );
 }

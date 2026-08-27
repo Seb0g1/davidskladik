@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, BookOpen, Loader2, MessageSquareReply, RefreshCw, Star } from "lucide-react";
+import { z } from "zod";
+import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
@@ -27,16 +29,6 @@ type ReviewTemplate = { id: string; title: string; text: string };
 
 const EMOJI_ROW = ["🙏", "❤️", "😊", "🌸", "✨", "👍", "🎁", "🥰", "💫", "🤝"];
 
-async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    ...(init || {}),
-    headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers || {}) },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error((data as any)?.error || `HTTP ${response.status}`);
-  return data as T;
-}
 
 function Stars({ rating }: { rating: number }) {
   return (
@@ -52,7 +44,7 @@ function ReviewCard({ review, templates, onReplied }: { review: ReviewRow; templ
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const reply = useMutation({
-    mutationFn: () => apiJson("/api/reviews/reply", {
+    mutationFn: () => fetchJson("/api/reviews/reply", z.unknown(), {
       method: "POST",
       body: JSON.stringify({ marketplace: review.marketplace, target: review.target, externalId: review.externalId, text }),
     }),
@@ -98,8 +90,12 @@ function ReviewCard({ review, templates, onReplied }: { review: ReviewRow; templ
             ))}
           </div>
           <textarea rows={4} value={text} onChange={(event) => setText(event.target.value)} placeholder="Текст ответа покупателю" />
+          <div style={{fontSize: 11, color: "var(--muted)", textAlign: "right"}}>{text.length}/5000</div>
           {reply.error ? <div className="inline-error">{String((reply.error as Error).message)}</div> : null}
-          <button className="primary-action" type="button" disabled={!text.trim() || reply.isPending} onClick={() => reply.mutate()}>
+          <button className="primary-action" type="button" disabled={!text.trim() || reply.isPending} onClick={() => {
+            if (!window.confirm("Отправить ответ? Это действие необратимо.")) return;
+            reply.mutate();
+          }}>
             {reply.isPending ? <Loader2 className="spin" size={15} /> : <MessageSquareReply size={15} />} Отправить ответ
           </button>
         </div>
@@ -115,12 +111,12 @@ export function ReviewsPage() {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const reviewsQuery = useQuery({
     queryKey: ["reviews", marketplace, unanswered],
-    queryFn: () => apiJson<{ rows: ReviewRow[]; warnings: string[] }>(`/api/reviews?marketplace=${marketplace}&unanswered=${unanswered}&limit=50`),
+    queryFn: () => fetchJson(`/api/reviews?marketplace=${marketplace}&unanswered=${unanswered}&limit=50`, z.unknown()) as Promise<{ rows: ReviewRow[]; warnings: string[] }>,
     refetchInterval: 120_000,
   });
   const templatesQuery = useQuery({
     queryKey: ["review-templates"],
-    queryFn: () => apiJson<{ templates: ReviewTemplate[] }>("/api/reviews/templates"),
+    queryFn: () => fetchJson("/api/reviews/templates", z.unknown()) as Promise<{ templates: ReviewTemplate[] }>,
   });
   const rows = reviewsQuery.data?.rows || [];
   const templates = templatesQuery.data?.templates || [];

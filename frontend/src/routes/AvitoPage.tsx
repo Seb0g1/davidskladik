@@ -334,6 +334,8 @@ export function AvitoPage() {
     mutationFn: () => apiJson("/api/avito/upload", { method: "POST", body: JSON.stringify({}) }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["avito-uploads"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-sync-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
     },
   });
   const [adjustDirection, setAdjustDirection] = useState<"decrease" | "increase">("decrease");

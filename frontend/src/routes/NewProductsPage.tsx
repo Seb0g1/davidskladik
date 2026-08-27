@@ -108,7 +108,6 @@ export function NewProductsPage() {
   const submitSearch = (e: React.FormEvent) => {
     e.preventDefault();
     setQ(draftQ.trim());
-    setSupplierFilter("");
   };
 
   const priceRangeLabel = data && data.priceMax > 0

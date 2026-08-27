@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { z } from "zod";
 import { AlertCircle, BookOpen, HelpCircle, Loader2, MessageSquareReply, RefreshCw } from "lucide-react";
+import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
 import { Stat } from "../components/Stat";
@@ -18,28 +20,19 @@ type QuestionRow = {
   createdAt?: string;
   needsAnswer?: boolean;
   answersCount?: number;
+  productUrl?: string;
 };
 
 type QuestionTemplate = { id: string; title: string; text: string };
 
 const EMOJI_ROW = ["🙏", "😊", "✨", "👍", "🤝", "💬"];
 
-async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    ...(init || {}),
-    headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers || {}) },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error((data as any)?.error || `HTTP ${response.status}`);
-  return data as T;
-}
 
 function QuestionCard({ question, templates, onReplied }: { question: QuestionRow; templates: QuestionTemplate[]; onReplied: () => void }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const reply = useMutation({
-    mutationFn: () => apiJson("/api/questions/reply", {
+    mutationFn: () => fetchJson("/api/questions/reply", z.unknown(), {
       method: "POST",
       body: JSON.stringify({ marketplace: question.marketplace, externalId: question.externalId, sku: question.sku, target: question.target, text }),
     }),
@@ -54,6 +47,7 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
         <small className="review-date">{question.createdAt ? new Date(question.createdAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""}</small>
       </div>
       <strong className="review-product">{question.productName || question.sku || "товар"}</strong>
+      {question.productUrl && <a href={question.productUrl} target="_blank" rel="noreferrer" style={{fontSize: 12}}>↗ Товар</a>}
       {question.authorName ? <small className="review-author">{question.authorName}</small> : null}
       {question.text ? <p className="review-text review-question-text">{question.text}</p> : null}
       <div className="review-actions">
@@ -79,6 +73,7 @@ function QuestionCard({ question, templates, onReplied }: { question: QuestionRo
             ))}
           </div>
           <textarea rows={4} value={text} onChange={(event) => setText(event.target.value)} placeholder="Ответ покупателю" />
+          <div style={{fontSize: 11, color: "var(--muted)", textAlign: "right"}}>{text.length}/5000</div>
           {reply.error ? <div className="inline-error">{String((reply.error as Error).message)}</div> : null}
           <button className="primary-action" type="button" disabled={!text.trim() || reply.isPending} onClick={() => reply.mutate()}>
             {reply.isPending ? <Loader2 className="spin" size={15} /> : <MessageSquareReply size={15} />} Отправить ответ
@@ -96,12 +91,12 @@ export function QuestionsPage() {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const questionsQuery = useQuery({
     queryKey: ["questions", marketplace, unanswered],
-    queryFn: () => apiJson<{ rows: QuestionRow[]; warnings: string[] }>(`/api/questions?marketplace=${marketplace}&unanswered=${unanswered}&limit=50`),
+    queryFn: () => fetchJson(`/api/questions?marketplace=${marketplace}&unanswered=${unanswered}&limit=50`, z.unknown()) as Promise<{ rows: QuestionRow[]; warnings: string[] }>,
     refetchInterval: 120_000,
   });
   const templatesQuery = useQuery({
     queryKey: ["question-templates"],
-    queryFn: () => apiJson<{ templates: QuestionTemplate[] }>("/api/questions/templates"),
+    queryFn: () => fetchJson("/api/questions/templates", z.unknown()) as Promise<{ templates: QuestionTemplate[] }>,
   });
   const rows = questionsQuery.data?.rows || [];
   const templates = templatesQuery.data?.templates || [];

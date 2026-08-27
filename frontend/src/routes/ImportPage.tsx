@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { apiJson } from "../api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckSquare, ChevronDown, ChevronUp, Download, FileCode, FileText, Loader2, RefreshCw, Search, Square, Upload, Tag, ArrowLeftRight, X } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
@@ -156,7 +157,6 @@ function OzonAttributesPanel() {
               >
                 {clearMarkingDry.isPending ? <Loader2 className="spin" size={14} /> : <FileCode size={14} />} Проверить
               </button>
-              {clearMarkingDry.data && !clearMarkingDry.data.dryRun === false ? null : null}
               {clearMarkingDry.data?.candidates ? (
                 <button
                   className="primary-action"
@@ -276,16 +276,6 @@ type CandidatesResponse = { ok: boolean; page: number; pageSize: number; total: 
 type EligibleIdsResponse = { ids: string[]; eligible: number; total: number };
 type SyncNamesResponse = { ok: boolean; mismatched: number; sent: number; failed: number; dryRun?: boolean; sample?: { offerId: string; yandexName: string; ozonName: string }[]; errors?: unknown[] };
 
-async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    credentials: "same-origin",
-    ...(init || {}),
-    headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers || {}) },
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error((data as any)?.error || `HTTP ${response.status}`);
-  return data as T;
-}
 
 function statusLabel(item: Candidate): { text: string; tone: string } {
   if (item.existsOnYandex) return { text: "уже на Яндексе", tone: "muted" };
@@ -426,7 +416,7 @@ export function ImportPage() {
         subtitle="Перенос товаров с Ozon на Яндекс.Маркет: обнови список, найди по артикулу, выбери и импортируй."
         action={(
           <div className="row-actions">
-            <button className="secondary-action" type="button" disabled={repairDescriptions.isPending} onClick={() => repairDescriptions.mutate()} title="Получить описания из Ozon и отправить на Яндекс для товаров без описания">
+            <button className="secondary-action" type="button" disabled={repairDescriptions.isPending} onClick={() => { if (!window.confirm("Добавить описания товарам на Яндексе? Это перезапишет пустые описания.")) return; repairDescriptions.mutate(); }} title="Получить описания из Ozon и отправить на Яндекс для товаров без описания">
               {repairDescriptions.isPending ? <Loader2 className="spin" size={16} /> : <FileText size={16} />} Добавить описания
             </button>
             <button className="secondary-action" type="button" disabled={syncNames.isPending} onClick={() => syncNames.mutate()} title="Найти товары где название на Ozon отличается от Яндекс и исправить">
@@ -537,6 +527,9 @@ export function ImportPage() {
       {sendSelected.data ? (
         <div className={`info-strip ${sendSelected.data.sent ? "success" : "warn"}`}>
           <div>Импортировано: {sendSelected.data.sent}{sendSelected.data.failed ? ` · ошибок: ${sendSelected.data.failed}` : ""}{sendSelected.data.skipped?.length ? ` · пропущено: ${sendSelected.data.skipped.length}` : ""}</div>
+          {sendSelected.data.sent === 0 && sendSelected.data.skipped?.length > 0 && (
+            <div className="inline-warning">Все выбранные товары уже импортированы на Яндекс</div>
+          )}
           {sendSelected.data.skipped?.length ? (
             <ul className="import-skipped">
               {(sendSelected.data.skipped as Array<{ offerId?: string; reasons?: string[] }>).slice(0, 20).map((row, index) => (

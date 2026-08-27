@@ -68,7 +68,7 @@ app.get("/api/new-products", requireStaff, async (request, response, next) => {
       if (isTestOrDecant(nameLower)) continue;
       // Skip PM items whose name is a case-insensitive prefix of any warehouse product name
       // (e.g. PM "Chanel Jersey" → warehouse "Chanel JERSEY Парфюмерная вода 1.5 мл")
-      if (nameLower.length >= 8 && warehouseNormNames.some((wn) => wn.startsWith(nameLower))) continue;
+      if (nameLower.length >= 8 && warehouseNormNames.some((wn) => wn.startsWith(nameLower) || nameLower.startsWith(wn))) continue;
 
       const priceNum = Number(item.price || 0) || 0;
       if (priceNum <= 0) continue;

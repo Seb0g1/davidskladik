@@ -208,6 +208,9 @@ export function PickingListPage() {
         setMissingRow(null);
         setReplaceKey(variables.key);
       }
+      if (variables.key) {
+        setPickQtyDrafts((prev) => { const next = { ...prev }; delete next[variables.key]; return next; });
+      }
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
@@ -925,14 +928,14 @@ export function PickingListPage() {
                               ) : null}
                               <div className="picking-actions">
                                 {row.status === "picked" ? (
-                                  <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "returned" })}>
-                                    <RotateCcw size={14} /> Возврат
-                                  </button>
-                                ) : null}
-                                {row.status === "picked" ? (
-                                  <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
-                                    <RotateCcw size={14} /> К сборке
-                                  </button>
+                                  <>
+                                    <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "returned" })}>
+                                      <RotateCcw size={14} /> Возврат
+                                    </button>
+                                    <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
+                                      <RotateCcw size={14} /> К сборке
+                                    </button>
+                                  </>
                                 ) : null}
                                 {isAdmin ? (
                                   <button className="secondary-action danger-action" type="button" disabled={cancelCartMutation.isPending} onClick={() => cancelCartMutation.mutate(row.key)}>
@@ -1203,18 +1206,18 @@ export function PickingListPage() {
                                       </button>
                                     ) : null}
                                     {row.status === "picked" ? (
-                                      <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "returned" })}>
-                                        <RotateCcw size={14} /> Возврат
-                                      </button>
+                                      <>
+                                        <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "returned" })}>
+                                          <RotateCcw size={14} /> Возврат
+                                        </button>
+                                        <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
+                                          <RotateCcw size={14} /> К сборке
+                                        </button>
+                                      </>
                                     ) : null}
                                     {row.status !== "open" && row.status !== "picked" ? (
                                       <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
                                         <RotateCcw size={14} /> Вернуть
-                                      </button>
-                                    ) : null}
-                                    {row.status === "picked" ? (
-                                      <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
-                                        <RotateCcw size={14} /> К сборке
                                       </button>
                                     ) : null}
                                     {row.status === "open" ? (
@@ -1293,6 +1296,9 @@ export function PickingListPage() {
                   </div>
                 </div>
                 <div className="picking-invoice-list">
+                  {invoiceRows.length > 80 && (
+                    <div className="inline-warning" style={{ marginTop: 4 }}>Показаны первые 80 строк из {invoiceRows.length}</div>
+                  )}
                   {invoiceRows.slice(0, 80).map((row) => (
                     <div className="picking-invoice-row" key={`${row.key}-${row.pickedAt || ""}`}>
                       <span>{compactDate(row.pickedAt)}</span>

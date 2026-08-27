@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CreditCard, Loader2, Package, Plus, RefreshCw, ShoppingCart, TrendingUp } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -49,6 +49,8 @@ export function FinancePage() {
     note: "",
   });
   const [orderDrafts, setOrderDrafts] = useState<Record<string, Record<string, string>>>({});
+  const [expenseSuccess, setExpenseSuccess] = useState(false);
+  useEffect(() => { setOrderDrafts({}); }, [period, linkedOnly]);
   const summary = useQuery({
     queryKey: ["finance", "summary", period, linkedOnly],
     queryFn: () => fetchJson(`/api/finance/summary?period=${encodeURIComponent(period)}&linkedOnly=${linkedOnly ? "true" : "false"}`, FinanceSummarySchema),
@@ -71,6 +73,8 @@ export function FinancePage() {
     onSuccess: () => {
       setForm({ supplierName: "", partnerId: "", offerId: "", productName: "", quantity: 1, amount: "", note: "" });
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
+      setExpenseSuccess(true);
+      setTimeout(() => setExpenseSuccess(false), 3000);
     },
   });
   const updateOrder = useMutation({
@@ -138,7 +142,7 @@ export function FinancePage() {
           <input placeholder="Товар" value={form.productName} onChange={(event) => setForm({ ...form, productName: event.target.value })} />
           <input type="number" min="1" placeholder="Кол-во" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: Number(event.target.value || 1) })} />
           <input type="number" min="0" step="0.01" placeholder="Сумма, ₽" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} />
-          <button className="primary-action" type="button" disabled={createExpense.isPending || !(Number(form.amount) > 0)} onClick={() => createExpense.mutate()}>
+          <button className="primary-action" type="button" disabled={createExpense.isPending || !(Number(form.amount) > 0)} onClick={() => { if (!form.supplierName.trim()) { alert("Укажите поставщика"); return; } createExpense.mutate(); }}>
             {createExpense.isPending ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Добавить
           </button>
         </div>
@@ -154,7 +158,6 @@ export function FinancePage() {
           const draft = orderDrafts[order.id] || {};
           const valueOf = (key: string, fallback: unknown) => draft[key] ?? (fallback === null || fallback === undefined ? "" : String(fallback));
           const patch = {
-            ...order,
             saleAmount: Number(valueOf("saleAmount", order.saleAmount) || 0),
             payoutAmount: Number(valueOf("payoutAmount", order.payoutAmount) || 0),
             feesAmount: Number(valueOf("feesAmount", order.feesAmount) || 0),
