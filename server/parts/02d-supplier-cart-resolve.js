@@ -297,9 +297,11 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
 async function fetchOzonSupplierCartLines({ from, to, limit, statuses } = {}) {
   const accounts = getOzonAccounts();
   const lines = [];
+  // Never fetch awaiting_deliver — those orders are already packed and queued for courier
+  // pickup. Including them causes the cart to re-order already-assembled goods.
   const statusList = (Array.isArray(statuses) && statuses.length ? statuses : ["awaiting_packaging"])
     .map((item) => cleanText(item).toLowerCase())
-    .filter(Boolean);
+    .filter((s) => Boolean(s) && s !== "awaiting_deliver");
   for (const account of accounts) {
     for (const status of statusList) {
       let offset = 0;
@@ -463,9 +465,10 @@ function findSupplierCartWarehouseProduct(warehouse = {}, line = {}) {
   );
 }
 
-async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { preloadedMatches = null, preloadedUsdRate = null } = {}) {
+async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { preloadedMatches = null, preloadedUsdRate = null, pickedKeys = null } = {}) {
   const normalizedLine = normalizeSupplierCartLine(line);
   const processed = state.processed?.[normalizedLine.key];
+  const alreadyPicked = pickedKeys instanceof Set && pickedKeys.has(normalizedLine.key);
   const product = findSupplierCartWarehouseProduct(warehouse, normalizedLine);
   if (!product) {
     return normalizeSupplierCartPreviewRow({
@@ -474,7 +477,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       skipReason: "product_not_found",
       saleAmount: computeMarketplaceSaleAmountRub(normalizedLine),
       soldAt: normalizedLine.orderedAt,
-      alreadyCommitted: Boolean(processed),
+      alreadyCommitted: Boolean(processed) || alreadyPicked,
       requestDocId: processed?.requestDocId,
       requestRowId: processed?.requestRowId,
     });
@@ -491,7 +494,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       skipReason: "no_pricemaster_link",
       saleAmount: computeMarketplaceSaleAmountRub(normalizedLine),
       soldAt: normalizedLine.orderedAt,
-      alreadyCommitted: Boolean(processed),
+      alreadyCommitted: Boolean(processed) || alreadyPicked,
       requestDocId: processed?.requestDocId,
       requestRowId: processed?.requestRowId,
     });
@@ -512,6 +515,13 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
   } else {
     matches = await getLivePriceMasterMatchesForLinks(groupLinks, warehouse.suppliers || [], usdRate);
   }
+  // Name-based disambiguation: when a supplier has multiple PM rows for the same article
+  // (e.g. Далик stores different products under the same numeric code), narrow down to
+  // the row whose PM name best matches the ordered product name. Safe no-op when there
+  // is only one row or names are identical.
+  if (normalizedLine.productName) {
+    matches = disambiguateSupplierCartMatchesByOrderName(matches, normalizedLine.productName);
+  }
   const blockedPartnerIds = activeSupplierBlocksForOffer(state, normalizedLine.offerId);
   const {
     selected,
@@ -528,7 +538,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       skipReason: selectionSkipReason,
       saleAmount: computeMarketplaceSaleAmountRub(normalizedLine),
       soldAt: normalizedLine.orderedAt,
-      alreadyCommitted: Boolean(processed),
+      alreadyCommitted: Boolean(processed) || alreadyPicked,
       requestDocId: processed?.requestDocId,
       requestRowId: processed?.requestRowId,
     });
@@ -554,7 +564,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
     ready: true,
     stockOnlyFallback,
     skipReason: stockOnlyFallback ? selectionSkipReason : "",
-    alreadyCommitted: Boolean(processed),
+    alreadyCommitted: Boolean(processed) || alreadyPicked,
     requestDocId: processed?.requestDocId,
     requestRowId: processed?.requestRowId,
   });

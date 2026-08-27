@@ -165,6 +165,7 @@ app.post("/api/ozon/unarchive-queue/process", requireAdmin, async (request, resp
 });
 
 async function repairWarehouseProductGroup(productId, request = null) {
+  await hydrateWarehouseProductsForIds([productId], { expandGroups: true });
   const initialWarehouse = await readWarehouse();
   const seed = (initialWarehouse.products || []).find((product) => String(product.id) === String(productId));
   if (!seed) {

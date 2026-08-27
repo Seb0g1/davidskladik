@@ -10,9 +10,11 @@
 const ozonYandexAutoImportEnabled = process.env.OZON_YANDEX_AUTO_IMPORT_ENABLED !== "false";
 const ozonYandexAutoImportIntervalHours = Math.max(1, Math.min(48, Number(process.env.OZON_YANDEX_AUTO_IMPORT_INTERVAL_HOURS || 6) || 6));
 const ozonYandexAutoImportPerRunLimit = Math.max(10, Math.min(5000, Number(process.env.OZON_YANDEX_AUTO_IMPORT_PER_RUN || 500) || 500));
+const ozonYandexAutoImportStatePath = path.join(dataDir, "ozon-yandex-auto-import-state.json");
 let ozonYandexAutoImportTimer = null;
 let ozonYandexAutoImportRunning = false;
 let ozonYandexAutoImportNextRunAt = null;
+let ozonYandexAutoImportLastAt = 0;
 
 // Shared export pipeline: create Yandex cards for the given Ozon products, then send
 // prices + stocks and persist local yandex rows. Used by both the scheduled auto-import
@@ -179,6 +181,24 @@ async function runOzonYandexAutoImport({ limit = ozonYandexAutoImportPerRunLimit
   }
 }
 
+async function ozonYandexAutoImportIsDue() {
+  const intervalMs = ozonYandexAutoImportIntervalHours * 60 * 60 * 1000;
+  if (!ozonYandexAutoImportLastAt) {
+    try {
+      const saved = JSON.parse(await fs.readFile(ozonYandexAutoImportStatePath, "utf8"));
+      ozonYandexAutoImportLastAt = new Date(saved.lastRunAt || 0).getTime() || 0;
+    } catch {
+      ozonYandexAutoImportLastAt = 0;
+    }
+  }
+  return Date.now() - ozonYandexAutoImportLastAt >= intervalMs;
+}
+
+async function markOzonYandexAutoImportDone() {
+  ozonYandexAutoImportLastAt = Date.now();
+  await fs.writeFile(ozonYandexAutoImportStatePath, JSON.stringify({ lastRunAt: new Date().toISOString() }, null, 2)).catch(() => {});
+}
+
 function scheduleOzonYandexAutoImport(delayMs = null) {
   if (!ozonYandexAutoImportEnabled) {
     ozonYandexAutoImportNextRunAt = null;
@@ -191,16 +211,25 @@ function scheduleOzonYandexAutoImport(delayMs = null) {
   ozonYandexAutoImportTimer = setTimeout(async () => {
     let deferred = false;
     try {
-      if (heavyBackgroundWorkShouldDefer("ozon_yandex_auto_import")) {
+      // Only block on memory/HTTP pressure — NOT on autoSyncRunning.
+      // The auto-import is Postgres-only and doesn't conflict with the in-memory
+      // autoSync, but the worker restarts so frequently that the timer always fires
+      // while autoSync is running, causing permanent deferral.
+      if (serverUnderMemoryPressure() || serverUnderHttpLoad()) {
         logger.info("ozon yandex auto import deferred under load");
         deferred = true;
         return;
       }
+      if (!await ozonYandexAutoImportIsDue()) {
+        // Already ran recently (e.g., another process or manual trigger)
+        return;
+      }
       await runOzonYandexAutoImport({ source: "schedule" });
+      await markOzonYandexAutoImportDone();
     } catch (error) {
       logger.warn("ozon yandex auto import tick failed", { detail: error?.message || String(error) });
     } finally {
-      scheduleOzonYandexAutoImport(deferred ? 15 * 60 * 1000 : intervalMs);
+      scheduleOzonYandexAutoImport(deferred ? 5 * 60 * 1000 : intervalMs);
     }
   }, normalizedDelay);
   ozonYandexAutoImportTimer.unref?.();

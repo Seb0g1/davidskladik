@@ -63,18 +63,35 @@ function supplierPriceOutlierConfig() {
   return { ratio, minPeers };
 }
 
+// Сорин — приоритет 1, Инна — приоритет 2, все остальные — 99.
+// Приоритет не зависит от цены: доверенный поставщик выбирается первым
+// среди доступных, аутлаер-чек для них пропускается.
+function getSupplierSelectionPriority(supplier = {}) {
+  const name = supplier.partnerName || supplier.supplierName || "";
+  if (isSorinSupplierName(name)) return 1;
+  if (isInnaSupplierName(name)) return 2;
+  return 99;
+}
+
 function pickWarehouseSupplier(matches) {
   const eligible = [...matches]
     .filter((match) => match.available
       && match.priceEligible !== false
       && match.stockOnly !== true
       && !supplierUsesStockOnlyPricing(null, match))
-    .sort(compareWarehouseSupplierPrices);
+    .sort((a, b) => {
+      const aPrio = getSupplierSelectionPriority(a);
+      const bPrio = getSupplierSelectionPriority(b);
+      if (aPrio !== bPrio) return aPrio - bPrio;
+      return compareWarehouseSupplierPrices(a, b);
+    });
   if (!eligible.length) return null;
   // If the operator pinned a specific PM row (selected_row link with matched sourceRowId),
   // restrict the pool to pinned candidates so the explicit choice beats cheaper alternatives.
   const pinned = eligible.filter((m) => m.pinnedRow);
   const pool = pinned.length ? pinned : eligible;
+  // Priority suppliers (Sorin, Inna) are trusted — skip outlier check.
+  if (getSupplierSelectionPriority(pool[0]) < 99) return pool[0];
   const { ratio, minPeers } = supplierPriceOutlierConfig();
   if (!(ratio > 0)) return pool[0];
   for (let index = 0; index < pool.length; index += 1) {

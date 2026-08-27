@@ -46,6 +46,16 @@ async function buildSupplierCartPreview(params = {}) {
     uniqueLines.map((line) => line.offerId),
   );
   const state = await readSupplierCartState();
+  // Build a set of order keys that are already assembled (picking status="picked") so the
+  // preview can mark them as committed — otherwise the cart keeps re-queuing assembled orders
+  // that Ozon still shows as awaiting_packaging until the courier API call completes.
+  const pickingStateForPreview = await readSupplierPickingState().catch(() => ({ rows: {} }));
+  const pickedKeys = new Set(
+    Object.values(pickingStateForPreview.rows || {})
+      .map(normalizeSupplierPickingRow)
+      .filter((pr) => pr.status === "picked")
+      .map((pr) => pr.key),
+  );
   // Pre-fetch all PM matches in one batch to avoid N+1 MySQL queries per order row.
   const preloadedUsdRate = await getUsdRate();
   const allWarehouseLinks = (warehouse.products || []).flatMap((p) => p.links || []);
@@ -58,13 +68,13 @@ async function buildSupplierCartPreview(params = {}) {
     const batch = uniqueLines.slice(batchStart, batchStart + RESOLVE_BATCH);
     for (const line of batch) {
       try {
-        rows.push(await resolveSupplierCartRow(warehouse, line, state, { preloadedMatches, preloadedUsdRate }));
+        rows.push(await resolveSupplierCartRow(warehouse, line, state, { preloadedMatches, preloadedUsdRate, pickedKeys }));
       } catch (error) {
         rows.push(normalizeSupplierCartPreviewRow({
           ...line,
           ready: false,
           skipReason: `pricemaster_error: ${error?.message || String(error)}`,
-          alreadyCommitted: Boolean(state.processed?.[line.key]),
+          alreadyCommitted: Boolean(state.processed?.[line.key]) || pickedKeys.has(line.key),
           requestDocId: state.processed?.[line.key]?.requestDocId,
           requestRowId: state.processed?.[line.key]?.requestRowId,
         }));

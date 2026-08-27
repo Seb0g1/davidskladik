@@ -179,6 +179,15 @@ function isInnaSupplierName(partnerName = "") {
     || normalized.includes("inna");
 }
 
+function isSorinSupplierName(partnerName = "") {
+  const normalized = normalizeSupplierName(partnerName);
+  if (!normalized) return false;
+  return normalized === "сорин"
+    || normalized === "sorin"
+    || normalized.includes("сорин")
+    || normalized.includes("sorin");
+}
+
 function managedSupplierPriceCurrency(supplier = null, row = {}, link = {}) {
   const explicit = cleanText(supplier?.priceCurrency || supplier?.defaultCurrency).toUpperCase();
   if (explicit === "RUB" || explicit === "RUR") return "RUB";
@@ -354,25 +363,64 @@ function hasDraftInput(input = {}) {
 // All those rows end up in rawSuppliers and pickWarehouseSupplier picks the cheapest,
 // ignoring the user's explicit pin.
 // This function keeps only the exact rowId match when it is present; falls back to
-// exactName matches; and only uses all article matches (staleness fallback) when the
-// pinned row is truly gone (supplier re-uploaded with a new RowID).
+// exactName / resolvedPriceMasterRow.name matches; and only uses all article matches
+// (staleness fallback) when the pinned row is truly gone and no name anchor is available.
 function filterSelectedRowMatchesToBestPin(link, matches) {
   if (!Array.isArray(matches) || matches.length <= 1) return matches;
   if (link.matchType !== "selected_row" || !link.sourceRowId) return matches;
 
   const byRowId = matches.filter((m) => String(m.rowId || "") === String(link.sourceRowId));
-  // Return the pinned row only when it's still active. If the supplier deactivated the
-  // pinned row (re-uploaded with a new RowID), fall through to the staleness fallback
-  // so the new active row is found instead of returning a dead row with no price.
-  if (byRowId.some((m) => m.active !== false)) return byRowId;
+  // Return the pinned row only when it's still active AND has a price. If the supplier
+  // re-uploaded with a new RowID (old row kept active but price set to 0), fall through
+  // to the staleness fallback so the new row with a real price is found instead.
+  if (byRowId.some((m) => m.active !== false && (m.price || 0) > 0)) return byRowId;
 
-  if (link.exactName) {
+  // Use explicit exactName first; fall back to the name recorded when the row was pinned.
+  // resolvedPriceMasterRow.name is stored by the link UI when a user selects a specific row.
+  const fallbackName = link.exactName
+    || cleanText((link.resolvedPriceMasterRow && link.resolvedPriceMasterRow.name) || "");
+  if (fallbackName) {
     const byName = matches.filter((m) => exactPriceMasterNameMatches(
-      cleanText(m.name || m.nativeName || ""), link.exactName,
+      cleanText(m.name || m.nativeName || ""), fallbackName,
     ));
     if (byName.length) return byName;
   }
 
   return matches;
+}
+
+// When a supplier has multiple PM rows for the same article (e.g. Далик encodes different
+// perfumes under the same numeric NativeID), use the marketplace order product name to
+// pick the correct row by token overlap. Falls through without filtering when the name
+// gives no useful signal or there's nothing to disambiguate.
+function disambiguateSupplierCartMatchesByOrderName(matches, productName) {
+  if (!productName || !matches || !matches.size) return matches;
+  const orderTokens = priceMasterNameTokens(productName);
+  if (!orderTokens.length) return matches;
+  const orderSet = new Set(orderTokens);
+
+  const result = new Map();
+  for (const [linkId, rows] of matches) {
+    if (!Array.isArray(rows) || rows.length <= 1) { result.set(linkId, rows); continue; }
+
+    // Only disambiguate when rows have distinct PM names (same name = no signal to use).
+    const uniqueNames = new Set(rows.map((r) => normalizeSearchText(cleanText(r.name || ""))).filter(Boolean));
+    if (uniqueNames.size <= 1) { result.set(linkId, rows); continue; }
+
+    const scored = rows.map((r) => {
+      const pmTokens = new Set(priceMasterNameTokens(r.name || ""));
+      const intersection = orderTokens.filter((t) => pmTokens.has(t)).length;
+      const union = new Set([...orderSet, ...pmTokens]).size;
+      return { row: r, score: union > 0 ? intersection / union : 0 };
+    });
+
+    const maxScore = Math.max(...scored.map((s) => s.score));
+    if (maxScore > 0) {
+      const best = scored.filter((s) => s.score >= maxScore * 0.8).map((s) => s.row);
+      if (best.length > 0 && best.length < rows.length) { result.set(linkId, best); continue; }
+    }
+    result.set(linkId, rows);
+  }
+  return result;
 }
 

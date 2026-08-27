@@ -453,7 +453,7 @@ function getYandexShopByTarget(targetId) {
 
 function matchesOzonTarget(targetId, accountId) {
   const target = cleanText(targetId || "");
-  return target === cleanText(accountId || "") || target === "ozon";
+  return target === cleanText(accountId || "");
 }
 
 function matchesYandexTarget(targetId, shopId) {

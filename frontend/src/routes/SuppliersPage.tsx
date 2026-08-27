@@ -524,7 +524,7 @@ export function SuppliersPage() {
                         placeholder={supplierCurrency === "USD" ? "Фактический баланс, $" : "Фактический баланс, ₽"}
                         value={adjustDrafts[id] || ""}
                         onChange={(e) => setAdjustDrafts((p) => ({ ...p, [id]: e.target.value }))}
-                        title={`Текущий баланс в системе: ${moneySigned(balance, "RUB")}. Введите фактическую сумму — система создаст корректирующую запись.`}
+                        title={`Текущий баланс: ${supplierCurrency === "USD" ? `${moneySigned(balanceUsd, "USD")} (≈ ${moneySigned(balance, "RUB")})` : moneySigned(balance, "RUB")}. Введите фактическую сумму в ${currencySymbol(supplierCurrency)} — система создаст корректирующую запись.`}
                       />
                       <input
                         className="supplier-payment-note"
@@ -537,9 +537,10 @@ export function SuppliersPage() {
                         type="button"
                         disabled={adjustBalance.isPending || adjustDrafts[id] === ""}
                         onClick={() => {
-                          const target = Number(adjustDrafts[id] || 0);
-                          if (!Number.isFinite(target)) return;
-                          adjustBalance.mutate({ supplier, targetBalance: target, note: adjustNotes[id] || "" }, {
+                          const inputVal = Number(adjustDrafts[id] || 0);
+                          if (!Number.isFinite(inputVal)) return;
+                          const targetBalance = supplierCurrency === "USD" ? Math.round(inputVal * usdRate) : inputVal;
+                          adjustBalance.mutate({ supplier, targetBalance, note: adjustNotes[id] || "" }, {
                             onSuccess: () => { setAdjustDrafts((p) => ({ ...p, [id]: "" })); setAdjustNotes((p) => ({ ...p, [id]: "" })); },
                           });
                         }}
@@ -551,7 +552,7 @@ export function SuppliersPage() {
                       <div className="inline-success" style={{ marginTop: 6, fontSize: "0.82rem" }}>
                         {adjustBalance.data.skipped
                           ? adjustBalance.data.message
-                          : `Корректировка: ${moneySigned(adjustBalance.data.currentBalance ?? 0, supplierCurrency)} → ${moneySigned(adjustBalance.data.targetBalance ?? 0, supplierCurrency)} (запись на ${moneySigned(adjustBalance.data.delta ?? 0, supplierCurrency)})`}
+                          : `Корректировка: ${moneySigned(adjustBalance.data.currentBalance ?? 0, "RUB")} → ${moneySigned(adjustBalance.data.targetBalance ?? 0, "RUB")} (запись на ${moneySigned(adjustBalance.data.delta ?? 0, "RUB")})`}
                       </div>
                     )}
                     {adjustBalance.isError && <div className="inline-error" style={{ marginTop: 6 }}>{errorMessage(adjustBalance.error)}</div>}
@@ -635,7 +636,11 @@ export function SuppliersPage() {
                                         className="secondary-action danger-action supplier-return-btn"
                                         type="button"
                                         disabled={isPending || returnPicking.isPending}
-                                        onClick={() => returnPicking.mutate({ pickingKey: row.key })}
+                                        onClick={() => {
+                                          if (window.confirm(`Вернуть «${row.productName || row.offerId || row.key}» поставщику? Это действие нельзя отменить.`)) {
+                                            returnPicking.mutate({ pickingKey: row.key });
+                                          }
+                                        }}
                                         title="Вернуть товар поставщику"
                                       >
                                         {isPending ? <Loader2 className="spin" size={13} /> : <RotateCcw size={13} />} Возврат

@@ -209,11 +209,13 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
         }
       }
       for (const entry of mergedByOfferId.values()) {
-        // Dedup: skip if this OfferRowID already has an open (Sended=0) RequestRows entry.
+        // Dedup: skip if this OfferRowID already has an undelivered (Recieved=0) RequestRows
+        // entry — covers both open (Sended=0) and in-transit (Sended=1) orders so we don't
+        // re-order while the supplier is still processing or shipping the goods.
         const [[existingRow]] = await connection.query(
           `SELECT rr.RowID FROM RequestRows rr
            JOIN RequestDocs rd ON rd.DocID = rr.DocID
-           WHERE rr.OfferRowID = ? AND rd.PartnerID = ? AND rd.Sended = 0`,
+           WHERE rr.OfferRowID = ? AND rd.PartnerID = ? AND rd.Recieved = 0`,
           [Number(entry.offerRowId), Number(partnerId)],
         );
         if (existingRow?.RowID) {

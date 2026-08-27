@@ -147,8 +147,11 @@ async function resolveOzonStockWarehouses(account = null, product = null) {
   // For the primary account the operator has already configured OZON_STOCK_WAREHOUSE_IDS,
   // so respect the flag. For secondary accounts (Ozon2, Ozon3 …) there is no stored data
   // from import, so we must fetch from the API to get the correct warehouse_id.
+  // Exception: when storedWarehouses is also empty (product never had FBS stock), there is
+  // no fallback at all — fall through to API discovery so the stock payload includes a
+  // warehouse_id (without it Ozon silently rejects the FBS stock update).
   const isPrimaryAccount = !account?.id || account.id === "ozon";
-  if (!ozonWarehouseListEnabled && isPrimaryAccount) return [];
+  if (!ozonWarehouseListEnabled && isPrimaryAccount && storedWarehouses.length > 0) return [];
 
   try {
     const warehouses = await getOzonWarehouses(account);
