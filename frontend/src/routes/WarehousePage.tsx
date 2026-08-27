@@ -7,6 +7,7 @@ import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceHistorySchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { PmChipInput } from "../components/PmChipInput";
+import { getPmSearchStore } from "../lib/pmSearchStore";
 import { BrandPicker } from "../components/BrandPicker";
 import { SelectField } from "../components/SelectField";
 import { CatalogSkeleton } from "../components/Skeleton";
@@ -604,6 +605,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
     bulkDeleteMutation.reset();
     syncMutation.reset();
     manualPricesMutation.reset();
+    getPmSearchStore("global").clear();
   }, [draftScopeKey]);
 
   const addDraft = (nextDraft: LinkDraft) => {
@@ -783,6 +785,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
         <div className="section-subtitle">Найти строку PriceMaster</div>
         <div className="draft-grid single-field">
           <PmChipInput
+            key={draftScopeKey}
             onQueryChange={setSearch}
             placeholder="Артикул, название или штрихкод"
             disabled={readOnly}
@@ -1372,6 +1375,30 @@ function supplierText(supplierInput: unknown) {
   return `${supplier.supplierName}${supplier.article ? ` · ${supplier.article}` : ""}${supplier.currency ? ` · ${supplier.currency}` : ""}`;
 }
 
+const MpManualOrderSchema = z.object({ ok: z.boolean().optional(), inserted: z.number().optional().default(0) }).passthrough();
+
+function QuickOrderButton({ offerId, marketplace }: { offerId: string; marketplace: string }) {
+  const [done, setDone] = useState(false);
+  const mut = useMutation({
+    mutationFn: () => fetchJson("/api/supplier-cart/manual-order", MpManualOrderSchema, mutationBody({ offerId, marketplace, quantity: 1 })),
+    onSuccess: () => setDone(true),
+  });
+  if (done) return <span style={{ color: "var(--color-success)", fontSize: 12 }}>✓ Добавлено в корзину PM</span>;
+  return (
+    <button
+      type="button"
+      className="secondary-action"
+      style={{ fontSize: 12, padding: "2px 8px" }}
+      disabled={mut.isPending}
+      onClick={() => mut.mutate()}
+      title="Создать заявку на заказ у поставщика"
+    >
+      {mut.isPending ? <Loader2 className="spin" size={12} /> : <Package size={12} />}
+      Заказать
+    </button>
+  );
+}
+
 function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unknown>; error: unknown; loading: boolean }) {
   if (loading) return <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю диагностику...</div>;
   if (error) return <div className="inline-error">{errorMessage(error)}</div>;
@@ -1443,6 +1470,12 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
               <DiagnosticValue label="Цена" value={money(item.targetPrice || item.currentPrice)} />
             </div>
             <div className="diagnostic-lines">
+              {item.hasLinks && Number(item.targetStock || 0) === 0 && item.offerId ? (
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <b>Нет остатка</b>
+                  <QuickOrderButton offerId={String(item.offerId)} marketplace={String(item.marketplace || "ozon")} />
+                </span>
+              ) : null}
               <span><b>Поставщик:</b> {supplierText(item.selectedSupplier)}{supplierPmNameMismatch && <span className="pm-name-mismatch-hint"> · PM: {supplierPmRowName}</span>}</span>
               {formulaText && <span><b>Формула цены:</b> {formulaText}</span>}
               <div className="diagnostic-pm-links">
@@ -1453,6 +1486,25 @@ function DiagnosticsPanel({ data, error, loading }: { data?: Record<string, unkn
                   </span>
                 )) : <span className="diagnostic-pm-chip muted">нет привязки</span>}
               </div>
+              {(() => {
+                const raw = asRecord((item as unknown as Record<string, unknown>).raw);
+                const links0 = Array.isArray(item.links) ? (item.links as unknown[])[0] : undefined;
+                const rpm = asRecord(raw.resolvedPriceMasterRow ?? (links0 as Record<string, unknown> | undefined)?.raw);
+                const docDateStr = String(rpm.docDate || "");
+                const docDate = docDateStr ? new Date(docDateStr) : null;
+                const staleDays = docDate ? Math.floor((Date.now() - docDate.getTime()) / 86400000) : null;
+                if (staleDays !== null && staleDays >= 14 && !(item as unknown as Record<string, unknown>).selectedSupplier) return (
+                  <span style={{ color: "var(--color-warn)", fontWeight: 500 }}>
+                    ⚠️ PM-цена устарела: последнее разрешение {staleDays} дн. назад. Товар не найден в снапшоте — обновите привязку.
+                  </span>
+                );
+                return null;
+              })()}
+              {asRecord((item as unknown as Record<string, unknown>).raw).notFoundOnMarketplace ? (
+                <span style={{ color: "var(--color-danger)", fontWeight: 500 }}>
+                  ⛔ Товар не найден на маркетплейсе — SKU удалён или архивирован на стороне площадки.
+                </span>
+              ) : null}
               <span><b>Последний остаток:</b> {commandText(item.lastStockSend)}</span>
               <span><b>Последний архив/разархив:</b> {commandText(item.lastArchiveSend)}</span>
               <span><b>Yandex цена:</b> {commandText(item.lastYandexPriceSend, "нет отправки цены")}</span>

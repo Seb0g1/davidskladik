@@ -1,18 +1,33 @@
 async function appendPriceHistoryRows(rows = []) {
   if (!shouldUsePostgresStorage()) return 0;
   const normalizedRows = (Array.isArray(rows) ? rows : [])
-    .map((row) => ({
-      productId: cleanText(row.productId || row.id) || null,
-      marketplace: normalizeMarketplaceEnum(row.marketplace || "ozon"),
-      target: cleanText(row.target || row.marketplace) || null,
-      offerId: cleanText(row.offerId || row.offer_id),
-      oldPrice: row.oldPrice === undefined || row.oldPrice === null ? null : (roundPrice(row.oldPrice) || 0),
-      newPrice: roundPrice(row.newPrice ?? row.price ?? 0) || 0,
-      status: normalizeQueueStatusEnum(row.status || (row.error ? "failed" : "success")),
-      response: cloneAuditValue(row.response || row.result || null),
-      error: cleanText(row.error || ""),
-      createdAt: toDateOrNull(row.createdAt || row.at) || new Date(),
-    }))
+    .map((row) => {
+      // Store price breakdown in response so we can diagnose "where did this price come from"
+      // without a schema migration. Fields: pmPriceUsd, usdRate, markup, supplierName, supplierArticle, reason.
+      const breakdown = {};
+      if (row.pmPriceUsd != null) breakdown.pmPriceUsd = Number(row.pmPriceUsd);
+      if (row.usdRate != null) breakdown.usdRate = Number(row.usdRate);
+      if (row.markup != null) breakdown.markup = Number(row.markup);
+      if (row.supplierName) breakdown.supplierName = cleanText(row.supplierName);
+      if (row.supplierArticle) breakdown.supplierArticle = cleanText(row.supplierArticle);
+      if (row.reason) breakdown.reason = cleanText(row.reason);
+      const existingResponse = cloneAuditValue(row.response || row.result || null);
+      const mergedResponse = Object.keys(breakdown).length
+        ? { ...(existingResponse && typeof existingResponse === "object" ? existingResponse : {}), ...breakdown }
+        : existingResponse;
+      return {
+        productId: cleanText(row.productId || row.id) || null,
+        marketplace: normalizeMarketplaceEnum(row.marketplace || "ozon"),
+        target: cleanText(row.target || row.marketplace) || null,
+        offerId: cleanText(row.offerId || row.offer_id),
+        oldPrice: row.oldPrice === undefined || row.oldPrice === null ? null : (roundPrice(row.oldPrice) || 0),
+        newPrice: roundPrice(row.newPrice ?? row.price ?? 0) || 0,
+        status: normalizeQueueStatusEnum(row.status || (row.error ? "failed" : "success")),
+        response: mergedResponse,
+        error: cleanText(row.error || ""),
+        createdAt: toDateOrNull(row.createdAt || row.at) || new Date(),
+      };
+    })
     .filter((row) => row.offerId && row.newPrice > 0);
   if (!normalizedRows.length) return 0;
   try {
@@ -67,6 +82,7 @@ async function appendPriceHistoryRows(rows = []) {
 }
 
 function priceHistoryRowFromPostgres(row = {}) {
+  const resp = row.response && typeof row.response === "object" ? row.response : null;
   return {
     id: row.id || null,
     productId: row.productId || null,
@@ -78,6 +94,13 @@ function priceHistoryRowFromPostgres(row = {}) {
     status: row.status || "pending",
     response: row.response || null,
     error: row.error || "",
+    // Price breakdown (stored in response field to avoid schema migration)
+    pmPriceUsd: resp?.pmPriceUsd ?? null,
+    usdRate: resp?.usdRate ?? null,
+    markup: resp?.markup ?? null,
+    supplierName: resp?.supplierName ?? null,
+    supplierArticle: resp?.supplierArticle ?? null,
+    reason: resp?.reason ?? null,
     at: row.createdAt ? row.createdAt.toISOString() : null,
     createdAt: row.createdAt ? row.createdAt.toISOString() : null,
   };

@@ -113,6 +113,53 @@ app.get("/api/supplier-cart/pricemaster/status", requireAdmin, async (_request, 
   }
 });
 
+// Pending PM cart item count (badge): rows in RequestDocs WHERE Sended=0.
+app.get("/api/supplier-cart/pm-pending-count", requireAdmin, async (_request, response, next) => {
+  try {
+    const connection = await pool.getConnection();
+    try {
+      const [[row]] = await connection.query(
+        "SELECT COUNT(*) AS total FROM RequestRows rr JOIN RequestDocs rd ON rd.DocID = rr.DocID WHERE rd.Sended = 0",
+      );
+      const [[docRow]] = await connection.query(
+        "SELECT COUNT(*) AS docs FROM RequestDocs WHERE Sended = 0",
+      );
+      response.json({ ok: true, rows: Number(row?.total || 0), docs: Number(docRow?.docs || 0) });
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PM cart history: last sent docs (Sended=1), grouped by DocID.
+app.get("/api/supplier-cart/pm-history", requireAdmin, async (_request, response, next) => {
+  try {
+    const limit = Math.min(50, Math.max(1, Number(_request.query.limit || 20) || 20));
+    const connection = await pool.getConnection();
+    try {
+      const [docs] = await connection.query(
+        `SELECT d.DocID, d.DocDate, d.PartnerID, d.Comment, d.Sended, d.Recieved,
+                p.PartnerName, COUNT(r.RowID) AS rowCount
+           FROM RequestDocs d
+           LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+           LEFT JOIN RequestRows r ON r.DocID = d.DocID
+          WHERE d.Sended = 1 AND d.Comment LIKE 'ДавидСклад%'
+          GROUP BY d.DocID, d.DocDate, d.PartnerID, d.Comment, d.Sended, d.Recieved, p.PartnerName
+          ORDER BY d.DocID DESC
+          LIMIT ?`,
+        [limit],
+      );
+      response.json({ ok: true, docs: docs || [] });
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/supplier-cart/rollback-all", requireAdmin, async (request, response, next) => {
   try {
     const confirm = cleanText(request.body?.confirm);

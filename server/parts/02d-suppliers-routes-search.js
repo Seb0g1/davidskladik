@@ -23,8 +23,9 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
     const cached = getPriceMasterSearchCache(cacheKey);
     if (cached) return response.json(cached);
 
-    // OR-across-tokens approach (matches GingerPM word search): WHERE uses any-word OR,
-    // post-filter enforces minimum match count so 1-word false positives are excluded.
+    // AND-across-groups approach (matches GingerPM word search): each token group is a
+    // required term; SQL ANDs them; synonyms within a group are OR'd. JS post-filter enforces
+    // word-boundary precision.
     const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
     const minMatchCount = tokenGroups ? pmMinMatchCount(tokenGroups) : 0;
 
@@ -41,19 +42,15 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
       if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`);
       if (q) {
         if (tokenGroups && tokenGroups.length) {
-          // Use only REQUIRED token groups for SQL (non-optional, len>3, non-numeric).
-          // Optional groups (numbers, short units like "ml") are so common that including
-          // them in the SQL OR-list drowns out the primary-keyword candidates under LIMIT.
-          // JS post-filter enforces optional groups with word-boundary precision after fetch.
-          const sqlGroups = tokenGroups.filter((g) => !pmTokenGroupIsOptional(g) && !g._compound);
-          const activeGroups = sqlGroups.length ? sqlGroups : tokenGroups.filter((g) => !g._compound); // fallback: all-optional query
-          const nameConds = activeGroups.flatMap((group) => group.map(() => "r.NativeName LIKE ?"));
-          const extraConds = activeGroups[0].flatMap(() => ["r.NativeID LIKE ?", "r.BarCode LIKE ?", "p.PartnerName LIKE ?"]);
-          conditions.push(`(${[...nameConds, ...extraConds].join(" OR ")})`);
-          params.push(
-            ...activeGroups.flatMap((group) => group.map(likeSearch)),
-            ...activeGroups[0].flatMap((t) => [likeSearch(t), likeSearch(t), likeSearch(t)]),
-          );
+          // AND across token groups (each group is a required distinct term; synonyms within a
+          // group are OR'd). Previously all groups were in one OR — this caused the LIMIT to be
+          // filled by high-frequency words like "of"/"the" so multi-word matches were missed.
+          const sqlGroups = tokenGroups.filter((g) => !g._compound);
+          for (const group of sqlGroups) {
+            const conds = group.flatMap((t) => ["r.NativeName LIKE ?", "r.NativeID LIKE ?"]);
+            conditions.push(`(${conds.join(" OR ")})`);
+            params.push(...group.flatMap((t) => [likeSearch(t), likeSearch(t)]));
+          }
         } else {
           conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
           const like = likeSearch(q);
@@ -64,8 +61,7 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
         conditions.push("p.PartnerName LIKE ?");
         params.push(likeSearch(supplier));
       }
-      // Extra headroom: OR-query pulls in more candidates; JS post-filter trims to minMatchCount.
-      params.push(limit * 15);
+      params.push(limit * 10);
       const [liveRows] = await pool.query(
         `
         SELECT

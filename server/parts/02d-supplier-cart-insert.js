@@ -209,6 +209,17 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
         }
       }
       for (const entry of mergedByOfferId.values()) {
+        // Dedup: skip if this OfferRowID already has an open (Sended=0) RequestRows entry.
+        const [[existingRow]] = await connection.query(
+          `SELECT rr.RowID FROM RequestRows rr
+           JOIN RequestDocs rd ON rd.DocID = rr.DocID
+           WHERE rr.OfferRowID = ? AND rd.PartnerID = ? AND rd.Sended = 0`,
+          [Number(entry.offerRowId), Number(partnerId)],
+        );
+        if (existingRow?.RowID) {
+          logger.info("supplier_cart_insert_skipped_duplicate", { offerRowId: entry.offerRowId, partnerId, existingRowId: existingRow.RowID });
+          continue;
+        }
         const requestRowId = nextRowId++;
         const manualNote = cleanText(entry.manualNote || "");
         const rowComment = manualNote.slice(0, 250);

@@ -86,6 +86,28 @@ function evaluateHealthAlerts(metrics = {}, thresholds = {}) {
   for (const spike of errorSpikes) {
     alerts.push({ key: `error_spike:${spike.class}`, message: `⚠️ Всплеск ошибок: «${spike.class}» — ${spike.count}× за последние ${spike.windowMinutes} мин (порог ${thresholds.errorSpike}).` });
   }
+  // USD rate drift: current rate deviates >3% from rate used in last price sends.
+  const currentRate = Number(metrics.currentUsdRate || 0);
+  const lastSentRate = Number(metrics.lastSentUsdRate || 0);
+  if (currentRate > 0 && lastSentRate > 0) {
+    const driftPct = Math.abs(currentRate - lastSentRate) / lastSentRate * 100;
+    if (driftPct >= 3) {
+      const dir = currentRate > lastSentRate ? "вырос" : "упал";
+      alerts.push({
+        key: `usd_rate_drift:${Math.round(currentRate)}`,
+        message: `💱 Курс USD/RUB ${dir} на ${driftPct.toFixed(1)}%: был ${lastSentRate.toFixed(1)} → сейчас ${currentRate.toFixed(1)}. Рекомендуем переотправить цены.`,
+      });
+    }
+  }
+  // Price floor: target_price suspiciously below 500 RUB with active stock.
+  // Indicates rate-not-applied bug (rate≈1 used instead of ~90), manual override error, etc.
+  const lowPriceSuspect = Number(metrics.lowPriceSuspect || 0);
+  if (lowPriceSuspect > 0) {
+    alerts.push({
+      key: "low_price_suspect",
+      message: `🚨 Подозрительные цены: ${lowPriceSuspect} SKU с target_price < 500₽ при активном остатке. Вероятна ошибка расчёта (курс USD не применён). Запустите диагностику.`,
+    });
+  }
   return alerts;
 }
 
@@ -95,7 +117,7 @@ async function runHealthAlertCheck({ source = "schedule" } = {}) {
   if (!prisma || !shouldUsePostgresStorage()) return { status: "postgres_disabled" };
   healthAlertRunning = true;
   try {
-    const [stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, sweeps, reconcilerState, errorSpikes] = await Promise.all([
+    const [stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, sweeps, reconcilerState, errorSpikes, lowPriceSuspect] = await Promise.all([
       prisma.$queryRawUnsafe(`
         SELECT COUNT(*)::int AS n FROM warehouse_products p
         WHERE p.archived = false AND p.target_price IS NOT NULL AND p.target_price > 0
@@ -118,12 +140,40 @@ async function runHealthAlertCheck({ source = "schedule" } = {}) {
       readSweepHeartbeats().catch(() => []),
       readLinkedReconcilerState().catch(() => null),
       readErrorSpikes().catch(() => []),
+      prisma.$queryRawUnsafe(`
+        SELECT COUNT(*)::int AS n FROM warehouse_products
+        WHERE archived = false AND target_stock > 0
+          AND target_price IS NOT NULL AND target_price > 0 AND target_price < 500
+          AND EXISTS (SELECT 1 FROM product_links pl WHERE pl.product_id = warehouse_products.id::text)
+      `).then((rows) => Number(rows?.[0]?.n || 0)).catch(() => 0),
     ]);
     const staleSweeps = (sweeps || []).filter((s) => s.stale).map((s) => s.name);
     const marketplaceStateMismatches = Number(reconcilerState?.lastCycleStateMismatches || 0);
     const marketplaceWronglyHidden = Number(reconcilerState?.lastCycleWronglyHidden || 0);
     const marketplaceWronglyHiddenCycleAt = cleanText(reconcilerState?.lastCycleMismatchAt) || null;
-    const metrics = { stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, staleSweeps, marketplaceStateMismatches, marketplaceWronglyHidden, marketplaceWronglyHiddenCycleAt, errorSpikes };
+    // USD rate drift: compare current rate to rate used in last price sends.
+    let currentUsdRate = 0;
+    let lastSentUsdRate = 0;
+    try {
+      const [rateData, lastHistRow] = await Promise.all([
+        getUsdRate({ force: false }).catch(() => null),
+        prisma.$queryRawUnsafe(
+          `SELECT response->>'usdRate' AS rate FROM price_history
+           WHERE status = 'success' AND response->>'usdRate' IS NOT NULL
+           ORDER BY created_at DESC LIMIT 1`,
+        ).catch(() => []),
+      ]);
+      currentUsdRate = Number(rateData?.rate || 0);
+      lastSentUsdRate = Number(lastHistRow?.[0]?.rate || 0);
+    } catch { /* non-fatal */ }
+
+    const metrics = {
+      stalePriceLinked, oldestPriceJobAgeMs, linkedSoldBelowTarget, staleSweeps,
+      marketplaceStateMismatches, marketplaceWronglyHidden, marketplaceWronglyHiddenCycleAt,
+      errorSpikes, lowPriceSuspect,
+      ...(currentUsdRate > 0 ? { currentUsdRate } : {}),
+      ...(lastSentUsdRate > 0 ? { lastSentUsdRate } : {}),
+    };
     const thresholds = {
       stalePriceLinked: stalePriceLinkedAlertThreshold,
       staleHours: stalePriceLinkedHours,

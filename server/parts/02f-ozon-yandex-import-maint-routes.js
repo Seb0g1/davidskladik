@@ -621,6 +621,117 @@ app.post("/api/ozon-yandex-import/archive-blocked", requireAdmin, async (request
   }
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Yandex price quarantine: get items stuck in quarantine + confirm their prices.
+// YM puts a SKU into price quarantine when the new price is <20% below the
+// previous accepted price. The only way out is to POST /confirm for those offers.
+// ──────────────────────────────────────────────────────────────────────────────
+
+async function getYandexPriceQuarantine(shop) {
+  const items = [];
+  let pageToken = "";
+  for (;;) {
+    const params = new URLSearchParams({ limit: "200" });
+    if (pageToken) params.set("pageToken", pageToken);
+    const data = await yandexRequest(shop, "GET", `/v2/businesses/${shop.businessId}/price-quarantine?${params}`);
+    const page = data?.result?.offerPrices || data?.offerPrices || [];
+    items.push(...page);
+    pageToken = data?.result?.paging?.nextPageToken || data?.paging?.nextPageToken || "";
+    if (!pageToken || !page.length) break;
+  }
+  return items;
+}
+
+async function confirmYandexPriceQuarantine(shop, offerIds) {
+  const ids = [...new Set((Array.isArray(offerIds) ? offerIds : []).map(cleanText).filter(Boolean))];
+  if (!ids.length) return { confirmed: 0 };
+  let confirmed = 0;
+  for (const chunk of chunkArray(ids, 200)) {
+    await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/price-quarantine/confirm`, { offerIds: chunk });
+    confirmed += chunk.length;
+  }
+  return { confirmed };
+}
+
+app.get("/api/yandex/price-quarantine", requireAdmin, async (_request, response, next) => {
+  try {
+    const shops = uniqueYandexShopsByBusiness
+      ? uniqueYandexShopsByBusiness()
+      : getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+    if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
+    const byShop = [];
+    for (const shop of shops) {
+      const items = await getYandexPriceQuarantine(shop);
+      byShop.push({ shopId: shop.id, count: items.length, sample: items.slice(0, 5) });
+    }
+    const total = byShop.reduce((s, r) => s + r.count, 0);
+    response.json({ ok: true, total, byShop });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/yandex/price-quarantine/confirm", requireAdmin, async (request, response, next) => {
+  try {
+    const shops = uniqueYandexShopsByBusiness
+      ? uniqueYandexShopsByBusiness()
+      : getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+    if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
+    const results = [];
+    for (const shop of shops) {
+      const items = await getYandexPriceQuarantine(shop);
+      if (!items.length) { results.push({ shopId: shop.id, confirmed: 0 }); continue; }
+      const offerIds = items.map((item) => cleanText(item.offerId || item.offer_id || "")).filter(Boolean);
+      const res = await confirmYandexPriceQuarantine(shop, offerIds);
+      results.push({ shopId: shop.id, ...res });
+      logger.info("yandex_price_quarantine_confirmed", { shopId: shop.id, confirmed: res.confirmed });
+    }
+    const total = results.reduce((s, r) => s + r.confirmed, 0);
+    await appendAudit(request, "yandex.price_quarantine.confirm", { newValue: { total, byShop: results } });
+    response.json({ ok: true, total, byShop: results });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Confirm prices for offers showing "Цена сильно снизилась" card error.
+// Scans all offer-cards, finds those with the price-drop error, then POSTs confirm
+// to the price-quarantine/confirm endpoint for those specific offerIds.
+app.post("/api/yandex/price-quarantine/confirm-price-drop-errors", requireAdmin, async (request, response, next) => {
+  try {
+    const shops = uniqueYandexShopsByBusiness
+      ? uniqueYandexShopsByBusiness()
+      : getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+    if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
+    const PRICE_DROP_ERROR = /цена сильно снизилась|price.*decreased|price.*low/i;
+    const results = [];
+    for (const shop of shops) {
+      const mappings = await getYandexOfferMappings(shop);
+      const offerIds = mappings.map((m) => cleanText(m.offer?.offerId || m.offerId)).filter(Boolean);
+      if (!offerIds.length) { results.push({ shopId: shop.id, scanned: 0, confirmed: 0 }); continue; }
+      // Fetch card errors in pages of 500
+      const errorOfferIds = [];
+      for (const chunk of chunkArray(offerIds, 500)) {
+        const cards = await getYandexOfferCardsContentStatus(shop, chunk);
+        for (const card of cards) {
+          const hasPriceDrop = (card.errors || []).some((e) => PRICE_DROP_ERROR.test(e.message || e.comment || e.type || ""));
+          if (hasPriceDrop) errorOfferIds.push(cleanText(card.offerId || card.offer_id || card.shopSku || ""));
+        }
+      }
+      const toConfirm = [...new Set(errorOfferIds.filter(Boolean))];
+      logger.info("yandex_price_drop_confirm", { shopId: shop.id, scanned: offerIds.length, priceDropErrors: toConfirm.length });
+      if (!toConfirm.length) { results.push({ shopId: shop.id, scanned: offerIds.length, confirmed: 0 }); continue; }
+      const res = await confirmYandexPriceQuarantine(shop, toConfirm);
+      results.push({ shopId: shop.id, scanned: offerIds.length, priceDropErrors: toConfirm.length, confirmed: res.confirmed });
+    }
+    const totalConfirmed = results.reduce((s, r) => s + r.confirmed, 0);
+    await appendAudit(request, "yandex.price_quarantine.confirm_price_drop", { newValue: { totalConfirmed, byShop: results } });
+    response.json({ ok: true, totalConfirmed, byShop: results });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/ozon-yandex-import/sync-stocks", requireAdmin, async (request, response, next) => {
   try {
     const requestedLimit = Number(request.body?.limit || request.query.limit || 30000);

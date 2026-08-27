@@ -147,6 +147,15 @@ async function writePriceMasterSnapshotToPostgres(snapshot = {}) {
     return { skipped: true, reason: "unchanged", items: rows.length };
   }
 
+  // Capture partner row counts before the wipe so we can detect partner disappearances.
+  const partnerCountsBefore = await prisma.$queryRawUnsafe(`
+    SELECT partner_id, MAX(partner_name) AS partner_name,
+           COUNT(*) FILTER (WHERE active = true)::int AS active_count
+    FROM pm_snapshot_items
+    WHERE partner_id IS NOT NULL
+    GROUP BY partner_id
+  `).catch(() => []);
+
   const updatedAt = toDateOrNull(snapshot.createdAt) || new Date();
   const normalizedRows = rows
     .map((row) => normalizePriceMasterSnapshotItemForPostgres(row, updatedAt))
@@ -155,6 +164,46 @@ async function writePriceMasterSnapshotToPostgres(snapshot = {}) {
   for (const chunk of chunkArray(normalizedRows, 2000)) {
     await prisma.priceMasterSnapshotItem.createMany({ data: chunk, skipDuplicates: true });
   }
+
+  // Detect partners that lost a significant number of active rows.
+  if (partnerCountsBefore.length) {
+    const afterCountsByPartner = new Map();
+    for (const row of normalizedRows) {
+      if (row.active && row.partnerId) {
+        const entry = afterCountsByPartner.get(row.partnerId) || { count: 0, name: row.partnerName };
+        entry.count += 1;
+        afterCountsByPartner.set(row.partnerId, entry);
+      }
+    }
+    const drops = [];
+    for (const before of partnerCountsBefore) {
+      const beforeN = Number(before.active_count || 0);
+      if (beforeN < 5) continue; // ignore tiny partners — noise
+      const after = afterCountsByPartner.get(before.partner_id);
+      const afterN = after ? after.count : 0;
+      const lostPct = beforeN > 0 ? (beforeN - afterN) / beforeN : 0;
+      if (lostPct >= 0.2 && beforeN - afterN >= 5) {
+        drops.push({
+          name: before.partner_name || before.partner_id,
+          before: beforeN,
+          after: afterN,
+          lost: beforeN - afterN,
+        });
+      }
+    }
+    if (drops.length) {
+      const msg = drops.map((d) => `• ${d.name}: было ${d.before} → стало ${d.after} (−${d.lost})`).join("\n");
+      logger.warn("pm_partner_rows_dropped", { drops });
+      // sendHealthAlertTelegram is defined later in the assembled module (02f-health-alert-monitor.js)
+      // and is always available by the time any snapshot write runs (server already fully started).
+      if (typeof sendHealthAlertTelegram === "function") {
+        sendHealthAlertTelegram(
+          `⚠️ DavidSklad: поставщики потеряли строки в PriceMaster:\n${msg}\nПроверьте — товары могут потерять цену.`
+        ).catch(() => {});
+      }
+    }
+  }
+
   logger.info("PriceMaster postgres snapshot written", {
     items: normalizedRows.length,
     changes,

@@ -17,6 +17,47 @@ const PM_SYNONYM_GROUPS = [
   ["tester", "test", "testep", "testor", "testr", "тестер"],
   // Объём мл
   ["ml", "мл"],
+  // Бренды: кириллица ↔ латиница
+  ["chanel", "шанель"],
+  ["dior", "диор"],
+  ["givenchy", "живанши", "живанши"],
+  ["guerlain", "герлен"],
+  ["hermes", "эрмес", "гермес"],
+  ["lancome", "ланком"],
+  ["yves", "ив"],
+  ["saint", "сен"],
+  ["laurent", "лоран"],
+  ["versace", "версаче"],
+  ["armani", "армани"],
+  ["dolce", "дольче"],
+  ["gabbana", "габбана"],
+  ["prada", "прада"],
+  ["gucci", "гуччи"],
+  ["burberry", "барберри"],
+  ["cartier", "картье"],
+  ["bvlgari", "bulgari", "булгари"],
+  ["montblanc", "монблан"],
+  ["hugo", "хуго"],
+  ["boss", "босс"],
+  ["calvin", "кельвин"],
+  ["klein", "кляйн"],
+  ["diptyque", "диптик"],
+  ["byredo", "байредо"],
+  ["maison", "мезон"],
+  ["margiela", "маржела"],
+  ["narciso", "нарцисо"],
+  ["rodriguez", "родригез"],
+  ["viktor", "виктор"],
+  ["rolf", "рольф"],
+  ["flowerbomb", "флауэрбомб"],
+  ["thierry", "тьерри"],
+  ["mugler", "мюглер"],
+  ["alien", "эйлиен"],
+  ["angel", "энджел"],
+  ["rabanne", "рабан"],
+  ["invictus", "инвиктус"],
+  ["olympea", "олимпеа"],
+  ["paco", "пако"],
 ];
 
 const PM_SYNONYM_MAP = new Map();
@@ -168,6 +209,16 @@ function wordSimJs(token, lower) {
   return Math.max(...words.map((w) => ngramSim(token, w)));
 }
 
+// Sorted-character match: catches transpositions like "doir"→"dior", "givanchi"→"givenchy" (4-6 chars).
+// Two tokens match if they have the same sorted characters — i.e. one is a transposition of the other.
+// Only applied for tokens 4-7 chars (very short/long words would create too many false positives).
+function sortedCharMatch(token, lower) {
+  if (token.length < 4 || token.length > 7) return false;
+  const sortedToken = token.split("").sort().join("");
+  const words = lower.split(/[\s\-.,/]+/).filter((w) => Math.abs(w.length - token.length) <= 1);
+  return words.some((w) => w.split("").sort().join("") === sortedToken);
+}
+
 // Like pmPassesSearchFilter but allows long required tokens (≥5 chars) to match
 // via trigram similarity (≥0.4) when exact match fails.
 // Used for fuzzy fallback results so typos in brand names still pass.
@@ -184,8 +235,10 @@ function pmPassesSearchFilterFuzzy(text, tokenGroups) {
   for (const group of required) {
     const exactHit = group.some((t) => pmTokenMatchesText(lower, t));
     if (exactHit) { score++; continue; }
-    // Fuzzy fallback for long tokens (≥5 chars) — handles typos like "chanell"→"chanel".
-    if (!group._compound && group.some((t) => t.length >= 5 && wordSimJs(t, lower) >= 0.4)) score++;
+    // Fuzzy: trigram similarity for long tokens (≥5 chars) — handles insertion/deletion typos.
+    if (!group._compound && group.some((t) => t.length >= 5 && wordSimJs(t, lower) >= 0.4)) { score++; continue; }
+    // Fuzzy: sorted-char for short tokens (4-7 chars) — handles transpositions like "doir"→"dior".
+    if (!group._compound && group.some((t) => t.length >= 4 && sortedCharMatch(t, lower))) score++;
   }
   if (score < minMatch) return false;
   return optional.every((group) => group.some((t) => pmTokenMatchesText(lower, t)));

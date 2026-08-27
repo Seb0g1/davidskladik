@@ -17,6 +17,25 @@
     const oldPriceAdjustedForItem = failedEntryForItem ? needsOzonOldPriceEscalation({ message: failedEntryForItem.error }) : false;
     const ozonVerification = item.marketplace === "ozon" ? ozonVerifiedById.get(String(item.id)) : null;
     const verificationNotApplied = failedEntryForItem?.errorCode === "ozon_price_not_applied";
+    // Detect "product not found" — SKU archived/deleted on marketplace side.
+    const isProductNotFound = !success && failedEntryForItem
+      && /product.not.found|not.found|товар.не.найден|offer.not.found|sku.not.found/i.test(failedEntryForItem.error || "");
+    if (isProductNotFound) {
+      const alreadyFlagged = product.notFoundOnMarketplace === true;
+      product.notFoundOnMarketplace = true;
+      product.notFoundAt = product.notFoundAt || sentAt;
+      if (!alreadyFlagged && healthAlertTelegramConfigured()) {
+        sendHealthAlertTelegram(
+          `⛔ Товар не найден на ${item.marketplace.toUpperCase()}\n` +
+          `SKU: ${item.offerId} — «${cleanText(product.name || "").slice(0, 60)}»\n` +
+          `Ошибка: ${cleanText(failedEntryForItem.error || "").slice(0, 120)}\n` +
+          `Маркетплейс скрыл/удалил — обновить вручную.`,
+        ).catch(() => null);
+      }
+    } else if (success && product.notFoundOnMarketplace) {
+      product.notFoundOnMarketplace = false;
+      product.notFoundAt = null;
+    }
     const sendStatus = success ? "success" : (delayedByLimitForItem ? "delayed" : (oldPriceAdjustedForItem ? "pending" : "failed"));
     const retryNextAt = failedEntryForItem
       ? new Date(new Date(sentAt).getTime() + priceRetryDelayMs(Number(failedEntryForItem.attempts || 1), { message: failedEntryForItem.error })).toISOString()
@@ -98,6 +117,13 @@
       status: sendStatus,
       error: historyEntry.error || "",
       at: sentAt,
+      // Price breakdown for diagnostics
+      pmPriceUsd: historyEntry.usdPrice || null,
+      usdRate: historyEntry.usdRate || null,
+      markup: historyEntry.markup || null,
+      supplierName: historyEntry.supplierName || null,
+      supplierArticle: historyEntry.supplierArticle || null,
+      reason: historyEntry.reason || null,
     });
     const lastPriceSendBase = {
       status: sendStatus === "failed" ? "error" : sendStatus,

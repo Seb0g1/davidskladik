@@ -32,6 +32,7 @@ function priceMasterSnapshotOffer(row = {}, usdRate) {
     name,
     productId: cleanText(raw.productId || raw.ProductID || ""),
     active: row.active !== false,
+    unavailable: Boolean(row._unavailable),
     isNew: Boolean(raw.isNew || raw.IsNew),
     ignored: Boolean(raw.ignored || raw.Ignored),
     docDate,
@@ -86,21 +87,40 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
   const groups = tokenGroups && tokenGroups.length ? tokenGroups : (q ? pmQueryToTokenGroups(q) : null);
   const minMatchCount = groups ? pmMinMatchCount(groups) : 0;
 
-  function buildQuery(allGroups) {
-    const and = [{ active: true }];
+  // Barcode search: 8-13 digits → search raw->>'barcode' / raw->>'BarCode' and return.
+  if (q && /^\d{8,13}$/.test(q)) {
+    try {
+      const prisma = getPrisma();
+      if (prisma && shouldUsePostgresStorage()) {
+        const barcodeRows = await prisma.$queryRawUnsafe(
+          `SELECT * FROM pm_snapshot_items WHERE active = true AND (raw->>'barcode' = $1 OR raw->>'BarCode' = $1) ORDER BY doc_date DESC LIMIT $2`,
+          q, take,
+        );
+        if (barcodeRows.length) {
+          return barcodeRows.map((r) => priceMasterSnapshotOffer({
+            id: r.id, rowId: r.row_id, article: r.article, partnerId: r.partner_id,
+            partnerName: r.partner_name, nativeName: r.native_name, price: r.price,
+            currency: r.currency, docDate: r.doc_date, active: r.active, raw: r.raw,
+          }, usdRate));
+        }
+      }
+    } catch { /* fall through to regular search */ }
+  }
+
+  function buildQuery(allGroups, includeInactive = false) {
+    const and = includeInactive ? [] : [{ active: true }];
     if (allGroups && allGroups.length) {
-      // Use only REQUIRED groups (len>3, non-numeric) for SQL — optional groups like "50"/"ml"
-      // are so broad they drown out primary-keyword candidates under ORDER BY + LIMIT.
-      // JS post-filter enforces optional groups with word-boundary precision after fetch.
-      const sqlGroups = allGroups.filter((g) => !pmTokenGroupIsOptional(g) && !g._compound);
-      const activeGroups = sqlGroups.length ? sqlGroups : allGroups.filter((g) => !g._compound);
-      const orTerms = activeGroups.flatMap((group) =>
-        group.flatMap((synonym) => [
+      // AND across groups: each group is a required term; synonyms within a group are OR'd.
+      // Previously all groups were flattened into one OR — this caused fetch of 450 broadly-
+      // matching rows (e.g. anything containing "of"/"the") which cut off valid deep results.
+      const sqlGroups = allGroups.filter((g) => !g._compound);
+      for (const group of sqlGroups) {
+        const orTerms = group.flatMap((synonym) => [
           { article: { contains: synonym, mode: "insensitive" } },
           { nativeName: { contains: synonym, mode: "insensitive" } },
-        ]),
-      );
-      and.push({ OR: orTerms });
+        ]);
+        if (orTerms.length) and.push({ OR: orTerms });
+      }
     } else if (q) {
       and.push({
         OR: [
@@ -129,6 +149,24 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
       });
     }
     rows = rows.slice(0, take);
+
+    // Inactive fallback: include active=false rows marked as unavailable when few results.
+    if (rows.length < 6 && q && groups && groups.length) {
+      const inactiveRows = await prisma.priceMasterSnapshotItem.findMany({
+        where: { AND: buildQuery(groups, true) },
+        orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
+        take: take * 3,
+      });
+      const existingIds = new Set(rows.map((r) => r.id));
+      for (const ir of inactiveRows) {
+        if (existingIds.has(ir.id) || ir.active) continue;
+        const hay = [cleanText(ir.nativeName || ""), cleanText(ir.article || "")].join(" ");
+        if (pmPassesSearchFilter(hay, groups)) {
+          ir._unavailable = true;
+          rows.push(ir);
+        }
+      }
+    }
 
     // Fuzzy fallback: if exact search found very few results, try word_similarity via pg_trgm.
     if (rows.length < 3 && q && groups && groups.length) {

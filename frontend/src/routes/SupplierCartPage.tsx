@@ -742,8 +742,64 @@ const ALL_MARKETPLACES = [
   { id: "wb", label: "Wildberries" },
 ] as const;
 
+const PmPendingCountSchema = z.object({
+  ok: z.boolean().optional(),
+  rows: z.number().optional().default(0),
+  docs: z.number().optional().default(0),
+}).passthrough();
+
+const PmHistoryDocSchema = z.object({
+  DocID: z.number().optional().default(0),
+  DocDate: z.coerce.string().optional().nullable(),
+  PartnerID: z.number().optional().nullable(),
+  PartnerName: z.coerce.string().optional().nullable(),
+  Comment: z.coerce.string().optional().nullable(),
+  Sended: z.number().optional().default(0),
+  rowCount: z.number().optional().default(0),
+}).passthrough();
+
+const PmHistorySchema = z.object({
+  ok: z.boolean().optional(),
+  docs: z.array(PmHistoryDocSchema).optional().default([]),
+}).passthrough();
+
+function PmHistoryPanel() {
+  const historyQuery = useQuery({
+    queryKey: ["supplier-cart", "pm-history"],
+    queryFn: () => fetchJson("/api/supplier-cart/pm-history?limit=20", PmHistorySchema),
+    staleTime: 30_000,
+  });
+  const docs = historyQuery.data?.docs ?? [];
+  if (historyQuery.isLoading) return <div style={{ padding: "24px", color: "var(--text-secondary)" }}><Loader2 className="spin" size={16} /> Загрузка истории…</div>;
+  if (!docs.length) return <div style={{ padding: "24px", color: "var(--text-secondary)" }}>Нет отправленных корзин.</div>;
+  return (
+    <div style={{ padding: "12px 0" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--border)" }}>
+            <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Дата</th>
+            <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Поставщик</th>
+            <th style={{ padding: "4px 8px", textAlign: "right", color: "var(--text-secondary)", fontWeight: 500 }}>Позиций</th>
+            <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Комментарий</th>
+          </tr>
+        </thead>
+        <tbody>
+          {docs.map((doc) => (
+            <tr key={doc.DocID} style={{ borderBottom: "1px solid var(--border-subtle)" }}>
+              <td style={{ padding: "6px 12px" }}>{doc.DocDate ? new Date(String(doc.DocDate)).toLocaleString("ru-RU") : "—"}</td>
+              <td style={{ padding: "6px 12px" }}>{doc.PartnerName || `#${doc.PartnerID}`}</td>
+              <td style={{ padding: "6px 8px", textAlign: "right" }}>{doc.rowCount}</td>
+              <td style={{ padding: "6px 12px", color: "var(--text-secondary)" }}>{doc.Comment || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function SupplierCartPage() {
-  const [tab, setTab] = useState<"cart" | "ready">("cart");
+  const [tab, setTab] = useState<"cart" | "ready" | "pm-history">("cart");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [pmSearchOpen, setPmSearchOpen] = useState(false);
   const [pendingMarketplaces, setPendingMarketplaces] = useState<string[] | null>(null);
@@ -771,6 +827,11 @@ export function SupplierCartPage() {
     queryFn: () => fetchJson("/api/supplier-cart/pricemaster/status", PriceMasterStatusSchema),
     refetchInterval: 60_000,
     enabled: settingsOpen,
+  });
+  const pmPendingCount = useQuery({
+    queryKey: ["supplier-cart", "pm-pending-count"],
+    queryFn: () => fetchJson("/api/supplier-cart/pm-pending-count", PmPendingCountSchema),
+    refetchInterval: 60_000,
   });
   const rollbackDryRun = useMutation({
     mutationFn: () => fetchJson("/api/supplier-cart/rollback-all", SupplierCartRollbackSchema, mutationBody({
@@ -839,6 +900,12 @@ export function SupplierCartPage() {
           <CalendarClock size={13} />
           {schedule.data?.nextAutoRunAt ? `Запуск: ${formatDate(schedule.data.nextAutoRunAt)}` : "Следующий запуск: —"}
         </div>
+        {(pmPendingCount.data?.rows ?? 0) > 0 ? (
+          <div className="cart-status-chip" style={{ background: "var(--accent-subtle)", color: "var(--accent)" }}>
+            <Database size={13} />
+            В PM-корзине: {pmPendingCount.data!.rows} поз. ({pmPendingCount.data!.docs} докум.)
+          </div>
+        ) : null}
         <button
           className={`cart-status-toggle${autoEnabled ? "" : " cart-status-toggle--off"}`}
           type="button"
@@ -956,8 +1023,11 @@ export function SupplierCartPage() {
         <button className={`page-tab-btn${tab === "ready" ? " active" : ""}`} type="button" onClick={() => setTab("ready")}>
           <Package size={15} /> Готовы к отгрузке
         </button>
+        <button className={`page-tab-btn${tab === "pm-history" ? " active" : ""}`} type="button" onClick={() => setTab("pm-history")}>
+          <PackageOpen size={15} /> История PM
+        </button>
       </div>
-      {tab === "cart" ? <SupplierCartPanel /> : <ReadyToShipPanel />}
+      {tab === "cart" ? <SupplierCartPanel /> : tab === "ready" ? <ReadyToShipPanel /> : <PmHistoryPanel />}
 
       {/* PM Search side panel overlay */}
       {pmSearchOpen ? (

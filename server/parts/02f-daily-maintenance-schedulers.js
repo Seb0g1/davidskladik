@@ -1,4 +1,69 @@
 
+// Daily scan: find products whose target_price is impossibly low relative to PM prices.
+// Resets target_price = NULL so the price sweep recomputes from PM × rate × markup.
+// Catches the "rate ≈ 1" bug where target_price was saved without the USD→RUB multiplier.
+async function runStalePriceTargetScan() {
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) return { skipped: true, reason: "postgres_disabled" };
+  try {
+    const rateData = await getUsdRate({ force: false }).catch(() => null);
+    const rate = Number(rateData?.rate || 0);
+    if (!rate) return { skipped: true, reason: "no_usd_rate" };
+
+    // Find products where target_price < cheapest_active_PM_price_usd × rate × 0.5
+    // Joins via product_links → pm_snapshot_items for both matchType=selected_row and article
+    const staleRows = await prisma.$queryRawUnsafe(`
+      SELECT DISTINCT wp.id::text AS id, wp.target_price, wp.offer_id, wp.marketplace
+      FROM warehouse_products wp
+      WHERE wp.archived = false
+        AND wp.target_stock > 0
+        AND wp.target_price IS NOT NULL AND wp.target_price > 0 AND wp.target_price < 500
+        AND EXISTS (
+          SELECT 1 FROM product_links pl
+          JOIN pm_snapshot_items pm ON (
+            (pl.raw->>'matchType' = 'selected_row' AND pm.row_id = (pl.raw->>'sourceRowId'))
+            OR (pl.raw->>'matchType' = 'article'
+                AND pm.partner_id::text = pl.partner_id::text
+                AND pm.article = COALESCE(NULLIF(pl.raw->>'article',''), pl.supplier_article))
+          )
+          WHERE pl.product_id = wp.id::text
+            AND pm.active = true
+            AND pm.currency = 'USD'
+            AND pm.price IS NOT NULL
+            AND wp.target_price < (pm.price::float * ${rate} * 0.5)
+        )
+    `);
+
+    if (!staleRows.length) return { ok: true, reset: 0, rate };
+
+    const ids = staleRows.map((r) => r.id);
+    await prisma.$executeRawUnsafe(
+      `UPDATE warehouse_products SET target_price = NULL, updated_at = now()
+       WHERE id::text = ANY($1)`,
+      ids,
+    );
+
+    logger.warn("stale_price_target_scan_reset", {
+      reset: ids.length,
+      rate,
+      sample: staleRows.slice(0, 5).map((r) => `${r.offer_id}[${r.marketplace}]=${r.target_price}₽`),
+    });
+
+    // Alert via Telegram (sendHealthAlertTelegram defined in 02f-health-alert-monitor.js, loaded after this file)
+    if (typeof sendHealthAlertTelegram === "function") {
+      const sample = staleRows.slice(0, 5).map((r) => `${r.offer_id}[${r.marketplace}]=${r.target_price}₽`).join(", ");
+      await sendHealthAlertTelegram(
+        `🔧 DavidSklad: сброшены зависшие цены (${ids.length} SKU с target_price < 500₽ при PM-цене ×${rate.toFixed(0)} > 500₽).\nПримеры: ${sample}\nPrice sweep пересчитает автоматически.`
+      ).catch(() => {});
+    }
+
+    return { ok: true, reset: ids.length, rate };
+  } catch (error) {
+    logger.warn("stale_price_target_scan_failed", { detail: error?.message || String(error) });
+    return { ok: false, error: error?.message };
+  }
+}
+
 function msUntilNextDailyRun(timeString, now = new Date()) {
   const [rawHour = "11", rawMinute = "0"] = String(timeString || "11:00").split(":");
   const hour = Math.min(Math.max(Number(rawHour) || 11, 0), 23);
@@ -46,6 +111,12 @@ async function runDailyRefresh(trigger = "manual") {
         : await runTargetedBackgroundSupplierAutomations(priceMaster, warehouse);
       const automation = backgroundAutomation.automation;
       const recovery = backgroundAutomation.recovery;
+      // Stale target_price scan: reset products whose stored price contradicts current PM×rate.
+      // Runs fire-and-forget — don't let a scan failure abort the daily sync.
+      runStalePriceTargetScan().catch((err) =>
+        logger.warn("stale price target scan failed in daily refresh", { detail: err?.message || String(err) }),
+      );
+
       let pricePush = null;
       const shouldSendPrices = trigger === "manual" || (trigger === "schedule" && dailySyncSendPrices);
       if (shouldSendPrices) {

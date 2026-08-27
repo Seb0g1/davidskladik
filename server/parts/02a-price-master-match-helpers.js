@@ -186,9 +186,9 @@ function managedSupplierPriceCurrency(supplier = null, row = {}, link = {}) {
   // with the form default "USD" which overrode name-based detection and caused 850 RUB to
   // be treated as $850 USD in markup rule lookup.
   const partnerName = normalizeSupplierName(
-    supplier?.name
-    || supplier?.partnerName
+    supplier?.partnerName
     || supplier?.supplierName
+    || supplier?.name
     || row.partnerName
     || row.supplierName
     || link.supplierName
