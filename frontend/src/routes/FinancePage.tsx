@@ -50,6 +50,8 @@ export function FinancePage() {
   });
   const [orderDrafts, setOrderDrafts] = useState<Record<string, Record<string, string>>>({});
   const [expenseSuccess, setExpenseSuccess] = useState(false);
+  const [expenseError, setExpenseError] = useState("");
+  const [savingId, setSavingId] = useState<string | null>(null);
   useEffect(() => { setOrderDrafts({}); }, [period, linkedOnly]);
   const summary = useQuery({
     queryKey: ["finance", "summary", period, linkedOnly],
@@ -83,6 +85,7 @@ export function FinancePage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
     },
+    onSettled: () => setSavingId(null),
   });
   const s = summary.data?.summary || {};
   const refresh = () => {
@@ -142,14 +145,15 @@ export function FinancePage() {
           <input placeholder="Товар" value={form.productName} onChange={(event) => setForm({ ...form, productName: event.target.value })} />
           <input type="number" min="1" placeholder="Кол-во" value={form.quantity} onChange={(event) => setForm({ ...form, quantity: Number(event.target.value || 1) })} />
           <input type="number" min="0" step="0.01" placeholder="Сумма, ₽" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} />
-          <button className="primary-action" type="button" disabled={createExpense.isPending || !(Number(form.amount) > 0)} onClick={() => { if (!form.supplierName.trim()) { alert("Укажите поставщика"); return; } createExpense.mutate(); }}>
+          <button className="primary-action" type="button" disabled={createExpense.isPending || !(Number(form.amount) > 0)} onClick={() => { if (!form.supplierName.trim()) { setExpenseError("Укажите поставщика"); return; } setExpenseError(""); createExpense.mutate(); }}>
             {createExpense.isPending ? <Loader2 className="spin" size={16} /> : <Plus size={16} />} Добавить
           </button>
         </div>
         <input placeholder="Комментарий" value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} />
+        {expenseError ? <div className="inline-error">{expenseError}</div> : null}
         {createExpense.error ? <div className="inline-error">{errorMessage(createExpense.error)}</div> : null}
         {updateOrder.error ? <div className="inline-error">{errorMessage(updateOrder.error)}</div> : null}
-        {createExpense.isSuccess ? <div className="success-strip">Закупка добавлена в финансы и историю поставщика.</div> : null}
+        {expenseSuccess ? <div className="success-strip">Закупка добавлена в финансы и историю поставщика.</div> : null}
       </section>
 
       <div className="table-panel price-table finance-orders-table">
@@ -162,8 +166,6 @@ export function FinancePage() {
             payoutAmount: Number(valueOf("payoutAmount", order.payoutAmount) || 0),
             feesAmount: Number(valueOf("feesAmount", order.feesAmount) || 0),
             taxAmount: Number(valueOf("taxAmount", order.taxAmount) || 0),
-            penaltiesAmount: Number(valueOf("penaltiesAmount", order.penaltiesAmount) || 0),
-            refundsAmount: Number(valueOf("refundsAmount", order.refundsAmount) || 0),
           };
           return (
           <div className="table-row finance-order-row" key={order.id}>
@@ -178,8 +180,8 @@ export function FinancePage() {
               <input type="number" placeholder="Выплата" value={valueOf("payoutAmount", order.payoutAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), payoutAmount: event.target.value } }))} />
               <input type="number" placeholder="Комиссия" value={valueOf("feesAmount", order.feesAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), feesAmount: event.target.value } }))} />
               <input type="number" placeholder="Налог" value={valueOf("taxAmount", order.taxAmount)} onChange={(event) => setOrderDrafts((current) => ({ ...current, [order.id]: { ...(current[order.id] || {}), taxAmount: event.target.value } }))} />
-              <button className="secondary-action" type="button" disabled={updateOrder.isPending} onClick={() => updateOrder.mutate({ id: order.id, patch })}>
-                {updateOrder.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Сохранить
+              <button className="secondary-action" type="button" disabled={savingId === order.id} onClick={() => { setSavingId(order.id); updateOrder.mutate({ id: order.id, patch }); }}>
+                {savingId === order.id ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Сохранить
               </button>
             </span>
           </div>

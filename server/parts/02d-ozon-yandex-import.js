@@ -73,6 +73,24 @@ async function runOzonYandexImportSend(payload = {}, auditRequest = { session: {
   const stockStage = exportedProducts.length
     ? await sendYandexStocksForExportedOzonProducts(exportedProducts, { shops, existingOfferIds: sentOfferIds })
     : { ok: true, sent: 0, failed: 0, skipped: 0, warnings: [], results: [] };
+
+  // Cards were accepted by YM but not yet PUBLISHED — enqueue for stock retry later.
+  if (sentOfferIds.size) {
+    const stockSentIds = new Set((Array.isArray(stockStage.results) ? stockStage.results : [])
+      .filter((r) => r.ok)
+      .map((r) => cleanText(r.offerId).toLowerCase())
+      .filter(Boolean));
+    const pendingOfferIds = Array.from(sentOfferIds).filter((id) => !stockSentIds.has(id));
+    if (pendingOfferIds.length) {
+      const pendingProducts = exportedProducts.filter((p) => pendingOfferIds.includes(cleanText(p.offerId).toLowerCase()));
+      // Build one enqueue call per shop; shopId is the first shop if multiple
+      const shopId = shops.length ? shops[0].id : "";
+      const itemsToQueue = pendingProducts.map((p) => ({ offerId: cleanText(p.offerId), stock: pickOzonProductStockForYandex(p) }));
+      addYandexPendingStockItems(itemsToQueue.map((i) => i.offerId), { shopId, stock: itemsToQueue[0]?.stock || 5 })
+        .catch((err) => logger.warn("addYandexPendingStockItems failed", { detail: err?.message || String(err) }));
+    }
+  }
+
   const stageWarnings = [
     ...warnings,
     ...(Array.isArray(priceStage.warnings) ? priceStage.warnings : []),

@@ -643,7 +643,7 @@ function SystemSettingsPanel() {
         <DiagnosticValue label="В очереди" value={retryQuery.data?.total || retryItems.length} tone={retryItems.length ? "warn" : ""} />
         <div className="row-actions">
           <button className="primary-action" type="button" disabled={!retryItems.length || retryPrices.isPending} onClick={() => retryPrices.mutate()}>Повторить цены</button>
-          <button className="secondary-action" type="button" disabled={!retryItems.length || clearRetry.isPending} onClick={() => clearRetry.mutate()}>Очистить очередь</button>
+          <button className="secondary-action" type="button" disabled={!retryItems.length || clearRetry.isPending} onClick={() => { if (!window.confirm("Очистить очередь повторных отправок? Это действие необратимо.")) return; clearRetry.mutate(); }}>Очистить очередь</button>
         </div>
       </div>
       <div className="settings-panel settings-panel-wide">
@@ -726,6 +726,7 @@ function SupplierStockModePanel() {
               <div className="supplier-quality-controls">
                 <label>Доверие
                   <input
+                    key={`${id}-trust-${supplier.trustFactor ?? 100}`}
                     type="number"
                     min={0}
                     max={100}
@@ -736,6 +737,7 @@ function SupplierStockModePanel() {
                 </label>
                 <label>Заказы до
                   <input
+                    key={`${id}-cutoff-${supplier.orderCutoffTime || ""}`}
                     defaultValue={supplier.orderCutoffTime || ""}
                     placeholder="13:00"
                     disabled={!id || updateSupplier.isPending}

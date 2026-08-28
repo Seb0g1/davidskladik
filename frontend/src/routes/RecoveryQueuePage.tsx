@@ -157,6 +157,7 @@ export function RecoveryQueuePage() {
   });
   const rebuildMut = useMutation({
     mutationFn: () => fetchJson("/api/ozon/unarchive-queue/rebuild", z.unknown(), { method: "POST" }),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["ozon", "unarchive-queue"] }); },
   });
   const yandexFastQuery = useQuery({
     queryKey: ["yandex-fast-status"],
@@ -225,11 +226,11 @@ export function RecoveryQueuePage() {
         <button className="secondary-action" onClick={() => { if (window.confirm("Перестроить очередь Ozon?")) rebuildMut.mutate(); }} disabled={rebuildMut.isPending}>Перестроить очередь</button>
         {rebuildMut.error ? <span className="inline-error" style={{ margin: 0 }}>{String((rebuildMut.error as Error)?.message || rebuildMut.error)}</span> : null}
       </div>
+      <input type="text" placeholder="Поиск по SKU..." value={queueSearch} onChange={e => setQueueSearch(e.target.value)} style={{marginBottom:8, padding:"4px 8px", border:"1px solid var(--border)", borderRadius:4}} />
       <div className="table-panel queue-table">
         <div className="table-head">
           <span>SKU</span><span>OfferId</span><span>Цель</span><span>Статус</span><span>Попытки</span><span>Когда</span>
         </div>
-        <input type="text" placeholder="Поиск по SKU..." value={queueSearch} onChange={e => setQueueSearch(e.target.value)} style={{marginBottom:8, padding:"4px 8px", border:"1px solid var(--border)", borderRadius:4}} />
         {items.length > visibleItems.length ? (
           <div className="table-note">Показаны первые {visibleItems.length} строк из {items.length}. Остальные останутся в очереди и обработаются автоматически по лимиту Ozon.</div>
         ) : null}

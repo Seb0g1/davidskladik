@@ -55,6 +55,82 @@ node scripts/setup-prod-monitoring.cjs
 
 Алерт: 3 slow requests > 10 s за 5 мин или login > 5 s (см. `/api/health?deep=true`).
 
+## Watchdog воркера (davidsklad-health-watchdog)
+
+PM2 не перезапускает процесс с зависшим event loop — статус остаётся `online`. Для этого есть `davidsklad-health-watchdog` (`scripts/health-watchdog.cjs`), запущенный как третий PM2 процесс.
+
+**Как работает**: каждые 45 с проверяет `/health` на api (3000) и worker (3001). При 3 подряд неудачах — `pm2 restart` + запись в `data/health-watchdog-incidents.jsonl` + Telegram-алерт. Обнаруживает не только упавший процесс, но и зависший event loop (через `liveness.ageMs` в `/health`).
+
+```bash
+# Статус watchdog
+pm2 show davidsklad-health-watchdog
+
+# Лог инцидентов (перезапуски)
+cat data/health-watchdog-incidents.jsonl
+
+# Запустить разово (проверить оба процесса)
+node scripts/health-watchdog.cjs
+```
+
+**Настройка** (через `.env` на сервере):
+- `HEALTH_WATCHDOG_INTERVAL_MS` — интервал проверки (дефолт 45 000 мс)
+- `HEALTH_WATCHDOG_FAILURE_THRESHOLD` — порог перезапуска (дефолт 3)
+- `HEALTH_WATCHDOG_TIMEOUT_MS` — таймаут HTTP-запроса (дефолт 8 000 мс)
+
+**Если watchdog сам завис**: `pm2 restart davidsklad-health-watchdog`
+
+## База данных: бэкап и восстановление
+
+### Как работает бэкап
+
+`scripts/pg-backup.sh` — ежедневный cron в 03:30 МСК, сохраняет compressed custom-format dump (`pg_dump -Fc`) в `/var/backups/davidsklad/`. Ротация: хранить 14 дней, старые удаляются автоматически. Размер дампа проверяется — при пустом файле скрипт завершается с ошибкой.
+
+### Установка cron (один раз на сервере)
+
+```bash
+chmod +x scripts/pg-backup.sh scripts/db-restore.sh
+( crontab -l 2>/dev/null; echo "30 3 * * * /var/www/davidsklad/davidskladik/scripts/pg-backup.sh >> /var/backups/davidsklad/backup.log 2>&1" ) | crontab -
+```
+
+### Ручной запуск
+
+```bash
+# из корня проекта на сервере
+bash scripts/pg-backup.sh
+```
+
+### Просмотр бэкапов
+
+```bash
+ls -lh /var/backups/davidsklad/
+tail -20 /var/backups/davidsklad/backup.log
+```
+
+### Восстановление
+
+**Перед восстановлением остановить все процессы:**
+
+```bash
+pm2 stop davidsklad-api davidsklad-worker davidsklad-health-watchdog
+```
+
+**Восстановить из дампа:**
+
+```bash
+bash scripts/db-restore.sh /var/backups/davidsklad/davidsklad-20260828-030001.dump
+```
+
+Скрипт попросит подтверждение, затем выполнит `pg_restore --clean`. После восстановления:
+
+```bash
+pm2 start davidsklad-api davidsklad-worker davidsklad-health-watchdog
+```
+
+**Конфигурация через env:**
+- `BACKUP_DIR` — директория (дефолт `/var/backups/davidsklad`)
+- `RETENTION_DAYS` — сколько дней хранить (дефолт `14`)
+- `MIN_BACKUP_BYTES` — минимальный размер для проверки (дефолт `10240`)
+
 ## BullMQ failed jobs
 
 ```bash

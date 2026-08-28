@@ -41,7 +41,7 @@ export function NoSupplierPage() {
               <strong>{String(item.offerId || item.name || item.id)}</strong>
               <span>{String(item.name || "Без названия")} · {String(item.marketplace || "-")} · привязок {String(item.supplierCount || 0)} · активных {String(item.availableSupplierCount || 0)}</span>
             </div>
-            <a className="secondary-action" href={`/app/warehouse/${encodeURIComponent(`offer:${String(item.offerId || "").toLowerCase()}`)}?q=${encodeURIComponent(String(item.offerId || ""))}`}>Открыть</a>
+            <button className="secondary-action" type="button" onClick={() => { const url = `/app/warehouse/${encodeURIComponent(`offer:${String(item.offerId || "").toLowerCase()}`)}?q=${encodeURIComponent(String(item.offerId || ""))}`; window.history.pushState(null, "", url); window.dispatchEvent(new PopStateEvent("popstate")); }}>Открыть</button>
           </article>
         ))}
         {!query.isLoading && !alerts.length && <div className="soft-empty">Ошибок наличия нет.</div>}

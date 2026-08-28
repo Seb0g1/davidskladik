@@ -372,6 +372,30 @@ app.delete("/api/supplier-ledger/reset-all", requireAdmin, async (request, respo
   }
 });
 
+// Comprehensive reset: clears ledger entries + picking history + cart drafts for all suppliers
+app.delete("/api/supplier-ledger/reset-all-history", requireAdmin, async (request, response, next) => {
+  try {
+    if (!shouldUsePostgresStorage()) {
+      return response.status(503).json({ error: "Supplier ledger requires PostgreSQL.", code: "supplier_ledger_postgres_required" });
+    }
+    const [ledger, picking, cart] = await Promise.all([
+      getPrisma().supplierLedgerEntry.deleteMany({}),
+      getPrisma().supplierPickingRow.deleteMany({}),
+      getPrisma().supplierCartDraft.deleteMany({}),
+    ]);
+    suppliersListCache = null;
+    logger.info("supplier full history reset", { ledger: ledger.count, picking: picking.count, cart: cart.count, by: request.session?.username });
+    await appendAudit(request, "supplier_ledger.reset_all_history", {
+      entityType: "supplier_ledger",
+      entityId: "all",
+      newValue: { ledger: ledger.count, picking: picking.count, cart: cart.count },
+    }).catch((error) => logger.warn("supplier ledger reset history audit failed", { detail: error?.message || String(error) }));
+    response.json({ ok: true, ledger: ledger.count, picking: picking.count, cart: cart.count });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Корректировка: устанавливает баланс в targetBalance, создавая запись balance_correction
 app.post("/api/supplier-ledger/adjust", requireAdmin, async (request, response, next) => {
   try {

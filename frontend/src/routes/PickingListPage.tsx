@@ -284,7 +284,7 @@ export function PickingListPage() {
     const openCount = (listQuery.data?.summary as Record<string, number> | undefined)?.open ?? 0;
     const prev = document.title.replace(/^\(\d+\)\s*/, "");
     document.title = openCount > 0 ? `(${openCount}) ${prev}` : prev;
-    return () => { document.title = document.title.replace(/^\(\d+\)\s*/, ""); };
+    return () => { document.title = prev; };
   }, [listQuery.data?.summary]);
 
   useEffect(() => {
@@ -426,7 +426,7 @@ export function PickingListPage() {
     });
 
   const balanceTone = myBalance > 500 ? "success" : myBalance > 0 ? "warn" : myBalance < 0 ? "danger" : "";
-  const balanceStr = (n: number) => `$${Math.round(n).toLocaleString("ru-RU")}`;
+  const balanceStr = (n: number) => `₽${Math.round(n).toLocaleString("ru-RU")}`;
   const dailyTotal = dailyTotalQuery.data?.total ?? 0;
   const dailyItems = dailyTotalQuery.data?.items ?? 0;
 
@@ -558,7 +558,7 @@ export function PickingListPage() {
               {/* Amount + issue */}
               <div className="picker-issue-body">
                 <div className="picker-issue-amount-wrap">
-                  <span className="picker-issue-currency">$</span>
+                  <span className="picker-issue-currency">₽</span>
                   <input
                     type="number"
                     min="0"
@@ -594,7 +594,7 @@ export function PickingListPage() {
                 <div className="picker-select-label" style={{ paddingTop: 0 }}>Принять возврат</div>
                 <div className="picker-issue-body">
                   <div className="picker-issue-amount-wrap">
-                    <span className="picker-issue-currency">$</span>
+                    <span className="picker-issue-currency">₽</span>
                     <input
                       type="number"
                       min="0"

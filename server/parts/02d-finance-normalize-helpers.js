@@ -15,7 +15,8 @@ function financeOrderProfit(row = {}) {
 
 function financeOrderIdForPicking(row = {}) {
   const key = cleanText(row.key || supplierCartItemKey(row));
-  return `picking:${crypto.createHash("sha1").update(key || crypto.randomUUID()).digest("hex")}`;
+  if (!key) return "";
+  return `picking:${crypto.createHash("sha1").update(key).digest("hex")}`;
 }
 
 function resolvePickingRowCurrency(row = {}) {
@@ -70,7 +71,7 @@ function normalizeFinanceExpense(input = {}) {
 
 function normalizeFinanceOrder(input = {}) {
   const marketplaceText = cleanText(input.marketplace).toLowerCase();
-  const marketplace = marketplaceText === "ozon" || marketplaceText === "yandex" ? marketplaceText : "";
+  const marketplace = marketplaceText === "ozon" || marketplaceText === "yandex" || marketplaceText === "wb" || marketplaceText === "avito" ? marketplaceText : "";
   const saleAmount = input.saleAmount ?? input.sale_amount;
   const payoutAmount = input.payoutAmount ?? input.payout_amount;
   const purchaseCost = input.purchaseCost ?? input.purchase_cost;

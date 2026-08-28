@@ -3118,6 +3118,146 @@ button:disabled {
   align-items: center;
 }
 
+.supplier-toolbar-flex {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ===== Compact supplier table ===== */
+.supplier-compact-table {
+  display: grid;
+  gap: 2px;
+}
+
+.supplier-table-head {
+  display: grid;
+  grid-template-columns: minmax(160px, 2fr) 60px minmax(100px, 1fr) minmax(100px, 1fr) 100px 32px;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--line);
+}
+
+.supplier-table-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 2fr) 60px minmax(100px, 1fr) minmax(100px, 1fr) 100px 32px;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.12s;
+  border: 1px solid transparent;
+  font-size: 0.87rem;
+}
+
+.supplier-table-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.06);
+}
+
+.supplier-table-row.is-open {
+  background: rgba(59, 109, 255, 0.07);
+  border-color: rgba(59, 109, 255, 0.25);
+}
+
+.supplier-table-row.is-inactive {
+  opacity: 0.65;
+}
+
+.supplier-table-name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.supplier-table-name strong {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.supplier-table-name small {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.supplier-stopped-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: var(--yellow, #ffd166);
+  background: rgba(255, 209, 102, 0.12);
+  border: 1px solid rgba(255, 209, 102, 0.25);
+  padding: 1px 5px;
+  border-radius: 3px;
+  width: fit-content;
+}
+
+.supplier-table-open {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+.supplier-table-row:hover .supplier-table-open {
+  opacity: 1;
+  color: var(--accent, #3b6dff);
+}
+
+/* ===== Supplier Drawer ===== */
+.supplier-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100vh;
+  width: 520px;
+  max-width: 100vw;
+  overflow-y: auto;
+  background: var(--bg-surface, #0e1726);
+  border-left: 1px solid var(--line);
+  box-shadow: -6px 0 32px rgba(0, 0, 0, 0.35);
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 22px 40px;
+}
+
+.supplier-drawer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.supplier-drawer-head h3 {
+  margin: 4px 0 0;
+  font-size: 1.1rem;
+  line-height: 1.3;
+}
+
+.supplier-drawer-section {
+  display: grid;
+  gap: 8px;
+}
+
+.supplier-status-pill.is-stopped {
+  color: var(--yellow, #ffd166);
+  border-color: rgba(255, 209, 102, 0.35);
+}
+
 .supplier-search {
   position: relative;
 }

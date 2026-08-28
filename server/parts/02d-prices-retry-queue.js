@@ -86,34 +86,37 @@ async function processPriceRetryQueue({ queueKeys = [], limit = 1000, respectNex
       const yandexItems = targetItems.map((item) => ({ offerId: String(item.offerId || "").trim(), price: { value: roundPrice(item.price), currencyId: "RUR" } }))
         .filter((item) => item.offerId && item.price.value > 0);
       if (!yandexItems.length) continue;
-      try {
-        for (const chunk of chunkArray(yandexItems, 500)) {
+      const yandexOfferIdToItem = new Map(
+        targetItems.map((item) => [String(item.offerId || "").trim(), item]).filter(([k]) => k),
+      );
+      for (const chunk of chunkArray(yandexItems, 500)) {
+        try {
           results.push({ target: shop.id, response: await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-prices/updates`, { offers: chunk }) });
+          historyRows.push(...chunk.map((y) => yandexOfferIdToItem.get(y.offerId)).filter(Boolean).map((item) => ({
+            productId: item.productId || item.id,
+            marketplace: "yandex",
+            target: item.target,
+            offerId: item.offerId,
+            oldPrice: item.oldPrice,
+            newPrice: item.price,
+            status: "success",
+            error: "",
+            at: now.toISOString(),
+          })));
+        } catch (error) {
+          historyRows.push(...chunk.map((y) => yandexOfferIdToItem.get(y.offerId)).filter(Boolean).map((item) => ({
+            productId: item.productId || item.id,
+            marketplace: "yandex",
+            target: item.target,
+            offerId: item.offerId,
+            oldPrice: item.oldPrice,
+            newPrice: item.price,
+            status: "failed",
+            error: error?.message || "send_failed",
+            at: now.toISOString(),
+          })));
+          failed.push(...chunk.map((y) => yandexOfferIdToItem.get(y.offerId)).filter(Boolean).map((item) => buildPriceRetryItem(item, error, now)).filter(Boolean));
         }
-        historyRows.push(...targetItems.map((item) => ({
-          productId: item.productId || item.id,
-          marketplace: "yandex",
-          target: item.target,
-          offerId: item.offerId,
-          oldPrice: item.oldPrice,
-          newPrice: item.price,
-          status: "success",
-          error: "",
-          at: now.toISOString(),
-        })));
-      } catch (error) {
-        historyRows.push(...targetItems.map((item) => ({
-          productId: item.productId || item.id,
-          marketplace: "yandex",
-          target: item.target,
-          offerId: item.offerId,
-          oldPrice: item.oldPrice,
-          newPrice: item.price,
-          status: "failed",
-          error: error?.message || "send_failed",
-          at: now.toISOString(),
-        })));
-        failed.push(...targetItems.map((item) => buildPriceRetryItem(item, error, now)).filter(Boolean));
       }
     }
 

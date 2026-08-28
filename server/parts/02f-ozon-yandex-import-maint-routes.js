@@ -740,7 +740,13 @@ app.post("/api/ozon-yandex-import/sync-stocks", requireAdmin, async (request, re
     const products = (warehouse.products || [])
       .filter((product) => product.marketplace === "ozon")
       .slice(0, limit);
-    const existingOfferIds = getLocalYandexExportedOfferIdSet(warehouse.products || []);
+    const offerIds = products.map((p) => cleanText(p.offerId || p.offer_id)).filter(Boolean);
+    const existingOfferIds = await getKnownYandexExistingOfferIds(offerIds, {
+      products: warehouse.products || [],
+      warnings: [],
+      allowCatalogRefresh: false,
+      allowDirectCheck: true,
+    });
     const result = await sendYandexStocksFromOzonProducts(products, {
       dryRun: request.body?.dryRun === true,
       warehouseProducts: warehouse.products || [],

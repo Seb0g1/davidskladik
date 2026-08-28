@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PLAN-HARDENING.md 2.4: daily PostgreSQL backup with 7-day rotation.
+# PLAN-HARDENING.md 2.4: daily PostgreSQL backup with 14-day rotation.
 #
 # Reads DATABASE_URL from the app .env, writes a compressed custom-format dump
 # (pg_dump -Fc, restorable with pg_restore) to $BACKUP_DIR, prunes dumps older
@@ -14,7 +14,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/var/www/davidsklad/davidskladik}"
 ENV_FILE="${ENV_FILE:-$APP_DIR/.env}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/davidsklad}"
-RETENTION_DAYS="${RETENTION_DAYS:-7}"
+RETENTION_DAYS="${RETENTION_DAYS:-14}"
 LOG_PREFIX="$(date -u +%Y-%m-%dT%H:%M:%SZ) pg-backup:"
 
 mkdir -p "$BACKUP_DIR"

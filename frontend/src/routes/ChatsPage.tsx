@@ -203,6 +203,8 @@ export function ChatsPage() {
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [lightbox, setLightbox] = useState<LightboxMedia>(null);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
+  const pendingImagesRef = useRef<PendingImage[]>([]);
+  pendingImagesRef.current = pendingImages;
   const [uploadingImages, setUploadingImages] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -285,12 +287,11 @@ export function ChatsPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages.length, selected?.id]);
 
-  // Revoke object URLs when pending images are cleared on unmount
   useEffect(() => {
     return () => {
-      pendingImages.forEach((img: PendingImage) => URL.revokeObjectURL(img.localUrl));
+      pendingImagesRef.current.forEach((img: PendingImage) => URL.revokeObjectURL(img.localUrl));
     };
-  }, [pendingImages]);
+  }, []);
 
   // Restore draft when switching chats
   useEffect(() => {

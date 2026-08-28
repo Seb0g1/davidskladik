@@ -158,7 +158,11 @@ async function sendTargetStocksToMarketplace(products = []) {
     const [marketplace, target] = key.split(":");
     if (marketplace === "ozon") {
       const account = getOzonAccountByTarget(target);
-      if (!account) continue;
+      if (!account) {
+        logger.warn("sendTargetStocksToMarketplace: ozon account not found", { target, products: items.length });
+        actions.push(...items.map((item) => ({ id: item.id, type: "target_stock", target, ok: false, error: "ozon_account_not_found" })));
+        continue;
+      }
       for (const chunk of chunkArray(items, 100)) {
         const payload = { stocks: await buildOzonStockPayloadItems(chunk, account, (item) => item.targetStock) };
         if (!payload.stocks.length) continue;

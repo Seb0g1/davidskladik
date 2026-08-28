@@ -151,7 +151,7 @@ async function resolveOzonStockWarehouses(account = null, product = null) {
   // no fallback at all — fall through to API discovery so the stock payload includes a
   // warehouse_id (without it Ozon silently rejects the FBS stock update).
   const isPrimaryAccount = !account?.id || account.id === "ozon";
-  if (!ozonWarehouseListEnabled && isPrimaryAccount && storedWarehouses.length > 0) return [];
+  if (!ozonWarehouseListEnabled && isPrimaryAccount && storedWarehouses.length > 0 && !configuredNames.length) return [];
 
   try {
     const warehouses = await getOzonWarehouses(account);

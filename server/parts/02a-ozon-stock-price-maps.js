@@ -22,7 +22,11 @@ async function getOzonStockMap(offerIds, account = null, options = {}) {
       throw error;
     }
 
-    for (const item of data.items || data.result?.items || []) {
+    const stockItems = data.items || data.result?.items || [];
+    if (stockItems.length > 0) {
+      validateApiShape(data.result || data, ["items[0].offer_id", "items[0].stocks[0].present"], "ozon_stocks_v4");
+    }
+    for (const item of stockItems) {
       const offerId = item.offer_id || item.offerId;
       if (!offerId) continue;
       const stocks = Array.isArray(item.stocks) ? item.stocks : [];

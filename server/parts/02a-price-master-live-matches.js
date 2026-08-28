@@ -18,6 +18,12 @@ async function getPriceMasterMatchesForLinks(links, managedSuppliers = [], usdRa
       candidateRows = snapshotIndexes.byArticle.get(link.article)
         || snapshotIndexes.byRowId.get(cleanText(link.sourceRowId))
         || [];
+      // Snapshot miss: article not in snapshot yet (e.g. fresh catalog upload not synced).
+      // Fall back to a direct MySQL query with a 5-min cache so price isn't stuck at 0.
+      if (!candidateRows.length) {
+        evictLivePMCache();
+        candidateRows = await getLivePMRowsForArticle(link.article);
+      }
     } else if (link.matchType === "selected_row" && link.sourceRowId) {
       candidateRows = snapshotIndexes.byRowId.get(cleanText(link.sourceRowId)) || [];
     } else {

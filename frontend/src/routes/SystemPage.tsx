@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertCircle, AlertTriangle, Database, HeartPulse, ListChecks, RefreshCcw, RotateCcw } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Activity, AlertCircle, AlertTriangle, CheckCircle, Database, HeartPulse, ListChecks, RefreshCcw, RotateCcw } from "lucide-react";
+import { useState } from "react";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
@@ -144,6 +145,103 @@ export function SystemPage() {
           </div>
         </div>
       ) : null}
+
+      <AppErrorJournal />
     </section>
+  );
+}
+
+type AppError = {
+  id: string;
+  type: string;
+  source: string;
+  message: string;
+  context?: Record<string, unknown>;
+  resolvedAt: string | null;
+  createdAt: string;
+};
+
+const SINCE_OPTIONS = [
+  { label: "1ч", value: "1h" },
+  { label: "6ч", value: "6h" },
+  { label: "24ч", value: "24h" },
+  { label: "7д", value: "7d" },
+];
+
+function AppErrorJournal() {
+  const qc = useQueryClient();
+  const [since, setSince] = useState("24h");
+
+  const errorsQ = useQuery({
+    queryKey: ["system-errors", since],
+    queryFn: () => fetch(`/api/system/errors?since=${since}&limit=50`).then((r) => r.json()) as Promise<{ ok: boolean; errors: AppError[]; total: number }>,
+    refetchInterval: 60_000,
+  });
+
+  const resolveMut = useMutation({
+    mutationFn: (id: string) => fetch(`/api/system/errors/${id}/resolve`, { method: "PATCH" }).then((r) => r.json()),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["system-errors"] }),
+  });
+
+  const errors: AppError[] = errorsQ.data?.errors ?? [];
+
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <div className="section-title" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px" }}>
+        <h3 style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+          <AlertTriangle size={16} /> Журнал ошибок
+          {errorsQ.data?.total ? <span className="badge warn" style={{ marginLeft: 4 }}>{errorsQ.data.total}</span> : null}
+        </h3>
+        <div style={{ display: "flex", gap: 4 }}>
+          {SINCE_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              className={since === opt.value ? "action-button active" : "secondary-action"}
+              style={{ padding: "2px 8px", fontSize: 12 }}
+              onClick={() => setSince(opt.value)}
+            >
+              {opt.label}
+            </button>
+          ))}
+          <button type="button" className="secondary-action" style={{ padding: "2px 8px", fontSize: 12 }} onClick={() => errorsQ.refetch()} disabled={errorsQ.isFetching}>
+            <RefreshCcw size={12} />
+          </button>
+        </div>
+      </div>
+      {errorsQ.error ? <div className="inline-error" style={{ margin: 8 }}>{String((errorsQ.error as Error).message)}</div> : null}
+      <div className="table-panel system-table">
+        <div className="table-head">
+          <span>Время</span>
+          <span>Тип</span>
+          <span>Источник</span>
+          <span>Сообщение</span>
+          <span>Действие</span>
+        </div>
+        {errors.map((err) => (
+          <div className="table-row" key={err.id}>
+            <span data-label="Время" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{dateText(err.createdAt)}</span>
+            <span data-label="Тип"><code style={{ fontSize: 11 }}>{err.type}</code></span>
+            <span data-label="Источник" style={{ fontSize: 11, opacity: 0.8 }}>{err.source}</span>
+            <span data-label="Сообщение" style={{ fontSize: 12 }}>{err.message}</span>
+            <span data-label="Действие">
+              <button
+                type="button"
+                className="secondary-action"
+                style={{ padding: "2px 8px", fontSize: 11 }}
+                disabled={resolveMut.isPending}
+                onClick={() => resolveMut.mutate(err.id)}
+                title="Отметить решённой"
+              >
+                <CheckCircle size={12} /> Решено
+              </button>
+            </span>
+          </div>
+        ))}
+        {!errors.length && !errorsQ.isFetching ? (
+          <div className="empty-state">Ошибок за выбранный период нет.</div>
+        ) : null}
+      </div>
+    </div>
   );
 }

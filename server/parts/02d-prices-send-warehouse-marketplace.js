@@ -111,16 +111,22 @@
       }))
       .filter((item) => item.offerId && item.price.value > 0);
     if (!yandexItems.length) continue;
-    try {
-      for (const chunk of chunkArray(yandexItems, 500)) {
+    const yandexOfferIdToItem = new Map(
+      targetItems.map((item) => [String(item.offerId || "").trim(), item]).filter(([k]) => k),
+    );
+    for (const chunk of chunkArray(yandexItems, 500)) {
+      try {
         results.push({
           target: shop.id,
           response: await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-prices/updates`, { offers: chunk }),
         });
+      } catch (error) {
+        const detail = error?.message || "send_failed";
+        failed.push(...chunk
+          .map((y) => yandexOfferIdToItem.get(y.offerId))
+          .filter(Boolean)
+          .map((item) => ({ ...item, error: detail, marketplace: "yandex" })));
       }
-    } catch (error) {
-      const detail = error?.message || "send_failed";
-      failed.push(...targetItems.map((item) => ({ ...item, error: detail, marketplace: "yandex" })));
     }
   }
   } finally {

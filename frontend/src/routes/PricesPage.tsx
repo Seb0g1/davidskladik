@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, BadgeDollarSign, CheckCircle2, Loader2, RefreshCcw, Send, Zap } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
 import { SelectField } from "../components/SelectField";
@@ -58,6 +58,8 @@ export function PricesPage() {
   const [marketplace, setMarketplace] = useState("all");
   const [reason, setReason] = useState("all");
   const [applyStatus, setApplyStatus] = useState("all");
+  const [runResult, setRunResult] = useState<Record<string, unknown> | null>(null);
+  const runResultTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryClient = useQueryClient();
 
   const summary = useQuery({
@@ -87,16 +89,14 @@ export function PricesPage() {
         limit: 5000,
       }),
     ),
-    onSuccess: () => {
+    onSuccess: (data) => {
       void queryClient.invalidateQueries({ queryKey: ["sales-automation"] });
       void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      setRunResult(data as Record<string, unknown>);
+      if (runResultTimer.current) clearTimeout(runResultTimer.current);
+      runResultTimer.current = setTimeout(() => setRunResult(null), 6000);
     },
   });
-
-  useEffect(() => {
-    run.mutate({ marketplace: "all", force: true, onlyChanged: false, reason: "prices_page_open_auto" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   const reasons = summary.data?.reasons || {};
   const reasonOptions = useMemo(() => Object.entries(reasons).sort((a, b) => b[1] - a[1]), [reasons]);
@@ -110,8 +110,16 @@ export function PricesPage() {
   ];
   const items = itemsQuery.data?.items || [];
   const okReasons = ["ok", "unchanged", "unchanged_verified", "verified"];
-  const yandexIssues = useMemo(() => items.filter((item) => text(item.marketplace) === "yandex" && !okReasons.includes(text(item.reason))).length, [items]);
-  const ozonIssues = useMemo(() => items.filter((item) => text(item.marketplace) === "ozon" && !okReasons.includes(text(item.reason))).length, [items]);
+  const { ozonIssues, yandexIssues } = useMemo(() => {
+    let ozon = 0;
+    let yandex = 0;
+    for (const item of items) {
+      if (okReasons.includes(text(item.reason))) continue;
+      if (text(item.marketplace) === "ozon") ozon++;
+      else if (text(item.marketplace) === "yandex") yandex++;
+    }
+    return { ozonIssues: ozon, yandexIssues: yandex };
+  }, [items]);
 
   return (
     <section className="page-section price-control-page">
@@ -193,7 +201,7 @@ export function PricesPage() {
         <button className="primary-action danger-action" type="button" onClick={() => run.mutate({ marketplace, force: true, onlyChanged: false, reason: "sales_automation_reprice_selected" })} disabled={run.isPending}>
           {run.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Пересчитать выбранное
         </button>
-        <button className="primary-action danger-action" type="button" onClick={() => run.mutate({ marketplace: "all", force: true, onlyChanged: false, reason: "force_all_immediate" })} disabled={run.isPending}>
+        <button className="primary-action danger-action" type="button" onClick={() => { if (window.confirm("Отправить цены по ВСЕМ товарам прямо сейчас? Это перезапишет цены на маркетплейсах.")) run.mutate({ marketplace: "all", force: true, onlyChanged: false, reason: "force_all_immediate" }); }} disabled={run.isPending}>
           {run.isPending ? <Loader2 className="spin" size={16} /> : <Zap size={16} />} ОТПРАВИТЬ ВСЕ СЕЙЧАС
         </button>
         <button className="secondary-action danger-action" type="button" onClick={() => run.mutate({ marketplace: "ozon", force: true, onlyChanged: false, reason: "sales_automation_force_ozon" })} disabled={run.isPending}>
@@ -209,11 +217,11 @@ export function PricesPage() {
 
       {run.error ? <div className="inline-error">{String((run.error as Error).message || run.error)}</div> : null}
       {itemsQuery.error ? <div className="inline-error">{String((itemsQuery.error as Error).message || itemsQuery.error)}</div> : null}
-      {run.data ? (
+      {runResult ? (
         <div className="success-strip">
-          {run.data.accepted
-            ? `Пересчет поставлен в очередь: ${numberValue(run.data.queued)} SKU · ${numberValue(run.data.queuedBatches)} batch · intent ${text(run.data.priceIntentId) || "new"}.`
-            : `Отправлено: ${numberValue(run.data.sent)} · Ozon ${numberValue(run.data.ozonSent)} · Yandex ${numberValue(run.data.yandexSent)} · ошибок ${numberValue(run.data.failed)}`}
+          {runResult.accepted
+            ? `Пересчет поставлен в очередь: ${numberValue(runResult.queued)} SKU · ${numberValue(runResult.queuedBatches)} batch · intent ${text(runResult.priceIntentId) || "new"}.`
+            : `Отправлено: ${numberValue(runResult.sent)} · Ozon ${numberValue(runResult.ozonSent)} · Yandex ${numberValue(runResult.yandexSent)} · ошибок ${numberValue(runResult.failed)}`}
         </div>
       ) : null}
 

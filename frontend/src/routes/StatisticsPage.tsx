@@ -115,10 +115,10 @@ export function StatisticsPage() {
             <div className="section-title compact-title">
               <div><span>Склад</span><h3>Текущие показатели</h3></div>
             </div>
-            {warehouse.error && <div className="inline-error">Данные склада недоступны</div>}
+            {warehouse.error && <div className="inline-error">Данные склада недоступны: {errorMessage(warehouse.error)}</div>}
             <div className="dashboard-kpis">
-              <span>Карточки <b>{warehouse.data?.groupTotal || warehouse.data?.total || 0}</b></span>
-              <span>SKU <b>{warehouse.data?.rowTotal || warehouse.data?.totalAll || 0}</b></span>
+              <span>Карточки <b>{warehouse.data?.groupTotal ?? warehouse.data?.total ?? 0}</b></span>
+              <span>SKU <b>{warehouse.data?.rowTotal ?? warehouse.data?.totalAll ?? 0}</b></span>
               <span>Готовы <b>{warehouse.data?.ready || 0}</b></span>
               <span>Без поставщика <b>{warehouse.data?.withoutSupplier || 0}</b></span>
             </div>
@@ -127,7 +127,7 @@ export function StatisticsPage() {
             <div className="section-title compact-title">
               <div><span>Сборка</span><h3>Очередь заказов</h3></div>
             </div>
-            {picking.error && <div className="inline-error">Данные сборки недоступны</div>}
+            {picking.error && <div className="inline-error">Данные сборки недоступны: {errorMessage(picking.error)}</div>}
             <div className="dashboard-money">
               <strong>{picking.data?.total || 0}</strong>
               <span>строк в листе сборки</span>
@@ -137,7 +137,7 @@ export function StatisticsPage() {
             <div className="section-title compact-title">
               <div><span>Финансы</span><h3>{period}</h3></div>
             </div>
-            {finance.error && <div className="inline-error">Финансы недоступны</div>}
+            {finance.error && <div className="inline-error">Финансы недоступны: {errorMessage(finance.error)}</div>}
             <div className="dashboard-kpis">
               <span>Выручка <b>{money(financeSummary.orderIncome)}</b></span>
               <span>Заказов <b>{String(financeSummary.orders || 0)}</b></span>

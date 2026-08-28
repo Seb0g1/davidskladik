@@ -293,6 +293,8 @@ model ProductLink {
   partnerId       String?        @map("partner_id")
   priceCurrency   PriceCurrency  @default(USD) @map("price_currency")
   keyword         String?
+  sourceRowId     String?        @map("source_row_id")
+  exactName       String?        @map("exact_name")
   raw             Json?
   createdById     String?        @map("created_by_id")
   updatedById     String?        @map("updated_by_id")
@@ -309,6 +311,8 @@ model ProductLink {
   @@index([partnerId])
   @@index([supplierName])
   @@index([updatedAt])
+  @@index([sourceRowId])
+  @@index([exactName])
   @@unique([productId, supplierArticle, partnerId, supplierName, keyword, priceCurrency])
   @@map("product_links")
 }
@@ -702,4 +706,18 @@ model PriceMasterSnapshotItem {
   @@index([updatedAt])
   @@unique([article, partnerId, rowId])
   @@map("pm_snapshot_items")
+}
+
+model AppError {
+  id         String    @id @default(cuid())
+  type       String
+  source     String
+  message    String
+  context    Json?
+  resolvedAt DateTime? @map("resolved_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([type, createdAt])
+  @@index([createdAt])
+  @@map("app_errors")
 }

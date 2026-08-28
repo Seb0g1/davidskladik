@@ -218,7 +218,7 @@ function hasPmNameMismatch(product: Product): boolean {
   return Boolean(pmName && productName && pmName !== productName);
 }
 
-function ProductGroupRow({ group, selected, onSelect }: { group: ProductGroup; selected: boolean; onSelect: () => void }) {
+function ProductGroupRow({ group, selected, onSelect, bulkChecked, onBulkToggle }: { group: ProductGroup; selected: boolean; onSelect: () => void; bulkChecked?: boolean; onBulkToggle?: (e: React.MouseEvent) => void }) {
   const primary = group.primary;
   const status = groupStatusLabel(group);
   const image = firstImage(primary);
@@ -228,8 +228,16 @@ function ProductGroupRow({ group, selected, onSelect }: { group: ProductGroup; s
   const pmMismatch = hasPmNameMismatch(primary);
   const pmRowName = pmMismatch ? supplierPmRowName(primary) : "";
   return (
-    <button className={`product-row group-row ${selected ? "is-selected" : ""}`} type="button" onClick={onSelect}>
-      <span className="row-check" aria-hidden="true" />
+    <button className={`product-row group-row ${selected ? "is-selected" : ""}${bulkChecked ? " bulk-selected" : ""}`} type="button" onClick={onSelect}>
+      <span className="row-check" aria-hidden="true" onClick={onBulkToggle}>
+        <input
+          type="checkbox"
+          checked={bulkChecked ?? false}
+          onChange={() => {}}
+          onClick={(e) => { e.stopPropagation(); onBulkToggle?.(e as unknown as React.MouseEvent); }}
+          style={{ cursor: "pointer", width: 15, height: 15 }}
+        />
+      </span>
       <div className="product-cell">
         <div className="product-thumb">
           {image ? <img src={image} alt="" loading="lazy" /> : <PackageCheck size={20} />}
@@ -749,7 +757,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
             <button className="secondary-action" type="button" onClick={() => copyPlainText(savedSupplierList.join("\n"))} disabled={!savedSupplierList.length}>
               <Copy size={16} /> Скопировать
             </button>
-            <button className="secondary-action danger" type="button" onClick={() => bulkDeleteMutation.mutate()} disabled={readOnly || !selectedLinkIds.length || bulkDeleteMutation.isPending}>
+            <button className="secondary-action danger" type="button" onClick={() => { if (!window.confirm("Удалить все выбранные привязки? Это действие необратимо.")) return; bulkDeleteMutation.mutate(); }} disabled={readOnly || !selectedLinkIds.length || bulkDeleteMutation.isPending}>
               {bulkDeleteMutation.isPending ? <Loader2 className="spin" size={16} /> : <Trash2 size={16} />} Удалить выбранные {selectedLinkIds.length || ""}
             </button>
         </div>
@@ -800,7 +808,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
                 </div>
               </div>
               {!readOnly && link.id && <SnoozeLink productId={link.productId || products[0]?.id || ""} link={link} onDone={refreshAfterMutation} />}
-              <button className="icon-action danger" type="button" onClick={() => deleteMutation.mutate(link)} title="Удалить привязку" disabled={readOnly}>
+              <button className="icon-action danger" type="button" onClick={() => { if (!window.confirm("Удалить привязку? Это действие необратимо.")) return; deleteMutation.mutate(link); }} title="Удалить привязку" disabled={readOnly}>
                 <Trash2 size={16} />
               </button>
             </div>
@@ -2017,13 +2025,14 @@ function EtaChips({ productId, archived, changed }: { productId: string; archive
   const [eta, setEta] = useState<{ priceEtaAt?: string; unarchiveEtaAt?: string | null } | null>(null);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
+    const controller = new AbortController();
     let alive = true;
-    fetch(`/api/warehouse/products/${encodeURIComponent(productId)}/eta`, { credentials: "same-origin" })
+    fetch(`/api/warehouse/products/${encodeURIComponent(productId)}/eta`, { credentials: "same-origin", signal: controller.signal })
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => { if (alive && data?.ok) setEta(data); })
       .catch(() => {});
     const timer = window.setInterval(() => setNow(Date.now()), 30_000);
-    return () => { alive = false; window.clearInterval(timer); };
+    return () => { alive = false; controller.abort(); window.clearInterval(timer); };
   }, [productId]);
   if (!eta) return null;
   const priceSeconds = eta.priceEtaAt ? Math.max(0, Math.round((new Date(eta.priceEtaAt).getTime() - now) / 1000)) : null;
@@ -2238,9 +2247,6 @@ function QuickActions({ products, onDone }: { primary: Product; products: Produc
           {recover.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Проверить и починить товар
         </button>
         <button className="secondary-action" type="button" onClick={() => recover.mutate()} disabled={anyBusy}>
-          {recover.isPending ? <Loader2 className="spin" size={16} /> : null} Восстановить товар
-        </button>
-        <button className="secondary-action" type="button" onClick={() => recover.mutate()} disabled={anyBusy}>
           {recover.isPending ? <Loader2 className="spin" size={16} /> : null} Отправить остаток
         </button>
         <button className="secondary-action" type="button" onClick={() => sendPrices.mutate()} disabled={anyBusy}>
@@ -2368,15 +2374,26 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
           {priceHistoryQuery.data.items.map((item, i, arr) => {
             const raw = item as Record<string, unknown>;
             const price = Number(raw.newPrice || raw.price || 0);
+            const oldPrice = raw.oldPrice != null ? Number(raw.oldPrice) : null;
             const prevPrice = i + 1 < arr.length ? Number((arr[i + 1] as Record<string, unknown>).newPrice || (arr[i + 1] as Record<string, unknown>).price || 0) : 0;
-            const delta = prevPrice > 0 ? price - prevPrice : 0;
+            const delta = oldPrice != null && oldPrice > 0 ? price - oldPrice : prevPrice > 0 ? price - prevPrice : 0;
             const mp = String(raw.marketplace || raw.market || "");
             const mpLabel = mp === "ozon" ? "Ozon" : mp === "yandex" ? "ЯМ" : mp === "wb" ? "WB" : mp || "";
+            const pmUsd = raw.pmPriceUsd != null ? Number(raw.pmPriceUsd) : null;
+            const usdRate = raw.usdRate != null ? Number(raw.usdRate) : null;
+            const markup = raw.markup != null ? Number(raw.markup) : null;
+            const supplier = String(raw.supplierName || "").slice(0, 20);
+            const reason = String(raw.reason || raw.status || raw.source || "").slice(0, 32);
             return (
               <div key={i} className="price-history-item">
                 <span className="muted-note">{compactDate(String(raw.createdAt || raw.at || ""))}</span>
                 <span className={delta > 0 ? "price-up" : delta < 0 ? "price-down" : ""}>{money(price)}{delta !== 0 && <span className="price-delta">{delta > 0 ? `+${money(delta)}` : money(delta)}</span>}</span>
-                <span className="muted-note">{mpLabel && <span className="mp-badge">{mpLabel}</span>}{String(raw.reason || raw.status || raw.source || "").slice(0, 32)}</span>
+                <span className="muted-note">
+                  {mpLabel && <span className="mp-badge">{mpLabel}</span>}
+                  {pmUsd != null && <span className="muted-note" title={usdRate != null ? `Курс ${usdRate}${markup != null ? `, наценка ×${markup}` : ""}` : undefined}> ${pmUsd.toFixed(2)}</span>}
+                  {supplier && <span className="muted-note"> · {supplier}</span>}
+                  {reason && <span> {reason}</span>}
+                </span>
               </div>
             );
           })}
@@ -2421,6 +2438,8 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const [filters, setFilters] = useState<Filters>(() => readFilters());
   const [selectedGroup, setSelectedGroup] = useState(() => selectedGroupFromPath());
   const [isMobileList, setIsMobileList] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileListMedia).matches);
+  const [selectedGroupKeys, setSelectedGroupKeys] = useState<Set<string>>(new Set());
+  const [bulkResult, setBulkResult] = useState<string | null>(null);
   const debouncedQ = useDebounced(filters.q, 450);
   const effectiveFilters = { ...filters, q: debouncedQ };
   const parentRef = useRef<HTMLDivElement>(null);
@@ -2514,6 +2533,55 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
         || (pageQuery.data && Number(pageQuery.data.totalAll || pageQuery.data.total || pageQuery.data.groupTotal || serverProductCount || 0) <= Math.max(1, serverProductCount))),
   );
   const groups = useDemoCatalog ? demoGroups : serverGroups;
+
+  const selectedProductIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const group of groups) {
+      if (selectedGroupKeys.has(group.groupKey)) {
+        for (const p of group.products) if (p.id) ids.push(p.id);
+      }
+    }
+    return ids;
+  }, [groups, selectedGroupKeys]);
+
+  const allOnPageSelected = groups.length > 0 && groups.every((g) => selectedGroupKeys.has(g.groupKey));
+
+  const toggleBulkGroup = (groupKey: string) => {
+    setSelectedGroupKeys((prev) => {
+      const next = new Set(prev);
+      next.has(groupKey) ? next.delete(groupKey) : next.add(groupKey);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (allOnPageSelected) setSelectedGroupKeys(new Set());
+    else setSelectedGroupKeys(new Set(groups.map((g) => g.groupKey)));
+  };
+
+  const bulkPriceMutation = useMutation({
+    mutationFn: (productIds: string[]) =>
+      fetchJson("/api/warehouse/prices/send", z.object({ ok: z.boolean(), sent: z.number().optional(), errors: z.number().optional() }).passthrough(), mutationBody({ confirmed: true, productIds, force: true, dryRun: false })),
+    onSuccess: (data) => {
+      const sent = (data as Record<string, unknown>).sent ?? 0;
+      setBulkResult(`Цены отправлены: ${sent} товаров`);
+      setSelectedGroupKeys(new Set());
+      setTimeout(() => setBulkResult(null), 4000);
+    },
+    onError: (e) => { setBulkResult(`Ошибка: ${errorMessage(e)}`); setTimeout(() => setBulkResult(null), 5000); },
+  });
+
+  const bulkStockMutation = useMutation({
+    mutationFn: (productIds: string[]) =>
+      fetchJson("/api/warehouse/links/recover-stale-stocks", z.object({ ok: z.boolean() }).passthrough(), mutationBody({ productIds })),
+    onSuccess: () => {
+      setBulkResult(`Остатки переотправлены для ${selectedProductIds.length} товаров`);
+      setSelectedGroupKeys(new Set());
+      setTimeout(() => setBulkResult(null), 4000);
+    },
+    onError: (e) => { setBulkResult(`Ошибка: ${errorMessage(e)}`); setTimeout(() => setBulkResult(null), 5000); },
+  });
+
   const selectedRowsOnPage = useMemo(() => groups.find((group) => group.groupKey === selectedGroup)?.products || [], [groups, selectedGroup]);
   const selectedIsDemoGroup = Boolean(useDemoCatalog && groups.some((group) => group.groupKey === selectedGroup));
   const selectedFilteredOut = Boolean(selectedGroup && !pageQuery.isLoading && !groups.some((group) => group.groupKey === selectedGroup));
@@ -2524,7 +2592,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
     enabled: Boolean(selectedGroup) && !selectedIsDemoGroup,
     staleTime: 60_000,
     gcTime: 180_000,
-    retry: 2,
+    retry: (failureCount, error) => { const status = (error as { status?: number })?.status; return status !== 404 && failureCount < 2; },
     retryDelay: (attempt) => Math.min(1500 * (attempt + 1), 4000),
   });
   const detailProducts = detailQuery.data?.products?.length
@@ -2685,7 +2753,15 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
         <div className="list-panel">
           {pageQuery.error && !useDemoCatalog && <div className="inline-error">{errorMessage(pageQuery.error)}</div>}
           <div className="warehouse-table-head">
-            <span />
+            <span style={{ display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <input
+                type="checkbox"
+                checked={allOnPageSelected}
+                onChange={toggleSelectAll}
+                title="Выбрать все на странице"
+                style={{ cursor: "pointer", width: 15, height: 15 }}
+              />
+            </span>
             <span>Товар</span>
             <span>Артикул / SKU</span>
             <span>Маркетплейсы</span>
@@ -2700,7 +2776,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
                 const group = groups[virtualRow.index];
                 return (
                   <div key={group.groupKey} style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualRow.start}px)` }}>
-                    <ProductGroupRow group={group} selected={group.groupKey === selectedGroup} onSelect={() => setSelectedGroup(group.groupKey)} />
+                    <ProductGroupRow group={group} selected={group.groupKey === selectedGroup} onSelect={() => setSelectedGroup(group.groupKey)} bulkChecked={selectedGroupKeys.has(group.groupKey)} onBulkToggle={() => toggleBulkGroup(group.groupKey)} />
                   </div>
                 );
               })}
@@ -2726,6 +2802,38 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           demoMode={selectedIsDemoGroup}
         />
       </section>
+      {selectedGroupKeys.size > 0 && (
+        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 100, display: "flex", alignItems: "center", gap: 8, background: "white", border: "1px solid #e5e7eb", borderRadius: 12, boxShadow: "0 4px 24px rgba(0,0,0,0.13)", padding: "10px 16px", whiteSpace: "nowrap" }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginRight: 4 }}>
+            Выбрано: {selectedGroupKeys.size}
+          </span>
+          <button
+            onClick={() => { if (selectedProductIds.length) bulkPriceMutation.mutate(selectedProductIds); }}
+            disabled={bulkPriceMutation.isPending || bulkStockMutation.isPending}
+            style={{ padding: "6px 14px", fontSize: 13, background: "#2563eb", color: "white", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 500 }}
+          >
+            {bulkPriceMutation.isPending ? "Отправка…" : "Переотправить цену"}
+          </button>
+          <button
+            onClick={() => { if (selectedProductIds.length) bulkStockMutation.mutate(selectedProductIds.slice(0, 200)); }}
+            disabled={bulkPriceMutation.isPending || bulkStockMutation.isPending}
+            style={{ padding: "6px 14px", fontSize: 13, background: "#16a34a", color: "white", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 500 }}
+          >
+            {bulkStockMutation.isPending ? "Отправка…" : "Переотправить остаток"}
+          </button>
+          <button
+            onClick={() => setSelectedGroupKeys(new Set())}
+            style={{ padding: "6px 10px", fontSize: 13, background: "transparent", color: "#6b7280", border: "1px solid #e5e7eb", borderRadius: 8, cursor: "pointer" }}
+          >
+            Снять выделение
+          </button>
+        </div>
+      )}
+      {bulkResult && (
+        <div style={{ position: "fixed", bottom: selectedGroupKeys.size > 0 ? 88 : 24, left: "50%", transform: "translateX(-50%)", zIndex: 101, background: "#1f2937", color: "white", borderRadius: 8, padding: "8px 18px", fontSize: 13, fontWeight: 500, boxShadow: "0 2px 12px rgba(0,0,0,0.2)", whiteSpace: "nowrap" }}>
+          {bulkResult}
+        </div>
+      )}
     </>
   );
 }

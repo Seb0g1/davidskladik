@@ -56,7 +56,7 @@ app.post("/api/warehouse/links/fix-stale-row-ids", requireAdmin, async (request,
         pl.product_id,
         pl.supplier_article,
         pl.partner_id,
-        pl.raw->>'sourceRowId'         AS pinned_row_id,
+        COALESCE(pl.source_row_id, pl.raw->>'sourceRowId') AS pinned_row_id,
         pm_old.price::float            AS old_price,
         pm_old.active                  AS old_active,
         pm_old.native_name             AS old_name,
@@ -69,7 +69,7 @@ app.post("/api/warehouse/links/fix-stale-row-ids", requireAdmin, async (request,
       FROM product_links pl
       JOIN warehouse_products wp ON wp.id = pl.product_id
       LEFT JOIN pm_snapshot_items pm_old
-        ON pm_old.row_id = (pl.raw->>'sourceRowId')
+        ON pm_old.row_id = COALESCE(pl.source_row_id, pl.raw->>'sourceRowId')
         AND pm_old.partner_id::text = pl.partner_id::text
       JOIN LATERAL (
         SELECT pm2.row_id, pm2.price, pm2.native_name, pm2.doc_date
@@ -82,8 +82,9 @@ app.post("/api/warehouse/links/fix-stale-row-ids", requireAdmin, async (request,
         LIMIT 1
       ) pm_new ON true
       WHERE pl.raw->>'matchType' = 'selected_row'
-        AND pl.raw->>'sourceRowId' IS NOT NULL AND pl.raw->>'sourceRowId' != ''
-        AND pm_new.row_id != (pl.raw->>'sourceRowId')
+        AND COALESCE(pl.source_row_id, pl.raw->>'sourceRowId') IS NOT NULL
+        AND COALESCE(pl.source_row_id, pl.raw->>'sourceRowId') != ''
+        AND pm_new.row_id != COALESCE(pl.source_row_id, pl.raw->>'sourceRowId')
         AND (
           pm_old.row_id IS NULL
           OR pm_old.active = false
@@ -122,9 +123,10 @@ app.post("/api/warehouse/links/fix-stale-row-ids", requireAdmin, async (request,
               jsonb_set(raw, '{sourceRowId}', $1::jsonb),
               '{resolvedBy}', '"stale_row_id_fix"'
             ),
+            source_row_id = $3,
             updated_at = now()
         WHERE id = $2
-      `, JSON.stringify(row.new_row_id), row.link_id);
+      `, JSON.stringify(row.new_row_id), row.link_id, row.new_row_id);
       fixed++;
     }
 

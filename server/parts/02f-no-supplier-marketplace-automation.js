@@ -89,8 +89,6 @@ async function runNoSupplierMarketplaceAutomation(preview, options = {}) {
   const changedProducts = Array.from(changedById.values());
   if (changedProducts.length) {
     await writeWarehouseProductPatch(changedProducts, { reason: "no_supplier_automation" });
-  } else if ((warehouse.products || []).length) {
-    await writeWarehouse(warehouse);
   }
 
   const errors = allActions

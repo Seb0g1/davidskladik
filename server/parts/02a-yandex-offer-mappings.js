@@ -18,6 +18,9 @@ async function getYandexOfferMappings(shop, limit = Number.POSITIVE_INFINITY, op
       body,
     );
     const pageItems = data.result?.offerMappings || data.result?.offers || data.offerMappings || [];
+    if (pageItems.length > 0) {
+      validateApiShape(data, ["result.offerMappings[0].offer.offerId"], "ym_offer_mappings_v2");
+    }
     items.push(...pageItems);
 
     pageToken =

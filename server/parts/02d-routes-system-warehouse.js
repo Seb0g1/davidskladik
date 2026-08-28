@@ -242,3 +242,50 @@ app.post("/api/warehouse/brands/rebuild-index", requireAdmin, async (request, re
   }
 });
 
+// ─── Журнал ошибок приложения ─────────────────────────────────────────────────
+
+function sinceMs(since) {
+  switch (String(since || "").trim()) {
+    case "1h": return 60 * 60 * 1000;
+    case "6h": return 6 * 60 * 60 * 1000;
+    case "7d": return 7 * 24 * 60 * 60 * 1000;
+    default: return 24 * 60 * 60 * 1000; // 24h
+  }
+}
+
+app.get("/api/system/errors", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    const sinceDate = new Date(Date.now() - sinceMs(request.query.since));
+    const type = cleanText(request.query.type || "");
+    const limit = Math.min(200, Math.max(1, Number(request.query.limit) || 50));
+    const errors = await prisma.appError.findMany({
+      where: {
+        createdAt: { gte: sinceDate },
+        ...(type ? { type } : {}),
+        resolvedAt: null,
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    const total = await prisma.appError.count({
+      where: { createdAt: { gte: sinceDate }, ...(type ? { type } : {}), resolvedAt: null },
+    });
+    response.json({ ok: true, errors, total });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch("/api/system/errors/:id/resolve", requireAdmin, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    const id = cleanText(request.params.id);
+    if (!id) return response.status(400).json({ error: "Missing id." });
+    await prisma.appError.update({ where: { id }, data: { resolvedAt: new Date() } });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+

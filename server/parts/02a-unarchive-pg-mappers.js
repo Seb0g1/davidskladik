@@ -56,6 +56,8 @@ function linkToPostgresData(product, link = {}) {
     partnerId: normalized.partnerId || null,
     priceCurrency: normalized.priceCurrency === "RUB" ? "RUB" : "USD",
     keyword: normalized.keyword || null,
+    sourceRowId: normalized.sourceRowId || null,
+    exactName: normalized.exactName || null,
     raw: cloneAuditValue(normalized) || {},
     createdAt: toDateOrNull(normalized.createdAt) || new Date(),
     updatedAt: toDateOrNull(normalized.updatedAt) || new Date(),

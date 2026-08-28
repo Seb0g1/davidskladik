@@ -447,8 +447,9 @@ export function ConsignmentPage() {
                 type="button"
                 disabled={returnSale.isPending}
                 onClick={() => {
-                  const note = window.prompt("Примечание к возврату (необязательно):", "") ?? "";
-                  returnSale.mutate({ id: op.id, note });
+                  const note = window.prompt("Примечание к возврату (необязательно):", "");
+                  if (note === null) return;
+                  returnSale.mutate({ id: op.id, note: note || "" });
                 }}
               >
                 {returnSale.isPending ? <Loader2 className="spin" size={14} /> : <RotateCcw size={14} />} Возврат

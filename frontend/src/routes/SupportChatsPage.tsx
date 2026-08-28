@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageCircleHeart, Send, Check, RefreshCw, ChevronRight, Clock, User, Headphones, X, ArrowLeft } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
@@ -46,6 +46,7 @@ export function SupportChatsPage() {
   const [statusFilter, setStatusFilter] = useState<"open" | "closed" | "all">("open");
   const [reply, setReply] = useState("");
   const [mobileView, setMobileView] = useState<"list" | "thread">("list");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const listQuery = useQuery({
     queryKey: ["support-chats", statusFilter],
@@ -85,13 +86,18 @@ export function SupportChatsPage() {
     },
   });
 
+  const messageCount = detailQuery.data?.chat?.messages?.length ?? 0;
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messageCount]);
+
   const chats = listQuery.data?.chats ?? [];
   const chat = detailQuery.data?.chat;
   const unreadCount = chats.filter((c) => c.unreadAdmin && c.status === "open").length;
 
   function handleSend(e: React.FormEvent) {
     e.preventDefault();
-    if (!reply.trim() || replyMutation.isPending) return;
+    if (!selectedId || !reply.trim() || replyMutation.isPending) return;
     replyMutation.mutate(reply.trim());
   }
 
@@ -232,9 +238,15 @@ export function SupportChatsPage() {
                 {chat.messages.length === 0 && (
                   <div style={{ color: "var(--muted-soft)", fontSize: 13, textAlign: "center", marginTop: 16 }}>Сообщений нет</div>
                 )}
+                <div ref={messagesEndRef} />
               </div>
 
               {/* Reply input */}
+              {statusMutation.error && (
+                <div className="inline-error" style={{ margin: "4px 16px 0" }}>
+                  {statusMutation.error instanceof Error ? statusMutation.error.message : String(statusMutation.error)}
+                </div>
+              )}
               {chat.status === "open" ? (
                 <form onSubmit={handleSend} className="chat-composer">
                   <div className="chat-input-row">
@@ -255,6 +267,11 @@ export function SupportChatsPage() {
                       <Send size={15} />
                     </button>
                   </div>
+                  {replyMutation.error && (
+                    <div className="inline-error">
+                      {replyMutation.error instanceof Error ? replyMutation.error.message : String(replyMutation.error)}
+                    </div>
+                  )}
                 </form>
               ) : (
                 <div className="chat-composer" style={{ textAlign: "center", color: "var(--muted-soft)", fontSize: 12 }}>

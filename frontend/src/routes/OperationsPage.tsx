@@ -109,6 +109,7 @@ function OperationDetailPanel({ jobId }: { jobId: string }) {
     queryFn: () => fetchJson(`/api/operations/${encodeURIComponent(jobId)}`, OperationDetailSchema),
     enabled: Boolean(jobId),
     refetchInterval: (query) => {
+      if (!query.state.data) return 3000;
       const status = String(asRecord(query.state.data?.job).status || "");
       return status === "queued" || status === "running" ? 3000 : false;
     },
@@ -272,10 +273,13 @@ export function SupplierCartPanel() {
   const previewData = generateMutation.data || draftQuery.data;
   const rows = previewData?.rows || [];
   const filteredRows = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return rows;
-    return rows.filter((row) => [row.productName, row.offerId, row.orderId, row.postingNumber, row.supplierName]
-      .join(" ").toLowerCase().includes(needle));
+    const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return rows;
+    return rows.filter((row) => {
+      const text = [row.productName, row.offerId, row.orderId, row.postingNumber, row.supplierName]
+        .join(" ").toLowerCase();
+      return words.every((w) => text.includes(w));
+    });
   }, [q, rows]);
   const toggleRow = (key: string) => {
     setSelected((current) => {
@@ -537,20 +541,26 @@ export function OperationsPage() {
     refetchInterval: 5000,
   });
   const startMutation = useMutation({
-    mutationFn: (type: string) => fetchJson("/api/operations", OperationCreateSchema, mutationBody({
-      type,
-      payload: type === "yandex-import-send"
-        ? { limit, sendLimit }
-        : type === "restore-archived-stock"
-          ? { limit, stock, marketplace: "yandex" }
-          : type === "ozon-linked-unarchive"
-            ? { limit, marketplace: "ozon", force: true }
-          : type === "yandex-card-quality-ai-drafts"
-            ? { limit, threshold, draftLimit, generateImages: true }
-            : type === "yandex-price-push"
-              ? { limit, force: false, onlyChanged: true }
-            : { limit },
-    })),
+    mutationFn: (arg: string | { type: string; extraPayload?: Record<string, unknown> }) => {
+      const type = typeof arg === "string" ? arg : arg.type;
+      const extraPayload = typeof arg === "string" ? {} : (arg.extraPayload || {});
+      return fetchJson("/api/operations", OperationCreateSchema, mutationBody({
+        type,
+        payload: type === "yandex-import-send"
+          ? { limit, sendLimit }
+          : type === "restore-archived-stock"
+            ? { limit, stock, marketplace: "yandex" }
+            : type === "ozon-linked-unarchive"
+              ? { limit, marketplace: "ozon", force: true }
+            : type === "yandex-card-quality-ai-drafts"
+              ? { limit, threshold, draftLimit, generateImages: true }
+              : type === "yandex-price-push"
+                ? { limit, force: false, onlyChanged: true }
+              : type === "initialize-linked-ozon-stock"
+                ? { limit, stock, ...extraPayload }
+              : { limit, ...extraPayload },
+      }));
+    },
     onSuccess: (payload) => {
       const id = String(payload.job?.id || "");
       if (id) setSelectedJobId(id);
@@ -579,15 +589,21 @@ export function OperationsPage() {
         <label>AI drafts<input type="number" value={draftLimit} onChange={(event) => setDraftLimit(numberValue(event.target.value, 20))} /></label>
       </section>
       <section className="action-strip">
-        <button className="primary-action" onClick={() => startMutation.mutate("linked-supplier-recovery")} disabled={startMutation.isPending}>Восстановить привязанные</button>
-        <button className="primary-action" onClick={() => { if (!window.confirm("Операция изменит данные на маркетплейсе. Продолжить?")) return; startMutation.mutate("ozon-linked-unarchive"); }} disabled={startMutation.isPending}>Вернуть Ozon автоархив</button>
-        <button className="secondary-action" onClick={() => startMutation.mutate("restore-archived-stock")} disabled={startMutation.isPending}>Восстановить архив</button>
-        <button className="secondary-action" onClick={() => startMutation.mutate("yandex-card-quality-ai-drafts")} disabled={startMutation.isPending}>AI качество карточек</button>
-        <button className="secondary-action" onClick={() => startMutation.mutate("yandex-price-push")} disabled={startMutation.isPending}>Отправить новые цены Yandex</button>
-        <button className="secondary-action" onClick={() => startMutation.mutate("sales-automation-run")} disabled={startMutation.isPending}>Запустить автоматизацию продаж</button>
-        <button className="secondary-action" onClick={() => startMutation.mutate("brand-index-rebuild")} disabled={startMutation.isPending}>Пересобрать бренды</button>
-        <button className="secondary-action" onClick={() => { if (!window.confirm("Операция изменит данные на маркетплейсе. Продолжить?")) return; startMutation.mutate("repair-pricemaster-group-links"); }} disabled={startMutation.isPending}>Починить привязки Ozon/Yandex</button>
-        <button className="secondary-action" onClick={() => startMutation.mutate("health-deep")} disabled={startMutation.isPending}>Глубокий health</button>
+        <button className="primary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("linked-supplier-recovery")}>Восстановить привязанные</button>
+        <button className="primary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Операция изменит данные на маркетплейсе. Продолжить?")) return; startMutation.mutate("ozon-linked-unarchive"); }}>Вернуть Ozon автоархив</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("restore-archived-stock")}>Восстановить архив</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("initialize-linked-ozon-stock")}>Инициализировать остатки Ozon (привязки)</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate({ type: "scan-and-fix-zero-stock", extraPayload: { dryRun: true } })}>Нулевые остатки: проверить (dry run)</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Отправить остатки на маркетплейсы для всех привязанных товаров с нулём? Продолжить?")) return; startMutation.mutate({ type: "scan-and-fix-zero-stock", extraPayload: { dryRun: false } }); }}>Нулевые остатки: исправить</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Принудительная инициализация — включит также товары, у которых ранее исчез поставщик, но сейчас привязка восстановлена. Продолжить?")) return; startMutation.mutate({ type: "initialize-linked-ozon-stock", extraPayload: { force: true } }); }}>Инициализировать Ozon (принудительно)</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("yandex-card-quality-ai-drafts")}>AI качество карточек</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("yandex-price-push")}>Отправить новые цены Yandex</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("sales-automation-run")}>Запустить автоматизацию продаж</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("brand-index-rebuild")}>Пересобрать бренды</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate({ type: "repair-dalik-disambiguation-links", extraPayload: { dryRun: true } })}>Далик: проверить привязки (dry run)</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Исправить неверные привязки Далик? Это обновит exactName/sourceRowId в БД.")) return; startMutation.mutate({ type: "repair-dalik-disambiguation-links", extraPayload: { dryRun: false } }); }}>Далик: исправить привязки</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Операция изменит данные на маркетплейсе. Продолжить?")) return; startMutation.mutate("repair-pricemaster-group-links"); }}>Починить привязки Ozon/Yandex</button>
+        <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("health-deep")}>Глубокий health</button>
       </section>
       {startMutation.error && <div className="inline-error">{errorMessage(startMutation.error)}</div>}
       <section className="table-panel supplier-cart-panel">

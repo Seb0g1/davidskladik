@@ -99,6 +99,7 @@ async function runChangedPriceSweep({ source = "schedule" } = {}) {
     return { status: "ok", candidates: rows.length, selected: productIds.length, queued: refresh.queued || 0 };
   } catch (error) {
     logger.warn("price sweep failed", { detail: error?.message || String(error) });
+    recordAppError?.("price_sweep", "02f-price-sweep", error?.message || String(error), { source });
     return { status: "error", error: error?.message || String(error) };
   } finally {
     priceSweepRunning = false;

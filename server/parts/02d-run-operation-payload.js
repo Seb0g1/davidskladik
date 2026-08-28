@@ -10,7 +10,16 @@ async function runOperationPayload(job, options = {}) {
     const products = (warehouse.products || [])
       .filter((product) => product.marketplace === "ozon")
       .slice(0, limit);
-    const existingOfferIds = getLocalYandexExportedOfferIdSet(warehouse.products || []);
+    // Use getKnownYandexExistingOfferIds so products that were uploaded to Yandex
+    // but whose exports.yandex.status wasn't set (partial export) are still included
+    // via the direct API check against Yandex's offer-mappings endpoint.
+    const offerIds = products.map((p) => cleanText(p.offerId || p.offer_id)).filter(Boolean);
+    const existingOfferIds = await getKnownYandexExistingOfferIds(offerIds, {
+      products: warehouse.products || [],
+      warnings: [],
+      allowCatalogRefresh: false,
+      allowDirectCheck: true,
+    });
     const result = await sendYandexStocksFromOzonProducts(products, {
       dryRun: job.payload?.dryRun === true,
       warehouseProducts: warehouse.products || [],
@@ -107,6 +116,24 @@ async function runOperationPayload(job, options = {}) {
     });
     return result;
   }
+  if (job.type === "initialize-linked-ozon-stock") {
+    const result = await runInitializeLinkedOzonStockOperation(job.payload || {}, options);
+    await appendAudit(auditRequest, "marketplace.ozon.initialize_linked_stock", {
+      entityType: "ozon_stock_init",
+      entityId: "all",
+      newValue: result,
+    });
+    return result;
+  }
+  if (job.type === "repair-dalik-disambiguation-links") {
+    const result = await runRepairDalikDisambiguationLinksOperation(job.payload || {}, options);
+    await appendAudit(auditRequest, "warehouse.links.repair_dalik_disambiguation", {
+      entityType: "dalik_links_repair",
+      entityId: "all",
+      newValue: result,
+    });
+    return result;
+  }
   if (job.type === "yandex-card-quality-ai-drafts") {
     const result = await runYandexCardQualityAiDraftOperation(job.payload || {}, options);
     await appendAudit(auditRequest, "yandex.card_quality.ai_drafts", {
@@ -136,6 +163,15 @@ async function runOperationPayload(job, options = {}) {
   }
   if (job.type === "marketplace-supplier-cart-commit") {
     return runSupplierCartCommitOperation(job.payload || {}, auditRequest);
+  }
+  if (job.type === "scan-and-fix-zero-stock") {
+    const result = await runScanAndFixZeroStockOperation(job.payload || {});
+    await appendAudit(auditRequest, "marketplace.stock.scan_and_fix_zero", {
+      entityType: "zero_stock_scan",
+      entityId: "all",
+      newValue: result,
+    });
+    return result;
   }
   if (job.type === "health-deep") {
     return collectHealthDetails({ deep: true });

@@ -136,8 +136,8 @@ export function DashboardPage() {
       />
 
       <section className="dashboard-metrics">
-        <Stat label="Активных товаров" value={warehouse.data?.groupTotal || warehouse.data?.total || 0} tone="accent" icon={<PackageCheck size={18} />} trend={<MiniTrend />} delta="+5.3% к вчера" />
-        <Stat label="Готовы к продаже" value={warehouse.data?.ready || 0} tone="success" icon={<CheckCircle2 size={18} />} trend={<MiniTrend tone="success" />} delta="+8% к вчера" />
+        <Stat label="Активных товаров" value={warehouse.data?.groupTotal || warehouse.data?.total || 0} tone="accent" icon={<PackageCheck size={18} />} trend={<MiniTrend />} />
+        <Stat label="Готовы к продаже" value={warehouse.data?.ready || 0} tone="success" icon={<CheckCircle2 size={18} />} trend={<MiniTrend tone="success" />} />
         <Stat label="Продажи сегодня" value={money(salesToday.income)} tone="success" icon={<TrendingUp size={18} />} trend={<MiniTrend tone="success" />} delta={`${salesToday.orders} заказ(ов), прибыль ${money(salesToday.profit)}`} />
         <Stat label="Очередь сборки" value={picking.data?.total || rows.length || 0} icon={<ClipboardList size={18} />} trend={<MiniTrend />} delta="в работе" />
         <Stat label="Нужны действия" value={warehouse.data?.withoutSupplier || sales.data?.retryTotal || 0} tone="warn" icon={<AlertTriangle size={18} />} trend={<MiniTrend tone="warn" />} delta="проверить" />
@@ -327,8 +327,9 @@ export function DashboardPage() {
             {/* Каналы продаж */}
             <div className="analytics-mp-panel">
               <div className="analytics-section-label">По каналу</div>
-              {(analytics!.byMarketplace || []).map((mp) => {
-                const pct = analyticsMaxIncome > 0 ? Math.round((mp.income / analyticsMaxIncome) * 100) : 0;
+              {(analytics!.byMarketplace || []).map((mp, _i, arr) => {
+                const maxMpIncome = Math.max(...arr.map((m) => m.income), 1);
+                const pct = Math.round((mp.income / maxMpIncome) * 100);
                 return (
                   <div className="analytics-mp-row" key={mp.marketplace}>
                     <span className="analytics-mp-name">{MP_LABELS[mp.marketplace] || mp.marketplace}</span>

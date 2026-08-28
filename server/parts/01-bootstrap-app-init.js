@@ -84,6 +84,7 @@ const priceRetryQueuePath = path.join(dataDir, "price-retry-queue.json");
 const ozonUnarchiveQueuePath = path.join(dataDir, "ozon-unarchive-queue.json");
 const ozonUnarchiveDailyStatePath = path.join(dataDir, "ozon-unarchive-daily.json");
 const yandexUnarchiveQueuePath = path.join(dataDir, "yandex-unarchive-queue.json");
+const yandexPendingStockQueuePath = path.join(dataDir, "yandex-pending-stock-queue.json");
 const yandexExistingOffersCachePath = path.join(dataDir, "yandex-existing-offers.json");
 const operationJobsPath = path.join(dataDir, "operation-jobs.json");
 const aiImageJobsPath = path.join(dataDir, "ai-image-jobs.json");

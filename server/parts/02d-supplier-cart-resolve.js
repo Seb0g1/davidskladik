@@ -257,6 +257,10 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
     : (Array.isArray(data?.result?.orders) ? data.result.orders : []);
   const lines = [];
   for (const order of orders) {
+    // Skip orders already confirmed ready-to-ship or further along — the Yandex API
+    // substatus filter is best-effort and sometimes returns READY_TO_SHIP orders anyway.
+    const orderSubstatus = cleanText(order.substatus || order.subStatus || "").toUpperCase();
+    if (orderSubstatus === "READY_TO_SHIP" || orderSubstatus === "SHIPPED" || orderSubstatus === "DELIVERY") continue;
     const items = Array.isArray(order.items) ? order.items : [];
     const isExpress = cleanText(order.delivery?.type || order.deliveryType || "").toUpperCase() === "EXPRESS";
     const orderCampaignId = cleanText(order.campaignId || shop.campaignId || "");
@@ -519,8 +523,11 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
   // (e.g. Далик stores different products under the same numeric code), narrow down to
   // the row whose PM name best matches the ordered product name. Safe no-op when there
   // is only one row or names are identical.
-  if (normalizedLine.productName) {
-    matches = disambiguateSupplierCartMatchesByOrderName(matches, normalizedLine.productName);
+  // Prefer marketplace order name; fall back to warehouse product name when the order
+  // name is absent (e.g. WB orders) so Dalik multi-product articles still disambiguate.
+  const disambigName = normalizedLine.productName || normalizeWarehouseProduct(product).name;
+  if (disambigName) {
+    matches = disambiguateSupplierCartMatchesByOrderName(matches, disambigName);
   }
   const blockedPartnerIds = activeSupplierBlocksForOffer(state, normalizedLine.offerId);
   const {

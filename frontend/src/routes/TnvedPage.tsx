@@ -141,14 +141,13 @@ export function TnvedPage() {
   const report = reportQuery.data;
 
   useEffect(() => {
-    if (categories.length && !Object.keys(localCodes).length) {
-      const codes: Record<string, string> = {};
-      for (const cat of categories) {
-        const key = `${cat.descCatId}:${cat.typeId}`;
-        codes[key] = cat.tnvedCode || "";
-      }
-      setLocalCodes(codes);
+    if (!categories.length) return;
+    const codes: Record<string, string> = {};
+    for (const cat of categories) {
+      const key = `${cat.descCatId}:${cat.typeId}`;
+      codes[key] = cat.tnvedCode || "";
     }
+    setLocalCodes(codes);
   }, [categories]);
 
   useEffect(() => { if (report?.yandex.defaultCode) setDefaultCode((c) => c || (report?.yandex.defaultCode ?? "")); }, [report]);

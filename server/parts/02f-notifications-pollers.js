@@ -58,6 +58,9 @@ async function pollOzonOrderNotifications(state) {
         with: { analytics_data: false, financial_data: false },
       }, account);
       const postings = data?.result?.postings || [];
+      if (postings.length > 0) {
+        validateApiShape(data, ["result.postings[0].posting_number", "result.postings[0].products[0].offer_id"], "ozon_postings_v3");
+      }
       let maxSeen = sinceIso;
       for (const posting of postings) {
         const createdAt = cleanText(posting.in_process_at || posting.created_at);

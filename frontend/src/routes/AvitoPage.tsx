@@ -909,7 +909,7 @@ export function AvitoPage() {
                 )}
               </span>
               <span>
-                <button className="icon-action danger" type="button" disabled={removeListing.isPending} onClick={() => removeListing.mutate(item.adId)} title="Убрать из фида">
+                <button className="icon-action danger" type="button" disabled={removeListing.isPending} onClick={() => { if (!window.confirm("Удалить листинг? Это действие необратимо.")) return; removeListing.mutate(item.adId); }} title="Убрать из фида">
                   <Trash2 size={15} />
                 </button>
               </span>

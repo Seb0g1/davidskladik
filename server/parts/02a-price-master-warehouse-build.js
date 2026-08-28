@@ -67,9 +67,16 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     const productMarkupOverride = marketplaceProductMarkupOverride(product);
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
     const buildNow = new Date();
+    // Disambiguate PM rows per product: when a Dalik-style supplier stores multiple products
+    // under the same article code, use the warehouse product name to pick the correct row.
+    const productName = cleanText(product.name || product.offerId || product.offer_id || "");
+    const productSubMap = new Map(normalizedLinks.map((link) => [link.id, matchMap.get(link.id) || []]));
+    const disambiguatedMap = productName
+      ? disambiguateSupplierCartMatchesByOrderName(productSubMap, productName)
+      : productSubMap;
     const rawSuppliers = normalizedLinks.flatMap((link) => {
       if (link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > buildNow) return [];
-      return (matchMap.get(link.id) || []).map((match) => ({
+      return (disambiguatedMap.get(link.id) || []).map((match) => ({
         ...match,
         markupCoefficient: resolveMarkupCoefficient({
           productMarkup: productMarkupOverride,
@@ -108,7 +115,7 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
     });
     const hasSnoozedLinks = normalizedLinks.some((link) => link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > buildNow);
     const links = normalizedLinks.map((link) => {
-      const matched = matchMap.get(link.id) || [];
+      const matched = disambiguatedMap.get(link.id) || [];
       const availableMatches = matched.filter((item) => item.available);
       return {
         ...link,

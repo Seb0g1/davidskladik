@@ -21,7 +21,7 @@ async function runStalePriceTargetScan() {
         AND EXISTS (
           SELECT 1 FROM product_links pl
           JOIN pm_snapshot_items pm ON (
-            (pl.raw->>'matchType' = 'selected_row' AND pm.row_id = (pl.raw->>'sourceRowId'))
+            (pl.raw->>'matchType' = 'selected_row' AND pm.row_id = COALESCE(pl.source_row_id, pl.raw->>'sourceRowId'))
             OR (pl.raw->>'matchType' = 'article'
                 AND pm.partner_id::text = pl.partner_id::text
                 AND pm.article = COALESCE(NULLIF(pl.raw->>'article',''), pl.supplier_article))
@@ -167,6 +167,7 @@ async function runDailyRefresh(trigger = "manual") {
       }));
       return state;
     } catch (error) {
+      recordAppError?.("pm_sync", "02f-daily-maintenance-schedulers/runDailyRefresh", error?.message || String(error), { trigger });
       const state = await writeDailySyncState(withDailySyncLog({
         status: "failed",
         trigger,
@@ -177,6 +178,7 @@ async function runDailyRefresh(trigger = "manual") {
       return state;
     }
   })().finally(() => {
+    pruneOldAppErrors?.().catch(() => {});
     dailySyncPromise = null;
   });
 
@@ -472,6 +474,7 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
         detail: error?.message || String(error),
         err: error,
       });
+      recordAppError?.("pm_sync", "02f-daily-maintenance-schedulers", error?.message || String(error), { trigger });
       throw error;
     } finally {
       marketplaceMaintenanceRunning = false;

@@ -1001,7 +1001,7 @@ export function SupplierCartPage() {
               <div><span>Документы ДавидСклад</span><strong>{pmStatus.data?.davidskladDocs?.length || 0}</strong></div>
               <div><span>Строки PM</span><strong>{pmStatus.data?.latestRows?.length || 0}</strong></div>
             </div>
-            {pmStatus.error ? <div className="inline-error">{String(pmStatus.error)}</div> : null}
+            {pmStatus.error ? <div className="inline-error">{errorMessage(pmStatus.error)}</div> : null}
             <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
               <button className="secondary-action danger-action" type="button" disabled={rollbackDryRun.isPending} onClick={() => rollbackDryRun.mutate()}>
                 {rollbackDryRun.isPending ? <Loader2 className="spin" size={14} /> : <AlertTriangle size={14} />} Проверить откат
@@ -1023,8 +1023,8 @@ export function SupplierCartPage() {
               </div>
             ) : null}
             {rollbackApply.data ? <div className="success-strip">Откат выполнен. Осталось строк сборки: {rollbackApply.data.after?.pickingRows || 0}, PM rows: {countArray(rollbackApply.data.after?.pm?.rowIds)}.</div> : null}
-            {rollbackDryRun.error ? <div className="inline-error">{String(rollbackDryRun.error)}</div> : null}
-            {rollbackApply.error ? <div className="inline-error">{String(rollbackApply.error)}</div> : null}
+            {rollbackDryRun.error ? <div className="inline-error">{errorMessage(rollbackDryRun.error)}</div> : null}
+            {rollbackApply.error ? <div className="inline-error">{errorMessage(rollbackApply.error)}</div> : null}
           </section>
         </div>
       ) : null}

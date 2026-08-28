@@ -110,6 +110,418 @@ _PG-маршруты candidates(поиск по артикулу+флаги)/ref
 - #3 (сделано): тот же reconcile пишет `raw.priceVerifiedAt=now()`; `02f-price-sweep.js` SQL исключает товары с `priceVerifiedAt` свежее `PRICE_SWEEP_VERIFIED_COOLDOWN_HOURS` (default 6ч), даже если current_price/target_price снова расходятся косметически.
 - После деплоя проверить: счётчик stale падает и держится; в логах `price current_price reconciled to target` для прежних "вечных" SKU (напр. DIC12) больше не повторяется на каждом цикле.
 
+## E. Архитектурное оздоровление — КОРНИ БАГОВ И КАК ИХ УБРАТЬ
+
+> Этот раздел — честный диагноз, почему баги появляются снова и снова, и конкретный план их устранения. Написан после анализа 54 527 строк кода, 14 `raw Json?` полей в схеме и истории инцидентов (Dalik, snapshot.corrupt, event-loop блокировки воркера).
+
+### Диагноз: почему так много багов
+
+**1. `sourceRowId` и `exactName` не являются колонками БД**
+Самый важный факт: привязка товара к PriceMaster (`sourceRowId`) хранится НЕ в типизированной колонке, а в `raw` JSON-блобе ProductLink. Нет колонки → нет индекса → нет валидации → можно записать что угодно. Именно это породило весь класс ошибок Dalik: `raw.article` и `supplierArticle`-колонка разошлись, `sourceRowId` указывал на другой товар, поле `exactName` жило отдельной жизнью.
+
+**2. 14 `raw Json?` полей в схеме Prisma**
+Почти каждая модель хранит критичные данные в неструктурированном JSON. Код пишет `raw.someField` и читает `raw?.someField` без проверок типа. Ошибки типов видны только в production, не при разработке.
+
+**3. JSON-файлы как критическое состояние**
+В корне проекта: `personal-warehouse.json` (был `.corrupt-...`!), `ozon-unarchive-queue.json`, `price-retry-queue.json`, `app-settings.json`, `app-users.json`, `snapshot.json` (300 МБ). Запись не ACID-атомарна → при перегрузке/сбое файл портится. Уже произошло минимум 1 раз (`personal-warehouse.corrupt-...`).
+
+**4. 300 МБ PM snapshot в памяти**
+300 000 строк MySQL → JSON-файл 300 МБ → in-memory индексы → GC-давление → зависания event loop. Воркер рестартовал 31 раз в день. Исправлено patch'ем, но архитектура остаётся хрупкой.
+
+**5. Нет TypeScript на бэкенде**
+54 527 строк JavaScript без типов. Ошибки `Cannot read property 'X' of undefined` видны только в проде. Фронтенд на TypeScript — бэкенд нет.
+
+**6. Нет валидации ответов маркетплейсов**
+Ozon/YM/WB меняют форму ответа API — наш код молча ломается (читает `undefined`). Узнаём только когда что-то пошло не так в прод.
+
+**7. Ручной манифест `server/source.js`**
+100+ файлов надо вставлять в правильное место вручную. Линтер помогает, но при каждом добавлении риск ошибки.
+
+---
+
+### Задачи: от критичных к желательным
+
+#### E1. 🔴 КРИТИЧНО: Вынести `sourceRowId` и `exactName` из `raw` в типизированные колонки
+
+**Проблема**: Prism-схема ProductLink не имеет колонок `sourceRowId` и `exactName` — они лежат в `raw` JSON. Нет индекса → медленный поиск; нет типа → расхождения; нет ограничений → баги Dalik.
+
+**Что делать**:
+- Prisma migration: добавить `sourceRowId String? @map("source_row_id")`, `exactName String? @map("exact_name")` в ProductLink
+- Добавить `@@index([sourceRowId])` и `@@index([exactName])`
+- Обновить все места где читается/пишется `raw.sourceRowId` и `raw.exactName` (grep по кодобазе)
+- Backfill: заполнить новые колонки из существующих `raw`-данных через SQL-миграцию
+
+**Файлы для изменения**: `prisma/schema.prisma`, все `02a-price-master-*.js`, `02d-operation-runners-archived.js`, `02a-normalizers-warehouse-links.js`.
+
+**Критерий**: `prisma.productLink.findMany({ where: { sourceRowId: "2331708" } })` работает мгновенно. Никакой код не читает `link.raw?.sourceRowId` — только `link.sourceRowId`.
+
+---
+
+**ПРОМТ ДЛЯ АГЕНТА E1:**
+```
+Задача: вынести поля sourceRowId и exactName из JSON-блоба raw в типизированные колонки Prisma.
+
+Контекст проекта:
+- Node.js/Express, server/parts/*.js (манифест server/source.js — добавлять новые файлы туда!)
+- PostgreSQL через Prisma (prisma/schema.prisma), MySQL PriceMaster (read-only)
+- Команды: npm test (lint + smoke), npm run db:migrate:dev (Prisma migration dev)
+
+Шаг 1 — Prisma schema (prisma/schema.prisma):
+В модель ProductLink добавить после поля `keyword`:
+  sourceRowId  String?  @map("source_row_id")
+  exactName    String?  @map("exact_name")
+В @@index добавить: @@index([sourceRowId]), @@index([exactName])
+
+Шаг 2 — Migration:
+Создай migration файл вручную (npm run db:migrate:dev -- --name add_link_source_row). Migration SQL:
+  ALTER TABLE product_links ADD COLUMN source_row_id TEXT;
+  ALTER TABLE product_links ADD COLUMN exact_name TEXT;
+  CREATE INDEX idx_product_links_source_row_id ON product_links(source_row_id) WHERE source_row_id IS NOT NULL;
+  CREATE INDEX idx_product_links_exact_name ON product_links(exact_name) WHERE exact_name IS NOT NULL;
+  -- Backfill из raw JSON:
+  UPDATE product_links SET source_row_id = (raw->>'sourceRowId') WHERE raw->>'sourceRowId' IS NOT NULL;
+  UPDATE product_links SET exact_name = (raw->>'exactName') WHERE raw->>'exactName' IS NOT NULL;
+
+Шаг 3 — обновить все места в коде где читается/пишется raw.sourceRowId и raw.exactName:
+  Grep: grep -rn "raw\.sourceRowId\|raw\?\.sourceRowId\|raw\.exactName\|raw\?\.exactName\|sourceRowId.*raw\|exactName.*raw" server/
+  Для каждого найденного места:
+  - Чтение: заменить `link.raw?.sourceRowId` на `link.sourceRowId ?? link.raw?.sourceRowId` (временный fallback)
+  - Запись: при update/create ProductLink всегда писать в оба места — и в поле, и в raw (чтобы не сломать код который ещё не обновлён)
+  - В 02d-operation-runners-archived.js (runRepairDalikDisambiguationLinksOperation): при update добавить sourceRowId: bestRowId, exactName: bestName вместе с raw
+
+Шаг 4 — обновить normalizers-warehouse-links.js:
+  normalizeWarehouseLink должен читать sourceRowId из input.sourceRowId || input.raw?.sourceRowId
+  При create ProductLink писать sourceRowId в поле, не только в raw
+
+Шаг 5 — npm test (все 281 должны пройти, плюс lint:source-manifest).
+
+Важно: НЕ удалять raw.sourceRowId и raw.exactName из raw-блоба пока — только добавить дублирование в колонки. Полная миграция чтений — следующий шаг.
+
+Репорт: сколько мест обновлено, прошли ли тесты.
+```
+
+---
+
+#### E2. 🔴 КРИТИЧНО: Zod-валидация ответов маркетплейсов
+
+**Проблема**: Ozon/YM/WB могут изменить форму ответа API. Мы узнаём об этом только когда что-то сломалось в проде — потому что читаем `response.result?.items?.[0]?.stock` без проверки что response.result вообще существует.
+
+**Что делать**:
+- Установить `zod` (или использовать ручную валидацию) 
+- Создать `server/parts/02a-api-schemas.js` со схемами для 5 критичных эндпоинтов:
+  - Ozon `/v4/product/info/stocks` (остатки)
+  - Ozon `/v5/product/info/prices` (цены)
+  - Ozon `/v2/posting/fbs/list` (заказы)
+  - YM `/v3/businesses/{id}/offers/stocks` (остатки)
+  - YM `/v3/campaigns/{id}/offers` (товары)
+- При получении ответа: parse → если не совпадает → `logger.warn("api_response_unexpected_shape", { endpoint, diff })`
+- НЕ падать при несовпадении — только логировать
+
+**Критерий**: при изменении API маркетплейса в логах появляется warning за часы до того как что-то сломается.
+
+---
+
+**ПРОМТ ДЛЯ АГЕНТА E2:**
+```
+Задача: добавить валидацию форм ответов API маркетплейсов чтобы обнаруживать изменения API заранее.
+
+Контекст:
+- Node.js без TypeScript на бэкенде
+- Ozon API: server/parts/02a-ozon-api-request.js, 02a-ozon-stock-price-maps.js
+- YM API: server/parts/02a-yandex-*.js
+- Логгер: logger.warn/info/error (pino, уже импортирован во всех файлах)
+- НЕ ставить новых npm-пакетов — использовать ручную валидацию
+
+Реализация:
+1. Создай server/parts/02a-api-schemas.js со вспомогательной функцией validateApiShape(response, schema, context):
+   - schema — объект вида { "result.items[].stock": "number", "result.items[].offer_id": "string" }
+   - функция проверяет наличие и тип каждого поля через путь (используй lodash.get или собственный getPath)
+   - при несовпадении вызывает logger.warn("api_shape_mismatch", { context, missingFields, unexpectedTypes })
+   - возвращает { valid: bool, issues: [] }
+   - НЕ бросает исключений
+
+2. Добавь вызовы validateApiShape для этих ответов (найди где они обрабатываются):
+   a) Ozon /v4/product/info/stocks — ожидаем { result: { items: [{ offer_id, stocks: [{ type, present, reserved }] }] } }
+      Файл: 02a-ozon-stock-price-maps.js, функция getOzonStockMap или аналог
+   b) Ozon /v2/posting/fbs/list — ожидаем { result: { postings: [{ posting_number, products: [{ offer_id, quantity }] }] } }  
+      Файл: 02f-notifications-pollers.js или 02d-shop-api-routes.js
+   c) YM /v3/businesses/{id}/offers — ожидаем { result: { offerMappings: [{ offer: { offerId } }] } }
+      Файл: 02a-yandex-stock-send-bulk.js (getKnownYandexExistingOfferIdSet)
+
+3. Добавь 02a-api-schemas.js в server/source.js в правильное место (после 02a-ozon-api-request.js).
+
+4. npm test — должны пройти все тесты.
+
+Репорт: какие файлы изменены, сколько эндпоинтов покрыто.
+```
+
+---
+
+#### E3. 🟡 ВАЖНО: Централизованный журнал ошибок в Postgres
+
+**Проблема**: ошибки разбросаны по логам (pino → stdout). Нет способа быстро увидеть «что сломалось за последний час» без SSH.
+
+**Что делать**:
+- Prisma-модель `AppError` (id, type, source, message, context Json, resolvedAt, createdAt)
+- Функция `recordAppError(type, source, message, context)` — пишет в БД non-blocking (без await, чтобы не ломать основной поток)
+- Вызывать из catch-блоков критичных операций (ценообразование, синк, разархив)
+- Маршрут `GET /api/system/errors?since=1h&type=` — для SystemPage
+- На SystemPage: таблица последних 50 ошибок с фильтром по типу
+
+---
+
+**ПРОМТ ДЛЯ АГЕНТА E3:**
+```
+Задача: добавить централизованный журнал ошибок приложения в Postgres + UI на странице системы.
+
+Контекст:
+- Prisma schema: prisma/schema.prisma (команда npm run db:migrate:dev для создания миграции)
+- SystemPage: frontend/src/routes/SystemPage.tsx
+- API файл для системных роутов: найди через grep "system\|SystemPage" в server/parts/
+- Logger: pino (logger.error/warn)
+- prisma клиент: глобальный, импортируется как { prisma } или require('../lib/postgres')
+
+Шаг 1 — Prisma schema:
+Добавить модель:
+model AppError {
+  id          String    @id @default(cuid())
+  type        String    // "price_send", "stock_send", "pm_sync", "api_error", etc
+  source      String    // файл/функция откуда ошибка
+  message     String
+  context     Json?
+  resolvedAt  DateTime? @map("resolved_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  @@index([type, createdAt])
+  @@index([createdAt])
+  @@map("app_errors")
+}
+
+Шаг 2 — migration: npm run db:migrate:dev -- --name add_app_errors
+
+Шаг 3 — создай server/parts/02a-error-tracker.js:
+function recordAppError(type, source, message, context = {}) {
+  // non-blocking — не await
+  prisma.appError.create({ data: { type, source, message, context } })
+    .catch((e) => logger.warn("error_tracker_write_failed", { detail: e.message }));
+}
+// Автоочистка: удалять ошибки старше 7 дней (вызывать раз в сутки из планировщика)
+async function pruneOldAppErrors() {
+  const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  await prisma.appError.deleteMany({ where: { createdAt: { lt: cutoff } } });
+}
+Экспортировать обе функции. Добавить в server/source.js.
+
+Шаг 4 — API роут (в существующем файле системных роутов):
+GET /api/system/errors?since=1h&type=&limit=50
+  since: "1h"|"6h"|"24h"|"7d"
+  Возвращает: { errors: [{ id, type, source, message, context, createdAt }] }
+DELETE /api/system/errors/:id — пометить resolved
+
+Шаг 5 — вызвать recordAppError в 3 критичных местах:
+  - в catch блоке отправки цен (найти через grep "price.*error\|send.*price.*catch")
+  - в catch блоке синка PM снапшота (02f-daily-maintenance-schedulers.js или аналог)
+  - в catch блоке отправки остатков
+
+Шаг 6 — фронт SystemPage.tsx: добавить секцию "Журнал ошибок" с таблицей, фильтром по времени/типу, кнопкой "Отметить решённой".
+
+npm test в конце. Репорт: что сделано.
+```
+
+---
+
+#### E4. 🟡 ВАЖНО: Лог истории цен в карточке товара
+
+**Проблема**: `PriceHistory` уже пишется — но нет UI чтобы это видеть. Операторы не знают, почему цена изменилась.
+
+**Что делать**:
+- На странице карточки товара: вкладка «История цен» — таблица/график последних 30 записей из PriceHistory
+- Колонки: дата, рыночная цена (до), рыночная цена (после), причина (из `raw.reason`), кто изменил
+- Маршрут уже может существовать — проверить через grep
+
+---
+
+**ПРОМТ ДЛЯ АГЕНТА E4:**
+```
+Задача: показать историю изменений цены в карточке товара на складе.
+
+Контекст:
+- PriceHistory модель уже есть в prisma/schema.prisma и данные пишутся
+- Карточка товара: frontend/src/ — найди файл DiagnosticValue или WarehousePage или ProductCard (grep по "priceHistory\|PriceHistory\|price_history")
+- API: найди есть ли уже GET /api/warehouse/products/:id/price-history (grep по server/parts/)
+- Фронтенд: React + TanStack Query + TailwindCSS
+
+Шаг 1 — найти или создать бэкенд-роут:
+  Если нет GET /api/warehouse/products/:id/price-history — добавить в подходящий роутовый файл (02d-warehouse-products-crud.js или аналог):
+  - SELECT из price_history WHERE product_id = :id ORDER BY created_at DESC LIMIT 50
+  - Возвращать: [{ id, marketplace, target, priceRub, usdPrice, usdRate, markup, reason, createdAt }]
+  - Поля могут быть в raw JSON — посмотри реальную структуру: prisma.priceHistory.findFirst() чтобы увидеть что пишется
+
+Шаг 2 — найти где рендерится карточка товара на фронтенде:
+  Это скорее всего modal/drawer или страница. Добавить раздел "История цен":
+  - Использовать useQuery(["/api/warehouse/products", id, "price-history"])
+  - Таблица: Дата | МП | Цена (₽) | PM цена (USD) | Наценка | Причина
+  - Показывать последние 20 записей, кнопка "показать все"
+  - Если записей нет — "История цен пуста"
+
+Шаг 3 — npm run frontend:check (TypeScript errors), npm test.
+
+Репорт: какой файл карточки изменён, есть ли уже данные в price_history.
+```
+
+---
+
+#### E5. 🟡 ВАЖНО: Watchdog воркера (автоперезапуск при зависшем event loop)
+
+**Проблема**: PM2 не перезапускает процесс с зависшим event loop (статус остаётся `online`). Уже приводило к суткам простоя.
+
+**Что делать**:
+- Внешний bash-скрипт (cron, каждые 2 мин): `curl -f http://localhost:3001/health || pm2 restart davidsklad-worker`
+- Или: в самом воркере — setInterval который проверяет что event loop не отстаёт больше чем на 5 сек
+- Документировать в DEPLOY.md и PROD_RUNBOOK.md
+
+---
+
+**ПРОМТ ДЛЯ АГЕНТА E5:**
+```
+Задача: защита от зависания event loop воркера — автоперезапуск через pm2 при недоступности /health.
+
+Контекст:
+- Production сервер: root@81.17.154.153
+- PM2 конфиг: ecosystem.config.cjs в корне
+- Worker process: davidsklad-worker (SERVER_ROLE=worker, порт 3001)
+- /health эндпоинт уже существует (01-bootstrap-health.js)
+- Деплой: git pull && node server/assemble.js && pm2 restart davidsklad-api davidsklad-worker
+
+НЕ нужно менять код сервера. Нужно:
+
+1. Создай scripts/watchdog-worker.sh:
+#!/bin/bash
+HEALTH_URL="http://localhost:3001/health"
+MAX_FAILURES=2
+FAILURES=0
+while true; do
+  if ! curl -sf --max-time 5 "$HEALTH_URL" > /dev/null 2>&1; then
+    FAILURES=$((FAILURES + 1))
+    echo "[watchdog] health check failed ($FAILURES/$MAX_FAILURES)" | logger -t davidsklad-watchdog
+    if [ "$FAILURES" -ge "$MAX_FAILURES" ]; then
+      echo "[watchdog] restarting davidsklad-worker" | logger -t davidsklad-watchdog
+      pm2 restart davidsklad-worker
+      FAILURES=0
+    fi
+  else
+    FAILURES=0
+  fi
+  sleep 60
+done
+
+2. Создай scripts/watchdog-setup.sh — инструкция по установке как systemd service:
+[Unit]
+Description=DavidSklad Worker Watchdog
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/var/www/davidsklad/davidskladik/scripts/watchdog-worker.sh
+Restart=always
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target
+
+Включение: systemctl enable davidsklad-watchdog && systemctl start davidsklad-watchdog
+
+3. Обнови docs/PROD_RUNBOOK.md — добавь секцию "Watchdog" с инструкцией по установке и проверке (systemctl status davidsklad-watchdog).
+
+4. Добавь в ecosystem.config.cjs для davidsklad-worker:
+   max_restarts: 20,
+   restart_delay: 3000,
+   -- эти значения уже могут быть, проверь
+
+Репорт: какие файлы созданы/изменены. (Не пытайся деплоить — только создай файлы локально.)
+```
+
+---
+
+#### E6. 🟢 ХОРОШО ИМЕТЬ: Bulk-операции в каталоге склада
+
+**Что делать**: чекбоксы у товаров в таблице каталога (WarehousePage) + кнопки «Переотправить цену», «Переотправить остаток», «Снять привязку» для выбранных товаров. API уже есть (price push, stock push) — нужен только фронтенд мультивыбора.
+
+---
+
+**ПРОМТ ДЛЯ АГЕНТА E6:**
+```
+Задача: добавить bulk-операции (мультивыбор + действия) в таблицу каталога на WarehousePage.
+
+Контекст:
+- Frontend: frontend/src/routes/WarehousePage.tsx (или аналог — найди через glob)
+- React 19 + TanStack Query + TailwindCSS
+- API для цен: POST /api/prices/send-selected (найди через grep)
+- API для остатков: есть ли уже bulk stock endpoint? Grep по server/parts/
+- API для снятия привязки: DELETE /api/warehouse/products/:id/links или аналог
+
+Шаг 1 — state мультивыбора в WarehousePage:
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  Чекбокс в каждой строке таблицы. "Выбрать все на странице". Счётчик выбранных.
+
+Шаг 2 — floating action bar (появляется когда selectedIds.size > 0):
+  "Выбрано N товаров" + кнопки:
+  - "Переотправить цену" → POST к price endpoint с выбранными productIds
+  - "Переотправить остаток" → POST к stock endpoint
+  - "Снять выделение" → setSelectedIds(new Set())
+  Стилизация: fixed bottom bar с тенью, анимация появления
+
+Шаг 3 — если нет bulk stock endpoint:
+  Добавить POST /api/warehouse/bulk-stock-push в подходящий серверный файл
+  Body: { productIds: string[] }
+  Вызывает sendTargetStocksToMarketplace для найденных продуктов
+
+Шаг 4 — npm run frontend:check + npm test.
+
+Репорт: что изменено, есть ли нужные API-эндпоинты.
+```
+
+---
+
+#### E7. 🟢 ХОРОШО ИМЕТЬ: Ежедневный бэкап БД
+
+**Что делать**: bash-скрипт `scripts/db-backup.sh` → pg_dump → `/var/backups/davidsklad/YYYY-MM-DD.sql.gz`. Cron: 03:00 ежедневно. Ротация: хранить 14 дней.
+
+---
+
+**ПРОМТ ДЛЯ АГЕНТА E7:**
+```
+Задача: ежедневный бэкап PostgreSQL.
+
+Создай scripts/db-backup.sh:
+#!/bin/bash
+set -e
+BACKUP_DIR="/var/backups/davidsklad"
+DATE=$(date +%Y-%m-%d)
+mkdir -p "$BACKUP_DIR"
+# DATABASE_URL из env или параметра
+DB_URL="${DATABASE_URL:-}"
+if [ -z "$DB_URL" ]; then
+  echo "DATABASE_URL not set" >&2; exit 1
+fi
+pg_dump "$DB_URL" | gzip > "$BACKUP_DIR/$DATE.sql.gz"
+echo "Backup saved: $BACKUP_DIR/$DATE.sql.gz ($(du -h "$BACKUP_DIR/$DATE.sql.gz" | cut -f1))"
+# Ротация: удалить старше 14 дней
+find "$BACKUP_DIR" -name "*.sql.gz" -mtime +14 -delete
+echo "Old backups cleaned."
+
+Создай scripts/db-backup-setup.sh с инструкцией cron:
+# Добавить в crontab (crontab -e):
+# 0 3 * * * /var/www/davidsklad/davidskladik/scripts/db-backup.sh >> /var/log/davidsklad-backup.log 2>&1
+
+Обнови docs/PROD_RUNBOOK.md — добавь секцию "Backup" с инструкцией восстановления:
+  gunzip -c backup.sql.gz | psql $DATABASE_URL
+
+Репорт: файлы созданы.
+```
+
+---
+
 ## D. Прочие улучшения (предложения)
 1. ✅ **Дашборд** (главная для ADMIN): сводка — продажи за сегодня/неделю (из finance), прибыль, топ-поставщики, очередь цен, архив-бэклог, непрочитанные чаты/вопросы/отзывы. Сейчас «Статистика» пустует.
    - Сделано: новый эндпоинт `/api/dashboard/summary` (`02d-dashboard-summary.js`) агрегирует продажи за сегодня/неделю и прибыль (из `listFinanceOrders`, новый период `period=today` добавлен в `02d-finance-list-query.js`), топ-5 поставщиков за неделю по прибыли, очередь цен (`salesAutomationSkuState` со статусом pending/queued), архив-бэклог (Яндекс `archived+linked` count + очередь восстановления Ozon), непрочитанные уведомления по типам (`app_notifications` group by type). `DashboardPage.tsx` дополнен карточками: «Продажи сегодня» (метрика), «Продажи за неделю» + топ поставщиков, «Очередь и архив», «Уведомления» (чаты/вопросы/отзывы).

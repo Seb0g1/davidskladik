@@ -14,6 +14,9 @@ function productFromPostgres(row = {}) {
     return normalizeWarehouseLink({
       ...linkRaw,
       id: link.id,
+      // Prefer typed columns over raw JSON — typed columns are authoritative after migration
+      sourceRowId: link.sourceRowId || linkRaw.sourceRowId,
+      exactName: link.exactName || linkRaw.exactName,
       article: linkRaw.article || (linkRaw.matchType ? "" : link.supplierArticle),
       supplierName: link.supplierName,
       partnerId: link.partnerId,

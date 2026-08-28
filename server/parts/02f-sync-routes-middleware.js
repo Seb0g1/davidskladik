@@ -244,6 +244,7 @@ function startBackgroundSchedulers() {
       batchLimit: zeroStockSweepBatchLimit,
     });
   }
+  startMarketplaceVerifyScheduler();
   if (snoozeSweepEnabled) {
     scheduleSnoozeSweep(5 * 60_000);
     logger.info("snooze sweep scheduler enabled", {
@@ -290,6 +291,9 @@ function startBackgroundSchedulers() {
       intervalSeconds: Math.round(yandexFastUnarchiveIntervalMs / 1000),
       nextRunAt: yandexFastUnarchiveNextRunAt,
     });
+  }
+  if (backgroundJobsEnabled) {
+    startYandexPendingStockScheduler();
   }
   if (ozonYandexAutoImportEnabled) {
     scheduleOzonYandexAutoImport(20 * 60 * 1000);

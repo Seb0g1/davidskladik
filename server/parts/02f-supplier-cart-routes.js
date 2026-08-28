@@ -269,18 +269,28 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     if (partnerId) baseWhere.partnerId = partnerId;
 
     const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
-    const minMatchCount = tokenGroups ? pmMinMatchCount(tokenGroups) : 0;
     function buildWhere(groups) {
       if (groups && groups.length) {
-        // Only required groups in SQL — optional (numbers, "ml") are so broad they flood
-        // the LIMIT window and bury primary-keyword items. JS post-filter handles them.
-        const sqlGroups = groups.filter((g) => !pmTokenGroupIsOptional(g) && !g._compound);
-        const activeGroups = sqlGroups.length ? sqlGroups : groups.filter((g) => !g._compound);
-        const orTerms = activeGroups.flatMap((group) => group.flatMap((synonym) => [
+        // AND across token groups, OR within each group — mirrors the MySQL live search.
+        // AND logic means each additional chip NARROWS results, so all non-compound groups
+        // participate in SQL (not just "required" ones). This prevents the LIMIT window
+        // from being filled by single-keyword matches when the target needs multiple terms.
+        const sqlGroups = groups.filter((g) => !g._compound);
+        if (sqlGroups.length) {
+          const andClauses = sqlGroups.map((group) => ({
+            OR: group.flatMap((synonym) => [
+              { nativeName: { contains: synonym, mode: "insensitive" } },
+              { article: { contains: synonym, mode: "insensitive" } },
+            ]),
+          }));
+          return { ...baseWhere, AND: andClauses };
+        }
+        // Only compound groups: OR pre-filter, JS post-filter does precision.
+        const orTerms = groups.filter((g) => g._compound).flatMap((group) => group.flatMap((synonym) => [
           { nativeName: { contains: synonym, mode: "insensitive" } },
           { article: { contains: synonym, mode: "insensitive" } },
         ]));
-        return { ...baseWhere, OR: orTerms };
+        return orTerms.length ? { ...baseWhere, OR: orTerms } : baseWhere;
       }
       if (q) {
         return { ...baseWhere, OR: [
@@ -292,9 +302,9 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
     }
 
     const sel = { id: true, rowId: true, article: true, partnerId: true, partnerName: true, nativeName: true, price: true, currency: true, docDate: true };
-    // Fetch a large candidate pool so older products (e.g. Dior items from past docs) are not
-    // cut off before post-filter. OR-based SQL pre-filter casts a wide net; JS does precision.
-    let items = await prisma.priceMasterSnapshotItem.findMany({ where: buildWhere(tokenGroups), orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }], take: Math.min(limit * 15, 2000), select: sel });
+    // AND-based SQL pre-filter is now precise enough that a smaller candidate pool suffices.
+    // Take limit*10 (cap 1500) to cover duplicate rows per partner per day.
+    let items = await prisma.priceMasterSnapshotItem.findMany({ where: buildWhere(tokenGroups), orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }], take: Math.min(limit * 10, 1500), select: sel });
 
     // Post-filter: apply quality bar (required keywords must match; numbers/units are optional).
     if (tokenGroups && tokenGroups.length >= 1) {
