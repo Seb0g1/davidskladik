@@ -1,0 +1,70 @@
+.alert.alert-green,
+.alert.alert-red,
+.alert.alert-yellow,
+.alert.alert-clear {
+    font-size: 14px;
+    margin: 0 0 16px;
+    padding: 15px 20px;
+}
+.alert.alert-green {
+    background-color: #dff4ea;
+    background-color: rgba(40, 178, 111, 0.15);
+}
+.alert.alert-red {
+    background-color: #ffe5e7;
+    background-color: rgba(255, 75, 91, 0.15);
+}
+.alert.alert-yellow {
+    background-color: #fff4df;
+    background-color: rgba(253, 178, 38, 0.15);
+}
+.alert.alert-clear {
+    padding: 0;
+}
+.alert-warning {
+    color: #000;
+    background-color: #FFF;
+    border-width: 0 0 0 2px;
+    border-left: 2px solid #f06939;
+    padding: 0 6px 0 14px !important;
+    -webkit-box-shadow: none;
+    -moz-box-shadow:    none;
+    box-shadow:         none;
+    margin: 0 0 16px;
+}
+.alert-warning.alert-warning-big {
+    padding-left: 27px !important;
+    border-left-width: 3px;
+    font-size: 14px;
+    line-height: 20px;
+}
+.alert p {
+    line-height: 20px;
+    margin: 0;
+}
+.alert-warning p {
+    line-height: 18px;
+}
+.alert p + p {
+    margin: 8px 0 0;
+}
+.alert.alert-clear > p {
+    margin: 0;
+}
+.alert.alert-clear > p + p {
+    margin: 8px 0;
+}
+.alert .list {
+    list-style-type: none;
+}
+.alert .list > li:before  {
+    content: '\2014\2002';
+    display: block;
+    float: left;
+    margin: 0 -20px 0;
+}
+.alert .list > li {
+    list-style-type: none;
+    margin: 8px 0;
+    padding: 0 0 0 20px;
+}

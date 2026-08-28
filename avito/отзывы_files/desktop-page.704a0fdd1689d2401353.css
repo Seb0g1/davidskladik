@@ -1,0 +1,153 @@
+/* stylelint-disable-next-line selector-max-universal */
+* {
+    outline-color: var(--theme-palette-blue-deep);
+}
+
+body {
+    display: flex;
+    margin: 0;
+    min-height: 100vh;
+    background-color: var(--theme-palette-gray4-0);
+    color: var(--theme-palette-gray4-100);
+    font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+}
+
+/* Новые стили для заголовков, в итоге должны заменить привязку к тегам h1 и т.п. */
+h1,
+h2 {
+    font-weight: bold;
+}
+
+h3 {
+    margin: 0 0 15px;
+    font-size: 21px;
+    font-weight: normal;
+    line-height: 27px;
+}
+
+h4 {
+    font-size: 18px;
+    line-height: 25px;
+    margin: 0 0 20px;
+}
+
+small {
+    font-size: 11px;
+    line-height: 16px;
+}
+
+a {
+    text-decoration: none;
+    color: var(--theme-palette-blue-deep);
+    outline: none;
+}
+
+strong {
+    font-weight: bold;
+}
+
+img {
+    vertical-align: top;
+}
+
+#app {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+}
+
+.index-container-2t-6t {
+    background-color: #0af;
+    color: #fff;
+    font-size: 14px;
+    line-height: 20px;
+    overflow: hidden;
+    position: relative;
+}
+
+.index-inner-3sFTg {
+    position: relative;
+    width: 1200px;
+    margin: 0 auto;
+}
+
+.index-left-part-28Xr9,
+.index-right-part-3BRJ5 {
+    position: relative;
+    padding: 6px 0;
+    display: inline-block;
+}
+
+.index-left-part-28Xr9 {
+    padding-right: 90px;
+    padding-left: 17px;
+    position: relative;
+    background-color: #ff6163;
+}
+
+.index-inline-1nlmE {
+    display: inline-block;
+}
+
+.index-icon-chrome-iJ3OF {
+    position: absolute;
+    display: block;
+    width: 204px;
+    height: 32px;
+    top: 0;
+    left: -102px;
+    background-image: url(/dstatic/build/089d1664d5a8fac21bff.png);
+}
+
+@media screen and (-webkit-min-device-pixel-ratio: 2), screen and (min-resolution: 192dpi), screen and (min-resolution: 2dppx) {
+    .index-icon-chrome-iJ3OF {
+        background-image: url(/dstatic/build/67c3800868a1ae91b92c.png);
+        background-size: contain;
+        background-repeat: no-repeat;
+    }
+}
+
+.index-cross-2oQbf {
+    position: absolute;
+    top: 4px;
+    right: 17px;
+    width: 21px;
+    height: 21px;
+    padding: 0;
+    cursor: pointer;
+    border: 0;
+    background-color: transparent;
+    z-index: 1;
+}
+
+.index-cross-2oQbf:focus {
+    outline: 0;
+}
+
+.index-cross-icon-Fvw7H {
+    vertical-align: top;
+    position: relative;
+    display: inline-block;
+    width: 15px;
+    height: 15px;
+    background: url(/dstatic/build/8654f7533c1c70bf6603.png) -43px -1px no-repeat;
+    border: 1px solid #fff;
+    border-radius: 50%;
+}
+
+.index-download-3PTsV {
+    margin-left: 33px;
+    font-weight: 600;
+}
+
+.index-download-3PTsV,
+.index-download-3PTsV:hover {
+    color: #fff;
+    text-decoration: none;
+}
+
+.index-by-design-inline-3WK99 {
+    display: inline-block;
+    padding-left: 90px;
+}
+

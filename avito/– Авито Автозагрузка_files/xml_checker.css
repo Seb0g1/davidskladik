@@ -1,0 +1,392 @@
+section h1 {
+  margin: 26px 0 15px;
+}
+.progress {
+  text-align: center;
+}
+.progress svg {
+  width: 40px;
+  height: 40px;
+}
+.form-upload {
+  padding: 30px 30px 31px;
+  margin: 17px 0 0;
+  background: #f7f7fa;
+}
+.form-upload #file {
+  display: none;
+}
+.form-upload #file:focus ~ .form-upload-nav .form-radio-group__label[for='file'] .form-radio-group__item,
+.form-upload #file:active ~ .form-upload-nav .form-radio-group__label[for='file'] .form-radio-group__item {
+  border-color: #b8b8b8;
+  z-index: 1;
+}
+.form-upload #file:checked ~ .form-upload-nav .form-radio-group__label[for='file'] .form-radio-group__item {
+  background-color: #b2e5ff;
+  box-shadow: inset 0 1px 2px rgba(0,170,255,0.3);
+  border-color: #59c8ff;
+  z-index: 1;
+}
+.form-upload #file:checked ~ .form-upload-file {
+  display: block;
+}
+.form-upload #link {
+  display: none;
+}
+.form-upload #link:focus ~ .form-upload-nav .form-radio-group__label[for='link'] .form-radio-group__item,
+.form-upload #link:active ~ .form-upload-nav .form-radio-group__label[for='link'] .form-radio-group__item {
+  border-color: #b8b8b8;
+  z-index: 1;
+}
+.form-upload #link:checked ~ .form-upload-nav .form-radio-group__label[for='link'] .form-radio-group__item {
+  background-color: #b2e5ff;
+  box-shadow: inset 0 1px 2px rgba(0,170,255,0.3);
+  border-color: #59c8ff;
+  z-index: 1;
+}
+.form-upload #link:checked ~ .form-upload-link {
+  display: block;
+}
+.form-upload #text {
+  display: none;
+}
+.form-upload #text:focus ~ .form-upload-nav .form-radio-group__label[for='text'] .form-radio-group__item,
+.form-upload #text:active ~ .form-upload-nav .form-radio-group__label[for='text'] .form-radio-group__item {
+  border-color: #b8b8b8;
+  z-index: 1;
+}
+.form-upload #text:checked ~ .form-upload-nav .form-radio-group__label[for='text'] .form-radio-group__item {
+  background-color: #b2e5ff;
+  box-shadow: inset 0 1px 2px rgba(0,170,255,0.3);
+  border-color: #59c8ff;
+  z-index: 1;
+}
+.form-upload #text:checked ~ .form-upload-text {
+  display: block;
+}
+.form-upload-nav {
+  margin-bottom: 20px;
+}
+.form-upload__section {
+  display: none;
+  animation: 0.5s section 1;
+}
+.form-upload__section .error {
+  font-size: 13px;
+  margin: 6px 0 -5px;
+}
+.form-upload__section[data-state="sent"] button,
+.form-upload__section[data-state="sent"] input,
+.form-upload__section[data-state="sent"] textarea,
+.form-upload__section[data-state="sent"] div,
+.form-upload__section[data-state="sent"] span {
+  display: none;
+}
+.form-upload-file__drop-zone {
+  background: #fff;
+  border: 1px dashed #bcbcbc;
+  position: relative;
+  text-align: center;
+  line-height: 18px;
+  padding: 24px 0 28px;
+  width: 472px;
+}
+.form-upload-file__drop-zone .form-upload-file__content_default {
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  gap: 12px;
+}
+.form-upload-file__drop-zone[data-state="clear"] .form-upload-file__content_default {
+  display: flex;
+}
+.form-upload-file__drop-zone[data-state="dragover"] {
+  border-style: solid;
+}
+.form-upload-file__drop-zone[data-state="dragover"] .form-upload-file__content_default {
+  display: flex;
+}
+.form-upload-file__drop-zone[data-state="drop"] .form-upload-file__content_drop {
+  display: block;
+}
+.form-upload-file__drop-zone[data-state="uploaded"] {
+  background: 0;
+  border: 0;
+  text-align: left;
+  padding: 0;
+}
+.form-upload-file__drop-zone[data-state="uploaded"] .form-upload-file__content_uploaded {
+  display: block;
+  margin-top: -4px;
+}
+.form-upload-file__help {
+  width: 26px;
+  position: relative;
+  height: 32px;
+  background: url(icon-file.png);
+}
+.form-upload-file__help:before,
+.form-upload-file__help:after {
+  content: "";
+  display: block;
+  position: absolute;
+}
+.form-upload-file__help:before {
+  background: url("icon-file.png");
+  width: 26px;
+  height: 32px;
+  animation: file 1s 1;
+}
+.form-upload-file__help:after {
+  background: url("icon-arrow.png");
+  height: 16px;
+  width: 64px;
+  left: 22px;
+  top: -20px;
+  animation: arrow 1s 1;
+}
+.form-upload-file__link {
+  position: relative;
+  display: inline-block;
+}
+.form-upload-file__link input[type="file"] {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  opacity: 0;
+  z-index: 1;
+}
+.form-upload-file-link__input {
+  display: block;
+}
+.form-upload-file__content {
+  display: none;
+}
+.form-upload-file-progress {
+  height: 4px;
+  background: #b2e5ff;
+  width: 144px;
+  display: inline-block;
+}
+.form-upload-file-progress__bar {
+  background: #0af;
+  height: 100%;
+}
+.form-upload-link__button {
+  float: right;
+}
+.form-upload-link__input-wrapper {
+  overflow: hidden;
+  padding-right: 10px;
+}
+.form-upload-link__input {
+  width: 100%;
+}
+.form-upload-text__textarea {
+  resize: none;
+  width: 100%;
+  height: 200px;
+}
+.form-upload-text__button {
+  margin-top: 10px;
+}
+.form-upload-filename__name {
+  margin-right: 5px;
+}
+.form-upload-filename__size {
+  color: #858585;
+}
+.form-upload-filename__size:after {
+  content: " МБ";
+}
+[data-state='uploaded'] .form-upload-filename {
+  display: inline-block;
+  position: relative;
+  text-align: left;
+}
+[data-state='uploaded'] .form-upload-filename .form-upload-filename__size {
+  margin-right: 12px;
+}
+[data-state='uploaded'] .form-upload-filename .icon-x {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 16px;
+  left: 100%;
+  cursor: pointer;
+}
+[data-state='uploaded'] .form-upload-filename .icon-x:after {
+  content: "\00D7";
+}
+table.report {
+  width: 100%;
+  table-layout: fixed;
+  text-align: left;
+  border-collapse: collapse;
+  line-height: 20px;
+  margin: 10px 0 22px;
+}
+table.report td,
+table.report th {
+  vertical-align: top;
+}
+table.report thead tr {
+  border-bottom: 2px solid #e1e1e1;
+  color: #858585;
+}
+table.report thead tr th {
+  padding: 0 10px 5px 0;
+  font-size: 12px;
+  font-weight: normal;
+}
+table.report thead tr th:nth-child(2) {
+  width: 45%;
+}
+table.report thead tr th:last-child {
+  width: 47%;
+}
+table.report tbody tr {
+  border-bottom: 1px solid #e1e1e1;
+}
+table.report tbody tr:last-child {
+  border-bottom: 0;
+}
+table.report tbody tr td {
+  padding: 5px 10px 5px 0;
+}
+table.report tbody tr td.item-id {
+  word-break: break-word;
+}
+table.report tbody tr td:first-child {
+  padding-left: 6px;
+}
+@-moz-keyframes horizontal {
+  from {
+    transform: scale(0, 1);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@-webkit-keyframes horizontal {
+  from {
+    transform: scale(0, 1);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@-o-keyframes horizontal {
+  from {
+    transform: scale(0, 1);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@keyframes horizontal {
+  from {
+    transform: scale(0, 1);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@-moz-keyframes section {
+  from {
+    transform: scale(1, 0);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@-webkit-keyframes section {
+  from {
+    transform: scale(1, 0);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@-o-keyframes section {
+  from {
+    transform: scale(1, 0);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@keyframes section {
+  from {
+    transform: scale(1, 0);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@-moz-keyframes file {
+  from {
+    transform: scale(0, 0);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@-webkit-keyframes file {
+  from {
+    transform: scale(0, 0);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@-o-keyframes file {
+  from {
+    transform: scale(0, 0);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@keyframes file {
+  from {
+    transform: scale(0, 0);
+  }
+  to {
+    transform: scale(1, 1);
+  }
+}
+@-moz-keyframes arrow {
+  from {
+    width: 0;
+  }
+  to {
+    width: 64px;
+  }
+}
+@-webkit-keyframes arrow {
+  from {
+    width: 0;
+  }
+  to {
+    width: 64px;
+  }
+}
+@-o-keyframes arrow {
+  from {
+    width: 0;
+  }
+  to {
+    width: 64px;
+  }
+}
+@keyframes arrow {
+  from {
+    width: 0;
+  }
+  to {
+    width: 64px;
+  }
+}

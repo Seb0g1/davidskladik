@@ -1,0 +1,90 @@
+(function() {
+    'use strict;'
+
+    var smoothScroll = document.querySelector('.smooth-scroll');
+        links = document.querySelectorAll('a[href^="#"]'),
+        codes = document.querySelectorAll('script[type="prism-markup"]');
+
+    if (smoothScroll) {
+
+        window.onscroll = (function() {
+            var isBusy = false;
+
+            function toggleScroll() {
+                if (window.pageYOffset > window.innerHeight / 2) {
+                    smoothScroll.classList.add('smooth-scroll_visible');
+                } else {
+                    smoothScroll.classList.remove('smooth-scroll_visible');
+                }
+            }
+
+            return function() {
+                if (isBusy) {
+                    return false;
+                }
+                toggleScroll();
+                setTimeout(function() {
+                    isBusy = false;
+                    toggleScroll();
+                }, 300);
+                isBusy = true;
+            };
+        })();
+    }
+
+    var attachEvent = function(el, type, cb) {
+      if (window.addEventListener) {
+        return el.addEventListener(type, cb);
+      } else {
+        return el.attachEvent('on' + type, cb);
+      }
+    }
+
+
+    attachEvent(document.querySelector(".smooth-scroll"), 'click', function() {
+      window.scrollTo(0,0)
+    });
+
+    if (links.length) {
+        Array.prototype.forEach.call(links, function(link) {
+            var target = link.getAttribute('href').substr(1),
+                targetEl = document.getElementById(target);
+            if (targetEl) {
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                });
+            }
+        });
+    }
+
+    if (codes.length) {
+        Array.prototype.forEach.call(codes, function(code) {
+            var html = code.innerHTML;
+            html = html.replace(/(^\n)/, '').replace(/\n\s*?$/, '');
+            code.innerHTML = html;
+        });
+    }
+
+    window.setTimeout(function () {
+        if(window.UXS) {
+            window.UXS.sendEvent('AutoloadDocumentationOld')
+        }
+    }, 90 * 1000);
+})();
+
+if (!window.location.href.includes('gruzoviki_i_spetstehnika')) {
+    [...document.querySelectorAll('li.dropdown li')].forEach(el => el.classList.toggle('dropdown-hide-el'));
+    [...document.querySelectorAll('li.dropdown > div.dropdown-icon-open')].forEach(el => el.classList.toggle('dropdown-icon-open'));
+}
+
+[...document.querySelectorAll('li.dropdown > div')].forEach(el =>
+    el.addEventListener(
+        'click',
+        event => {
+            event.srcElement.classList.toggle('dropdown-icon-open');
+            [...event.currentTarget.parentElement.querySelectorAll('li')].forEach(
+                el => el.classList.toggle('dropdown-hide-el')
+            )
+        }
+    )
+);

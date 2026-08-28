@@ -16,6 +16,7 @@ function requireAuth(request, response, next) {
     "/ai-drafts.html",
     "/ai-drafts.js",
     "/health",
+    "/health/ready",
   ];
   if (publicPaths.includes(request.path)) return next();
   if (request.path.startsWith("/uploads/images/")) return next();

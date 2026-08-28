@@ -1,0 +1,15 @@
+.api-list-card-view-root-1-wCJ {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    margin: 0;
+    row-gap: 56px;
+    list-style: none;
+}
+
+.api-list-card-view-list-item-d9Lay {
+    display: flex;
+    flex-direction: column;
+    row-gap: 16px;
+}
+

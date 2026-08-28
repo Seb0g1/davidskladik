@@ -1,0 +1,44 @@
+.index-root_withPadding-2aelI {
+    margin: 0 auto;
+    max-width: 1316px;
+    padding: 0 16px;
+}
+
+.index-header-5M894 {
+    margin: 16px 0;
+}
+
+.index-container-3G6-S {
+    display: grid;
+    gap: 34px;
+    grid-template-columns: 1fr 390px;
+    margin: 48px 0;
+}
+
+.index-content-U1nVx {
+    padding-top: 80px;
+}
+
+.index-cover-qQSO2 {
+    min-height: 360px;
+    background-repeat: no-repeat;
+    background-position: top center;
+    background-size: contain;
+}
+
+.index-cover_page-3zf2J {
+    background-image: url(/dstatic/build/37d8fa0af8c042af3b91.svg);
+}
+
+.index-cover_unknown-149Kj {
+    background-image: url(/dstatic/build/f2be7d00b031f6942dbc.svg);
+}
+
+.index-paragraph-1TbVX {
+    margin: 8px 0;
+}
+
+.index-paragraph-1TbVX:last-of-type {
+    margin-bottom: 15px;
+}
+

@@ -425,6 +425,9 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
     }
 
     logger.info("linked_reconciler_complete", { trigger, ...totals, lastError });
+    if (totals.zeroStockSent >= 10) {
+      sendTelegramAlert?.("mass_zero_stock", `📦 Реконсайлер: ${totals.zeroStockSent} товаров обнулили остаток за один тик.\nВозможно, поставщик исчез из PM или массово потерял товары.`).catch(() => {});
+    }
     return { status: "ok", trigger, ...totals, lastError };
   } finally {
     linkedReconcilerRunning = false;

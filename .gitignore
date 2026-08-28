@@ -16,3 +16,4 @@ Thumbs.db
 # Тесты
 coverage/
 .nyc_output/
+claude.exe

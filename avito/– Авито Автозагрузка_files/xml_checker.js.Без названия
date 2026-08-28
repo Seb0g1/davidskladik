@@ -1,0 +1,395 @@
+String.prototype.format = function() {
+  var formatted = this;
+  for (var i = 0; i < arguments.length; i++) {
+    var regexp = new RegExp('\\{'+i+'\\}', 'gi');
+    formatted = formatted.replace(regexp, arguments[i]);
+  }
+  return formatted;
+};
+
+
+Handlebars.registerHelper({
+    eq: function (v1, v2) {
+        return v1 === v2;
+    },
+    ne: function (v1, v2) {
+        return v1 !== v2;
+    },
+    lt: function (v1, v2) {
+        return v1 < v2;
+    },
+    gt: function (v1, v2) {
+        return v1 > v2;
+    },
+    lte: function (v1, v2) {
+        return v1 <= v2;
+    },
+    gte: function (v1, v2) {
+        return v1 >= v2;
+    },
+    and: function (v1, v2) {
+        return v1 && v2;
+    },
+    or: function (v1, v2) {
+        return v1 || v2;
+    },
+    math: function(lvalue, operator, rvalue, options) {
+        lvalue = parseFloat(lvalue);
+        rvalue = parseFloat(rvalue);
+
+        return {
+            "+": lvalue + rvalue,
+            "-": lvalue - rvalue,
+            "*": lvalue * rvalue,
+            "/": lvalue / rvalue,
+            "%": lvalue % rvalue
+        }[operator];
+    }
+});
+
+function show(objectId) {
+    let elements = document.getElementsByClassName(objectId);
+    for (let i = 0; i < elements.length; i++) {
+        elements[i].style.display = '';
+    }
+    elements = document.getElementsByClassName(objectId + '_link');
+    for (let i = 0; i < elements.length; i++) {
+        elements[i].style.display = 'none';
+    }
+}
+
+(function() {
+  'use strict';
+
+  const RESULT_RETRY_INTERVAL = 2500;
+
+  const BROKEN_ERROR_MESSAGE = 'Проверка временно недоступна. Попробуйте обновить страницу или заглянуть сюда чуть позже.';
+
+  const CHECKER_TYPE_XML = 'xml';
+  const CHECKER_PATHS = {
+      [CHECKER_TYPE_XML]: {
+          byURL: '/api/v2/public/xml_checker/from_url/',
+          result: '/api/v2/public/xml_checker/result/{0}/',
+      },
+  };
+  const ALLOWED_EXTENSIONS = ['xml', 'csv', 'xls', 'xlsx'];
+  const GET_PARSER_RESULT_RETRIES = 3;
+
+  const toArray = obj => Array.prototype.slice.call(obj);
+
+  const form = document.querySelector('.form-upload');
+  let sections = form.querySelectorAll('.form-upload__section');
+  let progressElement = document.querySelector('.progress');
+  let dropZone = document.querySelector('.js-drop-zone');
+  let inputUpload = document.querySelector('.js-upload');
+
+  // init texts
+  const isNewTexts = typeof URLSearchParams !== 'undefined' ? (new URLSearchParams(window.location.search)).get('checkerNewTexts') === 'true' : false;
+
+  function ensureIsNewContent(config) {
+      config.forEach(({ selector, oldHtml, newHtml}) => {
+          const element = document.querySelector(selector);
+
+          if (element) {
+              element.innerHTML = isNewTexts ? newHtml : oldHtml;
+          }
+      });
+  };
+
+  (function () {
+      const config = [
+          {
+              selector: '#page-title',
+              oldHtml: 'Проверить файл',
+              newHtml: 'Проверка файла'
+          },
+          {
+              selector: '#bread-crumbs-page-title',
+              oldHtml: 'Проверить файл',
+              newHtml: 'Проверка файла'
+          },
+          {
+              selector: '#xml-check-page-main-text',
+              oldHtml: `
+                <p>
+                  На этой странице вы можете проверить ваши файлы на соответствие формату Avito XML v.3,
+                  что упростит их подготовку и отладку.
+                </p>
+              `,
+              newHtml: `
+                <p>
+                  Подходит для XML-файлов. Ограничения:
+                </p>
+                <ul>
+                  <li>
+                    Не проверяются файлы, где больше 1 000 объявлений.
+                  </li>
+                  <li>
+                    Не обрабатываются ссылки на Яндекс Диск.
+                  </li>
+                  <li>
+                    Не показываются дубли объявлений и многие ошибки в параметрах.
+                  </li>
+                  <li>
+                    Не проверяются фотографии.
+                  </li>
+                  <li>
+                    Не проверяются русские названия параметров.
+                  </li>
+                  <li>
+                    Не проверяются настройки цены целевого действия.
+                  </li>
+                </ul>
+                <p>
+                  Не советуем проверять CSV- и Excel-файлы — с ними инструмент работает некорректно. 
+                  Вы можете проверить их прямо в автозагрузке: загрузите файл и посмотрите отчёт.
+                </p>
+              `,
+          },
+          {
+              selector: '#form-upload-file-text',
+              oldHtml: 'Перетащите сюда XML-, CSV- или Excel-файл',
+              newHtml: 'Перетащите сюда файл'
+          }
+      ];
+
+      ensureIsNewContent(config);
+  })();
+
+    const attachEvent = function (el, type, cb) {
+        if (window.addEventListener) {
+            return el.addEventListener(type, cb);
+        } else {
+            return el.attachEvent('on' + type, cb);
+    }
+  };
+
+  const showProgress = () => {
+    progressElement.classList.remove('is-hidden');
+    sections.forEach(section => section.setAttribute('data-state', 'sent'));
+  };
+  const hideProgress = () => {
+    progressElement.classList.add('is-hidden');
+    sections.forEach(section => section.setAttribute('data-state', 'done'));
+  };
+
+  const showError = text => {
+    let error = document.querySelector('.error');
+    error.classList.remove('is-hidden');
+    error.innerHTML = text;
+    hideProgress();
+  };
+  const hideErrors = () => document.querySelector('.error').classList.add('is-hidden');
+
+  const uploadFile = data => sendRequest('/api/v2/public/xml_checker/upload/', data);
+  const uploadUrl = data => sendRequest('/api/v2/public/xml_checker/from_url/', data);
+
+  const makeAjaxRequest = (method, url, data, onSuccess, onError) => {
+    let xhr = new XMLHttpRequest();
+    xhr.open(method, url, true);
+    xhr.send(data);
+
+    xhr.onreadystatechange = function() {
+      if (this.readyState !== 4) return;
+
+      if (this.status >= 500) {
+        showError(BROKEN_ERROR_MESSAGE);
+        if (waitParser.timeout !== undefined) {
+            clearInterval(waitParser.timeout);
+        }
+        return;
+      }
+
+      const callback = this.status === 200 ? onSuccess : onError;
+      callback(this);
+    }
+  };
+
+  function writeFileFields(file) {
+    toArray(document.querySelectorAll('.form-upload-filename__name')).forEach(function(name) {
+      name.innerHTML = file.name;
+    });
+  }
+
+  function waitParser(msg, retries) {
+    const apiURL = CHECKER_PATHS[CHECKER_TYPE_XML].result.format(msg.data.id);
+
+    const onSuccess = request => {
+      hideProgress();
+      clearInterval(waitParser.timeout);
+      inputUpload.value = '';
+      dropZone.setAttribute('data-state', 'clear');
+      document.getElementById('report-result').innerHTML = request.responseText;
+      document.getElementById('report').classList.remove('is-hidden');
+
+      ensureIsNewContent([
+          {
+              selector: '#form-upload-file-text',
+              oldHtml: 'Отчёт о проверке XML-файла',
+              newHtml: 'Отчёт о проверке файла'
+          },
+          {
+              selector: '#report-result-description',
+              oldHtml: `
+                <p>
+                  <strong>
+                    Обратите внимание, что успешное прохождение проверки не гарантирует полное отсутствие ошибок при реальной автозагрузке
+                  </strong> 
+                  объявлений на сайт Avito, так как многие ошибки могут возникать только после 
+                  прохождения модерации или в контексте истории версий конкретного объявления. Также 
+                  инструмент не проверяет наличие и корректность фотографий, указанных в объявлениях.
+              `,
+              newHtml: 'Если проверка не выявила ошибок, это не значит, что их не будет в автозагрузке. Некоторые ошибки возникают только после модерации объявлений.\n'
+          },
+          {
+              selector: '.form-fieldset .status_failed',
+              oldHtml: 'XML не соответствует формату',
+              newHtml: 'Не получилось проверить'
+          },
+          {
+              selector: '.form-fieldset .status_warnings',
+              oldHtml: 'XML не полностью соответствует формату',
+              newHtml: 'Не получилось проверить'
+          },
+          {
+              selector: '.form-fieldset .status_success',
+              oldHtml: 'XML соответствует формату',
+              newHtml: 'Файл соответствует формату'
+          }
+      ]);
+
+      if (isNewTexts) {
+          document.querySelectorAll('[data-new-html]').forEach(el => el.innerHTML = el.dataset.newHtml);
+      }
+    };
+
+    const onError = request => {
+        let error_message;
+        if (request.getResponseHeader('content-type').indexOf('application/json') >= 0) {
+            const response = JSON.parse(request.responseText);
+            const responseMessage = response.messages[0];
+            if (responseMessage.type === 'error') {
+                error_message = responseMessage.text;
+            }
+        } else {
+            error_message = 'Неизвестная ошибка. Попробуйте повторить запрос позднее';
+        }
+        if (!error_message) {
+            retries['retry_count'] = GET_PARSER_RESULT_RETRIES;
+            return;
+        }
+        console.error(
+            'Ошибка при получении результата: '
+            + request.status + ' '
+            + request.statusText + ': '
+            + request.responseText
+        );
+        if (retries && retries['retry_count'] > 0) {
+            retries['retry_count']--;
+            return;
+        }
+        hideProgress();
+        showError(error_message);
+        clearInterval(waitParser.timeout);
+    };
+
+    makeAjaxRequest('GET', apiURL, null, onSuccess, onError);
+  }
+
+  function sendRequest(url, data) {
+    document.getElementById('report-result').innerHTML = '';
+    showProgress();
+
+    const onSuccess = request => {
+      const response = JSON.parse(request.responseText);
+      let retries = {'retry_count': GET_PARSER_RESULT_RETRIES};
+      waitParser.timeout = setInterval(
+          () => waitParser(response, retries),
+          RESULT_RETRY_INTERVAL
+      );
+    };
+    const onError = request => {
+        let error_message;
+        if (request.getResponseHeader('content-type').indexOf('application/json') >= 0) {
+            const response = JSON.parse(request.responseText);
+            const responseMessage = response.messages[0];
+            error_message = responseMessage.text;
+        } else if (request.status === 413) {
+            error_message = 'Размер файла слишком велик';
+        } else if (request.status === 599) {
+            error_message = 'Превышено время обработки. Попробуйте повторить запрос позднее';
+        } else {
+            console.error(
+                'Ошибка обработки фида: '
+                + request.status + ' '
+                + request.statusText + ': '
+                + request.responseText
+            );
+            error_message = 'Неизвестная ошибка. Попробуйте повторить запрос позднее';
+        }
+        showError(error_message);
+    };
+
+    makeAjaxRequest('POST', url, data, onSuccess, onError);
+  }
+
+  function handleFiles(files) {
+    if (!files.length) return;
+
+    const file = files[0];
+    const extension = file.name.split('.').pop().toLowerCase();
+
+    if (files.length > 1) {
+      showError('Слишком много файлов');
+    } else if (ALLOWED_EXTENSIONS.indexOf(extension) < 0) {
+      showError('Формат файла не поддерживается');
+    } else {
+      writeFileFields(file);
+      dropZone.setAttribute('data-state', 'uploaded');
+      uploadFile(file);
+    }
+  }
+
+  // Attach events to elements
+
+  dropZone.ondragover = function(e) {
+    e.stopPropagation();
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    this.setAttribute('data-state', 'dragover');
+  };
+
+  dropZone.ondrop = function(e) {
+    e.stopPropagation();
+    e.preventDefault();
+    this.setAttribute('data-state', 'drop');
+    hideErrors();
+    handleFiles(e.dataTransfer.files);
+  };
+
+  inputUpload.onchange = function() {
+    hideErrors();
+    handleFiles(this.files)
+  };
+
+  document.querySelectorAll(".form-radio-group__item").forEach(function(name) {
+    attachEvent(name, 'click', hideErrors);
+  });
+
+  attachEvent(document.getElementById("xml_button"), 'click', function() {
+    const content = document.getElementById("xml_textarea").value;
+    if (content.length > 0) {
+      hideErrors();
+      uploadFile(content);
+    }
+  });
+
+  attachEvent(document.querySelector(".form-upload-link__button"), 'click', function() {
+    const text = document.querySelector(".form-upload-link__input").value;
+    if (text.length > 0) {
+      hideErrors();
+      uploadUrl(text);
+    }
+  });
+
+})();

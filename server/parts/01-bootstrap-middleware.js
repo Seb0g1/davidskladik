@@ -40,6 +40,48 @@ app.use((request, response, next) => {
   next();
 });
 
+function isSafeMethod(method) {
+  return method === "GET" || method === "HEAD" || method === "OPTIONS";
+}
+
+function allowedOriginHosts(request) {
+  const hosts = new Set();
+  const publicBase = String(process.env.PUBLIC_BASE_URL || "").trim();
+  if (publicBase) {
+    try { hosts.add(new URL(publicBase).host); } catch (_e) { /* ignore */ }
+  }
+  const requestHost = request.get("host");
+  if (requestHost) hosts.add(requestHost);
+  return hosts;
+}
+
+function csrfGuard(request, response, next) {
+  if (process.env.CSRF_BYPASS_FOR_TESTS === "true") return next();
+  if (isSafeMethod(request.method)) return next();
+  if (!request.path.startsWith("/api/")) return next();
+  if (request.path === "/api/login") return next();
+  const origin = request.get("origin");
+  const referer = request.get("referer");
+  const allowed = allowedOriginHosts(request);
+  const headerHost = (raw) => { if (!raw) return null; try { return new URL(raw).host; } catch (_e) { return null; } };
+  const originHost = headerHost(origin);
+  const refererHost = headerHost(referer);
+  if (originHost) {
+    if (!allowed.has(originHost)) return response.status(403).json({ error: "Запрос отклонён: чужой Origin" });
+    return next();
+  }
+  if (refererHost) {
+    if (!allowed.has(refererHost)) return response.status(403).json({ error: "Запрос отклонён: чужой Referer" });
+    return next();
+  }
+  if (process.env.NODE_ENV === "production") {
+    return response.status(403).json({ error: "Запрос отклонён: отсутствует Origin/Referer" });
+  }
+  return next();
+}
+
+app.use(csrfGuard);
+
 const uploadImages = multer({
   storage: multer.memoryStorage(),
   limits: {

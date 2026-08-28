@@ -168,6 +168,7 @@ async function runDailyRefresh(trigger = "manual") {
       return state;
     } catch (error) {
       recordAppError?.("pm_sync", "02f-daily-maintenance-schedulers/runDailyRefresh", error?.message || String(error), { trigger });
+      sendTelegramAlert?.("pm_sync_failed", `❌ PM синк упал: ${error.message || String(error)}\nTrigger: ${trigger}`).catch(() => {});
       const state = await writeDailySyncState(withDailySyncLog({
         status: "failed",
         trigger,
@@ -475,6 +476,7 @@ async function runMarketplaceMaintenanceCycle(trigger = "maintenance") {
         err: error,
       });
       recordAppError?.("pm_sync", "02f-daily-maintenance-schedulers", error?.message || String(error), { trigger });
+      sendTelegramAlert?.("marketplace_maintenance_failed", `❌ Marketplace maintenance упал: ${error.message || String(error)}\nTrigger: ${trigger}`).catch(() => {});
       throw error;
     } finally {
       marketplaceMaintenanceRunning = false;

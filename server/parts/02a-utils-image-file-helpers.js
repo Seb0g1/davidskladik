@@ -67,6 +67,39 @@ function pickOzonCabinetListedPrice(details = {}) {
   );
 }
 
+const TRANSIENT_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ECONNREFUSED",
+  "PROTOCOL_CONNECTION_LOST",
+]);
+
+function isTransientError(error) {
+  if (!error) return false;
+  const code = String(error.code || "");
+  if (TRANSIENT_ERROR_CODES.has(code)) return true;
+  return /econnreset|etimedout|fetch failed|socket hang up/i.test(String(error.message || ""));
+}
+
+async function withRetry(fn, { attempts = 3, baseDelayMs = 1000, label = "retry" } = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts || !isTransientError(error)) throw error;
+      const wait = baseDelayMs * 2 ** (attempt - 1) + Math.floor(Math.random() * 250);
+      logger.warn("transient error, will retry", { label, attempt, nextDelayMs: wait, detail: error.code || error.message });
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+  throw lastError;
+}
+
 function roundPrice(value) {
   const number = Number(value || 0);
   if (!Number.isFinite(number) || number <= 0) return 0;

@@ -1,0 +1,53 @@
+.applications-card-view-root-1s7nk {
+    display: flex;
+    flex-direction: column;
+    cursor: pointer;
+    border-radius: 20px;
+    row-gap: 16px;
+    width: calc(100% + 48px);
+    padding: 16px 24px;
+    margin: -16px 0 0 -24px;
+}
+
+.applications-card-view-root-1s7nk:hover {
+    background: var(--theme-palette-gray4);
+}
+
+.application-info-list-list-item-15fXx {
+    display: flex;
+    align-items: center;
+    -moz-column-gap: 4px;
+         column-gap: 4px;
+}
+
+.application-info-list-list-item-15fXx.application-info-list-with-copy-1eI7T:hover {
+    color: var(--theme-palette-red500);
+}
+
+.application-info-list-label-container-1Xx4H {
+    min-width: 102px;
+    width: 102px;
+}
+
+.application-info-list-list-item-15fXx svg {
+    display: none;
+}
+
+.application-info-list-list-item-15fXx:hover svg {
+    display: initial;
+}
+
+.scopes-list-root-vo-iL {
+    display: flex;
+    flex-direction: column;
+    row-gap: 4px;
+    padding-left: 2px;
+}
+
+.scopes-list-scopes-ids-3N2sR {
+    display: flex;
+    flex-direction: column;
+    row-gap: 4px;
+    padding-left: 28px;
+}
+

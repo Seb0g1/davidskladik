@@ -197,3 +197,13 @@ app.get("/health", async (request, response) => {
   const deep = ["1", "true", "yes"].includes(String(request.query.deep || "").toLowerCase());
   response.json(await collectHealthDetails({ deep }));
 });
+
+app.get("/health/ready", async (_request, response) => {
+  const startedAt = Date.now();
+  try {
+    await pool.query("SELECT 1");
+    response.json({ ok: true, service: "magic-vibes-warehouse", mysql: "ok", latencyMs: Date.now() - startedAt, time: new Date().toISOString() });
+  } catch (error) {
+    response.status(503).json({ ok: false, service: "magic-vibes-warehouse", mysql: "fail", detail: error.code || error.message, time: new Date().toISOString() });
+  }
+});

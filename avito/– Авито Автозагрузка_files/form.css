@@ -1,0 +1,169 @@
+/*
+ * Интерфейс формы и модели
+ *
+ * Структурная
+ *    <form class='form' [...]>
+ *
+ * Инлайновая
+ *    <form class='form form_inline' [...]>
+ *
+ * Сетка
+ *    <form class='form form_grid' [...]>
+ *
+ * Пример:
+ *     <form class='form' method='post'>
+ *         <fieldset class='form-fieldset'>
+ *             <label class='form-fieldset__label'>
+ *                 Label
+ *                 <span class='form-fieldset__help'>Help</span>
+ *             </label>
+ *
+ *             <input type='text' value='' />
+ *         </fieldset>
+ *
+ *         <div class='form-action'>
+ *             <button class='button button-origin' type='submit'>Button</button>
+ *         </div>
+ *     </form>
+ */
+.form {
+  font-size: 14px;
+}
+.form-fieldset {
+  position: relative;
+  margin: 10px 0;
+  padding: 0 0 0 246px;
+  border: 0;
+  line-height: 20px;
+}
+.form-fieldset__label {
+  font-size: 14px;
+  line-height: 20px;
+  color: #4a4a4a;
+  margin-left: -246px;
+  padding-top: 5px;
+  width: 226px;
+  float: left;
+}
+.is-readonly .form-fieldset__label {
+  padding-top: 0;
+}
+.form-fieldset__label__postfix {
+  display: block;
+  margin-top: 1px;
+  font-size: 13px;
+  line-height: 18px;
+  color: #858585;
+}
+.form-fieldset__context {
+  position: relative;
+}
+.form-fieldset__descr {
+  margin-top: 15px;
+  margin-bottom: -5px;
+  line-height: 20px;
+  display: block;
+  float: none;
+}
+.form-fieldset__postfix {
+  vertical-align: middle;
+  margin-left: 8px;
+  line-height: 20px;
+  display: inline-block;
+}
+.form-fieldset__help,
+.form-fieldset__error {
+  font-size: 13px;
+  color: #858585;
+  line-height: 18px;
+  display: block;
+}
+.form-fieldset__error {
+  color: #ff6163;
+  margin-top: 2px;
+  display: none;
+}
+.is-error .form-fieldset__error {
+  display: block;
+}
+.form-fieldset.is-readonly {
+  margin: 15px 0;
+}
+.form-fieldset.is-readonly + .form-fieldset.is-readonly {
+  margin-top: 20px;
+}
+.form-fieldset.is-readonly:first-child {
+  margin-top: 15px;
+}
+.form-fieldset.is-readonly:last-child {
+  margin-bottom: 5px;
+}
+.form-fieldset_simple {
+  padding-left: 0;
+}
+.form-fieldset:first-child {
+  margin-top: 0;
+}
+.form-fieldset:last-child {
+  margin-bottom: 0;
+}
+.form__linebreak {
+  background-color: #d8d8d8;
+  margin: 29px 0 25px;
+  height: 1px;
+  display: block;
+}
+.form-action {
+  margin-top: 20px;
+}
+.form-section {
+  margin-bottom: 25px;
+}
+.form-section__title {
+  font-size: 18px;
+  font-weight: 300;
+  line-height: 25px;
+  margin-bottom: 10px;
+  padding: 2px 0 3px;
+  display: block;
+}
+.form-section_blue {
+  background-color: #f7fcff;
+  border: 3px solid #ace2ff;
+}
+.form-section_yellow {
+  background-color: #fffbf4;
+  border: 3px solid #ffe5b4;
+}
+.form-section_blue,
+.form-section_yellow {
+  padding: 17px 22px 22px;
+}
+.form-section_blue .form-fieldset,
+.form-section_yellow .form-fieldset {
+  padding-left: 224px;
+}
+.form-section_blue .form-fieldset__label,
+.form-section_yellow .form-fieldset__label {
+  margin-left: -224px;
+  width: 224px;
+}
+.form-section_blue .form-fieldset__descr .form-checkbox,
+.form-section_yellow .form-fieldset__descr .form-checkbox,
+.form-section_blue .form-fieldset__descr .form-checkbox__label,
+.form-section_yellow .form-fieldset__descr .form-checkbox__label {
+  vertical-align: top;
+}
+.form-section_brown {
+  background-color: #fffbf4;
+  padding: 23px 25px;
+  border: 3px solid #ffe5b4;
+}
+.form-section:last-child {
+  margin-bottom: 0;
+}
+.form input[class|='col'],
+.form textarea[class|='col'],
+.form select[class|='col'] {
+  float: none;
+}

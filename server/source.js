@@ -71,6 +71,7 @@ const partFiles = [
   "02a-yandex-price-preview-rules.js",
   "02a-ozon-product-payload-build.js",
   "02a-app-settings.js",
+  "02a-telegram-alerts.js",
   "02a-price-master-partners.js",
   "02a-ozon-category-suppliers.js",
   "02a-ozon-product-builders.js",

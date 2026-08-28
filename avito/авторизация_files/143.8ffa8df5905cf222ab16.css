@@ -1,0 +1,12 @@
+.redoc-root-44tCo {
+    width: calc(100% + 16px);
+    margin-top: -16px;
+    margin-right: -16px;
+}
+
+@media (max-width: 1366px) {
+    .redoc-root-44tCo {
+        width: 100%;
+    }
+}
+

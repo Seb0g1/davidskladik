@@ -1,0 +1,34 @@
+.index-root-2a-KW {
+    width: 105px;
+    height: 30px;
+    display: inline-block;
+    border-bottom: 0;
+    background-image: url(/dstatic/build/e48ad8512b1755b85b5b.svg);
+    background-size: contain;
+    background-repeat: no-repeat;
+}
+
+.index-root-2a-KW:hover {
+    opacity: .9;
+}
+
+/* Авто (красный) */
+.index-auto-1kVBM {
+    background-image: url(/dstatic/build/6a19a6f3f946009ba5ae.svg);
+}
+
+/* Недвижимость (синий) */
+.index-realty-2wPrw {
+    background-image: url(/dstatic/build/3863871bcab8bf1bb5ef.svg);
+}
+
+/* Работа (зеленый) */
+.index-job-ZbZbE {
+    background-image: url(/dstatic/build/465b78eb597f3897dc2a.svg);
+}
+
+/* Услуги (фиолетовый) */
+.index-service-3Hv1l {
+    background-image: url(/dstatic/build/b3a290c8b5ed0c904608.svg);
+}
+

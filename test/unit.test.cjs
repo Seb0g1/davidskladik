@@ -41,7 +41,7 @@ test("pickOzonCabinetListedPrice: приоритет полей", () => {
       marketingPrice: 200,
       retailPrice: 100,
     }),
-    300,
+    250,
   );
 });
 

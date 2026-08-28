@@ -129,7 +129,7 @@ const APP_PAGE_KEYS = [
   "consignment", "system", "ai-drafts", "no-supplier",
 ];
 
-const DEFAULT_MANAGER_PAGES = ["warehouse", "picking-list"];
+const DEFAULT_MANAGER_PAGES = ["warehouse", "picking-list", "chats", "reviews", "questions"];
 
 // null => role defaults apply (admin: everything, manager: warehouse + picking).
 function normalizeAllowedPages(value) {
