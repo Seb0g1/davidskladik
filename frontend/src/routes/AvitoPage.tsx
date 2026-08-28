@@ -1,0 +1,932 @@
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CheckSquare, ClipboardCopy, Eye, Link2, Loader2, MessageCircle, PackageCheck, RefreshCw, Save, Send, Trash2, Upload, Wallet } from "lucide-react";
+import { PageHeader } from "../components/PageHeader";
+import { Stat } from "../components/Stat";
+import { useDebounced } from "../lib/common";
+
+type FeedDefaults = {
+  category: string;
+  goodsType: string;
+  adType: string;
+  condition: string;
+  address: string;
+  description: string;
+};
+
+type ImportRules = {
+  enabled: boolean;
+  minVolumeMl: number;
+  skipWithoutVolume: boolean;
+  excludeTitleWords: string[];
+  includeTitleWords: string[];
+  excludeBrands: string[];
+  includeBrands: string[];
+  minPriceRub: number;
+  maxPriceRub: number;
+  requireImages: boolean;
+  skipArchived: boolean;
+  minStock: number;
+  defaultCategoryKey: string;
+  priceCoefficient: number;
+  priceRules: Array<{ minPriceRub: number; coefficient: number }>;
+  autoUpdatePrices: boolean;
+  hideOutOfStock: boolean;
+  maxItems: number;
+  feedDefaults: FeedDefaults;
+};
+
+type MatchedListing = {
+  adId: string;
+  sourceOfferId: string;
+  title: string;
+  brand: string;
+  volumeMl: number;
+  priceRub: number;
+  imageUrls: string[];
+  categoryKey?: string;
+  goodsType?: string;
+  goodsSubType?: string;
+  subType?: string;
+  perfumeryType?: string;
+};
+
+type SkippedItem = { id: string; offerId: string; name: string; reasons: string[] };
+
+type PreviewResponse = {
+  rules: ImportRules;
+  totalOzonProducts: number;
+  matchedCount: number;
+  skippedCount: number;
+  skippedByReason: Record<string, number>;
+  matchedByCategory?: Record<string, number>;
+  matchedSample: MatchedListing[];
+  skippedSample: SkippedItem[];
+};
+
+type ApplyResponse = {
+  ok: boolean;
+  totalOzonProducts: number;
+  matchedCount: number;
+  skippedCount: number;
+  created: number;
+  updated: number;
+  totalListings: number;
+  matchedByCategory?: Record<string, number>;
+};
+
+type Listing = {
+  adId: string;
+  source: string;
+  title: string;
+  brand: string;
+  volumeMl: number;
+  priceRub: number;
+  markupCoefficient?: number;
+  // Список с сервера урезан: только первое фото и флаг наличия описания
+  // (полный дамп с описаниями весил ~19 МБ).
+  imageUrls: string[];
+  hasDescription?: boolean;
+  categoryKey?: string;
+  goodsType?: string;
+  goodsSubType?: string;
+  subType?: string;
+  perfumeryType?: string;
+  categoryAutoDefaulted?: boolean;
+  enabled: boolean;
+  outOfStock?: boolean;
+  lastSyncedAt?: string | null;
+  updatedAt: string;
+};
+
+type ListingsResponse = { updatedAt: string | null; total: number; matched?: number; items: Listing[] };
+type FeedRefreshResult = {
+  status: string;
+  updatedPrices?: number;
+  outOfStock?: number;
+  total?: number;
+  at?: string;
+  error?: string;
+};
+type FeedInfoResponse = {
+  feedUrl: string;
+  stockFeedUrl?: string;
+  enabledCount: number;
+  totalListings: number;
+  hiddenOutOfStock?: number;
+  hiddenNoImages?: number;
+  hiddenDuplicates?: number;
+  liveSource?: string;
+  autoRefresh?: {
+    enabled: boolean;
+    intervalMinutes: number;
+    nextRunAt: string | null;
+    lastResult: FeedRefreshResult | null;
+  };
+};
+type AvitoUpload = {
+  upload_id: number;
+  status: string;
+  started_at?: string;
+  source?: string;
+  stats?: { count?: number };
+  events?: Array<{ description?: string; type?: string }>;
+};
+type UploadsResponse = { uploads?: AvitoUpload[] };
+type AccountsResponse = { accounts: Array<{ id: string; marketplace: string; name: string; configured: boolean }> };
+
+type AvitoFeedRefreshResult = {
+  status: string;
+  source?: string;
+  total?: number;
+  updatedPrices?: number;
+  outOfStock?: number;
+  reclassified?: number;
+  persisted?: boolean;
+  at?: string;
+  error?: string;
+};
+type AvitoUploadTriggerResult = {
+  ok?: boolean;
+  at?: string;
+  error?: string;
+  skipped?: boolean;
+  reason?: string;
+  nextAllowedAt?: string;
+};
+type AvitoSyncStatus = {
+  ok: boolean;
+  listings: number;
+  inStock: number;
+  outOfStock: number;
+  feedRefreshEnabled: boolean;
+  feedRefreshIntervalMs: number;
+  feedRefreshRunning: boolean;
+  feedRefreshNextRunAt: string | null;
+  feedRefreshLastResult: AvitoFeedRefreshResult | null;
+  autoUploadEnabled: boolean;
+  lastUploadTriggerAt: string | null;
+  lastUploadTriggerResult: AvitoUploadTriggerResult | null;
+  uploadTriggerRunning: boolean;
+};
+type AvitoSyncResponse = {
+  ok: boolean;
+  refreshResult: AvitoFeedRefreshResult;
+  uploadResult: AvitoUploadTriggerResult;
+};
+
+type AvitoMeResponse = {
+  ok: boolean;
+  profile: { id: number; name: string; email: string; phone: string; avatar: string } | null;
+  balance: { real: number; bonus: number; total: number } | null;
+  profileError?: string | null;
+  balanceError?: string | null;
+};
+
+const SKIP_REASON_LABELS: Record<string, string> = {
+  title_word: "Стоп-слово в названии",
+  title_not_in_include_list: "Нет обязательного слова",
+  brand: "Бренд в чёрном списке",
+  brand_not_in_include_list: "Бренд не в белом списке",
+  volume_below_min: "Объём меньше порога",
+  volume_unknown: "Объём не распознан",
+  no_price: "Нет цены",
+  price_below_min: "Цена ниже минимума",
+  price_above_max: "Цена выше максимума",
+  no_images: "Нет фото",
+  archived: "В архиве",
+  stock_below_min: "Мало остатков",
+  no_title: "Нет названия",
+  duplicate_title: "Дубль по названию",
+};
+
+function reasonLabel(reason: string): string {
+  const key = reason.split(":")[0];
+  const detail = reason.includes(":") ? ` (${reason.split(":").slice(1).join(":")})` : "";
+  return `${SKIP_REASON_LABELS[key] || key}${detail}`;
+}
+
+const UPLOAD_STATUS_LABELS: Record<string, string> = {
+  processing: "обрабатывается",
+  success: "успешно",
+  success_warning: "успешно, с предупреждениями",
+  error: "ошибка",
+  canceled: "отменена",
+};
+
+async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    credentials: "same-origin",
+    ...(init || {}),
+    headers: { ...(init?.body ? { "Content-Type": "application/json" } : {}), ...(init?.headers || {}) },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error((data as { error?: string })?.error || `HTTP ${response.status}`);
+  return data as T;
+}
+
+function wordsToText(words: string[]): string {
+  return (words || []).join(", ");
+}
+
+function textToWords(text: string): string[] {
+  return text.split(/[\n,;]+/).map((word) => word.trim()).filter(Boolean);
+}
+
+function numberInput(value: string, fallback = 0): number {
+  const parsed = Number(value.replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+// Ключи и подписи должны совпадать с AVITO_CATEGORY_SPECS на сервере
+// (server/parts/02a-avito-categorizer.js).
+const CATEGORY_OPTIONS: Array<{ key: string; label: string }> = [
+  { key: "parfum-edt", label: "Парфюмерия / Духи и туалетная вода" },
+  { key: "parfum-sets", label: "Парфюмерия / Парфюмерные наборы" },
+  { key: "parfum-oils", label: "Парфюмерия / Парфюмерные масла" },
+  { key: "parfum-diffusers", label: "Парфюмерия / Диффузоры, спреи и саше" },
+  { key: "parfum-atomizers", label: "Парфюмерия / Атомайзеры и флаконы" },
+  { key: "parfum-other", label: "Парфюмерия / Другое" },
+  { key: "care-sets", label: "Уход и гигиена / Наборы уходовой косметики" },
+];
+
+function categoryPath(item: { goodsType?: string; goodsSubType?: string; subType?: string; perfumeryType?: string }): string {
+  return [item.goodsType, item.goodsSubType, item.subType, item.perfumeryType].filter(Boolean).join(" / ");
+}
+
+export function AvitoPage() {
+  const queryClient = useQueryClient();
+  const [rules, setRules] = useState<ImportRules | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [copiedStock, setCopiedStock] = useState(false);
+
+  const accountsQuery = useQuery({
+    queryKey: ["marketplace-accounts"],
+    queryFn: () => apiJson<AccountsResponse>("/api/marketplace-accounts"),
+  });
+  const rulesQuery = useQuery({
+    queryKey: ["avito-import-rules"],
+    queryFn: () => apiJson<ImportRules>("/api/avito/import/rules"),
+  });
+  const [listingSearch, setListingSearch] = useState("");
+  const debouncedListingSearch = useDebounced(listingSearch, 400);
+  const listingsQuery = useQuery({
+    queryKey: ["avito-listings", debouncedListingSearch],
+    queryFn: () => apiJson<ListingsResponse>(`/api/avito/listings?q=${encodeURIComponent(debouncedListingSearch)}&limit=200`),
+  });
+  const feedInfoQuery = useQuery({
+    queryKey: ["avito-feed-info"],
+    queryFn: () => apiJson<FeedInfoResponse>("/api/avito/feed-info"),
+  });
+  const syncStatusQuery = useQuery({
+    queryKey: ["avito-sync-status"],
+    queryFn: () => apiJson<AvitoSyncStatus>("/api/avito/sync-status"),
+    refetchInterval: 30_000,
+  });
+
+  const avitoAccount = (accountsQuery.data?.accounts || []).find((account) => account.marketplace === "avito");
+  const avitoConfigured = Boolean(avitoAccount?.configured);
+
+  const meQuery = useQuery({
+    queryKey: ["avito-me"],
+    queryFn: () => apiJson<AvitoMeResponse>("/api/avito/me"),
+    enabled: avitoConfigured,
+    retry: false,
+    staleTime: 5 * 60_000,
+  });
+
+  const uploadsQuery = useQuery({
+    queryKey: ["avito-uploads"],
+    queryFn: () => apiJson<UploadsResponse>("/api/avito/uploads?perPage=10"),
+    enabled: avitoConfigured,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (rulesQuery.data?.priceRules !== undefined && !rules) setRules(rulesQuery.data);
+  }, [rulesQuery.data, rules]);
+
+  const saveRules = useMutation({
+    mutationFn: (next: ImportRules) => apiJson<ImportRules>("/api/avito/import/rules", { method: "PUT", body: JSON.stringify(next) }),
+    onSuccess: (saved) => {
+      setRules(saved);
+      void queryClient.invalidateQueries({ queryKey: ["avito-import-rules"] });
+    },
+  });
+  const preview = useMutation({
+    mutationFn: (next: ImportRules) => apiJson<PreviewResponse>("/api/avito/import/preview", { method: "POST", body: JSON.stringify(next) }),
+  });
+  const applyImport = useMutation({
+    mutationFn: (next: ImportRules) => apiJson<ApplyResponse>("/api/avito/import/apply", { method: "POST", body: JSON.stringify(next) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
+    },
+  });
+  const removeListing = useMutation({
+    mutationFn: (adId: string) => apiJson("/api/avito/listings", { method: "DELETE", body: JSON.stringify({ adIds: [adId] }) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
+    },
+  });
+  const triggerUpload = useMutation({
+    mutationFn: () => apiJson("/api/avito/upload", { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-uploads"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-sync-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
+    },
+  });
+  const [adjustDirection, setAdjustDirection] = useState<"decrease" | "increase">("decrease");
+  const [adjustPercent, setAdjustPercent] = useState(2);
+  const adjustPrices = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; rules: ImportRules }>("/api/avito/price/adjust-percent", {
+      method: "POST",
+      body: JSON.stringify({ direction: adjustDirection, percent: adjustPercent }),
+    }),
+    onSuccess: (data) => {
+      if (data.rules) setRules(data.rules);
+      void queryClient.invalidateQueries({ queryKey: ["avito-import-rules"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
+    },
+  });
+  const refreshFeed = useMutation({
+    mutationFn: () => apiJson<FeedRefreshResult>("/api/avito/feed/refresh", { method: "POST", body: JSON.stringify({}) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
+    },
+  });
+  const syncNow = useMutation({
+    mutationFn: (force: boolean) => apiJson<AvitoSyncResponse>("/api/avito/sync", { method: "POST", body: JSON.stringify({ force }) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-sync-status"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
+    },
+  });
+  const backfillDescriptions = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; status: string; updated?: number; remaining?: number }>("/api/avito/descriptions/backfill", { method: "POST", body: JSON.stringify({ limit: 500 }) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+    },
+  });
+  const backfillImages = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; status: string; updatedFromPostgres?: number; updatedFromOzon?: number; remaining?: number }>("/api/avito/images/backfill", { method: "POST", body: JSON.stringify({ limit: 500 }) }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["avito-listings"] });
+      void queryClient.invalidateQueries({ queryKey: ["avito-feed-info"] });
+    },
+  });
+
+  const copyFeedUrl = async () => {
+    const url = feedInfoQuery.data?.feedUrl;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      /* clipboard недоступен — url виден в поле */
+    }
+  };
+
+  const copyStockFeedUrl = async () => {
+    const url = feedInfoQuery.data?.stockFeedUrl;
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopiedStock(true);
+      window.setTimeout(() => setCopiedStock(false), 2000);
+    } catch {
+      /* clipboard недоступен — url виден в поле */
+    }
+  };
+
+  const updateRules = (patch: Partial<ImportRules>) => {
+    setRules((current) => (current ? { ...current, ...patch } : current));
+  };
+  const updateFeedDefaults = (patch: Partial<FeedDefaults>) => {
+    setRules((current) => (current ? { ...current, feedDefaults: { ...current.feedDefaults, ...patch } } : current));
+  };
+
+  const listings = listingsQuery.data?.items || [];
+  const previewData = preview.data;
+  const syncStatus = syncStatusQuery.data;
+
+  return (
+    <section className="page-section import-page avito-page">
+      <PageHeader
+        title="Импорт на Avito"
+        subtitle="Перенос товаров с Ozon в фид Автозагрузки Avito. Цена считается от закупки привязанного поставщика × наценка Avito (Настройки → Цены); категория и описание подбираются автоматически."
+        action={(
+          <div className="row-actions">
+            <button className="secondary-action" type="button" disabled={!rules || preview.isPending} onClick={() => rules && preview.mutate(rules)}>
+              {preview.isPending ? <Loader2 className="spin" size={16} /> : <Eye size={16} />} Предпросмотр
+            </button>
+            <button className="primary-action" type="button" disabled={!rules || applyImport.isPending} onClick={() => rules && applyImport.mutate(rules)}>
+              {applyImport.isPending ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Импортировать в фид
+            </button>
+            <button className="secondary-action" type="button" disabled={!avitoConfigured || triggerUpload.isPending} onClick={() => triggerUpload.mutate()} title="Avito скачает фид и обновит объявления. Не чаще раза в час.">
+              {triggerUpload.isPending ? <Loader2 className="spin" size={16} /> : <Send size={16} />} Запустить автозагрузку
+            </button>
+          </div>
+        )}
+      />
+
+      {!accountsQuery.isFetching && !avitoConfigured ? (
+        <div className="info-strip warn">
+          Кабинет Avito не настроен. Добавьте Client ID и Client Secret на вкладке «Кабинеты» в классическом интерфейсе — <a href="/">открыть настройки кабинетов</a>. Правила и фид можно готовить и без ключей.
+        </div>
+      ) : null}
+
+      <section className="dashboard-metrics">
+        <Stat label="Товаров Ozon" value={previewData?.totalOzonProducts ?? "—"} tone="accent" icon={<PackageCheck size={18} />} />
+        <Stat label="Пройдут фильтр" value={previewData?.matchedCount ?? "—"} tone="success" icon={<CheckSquare size={18} />} />
+        <Stat label="Будут пропущены" value={previewData?.skippedCount ?? "—"} tone="warn" icon={<Trash2 size={18} />} />
+        <Stat label="Объявлений в фиде" value={feedInfoQuery.data?.enabledCount ?? listings.length} tone="accent" icon={<Link2 size={18} />} />
+        {meQuery.data?.balance ? (
+          <Stat
+            label="Баланс Avito"
+            value={`${meQuery.data.balance.real.toLocaleString("ru-RU")} ₽`}
+            tone={meQuery.data.balance.real < 100 ? "warn" : "success"}
+            icon={<Wallet size={18} />}
+          />
+        ) : null}
+        {meQuery.data?.balance?.bonus ? (
+          <Stat label="Бонусы Avito" value={`${meQuery.data.balance.bonus.toLocaleString("ru-RU")} ₽`} tone="accent" icon={<Wallet size={18} />} />
+        ) : null}
+      </section>
+      {meQuery.data?.profile ? (
+        <div className="avito-profile-strip">
+          {meQuery.data.profile.avatar ? <img src={meQuery.data.profile.avatar} alt="" className="avito-profile-avatar" /> : null}
+          <span className="avito-profile-name">{meQuery.data.profile.name}</span>
+          {meQuery.data.profile.phone ? <span className="avito-profile-phone">{meQuery.data.profile.phone}</span> : null}
+          <a href="/chats?marketplace=avito" className="avito-profile-chats secondary-action">
+            <MessageCircle size={13} /> Чаты Avito
+          </a>
+        </div>
+      ) : null}
+
+      {applyImport.data ? (
+        <div className="info-strip success">
+          Импорт применён: новых {applyImport.data.created} · обновлено {applyImport.data.updated} · всего в фиде {applyImport.data.totalListings} · пропущено {applyImport.data.skippedCount}
+        </div>
+      ) : null}
+      {applyImport.error ? <div className="inline-error">{String((applyImport.error as Error).message)}</div> : null}
+      {preview.error ? <div className="inline-error">{String((preview.error as Error).message)}</div> : null}
+      {triggerUpload.data ? <div className="info-strip success">Автозагрузка запущена — Avito скачает фид в течение нескольких минут.</div> : null}
+      {triggerUpload.error ? <div className="inline-error">{String((triggerUpload.error as Error).message)}</div> : null}
+
+      <div className="settings-grid">
+        <section className="settings-panel settings-panel-wide">
+          <div className="section-title">
+            <div><span>Правила импорта</span><h3>Фильтры Ozon → Avito</h3></div>
+            <button className="secondary-action" type="button" disabled={!rules || saveRules.isPending} onClick={() => rules && saveRules.mutate(rules)}>
+              {saveRules.isPending ? <Loader2 className="spin" size={16} /> : <Save size={16} />} Сохранить правила
+            </button>
+          </div>
+          {!rules ? (
+            <div className="table-note"><Loader2 className="spin" size={14} /> Загружаю правила…</div>
+          ) : (
+            <>
+              <div className="settings-form-row">
+                <label className="field-label">
+                  Мин. объём, мл (0 = выкл)
+                  <input type="number" min={0} value={String(rules.minVolumeMl)} onChange={(event) => updateRules({ minVolumeMl: numberInput(event.target.value) })} />
+                </label>
+                <label className="field-label" title="Применяется поверх цены «закупка поставщика × наценка Avito из Настроек». 1 = без изменения.">
+                  Доп. коэффициент цены
+                  <input type="number" min={0.01} step={0.01} value={String(rules.priceCoefficient)} onChange={(event) => updateRules({ priceCoefficient: numberInput(event.target.value, 1) })} />
+                </label>
+                <label className="field-label">
+                  Мин. цена, ₽ (0 = выкл)
+                  <input type="number" min={0} value={String(rules.minPriceRub)} onChange={(event) => updateRules({ minPriceRub: numberInput(event.target.value) })} />
+                </label>
+                <label className="field-label">
+                  Макс. цена, ₽ (0 = выкл)
+                  <input type="number" min={0} value={String(rules.maxPriceRub)} onChange={(event) => updateRules({ maxPriceRub: numberInput(event.target.value) })} />
+                </label>
+                <label className="field-label">
+                  Мин. остаток (0 = выкл)
+                  <input type="number" min={0} value={String(rules.minStock)} onChange={(event) => updateRules({ minStock: numberInput(event.target.value) })} />
+                </label>
+                <label className="field-label">
+                  Лимит объявлений (0 = все)
+                  <input type="number" min={0} value={String(rules.maxItems)} onChange={(event) => updateRules({ maxItems: numberInput(event.target.value) })} />
+                </label>
+                <label className="field-label" title="Категория Avito подбирается автоматически по названию товара; сюда попадают товары без уверенной классификации">
+                  Категория по умолчанию
+                  <select value={rules.defaultCategoryKey || "parfum-edt"} onChange={(event) => updateRules({ defaultCategoryKey: event.target.value })}>
+                    {CATEGORY_OPTIONS.map((option) => (
+                      <option key={option.key} value={option.key}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="settings-form-row">
+                <label className="settings-toggle">
+                  <input type="checkbox" checked={rules.skipWithoutVolume} onChange={(event) => updateRules({ skipWithoutVolume: event.target.checked })} />
+                  Пропускать без распознанного объёма
+                </label>
+                <label className="settings-toggle">
+                  <input type="checkbox" checked={rules.requireImages} onChange={(event) => updateRules({ requireImages: event.target.checked })} />
+                  Только с фото
+                </label>
+                <label className="settings-toggle">
+                  <input type="checkbox" checked={rules.skipArchived} onChange={(event) => updateRules({ skipArchived: event.target.checked })} />
+                  Пропускать архивные
+                </label>
+                <label className="settings-toggle" title="При каждом скачивании фида Avito получает актуальную цену склада × коэффициент">
+                  <input type="checkbox" checked={rules.autoUpdatePrices} onChange={(event) => updateRules({ autoUpdatePrices: event.target.checked })} />
+                  Автообновлять цены в фиде
+                </label>
+                <label className="settings-toggle" title="Товары без остатков или в архиве исключаются из фида — Avito снимет объявление">
+                  <input type="checkbox" checked={rules.hideOutOfStock} onChange={(event) => updateRules({ hideOutOfStock: event.target.checked })} />
+                  Скрывать без остатков
+                </label>
+              </div>
+              <div className="section-title compact-title">
+                <div><span>Цена</span><h3>Гибкие правила наценки Avito</h3></div>
+                <button className="secondary-action" type="button" onClick={() => updateRules({ priceRules: [...rules.priceRules, { minPriceRub: 0, coefficient: rules.priceCoefficient || 1 }] })}>
+                  Добавить правило
+                </button>
+              </div>
+              <p className="form-hint">Дополнительный коэффициент поверх цены от поставщика: берётся правило с наибольшим подходящим порогом «от цены». Если правил нет — действует базовый коэффициент выше. Основная наценка Avito настраивается в Настройки → Цены → «Гибкие правила наценки».</p>
+              <div className="avito-price-rules">
+                <div className="avito-price-rule-head"><span>От цены, ₽</span><span>Коэффициент</span><span></span></div>
+                {rules.priceRules
+                  .map((rule, index) => ({ rule, index }))
+                  .sort((a, b) => a.rule.minPriceRub - b.rule.minPriceRub || a.index - b.index)
+                  .map(({ rule, index }) => (
+                    <div className="avito-price-rule-row" key={`price-rule-${index}`}>
+                      <input type="number" min={0} value={String(rule.minPriceRub)} onChange={(event) => updateRules({ priceRules: rules.priceRules.map((item, itemIndex) => (itemIndex === index ? { ...item, minPriceRub: numberInput(event.target.value) } : item)) })} />
+                      <input type="number" min={0.01} step={0.01} value={String(rule.coefficient)} onChange={(event) => updateRules({ priceRules: rules.priceRules.map((item, itemIndex) => (itemIndex === index ? { ...item, coefficient: numberInput(event.target.value, 1) } : item)) })} />
+                      <button className="icon-action danger" type="button" title="Удалить правило" onClick={() => updateRules({ priceRules: rules.priceRules.filter((_, itemIndex) => itemIndex !== index) })}>×</button>
+                    </div>
+                  ))}
+                {!rules.priceRules.length ? <div className="form-hint">Правил нет — используется базовый коэффициент {rules.priceCoefficient}.</div> : null}
+              </div>
+              <div className="avito-price-adjust">
+                <strong>Быстрая корректировка цен</strong>
+                <div className="avito-price-adjust-row">
+                  <select value={adjustDirection} onChange={(event) => setAdjustDirection(event.target.value as "decrease" | "increase")}>
+                    <option value="decrease">Снизить</option>
+                    <option value="increase">Поднять</option>
+                  </select>
+                  <input type="number" min={0.01} max={90} step={0.01} value={String(adjustPercent)} onChange={(event) => setAdjustPercent(numberInput(event.target.value, 0))} />
+                  <span>%</span>
+                  <button className="primary-action" type="button" disabled={adjustPrices.isPending || !(adjustPercent > 0)} onClick={() => adjustPrices.mutate()}>
+                    {adjustPrices.isPending ? <Loader2 className="spin" size={15} /> : null} Применить
+                  </button>
+                </div>
+                <small className="form-hint">Меняет базовый коэффициент и все правила на указанный процент и сразу обновляет цены в фиде.</small>
+                {adjustPrices.isSuccess ? <div className="info-strip success compact">Коэффициенты обновлены, цены в фиде пересчитаны.</div> : null}
+                {adjustPrices.error ? <div className="inline-error">{String((adjustPrices.error as Error).message)}</div> : null}
+              </div>
+              <div className="settings-form-row">
+                <label className="field-label field-label-wide">
+                  Стоп-слова в названии (через запятую)
+                  <textarea rows={2} value={wordsToText(rules.excludeTitleWords)} onChange={(event) => updateRules({ excludeTitleWords: textToWords(event.target.value) })} placeholder="дубль, удаленый, удаленный" />
+                </label>
+                <label className="field-label field-label-wide">
+                  Обязательные слова (пусто = все)
+                  <textarea rows={2} value={wordsToText(rules.includeTitleWords)} onChange={(event) => updateRules({ includeTitleWords: textToWords(event.target.value) })} placeholder="например: туалетная вода" />
+                </label>
+              </div>
+              <div className="settings-form-row">
+                <label className="field-label field-label-wide">
+                  Исключить бренды
+                  <textarea rows={2} value={wordsToText(rules.excludeBrands)} onChange={(event) => updateRules({ excludeBrands: textToWords(event.target.value) })} />
+                </label>
+                <label className="field-label field-label-wide">
+                  Только бренды (пусто = все)
+                  <textarea rows={2} value={wordsToText(rules.includeBrands)} onChange={(event) => updateRules({ includeBrands: textToWords(event.target.value) })} />
+                </label>
+              </div>
+              <div className="section-title compact-title"><div><span>Фид</span><h3>Значения по умолчанию для объявлений</h3></div></div>
+              <div className="settings-form-row">
+                <label className="field-label">
+                  Категория
+                  <input value={rules.feedDefaults.category} onChange={(event) => updateFeedDefaults({ category: event.target.value })} />
+                </label>
+                <label className="field-label">
+                  Вид товара (GoodsType)
+                  <input value={rules.feedDefaults.goodsType} onChange={(event) => updateFeedDefaults({ goodsType: event.target.value })} />
+                </label>
+                <label className="field-label">
+                  Вид объявления (AdType)
+                  <input value={rules.feedDefaults.adType} onChange={(event) => updateFeedDefaults({ adType: event.target.value })} />
+                </label>
+                <label className="field-label">
+                  Состояние
+                  <input value={rules.feedDefaults.condition} onChange={(event) => updateFeedDefaults({ condition: event.target.value })} />
+                </label>
+              </div>
+              <div className="settings-form-row">
+                <label className="field-label field-label-wide">
+                  Адрес (обязателен для публикации на Avito)
+                  <input value={rules.feedDefaults.address} onChange={(event) => updateFeedDefaults({ address: event.target.value })} placeholder="Москва, ул. Примерная, 1" />
+                </label>
+                <label className="field-label field-label-wide">
+                  Шаблон описания ({"{title}"} и {"{brand}"} подставятся)
+                  <textarea rows={3} value={rules.feedDefaults.description} onChange={(event) => updateFeedDefaults({ description: event.target.value })} placeholder="{title} — оригинальная продукция. Быстрая отправка." />
+                </label>
+              </div>
+            </>
+          )}
+        </section>
+
+        <section className="settings-panel">
+          <div className="section-title"><div><span>Фид Автозагрузки</span><h3>Ссылка для Avito</h3></div></div>
+          <p className="form-hint">Укажите эту ссылку в профиле автозагрузки Avito (или сохраните через API-профиль). Avito будет скачивать XML по расписанию.</p>
+          {feedInfoQuery.data ? (
+            <>
+              <div className="feed-url-row">
+                <input readOnly value={feedInfoQuery.data.feedUrl} onFocus={(event) => event.target.select()} />
+                <button className="secondary-action" type="button" onClick={copyFeedUrl}>
+                  <ClipboardCopy size={16} /> {copied ? "Скопировано" : "Копировать"}
+                </button>
+              </div>
+              <p className="form-hint">
+                В фиде: {feedInfoQuery.data.enabledCount} активных из {feedInfoQuery.data.totalListings} объявлений
+                {feedInfoQuery.data.hiddenOutOfStock ? ` · скрыто без остатков: ${feedInfoQuery.data.hiddenOutOfStock}` : ""}
+                {feedInfoQuery.data.hiddenNoImages ? ` · скрыто без фото: ${feedInfoQuery.data.hiddenNoImages}` : ""}
+                {feedInfoQuery.data.hiddenDuplicates ? ` · скрыто дублей: ${feedInfoQuery.data.hiddenDuplicates}` : ""}.
+                {" "}<a href="/api/avito/feed.xml" target="_blank" rel="noopener">Открыть XML</a>
+              </p>
+              {feedInfoQuery.data.stockFeedUrl ? (
+                <>
+                  <p className="form-hint" style={{ marginTop: 12 }}>
+                    <strong>Файл остатков.</strong> Укажите эту ссылку в разделе Avito «Управление остатками» → способ загрузки «Автоматический» — Avito будет обновлять остатки по ней каждый час.
+                  </p>
+                  <div className="feed-url-row">
+                    <input readOnly value={feedInfoQuery.data.stockFeedUrl} onFocus={(event) => event.target.select()} />
+                    <button className="secondary-action" type="button" onClick={copyStockFeedUrl}>
+                      <ClipboardCopy size={16} /> {copiedStock ? "Скопировано" : "Копировать"}
+                    </button>
+                  </div>
+                  <p className="form-hint">
+                    Формат CSV (Id,Stock): Id совпадает с объявлением из фида, Stock 0 снимает объявление с продажи.
+                    {" "}<a href="/api/avito/stock.csv" target="_blank" rel="noopener">Открыть CSV</a>
+                  </p>
+                </>
+              ) : null}
+              <p className="form-hint">
+                Цены и остатки подставляются из склада при каждом скачивании фида
+                {feedInfoQuery.data.autoRefresh?.enabled
+                  ? `; фоновая сверка каждые ${feedInfoQuery.data.autoRefresh.intervalMinutes} мин`
+                  : ""}
+                {feedInfoQuery.data.autoRefresh?.lastResult?.at
+                  ? ` · последняя: ${new Date(feedInfoQuery.data.autoRefresh.lastResult.at).toLocaleString("ru-RU")}`
+                  : ""}.
+              </p>
+              <div className="row-actions">
+                <button className="secondary-action" type="button" disabled={refreshFeed.isPending} onClick={() => refreshFeed.mutate()} title="Перенести актуальные цены и остатки склада в объявления прямо сейчас">
+                  {refreshFeed.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить цены/остатки
+                </button>
+                <button className="secondary-action" type="button" disabled={backfillDescriptions.isPending} onClick={() => backfillDescriptions.mutate()} title="Подтянуть описания товаров с Ozon для объявлений без описания (порция до 500 за запуск; фоновая задача добирает остальные автоматически)">
+                  {backfillDescriptions.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Описания с Ozon
+                </button>
+                <button className="secondary-action" type="button" disabled={backfillImages.isPending} onClick={() => backfillImages.mutate()} title="Подтянуть фото для объявлений без картинок: сначала со склада, недостающие — с Ozon API (порция до 500; фоновая задача добирает остальные автоматически)">
+                  {backfillImages.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Фото с Ozon
+                </button>
+              </div>
+              {refreshFeed.data ? (
+                <p className="form-hint">
+                  Обновлено цен: {refreshFeed.data.updatedPrices ?? 0} · без остатков: {refreshFeed.data.outOfStock ?? 0} из {refreshFeed.data.total ?? 0}.
+                </p>
+              ) : null}
+              {refreshFeed.error ? <div className="inline-error">{String((refreshFeed.error as Error).message)}</div> : null}
+              {backfillDescriptions.data ? (
+                <p className="form-hint">
+                  Описания: добавлено {backfillDescriptions.data.updated ?? 0}, осталось без описания {backfillDescriptions.data.remaining ?? 0}.
+                </p>
+              ) : null}
+              {backfillDescriptions.error ? <div className="inline-error">{String((backfillDescriptions.error as Error).message)}</div> : null}
+              {backfillImages.data ? (
+                <p className="form-hint">
+                  Фото: со склада {backfillImages.data.updatedFromPostgres ?? 0}, с Ozon {backfillImages.data.updatedFromOzon ?? 0}, осталось без фото {backfillImages.data.remaining ?? 0}.
+                </p>
+              ) : null}
+              {backfillImages.error ? <div className="inline-error">{String((backfillImages.error as Error).message)}</div> : null}
+            </>
+          ) : (
+            <div className="table-note"><Loader2 className="spin" size={14} /> Загружаю…</div>
+          )}
+          <div className="section-title compact-title"><div><span>Загрузки Avito</span><h3>Последние запуски</h3></div>
+            <button className="secondary-action" type="button" disabled={!avitoConfigured} onClick={() => uploadsQuery.refetch()}><RefreshCw size={16} /></button>
+          </div>
+          {!avitoConfigured ? <p className="form-hint">Появятся после настройки кабинета Avito.</p> : null}
+          {uploadsQuery.error ? <p className="form-hint">История загрузок недоступна: {String((uploadsQuery.error as Error).message)}</p> : null}
+          {(uploadsQuery.data?.uploads || []).slice(0, 6).map((upload) => (
+            <div className="upload-status-row" key={upload.upload_id}>
+              <span className={`pill ${upload.status === "success" ? "ok" : upload.status === "processing" ? "muted" : "warn"}`}>
+                {UPLOAD_STATUS_LABELS[upload.status] || upload.status}
+              </span>
+              <span>{upload.started_at ? new Date(upload.started_at).toLocaleString("ru-RU") : "—"}</span>
+              <span>{upload.stats?.count ?? 0} объявл.</span>
+            </div>
+          ))}
+
+          <div className="section-title compact-title">
+            <div><span>Синхронизация</span><h3>Цены и остатки Avito</h3></div>
+            <button
+              className="primary-action"
+              type="button"
+              disabled={!avitoConfigured || syncNow.isPending || syncStatus?.feedRefreshRunning}
+              onClick={() => syncNow.mutate(false)}
+              title="Обновить цены/остатки в фиде и сразу сообщить Avito скачать его. Лимит Avito — раз в час; если лимит ещё не вышел, загрузка будет пропущена."
+            >
+              {syncNow.isPending || syncStatus?.feedRefreshRunning ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
+              {syncNow.isPending ? "Синхронизирую…" : "Синхронизировать сейчас"}
+            </button>
+          </div>
+          {syncStatus ? (
+            <>
+              <div className="brand-chips" style={{ marginBottom: 6 }}>
+                <span className="brand-chip ok">{syncStatus.inStock} в наличии</span>
+                {syncStatus.outOfStock > 0 ? <span className="brand-chip warn">{syncStatus.outOfStock} нет в наличии</span> : null}
+                <span className="brand-chip muted">{syncStatus.listings} объявлений всего</span>
+              </div>
+              {syncStatus.feedRefreshEnabled ? (
+                <p className="form-hint">
+                  Фоновая сверка каждые {Math.round(syncStatus.feedRefreshIntervalMs / 60_000)} мин
+                  {syncStatus.feedRefreshNextRunAt
+                    ? ` · следующая: ${new Date(syncStatus.feedRefreshNextRunAt).toLocaleTimeString("ru-RU")}`
+                    : ""}
+                  {syncStatus.feedRefreshLastResult?.at
+                    ? ` · последняя: ${new Date(syncStatus.feedRefreshLastResult.at).toLocaleString("ru-RU")}`
+                    : ""}
+                  {syncStatus.feedRefreshLastResult?.updatedPrices
+                    ? ` · обновлено цен: ${syncStatus.feedRefreshLastResult.updatedPrices}`
+                    : ""}
+                  .
+                </p>
+              ) : (
+                <p className="form-hint">Фоновая сверка отключена (AVITO_FEED_REFRESH_ENABLED=false).</p>
+              )}
+              {syncStatus.lastUploadTriggerResult ? (
+                <p className="form-hint">
+                  {"Последний триггер Avito: "}
+                  {syncStatus.lastUploadTriggerResult.ok ? (
+                    <span className="pill ok">
+                      успешно {syncStatus.lastUploadTriggerResult.at ? new Date(syncStatus.lastUploadTriggerResult.at).toLocaleString("ru-RU") : ""}
+                    </span>
+                  ) : syncStatus.lastUploadTriggerResult.skipped ? (
+                    <span className="pill muted">
+                      пропущен ({syncStatus.lastUploadTriggerResult.reason})
+                      {syncStatus.lastUploadTriggerResult.nextAllowedAt
+                        ? ` · следующий не раньше ${new Date(syncStatus.lastUploadTriggerResult.nextAllowedAt).toLocaleTimeString("ru-RU")}`
+                        : ""}
+                    </span>
+                  ) : (
+                    <span className="pill warn">ошибка: {syncStatus.lastUploadTriggerResult.error}</span>
+                  )}
+                </p>
+              ) : (
+                <p className="form-hint">Триггер Avito ещё не запускался с последнего рестарта.</p>
+              )}
+            </>
+          ) : (
+            <div className="table-note"><Loader2 className="spin" size={14} /> Загружаю состояние…</div>
+          )}
+          {syncNow.data ? (
+            <div className="info-strip success compact">
+              Синхронизация выполнена
+              {syncNow.data.refreshResult?.updatedPrices ? ` · обновлено цен: ${syncNow.data.refreshResult.updatedPrices}` : ""}
+              {syncNow.data.refreshResult?.outOfStock ? ` · без остатков: ${syncNow.data.refreshResult.outOfStock}` : ""}
+              {syncNow.data.uploadResult?.ok ? " · загрузка Avito запущена" : ""}
+              {syncNow.data.uploadResult?.skipped ? ` · загрузка пропущена (${syncNow.data.uploadResult.reason})` : ""}
+              .
+            </div>
+          ) : null}
+          {syncNow.error ? <div className="inline-error">{String((syncNow.error as Error).message)}</div> : null}
+        </section>
+      </div>
+
+      {previewData ? (
+        <section className="settings-panel settings-panel-wide">
+          <div className="section-title"><div><span>Предпросмотр</span><h3>Пройдут: {previewData.matchedCount} · пропущены: {previewData.skippedCount}</h3></div></div>
+          {Object.keys(previewData.skippedByReason).length ? (
+            <div className="brand-chips">
+              {Object.entries(previewData.skippedByReason).map(([reason, count]) => (
+                <span className="brand-chip" key={reason}>{reasonLabel(reason)}: {count}</span>
+              ))}
+            </div>
+          ) : null}
+          {previewData.matchedByCategory && Object.keys(previewData.matchedByCategory).length ? (
+            <>
+              <h4>Категории Avito</h4>
+              <div className="brand-chips">
+                {Object.entries(previewData.matchedByCategory)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([category, count]) => (
+                    <span className="brand-chip" key={category}>{category}: {count}</span>
+                  ))}
+              </div>
+            </>
+          ) : null}
+          <div className="preview-columns">
+            <div>
+              <h4>Примеры прошедших ({previewData.matchedSample.length})</h4>
+              <div className="table-panel">
+                {previewData.matchedSample.slice(0, 20).map((item) => (
+                  <div className="table-row avito-preview-row" key={item.adId}>
+                    <span className="import-name">{item.title}</span>
+                    <span>{item.volumeMl ? `${item.volumeMl} мл` : "—"}</span>
+                    <span>{item.priceRub} ₽</span>
+                  </div>
+                ))}
+                {!previewData.matchedSample.length ? <div className="empty-state">Ни один товар не прошёл фильтры.</div> : null}
+              </div>
+            </div>
+            <div>
+              <h4>Примеры пропущенных ({previewData.skippedSample.length})</h4>
+              <div className="table-panel">
+                {previewData.skippedSample.slice(0, 20).map((item) => (
+                  <div className="table-row avito-preview-row" key={item.id}>
+                    <span className="import-name">{item.name || item.offerId}</span>
+                    <span className="pill warn">{reasonLabel(item.reasons[0] || "unknown")}</span>
+                  </div>
+                ))}
+                {!previewData.skippedSample.length ? <div className="empty-state">Пропущенных нет.</div> : null}
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="settings-panel settings-panel-wide">
+        <div className="section-title">
+          <div><span>Объявления фида</span><h3>Всего: {listingsQuery.data?.total ?? 0}</h3></div>
+          <div className="row-actions">
+            <input
+              type="search"
+              value={listingSearch}
+              onChange={(event) => setListingSearch(event.target.value)}
+              placeholder="Поиск: артикул, название, бренд"
+              aria-label="Поиск по объявлениям"
+            />
+            <button className="secondary-action" type="button" onClick={() => listingsQuery.refetch()}>
+              {listingsQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить
+            </button>
+          </div>
+        </div>
+        <div className="table-panel import-table">
+          <div className="table-head avito-listing-row">
+            <span>Объявление</span>
+            <span>Артикул</span>
+            <span>Объём</span>
+            <span>Цена</span>
+            <span>Источник</span>
+            <span></span>
+          </div>
+          {listings.slice(0, 200).map((item) => (
+            <div className="table-row avito-listing-row" key={item.adId}>
+              <span className="import-product">
+                {item.imageUrls[0] ? <img src={item.imageUrls[0]} alt="" loading="lazy" /> : <span className="import-noimg" />}
+                <span className="import-name">
+                  {item.title}
+                  {categoryPath(item) ? <small style={{ display: "block", opacity: 0.65 }}>{categoryPath(item)}{item.categoryAutoDefaulted ? " · по умолчанию" : ""}{!item.hasDescription ? " · без описания" : ""}</small> : null}
+                </span>
+              </span>
+              <span data-label="Артикул">{item.adId}</span>
+              <span data-label="Объём">{item.volumeMl ? `${item.volumeMl} мл` : "—"}</span>
+              <span data-label="Цена">
+                {item.priceRub ? `${item.priceRub} ₽` : "—"}
+                {(item.markupCoefficient || 0) > 0 ? (
+                  <span className="pill muted" title="Личный коэффициент наценки: цена = закупка поставщика × коэффициент, общие правила не применяются">коэф. ×{item.markupCoefficient}</span>
+                ) : null}
+              </span>
+              <span data-label="Источник">
+                {item.outOfStock ? (
+                  <span className="pill warn" title="Нет остатков на складе — объявление скрыто из фида">нет остатков</span>
+                ) : (
+                  <span className={`pill ${item.source === "ozon" ? "ok" : "muted"}`}>{item.source === "ozon" ? "Ozon" : "вручную"}</span>
+                )}
+              </span>
+              <span>
+                <button className="icon-action danger" type="button" disabled={removeListing.isPending} onClick={() => { if (!window.confirm("Удалить листинг? Это действие необратимо.")) return; removeListing.mutate(item.adId); }} title="Убрать из фида">
+                  <Trash2 size={15} />
+                </button>
+              </span>
+            </div>
+          ))}
+          {!listings.length && !listingsQuery.isFetching ? (
+            <div className="empty-state">
+              {debouncedListingSearch ? "Ничего не найдено по запросу." : "Фид пуст. Настрой правила и нажми «Импортировать в фид»."}
+            </div>
+          ) : null}
+        </div>
+        {(listingsQuery.data?.matched ?? 0) > listings.length ? (
+          <p className="form-hint">
+            Показаны первые {listings.length} из {listingsQuery.data?.matched}{debouncedListingSearch ? " найденных" : ""} — уточни поиск.
+          </p>
+        ) : null}
+      </section>
+    </section>
+  );
+}

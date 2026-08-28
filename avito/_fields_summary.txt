@@ -1,0 +1,99 @@
+﻿### автомайзеры и флаконы
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, Condition, VideoFileURL, PerfumeryType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### авторизация
+
+
+### Гигиена и контрацепция
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### дезодорант
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### диффузоры спери саше
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, Condition, VideoFileURL, PerfumeryType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### другое
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, Condition, VideoFileURL, PerfumeryType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### духи и туалетная вода
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, Condition, VideoFileURL, PerfumeryType, Material, Color, Volume, UnitQuantity, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### загар защита от солнца
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### Корректирующие средства
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### Кремы
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### маски
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### масла
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### мессенджер avito
+
+
+### мыло
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### Наборы уходовой косметики
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### остатки
+
+
+### отзывы
+
+
+### Парфюмерные масла
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, Condition, VideoFileURL, PerfumeryType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### Парфюмерные наборы
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, Condition, VideoFileURL, PerfumeryType, Brand, FragranceGroup, PerfumeryNotes, Gender, Volume, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### патчи
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### Портал разработчика Авито
+
+
+### Портал разработчика Авито2
+
+
+### Приборы и аксессуары
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### скрабы и паиллинги
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### Скрабы и пилинги
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### Средства для волос
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### средство для умывания
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### Сыворотки и эссенции
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### Тоники и лосьоны
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### управление заказами
+
+
+### Уход за полостью рта
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+
+### уход за телом
+
+
+### Эмульсии и флюиды
+Id, DateBegin, DateEnd, ListingFee, AdStatus, AvitoId, ManagerName, ContactPhone, Address, Latitude, Longitude, SellerAddressID, ImageUrls, ImageNames, VideoURL, ContactMethod, Promo, PromoAutoOptions, PromoManualOptions, Category, Title, Description, InternetCalls, CallsDevices, Delivery, WeightForDelivery, LengthForDelivery, HeightForDelivery, WidthForDelivery, ReturnPolicy, DeliverySubsidy, Price, GoodsType, AdType, VideoFileURL, GoodsSubType, SubType, WholesaleType, WholesaleMinOrderType, WholesaleMinOrderCount, WholesalePacking, WholesalePackingCount, WholesaleMeasureUnit, WholesaleDiscountLadderType, DiscountLadderList
+

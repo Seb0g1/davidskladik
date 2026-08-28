@@ -3,27 +3,55 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#2563eb" />
-    <title>Вход | Magic Vibes - Склад</title>
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%237c3aed'/%3E%3Cpath fill='%23fff' d='M8 22V10h2.8l3.4 6.1L17.5 10H20v12h-2.5v-7.2l-2.8 5h-1.4l-2.8-5V22H8z'/%3E%3C/svg%3E" />
+    <meta name="theme-color" content="#06111f" />
+    <title>Вход | DavidSklad</title>
+    <link rel="icon" type="image/png" href="/logo1.png" />
+    <link rel="apple-touch-icon" href="/logo1.png" />
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body class="login-page">
-    <main class="login-card">
-      <h1 class="site-brand site-brand--compact"><span class="brand-name">Magic Vibes</span><span class="brand-sep"> — </span><span class="brand-tag">Склад</span></h1>
-      <p>Войдите, чтобы открыть товары маркетплейсов, привязки PriceMaster и управление ценами.</p>
-      <form id="loginForm">
-        <label>
-          Логин
-          <input name="username" autocomplete="username" required />
-        </label>
-        <label>
-          Пароль
-          <input name="password" type="password" autocomplete="current-password" required />
-        </label>
-        <button class="primary-button" type="submit">Войти</button>
-      </form>
-      <div id="loginError" class="login-error"></div>
+    <main class="login-shell">
+      <section class="login-brand-panel" aria-label="DavidSklad">
+        <div class="login-brand-lockup">
+          <span class="login-brand-mark" aria-hidden="true">D</span>
+          <h1>David<span>Sklad</span></h1>
+        </div>
+        <div class="login-dashboard-preview">
+          <div class="login-preview-top">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="login-preview-grid">
+            <article><small>Активных товаров</small><strong>7 892</strong></article>
+            <article><small>Очередь цен</small><strong>126</strong></article>
+            <article><small>Ожидают сборки</small><strong>58</strong></article>
+          </div>
+          <div class="login-preview-table">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+        </div>
+      </section>
+      <section class="login-card">
+        <div class="login-card-head">
+          <span class="login-eyebrow">Рабочий интерфейс</span>
+          <h2>Вход в кабинет</h2>
+        </div>
+        <form id="loginForm">
+          <label>
+            Логин
+            <input name="username" autocomplete="username" required />
+          </label>
+          <label>
+            Пароль
+            <input name="password" type="password" autocomplete="current-password" required />
+          </label>
+          <button class="primary-button" type="submit">Войти</button>
+        </form>
+        <div id="loginError" class="login-error"></div>
+      </section>
     </main>
     <script src="/login.js"></script>
   </body>

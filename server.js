@@ -1,14 +1,4 @@
-const fs = require("fs/promises");
-const fsSync = require("fs");
-const path = require("path");
-const crypto = require("crypto");
-const express = require("express");
-const compression = require("compression");
-const rateLimit = require("express-rate-limit");
-const multer = require("multer");
-const mysql = require("mysql2/promise");
-const { Queue, Worker } = require("bullmq");
-require("dotenv").config();
+"use strict";
 
 const logger = require("./lib/logger");
 const { cleanupDataDirectory, rotateHistoryFile } = require("./lib/cleanup");
@@ -5795,5 +5785,5 @@ module.exports = {
 };
 
 if (require.main === module) {
-  startServer();
+  void server.startServer();
 }

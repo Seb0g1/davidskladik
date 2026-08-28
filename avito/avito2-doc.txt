@@ -1,0 +1,3728 @@
+
+Портал разработчика Авито
+ 
+ 
+Для бизнеса
+Магазины
+Авито Pro
+Помощь
+4
+3
+Мои объявления
+Точка Стиля
+4,2
+5 отзывов
+Мои объявления
+Заказы
+Мои отзывы
+Избранное
+Сообщения
+3
+Уведомления
+4
+Кошелёк
+0
+&nbsp;
+₽
+250
+ 
+бонусов
+Тариф
+0
+&nbsp;
+₽
+Платные услуги
+Для профессионалов
+Оформление профиля
+Защита профиля
+Настройки
+Сменить профиль
+Добавить профиль
+Выйти
+Разместить объявление
+В общем про API
+Каталог API
+Иерархия Аккаунтов
+Авито Реклама
+CPA-аукцион
+Авторизация
+Автозагрузка
+Описание
+Общая информация
+Переход с v2v3 методов отчётов на v4 методы загрузок
+Список методов
+Техническая документация
+get
+Получение профиля пользователя автозагрузки (deprecated)
+post
+Создание/редактирование настроек профиля пользователя автозагрузки (deprecated)
+post
+Загрузка файла по ссылке
+get
+Получения полей категории
+get
+Получение дерева категорий
+get
+ID объявлений из файла
+get
+ID объявлений на Авито
+get
+Получение профиля пользователя автозагрузки
+post
+Создание/редактирование настроек профиля пользователя автозагрузки
+get
+Список отчётов автозагрузки (deprecated)
+get
+Объявления по ID в автозагрузке (deprecated)
+get
+Статистика по последней выгрузке (deprecated)
+get
+Статистика по конкретной выгрузке (deprecated)
+get
+Все объявления из конкретной выгрузки (deprecated)
+get
+Списания за объявления в конкретной выгрузке (deprecated)
+get
+Статистика по последней выгрузке (deprecated)
+get
+Статистика по конкретной выгрузке (deprecated)
+get
+История загрузок
+get
+Текущая загрузка
+get
+Объявления текущей загрузки
+get
+Последняя успешно завершённая загрузка
+get
+Объявления последней успешно завершённой загрузки
+История обновления версий
+Автостратегия
+Автотека
+Авито Promo
+CallTracking[КТ]
+CPA Авито
+Настройка цены целевого действия
+Доставка
+Объявления
+Авито.Работа
+Мессенджер
+Управление заказами
+Продвижение
+Рейтинги и отзывы
+Аналитика по недвижимости
+Рассылка скидок и спецпредложений в мессенджере (beta-version)
+Управление остатками
+Краткосрочная аренда
+Тарифы
+TrxPromo
+Описание
+Техническая документация
+Информация о пользователе
+Мои приложения
+Готовые интеграции
+Обновления API
+&nbsp;
+Новое
+Номер профиля
+112&nbsp;243&nbsp;492
+Поддержка проф. инструментов
+8 800 600-00-01
+supportautoload@avito.ru
+Написать в поддержку
+Чтобы обращение рассмотрели быстрее, добавьте сURL запроса в&nbsp;описании проблемы
+Автозагрузка
+ 
+Скачать swagger
+Приложение Avito Helper Seb0g1
+Разрешены доступы autoload:reports, items:apply_vas, items:info, job:applications, job:cv, job:write, messenger:read, messenger:write, short_term_rent:read, short_term_rent:write, stats:read, user:read, user_balance:read, user_operations:read. Можете пользоваться API.
+Общая информация
+С помощью методов API из этого раздела вы можете:
+самостоятельно подключить и управлять настройками автозагрузки;
+самостоятельно запустить автозагрузку;
+получить историю загрузок;
+посмотреть подробные данные о текущей или последней успешно завершённой загрузке;
+проверить информацию по отдельным объявлениям: статус, ошибки загрузки, ссылки на Авито.
+получить дерево категорий и его поля.
+&nbsp;
+Переход с v2/v3 методов отчётов на v4 методы загрузок
+С 08.06.2026 опубликованы методы v4 для работы с загрузками. Старые методы v2/v3 для работы с отчётами выводятся из эксплуатации. Вам нужно перейти на новые методы в течение 9 месяцев (до 08.03.2027).
+Этапы вывода из эксплуатации
+:
+08.06.2026 — запуск методов v4. Методы v2/v3 продолжают работать без изменений, помечены 
+deprecated
+.
+08.09.2026 — старые методы начнут возвращать меньше исторических данных (данные старше 7 дней будут неполными).
+08.03.2027 — старые методы будут удалены, начнут возвращать 
+410 Gone
+.
+Breaking changes
+ - данные которых нет в новых методах:
+Теперь информацию по объявлениям в загрузке можно посмотреть только по 
+текущей
+ и по 
+последней успешной
+ загрузке.
+Данные об услугах продвижения (
+applied_vas
+). Применённые VAS по объявлению доступны через 
+getItemInfo
+.
+Данные о списаниях (
+fee_info
+, 
+listing_fees
+). История операций по кошельку доступна через 
+getUserInfoSelf
+.
+Поля 
+finished_at
+ (время окончания публикации) и 
+processing_time
+ (длительность обработки) — без замены.
+Подкатегории в разделе "Успешно опубликовано" (
+successful
+) в 
+sections_stats
+ больше не возвращаются, только общее количество в 
+successful.count
+.
+Соответствие старых методов новым
+:
+getReportsV2
+ → 
+getUploads
+.
+getReportByIdV2
+, 
+getReportByIdV3
+ → 
+getUploads
+.
+getLastCompletedReport
+ (v2), 
+getLastCompletedReportV3
+ → 
+getLastSuccessfulUpload
+.
+getReportItemsById
+ → 
+getLastSuccessfulUploadItems
+. Параметр 
+report_id
+ больше не нужен — всегда возвращается последняя успешно завершённая загрузка.
+getAutoloadItemsInfoV2
+ → 
+getLastSuccessfulUploadItems
+.
+getReportItemsFeesById
+ → без прямой замены. История операций по кошельку доступна через 
+getUserInfoSelf
+.
+Соответствие старых полей новым
+ (просто переименования, данные те же самые):
+report_id
+ → 
+upload_id
+.
+feed_url
+ (v2) / 
+feeds_urls
+ (v3) → 
+feed_urls
+ (массив объектов 
+{ name, url }
+).
+Параметр пагинации 
+per_page
+ → 
+perPage
+.
+Параметры фильтрации 
+date_from
+ / 
+date_to
+ → 
+dateFrom
+ / 
+dateTo
+.
+Список методов:
+getProfile
+ (deprecated)
+Возвращает настройки профиля пользователя автозагрузки.
+С его помощью можно посмотреть информацию:
+Статус автозагрузки (вкл/выкл)
+Расписание регулярных загрузок
+URL-адрес фида, для которого настроены регулярные загрузки
+Почта, на которую будут приходить отчеты о загрузках
+createOrUpdateProfile
+ (deprecated)
+Предназначен для создания и управления профилем автозагрузки. Если профиля еще не существует - через этот метод можно его создать. 
+Если профиль существует - через этот метод можно управлять следующими настройками:
+Статус автозагрузки (вкл/выкл)
+Расписание регулярных загрузок
+URL-адрес фида, для регулярных загрузок
+Почта, на которую будут приходить отчеты о загрузках
+getReportsV2
+ (deprecated)
+Показывает список отчетов автозагрузки. Самый новый отчёт будет в верху списка.
+getReportByIdV2
+ (deprecated)
+Если ввести ID нужного отчета из списка, полученного по методу getReportsV2, можно посмотреть информацию:
+по самому отчёту: статус загрузки, сколько денег списано из кошелька или потрачено размещений из тарифа.
+по объявлениям: сколько объявлений было в файле и сколько из них было опубликовано с ошибками или без.
+getLastCompletedReport
+ (deprecated)
+Показывает общую информацию только по последнему закрытому отчёту: статус загрузки и сколько денег списано из кошелька. Не показывает статистику по отдельным объявлениям и услугам продвижения.
+getAutoloadItemsInfoV2
+ (deprecated)
+Если ввести ID нужного объявления, можно посмотреть дату и статус его последней загрузки, ошибки загрузки (если были) и ссылку на Авито.
+upload
+Запускает автозагрузку по ссылке, которая указана в настройках автозагрузки вашего профиля. Запускать автозагрузку можно не чаще, чем раз в час.
+getAdIdsByAvitoIds
+По номеру объявления на Авито можно узнать Id объявления в файле автозагрузки.
+getAvitoIdsByAdIds
+По Id объявления в файле автозагрузки можно узнать номер объявления на Авито.
+getReportItemsById
+ (deprecated)
+Показывает информацию по каждому объявлению из выбранного отчёта: статус загрузки и ссылку на Авито.
+userDocsTree
+Вернёт вложенное дерево категорий. Для каждой ноды категории, у которой есть атрибут slug, можно получить список полей.
+userDocsNodeFields
+Возвращает поля дерева категории для самых нижних нод.
+getProfileV2
+Возвращает настройки профиля пользователя автозагрузки.
+createOrUpdateProfileV2
+Создание и редактирование профиля автозагрузки.
+getReportByIdV3
+ (deprecated)
+Возвращает статистику по конкретной загрузке.
+getLastCompletedReportV3
+ (deprecated)
+Возвращает статистику по последней загрузке.
+getReportItemsFeesById
+ (deprecated, без замены)
+Возвращает данные о списаниях по объявлениям конкретной загрузки.
+getUploads
+Возвращает список загрузок. Самая свежая загрузка — в начале списка.
+getLastSuccessfulUpload
+Возвращает последнюю успешно завершённую загрузку, т.е. загрузку, которая обработала все объявления фида. Для самой последней загрузки возможны задержки при определении того, что загрузка завершена — в таком случае смотрите актуальные данные в методе 
+текущей загрузки
+.
+getCurrentUpload
+Возвращает текущую загрузку пользователя, т.е. последнюю загрузку, которая обработала хотя бы одно объявление фида. Подходит, когда нужны самые актуальные данные. В общем случае лучше использовать метод 
+последней завершённой загрузки
+.
+getLastSuccessfulUploadItems
+Возвращает объявления 
+последней успешно завершённой загрузки
+.
+getCurrentUploadItems
+Возвращает объявления 
+текущей загрузки
+.
+Сервис Автозагрузка
+get
+Получение профиля пользователя автозагрузки (deprecated)
+post
+Создание/редактирование настроек профиля пользователя автозагрузки (deprecated)
+post
+Загрузка файла по ссылке
+get
+Получения полей категории
+get
+Получение дерева категорий
+get
+ID объявлений из файла
+get
+ID объявлений на Авито
+get
+Получение профиля пользователя автозагрузки
+post
+Создание/редактирование настроек профиля пользователя автозагрузки
+get
+Список отчётов автозагрузки (deprecated)
+get
+Объявления по ID в автозагрузке (deprecated)
+get
+Статистика по последней выгрузке (deprecated)
+get
+Статистика по конкретной выгрузке (deprecated)
+get
+Все объявления из конкретной выгрузки (deprecated)
+get
+Списания за объявления в конкретной выгрузке (deprecated)
+get
+Статистика по последней выгрузке (deprecated)
+get
+Статистика по конкретной выгрузке (deprecated)
+get
+История загрузок
+get
+Текущая загрузка
+get
+Объявления текущей загрузки
+get
+Последняя успешно завершённая загрузка
+get
+Объявления последней успешно завершённой загрузки
+Documentation Powered by ReDoc
+Автозагрузка 
+(1)
+Download OpenAPI specification:
+Download
+E-mail: 
+supportautoload@avito.ru
+ 
+Получение отчётов о публикации и редактировании объявлений через Автозагрузку
+Авито API для бизнеса предоставляется согласно 
+Условиям использования
+.
+ -->
+Сервис Автозагрузка
+Методы API для получения информации об автозагрузке объявлений
+Получение профиля пользователя автозагрузки (deprecated) 
+ Deprecated 
+Возвращает настройки профиля пользователя автозагрузки.
+С 23.12.2024 вместо поля upload_url используйте поле feeds_data. В нём содержится название файла и ссылка на него. 
+Новая версия
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешное получение данных пользователя
+400 
+Неверный запрос
+403 
+Доступ запрещён
+404 
+Профиль не найден
+500 
+Внутренняя ошибка метода API
+get
+/autoload/v1/profile
+https://api.avito.ru
+/autoload/v1/profile
+ Response samples 
+200
+400
+403
+404
+500
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"autoload_enabled"
+: 
+true
+,
+"report_email"
+: 
+"string"
+,
+"schedule"
+: 
+[
+{
+"rate"
+: 
+0
+,
+"time_slots"
+: 
+[
+0
+]
+,
+"weekdays"
+: 
+[
+0
+]
+}
+]
+,
+"upload_url"
+: 
+"string"
+}
+Создание/редактирование настроек профиля пользователя автозагрузки (deprecated) 
+ Deprecated 
+Предназначен для создания и управления профилем автозагрузки. Если профиля еще не существует - через этот метод можно его создать. 
+С 23.12.2024 вместо поля upload_url используйте поле feeds_data. В нём содержится название файла и ссылка на него. 
+Новая версия
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Request Body schema: 
+application/json
+agreement
+boolean
+ Nullable 
+ 
+Согласие с 
+правилами
+ использования Авито Автозагрузки.
+Обязательно, если профиль еще не существует.
+autoload_enabled
+ required 
+boolean
+ 
+Статус автозагрузки (вкл/выкл)
+report_email
+ required 
+string
+ 
+Почта, на которую будут приходить отчеты о выгрузках
+schedule
+ required 
+Array of 
+objects
+ (ExportSchedule) 
+ 
+Расписание регулярных выгрузок. Содержит в себе периоды и сколько объявлений загружать за каждый период. 
+Каждый период означает часовой промежуток, в течение которого будет запущена выгрузка.
+Время указывается по Москве.
+upload_url
+ required 
+string
+ 
+URL-адрес фида, для которого настроены регулярные выгрузки. Должен начинаться с http или https.
+Responses
+200 
+Успешное обновление настроек профиля
+400 
+Неверный запрос
+403 
+Доступ запрещён
+500 
+Внутренняя ошибка метода API
+post
+/autoload/v1/profile
+https://api.avito.ru
+/autoload/v1/profile
+ Request samples 
+Payload
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"agreement"
+: 
+true
+,
+"autoload_enabled"
+: 
+true
+,
+"report_email"
+: 
+"string"
+,
+"schedule"
+: 
+[
+{
+"rate"
+: 
+0
+,
+"time_slots"
+: 
+[
+0
+]
+,
+"weekdays"
+: 
+[
+0
+]
+}
+]
+,
+"upload_url"
+: 
+"string"
+}
+ Response samples 
+400
+403
+500
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"error"
+: 
+{
+"code"
+: 
+0
+,
+"message"
+: 
+"string"
+}
+}
+Загрузка файла по ссылке 
+Метод запускает процесс выгрузки объявлений из файла по ссылке, которая указана
+в настройках автозагрузки
+ в профиле Авито.
+В течение часа таким способом можно запустить только одну выгрузку.
+Важно
+: на загрузки с помощью этого метода не распространяются лимиты на количество публикаций, которые указаны в настройках автозагрузки в профиле Авито.
+Все объявления из файла, которые могут быть опубликованы или активированы, будут опубликованы или активированы.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+Responses
+200 
+Выгрузка файла по ссылке запущена успешно
+default 
+Информация об ошибке
+post
+/autoload/v1/upload
+https://api.avito.ru
+/autoload/v1/upload
+ Response samples 
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"error"
+: 
+{
+"code"
+: 
+0
+,
+"message"
+: 
+"string"
+}
+}
+Получения полей категории 
+Метод позволяет получить поля конкретной категории и их параметры, зависимости полей, возможные значения и их типы, предупреждения (например, когда поле станет обязательным) и ссылки на каталоги значений.
+📝 
+Напишите нам
+, если в методе вам не хватает каких-либо данных.
+path Parameters
+node_slug
+ required 
+string
+ 
+ Example: 
+ 
+remont
+slug узла дерева категории
+header Parameters
+If-Modified-Since
+string
+ Nullable 
+ 
+ Example: 
+ 
+Mon, 01 Jan 0001 00:00:00 UTC
+Дата и время последней полученной версии в формате RFC1123 в UTC
+Responses
+200 
+Успешное получение полей для переданной категории
+304 
+Вернётся пустой ответ, если дата в заголовке If-Modified-Since раньше даты последней сборки документации.
+400 
+Неправильный запрос
+403 
+Ошибка авторизации пользователя
+404 
+Запрашиваемый ресурс не найден
+get
+/autoload/v1/user-docs/node/{node_slug}/fields
+https://api.avito.ru
+/autoload/v1/user-docs/node/{node_slug}/fields
+ Response samples 
+200
+400
+403
+404
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"alert"
+: 
+{
+"description"
+: 
+"Категория будет разбита на подкатегории"
+,
+"title"
+: 
+"Изменения в категории"
+,
+"type"
+: 
+"warning"
+}
+,
+"fields"
+: 
+[
+{
+"children"
+: 
+[
+{
+"content"
+: 
+[
+{
+"data_type"
+: 
+"string"
+,
+"default"
+: 
+{
+"description"
+: 
+"string"
+,
+"value"
+: 
+"Предложение услуг"
+}
+,
+"dependencies"
+: 
+[
+{
+"action"
+: 
+"visible"
+,
+"clause"
+: 
+"or"
+,
+"pairs"
+: 
+[
+null
+]
+}
+]
+,
+"dependencies_text"
+: 
+[
+"string"
+]
+,
+"field_type"
+: 
+"select"
+,
+"is_catalog"
+: 
+"true"
+,
+"name_in_catalog"
+: 
+"vendor"
+,
+"required"
+: 
+true
+,
+"required_by_dependency"
+: 
+true
+,
+"values"
+: 
+[
+{
+"description"
+: 
+"string"
+,
+"value"
+: 
+"Предложение услуг"
+}
+]
+,
+"values_link_json"
+: 
+"
+https://api.avito.ru/autoload/v1/user-docs/node/zapchasti_i_aksessuary/field/115633/values-json
+"
+,
+"values_link_xml"
+: 
+"
+https://api.avito.ru/autoload/v1/user-docs/node/zapchasti_i_aksessuary/field/115633/values-xml
+"
+,
+"values_range"
+: 
+{
+"max"
+: 
+42
+,
+"min"
+: 
+0
+}
+,
+"warnings"
+: 
+[
+{
+"content"
+: 
+"Поле станет обязательным после 12.12.2022"
+,
+"title"
+: 
+"Изменяется обязательность"
+}
+]
+}
+]
+,
+"descriptions"
+: 
+"Категория объявления"
+,
+"feed_format"
+: 
+{
+"xml"
+: 
+null
+}
+,
+"label"
+: 
+"Категория"
+,
+"tag"
+: 
+"Category"
+}
+]
+,
+"content"
+: 
+[
+{
+"data_type"
+: 
+"string"
+,
+"default"
+: 
+{
+"description"
+: 
+"string"
+,
+"value"
+: 
+"Предложение услуг"
+}
+,
+"dependencies"
+: 
+[
+{
+"action"
+: 
+"visible"
+,
+"clause"
+: 
+"or"
+,
+"pairs"
+: 
+[
+{
+"clause"
+: 
+"value"
+,
+"source_field_tag"
+: 
+"string"
+,
+"values"
+: 
+[
+null
+]
+}
+]
+}
+]
+,
+"dependencies_text"
+: 
+[
+"string"
+]
+,
+"field_type"
+: 
+"select"
+,
+"is_catalog"
+: 
+"true"
+,
+"name_in_catalog"
+: 
+"vendor"
+,
+"required"
+: 
+true
+,
+"required_by_dependency"
+: 
+true
+,
+"values"
+: 
+[
+{
+"description"
+: 
+"string"
+,
+"value"
+: 
+"Предложение услуг"
+}
+]
+,
+"values_link_json"
+: 
+"
+https://api.avito.ru/autoload/v1/user-docs/node/zapchasti_i_aksessuary/field/115633/values-json
+"
+,
+"values_link_xml"
+: 
+"
+https://api.avito.ru/autoload/v1/user-docs/node/zapchasti_i_aksessuary/field/115633/values-xml
+"
+,
+"values_range"
+: 
+{
+"max"
+: 
+42
+,
+"min"
+: 
+0
+}
+,
+"warnings"
+: 
+[
+{
+"content"
+: 
+"Поле станет обязательным после 12.12.2022"
+,
+"title"
+: 
+"Изменяется обязательность"
+}
+]
+}
+]
+,
+"descriptions"
+: 
+"Категория объявления"
+,
+"feed_format"
+: 
+{
+"xml"
+: 
+null
+}
+,
+"label"
+: 
+"Категория"
+,
+"tag"
+: 
+"Category"
+}
+]
+,
+"node"
+: 
+{
+"name"
+: 
+"Ремонт"
+,
+"slug"
+: 
+"remont"
+}
+}
+Получение дерева категорий 
+Метод позволяет получить дерево категорий Авито в виде массива.
+📝 
+Напишите нам
+, если в методе вам не хватает каких-либо данных.
+header Parameters
+If-Modified-Since
+string
+ Nullable 
+ 
+ Example: 
+ 
+Mon, 01 Jan 0001 00:00:00 UTC
+Дата и время последней полученной версии в формате RFC1123 в UTC
+Responses
+200 
+Успешное получение дерева категорий
+304 
+Вернётся пустой ответ, если дата в заголовке If-Modified-Since раньше даты последней сборки документации.
+403 
+Ошибка авторизации пользователя
+get
+/autoload/v1/user-docs/tree
+https://api.avito.ru
+/autoload/v1/user-docs/tree
+ Response samples 
+200
+403
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"categories"
+: 
+[
+{
+"name"
+: 
+"string"
+,
+"nested"
+: 
+[
+{
+"property1"
+: 
+[
+{ }
+]
+,
+"property2"
+: 
+[
+{ }
+]
+}
+]
+,
+"slug"
+: 
+"string"
+}
+]
+}
+ID объявлений из файла 
+Метод позволяет получить идентификаторы (ID) объявлений из файла автозагрузки по ID объявлений на Авито.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+query Parameters
+query
+ required 
+string
+ 
+Список ID объявлений.
+Формат значения: строка с идентификаторами объявлений на Авито, перечисленными через «,» или «|».
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+default 
+Все ошибки
+get
+/autoload/v2/items/ad_ids
+https://api.avito.ru
+/autoload/v2/items/ad_ids
+ Response samples 
+200
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"items"
+: 
+[
+{
+"ad_id"
+: 
+"string"
+,
+"avito_id"
+: 
+0
+}
+]
+}
+ID объявлений на Авито 
+Метод позволяет получить идентификаторы (ID) объявлений на Авито по идентификаторам объявлений из файла автозагрузки.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+query Parameters
+query
+ required 
+string
+ 
+Список ID объявлений.
+Формат значения: строка с 
+идентификаторами объявлений из файла
+,
+перечисленными через «,» или «|»
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+default 
+Информация об ошибке
+get
+/autoload/v2/items/avito_ids
+https://api.avito.ru
+/autoload/v2/items/avito_ids
+ Response samples 
+200
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"items"
+: 
+[
+{
+"ad_id"
+: 
+"string"
+,
+"avito_id"
+: 
+0
+}
+]
+}
+Получение профиля пользователя автозагрузки 
+Возвращает настройки профиля пользователя автозагрузки. С 23.12.2024 вместо поля upload_url используйте поле feeds_data. В нём содержится название файла и ссылка на него.
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешное получение данных пользователя
+400 
+Неверный запрос
+403 
+Доступ запрещён
+404 
+Профиль не найден
+500 
+Внутренняя ошибка метода API
+get
+/autoload/v2/profile
+https://api.avito.ru
+/autoload/v2/profile
+ Response samples 
+200
+400
+403
+404
+500
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"autoload_enabled"
+: 
+true
+,
+"feeds_data"
+: 
+[
+{
+"feed_name"
+: 
+"string"
+,
+"feed_url"
+: 
+"string"
+}
+]
+,
+"report_email"
+: 
+"string"
+,
+"schedule"
+: 
+[
+{
+"rate"
+: 
+0
+,
+"time_slots"
+: 
+[
+0
+]
+,
+"weekdays"
+: 
+[
+0
+]
+}
+]
+}
+Создание/редактирование настроек профиля пользователя автозагрузки 
+Предназначен для создания и управления профилем автозагрузки. Если профиля еще не существует - через этот метод можно его создать. С 23.12.2024 вместо поля feed_url используйте поле feeds_data. В нём содержится название файла и ссылка на него.
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Request Body schema: 
+application/json
+agreement
+boolean
+ Nullable 
+ 
+Согласие с 
+правилами
+ использования Авито Автозагрузки.
+Обязательно, если профиль еще не существует.
+autoload_enabled
+ required 
+boolean
+ 
+Статус автозагрузки (вкл/выкл)
+feeds_data
+ required 
+Array of 
+objects
+ (FeedsData) 
+ Nullable 
+ 
+report_email
+ required 
+string
+ 
+Почта, на которую будут приходить отчеты о выгрузках
+schedule
+ required 
+Array of 
+objects
+ (ExportSchedule) 
+ 
+Расписание регулярных выгрузок. Содержит в себе периоды и сколько объявлений загружать за каждый период. 
+Каждый период означает часовой промежуток, в течение которого будет запущена выгрузка.
+Время указывается по Москве.
+Responses
+200 
+Успешное обновление настроек профиля
+400 
+Неверный запрос
+403 
+Доступ запрещён
+500 
+Внутренняя ошибка метода API
+post
+/autoload/v2/profile
+https://api.avito.ru
+/autoload/v2/profile
+ Request samples 
+Payload
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"agreement"
+: 
+true
+,
+"autoload_enabled"
+: 
+true
+,
+"feeds_data"
+: 
+[
+{
+"feed_name"
+: 
+"string"
+,
+"feed_url"
+: 
+"string"
+}
+]
+,
+"report_email"
+: 
+"string"
+,
+"schedule"
+: 
+[
+{
+"rate"
+: 
+0
+,
+"time_slots"
+: 
+[
+0
+]
+,
+"weekdays"
+: 
+[
+0
+]
+}
+]
+}
+ Response samples 
+400
+403
+500
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"error"
+: 
+{
+"code"
+: 
+0
+,
+"message"
+: 
+"string"
+}
+}
+Список отчётов автозагрузки (deprecated) 
+ Deprecated 
+По запросу вы получите список отчётов автозагрузки.
+Они будут отсортированы в порядке убывания: самый свежий отчёт — в начале списка.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+Метод будет отключен 08.03.2027. С 08.09.2026 метод начнёт возвращать меньше данных. Подробнее читайте в 
+плане миграции
+.
+query Parameters
+per_page
+integer
+ Default: 
+ 
+50
+ 
+Количество отчётов на странице: целое число больше 0 и меньше или равно 200.
+page
+integer
+ Default: 
+ 
+0
+ 
+Номер страницы: целое число больше или равно 0.
+date_from
+string
+ <date-time> 
+ 
+ Example: 
+ 
+date_from=2022-05-27T14:48:50.52Z
+Фильтр по дате создания отчёта «от» (от такой-то даты).
+Формат значения: RFC3339
+date_to
+string
+ <date-time> 
+ 
+ Example: 
+ 
+date_to=2022-05-27T14:48:50.52Z
+Фильтр по дате создания отчёта «до» (до такой-то даты).
+Формат значения: RFC3339
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+default 
+Информация об ошибке
+get
+/autoload/v2/reports
+https://api.avito.ru
+/autoload/v2/reports
+ Response samples 
+200
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"meta"
+: 
+{
+"page"
+: 
+0
+,
+"pages"
+: 
+0
+,
+"per_page"
+: 
+0
+,
+"total"
+: 
+0
+}
+,
+"reports"
+: 
+[
+{
+"finished_at"
+: 
+"2019-08-24T14:15:22Z"
+,
+"id"
+: 
+0
+,
+"started_at"
+: 
+"2019-08-24T14:15:22Z"
+,
+"status"
+: 
+"processing"
+}
+]
+}
+Объявления по ID в автозагрузке (deprecated) 
+ Deprecated 
+По запросу API отдаст данные по конкретным объявлениям.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+Метод будет отключен 08.03.2027. С 08.09.2026 метод начнёт возвращать меньше данных. Подробнее читайте в 
+плане миграции
+.
+query Parameters
+query
+ required 
+string
+ 
+Идентификаторы объявлений из файла (
+параметр Id
+).
+Формат значения: строка, содержащая от 1 до 100 идентификаторов, перечисленных через «,» или «|».
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+default 
+Информация об ошибке
+get
+/autoload/v2/reports/items
+https://api.avito.ru
+/autoload/v2/reports/items
+ Response samples 
+200
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"items"
+: 
+[
+{
+"ad_id"
+: 
+"string"
+,
+"avito_date_end"
+: 
+"2019-08-24T14:15:22Z"
+,
+"avito_id"
+: 
+0
+,
+"avito_status"
+: 
+"active"
+,
+"fee_info"
+: 
+{
+"amount"
+: 
+0
+,
+"package_id"
+: 
+0
+,
+"type"
+: 
+"single"
+}
+,
+"messages"
+: 
+[
+{
+"code"
+: 
+0
+,
+"description"
+: 
+"string"
+,
+"title"
+: 
+"string"
+,
+"type"
+: 
+"error"
+,
+"updated_at"
+: 
+"2019-08-24T14:15:22Z"
+}
+]
+,
+"processing_time"
+: 
+"2019-08-24T14:15:22Z"
+,
+"section"
+: 
+{
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+,
+"url"
+: 
+"string"
+}
+]
+}
+Статистика по последней выгрузке (deprecated) 
+ Deprecated 
+Метод возвращает сводную статистику с результатами последней завершённой выгрузки.
+Например, сколько объявлений было в файле и сколько из них было опубликовано с ошибками или без.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+С 23.12.2024 вместо поля feed_url используйте поле feeds_urls. В нём содержится название файла и ссылка на него.
+Метод будет отключен 08.03.2027. С 08.09.2026 метод начнёт возвращать меньше данных. Подробнее читайте в 
+плане миграции
+.
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+default 
+Информация об ошибке
+get
+/autoload/v2/reports/last_completed_report
+https://api.avito.ru
+/autoload/v2/reports/last_completed_report
+ Response samples 
+200
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"events"
+: 
+[
+{
+"code"
+: 
+0
+,
+"description"
+: 
+"string"
+,
+"type"
+: 
+"string"
+}
+]
+,
+"feed_url"
+: 
+"string"
+,
+"finished_at"
+: 
+"2019-08-24T14:15:22Z"
+,
+"listing_fees"
+: 
+{
+"packages"
+: 
+[
+{
+"count"
+: 
+0
+,
+"package_id"
+: 
+0
+}
+]
+,
+"single"
+: 
+{
+"count"
+: 
+0
+,
+"total_amount"
+: 
+0
+}
+}
+,
+"report_id"
+: 
+0
+,
+"section_stats"
+: 
+{
+"count"
+: 
+0
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+0
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+0
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+]
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+]
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+,
+"source"
+: 
+"email"
+,
+"started_at"
+: 
+"2019-08-24T14:15:22Z"
+,
+"status"
+: 
+"processing"
+}
+Статистика по конкретной выгрузке (deprecated) 
+ Deprecated 
+Метод возвращает сводную статистику с результатами конкретной выгрузки — по ID отчёта.
+Например, сколько объявлений было в файле и сколько из них было опубликовано с ошибками или без.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+С 23.12.2024 вместо поля feed_url используйте поле feeds_urls. В нём содержится название файла и ссылка на него.
+Метод будет отключен 08.03.2027. С 08.09.2026 метод начнёт возвращать меньше данных. Подробнее читайте в 
+плане миграции
+.
+path Parameters
+report_id
+ required 
+integer
+ 
+Идентификатор отчёта (ID)
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+default 
+Информация об ошибке
+get
+/autoload/v2/reports/{report_id}
+https://api.avito.ru
+/autoload/v2/reports/{report_id}
+ Response samples 
+200
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"events"
+: 
+[
+{
+"code"
+: 
+0
+,
+"description"
+: 
+"string"
+,
+"type"
+: 
+"string"
+}
+]
+,
+"feed_url"
+: 
+"string"
+,
+"finished_at"
+: 
+"2019-08-24T14:15:22Z"
+,
+"listing_fees"
+: 
+{
+"packages"
+: 
+[
+{
+"count"
+: 
+0
+,
+"package_id"
+: 
+0
+}
+]
+,
+"single"
+: 
+{
+"count"
+: 
+0
+,
+"total_amount"
+: 
+0
+}
+}
+,
+"report_id"
+: 
+0
+,
+"section_stats"
+: 
+{
+"count"
+: 
+0
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+0
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+0
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+]
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+]
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+,
+"source"
+: 
+"email"
+,
+"started_at"
+: 
+"2019-08-24T14:15:22Z"
+,
+"status"
+: 
+"processing"
+}
+Все объявления из конкретной выгрузки (deprecated) 
+ Deprecated 
+С помощью этого метода можно получить результаты обработки каждого объявления в конкретной выгрузке.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+С 23.12.2024 добавляется поле feed_name. В нём содержится название файла.
+Метод будет отключен 08.03.2027. С 08.09.2026 метод начнёт возвращать меньше данных. Подробнее читайте в 
+плане миграции
+.
+path Parameters
+report_id
+ required 
+integer
+ 
+Идентификатор отчёта (ID)
+query Parameters
+per_page
+integer
+ Default: 
+ 
+50
+ 
+Количество объявлений на странице: целое число больше 0 и меньше или равно 200
+page
+integer
+ Default: 
+ 
+0
+ 
+Номер страницы: целое число больше или равно 0
+query
+string
+ 
+Фильтр по ID объявления.
+Формат значения: строка с 
+идентификаторами объявлений из файла
+или идентификаторами объявлений на Авито, перечисленными через «,» или «|».
+sections
+string
+ 
+Фильтр объявлений по разделам. Формат значения: строка с идентификаторами разделов, перечисленными через «,» или «|».
+Получить список разделов для конкретного отчёта можно с помощью метода
+Статистика по конкретной выгрузке
+.
+Responses
+200 
+Успешный ответ
+default 
+Информация об ошибке
+get
+/autoload/v2/reports/{report_id}/items
+https://api.avito.ru
+/autoload/v2/reports/{report_id}/items
+ Response samples 
+200
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"items"
+: 
+[
+{
+"ad_id"
+: 
+"string"
+,
+"applied_vas"
+: 
+[
+{
+"price"
+: 
+0
+,
+"slug"
+: 
+"xl"
+,
+"title"
+: 
+"string"
+}
+]
+,
+"avito_date_end"
+: 
+"string"
+,
+"avito_id"
+: 
+0
+,
+"avito_status"
+: 
+"active"
+,
+"feed_name"
+: 
+"string"
+,
+"messages"
+: 
+[
+{
+"code"
+: 
+0
+,
+"description"
+: 
+"string"
+,
+"title"
+: 
+"string"
+,
+"type"
+: 
+"error"
+,
+"updated_at"
+: 
+"2019-08-24T14:15:22Z"
+}
+]
+,
+"section"
+: 
+{
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+,
+"url"
+: 
+"string"
+}
+]
+,
+"meta"
+: 
+{
+"page"
+: 
+0
+,
+"pages"
+: 
+0
+,
+"per_page"
+: 
+0
+,
+"total"
+: 
+0
+}
+,
+"report_id"
+: 
+0
+}
+Списания за объявления в конкретной выгрузке (deprecated) 
+ Deprecated 
+С помощью этого метода можно получить информацию о списаниях за размещение каждого объявления в конкретной выгрузке.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+Метод будет отключен 08.03.2027. С 08.09.2026 метод начнёт возвращать меньше данных. Подробнее читайте в 
+плане миграции
+.
+path Parameters
+report_id
+ required 
+integer
+ 
+Идентификатор отчёта (ID)
+query Parameters
+per_page
+integer
+ Default: 
+ 
+100
+ 
+Количество объявлений на странице: целое число больше 0 и меньше или равно 200
+page
+integer
+ Default: 
+ 
+0
+ 
+Номер страницы: целое число больше или равно 0
+ad_ids
+string
+ 
+Фильтр по ID объявления.
+Формат значения: строка с 
+идентификаторами объявлений из файла
+,
+перечисленными через «,» или «|».
+avito_ids
+string
+ 
+Фильтр по AvitoID объявления.
+Формат значения: строка с идентификаторами объявлений на Авито, перечисленными через «,» или «|».
+Responses
+200 
+Успешный ответ
+default 
+Информация об ошибке
+get
+/autoload/v2/reports/{report_id}/items/fees
+https://api.avito.ru
+/autoload/v2/reports/{report_id}/items/fees
+ Response samples 
+200
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"fees"
+: 
+[
+{
+"ad_id"
+: 
+"string"
+,
+"avito_id"
+: 
+0
+,
+"fees_amount"
+: 
+0
+,
+"fees_package_id"
+: 
+0
+,
+"fees_type"
+: 
+"single"
+}
+]
+,
+"meta"
+: 
+{
+"page"
+: 
+0
+,
+"pages"
+: 
+0
+,
+"per_page"
+: 
+0
+,
+"total"
+: 
+0
+}
+,
+"report_id"
+: 
+0
+}
+Статистика по последней выгрузке (deprecated) 
+ Deprecated 
+Метод возвращает сводную статистику с результатами последней завершённой выгрузки.
+Например, сколько объявлений было в файле и сколько из них было опубликовано с ошибками или без.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+С 23.12.2024 вместо поля feed_url используйте поле feeds_urls. В нём содержится название файла и ссылка на него.
+Метод будет отключен 08.03.2027. С 08.09.2026 метод начнёт возвращать меньше данных. Подробнее читайте в 
+плане миграции
+.
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+default 
+Информация об ошибке
+get
+/autoload/v3/reports/last_completed_report
+https://api.avito.ru
+/autoload/v3/reports/last_completed_report
+ Response samples 
+200
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"events"
+: 
+[
+{
+"code"
+: 
+0
+,
+"description"
+: 
+"string"
+,
+"type"
+: 
+"string"
+}
+]
+,
+"feeds_urls"
+: 
+[
+{
+"name"
+: 
+"string"
+,
+"url"
+: 
+"string"
+}
+]
+,
+"finished_at"
+: 
+"2019-08-24T14:15:22Z"
+,
+"listing_fees"
+: 
+{
+"packages"
+: 
+[
+{
+"count"
+: 
+0
+,
+"package_id"
+: 
+0
+}
+]
+,
+"single"
+: 
+{
+"count"
+: 
+0
+,
+"total_amount"
+: 
+0
+}
+}
+,
+"report_id"
+: 
+0
+,
+"section_stats"
+: 
+{
+"count"
+: 
+0
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+0
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+0
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+]
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+]
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+,
+"source"
+: 
+"email"
+,
+"started_at"
+: 
+"2019-08-24T14:15:22Z"
+,
+"status"
+: 
+"processing"
+}
+Статистика по конкретной выгрузке (deprecated) 
+ Deprecated 
+Метод возвращает сводную статистику с результатами конкретной выгрузки — по ID отчёта.
+Например, сколько объявлений было в файле и сколько из них было опубликовано с ошибками или без.
+📝 
+Напишите нам
+,
+если в методе вам не хватает каких-либо данных.
+С 23.12.2024 вместо поля feed_url используйте поле feeds_urls. В нём содержится название файла и ссылка на него.
+Метод будет отключен 08.03.2027. С 08.09.2026 метод начнёт возвращать меньше данных. Подробнее читайте в 
+плане миграции
+.
+path Parameters
+report_id
+ required 
+integer
+ 
+Идентификатор отчёта (ID)
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+default 
+Информация об ошибке
+get
+/autoload/v3/reports/{report_id}
+https://api.avito.ru
+/autoload/v3/reports/{report_id}
+ Response samples 
+200
+default
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"events"
+: 
+[
+{
+"code"
+: 
+0
+,
+"description"
+: 
+"string"
+,
+"type"
+: 
+"string"
+}
+]
+,
+"feeds_urls"
+: 
+[
+{
+"name"
+: 
+"string"
+,
+"url"
+: 
+"string"
+}
+]
+,
+"finished_at"
+: 
+"2019-08-24T14:15:22Z"
+,
+"listing_fees"
+: 
+{
+"packages"
+: 
+[
+{
+"count"
+: 
+0
+,
+"package_id"
+: 
+0
+}
+]
+,
+"single"
+: 
+{
+"count"
+: 
+0
+,
+"total_amount"
+: 
+0
+}
+}
+,
+"report_id"
+: 
+0
+,
+"section_stats"
+: 
+{
+"count"
+: 
+0
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+0
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+0
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+]
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+]
+,
+"slug"
+: 
+"string"
+,
+"title"
+: 
+"string"
+}
+,
+"source"
+: 
+"email"
+,
+"started_at"
+: 
+"2019-08-24T14:15:22Z"
+,
+"status"
+: 
+"processing"
+}
+История загрузок 
+Возвращает список загрузок. Самая свежая загрузка — в начале списка.
+query Parameters
+perPage
+integer
+ 
+ [ 1 .. 50 ] 
+ Default: 
+ 
+10
+ 
+Количество загрузок на странице
+page
+integer
+ 
+ >= 1 
+ Default: 
+ 
+1
+ 
+Номер страницы
+dateFrom
+string
+ <date-time> 
+ 
+ Example: 
+ 
+dateFrom=2026-05-20T10:00:00Z
+Фильтр по дате загрузки «от» (от такой-то даты).
+Формат значения: RFC3339
+dateTo
+string
+ <date-time> 
+ 
+ Example: 
+ 
+dateTo=2026-05-27T10:00:00Z
+Фильтр по дате загрузки «до» (до такой-то даты).
+Формат значения: RFC3339
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+400 
+Невалидные параметры запроса
+403 
+Доступ запрещён
+404 
+Загрузка не найдена
+429 
+Превышен лимит запросов
+500 
+Внутренняя ошибка метода API
+503 
+Метод API временно недоступен
+get
+/autoload/v4/uploads
+https://api.avito.ru
+/autoload/v4/uploads
+ Response samples 
+200
+400
+403
+404
+429
+500
+503
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"meta"
+: 
+{
+"page"
+: 
+1
+,
+"pages"
+: 
+5
+,
+"perPage"
+: 
+10
+,
+"total"
+: 
+47
+}
+,
+"uploads"
+: 
+[
+{
+"events"
+: 
+[ ]
+,
+"feed_urls"
+: 
+[
+{
+"name"
+: 
+"файл 1"
+,
+"url"
+: 
+"
+https://www.avito.ru/
+"
+}
+]
+,
+"source"
+: 
+"OpenAPI"
+,
+"started_at"
+: 
+"2026-05-27T08:42:00+03:00"
+,
+"stats"
+: 
+{
+"count"
+: 
+0
+,
+"sections"
+: 
+[ ]
+,
+"slug"
+: 
+"sections_stats"
+,
+"title"
+: 
+"Обработано объявлений"
+}
+,
+"status"
+: 
+"processing"
+,
+"upload_id"
+: 
+1234567890
+}
+,
+{
+"events"
+: 
+[
+{
+"code"
+: 
+600
+,
+"description"
+: 
+"В ваших файлах суммарно слишком много объявлений — автозагрузка обработает только 100000 из них."
+,
+"type"
+: 
+"warning"
+}
+]
+,
+"feed_urls"
+: 
+[
+{
+"name"
+: 
+"файл 1"
+,
+"url"
+: 
+"
+https://www.avito.ru/
+"
+}
+]
+,
+"source"
+: 
+"OpenAPI"
+,
+"started_at"
+: 
+"2026-05-20T10:15:30+03:00"
+,
+"stats"
+: 
+{
+"count"
+: 
+3
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+1
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+1
+,
+"slug"
+: 
+"error_params"
+,
+"title"
+: 
+"Ошибки описания"
+}
+]
+,
+"slug"
+: 
+"error"
+,
+"title"
+: 
+"Не удалось опубликовать"
+}
+,
+{
+"count"
+: 
+2
+,
+"sections"
+: 
+[ ]
+,
+"slug"
+: 
+"successful"
+,
+"title"
+: 
+"Успешно опубликовано"
+}
+]
+,
+"slug"
+: 
+"sections_stats"
+,
+"title"
+: 
+"Обработано объявлений"
+}
+,
+"status"
+: 
+"success_warning"
+,
+"upload_id"
+: 
+1234567889
+}
+]
+}
+Текущая загрузка 
+Возвращает текущую загрузку пользователя, т.е. последнюю загрузку, которая обработала хотя бы одно объявление фида. Подходит, когда нужны самые актуальные данные. Но эти данные могут меняться в процессе загрузки - для получения стабильных данных лучше использовать метод 
+последней завершённой загрузки
+.
+Если подходящей загрузки нет — возвращается ответ 
+404
+.
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+400 
+Невалидные параметры запроса
+403 
+Доступ запрещён
+404 
+Загрузка не найдена
+429 
+Превышен лимит запросов
+500 
+Внутренняя ошибка метода API
+503 
+Метод API временно недоступен
+get
+/autoload/v4/uploads/current
+https://api.avito.ru
+/autoload/v4/uploads/current
+ Response samples 
+200
+400
+403
+404
+429
+500
+503
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"events"
+: 
+[
+{
+"code"
+: 
+600
+,
+"description"
+: 
+"В ваших файлах суммарно слишком много объявлений — автозагрузка обработает только 100000 из них."
+,
+"type"
+: 
+"warning"
+}
+]
+,
+"feed_urls"
+: 
+[
+{
+"name"
+: 
+"файл 1"
+,
+"url"
+: 
+"
+https://www.avito.ru/
+"
+}
+]
+,
+"source"
+: 
+"OpenAPI"
+,
+"started_at"
+: 
+"2026-05-20T10:15:30+03:00"
+,
+"stats"
+: 
+{
+"count"
+: 
+3
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+1
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+1
+,
+"slug"
+: 
+"error_params"
+,
+"title"
+: 
+"Ошибки описания"
+}
+]
+,
+"slug"
+: 
+"error"
+,
+"title"
+: 
+"Не удалось опубликовать"
+}
+,
+{
+"count"
+: 
+2
+,
+"sections"
+: 
+[ ]
+,
+"slug"
+: 
+"successful"
+,
+"title"
+: 
+"Успешно опубликовано"
+}
+]
+,
+"slug"
+: 
+"sections_stats"
+,
+"title"
+: 
+"Обработано объявлений"
+}
+,
+"status"
+: 
+"success_warning"
+,
+"upload_id"
+: 
+1234567890
+}
+Объявления текущей загрузки 
+Возвращает объявления 
+текущей загрузки
+.
+Если подходящей загрузки нет — возвращается ответ 
+404
+.
+query Parameters
+query
+string
+ 
+Поиск по одному или нескольким 
+идентификаторам объявлений из файла
+,
+перечисленным через «,» или «|».
+Без параметра — возвращаются все объявления с пагинацией.
+sections
+string
+ 
+Фильтр по разделам отчёта. Формат значения: строка со slug разделов,
+перечисленными через запятую.
+perPage
+integer
+ 
+ [ 1 .. 100 ] 
+ Default: 
+ 
+20
+ 
+Количество объявлений на странице
+page
+integer
+ 
+ >= 1 
+ Default: 
+ 
+1
+ 
+Номер страницы
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+400 
+Невалидные параметры запроса
+403 
+Доступ запрещён
+404 
+Загрузка не найдена
+429 
+Превышен лимит запросов
+500 
+Внутренняя ошибка метода API
+503 
+Метод API временно недоступен
+get
+/autoload/v4/uploads/current/items
+https://api.avito.ru
+/autoload/v4/uploads/current/items
+ Response samples 
+200
+400
+403
+404
+429
+500
+503
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"items"
+: 
+[
+{
+"ad_id"
+: 
+"ad1"
+,
+"avito_date_end"
+: 
+"2026-12-31T23:59:59+03:00"
+,
+"avito_id"
+: 
+777
+,
+"avito_status"
+: 
+"active"
+,
+"feed_name"
+: 
+"файл 1"
+,
+"messages"
+: 
+[ ]
+,
+"section"
+: 
+{
+"slug"
+: 
+"success_activated"
+,
+"title"
+: 
+"Активировано"
+}
+,
+"url"
+: 
+"
+https://www.avito.ru/
+"
+}
+,
+{
+"ad_id"
+: 
+"ad2"
+,
+"avito_date_end"
+: 
+null
+,
+"avito_id"
+: 
+null
+,
+"avito_status"
+: 
+null
+,
+"feed_name"
+: 
+"файл 1"
+,
+"messages"
+: 
+[
+{
+"code"
+: 
+4012
+,
+"description"
+: 
+"Для объявлений категории «Недвижимость» поле price обязательно."
+,
+"title"
+: 
+"Не указана цена"
+,
+"type"
+: 
+"error"
+,
+"updated_at"
+: 
+"2026-05-20T10:15:25+03:00"
+}
+]
+,
+"section"
+: 
+{
+"slug"
+: 
+"error_params"
+,
+"title"
+: 
+"Ошибки описания"
+}
+,
+"url"
+: 
+null
+}
+]
+,
+"meta"
+: 
+{
+"page"
+: 
+1
+,
+"pages"
+: 
+73
+,
+"perPage"
+: 
+20
+,
+"total"
+: 
+1450
+}
+}
+Последняя успешно завершённая загрузка 
+Возвращает последнюю успешно завершённую загрузку, т.е. загрузку, которая обработала все объявления фида. Для самой последней загрузки возможны задержки при определении того, что загрузка завершена — в таком случае смотрите актуальные данные в методе 
+текущей загрузки
+.
+Если подходящей загрузки нет — возвращается ответ 
+404
+.
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+400 
+Невалидные параметры запроса
+403 
+Доступ запрещён
+404 
+Загрузка не найдена
+429 
+Превышен лимит запросов
+500 
+Внутренняя ошибка метода API
+503 
+Метод API временно недоступен
+get
+/autoload/v4/uploads/last_successful
+https://api.avito.ru
+/autoload/v4/uploads/last_successful
+ Response samples 
+200
+400
+403
+404
+429
+500
+503
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"events"
+: 
+[
+{
+"code"
+: 
+600
+,
+"description"
+: 
+"В ваших файлах суммарно слишком много объявлений — автозагрузка обработает только 100000 из них."
+,
+"type"
+: 
+"warning"
+}
+]
+,
+"feed_urls"
+: 
+[
+{
+"name"
+: 
+"файл 1"
+,
+"url"
+: 
+"
+https://www.avito.ru/
+"
+}
+]
+,
+"source"
+: 
+"OpenAPI"
+,
+"started_at"
+: 
+"2026-05-20T10:15:30+03:00"
+,
+"stats"
+: 
+{
+"count"
+: 
+3
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+1
+,
+"sections"
+: 
+[
+{
+"count"
+: 
+1
+,
+"slug"
+: 
+"error_params"
+,
+"title"
+: 
+"Ошибки описания"
+}
+]
+,
+"slug"
+: 
+"error"
+,
+"title"
+: 
+"Не удалось опубликовать"
+}
+,
+{
+"count"
+: 
+2
+,
+"sections"
+: 
+[ ]
+,
+"slug"
+: 
+"successful"
+,
+"title"
+: 
+"Успешно опубликовано"
+}
+]
+,
+"slug"
+: 
+"sections_stats"
+,
+"title"
+: 
+"Обработано объявлений"
+}
+,
+"status"
+: 
+"success_warning"
+,
+"upload_id"
+: 
+1234567890
+}
+Объявления последней успешно завершённой загрузки 
+Возвращает объявления 
+последней успешно завершённой загрузки
+.
+Если подходящей загрузки нет — возвращается ответ 
+404
+.
+query Parameters
+query
+string
+ 
+Поиск по одному или нескольким 
+идентификаторам объявлений из файла
+,
+перечисленным через «,» или «|».
+Без параметра — возвращаются все объявления с пагинацией.
+sections
+string
+ 
+Фильтр по разделам отчёта. Формат значения: строка со slug разделов,
+перечисленными через запятую.
+perPage
+integer
+ 
+ [ 1 .. 100 ] 
+ Default: 
+ 
+20
+ 
+Количество объявлений на странице
+page
+integer
+ 
+ >= 1 
+ Default: 
+ 
+1
+ 
+Номер страницы
+header Parameters
+Authorization
+ required 
+string
+ 
+ Example: 
+ 
+Bearer ACCESS_TOKEN
+Токен для авторизации
+Responses
+200 
+Успешный ответ
+400 
+Невалидные параметры запроса
+403 
+Доступ запрещён
+404 
+Загрузка не найдена
+429 
+Превышен лимит запросов
+500 
+Внутренняя ошибка метода API
+503 
+Метод API временно недоступен
+get
+/autoload/v4/uploads/last_successful/items
+https://api.avito.ru
+/autoload/v4/uploads/last_successful/items
+ Response samples 
+200
+400
+403
+404
+429
+500
+503
+Content type
+application/json
+Copy
+ Expand all 
+ Collapse all 
+{
+"items"
+: 
+[
+{
+"ad_id"
+: 
+"ad1"
+,
+"avito_date_end"
+: 
+"2026-12-31T23:59:59+03:00"
+,
+"avito_id"
+: 
+777
+,
+"avito_status"
+: 
+"active"
+,
+"feed_name"
+: 
+"файл 1"
+,
+"messages"
+: 
+[ ]
+,
+"section"
+: 
+{
+"slug"
+: 
+"success_activated"
+,
+"title"
+: 
+"Активировано"
+}
+,
+"url"
+: 
+"
+https://www.avito.ru/
+"
+}
+,
+{
+"ad_id"
+: 
+"ad2"
+,
+"avito_date_end"
+: 
+null
+,
+"avito_id"
+: 
+null
+,
+"avito_status"
+: 
+null
+,
+"feed_name"
+: 
+"файл 1"
+,
+"messages"
+: 
+[
+{
+"code"
+: 
+4012
+,
+"description"
+: 
+"Для объявлений категории «Недвижимость» поле price обязательно."
+,
+"title"
+: 
+"Не указана цена"
+,
+"type"
+: 
+"error"
+,
+"updated_at"
+: 
+"2026-05-20T10:15:25+03:00"
+}
+]
+,
+"section"
+: 
+{
+"slug"
+: 
+"error_params"
+,
+"title"
+: 
+"Ошибки описания"
+}
+,
+"url"
+: 
+null
+}
+]
+,
+"meta"
+: 
+{
+"page"
+: 
+1
+,
+"pages"
+: 
+73
+,
+"perPage"
+: 
+20
+,
+"total"
+: 
+1450
+}
+}
+ 
+История обновления версий
+2026-06-08
+Добавлены методы для получения информации по загрузкам Автозагрузки:
+/autoload/v4/uploads
+ — история загрузок
+/autoload/v4/uploads/current
+ — текущая загрузка
+/autoload/v4/uploads/current/items
+ — объявления текущей загрузки
+/autoload/v4/uploads/last_successful
+ — последняя успешно завершённая загрузка
+/autoload/v4/uploads/last_successful/items
+ — объявления последней успешно завершённой загрузки
+Deprecated
+Методы для работы с отчётами помечены 
+deprecated
+ и будут постепенно выведены из эксплуатации. Подробнее об этом читайте в 
+плане миграции
+.
+Полный список устаревших методов:
+/autoload/v2/reports
+/autoload/v2/reports/{report_id}
+/autoload/v2/reports/last_completed_report
+/autoload/v2/reports/items
+/autoload/v2/reports/{report_id}/items
+/autoload/v2/reports/{report_id}/items/fees
+/autoload/v3/reports/{report_id}
+/autoload/v3/reports/last_completed_report
+Эти методы будут полностью отключены через 9 месяцев — 08.03.2027
+Условия использования Авито
+ ·
+ 
+Политика о данных пользователей
+ ·
+ 
+Условия использования API
+Авито — сайт объявлений России. © ООО «КЕХ еКоммерц» 2007–
+2026
+.
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 
+ 

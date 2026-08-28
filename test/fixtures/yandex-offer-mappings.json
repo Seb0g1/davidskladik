@@ -1,0 +1,50 @@
+{
+  "result": {
+    "offerMappings": [
+      {
+        "offer": {
+          "offerId": "SKU-YA-1",
+          "name": "Test perfume 100ml",
+          "basicPrice": { "value": 1990, "currencyId": "RUR" },
+          "campaignStatus": { "status": "PUBLISHED" },
+          "availability": "ACTIVE",
+          "pictures": ["https://example.test/img.jpg"],
+          "vendor": "Acme"
+        },
+        "mapping": {
+          "marketSku": 123456,
+          "marketCategoryId": 90555
+        }
+      },
+      {
+        "offer": {
+          "offerId": "SKU-YA-2",
+          "name": "Disabled automatically product",
+          "basicPrice": { "value": 990, "currencyId": "RUR" },
+          "campaignStatus": { "status": "DISABLED_AUTOMATICALLY" },
+          "availability": "ACTIVE"
+        }
+      },
+      {
+        "offer": {
+          "offerId": "SKU-YA-3",
+          "name": "Zero price product",
+          "basicPrice": { "value": 0, "currencyId": "RUR" },
+          "campaignStatus": { "status": "PUBLISHED" },
+          "availability": "ACTIVE"
+        }
+      },
+      {
+        "offer": {
+          "offerId": "SKU-YA-4",
+          "name": "Archived product",
+          "basicPrice": { "value": 1500, "currencyId": "RUR" },
+          "campaignStatus": { "status": "PUBLISHED" },
+          "availability": "DELISTED",
+          "archived": true
+        }
+      }
+    ],
+    "paging": {}
+  }
+}

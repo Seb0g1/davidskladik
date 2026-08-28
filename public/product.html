@@ -25,6 +25,47 @@
         <div class="empty">Загружаю карточку...</div>
       </section>
     </main>
+    <div id="aiImageModal" class="ai-inline-modal hidden" role="dialog" aria-modal="true" aria-labelledby="aiImageTitle">
+      <div class="ai-inline-card">
+        <div class="ai-inline-head">
+          <div>
+            <span class="eyebrow">AI-фото Ozon</span>
+            <h3 id="aiImageTitle">Генерация фото на месте</h3>
+            <p id="aiImageProductMeta">Карточка Ozon</p>
+          </div>
+          <button id="aiImageCloseButton" class="icon-button" type="button" aria-label="Закрыть">×</button>
+        </div>
+        <div class="ai-inline-product">
+          <strong id="aiImageProductName">Товар</strong>
+          <span id="aiImageStatus">Проверьте промпт и сгенерируйте вариант.</span>
+        </div>
+        <div class="ai-inline-grid">
+          <section>
+            <div class="ai-inline-label">Исходное фото</div>
+            <div id="aiImageCurrentPreview" class="ai-inline-preview"></div>
+          </section>
+          <section>
+            <div class="ai-inline-label">AI-черновик</div>
+            <div id="aiImagePreview" class="ai-inline-preview ai-inline-preview--result"></div>
+          </section>
+        </div>
+        <label class="ai-inline-field">
+          URL исходного фото
+          <input id="aiImageSourceInput" type="url" placeholder="https://..." />
+        </label>
+        <label class="ai-inline-field">
+          Промпт для генерации
+          <textarea id="aiImagePromptInput" rows="5" placeholder="Промпт заполнится автоматически по товару"></textarea>
+        </label>
+        <div class="ai-inline-actions">
+          <button id="aiImageGenerateButton" class="primary-button" type="button">Сгенерировать</button>
+          <button id="aiImageApproveButton" class="success-button" type="button" disabled>✓ Поставить фото</button>
+          <button id="aiImageRejectButton" class="secondary-button" type="button" disabled>× Не изменять</button>
+          <button id="aiImageCancelButton" class="text-button" type="button">Закрыть</button>
+        </div>
+      </div>
+    </div>
+
     <script src="/product.js"></script>
   </body>
 </html>

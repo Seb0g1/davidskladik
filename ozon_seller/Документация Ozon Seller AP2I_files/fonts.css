@@ -1,0 +1,31 @@
+@font-face {
+  font-family: GTEestiProDisplay;
+  src: url("./GTEestiProDisplay-Bold.ttf") format("truetype");
+  font-weight: 600;
+}
+@font-face {
+  font-family: GTEestiProDisplay;
+  src: url("./GT-Eesti-Pro-Display-Medium.ttf") format("truetype");
+  font-weight: 500;
+}
+@font-face {
+  font-family: Inter;
+  src: url("./Inter-VariableFont_slnt,wght.ttf") format("truetype");
+  font-weight: normal;
+}
+@font-face {
+  font-family: Inter;
+  src: url("./Inter-Medium.ttf") format("truetype");
+  font-weight: 500;
+}
+@font-face {
+  font-family: Inter;
+  src: url("./Inter-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+}
+@font-face {
+  font-family: JetBrains Mono;
+  src: url("./JetBrainsMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-display: swap;
+}

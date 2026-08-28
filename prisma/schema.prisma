@@ -1,0 +1,723 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  admin
+  manager
+}
+
+enum Marketplace {
+  ozon
+  yandex
+}
+
+enum PriceCurrency {
+  USD
+  RUB
+}
+
+enum QueueStatus {
+  pending
+  processing
+  success
+  failed
+  delayed
+}
+
+enum SyncStatus {
+  running
+  success
+  failed
+  skipped
+}
+
+model AppUser {
+  id           String   @id @default(cuid())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  role         UserRole @default(manager)
+  active       Boolean  @default(true)
+  source       String   @default("postgres")
+  protected    Boolean  @default(false)
+  allowedPages Json?    @map("allowed_pages")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  linksCreated ProductLink[] @relation("ProductLinkCreatedBy")
+  linksUpdated ProductLink[] @relation("ProductLinkUpdatedBy")
+  auditLogs    AuditLog[]
+
+  @@map("app_users")
+}
+
+model WarehouseProduct {
+  id               String      @id
+  marketplace      Marketplace
+  target           String?
+  offerId          String      @map("offer_id")
+  productId        String?     @map("product_id")
+  name             String
+  brand            String?
+  images           Json?
+  marketplaceState Json?       @map("marketplace_state")
+  currentPrice     Int?        @map("current_price")
+  targetPrice      Int?        @map("target_price")
+  targetStock      Int?        @map("target_stock")
+  status           String?
+  archived         Boolean     @default(false)
+  everHadLinks     Boolean     @default(false) @map("ever_had_links")
+  raw              Json?
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
+
+  links        ProductLink[]
+  priceHistory PriceHistory[]
+  retryItems   PriceRetryQueueItem[]
+  salesStates  SalesAutomationSkuState[]
+  brandIndex   BrandIndexItem[]
+
+  @@index([marketplace, target])
+  @@index([marketplace, status, updatedAt])
+  @@index([marketplace, archived, updatedAt])
+  @@index([target, status])
+  @@index([offerId])
+  @@index([productId])
+  @@index([brand])
+  @@map("warehouse_products")
+}
+
+model SalesAutomationSkuState {
+  id                String      @id @default(cuid())
+  productId         String?     @map("product_id")
+  marketplace       Marketplace
+  target            String?
+  offerId           String      @map("offer_id")
+  currentPrice      Int?        @map("current_price")
+  targetPrice       Int?        @map("target_price")
+  targetStock       Int?        @map("target_stock")
+  priceStatus       QueueStatus @default(pending) @map("price_status")
+  stockStatus       QueueStatus @default(pending) @map("stock_status")
+  unarchiveStatus   QueueStatus @default(pending) @map("unarchive_status")
+  reason            String      @default("ok")
+  lastCalculatedAt  DateTime?   @map("last_calculated_at")
+  lastPriceSentAt   DateTime?   @map("last_price_sent_at")
+  lastStockSentAt   DateTime?   @map("last_stock_sent_at")
+  lastError         String?     @map("last_error")
+  raw               Json?
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
+
+  product WarehouseProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@unique([marketplace, target, offerId])
+  @@index([productId])
+  @@index([marketplace, reason])
+  @@index([priceStatus, stockStatus])
+  @@index([updatedAt])
+  @@map("sales_automation_sku_states")
+}
+
+model OzonUnarchiveQueueItem {
+  id            String      @id @default(cuid())
+  queueKey      String      @unique @map("queue_key")
+  productId     String?     @map("product_id")
+  offerId       String      @map("offer_id")
+  target        String?
+  status        QueueStatus @default(pending)
+  queuedAt      DateTime    @default(now()) @map("queued_at")
+  nextRetryAt   DateTime?   @map("next_retry_at")
+  lastAttemptAt DateTime?   @map("last_attempt_at")
+  attempts      Int         @default(0)
+  warning       String?
+  error         String?
+  raw           Json?
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  @@index([status, nextRetryAt])
+  @@index([target])
+  @@index([offerId])
+  @@map("ozon_unarchive_queue")
+}
+
+model SupplierCartDraft {
+  id          String   @id @default(cuid())
+  generatedAt DateTime @default(now()) @map("generated_at")
+  generatedBy String?  @map("generated_by")
+  marketplace String   @default("all")
+  from        DateTime?
+  to          DateTime?
+  summary     Json?
+  active      Boolean  @default(true)
+  params      Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  rows SupplierCartDraftRow[]
+
+  @@index([active, generatedAt])
+  @@map("supplier_cart_drafts")
+}
+
+model SupplierCartDraftRow {
+  id             String   @id @default(cuid())
+  draftId        String   @map("draft_id")
+  cartKey        String   @map("cart_key")
+  marketplace    String?
+  accountName    String?  @map("account_name")
+  orderId        String?  @map("order_id")
+  postingNumber  String?  @map("posting_number")
+  offerId        String?  @map("offer_id")
+  productName    String?  @map("product_name")
+  quantity       Int      @default(1)
+  supplierName   String?  @map("supplier_name")
+  partnerId      String?  @map("partner_id")
+  offerRowId     String?  @map("offer_row_id")
+  price          Decimal? @db.Decimal(14, 4)
+  priceCurrency  String?  @map("price_currency")
+  supplierScore  Decimal? @map("supplier_score") @db.Decimal(14, 4)
+  ready          Boolean  @default(false)
+  alreadyCommitted Boolean @default(false) @map("already_committed")
+  skipReason     String?  @map("skip_reason")
+  requestDocId   String?  @map("request_doc_id")
+  requestRowId   String?  @map("request_row_id")
+  raw            Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  draft SupplierCartDraft @relation(fields: [draftId], references: [id], onDelete: Cascade)
+
+  @@unique([draftId, cartKey])
+  @@index([cartKey])
+  @@index([offerId])
+  @@index([ready])
+  @@map("supplier_cart_draft_rows")
+}
+
+model SupplierPickingRow {
+  id             String   @id @default(cuid())
+  pickingKey     String   @unique @map("picking_key")
+  marketplace    String?
+  accountName    String?  @map("account_name")
+  orderId        String?  @map("order_id")
+  postingNumber  String?  @map("posting_number")
+  offerId        String?  @map("offer_id")
+  productName    String?  @map("product_name")
+  quantity       Int      @default(1)
+  supplierName   String?  @map("supplier_name")
+  partnerId      String?  @map("partner_id")
+  offerRowId     String?  @map("offer_row_id")
+  price          Decimal? @db.Decimal(14, 4)
+  priceCurrency  String?  @map("price_currency")
+  trustFactor    Int      @default(100) @map("trust_factor")
+  orderCutoffTime String? @map("order_cutoff_time")
+  reseller       Boolean  @default(false)
+  supplierScore  Decimal? @map("supplier_score") @db.Decimal(14, 4)
+  requestDocId   String?  @map("request_doc_id")
+  requestRowId   String?  @map("request_row_id")
+  status         String   @default("open")
+  createdBy      String?  @map("created_by")
+  pickedBy       String?  @map("picked_by")
+  pickedAt       DateTime? @map("picked_at")
+  missingBy      String?  @map("missing_by")
+  missingAt      DateTime? @map("missing_at")
+  missingReason  String?  @map("missing_reason")
+  nextRetryAt    DateTime? @map("next_retry_at")
+  replacementFor String?  @map("replacement_for")
+  replacementKey String?  @map("replacement_key")
+  raw            Json?
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  @@index([status, createdAt])
+  @@index([supplierName])
+  @@index([partnerId])
+  @@index([offerId])
+  @@map("supplier_picking_rows")
+}
+
+model SupplierBlock {
+  id          String   @id @default(cuid())
+  blockKey    String   @unique @map("block_key")
+  offerId     String   @map("offer_id")
+  partnerId   String   @map("partner_id")
+  supplierName String? @map("supplier_name")
+  reason      String?
+  sourceKey   String?  @map("source_key")
+  blockedBy   String?  @map("blocked_by")
+  blockedAt   DateTime @default(now()) @map("blocked_at")
+  expiresAt   DateTime @map("expires_at")
+  active      Boolean  @default(true)
+  raw         Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([offerId, active, expiresAt])
+  @@index([partnerId])
+  @@map("supplier_blocks")
+}
+
+model BrandIndexItem {
+  id              String      @id @default(cuid())
+  normalizedBrand String      @map("normalized_brand")
+  displayBrand    String      @map("display_brand")
+  productId        String      @map("product_id")
+  marketplace      Marketplace
+  offerId          String      @map("offer_id")
+  source           String
+  confidence       Int         @default(80)
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
+
+  product WarehouseProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([normalizedBrand, productId, source])
+  @@index([normalizedBrand])
+  @@index([displayBrand])
+  @@index([productId])
+  @@index([marketplace])
+  @@map("brand_index_items")
+}
+
+model ProductLink {
+  id              String         @id @default(cuid())
+  productId       String         @map("product_id")
+  supplierArticle String         @map("supplier_article")
+  supplierName    String?        @map("supplier_name")
+  partnerId       String?        @map("partner_id")
+  priceCurrency   PriceCurrency  @default(USD) @map("price_currency")
+  keyword         String?
+  sourceRowId     String?        @map("source_row_id")
+  exactName       String?        @map("exact_name")
+  raw             Json?
+  createdById     String?        @map("created_by_id")
+  updatedById     String?        @map("updated_by_id")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+
+  product   WarehouseProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdBy AppUser?         @relation("ProductLinkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy AppUser?         @relation("ProductLinkUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([supplierArticle])
+  @@index([supplierArticle, partnerId])
+  @@index([partnerId])
+  @@index([supplierName])
+  @@index([updatedAt])
+  @@index([sourceRowId])
+  @@index([exactName])
+  @@unique([productId, supplierArticle, partnerId, supplierName, keyword, priceCurrency])
+  @@map("product_links")
+}
+
+model ManagedSupplier {
+  id              String        @id @default(cuid())
+  partnerId       String?       @unique @map("partner_id")
+  name            String
+  active          Boolean       @default(true)
+  defaultCurrency PriceCurrency @default(USD) @map("default_currency")
+  stopReason      String?       @map("stop_reason")
+  note            String?
+  raw             Json?
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @updatedAt @map("updated_at")
+
+  @@index([name])
+  @@map("managed_suppliers")
+}
+
+model AppSetting {
+  key       String   @id
+  value     Json
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  username   String
+  userId     String?  @map("user_id")
+  action     String
+  entityType String?  @map("entity_type")
+  entityId   String?  @map("entity_id")
+  oldValue   Json?    @map("old_value")
+  newValue   Json?    @map("new_value")
+  details    Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user AppUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([username])
+  @@index([action])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model PriceRetryQueueItem {
+  id            String       @id @default(cuid())
+  queueKey      String       @unique @map("queue_key")
+  marketplace   Marketplace
+  target        String?
+  productId     String?      @map("product_id")
+  offerId       String       @map("offer_id")
+  price         Int
+  oldPrice      Int?         @map("old_price")
+  status        QueueStatus  @default(pending)
+  attempts      Int          @default(0)
+  error         String?
+  payload       Json?
+  nextRetryAt   DateTime?    @map("next_retry_at")
+  lastAttemptAt DateTime?    @map("last_attempt_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  product WarehouseProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextRetryAt])
+  @@index([marketplace, target])
+  @@index([offerId])
+  @@map("price_retry_queue")
+}
+
+model PriceHistory {
+  id          String      @id @default(cuid())
+  productId   String?     @map("product_id")
+  marketplace Marketplace
+  target      String?
+  offerId     String      @map("offer_id")
+  oldPrice    Int?        @map("old_price")
+  newPrice    Int         @map("new_price")
+  status      QueueStatus
+  response    Json?
+  error       String?
+  createdAt   DateTime    @default(now()) @map("created_at")
+
+  product WarehouseProduct? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([marketplace, target])
+  @@index([createdAt])
+  @@map("price_history")
+}
+
+model FinanceOrder {
+  id                 String       @id @default(cuid())
+  marketplace        Marketplace?
+  target             String?
+  orderId            String       @map("order_id")
+  postingNumber      String?      @map("posting_number")
+  offerId            String?      @map("offer_id")
+  productName        String?      @map("product_name")
+  quantity           Int          @default(1)
+  saleAmount         Decimal?     @map("sale_amount") @db.Decimal(14, 2)
+  payoutAmount       Decimal?     @map("payout_amount") @db.Decimal(14, 2)
+  purchaseCost       Decimal?     @map("purchase_cost") @db.Decimal(14, 2)
+  feesAmount         Decimal?     @map("fees_amount") @db.Decimal(14, 2)
+  taxAmount          Decimal?     @map("tax_amount") @db.Decimal(14, 2)
+  penaltiesAmount    Decimal?     @map("penalties_amount") @db.Decimal(14, 2)
+  refundsAmount      Decimal?     @map("refunds_amount") @db.Decimal(14, 2)
+  profitAmount       Decimal?     @map("profit_amount") @db.Decimal(14, 2)
+  supplierName       String?      @map("supplier_name")
+  partnerId          String?      @map("partner_id")
+  source             String       @default("manual")
+  status             String       @default("open")
+  raw                Json?
+  soldAt             DateTime?    @map("sold_at")
+  receivedAt         DateTime?    @map("received_at")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+
+  @@unique([marketplace, target, orderId, offerId])
+  @@index([marketplace, status])
+  @@index([orderId])
+  @@index([offerId])
+  @@index([supplierName])
+  @@index([createdAt])
+  @@map("finance_orders")
+}
+
+model FinanceExpense {
+  id            String    @id @default(cuid())
+  type          String    @default("manual_purchase")
+  supplierName  String?   @map("supplier_name")
+  partnerId     String?   @map("partner_id")
+  offerId       String?   @map("offer_id")
+  productName   String?   @map("product_name")
+  quantity      Int       @default(1)
+  amount        Decimal   @db.Decimal(14, 2)
+  currency      String    @default("RUB")
+  note          String?
+  source        String    @default("manual")
+  status        String    @default("confirmed")
+  spentAt       DateTime  @default(now()) @map("spent_at")
+  raw           Json?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([type])
+  @@index([supplierName])
+  @@index([offerId])
+  @@index([spentAt])
+  @@map("finance_expenses")
+}
+
+model SupplierLedgerEntry {
+  id            String    @id @default(cuid())
+  sourceKey     String    @unique @map("source_key")
+  entryType     String    @map("entry_type")
+  supplierName  String?   @map("supplier_name")
+  partnerId     String?   @map("partner_id")
+  amount        Decimal   @db.Decimal(14, 2)
+  currency      String    @default("RUB")
+  pickingKey    String?   @map("picking_key")
+  financeOrderId String?  @map("finance_order_id")
+  orderId       String?   @map("order_id")
+  postingNumber String?   @map("posting_number")
+  offerId       String?   @map("offer_id")
+  productName   String?   @map("product_name")
+  quantity      Int       @default(1)
+  note          String?
+  status        String    @default("active")
+  occurredAt    DateTime  @default(now()) @map("occurred_at")
+  voidedAt      DateTime? @map("voided_at")
+  createdBy     String?   @map("created_by")
+  raw           Json?
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([supplierName])
+  @@index([partnerId])
+  @@index([entryType])
+  @@index([status])
+  @@index([occurredAt])
+  @@index([pickingKey])
+  @@index([financeOrderId])
+  @@map("supplier_ledger_entries")
+}
+
+model ConsignmentItem {
+  id            String   @id @default(cuid())
+  name          String
+  article       String?
+  supplierName  String?  @map("supplier_name")
+  partnerId     String?  @map("partner_id")
+  purchasePrice Decimal  @default(0) @map("purchase_price") @db.Decimal(14, 2)
+  salePrice     Decimal  @default(0) @map("sale_price") @db.Decimal(14, 2)
+  quantity      Int      @default(0)
+  note          String?
+  archived      Boolean  @default(false)
+  raw           Json?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  operations ConsignmentOperation[]
+
+  @@index([article])
+  @@index([supplierName])
+  @@index([archived, updatedAt])
+  @@map("consignment_items")
+}
+
+model ConsignmentOperation {
+  id                 String   @id @default(cuid())
+  sourceKey          String?  @unique @map("source_key")
+  itemId             String?  @map("item_id")
+  itemName           String?  @map("item_name")
+  type               String
+  quantity           Int      @default(0)
+  unitPurchase       Decimal  @default(0) @map("unit_purchase") @db.Decimal(14, 2)
+  unitSale           Decimal  @default(0) @map("unit_sale") @db.Decimal(14, 2)
+  balanceDelta       Decimal  @default(0) @map("balance_delta") @db.Decimal(14, 2)
+  sponsorDelta       Decimal  @default(0) @map("sponsor_delta") @db.Decimal(14, 2)
+  myDelta            Decimal  @default(0) @map("my_delta") @db.Decimal(14, 2)
+  note               String?
+  status             String   @default("active")
+  relatedOperationId String?  @map("related_operation_id")
+  createdBy          String?  @map("created_by")
+  raw                Json?
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  item ConsignmentItem? @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@index([itemId])
+  @@index([type])
+  @@index([status])
+  @@index([createdAt])
+  @@index([relatedOperationId])
+  @@map("consignment_operations")
+}
+
+model ShopCustomer {
+  id        String      @id @default(cuid())
+  email     String      @unique
+  password  String
+  firstName String?     @map("first_name")
+  lastName  String?     @map("last_name")
+  phone     String?
+  createdAt DateTime    @default(now()) @map("created_at")
+  updatedAt DateTime    @updatedAt @map("updated_at")
+
+  orders  ShopOrder[]
+  reviews ShopReview[]
+
+  @@map("shop_customers")
+}
+
+model ShopOrder {
+  id         String        @id
+  customerId String?       @map("customer_id")
+  status     String        @default("pending")
+  items      Json
+  delivery   Json
+  totalRub   Int           @map("total_rub")
+  comment    String?
+  createdAt  DateTime      @default(now()) @map("created_at")
+
+  customer ShopCustomer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  @@index([customerId])
+  @@index([createdAt])
+  @@map("shop_orders")
+}
+
+model SyncRun {
+  id         String     @id @default(cuid())
+  trigger    String
+  status     SyncStatus
+  startedAt  DateTime   @default(now()) @map("started_at")
+  finishedAt DateTime?  @map("finished_at")
+  stats      Json?
+  error      String?
+
+  @@index([trigger])
+  @@index([status])
+  @@index([startedAt])
+  @@map("sync_runs")
+}
+
+model TelegramNewsPost {
+  id          String   @id @default(cuid())
+  messageId   Int      @unique @map("message_id")
+  text        String?
+  photoUrl    String?  @map("photo_url")
+  publishedAt DateTime @map("published_at")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([active, publishedAt])
+  @@map("telegram_news_posts")
+}
+
+model ShopReview {
+  id          String    @id @default(cuid())
+  customerId  String    @map("customer_id")
+  offerId     String?   @map("offer_id")
+  productName String?   @map("product_name")
+  productImg  String?   @map("product_img")
+  rating      Int       @default(5)
+  text        String
+  approved    Boolean   @default(true)
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  customer ShopCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([approved, createdAt])
+  @@index([customerId])
+  @@map("shop_reviews")
+}
+
+model SupportChat {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  visitorName  String   @map("visitor_name")
+  category     String
+  status       String   @default("open")
+  unreadAdmin  Boolean  @default(true)  @map("unread_admin")
+  unreadUser   Boolean  @default(false) @map("unread_user")
+  lastMessageAt DateTime? @map("last_message_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  messages SupportMessage[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@map("support_chats")
+}
+
+model SupportMessage {
+  id        String   @id @default(cuid())
+  chatId    String   @map("chat_id")
+  role      String
+  body      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  chat SupportChat @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId, createdAt])
+  @@map("support_messages")
+}
+
+model StockAlert {
+  id          String    @id @default(cuid())
+  offerId     String    @map("offer_id")
+  email       String
+  createdAt   DateTime  @default(now()) @map("created_at")
+  notifiedAt  DateTime? @map("notified_at")
+
+  @@index([offerId])
+  @@index([notifiedAt])
+  @@unique([offerId, email])
+  @@map("stock_alerts")
+}
+
+model PriceMasterSnapshotItem {
+  id          String        @id @default(cuid())
+  rowId       String?       @map("row_id")
+  article     String
+  partnerId   String?       @map("partner_id")
+  partnerName String?       @map("partner_name")
+  nativeName  String?       @map("native_name")
+  price       Decimal?      @db.Decimal(14, 4)
+  currency    PriceCurrency @default(USD)
+  docDate     DateTime?     @map("doc_date")
+  active      Boolean       @default(true)
+  raw         Json?
+  updatedAt   DateTime      @default(now()) @map("updated_at")
+
+  @@index([article])
+  @@index([rowId])
+  @@index([article, partnerId])
+  @@index([active, article])
+  @@index([partnerId])
+  @@index([partnerName])
+  @@index([nativeName])
+  @@index([updatedAt])
+  @@unique([article, partnerId, rowId])
+  @@map("pm_snapshot_items")
+}
+
+model AppError {
+  id         String    @id @default(cuid())
+  type       String
+  source     String
+  message    String
+  context    Json?
+  resolvedAt DateTime? @map("resolved_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([type, createdAt])
+  @@index([createdAt])
+  @@map("app_errors")
+}

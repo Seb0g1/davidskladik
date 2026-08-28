@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Импорт Ozon в Яндекс</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell import-page-shell">
+      <section class="panel import-hero-panel">
+        <div>
+          <p class="eyebrow">Ozon → Яндекс</p>
+          <h1>Импорт товаров</h1>
+          <p class="muted-text">Предпросмотр показывает только безопасные карточки. Отливант, “без коробки” и объем меньше 20 мл блокируются до выгрузки.</p>
+        </div>
+        <a class="secondary-link-button compact-button" href="/">Склад</a>
+      </section>
+
+      <section class="panel import-toolbar-panel">
+        <div class="import-toolbar">
+          <label class="search-control">
+            Лимит
+            <input id="importLimitInput" type="number" min="1" max="50000" step="1" value="30000" />
+          </label>
+          <button id="loadWarehouseImportButton" class="secondary-button" type="button">Показать из склада</button>
+          <button id="loadOzonImportButton" class="primary-button" type="button">Загрузить из Ozon</button>
+          <button id="syncYandexStocksButton" class="secondary-button" type="button">Синхронизировать остатки</button>
+          <button id="archiveBlockedButton" class="danger-button" type="button">Архивировать блок</button>
+          <button id="sendYandexImportButton" class="secondary-button" type="button" disabled>Загрузить в Яндекс</button>
+        </div>
+        <div id="importStatus" class="sync-status-pill">Готово к проверке.</div>
+      </section>
+
+      <section class="import-summary-grid" aria-live="polite">
+        <article class="stat-card">
+          <span>Всего</span>
+          <strong id="importTotalCount">0</strong>
+        </article>
+        <article class="stat-card good">
+          <span>Можно выгружать</span>
+          <strong id="importEligibleCount">0</strong>
+        </article>
+        <article class="stat-card warn">
+          <span>Заблокировано</span>
+          <strong id="importBlockedCount">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Уже есть в Яндексе</span>
+          <strong id="importExistingCount">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Не хватает полей</span>
+          <strong id="importMissingCount">0</strong>
+        </article>
+      </section>
+
+      <section class="panel yandex-cleanup-panel">
+        <div class="cleanup-copy">
+          <p class="eyebrow">Yandex Market</p>
+          <h2>Очистка Яндекса по брендам</h2>
+          <p class="muted-text">Сначала сделайте предпросмотр. Сайт просмотрит товары Яндекса во всех статусах, найдёт защищённые бренды в названии, описании и характеристиках, а остальные подготовит к удалению из каталога.</p>
+        </div>
+        <div class="cleanup-controls">
+          <label class="search-control cleanup-brands-field">
+            Бренды, которые нельзя удалять
+            <textarea id="yandexProtectedBrandsInput" rows="4" placeholder="Giorgio Armani&#10;Creed&#10;Ex Nihilo"></textarea>
+          </label>
+          <div class="cleanup-actions">
+            <button id="previewYandexCleanupButton" class="secondary-button" type="button">Предпросмотр очистки</button>
+            <button id="downloadYandexCleanupCsvButton" class="secondary-button" type="button" disabled>Скачать CSV</button>
+            <button id="archiveYandexCleanupButton" class="danger-button" type="button" disabled>Удалить незащищённые</button>
+          </div>
+          <div id="yandexCleanupStatus" class="sync-status-pill">Укажите бренды-защиту и запустите предпросмотр.</div>
+        </div>
+      </section>
+
+      <section class="import-summary-grid cleanup-summary-grid" aria-live="polite">
+        <article class="stat-card">
+          <span>Яндекс всего</span>
+          <strong id="yandexCleanupTotalCount">0</strong>
+        </article>
+        <article class="stat-card good">
+          <span>Оставить</span>
+          <strong id="yandexCleanupProtectedCount">0</strong>
+        </article>
+        <article class="stat-card warn">
+          <span>Удалить</span>
+          <strong id="yandexCleanupArchiveCount">0</strong>
+        </article>
+        <article class="stat-card">
+          <span>Из них в архиве</span>
+          <strong id="yandexCleanupAlreadyArchivedCount">0</strong>
+        </article>
+      </section>
+
+      <section class="panel import-list-panel cleanup-list-panel">
+        <div class="import-list-head">
+          <h2>Предпросмотр очистки Яндекса</h2>
+          <span id="yandexCleanupRowsMeta" class="sync-status-pill">Нет данных</span>
+        </div>
+        <div class="cleanup-preview-controls">
+          <input id="yandexCleanupSearchInput" class="compact-input" type="search" placeholder="Поиск SKU или название" autocomplete="off" />
+          <select id="yandexCleanupFilterSelect" class="compact-select" aria-label="Фильтр предпросмотра очистки">
+            <option value="all">Все</option>
+            <option value="delete">Удалить</option>
+            <option value="keep">Оставить</option>
+            <option value="errors">Ошибки</option>
+            <option value="archived">Архивные</option>
+          </select>
+        </div>
+        <div id="yandexCleanupWarnings" class="import-warnings" hidden></div>
+        <div id="yandexCleanupFailures" class="import-warnings" hidden></div>
+        <div id="yandexCleanupRows" class="import-rows"></div>
+      </section>
+
+      <section class="panel import-list-panel cleanup-history-panel">
+        <div class="import-list-head">
+          <h2>Журнал удаления Яндекса</h2>
+          <button id="refreshYandexCleanupHistoryButton" class="secondary-button compact-button" type="button">Обновить</button>
+        </div>
+        <div id="yandexCleanupHistoryStatus" class="sync-status-pill">Журнал ещё не загружен.</div>
+        <div id="yandexCleanupHistory" class="history-list"></div>
+      </section>
+
+      <section class="panel import-list-panel">
+        <div class="import-list-head">
+          <h2>Карточки</h2>
+          <select id="importFilterSelect" class="compact-select" aria-label="Фильтр карточек">
+            <option value="all">Все</option>
+            <option value="eligible">Можно выгружать</option>
+            <option value="existing">Уже есть в Яндексе</option>
+            <option value="blocked">Заблокировано</option>
+            <option value="missing">Не хватает полей</option>
+          </select>
+        </div>
+        <div id="importWarnings" class="import-warnings" hidden></div>
+        <div id="importFailures" class="import-warnings" hidden></div>
+        <div id="importRows" class="import-rows"></div>
+      </section>
+
+      <section class="panel import-list-panel">
+        <div class="import-list-head">
+          <h2>Журнал выгрузки в Яндекс</h2>
+          <button id="refreshYandexImportHistoryButton" class="secondary-button compact-button" type="button">Обновить</button>
+        </div>
+        <div id="yandexImportHistoryStatus" class="sync-status-pill">Журнал ещё не загружен.</div>
+        <div id="yandexImportHistory" class="history-list"></div>
+      </section>
+    </main>
+    <div id="yandexCleanupConfirmModal" class="cleanup-modal-backdrop" hidden>
+      <section class="cleanup-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="yandexCleanupConfirmTitle">
+        <div class="cleanup-confirm-head">
+          <div>
+            <p class="eyebrow">Yandex Market</p>
+            <h2 id="yandexCleanupConfirmTitle">Подтвердите удаление</h2>
+          </div>
+          <button id="yandexCleanupConfirmClose" class="modal-icon-button" type="button" aria-label="Закрыть">×</button>
+        </div>
+        <div id="yandexCleanupConfirmSummary" class="cleanup-confirm-summary"></div>
+        <div class="cleanup-confirm-warning">
+          Удаление из каталога Яндекса необратимо. Защищённые бренды останутся, но товары меньше 20 мл всё равно попадут в удаление.
+        </div>
+        <label class="cleanup-confirm-input">
+          Для подтверждения введите <strong>УДАЛИТЬ ЯНДЕКС</strong>
+          <input id="yandexCleanupConfirmInput" type="text" autocomplete="off" spellcheck="false" />
+        </label>
+        <div class="cleanup-confirm-actions">
+          <button id="yandexCleanupConfirmCancel" class="secondary-button" type="button">Отмена</button>
+          <button id="yandexCleanupConfirmSubmit" class="danger-button" type="button" disabled>Удалить из Яндекса</button>
+        </div>
+      </section>
+    </div>
+    <div id="importActionConfirmModal" class="cleanup-modal-backdrop" hidden>
+      <section class="cleanup-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="importActionConfirmTitle">
+        <div class="cleanup-confirm-head">
+          <div>
+            <p id="importActionConfirmEyebrow" class="eyebrow">Подтверждение</p>
+            <h2 id="importActionConfirmTitle">Подтвердите действие</h2>
+          </div>
+          <button id="importActionConfirmClose" class="modal-icon-button" type="button" aria-label="Закрыть">×</button>
+        </div>
+        <div id="importActionConfirmBody" class="action-confirm-body"></div>
+        <div class="cleanup-confirm-actions">
+          <button id="importActionConfirmCancel" class="secondary-button" type="button">Отмена</button>
+          <button id="importActionConfirmSubmit" class="primary-button" type="button">Продолжить</button>
+        </div>
+      </section>
+    </div>
+    <script src="/ozon-yandex-import.js"></script>
+  </body>
+</html>

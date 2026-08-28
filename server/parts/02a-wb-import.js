@@ -1,0 +1,531 @@
+// Импорт Ozon → Wildberries: правила, кандидаты и payload карточек.
+//
+// Бизнес-правило WB (с 2026-07-16): продаются только товары с итоговой ценой
+// WB не выше WB_MAX_PRICE_RUB (по умолчанию 20 000 ₽). Итоговая цена — это
+// закупка поставщика × наценка WB (Настройки → Цены: defaultMarkups.wb +
+// гибкие правила marketplace "wb"), НЕ цена Ozon. Выше лимита: товар не
+// загружается, цена не отправляется, остаток обнуляется — в т.ч. когда лимит
+// превышается после смены коэффициента наценки (автосинк каждые 3 часа).
+// Старый порог «закупка ≥ 15 000» отменён: minSupplierPriceRub по умолчанию 0.
+
+const WB_MIN_SUPPLIER_PRICE_RUB = Math.max(0, Number(process.env.WB_MIN_SUPPLIER_PRICE_RUB || 0) || 0);
+const WB_MAX_PRICE_RUB = Math.max(0, Number(process.env.WB_MAX_PRICE_RUB || 20000) || 20000);
+const wbImportRulesPath = path.join(dataDir, "wb-import-rules.json");
+
+function normalizeWbImportRules(input = {}) {
+  const fallbackSubjectId = Number(process.env.WB_DEFAULT_SUBJECT_ID || 0) || 0;
+  return {
+    // Предмет (категория) WB по умолчанию для создаваемых карточек.
+    subjectId: Number(input.subjectId ?? fallbackSubjectId) || 0,
+    subjectName: cleanText(input.subjectName),
+    // Код ТН ВЭД для карточек: пусто — берём первый код из справочника WB
+    // по предмету (GET /content/v2/directory/tnved).
+    tnved: cleanText(input.tnved),
+    // 0 — минимальный порог закупки отключён (легаси-правило «только дорогие»).
+    minSupplierPriceRub: Number(input.minSupplierPriceRub) >= 0 ? Number(input.minSupplierPriceRub) || 0 : WB_MIN_SUPPLIER_PRICE_RUB,
+    // Лимит итоговой цены WB: выше — товар не продаётся на WB.
+    maxWbPriceRub: Number(input.maxWbPriceRub) > 0 ? Number(input.maxWbPriceRub) : WB_MAX_PRICE_RUB,
+    skipArchived: input.skipArchived !== false,
+    excludeTitleWords: Array.isArray(input.excludeTitleWords)
+      ? input.excludeTitleWords.map((word) => cleanText(word).toLowerCase().replace(/ё/g, "е")).filter(Boolean)
+      : ["дубль", "удаленый", "удаленный", "отливант", "пробник", "тестер"],
+    // Остаток FBS для карточек с валидным поставщиком.
+    defaultStock: Math.max(0, Math.min(999, Number(input.defaultStock ?? 3) || 3)),
+    updatedAt: input.updatedAt || null,
+  };
+}
+
+async function readWbImportRules() {
+  try {
+    return normalizeWbImportRules(JSON.parse(await fs.readFile(wbImportRulesPath, "utf8")));
+  } catch (error) {
+    if (error.code !== "ENOENT") logger.warn("read wb import rules failed", { detail: error?.message || String(error) });
+    return normalizeWbImportRules({});
+  }
+}
+
+async function writeWbImportRules(input = {}) {
+  const rules = normalizeWbImportRules({ ...(await readWbImportRules()), ...input, updatedAt: new Date().toISOString() });
+  await fs.mkdir(dataDir, { recursive: true });
+  await fs.writeFile(wbImportRulesPath, JSON.stringify(rules, null, 2), "utf8");
+  return rules;
+}
+
+// Закупка поставщика в рублях; MAX_SAFE_INTEGER от warehouseSupplierPurchaseRubPrice
+// означает «цены нет».
+function wbSupplierPurchaseRub(supplier, pricing = {}) {
+  if (!supplier || typeof supplier !== "object") return 0;
+  const purchaseRub = warehouseSupplierPurchaseRubPrice(supplier, pricing.usdRate);
+  if (!Number.isFinite(purchaseRub) || purchaseRub <= 0 || purchaseRub >= Number.MAX_SAFE_INTEGER) return 0;
+  return purchaseRub;
+}
+
+// Единая проверка «товар продаётся на WB»: валидный поставщик, не архив,
+// закупка не ниже минимума (если задан) и итоговая цена не выше лимита.
+// Используется отправкой цен, синком остатков и статусом карточки.
+function wbCardSellable({ product = null, purchaseRub = 0, priceRub = 0, rules = {} } = {}) {
+  if (!product || product.archived) return false;
+  if (!(purchaseRub > 0) || !(priceRub > 0)) return false;
+  const minRub = Number(rules.minSupplierPriceRub || 0);
+  if (minRub > 0 && purchaseRub < minRub) return false;
+  const maxRub = Number(rules.maxWbPriceRub || 0);
+  if (maxRub > 0 && priceRub > maxRub) return false;
+  return true;
+}
+
+function wbSupplierPriceRub(supplier, pricing = {}) {
+  const purchaseRub = wbSupplierPurchaseRub(supplier, pricing);
+  if (!(purchaseRub > 0)) return 0;
+  const rate = Number(pricing.usdRate || process.env.DEFAULT_USD_RATE || 95) || 95;
+  const rubNative = supplierPriceIsRubNative(supplier);
+  const usd = !rubNative && Number(supplier.price || 0) > 0 ? Number(supplier.price) : purchaseRub / rate;
+  const coefficient = resolveMarkupCoefficient({
+    productMarkup: 0,
+    marketplace: "wb",
+    supplierUsdPrice: usd,
+    supplierPriceCurrency: rubNative ? "RUB" : "USD",
+    usdRate: rate,
+    appSettings: pricing.appSettings,
+  });
+  return Math.round(purchaseRub * coefficient);
+}
+
+// Габариты для карточки WB (см и кг брутто): из Ozon (мм и граммы), фолбэк —
+// парфюмерная эвристика от объёма (как у Яндекса).
+function wbDimensionsFromProduct(product = {}) {
+  const ozon = product.ozon || {};
+  const dimsMm = [Number(ozon.depth || 0), Number(ozon.width || 0), Number(ozon.height || 0)]
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const weightG = Number(ozon.weight || 0);
+  if (dimsMm.length === 3 && weightG > 0) {
+    const sorted = dimsMm.sort((a, b) => b - a);
+    return {
+      length: Math.max(1, Math.round(sorted[0] / 10)),
+      width: Math.max(1, Math.round(sorted[1] / 10)),
+      height: Math.max(1, Math.round(sorted[2] / 10)),
+      weightBrutto: Math.max(0.05, Number((weightG / 1000).toFixed(3))),
+    };
+  }
+  const volumes = extractOzonYandexImportVolumesMl([product.name, ozon.name, product.offerId].filter(Boolean).join(" "));
+  const volumeMl = volumes.length ? Math.max(...volumes) : 100;
+  return {
+    length: 12,
+    width: 8,
+    height: Math.max(6, Math.min(22, Math.round(volumeMl / 10))),
+    weightBrutto: Math.max(0.12, Math.min(1.5, Number((volumeMl * 0.004 + 0.08).toFixed(3)))),
+  };
+}
+
+function wbExtractImageUrls(product = {}) {
+  const ozon = product.ozon || {};
+  return Array.from(new Set([
+    cleanText(product.imageUrl),
+    ...splitList(ozon.primaryImage),
+    ...splitList(ozon.images),
+  ].filter(Boolean)));
+}
+
+// Возвращает { ok, reasons, listing } — по образцу evaluateAvitoImportCandidate.
+// Ключевой блок: price_below_min при закупке поставщика ниже порога 15 000 ₽.
+function evaluateWbImportCandidate(product = {}, rules = {}, pricing = {}) {
+  const normalizedRules = normalizeWbImportRules(rules);
+  const reasons = [];
+  const title = cleanText(product.name);
+  const matchTitle = title.toLowerCase().replace(/ё/g, "е");
+
+  if (!title) reasons.push("no_title");
+  if (normalizedRules.skipArchived && product.archived) reasons.push("archived");
+  const excludeWord = normalizedRules.excludeTitleWords.find((word) => matchTitle.includes(word));
+  if (excludeWord) reasons.push(`title_word:${excludeWord}`);
+
+  const imageUrls = wbExtractImageUrls(product);
+  if (!imageUrls.length) reasons.push("no_images");
+  if (!normalizedRules.subjectId) reasons.push("no_subject");
+
+  const supplier = pricing.supplierByProductId instanceof Map
+    ? pricing.supplierByProductId.get(cleanText(product.id)) || null
+    : product.selectedSupplier || null;
+  const purchaseRub = wbSupplierPurchaseRub(supplier, pricing);
+  const priceRub = purchaseRub > 0 ? wbSupplierPriceRub(supplier, pricing) : 0;
+  if (!(purchaseRub > 0)) {
+    reasons.push("no_price");
+  } else if (normalizedRules.minSupplierPriceRub > 0 && purchaseRub < normalizedRules.minSupplierPriceRub) {
+    reasons.push(`price_below_min:${Math.round(purchaseRub)}`);
+  } else if (normalizedRules.maxWbPriceRub > 0 && priceRub > normalizedRules.maxWbPriceRub) {
+    reasons.push(`price_above_max:${Math.round(priceRub)}`);
+  }
+
+  if (reasons.length) return { ok: false, reasons, listing: null };
+  return {
+    ok: true,
+    reasons: [],
+    listing: {
+      sourceProductId: cleanText(product.id),
+      vendorCode: cleanText(product.offerId) || cleanText(product.id),
+      // Лимит WB на название — 60 символов.
+      title: title.slice(0, 60),
+      description: cleanText(product.ozon?.description) || title,
+      brand: cleanText(product.brand || product.ozon?.vendor),
+      barcode: cleanText(product.ozon?.barcode) || splitList(product.ozon?.barcodes)[0] || "",
+      imageUrls,
+      dimensions: wbDimensionsFromProduct(product),
+      purchaseRub: Math.round(purchaseRub),
+      priceRub,
+      subjectId: normalizedRules.subjectId,
+    },
+  };
+}
+
+// Payload создания карточки WB (content/v2/cards/upload). tnvedCharc —
+// характеристика «ТНВЭД» из resolveWbTnvedCharacteristic (или null).
+function buildWbCardPayload(listing = {}, tnvedCharc = null) {
+  return {
+    subjectID: Number(listing.subjectId),
+    variants: [compactObject({
+      vendorCode: cleanText(listing.vendorCode),
+      title: cleanText(listing.title),
+      description: cleanText(listing.description) || undefined,
+      brand: cleanText(listing.brand) || undefined,
+      dimensions: listing.dimensions,
+      characteristics: tnvedCharc ? [{ id: tnvedCharc.id, value: tnvedCharc.value }] : undefined,
+      sizes: [{
+        techSize: "0",
+        wbSize: "",
+        skus: [cleanText(listing.barcode)].filter(Boolean),
+      }],
+    })],
+  };
+}
+
+function wbCharcNameIsTnved(name) {
+  return cleanText(name).toLowerCase().replace(/[\s.]+/g, "") === "тнвэд";
+}
+
+// Характеристика «ТНВЭД» для карточек предмета: id — из справочника
+// характеристик предмета, код — из правил (override) или первый код
+// справочника ТН ВЭД WB по предмету. null — если у предмета нет такой
+// характеристики (тогда WB заполняет сам).
+async function resolveWbTnvedCharacteristic(account, rules = {}) {
+  const subjectId = Number(rules.subjectId) || 0;
+  if (!subjectId) return null;
+  const characteristics = await wbSubjectCharacteristics(account, subjectId);
+  const tnvedCharcMeta = characteristics.find((charc) => wbCharcNameIsTnved(charc.name));
+  if (!tnvedCharcMeta) return null;
+  let code = cleanText(rules.tnved);
+  if (!code) {
+    const directory = await wbTnvedList(account, subjectId);
+    const codes = directory.map((entry) => cleanText(entry.tnVed || entry.tnved)).filter(Boolean);
+    // Группа 3303 — «духи и туалетная вода»: для парфюмерных предметов
+    // предпочитаем её, иначе первый код справочника предмета.
+    code = codes.find((value) => value.startsWith("3303")) || codes[0] || "";
+  }
+  if (!code) return null;
+  // charcType 4 — число, иначе строка (WB ждёт массив строк).
+  const value = Number(tnvedCharcMeta.charcType) === 4 ? Number(code) : [code];
+  return { id: Number(tnvedCharcMeta.charcID), code, value };
+}
+
+// Дозаполнение ТН ВЭД в уже созданных карточках WB (cards/update требует
+// полную карточку — берём её из cards/list и добавляем характеристику).
+async function backfillWbTnvedCharacteristics(account, { limit = 20000 } = {}) {
+  const rules = await readWbImportRules();
+  const tnvedCharc = await resolveWbTnvedCharacteristic(account, rules);
+  if (!tnvedCharc) {
+    return { ok: false, error: "Не удалось определить характеристику ТНВЭД: проверьте subjectId в правилах импорта WB." };
+  }
+  const cards = await wbCardsList(account);
+  const missing = cards
+    .filter((card) => Number(card.nmID) > 0 && !(Array.isArray(card.characteristics)
+      && card.characteristics.some((charc) => {
+        if (!wbCharcNameIsTnved(charc.name) && Number(charc.id) !== tnvedCharc.id) return false;
+        return Array.isArray(charc.value) ? charc.value.length > 0 : Boolean(charc.value);
+      })))
+    .slice(0, Math.max(1, limit));
+  const updates = missing.map((card) => compactObject({
+    nmID: Number(card.nmID),
+    vendorCode: cleanText(card.vendorCode),
+    brand: cleanText(card.brand) || undefined,
+    title: cleanText(card.title),
+    description: cleanText(card.description) || undefined,
+    dimensions: card.dimensions ? compactObject({
+      length: Number(card.dimensions.length) || 0,
+      width: Number(card.dimensions.width) || 0,
+      height: Number(card.dimensions.height) || 0,
+      weightBrutto: Number(card.dimensions.weightBrutto) || undefined,
+    }) : undefined,
+    characteristics: [
+      ...(Array.isArray(card.characteristics) ? card.characteristics : [])
+        .map((charc) => ({ id: Number(charc.id), value: charc.value })),
+      { id: tnvedCharc.id, value: tnvedCharc.value },
+    ],
+    sizes: (Array.isArray(card.sizes) ? card.sizes : []).map((size) => compactObject({
+      chrtID: Number(size.chrtID) || undefined,
+      techSize: cleanText(size.techSize) || "0",
+      wbSize: cleanText(size.wbSize) || undefined,
+      skus: Array.isArray(size.skus) ? size.skus : [],
+    })),
+  }));
+  let updated = 0;
+  const errors = [];
+  for (const chunk of chunkArray(updates, 100)) {
+    try {
+      await wbCardsUpdate(account, chunk);
+      updated += chunk.length;
+    } catch (error) {
+      errors.push({
+        nmIDs: chunk.map((card) => card.nmID).slice(0, 5),
+        statusCode: error?.statusCode,
+        wb: error?.wb,
+        error: error?.message || String(error),
+      });
+    }
+  }
+  return {
+    ok: errors.length === 0,
+    tnved: tnvedCharc.code,
+    charcId: tnvedCharc.id,
+    cards: cards.length,
+    missingTnved: missing.length,
+    updated,
+    errors: errors.slice(0, 20),
+  };
+}
+
+// --- Обогащение созданных карточек данными Ozon ---
+// Карточки создавались «скелетами»: бренд не приживался, описание = названию,
+// характеристик нет. Дозаполняем через cards/update: бренд (поле + charc),
+// описание из raw ozon.description (недостающие добираются с Ozon API),
+// объём из названия и артикул Ozon.
+
+const WB_CHARC_BRAND_ID = 14177446;
+const WB_CHARC_VOLUME_ML_ID = 89010;
+const WB_CHARC_OZON_ARTICLE_ID = 15003293;
+
+async function loadWbEnrichSourceRows(prisma, vendorCodes = []) {
+  const codes = [...new Set(vendorCodes.map((value) => cleanText(value).toLowerCase()).filter(Boolean))];
+  const byOfferId = new Map();
+  for (const chunk of chunkArray(codes, 5000)) {
+    if (!chunk.length) continue;
+    const rows = await prisma.$queryRaw`
+      SELECT id, offer_id, target, product_id,
+             COALESCE(NULLIF(raw->>'brand', ''), NULLIF(raw#>>'{ozon,vendor}', '')) AS brand,
+             raw#>>'{ozon,description}' AS description,
+             COALESCE(NULLIF(raw->>'name', ''), '') AS name
+      FROM warehouse_products
+      WHERE marketplace = 'ozon' AND LOWER(offer_id) = ANY(${chunk})
+    `;
+    for (const row of rows) {
+      const key = cleanText(row.offer_id).toLowerCase();
+      if (key && !byOfferId.has(key)) byOfferId.set(key, row);
+    }
+  }
+  return byOfferId;
+}
+
+function wbCharcValue(charcs = [], id = 0) {
+  const charc = charcs.find((item) => Number(item.id) === id);
+  if (!charc) return null;
+  return Array.isArray(charc.value) ? charc.value[0] : charc.value;
+}
+
+async function enrichWbCards(account, { limit = 20000, fetchDescriptions = 300, descriptionDelayMs = 150 } = {}) {
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) {
+    const error = new Error("Postgres недоступен: обогащение WB требует основную БД.");
+    error.statusCode = 503;
+    throw error;
+  }
+  const cards = (await wbCardsList(account)).filter((card) => Number(card.nmID) > 0);
+  const sourceByOfferId = await loadWbEnrichSourceRows(prisma, cards.map((card) => card.vendorCode));
+
+  let descriptionBudget = Math.max(0, Number(fetchDescriptions) || 0);
+  let descriptionsFetched = 0;
+  let descriptionApiErrors = 0;
+  const updates = [];
+  let skippedNotLinked = 0;
+  let alreadyComplete = 0;
+
+  for (const card of cards) {
+    if (updates.length >= limit) break;
+    const source = sourceByOfferId.get(cleanText(card.vendorCode).toLowerCase());
+    if (!source) {
+      skippedNotLinked += 1;
+      continue;
+    }
+    const charcs = Array.isArray(card.characteristics) ? card.characteristics : [];
+    const brand = cleanText(source.brand);
+    let description = cleanText(source.description);
+    const cardDescription = cleanText(card.description);
+    const cardTitle = cleanText(card.title);
+    const volumes = extractOzonYandexImportVolumesMl([cardTitle, cleanText(source.name)].filter(Boolean).join(" "));
+    const volumeMl = volumes.length ? Math.max(...volumes) : 0;
+
+    const needBrand = Boolean(brand) && (cleanText(card.brand) !== brand || cleanText(wbCharcValue(charcs, WB_CHARC_BRAND_ID)) !== brand);
+    const needVolume = volumeMl > 0 && Number(wbCharcValue(charcs, WB_CHARC_VOLUME_ML_ID) || 0) !== volumeMl;
+    const needArticle = cleanText(wbCharcValue(charcs, WB_CHARC_OZON_ARTICLE_ID)) !== cleanText(card.vendorCode);
+    // Описание «скелета» — копия названия; настоящее берём из raw, недостающее
+    // добираем с Ozon API в пределах бюджета за прогон.
+    let needDescription = Boolean(description) && description !== cardDescription;
+    if (!description && (!cardDescription || cardDescription === cardTitle) && descriptionBudget > 0 && descriptionApiErrors < 5) {
+      descriptionBudget -= 1;
+      try {
+        const ozonAccount = getOzonAccountByTarget(cleanText(source.target) || "ozon");
+        if (ozonAccount) {
+          const body = source.product_id
+            ? { product_id: Number(source.product_id) || undefined, offer_id: cleanText(source.offer_id) }
+            : { offer_id: cleanText(source.offer_id) };
+          const data = await ozonRequest("/v1/product/info/description", body, ozonAccount);
+          description = cleanText(data?.result?.description || "");
+          if (description) {
+            descriptionsFetched += 1;
+            needDescription = true;
+          }
+          if (descriptionDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, descriptionDelayMs));
+        }
+      } catch (error) {
+        descriptionApiErrors += 1;
+        logger.warn("wb enrich: ozon description fetch failed", { offerId: source.offer_id, detail: error?.message || String(error) });
+      }
+    }
+
+    if (!needBrand && !needVolume && !needArticle && !needDescription) {
+      alreadyComplete += 1;
+      continue;
+    }
+
+    const keptCharcs = charcs
+      .filter((charc) => ![WB_CHARC_BRAND_ID, WB_CHARC_VOLUME_ML_ID, WB_CHARC_OZON_ARTICLE_ID].includes(Number(charc.id)))
+      .map((charc) => ({ id: Number(charc.id), value: charc.value }));
+    updates.push(compactObject({
+      nmID: Number(card.nmID),
+      vendorCode: cleanText(card.vendorCode),
+      brand: brand || cleanText(card.brand) || undefined,
+      title: cardTitle,
+      description: (description || cardDescription || cardTitle).slice(0, 2000),
+      dimensions: card.dimensions ? compactObject({
+        length: Number(card.dimensions.length) || 0,
+        width: Number(card.dimensions.width) || 0,
+        height: Number(card.dimensions.height) || 0,
+        weightBrutto: Number(card.dimensions.weightBrutto) || undefined,
+      }) : undefined,
+      characteristics: [
+        ...keptCharcs,
+        ...(brand ? [{ id: WB_CHARC_BRAND_ID, value: [brand] }] : []),
+        ...(volumeMl > 0 ? [{ id: WB_CHARC_VOLUME_ML_ID, value: volumeMl }] : []),
+        { id: WB_CHARC_OZON_ARTICLE_ID, value: [cleanText(card.vendorCode)] },
+      ],
+      sizes: (Array.isArray(card.sizes) ? card.sizes : []).map((size) => compactObject({
+        chrtID: Number(size.chrtID) || undefined,
+        techSize: cleanText(size.techSize) || "0",
+        wbSize: cleanText(size.wbSize) || undefined,
+        skus: Array.isArray(size.skus) ? size.skus : [],
+      })),
+    }));
+  }
+
+  let updated = 0;
+  const errors = [];
+  for (const chunk of chunkArray(updates, 100)) {
+    try {
+      await wbCardsUpdate(account, chunk);
+      updated += chunk.length;
+    } catch (error) {
+      errors.push({
+        nmIDs: chunk.map((card) => card.nmID).slice(0, 5),
+        statusCode: error?.statusCode,
+        wb: error?.wb,
+        error: error?.message || String(error),
+      });
+    }
+  }
+  return {
+    ok: errors.length === 0,
+    cards: cards.length,
+    prepared: updates.length,
+    updated,
+    alreadyComplete,
+    skippedNotLinked,
+    descriptionsFetched,
+    descriptionApiErrors,
+    errors: errors.slice(0, 20),
+  };
+}
+
+// Кандидаты импорта из Postgres: дешёвые фильтры первым проходом, поставщики —
+// только для прошедших (двухпроходный, как у Avito: живой PriceMaster дорогой).
+async function collectWbImportCandidates({ rules = null, limit = 50000 } = {}) {
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) {
+    const error = new Error("Postgres недоступен: импорт WB требует основную БД.");
+    error.statusCode = 503;
+    throw error;
+  }
+  // Частичные правила из body накладываются на сохранённые (проверка без сохранения).
+  const effectiveRules = normalizeWbImportRules({ ...(await readWbImportRules()), ...(rules || {}) });
+  const pricing = await loadAvitoPricingContext();
+
+  const products = [];
+  let cursorId = null;
+  while (products.length < limit) {
+    const page = await prisma.warehouseProduct.findMany({
+      where: { AND: [enabledWarehouseTargetWhere(), { marketplace: "ozon" }] },
+      select: { id: true, raw: true },
+      orderBy: { id: "asc" },
+      take: 1000,
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+    });
+    if (!page.length) break;
+    cursorId = page[page.length - 1].id;
+    for (const row of page) {
+      const product = row.raw && typeof row.raw === "object" ? normalizeWarehouseProduct(row.raw) : null;
+      if (product && cleanText(product.offerId)) products.push(product);
+      if (products.length >= limit) break;
+    }
+    if (page.length < 1000) break;
+  }
+
+  // Проход 1: без цен поставщика (subjectId проверяем всегда, чтобы отчёт был честным).
+  const cheapPass = products.map((product) => ({
+    product,
+    result: evaluateWbImportCandidate(product, effectiveRules, {
+      ...pricing,
+      supplierByProductId: new Map([[cleanText(product.id), product.selectedSupplier || null]]),
+    }),
+  }));
+  const survivors = cheapPass.filter(({ result }) => (
+    result.ok || result.reasons.every((reason) => reason === "no_price" || reason.startsWith("price_below_min"))
+  ));
+
+  // Проход 2: живая цена поставщика только для прошедших дешёвые фильтры.
+  const supplierMap = await loadAvitoSupplierPricingMap(survivors.map(({ product }) => cleanText(product.id)));
+  const evaluated = cheapPass.map(({ product, result }) => {
+    const isSurvivor = survivors.some((item) => item.product === product);
+    if (!isSurvivor) return { product, result };
+    return {
+      product,
+      result: evaluateWbImportCandidate(product, effectiveRules, { ...pricing, supplierByProductId: supplierMap }),
+    };
+  });
+
+  return { rules: effectiveRules, pricing, evaluated, total: products.length };
+}
+
+function summarizeWbImportPreview(evaluated = []) {
+  const reasonCounts = new Map();
+  let okCount = 0;
+  for (const { result } of evaluated) {
+    if (result.ok) {
+      okCount += 1;
+      continue;
+    }
+    for (const reason of result.reasons) {
+      const key = reason.split(":")[0];
+      reasonCounts.set(key, (reasonCounts.get(key) || 0) + 1);
+    }
+  }
+  return {
+    ok: okCount,
+    skipped: evaluated.length - okCount,
+    reasons: Object.fromEntries([...reasonCounts.entries()].sort((a, b) => b[1] - a[1])),
+  };
+}

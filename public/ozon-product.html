@@ -22,8 +22,8 @@
           </p>
         </div>
         <div class="builder-page-header__actions">
-          <a class="secondary-link-button" href="/settings.html">Настройки</a>
-          <a class="secondary-link-button" href="/pricemaster.html">PriceMaster + аудит</a>
+          <a class="secondary-link-button" data-admin-only href="/settings.html">Настройки</a>
+          <a class="secondary-link-button" data-admin-only href="/pricemaster.html">PriceMaster + аудит</a>
           <a class="secondary-link-button" href="/yandex-product.html">Форма Яндекс Маркет</a>
           <button id="logoutButton" class="secondary-button" type="button">Выйти</button>
         </div>
@@ -208,6 +208,25 @@
                     <button id="ozonImageUploadButton" class="secondary-button compact-button" type="button">Загрузить</button>
                   </div>
                   <small id="ozonImageUploadStatus" class="image-importer__status">Файлы ещё не выбраны.</small>
+                </div>
+                <div id="pb-ozon-ai" class="ai-image-panel field-span-2">
+                  <div class="ai-image-panel__head">
+                    <div>
+                      <strong>AI-изображение для Ozon</strong>
+                      <span>Генерация создаст черновик для проверки и не отправит его в Ozon.</span>
+                    </div>
+                    <button id="ozonAiGenerateButton" class="secondary-button compact-button" type="button">Сгенерировать</button>
+                  </div>
+                  <label>
+                    Исходное фото
+                    <input id="ozonAiSourceImage" type="url" placeholder="Берется главное изображение, можно указать другой URL PNG/JPG/WEBP" />
+                  </label>
+                  <label>
+                    Промт
+                    <textarea id="ozonAiPrompt" class="code-area" rows="4">Сгенерируй продающее изображение для карточки товара на Ozon. Используй название товара: "{productName}". Сохрани узнаваемость товара с исходного фото, улучшив фон, свет, композицию и визуальную привлекательность для маркетплейса. Не добавляй логотипы, водяные знаки, недостоверные характеристики или лишний текст.</textarea>
+                  </label>
+                  <div id="ozonAiPreview" class="ai-image-preview" hidden></div>
+                  <small id="ozonAiStatus" class="image-importer__status">AI-черновиков пока нет.</small>
                 </div>
                 <label class="field-span-2">
                   Фото 360

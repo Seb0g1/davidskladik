@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI качество карточек | Magic Vibes</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell import-page-shell">
+      <section class="panel import-hero-panel">
+        <div>
+          <p class="eyebrow">Yandex quality lab</p>
+          <h1>AI качество карточек</h1>
+          <p class="muted-text">Найдите товары с низким качеством, сгенерируйте новый текст и 5 фото, проверьте результат и только потом отправьте изменения в Яндекс.</p>
+        </div>
+        <div class="header-actions">
+          <a class="secondary-link-button compact-button" href="/operations.html">Операции</a>
+          <a class="secondary-link-button compact-button" href="/">Склад</a>
+        </div>
+      </section>
+
+      <section class="panel import-toolbar-panel">
+        <div class="import-toolbar">
+          <label class="search-control">
+            Качество до
+            <input id="qualityThresholdInput" type="number" min="0" max="100" step="1" value="40" />
+          </label>
+          <label class="search-control">
+            Проверить товаров
+            <input id="qualityLimitInput" type="number" min="1" max="50000" step="100" value="30000" />
+          </label>
+          <button id="findLowQualityButton" class="primary-button" type="button">Обновить качество из Яндекса</button>
+          <button id="refreshDraftsButton" class="secondary-button" type="button">Показать локально</button>
+        </div>
+        <div id="draftStatus" class="sync-status-pill">Загружаю локальные карточки...</div>
+        <div id="qualitySearchProgress" class="ai-search-progress" hidden>
+          <div class="ai-search-progress-head">
+            <strong id="qualitySearchProgressLabel">Ожидаю запуск</strong>
+            <span id="qualitySearchProgressMeta">0%</span>
+          </div>
+          <div class="ai-search-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="qualitySearchProgressBar" class="ai-search-progress-bar"></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel import-list-panel">
+        <div class="import-list-head">
+          <h2>Карточки до порога</h2>
+          <p class="muted-text">Карточки до 40 показываются автоматически из последнего сохранённого качества. Обновление из Яндекса запускается отдельно.</p>
+        </div>
+        <div id="draftsList" class="history-list"></div>
+      </section>
+    </main>
+    <script src="/ai-drafts.js"></script>
+  </body>
+</html>
