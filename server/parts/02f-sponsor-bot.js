@@ -11,6 +11,8 @@ const SPONSOR_BOT_ENABLED = Boolean(SPONSOR_BOT_TOKEN);
 const sponsorBotUsers = new Map();
 let sponsorBotOffset = 0;
 let sponsorBotRunning = false;
+// Дедупликация: храним последние 500 обработанных update_id
+const sponsorBotSeenIds = new Set();
 
 // ─── API helpers ─────────────────────────────────────────────────────────────
 
@@ -97,23 +99,30 @@ const KB_BACK_DAVID = { inline_keyboard: [[{ text: "◀️ В меню", callbac
 // ─── Data ────────────────────────────────────────────────────────────────────
 
 async function sbGetStats({ days = 1 } = {}) {
+  // Не используем shouldUsePostgresStorage() — работаем напрямую через getPrisma()
   const prisma = getPrisma();
-  if (!prisma || !shouldUsePostgresStorage()) return null;
+  if (!prisma) return null;
 
   const since = new Date();
   since.setDate(since.getDate() - (days - 1));
   since.setHours(0, 0, 0, 0);
 
-  const [periodOps, allOps, rate] = await Promise.all([
-    prisma.consignmentOperation.findMany({
-      where: { createdAt: { gte: since }, type: { in: ["sale", "return", "writeoff"] } },
-      select: { sponsorDelta: true, myDelta: true, type: true, unitSale: true, quantity: true },
-    }),
-    prisma.consignmentOperation.findMany({
-      select: { sponsorDelta: true, balanceDelta: true, myDelta: true, type: true },
-    }),
-    sbGetRate(),
-  ]);
+  let periodOps, allOps, rate;
+  try {
+    [periodOps, allOps, rate] = await Promise.all([
+      prisma.consignmentOperation.findMany({
+        where: { createdAt: { gte: since }, type: { in: ["sale", "return", "writeoff"] } },
+        select: { sponsorDelta: true, myDelta: true, type: true, unitSale: true, quantity: true },
+      }),
+      prisma.consignmentOperation.findMany({
+        select: { sponsorDelta: true, balanceDelta: true, myDelta: true, type: true },
+      }),
+      sbGetRate(),
+    ]);
+  } catch (err) {
+    logger.warn("sponsor_bot_stats_error", { detail: String(err?.message || err) });
+    return null;
+  }
 
   const sales = periodOps.filter((op) => op.type === "sale");
   const returns = periodOps.filter((op) => op.type === "return");
@@ -359,6 +368,14 @@ async function handleText(chatId) {
 // ─── Update dispatcher ────────────────────────────────────────────────────────
 
 async function sponsorBotHandleUpdate(update) {
+  // Дедупликация по update_id — защита от повторной обработки при рестарте
+  const uid = update.update_id;
+  if (sponsorBotSeenIds.has(uid)) return;
+  sponsorBotSeenIds.add(uid);
+  if (sponsorBotSeenIds.size > 500) {
+    sponsorBotSeenIds.delete(sponsorBotSeenIds.values().next().value);
+  }
+
   try {
     if (update.callback_query) {
       const cb = update.callback_query;
@@ -391,13 +408,18 @@ async function sponsorBotHandleUpdate(update) {
 // ─── Polling loop ─────────────────────────────────────────────────────────────
 
 async function sponsorBotDrainOldUpdates() {
-  // Пропускаем все накопившиеся обновления при старте (избегаем дубликатов при рестарте)
+  // Drain loop — сбрасываем ВСЕ накопленные апдейты батчами по 100
+  let total = 0;
   try {
-    const updates = await sbApi("getUpdates", { timeout: 0, limit: 100 });
-    if (Array.isArray(updates) && updates.length > 0) {
+    for (;;) {
+      const updates = await sbApi("getUpdates", { offset: sponsorBotOffset, timeout: 0, limit: 100 });
+      if (!Array.isArray(updates) || !updates.length) break;
+      for (const u of updates) sponsorBotSeenIds.add(u.update_id);
       sponsorBotOffset = updates[updates.length - 1].update_id + 1;
-      logger.info("sponsor_bot_drained", { skipped: updates.length, nextOffset: sponsorBotOffset });
+      total += updates.length;
+      if (updates.length < 100) break;
     }
+    if (total > 0) logger.info("sponsor_bot_drained", { skipped: total, nextOffset: sponsorBotOffset });
   } catch (err) {
     logger.warn("sponsor_bot_drain_error", { detail: String(err?.message || err) });
   }
@@ -425,6 +447,8 @@ async function sponsorBotPollOnce() {
 
 async function sponsorBotLoop() {
   sponsorBotRunning = true;
+  // Даём серверу/Prisma время инициализироваться перед первым обращением к БД
+  await new Promise((r) => setTimeout(r, 8000));
   await sponsorBotDrainOldUpdates(); // пропустить старые — избегаем дублей при рестарте
   while (sponsorBotRunning) {
     await sponsorBotPollOnce();
