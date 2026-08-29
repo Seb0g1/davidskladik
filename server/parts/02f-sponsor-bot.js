@@ -94,7 +94,10 @@ const F = (n) => Math.round(Number(n) || 0).toLocaleString("ru-RU");
 
 async function sbGetStats({ days = 1 } = {}) {
   const prisma = getPrisma();
-  if (!prisma) return null;
+  if (!prisma) {
+    logger.warn("sponsor_bot_stats_no_prisma", { DATABASE_URL: Boolean(process.env.DATABASE_URL) });
+    return null;
+  }
 
   const since = new Date();
   since.setDate(since.getDate() - (days - 1));
@@ -113,7 +116,11 @@ async function sbGetStats({ days = 1 } = {}) {
       sbGetRate(),
     ]);
   } catch (err) {
-    logger.warn("sponsor_bot_stats_error", { detail: String(err?.message || err) });
+    logger.warn("sponsor_bot_stats_error", {
+      detail: String(err?.message || err),
+      code: err?.code,
+      stack: String(err?.stack || "").slice(0, 500),
+    });
     return null;
   }
 
@@ -435,6 +442,17 @@ async function sponsorBotLoop() {
   // 20s: Prisma init + ensures old instance (poll timeout=15s) finishes before we start
   await new Promise((r) => setTimeout(r, 20000));
   if (!sponsorBotRunning) return;
+  try {
+    const p = getPrisma();
+    if (p) {
+      await p.$connect();
+      logger.info("sponsor_bot_db_connected");
+    } else {
+      logger.warn("sponsor_bot_db_skip_connect", { DATABASE_URL: Boolean(process.env.DATABASE_URL) });
+    }
+  } catch (err) {
+    logger.warn("sponsor_bot_db_connect_failed", { detail: String(err?.message || err) });
+  }
   await sponsorBotDrainOldUpdates();
   while (sponsorBotRunning) {
     await sponsorBotPollOnce();
