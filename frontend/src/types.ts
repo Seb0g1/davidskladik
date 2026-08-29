@@ -1035,6 +1035,69 @@ export const ConsignmentPmSyncSchema = z.object({
 }).passthrough();
 export type ConsignmentPmSync = z.infer<typeof ConsignmentPmSyncSchema>;
 
+export const ConsignmentPmNomenclatureSchema = z.object({
+  ok: z.boolean().optional(),
+  items: z.array(z.object({
+    productId: z.coerce.string(),
+    name: z.coerce.string().default(""),
+    purchasePrice: z.number().default(0),
+    alreadyAdded: z.boolean().default(false),
+  }).passthrough()).optional().default([]),
+  total: z.number().optional().default(0),
+  page: z.number().optional().default(1),
+  hasMore: z.boolean().optional().default(false),
+}).passthrough();
+export type ConsignmentPmNomenclature = z.infer<typeof ConsignmentPmNomenclatureSchema>;
+
+export const ConsignmentPmNomenclatureAddSchema = z.object({
+  ok: z.boolean().optional(),
+  item: z.record(z.string(), z.unknown()).optional().nullable(),
+  error: z.string().optional(),
+}).passthrough();
+
+export const ConsignmentPmNewItemsSchema = z.object({
+  ok: z.boolean().optional(),
+  newCount: z.number().optional().default(0),
+  checked: z.number().optional().default(0),
+  skipped: z.boolean().optional(),
+  newItems: z.array(z.object({
+    productId: z.coerce.string(),
+    name: z.coerce.string().default(""),
+    purchasePrice: z.number().default(0),
+  }).passthrough()).optional().default([]),
+}).passthrough();
+export type ConsignmentPmNewItems = z.infer<typeof ConsignmentPmNewItemsSchema>;
+
+export const ConsignmentInvoiceItemSchema = z.object({
+  id: z.string(),
+  invoiceId: z.string(),
+  itemId: z.string().nullable().optional(),
+  name: z.string(),
+  article: z.string().nullable().optional(),
+  quantity: z.number(),
+  unitPrice: z.number(),
+}).passthrough();
+export type ConsignmentInvoiceItem = z.infer<typeof ConsignmentInvoiceItemSchema>;
+
+export const ConsignmentInvoiceSchema = z.object({
+  id: z.string(),
+  number: z.string(),
+  supplierName: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
+  totalAmount: z.number(),
+  createdBy: z.string().nullable().optional(),
+  createdAt: z.string().nullable().optional(),
+  items: z.array(ConsignmentInvoiceItemSchema).optional().default([]),
+}).passthrough();
+export type ConsignmentInvoice = z.infer<typeof ConsignmentInvoiceSchema>;
+
+export const ConsignmentInvoicesSchema = z.object({
+  ok: z.boolean().optional(),
+  invoices: z.array(ConsignmentInvoiceSchema).optional().default([]),
+  total: z.number().optional().default(0),
+  page: z.number().optional().default(0),
+}).passthrough();
+
 export const SupplierAlternativeOptionSchema = z.object({
   partnerId: z.coerce.string().optional().default(""),
   supplierName: z.coerce.string().optional().default(""),

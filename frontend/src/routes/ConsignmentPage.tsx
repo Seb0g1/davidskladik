@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Banknote, Boxes, Check, ChevronDown, ChevronRight, HandCoins, History, ListPlus, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, Trash2, TrendingUp, Upload, Wallet, X } from "lucide-react";
+import { ArrowLeft, Banknote, Boxes, Check, ChevronDown, ChevronRight, FileText, HandCoins, History, ListPlus, Loader2, Package, PackageMinus, PackagePlus, Plus, RefreshCw, RotateCcw, Search, ShoppingCart, Trash2, TrendingUp, Upload, Wallet, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { PmChipInput } from "../components/PmChipInput";
 import {
@@ -12,6 +12,10 @@ import {
   ConsignmentMutationSchema,
   ConsignmentOperation,
   ConsignmentOperationsSchema,
+  ConsignmentInvoicesSchema,
+  ConsignmentPmNomenclatureAddSchema,
+  ConsignmentPmNomenclatureSchema,
+  ConsignmentPmNewItemsSchema,
   ConsignmentPmSearchSchema,
   ConsignmentPmSync,
   ConsignmentPmSyncSchema,
@@ -161,6 +165,10 @@ export function ConsignmentPage() {
   const [addForm, setAddForm] = useState(emptyAddForm);
   const [pmQuery, setPmQuery] = useState("");
   const [pmOpen, setPmOpen] = useState(false);
+  const [pmNomenclatureOpen, setPmNomenclatureOpen] = useState(false);
+  const [pmNomenclatureQuery, setPmNomenclatureQuery] = useState("");
+  const [pmNomenclaturePage, setPmNomenclaturePage] = useState(1);
+  const [pmNomenclatureAdding, setPmNomenclatureAdding] = useState<Record<string, { purchasePrice: string; quantity: string }>>({});
   const [action, setAction] = useState<StockAction | null>(null);
   const [actionForm, setActionForm] = useState({ quantity: "1", price: "", note: "", fromBalance: false });
   const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
@@ -172,6 +180,12 @@ export function ConsignmentPage() {
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
   const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
   const [pmSyncResult, setPmSyncResult] = useState<ConsignmentPmSync | null>(null);
+  const [invoicesOpen, setInvoicesOpen] = useState(false);
+  const [invoiceForm, setInvoiceForm] = useState<{
+    supplierName: string;
+    note: string;
+    lines: Array<{ name: string; article: string; quantity: string; unitPrice: string }>;
+  }>({ supplierName: "", note: "", lines: [{ name: "", article: "", quantity: "1", unitPrice: "" }] });
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["consignment"] });
 
@@ -195,6 +209,61 @@ export function ConsignmentPage() {
     queryKey: ["consignment", "pm-search", pmQuery],
     queryFn: () => fetchJson(`/api/consignment/pm-search?q=${encodeURIComponent(pmQuery)}`, ConsignmentPmSearchSchema),
     enabled: pmQuery.trim().length >= 2,
+  });
+
+  const pmNomenclature = useQuery({
+    queryKey: ["consignment", "pm-nomenclature", pmNomenclatureQuery, pmNomenclaturePage],
+    queryFn: () => fetchJson(
+      `/api/consignment/pm-nomenclature?q=${encodeURIComponent(pmNomenclatureQuery)}&page=${pmNomenclaturePage}&limit=50`,
+      ConsignmentPmNomenclatureSchema,
+    ),
+    enabled: pmNomenclatureOpen,
+  });
+
+  const pmNewItems = useQuery({
+    queryKey: ["consignment", "pm-nomenclature-new"],
+    queryFn: () => fetchJson("/api/consignment/pm-nomenclature/new", ConsignmentPmNewItemsSchema),
+    refetchInterval: 5 * 60 * 1000,
+    staleTime: 4 * 60 * 1000,
+  });
+  const pmNewCount = pmNewItems.data?.newCount || 0;
+
+  const invoicesList = useQuery({
+    queryKey: ["consignment", "invoices"],
+    queryFn: () => fetchJson("/api/consignment/invoices?limit=20", ConsignmentInvoicesSchema),
+    enabled: invoicesOpen,
+  });
+
+  const createInvoice = useMutation({
+    mutationFn: () => fetchJson("/api/consignment/invoices", ConsignmentInvoicesSchema, mutationBody({
+      supplierName: invoiceForm.supplierName || null,
+      note: invoiceForm.note || null,
+      items: invoiceForm.lines.filter(l => l.name.trim()).map(l => ({
+        name: l.name.trim(),
+        article: l.article.trim() || null,
+        quantity: Math.max(1, Number(l.quantity) || 1),
+        unitPrice: Number(l.unitPrice) || 0,
+      })),
+    })),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["consignment", "invoices"] });
+      void queryClient.invalidateQueries({ queryKey: ["consignment", "items"] });
+      setInvoiceForm({ supplierName: "", note: "", lines: [{ name: "", article: "", quantity: "1", unitPrice: "" }] });
+    },
+  });
+
+  const addFromNomenclature = useMutation({
+    mutationFn: ({ productId, purchasePrice, quantity }: { productId: string; purchasePrice: number; quantity: number }) =>
+      fetchJson("/api/consignment/pm-nomenclature/add", ConsignmentPmNomenclatureAddSchema, mutationBody({ productId, purchasePrice, quantity })),
+    onSuccess: (_data, variables) => {
+      setPmNomenclatureAdding((current) => {
+        const next = { ...current };
+        delete next[variables.productId];
+        return next;
+      });
+      void queryClient.invalidateQueries({ queryKey: ["consignment", "pm-nomenclature"] });
+      invalidate();
+    },
   });
 
   const createItem = useMutation({
@@ -514,6 +583,27 @@ export function ConsignmentPage() {
             <button
               className="secondary-action"
               type="button"
+              onClick={() => { setPmNomenclatureOpen(true); setPmNomenclatureQuery(""); setPmNomenclaturePage(1); }}
+              title="Добавить товар из номенклатуры PriceMaster"
+            >
+              <Package size={16} /> Из PM
+              {pmNewCount > 0 && (
+                <span style={{ marginLeft: 4, fontSize: 11, background: "var(--accent, #6366f1)", color: "#fff", borderRadius: 8, padding: "1px 6px" }}>
+                  +{pmNewCount}
+                </span>
+              )}
+            </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => setInvoicesOpen(true)}
+              title="Приходные накладные"
+            >
+              <FileText size={16} /> Накладные
+            </button>
+            <button
+              className="secondary-action"
+              type="button"
               disabled={pmSync.isPending}
               onClick={() => { setPmSyncResult(null); pmSync.mutate(); }}
               title="Импортировать продажи из PriceMaster автоматически"
@@ -563,6 +653,239 @@ export function ConsignmentPage() {
       )}
       {pmReset.error && (
         <div className="inline-error" style={{ marginBottom: 12 }}>{errorMessage(pmReset.error)}</div>
+      )}
+
+      {pmNomenclatureOpen && (
+        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setPmNomenclatureOpen(false); }}>
+          <div className="modal-panel" style={{ maxWidth: 700, width: "100%" }}>
+            <div className="section-title" style={{ marginBottom: 12 }}>
+              <div>
+                <span>PM номенклатура</span>
+                <h3>Добавить товар из PriceMaster</h3>
+              </div>
+              <button className="icon-action" type="button" onClick={() => setPmNomenclatureOpen(false)}><X size={16} /></button>
+            </div>
+            <div className="settings-form-row" style={{ marginBottom: 8 }}>
+              <input
+                placeholder="Поиск по наименованию или ID"
+                value={pmNomenclatureQuery}
+                autoFocus
+                onChange={(e) => { setPmNomenclatureQuery(e.target.value); setPmNomenclaturePage(1); }}
+                style={{ flex: 1 }}
+              />
+            </div>
+            {pmNomenclature.isLoading && <div className="empty-state">Загрузка номенклатуры…</div>}
+            {pmNomenclature.isError && <div className="inline-error">{errorMessage(pmNomenclature.error)}</div>}
+            {addFromNomenclature.isError && <div className="inline-error" style={{ marginBottom: 8 }}>{errorMessage(addFromNomenclature.error)}</div>}
+            {(pmNomenclature.data?.items || []).map((product) => {
+              const pending = pmNomenclatureAdding[product.productId];
+              return (
+                <div key={product.productId} className="consignment-pm-result" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+                  <div style={{ display: "flex", width: "100%", gap: 8, alignItems: "center" }}>
+                    <span style={{ minWidth: 60, color: "var(--text-muted)", fontSize: 12 }}>{product.productId}</span>
+                    <span style={{ flex: 1 }}>{product.name || "-"}</span>
+                    <span style={{ minWidth: 80, textAlign: "right" }}>{money(product.purchasePrice)}</span>
+                    {product.alreadyAdded ? (
+                      <span className="badge-success" style={{ fontSize: 11 }}>В реализации</span>
+                    ) : (
+                      <button
+                        className="secondary-action"
+                        type="button"
+                        onClick={() => setPmNomenclatureAdding((current) => ({
+                          ...current,
+                          [product.productId]: { purchasePrice: String(product.purchasePrice || ""), quantity: "1" },
+                        }))}
+                      >
+                        <Plus size={14} /> Добавить
+                      </button>
+                    )}
+                  </div>
+                  {pending && (
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", paddingLeft: 68, width: "100%" }}>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="Цена закупки, $"
+                        value={pending.purchasePrice}
+                        style={{ width: 140 }}
+                        onChange={(e) => setPmNomenclatureAdding((current) => ({ ...current, [product.productId]: { ...current[product.productId], purchasePrice: e.target.value } }))}
+                      />
+                      <input
+                        type="number"
+                        min="1"
+                        placeholder="Кол-во"
+                        value={pending.quantity}
+                        style={{ width: 90 }}
+                        onChange={(e) => setPmNomenclatureAdding((current) => ({ ...current, [product.productId]: { ...current[product.productId], quantity: e.target.value } }))}
+                      />
+                      <button
+                        className="primary-action"
+                        type="button"
+                        disabled={addFromNomenclature.isPending}
+                        onClick={() => addFromNomenclature.mutate({
+                          productId: product.productId,
+                          purchasePrice: Number(pending.purchasePrice || 0),
+                          quantity: Math.max(1, Number(pending.quantity || 1)),
+                        })}
+                      >
+                        {addFromNomenclature.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Сохранить
+                      </button>
+                      <button
+                        className="secondary-action"
+                        type="button"
+                        onClick={() => setPmNomenclatureAdding((current) => { const next = { ...current }; delete next[product.productId]; return next; })}
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {!pmNomenclature.isLoading && !pmNomenclature.data?.items?.length && (
+              <div className="empty-state">Ничего не найдено.</div>
+            )}
+            {(pmNomenclature.data?.total ?? 0) > 0 && (
+              <div className="row-actions" style={{ marginTop: 12, justifyContent: "space-between" }}>
+                <span className="muted-note">Всего: {pmNomenclature.data?.total} товаров</span>
+                <div className="row-actions">
+                  <button className="secondary-action" type="button" disabled={pmNomenclaturePage <= 1} onClick={() => setPmNomenclaturePage((p) => p - 1)}>← Пред.</button>
+                  <span className="muted-note">стр. {pmNomenclaturePage}</span>
+                  <button className="secondary-action" type="button" disabled={!pmNomenclature.data?.hasMore} onClick={() => setPmNomenclaturePage((p) => p + 1)}>След. →</button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {invoicesOpen && (
+        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setInvoicesOpen(false); }}>
+          <div className="modal-panel" style={{ maxWidth: 760, width: "100%", maxHeight: "90vh", overflow: "auto" }}>
+            <div className="section-title" style={{ marginBottom: 12 }}>
+              <div>
+                <span>Реализация</span>
+                <h3>Приходные накладные</h3>
+              </div>
+              <button className="icon-action" type="button" onClick={() => setInvoicesOpen(false)}><X size={16} /></button>
+            </div>
+
+            <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: 16, marginBottom: 16 }}>
+              <h4 style={{ marginBottom: 8, fontSize: 14 }}>Новая накладная</h4>
+              <div className="settings-form-row" style={{ marginBottom: 8 }}>
+                <input
+                  placeholder="Поставщик (необязательно)"
+                  value={invoiceForm.supplierName}
+                  onChange={(e) => setInvoiceForm({ ...invoiceForm, supplierName: e.target.value })}
+                />
+                <input
+                  placeholder="Примечание"
+                  value={invoiceForm.note}
+                  onChange={(e) => setInvoiceForm({ ...invoiceForm, note: e.target.value })}
+                />
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8, fontSize: 14 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 500 }}>Товар</th>
+                    <th style={{ width: 80, textAlign: "center", padding: "4px", fontWeight: 500 }}>Кол-во</th>
+                    <th style={{ width: 110, textAlign: "center", padding: "4px", fontWeight: 500 }}>Цена, $</th>
+                    <th style={{ width: 32 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {invoiceForm.lines.map((line, idx) => (
+                    <tr key={idx}>
+                      <td style={{ padding: "4px 8px" }}>
+                        <input
+                          placeholder="Наименование товара"
+                          style={{ width: "100%" }}
+                          value={line.name}
+                          onChange={(e) => setInvoiceForm(f => ({ ...f, lines: f.lines.map((l, i) => i === idx ? { ...l, name: e.target.value } : l) }))}
+                        />
+                      </td>
+                      <td style={{ padding: "4px" }}>
+                        <input
+                          type="number"
+                          min="1"
+                          style={{ width: "100%", textAlign: "center" }}
+                          value={line.quantity}
+                          onChange={(e) => setInvoiceForm(f => ({ ...f, lines: f.lines.map((l, i) => i === idx ? { ...l, quantity: e.target.value } : l) }))}
+                        />
+                      </td>
+                      <td style={{ padding: "4px" }}>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0.00"
+                          style={{ width: "100%", textAlign: "center" }}
+                          value={line.unitPrice}
+                          onChange={(e) => setInvoiceForm(f => ({ ...f, lines: f.lines.map((l, i) => i === idx ? { ...l, unitPrice: e.target.value } : l) }))}
+                        />
+                      </td>
+                      <td>
+                        <button
+                          className="icon-action"
+                          type="button"
+                          title="Удалить строку"
+                          onClick={() => setInvoiceForm(f => ({ ...f, lines: f.lines.filter((_, i) => i !== idx) }))}
+                        >
+                          <X size={14} />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
+                <button
+                  className="secondary-action"
+                  type="button"
+                  onClick={() => setInvoiceForm(f => ({ ...f, lines: [...f.lines, { name: "", article: "", quantity: "1", unitPrice: "" }] }))}
+                >
+                  <Plus size={14} /> Добавить строку
+                </button>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span className="muted-note">
+                    Итого: {money(invoiceForm.lines.reduce((s, l) => s + (Number(l.unitPrice) || 0) * (Number(l.quantity) || 0), 0))}
+                  </span>
+                  <button
+                    className="primary-action"
+                    type="button"
+                    disabled={createInvoice.isPending || !invoiceForm.lines.some(l => l.name.trim())}
+                    onClick={() => createInvoice.mutate()}
+                  >
+                    {createInvoice.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Провести
+                  </button>
+                </div>
+              </div>
+              {createInvoice.isSuccess && <div className="success-strip" style={{ marginTop: 8 }}>Накладная проведена.</div>}
+              {createInvoice.isError && <div className="inline-error" style={{ marginTop: 8 }}>{errorMessage(createInvoice.error)}</div>}
+            </div>
+
+            <div>
+              <h4 style={{ marginBottom: 8, fontSize: 14 }}>История накладных</h4>
+              {invoicesList.isLoading && <div className="empty-state">Загрузка…</div>}
+              {(invoicesList.data?.invoices || []).map((inv) => (
+                <div key={inv.id} style={{ borderBottom: "1px solid var(--border)", paddingBottom: 8, marginBottom: 8 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                    <strong style={{ fontSize: 14 }}>{inv.number}</strong>
+                    <span className="muted-note">{inv.createdAt ? new Date(inv.createdAt).toLocaleDateString("ru-RU") : ""}</span>
+                  </div>
+                  {inv.supplierName && <div className="muted-note" style={{ fontSize: 13 }}>{inv.supplierName}</div>}
+                  <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+                    {(inv.items || []).length} поз. · {money(inv.totalAmount)}
+                  </div>
+                </div>
+              ))}
+              {!invoicesList.isLoading && !(invoicesList.data?.invoices || []).length && (
+                <div className="empty-state">Накладных пока нет.</div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       <section className="dashboard-metrics">
