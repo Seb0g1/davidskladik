@@ -275,7 +275,18 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
         // AND logic means each additional chip NARROWS results, so all non-compound groups
         // participate in SQL (not just "required" ones). This prevents the LIMIT window
         // from being filled by single-keyword matches when the target needs multiple terms.
+        //
+        // Compound tokens (e.g. "BOD13" from query "BOD13") are OR'd against the AND block
+        // so that an exact article code match is always fetched even if the token-split AND
+        // conditions would fill the fetch window with false positives.
         const sqlGroups = groups.filter((g) => !g._compound);
+        const compoundGroups = groups.filter((g) => g._compound);
+
+        const compoundOrTerms = compoundGroups.flatMap((g) => g.flatMap((synonym) => [
+          { nativeName: { contains: synonym, mode: "insensitive" } },
+          { article: { contains: synonym, mode: "insensitive" } },
+        ]));
+
         if (sqlGroups.length) {
           const andClauses = sqlGroups.map((group) => ({
             OR: group.flatMap((synonym) => [
@@ -283,14 +294,14 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
               { article: { contains: synonym, mode: "insensitive" } },
             ]),
           }));
+          if (compoundOrTerms.length) {
+            // (AND of split tokens) OR (compound whole-code match)
+            return { ...baseWhere, OR: [{ AND: andClauses }, ...compoundOrTerms] };
+          }
           return { ...baseWhere, AND: andClauses };
         }
-        // Only compound groups: OR pre-filter, JS post-filter does precision.
-        const orTerms = groups.filter((g) => g._compound).flatMap((group) => group.flatMap((synonym) => [
-          { nativeName: { contains: synonym, mode: "insensitive" } },
-          { article: { contains: synonym, mode: "insensitive" } },
-        ]));
-        return orTerms.length ? { ...baseWhere, OR: orTerms } : baseWhere;
+        // Only compound groups (no non-compound split tokens).
+        return compoundOrTerms.length ? { ...baseWhere, OR: compoundOrTerms } : baseWhere;
       }
       if (q) {
         return { ...baseWhere, OR: [
@@ -322,6 +333,27 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
         if (existingIds.has(fr.id)) continue;
         const hay = [cleanText(fr.nativeName || ""), cleanText(fr.article || "")].join(" ");
         if (pmPassesSearchFilterFuzzy(hay, tokenGroups)) items.push(fr);
+      }
+    }
+
+    // Last-resort LIKE fallback: if tokenised/fuzzy search found nothing, broaden to a simple
+    // LIKE '%q%' on article and nativeName. Catches codes with unusual formats or products that
+    // don't pass the word-boundary post-filter but exist as exact substrings.
+    if (!items.length && q) {
+      const sel2 = { id: true, rowId: true, article: true, partnerId: true, partnerName: true, nativeName: true, price: true, currency: true, docDate: true };
+      const likeWhere = { ...baseWhere, OR: [
+        { nativeName: { contains: q, mode: "insensitive" } },
+        { article: { contains: q, mode: "insensitive" } },
+      ] };
+      const likeItems = await prisma.priceMasterSnapshotItem.findMany({
+        where: likeWhere,
+        orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
+        take: limit,
+        select: sel2,
+      });
+      const existingIds = new Set(items.map((i) => i.id));
+      for (const li of likeItems) {
+        if (!existingIds.has(li.id)) items.push(li);
       }
     }
 

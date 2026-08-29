@@ -113,13 +113,35 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
       // AND across groups: each group is a required term; synonyms within a group are OR'd.
       // Previously all groups were flattened into one OR — this caused fetch of 450 broadly-
       // matching rows (e.g. anything containing "of"/"the") which cut off valid deep results.
+      //
+      // Compound tokens (e.g. "BOD13") are OR'd against the AND block so that products whose
+      // article exactly matches the compound code are always fetched even when the token-split
+      // AND would exhaust the fetch window with false positives.
       const sqlGroups = allGroups.filter((g) => !g._compound);
-      for (const group of sqlGroups) {
-        const orTerms = group.flatMap((synonym) => [
-          { article: { contains: synonym, mode: "insensitive" } },
-          { nativeName: { contains: synonym, mode: "insensitive" } },
-        ]);
-        if (orTerms.length) and.push({ OR: orTerms });
+      const compoundGroups = allGroups.filter((g) => g._compound);
+      const compoundOrTerms = compoundGroups.flatMap((g) => g.flatMap((synonym) => [
+        { article: { contains: synonym, mode: "insensitive" } },
+        { nativeName: { contains: synonym, mode: "insensitive" } },
+      ]));
+
+      if (sqlGroups.length && compoundOrTerms.length) {
+        // Build the AND clauses for split tokens, then OR with compound direct match.
+        const splitAndClauses = sqlGroups.map((group) => ({
+          OR: group.flatMap((synonym) => [
+            { article: { contains: synonym, mode: "insensitive" } },
+            { nativeName: { contains: synonym, mode: "insensitive" } },
+          ]),
+        }));
+        and.push({ OR: [{ AND: splitAndClauses }, ...compoundOrTerms] });
+      } else {
+        for (const group of sqlGroups) {
+          const orTerms = group.flatMap((synonym) => [
+            { article: { contains: synonym, mode: "insensitive" } },
+            { nativeName: { contains: synonym, mode: "insensitive" } },
+          ]);
+          if (orTerms.length) and.push({ OR: orTerms });
+        }
+        if (compoundOrTerms.length) and.push({ OR: compoundOrTerms });
       }
     } else if (q) {
       and.push({
@@ -176,6 +198,27 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
         if (existingIds.has(fr.id)) continue;
         const hay = [cleanText(fr.nativeName || ""), cleanText(fr.article || "")].join(" ");
         if (pmPassesSearchFilterFuzzy(hay, groups)) rows.push(fr);
+      }
+    }
+
+    // Last-resort LIKE fallback: tokenised/fuzzy search found nothing — fall back to a simple
+    // LIKE '%q%' on article and nativeName. Catches unusual code formats and products that
+    // exist as exact substrings but don't pass word-boundary post-filter with the split tokens.
+    if (!rows.length && q) {
+      const likeRows = await prisma.priceMasterSnapshotItem.findMany({
+        where: {
+          OR: [
+            { article: { contains: q, mode: "insensitive" } },
+            { nativeName: { contains: q, mode: "insensitive" } },
+          ],
+          ...(partnerId ? { partnerId } : {}),
+        },
+        orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
+        take,
+      });
+      const existingIds = new Set(rows.map((r) => r.id));
+      for (const lr of likeRows) {
+        if (!existingIds.has(lr.id)) rows.push(lr);
       }
     }
 

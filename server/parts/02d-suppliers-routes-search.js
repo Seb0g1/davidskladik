@@ -45,11 +45,34 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
           // AND across token groups (each group is a required distinct term; synonyms within a
           // group are OR'd). Previously all groups were in one OR — this caused the LIMIT to be
           // filled by high-frequency words like "of"/"the" so multi-word matches were missed.
+          //
+          // Compound tokens (e.g. "BOD13" from query "BOD13") are included as an OR condition on
+          // NativeID so that an exact article code match always reaches the JS post-filter even
+          // when the fetch window (LIMIT) fills up with false positives from the split tokens.
           const sqlGroups = tokenGroups.filter((g) => !g._compound);
-          for (const group of sqlGroups) {
-            const conds = group.flatMap((t) => ["r.NativeName LIKE ?", "r.NativeID LIKE ?", "r.BarCode LIKE ?"]);
-            conditions.push(`(${conds.join(" OR ")})`);
-            params.push(...group.flatMap((t) => [likeSearch(t), likeSearch(t), likeSearch(t)]));
+          const compoundGroups = tokenGroups.filter((g) => g._compound);
+
+          if (sqlGroups.length || compoundGroups.length) {
+            // Build per-group AND conditions from regular (non-compound) tokens.
+            const andParts = sqlGroups.map((group) => {
+              const conds = group.flatMap((t) => ["r.NativeName LIKE ?", "r.NativeID LIKE ?", "r.BarCode LIKE ?"]);
+              params.push(...group.flatMap((t) => [likeSearch(t), likeSearch(t), likeSearch(t)]));
+              return `(${conds.join(" OR ")})`;
+            });
+            // Compound-token direct article match: (NativeName LIKE '%bod13%' OR NativeID LIKE '%bod13%').
+            const compoundConds = compoundGroups.flatMap((g) => {
+              params.push(likeSearch(g[0]), likeSearch(g[0]));
+              return [`r.NativeName LIKE ?`, `r.NativeID LIKE ?`];
+            });
+
+            if (andParts.length && compoundConds.length) {
+              // (split-token AND match) OR (whole-code article match)
+              conditions.push(`((${andParts.join(" AND ")}) OR (${compoundConds.join(" OR ")}))`);
+            } else if (andParts.length) {
+              for (const part of andParts) conditions.push(part);
+            } else {
+              conditions.push(`(${compoundConds.join(" OR ")})`);
+            }
           }
         } else {
           conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
@@ -133,6 +156,35 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
         source = "json_snapshot";
         rows = fallbackRows;
       }
+    }
+
+    // Last-resort fallback: if still no results, try a direct LIKE '%q%' on NativeID and NativeName
+    // in live MySQL. Handles cases where the tokenised AND-logic is too strict (e.g. rare codes,
+    // mixed-script names, or products that only exist in MySQL but not the Postgres snapshot).
+    if (!rows.length && q && liveOk) {
+      try {
+        const fbParams = [likeSearch(q), likeSearch(q)];
+        if (supplier) fbParams.push(likeSearch(supplier));
+        fbParams.push(limit);
+        const [fbRows] = await pool.query(
+          `SELECT r.NativeID AS article, r.NativeName AS name, r.NativePrice AS price,
+                  r.Active AS active, r.RowID AS rowId, d.DocDate AS docDate,
+                  d.PartnerID AS partnerId, p.PartnerName AS partnerName
+           FROM OfferRows r
+           JOIN OfferDocs d ON d.DocID = r.DocID
+           LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+           WHERE r.Ignored = 0
+             AND (r.NativeID LIKE ? OR r.NativeName LIKE ?)
+             ${supplier ? "AND p.PartnerName LIKE ?" : ""}
+           ORDER BY d.DocDate DESC, r.RowID DESC
+           LIMIT ?`,
+          fbParams,
+        );
+        if (fbRows.length) {
+          source = "live_like_fallback";
+          for (const row of fbRows) rows.push(mapPriceMasterSearchResponseRow(row, usdRate));
+        }
+      } catch { /* ignore fallback errors */ }
     }
 
     // Linking UX: relevance first, cheapest rows within same relevance;
