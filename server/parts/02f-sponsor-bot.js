@@ -4,7 +4,9 @@
 
 const SPONSOR_BOT_TOKEN = process.env.SPONSOR_BOT_TOKEN || "";
 const SPONSOR_BOT_PASSWORD = process.env.SPONSOR_BOT_PASSWORD || "";
-const SPONSOR_BOT_POLL_TIMEOUT = 25;
+// Timeout shorter than startup delay so the OLD instance finishes its in-flight poll
+// before the NEW instance starts (prevents duplicate responses during rolling restart).
+const SPONSOR_BOT_POLL_TIMEOUT = 15;
 const SPONSOR_BOT_ENABLED = Boolean(SPONSOR_BOT_TOKEN);
 
 // chatId → { role: 'partner'|'david'|null, step: 'idle'|'await_password' }
@@ -82,41 +84,54 @@ const F = (n) => Math.round(Number(n) || 0).toLocaleString("ru-RU");
 
 // ─── Данные ───────────────────────────────────────────────────────────────────
 
-async function sbGetStats({ days = 1 } = {}) {
+async function sbGetStatsOnce({ days = 1 } = {}) {
   const prisma = getPrisma();
   if (!prisma) return null;
   const since = new Date();
   since.setDate(since.getDate() - (days - 1));
   since.setHours(0, 0, 0, 0);
-  try {
-    const [periodOps, allOps, rate] = await Promise.all([
-      prisma.consignmentOperation.findMany({
-        where: { createdAt: { gte: since }, type: { in: ["sale", "return", "writeoff"] } },
-        select: { sponsorDelta: true, myDelta: true, type: true, unitSale: true, quantity: true },
-      }),
-      prisma.consignmentOperation.findMany({
-        select: { sponsorDelta: true, balanceDelta: true, myDelta: true, type: true },
-      }),
-      sbGetRate(),
-    ]);
-    const $ = (v) => (Number(v) || 0) * rate;
-    const sales = periodOps.filter((o) => o.type === "sale");
-    return {
-      rate,
-      sales: sales.length,
-      returns: periodOps.filter((o) => o.type === "return").length,
-      periodSponsor: $(periodOps.reduce((s, o) => s + (Number(o.sponsorDelta) || 0), 0)),
-      periodMy: $(periodOps.reduce((s, o) => s + (Number(o.myDelta) || 0), 0)),
-      periodRevenue: $(sales.reduce((s, o) => s + (Number(o.unitSale) || 0) * (Number(o.quantity) || 0), 0)),
-      totalBalance: $(allOps.reduce((s, o) => s + (Number(o.balanceDelta) || 0), 0)),
-      totalSponsor: $(allOps.reduce((s, o) => s + (Number(o.sponsorDelta) || 0), 0)),
-      totalMy: $(allOps.reduce((s, o) => s + (Number(o.myDelta) || 0), 0)),
-      totalSales: allOps.filter((o) => o.type === "sale").length,
-    };
-  } catch (err) {
-    logger.warn("sponsor_bot_stats_error", { detail: String(err?.message || err) });
-    return null;
+  const [periodOps, allOps, rate] = await Promise.all([
+    prisma.consignmentOperation.findMany({
+      where: { createdAt: { gte: since }, type: { in: ["sale", "return", "writeoff"] } },
+      select: { sponsorDelta: true, myDelta: true, type: true, unitSale: true, quantity: true },
+    }),
+    prisma.consignmentOperation.findMany({
+      select: { sponsorDelta: true, balanceDelta: true, myDelta: true, type: true },
+    }),
+    sbGetRate(),
+  ]);
+  const $ = (v) => (Number(v) || 0) * rate;
+  const sales = periodOps.filter((o) => o.type === "sale");
+  return {
+    rate,
+    sales: sales.length,
+    returns: periodOps.filter((o) => o.type === "return").length,
+    periodSponsor: $(periodOps.reduce((s, o) => s + (Number(o.sponsorDelta) || 0), 0)),
+    periodMy: $(periodOps.reduce((s, o) => s + (Number(o.myDelta) || 0), 0)),
+    periodRevenue: $(sales.reduce((s, o) => s + (Number(o.unitSale) || 0) * (Number(o.quantity) || 0), 0)),
+    totalBalance: $(allOps.reduce((s, o) => s + (Number(o.balanceDelta) || 0), 0)),
+    totalSponsor: $(allOps.reduce((s, o) => s + (Number(o.sponsorDelta) || 0), 0)),
+    totalMy: $(allOps.reduce((s, o) => s + (Number(o.myDelta) || 0), 0)),
+    totalSales: allOps.filter((o) => o.type === "sale").length,
+  };
+}
+
+async function sbGetStats(opts = {}) {
+  // Retry up to 3 times (Prisma may not be ready right after startup)
+  for (let i = 0; i < 3; i++) {
+    try {
+      const result = await sbGetStatsOnce(opts);
+      if (result !== null) return result;
+    } catch (err) {
+      logger.warn("sponsor_bot_stats_error", {
+        attempt: i + 1,
+        detail: String(err?.message || err),
+        stack: String(err?.stack || "").slice(0, 300),
+      });
+    }
+    if (i < 2) await new Promise((r) => setTimeout(r, 4000));
   }
+  return null;
 }
 
 // ─── Сообщения ────────────────────────────────────────────────────────────────
@@ -412,12 +427,17 @@ async function sponsorBotPollOnce() {
 
 async function sponsorBotLoop() {
   sponsorBotRunning = true;
-  await new Promise((r) => setTimeout(r, 8000)); // ждём инит Prisma
+  // 20s: (a) lets Prisma finish init, (b) ensures the OLD worker's 15s poll timeout
+  // has expired before we start polling — preventing dual-instance duplicate messages
+  // during PM2 rolling restarts (kill_timeout=15s).
+  await new Promise((r) => setTimeout(r, 20000));
+  if (!sponsorBotRunning) return; // SIGTERM arrived during startup delay
   await sponsorBotDrainOldUpdates();
   while (sponsorBotRunning) {
     await sponsorBotPollOnce();
     await new Promise((r) => setTimeout(r, 200));
   }
+  logger.info("sponsor_bot_loop_stopped");
 }
 
 // ─── Уведомление Давиду ───────────────────────────────────────────────────────
@@ -454,6 +474,12 @@ async function notifyDavidAboutSponsorReport(reportUsd) {
 
 const isSponsorBotHost = process.env.SERVER_ROLE === "worker";
 if (SPONSOR_BOT_ENABLED && isSponsorBotHost) {
+  // Stop polling immediately on SIGTERM so the old instance doesn't race
+  // with the new one during PM2 rolling restarts.
+  process.once("SIGTERM", () => {
+    sponsorBotRunning = false;
+  });
+
   sponsorBotLoop().catch((err) =>
     logger.warn("sponsor_bot_loop_crashed", { detail: String(err?.message || err) })
   );
