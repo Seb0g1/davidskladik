@@ -223,6 +223,9 @@ function normalizeAppSettings(input = {}) {
         ? input.support.categories.map((c) => cleanText(c)).filter(Boolean).slice(0, 20)
         : defaultSupportCategories(),
     },
+    sponsorTelegramChatId: cleanText(input.sponsorTelegramChatId ?? input.sponsor_telegram_chat_id ?? "") || "",
+    sponsorDailyReportEnabled: parseBooleanSetting(input.sponsorDailyReportEnabled ?? input.sponsor_daily_report_enabled, false),
+    sponsorDailyReportHour: Math.min(23, Math.max(0, Math.round(Number(input.sponsorDailyReportHour ?? input.sponsor_daily_report_hour ?? 20) || 20))),
   };
 }
 

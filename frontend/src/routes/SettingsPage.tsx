@@ -1051,6 +1051,68 @@ export function SettingsPage() {
             {!availabilityRules.length && <div className="soft-empty compact">При сохранении будет добавлено дефолтное правило: все площадки, от 1 поставщика, поправка 0, остаток 3.</div>}
           </div>
         </div>
+
+        <div className="settings-panel">
+          <div className="section-title">
+            <div><span>Реализация</span><h3>Ежедневный отчёт спонсору</h3></div>
+          </div>
+          <p className="soft-empty compact">
+            Каждый день в указанный час спонсор получит в Telegram сводку: продажи за день, доля прибыли, текущий баланс.
+          </p>
+          <div className="settings-form-row">
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input
+                type="checkbox"
+                checked={Boolean(draft.sponsorDailyReportEnabled)}
+                onChange={(event) => update({ sponsorDailyReportEnabled: event.target.checked })}
+              />
+              Включить ежедневный отчёт
+            </label>
+          </div>
+          <div className="settings-form-row">
+            <label>
+              Telegram Chat ID спонсора
+              <input
+                type="text"
+                placeholder="-100123456789"
+                value={String(draft.sponsorTelegramChatId ?? "")}
+                onChange={(event) => update({ sponsorTelegramChatId: event.target.value })}
+                style={{ maxWidth: 220 }}
+              />
+            </label>
+            <label>
+              Час отправки (0–23)
+              <input
+                type="number"
+                min={0}
+                max={23}
+                value={String(draft.sponsorDailyReportHour ?? 20)}
+                onChange={(event) => update({ sponsorDailyReportHour: Number(event.target.value) })}
+                style={{ maxWidth: 90 }}
+              />
+            </label>
+          </div>
+          <div className="settings-form-row">
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() =>
+                fetch("/api/consignment/sponsor-report/send", { method: "POST" })
+                  .then((r) => r.json())
+                  .then((d) =>
+                    alert(
+                      d.result?.skipped
+                        ? `Пропущено: ${d.result.reason}`
+                        : `Отчёт отправлен. Прибыль за сегодня: ${d.result?.todayProfit ?? 0} ₽`,
+                    ),
+                  )
+                  .catch((e) => alert("Ошибка: " + e.message))
+              }
+            >
+              Тестовый отчёт в Telegram
+            </button>
+          </div>
+        </div>
       </section>}
 
       {activeTab === "ai" && <section className="settings-grid pricing-settings-grid">

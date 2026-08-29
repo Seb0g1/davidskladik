@@ -839,9 +839,129 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
   }
 });
 
+// Просмотр номенклатуры PM (Products) — для добавления товаров в реализацию.
+app.get("/api/consignment/pm-nomenclature", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const q = cleanText(request.query.q || "");
+    const limit = Math.min(100, Math.max(10, Number(request.query.limit) || 50));
+    const page = Math.max(1, Number(request.query.page) || 1);
+    const offset = (page - 1) * limit;
+
+    let rows;
+    let countRows;
+    if (q.length >= 2) {
+      const like = `%${q}%`;
+      [rows] = await pool.query(
+        `SELECT ProductID, ProductName, SalePrice FROM Products WHERE ProductName LIKE ? OR CAST(ProductID AS CHAR) LIKE ? ORDER BY ProductName ASC LIMIT ? OFFSET ?`,
+        [like, like, limit + 1, offset],
+      );
+      [countRows] = await pool.query(
+        `SELECT COUNT(*) AS total FROM Products WHERE ProductName LIKE ? OR CAST(ProductID AS CHAR) LIKE ?`,
+        [like, like],
+      );
+    } else {
+      [rows] = await pool.query(
+        `SELECT ProductID, ProductName, SalePrice FROM Products ORDER BY ProductName ASC LIMIT ? OFFSET ?`,
+        [limit + 1, offset],
+      );
+      [countRows] = await pool.query(`SELECT COUNT(*) AS total FROM Products`);
+    }
+
+    const hasMore = rows.length > limit;
+    if (hasMore) rows = rows.slice(0, limit);
+    const total = Number(countRows[0]?.total || 0);
+
+    // Check which productIds already exist in ConsignmentItem
+    const productIds = rows.map((r) => r.ProductID);
+    const existingArticles = productIds.length
+      ? new Set(
+          (await getPrisma().consignmentItem.findMany({
+            where: { article: { in: productIds.map((id) => `pm:${id}`) } },
+            select: { article: true },
+          })).map((row) => row.article),
+        )
+      : new Set();
+
+    const items = rows.map((row) => ({
+      productId: String(row.ProductID),
+      name: cleanText(String(row.ProductName || "")),
+      purchasePrice: normalizeFinanceMoney(row.SalePrice, 0),
+      alreadyAdded: existingArticles.has(`pm:${row.ProductID}`),
+    }));
+
+    response.json({ ok: true, items, total, page, hasMore });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Добавить товар из PM номенклатуры в реализацию.
+app.post("/api/consignment/pm-nomenclature/add", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const productId = cleanText(String(request.body?.productId || ""));
+    if (!productId) return response.status(400).json({ error: "productId обязателен." });
+    const purchasePrice = normalizeFinanceMoney(request.body?.purchasePrice, 0);
+    const quantity = Math.max(0, Math.round(Number(request.body?.quantity || 0)));
+    const note = cleanText(request.body?.note || "");
+    const supplierName = cleanText(request.body?.supplierName || "");
+
+    // Look up PM product name
+    const [pmRows] = await pool.query(
+      `SELECT ProductName, SalePrice FROM Products WHERE ProductID = ? LIMIT 1`,
+      [Number(productId)],
+    );
+    if (!pmRows.length) return response.status(404).json({ error: `Товар ProductID=${productId} не найден в PM.` });
+    const pmName = cleanText(String(pmRows[0].ProductName || ""));
+    const article = `pm:${productId}`;
+
+    // Check if already exists
+    const existing = await getPrisma().consignmentItem.findFirst({ where: { article } });
+    if (existing) return response.status(409).json({ error: `Товар с артикулом ${article} уже есть в реализации.`, item: consignmentItemFromPostgres(existing) });
+
+    const item = await getPrisma().consignmentItem.create({
+      data: {
+        name: pmName,
+        article,
+        supplierName: supplierName || "",
+        purchasePrice,
+        salePrice: 0,
+        quantity,
+        note: note || null,
+        archived: false,
+        raw: { pmProductId: productId, pmName },
+      },
+    });
+
+    response.json({ ok: true, item: consignmentItemFromPostgres(item) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Bigram Jaccard similarity [0..1] for name validation.
+function jaccardSimilarity(a, b) {
+  if (!a || !b) return 0;
+  const norm = (s) => s.toLowerCase().replace(/[^а-яёa-z0-9]/gi, " ").replace(/\s+/g, " ").trim();
+  const bigrams = (s) => {
+    const set = new Set();
+    for (let i = 0; i < s.length - 1; i++) set.add(s.slice(i, i + 2));
+    return set;
+  };
+  const sa = bigrams(norm(a));
+  const sb = bigrams(norm(b));
+  if (!sa.size && !sb.size) return 1;
+  if (!sa.size || !sb.size) return 0;
+  let intersection = 0;
+  for (const g of sa) if (sb.has(g)) intersection++;
+  return intersection / (sa.size + sb.size - intersection);
+}
+
 // Синхронизирует продажи из PriceMaster (SaleRows+SaleDocs+Products) → ConsignmentOperation.
 // Инкрементно: при каждом запуске берёт только строки PM с RowID > уже обработанных.
-// Матчит строго по article = "pm:{productId}" — нечёткий матч по имени убран (давал ложные совпадения).
+// Матчит по article = "pm:{productId}" + проверяет имя (Jaccard ≥ 0.35 vs item.name).
+// Если productId не совпал — fallback матч по имени (Jaccard ≥ 0.6) среди всех items.
 // Продажи ДО item.createdAt игнорируются. Каждая продажа:
 //   - декрементирует item.quantity (clamp to 0)
 //   - balanceDelta = purchasePrice * quantity (возврат себестоимости на баланс)
@@ -916,25 +1036,57 @@ async function runConsignmentPmSync() {
     return { ok: true, created: 0, skipped: 0, skippedBefore: 0, itemsMatched: 0, total: 0 };
   }
 
-  // Матч только по article = "pm:{productId}" — нет fuzzy-матча по имени
+  // Матч по article = "pm:{productId}" + name-validation (Jaccard ≥ 0.35).
+  // Если productId не совпал — fallback по имени среди всех активных items (Jaccard ≥ 0.6).
   const productIds = [...new Set(saleRows.map((r) => r.productId))];
-  const itemByProductId = new Map();
+  const itemByProductId = new Map(); // productId → item
+  const itemByName = new Map();     // productId → item (from fallback)
+
+  // Load all non-archived consignment items once for fallback name match
+  const allItems = await prisma.consignmentItem.findMany({
+    where: { archived: false, article: { startsWith: "pm:" } },
+    select: { id: true, name: true, article: true, createdAt: true, purchasePrice: true },
+  });
+
   for (const productId of productIds) {
     const article = `pm:${productId}`;
-    const existing = await prisma.consignmentItem.findFirst({
-      where: { article },
-      select: { id: true, createdAt: true, purchasePrice: true },
-    });
-    if (existing) itemByProductId.set(productId, existing);
+    const pmRow = saleRows.find((r) => r.productId === productId);
+    const pmName = pmRow?.productName || "";
+
+    const existing = allItems.find((it) => it.article === article);
+    if (existing) {
+      const sim = jaccardSimilarity(existing.name, pmName);
+      if (sim >= 0.35 || !pmName) {
+        itemByProductId.set(productId, existing);
+      }
+      // else: article matches but name diverged too much — treat as unmatched
+    }
   }
-  const itemsMatched = itemByProductId.size;
+
+  // Fallback: for saleRows whose productId has no match, try name-based search
+  for (const row of saleRows) {
+    if (itemByProductId.has(row.productId)) continue;
+    const pmName = row.productName || "";
+    if (!pmName) continue;
+    let bestSim = 0;
+    let bestItem = null;
+    for (const it of allItems) {
+      const sim = jaccardSimilarity(it.name, pmName);
+      if (sim > bestSim) { bestSim = sim; bestItem = it; }
+    }
+    if (bestSim >= 0.6 && bestItem) {
+      itemByName.set(row.productId, bestItem);
+    }
+  }
+
+  const itemsMatched = itemByProductId.size + itemByName.size;
 
   let created = 0;
   let skipped = 0;
   let skippedBefore = 0;
 
   for (const row of saleRows) {
-    const item = itemByProductId.get(row.productId);
+    const item = itemByProductId.get(row.productId) || itemByName.get(row.productId);
     if (!item) { skipped++; continue; }
     const docDate = row.docDate ? new Date(row.docDate) : new Date();
     if (docDate < item.createdAt) { skippedBefore++; continue; }
@@ -1016,6 +1168,158 @@ function scheduleConsignmentPmSync(delayMs = consignmentPmSyncIntervalMs) {
   consignmentPmSyncTimer.unref?.();
 }
 
+// ─── Приходные накладные ────────────────────────────────────────────────────
+
+function consignmentInvoiceFromPostgres(row = {}) {
+  return {
+    id: row.id,
+    number: row.number,
+    supplierName: row.supplierName || null,
+    note: row.note || null,
+    totalAmount: Number(row.totalAmount || 0),
+    createdBy: row.createdBy || null,
+    createdAt: row.createdAt?.toISOString?.() || null,
+    items: (row.items || []).map((it) => ({
+      id: it.id,
+      invoiceId: it.invoiceId,
+      itemId: it.itemId || null,
+      name: it.name,
+      article: it.article || null,
+      quantity: it.quantity,
+      unitPrice: Number(it.unitPrice || 0),
+    })),
+  };
+}
+
+async function generateInvoiceNumber(prisma) {
+  const count = await prisma.consignmentInvoice.count();
+  return `ПН-${String(count + 1).padStart(3, "0")}`;
+}
+
+app.get("/api/consignment/invoices", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const prisma = getPrisma();
+    const page = Math.max(0, Number(request.query.page || 0) || 0);
+    const limit = Math.min(100, Math.max(1, Number(request.query.limit || 20) || 20));
+    const [invoices, total] = await Promise.all([
+      prisma.consignmentInvoice.findMany({
+        orderBy: { createdAt: "desc" },
+        skip: page * limit,
+        take: limit,
+        include: { items: true },
+      }),
+      prisma.consignmentInvoice.count(),
+    ]);
+    response.json({ ok: true, invoices: invoices.map(consignmentInvoiceFromPostgres), total, page });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/consignment/invoices/:id", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const prisma = getPrisma();
+    const invoice = await prisma.consignmentInvoice.findUnique({
+      where: { id: request.params.id },
+      include: { items: true },
+    });
+    if (!invoice) return response.status(404).json({ error: "Накладная не найдена" });
+    response.json({ ok: true, invoice: consignmentInvoiceFromPostgres(invoice) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/consignment/invoices", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const prisma = getPrisma();
+    const { supplierName, note, items = [] } = request.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      return response.status(400).json({ error: "Нет позиций в накладной" });
+    }
+
+    const invoiceNumber = await generateInvoiceNumber(prisma);
+    let totalAmount = 0;
+    const invoiceItemsData = [];
+    const consignmentOps = [];
+
+    for (const line of items) {
+      const name = cleanText(line.name);
+      if (!name) continue;
+      const quantity = Math.max(1, Math.round(Number(line.quantity || 1) || 1));
+      const unitPrice = Math.max(0, Number(line.unitPrice || 0) || 0);
+      const article = cleanText(line.article) || null;
+      totalAmount += unitPrice * quantity;
+
+      // Find or create ConsignmentItem
+      let consignmentItem = null;
+      if (article) {
+        consignmentItem = await prisma.consignmentItem.findFirst({ where: { article } });
+      }
+      if (!consignmentItem) {
+        consignmentItem = await prisma.consignmentItem.findFirst({
+          where: { name: { equals: name, mode: "insensitive" } },
+        });
+      }
+      if (!consignmentItem) {
+        consignmentItem = await prisma.consignmentItem.create({
+          data: { name, article: article || undefined, purchasePrice: unitPrice, salePrice: unitPrice, quantity: 0 },
+        });
+      }
+
+      // Update item quantity and purchase price
+      await prisma.consignmentItem.update({
+        where: { id: consignmentItem.id },
+        data: { quantity: { increment: quantity }, purchasePrice: unitPrice },
+      });
+
+      invoiceItemsData.push({ id: require("crypto").randomUUID(), name, article, quantity, unitPrice, itemId: consignmentItem.id });
+      consignmentOps.push({ itemId: consignmentItem.id, itemName: name, quantity, unitPrice });
+    }
+
+    const invoice = await prisma.$transaction(async (tx) => {
+      const inv = await tx.consignmentInvoice.create({
+        data: {
+          number: invoiceNumber,
+          supplierName: cleanText(supplierName) || null,
+          note: cleanText(note) || null,
+          totalAmount,
+          createdBy: request.session?.user?.username || null,
+          items: {
+            create: invoiceItemsData.map(({ id: _id, itemId, ...rest }) => ({ ...rest, itemId })),
+          },
+        },
+        include: { items: true },
+      });
+      for (const op of consignmentOps) {
+        await tx.consignmentOperation.create({
+          data: {
+            itemId: op.itemId,
+            itemName: op.itemName,
+            type: "purchase",
+            quantity: op.quantity,
+            unitPurchase: op.unitPrice,
+            balanceDelta: -(op.unitPrice * op.quantity),
+            sponsorDelta: 0,
+            myDelta: 0,
+            note: `Накладная ${invoiceNumber}`,
+          },
+        });
+      }
+      return inv;
+    });
+
+    response.json({ ok: true, invoice: consignmentInvoiceFromPostgres(invoice) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ─── PM-синк продаж ─────────────────────────────────────────────────────────
+
 app.post("/api/consignment/pm-sync", requireAdmin, async (request, response, next) => {
   try {
     if (consignmentStorageUnavailable(response)) return;
@@ -1041,6 +1345,57 @@ app.post("/api/consignment/pm-sync/cleanup", requireAdmin, async (request, respo
     const opsResult = await prisma.consignmentOperation.deleteMany({ where: { itemId: { in: ids } } });
     const itemsResult = await prisma.consignmentItem.deleteMany({ where: { id: { in: ids } } });
     response.json({ ok: true, removedItems: itemsResult.count, removedOperations: opsResult.count });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Проверяет: есть ли в PM.Products товары, которых ещё нет в ConsignmentItem (как pm:ID).
+// Возвращает { ok, newCount, checked, newItems: [{productId, name, purchasePrice}] }.
+// Используется daily-maintenance-scheduler и GET /api/consignment/pm-nomenclature/new.
+async function checkNewPmNomenclatureItems() {
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) return { skipped: true };
+  if (!pool) return { skipped: true, reason: "no_pm_pool" };
+  try {
+    const existing = await prisma.consignmentItem.findMany({
+      where: { article: { startsWith: "pm:" } },
+      select: { article: true },
+    });
+    const existingIds = new Set(
+      existing.map((e) => {
+        const n = Number(String(e.article).replace("pm:", ""));
+        return Number.isFinite(n) ? n : -1;
+      }),
+    );
+    const [pmProducts] = await pool.query(
+      `SELECT ProductID, ProductName, SalePrice FROM Products WHERE ProductID > 0 ORDER BY ProductID DESC LIMIT 2000`,
+    );
+    const newItems = pmProducts
+      .filter((p) => !existingIds.has(p.ProductID))
+      .map((p) => ({
+        productId: String(p.ProductID),
+        name: cleanText(String(p.ProductName || "")),
+        purchasePrice: normalizeFinanceMoney(p.SalePrice, 0),
+      }));
+    if (newItems.length > 0) {
+      logger.info("pm_new_nomenclature_items", {
+        count: newItems.length,
+        sample: newItems.slice(0, 10).map((p) => ({ id: p.productId, name: p.name })),
+      });
+    }
+    return { ok: true, newCount: newItems.length, checked: pmProducts.length, newItems };
+  } catch (error) {
+    logger.warn("checkNewPmNomenclatureItems failed", { detail: error?.message || String(error) });
+    return { ok: false, error: error?.message };
+  }
+}
+
+app.get("/api/consignment/pm-nomenclature/new", requireAdmin, async (request, response, next) => {
+  try {
+    if (consignmentStorageUnavailable(response)) return;
+    const result = await checkNewPmNomenclatureItems();
+    response.json(result);
   } catch (error) {
     next(error);
   }
@@ -1087,6 +1442,71 @@ app.post("/api/consignment/pm-sync/reset", requireAdmin, async (request, respons
     });
 
     response.json({ ok: true, removedOperations: pmOps.length, restoredItems });
+  } catch (error) {
+    next(error);
+  }
+});
+
+async function sendSponsorDailyReport() {
+  const settings = await readAppSettings();
+  const chatId = String(settings.sponsorTelegramChatId || "").trim();
+  if (!chatId || !settings.sponsorDailyReportEnabled) {
+    return { skipped: true, reason: "disabled_or_no_chat_id" };
+  }
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return { skipped: true, reason: "no_bot_token" };
+
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) return { skipped: true, reason: "no_db" };
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const [todayOps, allOps] = await Promise.all([
+    prisma.consignmentOperation.findMany({
+      where: { createdAt: { gte: today }, type: { in: ["sale", "return", "writeoff"] } },
+      select: { sponsorDelta: true, type: true },
+    }),
+    prisma.consignmentOperation.findMany({
+      select: { sponsorDelta: true, balanceDelta: true },
+    }),
+  ]);
+
+  const todaySponsorProfit = todayOps.reduce((s, op) => s + (Number(op.sponsorDelta) || 0), 0);
+  const todaySales = todayOps.filter((op) => op.type === "sale").length;
+  const totalBalance = allOps.reduce((s, op) => s + (Number(op.balanceDelta) || 0), 0);
+  const totalSponsorProfit = allOps.reduce((s, op) => s + (Number(op.sponsorDelta) || 0), 0);
+
+  const fmt = (n) => Math.round(n).toLocaleString("ru-RU");
+  const todayStr = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+
+  const text = [
+    `📊 <b>Отчёт реализации за ${todayStr}</b>`,
+    ``,
+    todaySales > 0 ? `✅ Продаж сегодня: ${todaySales} шт` : `📭 Продаж сегодня нет`,
+    `💰 Ваша доля за день: <b>${fmt(todaySponsorProfit)} ₽</b>`,
+    ``,
+    `📈 Накопленная прибыль: ${fmt(totalSponsorProfit)} ₽`,
+    `💳 Текущий баланс: ${fmt(totalBalance)} ₽`,
+  ].join("\n");
+
+  const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+    signal: AbortSignal.timeout(8000),
+  });
+  const data = await resp.json();
+  if (!data.ok) throw new Error(`Telegram error: ${data.description}`);
+
+  logger.info("sponsor_daily_report_sent", { chatId, todayProfit: todaySponsorProfit, totalBalance, todaySales });
+  return { ok: true, todayProfit: todaySponsorProfit, totalBalance, todaySales };
+}
+
+app.post("/api/consignment/sponsor-report/send", requireAdmin, async (request, response, next) => {
+  try {
+    const result = await sendSponsorDailyReport();
+    response.json({ ok: true, result });
   } catch (error) {
     next(error);
   }

@@ -721,3 +721,33 @@ model AppError {
   @@index([createdAt])
   @@map("app_errors")
 }
+
+model ConsignmentInvoice {
+  id           String   @id @default(cuid())
+  number       String
+  supplierName String?  @map("supplier_name")
+  note         String?
+  totalAmount  Float    @default(0) @map("total_amount")
+  createdBy    String?  @map("created_by")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  items ConsignmentInvoiceItem[]
+
+  @@index([createdAt])
+  @@map("consignment_invoices")
+}
+
+model ConsignmentInvoiceItem {
+  id        String  @id @default(cuid())
+  invoiceId String  @map("invoice_id")
+  itemId    String? @map("item_id")
+  name      String
+  article   String?
+  quantity  Int
+  unitPrice Float   @map("unit_price")
+
+  invoice ConsignmentInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("consignment_invoice_items")
+}

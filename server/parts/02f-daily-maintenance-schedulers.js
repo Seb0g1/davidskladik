@@ -116,6 +116,24 @@ async function runDailyRefresh(trigger = "manual") {
       runStalePriceTargetScan().catch((err) =>
         logger.warn("stale price target scan failed in daily refresh", { detail: err?.message || String(err) }),
       );
+      // New PM nomenclature check: log if PM has products not yet in реализация.
+      if (typeof checkNewPmNomenclatureItems === "function") {
+        checkNewPmNomenclatureItems().catch((err) =>
+          logger.warn("pm nomenclature new-items check failed in daily refresh", { detail: err?.message || String(err) }),
+        );
+      }
+      // Sponsor daily Telegram report (fire-and-forget, hour-gated).
+      if (typeof sendSponsorDailyReport === "function") {
+        readAppSettings().then((appSettings) => {
+          const targetHour = Number(appSettings.sponsorDailyReportHour ?? 20);
+          const currentHour = new Date().getHours();
+          if (appSettings.sponsorDailyReportEnabled && Math.abs(currentHour - targetHour) <= 1) {
+            return sendSponsorDailyReport();
+          }
+        }).catch((err) =>
+          logger.warn("sponsor_daily_report_failed", { detail: err?.message || String(err) }),
+        );
+      }
 
       let pricePush = null;
       const shouldSendPrices = trigger === "manual" || (trigger === "schedule" && dailySyncSendPrices);
