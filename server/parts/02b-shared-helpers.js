@@ -203,12 +203,14 @@ async function fuzzySearchPmSnapshotItems(prisma, tokenGroups, limit = 50) {
     });
     return `(${groupConds.join(" OR ")})`;
   });
-  // Compound groups (e.g. "no5") must also match in SQL via regex (flexible spacing).
+  // Compound groups (e.g. "no5") must also match in SQL via regex (flexible separator).
+  // The pattern allows space, hyphen, dot, or underscore between letter and digit parts
+  // so that "bod13" matches articles/names like "bod-13" or "bod.13".
   const compoundGroups = tokenGroups.filter((g) => g._compound);
   for (const g of compoundGroups) {
-    const flexPat = g[0].replace(/([a-zа-я])(\d)/g, "$1\\s*$2").replace(/(\d)([a-zа-я])/g, "$1\\s*$2");
+    const flexPat = g[0].replace(/([a-zа-я])(\d)/g, "$1[\\s\\-._ ]*$2").replace(/(\d)([a-zа-я])/g, "$1[\\s\\-._ ]*$2");
     params.push(flexPat);
-    conditions.push(`native_name ~* $${params.length}`);
+    conditions.push(`(native_name ~* $${params.length} OR article ~* $${params.length})`);
   }
   const orderTerms = long.map((group) => {
     params.push(group[0]);

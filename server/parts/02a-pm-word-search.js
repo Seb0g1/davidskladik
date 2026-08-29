@@ -121,12 +121,13 @@ function pmTokenMatchesText(lower, token) {
     const esc = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(?<![a-zа-я])${esc}(?![a-zа-я])`).test(lower);
   }
-  // Alphanumeric compound ("no5", "h24"): match exact substring OR with optional space between letter/digit parts.
+  // Alphanumeric compound ("no5", "h24"): match exact substring OR with optional separator
+  // (space, hyphen, dot, underscore) between letter/digit parts — so "bod13" matches "bod-13".
   if (/[a-zа-я]/.test(token) && /\d/.test(token)) {
     if (lower.includes(token)) return true;
     const flex = token
-      .replace(/([a-zа-я])(\d)/g, "$1\\s*$2")
-      .replace(/(\d)([a-zа-я])/g, "$1\\s*$2");
+      .replace(/([a-zа-я])(\d)/g, "$1[\\s\\-._ ]*$2")
+      .replace(/(\d)([a-zа-я])/g, "$1[\\s\\-._ ]*$2");
     try { return new RegExp(flex).test(lower); } catch { return false; }
   }
   return lower.includes(token);

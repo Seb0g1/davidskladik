@@ -17,7 +17,7 @@ function productFromPostgres(row = {}) {
       // Prefer typed columns over raw JSON — typed columns are authoritative after migration
       sourceRowId: link.sourceRowId || linkRaw.sourceRowId,
       exactName: link.exactName || linkRaw.exactName,
-      article: linkRaw.article || (linkRaw.matchType ? "" : link.supplierArticle),
+      article: linkRaw.article || link.supplierArticle,
       supplierName: link.supplierName,
       partnerId: link.partnerId,
       priceCurrency: link.priceCurrency,

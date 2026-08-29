@@ -47,9 +47,9 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
           // filled by high-frequency words like "of"/"the" so multi-word matches were missed.
           const sqlGroups = tokenGroups.filter((g) => !g._compound);
           for (const group of sqlGroups) {
-            const conds = group.flatMap((t) => ["r.NativeName LIKE ?", "r.NativeID LIKE ?"]);
+            const conds = group.flatMap((t) => ["r.NativeName LIKE ?", "r.NativeID LIKE ?", "r.BarCode LIKE ?"]);
             conditions.push(`(${conds.join(" OR ")})`);
-            params.push(...group.flatMap((t) => [likeSearch(t), likeSearch(t)]));
+            params.push(...group.flatMap((t) => [likeSearch(t), likeSearch(t), likeSearch(t)]));
           }
         } else {
           conditions.push("(r.NativeID LIKE ? OR r.NativeName LIKE ? OR r.BarCode LIKE ? OR p.PartnerName LIKE ?)");
