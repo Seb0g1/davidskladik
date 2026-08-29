@@ -319,17 +319,29 @@ async function handleCallback(chatId, callbackId, data, msgId) {
 
   if (data === "role:partner") {
     sponsorBotUsers.set(chatId, { role: "partner", step: "idle" });
+    await sbEdit(chatId, msgId, "✅ <b>Роль: Партнёр</b>");
+    // Keyboard sent immediately — stats load after
+    const loadMsg = await sbSend(chatId, "⏳ Загружаю данные...", { reply_markup: KB_PARTNER_REPLY });
     const d = await sbGetStats({ days: 1 });
-    // Убираем inline-кнопки выбора роли, ставим постоянную клавиатуру
-    await sbEdit(chatId, msgId, "✅ <b>Роль: Партнёр</b>\n\nИспользуйте кнопки меню ниже 👇");
-    await sbSend(chatId, msgPartnerWelcome(d), { reply_markup: KB_PARTNER_REPLY });
+    const text = msgPartnerWelcome(d);
+    if (loadMsg?.message_id) {
+      await sbEdit(chatId, loadMsg.message_id, text, d ? { reply_markup: inlineRefreshPartner } : {});
+    } else {
+      await sbSend(chatId, text, d ? { reply_markup: inlineRefreshPartner } : {});
+    }
     return;
   }
   if (data === "role:david") {
     sponsorBotUsers.set(chatId, { role: "david", step: "idle" });
+    await sbEdit(chatId, msgId, "✅ <b>Роль: Давид</b>");
+    const loadMsg = await sbSend(chatId, "⏳ Загружаю данные...", { reply_markup: KB_DAVID_REPLY });
     const d = await sbGetStats({ days: 1 });
-    await sbEdit(chatId, msgId, "✅ <b>Роль: Давид</b>\n\nИспользуйте кнопки меню ниже 👇");
-    await sbSend(chatId, msgDavidWelcome(d), { reply_markup: KB_DAVID_REPLY });
+    const text = msgDavidWelcome(d);
+    if (loadMsg?.message_id) {
+      await sbEdit(chatId, loadMsg.message_id, text, d ? { reply_markup: inlineRefreshDavid } : {});
+    } else {
+      await sbSend(chatId, text, d ? { reply_markup: inlineRefreshDavid } : {});
+    }
     return;
   }
   if (data === "refresh") {
