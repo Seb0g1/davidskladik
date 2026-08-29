@@ -1500,6 +1500,14 @@ async function sendSponsorDailyReport() {
   if (!data.ok) throw new Error(`Telegram error: ${data.description}`);
 
   logger.info("sponsor_daily_report_sent", { chatId, todayProfit: todaySponsorProfit, totalBalance, todaySales });
+
+  // Уведомить Давида через sponsor-бот
+  if (typeof notifyDavidAboutSponsorReport === "function") {
+    notifyDavidAboutSponsorReport({ todaySales, todaySponsorProfit, totalBalance, totalSponsorProfit }).catch(
+      (err) => logger.warn("notify_david_failed", { detail: String(err?.message || err) })
+    );
+  }
+
   return { ok: true, todayProfit: todaySponsorProfit, totalBalance, todaySales };
 }
 

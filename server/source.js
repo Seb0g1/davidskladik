@@ -272,6 +272,7 @@ const partFiles = [
   "02f-chats-routes.js",
   "02f-product-eta-route.js",
   "02f-supplier-export-routes.js",
+  "02f-sponsor-bot.js",
   "03-lifecycle-start.js",
   "03-lifecycle-shutdown.js",
   "03-lifecycle-exports.js",
