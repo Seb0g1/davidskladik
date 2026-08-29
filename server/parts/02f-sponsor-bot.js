@@ -1,17 +1,18 @@
 // Telegram-бот для спонсора и Давида — красивый интерфейс с inline-кнопками.
 // SPONSOR_BOT_TOKEN — токен бота, SPONSOR_BOT_PASSWORD — пароль входа.
+// Значения в БД хранятся в USD — конвертируем в RUB через getUsdRate().
 
 const SPONSOR_BOT_TOKEN = process.env.SPONSOR_BOT_TOKEN || "";
 const SPONSOR_BOT_PASSWORD = process.env.SPONSOR_BOT_PASSWORD || "";
 const SPONSOR_BOT_POLL_TIMEOUT = 25;
 const SPONSOR_BOT_ENABLED = Boolean(SPONSOR_BOT_TOKEN);
 
-// chatId → { role: 'partner'|'david'|null, step: 'idle'|'await_password', lastReportMsgId }
+// chatId → { role: 'partner'|'david'|null, step: 'idle'|'await_password' }
 const sponsorBotUsers = new Map();
 let sponsorBotOffset = 0;
 let sponsorBotRunning = false;
 
-// ─── API helpers ────────────────────────────────────────────────────────────
+// ─── API helpers ─────────────────────────────────────────────────────────────
 
 async function sbApi(method, body = {}) {
   if (!SPONSOR_BOT_TOKEN) throw new Error("SPONSOR_BOT_TOKEN not set");
@@ -19,7 +20,7 @@ async function sbApi(method, body = {}) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(35000),
   });
   const data = await resp.json();
   if (!data.ok) throw new Error(`Telegram ${method}: ${data.description}`);
@@ -31,11 +32,29 @@ async function sbSend(chatId, text, extra = {}) {
 }
 
 async function sbEdit(chatId, msgId, text, extra = {}) {
-  return sbApi("editMessageText", { chat_id: chatId, message_id: msgId, text, parse_mode: "HTML", ...extra }).catch(() => null);
+  return sbApi("editMessageText", {
+    chat_id: chatId, message_id: msgId, text, parse_mode: "HTML", ...extra,
+  }).catch(() => null);
 }
 
 async function sbAnswer(callbackQueryId, text = "") {
   return sbApi("answerCallbackQuery", { callback_query_id: callbackQueryId, text }).catch(() => null);
+}
+
+// ─── Currency ─────────────────────────────────────────────────────────────────
+
+async function sbGetRate() {
+  try {
+    const rateData = await getUsdRate({ force: false });
+    return Number(rateData?.rate || 0) || 85;
+  } catch {
+    return 85;
+  }
+}
+
+function sbFmt(usd, rate) {
+  const rub = Math.round((Number(usd) || 0) * rate);
+  return rub.toLocaleString("ru-RU") + " ₽";
 }
 
 // ─── Keyboards ───────────────────────────────────────────────────────────────
@@ -47,56 +66,45 @@ const KB_ROLE = {
   ]],
 };
 
-function kbPartner() {
-  return {
-    inline_keyboard: [
-      [
-        { text: "📊 Отчёт за сегодня", callback_data: "p:today" },
-        { text: "💰 Общий баланс", callback_data: "p:balance" },
-      ],
-      [
-        { text: "📈 История за неделю", callback_data: "p:week" },
-        { text: "🔄 Обновить", callback_data: "p:refresh" },
-      ],
+const kbPartner = () => ({
+  inline_keyboard: [
+    [
+      { text: "📊 Сегодня", callback_data: "p:today" },
+      { text: "💰 Баланс", callback_data: "p:balance" },
     ],
-  };
-}
-
-function kbDavid() {
-  return {
-    inline_keyboard: [
-      [
-        { text: "📋 Последний отчёт", callback_data: "d:last" },
-        { text: "🔔 Статус уведомлений", callback_data: "d:status" },
-      ],
-      [
-        { text: "📊 Статистика", callback_data: "d:stats" },
-      ],
+    [
+      { text: "📈 За 7 дней", callback_data: "p:week" },
+      { text: "🔄 Обновить", callback_data: "p:refresh" },
     ],
-  };
-}
+  ],
+});
 
-const KB_BACK_PARTNER = { inline_keyboard: [[{ text: "◀️ Назад в меню", callback_data: "p:menu" }]] };
-const KB_BACK_DAVID = { inline_keyboard: [[{ text: "◀️ Назад в меню", callback_data: "d:menu" }]] };
+const kbDavid = () => ({
+  inline_keyboard: [
+    [
+      { text: "📋 Последний отчёт", callback_data: "d:last" },
+      { text: "📊 Статистика", callback_data: "d:stats" },
+    ],
+    [
+      { text: "🔔 Статус уведомлений", callback_data: "d:status" },
+    ],
+  ],
+});
 
-// ─── Data helpers ────────────────────────────────────────────────────────────
+const KB_BACK_PARTNER = { inline_keyboard: [[{ text: "◀️ В меню", callback_data: "p:menu" }]] };
+const KB_BACK_DAVID = { inline_keyboard: [[{ text: "◀️ В меню", callback_data: "d:menu" }]] };
 
-const fmt = (n) => Math.round(Number(n) || 0).toLocaleString("ru-RU");
-const fmtF = (n) => (Number(n) || 0).toLocaleString("ru-RU", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-const bar = (pct) => {
-  const filled = Math.round(pct / 10);
-  return "🟢".repeat(Math.max(0, filled)) + "⬜".repeat(Math.max(0, 10 - filled));
-};
+// ─── Data ────────────────────────────────────────────────────────────────────
 
 async function sbGetStats({ days = 1 } = {}) {
   const prisma = getPrisma();
   if (!prisma || !shouldUsePostgresStorage()) return null;
 
   const since = new Date();
-  since.setDate(since.getDate() - days);
+  since.setDate(since.getDate() - (days - 1));
   since.setHours(0, 0, 0, 0);
 
-  const [periodOps, allOps] = await Promise.all([
+  const [periodOps, allOps, rate] = await Promise.all([
     prisma.consignmentOperation.findMany({
       where: { createdAt: { gte: since }, type: { in: ["sale", "return", "writeoff"] } },
       select: { sponsorDelta: true, myDelta: true, type: true, unitSale: true, quantity: true },
@@ -104,21 +112,25 @@ async function sbGetStats({ days = 1 } = {}) {
     prisma.consignmentOperation.findMany({
       select: { sponsorDelta: true, balanceDelta: true, myDelta: true, type: true },
     }),
+    sbGetRate(),
   ]);
 
   const sales = periodOps.filter((op) => op.type === "sale");
   const returns = periodOps.filter((op) => op.type === "return");
 
-  const periodSponsorProfit = periodOps.reduce((s, op) => s + (Number(op.sponsorDelta) || 0), 0);
-  const periodMyProfit = periodOps.reduce((s, op) => s + (Number(op.myDelta) || 0), 0);
-  const periodRevenue = sales.reduce((s, op) => s + (Number(op.unitSale) || 0) * (Number(op.quantity) || 0), 0);
+  const usd2rub = (v) => (Number(v) || 0) * rate;
 
-  const totalBalance = allOps.reduce((s, op) => s + (Number(op.balanceDelta) || 0), 0);
-  const totalSponsorProfit = allOps.reduce((s, op) => s + (Number(op.sponsorDelta) || 0), 0);
-  const totalMyProfit = allOps.reduce((s, op) => s + (Number(op.myDelta) || 0), 0);
+  const periodSponsorProfit = usd2rub(periodOps.reduce((s, op) => s + (Number(op.sponsorDelta) || 0), 0));
+  const periodMyProfit = usd2rub(periodOps.reduce((s, op) => s + (Number(op.myDelta) || 0), 0));
+  const periodRevenue = usd2rub(sales.reduce((s, op) => s + (Number(op.unitSale) || 0) * (Number(op.quantity) || 0), 0));
+
+  const totalBalance = usd2rub(allOps.reduce((s, op) => s + (Number(op.balanceDelta) || 0), 0));
+  const totalSponsorProfit = usd2rub(allOps.reduce((s, op) => s + (Number(op.sponsorDelta) || 0), 0));
+  const totalMyProfit = usd2rub(allOps.reduce((s, op) => s + (Number(op.myDelta) || 0), 0));
   const totalSales = allOps.filter((op) => op.type === "sale").length;
 
   return {
+    rate,
     sales: sales.length,
     returns: returns.length,
     periodSponsorProfit,
@@ -131,114 +143,115 @@ async function sbGetStats({ days = 1 } = {}) {
   };
 }
 
-// ─── Message builders ─────────────────────────────────────────────────────────
+// ─── Messages ────────────────────────────────────────────────────────────────
 
-function msgWelcome() {
-  return `✨ <b>Magic Vibes — Партнёрский кабинет</b>\n\n` +
-    `Добро пожаловать! Этот бот показывает статистику реализации.\n\n` +
-    `🔐 Для входа отправьте пароль:`;
-}
+const F = (n) => Math.round(n).toLocaleString("ru-RU");
 
-function msgChooseRole() {
-  return `✅ <b>Вход выполнен!</b>\n\n` +
-    `Выберите вашу роль:`;
-}
-
-function msgPartnerMenu(data) {
-  if (!data) return `⚠️ Данные временно недоступны.`;
-  const today = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
-  return `🏠 <b>Главное меню</b>\n` +
-    `<i>${today}</i>\n\n` +
-    `💰 Баланс: <b>${fmt(data.totalBalance)} ₽</b>\n` +
-    `📈 Ваша прибыль (всего): <b>${fmt(data.totalSponsorProfit)} ₽</b>\n\n` +
-    `Выберите действие:`;
-}
-
-function msgPartnerToday(data) {
-  if (!data) return `⚠️ Данные временно недоступны.`;
-  const today = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
-  const hasSales = data.sales > 0;
+function msgPartnerMenu(d) {
+  if (!d) return "⚠️ Данные временно недоступны. Попробуйте позже.";
+  const date = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
   return [
-    `📊 <b>Отчёт за ${today}</b>`,
+    `🏠 <b>Главное меню</b>`,
+    `<i>${date}</i>`,
     ``,
-    hasSales
-      ? `✅ Продаж: <b>${data.sales} шт</b>${data.returns > 0 ? `  |  🔄 Возвратов: ${data.returns}` : ``}`
-      : `📭 Продаж сегодня нет`,
-    hasSales ? `💵 Выручка: ${fmt(data.periodRevenue)} ₽` : ``,
+    `💰 Баланс: <b>${F(d.totalBalance)} ₽</b>`,
+    `📈 Ваш профит (всего): <b>${F(d.totalSponsorProfit)} ₽</b>`,
     ``,
-    `💰 <b>Ваша доля за день: ${fmt(data.periodSponsorProfit)} ₽</b>`,
-    ``,
-    `━━━━━━━━━━━━━━━`,
-    `📈 Общий накопленный профит: ${fmt(data.totalSponsorProfit)} ₽`,
-    `💳 Текущий баланс: <b>${fmt(data.totalBalance)} ₽</b>`,
-  ].filter((l) => l !== undefined).join("\n");
-}
-
-function msgPartnerBalance(data) {
-  if (!data) return `⚠️ Данные временно недоступны.`;
-  return [
-    `💰 <b>Детали баланса</b>`,
-    ``,
-    `💳 Текущий баланс:        <b>${fmt(data.totalBalance)} ₽</b>`,
-    `📈 Ваш профит (всего):    <b>${fmt(data.totalSponsorProfit)} ₽</b>`,
-    `📦 Всего продаж:          <b>${data.totalSales} шт</b>`,
+    `Выберите действие:`,
   ].join("\n");
 }
 
-function msgPartnerWeek(data) {
-  if (!data) return `⚠️ Данные временно недоступны.`;
-  const hasSales = data.sales > 0;
+function msgPartnerToday(d) {
+  if (!d) return "⚠️ Данные временно недоступны.";
+  const date = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
   return [
-    `📈 <b>Статистика за 7 дней</b>`,
+    `📊 <b>Отчёт за ${date}</b>`,
     ``,
-    `🛍 Продаж: <b>${data.sales} шт</b>${data.returns > 0 ? `  (возвратов: ${data.returns})` : ``}`,
-    hasSales ? `💵 Выручка: ${fmt(data.periodRevenue)} ₽` : ``,
+    d.sales > 0
+      ? `✅ Продаж: <b>${d.sales} шт</b>${d.returns > 0 ? `  |  🔄 Возвратов: ${d.returns}` : ``}`
+      : `📭 Продаж сегодня нет`,
+    d.sales > 0 ? `💵 Выручка: ${F(d.periodRevenue)} ₽` : ``,
     ``,
-    `💰 <b>Ваша доля за неделю: ${fmt(data.periodSponsorProfit)} ₽</b>`,
-    `🔧 Доля магазина: ${fmt(data.periodMyProfit)} ₽`,
+    `💰 <b>Ваша доля за день: ${F(d.periodSponsorProfit)} ₽</b>`,
     ``,
     `━━━━━━━━━━━━━━━`,
-    `💳 Баланс сейчас: ${fmt(data.totalBalance)} ₽`,
+    `📈 Накопленный профит: ${F(d.totalSponsorProfit)} ₽`,
+    `💳 Текущий баланс: <b>${F(d.totalBalance)} ₽</b>`,
   ].filter(Boolean).join("\n");
 }
 
-function msgDavidMenu(data) {
-  if (!data) return `⚠️ Данные временно недоступны.`;
-  const today = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
-  return `👤 <b>Панель управления</b>\n` +
-    `<i>${today}</i>\n\n` +
-    `📦 Продаж сегодня: <b>${data.sales} шт</b>\n` +
-    `💰 Доля партнёра сегодня: <b>${fmt(data.periodSponsorProfit)} ₽</b>\n\n` +
-    `Выберите действие:`;
-}
-
-function msgDavidStats(data) {
-  if (!data) return `⚠️ Данные временно недоступны.`;
+function msgPartnerBalance(d) {
+  if (!d) return "⚠️ Данные временно недоступны.";
   return [
-    `📊 <b>Общая статистика</b>`,
+    `💰 <b>Детали баланса</b>`,
     ``,
-    `📦 Всего продаж: <b>${data.totalSales} шт</b>`,
-    `💰 Профит партнёра (всего): <b>${fmt(data.totalSponsorProfit)} ₽</b>`,
-    `🔧 Мой профит (всего): <b>${fmt(data.totalMyProfit)} ₽</b>`,
-    `💳 Баланс партнёра: <b>${fmt(data.totalBalance)} ₽</b>`,
+    `💳 Текущий баланс:         <b>${F(d.totalBalance)} ₽</b>`,
+    `📈 Ваш профит (всего):     <b>${F(d.totalSponsorProfit)} ₽</b>`,
+    `📦 Всего продаж:           <b>${d.totalSales} шт</b>`,
     ``,
-    `📅 За 7 дней:`,
-    `  Продаж: ${data.sales} шт`,
-    `  Доля партнёра: ${fmt(data.periodSponsorProfit)} ₽`,
+    `<i>Курс USD: ${F(d.rate)} ₽</i>`,
   ].join("\n");
 }
 
-function msgDavidStatus(chatId) {
+function msgPartnerWeek(d) {
+  if (!d) return "⚠️ Данные временно недоступны.";
+  return [
+    `📈 <b>Статистика за 7 дней</b>`,
+    ``,
+    `🛍 Продаж: <b>${d.sales} шт</b>${d.returns > 0 ? `  (возвратов: ${d.returns})` : ``}`,
+    d.sales > 0 ? `💵 Выручка: ${F(d.periodRevenue)} ₽` : ``,
+    ``,
+    `💰 <b>Ваша доля: ${F(d.periodSponsorProfit)} ₽</b>`,
+    `🔧 Доля магазина: ${F(d.periodMyProfit)} ₽`,
+    ``,
+    `━━━━━━━━━━━━━━━`,
+    `💳 Баланс сейчас: ${F(d.totalBalance)} ₽`,
+  ].filter(Boolean).join("\n");
+}
+
+function msgDavidMenu(d) {
+  if (!d) return "⚠️ Данные временно недоступны.";
+  const date = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" });
+  return [
+    `👤 <b>Панель управления</b>`,
+    `<i>${date}</i>`,
+    ``,
+    `📦 Продаж сегодня: <b>${d.sales} шт</b>`,
+    `💰 Доля партнёра сегодня: <b>${F(d.periodSponsorProfit)} ₽</b>`,
+    ``,
+    `Выберите действие:`,
+  ].join("\n");
+}
+
+function msgDavidStats(d) {
+  if (!d) return "⚠️ Данные временно недоступны.";
+  return [
+    `📊 <b>Общая статистика</b>`,
+    ``,
+    `📦 Всего продаж: <b>${d.totalSales} шт</b>`,
+    `💰 Профит партнёра (всего): <b>${F(d.totalSponsorProfit)} ₽</b>`,
+    `🔧 Мой профит (всего): <b>${F(d.totalMyProfit)} ₽</b>`,
+    `💳 Баланс партнёра: <b>${F(d.totalBalance)} ₽</b>`,
+    ``,
+    `📅 <b>За 7 дней:</b>`,
+    `  Продаж: ${d.sales} шт`,
+    `  Доля партнёра: ${F(d.periodSponsorProfit)} ₽`,
+    ``,
+    `<i>Курс USD: ${F(d.rate)} ₽</i>`,
+  ].join("\n");
+}
+
+function msgDavidStatus() {
   const davidCount = [...sponsorBotUsers.values()].filter((u) => u.role === "david").length;
   const partnerCount = [...sponsorBotUsers.values()].filter((u) => u.role === "partner").length;
   return [
     `🔔 <b>Статус уведомлений</b>`,
     ``,
-    `✅ Бот активен и принимает обновления`,
+    `✅ Бот активен`,
     `👤 Давидов в системе: ${davidCount}`,
     `🤝 Партнёров в системе: ${partnerCount}`,
     ``,
-    `📬 Уведомления приходят автоматически при:`,
+    `📬 Уведомления приходят при:`,
     `  • Ежедневном отчёте партнёру`,
     `  • Ручной отправке отчёта`,
   ].join("\n");
@@ -247,29 +260,32 @@ function msgDavidStatus(chatId) {
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
 async function handleStart(chatId) {
-  sponsorBotUsers.set(chatId, { role: null, step: "await_password", lastReportMsgId: null });
-  await sbSend(chatId, msgWelcome());
+  sponsorBotUsers.set(chatId, { role: null, step: "await_password" });
+  await sbSend(chatId, [
+    `✨ <b>Magic Vibes — Партнёрский кабинет</b>`,
+    ``,
+    `Добро пожаловать! Введите пароль для доступа:`,
+  ].join("\n"));
 }
 
 async function handlePassword(chatId, text) {
   if (!SPONSOR_BOT_PASSWORD) {
-    await sbSend(chatId, "⚠️ Пароль не настроен на сервере (SPONSOR_BOT_PASSWORD).");
+    await sbSend(chatId, "⚠️ Пароль не настроен (SPONSOR_BOT_PASSWORD не задан).");
     return;
   }
   if (text !== SPONSOR_BOT_PASSWORD) {
-    sponsorBotUsers.set(chatId, { role: null, step: "idle", lastReportMsgId: null });
-    await sbSend(chatId, "❌ <b>Неверный пароль.</b>\n\nПопробуйте снова через /start");
+    sponsorBotUsers.set(chatId, { role: null, step: "idle" });
+    await sbSend(chatId, "❌ <b>Неверный пароль.</b>\n\nПопробуйте снова: /start");
     return;
   }
-  sponsorBotUsers.set(chatId, { role: null, step: "idle", lastReportMsgId: null });
-  await sbSend(chatId, msgChooseRole(), { reply_markup: KB_ROLE });
+  sponsorBotUsers.set(chatId, { role: null, step: "idle" });
+  await sbSend(chatId, "✅ <b>Доступ разрешён!</b>\n\nВыберите вашу роль:", { reply_markup: KB_ROLE });
 }
 
 async function handleCallback(chatId, callbackId, data, msgId) {
   const user = sponsorBotUsers.get(chatId) || { role: null, step: "idle" };
   await sbAnswer(callbackId);
 
-  // Выбор роли
   if (data === "role:partner") {
     sponsorBotUsers.set(chatId, { ...user, role: "partner" });
     const stats = await sbGetStats({ days: 1 });
@@ -283,7 +299,6 @@ async function handleCallback(chatId, callbackId, data, msgId) {
     return;
   }
 
-  // Партнёрское меню
   if (data === "p:menu") {
     const stats = await sbGetStats({ days: 1 });
     await sbEdit(chatId, msgId, msgPartnerMenu(stats), { reply_markup: kbPartner() });
@@ -305,7 +320,6 @@ async function handleCallback(chatId, callbackId, data, msgId) {
     return;
   }
 
-  // Давидово меню
   if (data === "d:menu") {
     const stats = await sbGetStats({ days: 1 });
     await sbEdit(chatId, msgId, msgDavidMenu(stats), { reply_markup: kbDavid() });
@@ -317,7 +331,7 @@ async function handleCallback(chatId, callbackId, data, msgId) {
     return;
   }
   if (data === "d:status") {
-    await sbEdit(chatId, msgId, msgDavidStatus(chatId), { reply_markup: KB_BACK_DAVID });
+    await sbEdit(chatId, msgId, msgDavidStatus(), { reply_markup: KB_BACK_DAVID });
     return;
   }
   if (data === "d:stats") {
@@ -327,10 +341,10 @@ async function handleCallback(chatId, callbackId, data, msgId) {
   }
 }
 
-async function handleText(chatId, text) {
+async function handleText(chatId) {
   const user = sponsorBotUsers.get(chatId);
-  if (!user || !user.role) {
-    await sbSend(chatId, "Введите /start для начала работы.");
+  if (!user?.role) {
+    await sbSend(chatId, "Введите /start для начала.");
     return;
   }
   if (user.role === "partner") {
@@ -346,16 +360,13 @@ async function handleText(chatId, text) {
 
 async function sponsorBotHandleUpdate(update) {
   try {
-    const callbackQuery = update.callback_query;
-
-    if (callbackQuery) {
-      const chatId = callbackQuery.message?.chat?.id;
-      const msgId = callbackQuery.message?.message_id;
-      if (!chatId) return;
-      await handleCallback(chatId, callbackQuery.id, callbackQuery.data || "", msgId);
+    if (update.callback_query) {
+      const cb = update.callback_query;
+      const chatId = cb.message?.chat?.id;
+      const msgId = cb.message?.message_id;
+      if (chatId) await handleCallback(chatId, cb.id, cb.data || "", msgId);
       return;
     }
-
     const msg = update.message;
     if (!msg) return;
     const chatId = msg.chat?.id;
@@ -366,20 +377,31 @@ async function sponsorBotHandleUpdate(update) {
       await handleStart(chatId);
       return;
     }
-
     const user = sponsorBotUsers.get(chatId);
     if (user?.step === "await_password") {
       await handlePassword(chatId, text);
       return;
     }
-
-    await handleText(chatId, text);
+    await handleText(chatId);
   } catch (err) {
     logger.warn("sponsor_bot_update_error", { detail: String(err?.message || err) });
   }
 }
 
 // ─── Polling loop ─────────────────────────────────────────────────────────────
+
+async function sponsorBotDrainOldUpdates() {
+  // Пропускаем все накопившиеся обновления при старте (избегаем дубликатов при рестарте)
+  try {
+    const updates = await sbApi("getUpdates", { timeout: 0, limit: 100 });
+    if (Array.isArray(updates) && updates.length > 0) {
+      sponsorBotOffset = updates[updates.length - 1].update_id + 1;
+      logger.info("sponsor_bot_drained", { skipped: updates.length, nextOffset: sponsorBotOffset });
+    }
+  } catch (err) {
+    logger.warn("sponsor_bot_drain_error", { detail: String(err?.message || err) });
+  }
+}
 
 async function sponsorBotPollOnce() {
   if (!SPONSOR_BOT_ENABLED) return;
@@ -392,10 +414,10 @@ async function sponsorBotPollOnce() {
     if (!Array.isArray(updates) || !updates.length) return;
     for (const update of updates) {
       sponsorBotOffset = update.update_id + 1;
-      sponsorBotHandleUpdate(update);
+      await sponsorBotHandleUpdate(update);
     }
   } catch (err) {
-    if (String(err?.message).includes("aborted") || String(err?.message).includes("timeout")) return;
+    if (/aborted|timeout/i.test(String(err?.message))) return;
     logger.warn("sponsor_bot_poll_error", { detail: String(err?.message || err) });
     await new Promise((r) => setTimeout(r, 5000));
   }
@@ -403,30 +425,34 @@ async function sponsorBotPollOnce() {
 
 async function sponsorBotLoop() {
   sponsorBotRunning = true;
+  await sponsorBotDrainOldUpdates(); // пропустить старые — избегаем дублей при рестарте
   while (sponsorBotRunning) {
     await sponsorBotPollOnce();
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 200));
   }
 }
 
-// ─── David notification (called from sendSponsorDailyReport) ─────────────────
+// ─── David notification ───────────────────────────────────────────────────────
 
-async function notifyDavidAboutSponsorReport(report) {
+async function notifyDavidAboutSponsorReport(reportUsd) {
   if (!SPONSOR_BOT_ENABLED) return;
   const davidChats = [...sponsorBotUsers.entries()]
     .filter(([, st]) => st.role === "david")
     .map(([chatId]) => chatId);
   if (!davidChats.length) return;
 
-  const todayStr = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
-  const hasSales = (report.todaySales || 0) > 0;
+  const rate = await sbGetRate();
+  const toRub = (v) => Math.round((Number(v) || 0) * rate);
+  const date = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+  const hasSales = (reportUsd.todaySales || 0) > 0;
+
   const text = [
     `📨 <b>Отчёт отправлен партнёру</b>`,
-    `<i>${todayStr}</i>`,
+    `<i>${date}</i>`,
     ``,
-    hasSales ? `✅ Продаж: <b>${report.todaySales} шт</b>` : `📭 Продаж сегодня нет`,
-    `💰 Доля партнёра за день: <b>${Math.round(report.todaySponsorProfit).toLocaleString("ru-RU")} ₽</b>`,
-    `💳 Баланс партнёра: <b>${Math.round(report.totalBalance).toLocaleString("ru-RU")} ₽</b>`,
+    hasSales ? `✅ Продаж: <b>${reportUsd.todaySales} шт</b>` : `📭 Продаж сегодня нет`,
+    `💰 Доля партнёра за день: <b>${toRub(reportUsd.todaySponsorProfit).toLocaleString("ru-RU")} ₽</b>`,
+    `💳 Баланс партнёра: <b>${toRub(reportUsd.totalBalance).toLocaleString("ru-RU")} ₽</b>`,
   ].join("\n");
 
   for (const chatId of davidChats) {
