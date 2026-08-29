@@ -488,7 +488,10 @@ async function notifyDavidAboutSponsorReport(reportUsd) {
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 
-if (SPONSOR_BOT_ENABLED && (process.env.BACKGROUND_JOBS_ENABLED !== "false" || process.env.NODE_ENV !== "production")) {
+// Запускаем ТОЛЬКО на production worker (SERVER_ROLE=worker).
+// Если запустить и локально и на prod — оба бота будут получать одни апдейты → дубли.
+const isSponsorBotHost = process.env.SERVER_ROLE === "worker";
+if (SPONSOR_BOT_ENABLED && isSponsorBotHost) {
   sponsorBotLoop().catch((err) =>
     logger.warn("sponsor_bot_loop_crashed", { detail: String(err?.message || err) })
   );
