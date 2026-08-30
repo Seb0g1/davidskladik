@@ -268,10 +268,16 @@ async function readAppSettings() {
       const prisma = getPrisma();
       const row = await prisma.appSetting.findUnique({ where: { key: "app" } });
       if (row?.value) return normalizeAppSettings(row.value);
+      // Row missing in Postgres — migrate from JSON if available.
+      if (!jsonFallbackEnabled()) return defaultAppSettings();
     } catch (error) {
       if (!jsonFallbackEnabled()) throw error;
       logger.warn("read app settings postgres failed, using JSON fallback", { detail: error?.message || String(error) });
     }
+  }
+  if (shouldUsePostgresStorage() && !jsonFallbackEnabled()) {
+    // Postgres mode with no JSON fallback — do not read stale JSON file.
+    return defaultAppSettings();
   }
   try {
     const parsed = JSON.parse(await fs.readFile(appSettingsPath, "utf8"));

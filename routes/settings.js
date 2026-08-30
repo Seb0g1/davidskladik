@@ -47,6 +47,26 @@ async function saveSettingsHandler(request, response, next) {
   try {
     const previous = await readAppSettings();
     const rawSettings = { ...(request.body || {}) };
+
+    // Preserve markupRules from previous if incoming is empty/absent — prevents accidental wipe.
+    if (!Array.isArray(rawSettings.markupRules) || rawSettings.markupRules.length === 0) {
+      if (Array.isArray(previous.markupRules) && previous.markupRules.length > 0) {
+        rawSettings.markupRules = previous.markupRules;
+      }
+    }
+    // Preserve fixedUsdRate from previous if incoming is absent/zero.
+    if (!rawSettings.fixedUsdRate || Number(rawSettings.fixedUsdRate) <= 0) {
+      if (previous.fixedUsdRate && Number(previous.fixedUsdRate) > 0) {
+        rawSettings.fixedUsdRate = previous.fixedUsdRate;
+      }
+    }
+    // Preserve defaultMarkups: only overwrite individual keys that are explicitly provided.
+    if (rawSettings.defaultMarkups && typeof rawSettings.defaultMarkups === "object") {
+      rawSettings.defaultMarkups = { ...(previous.defaultMarkups || {}), ...rawSettings.defaultMarkups };
+    } else if (!rawSettings.defaultMarkups && previous.defaultMarkups) {
+      rawSettings.defaultMarkups = previous.defaultMarkups;
+    }
+
     if (!rawSettings.tnved) {
       rawSettings.tnved = previous.tnved || {};
     } else {
