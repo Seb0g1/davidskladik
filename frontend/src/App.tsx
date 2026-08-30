@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, RefreshCcw, Search, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, MessageCircleHeart, Tag, UserCircle, Upload } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, MessageCircleHeart, Tag, UserCircle, Upload } from "lucide-react";
 import { lazy, ReactNode, Suspense, useEffect, useRef, useState } from "react";
 import { NotificationsBell } from "./components/NotificationsBell";
 import { SystemHealthIndicator } from "./components/SystemHealthIndicator";
@@ -109,7 +109,6 @@ const isPreviewEmbed = new URLSearchParams(window.location.search).get("embed") 
 function AppShell() {
   const [route, setRoute] = useState<AppRoute>(() => currentRoute());
   const [session, setSession] = useState<SessionState | null>(null);
-  const [globalSearch, setGlobalSearch] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCompact, setSidebarCompact] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => {
@@ -128,7 +127,6 @@ function AppShell() {
   };
   const [isMobileNav, setIsMobileNav] = useState(() => window.matchMedia("(max-width: 980px)").matches);
   const activeNavRef = useRef<HTMLAnchorElement | null>(null);
-  const globalSearchInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => {
     const onPop = () => {
       setRoute(currentRoute());
@@ -139,16 +137,7 @@ function AppShell() {
   }, []);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSidebarOpen(false);
-        if (document.activeElement === globalSearchInputRef.current) globalSearchInputRef.current?.blur();
-      }
-      if ((event.ctrlKey || event.metaKey) && event.key === "/") {
-        event.preventDefault();
-        setSidebarOpen(false);
-        globalSearchInputRef.current?.focus();
-        globalSearchInputRef.current?.select();
-      }
+      if (event.key === "Escape") setSidebarOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -198,15 +187,6 @@ function AppShell() {
     event.preventDefault();
     window.history.pushState(null, "", href);
     setRoute(currentRoute());
-    setSidebarOpen(false);
-  };
-  const submitGlobalSearch = (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const q = globalSearch.trim();
-    if (!q) return;
-    window.history.pushState(null, "", `/app/warehouse?q=${encodeURIComponent(q)}`);
-    window.dispatchEvent(new PopStateEvent("popstate"));
-    setRoute("warehouse");
     setSidebarOpen(false);
   };
   const toggleNavigation = () => {
@@ -301,19 +281,13 @@ function AppShell() {
       <div className="app-content">
       <header className="topbar content-topbar">
         <button className="topbar-menu" type="button" aria-label={navExpanded ? "Свернуть меню" : "Открыть меню"} aria-expanded={navExpanded} onClick={toggleNavigation}><Menu size={22} /></button>
-        <form className="global-search" onSubmit={submitGlobalSearch}>
-          <Search size={17} />
-          <input ref={globalSearchInputRef} value={globalSearch} onChange={(event) => setGlobalSearch(event.target.value)} placeholder="Поиск по товарам, SKU, артикулу или штрихкоду" />
-          <kbd>Ctrl + /</kbd>
-        </form>
+        <div className="topbar-spacer" />
         <div className="topbar-actions">
           <ThemeSwitcher />
           {isAdmin ? <SystemHealthIndicator /> : null}
           <NotificationsBell />
-          <div className="topbar-user">
+          <div className="topbar-user" title={roleLabel}>
             <UserCircle size={30} />
-            <span>{roleLabel}</span>
-            <ChevronDown size={15} />
           </div>
         </div>
       </header>

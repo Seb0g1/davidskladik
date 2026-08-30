@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, Bot, Check, Clock, Copy, ImagePlus, Link2, Loader2, Package, PackageCheck, RefreshCw, Save, Search, Sparkles, Star, Trash2, Users, X } from "lucide-react";
+import { AlertTriangle, BarChart2, Bot, Check, Clock, Copy, EyeOff, ImagePlus, Link2, Loader2, Package, PackageCheck, RefreshCw, Save, Search, Sparkles, Star, Trash2, Users, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceHistorySchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -17,7 +17,8 @@ import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMe
 import { ProductGroup, firstImage, groupMarketplaceLabels, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, marketplaceRowLabel, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
 import { demoWarehouseProducts, isDemoWarehouseProduct } from "../demoWarehouse";
 
-const pageSize = 40;
+const DEFAULT_PAGE_SIZE = 40;
+const PAGE_SIZE_OPTIONS = [20, 50, 100];
 const mobileListMedia = "(max-width: 640px)";
 const studioPhotoPresets = [
   { id: "white-packshot", label: "White", prompt: "Clean white marketplace packshot, full perfume bottle visible from cap to base, centered, upright, not cropped, 10-15% margin on every side, remove any box or packaging." },
@@ -90,7 +91,7 @@ function writeWarehouseLocation(filters: Filters, selectedGroup: string, replace
   else window.history.pushState(null, "", next);
 }
 
-function buildPageUrl(filters: Filters) {
+function buildPageUrl(filters: Filters, pageSize: number) {
   const params = new URLSearchParams({
     page: String(filters.page),
     pageSize: String(pageSize),
@@ -2357,12 +2358,6 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
         </div>
       </div>
       {filteredOut ? <div className="warning-strip compact">Карточка скрыта текущими фильтрами, но открыта для проверки.</div> : null}
-      <div className="stats-grid">
-        <Stat label="Текущая цена" value={money(primary.currentPrice)} />
-        <Stat label="Новая цена" value={money(primary.newPrice || primary.targetPrice)} />
-        <Stat label="Остаток" value={primary.targetStock || primary.stock || "-"} />
-        <Stat label="Привязки" value={groupLinkCount} />
-      </div>
       {priceHistoryQuery.data?.items?.length ? (
         <div className="price-history-mini">
           <div className="price-history-header">
@@ -2440,6 +2435,12 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const [isMobileList, setIsMobileList] = useState(() => typeof window !== "undefined" && window.matchMedia(mobileListMedia).matches);
   const [selectedGroupKeys, setSelectedGroupKeys] = useState<Set<string>>(new Set());
   const [bulkResult, setBulkResult] = useState<string | null>(null);
+  const [pageSize, setPageSize] = useState<number>(() => {
+    try { return Number(window.localStorage.getItem("warehouse-page-size") || DEFAULT_PAGE_SIZE) || DEFAULT_PAGE_SIZE; } catch { return DEFAULT_PAGE_SIZE; }
+  });
+  const [statsVisible, setStatsVisible] = useState<boolean>(() => {
+    try { return window.localStorage.getItem("warehouse-stats-visible") !== "false"; } catch { return true; }
+  });
   const debouncedQ = useDebounced(filters.q, 450);
   const effectiveFilters = { ...filters, q: debouncedQ };
   const parentRef = useRef<HTMLDivElement>(null);
@@ -2494,8 +2495,8 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const activeOrdersCount = ordersCountQuery.data?.total ?? (ordersCountQuery.data?.lines?.length ?? null);
 
   const pageQuery = useQuery({
-    queryKey: ["warehouse", "page", effectiveFilters],
-    queryFn: () => fetchJson(buildPageUrl(effectiveFilters), WarehousePageSchema),
+    queryKey: ["warehouse", "page", effectiveFilters, pageSize],
+    queryFn: () => fetchJson(buildPageUrl(effectiveFilters, pageSize), WarehousePageSchema),
     placeholderData: (previousData, previousQuery) => {
       const prevFilters = previousQuery?.queryKey?.[2] as Filters | undefined;
       if (prevFilters?.linked !== effectiveFilters.linked) return undefined;
@@ -2724,6 +2725,33 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           <input type="checkbox" checked={filters.autoOnly} onChange={(event) => setFilter("autoOnly", event.target.checked)} />
           Только автопрайс
         </label>
+        <select
+          className="page-size-select"
+          value={pageSize}
+          aria-label="Товаров на странице"
+          onChange={(e) => {
+            const v = Number(e.target.value) || DEFAULT_PAGE_SIZE;
+            setPageSize(v);
+            try { window.localStorage.setItem("warehouse-page-size", String(v)); } catch { /* ignore */ }
+            setFilters((f) => ({ ...f, page: 1 }));
+          }}
+        >
+          {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} / стр.</option>)}
+        </select>
+        <button
+          className="stats-toggle-btn"
+          type="button"
+          title={statsVisible ? "Скрыть статистику" : "Показать статистику"}
+          onClick={() => {
+            setStatsVisible((v) => {
+              try { window.localStorage.setItem("warehouse-stats-visible", String(!v)); } catch { /* ignore */ }
+              return !v;
+            });
+          }}
+        >
+          {statsVisible ? <EyeOff size={15} /> : <BarChart2 size={15} />}
+          <span>{statsVisible ? "Скрыть стат." : "Статистика"}</span>
+        </button>
       </section>
       {pageQuery.isFetching ? (
         <div className="catalog-loading-bar" role="status" aria-label="Каталог обновляется">
@@ -2731,15 +2759,17 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           <span>Обновляю каталог…</span>
         </div>
       ) : null}
-      <section className={`summary-grid${pageQuery.isFetching ? " is-loading" : ""}`}>
-        <Stat label={pageQuery.data?.grouped ? "Карточек" : "Найдено"} value={catalogStats?.groupTotal ?? (pageQuery.data?.groupTotal || pageQuery.data?.total || 0)} tone="accent" icon={<PackageCheck size={18} />} />
-        {(catalogStats || (pageQuery.data?.grouped && pageQuery.data?.rowTotal)) ? <Stat label="SKU" value={catalogStats?.rowTotal ?? pageQuery.data?.rowTotal ?? 0} icon={<Copy size={18} />} /> : null}
-        <Stat label="Всего" value={catalogStats?.totalAll ?? (pageQuery.data?.totalAll || 0)} icon={<Search size={18} />} />
-        <Stat label="Готовы" value={catalogStats?.ready ?? (pageQuery.data != null ? (pageQuery.data?.ready ?? 0) : undefined)} tone="success" icon={<Check size={18} />} />
-        <Stat label="Изменения" value={catalogStats?.changed ?? (pageQuery.data != null ? (pageQuery.data?.changed ?? 0) : undefined)} tone="warn" icon={<RefreshCw size={18} />} />
-        <Stat label="Без поставщика" value={catalogStats?.withoutSupplier ?? (pageQuery.data != null ? (pageQuery.data?.withoutSupplier ?? 0) : undefined)} icon={<Link2 size={18} />} />
-        <Stat label="С поставщиком" value={pageQuery.data != null ? (pageQuery.data?.linkedProducts ?? 0) : undefined} tone="success" icon={<Users size={18} />} />
-      </section>
+      {statsVisible && (
+        <section className={`summary-grid${pageQuery.isFetching ? " is-loading" : ""}`}>
+          <Stat label={pageQuery.data?.grouped ? "Карточек" : "Найдено"} value={catalogStats?.groupTotal ?? (pageQuery.data?.groupTotal || pageQuery.data?.total || 0)} tone="accent" icon={<PackageCheck size={18} />} />
+          {(catalogStats || (pageQuery.data?.grouped && pageQuery.data?.rowTotal)) ? <Stat label="SKU" value={catalogStats?.rowTotal ?? pageQuery.data?.rowTotal ?? 0} icon={<Copy size={18} />} /> : null}
+          <Stat label="Всего" value={catalogStats?.totalAll ?? (pageQuery.data?.totalAll || 0)} icon={<Search size={18} />} />
+          <Stat label="Готовы" value={catalogStats?.ready ?? (pageQuery.data != null ? (pageQuery.data?.ready ?? 0) : undefined)} tone="success" icon={<Check size={18} />} />
+          <Stat label="Изменения" value={catalogStats?.changed ?? (pageQuery.data != null ? (pageQuery.data?.changed ?? 0) : undefined)} tone="warn" icon={<RefreshCw size={18} />} />
+          <Stat label="Без поставщика" value={catalogStats?.withoutSupplier ?? (pageQuery.data != null ? (pageQuery.data?.withoutSupplier ?? 0) : undefined)} icon={<Link2 size={18} />} />
+          <Stat label="С поставщиком" value={pageQuery.data != null ? (pageQuery.data?.linkedProducts ?? 0) : undefined} tone="success" icon={<Users size={18} />} />
+        </section>
+      )}
       {useDemoCatalog ? (
         <div className="demo-catalog-strip">
           <Sparkles size={16} />

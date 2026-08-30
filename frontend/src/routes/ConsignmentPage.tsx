@@ -691,11 +691,11 @@ export function ConsignmentPage() {
             {(pmNomenclature.data?.items || []).map((product) => {
               const pending = pmNomenclatureAdding[product.productId];
               return (
-                <div key={product.productId} className="consignment-pm-result" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
+                <div key={product.productId} style={{ display: "flex", flexDirection: "column", gap: 6, padding: "9px 12px", borderBottom: "1px solid rgba(148,163,184,0.12)" }}>
                   <div style={{ display: "flex", width: "100%", gap: 8, alignItems: "center" }}>
-                    <span style={{ minWidth: 60, color: "var(--text-muted)", fontSize: 12 }}>{product.productId}</span>
-                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{product.name || "-"}</span>
-                    <span style={{ minWidth: 80, textAlign: "right", flexShrink: 0 }}>{money(product.purchasePrice)}</span>
+                    <span style={{ minWidth: 52, color: "var(--muted)", fontSize: 11, flexShrink: 0 }}>{product.productId}</span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 13 }}>{product.name || "-"}</span>
+                    <span style={{ minWidth: 70, textAlign: "right", flexShrink: 0, fontSize: 13 }}>{money(product.purchasePrice)}</span>
                     {product.alreadyAdded ? (
                       <span className="badge-success" style={{ fontSize: 11 }}>В реализации</span>
                     ) : (
