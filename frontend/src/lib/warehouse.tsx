@@ -233,7 +233,7 @@ export function firstImage(product?: Product): string {
 export function statusLabel(product: Product): { label: string; tone: string; icon: ReactNode } {
   const lastArchiveSend = asRecord(asRecord(product).lastArchiveSend);
   const isAlreadyActive = String(product.marketplaceState?.code || "").toLowerCase() === "active"
-    && product.marketplaceState?.archived === false;
+    && product.marketplaceState?.archived !== true;
   if (!isAlreadyActive && (lastArchiveSend.queuedByDailyLimit || lastArchiveSend.warning === "ozon_unarchive_daily_limit_queued")) {
     return { label: "Ожидает разархива Ozon", tone: "warn", icon: <AlertCircle size={14} /> };
   }

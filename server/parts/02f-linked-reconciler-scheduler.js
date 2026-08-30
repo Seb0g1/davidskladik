@@ -54,9 +54,14 @@ async function refreshOzonMarketplaceStateForProducts(products = []) {
 function mergeYandexLiveMarketplaceState(previous = {}, liveState = {}) {
   const state = liveState && typeof liveState === "object" ? liveState : {};
   const current = normalizeMarketplaceState(previous || {});
+  // Yandex offer-mappings API never returns a stock quantity. When Yandex confirms the
+  // product is out of stock or archived, force stock/present to 0 so that
+  // shouldSendTargetStockForProduct detects the drift and re-sends the target stock.
+  const liveCode = cleanText(state.code).toLowerCase();
+  const stockZero = liveCode === "out_of_stock" || liveCode === "archived";
   return normalizeMarketplaceState({
-    stock: current.stock,
-    present: current.present,
+    stock: stockZero ? 0 : current.stock,
+    present: stockZero ? 0 : current.present,
     reserved: current.reserved,
     warehouses: current.warehouses,
     hasStocks: current.hasStocks,

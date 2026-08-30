@@ -1649,7 +1649,7 @@ function MarketplaceRows({ products, breakdown = [], canEdit = false, withExtern
           const stockOnlyFallback = Boolean(product.stockOnlyFallbackActive || formula.stockOnlyFallbackActive || supplier.stockOnly || supplier.priceEligible === false);
           const stockOnlyManualPrice = Number(formula.stockOnlyManualPrice || supplier.manualPrice || targetPrice || 0) || 0;
           const lastArchiveSend = asRecord(asRecord(product).lastArchiveSend);
-          const ozonUnarchiveQueued = Boolean(rowBreakdown?.ozonUnarchiveQueued || lastArchiveSend.queuedByDailyLimit || lastArchiveSend.warning === "ozon_unarchive_daily_limit_queued" || lastArchiveSend.warning === "linked_activation_queued");
+          const ozonUnarchiveQueued = Boolean(rowBreakdown?.ozonUnarchiveQueued || (rowStatusCode !== "active" && (lastArchiveSend.queuedByDailyLimit || lastArchiveSend.warning === "ozon_unarchive_daily_limit_queued" || lastArchiveSend.warning === "linked_activation_queued")));
           const ozonUnarchiveNextRetryAt = String(rowBreakdown?.ozonUnarchiveNextRetryAt || lastArchiveSend.nextRetryAt || "");
           const priceClampReason = String(formula.priceClampReason || "");
           const autoPriceMinLimit = Number((product as any).autoPriceMin || formula.autoPriceMin || 0) || 0;
