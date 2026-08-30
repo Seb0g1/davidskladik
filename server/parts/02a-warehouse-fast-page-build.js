@@ -64,7 +64,9 @@ async function buildFastWarehousePageFromPostgres({
     pageTrace("postgres:after-strict-fallback-query", traceStartedAt);
   }
   let pageBaseCount = dbRows.length;
-  if (!needsComputedLinkFilter && !strictIdentitySearch) {
+  if (!needsComputedLinkFilter) {
+    // Always add cross-marketplace siblings (Ozon↔Yandex pairing) — including for
+    // strict identity searches so that searching by article shows both marketplaces.
     dbRows = await addWarehousePostgresPageGroupSiblings(prisma, where, dbRows);
   }
   const normalizedSuppliers = summary.normalizedSuppliers;
@@ -94,7 +96,7 @@ async function buildFastWarehousePageFromPostgres({
   if (needsInMemoryPage) {
     const pageSlice = allProducts.slice(offset, offset + pageSize);
     pageBaseCount = pageSlice.length;
-    visibleProducts = strictIdentitySearch ? pageSlice : addWarehousePageGroupSiblings(siblingSourceProducts, pageSlice);
+    visibleProducts = addWarehousePageGroupSiblings(siblingSourceProducts, pageSlice);
   }
   // When WAREHOUSE_PAGE_AUTO_ENRICH_BLOCKING=false: fire-and-forget the Ozon refresh
   // so we return the snapshot immediately and save the 300-2000ms Ozon API latency.

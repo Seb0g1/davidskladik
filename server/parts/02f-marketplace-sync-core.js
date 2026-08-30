@@ -13,7 +13,7 @@ async function runSync() {
       closeDumpMarker();
       const closeCompareMarker = setEventLoopBlockMarker("pricemaster_compare_snapshots");
       try {
-        compared = compareSnapshots(previous.items || {}, currentOffers);
+        compared = await compareSnapshots(previous.items || {}, currentOffers);
       } finally {
         closeCompareMarker();
       }

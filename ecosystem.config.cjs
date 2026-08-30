@@ -150,6 +150,13 @@ module.exports = {
       max_memory_restart: "256M",
       env: {
         NODE_ENV: "production",
+        // Explicitly pin these so .env overrides don't cause single-failure restarts.
+        // The 267k-row PM snapshot compare yields to the event loop every 20k items
+        // but can still briefly stall on a cold parse; 3 consecutive failures (135s)
+        // is a real stuck process — 1 is not.
+        HEALTH_WATCHDOG_FAILURE_THRESHOLD: "3",
+        HEALTH_WATCHDOG_TIMEOUT_MS: "15000",
+        HEALTH_WATCHDOG_INTERVAL_MS: "45000",
       },
     },
   ],

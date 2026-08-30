@@ -296,7 +296,8 @@ function startBackgroundSchedulers() {
     startYandexPendingStockScheduler();
   }
   if (ozonYandexAutoImportEnabled) {
-    scheduleOzonYandexAutoImport(20 * 60 * 1000);
+    const yandexImportInitialDelayMs = Math.max(60_000, Number(process.env.OZON_YANDEX_AUTO_IMPORT_INITIAL_DELAY_MS || 3 * 60 * 1000) || 3 * 60 * 1000);
+    scheduleOzonYandexAutoImport(yandexImportInitialDelayMs);
     logger.info("ozon yandex auto import scheduler enabled", {
       everyHours: ozonYandexAutoImportIntervalHours,
       perRun: ozonYandexAutoImportPerRunLimit,
