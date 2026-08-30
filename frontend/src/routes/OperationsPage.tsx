@@ -540,6 +540,17 @@ export function OperationsPage() {
     queryFn: () => fetchJson("/api/operations?limit=80", OperationsSchema),
     refetchInterval: 5000,
   });
+  const bulkStaleRecovery = useMutation({
+    mutationFn: () => fetchJson("/api/warehouse/links/bulk-stale-recovery", z.object({
+      ok: z.boolean(),
+      found: z.number().default(0),
+      fixed: z.number().default(0),
+      productCount: z.number().default(0),
+      recovered: z.number().default(0),
+    }).passthrough(), mutationBody({})),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["warehouse"] }),
+  });
+
   const startMutation = useMutation({
     mutationFn: (arg: string | { type: string; extraPayload?: Record<string, unknown> }) => {
       const type = typeof arg === "string" ? arg : arg.type;
@@ -603,8 +614,22 @@ export function OperationsPage() {
         <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate({ type: "repair-dalik-disambiguation-links", extraPayload: { dryRun: true } })}>Далик: проверить привязки (dry run)</button>
         <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Исправить неверные привязки Далик? Это обновит exactName/sourceRowId в БД.")) return; startMutation.mutate({ type: "repair-dalik-disambiguation-links", extraPayload: { dryRun: false } }); }}>Далик: исправить привязки</button>
         <button className="secondary-action" disabled={startMutation.isPending} onClick={() => { if (!window.confirm("Операция изменит данные на маркетплейсе. Продолжить?")) return; startMutation.mutate("repair-pricemaster-group-links"); }}>Починить привязки Ozon/Yandex</button>
+        <button
+          className="secondary-action"
+          disabled={bulkStaleRecovery.isPending}
+          onClick={() => { if (!window.confirm("Найти все товары со устаревшими PM-привязками и починить их (обновить source_row_id + пересчитать остатки)? Может занять несколько минут.")) return; bulkStaleRecovery.mutate(); }}
+          title="Ищет товары, у которых source_row_id указывает на неактивную PM-запись, обновляет его до актуального и пересчитывает остатки"
+        >
+          {bulkStaleRecovery.isPending ? <Loader2 className="spin" size={14} /> : null} Починить все стальные привязки (batch)
+        </button>
         <button className="secondary-action" disabled={startMutation.isPending} onClick={() => startMutation.mutate("health-deep")}>Глубокий health</button>
       </section>
+      {bulkStaleRecovery.data && (
+        <div className="success-strip">
+          Починено: найдено {bulkStaleRecovery.data.found} стальных привязок, исправлено {bulkStaleRecovery.data.fixed}, товаров обработано {bulkStaleRecovery.data.productCount}.
+        </div>
+      )}
+      {bulkStaleRecovery.error && <div className="inline-error">{errorMessage(bulkStaleRecovery.error)}</div>}
       {startMutation.error && <div className="inline-error">{errorMessage(startMutation.error)}</div>}
       <section className="table-panel supplier-cart-panel">
         <div className="section-title">

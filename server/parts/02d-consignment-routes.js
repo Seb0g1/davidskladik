@@ -1040,14 +1040,15 @@ async function runConsignmentPmSync() {
   // Если productId не совпал — fallback по имени среди всех активных items (Jaccard ≥ 0.6).
   const productIds = [...new Set(saleRows.map((r) => r.productId))];
   const itemByProductId = new Map(); // productId → item
-  const itemByName = new Map();     // productId → item (from fallback)
 
-  // Load all non-archived consignment items once for fallback name match
+  // Загружаем все активные позиции реализации с pm: артикулом
   const allItems = await prisma.consignmentItem.findMany({
     where: { archived: false, article: { startsWith: "pm:" } },
     select: { id: true, name: true, article: true, createdAt: true, purchasePrice: true },
   });
 
+  // Матчинг строго по артикулу pm:{productId} + опциональная проверка имени.
+  // Fallback по имени убран: он порождал «призрачные» продажи товаров не из реализации.
   for (const productId of productIds) {
     const article = `pm:${productId}`;
     const pmRow = saleRows.find((r) => r.productId === productId);
@@ -1055,38 +1056,23 @@ async function runConsignmentPmSync() {
 
     const existing = allItems.find((it) => it.article === article);
     if (existing) {
-      const sim = jaccardSimilarity(existing.name, pmName);
-      if (sim >= 0.35 || !pmName) {
+      // Если имя сильно расходится (< 0.25 Jaccard) — артикул мог переиспользоваться,
+      // пропускаем чтобы не записать продажу чужого товара.
+      const sim = pmName ? jaccardSimilarity(existing.name, pmName) : 1;
+      if (sim >= 0.25) {
         itemByProductId.set(productId, existing);
       }
-      // else: article matches but name diverged too much — treat as unmatched
     }
   }
 
-  // Fallback: for saleRows whose productId has no match, try name-based search
-  for (const row of saleRows) {
-    if (itemByProductId.has(row.productId)) continue;
-    const pmName = row.productName || "";
-    if (!pmName) continue;
-    let bestSim = 0;
-    let bestItem = null;
-    for (const it of allItems) {
-      const sim = jaccardSimilarity(it.name, pmName);
-      if (sim > bestSim) { bestSim = sim; bestItem = it; }
-    }
-    if (bestSim >= 0.6 && bestItem) {
-      itemByName.set(row.productId, bestItem);
-    }
-  }
-
-  const itemsMatched = itemByProductId.size + itemByName.size;
+  const itemsMatched = itemByProductId.size;
 
   let created = 0;
   let skipped = 0;
   let skippedBefore = 0;
 
   for (const row of saleRows) {
-    const item = itemByProductId.get(row.productId) || itemByName.get(row.productId);
+    const item = itemByProductId.get(row.productId);
     if (!item) { skipped++; continue; }
     const docDate = row.docDate ? new Date(row.docDate) : new Date();
     if (docDate < item.createdAt) { skippedBefore++; continue; }

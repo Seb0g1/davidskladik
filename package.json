@@ -9,6 +9,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "build": "cd frontend && npx vite build",
     "inspect:db": "node scripts/inspect-db.js",
     "test": "node --test \"test/**/*.test.cjs\"",
     "audit": "npm audit --omit=dev",

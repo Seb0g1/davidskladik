@@ -1,6 +1,6 @@
 // Telegram-бот для спонсора и Давида.
 // Только на production worker (SERVER_ROLE=worker).
-// Значения в БД в USD → конвертируем через getUsdRate().
+// Значения в БД и в боте — USD.
 
 const SPONSOR_BOT_TOKEN = process.env.SPONSOR_BOT_TOKEN || "";
 const SPONSOR_BOT_PASSWORD = process.env.SPONSOR_BOT_PASSWORD || "";
@@ -88,7 +88,7 @@ async function sbGetRate() {
   }
 }
 
-const F = (n) => Math.round(Number(n) || 0).toLocaleString("ru-RU");
+const F = (n) => (Number(n) || 0).toFixed(2);
 
 // ─── Stats (рабочая логика из b65d6143) ──────────────────────────────────────
 
@@ -103,9 +103,9 @@ async function sbGetStats({ days = 1 } = {}) {
   since.setDate(since.getDate() - (days - 1));
   since.setHours(0, 0, 0, 0);
 
-  let periodOps, allOps, rate;
+  let periodOps, allOps;
   try {
-    [periodOps, allOps, rate] = await Promise.all([
+    [periodOps, allOps] = await Promise.all([
       prisma.consignmentOperation.findMany({
         where: { createdAt: { gte: since }, type: { in: ["sale", "return", "writeoff"] } },
         select: { sponsorDelta: true, myDelta: true, type: true, unitSale: true, quantity: true },
@@ -113,7 +113,6 @@ async function sbGetStats({ days = 1 } = {}) {
       prisma.consignmentOperation.findMany({
         select: { sponsorDelta: true, balanceDelta: true, myDelta: true, type: true },
       }),
-      sbGetRate(),
     ]);
   } catch (err) {
     logger.warn("sponsor_bot_stats_error", {
@@ -126,18 +125,17 @@ async function sbGetStats({ days = 1 } = {}) {
 
   const sales = periodOps.filter((op) => op.type === "sale");
   const returns = periodOps.filter((op) => op.type === "return");
-  const usd = (v) => (Number(v) || 0) * rate;
+  const raw = (v) => Number(v) || 0;
 
   return {
-    rate,
     sales: sales.length,
     returns: returns.length,
-    periodSponsor: usd(periodOps.reduce((s, op) => s + (Number(op.sponsorDelta) || 0), 0)),
-    periodMy: usd(periodOps.reduce((s, op) => s + (Number(op.myDelta) || 0), 0)),
-    periodRevenue: usd(sales.reduce((s, op) => s + (Number(op.unitSale) || 0) * (Number(op.quantity) || 0), 0)),
-    totalBalance: usd(allOps.reduce((s, op) => s + (Number(op.balanceDelta) || 0), 0)),
-    totalSponsor: usd(allOps.reduce((s, op) => s + (Number(op.sponsorDelta) || 0), 0)),
-    totalMy: usd(allOps.reduce((s, op) => s + (Number(op.myDelta) || 0), 0)),
+    periodSponsor: raw(periodOps.reduce((s, op) => s + raw(op.sponsorDelta), 0)),
+    periodMy: raw(periodOps.reduce((s, op) => s + raw(op.myDelta), 0)),
+    periodRevenue: raw(sales.reduce((s, op) => s + raw(op.unitSale) * raw(op.quantity), 0)),
+    totalBalance: raw(allOps.reduce((s, op) => s + raw(op.balanceDelta), 0)),
+    totalSponsor: raw(allOps.reduce((s, op) => s + raw(op.sponsorDelta), 0)),
+    totalMy: raw(allOps.reduce((s, op) => s + raw(op.myDelta), 0)),
     totalSales: allOps.filter((op) => op.type === "sale").length,
   };
 }
@@ -155,12 +153,12 @@ function msgToday(d) {
     d.sales > 0
       ? `✅ Продаж: <b>${d.sales} шт</b>${d.returns > 0 ? `  |  🔄 Возвратов: ${d.returns}` : ``}`
       : `📭 Продаж сегодня нет`,
-    d.sales > 0 ? `💵 Выручка: ${F(d.periodRevenue)} ₽` : ``,
+    d.sales > 0 ? `💵 Выручка: $${F(d.periodRevenue)}` : ``,
     ``,
-    `💰 <b>Ваша доля за день: ${F(d.periodSponsor)} ₽</b>`,
+    `💰 <b>Ваша доля за день: $${F(d.periodSponsor)}</b>`,
     `━━━━━━━━━━━━━━━`,
-    `📈 Накопленный профит: ${F(d.totalSponsor)} ₽`,
-    `💳 Баланс: <b>${F(d.totalBalance)} ₽</b>`,
+    `📈 Накопленный профит: $${F(d.totalSponsor)}`,
+    `💳 Баланс: <b>$${F(d.totalBalance)}</b>`,
   ].filter(Boolean).join("\n");
 }
 
@@ -170,12 +168,12 @@ function msgWeek(d) {
     `📈 <b>Статистика за 7 дней</b>`,
     ``,
     `🛍 Продаж: <b>${d.sales} шт</b>${d.returns > 0 ? `  (возвратов: ${d.returns})` : ``}`,
-    d.sales > 0 ? `💵 Выручка: ${F(d.periodRevenue)} ₽` : ``,
+    d.sales > 0 ? `💵 Выручка: $${F(d.periodRevenue)}` : ``,
     ``,
-    `💰 <b>Ваша доля: ${F(d.periodSponsor)} ₽</b>`,
-    `🔧 Доля магазина: ${F(d.periodMy)} ₽`,
+    `💰 <b>Ваша доля: $${F(d.periodSponsor)}</b>`,
+    `🔧 Доля магазина: $${F(d.periodMy)}`,
     `━━━━━━━━━━━━━━━`,
-    `💳 Баланс сейчас: ${F(d.totalBalance)} ₽`,
+    `💳 Баланс сейчас: $${F(d.totalBalance)}`,
   ].filter(Boolean).join("\n");
 }
 
@@ -184,11 +182,9 @@ function msgBalance(d) {
   return [
     `💰 <b>Баланс</b>`,
     ``,
-    `💳 Текущий баланс:    <b>${F(d.totalBalance)} ₽</b>`,
-    `📈 Накопл. профит:    <b>${F(d.totalSponsor)} ₽</b>`,
+    `💳 Текущий баланс:    <b>$${F(d.totalBalance)}</b>`,
+    `📈 Накопл. профит:    <b>$${F(d.totalSponsor)}</b>`,
     `📦 Всего продаж:      <b>${d.totalSales} шт</b>`,
-    ``,
-    `<i>Курс USD: ${F(d.rate)} ₽</i>`,
   ].join("\n");
 }
 
@@ -199,9 +195,9 @@ function msgWelcomePartner(d) {
     `👋 <b>Добро пожаловать, партнёр!</b>`,
     `<i>${date}</i>`,
     ``,
-    `💳 Баланс: <b>${F(d.totalBalance)} ₽</b>`,
+    `💳 Баланс: <b>$${F(d.totalBalance)}</b>`,
     `📊 Продаж сегодня: <b>${d.sales} шт</b>`,
-    `💰 Ваша доля сегодня: <b>${F(d.periodSponsor)} ₽</b>`,
+    `💰 Ваша доля сегодня: <b>$${F(d.periodSponsor)}</b>`,
     ``,
     `Используйте кнопки меню 👇`,
   ].join("\n");
@@ -215,7 +211,7 @@ function msgWelcomeDavid(d) {
     `<i>${date}</i>`,
     ``,
     `📦 Продаж сегодня: <b>${d.sales} шт</b>`,
-    `💰 Доля партнёра сегодня: <b>${F(d.periodSponsor)} ₽</b>`,
+    `💰 Доля партнёра сегодня: <b>$${F(d.periodSponsor)}</b>`,
     ``,
     `Используйте кнопки меню 👇`,
   ].join("\n");
@@ -227,11 +223,9 @@ function msgDavidStats(d) {
     `📊 <b>Общая статистика</b>`,
     ``,
     `📦 Всего продаж: <b>${d.totalSales} шт</b>`,
-    `💰 Профит партнёра (всего): <b>${F(d.totalSponsor)} ₽</b>`,
-    `🔧 Мой профит (всего): <b>${F(d.totalMy)} ₽</b>`,
-    `💳 Баланс партнёра: <b>${F(d.totalBalance)} ₽</b>`,
-    ``,
-    `<i>Курс USD: ${F(d.rate)} ₽</i>`,
+    `💰 Профит партнёра (всего): <b>$${F(d.totalSponsor)}</b>`,
+    `🔧 Мой профит (всего): <b>$${F(d.totalMy)}</b>`,
+    `💳 Баланс партнёра: <b>$${F(d.totalBalance)}</b>`,
   ].join("\n");
 }
 
@@ -470,8 +464,6 @@ async function notifyDavidAboutSponsorReport(reportUsd) {
     .map(([chatId]) => chatId);
   if (!davidChats.length) return;
 
-  const rate = await sbGetRate();
-  const toRub = (v) => Math.round((Number(v) || 0) * rate).toLocaleString("ru-RU");
   const date = new Date().toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
   const hasSales = (reportUsd.todaySales || 0) > 0;
 
@@ -480,8 +472,8 @@ async function notifyDavidAboutSponsorReport(reportUsd) {
     `<i>${date}</i>`,
     ``,
     hasSales ? `✅ Продаж: <b>${reportUsd.todaySales} шт</b>` : `📭 Продаж сегодня нет`,
-    `💰 Доля партнёра за день: <b>${toRub(reportUsd.todaySponsorProfit)} ₽</b>`,
-    `💳 Баланс партнёра: <b>${toRub(reportUsd.totalBalance)} ₽</b>`,
+    `💰 Доля партнёра за день: <b>$${F(reportUsd.todaySponsorProfit)}</b>`,
+    `💳 Баланс партнёра: <b>$${F(reportUsd.totalBalance)}</b>`,
   ].join("\n");
 
   for (const chatId of davidChats) {

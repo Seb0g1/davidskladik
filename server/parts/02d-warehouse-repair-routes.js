@@ -163,6 +163,115 @@ app.post("/api/warehouse/links/recover-stale-stocks", requireAdmin, async (reque
   }
 });
 
+async function runBulkStaleRecoveryOperation(payload = {}) {
+  const prisma = getPrisma();
+  if (!prisma) throw new Error("Postgres is unavailable.");
+
+  const staleLinks = await prisma.$queryRawUnsafe(`
+      SELECT
+        pl.id                           AS link_id,
+        pl.product_id,
+        pl.supplier_article,
+        pl.partner_id,
+        COALESCE(pl.source_row_id, pl.raw->>'sourceRowId') AS pinned_row_id,
+        pm_new.row_id                  AS new_row_id,
+        wp.id                          AS product_id_str,
+        wp.marketplace
+      FROM product_links pl
+      JOIN warehouse_products wp ON wp.id = pl.product_id
+      LEFT JOIN pm_snapshot_items pm_old
+        ON pm_old.row_id = COALESCE(pl.source_row_id, pl.raw->>'sourceRowId')
+        AND pm_old.partner_id::text = pl.partner_id::text
+      JOIN LATERAL (
+        SELECT pm2.row_id, pm2.price, pm2.doc_date
+        FROM pm_snapshot_items pm2
+        WHERE pm2.article = COALESCE(NULLIF(pl.raw->>'article',''), pl.supplier_article)
+          AND pm2.partner_id::text = pl.partner_id::text
+          AND pm2.active = true
+          AND pm2.price IS NOT NULL AND pm2.price > 0
+        ORDER BY pm2.doc_date DESC, pm2.row_id DESC
+        LIMIT 1
+      ) pm_new ON true
+      WHERE pl.raw->>'matchType' = 'selected_row'
+        AND COALESCE(pl.source_row_id, pl.raw->>'sourceRowId') IS NOT NULL
+        AND COALESCE(pl.source_row_id, pl.raw->>'sourceRowId') != ''
+        AND pm_new.row_id != COALESCE(pl.source_row_id, pl.raw->>'sourceRowId')
+        AND (
+          pm_old.row_id IS NULL
+          OR pm_old.active = false
+          OR pm_old.price IS NULL
+          OR pm_old.price = 0
+        )
+      LIMIT 5000
+    `);
+
+  if (!staleLinks.length) {
+    return { ok: true, found: 0, fixed: 0, productCount: 0, recovered: 0, productIds: [] };
+  }
+
+  let fixed = 0;
+  for (const row of staleLinks) {
+    await prisma.$executeRawUnsafe(`
+      UPDATE product_links
+      SET raw = jsonb_set(
+            jsonb_set(raw, '{sourceRowId}', $1::jsonb),
+            '{resolvedBy}', '"bulk_stale_recovery"'
+          ),
+          source_row_id = $3,
+          updated_at = now()
+      WHERE id = $2
+    `, JSON.stringify(row.new_row_id), row.link_id, row.new_row_id);
+    fixed++;
+  }
+
+  const productIds = [...new Set(staleLinks.map((r) => r.product_id_str))];
+
+  const batchSize = 50;
+  let recovered = 0;
+  for (let i = 0; i < productIds.length; i += batchSize) {
+    const batch = productIds.slice(i, i + batchSize);
+    const fresh = await buildFreshWarehouseProducts(batch, {
+      livePriceMaster: true,
+      batchPriceMaster: true,
+      persistMutations: true,
+      priceMasterTimeoutMs: autoPricePmTimeoutMs,
+    });
+    await runSupplierRecoveryAutomation(
+      { products: fresh },
+      { productIds: batch, source: "bulk_stale_recovery", force: true },
+    );
+    recovered += batch.length;
+  }
+
+  logger.info("bulk_stale_recovery", { found: staleLinks.length, fixed, products: productIds.length, recovered });
+  return { ok: true, found: staleLinks.length, fixed, productCount: productIds.length, recovered, productIds };
+}
+
+app.post("/api/warehouse/links/bulk-stale-recovery", requireAdmin, async (request, response, next) => {
+  try {
+    const job = await upsertOperationJob({
+      id: crypto.randomUUID(),
+      type: "bulk-stale-recovery",
+      title: operationTitle("bulk-stale-recovery"),
+      status: "queued",
+      user: request.session?.username || "system",
+      role: request.session?.role || "admin",
+      payload: {},
+      progress: 0,
+    });
+    startOperationJob(job);
+    return response.status(202).json({
+      ok: true,
+      accepted: true,
+      jobId: job.id,
+      statusUrl: `/api/operations/${job.id}`,
+      job: operationJobPublic(job),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/warehouse/products/repair-weak-ozon", async (request, response, next) => {
   try {
     const limit = Math.max(1, Math.min(1000, Number(request.body?.limit || 400) || 400));

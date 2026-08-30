@@ -181,11 +181,13 @@ export function ConsignmentPage() {
   const [draftItems, setDraftItems] = useState<DraftItem[]>([]);
   const [pmSyncResult, setPmSyncResult] = useState<ConsignmentPmSync | null>(null);
   const [invoicesOpen, setInvoicesOpen] = useState(false);
+  const [invoicePmQuery, setInvoicePmQuery] = useState("");
+  const [invoicePmPage, setInvoicePmPage] = useState(1);
   const [invoiceForm, setInvoiceForm] = useState<{
     supplierName: string;
     note: string;
     lines: Array<{ name: string; article: string; quantity: string; unitPrice: string }>;
-  }>({ supplierName: "", note: "", lines: [{ name: "", article: "", quantity: "1", unitPrice: "" }] });
+  }>({ supplierName: "", note: "", lines: [] });
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["consignment"] });
 
@@ -234,6 +236,15 @@ export function ConsignmentPage() {
     enabled: invoicesOpen,
   });
 
+  const invoicePmNomenclature = useQuery({
+    queryKey: ["consignment", "invoice-pm-nomenclature", invoicePmQuery, invoicePmPage],
+    queryFn: () => fetchJson(
+      `/api/consignment/pm-nomenclature?q=${encodeURIComponent(invoicePmQuery)}&page=${invoicePmPage}&limit=30`,
+      ConsignmentPmNomenclatureSchema,
+    ),
+    enabled: invoicesOpen,
+  });
+
   const createInvoice = useMutation({
     mutationFn: () => fetchJson("/api/consignment/invoices", ConsignmentInvoicesSchema, mutationBody({
       supplierName: invoiceForm.supplierName || null,
@@ -248,7 +259,7 @@ export function ConsignmentPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["consignment", "invoices"] });
       void queryClient.invalidateQueries({ queryKey: ["consignment", "items"] });
-      setInvoiceForm({ supplierName: "", note: "", lines: [{ name: "", article: "", quantity: "1", unitPrice: "" }] });
+      setInvoiceForm({ supplierName: "", note: "", lines: [] });
     },
   });
 
@@ -683,8 +694,8 @@ export function ConsignmentPage() {
                 <div key={product.productId} className="consignment-pm-result" style={{ flexDirection: "column", alignItems: "flex-start", gap: 6 }}>
                   <div style={{ display: "flex", width: "100%", gap: 8, alignItems: "center" }}>
                     <span style={{ minWidth: 60, color: "var(--text-muted)", fontSize: 12 }}>{product.productId}</span>
-                    <span style={{ flex: 1 }}>{product.name || "-"}</span>
-                    <span style={{ minWidth: 80, textAlign: "right" }}>{money(product.purchasePrice)}</span>
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{product.name || "-"}</span>
+                    <span style={{ minWidth: 80, textAlign: "right", flexShrink: 0 }}>{money(product.purchasePrice)}</span>
                     {product.alreadyAdded ? (
                       <span className="badge-success" style={{ fontSize: 11 }}>В реализации</span>
                     ) : (
@@ -701,14 +712,14 @@ export function ConsignmentPage() {
                     )}
                   </div>
                   {pending && (
-                    <div style={{ display: "flex", gap: 8, alignItems: "center", paddingLeft: 68, width: "100%" }}>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", width: "100%" }}>
                       <input
                         type="number"
                         min="0"
                         step="0.01"
                         placeholder="Цена закупки, $"
                         value={pending.purchasePrice}
-                        style={{ width: 140 }}
+                        style={{ width: 120, minWidth: 80, flex: "1 1 80px" }}
                         onChange={(e) => setPmNomenclatureAdding((current) => ({ ...current, [product.productId]: { ...current[product.productId], purchasePrice: e.target.value } }))}
                       />
                       <input
@@ -761,116 +772,181 @@ export function ConsignmentPage() {
       )}
 
       {invoicesOpen && (
-        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) setInvoicesOpen(false); }}>
-          <div className="modal-panel" style={{ maxWidth: 760, width: "100%", maxHeight: "90vh", overflow: "auto" }}>
+        <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) { setInvoicesOpen(false); setInvoicePmQuery(""); setInvoicePmPage(1); } }}>
+          <div className="modal-panel" style={{ maxWidth: 860, width: "100%", maxHeight: "92vh", overflow: "auto", display: "flex", flexDirection: "column", gap: 0 }}>
             <div className="section-title" style={{ marginBottom: 12 }}>
               <div>
                 <span>Реализация</span>
-                <h3>Приходные накладные</h3>
+                <h3>Приходная накладная</h3>
               </div>
-              <button className="icon-action" type="button" onClick={() => setInvoicesOpen(false)}><X size={16} /></button>
+              <button className="icon-action" type="button" onClick={() => { setInvoicesOpen(false); setInvoicePmQuery(""); setInvoicePmPage(1); }}><X size={16} /></button>
             </div>
 
+            {/* Новая накладная */}
             <div style={{ borderBottom: "1px solid var(--border)", paddingBottom: 16, marginBottom: 16 }}>
-              <h4 style={{ marginBottom: 8, fontSize: 14 }}>Новая накладная</h4>
-              <div className="settings-form-row" style={{ marginBottom: 8 }}>
+              <div className="settings-form-row" style={{ marginBottom: 12 }}>
                 <input
                   placeholder="Поставщик (необязательно)"
                   value={invoiceForm.supplierName}
                   onChange={(e) => setInvoiceForm({ ...invoiceForm, supplierName: e.target.value })}
                 />
                 <input
-                  placeholder="Примечание"
+                  placeholder="Примечание к накладной"
                   value={invoiceForm.note}
                   onChange={(e) => setInvoiceForm({ ...invoiceForm, note: e.target.value })}
                 />
               </div>
-              <table style={{ width: "100%", borderCollapse: "collapse", marginBottom: 8, fontSize: 14 }}>
-                <thead>
-                  <tr>
-                    <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 500 }}>Товар</th>
-                    <th style={{ width: 80, textAlign: "center", padding: "4px", fontWeight: 500 }}>Кол-во</th>
-                    <th style={{ width: 110, textAlign: "center", padding: "4px", fontWeight: 500 }}>Цена, $</th>
-                    <th style={{ width: 32 }}></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {invoiceForm.lines.map((line, idx) => (
-                    <tr key={idx}>
-                      <td style={{ padding: "4px 8px" }}>
-                        <input
-                          placeholder="Наименование товара"
-                          style={{ width: "100%" }}
-                          value={line.name}
-                          onChange={(e) => setInvoiceForm(f => ({ ...f, lines: f.lines.map((l, i) => i === idx ? { ...l, name: e.target.value } : l) }))}
-                        />
-                      </td>
-                      <td style={{ padding: "4px" }}>
-                        <input
-                          type="number"
-                          min="1"
-                          style={{ width: "100%", textAlign: "center" }}
-                          value={line.quantity}
-                          onChange={(e) => setInvoiceForm(f => ({ ...f, lines: f.lines.map((l, i) => i === idx ? { ...l, quantity: e.target.value } : l) }))}
-                        />
-                      </td>
-                      <td style={{ padding: "4px" }}>
-                        <input
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          placeholder="0.00"
-                          style={{ width: "100%", textAlign: "center" }}
-                          value={line.unitPrice}
-                          onChange={(e) => setInvoiceForm(f => ({ ...f, lines: f.lines.map((l, i) => i === idx ? { ...l, unitPrice: e.target.value } : l) }))}
-                        />
-                      </td>
-                      <td>
-                        <button
-                          className="icon-action"
-                          type="button"
-                          title="Удалить строку"
-                          onClick={() => setInvoiceForm(f => ({ ...f, lines: f.lines.filter((_, i) => i !== idx) }))}
-                        >
-                          <X size={14} />
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center" }}>
-                <button
-                  className="secondary-action"
-                  type="button"
-                  onClick={() => setInvoiceForm(f => ({ ...f, lines: [...f.lines, { name: "", article: "", quantity: "1", unitPrice: "" }] }))}
-                >
-                  <Plus size={14} /> Добавить строку
-                </button>
-                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                  <span className="muted-note">
-                    Итого: {money(invoiceForm.lines.reduce((s, l) => s + (Number(l.unitPrice) || 0) * (Number(l.quantity) || 0), 0))}
-                  </span>
-                  <button
-                    className="primary-action"
-                    type="button"
-                    disabled={createInvoice.isPending || !invoiceForm.lines.some(l => l.name.trim())}
-                    onClick={() => createInvoice.mutate()}
-                  >
-                    {createInvoice.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Провести
-                  </button>
+
+              {/* PM-номенклатура: выбор товаров */}
+              <div style={{ marginBottom: 12, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                <div style={{ background: "var(--bg-secondary, #f5f5f5)", padding: "8px 12px", display: "flex", gap: 8, alignItems: "center" }}>
+                  <Search size={14} />
+                  <input
+                    placeholder="Поиск по номенклатуре PM (название или ID)"
+                    value={invoicePmQuery}
+                    onChange={(e) => { setInvoicePmQuery(e.target.value); setInvoicePmPage(1); }}
+                    style={{ flex: 1, background: "transparent", border: "none", outline: "none" }}
+                  />
                 </div>
+                <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                  {invoicePmNomenclature.isLoading && <div className="empty-state" style={{ padding: 12 }}>Загрузка номенклатуры…</div>}
+                  {(invoicePmNomenclature.data?.items || []).map((product) => {
+                    const alreadyInLines = invoiceForm.lines.some(l => l.article === `pm:${product.productId}`);
+                    return (
+                      <div
+                        key={product.productId}
+                        style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 12px", borderBottom: "1px solid var(--border-light, #eee)", cursor: alreadyInLines ? "default" : "pointer" }}
+                        onClick={() => {
+                          if (alreadyInLines) return;
+                          setInvoiceForm(f => ({
+                            ...f,
+                            lines: [...f.lines, {
+                              name: product.name,
+                              article: `pm:${product.productId}`,
+                              quantity: "1",
+                              unitPrice: String(product.purchasePrice || ""),
+                            }],
+                          }));
+                        }}
+                      >
+                        <span style={{ minWidth: 52, color: "var(--text-muted)", fontSize: 11 }}>{product.productId}</span>
+                        <span style={{ flex: 1, fontSize: 13, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{product.name || "-"}</span>
+                        <span style={{ minWidth: 72, textAlign: "right", fontSize: 13, color: "var(--text-muted)", flexShrink: 0 }}>{money(product.purchasePrice)}</span>
+                        {alreadyInLines
+                          ? <span style={{ fontSize: 11, color: "var(--text-muted)", flexShrink: 0 }}>✓ добавлен</span>
+                          : <span style={{ fontSize: 11, color: "var(--accent, #6366f1)", flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 2 }}><Plus size={12} /> выбрать</span>}
+                      </div>
+                    );
+                  })}
+                  {!invoicePmNomenclature.isLoading && !(invoicePmNomenclature.data?.items || []).length && (
+                    <div className="empty-state" style={{ padding: 12 }}>Ничего не найдено.</div>
+                  )}
+                </div>
+                {(invoicePmNomenclature.data?.total ?? 0) > 0 && (
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 12px", background: "var(--bg-secondary, #f5f5f5)", fontSize: 12 }}>
+                    <span className="muted-note">Всего: {invoicePmNomenclature.data?.total} товаров</span>
+                    <div className="row-actions">
+                      <button className="secondary-action" type="button" style={{ padding: "2px 8px", fontSize: 12 }} disabled={invoicePmPage <= 1} onClick={() => setInvoicePmPage(p => p - 1)}>← Пред.</button>
+                      <span className="muted-note">стр. {invoicePmPage}</span>
+                      <button className="secondary-action" type="button" style={{ padding: "2px 8px", fontSize: 12 }} disabled={!invoicePmNomenclature.data?.hasMore} onClick={() => setInvoicePmPage(p => p + 1)}>След. →</button>
+                    </div>
+                  </div>
+                )}
               </div>
-              {createInvoice.isSuccess && <div className="success-strip" style={{ marginTop: 8 }}>Накладная проведена.</div>}
+
+              {/* Строки накладной */}
+              {invoiceForm.lines.length > 0 && (
+                <>
+                  <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", minWidth: 380, borderCollapse: "collapse", marginBottom: 8, fontSize: 14 }}>
+                    <thead>
+                      <tr>
+                        <th style={{ textAlign: "left", padding: "4px 8px", fontWeight: 500 }}>Товар</th>
+                        <th style={{ width: 80, textAlign: "center", padding: "4px", fontWeight: 500 }}>Кол-во</th>
+                        <th style={{ width: 110, textAlign: "center", padding: "4px", fontWeight: 500 }}>Цена, $</th>
+                        <th style={{ width: 32 }}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {invoiceForm.lines.map((line, idx) => (
+                        <tr key={idx}>
+                          <td style={{ padding: "4px 8px" }}>
+                            <div style={{ fontSize: 13 }}>{line.name || "-"}</div>
+                            {line.article && <div style={{ fontSize: 11, color: "var(--text-muted)" }}>{line.article}</div>}
+                          </td>
+                          <td style={{ padding: "4px" }}>
+                            <input
+                              type="number"
+                              min="1"
+                              style={{ width: "100%", textAlign: "center" }}
+                              value={line.quantity}
+                              onChange={(e) => setInvoiceForm(f => ({ ...f, lines: f.lines.map((l, i) => i === idx ? { ...l, quantity: e.target.value } : l) }))}
+                            />
+                          </td>
+                          <td style={{ padding: "4px" }}>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              placeholder="0.00"
+                              style={{ width: "100%", textAlign: "center" }}
+                              value={line.unitPrice}
+                              onChange={(e) => setInvoiceForm(f => ({ ...f, lines: f.lines.map((l, i) => i === idx ? { ...l, unitPrice: e.target.value } : l) }))}
+                            />
+                          </td>
+                          <td>
+                            <button
+                              className="icon-action"
+                              type="button"
+                              title="Удалить строку"
+                              onClick={() => setInvoiceForm(f => ({ ...f, lines: f.lines.filter((_, i) => i !== idx) }))}
+                            >
+                              <X size={14} />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, justifyContent: "space-between", alignItems: "center", flexWrap: "wrap" }}>
+                    <span className="muted-note">
+                      {invoiceForm.lines.length} поз. · Итого: {money(invoiceForm.lines.reduce((s, l) => s + (Number(l.unitPrice) || 0) * (Number(l.quantity) || 0), 0))}
+                    </span>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <button
+                        className="secondary-action"
+                        type="button"
+                        onClick={() => setInvoiceForm(f => ({ ...f, lines: [] }))}
+                      >
+                        <Trash2 size={14} /> Очистить список
+                      </button>
+                      <button
+                        className="primary-action"
+                        type="button"
+                        disabled={createInvoice.isPending || !invoiceForm.lines.some(l => l.name.trim())}
+                        onClick={() => createInvoice.mutate()}
+                      >
+                        {createInvoice.isPending ? <Loader2 className="spin" size={14} /> : <Check size={14} />} Провести накладную
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+              {!invoiceForm.lines.length && (
+                <div className="empty-state">Выберите товары из списка номенклатуры выше.</div>
+              )}
+              {createInvoice.isSuccess && <div className="success-strip" style={{ marginTop: 8 }}>Накладная проведена. Остатки обновлены.</div>}
               {createInvoice.isError && <div className="inline-error" style={{ marginTop: 8 }}>{errorMessage(createInvoice.error)}</div>}
             </div>
 
+            {/* История накладных */}
             <div>
               <h4 style={{ marginBottom: 8, fontSize: 14 }}>История накладных</h4>
               {invoicesList.isLoading && <div className="empty-state">Загрузка…</div>}
               {(invoicesList.data?.invoices || []).map((inv) => (
                 <div key={inv.id} style={{ borderBottom: "1px solid var(--border)", paddingBottom: 8, marginBottom: 8 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", flexWrap: "wrap", gap: 4 }}>
                     <strong style={{ fontSize: 14 }}>{inv.number}</strong>
                     <span className="muted-note">{inv.createdAt ? new Date(inv.createdAt).toLocaleDateString("ru-RU") : ""}</span>
                   </div>
@@ -1111,7 +1187,7 @@ export function ConsignmentPage() {
             <span>Склад реализации</span>
             <h3>Товары ({items.data?.items?.length || 0})</h3>
           </div>
-          <input placeholder="Поиск: название, артикул, поставщик" value={itemSearch} onChange={(event) => setItemSearch(event.target.value)} />
+          <input placeholder="Поиск: название, артикул, поставщик" value={itemSearch} onChange={(event) => setItemSearch(event.target.value)} style={{ minWidth: 0, flex: "1 1 160px" }} />
         </div>
         <div className="table-head">
           <span>Товар</span><span>Артикул</span><span>Поставщик</span><span>Закупка</span><span>Продажа</span><span>Кол-во</span><span>Сумма (закупка)</span><span>Действия</span>

@@ -783,7 +783,8 @@ function PmHistoryPanel() {
       {!docs.length ? (
         <div style={{ padding: "0 12px", color: "var(--text-secondary)" }}>Нет отправленных корзин.</div>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", minWidth: 480, borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ borderBottom: "1px solid var(--border)" }}>
               <th style={{ padding: "4px 12px", textAlign: "left", color: "var(--text-secondary)", fontWeight: 500 }}>Дата</th>
@@ -805,6 +806,7 @@ function PmHistoryPanel() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );
@@ -879,7 +881,7 @@ export function SupplierCartPage() {
         title="Автокорзина"
         subtitle={`Заказы ${activeMarketplaces.map((m) => m === "wb" ? "Wildberries" : m === "yandex" ? "Yandex Market" : "Ozon").join(", ")} автоматически отправляются в корзину PriceMaster по расписанию.`}
         action={
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
               className={`secondary-action${pmSearchOpen ? " active" : ""}`}
               type="button"

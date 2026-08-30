@@ -45,6 +45,7 @@ function operationTitle(type = "") {
     "brand-index-rebuild": "Rebuild brand index",
     "health-deep": "Deep health check",
     "restore-yandex-markups": "Восстановить наценки Яндекса из истории цен",
+    "bulk-stale-recovery": "Массовая починка стальных привязок PM",
   };
   return titles[type] || type || "Operation";
 }

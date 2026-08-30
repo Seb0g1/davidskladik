@@ -143,6 +143,15 @@ async function runOperationPayload(job, options = {}) {
     });
     return result;
   }
+  if (job.type === "bulk-stale-recovery") {
+    const result = await runBulkStaleRecoveryOperation(job.payload || {});
+    await appendAudit(auditRequest, "warehouse.links.bulk_stale_recovery", {
+      entityType: "warehouse_stale_links",
+      entityId: "all",
+      newValue: result,
+    });
+    return result;
+  }
   if (job.type === "repair-pricemaster-group-links") {
     const result = await runPriceMasterGroupLinksRepairOperation(job.payload || {}, options);
     await appendAudit(auditRequest, "warehouse.links.repair_group", {
