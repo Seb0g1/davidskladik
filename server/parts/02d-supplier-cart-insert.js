@@ -127,11 +127,24 @@ async function confirmMarketplaceOrdersAfterInsert(inserted = []) {
 }
 
 async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, options = {}) {
-  const readyRows = rows.map(normalizeSupplierCartPreviewRow).filter((row) => row.ready && !row.alreadyCommitted && row.offerRowId && row.partnerId);
-  if (!readyRows.length) return { inserted: [], skipped: rows.length, docIds: [] };
+  const allNormalized = rows.map(normalizeSupplierCartPreviewRow);
+  const readyRows = allNormalized.filter((row) => row.ready && !row.alreadyCommitted && row.offerRowId && row.partnerId);
+  const skippedNotReady = allNormalized
+    .filter((row) => !row.ready || row.alreadyCommitted || !row.offerRowId || !row.partnerId)
+    .map((row) => ({
+      key: row.key,
+      offerId: row.offerId,
+      productName: row.productName,
+      skipReason: row.skipReason || (row.alreadyCommitted ? "already_committed" : !row.ready ? "not_ready" : !row.offerRowId ? "no_offer_row_id" : "no_partner_id"),
+    }));
+  if (!readyRows.length) return { inserted: [], skipped: rows.length, skippedDetails: skippedNotReady, docIds: [] };
   const state = await readSupplierCartState();
   const freshRows = readyRows.filter((row) => !state.processed?.[row.key]);
-  if (!freshRows.length) return { inserted: [], skipped: readyRows.length, docIds: [] };
+  const staleSkipped = readyRows
+    .filter((row) => state.processed?.[row.key])
+    .map((row) => ({ key: row.key, offerId: row.offerId, productName: row.productName, skipReason: "already_in_state" }));
+  const skippedDetails = [...skippedNotReady, ...staleSkipped];
+  if (!freshRows.length) return { inserted: [], skipped: readyRows.length, skippedDetails, docIds: [] };
 
   // Items returned from ПВЗ: use physical stock instead of re-ordering from PM
   const pickingStateCheck = await readSupplierPickingState();
@@ -158,6 +171,7 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
   }
   const connection = await pool.getConnection();
   const inserted = [];
+  const pmBlocked = [];
   const docIds = [];
   let verification = null;
   let lockAcquired = false;
@@ -213,13 +227,24 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
         // entry — covers both open (Sended=0) and in-transit (Sended=1) orders so we don't
         // re-order while the supplier is still processing or shipping the goods.
         const [[existingRow]] = await connection.query(
-          `SELECT rr.RowID FROM RequestRows rr
+          `SELECT rr.RowID, rd.DocID, rd.Sended, rd.DocDate FROM RequestRows rr
            JOIN RequestDocs rd ON rd.DocID = rr.DocID
            WHERE rr.OfferRowID = ? AND rd.PartnerID = ? AND rd.Recieved = 0`,
           [Number(entry.offerRowId), Number(partnerId)],
         );
         if (existingRow?.RowID) {
-          logger.info("supplier_cart_insert_skipped_duplicate", { offerRowId: entry.offerRowId, partnerId, existingRowId: existingRow.RowID });
+          logger.info("supplier_cart_insert_skipped_duplicate", { offerRowId: entry.offerRowId, partnerId, existingRowId: existingRow.RowID, existingDocId: existingRow.DocID });
+          pmBlocked.push({
+            offerId: entry.offerId,
+            productName: entry.productName || "",
+            offerRowId: entry.offerRowId,
+            partnerId,
+            existingRowId: Number(existingRow.RowID),
+            existingDocId: Number(existingRow.DocID),
+            existingDocSended: Number(existingRow.Sended),
+            existingDocDate: existingRow.DocDate ? String(existingRow.DocDate).slice(0, 10) : "",
+            sourceRows: entry.sourceRows,
+          });
           continue;
         }
         const requestRowId = nextRowId++;
@@ -287,6 +312,31 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
       committedAt: row.committedAt,
       committedBy: requestUsername(request),
     };
+  }
+  // Sync pmBlocked items into state.processed so the draft shows them as alreadyCommitted.
+  // This reconciles cases where the PM insert succeeded but the Postgres state write failed.
+  const syncedAt = new Date().toISOString();
+  for (const blocked of pmBlocked) {
+    for (const sourceRow of blocked.sourceRows || []) {
+      const normalized = normalizeSupplierCartPreviewRow(sourceRow);
+      if (!normalized.key || nextState.processed?.[normalized.key]) continue;
+      nextState.processed[normalized.key] = {
+        key: normalized.key,
+        marketplace: normalized.marketplace,
+        orderId: normalized.orderId,
+        postingNumber: normalized.postingNumber,
+        offerId: blocked.offerId,
+        quantity: normalized.quantity,
+        warehouseProductId: normalized.warehouseProductId,
+        supplierName: normalized.supplierName,
+        partnerId: blocked.partnerId,
+        offerRowId: blocked.offerRowId,
+        requestDocId: String(blocked.existingDocId),
+        requestRowId: String(blocked.existingRowId),
+        committedAt: syncedAt,
+        committedBy: "pm_sync",
+      };
+    }
   }
   if (nextState.draft?.rows?.length) {
     const processedByKey = nextState.processed || {};
@@ -389,17 +439,44 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
     }
   }
 
-  const marketplaceConfirms = await confirmMarketplaceOrdersAfterInsert(inserted).catch((error) => {
-    logger.warn("marketplace order confirmation after insert failed", { detail: error?.message || String(error) });
-    return [];
+  // Create picking rows for pmBlocked items (already in PM, state desync recovery).
+  // These items were not inserted (PM dedup blocked them) but may be missing picking rows
+  // if a previous crash interrupted state write after PM commit.
+  const blockedSourceRows = pmBlocked.flatMap((b) =>
+    (b.sourceRows || []).map((row) => ({
+      ...normalizeSupplierCartPreviewRow(row),
+      requestDocId: String(b.existingDocId || ""),
+      requestRowId: String(b.existingRowId || ""),
+    })),
+  );
+  const pickingBlockedCreated = blockedSourceRows.length
+    ? await createSupplierPickingRows(blockedSourceRows, request, options)
+    : [];
+
+  // Run marketplace confirmations (Ozon ship, Yandex status, WB supply) in the background
+  // so the HTTP response is not blocked by slow external API calls.
+  // Also confirm orders for pmBlocked items that were auto-synced (previously committed to PM
+  // but marketplace was never notified — state write failed at the time of the original commit).
+  const syncedRows = pmBlocked.flatMap((b) => b.sourceRows || []);
+  const toConfirm = [...inserted, ...syncedRows];
+  setImmediate(() => {
+    confirmMarketplaceOrdersAfterInsert(toConfirm).catch((error) => {
+      logger.warn("marketplace order confirmation after insert failed", { detail: error?.message || String(error) });
+    });
   });
   return {
     inserted,
     skipped: readyRows.length - inserted.length - returnCoveredRows.length,
+    skippedDetails,
+    pmBlocked,
     returnClaimed,
     docIds,
-    pickingCreated: [...(Array.isArray(pickingCreated) ? pickingCreated : []), ...returnClaimed],
-    marketplaceConfirms,
+    pickingCreated: [
+      ...(Array.isArray(pickingCreated) ? pickingCreated : []),
+      ...returnClaimed,
+      ...pickingBlockedCreated,
+    ],
+    marketplaceConfirms: [],
     verification,
   };
 }
@@ -431,7 +508,10 @@ async function snoozeSupplierLinkForPickingRow(row = {}, days = 7) {
 
 function supplierCartSourceKeyForPickingRow(row = {}) {
   const normalized = normalizeSupplierPickingRow(row);
-  return cleanText(normalized.replacementFor || normalized.key.replace(/\|retry:.+$/, ""));
+  // Strip :uN unit suffix (and any trailing |retry:... on the same unit) then strip any bare |retry:...
+  // so we always land on the original cart-draft key regardless of how many replacements have happened.
+  const base = normalized.replacementFor || normalized.key;
+  return cleanText(base.replace(/:u\d+(?:\|retry:[^|]*)?$/, "").replace(/\|retry:[^|]*$/, ""));
 }
 
 async function deactivateSupplierBlockForPickingRow(row = {}, request = null) {

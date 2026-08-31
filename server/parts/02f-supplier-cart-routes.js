@@ -63,15 +63,117 @@ app.patch("/api/supplier-cart/schedule", requireAdmin, async (request, response,
   }
 });
 
+// Background generate tracking — cross-process detection via draft generatedAt timestamp
+let _cartGenerating = false;
+let _cartGeneratingAt = null;
+let _cartGenerateTriggeredAt = null; // draft.generatedAt at the moment we triggered generation
+let _cartGenerateJobId = null; // BullMQ job ID for failure detection
+const _CART_GENERATE_TIMEOUT_MS = 2 * 60 * 1000; // auto-clear stale flag after 2 min
+
+app.get("/api/supplier-cart/generating", requireAdmin, async (_request, response) => {
+  if (!_cartGenerating) return response.json({ generating: false, startedAt: null });
+  // Auto-clear if timed out
+  if (_cartGeneratingAt && Date.now() - new Date(_cartGeneratingAt).getTime() > _CART_GENERATE_TIMEOUT_MS) {
+    _cartGenerating = false;
+    _cartGeneratingAt = null;
+    _cartGenerateTriggeredAt = null;
+    _cartGenerateJobId = null;
+    return response.json({ generating: false, startedAt: null });
+  }
+  // Detect BullMQ job failure early (avoids waiting for the full timeout)
+  if (_cartGenerateJobId && marketplaceQueue) {
+    try {
+      const job = await marketplaceQueue.getJob(_cartGenerateJobId);
+      if (job && await job.isFailed()) {
+        const failReason = job.failedReason || "unknown";
+        logger.warn("supplier cart generate job failed", { jobId: _cartGenerateJobId, reason: failReason });
+        _cartGenerating = false;
+        _cartGeneratingAt = null;
+        _cartGenerateTriggeredAt = null;
+        _cartGenerateJobId = null;
+        return response.json({ generating: false, startedAt: null, error: "Генерация завершилась с ошибкой. Попробуйте снова." });
+      }
+    } catch (_) {}
+  }
+  // Cross-process: detect worker completion by checking if draft's generatedAt has advanced
+  try {
+    const state = await readSupplierCartState();
+    const draftAt = state.draft?.generatedAt || null;
+    const completed = _cartGenerateTriggeredAt
+      ? (draftAt && draftAt > _cartGenerateTriggeredAt)
+      : Boolean(draftAt); // first-ever generation: done when any draft exists
+    if (completed) {
+      _cartGenerating = false;
+      _cartGeneratingAt = null;
+      _cartGenerateTriggeredAt = null;
+      _cartGenerateJobId = null;
+      return response.json({ generating: false, startedAt: null });
+    }
+  } catch (_) {}
+  response.json({ generating: _cartGenerating, startedAt: _cartGeneratingAt });
+});
+
 app.post("/api/supplier-cart/generate", requireAdmin, async (request, response, next) => {
   try {
-    const preview = await generateSupplierCartDraft({
+    // Return current cached draft immediately; generation runs in worker via BullMQ
+    const state = await readSupplierCartState();
+    const rows = state.draft?.rows || [];
+    const ready = rows.filter((r) => r.ready && !r.alreadyCommitted).length;
+    const alreadyCommitted = rows.filter((r) => r.alreadyCommitted).length;
+    response.json({
+      ok: true,
+      generating: true,
+      draftId: state.draft?.id || "",
+      generatedAt: state.draft?.generatedAt || null,
+      generatedBy: state.draft?.generatedBy || "",
+      rows,
+      total: rows.length,
+      ready,
+      skipped: rows.length - ready - alreadyCommitted,
+      alreadyCommitted,
+      warnings: state.draft?.summary?.warnings || [],
+    });
+
+    if (_cartGenerating) return; // already running
+    _cartGenerating = true;
+    _cartGeneratingAt = new Date().toISOString();
+    _cartGenerateTriggeredAt = state.draft?.generatedAt || null;
+    _cartGenerateJobId = null;
+    const params = {
       marketplace: request.body?.marketplace || request.query.marketplace,
       from: request.body?.from || request.query.from,
       to: request.body?.to || request.query.to,
       limit: request.body?.limit || request.query.limit,
-    }, request);
-    response.json(preview);
+    };
+    const username = requestUsername(request);
+    // Enqueue in worker process to avoid blocking the API event loop
+    const enqueued = await enqueueMarketplaceJobAccepted(
+      "supplier-cart-generate", // USER_ACTION: jumps ahead of DEFAULT but not price/recovery
+      { params, username },
+      { priority: QUEUE_PRIORITY.USER_ACTION },
+    ).catch((err) => {
+      logger.warn("supplier cart enqueue failed", { detail: err?.message || String(err) });
+      return null;
+    });
+    // Track job ID for failure detection in /generating
+    if (enqueued?.id) _cartGenerateJobId = String(enqueued.id);
+    const usedQueue = enqueued && enqueued !== null && enqueued?.queueUnavailable !== true;
+    if (!usedQueue) {
+      // Queue unavailable — fall back to API-local background (best effort)
+      logger.warn("supplier cart generate: queue unavailable, running inline in API process");
+      setImmediate(async () => {
+        try {
+          await generateSupplierCartDraft(params, request);
+          logger.info("supplier cart inline generate complete");
+        } catch (err) {
+          logger.warn("supplier cart inline generate failed", { detail: err?.message || String(err) });
+        } finally {
+          _cartGenerating = false;
+          _cartGeneratingAt = null;
+          _cartGenerateTriggeredAt = null;
+        }
+      });
+    }
   } catch (error) {
     next(error);
   }
@@ -92,6 +194,8 @@ app.post("/api/supplier-cart/commit", requireAdmin, async (request, response, ne
       ok: true,
       inserted: result.inserted.length,
       skipped: result.skipped,
+      skippedDetails: result.skippedDetails || [],
+      pmBlocked: result.pmBlocked || [],
       docIds: result.docIds,
       pickingCreated: result.pickingCreated?.length || 0,
       verifiedInPriceMaster: Boolean(result.verification?.ok),
@@ -257,103 +361,105 @@ app.post("/api/supplier-cart/manual-order", requireAdmin, async (request, respon
   }
 });
 
-// Поиск товаров в снапшоте PriceMaster по названию/артикулу
+// Поиск товаров PriceMaster по названию/артикулу — запрашивает live MySQL напрямую.
+// Снапшот Postgres не используется: он устаревает и скрывает товары с Active=0.
 app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, next) => {
   try {
     const q = cleanText(request.query.q || "").toLowerCase();
     const partnerId = cleanText(request.query.partnerId || "");
     const limit = cleanLimit(request.query.limit, 80, 200);
-    const prisma = getPrisma();
-    if (!prisma) return response.status(503).json({ ok: false, error: "Database not available" });
-    const baseWhere = { active: true, price: { not: null, gt: 0 } };
-    if (partnerId) baseWhere.partnerId = partnerId;
 
     const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
-    function buildWhere(groups) {
-      if (groups && groups.length) {
-        // AND across token groups, OR within each group — mirrors the MySQL live search.
-        // AND logic means each additional chip NARROWS results, so all non-compound groups
-        // participate in SQL (not just "required" ones). This prevents the LIMIT window
-        // from being filled by single-keyword matches when the target needs multiple terms.
-        //
-        // Compound tokens (e.g. "BOD13" from query "BOD13") are OR'd against the AND block
-        // so that an exact article code match is always fetched even if the token-split AND
-        // conditions would fill the fetch window with false positives.
-        const sqlGroups = groups.filter((g) => !g._compound);
-        const compoundGroups = groups.filter((g) => g._compound);
 
-        const compoundOrTerms = compoundGroups.flatMap((g) => g.flatMap((synonym) => [
-          { nativeName: { contains: synonym, mode: "insensitive" } },
-          { article: { contains: synonym, mode: "insensitive" } },
-        ]));
+    // Query live MySQL directly — always fresh, includes active=0 rows (marked _unavailable).
+    let items = [];
+    if (pool) {
+      try {
+        const params = [];
+        const conditions = ["r.Ignored = 0"];
 
-        if (sqlGroups.length) {
-          const andClauses = sqlGroups.map((group) => ({
-            OR: group.flatMap((synonym) => [
-              { nativeName: { contains: synonym, mode: "insensitive" } },
-              { article: { contains: synonym, mode: "insensitive" } },
-            ]),
-          }));
-          if (compoundOrTerms.length) {
-            // (AND of split tokens) OR (compound whole-code match)
-            return { ...baseWhere, OR: [{ AND: andClauses }, ...compoundOrTerms] };
+        if (q) {
+          if (tokenGroups && tokenGroups.length) {
+            // AND across token groups, OR within each group (synonyms).
+            // Compound tokens (e.g. "BOD13") are OR'd against the AND block so
+            // exact article codes always reach the JS post-filter.
+            const sqlGroups = tokenGroups.filter((g) => !g._compound);
+            const compoundGroups = tokenGroups.filter((g) => g._compound);
+
+            const andParts = sqlGroups.map((group) => {
+              const conds = group.flatMap(() => ["r.NativeName LIKE ?", "r.NativeID LIKE ?"]);
+              params.push(...group.flatMap((t) => [likeSearch(t), likeSearch(t)]));
+              return `(${conds.join(" OR ")})`;
+            });
+            const compoundConds = compoundGroups.flatMap((g) => {
+              params.push(likeSearch(g[0]), likeSearch(g[0]));
+              return ["r.NativeName LIKE ?", "r.NativeID LIKE ?"];
+            });
+
+            if (andParts.length && compoundConds.length) {
+              conditions.push(`((${andParts.join(" AND ")}) OR (${compoundConds.join(" OR ")}))`);
+            } else if (andParts.length) {
+              for (const part of andParts) conditions.push(part);
+            } else if (compoundConds.length) {
+              conditions.push(`(${compoundConds.join(" OR ")})`);
+            }
+          } else {
+            conditions.push("(r.NativeName LIKE ? OR r.NativeID LIKE ?)");
+            params.push(likeSearch(q), likeSearch(q));
           }
-          return { ...baseWhere, AND: andClauses };
         }
-        // Only compound groups (no non-compound split tokens).
-        return compoundOrTerms.length ? { ...baseWhere, OR: compoundOrTerms } : baseWhere;
-      }
-      if (q) {
-        return { ...baseWhere, OR: [
-          { nativeName: { contains: q, mode: "insensitive" } },
-          { article: { contains: q, mode: "insensitive" } },
-        ] };
-      }
-      return baseWhere;
-    }
 
-    const sel = { id: true, rowId: true, article: true, partnerId: true, partnerName: true, nativeName: true, price: true, currency: true, docDate: true };
-    // AND-based SQL pre-filter is now precise enough that a smaller candidate pool suffices.
-    // Take limit*10 (cap 1500) to cover duplicate rows per partner per day.
-    let items = await prisma.priceMasterSnapshotItem.findMany({ where: buildWhere(tokenGroups), orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }], take: Math.min(limit * 10, 1500), select: sel });
+        if (partnerId) {
+          conditions.push("d.PartnerID = ?");
+          params.push(partnerId);
+        }
 
-    // Post-filter: apply quality bar (required keywords must match; numbers/units are optional).
-    if (tokenGroups && tokenGroups.length >= 1) {
-      items = items.filter((item) => {
-        const hay = [cleanText(item.nativeName || ""), cleanText(item.article || "")].join(" ");
-        return pmPassesSearchFilter(hay, tokenGroups);
-      });
-    }
+        // Fetch limit*10 (cap 2000) to allow de-dup and post-filter, then slice to limit.
+        params.push(Math.min(limit * 10, 2000));
 
-    // Fuzzy fallback: when exact search finds very few results (likely a typo), try word_similarity.
-    if (items.length < 3 && q && tokenGroups && tokenGroups.length) {
-      const fuzzy = await fuzzySearchPmSnapshotItems(prisma, tokenGroups, limit);
-      const existingIds = new Set(items.map((i) => i.id));
-      for (const fr of fuzzy) {
-        if (existingIds.has(fr.id)) continue;
-        const hay = [cleanText(fr.nativeName || ""), cleanText(fr.article || "")].join(" ");
-        if (pmPassesSearchFilterFuzzy(hay, tokenGroups)) items.push(fr);
-      }
-    }
+        const [liveRows] = await pool.query(
+          `SELECT r.RowID AS rowId, r.NativeID AS article, r.NativeName AS nativeName,
+                  r.NativePrice AS price, r.Active AS active, d.DocDate AS docDate,
+                  d.PartnerID AS partnerId, p.PartnerName AS partnerName
+           FROM OfferRows r
+           JOIN OfferDocs d ON d.DocID = r.DocID
+           LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+           WHERE ${conditions.join(" AND ")}
+           ORDER BY d.DocDate DESC, r.RowID DESC
+           LIMIT ?`,
+          params,
+        );
 
-    // Last-resort LIKE fallback: if tokenised/fuzzy search found nothing, broaden to a simple
-    // LIKE '%q%' on article and nativeName. Catches codes with unusual formats or products that
-    // don't pass the word-boundary post-filter but exist as exact substrings.
-    if (!items.length && q) {
-      const sel2 = { id: true, rowId: true, article: true, partnerId: true, partnerName: true, nativeName: true, price: true, currency: true, docDate: true };
-      const likeWhere = { ...baseWhere, OR: [
-        { nativeName: { contains: q, mode: "insensitive" } },
-        { article: { contains: q, mode: "insensitive" } },
-      ] };
-      const likeItems = await prisma.priceMasterSnapshotItem.findMany({
-        where: likeWhere,
-        orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],
-        take: limit,
-        select: sel2,
-      });
-      const existingIds = new Set(items.map((i) => i.id));
-      for (const li of likeItems) {
-        if (!existingIds.has(li.id)) items.push(li);
+        // De-duplicate: keep only the newest row per partner+article combination.
+        const seenOffer = new Set();
+        for (const row of liveRows) {
+          const offerKey = `${cleanText(row.partnerId)}|${cleanText(row.article || "").toLowerCase()}`;
+          if (seenOffer.has(offerKey)) continue;
+          seenOffer.add(offerKey);
+          items.push({
+            id: `live_${cleanText(row.rowId)}`,
+            rowId: cleanText(row.rowId || ""),
+            article: cleanText(row.article || ""),
+            partnerId: cleanText(row.partnerId || ""),
+            partnerName: cleanText(row.partnerName || ""),
+            nativeName: cleanText(row.nativeName || ""),
+            price: String(row.price ?? ""),
+            currency: "USD",
+            docDate: row.docDate || null,
+            active: Boolean(row.active),
+            _unavailable: !row.active,
+          });
+        }
+
+        // Post-filter: apply quality bar (required keywords must match; numbers/units optional).
+        if (tokenGroups && tokenGroups.length >= 1) {
+          items = items.filter((item) => {
+            const hay = [cleanText(item.nativeName || ""), cleanText(item.article || "")].join(" ");
+            return pmPassesSearchFilter(hay, tokenGroups);
+          });
+        }
+      } catch (mysqlErr) {
+        logger.warn("pm-search MySQL query failed", { detail: mysqlErr?.message || String(mysqlErr) });
       }
     }
 
@@ -417,6 +523,7 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
         priceRub: toRub(price, currency, partnerName),
         isTester: isTesterName(item.nativeName || ""),
         docDate: item.docDate?.toISOString?.()?.slice(0, 10) || null,
+        unavailable: Boolean(item._unavailable),
         _relevance: computeRelevance(name, article),
       };
     });
@@ -445,13 +552,28 @@ app.post("/api/supplier-cart/pm-manual-commit", requireAdmin, async (request, re
     const prisma = getPrisma();
     if (!prisma) return response.status(503).json({ ok: false, error: "Database not available" });
     const ids = [...new Set(items.map((i) => cleanText(i.id)).filter(Boolean))];
-    const snapshotRows = await prisma.priceMasterSnapshotItem.findMany({
-      where: { id: { in: ids }, active: true },
-    });
+    // Only look up Postgres snapshot for non-live IDs (live_xxx come from MySQL fallback)
+    const snapshotIds = ids.filter((id) => !id.startsWith("live_"));
+    const snapshotRows = snapshotIds.length
+      ? await prisma.priceMasterSnapshotItem.findMany({ where: { id: { in: snapshotIds } } })
+      : [];
     const snapById = new Map(snapshotRows.map((r) => [r.id, r]));
     const cartRows = items
       .map((item) => {
-        const snap = snapById.get(cleanText(item.id));
+        const itemId = cleanText(item.id);
+        let snap = snapById.get(itemId);
+        // Live-only items (from MySQL fallback, id=live_XXX): build snap from request body fields
+        if (!snap && itemId?.startsWith("live_") && item.rowId && item.partnerId) {
+          snap = {
+            rowId: cleanText(item.rowId),
+            partnerId: cleanText(item.partnerId),
+            article: cleanText(item.article || ""),
+            nativeName: cleanText(item.name || item.nativeName || ""),
+            price: Number(item.price || 0),
+            currency: cleanText(item.currency || "USD"),
+            partnerName: cleanText(item.supplierName || ""),
+          };
+        }
         if (!snap || !snap.rowId || !snap.partnerId) return null;
         const quantity = Math.max(1, Math.round(Number(item.quantity || 1) || 1));
         const note = cleanText(item.note || "").slice(0, 200);
@@ -475,12 +597,14 @@ app.post("/api/supplier-cart/pm-manual-commit", requireAdmin, async (request, re
         });
       })
       .filter(Boolean);
-    if (!cartRows.length) return response.status(400).json({ ok: false, error: "No valid rows found in PriceMaster snapshot." });
+    if (!cartRows.length) return response.status(400).json({ ok: false, error: "No valid rows to commit (missing rowId or partnerId)." });
     const result = await insertSupplierCartRowsIntoPriceMaster(cartRows, request);
     response.json({
       ok: true,
       inserted: result.inserted.length,
       skipped: result.skipped,
+      skippedDetails: result.skippedDetails || [],
+      pmBlocked: (result.pmBlocked || []).map((b) => ({ offerId: b.offerId, productName: b.productName, existingDocId: b.existingDocId, existingDocDate: b.existingDocDate })),
       docIds: result.docIds,
       pickingCreated: Array.isArray(result.pickingCreated) ? result.pickingCreated.length : (result.pickingCreated || 0),
       verifiedInPriceMaster: Boolean(result.verification?.ok),
@@ -622,6 +746,7 @@ app.post("/api/ready-to-ship/order", requireStaff, async (request, response, nex
       docIds: result.docIds,
       pickingCreated: result.pickingCreated?.length || 0,
       supplierName: option.supplierName,
+      pmBlocked: (result.pmBlocked || []).map((b) => ({ offerId: b.offerId, productName: b.productName, existingDocId: b.existingDocId, existingDocDate: b.existingDocDate })),
       row: result.inserted[0] || null,
     });
   } catch (error) {
@@ -688,6 +813,33 @@ app.post("/api/ready-to-ship/batch-order", requireStaff, async (request, respons
       docIds: result.docIds,
       pickingCreated: result.pickingCreated?.length || 0,
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Re-send marketplace shipment confirmations for alreadyCommitted draft rows.
+// Safe to call multiple times — Ozon/Yandex handle duplicate ship confirmations gracefully.
+// Only sends for rows ordered today (soldAt within last 48h) to avoid mass-confirming old orders.
+app.post("/api/supplier-cart/reconfirm-marketplace", requireAdmin, async (request, response, next) => {
+  try {
+    const state = await readSupplierCartState();
+    const draftRows = state.draft?.rows || [];
+    const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    const isRecent = (row) => !row.soldAt || new Date(row.soldAt) >= cutoff;
+    const toConfirm = draftRows.filter(
+      (row) => row.alreadyCommitted && row.postingNumber && row.ozonProductId && row.marketplace === "ozon" && isRecent(row),
+    );
+    const toConfirmYandex = draftRows.filter(
+      (row) => row.alreadyCommitted && row.orderId && row.campaignId && row.marketplace === "yandex" && isRecent(row),
+    );
+
+    const allToConfirm = [...toConfirm, ...toConfirmYandex];
+    if (!allToConfirm.length) return response.json({ ok: true, confirmed: 0, skipped: 0, results: [] });
+
+    const results = await confirmMarketplaceOrdersAfterInsert(allToConfirm);
+    logger.info("marketplace reconfirm manual", { ozon: toConfirm.length, yandex: toConfirmYandex.length });
+    response.json({ ok: true, confirmed: allToConfirm.length, skipped: 0, results });
   } catch (error) {
     next(error);
   }
