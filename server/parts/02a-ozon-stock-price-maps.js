@@ -29,7 +29,13 @@ async function getOzonStockMap(offerIds, account = null, options = {}) {
       // on an item that actually has stock entries, to avoid false shape-mismatch noise.
       const firstWithStocks = stockItems.findIndex((i) => Array.isArray(i.stocks) && i.stocks.length > 0);
       if (firstWithStocks >= 0) {
-        validateApiShape(data.result || data, [`items[${firstWithStocks}].stocks[0].present`], "ozon_stocks_v4");
+        const stockSample = stockItems[firstWithStocks].stocks[0];
+        if (!("present" in stockSample)) {
+          logger.warn("ozon_stocks_v4: stocks[0] missing 'present' field", {
+            keys: Object.keys(stockSample),
+            sample: stockSample,
+          });
+        }
       }
     }
     for (const item of stockItems) {
