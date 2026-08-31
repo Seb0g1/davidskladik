@@ -8,14 +8,24 @@ async function confirmOzonPostingPackaged(postingNumber, products = [], account 
     logger.info("ozon posting shipped to awaiting_deliver", { postingNumber, products: products.length, accountId: account?.id });
     return { ok: true, postingNumber, result };
   } catch (error) {
+    const ozonResponse = error?.ozon || null;
+    const errMsg = error?.message || String(error);
+    // Ozon returns errors when the order is already in a shipped/assembled state.
+    // Treat "wrong state" as already-confirmed — the operator has nothing to do.
+    const alreadyShipped = /wrong.?state|awaiting_deliver|not.*awaiting_packaging|нельзя|уже собран/i.test(errMsg)
+      || (typeof ozonResponse === "object" && /wrong.?state|awaiting_deliver/i.test(String(ozonResponse?.message || "")));
+    if (alreadyShipped) {
+      logger.info("ozon posting already in assembled state — skipping re-ship", { postingNumber, accountId: account?.id, detail: errMsg });
+      return { ok: true, postingNumber, alreadyConfirmed: true };
+    }
     logger.warn("ozon posting package confirmation failed", {
       postingNumber,
       accountId: account?.id,
       products,
-      detail: error?.message || String(error),
-      ozonResponse: error?.ozon || null,
+      detail: errMsg,
+      ozonResponse,
     });
-    return { ok: false, postingNumber, error: error?.message || String(error) };
+    return { ok: false, postingNumber, error: errMsg };
   }
 }
 
@@ -459,11 +469,21 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
   // but marketplace was never notified — state write failed at the time of the original commit).
   const syncedRows = pmBlocked.flatMap((b) => b.sourceRows || []);
   const toConfirm = [...inserted, ...syncedRows];
-  setImmediate(() => {
-    confirmMarketplaceOrdersAfterInsert(toConfirm).catch((error) => {
+  // Run confirmations synchronously with a 6-second ceiling so the HTTP response includes
+  // the Ozon/Yandex/WB results. On timeout we resolve to [] and let the background tail
+  // finish on its own — the operator can use /reconfirm-marketplace as fallback.
+  let marketplaceConfirms = [];
+  const confirmPromise = confirmMarketplaceOrdersAfterInsert(toConfirm);
+  const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 6000));
+  const confirmResult = await Promise.race([confirmPromise, timeoutPromise]);
+  if (confirmResult !== null) {
+    marketplaceConfirms = confirmResult;
+  } else {
+    logger.warn("marketplace confirmations timed out — running in background", { count: toConfirm.length });
+    confirmPromise.catch((error) => {
       logger.warn("marketplace order confirmation after insert failed", { detail: error?.message || String(error) });
     });
-  });
+  }
   return {
     inserted,
     skipped: readyRows.length - inserted.length - returnCoveredRows.length,
@@ -476,7 +496,7 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
       ...returnClaimed,
       ...pickingBlockedCreated,
     ],
-    marketplaceConfirms: [],
+    marketplaceConfirms,
     verification,
   };
 }

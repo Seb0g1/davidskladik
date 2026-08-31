@@ -87,6 +87,7 @@ function normalizeSupplierCartPreviewRow(input = {}) {
     skipReason: cleanText(input.skipReason || input.reason),
     requestDocId: cleanText(input.requestDocId || input.docId),
     requestRowId: cleanText(input.requestRowId || input.rowId),
+    manualNote: cleanText(input.manualNote || ""),
   };
 }
 
