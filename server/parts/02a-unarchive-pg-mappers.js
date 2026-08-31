@@ -1,3 +1,8 @@
+function stripNullBytes(value) {
+  if (typeof value !== "string") return value;
+  return value.includes("\0") ? value.replace(/\0/g, "") : value;
+}
+
 function productToPostgresData(product = {}) {
   const normalized = normalizeWarehouseProduct(product);
   const images = compactObject({
@@ -5,13 +10,13 @@ function productToPostgresData(product = {}) {
     images: normalized.ozon?.images || normalized.yandex?.pictures || [],
   });
   return {
-    id: normalized.id,
+    id: stripNullBytes(normalized.id),
     marketplace: normalizeMarketplaceEnum(normalized.marketplace),
-    target: normalized.target || normalized.marketplace || null,
-    offerId: normalized.offerId || normalized.sku || normalized.id,
-    productId: normalized.productId || null,
-    name: normalized.name || normalized.offerId || normalized.id,
-    brand: resolveWarehouseBrand(normalized) || null,
+    target: stripNullBytes(normalized.target || normalized.marketplace || null),
+    offerId: stripNullBytes(normalized.offerId || normalized.sku || normalized.id),
+    productId: stripNullBytes(normalized.productId || null),
+    name: stripNullBytes(normalized.name || normalized.offerId || normalized.id),
+    brand: stripNullBytes(resolveWarehouseBrand(normalized) || null),
     // Без cloneAuditValue (JSON.parse(JSON.stringify())): Prisma сериализует
     // Json-поля сам при вызове, а тройной JSON-клон каждого товара (raw —
     // десятки КБ) на дельтах в тысячи строк блокировал event loop на ~10 с
@@ -21,7 +26,7 @@ function productToPostgresData(product = {}) {
     currentPrice: roundPrice(normalized.marketplacePrice || 0) || null,
     targetPrice: roundPrice(normalized.nextPrice || normalized.targetPrice || normalized.calculatedPrice || 0) || null,
     targetStock: Number.isFinite(Number(normalized.targetStock)) ? Number(normalized.targetStock) : null,
-    status: normalized.marketplaceState?.code || normalized.marketplaceState?.state || normalized.status || null,
+    status: stripNullBytes(normalized.marketplaceState?.code || normalized.marketplaceState?.state || normalized.status || null),
     archived: Boolean(normalized.marketplaceState?.archived || normalized.archived),
     everHadLinks: Boolean(normalized.everHadLinks),
     raw: normalized || {},
