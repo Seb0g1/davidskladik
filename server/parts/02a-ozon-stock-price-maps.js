@@ -24,7 +24,13 @@ async function getOzonStockMap(offerIds, account = null, options = {}) {
 
     const stockItems = data.items || data.result?.items || [];
     if (stockItems.length > 0) {
-      validateApiShape(data.result || data, ["items[0].offer_id", "items[0].stocks[0].present"], "ozon_stocks_v4");
+      validateApiShape(data.result || data, ["items[0].offer_id"], "ozon_stocks_v4");
+      // Ozon returns stocks:[] for zero-stock products — only validate the present field
+      // on an item that actually has stock entries, to avoid false shape-mismatch noise.
+      const firstWithStocks = stockItems.findIndex((i) => Array.isArray(i.stocks) && i.stocks.length > 0);
+      if (firstWithStocks >= 0) {
+        validateApiShape(data.result || data, [`items[${firstWithStocks}].stocks[0].present`], "ozon_stocks_v4");
+      }
     }
     for (const item of stockItems) {
       const offerId = item.offer_id || item.offerId;
