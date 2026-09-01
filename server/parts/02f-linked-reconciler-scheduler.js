@@ -210,6 +210,9 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
     closePhaseMarker();
   }
 
+  // Yield between phases so HTTP requests and timers can run.
+  await new Promise((r) => setImmediate(r));
+
   // Refresh live marketplace archive/stock state.
   // CRITICAL: capture the return value — it contains fresh archived/stock data even when
   // the internal DB-persist step fails (persist errors are caught-and-logged inside).
@@ -226,6 +229,8 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
       .filter((p) => p?.id)
       .map((p) => [String(p.id), p.marketplaceState]),
   );
+
+  await new Promise((r) => setImmediate(r));
 
   // Rebuild with live PriceMaster to get fresh supplier prices, then overlay the live
   // marketplace state captured above so archived/stock flags are always current regardless
@@ -247,6 +252,8 @@ async function processLinkedReconcilerBatch(seedProducts = []) {
     const liveState = liveStateById.get(String(p.id));
     return liveState ? { ...p, marketplaceState: liveState } : p;
   });
+
+  await new Promise((r) => setImmediate(r));
 
   // Supplier recovery: unarchive (Yandex immediate / Ozon queued on quota), restore stock,
   // requeue price. Reuses the existing automation verbatim, scoped to this batch.
@@ -362,6 +369,8 @@ async function runLinkedReconcilerBatch(trigger = "rolling") {
   let lastError = null;
   try {
     for (let batch = 0; batch < maxBatches; batch += 1) {
+      // Yield between batch iterations so other work (HTTP, timers) can run.
+      if (batch > 0) await new Promise((r) => setImmediate(r));
       const state = await readLinkedReconcilerState();
       if (!state.cycleStartedAt) state.cycleStartedAt = startedAt;
       const { products, nextCursorId, cycleComplete, postgres } = await loadNextLinkedReconcilerBatch(state);

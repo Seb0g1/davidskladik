@@ -76,10 +76,17 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
   const priceMap = priceMapResult.map;
   const minPriceMap = minPriceResult.map;
 
-  return productsToBuild.map((product) => {
+  // Yield every PRICE_BUILD_YIELD_EVERY products to avoid blocking the event loop
+  // for the full batch duration. The map is pure CPU (normalize + price calc per product)
+  // and at 100 products can block for 1-3s without breaks.
+  const PRICE_BUILD_YIELD_EVERY = 10;
+  const buildNow = new Date();
+  const builtProducts = [];
+  for (let _i = 0; _i < productsToBuild.length; _i++) {
+    if (_i > 0 && _i % PRICE_BUILD_YIELD_EVERY === 0) await new Promise((r) => setImmediate(r));
+    const product = productsToBuild[_i];
     const productMarkupOverride = marketplaceProductMarkupOverride(product);
     const normalizedLinks = Array.isArray(product.links) ? product.links.map(normalizeWarehouseLink) : [];
-    const buildNow = new Date();
     const rawSuppliers = normalizedLinks.flatMap((link) => {
       if (link.snooze?.snoozedUntil && new Date(link.snooze.snoozedUntil) > buildNow) return [];
       return (matchMap.get(link.id) || []).map((match) => {
@@ -183,7 +190,7 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
     const currentPrice = priceMap.get(product.id) || persistedCurrentPrice;
     const lastPriceSend = product.marketplace === "ozon" ? product.lastOzonPriceSend : product.lastYandexPriceSend;
 
-    return {
+    builtProducts.push({
       ...product,
       brand: resolveWarehouseBrand(product),
       markupCoefficient,
@@ -260,8 +267,9 @@ async function buildFreshWarehouseProductsForWarehouse(warehouse, productIds = [
       everHadLinks: Boolean(product.everHadLinks || links.length > 0),
       autoArchiveCandidate: links.length === 0,
       status: selectedSupplier ? (nextPrice !== currentPrice ? "price_changed" : "ok") : (stockOnlyFallbackActive ? (stockOnlyManualPrice ? "stock_only_fallback" : "stock_only_manual_price_missing") : "no_supplier"),
-    };
-  });
+    });
+  }
+  return builtProducts;
 }
 
 function summarizeWarehouseCounterStats({ totalProducts = 0, linkedProducts = [], builtLinkedProducts = [] } = {}) {
