@@ -304,6 +304,7 @@ module.exports = {
   supplierOrderCutoffPassed,
   supplierCartOrderScore,
   selectSupplierCartSupplierFromMatches,
+  supplierCartOptionRejection,
   hydrateSupplierCartWarehouse,
   classifyAvitoCategory,
   getAvitoCategorySpec,
