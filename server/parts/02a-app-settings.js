@@ -53,7 +53,7 @@ function defaultAppSettings() {
       lookbackHours: 168,
       includeOzonStatuses: ["awaiting_packaging"],
       includeYandexStatuses: ["PROCESSING"],
-      includeYandexSubstatuses: ["STARTED", "PACKAGING"],
+      includeYandexSubstatuses: ["STARTED", "PACKAGING", "READY_TO_SHIP"],
     },
   };
 }
