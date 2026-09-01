@@ -33,12 +33,34 @@ async function readLinkedProductsForReprice({ productIds, marketplace = "all", l
       marketplaceFilter !== "all" ? { marketplace: marketplaceFilter } : {},
     ].filter((item) => Object.keys(item || {}).length),
   };
-  const rows = await prisma.warehouseProduct.findMany({
-    where,
-    include: { links: true },
-    orderBy: { updatedAt: "desc" },
-    ...(normalizedLimit > 0 ? { take: normalizedLimit } : {}),
-  });
+  // Fetch in pages of 5 000 to avoid loading all data into Prisma's Rust heap at once.
+  // A single unlimited findMany on a 20k-product dataset with includes can push the API
+  // process over its memory ceiling, triggering the "Failed to convert rust String into
+  // napi string" error even when the data itself is clean.
+  const PAGE = 5000;
+  let rows = [];
+  try {
+    let skip = 0;
+    for (;;) {
+      const take = normalizedLimit > 0 ? Math.min(PAGE, normalizedLimit - rows.length) : PAGE;
+      const page = await prisma.warehouseProduct.findMany({
+        where,
+        include: { links: true },
+        orderBy: { updatedAt: "desc" },
+        take,
+        skip,
+      });
+      rows.push(...page);
+      if (page.length < PAGE) break;
+      if (normalizedLimit > 0 && rows.length >= normalizedLimit) break;
+      skip += PAGE;
+    }
+  } catch (pgError) {
+    logger.warn("readLinkedProductsForReprice postgres failed, using memory fallback", {
+      detail: pgError?.message || String(pgError),
+    });
+    return fromMemory;
+  }
   return rows
     .map(productFromPostgres)
     .filter((product) => Array.isArray(product.links) && product.links.length)
