@@ -20,7 +20,7 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
   const groupProducts = expandWarehouseProductsToGroups(warehouse.products || [], [product]);
   const groupLinks = buildCommonWarehouseGroupLinks(groupProducts, []);
   if (!groupLinks.length) return { options: [], skipReason: "no_pricemaster_link" };
-  const usdRate = await getUsdRate();
+  const usdRate = Number((await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);
   const matches = await getLivePriceMasterMatchesForLinks(groupLinks, warehouse.suppliers || [], usdRate);
   const blockedPartnerIds = activeSupplierBlocksForOffer(state, offerId, now);
   const seen = new Set();

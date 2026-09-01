@@ -327,7 +327,7 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
 
     items = items.slice(0, limit);
 
-    const usdRate = await getUsdRate();
+    const usdRate = Number((await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);
     // Инна prices in PM snapshot are stored with currency="USD" (snapshot has no managed-supplier
     // awareness), but they are actually in RUB — detect by partner name so sorting is correct.
     const toRub = (price, currency, partnerName) => {
