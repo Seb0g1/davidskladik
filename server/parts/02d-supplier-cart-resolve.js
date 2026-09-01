@@ -258,12 +258,15 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
     : (Array.isArray(data?.result?.orders) ? data.result.orders : []);
   const lines = [];
   for (const order of orders) {
-    // Skip orders already confirmed ready-to-ship or further along — the Yandex API
-    // substatus filter is best-effort and sometimes returns READY_TO_SHIP orders anyway.
-    const orderSubstatus = cleanText(order.substatus || order.subStatus || "").toUpperCase();
-    if (orderSubstatus === "READY_TO_SHIP" || orderSubstatus === "SHIPPED" || orderSubstatus === "DELIVERY") continue;
     const items = Array.isArray(order.items) ? order.items : [];
     const isExpress = cleanText(order.delivery?.type || order.deliveryType || "").toUpperCase() === "EXPRESS";
+    // Skip orders already confirmed ready-to-ship or further along — the Yandex API
+    // substatus filter is best-effort and sometimes returns READY_TO_SHIP orders anyway.
+    // Exception: express orders arrive with READY_TO_SHIP as the initial working substatus —
+    // the operator must still physically pick and hand off to the courier, so do not skip them.
+    const orderSubstatus = cleanText(order.substatus || order.subStatus || "").toUpperCase();
+    if (orderSubstatus === "SHIPPED" || orderSubstatus === "DELIVERY") continue;
+    if (orderSubstatus === "READY_TO_SHIP" && !isExpress) continue;
     const orderCampaignId = cleanText(order.campaignId || shop.campaignId || "");
     for (const item of items) {
       const itemStatus = cleanText(item.itemStatus || item.status).toUpperCase();
@@ -470,10 +473,16 @@ function findSupplierCartWarehouseProduct(warehouse = {}, line = {}) {
   );
 }
 
-async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { preloadedMatches = null, preloadedUsdRate = null, pickedKeys = null } = {}) {
+async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { preloadedMatches = null, preloadedUsdRate = null, pickedKeys = null, manualActiveOfferIds = null } = {}) {
   const normalizedLine = normalizeSupplierCartLine(line);
   const processed = state.processed?.[normalizedLine.key];
   const alreadyPicked = pickedKeys instanceof Set && pickedKeys.has(normalizedLine.key);
+  // A manual PM commit for the same offerId (marketplace="manual", status open/picked) means
+  // the article was already ordered directly — treat the marketplace order as committed so the
+  // autocart does not create a second PM order to a (potentially different) supplier.
+  const coveredByManual = manualActiveOfferIds instanceof Set
+    && Boolean(cleanText(normalizedLine.offerId).toLowerCase())
+    && manualActiveOfferIds.has(cleanText(normalizedLine.offerId).toLowerCase());
   const product = findSupplierCartWarehouseProduct(warehouse, normalizedLine);
   if (!product) {
     return normalizeSupplierCartPreviewRow({
@@ -482,7 +491,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       skipReason: "product_not_found",
       saleAmount: computeMarketplaceSaleAmountRub(normalizedLine),
       soldAt: normalizedLine.orderedAt,
-      alreadyCommitted: Boolean(processed) || alreadyPicked,
+      alreadyCommitted: Boolean(processed) || alreadyPicked || coveredByManual,
       requestDocId: processed?.requestDocId,
       requestRowId: processed?.requestRowId,
     });
@@ -499,7 +508,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       skipReason: "no_pricemaster_link",
       saleAmount: computeMarketplaceSaleAmountRub(normalizedLine),
       soldAt: normalizedLine.orderedAt,
-      alreadyCommitted: Boolean(processed) || alreadyPicked,
+      alreadyCommitted: Boolean(processed) || alreadyPicked || coveredByManual,
       requestDocId: processed?.requestDocId,
       requestRowId: processed?.requestRowId,
     });
@@ -546,7 +555,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       skipReason: selectionSkipReason,
       saleAmount: computeMarketplaceSaleAmountRub(normalizedLine),
       soldAt: normalizedLine.orderedAt,
-      alreadyCommitted: Boolean(processed) || alreadyPicked,
+      alreadyCommitted: Boolean(processed) || alreadyPicked || coveredByManual,
       requestDocId: processed?.requestDocId,
       requestRowId: processed?.requestRowId,
     });
@@ -572,7 +581,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
     ready: true,
     stockOnlyFallback,
     skipReason: stockOnlyFallback ? selectionSkipReason : "",
-    alreadyCommitted: Boolean(processed) || alreadyPicked,
+    alreadyCommitted: Boolean(processed) || alreadyPicked || coveredByManual,
     requestDocId: processed?.requestDocId,
     requestRowId: processed?.requestRowId,
   });

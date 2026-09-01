@@ -50,11 +50,22 @@ async function buildSupplierCartPreview(params = {}) {
   // preview can mark them as committed — otherwise the cart keeps re-queuing assembled orders
   // that Ozon still shows as awaiting_packaging until the courier API call completes.
   const pickingStateForPreview = await readSupplierPickingState().catch(() => ({ rows: {} }));
+  const pickingRows = Object.values(pickingStateForPreview.rows || {}).map(normalizeSupplierPickingRow);
   const pickedKeys = new Set(
-    Object.values(pickingStateForPreview.rows || {})
-      .map(normalizeSupplierPickingRow)
+    pickingRows
       .filter((pr) => pr.status === "picked")
       .map((pr) => pr.key),
+  );
+  // Build a set of offerIds already covered by active manual PM commits (marketplace="manual",
+  // status="open" or "picked"). When a user manually orders an article before the autocart
+  // runs, the resulting picking row has key "manual|pm|..." which never matches the
+  // marketplace order key — so the cart would create a second PM order to a different
+  // supplier. Index by offerId so resolveSupplierCartRow can detect this overlap.
+  const manualActiveOfferIds = new Set(
+    pickingRows
+      .filter((pr) => pr.marketplace === "manual" && (pr.status === "open" || pr.status === "picked"))
+      .map((pr) => cleanText(pr.offerId).toLowerCase())
+      .filter(Boolean),
   );
   // Pre-fetch all PM matches in one batch to avoid N+1 MySQL queries per order row.
   const preloadedUsdRate = await getUsdRate();
@@ -68,7 +79,7 @@ async function buildSupplierCartPreview(params = {}) {
     const batch = uniqueLines.slice(batchStart, batchStart + RESOLVE_BATCH);
     for (const line of batch) {
       try {
-        rows.push(await resolveSupplierCartRow(warehouse, line, state, { preloadedMatches, preloadedUsdRate, pickedKeys }));
+        rows.push(await resolveSupplierCartRow(warehouse, line, state, { preloadedMatches, preloadedUsdRate, pickedKeys, manualActiveOfferIds }));
       } catch (error) {
         rows.push(normalizeSupplierCartPreviewRow({
           ...line,
