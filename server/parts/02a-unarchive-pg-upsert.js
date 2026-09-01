@@ -83,23 +83,72 @@ function warehouseProductPostgresUpdateData(data = {}) {
 }
 
 async function upsertWarehouseProductPostgres(client, product) {
-  // Микро-маркеры для event_loop_blocked: делят стоимость upsert'а на
-  // подготовку данных (normalize) и вызов Prisma (сериализация Json-полей +
-  // движок) — бисекция остаточных 7-10 с блокировок worker.
   const closePrepareMarker = setEventLoopBlockMarker("pg_upsert_prepare");
-  let data;
+  let data, imagesJson, marketplaceStateJson, rawJson;
   try {
     data = productToPostgresData(product);
+    // Pre-serialize JSONB columns with V8 JSON.stringify so that Prisma's napi
+    // layer receives plain strings — napi string-copy is O(n) text bytes vs.
+    // O(n) object traversal which is 50-200× slower for nested objects.
+    imagesJson = JSON.stringify(data.images || {});
+    marketplaceStateJson = JSON.stringify(data.marketplaceState || {});
+    rawJson = JSON.stringify(data.raw || {});
   } finally {
     closePrepareMarker();
   }
   const closeCallMarker = setEventLoopBlockMarker("pg_upsert_call");
   try {
-    await client.warehouseProduct.upsert({
-      where: { id: data.id },
-      create: data,
-      update: warehouseProductPostgresUpdateData(data),
-    });
+    // $executeRawUnsafe keeps JSONB columns as pre-serialized strings.
+    // images: only updated when the incoming product carries image data
+    // (the images column is a persistent backfill cache).
+    // created_at is NOT in the UPDATE SET — preserve the original creation date.
+    await client.$executeRawUnsafe(
+      `INSERT INTO warehouse_products
+         (id, marketplace, target, offer_id, product_id, name, brand,
+          images, marketplace_state, current_price, target_price, target_stock,
+          status, archived, ever_had_links, raw, created_at, updated_at)
+       VALUES
+         ($1, $2::"Marketplace", $3, $4, $5, $6, $7,
+          $8::jsonb, $9::jsonb, $10, $11, $12,
+          $13, $14, $15, $16::jsonb, $17, $18)
+       ON CONFLICT (id) DO UPDATE SET
+         marketplace      = EXCLUDED.marketplace,
+         target           = EXCLUDED.target,
+         offer_id         = EXCLUDED.offer_id,
+         product_id       = EXCLUDED.product_id,
+         name             = EXCLUDED.name,
+         brand            = EXCLUDED.brand,
+         images           = CASE WHEN $8::jsonb != '{}'::jsonb
+                              THEN EXCLUDED.images
+                              ELSE warehouse_products.images END,
+         marketplace_state = EXCLUDED.marketplace_state,
+         current_price    = EXCLUDED.current_price,
+         target_price     = EXCLUDED.target_price,
+         target_stock     = EXCLUDED.target_stock,
+         status           = EXCLUDED.status,
+         archived         = EXCLUDED.archived,
+         ever_had_links   = EXCLUDED.ever_had_links,
+         raw              = EXCLUDED.raw,
+         updated_at       = EXCLUDED.updated_at`,
+      data.id,
+      data.marketplace,
+      data.target,
+      data.offerId,
+      data.productId,
+      data.name,
+      data.brand,
+      imagesJson,
+      marketplaceStateJson,
+      data.currentPrice,
+      data.targetPrice,
+      data.targetStock,
+      data.status,
+      data.archived,
+      data.everHadLinks,
+      rawJson,
+      data.createdAt,
+      data.updatedAt,
+    );
   } finally {
     closeCallMarker();
   }
