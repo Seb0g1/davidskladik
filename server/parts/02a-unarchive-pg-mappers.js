@@ -43,7 +43,13 @@ function productToPostgresData(product = {}) {
     status: stripNullBytes(normalized.marketplaceState?.code || normalized.marketplaceState?.state || normalized.status || null),
     archived: Boolean(normalized.marketplaceState?.archived || normalized.archived),
     everHadLinks: Boolean(normalized.everHadLinks),
-    raw: stripNullBytesDeep(normalized || {}),
+    // Strip computed-at-load fields (COMPUTED_WAREHOUSE_PRODUCT_FIELDS) so that
+    // raw stays lightweight — these arrays (suppliers, supplierAlternatives, …)
+    // can be 20-100 KB/product and are always rebuilt from PM at the next
+    // reconciler tick, so persisting them wastes napi serialization time and
+    // PostgreSQL storage.  repairWarehouseProductSupplierSnapshot on read
+    // already strips any leftovers from rows written before this change.
+    raw: stripNullBytesDeep(stripStaleWarehouseSupplierSnapshot(normalized) || {}),
     createdAt: toDateOrNull(normalized.createdAt) || new Date(),
     updatedAt: toDateOrNull(normalized.updatedAt) || new Date(),
   };
