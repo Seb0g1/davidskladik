@@ -363,8 +363,10 @@ function hasDraftInput(input = {}) {
 // All those rows end up in rawSuppliers and pickWarehouseSupplier picks the cheapest,
 // ignoring the user's explicit pin.
 // This function keeps only the exact rowId match when it is present; falls back to
-// exactName / resolvedPriceMasterRow.name matches; and only uses all article matches
-// (staleness fallback) when the pinned row is truly gone and no name anchor is available.
+// exactName / resolvedPriceMasterRow.name matches; and only uses article matches as a
+// staleness fallback (re-upload with new RowID) when the name tokens confirm it is the
+// same product. Returning unrelated article matches risks ordering the wrong product when
+// a supplier reuses an article number for a completely different item.
 function filterSelectedRowMatchesToBestPin(link, matches) {
   if (!Array.isArray(matches) || matches.length <= 1) return matches;
   if (link.matchType !== "selected_row" || !link.sourceRowId) return matches;
@@ -386,7 +388,30 @@ function filterSelectedRowMatchesToBestPin(link, matches) {
     if (byName.length) return byName;
   }
 
-  return matches;
+  // Staleness fallback of last resort: the pinned row is gone AND no exact-name match found.
+  // Only follow article-matching rows that share at least one meaningful name token with the
+  // pinned product name — this confirms the new row is the same product re-uploaded under a
+  // different RowID, not a different product that the supplier assigned the same article to.
+  // Without this guard, selectSupplierCartSupplierFromMatches would pick the highest rowId
+  // among unrelated rows sharing the article, potentially ordering the wrong product.
+  if (fallbackName) {
+    const anchorTokens = new Set(priceMasterNameTokens(fallbackName));
+    if (anchorTokens.size > 0) {
+      const bySimilarName = matches.filter((m) => {
+        const rowTokens = priceMasterNameTokens(cleanText(m.name || m.nativeName || ""));
+        return rowTokens.some((token) => anchorTokens.has(token));
+      });
+      // Use the token-similar rows only when at least one is active with a price.
+      // Otherwise fall back to the pinned row (inactive) so the cart shows not_available
+      // instead of ordering a different product from this supplier.
+      if (bySimilarName.some((m) => m.active !== false && (m.price || 0) > 0)) return bySimilarName;
+    }
+  }
+
+  // The pinned row is gone, no name match, no name-similar active row. Return the pinned
+  // row (inactive/zero-price) so upstream shows supplier_not_available rather than routing
+  // the order to an unrelated product at this supplier.
+  return byRowId.length ? byRowId : matches.slice(0, 1);
 }
 
 // When a supplier has multiple PM rows for the same article (e.g. Далик encodes different
