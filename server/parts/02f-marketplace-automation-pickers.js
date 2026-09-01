@@ -120,7 +120,12 @@ function queueLinkedUnavailableSupplierZeroStock(builtProducts = [], { source = 
   const productIds = [];
   const now = Date.now();
   for (const product of toZeroStock) {
-    if (!product?.id || !marketplaceHasPositiveStock(product)) continue;
+    // Queue if marketplace shows positive stock, OR if zero stock was never confirmed sent
+    // (stockZeroAt = null means the API call was never made — e.g. Yandex FBS where
+    // marketplaceState has no stock field, so marketplaceHasPositiveStock returns false even
+    // though the marketplace still shows the old stock count).
+    const zeroAlreadyConfirmed = !marketplaceHasPositiveStock(product) && product.noSupplierAutomation?.stockZeroAt;
+    if (!product?.id || zeroAlreadyConfirmed) continue;
     const lastQueuedAt = linkedNoSupplierZeroStockQueuedAt.get(product.id) || 0;
     if (now - lastQueuedAt < linkedNoSupplierZeroStockQueueCooldownMs) continue;
     linkedNoSupplierZeroStockQueuedAt.set(product.id, now);

@@ -19,15 +19,22 @@ function snapshotRowMatchesPriceMasterSearch(row = {}, { q = "", supplier = "", 
 
 function searchPriceMasterSnapshotJsonRows(rows = [], { q = "", supplier = "", limit = 100, usdRate = 95 } = {}) {
   const tokenGroups = q ? pmQueryToTokenGroups(q) : null;
-  const unique = new Map();
+  const available = new Map();
+  const unavailable = new Map();
+  const cap = limit * 10;
   for (const row of rows) {
     if (!snapshotRowMatchesPriceMasterSearch(row, { q, supplier, tokenGroups })) continue;
     const mapped = mapPriceMasterSearchResponseRow(row, usdRate);
     const key = [mapped.rowId, mapped.article, mapped.supplierName, mapped.name].join("|");
-    if (!unique.has(key)) unique.set(key, mapped);
-    if (unique.size >= limit) break;
+    if (available.has(key) || unavailable.has(key)) continue;
+    if (mapped.available) {
+      available.set(key, mapped);
+    } else {
+      unavailable.set(key, mapped);
+    }
+    if (available.size + unavailable.size >= cap) break;
   }
-  return Array.from(unique.values());
+  return [...available.values(), ...unavailable.values()].slice(0, limit);
 }
 
 async function readSnapshot() {

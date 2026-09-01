@@ -1,4 +1,9 @@
 function marketplaceJobId(name, data = {}) {
+  // Each generation trigger must have a unique job ID so that a previously
+  // failed/stalled entry with the same hash does not block retries.
+  if (name === "supplier-cart-generate") {
+    return `supplier-cart-gen-${crypto.randomUUID()}`;
+  }
   if (name === "ozon-unarchive-queue-process") {
     const source = cleanText(data?.source || "ozon_unarchive_queue_auto");
     const runId = cleanText(data?.queueRunId || data?.runId || crypto.randomUUID());

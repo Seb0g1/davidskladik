@@ -263,7 +263,34 @@ async function createSupplierPickingRows(inserted = [], request = null, options 
     for (let unitIdx = 0; unitIdx < units; unitIdx++) {
       const unitKey = units > 1 ? `${row.key}:u${unitIdx}` : row.key;
       const existing = state.rows[unitKey] ? normalizeSupplierPickingRow(state.rows[unitKey]) : null;
-      if (existing && existing.status !== "missing") continue;
+      if (existing && existing.status !== "missing") {
+        // When a re-commit resolves to a different supplier for the same open picking row,
+        // update the supplier info so the picking list reflects the latest PM commit.
+        if (
+          existing.status === "open"
+          && row.ready
+          && row.partnerId
+          && cleanText(row.partnerId).toLowerCase() !== cleanText(existing.partnerId).toLowerCase()
+        ) {
+          const updatedRow = normalizeSupplierPickingRow({
+            ...existing,
+            supplierName: row.supplierName,
+            partnerId: row.partnerId,
+            offerRowId: row.offerRowId,
+            price: row.price,
+            priceCurrency: row.priceCurrency,
+            trustFactor: row.trustFactor,
+            orderCutoffTime: row.orderCutoffTime,
+            reseller: row.reseller,
+            supplierScore: row.supplierScore,
+            requestDocId: row.requestDocId || existing.requestDocId,
+            requestRowId: row.requestRowId || existing.requestRowId,
+          });
+          state.rows[unitKey] = updatedRow;
+          created.push(updatedRow);
+        }
+        continue;
+      }
       const pickingKey = existing?.status === "missing"
         ? `${unitKey}|retry:${row.requestRowId || Date.now()}`
         : unitKey;

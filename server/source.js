@@ -158,6 +158,7 @@ const partFiles = [
   "02d-unarchive-helpers.js",
   "02d-routes-unarchive.js",
   "02d-routes-warehouse-catalog.js",
+  "02d-routes-catalog-report.js",
   "02d-routes-avito.js",
   "02d-routes-wb.js",
   "02d-shop-api-routes.js",

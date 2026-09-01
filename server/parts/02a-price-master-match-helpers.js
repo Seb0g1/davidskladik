@@ -408,10 +408,11 @@ function filterSelectedRowMatchesToBestPin(link, matches) {
     }
   }
 
-  // The pinned row is gone, no name match, no name-similar active row. Return the pinned
-  // row (inactive/zero-price) so upstream shows supplier_not_available rather than routing
-  // the order to an unrelated product at this supplier.
-  return byRowId.length ? byRowId : matches.slice(0, 1);
+  // The pinned row is gone (completely absent from snapshot), no name match, no name-similar
+  // active row. Return the pinned row (inactive/zero-price) if it is still in snapshot so
+  // upstream shows supplier_not_available. When byRowId is also empty, return [] — routing
+  // to matches.slice(0,1) would order a random unrelated product that shares the article code.
+  return byRowId.length ? byRowId : [];
 }
 
 // When a supplier has multiple PM rows for the same article (e.g. Далик encodes different

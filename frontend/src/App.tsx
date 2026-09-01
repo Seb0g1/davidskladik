@@ -32,8 +32,9 @@ const ShopAdminPage = lazy(() => import("./routes/ShopAdminPage").then((m) => ({
 const TnvedPage = lazy(() => import("./routes/TnvedPage").then((m) => ({ default: m.TnvedPage })));
 const SupportChatsPage = lazy(() => import("./routes/SupportChatsPage").then((m) => ({ default: m.SupportChatsPage })));
 const BrandBansPage = lazy(() => import("./routes/BrandBansPage").then((m) => ({ default: m.BrandBansPage })));
+const BrandsTnvedPage = lazy(() => import("./routes/BrandsTnvedPage").then((m) => ({ default: m.BrandsTnvedPage })));
 
-type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans";
+type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans" | "brands-tnved";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -63,6 +64,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "new-products", href: "/app/new-products", label: "Новые товары", icon: <Sparkles size={16} /> },
   { route: "tnved", href: "/app/tnved", label: "Коды ТН ВЭД", icon: <Tag size={16} /> },
   { route: "brand-bans", href: "/app/brand-bans", label: "Запрет брендов", icon: <AlertTriangle size={16} /> },
+  { route: "brands-tnved", href: "/app/brands-tnved", label: "Бренды / ТН ВЭД", icon: <Tag size={16} /> },
 ];
 
 // Сайдбар: первые пять пунктов — без заголовка, дальше сворачиваемые группы.
@@ -70,7 +72,7 @@ const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = 
   { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
   { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions", "support"] },
   { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "no-supplier", "operations", "recovery-queue"] },
-  { id: "extra", title: "Дополнительное", routes: ["suppliers", "shop", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products", "tnved", "brand-bans"] },
+  { id: "extra", title: "Дополнительное", routes: ["suppliers", "shop", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products", "tnved", "brand-bans", "brands-tnved"] },
 ];
 
 function currentRoute(): AppRoute {
@@ -100,6 +102,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/new-products")) return "new-products";
   if (path.startsWith("/app/tnved")) return "tnved";
   if (path.startsWith("/app/brand-bans")) return "brand-bans";
+  if (path.startsWith("/app/brands-tnved")) return "brands-tnved";
   return "warehouse";
 }
 
@@ -344,6 +347,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "new-products" ? <NewProductsPage /> : null}
       {sessionReady && !accessDenied && route === "tnved" ? <TnvedPage /> : null}
       {sessionReady && !accessDenied && route === "brand-bans" ? <BrandBansPage /> : null}
+      {sessionReady && !accessDenied && route === "brands-tnved" ? <BrandsTnvedPage /> : null}
       {sessionReady && !accessDenied && route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
       </Suspense>
       </div>

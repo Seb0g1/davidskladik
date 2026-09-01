@@ -172,8 +172,8 @@ async function searchPriceMasterSnapshotOffers({ search = "", partner = "", limi
     }
     rows = rows.slice(0, take);
 
-    // Inactive fallback: include active=false rows marked as unavailable when few results.
-    if (rows.length < 6 && q && groups && groups.length) {
+    // Always append inactive rows at the end so out-of-stock items are visible but de-prioritised.
+    if (q && groups && groups.length) {
       const inactiveRows = await prisma.priceMasterSnapshotItem.findMany({
         where: { AND: buildQuery(groups, true) },
         orderBy: [{ docDate: "desc" }, { updatedAt: "desc" }],

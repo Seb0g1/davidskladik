@@ -233,29 +233,30 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
         }
       }
       for (const entry of mergedByOfferId.values()) {
-        // Dedup: skip if this OfferRowID already has an undelivered (Recieved=0) RequestRows
-        // entry — covers both open (Sended=0) and in-transit (Sended=1) orders so we don't
-        // re-order while the supplier is still processing or shipping the goods.
+        // Dedup: check if this OfferRowID already has an undelivered (Recieved=0) RequestRows entry.
         const [[existingRow]] = await connection.query(
           `SELECT rr.RowID, rd.DocID, rd.Sended, rd.DocDate FROM RequestRows rr
            JOIN RequestDocs rd ON rd.DocID = rr.DocID
            WHERE rr.OfferRowID = ? AND rd.PartnerID = ? AND rd.Recieved = 0`,
           [Number(entry.offerRowId), Number(partnerId)],
         );
-        if (existingRow?.RowID) {
-          logger.info("supplier_cart_insert_skipped_duplicate", { offerRowId: entry.offerRowId, partnerId, existingRowId: existingRow.RowID, existingDocId: existingRow.DocID });
-          pmBlocked.push({
-            offerId: entry.offerId,
-            productName: entry.productName || "",
-            offerRowId: entry.offerRowId,
-            partnerId,
-            existingRowId: Number(existingRow.RowID),
-            existingDocId: Number(existingRow.DocID),
-            existingDocSended: Number(existingRow.Sended),
-            existingDocDate: existingRow.DocDate ? String(existingRow.DocDate).slice(0, 10) : "",
-            sourceRows: entry.sourceRows,
-          });
+        if (existingRow?.RowID && Number(existingRow.Sended) === 0) {
+          // Open order (not yet sent to supplier) — merge quantity into existing row instead of blocking.
+          await connection.query(
+            "UPDATE RequestRows SET RequestQuant = RequestQuant + ? WHERE RowID = ?",
+            [entry.totalQuantity, Number(existingRow.RowID)],
+          );
+          logger.info("supplier_cart_insert_quantity_merged", { offerRowId: entry.offerRowId, partnerId, existingRowId: existingRow.RowID, existingDocId: existingRow.DocID, addedQty: entry.totalQuantity });
+          const committedAt = new Date().toISOString();
+          for (const sourceRow of entry.sourceRows) {
+            inserted.push({ ...sourceRow, requestDocId: String(existingRow.DocID), requestRowId: String(existingRow.RowID), committedAt });
+          }
           continue;
+        }
+        if (existingRow?.RowID) {
+          // Sended=1: in-transit, but a NEW marketplace order has come in for the same product.
+          // Insert a fresh PM row — the supplier will fulfil both requests separately.
+          logger.info("supplier_cart_insert_new_despite_transit", { offerRowId: entry.offerRowId, partnerId, existingRowId: existingRow.RowID, existingDocId: existingRow.DocID });
         }
         const requestRowId = nextRowId++;
         const manualNote = cleanText(entry.manualNote || "");
