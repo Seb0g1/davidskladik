@@ -68,7 +68,7 @@ async function buildSupplierCartPreview(params = {}) {
       .filter(Boolean),
   );
   // Pre-fetch all PM matches in one batch to avoid N+1 MySQL queries per order row.
-  const preloadedUsdRate = await getUsdRate();
+  const preloadedUsdRate = Number((await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);
   const allWarehouseLinks = (warehouse.products || []).flatMap((p) => p.links || []);
   const preloadedMatches = allWarehouseLinks.length
     ? await getBatchPriceMasterMatchesForLinks(allWarehouseLinks, warehouse.suppliers || [], preloadedUsdRate, { timeoutMs: 8000 }).catch(() => null)

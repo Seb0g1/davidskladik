@@ -513,7 +513,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       requestRowId: processed?.requestRowId,
     });
   }
-  const usdRate = preloadedUsdRate ?? await getUsdRate();
+  const usdRate = preloadedUsdRate ?? Number((await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);
   // Use a pre-fetched batch PM map when available (avoids N+1 MySQL queries per order row).
   // Fall back to per-link live fetch only when no preloaded map was supplied.
   let matches;

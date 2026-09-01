@@ -63,12 +63,11 @@ app.patch("/api/supplier-cart/schedule", requireAdmin, async (request, response,
   }
 });
 
-// Background generate tracking — cross-process detection via draft generatedAt timestamp
+// Background generate tracking — completion detected via draft generatedAt timestamp
 let _cartGenerating = false;
 let _cartGeneratingAt = null;
 let _cartGenerateTriggeredAt = null; // draft.generatedAt at the moment we triggered generation
-let _cartGenerateJobId = null; // BullMQ job ID for failure detection
-const _CART_GENERATE_TIMEOUT_MS = 2 * 60 * 1000; // auto-clear stale flag after 2 min
+const _CART_GENERATE_TIMEOUT_MS = 5 * 60 * 1000; // auto-clear stale flag after 5 min
 
 app.get("/api/supplier-cart/generating", requireAdmin, async (_request, response) => {
   if (!_cartGenerating) return response.json({ generating: false, startedAt: null });
@@ -77,25 +76,9 @@ app.get("/api/supplier-cart/generating", requireAdmin, async (_request, response
     _cartGenerating = false;
     _cartGeneratingAt = null;
     _cartGenerateTriggeredAt = null;
-    _cartGenerateJobId = null;
     return response.json({ generating: false, startedAt: null });
   }
-  // Detect BullMQ job failure early (avoids waiting for the full timeout)
-  if (_cartGenerateJobId && marketplaceQueue) {
-    try {
-      const job = await marketplaceQueue.getJob(_cartGenerateJobId);
-      if (job && await job.isFailed()) {
-        const failReason = job.failedReason || "unknown";
-        logger.warn("supplier cart generate job failed", { jobId: _cartGenerateJobId, reason: failReason });
-        _cartGenerating = false;
-        _cartGeneratingAt = null;
-        _cartGenerateTriggeredAt = null;
-        _cartGenerateJobId = null;
-        return response.json({ generating: false, startedAt: null, error: "Генерация завершилась с ошибкой. Попробуйте снова." });
-      }
-    } catch (_) {}
-  }
-  // Cross-process: detect worker completion by checking if draft's generatedAt has advanced
+  // Detect completion by checking if draft's generatedAt has advanced
   try {
     const state = await readSupplierCartState();
     const draftAt = state.draft?.generatedAt || null;
@@ -106,7 +89,6 @@ app.get("/api/supplier-cart/generating", requireAdmin, async (_request, response
       _cartGenerating = false;
       _cartGeneratingAt = null;
       _cartGenerateTriggeredAt = null;
-      _cartGenerateJobId = null;
       return response.json({ generating: false, startedAt: null });
     }
   } catch (_) {}
@@ -138,42 +120,27 @@ app.post("/api/supplier-cart/generate", requireAdmin, async (request, response, 
     _cartGenerating = true;
     _cartGeneratingAt = new Date().toISOString();
     _cartGenerateTriggeredAt = state.draft?.generatedAt || null;
-    _cartGenerateJobId = null;
     const params = {
       marketplace: request.body?.marketplace || request.query.marketplace,
       from: request.body?.from || request.query.from,
       to: request.body?.to || request.query.to,
       limit: request.body?.limit || request.query.limit,
     };
-    const username = requestUsername(request);
-    // Enqueue in worker process to avoid blocking the API event loop
-    const enqueued = await enqueueMarketplaceJobAccepted(
-      "supplier-cart-generate", // USER_ACTION: jumps ahead of DEFAULT but not price/recovery
-      { params, username },
-      { priority: QUEUE_PRIORITY.USER_ACTION },
-    ).catch((err) => {
-      logger.warn("supplier cart enqueue failed", { detail: err?.message || String(err) });
-      return null;
+    // Run inline — all I/O-bound work (marketplace APIs, DB), won't block the event loop.
+    // BullMQ queue starvation made this unreliable: price-push jobs (priority 1) always
+    // run ahead, so a user-triggered cart generation (priority 4) would never be scheduled.
+    setImmediate(async () => {
+      try {
+        await generateSupplierCartDraft(params, request);
+        logger.info("supplier cart inline generate complete");
+      } catch (err) {
+        logger.warn("supplier cart inline generate failed", { detail: err?.message || String(err) });
+      } finally {
+        _cartGenerating = false;
+        _cartGeneratingAt = null;
+        _cartGenerateTriggeredAt = null;
+      }
     });
-    // Track job ID for failure detection in /generating
-    if (enqueued?.id) _cartGenerateJobId = String(enqueued.id);
-    const usedQueue = enqueued && enqueued !== null && enqueued?.queueUnavailable !== true;
-    if (!usedQueue) {
-      // Queue unavailable — fall back to API-local background (best effort)
-      logger.warn("supplier cart generate: queue unavailable, running inline in API process");
-      setImmediate(async () => {
-        try {
-          await generateSupplierCartDraft(params, request);
-          logger.info("supplier cart inline generate complete");
-        } catch (err) {
-          logger.warn("supplier cart inline generate failed", { detail: err?.message || String(err) });
-        } finally {
-          _cartGenerating = false;
-          _cartGeneratingAt = null;
-          _cartGenerateTriggeredAt = null;
-        }
-      });
-    }
   } catch (error) {
     next(error);
   }
@@ -465,7 +432,7 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
 
     items = items.slice(0, limit);
 
-    const usdRate = await getUsdRate();
+    const usdRate = Number((await getUsdRate()).rate || process.env.DEFAULT_USD_RATE || 95);
     // Инна prices in PM snapshot are stored with currency="USD" (snapshot has no managed-supplier
     // awareness), but they are actually in RUB — detect by partner name so sorting is correct.
     const toRub = (price, currency, partnerName) => {
