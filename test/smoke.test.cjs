@@ -210,6 +210,7 @@ const {
   supplierOrderCutoffPassed,
   supplierCartOrderScore,
   selectSupplierCartSupplierFromMatches,
+  supplierCartOptionRejection,
   shutdownForTests,
 } = require("../server.js");
 const postgres = require("../lib/postgres.js");
@@ -4122,6 +4123,51 @@ test("selectSupplierCartSupplierFromMatches uses stock-only after supplier block
   assert.equal(result.stockOnlyFallback, true);
   assert.equal(result.skipReason, "stock_only_fallback_after_supplier_blocked");
   assert.equal(result.blockedAvailable, 1);
+});
+
+test("selectSupplierCartSupplierFromMatches uses stock-only even when PM row is inactive (available=false)", () => {
+  const now = new Date("2026-05-25T08:00:00.000Z");
+  const matches = new Map([
+    ["link-1", [
+      { partnerId: "stock", partnerName: "Наш склад", available: false, active: false, price: 0, docDate: "2026-01-03", stockOnly: true, priceEligible: false },
+    ]],
+  ]);
+  const result = selectSupplierCartSupplierFromMatches(matches, new Set(), 95, now);
+  assert.equal(result.selected?.partnerName, "Наш склад");
+  assert.equal(result.stockOnlyFallback, true);
+  assert.equal(result.skipReason, "stock_only_fallback");
+});
+
+test("selectSupplierCartSupplierFromMatches prefers available stock-only rows over inactive ones", () => {
+  const now = new Date("2026-05-25T08:00:00.000Z");
+  const matches = new Map([
+    ["link-1", [
+      { partnerId: "stock", partnerName: "Наш склад", available: false, active: false, price: 0, docDate: "2026-01-01", stockOnly: true, priceEligible: false, rowId: "100" },
+      { partnerId: "stock", partnerName: "Наш склад", available: true, active: true, price: 0, docDate: "2026-01-03", stockOnly: true, priceEligible: false, rowId: "200" },
+    ]],
+  ]);
+  const result = selectSupplierCartSupplierFromMatches(matches, new Set(), 95, now);
+  assert.equal(result.selected?.rowId, "200");
+  assert.equal(result.stockOnlyFallback, true);
+});
+
+test("supplierCartOptionRejection allows stock-only options regardless of available/orderable", () => {
+  const stockOnlyOption = {
+    partnerId: "stock", supplierName: "Наш склад", rowId: "123",
+    price: 0, available: false, orderable: false, stockOnly: true, blocked: false,
+  };
+  assert.equal(supplierCartOptionRejection(stockOnlyOption), null);
+});
+
+test("supplierCartOptionRejection blocks unknown option", () => {
+  assert.ok(supplierCartOptionRejection(null));
+  assert.equal(supplierCartOptionRejection(null).code, "supplier_option_not_found");
+});
+
+test("supplierCartOptionRejection blocks blocked option", () => {
+  const blocked = { partnerId: "p", supplierName: "X", rowId: "1", price: 100, available: true, orderable: true, stockOnly: false, blocked: true };
+  assert.ok(supplierCartOptionRejection(blocked));
+  assert.equal(supplierCartOptionRejection(blocked).code, "supplier_option_blocked");
 });
 
 test("warehouse brand filter falls back to marketplace product data", () => {

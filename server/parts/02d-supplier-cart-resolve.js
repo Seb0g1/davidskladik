@@ -176,7 +176,10 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
   const stockOnlyRows = [];
   for (const [linkId, rows] of matches.entries()) {
     for (const row of rows || []) {
-      if (!supplierUsesStockOnlyPricing(null, row) || !row?.available) continue;
+      // Stock-only suppliers are selected by name/pricingMode, not by PM active/price status.
+      // Their availability is from the warehouse itself — bypassing the `available` flag so a
+      // PM row with Active=0 (or stopped managed-supplier flag) doesn't block the fallback.
+      if (!supplierUsesStockOnlyPricing(null, row)) continue;
       const partnerId = cleanText(row.partnerId).toLowerCase();
       if (blockedPartnerIds.has(partnerId)) {
         stockOnlyBlocked += 1;
@@ -186,7 +189,18 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
     }
   }
 
-  const stockOnly = pickWarehouseStockOnlySupplier(stockOnlyRows);
+  // In the cart context we intentionally do NOT check `available` for stock-only rows:
+  // the PM active/price flags don't reflect our own warehouse stock, so we pick the most
+  // recent row and prefer the one already marked available (for deterministic tiebreaking).
+  const stockOnly = stockOnlyRows
+    .slice()
+    .sort(
+      (a, b) =>
+        (b.available ? 1 : 0) - (a.available ? 1 : 0)
+        || String(b.docDate || "").localeCompare(String(a.docDate || ""))
+        || String(a.partnerName || a.supplierName || "").localeCompare(String(b.partnerName || b.supplierName || ""))
+        || String(a.rowId || "").localeCompare(String(b.rowId || "")),
+    )[0] || null;
   if (stockOnly) {
     let skipReason = "stock_only_fallback";
     if (blockedAvailable || stockOnlyBlocked) skipReason = "stock_only_fallback_after_supplier_blocked";

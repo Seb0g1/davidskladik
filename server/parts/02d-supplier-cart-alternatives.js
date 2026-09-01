@@ -47,7 +47,9 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
         price,
         originalPrice: Number(row.originalPrice || 0) || 0,
         priceCurrency: cleanText(row.priceCurrency || "USD").toUpperCase(),
-        available,
+        // Stock-only rows are always "available" from the cart's perspective — stock lives in
+        // our own warehouse, not in PriceMaster, so PM active/price flags don't apply.
+        available: stockOnly ? true : available,
         trustFactor: normalizeSupplierTrustFactor(row.trustFactor, 100),
         orderCutoffTime: normalizeSupplierOrderCutoff(row.orderCutoffTime),
         reseller: Boolean(row.reseller),
@@ -55,7 +57,8 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
         blocked: blockedPartnerIds.has(partnerId.toLowerCase()),
         cutoffPassed: supplierOrderCutoffPassed(row.orderCutoffTime, now),
         score: supplierCartOrderScore(row, usdRate, now),
-        orderable: available && (stockOnly || price > 0),
+        // Stock-only suppliers are always orderable — price=0 is expected (no purchase price).
+        orderable: stockOnly ? true : (available && price > 0),
         inactivePm,
       });
     }
@@ -96,6 +99,9 @@ function pickSupplierCartOption(options = [], partnerIdInput = "", rowIdInput = 
 function supplierCartOptionRejection(option) {
   if (!option) return { status: 404, error: "Поставщик с таким предложением не найден в PriceMaster.", code: "supplier_option_not_found" };
   if (option.blocked) return { status: 400, error: "Этот поставщик заблокирован для SKU после «Не было». Выберите другого.", code: "supplier_option_blocked" };
+  // Stock-only suppliers (own warehouse) bypass PM-based availability/price checks:
+  // stock lives in our warehouse, not in PriceMaster, so active/price flags don't apply.
+  if (option.stockOnly) return null;
   // Inactive PM row (OfferRows.Active=0): allow manual order even though available=false.
   // This mirrors pm-manual-commit which lets the user order from inactive suppliers explicitly.
   if (!option.available && !option.inactivePm) return { status: 400, error: "У этого поставщика нет наличия по PriceMaster.", code: "supplier_option_unavailable" };
