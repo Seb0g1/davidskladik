@@ -62,6 +62,7 @@ const PmSearchItemSchema = z.object({
   priceRub: z.number().optional().nullable(),
   isTester: z.boolean().optional().default(false),
   docDate: z.coerce.string().optional().nullable(),
+  unavailable: z.boolean().optional().default(false),
 }).passthrough();
 
 const PmSearchResponseSchema = z.object({
@@ -76,6 +77,12 @@ const PmManualCommitSchema = z.object({
   skipped: z.number().optional().default(0),
   docIds: z.array(z.unknown()).optional().default([]),
   pickingCreated: z.number().optional().default(0),
+  pmBlocked: z.array(z.object({
+    offerId: z.coerce.string().optional().default(""),
+    productName: z.coerce.string().optional().default(""),
+    existingDocId: z.number().optional().nullable(),
+    existingDocDate: z.coerce.string().optional().nullable(),
+  })).optional().default([]),
 }).passthrough();
 
 type PmSearchItem = z.infer<typeof PmSearchItemSchema>;
@@ -152,6 +159,12 @@ const MpOrderResultSchema = z.object({
   docIds: z.array(z.unknown()).optional().default([]),
   pickingCreated: z.number().optional().default(0),
   supplierName: z.coerce.string().optional().default(""),
+  pmBlocked: z.array(z.object({
+    offerId: z.coerce.string().optional().default(""),
+    productName: z.coerce.string().optional().default(""),
+    existingDocId: z.number().optional().nullable(),
+    existingDocDate: z.coerce.string().optional().nullable(),
+  })).optional().default([]),
 }).passthrough();
 
 const BatchOrderResultSchema = z.object({
@@ -254,12 +267,16 @@ function ReadyToShipPanel() {
   const revertAndReplaceMutation = useMutation({
     mutationFn: ({ key, partnerId, rowId }: { key: string; partnerId: string; rowId: string }) =>
       fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/replace-supplier`, SupplierReplaceResponseSchema, mutationBody({ partnerId, rowId })),
-    onSuccess: () => {
+    onSuccess: (data) => {
       setReplaceKey(null);
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      if ((data.pmBlocked?.length ?? 0) > 0) {
+        const names = data.pmBlocked!.map((b) => b.productName || b.offerId).join(", ");
+        alert(`Поставщик заменён, но товар уже есть в открытом заказе PM (дубль заблокирован): ${names}`);
+      }
     },
   });
 
@@ -389,9 +406,15 @@ function ReadyToShipPanel() {
                 <div className="inline-error">{errorMessage(mpOrderMutation.error)}</div>
               ) : null}
               {mpOrderMutation.isSuccess && (mpOrderMutation.variables as { line: ReadyToShipLine })?.line?.key === line.key ? (
-                <div className="success-strip compact">
-                  Заказано у «{mpOrderMutation.data?.supplierName || "поставщика"}» — doc {(mpOrderMutation.data?.docIds || []).join(", ") || "-"}
-                </div>
+                (mpOrderMutation.data?.inserted ?? 0) > 0 ? (
+                  <div className="success-strip compact">
+                    Заказано у «{mpOrderMutation.data?.supplierName || "поставщика"}» — doc {(mpOrderMutation.data?.docIds || []).join(", ") || "-"}
+                  </div>
+                ) : (
+                  <div className="inline-error">
+                    Уже в PM (дубль заблокирован){(mpOrderMutation.data?.pmBlocked?.length ?? 0) > 0 ? ` — doc ${mpOrderMutation.data!.pmBlocked!.map((b) => b.existingDocId).join(", ")}` : ""}
+                  </div>
+                )
               ) : null}
               <div className="supplier-cart-actions">
                 <button
@@ -444,9 +467,15 @@ function ReadyToShipPanel() {
           {returnMutation.data ? <div className="success-strip">Товар отмечен как «вернули из ПВЗ». При следующем заказе этого SKU PM-заявка не создаётся — берётся из пула возвратов.</div> : null}
           {revertAndReplaceMutation.error ? <div className="inline-error">Замена поставщика: {errorMessage(revertAndReplaceMutation.error)}</div> : null}
           {revertAndReplaceMutation.data ? (
-            <div className="success-strip">
-              Перезаказано у «{revertAndReplaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (doc {revertAndReplaceMutation.data.docIds?.join(", ") || "-"}).
-            </div>
+            (revertAndReplaceMutation.data.inserted ?? 0) > 0 ? (
+              <div className="success-strip">
+                Перезаказано у «{revertAndReplaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (doc {revertAndReplaceMutation.data.docIds?.join(", ") || "-"}).
+              </div>
+            ) : (
+              <div className="inline-error">
+                Замена поставщика: товар уже в PM (дубль заблокирован){(revertAndReplaceMutation.data.pmBlocked?.length ?? 0) > 0 ? ` — существующий doc ${revertAndReplaceMutation.data.pmBlocked?.[0]?.existingDocId ?? "?"}` : ""}
+              </div>
+            )
           ) : null}
           <div className="supplier-cart-list">
             {listQuery.isLoading ? <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю...</div> : null}
@@ -547,7 +576,17 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
 
   const commitMutation = useMutation({
     mutationFn: () => {
-      const items = Object.entries(selected).map(([id, { qty }]) => ({ id, quantity: qty }));
+      const items = Object.entries(selected).map(([id, { qty, item }]) => ({
+        id,
+        quantity: qty,
+        rowId: item.rowId || "",
+        partnerId: item.partnerId || "",
+        article: item.article || "",
+        name: item.name || "",
+        price: item.price ?? 0,
+        currency: item.currency || "USD",
+        supplierName: item.supplierName || "",
+      }));
       return fetchJson("/api/supplier-cart/pm-manual-commit", PmManualCommitSchema, mutationBody({ items }));
     },
     onSuccess: () => {
@@ -682,7 +721,7 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
           return (
             <article
               key={item.id}
-              className={`pm-search-item${sel ? " pm-search-item--selected" : ""}`}
+              className={`pm-search-item${sel ? " pm-search-item--selected" : ""}${item.unavailable ? " pm-search-item--unavailable" : ""}`}
               onClick={() => toggleItem(item)}
             >
               <div className="pm-search-item-check">
@@ -700,6 +739,7 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
                   <span className="pm-search-item-price">{item.price ? `${item.price} ${item.currency}` : "—"}</span>
                   {item.article ? <span>{item.article}</span> : null}
                   {item.docDate ? <span>{compactDate(item.docDate)}</span> : null}
+                  {item.unavailable ? <span style={{ color: "#f59e0b", fontSize: "0.75em" }}>неактивен в PM</span> : null}
                 </div>
                 {sel ? (
                   <div className="pm-search-item-qty" onClick={(e) => e.stopPropagation()}>
@@ -718,7 +758,28 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
         })}
       </div>
 
-      {/* Footer: commit button */}
+      {/* Footer: commit button + result */}
+      {commitMutation.data && !commitMutation.isPending ? (
+        <div className="pm-search-footer">
+          {(commitMutation.data.inserted ?? 0) > 0 ? (
+            <div className="success-strip" style={{ margin: 0, borderRadius: 6 }}>
+              Добавлено в PM: {commitMutation.data.inserted} поз.{" "}
+              {(commitMutation.data.docIds?.length ?? 0) > 0 ? `· Документ №${commitMutation.data.docIds.join(", ")}` : ""}
+              {(commitMutation.data.pickingCreated ?? 0) > 0 ? ` · Строк сборки: ${commitMutation.data.pickingCreated}` : ""}
+            </div>
+          ) : null}
+          {(commitMutation.data.pmBlocked?.length ?? 0) > 0 ? (
+            <div className="inline-error" style={{ margin: 0, borderRadius: 6 }}>
+              Уже в PM (дубль заблокирован): {commitMutation.data.pmBlocked!.map((b) => b.productName || b.offerId).join(", ")}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {commitMutation.error ? (
+        <div className="pm-search-footer">
+          <div className="inline-error" style={{ margin: 0 }}>{String((commitMutation.error as Error).message || commitMutation.error)}</div>
+        </div>
+      ) : null}
       {selectedCount > 0 ? (
         <div className="pm-search-footer">
           <button

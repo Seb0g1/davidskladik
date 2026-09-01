@@ -433,8 +433,9 @@ async function sponsorBotPollOnce() {
 
 async function sponsorBotLoop() {
   sponsorBotRunning = true;
-  // 20s: Prisma init + ensures old instance (poll timeout=15s) finishes before we start
-  await new Promise((r) => setTimeout(r, 20000));
+  // 30s: Prisma init + ensures old instance (poll timeout=15s + network) finishes before we start.
+  // Extended from 20s because rapid worker restarts left the old poll alive past 20s.
+  await new Promise((r) => setTimeout(r, 30000));
   if (!sponsorBotRunning) return;
   try {
     const p = getPrisma();

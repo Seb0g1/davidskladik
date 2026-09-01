@@ -59,6 +59,8 @@ export interface CartItem {
   quantity: number;
 }
 
+export type PaymentMethod = "ozon_pay" | "sbp" | "cash";
+
 export interface ShopOrderPayload {
   items: { offerId: string; quantity: number; priceRub: number }[];
   delivery: {
@@ -73,6 +75,7 @@ export interface ShopOrderPayload {
     pvzId?: string;
   };
   comment?: string;
+  paymentMethod?: PaymentMethod;
 }
 
 export interface ShopOrderItem {
@@ -116,6 +119,18 @@ export interface ShopReview {
   text: string;
   createdAt: string;
   author?: string;
+}
+
+export interface MarketplaceReview {
+  id: string;
+  author: string;
+  rating: number;
+  text: string;
+  advantages?: string;
+  disadvantages?: string;
+  createdAt: string;
+  source: "ozon" | "yandex";
+  photos?: string[];
 }
 
 export interface CatalogResponse {

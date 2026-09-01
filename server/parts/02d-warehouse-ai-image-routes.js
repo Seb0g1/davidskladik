@@ -30,7 +30,7 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/approve", async (reques
     });
     const batchUrls = [draft.resultUrl, ...batchDrafts.map((item) => item.resultUrl).filter((url) => url && url !== draft.resultUrl)];
     const marketplace = normalizeWarehouseProduct(product).marketplace === "yandex" ? "yandex" : "ozon";
-    const extraCardUrls = await marketplaceExtraCardUrls(marketplace, request);
+    const extraCardUrls = await marketplaceExtraCardUrls(marketplace, request, { product, accountId: product.accountId || "" });
     const sendBatchUrls = appendUniqueImages(batchUrls, extraCardUrls).slice(0, 10);
     if (normalizeWarehouseProduct(product).marketplace === "yandex") {
       const yandex = product.yandex || {};
@@ -92,7 +92,7 @@ app.post("/api/warehouse/products/:id/ai-images/:draftId/send", async (request, 
     }
     await normalizeAiImageDraftUrlsForMarketplaceSend(product, sourceDraft.id, request);
     const applied = applyAiImageDraftToProduct(product, sourceDraft.id, { sentMarketplace: marketplace });
-    const extraCardUrls = await marketplaceExtraCardUrls(marketplace, request);
+    const extraCardUrls = await marketplaceExtraCardUrls(marketplace, request, { product, accountId: product.accountId || "" });
     if (extraCardUrls.length) {
       if (marketplace === "yandex") {
         const yandex = applied.product.yandex || {};

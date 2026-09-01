@@ -125,6 +125,8 @@ async function runAiImageGenerationJob(jobInput, generation, requestContext = {}
         lastError: null,
       });
       const prompt = [generation.prompt, preset?.prompt].filter(Boolean).join("\n\n");
+      // Slots with no sourceImageUrl (e.g. pyramid) use text-to-image generation instead of image edits.
+      const hasSource = Boolean(cleanText(generation.sourceImageUrl));
       const draft = await generateOzonAiImageDraftWithRetry(product, {
         prompt,
         sourceImageUrl: generation.sourceImageUrl,
@@ -133,9 +135,11 @@ async function runAiImageGenerationJob(jobInput, generation, requestContext = {}
         variantTotal: generation.count,
         presetId: preset?.id,
         presetLabel: preset?.label,
-        requireSourceImage: true,
-        allowGenerationFallback: false,
+        requireSourceImage: hasSource,
+        allowGenerationFallback: !hasSource,
         forceCodexSale: true,
+        skipPackshotRules: Boolean(generation.rawPrompt),
+        slotOrder: generation.slotOrder,
       }, requestContext, {
         jobId: job.id,
         productId: product.id,

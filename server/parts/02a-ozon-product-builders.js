@@ -78,8 +78,10 @@ function buildOzonAiImagePrompt(product, promptOverride = "", options = {}) {
   let base = template.includes("{productName}")
     ? template.replaceAll("{productName}", productName)
     : `${template}\n\nНазвание товара: ${productName}`;
-  const bottleOnlyInstruction = "Strict marketplace packshot rules: create exactly one standalone image. Do not create a collage, grid, contact sheet, split-screen, multi-panel layout, before/after layout, or multiple variants inside one image. Show one clean perfume bottle only. The full bottle must fit inside the square frame from cap to base, centered, upright, not cropped, with 10-15% empty margin on every side. Do not place the bottle on the far left or far right. Remove or ignore any box, outer packaging, cartons, bags, brochures, accessories, props, hands, faces, and all extra text. Do not create headlines, brand typography, marketing copy, icons, or labels outside the original bottle label. Do not hallucinate packaging, even if the source photo contains a box.";
-  base = `${base}\n\n${bottleOnlyInstruction}`;
+  if (!options.skipPackshotRules) {
+    const bottleOnlyInstruction = "Strict marketplace packshot rules: create exactly one standalone image. Do not create a collage, grid, contact sheet, split-screen, multi-panel layout, before/after layout, or multiple variants inside one image. Show one clean perfume bottle only. The full bottle must fit inside the square frame from cap to base, centered, upright, not cropped, with 10-15% empty margin on every side. Do not place the bottle on the far left or far right. Remove or ignore any box, outer packaging, cartons, bags, brochures, accessories, props, hands, faces, and all extra text. Do not create headlines, brand typography, marketing copy, icons, or labels outside the original bottle label. Do not hallucinate packaging, even if the source photo contains a box.";
+    base = `${base}\n\n${bottleOnlyInstruction}`;
+  }
   const variantIndex = Number(options.variantIndex || 0);
   const variantTotal = Number(options.variantTotal || 0);
   if (!variantIndex || variantTotal <= 1) return base;

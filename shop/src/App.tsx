@@ -12,6 +12,8 @@ import BrandsPage from "./pages/BrandsPage";
 import NewProductsPage from "./pages/NewProductsPage";
 import NewsPage from "./pages/NewsPage";
 import SupportChatWidget from "./components/SupportChatWidget";
+import DeliveryPage from "./pages/DeliveryPage";
+import WarrantyPage from "./pages/WarrantyPage";
 
 export default function App() {
   return (
@@ -31,6 +33,8 @@ export default function App() {
           <Route path="/brands" element={<BrandsPage />} />
           <Route path="/new" element={<NewProductsPage />} />
           <Route path="/news" element={<NewsPage />} />
+          <Route path="/delivery" element={<DeliveryPage />} />
+          <Route path="/warranty" element={<WarrantyPage />} />
         </Route>
       </Routes>
       <SupportChatWidget />

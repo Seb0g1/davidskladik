@@ -30,9 +30,9 @@ export default {
         },
       },
       fontFamily: {
-        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
-        display: ["Playfair Display", "Georgia", "serif"],
-        serif: ["Playfair Display", "Georgia", "serif"],
+        sans: ["Jost", "system-ui", "sans-serif"],
+        display: ["Cormorant Garamond", "Georgia", "serif"],
+        serif: ["Cormorant Garamond", "Georgia", "serif"],
       },
       fontSize: {
         "2xs": "0.625rem",

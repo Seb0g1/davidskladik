@@ -119,7 +119,16 @@ async function readBrandingLogoBuffer(settings = {}, marketplace = "ozon", reque
   }
 }
 
-async function marketplaceExtraCardUrls(marketplace = "ozon", request = null) {
+// Keywords that indicate a product is cosmetics (not perfumery) — stubs are skipped for these.
+const COSMETICS_KEYWORDS = ["крем", "гель", "лосьон", "шампунь", "бальзам", "маска", "скраб", "мыло", "пена", "пилинг", "тонер", "сыворотка", "кондиционер", "primer", "праймер", "помада", "тушь", "тени", "карандаш", "хайлайтер", "контуринг", "консилер"];
+
+function isProductCosmetics(product) {
+  if (!product) return false;
+  const text = [product.name, product.ozon?.name, product.categoryName].filter(Boolean).join(" ").toLowerCase();
+  return COSMETICS_KEYWORDS.some((kw) => text.includes(kw));
+}
+
+async function marketplaceExtraCardUrls(marketplace = "ozon", request = null, options = {}) {
   const settings = await readAppSettings();
   const branding = brandingForMarketplace(settings, marketplace);
   const cards = Array.isArray(branding.extraCards) ? branding.extraCards : [];
@@ -129,6 +138,18 @@ async function marketplaceExtraCardUrls(marketplace = "ozon", request = null) {
     if (!rawUrl) continue;
     urls.push(await normalizeMarketplaceImageUrlForSend(rawUrl, request));
   }
+
+  // Append shop stubs (uploaded branding slides), skipped for cosmetics products.
+  const product = options.product || null;
+  if (!isProductCosmetics(product)) {
+    const accountId = cleanText(options.accountId || "");
+    const stubUrls = appendShopStubsToImages([], marketplace, accountId, settings);
+    for (const url of stubUrls) {
+      const normalized = await normalizeMarketplaceImageUrlForSend(url, request);
+      if (normalized && !urls.includes(normalized)) urls.push(normalized);
+    }
+  }
+
   return Array.from(new Set(urls));
 }
 

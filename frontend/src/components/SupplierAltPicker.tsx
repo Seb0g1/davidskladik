@@ -52,9 +52,9 @@ export function SupplierAltPicker({
         </div>
       ) : null}
       {options.map((option) => {
-        const disabled = busy || option.blocked || !option.orderable;
+        const disabled = busy || option.blocked || (!option.orderable && !option.inactivePm);
         return (
-          <div className={`supplier-alt-row${option.blocked || !option.orderable ? " is-disabled" : ""}`} key={`${option.partnerId}-${option.rowId}`}>
+          <div className={`supplier-alt-row${option.blocked || (!option.orderable && !option.inactivePm) ? " is-disabled" : ""}${option.inactivePm ? " is-inactive-pm" : ""}`} key={`${option.partnerId}-${option.rowId}`}>
             <div className="supplier-alt-info">
               <strong>{option.supplierName || option.partnerId}</strong>
               <span>
@@ -64,7 +64,7 @@ export function SupplierAltPicker({
               </span>
               <span className="supplier-alt-badges">
                 {option.blocked ? <em className="danger-text"><AlertTriangle size={12} /> заблокирован после «не было»</em> : null}
-                {!option.available ? <em className="danger-text">нет наличия</em> : null}
+                {option.inactivePm ? <em style={{ color: "#f59e0b" }}><AlertTriangle size={12} /> неактивен в PM (Active=0)</em> : (!option.available ? <em className="danger-text">нет наличия</em> : null)}
                 {option.cutoffPassed && !option.blocked ? <em><Clock3 size={12} /> приём заказов на сегодня закрыт</em> : null}
                 {option.stockOnly ? <em>Наш склад</em> : null}
                 {option.reseller ? <em>перекупщик</em> : null}
@@ -75,7 +75,7 @@ export function SupplierAltPicker({
               className="secondary-action"
               type="button"
               disabled={disabled}
-              title={option.blocked ? "Поставщик временно заблокирован для этого SKU" : (!option.orderable ? "Нет наличия или цены" : "")}
+              title={option.blocked ? "Поставщик временно заблокирован для этого SKU" : (option.inactivePm ? "Поставщик неактивен в PM — заказ всё равно будет создан" : (!option.orderable ? "Нет наличия или цены" : ""))}
               onClick={() => onPick(option)}
             >
               {busy ? <Loader2 className="spin" size={14} /> : null} {actionLabel}

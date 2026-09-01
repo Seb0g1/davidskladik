@@ -350,6 +350,145 @@ function BrandingLogoPanel({
   );
 }
 
+type ShopStubEntry = { enabled: boolean; stubUrls: string[]; position: string };
+type ShopStubs = { ozon: ShopStubEntry; yandex: ShopStubEntry; "ozon-aura": ShopStubEntry };
+
+const SHOP_STUB_SHOPS: Array<{ key: string; label: string; note: string }> = [
+  { key: "ozon", label: "Magic Stick (Ozon)", note: "Основной Ozon-кабинет" },
+  { key: "yandex", label: "parfumerius (Yandex Market)", note: "Yandex Market" },
+  { key: "ozon-aura", label: "AURA (Ozon второй аккаунт)", note: "Второй Ozon-кабинет (AURA)" },
+];
+
+function ShopStubsPanel() {
+  const queryClient = useQueryClient();
+  const [uploadFiles, setUploadFiles] = useState<Record<string, File | null>>({});
+  const stubsQuery = useQuery({
+    queryKey: ["shop-stubs"],
+    queryFn: async () => {
+      const res = await fetch("/api/settings/shop-stubs", { credentials: "same-origin" });
+      const data = await res.json().catch(() => ({})) as { shopStubs?: ShopStubs };
+      return (data.shopStubs || {}) as ShopStubs;
+    },
+  });
+  const stubs = stubsQuery.data as ShopStubs | undefined;
+
+  const toggleEnabled = useMutation({
+    mutationFn: async ({ shopKey, enabled }: { shopKey: string; enabled: boolean }) => {
+      const current = stubs || {} as ShopStubs;
+      const entry = (current as Record<string, ShopStubEntry>)[shopKey] || { enabled: false, stubUrls: [], position: "end" };
+      const next = { ...current, [shopKey]: { ...entry, enabled } };
+      const res = await fetch("/api/settings/shop-stubs", {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ shopStubs: next }),
+      });
+      return res.json();
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["shop-stubs"] }),
+  });
+
+  const uploadStub = useMutation({
+    mutationFn: async ({ shopKey, file }: { shopKey: string; file: File }) => {
+      const body = new FormData();
+      body.set("image", file);
+      const res = await fetch(`/api/settings/shop-stubs/${encodeURIComponent(shopKey)}/upload`, {
+        method: "POST",
+        credentials: "same-origin",
+        body,
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: (_data, variables) => {
+      setUploadFiles((prev) => ({ ...prev, [variables.shopKey]: null }));
+      void queryClient.invalidateQueries({ queryKey: ["shop-stubs"] });
+    },
+  });
+
+  const removeStub = useMutation({
+    mutationFn: async ({ shopKey, url }: { shopKey: string; url: string }) => {
+      const res = await fetch(`/api/settings/shop-stubs/${encodeURIComponent(shopKey)}/url`, {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      return res.json();
+    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["shop-stubs"] }),
+  });
+
+  return (
+    <div className="settings-panel settings-panel-wide">
+      <div className="section-title"><div><span>Заглушки</span><h3>Фото-заглушки в конце галереи товара</h3></div></div>
+      <div className="settings-hint">Брендинговые фото добавляются в конец галереи — после всех оригинальных фото товара. Максимум 5 заглушек на магазин.</div>
+      {stubsQuery.isLoading && <div className="soft-empty compact">Загрузка...</div>}
+      {SHOP_STUB_SHOPS.map(({ key, label, note }) => {
+        const entry: ShopStubEntry = (stubs && (stubs as Record<string, ShopStubEntry>)[key]) || { enabled: false, stubUrls: [], position: "end" };
+        const file = uploadFiles[key] || null;
+        return (
+          <div key={key} className="branding-card" style={{ marginBottom: "12px" }}>
+            <div className="branding-fields" style={{ width: "100%" }}>
+              <div className="section-title compact-title"><div><span>{note}</span><h3>{label}</h3></div></div>
+              <label className="settings-toggle">
+                <input
+                  type="checkbox"
+                  checked={entry.enabled}
+                  onChange={(event) => toggleEnabled.mutate({ shopKey: key, enabled: event.target.checked })}
+                />
+                Добавлять заглушки {entry.enabled ? "(включено)" : "(выключено)"}
+              </label>
+              {entry.stubUrls.length > 0 && (
+                <div className="extra-card-preview-row">
+                  {entry.stubUrls.map((url, index) => (
+                    <span className="extra-card-preview" key={url + index} style={{ position: "relative" }}>
+                      <img src={url} alt={`Заглушка ${index + 1}`} />
+                      <button
+                        type="button"
+                        className="icon-button"
+                        style={{ position: "absolute", top: 0, right: 0, background: "rgba(0,0,0,0.5)", color: "#fff", border: "none", cursor: "pointer", borderRadius: "50%", width: 20, height: 20, fontSize: 12 }}
+                        onClick={() => removeStub.mutate({ shopKey: key, url })}
+                        title="Удалить"
+                      >×</button>
+                      <small>Заглушка {index + 1}</small>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {entry.stubUrls.length === 0 && <div className="soft-empty compact">Заглушки не загружены для {label}.</div>}
+              {entry.stubUrls.length < 5 && (
+                <div className="draft-actions">
+                  <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      onChange={(event) => setUploadFiles((prev) => ({ ...prev, [key]: event.target.files?.[0] || null }))}
+                    />
+                  </label>
+                  <button
+                    className="secondary-action"
+                    type="button"
+                    disabled={!file || uploadStub.isPending}
+                    onClick={() => file && uploadStub.mutate({ shopKey: key, file })}
+                  >
+                    {uploadStub.isPending ? <Loader2 className="spin" size={16} /> : <Upload size={16} />} Загрузить заглушку
+                  </button>
+                </div>
+              )}
+              {entry.stubUrls.length >= 5 && <div className="settings-hint">Достигнут лимит 5 заглушек. Удалите старую, чтобы добавить новую.</div>}
+              {uploadStub.error && <div className="inline-error">{errorMessage(uploadStub.error)}</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function UsersSettingsPanel() {
   const queryClient = useQueryClient();
   const [form, setForm] = useState({ username: "", password: "", role: "manager" });
@@ -1146,6 +1285,8 @@ export function SettingsPage() {
             <BrandingLogoPanel marketplace="yandex" label="Yandex" settings={settings} draft={draft} update={update} />
           </div>
         </div>
+
+        <ShopStubsPanel />
 
         <div className="settings-panel">
           <div className="section-title"><div><span>Yandex</span><h3>Склад остатков</h3></div></div>

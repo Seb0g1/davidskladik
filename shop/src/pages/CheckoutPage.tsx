@@ -219,6 +219,7 @@ export default function CheckoutPage() {
                   placeholder="Необязательно..."
                 />
               </Section>
+
             </div>
 
             {/* Summary */}
@@ -265,7 +266,7 @@ export default function CheckoutPage() {
                 }}>
                 {mutation.isPending
                   ? <><Loader2 size={16} style={{ animation: "spin 1s linear infinite" }} /> Оформляем...</>
-                  : <><Lock size={14} /> Оформить · {total.toLocaleString("ru-RU")} ₽</>
+                  : <><Lock size={14} /> Оплатить · {total.toLocaleString("ru-RU")} ₽</>
                 }
               </button>
 

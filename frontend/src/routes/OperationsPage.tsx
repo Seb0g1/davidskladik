@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Clock3, Copy, ListChecks, Loader2, Plus, RefreshCw, Repeat2, Search, Zap } from "lucide-react";
 import { z } from "zod";
@@ -197,19 +197,38 @@ export function SupplierCartPanel() {
   const [manualRowId, setManualRowId] = useState("");
   const debouncedManualOfferId = useDebounced(manualOfferId.trim(), 400);
   const queryClient = useQueryClient();
+  const [isGenerating, setIsGenerating] = useState(false);
   const draftQuery = useQuery({
     queryKey: ["supplier-cart-draft"],
     queryFn: () => fetchJson("/api/supplier-cart/draft", SupplierCartPreviewSchema),
-    refetchInterval: 5 * 60 * 1000,
+    refetchInterval: isGenerating ? 3000 : 5 * 60 * 1000,
+  });
+  const generatingQuery = useQuery({
+    queryKey: ["supplier-cart-generating"],
+    queryFn: () => fetchJson("/api/supplier-cart/generating", z.object({ generating: z.boolean(), startedAt: z.string().nullable().optional(), error: z.string().optional().nullable() }).passthrough()),
+    refetchInterval: isGenerating ? 3000 : false,
+    enabled: isGenerating,
   });
   const generateMutation = useMutation({
     mutationFn: () => fetchJson("/api/supplier-cart/generate", SupplierCartPreviewSchema, mutationBody({ marketplace, limit })),
-    onSuccess: (payload) => {
-      queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
-      setSelected(new Set((payload.rows || []).filter((row) => row.ready && !row.alreadyCommitted).map((row) => row.key)));
+    onSuccess: () => {
+      setIsGenerating(true);
+      // Immediately overwrite stale cache (which might hold { generating: false } from the
+      // last run) so the render-below useEffect doesn't prematurely clear isGenerating
+      // before the first real poll from the worker arrives.
+      queryClient.setQueryData(["supplier-cart-generating"], { generating: true, startedAt: new Date().toISOString() });
     },
   });
-  useEffect(() => { void generateMutation.mutate(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const generateMutationRef = useRef(generateMutation);
+  generateMutationRef.current = generateMutation;
+  // Stop polling once server reports generation done (useEffect avoids render-body setState).
+  useEffect(() => {
+    if (isGenerating && generatingQuery.data?.generating === false) {
+      setIsGenerating(false);
+      generateMutationRef.current.reset(); // clear pre-generation draft so fresh draftQuery data is shown
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
+    }
+  }, [isGenerating, generatingQuery.data?.generating, queryClient]);
   const commitMutation = useMutation({
     mutationFn: () => fetchJson("/api/supplier-cart/commit", SupplierCartCommitSchema, mutationBody({
       rows: (generateMutation.data || draftQuery.data)?.rows || [],
@@ -219,6 +238,9 @@ export function SupplierCartPanel() {
       queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
       queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
     },
+  });
+  const reconfirmMutation = useMutation({
+    mutationFn: () => fetchJson("/api/supplier-cart/reconfirm-marketplace", z.object({ ok: z.boolean(), confirmed: z.number(), skipped: z.number().optional() }).passthrough(), mutationBody({})),
   });
   const overrideMutation = useMutation({
     mutationFn: ({ key, partnerId, rowId }: { key: string; partnerId: string; rowId: string }) =>
@@ -302,8 +324,9 @@ export function SupplierCartPanel() {
           <button className="secondary-action" type="button" onClick={() => setShowManualOrder((v) => !v)}>
             <Plus size={16} /> Ручной заказ
           </button>
-          <button className="secondary-action" type="button" onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending}>
-            {generateMutation.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Обновить корзину
+          <button className="secondary-action" type="button" onClick={() => generateMutation.mutate()} disabled={generateMutation.isPending || isGenerating}>
+            {(generateMutation.isPending || isGenerating) ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
+            {isGenerating ? "Обновляется…" : "Обновить корзину"}
           </button>
         </div>
       </div>
@@ -429,6 +452,7 @@ export function SupplierCartPanel() {
         </div>
       )}
       {scheduleMutation.error ? <div className="inline-error">{errorMessage(scheduleMutation.error)}</div> : null}
+      {generatingQuery.data?.error ? <div className="inline-error">{String(generatingQuery.data.error)}</div> : null}
       {previewData ? (
         <div className="operation-stats">
           <DiagnosticValue label="Найдено" value={previewData.total} />
@@ -507,7 +531,27 @@ export function SupplierCartPanel() {
           </div>
         </>
       ) : previewData ? <div className="soft-empty">Новых заказов для автокорзины не найдено.</div> : <div className="soft-empty">Загружаю заказы...</div>}
-      {commitMutation.data ? <div className="success-strip">Добавлено в PriceMaster: {commitMutation.data.inserted}. Проверено в PM: {commitMutation.data.verifiedRows}. База: {commitMutation.data.priceMasterDb || "-"}. Документы: {commitMutation.data.docIds.join(", ") || "-"}</div> : null}
+      {commitMutation.data ? (
+        <>
+          <div className="success-strip">Добавлено в PriceMaster: {commitMutation.data.inserted}. Проверено в PM: {commitMutation.data.verifiedRows}. База: {commitMutation.data.priceMasterDb || "-"}. Документы: {commitMutation.data.docIds.join(", ") || "-"}</div>
+          {(commitMutation.data.pmBlocked?.length ?? 0) > 0 && (
+            <div className="inline-warning" style={{ margin: "4px 0" }}>
+              <strong>Не добавлено (уже в заявке PM):</strong> {commitMutation.data.pmBlocked!.length} шт. — заказ у поставщика уже открыт, товар ещё не получен (Recieved=0).{" "}
+              Документы: {[...new Set(commitMutation.data.pmBlocked!.map((b) => b.existingDocId).filter(Boolean))].join(", ")}.{" "}
+              {commitMutation.data.pmBlocked!.slice(0, 3).map((b) => b.offerId || b.productName).filter(Boolean).join(", ")}
+              {(commitMutation.data.pmBlocked!.length ?? 0) > 3 ? ` и ещё ${commitMutation.data.pmBlocked!.length - 3}` : ""}.
+            </div>
+          )}
+        </>
+      ) : null}
+      <div style={{ display: "flex", gap: 8, margin: "4px 0", flexWrap: "wrap" }}>
+        <button className="secondary-action" type="button" disabled={reconfirmMutation.isPending} onClick={() => reconfirmMutation.mutate()} title="Повторно отправить подтверждение отгрузки на Ozon/Yandex для товаров, синхронизированных из PM">
+          {reconfirmMutation.isPending ? <Loader2 className="spin" size={14} /> : null}
+          Переотправить подтверждения отгрузки
+        </button>
+        {reconfirmMutation.data && <span className="tone-success" style={{ fontSize: 13, alignSelf: "center" }}>Подтверждено: {reconfirmMutation.data.confirmed}</span>}
+        {reconfirmMutation.error && <span className="tone-warn" style={{ fontSize: 13, alignSelf: "center" }}>{errorMessage(reconfirmMutation.error)}</span>}
+      </div>
       {generateMutation.error && <div className="inline-error">{errorMessage(generateMutation.error)}</div>}
       {commitMutation.error && <div className="inline-error">{errorMessage(commitMutation.error)}</div>}
       {overrideMutation.error && <div className="inline-error">Замена поставщика: {errorMessage(overrideMutation.error)}</div>}

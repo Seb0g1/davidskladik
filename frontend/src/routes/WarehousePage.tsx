@@ -16,6 +16,7 @@ import { DiagnosticValue } from "../components/DiagnosticValue";
 import { asRecord, compactDate, copyableLatinProductName, copyPlainText, errorMessage, money, type MutationPayload, numberValue, refreshWarehouseAfterMutation, updateCachedProducts, useDebounced } from "../lib/common";
 import { ProductGroup, firstImage, groupMarketplaceLabels, groupPrice, groupProductsForList, groupStatusLabel, marketplaceLabel, marketplaceRowLabel, preferredGroupPrimary, statusLabel, uniqueLinks } from "../lib/warehouse";
 import { demoWarehouseProducts, isDemoWarehouseProduct } from "../demoWarehouse";
+import { AiCardImagePanel } from "../components/AiCardImagePanel";
 
 const DEFAULT_PAGE_SIZE = 40;
 const PAGE_SIZE_OPTIONS = [20, 50, 100];
@@ -2407,6 +2408,7 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
       <MarketplaceRows products={products} breakdown={breakdown} canEdit={isAdmin && !demoMode} withExternal={!demoMode} />
       {isAdmin && !demoMode ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <AvitoImagesPanel product={primary} onSaved={refreshDetail} /> : null}
+      {isAdmin && !demoMode ? <AiCardImagePanel product={primary} onSaved={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <section className="detail-section">
         <div className="section-title">
           <div>

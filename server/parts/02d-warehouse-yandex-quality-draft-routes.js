@@ -156,7 +156,7 @@ app.post("/api/warehouse/products/:id/yandex-quality-draft/send", requireAdmin, 
         primaryUrl,
         ...imageBatch.map((draft) => draft.resultUrl).filter((url) => url && url !== primaryUrl),
       ].slice(0, 10);
-      const extraCardUrls = await marketplaceExtraCardUrls("yandex", request);
+      const extraCardUrls = await marketplaceExtraCardUrls("yandex", request, { product });
       yandexPicturesForSend = appendUniqueImages(batchUrls, extraCardUrls).slice(0, 10);
       const yandex = product.yandex || {};
       const currentPictures = splitList(yandex.pictures);

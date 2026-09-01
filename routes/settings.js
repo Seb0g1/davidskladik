@@ -30,6 +30,7 @@ function registerSettingsRoutes(app, deps) {
     crypto,
     brandingImageDir,
     uploadBaseUrl,
+    normalizeShopStubs,
   } = deps;
 
 app.get("/api/settings", requireAdmin, async (_request, response, next) => {
@@ -67,6 +68,14 @@ async function saveSettingsHandler(request, response, next) {
       rawSettings.defaultMarkups = previous.defaultMarkups;
     }
 
+    // Preserve shopStubs — upload happens via dedicated endpoint, not through general settings save.
+    if (!rawSettings.shopStubs || typeof rawSettings.shopStubs !== "object") {
+      rawSettings.shopStubs = previous.shopStubs || {};
+    }
+    // Preserve cardImageStubs (URL-based stub images for AI card panel).
+    if (!rawSettings.cardImageStubs || typeof rawSettings.cardImageStubs !== "object") {
+      rawSettings.cardImageStubs = previous.cardImageStubs || {};
+    }
     if (!rawSettings.tnved) {
       rawSettings.tnved = previous.tnved || {};
     } else {
@@ -416,6 +425,91 @@ app.post("/api/settings/branding/extra-card", requireAdmin, uploadImages.single(
       url: `${uploadBaseUrl(request)}${imageUrl}`,
       settings: publicAppSettings(settings),
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/settings/shop-stubs", requireAdmin, async (_request, response, next) => {
+  try {
+    const settings = await readAppSettings();
+    response.json({ ok: true, shopStubs: settings.shopStubs || {} });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/settings/shop-stubs", requireAdmin, async (request, response, next) => {
+  try {
+    const incoming = request.body?.shopStubs || request.body || {};
+    const previous = await readAppSettings();
+    const shopStubs = typeof normalizeShopStubs === "function"
+      ? normalizeShopStubs(incoming)
+      : incoming;
+    const settings = await writeAppSettings({ ...previous, shopStubs });
+    response.json({ ok: true, shopStubs: settings.shopStubs });
+  } catch (error) {
+    next(error);
+  }
+});
+
+const SHOP_STUB_KEYS = ["ozon", "yandex", "ozon-aura"];
+
+app.post("/api/settings/shop-stubs/:shopKey/upload", requireAdmin, uploadImages.single("image"), async (request, response, next) => {
+  try {
+    const shopKey = cleanText(request.params.shopKey || "").toLowerCase();
+    if (!SHOP_STUB_KEYS.includes(shopKey)) {
+      return response.status(400).json({ error: "shopKey must be ozon, yandex or ozon-aura", code: "shop_stub_key_invalid" });
+    }
+    const file = request.file;
+    if (!file) {
+      return response.status(400).json({ error: "Upload an image file.", code: "shop_stub_image_required" });
+    }
+    await fs.mkdir(brandingImageDir, { recursive: true });
+    const ext = String(file.mimetype || "").includes("jpeg") ? "jpg" : "png";
+    const fileName = `stub-${shopKey}-${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}.${ext}`;
+    const filePath = path.join(brandingImageDir, fileName);
+    await fs.writeFile(filePath, file.buffer);
+    const imageUrl = `/uploads/branding/${fileName}`;
+    const previous = await readAppSettings();
+    const existingStubs = previous.shopStubs || {};
+    const entry = existingStubs[shopKey] || { enabled: false, stubUrls: [], position: "end" };
+    const updatedEntry = {
+      ...entry,
+      stubUrls: [...(Array.isArray(entry.stubUrls) ? entry.stubUrls : []), imageUrl].slice(-5),
+    };
+    const shopStubs = typeof normalizeShopStubs === "function"
+      ? normalizeShopStubs({ ...existingStubs, [shopKey]: updatedEntry })
+      : { ...existingStubs, [shopKey]: updatedEntry };
+    const settings = await writeAppSettings({ ...previous, shopStubs });
+    response.json({ ok: true, shopKey, imageUrl, shopStubs: settings.shopStubs });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/settings/shop-stubs/:shopKey/url", requireAdmin, async (request, response, next) => {
+  try {
+    const shopKey = cleanText(request.params.shopKey || "").toLowerCase();
+    if (!SHOP_STUB_KEYS.includes(shopKey)) {
+      return response.status(400).json({ error: "shopKey must be ozon, yandex or ozon-aura", code: "shop_stub_key_invalid" });
+    }
+    const urlToRemove = cleanText(request.body?.url || "");
+    if (!urlToRemove) {
+      return response.status(400).json({ error: "Provide url to remove.", code: "shop_stub_url_required" });
+    }
+    const previous = await readAppSettings();
+    const existingStubs = previous.shopStubs || {};
+    const entry = existingStubs[shopKey] || { enabled: false, stubUrls: [], position: "end" };
+    const updatedEntry = {
+      ...entry,
+      stubUrls: (Array.isArray(entry.stubUrls) ? entry.stubUrls : []).filter((u) => u !== urlToRemove),
+    };
+    const shopStubs = typeof normalizeShopStubs === "function"
+      ? normalizeShopStubs({ ...existingStubs, [shopKey]: updatedEntry })
+      : { ...existingStubs, [shopKey]: updatedEntry };
+    const settings = await writeAppSettings({ ...previous, shopStubs });
+    response.json({ ok: true, shopKey, removed: urlToRemove, shopStubs: settings.shopStubs });
   } catch (error) {
     next(error);
   }

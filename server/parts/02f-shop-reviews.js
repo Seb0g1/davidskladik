@@ -12,7 +12,7 @@ app.get("/api/shop/reviews", async (request, response, next) => {
     const limit = Math.min(50, Number(request.query.limit || 8) || 8);
     const offerId = cleanText(request.query.offerId || "");
     const reviews = await prisma.shopReview.findMany({
-      where: { approved: true, ...(offerId ? { offerId } : {}) },
+      where: { approved: true, rating: { gte: 4 }, ...(offerId ? { offerId } : {}) },
       orderBy: { createdAt: "desc" },
       take: limit,
       include: { customer: { select: { firstName: true, lastName: true, email: true } } },

@@ -15,9 +15,9 @@ async function writeWarehouseToPostgresInner(prisma, payload) {
   await loadWarehousePgWrittenCache();
   const products = Array.isArray(payload.products) ? payload.products : [];
   const suppliers = Array.isArray(payload.suppliers) ? payload.suppliers : [];
-  // Cap at 25 so that each chunk of product writes is shorter (~2-3 s) and setImmediate
-  // yields between chunks keep the event loop responsive (prevents BullMQ job stalls).
-  const chunkSize = Math.max(5, Math.min(25, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 25) || 25));
+  // Cap at 10 so each chunk takes ~2-3 s at ~250ms/upsert; setImmediate between chunks
+  // prevents 6-8 s event-loop blocks seen at chunkSize=25 on the worker.
+  const chunkSize = Math.max(3, Math.min(10, Number(process.env.WAREHOUSE_POSTGRES_WRITE_CHUNK_SIZE || 10) || 10));
   // Стриминговый фильтр без pre-allocation массива changedProducts:
   // при дельте 8-11k предварительная фильтрация держала 400-800 МБ в памяти
   // параллельно с полным каталогом reconciler'а → heap 4+ GB → GC-паузы 22 с.
@@ -57,19 +57,20 @@ async function writeWarehouseToPostgresInner(prisma, payload) {
     if (upToDate) continue;
     productChunk.push(product);
     if (productChunk.length >= chunkSize) {
-      await runWithLimitedConcurrency(productChunk, writeConcurrency, async (p) => {
+      for (const p of productChunk) {
         await upsertWarehouseProductPostgres(prisma, p);
-      });
+        await new Promise((r) => setImmediate(r));
+      }
       markWarehousePostgresProductsWritten(productChunk);
       totalWritten += productChunk.length;
       productChunk = [];
-      await new Promise((r) => setImmediate(r));
     }
   }
   if (productChunk.length) {
-    await runWithLimitedConcurrency(productChunk, writeConcurrency, async (p) => {
+    for (const p of productChunk) {
       await upsertWarehouseProductPostgres(prisma, p);
-    });
+      await new Promise((r) => setImmediate(r));
+    }
     markWarehousePostgresProductsWritten(productChunk);
     totalWritten += productChunk.length;
   }

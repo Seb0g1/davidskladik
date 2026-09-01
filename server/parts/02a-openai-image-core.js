@@ -85,13 +85,13 @@ async function fetchOpenAiImageViaRelay({ prompt, sourceBuffer, sourceMimeType, 
   }
 }
 
-async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, sourceImageUrl = "", batchId, variantIndex = 1, variantTotal = 1, presetId = "", presetLabel = "" }, request) {
+async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, sourceImageUrl = "", batchId, variantIndex = 1, variantTotal = 1, presetId = "", presetLabel = "", skipPackshotRules = false }, request) {
   const aiSettings = await readEffectiveAiSettings();
   assertImageGenerationConfigured(aiSettings);
   const sourceHint = cleanText(sourceImageUrl)
     ? `\n\nReference product image URL for context: ${cleanText(sourceImageUrl)}. Generate a new marketplace-ready image; do not copy watermarks or UI elements from the source.`
     : "";
-  const generatedPrompt = buildOzonAiImagePrompt(product, `${cleanText(prompt)}${sourceHint}`, { variantIndex, variantTotal });
+  const generatedPrompt = buildOzonAiImagePrompt(product, `${cleanText(prompt)}${sourceHint}`, { variantIndex, variantTotal, skipPackshotRules });
   let imageBase64;
   try {
     if (isCodexSaleAiProvider(aiSettings)) {
@@ -139,7 +139,7 @@ async function generateOzonAiImageDraftFromPromptOnly(product, { prompt, sourceI
 }
 
 async function generateOzonAiImageDraft(product, options = {}, request) {
-  const { prompt, sourceImageUrl, batchId, variantIndex = 1, variantTotal = 1, requireSourceImage = false, allowGenerationFallback = true, forceCodexSale = false } = options;
+  const { prompt, sourceImageUrl, batchId, variantIndex = 1, variantTotal = 1, requireSourceImage = false, allowGenerationFallback = true, forceCodexSale = false, skipPackshotRules = false } = options;
   const hasExplicitSource = Object.prototype.hasOwnProperty.call(options, "sourceImageUrl");
   const sourceUrl = hasExplicitSource
     ? cleanText(sourceImageUrl)
@@ -151,7 +151,7 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
       error.code = "source_image_required";
       throw error;
     }
-    return generateOzonAiImageDraftFromPromptOnly(product, { prompt, batchId, variantIndex, variantTotal, presetId: options.presetId, presetLabel: options.presetLabel }, request);
+    return generateOzonAiImageDraftFromPromptOnly(product, { prompt, batchId, variantIndex, variantTotal, presetId: options.presetId, presetLabel: options.presetLabel, skipPackshotRules }, request);
   }
 
   let aiSettings = await readEffectiveAiSettings();
@@ -190,7 +190,7 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
     throw error;
   }
 
-  const generatedPrompt = buildOzonAiImagePrompt(product, prompt, { variantIndex, variantTotal });
+  const generatedPrompt = buildOzonAiImagePrompt(product, prompt, { variantIndex, variantTotal, skipPackshotRules });
   const logoReference = await readAiLogoReference();
   const referenceImages = logoReference?.payload ? [logoReference.payload] : [];
   let imageBase64;
@@ -255,6 +255,7 @@ async function generateOzonAiImageDraft(product, options = {}, request) {
     batchId,
     variantIndex,
     variantTotal,
+    slotOrder: options.slotOrder,
     presetId: cleanText(options.presetId),
     presetLabel: cleanText(options.presetLabel),
     model: effectiveOpenAiImageModel(aiSettings.imageModel, aiSettings),

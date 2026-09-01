@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Bot, ImagePlus, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, Bot, Check, ImagePlus, Loader2, RefreshCw, Send, X } from "lucide-react";
 import { fetchJson, mutationBody } from "../api";
 import { AiDraftsSchema, AiImagesResponseSchema, MutationProductResponseSchema, YandexQualityCandidatesSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -41,6 +41,18 @@ export function AiDraftsPage() {
       void queryClient.invalidateQueries({ queryKey: ["ai-drafts"] });
       void queryClient.invalidateQueries({ queryKey: ["quality-candidates"] });
     },
+  });
+
+  const reviewImage = useMutation({
+    mutationFn: ({ productId, draftId, action }: { productId: string; draftId: string; action: "approve" | "reject" }) =>
+      fetchJson(`/api/warehouse/products/${encodeURIComponent(productId)}/ai-images/${encodeURIComponent(draftId)}/${action}`, MutationProductResponseSchema, mutationBody({})),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["ai-drafts"] }),
+  });
+
+  const sendImage = useMutation({
+    mutationFn: ({ productId, draftId }: { productId: string; draftId: string }) =>
+      fetchJson(`/api/warehouse/products/${encodeURIComponent(productId)}/ai-images/${encodeURIComponent(draftId)}/send`, MutationProductResponseSchema, mutationBody({ marketplace: "yandex" })),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["ai-drafts"] }),
   });
   const drafts = draftsQuery.data?.drafts || [];
   const candidates = candidatesQuery.data?.products || [];
@@ -110,10 +122,35 @@ export function AiDraftsPage() {
               <article className="ai-review-card" key={`${product.id}-${draft.id}`}>
                 <div className="ai-review-image">
                   {imageDrafts.length > 1 ? (
-                    <div style={{ display: "flex", gap: 4, overflowX: "auto" }}>
+                    <div style={{ display: "flex", gap: 4, overflowX: "auto", flexWrap: "wrap" }}>
                       {imageDrafts.map((imgDraft, idx) => {
-                        const imgUrl = String(asRecord(imgDraft).resultUrl || "");
-                        return imgUrl ? <img key={idx} src={imgUrl} alt="" style={{ height: 64, width: 64, objectFit: "cover", borderRadius: 4, flexShrink: 0 }} /> : null;
+                        const img = asRecord(imgDraft);
+                        const imgUrl = String(img.resultUrl || "");
+                        const imgId = String(img.id || idx);
+                        const imgStatus = String(img.status || "pending");
+                        const productId = String(product.id || product.offerId || "");
+                        return imgUrl ? (
+                          <div key={idx} style={{ position: "relative", flexShrink: 0 }}>
+                            <img src={imgUrl} alt="" style={{ height: 72, width: 72, objectFit: "cover", borderRadius: 4, opacity: imgStatus === "rejected" ? 0.35 : 1, border: imgStatus === "approved" ? "2px solid rgba(34,197,94,0.7)" : "1px solid rgba(255,255,255,0.1)" }} />
+                            <div style={{ position: "absolute", top: 2, right: 2, display: "flex", gap: 2 }}>
+                              {imgStatus !== "approved" && (
+                                <button type="button" onClick={() => reviewImage.mutate({ productId, draftId: imgId, action: "approve" })} disabled={reviewImage.isPending} title="Одобрить" style={{ width: 18, height: 18, borderRadius: 3, border: "none", background: "rgba(34,197,94,0.9)", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
+                                  <Check size={10} />
+                                </button>
+                              )}
+                              {imgStatus !== "rejected" && (
+                                <button type="button" onClick={() => reviewImage.mutate({ productId, draftId: imgId, action: "reject" })} disabled={reviewImage.isPending} title="Отклонить" style={{ width: 18, height: 18, borderRadius: 3, border: "none", background: "rgba(239,68,68,0.85)", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
+                                  <X size={10} />
+                                </button>
+                              )}
+                              {imgStatus === "approved" && (
+                                <button type="button" onClick={() => sendImage.mutate({ productId, draftId: imgId })} disabled={sendImage.isPending} title="Отправить на Yandex" style={{ width: 18, height: 18, borderRadius: 3, border: "none", background: "rgba(168,85,247,0.9)", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
+                                  <Send size={10} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ) : null;
                       })}
                     </div>
                   ) : imageUrl ? <img src={imageUrl} alt="" /> : <Bot size={22} />}

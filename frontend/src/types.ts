@@ -705,10 +705,22 @@ export const MarketplaceConfirmSchema = z.object({
   error: z.coerce.string().optional().default(""),
 }).passthrough();
 
+export const PmBlockedItemSchema = z.object({
+  offerId: z.string().optional().default(""),
+  productName: z.string().optional().default(""),
+  offerRowId: z.union([z.string(), z.number()]).optional(),
+  partnerId: z.union([z.string(), z.number()]).optional(),
+  existingRowId: z.number().optional(),
+  existingDocId: z.number().optional(),
+  existingDocSended: z.number().optional(),
+  existingDocDate: z.string().optional().default(""),
+}).passthrough();
+
 export const SupplierCartCommitSchema = z.object({
   ok: z.boolean().optional(),
   inserted: z.number().optional().default(0),
   skipped: z.number().optional().default(0),
+  pmBlocked: z.array(PmBlockedItemSchema).optional().default([]),
   pickingCreated: z.number().optional().default(0),
   docIds: z.array(z.union([z.string(), z.number()])).optional().default([]),
   verifiedInPriceMaster: z.boolean().optional().default(false),
@@ -1114,6 +1126,7 @@ export const SupplierAlternativeOptionSchema = z.object({
   cutoffPassed: z.boolean().optional().default(false),
   score: z.number().optional().default(0),
   orderable: z.boolean().optional().default(false),
+  inactivePm: z.boolean().optional().default(false),
 }).passthrough();
 
 export const SupplierAlternativesSchema = z.object({
@@ -1133,6 +1146,12 @@ export const SupplierReplaceResponseSchema = z.object({
   oldKey: z.coerce.string().optional().default(""),
   supplierName: z.coerce.string().optional().default(""),
   inserted: z.number().optional().default(0),
+  pmBlocked: z.array(z.object({
+    offerId: z.coerce.string().optional().default(""),
+    productName: z.coerce.string().optional().default(""),
+    existingDocId: z.number().optional().nullable(),
+    existingDocDate: z.coerce.string().optional().nullable(),
+  })).optional().default([]),
   docIds: z.array(z.union([z.string(), z.number()])).optional().default([]),
   verifiedInPriceMaster: z.boolean().optional().default(false),
   row: z.record(z.string(), z.unknown()).optional().nullable(),

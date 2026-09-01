@@ -41,7 +41,9 @@ export async function fetchJson<T>(url: string, schema: z.ZodType<T>, init: Requ
   if (!response.ok) {
     const message = typeof payload === "object" && payload
       ? String((payload as { error?: string; detail?: string }).error || (payload as { detail?: string }).detail || `HTTP ${response.status}`)
-      : String(payload || `HTTP ${response.status}`);
+      : (typeof payload === "string" && payload.trimStart().startsWith("<")
+          ? `HTTP ${response.status} ${response.statusText || "Error"}`
+          : String(payload || `HTTP ${response.status}`));
     throw new ApiError(message, response.status, typeof payload === "object" && payload ? (payload as { code?: string }).code : undefined, payload);
   }
 

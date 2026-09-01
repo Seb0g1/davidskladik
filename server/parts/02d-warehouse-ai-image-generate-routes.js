@@ -133,3 +133,127 @@ app.get("/api/warehouse/products/:id/ai-images/jobs/:jobId", async (request, res
     next(error);
   }
 });
+
+// 6-slot card image generation: one AI job per slot, each with a product-specific prompt.
+app.post("/api/warehouse/products/:id/card-images/generate", async (request, response, next) => {
+  try {
+    const product = await findWarehouseProductById(request.params.id);
+    if (!product) return response.status(404).json({ error: "Товар склада не найден.", code: "warehouse_product_not_found" });
+
+    // Collect all unique product images to rotate across slots for visual variety.
+    const allImages = Array.from(new Set([
+      cleanText(request.body?.sourceImageUrl || ""),
+      firstImageUrl(product.ozon?.primaryImage || ""),
+      ...splitList(product.ozon?.images || ""),
+      firstImageUrl(product.imageUrl || ""),
+      ...splitList(product.yandex?.pictures || ""),
+    ].map(cleanText).filter(Boolean)));
+
+    if (!allImages.length) {
+      return response.status(400).json({ error: "Для генерации нужно исходное фото товара.", code: "source_image_required" });
+    }
+
+    assertImageGenerationConfigured(forceCodexSaleAiImageSettings(await readEffectiveAiSettings()));
+
+    const fragranceData = request.body?.fragranceData || null;
+    const slots = buildCardSlotPrompts(product, { fragranceData });
+
+    const batchId = crypto.randomUUID();
+    const jobs = [];
+    let productImageIndex = 0;
+
+    // AI slots first (queued with setImmediate), infographic slots last (synchronous, fast).
+    // This ensures slotOrder determines display position in the frontend.
+    const aiSlots = slots.filter((s) => s.type !== "infographic");
+    const infographicSlots = slots.filter((s) => s.type === "infographic");
+
+    const reqCtx = {
+      session: { username: requestUsername(request), role: request.session?.role || "admin" },
+      headers: { host: request.headers.host, "x-forwarded-proto": request.headers["x-forwarded-proto"] },
+      protocol: request.protocol,
+      get: (name) => request.get(name),
+      username: requestUsername(request),
+      role: request.session?.role || "admin",
+    };
+
+    for (const slot of aiSlots) {
+      const slotSourceUrl = allImages[productImageIndex++ % allImages.length];
+      const generation = {
+        sourceImageUrl: slotSourceUrl,
+        count: 1,
+        studioPresets: [],
+        prompt: slot.prompt,
+        rawPrompt: true,
+        slotOrder: slot.order,
+      };
+      const job = await upsertAiImageJob({
+        productId: product.id,
+        offerId: product.offerId,
+        target: product.target,
+        batchId,
+        status: "queued",
+        progress: 0,
+        variantTotal: 1,
+        model: "gpt-image-2",
+        endpoint: "https://codex.sale/v1/images/edits",
+        sourceImageUrl: slotSourceUrl,
+        prompt: slot.prompt,
+        createdBy: requestUsername(request),
+      });
+      activeAiImageJobs.set(job.id, true);
+      setImmediate(() => {
+        runAiImageGenerationJob(job, generation, reqCtx).catch((error) =>
+          logger.warn("card slot ai image job failed", { jobId: job.id, slotId: slot.slotId, detail: error?.message || String(error) })
+        );
+      });
+      jobs.push({ jobId: job.id, slotId: slot.slotId, slotName: slot.slotName, order: slot.order, status: "queued" });
+    }
+
+    // Generate infographic slots synchronously (Sharp/SVG, no AI API).
+    for (const slot of infographicSlots) {
+      try {
+        const buffer = slot.builder === "pyramid"
+          ? await buildFragrancePyramidImageBuffer(product, fragranceData, { size: 1000 })
+          : await buildOriginalBadgeImageBuffer(product, { size: 1000 });
+        const fileName = `${new Date().toISOString().slice(0, 10)}-${crypto.randomUUID()}.png`;
+        const filePath = path.join(aiImageDir, fileName);
+        await fs.mkdir(aiImageDir, { recursive: true });
+        await fs.writeFile(filePath, buffer);
+        const relativeUrl = `/uploads/ai-images/${fileName}`;
+        const draft = normalizeAiImageDraft({
+          status: "pending",
+          prompt: slot.slotName,
+          productName: product.name || product.ozon?.name,
+          sourceImageUrl: "",
+          resultUrl: `${uploadBaseUrl(request)}${relativeUrl}`,
+          batchId,
+          variantIndex: slot.order,
+          variantTotal: slots.length,
+          slotOrder: slot.order,
+          presetId: `infographic-${slot.slotId}`,
+          presetLabel: slot.slotName,
+          layout: "infographic",
+          model: "infographic",
+          size: "1000x1000",
+          quality: "deterministic",
+          format: "png",
+        });
+        if (draft) await appendAiImageDraftToProduct(product.id, draft);
+        jobs.push({ jobId: `infographic-${slot.slotId}-${batchId}`, slotId: slot.slotId, slotName: slot.slotName, order: slot.order, status: "completed", draftId: draft?.id });
+      } catch (error) {
+        logger.warn("card infographic slot generation failed", { slotId: slot.slotId, detail: error?.message || String(error) });
+        jobs.push({ jobId: `infographic-${slot.slotId}-${batchId}`, slotId: slot.slotId, slotName: slot.slotName, order: slot.order, status: "failed" });
+      }
+    }
+
+    response.status(202).json({ ok: true, batchId, productId: product.id, jobs, slots: slots.map((s) => ({ slotId: s.slotId, slotName: s.slotName, order: s.order, meta: s.meta })) });
+  } catch (error) {
+    logger.warn("card image generation failed", {
+      productId: request.params.id,
+      detail: error?.message || String(error),
+      code: error?.code,
+      statusCode: error?.statusCode || error?.status,
+    });
+    next(error);
+  }
+});

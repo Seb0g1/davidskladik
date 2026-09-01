@@ -87,6 +87,7 @@ function normalizeAiImageDraft(input = {}) {
     variantTotal: Number(input.variantTotal || input.variant_total || 0) || 0,
     presetId: cleanText(input.presetId || input.preset_id),
     presetLabel: cleanText(input.presetLabel || input.preset_label),
+    slotOrder: Number(input.slotOrder) || undefined,
     layout: cleanText(input.layout),
     model: cleanText(input.model),
     size: cleanText(input.size),

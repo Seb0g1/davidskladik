@@ -28,6 +28,8 @@ function requireAuth(request, response, next) {
   // CSV остатков для «Управления остатками» Авито — тоже по секретному токену.
   if (request.path.startsWith("/public/avito-stock/")) return next();
   if (request.path === "/api/login" || request.path === "/api/session") return next();
+  // Bot API: authenticated via DAVIDSKLAD_API_SECRET query param, no session needed.
+  if (request.path === "/api/consignment/partner-summary") return next();
   // Публичный API магазина — доступен без сессии, CORS проверяется в shopCors.
   // Административные роуты /api/shop/admin/* требуют сессии — не пропускаем их.
   if (request.path.startsWith("/api/shop/") && !request.path.startsWith("/api/shop/admin")) return next();

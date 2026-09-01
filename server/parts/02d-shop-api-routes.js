@@ -212,6 +212,7 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
       select: {
         id: true, offerId: true, name: true, brand: true, marketplace: true,
         images: true, raw: true, currentPrice: true, targetStock: true, status: true,
+        marketplaceState: true,
         links: { take: 2, select: { supplierArticle: true } },
       },
       orderBy: [
@@ -240,17 +241,31 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     .flatMap((p) => p.links.map((l) => cleanText(l.supplierArticle)))
     .filter(Boolean);
 
-  const pmMap = new Map();
-  if (articles.length) {
-    const snaps = await prisma.priceMasterSnapshotItem.findMany({
+  const dedupedOfferIds = deduped.map((p) => p.offerId).filter(Boolean);
+
+  const [pmSnaps, reviewGroups] = await Promise.all([
+    articles.length ? prisma.priceMasterSnapshotItem.findMany({
       where: { article: { in: articles }, active: true },
       select: { article: true, price: true, currency: true },
-    });
-    for (const snap of snaps) {
-      const cur = pmMap.get(snap.article);
-      const price = Number(snap.price || 0);
-      if (!cur || price < Number(cur.price)) pmMap.set(snap.article, snap);
-    }
+    }) : [],
+    dedupedOfferIds.length ? prisma.shopReview.groupBy({
+      by: ["offerId"],
+      where: { approved: true, offerId: { in: dedupedOfferIds } },
+      _avg: { rating: true },
+      _count: { rating: true },
+    }) : [],
+  ]);
+
+  const pmMap = new Map();
+  for (const snap of pmSnaps) {
+    const cur = pmMap.get(snap.article);
+    const price = Number(snap.price || 0);
+    if (!cur || price < Number(cur.price)) pmMap.set(snap.article, snap);
+  }
+
+  const reviewMap = new Map();
+  for (const g of reviewGroups) {
+    if (g.offerId) reviewMap.set(g.offerId, { avg: g._avg.rating || 0, count: g._count.rating || 0 });
   }
 
   // Build shop products
@@ -269,6 +284,12 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
     const name = cleanText(p.name || "");
     const _cat = extractProductCategory(name);
 
+    // Rating: prefer Ozon sync data (stored in marketplaceState), then our own ShopReview aggregate
+    const ms = p.marketplaceState && typeof p.marketplaceState === "object" ? p.marketplaceState : {};
+    const siteReview = reviewMap.get(p.offerId);
+    const rating = Number(ms.ozonRating || 0) || Number(siteReview?.avg || 0) || 0;
+    const reviewCount = Number(ms.ozonReviewCount || 0) || Number(siteReview?.count || 0) || 0;
+
     return {
       id: p.id,
       offerId: p.offerId,
@@ -283,8 +304,8 @@ async function buildShopProductsFromDb({ q, brand, category, inStock, sort, page
       category: _cat.slug,
       categoryLabel: _cat.label,
       tags: [],
-      rating: 0,
-      reviewCount: 0,
+      rating: Math.round(rating * 10) / 10,
+      reviewCount,
     };
   // Всегда требуем цену > 0 и нормальное название
   }).filter((p) => p.priceRub > 0 && p.name.length > 1);
@@ -351,12 +372,13 @@ async function findShopProductByOfferId(offerId) {
   const p = products.find((pr) => pr.marketplace === "ozon") || products[0];
   const images = extractImages(p);
 
-  // Try to get description from marketplaceState
   let description = "";
   try {
-    const state = p.marketplaceState;
-    if (state && typeof state === "object") {
-      description = cleanText(state.description || state.desc || state.productDescription || "");
+    const state = p.marketplaceState && typeof p.marketplaceState === "object" ? p.marketplaceState : {};
+    description = cleanText(state.description || state.desc || state.productDescription || "");
+    if (!description) {
+      const raw = p.raw && typeof p.raw === "object" ? p.raw : {};
+      description = cleanText(raw.ozon?.description || raw.yandex?.description || "");
     }
   } catch (_) {}
 
@@ -379,6 +401,20 @@ async function findShopProductByOfferId(offerId) {
     : currentPriceNum > 0 ? currentPriceNum : 0;
   const _pCat = extractProductCategory(cleanText(p.name || ""));
 
+  // Rating: Ozon sync data from marketplaceState, or aggregate from ShopReview
+  const ms2 = p.marketplaceState && typeof p.marketplaceState === "object" ? p.marketplaceState : {};
+  let singleRating = Number(ms2.ozonRating || 0);
+  let singleReviewCount = Number(ms2.ozonReviewCount || 0);
+  if (!singleRating) {
+    const rg = await prisma.shopReview.aggregate({
+      where: { offerId: p.offerId, approved: true },
+      _avg: { rating: true },
+      _count: { rating: true },
+    });
+    singleRating = Number(rg._avg.rating || 0);
+    singleReviewCount = Number(rg._count.rating || 0);
+  }
+
   return {
     id: p.id,
     offerId: p.offerId,
@@ -393,8 +429,8 @@ async function findShopProductByOfferId(offerId) {
     category: _pCat.slug,
     categoryLabel: _pCat.label,
     tags: [],
-    rating: 0,
-    reviewCount: 0,
+    rating: Math.round(singleRating * 10) / 10,
+    reviewCount: singleReviewCount,
   };
 }
 
@@ -493,6 +529,273 @@ app.get("/api/shop/new", shopCors, async (request, response, next) => {
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const result = await buildShopProductsFromDb({ q: "", brand: "", category: "", inStock: false, sort: "name", page: 1, pageSize, createdAfter: cutoff });
     response.json({ ok: true, ...result, days });
+  } catch (error) { next(error); }
+});
+
+// ── Popular products (last 30 days by marketplace + site sales) ───────────────
+app.get("/api/shop/popular", shopCors, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.json({ ok: true, products: [] });
+
+    const limit = Math.max(4, Math.min(20, Number(request.query.limit || 8) || 8));
+    const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    // Count from marketplace sales (FinanceOrder — Ozon/Yandex real orders)
+    const financeOrders = await prisma.financeOrder.findMany({
+      where: { soldAt: { gte: since30d }, offerId: { not: null }, status: { not: "cancelled" } },
+      select: { offerId: true, quantity: true },
+    });
+
+    // Count from our own shop orders (ShopOrder.items is JSON)
+    const shopOrders = await prisma.shopOrder.findMany({
+      where: { createdAt: { gte: since30d }, status: { not: "cancelled" } },
+      select: { items: true },
+    });
+
+    // Merge counts
+    const scoreMap = new Map();
+    const addScore = (offerId, qty) => {
+      if (!offerId) return;
+      const key = cleanText(offerId);
+      if (!key) return;
+      scoreMap.set(key, (scoreMap.get(key) || 0) + qty);
+    };
+
+    for (const fo of financeOrders) {
+      addScore(fo.offerId, Number(fo.quantity || 1));
+    }
+    for (const so of shopOrders) {
+      const items = Array.isArray(so.items) ? so.items : (so.items ? [so.items] : []);
+      for (const item of items) {
+        if (item && item.offerId) addScore(item.offerId, Number(item.quantity || 1));
+      }
+    }
+
+    // Sort by score, take top N
+    const topOfferIds = [...scoreMap.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, limit * 3) // fetch more to deduplicate
+      .map(([id]) => id);
+
+    if (!topOfferIds.length) {
+      // Fallback: return products with highest currentPrice (proxy for premium / popular)
+      const result = await buildShopProductsFromDb({ q: "", brand: "", category: "", inStock: true, sort: "name", page: 1, pageSize: limit });
+      return response.json({ ok: true, products: result.products.slice(0, limit), source: "fallback" });
+    }
+
+    // Fetch matching warehouse products
+    const shopSettings = await readShopSettings();
+    const defaultMarkup = shopSettings.markup || 2.2;
+    const shopMarkupRules = shopSettings.markupRules || [];
+    let usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
+    try { const r = await getUsdRate(); usdRate = Number(r?.rate || r || 95); } catch (_) {}
+    if (!usdRate || usdRate < 1) usdRate = Number(process.env.DEFAULT_USD_RATE || 95);
+
+    const warehouseProducts = await prisma.warehouseProduct.findMany({
+      where: {
+        offerId: { in: topOfferIds },
+        archived: false,
+        marketplace: { in: ["ozon", "yandex"] },
+        NOT: { status: "deleted" },
+        currentPrice: { gt: 0 },
+        links: { some: {} },
+      },
+      select: {
+        id: true, offerId: true, name: true, brand: true, marketplace: true,
+        images: true, raw: true, currentPrice: true, targetStock: true, status: true,
+        marketplaceState: true,
+        links: { take: 1, select: { supplierArticle: true } },
+      },
+      orderBy: [{ marketplace: "asc" }],
+    });
+
+    // De-duplicate by offerId
+    const seen = new Set();
+    const deduped = [];
+    for (const p of warehouseProducts) {
+      const key = cleanText(p.offerId).toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(p);
+    }
+
+    // PM price lookup
+    const arts = deduped.flatMap((p) => p.links.map((l) => cleanText(l.supplierArticle))).filter(Boolean);
+    const snaps = arts.length ? await prisma.priceMasterSnapshotItem.findMany({
+      where: { article: { in: arts }, active: true },
+      select: { article: true, price: true, currency: true },
+    }) : [];
+    const pmMap2 = new Map();
+    for (const s of snaps) {
+      const cur = pmMap2.get(s.article);
+      if (!cur || Number(s.price) < Number(cur.price)) pmMap2.set(s.article, s);
+    }
+
+    // Ratings
+    const offerIdsForRatings = deduped.map((p) => p.offerId).filter(Boolean);
+    const ratingGroups = offerIdsForRatings.length ? await prisma.shopReview.groupBy({
+      by: ["offerId"],
+      where: { approved: true, offerId: { in: offerIdsForRatings } },
+      _avg: { rating: true },
+      _count: { rating: true },
+    }) : [];
+    const ratingMap = new Map();
+    for (const g of ratingGroups) {
+      if (g.offerId) ratingMap.set(g.offerId, { avg: g._avg.rating || 0, count: g._count.rating || 0 });
+    }
+
+    const products = deduped
+      .map((p) => {
+        const images = extractImages(p);
+        const link = p.links[0];
+        const snap = link ? pmMap2.get(cleanText(link.supplierArticle)) : null;
+        const priceUsd = snap ? Number(snap.price || 0) : 0;
+        const currentPriceNum = Number(p.currentPrice || 0);
+        const markup = resolveShopMarkup(priceUsd, defaultMarkup, shopMarkupRules);
+        const priceRub = priceUsd > 0
+          ? Math.round(priceUsd * usdRate * markup)
+          : currentPriceNum > 0 ? currentPriceNum : 0;
+        const stockQty = p.targetStock ?? 0;
+        const name = cleanText(p.name || "");
+        const _cat = extractProductCategory(name);
+        const ms = p.marketplaceState && typeof p.marketplaceState === "object" ? p.marketplaceState : {};
+        const sr = ratingMap.get(p.offerId);
+        const rating = Number(ms.ozonRating || 0) || Number(sr?.avg || 0) || 0;
+        const reviewCount = Number(ms.ozonReviewCount || 0) || Number(sr?.count || 0) || 0;
+        return {
+          id: p.id, offerId: p.offerId,
+          name: name || cleanText(p.offerId),
+          brand: cleanText(p.brand || ""),
+          description: "", images, priceRub,
+          inStock: stockQty > 0 || (p.status !== "archived" && currentPriceNum > 0),
+          stockQty: Math.max(0, stockQty),
+          volume: extractVolume(p.name || ""),
+          category: _cat.slug, categoryLabel: _cat.label, tags: [],
+          rating: Math.round(rating * 10) / 10, reviewCount,
+          salesScore: scoreMap.get(cleanText(p.offerId).toLowerCase()) || 0,
+        };
+      })
+      .filter((p) => p.priceRub > 0 && p.name.length > 1)
+      .sort((a, b) => b.salesScore - a.salesScore)
+      .slice(0, limit);
+
+    response.json({ ok: true, products, source: "sales" });
+  } catch (error) { next(error); }
+});
+
+// ── Marketplace reviews for a product (Ozon, cached 6h) ─────────────────────
+const _mpReviewCache = new Map(); // key → { reviews, avgRating, reviewCount, expiresAt }
+const _MP_REVIEW_TTL = 6 * 60 * 60 * 1000;
+
+app.get("/api/shop/marketplace-reviews", shopCors, async (request, response, next) => {
+  try {
+    const offerId = cleanText(request.query.offerId || "");
+    if (!offerId) return response.json({ ok: true, reviews: [], avgRating: 0, reviewCount: 0 });
+
+    const cacheKey = `ozon:${offerId}`;
+    const cached = _mpReviewCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return response.json({ ok: true, reviews: cached.reviews, avgRating: cached.avgRating, reviewCount: cached.reviewCount });
+    }
+
+    const prisma = getPrisma();
+    let productId = null;
+    let wpId = null;
+    let wpState = {};
+
+    if (prisma) {
+      const wp = await prisma.warehouseProduct.findFirst({
+        where: { offerId: { equals: offerId, mode: "insensitive" }, marketplace: "ozon", archived: false },
+        select: { id: true, productId: true, marketplaceState: true },
+      });
+      if (wp) {
+        productId = wp.productId ? Number(wp.productId) : null;
+        wpId = wp.id;
+        wpState = wp.marketplaceState && typeof wp.marketplaceState === "object" ? wp.marketplaceState : {};
+        // L2: DB-persisted reviews survive server restarts/deploys
+        const cachedAt = wpState.ozonReviewsCachedAt ? new Date(wpState.ozonReviewsCachedAt).getTime() : 0;
+        if (Array.isArray(wpState.ozonReviews) && wpState.ozonReviews.length > 0 && cachedAt > Date.now() - _MP_REVIEW_TTL) {
+          const entry = { reviews: wpState.ozonReviews, avgRating: wpState.ozonRating || 0, reviewCount: wpState.ozonReviewCount || 0, expiresAt: cachedAt + _MP_REVIEW_TTL };
+          _mpReviewCache.set(cacheKey, entry);
+          return response.json({ ok: true, reviews: entry.reviews, avgRating: entry.avgRating, reviewCount: entry.reviewCount });
+        }
+      }
+    }
+
+    const accounts = getOzonAccounts().filter((a) => a.clientId && a.apiKey);
+    if (!accounts.length || !productId) {
+      _mpReviewCache.set(cacheKey, { reviews: [], avgRating: 0, reviewCount: 0, expiresAt: Date.now() + 30 * 60 * 1000 });
+      return response.json({ ok: true, reviews: [], avgRating: 0, reviewCount: 0 });
+    }
+
+    // Fetch reviews — fetch up to 100 so we can filter client-side by offer_id.
+    // Ozon's sku_ids filter may be unreliable (ignored on non-premium tiers),
+    // so we always post-filter by review.offer_id === our offerId.
+    const offerIdLower = offerId.toLowerCase();
+    let rawReviews = [];
+    for (const account of accounts) {
+      try {
+        const data = await ozonRequest("/v1/review/list", {
+          limit: 100,
+          sort_dir: "DESC",
+          ...(productId ? { sku_ids: [productId] } : {}),
+        }, account);
+        const list = Array.isArray(data?.result) ? data.result : Array.isArray(data?.reviews) ? data.reviews : [];
+        // Filter to only reviews that belong to this product (match offer_id or sku)
+        const matched = list.filter((r) => {
+          const rOffer = cleanText(r.offer_id || "").toLowerCase();
+          const rSku = String(r.sku || "");
+          return rOffer === offerIdLower || (productId && rSku === String(productId));
+        });
+        // If sku_ids filter worked perfectly, all reviews match — keep them all.
+        // If nothing matched after filter, the sku_ids filter returned unrelated reviews — discard all.
+        rawReviews = matched;
+        break;
+      } catch (_err) { /* try next account */ }
+    }
+
+    const reviews = rawReviews
+      .filter((r) => r.text && r.text.trim().length > 2 && Number(r.rating || 5) >= 4)
+      .map((r) => ({
+        id: `ozon:${r.id || r.review_id || Math.random()}`,
+        author: cleanText(r.author_name || "Покупатель Ozon") || "Покупатель Ozon",
+        rating: Math.max(1, Math.min(5, Number(r.rating || 5))),
+        text: cleanText(r.text || ""),
+        advantages: cleanText(r.advantages || ""),
+        disadvantages: cleanText(r.disadvantages || r.defects || ""),
+        createdAt: r.published_at || r.created_at || new Date().toISOString(),
+        source: "ozon",
+        photos: Array.isArray(r.photos) ? r.photos.map((ph) => ph.url || ph).filter(Boolean) : [],
+      }));
+
+    const avgRating = reviews.length
+      ? Math.round((reviews.reduce((s, r) => s + r.rating, 0) / reviews.length) * 10) / 10
+      : 0;
+    const reviewCount = rawReviews.length; // total, even if filtered
+
+    _mpReviewCache.set(cacheKey, { reviews, avgRating, reviewCount, expiresAt: Date.now() + _MP_REVIEW_TTL });
+
+    // Persist reviews + rating to DB so they survive restarts/deploys
+    if (prisma && wpId) {
+      try {
+        await prisma.warehouseProduct.update({
+          where: { id: wpId },
+          data: {
+            marketplaceState: {
+              ...wpState,
+              ozonRating: avgRating,
+              ozonReviewCount: reviewCount,
+              ozonRatingSyncedAt: new Date().toISOString(),
+              ozonReviews: reviews,
+              ozonReviewsCachedAt: new Date().toISOString(),
+            },
+          },
+        });
+      } catch (_) {}
+    }
+
+    response.json({ ok: true, reviews, avgRating, reviewCount });
   } catch (error) { next(error); }
 });
 
@@ -714,13 +1017,13 @@ function _ozonPayNotificationSign({ accessKey, orderID, transactionID, extOrderI
   return require("crypto").createHash("sha256").update(fingerprint).digest("hex");
 }
 
-async function _ozonPayCreateOrder({ orderId, totalRub, email }) {
+async function _ozonPayCreateOrder({ orderId, totalRub, email, paymentMethod = "ozon_pay" }) {
   const accessKey = process.env.OZON_PAY_ACCESS_KEY;
   const secretKey = process.env.OZON_PAY_SECRET_KEY;
   if (!accessKey || !secretKey) return null;
 
   const extId = orderId;
-  const paymentAlgorithm = "PAY_ALGO_SMS";
+  const paymentAlgorithm = paymentMethod === "sbp" ? "PAY_ALGO_SBP" : "PAY_ALGO_SMS";
   const currencyCode = "643";
   const value = String(Math.round(totalRub * 100));
 
@@ -813,7 +1116,8 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       phone: cleanText(delivery.phone || "").replace(/\d{4}$/, "****"),
     });
 
-    const paymentUrl = await _ozonPayCreateOrder({ orderId, totalRub, email: cleanText(delivery.email || "") });
+    const paymentMethod = ["ozon_pay", "sbp"].includes(body.paymentMethod) ? body.paymentMethod : "ozon_pay";
+    const paymentUrl = await _ozonPayCreateOrder({ orderId, totalRub, email: cleanText(delivery.email || ""), paymentMethod });
     if (paymentUrl && prisma) {
       await prisma.shopOrder.update({ where: { id: orderId }, data: { status: "payment_pending" } }).catch(() => {});
     }

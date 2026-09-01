@@ -1,4 +1,4 @@
-import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse, AutoCategory, TelegramNewsPost, ShopReview } from "./types";
+import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse, AutoCategory, TelegramNewsPost, ShopReview, MarketplaceReview } from "./types";
 
 // В dev Vite-прокси перенаправляет /api/shop → davidsklad.ru.
 // В production установите VITE_API_BASE=https://davidsklad.ru
@@ -96,6 +96,14 @@ export const api = {
 
   newProducts(days = 14): Promise<import("./types").CatalogResponse> {
     return req<import("./types").CatalogResponse>(`/new?days=${days}`);
+  },
+
+  popular(limit = 8): Promise<{ ok: boolean; products: import("./types").ShopProduct[]; source?: string }> {
+    return req<{ ok: boolean; products: import("./types").ShopProduct[]; source?: string }>(`/popular?limit=${limit}`);
+  },
+
+  marketplaceReviews(offerId: string): Promise<{ ok: boolean; reviews: MarketplaceReview[]; avgRating: number; reviewCount: number }> {
+    return req<{ ok: boolean; reviews: MarketplaceReview[]; avgRating: number; reviewCount: number }>(`/marketplace-reviews?offerId=${encodeURIComponent(offerId)}`);
   },
 };
 

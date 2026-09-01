@@ -1505,3 +1505,48 @@ app.post("/api/consignment/sponsor-report/send", requireAdmin, async (request, r
     next(error);
   }
 });
+
+// Bot API endpoint: partner summary via shared secret (no session required).
+// Used by @davidskladrealizarsuya_bot running on external server.
+app.get("/api/consignment/partner-summary", async (request, response, next) => {
+  try {
+    const secret = cleanText(request.query.secret || "");
+    const expectedSecret = process.env.DAVIDSKLAD_API_SECRET || "";
+    if (!expectedSecret || secret !== expectedSecret) {
+      return response.status(401).json({ error: "Unauthorized", code: "invalid_secret" });
+    }
+    if (consignmentStorageUnavailable(response)) return;
+    const partnerId = cleanText(request.query.partnerId || "");
+    const [itemRows, operationRows] = await Promise.all([
+      getPrisma().consignmentItem.findMany({
+        where: partnerId ? { partnerId, archived: false } : { archived: false },
+        orderBy: { createdAt: "desc" },
+        take: 2000,
+      }),
+      getPrisma().consignmentOperation.findMany({
+        take: 50000,
+      }),
+    ]);
+    const items = itemRows.map(consignmentItemFromPostgres);
+    const ops = operationRows.map(consignmentOperationFromPostgres);
+    const summary = consignmentSummaryFromRows(items, ops);
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const salesThisMonth = ops.filter((op) => op.type === "sale" && new Date(op.createdAt) >= monthStart);
+    const last30Start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const salesLast30 = ops.filter((op) => op.type === "sale" && new Date(op.createdAt) >= last30Start);
+    response.json({
+      ok: true,
+      partnerId: partnerId || null,
+      summary,
+      items,
+      salesThisMonth: salesThisMonth.length,
+      revenueThisMonth: salesThisMonth.reduce((s, op) => s + op.unitSale * op.quantity, 0),
+      salesLast30: salesLast30.length,
+      revenueLast30: salesLast30.reduce((s, op) => s + op.unitSale * op.quantity, 0),
+      updatedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    next(error);
+  }
+});

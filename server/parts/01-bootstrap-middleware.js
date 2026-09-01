@@ -60,6 +60,8 @@ function csrfGuard(request, response, next) {
   if (isSafeMethod(request.method)) return next();
   if (!request.path.startsWith("/api/")) return next();
   if (request.path === "/api/login") return next();
+  // Shop API uses Bearer JWT (not cookies) — CSRF guard does not apply here
+  if (request.path.startsWith("/api/shop/")) return next();
   const origin = request.get("origin");
   const referer = request.get("referer");
   const allowed = allowedOriginHosts(request);

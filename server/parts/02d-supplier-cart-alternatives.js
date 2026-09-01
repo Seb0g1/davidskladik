@@ -27,7 +27,7 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
   const options = [];
   for (const rows of matches.values()) {
     for (const row of rows || []) {
-      if (!row || !row.active) continue;
+      if (!row) continue;
       const partnerId = cleanText(row.partnerId);
       const rowId = cleanText(row.rowId);
       if (!partnerId && !rowId) continue;
@@ -37,6 +37,9 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
       const stockOnly = supplierUsesStockOnlyPricing(null, row);
       const available = row.available !== false;
       const price = Number(row.price || 0) || 0;
+      // Inactive PM row (OfferRows.Active=0) but NOT a hard-stopped managed supplier:
+      // still include so the user can manually order from them (like pm-manual-commit).
+      const inactivePm = !row.active && !row.stopped;
       options.push({
         partnerId,
         supplierName: cleanText(row.partnerName || row.supplierName),
@@ -53,6 +56,7 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
         cutoffPassed: supplierOrderCutoffPassed(row.orderCutoffTime, now),
         score: supplierCartOrderScore(row, usdRate, now),
         orderable: available && (stockOnly || price > 0),
+        inactivePm,
       });
     }
   }
@@ -60,7 +64,11 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
     const p = Number(opt.price || Number.POSITIVE_INFINITY);
     return opt.priceCurrency === "RUB" ? p / usdRate : p;
   };
-  const usableRank = (option) => (option.orderable && !option.blocked && !option.cutoffPassed && !option.stockOnly ? 0 : (option.orderable && !option.blocked ? 1 : 2));
+  // Rank: 0=active+orderable, 1=active+blocked/cutoff, 2=inactive PM, 3=stopped/no_price
+  const usableRank = (option) => {
+    if (option.inactivePm) return 2;
+    return option.orderable && !option.blocked && !option.cutoffPassed && !option.stockOnly ? 0 : (option.orderable && !option.blocked ? 1 : 3);
+  };
   const priorityRank = (option) => {
     const name = cleanText(option.supplierName || "");
     if (/сорин/i.test(name)) return 0;
@@ -88,8 +96,10 @@ function pickSupplierCartOption(options = [], partnerIdInput = "", rowIdInput = 
 function supplierCartOptionRejection(option) {
   if (!option) return { status: 404, error: "Поставщик с таким предложением не найден в PriceMaster.", code: "supplier_option_not_found" };
   if (option.blocked) return { status: 400, error: "Этот поставщик заблокирован для SKU после «Не было». Выберите другого.", code: "supplier_option_blocked" };
-  if (!option.available) return { status: 400, error: "У этого поставщика нет наличия по PriceMaster.", code: "supplier_option_unavailable" };
-  if (!option.orderable) return { status: 400, error: "У этого предложения нет закупочной цены.", code: "supplier_option_no_price" };
+  // Inactive PM row (OfferRows.Active=0): allow manual order even though available=false.
+  // This mirrors pm-manual-commit which lets the user order from inactive suppliers explicitly.
+  if (!option.available && !option.inactivePm) return { status: 400, error: "У этого поставщика нет наличия по PriceMaster.", code: "supplier_option_unavailable" };
+  if (!option.orderable && !option.inactivePm) return { status: 400, error: "У этого предложения нет закупочной цены.", code: "supplier_option_no_price" };
   return null;
 }
 
@@ -256,10 +266,11 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
     }
 
     // 3) Новая заявка новому поставщику — ОДНА строка с суммарным quantity всех unit-рядов.
-    // key = current.key, чтобы createSupplierPickingRows создал retry-строку и пометил
-    // текущую как «перезаказано» (replacementFor/replacementKey).
+    // key = sourceCartKey (base cart-draft key without :uN suffix) so that
+    // createSupplierPickingRows expands it correctly into :u0/:u1/... retry rows
+    // and insertSupplierCartRowsIntoPriceMaster finds the processed entry cleared.
     const newCartRow = normalizeSupplierCartPreviewRow({
-      key: current.key,
+      key: sourceCartKey,
       marketplace: current.marketplace,
       accountName: current.accountName,
       orderId: current.orderId,
@@ -319,6 +330,7 @@ app.post("/api/supplier-picking-list/:key/replace-supplier", requireStaff, async
       row: newPickingRow,
       supplierName: chosen.supplierName,
       inserted: commit.inserted.length,
+      pmBlocked: (commit.pmBlocked || []).map((b) => ({ offerId: b.offerId, productName: b.productName, existingDocId: b.existingDocId, existingDocDate: b.existingDocDate })),
       docIds: commit.docIds,
       verifiedInPriceMaster: Boolean(commit.verification?.ok),
       priceMasterCleanup,

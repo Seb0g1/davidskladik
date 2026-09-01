@@ -95,6 +95,11 @@ async function processMarketplaceJob(name, data = {}) {
   if (name === "wb-marketplace-sync") {
     return runWbMarketplaceSync({ source: cleanText(data.source || "queue") });
   }
+  if (name === "supplier-cart-generate") {
+    const username = cleanText(data?.username || "system") || "system";
+    const systemRequest = { session: { username, role: "admin" } };
+    return generateSupplierCartDraft(data?.params || {}, systemRequest);
+  }
   return null;
 }
 

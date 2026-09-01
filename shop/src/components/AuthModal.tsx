@@ -131,8 +131,7 @@ export default function AuthModal({ open, onClose }: Props) {
 
   return (
     <div
-      style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "flex-end", justifyContent: "center" }}
-      className="sm:items-center"
+      style={{ position: "fixed", inset: 0, zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       {/* Backdrop */}
@@ -149,15 +148,13 @@ export default function AuthModal({ open, onClose }: Props) {
           position: "relative",
           width: "100%", maxWidth: 440,
           background: "var(--surface2)",
-          borderRadius: "20px 20px 0 0",
+          borderRadius: 12,
           border: "1px solid var(--border-md)",
-          borderBottom: "none",
           overflow: "hidden",
-          boxShadow: "0 -20px 60px rgba(0,0,0,0.5)",
+          boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
         }}
       >
-        <style>{`@media(min-width:640px){.auth-panel{border-radius:16px!important;border-bottom:1px solid var(--border-md)!important;}}`}</style>
-        <div className="auth-panel">
+        <div>
           {/* Gold top accent */}
           <div style={{ height: 2, background: "linear-gradient(90deg, transparent, var(--accent), transparent)" }} />
 

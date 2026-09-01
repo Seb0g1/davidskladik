@@ -1,11 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ShoppingBag, Check, ChevronLeft, Star, Shield, Truck, RefreshCw, Minus, Plus, ChevronRight, Share2, Link2, Send, Users, X, Bell, MessageSquare, ThumbsUp } from "lucide-react";
+import { ShoppingBag, Check, ChevronLeft, Star, Shield, Truck, RefreshCw, Minus, Plus, ChevronRight, Share2, Link2, Users, X, Bell, MessageSquare, ThumbsUp, Send } from "lucide-react";
 import { api } from "../api";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
-import type { ShopReview } from "../types";
+import type { ShopReview, MarketplaceReview } from "../types";
 
 const S = {
   bg:      "#0E0D0B",
@@ -43,6 +43,8 @@ export default function ProductPage() {
   const [alertEmail, setAlertEmail] = useState("");
   const [alertSent, setAlertSent] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const shareRef = useRef<HTMLDivElement>(null);
 
   const { customer, token } = useAuth();
   const [reviewText, setReviewText] = useState("");
@@ -75,6 +77,16 @@ export default function ProductPage() {
   });
   const productReviews: ShopReview[] = reviewsQuery.data?.reviews ?? [];
 
+  const mpReviewsQuery = useQuery({
+    queryKey: ["shop-mp-reviews", offerId],
+    queryFn: () => api.marketplaceReviews(offerId!),
+    enabled: !!offerId,
+    staleTime: 30 * 60_000,
+  });
+  const mpReviews: MarketplaceReview[] = mpReviewsQuery.data?.reviews ?? [];
+  const mpAvgRating = mpReviewsQuery.data?.avgRating ?? 0;
+  const mpReviewCount = mpReviewsQuery.data?.reviewCount ?? 0;
+
   const reviewMutation = useMutation({
     mutationFn: () => api.postReview({
       offerId: offerId!,
@@ -85,6 +97,15 @@ export default function ProductPage() {
     }, token!),
     onSuccess: () => { setReviewSent(true); setReviewOpen(false); reviewsQuery.refetch(); },
   });
+
+  useEffect(() => {
+    if (!shareOpen) return;
+    const fn = (e: MouseEvent) => {
+      if (shareRef.current && !shareRef.current.contains(e.target as Node)) setShareOpen(false);
+    };
+    document.addEventListener("mousedown", fn);
+    return () => document.removeEventListener("mousedown", fn);
+  }, [shareOpen]);
 
   useEffect(() => {
     if (!product) return;
@@ -238,15 +259,20 @@ export default function ProductPage() {
                 </span>
               )}
 
-              {product.rating && product.rating > 0 ? (
+              {(mpAvgRating > 0 || (product.rating && product.rating > 0)) ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
                   <div style={{ display: "flex" }}>
-                    {[1,2,3,4,5].map((s) => (
-                      <Star key={s} size={14} style={{ color: s <= Math.round(product.rating!) ? "#fbbf24" : S.subtle, fill: s <= Math.round(product.rating!) ? "#fbbf24" : S.subtle }} />
-                    ))}
+                    {[1,2,3,4,5].map((s) => {
+                      const r = mpAvgRating || product.rating!;
+                      return <Star key={s} size={14} style={{ color: s <= Math.round(r) ? "#C9A96E" : S.subtle, fill: s <= Math.round(r) ? "#C9A96E" : S.subtle }} />;
+                    })}
                   </div>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{product.rating.toFixed(1)}</span>
-                  {product.reviewCount && <span style={{ fontSize: 12, color: S.muted }}>{product.reviewCount} отзывов</span>}
+                  <span style={{ fontSize: 13, fontWeight: 600, color: S.accent3 }}>
+                    {(mpAvgRating || product.rating!).toFixed(1)}
+                  </span>
+                  <span style={{ fontSize: 12, color: S.muted }}>
+                    {mpReviewCount > 0 ? `${mpReviewCount} на Ozon` : `${product.reviewCount} отзывов`}
+                  </span>
                 </div>
               ) : null}
 
@@ -343,35 +369,98 @@ export default function ProductPage() {
                 </div>
               )}
 
-              {/* Share */}
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 20 }}>
-                <span style={{ fontSize: 11, color: S.muted, fontWeight: 500, flexShrink: 0 }}>
-                  <Share2 size={11} style={{ marginRight: 4, verticalAlign: "middle" }} />Поделиться:
-                </span>
-                <button onClick={copyShareLink} title="Скопировать ссылку" style={{
-                  display: "flex", alignItems: "center", gap: 5, fontSize: 11, padding: "5px 10px",
-                  background: shareCopied ? "rgba(74,222,128,0.12)" : "rgba(255,255,255,0.06)",
-                  color: shareCopied ? "#4ade80" : S.muted, border: `1px solid ${S.border}`,
-                  borderRadius: 8, cursor: "pointer", transition: "all 0.2s", fontFamily: "inherit",
-                }}>
-                  <Link2 size={12} />{shareCopied ? "Скопировано!" : "Ссылка"}
+              {/* Share popup */}
+              <div ref={shareRef} style={{ position: "relative", marginBottom: 20, display: "inline-block" }}>
+                <button
+                  onClick={() => setShareOpen((o) => !o)}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 8,
+                    padding: "9px 18px", borderRadius: 2, cursor: "pointer",
+                    background: shareOpen ? "rgba(201,162,94,0.07)" : "transparent",
+                    border: `1px solid ${shareOpen ? "rgba(201,162,94,0.5)" : S.border}`,
+                    color: shareOpen ? S.accent3 : S.muted, fontSize: 12, fontFamily: "inherit",
+                    letterSpacing: "0.12em", textTransform: "uppercase",
+                    transition: "border-color 0.25s, color 0.25s, background 0.25s",
+                  }}
+                  onMouseEnter={e => { if (!shareOpen) { e.currentTarget.style.borderColor = "rgba(201,162,94,0.45)"; e.currentTarget.style.color = S.text; } }}
+                  onMouseLeave={e => { if (!shareOpen) { e.currentTarget.style.borderColor = S.border; e.currentTarget.style.color = S.muted; } }}
+                >
+                  <Share2 size={13} strokeWidth={1.6} />
+                  Поделиться
                 </button>
-                <a href={`https://t.me/share/url?url=${encodeURIComponent(pageUrl)}&text=${encodeURIComponent(shareText)}`}
-                  target="_blank" rel="noopener noreferrer" title="Поделиться в Telegram" style={{
-                    display: "flex", alignItems: "center", gap: 5, fontSize: 11, padding: "5px 10px",
-                    background: "rgba(255,255,255,0.06)", color: S.muted, border: `1px solid ${S.border}`,
-                    borderRadius: 8, textDecoration: "none", transition: "all 0.2s",
+
+                {shareOpen && (
+                  <div style={{
+                    position: "absolute", bottom: "calc(100% + 10px)", left: 0, zIndex: 60,
+                    background: "#1a1815", borderRadius: 3, border: `1px solid ${S.borderMd}`,
+                    boxShadow: "0 20px 60px rgba(0,0,0,0.8)", padding: "6px", minWidth: 220,
                   }}>
-                  <Send size={12} />TG
-                </a>
-                <a href={`https://vk.com/share.php?url=${encodeURIComponent(pageUrl)}&title=${encodeURIComponent(shareText)}`}
-                  target="_blank" rel="noopener noreferrer" title="Поделиться ВКонтакте" style={{
-                    display: "flex", alignItems: "center", gap: 5, fontSize: 11, padding: "5px 10px",
-                    background: "rgba(255,255,255,0.06)", color: S.muted, border: `1px solid ${S.border}`,
-                    borderRadius: 8, textDecoration: "none", transition: "all 0.2s",
-                  }}>
-                  ВК
-                </a>
+                    {/* Telegram */}
+                    <a
+                      href={`https://t.me/share/url?url=${encodeURIComponent(pageUrl)}&text=${encodeURIComponent(shareText)}`}
+                      target="_blank" rel="noopener noreferrer"
+                      onClick={() => setShareOpen(false)}
+                      style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 2, textDecoration: "none", color: S.text, fontSize: 13, transition: "background 0.15s" }}
+                      onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="12" fill="#26A5E4"/><path d="M5.5 11.8l11-4.3c.5-.2.9.1.8.6l-1.9 8.8c-.1.6-.5.7-1 .5l-2.8-2-1.3 1.3c-.1.1-.3.2-.5.2l.2-2.8 5.1-4.6c.2-.2 0-.3-.3-.1l-6.4 4-2.7-.9c-.6-.2-.6-.6.1-.9z" fill="white"/></svg>
+                      Telegram
+                    </a>
+
+                    {/* VKontakte */}
+                    <a
+                      href={`https://vk.com/share.php?url=${encodeURIComponent(pageUrl)}&title=${encodeURIComponent(shareText)}`}
+                      target="_blank" rel="noopener noreferrer"
+                      onClick={() => setShareOpen(false)}
+                      style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 2, textDecoration: "none", color: S.text, fontSize: 13, transition: "background 0.15s" }}
+                      onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect width="24" height="24" rx="4" fill="#4C75A3"/><path d="M12.7 16.5h1.2s.3 0 .5-.3l.2-.5s.2-1.5.9-1.7c.6-.2 1.4 1.4 2.2 2 .6.4 1.1.3 1.1.3l2.2-.1s1.2-.1.6-1c0 0-.4-.8-2.1-2.3-1.7-1.5-1.5-1.3.6-4 1.3-1.8 1.8-2.9 1.7-3.3-.1-.4-1.1-.3-1.1-.3h-2.5s-.2 0-.3.1l-.2.3s-.5 1.4-1.2 2.6c-1.4 2.4-2 2.5-2.2 2.4-.5-.4-.4-1.4-.4-2.2 0-2.4.4-3.4-.7-3.6-.4-.1-.6-.1-1.6-.1-1.3 0-2.3.1-2.9.4-.4.2-.7.6-.5.6.2 0 .8.1 1 .5.3.5.3 1.7.3 1.7s.2 2.8-.4 3.2c-.4.3-1-.4-2.2-2.5-.7-1.2-1.2-2.5-1.2-2.5l-.2-.3s-.1-.1-.3-.2H4.6s-.3 0-.4.1c-.1.2 0 .5 0 .5s2 4.7 4.2 7.1c2 2.2 4.3 2 4.3 2z" fill="white"/></svg>
+                      ВКонтакте
+                    </a>
+
+                    {/* WhatsApp */}
+                    <a
+                      href={`https://wa.me/?text=${encodeURIComponent(shareText + " " + pageUrl)}`}
+                      target="_blank" rel="noopener noreferrer"
+                      onClick={() => setShareOpen(false)}
+                      style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 2, textDecoration: "none", color: S.text, fontSize: 13, transition: "background 0.15s" }}
+                      onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="12" fill="#25D366"/><path d="M17 14.4c-.3-.1-1.7-.9-2-.9-.2 0-.4.1-.6.4l-.7.8c-.1.2-.3.2-.6.1-1.4-.6-2.4-1.5-3.1-2.7-.2-.4-.1-.6.1-.8l.5-.6c.1-.2.2-.4.1-.6-.1-.2-.6-1.6-.9-2.2-.3-.5-.5-.5-.7-.5-.5 0-.9.1-1.2.4-1 1.1-.9 2.5.3 4 1.2 1.5 3.4 3 5.9 3.7.4.1.8.2 1.2.2.7 0 1.4-.2 1.9-.7.4-.4.5-.9.4-1.3-.1-.2-.3-.3-.6-.3z" fill="white"/></svg>
+                      WhatsApp
+                    </a>
+
+                    {/* Odnoklassniki */}
+                    <a
+                      href={`https://connect.ok.ru/offer?url=${encodeURIComponent(pageUrl)}&title=${encodeURIComponent(shareText)}`}
+                      target="_blank" rel="noopener noreferrer"
+                      onClick={() => setShareOpen(false)}
+                      style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 2, textDecoration: "none", color: S.text, fontSize: 13, transition: "background 0.15s" }}
+                      onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="12" fill="#ED812B"/><path d="M12 6.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5zm0 3.5a1 1 0 110-2 1 1 0 010 2zm4 3.2c-.7.5-1.5.8-2.4.9l2.1 2.1c.3.3.3.8 0 1.1-.3.3-.8.3-1.1 0L12 14.8l-2.6 2.5c-.3.3-.8.3-1.1 0-.3-.3-.3-.8 0-1.1l2.1-2.1c-.9-.1-1.7-.4-2.4-.9-.4-.3-.5-.8-.2-1.2.3-.4.8-.5 1.2-.2.9.6 2 1 3.1 1s2.1-.3 3.1-1c.4-.3.9-.2 1.2.2.2.4.1.9-.3 1.2z" fill="white"/></svg>
+                      Одноклассники
+                    </a>
+
+                    <div style={{ height: 1, background: S.border, margin: "4px 0" }} />
+
+                    {/* Copy link */}
+                    <button
+                      onClick={() => { copyShareLink(); setShareOpen(false); }}
+                      style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 12px", borderRadius: 2, background: "transparent", border: "none", cursor: "pointer", color: shareCopied ? "#4ade80" : S.text, fontSize: 13, width: "100%", textAlign: "left", transition: "background 0.15s, color 0.2s", fontFamily: "inherit" }}
+                      onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
+                      onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                    >
+                      <Link2 size={18} style={{ color: shareCopied ? "#4ade80" : S.muted, flexShrink: 0, transition: "color 0.2s" }} />
+                      {shareCopied ? "Ссылка скопирована!" : "Копировать ссылку"}
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Perks */}
@@ -406,10 +495,22 @@ export default function ProductPage() {
         <div style={{ marginTop: 32 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20, gap: 12, flexWrap: "wrap" }}>
             <div>
-              <h2 style={{ fontSize: 16, fontWeight: 700, color: S.text, letterSpacing: "-0.03em", marginBottom: 2 }}>
-                Отзывы {productReviews.length > 0 && <span style={{ fontSize: 13, color: S.muted, fontWeight: 400 }}>({productReviews.length})</span>}
+              <h2 style={{ fontSize: 16, fontWeight: 700, color: S.text, letterSpacing: "-0.03em", marginBottom: 4 }}>
+                Отзывы{(productReviews.length + mpReviews.length) > 0 && (
+                  <span style={{ fontSize: 13, color: S.muted, fontWeight: 400 }}> ({productReviews.length + mpReviews.length})</span>
+                )}
               </h2>
-              {productReviews.length > 0 && (() => {
+              {/* Show Ozon rating prominently */}
+              {mpAvgRating > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <div style={{ display: "flex", gap: 2 }}>
+                    {[1,2,3,4,5].map((s) => <Star key={s} size={14} style={{ color: s <= Math.round(mpAvgRating) ? "#C9A96E" : S.subtle, fill: s <= Math.round(mpAvgRating) ? "#C9A96E" : S.subtle }} />)}
+                  </div>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: S.accent3 }}>{mpAvgRating.toFixed(1)}</span>
+                  <span style={{ fontSize: 12, color: S.muted }}>{mpReviewCount} {mpReviewCount === 1 ? "отзыв" : mpReviewCount >= 2 && mpReviewCount <= 4 ? "отзыва" : "отзывов"} на Ozon</span>
+                </div>
+              )}
+              {productReviews.length > 0 && mpAvgRating === 0 && (() => {
                 const avg = productReviews.reduce((s, r) => s + r.rating, 0) / productReviews.length;
                 return (
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -497,7 +598,7 @@ export default function ProductPage() {
             </div>
           )}
 
-          {productReviews.length === 0 && !reviewOpen && (
+          {productReviews.length === 0 && mpReviews.length === 0 && !reviewOpen && (
             <div style={{ textAlign: "center", padding: "40px 24px", background: S.surface, borderRadius: 18, border: `1px solid ${S.border}` }}>
               <ThumbsUp size={32} style={{ color: S.subtle, marginBottom: 12 }} />
               <p style={{ fontSize: 14, color: S.muted, marginBottom: 6 }}>Отзывов пока нет</p>
@@ -507,8 +608,67 @@ export default function ProductPage() {
             </div>
           )}
 
+          {/* Marketplace reviews (Ozon) */}
+          {mpReviews.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: S.muted }}>С маркетплейса</span>
+                <div style={{ flex: 1, height: 1, background: S.border }} />
+                <span style={{ fontSize: 10, color: S.subtle }}>Ozon</span>
+              </div>
+              {mpReviews.map((r) => (
+                <div key={r.id} style={{ background: S.surface, borderRadius: 16, padding: "16px 20px", border: `1px solid ${S.border}` }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <div style={{ width: 36, height: 36, borderRadius: "50%", background: "rgba(0,143,255,0.1)", border: "1px solid rgba(0,143,255,0.2)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <span style={{ fontSize: 13, fontWeight: 700, color: "#60b3ff" }}>{(r.author || "П")[0].toUpperCase()}</span>
+                      </div>
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{r.author}</span>
+                          <span style={{ fontSize: 9, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "#60b3ff", background: "rgba(0,143,255,0.1)", borderRadius: 4, padding: "1px 5px" }}>Ozon</span>
+                        </div>
+                        <div style={{ fontSize: 11, color: S.muted }}>{new Date(r.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}</div>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                      {[1,2,3,4,5].map((s) => <Star key={s} size={12} style={{ color: s <= r.rating ? "#C9A96E" : S.subtle, fill: s <= r.rating ? "#C9A96E" : S.subtle }} />)}
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.65, margin: 0 }}>{r.text}</p>
+                  {r.advantages && (
+                    <div style={{ marginTop: 8, display: "flex", gap: 6, alignItems: "flex-start" }}>
+                      <span style={{ fontSize: 10, color: "#4ade80", fontWeight: 600, flexShrink: 0, marginTop: 1 }}>+</span>
+                      <span style={{ fontSize: 12, color: "rgba(74,222,128,0.8)", lineHeight: 1.5 }}>{r.advantages}</span>
+                    </div>
+                  )}
+                  {r.disadvantages && (
+                    <div style={{ marginTop: 4, display: "flex", gap: 6, alignItems: "flex-start" }}>
+                      <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600, flexShrink: 0, marginTop: 1 }}>−</span>
+                      <span style={{ fontSize: 12, color: "rgba(248,113,113,0.8)", lineHeight: 1.5 }}>{r.disadvantages}</span>
+                    </div>
+                  )}
+                  {r.photos && r.photos.length > 0 && (
+                    <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                      {r.photos.slice(0, 4).map((url, i) => (
+                        <img key={i} src={url} alt="" loading="lazy" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: `1px solid ${S.border}` }} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Our own site reviews */}
           {productReviews.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              {mpReviews.length > 0 && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.1em", textTransform: "uppercase", color: S.muted }}>На нашем сайте</span>
+                  <div style={{ flex: 1, height: 1, background: S.border }} />
+                </div>
+              )}
               {productReviews.map((r) => (
                 <div key={r.id} style={{ background: S.surface, borderRadius: 16, padding: "16px 20px", border: `1px solid ${S.border}` }}>
                   <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>

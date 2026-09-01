@@ -74,6 +74,7 @@ registerSettingsRoutes(app, {
   crypto,
   brandingImageDir,
   uploadBaseUrl,
+  normalizeShopStubs,
 });
 
 registerSystemMediaRoutes(app, {

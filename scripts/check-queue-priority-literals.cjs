@@ -20,6 +20,7 @@ const CONST_TIER = {
   PRICE_BACKGROUND: "price",
   RECOVERY: "recovery",
   UNARCHIVE: "recovery",
+  USER_ACTION: "user_action",
   DEFAULT: null,
 };
 

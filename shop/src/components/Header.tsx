@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { Search, ShoppingBag, User, X, LayoutGrid, Home, LogOut, Package, Settings, Newspaper } from "lucide-react";
+import { Search, X, LayoutGrid, Home, Newspaper, ShoppingBag, LogOut, Package, Settings } from "lucide-react";
 import clsx from "clsx";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
@@ -29,7 +29,7 @@ export default function Header() {
   const userMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const fn = () => setScrolled(window.scrollY > 40);
+    const fn = () => setScrolled(window.scrollY > 20);
     window.addEventListener("scroll", fn, { passive: true });
     return () => window.removeEventListener("scroll", fn);
   }, []);
@@ -55,161 +55,232 @@ export default function Header() {
   const path = location.pathname;
   const isActive = (to: string) => to === "/" ? path === "/" : path.startsWith(to.split("?")[0]);
 
+  const initial = customer ? (customer.firstName || customer.email || "?")[0]?.toUpperCase() : null;
+
   return (
     <>
       <header style={{
         position: "sticky",
         top: 0,
         zIndex: 40,
-        background: scrolled ? "rgba(14,13,11,0.94)" : "transparent",
-        borderBottom: scrolled ? "1px solid var(--border)" : "1px solid transparent",
-        backdropFilter: scrolled ? "blur(20px)" : "none",
-        WebkitBackdropFilter: scrolled ? "blur(20px)" : "none",
-        transition: "background 0.3s ease, border-color 0.3s ease",
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "12px 24px",
+        padding: "14px clamp(18px, 4vw, 56px)",
+        background: scrolled ? "rgba(11,11,11,0.88)" : "rgba(11,11,11,0.6)",
+        backdropFilter: "blur(14px)",
+        WebkitBackdropFilter: "blur(14px)",
+        borderBottom: "1px solid rgba(201,162,94,0.14)",
+        transition: "background 0.4s ease",
       }}>
-        <div style={{
-          display: "flex", alignItems: "center", height: 62,
-          padding: "0 clamp(16px,4vw,40px)", maxWidth: 1320, margin: "0 auto", gap: 24,
+        {/* Logo */}
+        <Link to="/" style={{
+          fontFamily: "'Cormorant Garamond', Georgia, serif",
+          fontStyle: "italic",
+          fontWeight: 500,
+          fontSize: 23,
+          letterSpacing: "0.01em",
+          color: "#f5f4f0",
+          whiteSpace: "nowrap",
+          textDecoration: "none",
+          flexShrink: 0,
         }}>
+          Magic Vibes
+        </Link>
 
-          {/* Logo */}
-          <Link to="/" style={{ display: "flex", alignItems: "center", gap: 0, flexShrink: 0, textDecoration: "none" }}>
-            <span className="serif" style={{ fontSize: 18, fontWeight: 500, letterSpacing: "0.02em", color: "var(--text)", fontStyle: "italic" }}>
-              Magic Vibes
-            </span>
-          </Link>
-
-          {/* Desktop nav */}
-          <nav className="hidden md:flex" style={{ flex: 1, justifyContent: "center", gap: 0, marginLeft: 16 }}>
-            {[
-              { label: "Каталог", to: "/catalog" },
-              { label: "Бренды",  to: "/brands" },
-              { label: "Новинки", to: "/new" },
-              { label: "Новости", to: "/news" },
-            ].map((link) => (
-              <Link
-                key={link.to}
-                to={link.to}
-                style={{
-                  padding: "8px 16px",
-                  fontSize: 13.5,
-                  fontWeight: 500,
-                  textDecoration: "none",
-                  color: isActive(link.to) ? "var(--text)" : "var(--muted)",
-                  borderBottom: isActive(link.to) ? "1px solid var(--accent)" : "1px solid transparent",
-                  transition: "color 0.15s ease, border-color 0.15s ease",
-                  letterSpacing: "0.01em",
-                }}
-                onMouseEnter={e => { if (!isActive(link.to)) (e.currentTarget as HTMLElement).style.color = "var(--text)"; }}
-                onMouseLeave={e => { if (!isActive(link.to)) (e.currentTarget as HTMLElement).style.color = "var(--muted)"; }}
-              >
-                {link.label}
-              </Link>
-            ))}
-          </nav>
-
-          {/* Right */}
-          <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: "auto" }}>
-            <button
-              onClick={() => setSearchOpen((s) => !s)}
-              style={{ padding: 10, borderRadius: 8, color: "var(--muted)", background: "transparent", border: "none", display: "flex", transition: "color 0.15s ease" }}
-              onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "var(--text)"}
-              onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--muted)"}
+        {/* Desktop nav */}
+        <nav className="hidden md:flex" style={{ flex: "1 1 240px", minWidth: 0, flexWrap: "wrap", alignItems: "center", gap: "10px 22px" }}>
+          {[
+            { label: "Каталог", to: "/catalog" },
+            { label: "Бренды",  to: "/brands" },
+            { label: "Новинки", to: "/new" },
+            { label: "Новости", to: "/news" },
+          ].map((link) => (
+            <Link
+              key={link.to}
+              to={link.to}
+              style={{
+                fontSize: 13.5,
+                letterSpacing: "0.05em",
+                textDecoration: "none",
+                color: isActive(link.to) ? "#f5f4f0" : "#b8b4ab",
+                transition: "color 0.3s ease",
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "#f5f4f0"; }}
+              onMouseLeave={e => { if (!isActive(link.to)) (e.currentTarget as HTMLElement).style.color = "#b8b4ab"; }}
             >
-              <Search size={19} strokeWidth={1.7} />
-            </button>
-
-            <div className="hidden md:block" ref={userMenuRef} style={{ position: "relative" }}>
-              {customer ? (
-                <button
-                  onClick={() => setUserMenuOpen((s) => !s)}
-                  style={{ padding: 10, borderRadius: 8, color: "var(--muted)", background: "transparent", border: "none", display: "flex", transition: "color 0.15s ease" }}
-                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "var(--text)"}
-                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--muted)"}
-                >
-                  <User size={19} strokeWidth={1.7} />
-                </button>
-              ) : (
-                <button
-                  onClick={() => setAuthModal({ open: true, tab: "login" })}
-                  style={{
-                    padding: "7px 18px", borderRadius: 8, fontSize: 13, fontWeight: 500,
-                    color: "var(--muted)", background: "transparent",
-                    border: "1px solid var(--border)", cursor: "pointer",
-                    transition: "all 0.15s ease", fontFamily: "inherit",
-                  }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = "var(--text)"; (e.currentTarget as HTMLElement).style.borderColor = "var(--border-md)"; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = "var(--muted)"; (e.currentTarget as HTMLElement).style.borderColor = "var(--border)"; }}
-                >
-                  Войти
-                </button>
-              )}
-              {userMenuOpen && customer && (
-                <div className="modal-content" style={{
-                  position: "absolute", right: 0, top: "calc(100% + 8px)",
-                  width: 220, background: "var(--surface2)", borderRadius: 12,
-                  border: "1px solid var(--border-md)",
-                  boxShadow: "0 20px 60px rgba(0,0,0,0.6)",
-                  padding: "6px 0", overflow: "hidden",
-                }}>
-                  <div style={{ padding: "12px 16px 10px", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                      {customer.firstName || customer.email}
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 2 }}>
-                      {customer.email}
-                    </div>
-                  </div>
-                  {[
-                    { to: "/orders",  icon: <Package size={13} />, label: "Мои заказы" },
-                    { to: "/account", icon: <Settings size={13} />, label: "Профиль" },
-                  ].map(({ to, icon, label }) => (
-                    <Link key={to} to={to} onClick={() => setUserMenuOpen(false)}
-                      style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", fontSize: 13, color: "var(--muted)", textDecoration: "none", transition: "background 0.12s ease, color 0.12s ease" }}
-                      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,252,245,0.04)"; (e.currentTarget as HTMLElement).style.color = "var(--text)"; }}
-                      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "var(--muted)"; }}
-                    >
-                      {icon}{label}
-                    </Link>
-                  ))}
-                  <button
-                    onClick={() => { logout(); setUserMenuOpen(false); }}
-                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", fontSize: 13, color: "#F87171", background: "transparent", border: "none", cursor: "pointer", transition: "background 0.12s ease" }}
-                    onMouseEnter={e => (e.currentTarget.style.background = "rgba(239,68,68,0.07)")}
-                    onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
-                  >
-                    <LogOut size={13} /> Выйти
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <Link to="/cart" className="hidden md:flex" style={{ position: "relative", padding: 10, borderRadius: 8, color: "var(--muted)", textDecoration: "none", transition: "color 0.15s ease" }}
-              onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = "var(--text)"}
-              onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = "var(--muted)"}
-            >
-              <ShoppingBag size={19} strokeWidth={1.7} />
-              {totalItems > 0 && (
-                <span style={{ position: "absolute", top: 6, right: 6, width: 16, height: 16, background: "var(--accent)", color: "#0E0D0B", fontSize: 9, fontWeight: 800, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  {totalItems > 9 ? "9+" : totalItems}
-                </span>
-              )}
+              {link.label}
             </Link>
+          ))}
+        </nav>
+
+        {/* Right actions */}
+        <div className="hidden md:flex" style={{ marginLeft: "auto", alignItems: "center", gap: 8, flexShrink: 0 }}>
+          {/* Search */}
+          <button
+            onClick={() => setSearchOpen(s => !s)}
+            style={{
+              height: 38, padding: "0 14px",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 2,
+              background: "transparent",
+              color: "#cfcbc2",
+              fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase",
+              display: "flex", alignItems: "center", gap: 6,
+              transition: "border-color 0.3s ease, color 0.3s ease",
+            }}
+            onMouseEnter={e => { const el = e.currentTarget; el.style.borderColor = "rgba(201,162,94,0.6)"; el.style.color = "#f5f4f0"; }}
+            onMouseLeave={e => { const el = e.currentTarget; el.style.borderColor = "rgba(255,255,255,0.1)"; el.style.color = "#cfcbc2"; }}
+          >
+            <Search size={14} strokeWidth={1.5} />
+            Поиск
+          </button>
+
+          {/* Account */}
+          <div ref={userMenuRef} style={{ position: "relative" }}>
+            {customer ? (
+              <button
+                onClick={() => setUserMenuOpen(s => !s)}
+                style={{
+                  height: 38, padding: "0 14px",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 2,
+                  background: "transparent",
+                  color: "#cfcbc2",
+                  fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase",
+                  display: "flex", alignItems: "center", gap: 8,
+                  transition: "border-color 0.3s ease, color 0.3s ease",
+                }}
+                onMouseEnter={e => { const el = e.currentTarget; el.style.borderColor = "rgba(201,162,94,0.6)"; el.style.color = "#f5f4f0"; }}
+                onMouseLeave={e => { const el = e.currentTarget; el.style.borderColor = "rgba(255,255,255,0.1)"; el.style.color = "#cfcbc2"; }}
+              >
+                <span style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  width: 22, height: 22, borderRadius: "50%",
+                  background: "linear-gradient(140deg, #e9d2a0, #a3874f)",
+                  color: "#14120f", fontSize: 10, fontWeight: 500,
+                }}>
+                  {initial}
+                </span>
+                Кабинет
+              </button>
+            ) : (
+              <button
+                onClick={() => setAuthModal({ open: true, tab: "login" })}
+                style={{
+                  height: 38, padding: "0 14px",
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  borderRadius: 2,
+                  background: "transparent",
+                  color: "#cfcbc2",
+                  fontSize: 12, letterSpacing: "0.14em", textTransform: "uppercase",
+                  display: "flex", alignItems: "center", gap: 8,
+                  transition: "border-color 0.3s ease, color 0.3s ease",
+                }}
+                onMouseEnter={e => { const el = e.currentTarget; el.style.borderColor = "rgba(201,162,94,0.6)"; el.style.color = "#f5f4f0"; }}
+                onMouseLeave={e => { const el = e.currentTarget; el.style.borderColor = "rgba(255,255,255,0.1)"; el.style.color = "#cfcbc2"; }}
+              >
+                Войти
+              </button>
+            )}
+            {userMenuOpen && customer && (
+              <div className="modal-content" style={{
+                position: "absolute", right: 0, top: "calc(100% + 10px)",
+                width: 220,
+                background: "#141414",
+                borderRadius: 3,
+                border: "1px solid rgba(255,255,255,0.1)",
+                boxShadow: "0 20px 60px rgba(0,0,0,0.7)",
+                padding: "6px 0", overflow: "hidden",
+              }}>
+                <div style={{ padding: "12px 16px 10px", borderBottom: "1px solid var(--border)", marginBottom: 4 }}>
+                  <div style={{ fontSize: 13, fontWeight: 400, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", letterSpacing: "0.03em" }}>
+                    {customer.firstName || customer.email}
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--subtle)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 3 }}>
+                    {customer.email}
+                  </div>
+                </div>
+                {[
+                  { to: "/orders",  icon: <Package size={13} />, label: "Мои заказы" },
+                  { to: "/account", icon: <Settings size={13} />, label: "Профиль" },
+                ].map(({ to, icon, label }) => (
+                  <Link key={to} to={to} onClick={() => setUserMenuOpen(false)}
+                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", fontSize: 13, letterSpacing: "0.04em", color: "var(--muted)", textDecoration: "none", transition: "background 0.2s ease, color 0.2s ease" }}
+                    onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.04)"; (e.currentTarget as HTMLElement).style.color = "var(--text)"; }}
+                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "transparent"; (e.currentTarget as HTMLElement).style.color = "var(--muted)"; }}
+                  >
+                    {icon}{label}
+                  </Link>
+                ))}
+                <button
+                  onClick={() => { logout(); setUserMenuOpen(false); }}
+                  style={{ width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "10px 16px", fontSize: 13, color: "#F87171", background: "transparent", border: "none", cursor: "pointer", transition: "background 0.2s ease", letterSpacing: "0.04em" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "rgba(239,68,68,0.07)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <LogOut size={13} /> Выйти
+                </button>
+              </div>
+            )}
           </div>
+
+          {/* Cart */}
+          <Link to="/cart" style={{
+            position: "relative",
+            height: 38, padding: "0 16px",
+            borderRadius: 2,
+            background: "#f2efe6",
+            color: "#14120f",
+            fontSize: 12, fontWeight: 500, letterSpacing: "0.14em", textTransform: "uppercase",
+            display: "flex", alignItems: "center", gap: 8,
+            textDecoration: "none",
+            transition: "background 0.3s ease",
+          }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "#fffdf7"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "#f2efe6"; }}
+          >
+            Корзина{totalItems > 0 && ` · ${totalItems}`}
+          </Link>
+        </div>
+
+        {/* Mobile right */}
+        <div className="flex md:hidden" style={{ marginLeft: "auto", alignItems: "center", gap: 8 }}>
+          <button
+            onClick={() => setSearchOpen(s => !s)}
+            style={{ padding: 8, background: "transparent", border: "none", color: "var(--muted)" }}
+          >
+            <Search size={20} strokeWidth={1.5} />
+          </button>
+          <Link to="/cart" style={{ position: "relative", padding: 8, color: "var(--muted)", textDecoration: "none" }}>
+            <ShoppingBag size={20} strokeWidth={1.5} />
+            {totalItems > 0 && (
+              <span style={{ position: "absolute", top: 4, right: 4, width: 14, height: 14, background: "var(--accent)", color: "#0b0b0b", fontSize: 8, fontWeight: 600, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {totalItems > 9 ? "9+" : totalItems}
+              </span>
+            )}
+          </Link>
         </div>
 
         {/* Search bar */}
         {searchOpen && (
-          <div className="anim-fade-in" style={{ borderTop: "1px solid var(--border)", background: "rgba(14,13,11,0.97)" }}>
-            <div style={{ maxWidth: 600, margin: "0 auto", padding: "10px 16px" }}>
-              <form onSubmit={handleSearch} style={{ position: "relative" }}>
-                <Search size={15} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--subtle)", pointerEvents: "none" }} />
-                <input ref={searchRef} type="text" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Бренд, название, аромат..." className="input-base" style={{ paddingLeft: 40, paddingRight: 40 }} />
-                <button type="button" onClick={() => setSearchOpen(false)} style={{ position: "absolute", right: 12, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--subtle)", cursor: "pointer" }}>
-                  <X size={16} />
-                </button>
-              </form>
-            </div>
+          <div className="anim-fade-in" style={{ width: "100%", borderTop: "1px solid var(--border)", paddingTop: 10, paddingBottom: 4 }}>
+            <form onSubmit={handleSearch} style={{ position: "relative", maxWidth: 560 }}>
+              <Search size={14} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--subtle)", pointerEvents: "none" }} />
+              <input
+                ref={searchRef}
+                type="text"
+                value={q}
+                onChange={e => setQ(e.target.value)}
+                placeholder="Бренд, название, аромат..."
+                className="input-base"
+                style={{ paddingLeft: 36, paddingRight: 38 }}
+              />
+              <button type="button" onClick={() => setSearchOpen(false)} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "var(--subtle)", cursor: "pointer" }}>
+                <X size={15} />
+              </button>
+            </form>
           </div>
         )}
       </header>
@@ -220,9 +291,9 @@ export default function Header() {
           {BOT_NAV.map(({ label, to, icon: Icon, cart }) => (
             <Link key={to} to={to} className={clsx("bottom-nav-item", isActive(to) && "active")}>
               <div style={{ position: "relative" }}>
-                <Icon size={22} strokeWidth={isActive(to) ? 2.2 : 1.6} />
+                <Icon size={22} strokeWidth={isActive(to) ? 2 : 1.5} />
                 {cart && totalItems > 0 && (
-                  <span style={{ position: "absolute", top: -6, right: -8, width: 16, height: 16, background: "var(--accent)", color: "#0E0D0B", fontSize: 8, fontWeight: 800, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  <span style={{ position: "absolute", top: -6, right: -8, width: 15, height: 15, background: "var(--accent)", color: "#0b0b0b", fontSize: 8, fontWeight: 600, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center" }}>
                     {totalItems > 9 ? "9+" : totalItems}
                   </span>
                 )}
@@ -236,7 +307,7 @@ export default function Header() {
       <AuthModal
         open={authModal.open}
         defaultTab={authModal.tab}
-        onClose={() => setAuthModal((s) => ({ ...s, open: false }))}
+        onClose={() => setAuthModal(s => ({ ...s, open: false }))}
       />
     </>
   );
