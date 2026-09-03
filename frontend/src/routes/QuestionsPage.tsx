@@ -138,7 +138,7 @@ export function QuestionsPage() {
         <small className="review-author">Вопросы приходят с Ozon и Wildberries — у Яндекс.Маркета нет API вопросов.</small>
       </div>
       {(questionsQuery.data?.warnings || []).map((warning) => (
-        <div className="inline-error" key={warning}>{warning}</div>
+        <div className="inline-warn" key={warning}>{warning}</div>
       ))}
       {questionsQuery.error ? <div className="inline-error">{String((questionsQuery.error as Error).message)}</div> : null}
       <div className="reviews-grid">

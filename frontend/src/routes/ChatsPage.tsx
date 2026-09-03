@@ -343,7 +343,7 @@ export function ChatsPage() {
           Только непрочитанные
         </label>
       </div>
-      {(chatsQuery.data?.warnings || []).map((warning) => <div className="inline-error" key={warning}>{warning}</div>)}
+      {(chatsQuery.data?.warnings || []).map((warning) => <div className="inline-warn" key={warning}>{warning}</div>)}
 
       <div className="chats-layout">
         <div className={`chats-list${mobileView === "thread" ? " mobile-hidden" : ""}`}>

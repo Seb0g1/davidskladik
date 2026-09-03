@@ -168,7 +168,7 @@ export function ReviewsPage() {
         </label>
       </div>
       {(reviewsQuery.data?.warnings || []).map((warning) => (
-        <div className="inline-error" key={warning}>{warning}</div>
+        <div className="inline-warn" key={warning}>{warning}</div>
       ))}
       {reviewsQuery.error ? <div className="inline-error">{String((reviewsQuery.error as Error).message)}</div> : null}
       <div className="reviews-grid">

@@ -332,7 +332,7 @@ function ReadyToShipPanel() {
 
       {/* Live marketplace orders */}
       <div className="section-title compact-title" style={{ marginTop: "12px" }}>
-        <div><span>Маркетплейсы</span><h3>Заказы ожидающие отгрузки — {mpLines.length} шт.</h3></div>
+        <div><span>Маркетплейсы</span><h3>Заказы ожидающие отгрузки</h3></div>
         {filteredMpLines.length > 0 ? (
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             {selectedKeys.size > 0 ? (

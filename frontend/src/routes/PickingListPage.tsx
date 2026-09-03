@@ -281,13 +281,6 @@ export function PickingListPage() {
   }, [rows, status]);
 
   useEffect(() => {
-    const openCount = (listQuery.data?.summary as Record<string, number> | undefined)?.open ?? 0;
-    const prev = document.title.replace(/^\(\d+\)\s*/, "");
-    document.title = openCount > 0 ? `(${openCount}) ${prev}` : prev;
-    return () => { document.title = prev; };
-  }, [listQuery.data?.summary]);
-
-  useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "/") return;
       const tag = (document.activeElement as HTMLElement)?.tagName;
@@ -834,7 +827,7 @@ export function PickingListPage() {
                       {sheetRows.length} позиций · {supplierSet.size} поставщ. · {moneyAmount(totalCost)}
                     </span>
                   </div>
-                  <span className="sheet-toggle">{expanded ? "▲" : "▼"}</span>
+                  <ChevronDown size={15} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform .2s", opacity: 0.6, flexShrink: 0 }} />
                 </button>
                 {expanded ? (
                   <div className="assembly-sheet-body">

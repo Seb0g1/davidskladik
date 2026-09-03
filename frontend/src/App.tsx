@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, BarChart3, ChevronDown, CirclePlay, ClipboardList, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, RefreshCcw, Settings, ShoppingCart, Sparkles, Truck, Star, HelpCircle, MessageCircle, MessageCircleHeart, Tag, UserCircle, Upload } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, ChevronDown, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Store, Truck, Star, HelpCircle, MessageCircle, MessageCircleHeart, Tag, UserCircle, Upload } from "lucide-react";
 import { lazy, ReactNode, Suspense, useEffect, useRef, useState } from "react";
 import { NotificationsBell } from "./components/NotificationsBell";
 import { SystemHealthIndicator } from "./components/SystemHealthIndicator";
@@ -54,17 +54,17 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "operations", href: "/app/operations", label: "Операции", icon: <CirclePlay size={16} /> },
   { route: "recovery-queue", href: "/app/recovery-queue", label: "Восстановление", icon: <RefreshCcw size={16} /> },
   { route: "suppliers", href: "/app/suppliers", label: "Поставщики", icon: <Truck size={16} /> },
-  { route: "shop", href: "/app/shop", label: "Магазин MV", icon: <Sparkles size={16} /> },
-  { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Upload size={16} /> },
+  { route: "shop", href: "/app/shop", label: "Магазин MV", icon: <Store size={16} /> },
+  { route: "import", href: "/app/import", label: "Импорт на Яндекс", icon: <Download size={16} /> },
   { route: "supplier-cart", href: "/app/supplier-cart", label: "Автокорзина", icon: <ShoppingCart size={16} /> },
-  { route: "prices", href: "/app/prices", label: "Цены", icon: <BadgeDollarSign size={16} /> },
+  { route: "prices", href: "/app/prices", label: "Цены", icon: <DollarSign size={16} /> },
   { route: "statistics", href: "/app/statistics", label: "Статистика", icon: <BarChart3 size={16} /> },
   { route: "problem-products", href: "/app/problem-products", label: "Проблемные товары", icon: <AlertTriangle size={16} /> },
   { route: "finance", href: "/app/finance", label: "Финансы", icon: <BadgeDollarSign size={16} /> },
-  { route: "new-products", href: "/app/new-products", label: "Новые товары", icon: <Sparkles size={16} /> },
+  { route: "new-products", href: "/app/new-products", label: "Новые товары", icon: <PackagePlus size={16} /> },
   { route: "tnved", href: "/app/tnved", label: "Коды ТН ВЭД", icon: <Tag size={16} /> },
-  { route: "brand-bans", href: "/app/brand-bans", label: "Запрет брендов", icon: <AlertTriangle size={16} /> },
-  { route: "brands-tnved", href: "/app/brands-tnved", label: "Бренды / ТН ВЭД", icon: <Tag size={16} /> },
+  { route: "brand-bans", href: "/app/brand-bans", label: "Запрет брендов", icon: <Ban size={16} /> },
+  { route: "brands-tnved", href: "/app/brands-tnved", label: "Бренды / ТН ВЭД", icon: <BookOpen size={16} /> },
 ];
 
 // Сайдбар: первые пять пунктов — без заголовка, дальше сворачиваемые группы.
@@ -257,7 +257,7 @@ function AppShell() {
                   </button>
                 ) : null}
                 {!collapsed ? items.map((item) => (
-                  <a key={item.route} ref={route === item.route ? activeNavRef : undefined} className={route === item.route ? "is-active" : ""} href={item.href} onClick={(event) => navigate(event, item.href)}>
+                  <a key={item.route} ref={route === item.route ? activeNavRef : undefined} title={item.label} className={route === item.route ? "is-active" : ""} href={item.href} onClick={(event) => navigate(event, item.href)}>
                     {item.icon}{item.label}
                   </a>
                 )) : null}
@@ -266,9 +266,8 @@ function AppShell() {
           })}
         </nav>
         <div className="side-user-card">
-          <span>Статистика пользователя</span>
-          <strong>{session?.username || roleLabel}</strong>
-          <small>Сегодня: каталог, привязки и сборка</small>
+          <span>{roleLabel}</span>
+          <strong>{session?.username || "—"}</strong>
         </div>
         <button
           className="side-logout"
