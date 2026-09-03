@@ -792,7 +792,7 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
     if (q.length < 2) return response.json({ ok: true, items: [] });
     const tokenGroups = pmQueryToTokenGroups(q);
     // OR pre-filter casts a wide net so n-1 tolerance in pmPassesSearchFilter can work.
-    const and = [{ active: true }];
+    const and = [];
     if (tokenGroups.length) {
       const sqlGroups = tokenGroups.filter((g) => !g._compound);
       const orTerms = sqlGroups.flatMap((group) =>
@@ -828,6 +828,7 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
         name: cleanText(row.nativeName),
         supplierName: cleanText(row.partnerName),
         partnerId: cleanText(row.partnerId),
+        active: row.active !== false,
         price,
         currency,
         priceRub: price === null ? null : normalizeFinanceMoney(currency === "RUB" || currency === "RUR" ? price : price * usdRate, 0),
@@ -1222,7 +1223,7 @@ app.post("/api/consignment/invoices", requireAdmin, async (request, response, ne
   try {
     if (consignmentStorageUnavailable(response)) return;
     const prisma = getPrisma();
-    const { supplierName, note, items = [] } = request.body || {};
+    const { supplierName, note, fromBalance = false, items = [] } = request.body || {};
     if (!Array.isArray(items) || items.length === 0) {
       return response.status(400).json({ error: "Нет позиций в накладной" });
     }
@@ -1285,10 +1286,10 @@ app.post("/api/consignment/invoices", requireAdmin, async (request, response, ne
           data: {
             itemId: op.itemId,
             itemName: op.itemName,
-            type: "purchase",
+            type: fromBalance ? "purchase" : "receive",
             quantity: op.quantity,
             unitPurchase: op.unitPrice,
-            balanceDelta: -(op.unitPrice * op.quantity),
+            balanceDelta: fromBalance ? -(op.unitPrice * op.quantity) : 0,
             sponsorDelta: 0,
             myDelta: 0,
             note: `Накладная ${invoiceNumber}`,

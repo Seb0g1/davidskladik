@@ -291,6 +291,13 @@ export function SupplierCartPanel() {
     mutationFn: (mode: string) => fetchJson("/api/supplier-cart/schedule", SupplierCartScheduleSchema, patchBody({ mode })),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["supplier-cart-schedule"] }),
   });
+  const clearProcessedMutation = useMutation({
+    mutationFn: (keys: string[]) => fetchJson("/api/supplier-cart/processed", z.object({ ok: z.boolean(), cleared: z.number() }).passthrough(), { method: "DELETE", body: JSON.stringify({ keys }) }),
+    onSuccess: () => {
+      generateMutation.reset();
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
+    },
+  });
   const cartMode = scheduleQuery.data?.settings?.mode === "auto" ? "auto" : "draft";
   const previewData = generateMutation.data || draftQuery.data;
   const rows = previewData?.rows || [];
@@ -504,7 +511,14 @@ export function SupplierCartPanel() {
                     {row.stockOnlyFallback ? <span>Складской fallback</span> : null}
                     {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс — подтверждение Ozon после «Собрал»</span> : null}
                   </div>
-                  {row.alreadyCommitted ? <small>Уже в заявке PriceMaster: Doc {row.requestDocId}, Row {row.requestRowId}</small> : null}
+                  {row.alreadyCommitted ? (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <small>Уже в заявке PriceMaster: Doc {row.requestDocId}, Row {row.requestRowId}</small>
+                      <button className="secondary-action" type="button" style={{ padding: "1px 6px", fontSize: 11 }} disabled={clearProcessedMutation.isPending} onClick={() => clearProcessedMutation.mutate([row.key])} title="Снять пометку «уже в заявке» — если PM-строка была удалена или заказ устарел">
+                        Открыть снова
+                      </button>
+                    </div>
+                  ) : null}
                   {row.stockOnlyFallback ? <small>Заказ уйдёт через «Наш склад» — цена в PriceMaster будет 0, остаток со склада.</small> : null}
                   {row.skipReason === "supplier_cutoff_passed_no_alternative" ? <small className="danger-text">Все подходящие поставщики уже закрыли прием заказов на сегодня.</small> : null}
                   {!row.ready && !row.alreadyCommitted ? <small className="danger-text">Причина: {row.skipReason || "не готово"}</small> : null}

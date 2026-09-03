@@ -1,5 +1,5 @@
-import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Clock3, Loader2, ShieldCheck, Truck, X } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, Clock3, Loader2, ShieldCheck, Truck, Unlock, X } from "lucide-react";
 import { z } from "zod";
 import { fetchJson } from "../api";
 import { SupplierAlternativesSchema } from "../types";
@@ -29,10 +29,21 @@ export function SupplierAltPicker({
   onPick: (option: SupplierAltOption) => void;
   onClose: () => void;
 }) {
+  const qc = useQueryClient();
   const alternatives = useQuery({
     queryKey: ["supplier-alternatives", offerId],
     queryFn: () => fetchJson(`/api/supplier-cart/alternatives?offerId=${encodeURIComponent(offerId)}`, SupplierAlternativesSchema),
     staleTime: 30_000,
+  });
+  const unblock = useMutation({
+    mutationFn: (partnerId: string) =>
+      fetchJson("/api/supplier-cart/blocks", z.object({ ok: z.boolean().optional(), unblocked: z.string().optional() }), {
+        method: "DELETE",
+        body: JSON.stringify({ offerId, partnerId }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["supplier-alternatives", offerId] });
+    },
   });
   const current = (currentPartnerId || "").toLowerCase();
   const options = (alternatives.data?.options || []).filter((option) => String(option.partnerId || "").toLowerCase() !== current);
@@ -63,7 +74,11 @@ export function SupplierAltPicker({
                 {option.orderCutoffTime ? ` · заказы до ${option.orderCutoffTime}` : ""}
               </span>
               <span className="supplier-alt-badges">
-                {option.blocked ? <em className="danger-text"><AlertTriangle size={12} /> заблокирован после «не было»</em> : null}
+                {option.blocked ? (
+                  <em className="danger-text">
+                    <AlertTriangle size={12} /> заблокирован после «не было»
+                  </em>
+                ) : null}
                 {option.inactivePm ? <em style={{ color: "#f59e0b" }}><AlertTriangle size={12} /> неактивен в PM (Active=0)</em> : (!option.available ? <em className="danger-text">нет наличия</em> : null)}
                 {option.cutoffPassed && !option.blocked ? <em><Clock3 size={12} /> приём заказов на сегодня закрыт</em> : null}
                 {option.stockOnly ? <em>Наш склад</em> : null}
@@ -71,15 +86,30 @@ export function SupplierAltPicker({
                 {!option.blocked && option.orderable && !option.cutoffPassed && !option.stockOnly ? <em className="success-text"><ShieldCheck size={12} /> можно заказать</em> : null}
               </span>
             </div>
-            <button
-              className="secondary-action"
-              type="button"
-              disabled={disabled}
-              title={option.blocked ? "Поставщик временно заблокирован для этого SKU" : (option.inactivePm ? "Поставщик неактивен в PM — заказ всё равно будет создан" : (!option.orderable ? "Нет наличия или цены" : ""))}
-              onClick={() => onPick(option)}
-            >
-              {busy ? <Loader2 className="spin" size={14} /> : null} {actionLabel}
-            </button>
+            {option.blocked ? (
+              <button
+                className="secondary-action"
+                type="button"
+                disabled={unblock.isPending}
+                title="Снять блок поставщика для этого SKU"
+                onClick={() => unblock.mutate(option.partnerId)}
+              >
+                {unblock.isPending && unblock.variables === option.partnerId
+                  ? <Loader2 className="spin" size={14} />
+                  : <Unlock size={14} />}
+                {" "}Разблокировать
+              </button>
+            ) : (
+              <button
+                className="secondary-action"
+                type="button"
+                disabled={disabled}
+                title={option.inactivePm ? "Поставщик неактивен в PM — заказ всё равно будет создан" : (!option.orderable ? "Нет наличия или цены" : "")}
+                onClick={() => onPick(option)}
+              >
+                {busy ? <Loader2 className="spin" size={14} /> : null} {actionLabel}
+              </button>
+            )}
           </div>
         );
       })}

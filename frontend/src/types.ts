@@ -1152,6 +1152,12 @@ export const SupplierReplaceResponseSchema = z.object({
     existingDocId: z.number().optional().nullable(),
     existingDocDate: z.coerce.string().optional().nullable(),
   })).optional().default([]),
+  skippedDetails: z.array(z.object({
+    key: z.coerce.string().optional().default(""),
+    offerId: z.coerce.string().optional().default(""),
+    productName: z.coerce.string().optional().default(""),
+    skipReason: z.coerce.string().optional().default(""),
+  })).optional().default([]),
   docIds: z.array(z.union([z.string(), z.number()])).optional().default([]),
   verifiedInPriceMaster: z.boolean().optional().default(false),
   row: z.record(z.string(), z.unknown()).optional().nullable(),

@@ -104,7 +104,10 @@ const {
 } = createStaticAppHandlers({ fs, path, publicDir, modernAppDir, buildVersion });
 const sessionCookieName = "pm_session";
 const sessionTtlMs = 1000 * 60 * 60 * 12;
-const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || process.env.DEFAULT_AUTO_SYNC_MINUTES || 30);
+// PM is on the same server (local socket, ~1 ms latency) so runSync() is cheap
+// when nothing changed (it skips writeSnapshot on identical row counts + no changes).
+// Default dropped from 30 min → 2 min so the snapshot stays within ~2 min of truth.
+const autoSyncMinutes = Number(process.env.AUTO_SYNC_MINUTES || process.env.DEFAULT_AUTO_SYNC_MINUTES || 2);
 const autoSyncInitialDelaySeconds = Math.max(30, Number(process.env.AUTO_SYNC_INITIAL_DELAY_SECONDS || 120) || 120);
 const warehouseWarmOnStartup = process.env.WAREHOUSE_WARM_ON_STARTUP === "true";
 const warehouseFullMemoryLoadEnabled = process.env.WAREHOUSE_FULL_MEMORY_LOAD_ENABLED === "true";

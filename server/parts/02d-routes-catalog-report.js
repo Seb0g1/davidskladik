@@ -155,60 +155,79 @@ async function buildBrandsYandexReport() {
   const prisma = getPrisma();
   if (!prisma) throw new Error("БД недоступна");
 
-  const [brandRows, catRows, total, withTnvedRows] = await Promise.all([
+  const [brandRows, catRows, total] = await Promise.all([
     prisma.$queryRawUnsafe(`
       SELECT NULLIF(TRIM(raw->'yandex'->>'vendor'), '') AS vendor, COUNT(*)::int AS count
       FROM warehouse_products WHERE marketplace = 'yandex'
       GROUP BY vendor ORDER BY count DESC
     `),
     prisma.$queryRawUnsafe(`
-      SELECT NULLIF(TRIM(raw->'yandex'->>'marketCategoryId'), '') AS cat_id, COUNT(*)::int AS count
+      SELECT
+        NULLIF(TRIM(raw->'yandex'->>'marketCategoryId'), '') AS cat_id,
+        NULLIF(TRIM(raw->'yandex'->>'marketCategoryName'), '') AS cat_name,
+        COUNT(*)::int AS count
       FROM warehouse_products WHERE marketplace = 'yandex'
-      GROUP BY cat_id ORDER BY count DESC
+      GROUP BY cat_id, cat_name ORDER BY count DESC
     `),
     prisma.warehouseProduct.count({ where: { marketplace: "yandex" } }),
-    prisma.$queryRawUnsafe(`
-      SELECT COUNT(*)::int AS count
-      FROM warehouse_products
-      WHERE marketplace = 'yandex'
-      AND NULLIF(TRIM(COALESCE(raw->>'tnvedCode', raw->'yandex'->>'tnvedCode', '')), '') IS NOT NULL
-    `),
   ]);
 
   const withVendor = brandRows.filter((r) => r.vendor).reduce((s, r) => s + Number(r.count), 0);
-  const withTnved = Number(withTnvedRows[0]?.count || 0);
 
-  // Fetch category names from YM API (best-effort, failures are silently skipped)
-  const catIds = catRows.filter((r) => r.cat_id).map((r) => r.cat_id);
-  const categoryNames = new Map();
+  // TN VED: бэкфилл ЯМ отправляет код в Yandex API без сохранения локально.
+  // Используем настройки: если код задан — он применён ко всем товарам.
+  const settings = await readAppSettings().catch(() => null);
+  const tnvedCodeConfigured = cleanText(settings?.tnved?.code || "");
+  const totalNum = Number(total);
+  const withTnved = tnvedCodeConfigured ? totalNum : 0;
+
+  // Имена категорий: сначала из raw.yandex.marketCategoryName (если сохранено),
+  // затем добираем недостающие через API пакетами по 5 с задержкой.
+  const catNameMap = new Map();
+  const catIdsToFetch = [];
+  for (const row of catRows) {
+    if (!row.cat_id) continue;
+    const storedName = cleanText(row.cat_name || "");
+    if (storedName) {
+      catNameMap.set(row.cat_id, storedName);
+    } else {
+      catIdsToFetch.push(row.cat_id);
+    }
+  }
+
   const [shop] = getYandexShops();
-  if (shop) {
-    await Promise.allSettled(
-      catIds.map(async (catId) => {
-        try {
-          const data = await yandexRequest(shop, "GET", `/v2/categories/${catId}`, undefined);
-          const name = data?.result?.name || data?.name || "";
-          if (name) categoryNames.set(catId, name);
-        } catch {
-          // category name is optional — don't fail the report
-        }
-      }),
-    );
+  if (shop && catIdsToFetch.length) {
+    const BATCH = 5;
+    for (let i = 0; i < catIdsToFetch.length; i += BATCH) {
+      const chunk = catIdsToFetch.slice(i, i + BATCH);
+      await Promise.allSettled(
+        chunk.map(async (catId) => {
+          try {
+            const data = await yandexRequest(shop, "GET", `/v2/categories/${catId}`, undefined);
+            const name = cleanText(data?.result?.name || data?.category?.name || data?.name || "");
+            if (name) catNameMap.set(catId, name);
+          } catch {
+            // category name is optional — don't fail the report
+          }
+        }),
+      );
+      if (i + BATCH < catIdsToFetch.length) await sleep(300);
+    }
   }
 
   return {
     summary: {
-      total: Number(total),
+      total: totalNum,
       withVendor,
-      missingVendor: Number(total) - withVendor,
+      missingVendor: totalNum - withVendor,
       withTnved,
-      missingTnved: Number(total) - withTnved,
+      missingTnved: totalNum - withTnved,
     },
     brands: brandRows.filter((r) => r.vendor).map((r) => ({ brand: String(r.vendor), count: Number(r.count) })),
     categories: catRows.filter((r) => r.cat_id).map((r) => ({
       catId: String(r.cat_id),
       count: Number(r.count),
-      catName: categoryNames.get(r.cat_id) || "",
+      catName: catNameMap.get(r.cat_id) || "",
     })),
     cachedAt: new Date().toISOString(),
   };

@@ -313,3 +313,88 @@ async function queueLinkedProductActivation(productIds = [], sourceEvent = "link
   }
 }
 
+// Targeted stock sync triggered directly after a link create/update or delete.
+// Runs asynchronously — never blocks the HTTP response. Handles two cases:
+//   1. Products with a resolved supplier and zero (or missing) marketplace stock →
+//      immediately restores stock via restoreStocksOnMarketplaces so the marketplace
+//      shows the correct available quantity without waiting for the BullMQ recovery job.
+//   2. Products with a resolved supplier and a positive targetStock that differs from
+//      the current marketplace stock → pushes the correct targetStock via
+//      sendTargetStocksToMarketplace (covers the "re-link after supplier change" case).
+// This is a belt-and-suspenders safety net on top of the existing queueLinkedProductActivation
+// flow: the BullMQ supplier-recovery-automation job handles the general case, but there are
+// edge cases where it may run slightly later or be deduplicated — this direct push fills the gap.
+async function triggerLinkedProductStockSync(productIds = [], sourceEvent = "link_stock_sync") {
+  const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : []).map((id) => cleanText(id)).filter(Boolean)));
+  if (!ids.length) return;
+  try {
+    const products = await buildFreshWarehouseProducts(ids, {
+      refreshPrices: false,
+      livePriceMaster: true,
+      batchPriceMaster: true,
+      priceMasterTimeoutMs: autoPricePmTimeoutMs,
+    });
+    const defaultStock = Math.max(1, Number(process.env.LINKED_DEFAULT_TARGET_STOCK || 5) || 5);
+    // Products that need a stock restore: have a supplier, are not archived, not snoozed,
+    // and either have zero marketplace stock or a zero targetStock (first-time activation).
+    const needsRestore = products.filter(
+      (product) =>
+        product?.id
+        && product.hasLinks
+        && product.selectedSupplier
+        && !productLooksArchived(product)
+        && !product.hasSnoozedLinks
+        && (!marketplaceHasPositiveStock(product) || Math.round(Number(product.targetStock || 0)) <= 0),
+    ).map((product) => ({
+      ...product,
+      targetStock: Math.max(defaultStock, Math.round(Number(product.targetStock || 0)) || defaultStock),
+    }));
+    if (needsRestore.length) {
+      await restoreStocksOnMarketplaces(needsRestore).catch((err) => {
+        logger.warn("triggerLinkedProductStockSync restore failed", {
+          sourceEvent,
+          count: needsRestore.length,
+          detail: err?.message || String(err),
+        });
+      });
+      logger.info("triggerLinkedProductStockSync restore sent", {
+        sourceEvent,
+        count: needsRestore.length,
+        productIds: needsRestore.map((p) => p.id),
+      });
+      return;
+    }
+    // Products with a positive targetStock that differs from the marketplace — push targetStock.
+    const needsTargetPush = pickTargetStockSendProducts(
+      products.filter(
+        (product) =>
+          product?.id
+          && product.hasLinks
+          && product.selectedSupplier
+          && !productLooksArchived(product)
+          && !product.hasSnoozedLinks,
+      ),
+    );
+    if (needsTargetPush.length) {
+      await sendTargetStocksToMarketplace(needsTargetPush).catch((err) => {
+        logger.warn("triggerLinkedProductStockSync target push failed", {
+          sourceEvent,
+          count: needsTargetPush.length,
+          detail: err?.message || String(err),
+        });
+      });
+      logger.info("triggerLinkedProductStockSync target push sent", {
+        sourceEvent,
+        count: needsTargetPush.length,
+        productIds: needsTargetPush.map((p) => p.id),
+      });
+    }
+  } catch (err) {
+    logger.warn("triggerLinkedProductStockSync failed", {
+      sourceEvent,
+      ids,
+      detail: err?.message || String(err),
+    });
+  }
+}
+

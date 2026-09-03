@@ -65,42 +65,116 @@ async function runPmPriceChangeMonitor({ source = "schedule" } = {}) {
 
     if (!rows.length) return { status: "ok", checked: 0, changed: 0 };
 
-    const pmIndexes = await getPriceMasterSnapshotIndexes();
+    // Query live MySQL directly — PM is on the same server (local socket, ~1 ms).
+    // This avoids loading/indexing the 77 MB snapshot just for the monitor pass.
+    // Falls back to snapshot indexes if the pool is unavailable.
     let changed = 0;
     let missing = 0;
+    let usedLive = true;
 
+    // Collect unique rowIds to batch-fetch from MySQL in one query.
+    const rowIdToLinks = new Map();
     for (const row of rows) {
       const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
       const sourceRowId = cleanText(row.source_row_id || raw.sourceRowId || "");
       if (!sourceRowId) continue;
-
       const storedPrice = Number(raw.resolvedPriceMasterRow?.price ?? NaN);
       if (!Number.isFinite(storedPrice) || storedPrice <= 0) continue;
+      if (!rowIdToLinks.has(sourceRowId)) rowIdToLinks.set(sourceRowId, []);
+      rowIdToLinks.get(sourceRowId).push({ row, raw, storedPrice });
+    }
 
-      const snapshotRows = pmIndexes.byRowId.get(sourceRowId) || [];
-      if (!snapshotRows.length) {
-        // rowId no longer in snapshot — will be caught by disappearance monitor
-        missing += 1;
+    if (!rowIdToLinks.size) {
+      logger.info("pm_price_monitor_complete", { source, checked: rows.length, changed: 0, missingRowId: 0, pmSource: "none" });
+      return { status: "ok", checked: rows.length, changed: 0, missingRowId: 0 };
+    }
+
+    // Batch-fetch current prices from live MySQL for all pinned rowIds.
+    let liveByRowId = new Map();
+    try {
+      const rowIds = Array.from(rowIdToLinks.keys()).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+      if (rowIds.length && pool) {
+        const placeholders = rowIds.map(() => "?").join(",");
+        const [liveRows] = await pool.query(
+          `SELECT r.RowID AS rowId, r.NativePrice AS price, r.NativeName AS name,
+                  r.NativeID AS article, d.PartnerID AS partnerId, p.PartnerName AS partnerName
+           FROM OfferRows r
+           JOIN OfferDocs d ON d.DocID = r.DocID
+           LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
+           WHERE r.RowID IN (${placeholders})`,
+          rowIds,
+        );
+        for (const r of liveRows || []) {
+          liveByRowId.set(String(r.rowId), r);
+        }
+        logger.info("pm_price_monitor live MySQL query", { rowIds: rowIds.length, found: liveByRowId.size, pmSource: "live" });
+      }
+    } catch (liveError) {
+      usedLive = false;
+      logger.warn("pm_price_monitor live MySQL query failed, falling back to snapshot", { detail: liveError?.message || String(liveError) });
+      // Fallback: load snapshot indexes
+      try {
+        const pmIndexes = await getPriceMasterSnapshotIndexes();
+        for (const [sourceRowId, linkEntries] of rowIdToLinks) {
+          const snapshotRows = pmIndexes.byRowId.get(sourceRowId) || [];
+          if (!snapshotRows.length) {
+            missing += linkEntries.length;
+            continue;
+          }
+          const currentFields = priceMasterSnapshotRowFields(snapshotRows[0]);
+          const currentPrice = Number(currentFields.price ?? NaN);
+          for (const { row, raw, storedPrice } of linkEntries) {
+            if (!Number.isFinite(currentPrice) || currentPrice <= 0) continue;
+            const delta = Math.abs(currentPrice - storedPrice) / storedPrice;
+            if (delta >= pmPriceMonitorChangeThreshold) {
+              changed += 1;
+              logger.warn("pm_price_changed", {
+                offerId: cleanText(row.offer_id || ""),
+                marketplace: cleanText(row.marketplace || ""),
+                supplierName: cleanText(row.supplier_name || currentFields.partnerName || ""),
+                article: cleanText(row.article || currentFields.article || ""),
+                sourceRowId,
+                storedPriceUsd: storedPrice,
+                currentPriceUsd: currentPrice,
+                deltaPct: Math.round(delta * 1000) / 10,
+                pmSource: "snapshot_fallback",
+              });
+            }
+          }
+        }
+        logger.info("pm_price_monitor_complete", { source, checked: rows.length, changed, missingRowId: missing, pmSource: "snapshot_fallback" });
+        return { status: "ok", checked: rows.length, changed, missingRowId: missing };
+      } catch (snapshotError) {
+        logger.warn("pm_price_monitor snapshot fallback also failed", { detail: snapshotError?.message || String(snapshotError) });
+        return { status: "error", error: snapshotError?.message || String(snapshotError) };
+      }
+    }
+
+    // Compare stored prices against live MySQL results.
+    for (const [sourceRowId, linkEntries] of rowIdToLinks) {
+      const liveRow = liveByRowId.get(sourceRowId);
+      if (!liveRow) {
+        missing += linkEntries.length;
         continue;
       }
-
-      const currentFields = priceMasterSnapshotRowFields(snapshotRows[0]);
-      const currentPrice = Number(currentFields.price ?? NaN);
-      if (!Number.isFinite(currentPrice) || currentPrice <= 0) continue;
-
-      const delta = Math.abs(currentPrice - storedPrice) / storedPrice;
-      if (delta >= pmPriceMonitorChangeThreshold) {
-        changed += 1;
-        logger.warn("pm_price_changed", {
-          offerId: cleanText(row.offer_id || ""),
-          marketplace: cleanText(row.marketplace || ""),
-          supplierName: cleanText(row.supplier_name || currentFields.partnerName || ""),
-          article: cleanText(row.article || currentFields.article || ""),
-          sourceRowId,
-          storedPriceUsd: storedPrice,
-          currentPriceUsd: currentPrice,
-          deltaPct: Math.round(delta * 1000) / 10,
-        });
+      const currentPrice = Number(liveRow.price ?? NaN);
+      for (const { row, raw, storedPrice } of linkEntries) {
+        if (!Number.isFinite(currentPrice) || currentPrice <= 0) continue;
+        const delta = Math.abs(currentPrice - storedPrice) / storedPrice;
+        if (delta >= pmPriceMonitorChangeThreshold) {
+          changed += 1;
+          logger.warn("pm_price_changed", {
+            offerId: cleanText(row.offer_id || ""),
+            marketplace: cleanText(row.marketplace || ""),
+            supplierName: cleanText(row.supplier_name || liveRow.partnerName || ""),
+            article: cleanText(row.article || liveRow.article || ""),
+            sourceRowId,
+            storedPriceUsd: storedPrice,
+            currentPriceUsd: currentPrice,
+            deltaPct: Math.round(delta * 1000) / 10,
+            pmSource: "live",
+          });
+        }
       }
     }
 
@@ -109,6 +183,7 @@ async function runPmPriceChangeMonitor({ source = "schedule" } = {}) {
       checked: rows.length,
       changed,
       missingRowId: missing,
+      pmSource: usedLive ? "live" : "snapshot_fallback",
     });
     return { status: "ok", checked: rows.length, changed, missingRowId: missing };
   } catch (error) {
@@ -149,64 +224,140 @@ async function runPmDisappearanceMonitor({ source = "schedule" } = {}) {
 
     if (!rows.length) return { status: "ok", checked: 0, disappeared: 0 };
 
-    const pmIndexes = await getPriceMasterSnapshotIndexes();
+    // Query live MySQL directly — PM is on the same server (local socket, ~1 ms).
+    // Avoids loading the 77 MB snapshot just to check rowId/article existence.
+    // Falls back to snapshot indexes if the pool is unavailable.
     let disappeared = 0;
     let activeOk = 0;
 
+    // Collect unique (rowId, article, partnerId) tuples for batched MySQL lookup.
+    const linkChecks = [];
     for (const row of rows) {
       const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
       const sourceRowId = cleanText(row.source_row_id || raw.sourceRowId || "");
       if (!sourceRowId) continue;
+      linkChecks.push({
+        sourceRowId,
+        article: cleanText(raw.article || row.article || ""),
+        exactName: cleanText(row.exact_name || raw.exactName || ""),
+        partnerId: cleanText(raw.partnerId || row.partner_id || ""),
+        offerId: cleanText(row.offer_id || ""),
+        marketplace: cleanText(row.marketplace || ""),
+        supplierName: cleanText(row.supplier_name || ""),
+        linkId: cleanText(row.link_id || ""),
+      });
+    }
 
-      const article = cleanText(raw.article || row.article || "");
-      const exactName = cleanText(row.exact_name || raw.exactName || "");
+    if (!linkChecks.length) {
+      logger.info("pm_disappear_monitor_complete", { source, checked: rows.length, disappeared: 0, activeOk: 0, pmSource: "none" });
+      return { status: "ok", checked: rows.length, disappeared: 0, activeOk: 0 };
+    }
 
-      // Check if rowId still exists anywhere in the snapshot
-      const byRowId = pmIndexes.byRowId.get(sourceRowId) || [];
-      if (byRowId.length) {
-        activeOk += 1;
-        continue;
+    // Batch-check rowIds and articles from live MySQL.
+    try {
+      const uniqueRowIds = [...new Set(linkChecks.map((c) => Number(c.sourceRowId)).filter((n) => Number.isFinite(n) && n > 0))];
+      const uniqueArticles = [...new Set(linkChecks.map((c) => c.article).filter(Boolean))];
+
+      let existingRowIds = new Set();
+      let existingArticlesByPartner = new Map(); // "partnerId|article" → true
+
+      if (uniqueRowIds.length && pool) {
+        const rPlaceholders = uniqueRowIds.map(() => "?").join(",");
+        const [rowIdRows] = await pool.query(
+          `SELECT r.RowID AS rowId, d.PartnerID AS partnerId, r.NativeID AS article
+           FROM OfferRows r JOIN OfferDocs d ON d.DocID = r.DocID
+           WHERE r.RowID IN (${rPlaceholders}) AND r.Ignored = 0`,
+          uniqueRowIds,
+        );
+        for (const r of rowIdRows || []) existingRowIds.add(String(r.rowId));
       }
 
-      // rowId gone — check if article still exists under same partner
-      const byArticle = article ? (pmIndexes.byArticle.get(article) || []) : [];
-      const partnerId = cleanText(raw.partnerId || row.partner_id || "");
-      const articleMatch = partnerId
-        ? byArticle.some((r) => {
-          const f = priceMasterSnapshotRowFields(r);
-          return cleanText(f.partnerId) === partnerId;
-        })
-        : byArticle.length > 0;
+      if (uniqueArticles.length && pool) {
+        const aPlaceholders = uniqueArticles.map(() => "?").join(",");
+        const [articleRows] = await pool.query(
+          `SELECT DISTINCT TRIM(r.NativeID) AS article, d.PartnerID AS partnerId
+           FROM OfferRows r JOIN OfferDocs d ON d.DocID = r.DocID
+           WHERE BINARY TRIM(r.NativeID) IN (${aPlaceholders}) AND r.Ignored = 0`,
+          uniqueArticles,
+        );
+        for (const r of articleRows || []) {
+          existingArticlesByPartner.set(`${r.partnerId}|${cleanText(r.article)}`, true);
+          existingArticlesByPartner.set(`any|${cleanText(r.article)}`, true);
+        }
+      }
 
-      // Check by name if article also missing
-      const nameMatch = exactName && (pmIndexes.byName.get(exactName.toLowerCase()) || []).some((r) => {
-        if (!partnerId) return true;
-        const f = priceMasterSnapshotRowFields(r);
-        return cleanText(f.partnerId) === partnerId;
+      logger.info("pm_disappear_monitor live MySQL query", {
+        rowIds: uniqueRowIds.length,
+        foundRowIds: existingRowIds.size,
+        articles: uniqueArticles.length,
+        pmSource: "live",
       });
 
-      if (!articleMatch && !nameMatch) {
-        disappeared += 1;
-        logger.warn("pm_product_disappeared", {
-          offerId: cleanText(row.offer_id || ""),
-          marketplace: cleanText(row.marketplace || ""),
-          supplierName: cleanText(row.supplier_name || ""),
-          article,
-          sourceRowId,
-          exactName,
-          partnerId,
-          linkId: cleanText(row.link_id || ""),
-        });
-      } else {
-        // rowId moved (article renumbered or re-uploaded) — price change monitor handles reprice
-        activeOk += 1;
-        logger.info("pm_rowid_moved", {
-          offerId: cleanText(row.offer_id || ""),
-          sourceRowId,
-          article,
-          articleFound: articleMatch,
-          nameFound: nameMatch,
-        });
+      for (const check of linkChecks) {
+        if (existingRowIds.has(check.sourceRowId)) {
+          activeOk += 1;
+          continue;
+        }
+        // rowId gone — check if article still exists under same partner
+        const articleKey = check.partnerId
+          ? `${check.partnerId}|${check.article}`
+          : (check.article ? `any|${check.article}` : "");
+        const articleMatch = check.article && (
+          (check.partnerId && existingArticlesByPartner.has(`${check.partnerId}|${check.article}`))
+          || existingArticlesByPartner.has(`any|${check.article}`)
+        );
+
+        if (!articleMatch) {
+          disappeared += 1;
+          logger.warn("pm_product_disappeared", {
+            offerId: check.offerId,
+            marketplace: check.marketplace,
+            supplierName: check.supplierName,
+            article: check.article,
+            sourceRowId: check.sourceRowId,
+            exactName: check.exactName,
+            partnerId: check.partnerId,
+            linkId: check.linkId,
+            pmSource: "live",
+          });
+        } else {
+          activeOk += 1;
+          logger.info("pm_rowid_moved", {
+            offerId: check.offerId,
+            sourceRowId: check.sourceRowId,
+            article: check.article,
+            articleFound: true,
+            pmSource: "live",
+          });
+        }
+      }
+    } catch (liveError) {
+      logger.warn("pm_disappear_monitor live MySQL failed, falling back to snapshot", { detail: liveError?.message || String(liveError) });
+      // Snapshot fallback
+      try {
+        const pmIndexes = await getPriceMasterSnapshotIndexes();
+        for (const check of linkChecks) {
+          const byRowId = pmIndexes.byRowId.get(check.sourceRowId) || [];
+          if (byRowId.length) { activeOk += 1; continue; }
+          const byArticle = check.article ? (pmIndexes.byArticle.get(check.article) || []) : [];
+          const articleMatch = check.partnerId
+            ? byArticle.some((r) => cleanText(priceMasterSnapshotRowFields(r).partnerId) === check.partnerId)
+            : byArticle.length > 0;
+          const nameMatch = check.exactName && (pmIndexes.byName.get(check.exactName.toLowerCase()) || []).some((r) => {
+            if (!check.partnerId) return true;
+            return cleanText(priceMasterSnapshotRowFields(r).partnerId) === check.partnerId;
+          });
+          if (!articleMatch && !nameMatch) {
+            disappeared += 1;
+            logger.warn("pm_product_disappeared", { offerId: check.offerId, marketplace: check.marketplace, supplierName: check.supplierName, article: check.article, sourceRowId: check.sourceRowId, exactName: check.exactName, partnerId: check.partnerId, linkId: check.linkId, pmSource: "snapshot_fallback" });
+          } else {
+            activeOk += 1;
+            logger.info("pm_rowid_moved", { offerId: check.offerId, sourceRowId: check.sourceRowId, article: check.article, articleFound: articleMatch, nameFound: nameMatch, pmSource: "snapshot_fallback" });
+          }
+        }
+      } catch (snapshotError) {
+        logger.warn("pm_disappear_monitor snapshot fallback also failed", { detail: snapshotError?.message || String(snapshotError) });
+        return { status: "error", error: snapshotError?.message || String(snapshotError) };
       }
     }
 
@@ -215,6 +366,7 @@ async function runPmDisappearanceMonitor({ source = "schedule" } = {}) {
       checked: rows.length,
       disappeared,
       activeOk,
+      pmSource: "live",
     });
     return { status: "ok", checked: rows.length, disappeared, activeOk };
   } catch (error) {

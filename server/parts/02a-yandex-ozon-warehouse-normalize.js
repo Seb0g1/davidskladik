@@ -85,6 +85,7 @@ function normalizeYandexWarehouseProduct(item = {}, shop) {
       url: buildYandexProductUrl(offer, item),
       description: offer.description || "",
       marketCategoryId: offer.marketCategoryId || item.mapping?.marketCategoryId,
+      marketCategoryName: cleanText(offer.marketCategoryName || item.mapping?.marketCategoryName || ""),
       vendor: offer.vendor || "",
       pictures,
       barcodes,

@@ -204,6 +204,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
       detail: activationError?.message || String(activationError),
       productIds: expandedUpdatedIds,
     }));
+    void triggerLinkedProductStockSync(expandedUpdatedIds, "link_bulk_add_or_update").catch(() => {});
     appendAudit(request, "warehouse.links.bulk_save", {
       productIds: updatedIds,
       links: baseLinks.map((link) => ({
@@ -322,6 +323,7 @@ app.post("/api/warehouse/products/:id/links", async (request, response, next) =>
       detail: activationError?.message || String(activationError),
       productId: product.id,
     }));
+    void triggerLinkedProductStockSync([product.id], "link_add_or_update").catch(() => {});
     appendAudit(request, "warehouse.link.save", {
       productId: product.id,
       offerId: product.offerId,

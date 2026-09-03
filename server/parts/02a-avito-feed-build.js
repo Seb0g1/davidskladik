@@ -1,6 +1,45 @@
 // Построение XML-фида Avito Автозагрузки (Ads formatVersion 3).
 // Авито скачивает фид по публичной ссылке из настроек профиля автозагрузки.
 
+// Коды ТН ВЭД ЕАЭС по категории объявления. Духи + туалетная вода = 3303001000.
+// Подставляются автоматически если listing.tnVed не задан явно.
+const AVITO_CATEGORY_TNVED = {
+  "parfum-edt":        "3303001000",
+  "parfum-samples":    "3303001000",
+  "parfum-sets":       "3303001000",
+  "parfum-oils":       "3303001000",
+  "parfum-diffusers":  "3303001000",
+  "parfum-atomizers":  "3303001000",
+  "parfum-other":      "3303001000",
+  "body-deo":          "3307200000",
+  "body-soap":         "3401110000",
+  "body-shower":       "3401190000",
+  "body-scrubs":       "3307900000",
+  "body-creams":       "3304990000",
+  "body-oils":         "3304990000",
+  "body-lotions":      "3304990000",
+  "body-correctors":   "3304990000",
+  "face-creams":       "3304990000",
+  "face-masks":        "3304990000",
+  "face-oils":         "3304990000",
+  "face-patches":      "3304990000",
+  "face-scrubs":       "3304990000",
+  "face-cleansers":    "3304990000",
+  "face-serums":       "3304990000",
+  "face-toners":       "3304990000",
+  "face-fluids":       "3304990000",
+  "hair":              "3305900000",
+  "care-sun":          "3304990000",
+  "care-oral":         "3306100000",
+  "care-hygiene":      "3307900000",
+  "care-sets":         "3307900000",
+  "makeup-lips":       "3304100000",
+  "makeup-eyes":       "3304200000",
+  "makeup-face":       "3304990000",
+  "makeup-nails":      "3304300000",
+  "makeup":            "3304990000",
+};
+
 // Целевой остаток для тега <Stock>. Без тега Авито считает количество = 1 и после
 // первой продажи остаток остаётся 0 навсегда; с тегом каждая автозагрузка
 // восстанавливает остаток до целевого значения, пока поставщик даёт цену.
@@ -70,6 +109,8 @@ function buildAvitoAdXml(listing, feedDefaults = {}) {
   }
   emit("Address", listing.address || feedDefaults.address);
   emit("Brand", listing.brand);
+  const tnVed = cleanText(listing.tnVed || AVITO_CATEGORY_TNVED[listing.categoryKey] || feedDefaults.tnVed || "");
+  if (tnVed) emit("TnVed", tnVed);
   if (listing.stockQuantity !== null && listing.stockQuantity !== undefined && Number.isFinite(Number(listing.stockQuantity))) {
     emit("Stock", String(Math.max(0, Math.round(Number(listing.stockQuantity)))));
   }

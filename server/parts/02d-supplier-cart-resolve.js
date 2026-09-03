@@ -84,6 +84,7 @@ function normalizeSupplierCartPreviewRow(input = {}) {
     ready: Boolean(input.ready),
     alreadyCommitted: Boolean(input.alreadyCommitted),
     stockOnlyFallback: Boolean(input.stockOnlyFallback),
+    inactivePm: Boolean(input.inactivePm),
     skipReason: cleanText(input.skipReason || input.reason),
     requestDocId: cleanText(input.requestDocId || input.docId),
     requestRowId: cleanText(input.requestRowId || input.rowId),
@@ -551,7 +552,34 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
   // name is absent (e.g. WB orders) so Dalik multi-product articles still disambiguate.
   const disambigName = normalizedLine.productName || normalizeWarehouseProduct(product).name;
   if (disambigName) {
+    const matchesBefore = matches;
     matches = disambiguateSupplierCartMatchesByOrderName(matches, disambigName);
+    // disambiguateSupplierCartMatchesByOrderName returns [] for a linkId when rows carry
+    // distinct article codes but none overlap the order name (score = 0 for all). In that
+    // case every candidate entry in matches becomes empty — picking any row would order the
+    // wrong product. Surface "ambiguous_product" instead of silently ordering at random.
+    const allEmpty = matches.size > 0 && [...matches.values()].every((rows) => Array.isArray(rows) && rows.length === 0);
+    const hadCandidates = [...matchesBefore.values()].some((rows) => Array.isArray(rows) && rows.length > 0);
+    if (allEmpty && hadCandidates) {
+      logger.warn("supplier_cart_ambiguous_product", {
+        orderName: disambigName,
+        offerId: normalizedLine.offerId,
+        candidates: [...matchesBefore.values()].reduce((sum, rows) => sum + (Array.isArray(rows) ? rows.length : 0), 0),
+      });
+      return normalizeSupplierCartPreviewRow({
+        ...normalizedLine,
+        warehouseProductId: product.id,
+        groupKey: warehouseProductPageGroupKey(product),
+        groupOfferId: product.offerId,
+        ready: false,
+        skipReason: "ambiguous_product",
+        saleAmount: computeMarketplaceSaleAmountRub(normalizedLine),
+        soldAt: normalizedLine.orderedAt,
+        alreadyCommitted: Boolean(processed) || alreadyPicked || coveredByManual,
+        requestDocId: processed?.requestDocId,
+        requestRowId: processed?.requestRowId,
+      });
+    }
   }
   const blockedPartnerIds = activeSupplierBlocksForOffer(state, normalizedLine.offerId);
   const {

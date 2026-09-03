@@ -219,6 +219,7 @@ function defaultAvitoImportRules() {
       condition: "Новое",
       address: "Москва, Складочная ул., 1с1",
       description: "{title} — оригинальная продукция, новый товар. Быстрая отправка, Авито Доставка.",
+      tnVed: "3303001000",
     },
   };
 }
@@ -296,6 +297,7 @@ function normalizeAvitoImportRules(input = {}) {
       description: typeof rawDefaults.description === "string" && rawDefaults.description.trim()
         ? rawDefaults.description
         : fallback.feedDefaults.description,
+      tnVed: cleanText(rawDefaults.tnVed ?? rawDefaults.tn_ved ?? fallback.feedDefaults.tnVed),
     },
   };
 }

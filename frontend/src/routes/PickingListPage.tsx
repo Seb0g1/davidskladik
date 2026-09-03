@@ -799,7 +799,11 @@ export function PickingListPage() {
       {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}
       {cancelCartMutation.error ? <div className="inline-error">{errorMessage(cancelCartMutation.error)}</div> : null}
       {replaceMutation.error ? <div className="inline-error">Замена поставщика: {errorMessage(replaceMutation.error)}</div> : null}
-      {replaceMutation.data ? <div className="success-strip">Перезаказано у «{replaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (doc {replaceMutation.data.docIds?.join(", ") || "-"}).</div> : null}
+      {replaceMutation.data && replaceMutation.data.inserted > 0 ? (
+        <div className="success-strip">Перезаказано у «{replaceMutation.data.supplierName || "нового поставщика"}»: заявка в PriceMaster создана (doc {replaceMutation.data.docIds?.join(", ") || "-"}).</div>
+      ) : replaceMutation.data && replaceMutation.data.inserted === 0 ? (
+        <div className="inline-error"><AlertTriangle size={14} /> Поставщик заменён в списке сборки, но заявка в PriceMaster не создана{replaceMutation.data.skippedDetails?.[0]?.skipReason ? ` (${replaceMutation.data.skippedDetails[0].skipReason})` : ""}. Создайте вручную через PM.</div>
+      ) : null}
       {paymentMutation.error ? <div className="inline-error">{errorMessage(paymentMutation.error)}</div> : null}
 
       {view === "sheets" ? (
@@ -979,11 +983,10 @@ export function PickingListPage() {
                     </div>
                     <div className="supplier-ledger-row">
                       {supplierCurrency === "USD" ? (
-                        <DiagnosticValue label={Number(ledger.debtTotalUsd || 0) > 0 ? "Долг" : "Аванс"} value={moneySigned(-Number(ledger.debtTotalUsd || 0), "USD")} tone={Number(ledger.debtTotalUsd || 0) > 0 ? "danger" : "success"} />
+                        <DiagnosticValue label={balance < 0 ? "Долг" : "Аванс"} value={moneySigned(balance / usdRate, "USD")} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
                       ) : (
                         <DiagnosticValue label={balance < 0 ? "Долг" : "Аванс"} value={moneySigned(balance, "RUB")} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
                       )}
-                      <DiagnosticValue label="В долг" value={supplierCurrency === "USD" ? moneyAmount(Number(ledger.debtTotalUsd || 0), "USD") : moneyAmount(Number(ledger.debtTotal || 0), "RUB")} />
                       <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0), "RUB")} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
                       <DiagnosticValue label="Сборка" value={supplierCurrency === "RUB" ? moneyAmount(total, "RUB") : `${moneyAmount(total, "USD")} / ≈${moneyAmount(totalRub, "RUB")}`} />
                     </div>

@@ -231,6 +231,84 @@ app.get("/api/supplier-cart/pm-history", requireAdmin, async (_request, response
   }
 });
 
+// Снять блок поставщика для SKU вручную.
+// Блок возникает при замене поставщика («Не было») и хранится в state.supplierBlocks и/или SupplierBlock Postgres.
+app.delete("/api/supplier-cart/blocks", requireAdmin, async (request, response, next) => {
+  try {
+    const offerId = cleanText(request.body?.offerId);
+    const partnerId = cleanText(request.body?.partnerId);
+    if (!offerId || !partnerId) {
+      return response.status(400).json({ error: "offerId and partnerId are required.", code: "blocks_missing_params" });
+    }
+    const blockKey = supplierBlockKey(offerId, partnerId);
+    const state = await readSupplierCartState();
+    const hadJsonBlock = Boolean(state.supplierBlocks?.[blockKey]);
+    if (hadJsonBlock) {
+      delete state.supplierBlocks[blockKey];
+      await writeSupplierCartState(state);
+    }
+    let hadPgBlock = false;
+    if (shouldUsePostgresStorage()) {
+      const prisma = getPrisma();
+      if (prisma) {
+        try {
+          const updated = await prisma.supplierBlock.updateMany({
+            where: { blockKey, active: true },
+            data: { active: false, expiresAt: new Date() },
+          });
+          hadPgBlock = updated.count > 0;
+        } catch (pgErr) {
+          logger.warn("supplier block pg deactivate failed", { blockKey, detail: pgErr?.message || String(pgErr) });
+        }
+      }
+    }
+    if (!hadJsonBlock && !hadPgBlock) {
+      return response.status(404).json({ ok: false, error: "Блок не найден.", code: "block_not_found", blockKey });
+    }
+    await appendAudit(request, "supplier_cart.block_removed", {
+      entityType: "supplier_block",
+      entityId: blockKey,
+      newValue: { offerId, partnerId, blockKey, hadJsonBlock, hadPgBlock },
+    });
+    response.json({ ok: true, unblocked: blockKey });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Clear stale "already committed" processed entries so items can be re-queued.
+// Used when PM rows were manually deleted or orders got stuck without a real PM request.
+app.delete("/api/supplier-cart/processed", requireAdmin, async (request, response, next) => {
+  try {
+    const keys = Array.isArray(request.body?.keys) ? request.body.keys.map(cleanText).filter(Boolean) : [];
+    if (!keys.length) return response.status(400).json({ error: "keys[] is required.", code: "keys_required" });
+    const keySet = new Set(keys);
+    const state = await readSupplierCartState();
+    let cleared = 0;
+    for (const key of keys) {
+      if (state.processed?.[key]) {
+        delete state.processed[key];
+        cleared++;
+      }
+    }
+    // Also unmark alreadyCommitted in the stored draft so the UI reflects the change immediately
+    // without requiring a full re-generate.
+    if (Array.isArray(state.draft?.rows)) {
+      for (const row of state.draft.rows) {
+        if (row.alreadyCommitted && keySet.has(cleanText(row.key || ""))) {
+          row.alreadyCommitted = false;
+          row.requestDocId = null;
+          row.requestRowId = null;
+        }
+      }
+    }
+    await writeSupplierCartState(state);
+    response.json({ ok: true, cleared, requested: keys.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/supplier-cart/rollback-all", requireAdmin, async (request, response, next) => {
   try {
     const confirm = cleanText(request.body?.confirm);
@@ -494,9 +572,14 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
         _relevance: computeRelevance(name, article),
       };
     });
-    // Sort: testers/отливанты last; then by relevance desc; then price asc
+    // Sort: 0=active, 1=active+tester, 2=inactive+tester, 3=inactive-non-tester ("не в PM")
+    const pmSearchRank = (item) => {
+      if (item.unavailable) return item.isTester ? 2 : 3;
+      return item.isTester ? 1 : 0;
+    };
     mapped.sort((a, b) => {
-      if (a.isTester !== b.isTester) return a.isTester ? 1 : -1;
+      const ra = pmSearchRank(a), rb = pmSearchRank(b);
+      if (ra !== rb) return ra - rb;
       if (b._relevance !== a._relevance) return b._relevance - a._relevance;
       return a.priceRub - b.priceRub;
     });

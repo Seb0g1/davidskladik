@@ -218,6 +218,11 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
     if (automationIds.length) {
       queueMarketplaceJob("no-supplier-automation", { productIds: automationIds }, { priority: QUEUE_PRIORITY.RECOVERY });
     }
+    // For products that still have remaining links after partial deletion, trigger a targeted
+    // stock sync so the marketplace stock reflects the current supplier availability.
+    if (idsWithRemainingLinks.length) {
+      void triggerLinkedProductStockSync(idsWithRemainingLinks, "link_delete_remaining").catch(() => {});
+    }
   });
 }
 

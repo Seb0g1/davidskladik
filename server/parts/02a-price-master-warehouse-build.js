@@ -48,10 +48,29 @@ async function buildWarehouseView({ sync = false, usdRate, targetMarkups = {}, l
   const links = warehouse.products.flatMap((product) => product.links || []);
   let matchMap = new Map();
   let sourceError = null;
-  try {
-    matchMap = await getPriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
-  } catch (error) {
-    sourceError = error.code || error.message;
+  // PM is on the same server (local socket). Query live MySQL directly — same path
+  // as supplier-cart draft building. Falls back to the in-memory snapshot when the
+  // pool is unavailable so prices can still be computed during a MySQL restart.
+  const livePmTimeoutMs = Math.max(
+    2000,
+    Number(process.env.WAREHOUSE_VIEW_PM_TIMEOUT_MS || process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 8000),
+  );
+  if (links.length) {
+    try {
+      matchMap = await getBatchPriceMasterMatchesForLinks(links, warehouse.suppliers, rate, { timeoutMs: livePmTimeoutMs });
+      logger.info("warehouse view PM source: live MySQL", { links: links.length, matched: matchMap.size });
+    } catch (liveError) {
+      sourceError = liveError?.message || String(liveError);
+      logger.warn("warehouse view live PM failed, falling back to snapshot", { detail: sourceError });
+      try {
+        matchMap = await getPriceMasterMatchesForLinks(links, warehouse.suppliers, rate);
+        logger.info("warehouse view PM source: snapshot (fallback)", { links: links.length, matched: matchMap.size });
+        sourceError = null;
+      } catch (snapshotError) {
+        sourceError = snapshotError?.code || snapshotError?.message || String(snapshotError);
+        logger.warn("warehouse view snapshot PM also failed", { detail: sourceError });
+      }
+    }
   }
 
   const [priceMapResult, minPriceResult] = await Promise.all([

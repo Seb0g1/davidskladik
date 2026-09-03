@@ -444,6 +444,15 @@ function disambiguateSupplierCartMatchesByOrderName(matches, productName) {
     if (maxScore > 0) {
       const best = scored.filter((s) => s.score >= maxScore * 0.8).map((s) => s.row);
       if (best.length > 0 && best.length < rows.length) { result.set(linkId, best); continue; }
+    } else {
+      // maxScore === 0: no token overlap between order name and any PM row name.
+      // When rows carry distinct article codes they represent genuinely different products —
+      // returning all of them would let price-sorting pick the wrong item. Signal ambiguity
+      // with an empty array so the caller can surface "ambiguous_product" instead.
+      // If all rows share the same article code, product identity is unambiguous regardless
+      // of name variation, so fall through and return all rows as usual.
+      const uniqueArticles = new Set(rows.map((r) => cleanText(r.article || "").toLowerCase()).filter(Boolean));
+      if (uniqueArticles.size > 1) { result.set(linkId, []); continue; }
     }
     result.set(linkId, rows);
   }

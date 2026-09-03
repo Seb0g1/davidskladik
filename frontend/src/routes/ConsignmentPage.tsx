@@ -186,8 +186,9 @@ export function ConsignmentPage() {
   const [invoiceForm, setInvoiceForm] = useState<{
     supplierName: string;
     note: string;
+    fromBalance: boolean;
     lines: Array<{ name: string; article: string; quantity: string; unitPrice: string }>;
-  }>({ supplierName: "", note: "", lines: [] });
+  }>({ supplierName: "", note: "", fromBalance: false, lines: [] });
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["consignment"] });
 
@@ -249,6 +250,7 @@ export function ConsignmentPage() {
     mutationFn: () => fetchJson("/api/consignment/invoices", ConsignmentInvoicesSchema, mutationBody({
       supplierName: invoiceForm.supplierName || null,
       note: invoiceForm.note || null,
+      fromBalance: invoiceForm.fromBalance,
       items: invoiceForm.lines.filter(l => l.name.trim()).map(l => ({
         name: l.name.trim(),
         article: l.article.trim() || null,
@@ -259,7 +261,7 @@ export function ConsignmentPage() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["consignment", "invoices"] });
       void queryClient.invalidateQueries({ queryKey: ["consignment", "items"] });
-      setInvoiceForm({ supplierName: "", note: "", lines: [] });
+      setInvoiceForm({ supplierName: "", note: "", fromBalance: false, lines: [] });
     },
   });
 
@@ -914,6 +916,14 @@ export function ConsignmentPage() {
                       {invoiceForm.lines.length} поз. · Итого: {money(invoiceForm.lines.reduce((s, l) => s + (Number(l.unitPrice) || 0) * (Number(l.quantity) || 0), 0))}
                     </span>
                     <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, cursor: "pointer", userSelect: "none" }}>
+                        <input
+                          type="checkbox"
+                          checked={invoiceForm.fromBalance}
+                          onChange={(e) => setInvoiceForm(f => ({ ...f, fromBalance: e.target.checked }))}
+                        />
+                        Закупка с баланса
+                      </label>
                       <button
                         className="secondary-action"
                         type="button"
@@ -1005,9 +1015,11 @@ export function ConsignmentPage() {
                 key={`${row.article}-${index}`}
                 type="button"
                 className="consignment-pm-result"
+                style={(row as { active?: boolean }).active === false ? { opacity: 0.55 } : undefined}
+                title={(row as { active?: boolean }).active === false ? "Неактивен в PriceMaster" : undefined}
                 onClick={() => applyPmRow(row)}
               >
-                <span>{row.article || "-"}</span>
+                <span>{row.article || "-"}{(row as { active?: boolean }).active === false ? " ⚠" : ""}</span>
                 <span title={row.name}>{row.name || "-"}</span>
                 <span>{row.supplierName || "-"}</span>
                 <span>{pmPriceText(row)}</span>

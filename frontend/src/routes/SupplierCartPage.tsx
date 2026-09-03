@@ -473,7 +473,9 @@ function ReadyToShipPanel() {
               </div>
             ) : (
               <div className="inline-error">
-                Замена поставщика: товар уже в PM (дубль заблокирован){(revertAndReplaceMutation.data.pmBlocked?.length ?? 0) > 0 ? ` — существующий doc ${revertAndReplaceMutation.data.pmBlocked?.[0]?.existingDocId ?? "?"}` : ""}
+                {(revertAndReplaceMutation.data.pmBlocked?.length ?? 0) > 0
+                  ? `Замена поставщика: товар уже в PM (дубль заблокирован) — существующий doc ${revertAndReplaceMutation.data.pmBlocked?.[0]?.existingDocId ?? "?"}`
+                  : `Поставщик заменён в списке сборки, но заявка в PriceMaster не создана${revertAndReplaceMutation.data.skippedDetails?.[0]?.skipReason ? ` (${revertAndReplaceMutation.data.skippedDetails[0].skipReason})` : ""}. Создайте вручную через PM.`}
               </div>
             )
           ) : null}
@@ -604,12 +606,23 @@ export function PmSearchPanel({ onClose }: { onClose: () => void }) {
   const priceRub = (item: PmSearchItem) => item.priceRub ?? item.price ?? 0;
 
   const sortedItems = useMemo(() => {
-    let list = supplierFilter ? allItems.filter((i) => i.supplierName === supplierFilter) : allItems;
-    if (sortMode === "price_asc") list = [...list].sort((a, b) => priceRub(a) - priceRub(b));
-    else if (sortMode === "price_desc") list = [...list].sort((a, b) => priceRub(b) - priceRub(a));
-    else if (sortMode === "name_asc") list = [...list].sort((a, b) => (a.name || "").localeCompare(b.name || "", "ru"));
-    else if (sortMode === "supplier_asc") list = [...list].sort((a, b) => (a.supplierName || "").localeCompare(b.supplierName || "", "ru"));
-    return [...list].sort((a, b) => Number(isTester(a)) - Number(isTester(b)));
+    const list = supplierFilter ? allItems.filter((i) => i.supplierName === supplierFilter) : allItems;
+    const rank = (i: PmSearchItem) => {
+      if (i.unavailable) return isTester(i) ? 2 : 3;
+      return isTester(i) ? 1 : 0;
+    };
+    const secondary = (a: PmSearchItem, b: PmSearchItem) => {
+      if (sortMode === "price_asc") return priceRub(a) - priceRub(b);
+      if (sortMode === "price_desc") return priceRub(b) - priceRub(a);
+      if (sortMode === "name_asc") return (a.name || "").localeCompare(b.name || "", "ru");
+      if (sortMode === "supplier_asc") return (a.supplierName || "").localeCompare(b.supplierName || "", "ru");
+      return 0;
+    };
+    return [...list].sort((a, b) => {
+      const ra = rank(a), rb = rank(b);
+      if (ra !== rb) return ra - rb;
+      return secondary(a, b);
+    });
   }, [allItems, sortMode, supplierFilter]);
 
   const selectedCount = Object.keys(selected).length;

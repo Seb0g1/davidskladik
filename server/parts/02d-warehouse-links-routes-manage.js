@@ -209,6 +209,7 @@ app.post("/api/warehouse/products/links/sync-group", async (request, response, n
           oldValue: syncResult.oldValues || [],
           newValue: responseProducts.map((product) => ({ id: product.id, links: product.links || [], updatedAt: product.updatedAt })),
         }).catch((auditError) => logger.warn("link sync audit append failed", { detail: auditError?.message || String(auditError) }));
+        void triggerLinkedProductStockSync(expandedIds, "link_sync_group").catch(() => {});
       }
     });
   } catch (error) {

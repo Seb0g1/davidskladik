@@ -173,8 +173,56 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
     ? freshRows.filter((row) => returnedByOfferId.has(cleanText(row.offerId).toLowerCase()))
     : [];
 
-  const byPartner = new Map();
+  // Live PM validation: before writing, confirm each selected OfferRow is still
+  // active and has a price. Stock-only rows bypass this check — their PM row
+  // may intentionally be Active=0 (price comes from our own warehouse stock).
+  // If the pool is unavailable we fail open and proceed with snapshot data.
+  let liveInactiveRowIds = new Set();
+  // inactivePm rows were explicitly chosen by the user despite Active=0 — skip live validation,
+  // same as stock-only rows. Otherwise the user-selected inactive supplier gets silently rejected.
+  const rowsNeedingValidation = pmRows.filter((row) => !row.stockOnlyFallback && !row.inactivePm && row.offerRowId);
+  if (rowsNeedingValidation.length && pool) {
+    try {
+      const rowIdsToCheck = [...new Set(rowsNeedingValidation.map((row) => Number(row.offerRowId)).filter((id) => id > 0))];
+      if (rowIdsToCheck.length) {
+        const [liveRows] = await pool.query(
+          "SELECT RowID FROM OfferRows WHERE RowID IN (?) AND Active = 1 AND NativePrice > 0",
+          [rowIdsToCheck],
+        );
+        const liveActiveIds = new Set((liveRows || []).map((r) => Number(r.RowID)));
+        liveInactiveRowIds = new Set(rowIdsToCheck.filter((id) => !liveActiveIds.has(id)));
+      }
+    } catch (liveValidationError) {
+      logger.warn("supplier_cart_live_validation_failed_open", { detail: liveValidationError?.message || String(liveValidationError) });
+    }
+  }
+
+  // Split pmRows into validated (will be inserted) and live-inactive (will be skipped).
+  const validatedPmRows = [];
+  const liveInactiveSkipped = [];
   for (const row of pmRows) {
+    if (!row.stockOnlyFallback && row.offerRowId && liveInactiveRowIds.has(Number(row.offerRowId))) {
+      logger.warn("supplier_cart_live_validation_skip", {
+        rowId: row.offerRowId,
+        productName: row.productName,
+        offerId: row.offerId,
+        partnerId: row.partnerId,
+        reason: "inactive",
+      });
+      liveInactiveSkipped.push({
+        key: row.key,
+        offerId: row.offerId,
+        productName: row.productName,
+        skipReason: "supplier_inactive_live",
+      });
+    } else {
+      validatedPmRows.push(row);
+    }
+  }
+  skippedDetails.push(...liveInactiveSkipped);
+
+  const byPartner = new Map();
+  for (const row of validatedPmRows) {
     const partnerId = cleanText(row.partnerId);
     if (!byPartner.has(partnerId)) byPartner.set(partnerId, []);
     byPartner.get(partnerId).push(row);

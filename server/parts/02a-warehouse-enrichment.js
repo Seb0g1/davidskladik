@@ -274,7 +274,9 @@ function supplierCartOrderScore(row = {}, usdRate = 95, now = new Date()) {
   const trustPenalty = (100 - trust) / 100 * 0.18;
   const resellerPenalty = row.reseller ? 0.12 : 0;
   const cutoffPenalty = supplierOrderCutoffPassed(row.orderCutoffTime, now) ? 1000 : 0;
-  return price * (1 + trustPenalty + resellerPenalty) + cutoffPenalty;
+  const result = price * (1 + trustPenalty + resellerPenalty) + cutoffPenalty;
+  // Infinity (price=0 rows) serializes to null in JSON — clamp to a large finite sentinel.
+  return Number.isFinite(result) ? result : 999999;
 }
 
 function resolvePriceMasterRowCurrency(row = {}, link = {}, maps = managedSupplierMaps()) {

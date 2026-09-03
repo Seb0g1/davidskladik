@@ -78,13 +78,50 @@ function pickWarehouseSupplier(matches) {
     .filter((match) => match.available
       && match.priceEligible !== false
       && match.stockOnly !== true
-      && !supplierUsesStockOnlyPricing(null, match))
-    .sort((a, b) => {
-      const aPrio = getSupplierSelectionPriority(a);
-      const bPrio = getSupplierSelectionPriority(b);
-      if (aPrio !== bPrio) return aPrio - bPrio;
-      return compareWarehouseSupplierPrices(a, b);
-    });
+      && !supplierUsesStockOnlyPricing(null, match));
+
+  // Pre-compute minimum USD price across all eligible suppliers so Sorin's
+  // priority bonus can be suppressed when he is more than 20% above the
+  // cheapest available option.
+  const eligibleUsdPrices = eligible
+    .map((m) => Number(m.price || 0))
+    .filter((p) => Number.isFinite(p) && p > 0);
+  const minUsdPrice = eligibleUsdPrices.length ? Math.min(...eligibleUsdPrices) : 0;
+
+  eligible.sort((a, b) => {
+    const rawAPrio = getSupplierSelectionPriority(a);
+    const rawBPrio = getSupplierSelectionPriority(b);
+
+    // If Sorin's price is more than 20% above the cheapest eligible supplier,
+    // his trusted-supplier priority is suppressed (treated as 99).
+    // How much more expensive than the cheapest eligible supplier a priority-1 supplier
+    // is allowed to be before losing his priority bonus. Default 5% (env SORIN_PRICE_PREMIUM_MAX).
+    const sorinPremiumMax = (() => {
+      const raw = Number(process.env.SORIN_PRICE_PREMIUM_MAX);
+      return Number.isFinite(raw) && raw >= 0 ? raw : 0.05;
+    })();
+    let aPrio = rawAPrio;
+    if (rawAPrio === 1 && minUsdPrice > 0) {
+      const sorinUsd = Number(a.price || 0);
+      if (sorinUsd > minUsdPrice * (1 + sorinPremiumMax)) {
+        const name = a.partnerName || a.supplierName || "";
+        logger.info("sorin_priority_suppressed_by_price", { name, sorinUsd, minUsd: minUsdPrice, premiumMax: sorinPremiumMax });
+        aPrio = 99;
+      }
+    }
+    let bPrio = rawBPrio;
+    if (rawBPrio === 1 && minUsdPrice > 0) {
+      const sorinUsd = Number(b.price || 0);
+      if (sorinUsd > minUsdPrice * (1 + sorinPremiumMax)) {
+        const name = b.partnerName || b.supplierName || "";
+        logger.info("sorin_priority_suppressed_by_price", { name, sorinUsd, minUsd: minUsdPrice, premiumMax: sorinPremiumMax });
+        bPrio = 99;
+      }
+    }
+
+    if (aPrio !== bPrio) return aPrio - bPrio;
+    return compareWarehouseSupplierPrices(a, b);
+  });
   if (!eligible.length) return null;
   // If the operator pinned a specific PM row (selected_row link with matched sourceRowId),
   // restrict the pool to pinned candidates so the explicit choice beats cheaper alternatives.
