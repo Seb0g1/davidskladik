@@ -6931,3 +6931,51 @@ body.login-page::before {
     transition-duration: 0.001ms !important;
   }
 }
+
+/* Yandex ID login button */
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: rgba(141, 161, 191, 0.6);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: rgba(91, 140, 255, 0.14);
+}
+
+.yandex-login-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid rgba(252, 63, 29, 0.38);
+  border-radius: 8px;
+  background: rgba(252, 63, 29, 0.08);
+  color: #f5c0b2;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  padding: 0 16px;
+}
+
+.yandex-login-btn:hover:not(:disabled) {
+  background: rgba(252, 63, 29, 0.16);
+  border-color: rgba(252, 63, 29, 0.6);
+  color: #ffcfc4;
+}
+
+.yandex-login-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}

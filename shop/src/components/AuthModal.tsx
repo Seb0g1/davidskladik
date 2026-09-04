@@ -2,6 +2,15 @@ import { useState, useEffect, useRef } from "react";
 import { X, Mail, ArrowRight, Loader2, CheckCircle, RefreshCw } from "lucide-react";
 import { useAuth } from "../AuthContext";
 
+function YandexIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <circle cx="12" cy="12" r="12" fill="#FC3F1D" />
+      <path d="M13.32 7.12h-.92c-1.44 0-2.2.68-2.2 1.8 0 1.26.56 1.9 1.72 2.7l.96.64-2.76 4.14H8.3l2.54-3.8c-1.46-1.04-2.28-2.06-2.28-3.6 0-2.04 1.42-3.4 3.8-3.4h2.88v10.8H13.3V7.12z" fill="#fff" />
+    </svg>
+  );
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -14,12 +23,13 @@ const CODE_LEN = 6;
 const RESEND_SECONDS = 60;
 
 export default function AuthModal({ open, onClose }: Props) {
-  const { sendCode, verifyCode } = useAuth();
+  const { sendCode, verifyCode, startYandexLogin } = useAuth();
 
   const [step, setStep] = useState<Step>("email");
   const [email, setEmail] = useState("");
   const [digits, setDigits] = useState<string[]>(Array(CODE_LEN).fill(""));
   const [loading, setLoading] = useState(false);
+  const [yandexBusy, setYandexBusy] = useState(false);
   const [error, setError] = useState("");
   const [countdown, setCountdown] = useState(0);
 
@@ -209,6 +219,47 @@ export default function AuthModal({ open, onClose }: Props) {
                   Нажимая кнопку, вы соглашаетесь с{" "}
                   <a href="/privacy" style={{ color: "var(--accent)", textDecoration: "none" }}>политикой конфиденциальности</a>
                 </p>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0 0", color: "rgba(255,252,245,0.25)", fontSize: 12 }}>
+                  <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
+                  <span>или</span>
+                  <div style={{ flex: 1, height: 1, background: "var(--border)" }} />
+                </div>
+
+                <button
+                  type="button"
+                  disabled={yandexBusy || loading}
+                  onClick={async () => {
+                    setYandexBusy(true);
+                    setError("");
+                    try { await startYandexLogin(); }
+                    catch (err) { setError((err as Error).message || "Ошибка"); setYandexBusy(false); }
+                  }}
+                  style={{
+                    marginTop: 10,
+                    width: "100%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 9,
+                    minHeight: 44,
+                    borderRadius: 8,
+                    border: "1px solid rgba(252,63,29,0.3)",
+                    background: "rgba(252,63,29,0.07)",
+                    color: "#f5c0b2",
+                    fontFamily: "inherit",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    cursor: yandexBusy ? "default" : "pointer",
+                    opacity: yandexBusy ? 0.6 : 1,
+                    transition: "background 0.15s, border-color 0.15s",
+                  }}
+                  onMouseEnter={e => { if (!yandexBusy) { (e.currentTarget as HTMLButtonElement).style.background = "rgba(252,63,29,0.14)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(252,63,29,0.55)"; } }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(252,63,29,0.07)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(252,63,29,0.3)"; }}
+                >
+                  {yandexBusy ? <Loader2 size={15} style={{ animation: "spin 1s linear infinite" }} /> : <YandexIcon />}
+                  {yandexBusy ? "Переходим к Яндексу..." : "Войти с Яндекс ID"}
+                </button>
               </form>
             )}
 

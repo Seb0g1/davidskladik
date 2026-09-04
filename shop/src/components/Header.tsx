@@ -15,7 +15,7 @@ const BOT_NAV = [
 
 export default function Header() {
   const { totalItems } = useCart();
-  const { customer, logout } = useAuth();
+  const { customer, logout, yandexLoading, yandexError, clearYandexError } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -309,6 +309,25 @@ export default function Header() {
         defaultTab={authModal.tab}
         onClose={() => setAuthModal(s => ({ ...s, open: false }))}
       />
+
+      {/* Yandex OAuth: full-screen loading overlay */}
+      {yandexLoading && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 200, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,0.72)", backdropFilter: "blur(8px)" }}>
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" style={{ marginBottom: 16 }}>
+            <circle cx="12" cy="12" r="12" fill="#FC3F1D" />
+            <path d="M13.32 7.12h-.92c-1.44 0-2.2.68-2.2 1.8 0 1.26.56 1.9 1.72 2.7l.96.64-2.76 4.14H8.3l2.54-3.8c-1.46-1.04-2.28-2.06-2.28-3.6 0-2.04 1.42-3.4 3.8-3.4h2.88v10.8H13.3V7.12z" fill="#fff" />
+          </svg>
+          <p style={{ color: "#fff", fontSize: 15, fontWeight: 500 }}>Входим через Яндекс ID...</p>
+        </div>
+      )}
+
+      {/* Yandex OAuth: error notification */}
+      {yandexError && (
+        <div style={{ position: "fixed", top: 20, left: "50%", transform: "translateX(-50%)", zIndex: 300, maxWidth: 400, width: "calc(100% - 32px)", background: "rgba(248,113,113,0.12)", border: "1px solid rgba(248,113,113,0.35)", borderRadius: 10, padding: "14px 18px", display: "flex", alignItems: "flex-start", gap: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.4)" }}>
+          <span style={{ color: "#F87171", fontSize: 14, flex: 1, lineHeight: 1.4 }}>Ошибка входа через Яндекс: {yandexError}</span>
+          <button onClick={clearYandexError} style={{ color: "rgba(255,255,255,0.5)", background: "none", border: "none", cursor: "pointer", padding: 2, lineHeight: 1, fontSize: 16 }}>✕</button>
+        </div>
+      )}
     </>
   );
 }

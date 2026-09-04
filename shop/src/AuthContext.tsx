@@ -8,15 +8,20 @@ export interface ShopCustomer {
   firstName?: string | null;
   lastName?: string | null;
   phone?: string | null;
+  avatarUrl?: string | null;
 }
 
 interface AuthCtx {
   customer: ShopCustomer | null;
   token: string | null;
   loading: boolean;
+  yandexLoading: boolean;
+  yandexError: string | null;
   sendCode: (email: string) => Promise<void>;
   verifyCode: (email: string, code: string) => Promise<void>;
   updateProfile: (data: { firstName?: string; lastName?: string; phone?: string }) => Promise<void>;
+  startYandexLogin: () => Promise<void>;
+  clearYandexError: () => void;
   logout: () => void;
 }
 
@@ -43,12 +48,43 @@ function apiPatch(path: string, body: object, token: string) {
   return apiReq(path, { method: "PATCH", body: JSON.stringify(body) }, token);
 }
 
+function applyTokenResponse(data: { token: string; customer: ShopCustomer }, setToken: (t: string) => void, setCustomer: (c: ShopCustomer) => void) {
+  localStorage.setItem("mv_token", data.token);
+  setToken(data.token);
+  setCustomer(data.customer);
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [customer, setCustomer] = useState<ShopCustomer | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [yandexLoading, setYandexLoading] = useState(false);
+  const [yandexError, setYandexError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Handle Yandex OAuth callback: Yandex redirects to / with ?code=&state=
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    const state = params.get("state");
+
+    if (code && state) {
+      window.history.replaceState({}, "", window.location.pathname);
+      setYandexLoading(true);
+      apiPost("/yandex/callback", { code, state })
+        .then((data) => {
+          applyTokenResponse(data, setToken, setCustomer);
+        })
+        .catch((err: Error) => {
+          setYandexError(err.message || "Не удалось войти через Яндекс");
+        })
+        .finally(() => {
+          setYandexLoading(false);
+          setLoading(false);
+        });
+      return;
+    }
+
+    // Normal JWT restoration
     const saved = localStorage.getItem("mv_token");
     if (!saved) { setLoading(false); return; }
     setToken(saved);
@@ -64,10 +100,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const verifyCode = useCallback(async (email: string, code: string) => {
-    const { token: t, customer: c } = await apiPost("/verify-code", { email, code });
-    localStorage.setItem("mv_token", t);
-    setToken(t);
-    setCustomer(c);
+    const data = await apiPost("/verify-code", { email, code });
+    applyTokenResponse(data, setToken, setCustomer);
   }, []);
 
   const updateProfile = useCallback(async (data: { firstName?: string; lastName?: string; phone?: string }) => {
@@ -77,6 +111,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (res.customer) setCustomer(res.customer);
   }, []);
 
+  const startYandexLogin = useCallback(async () => {
+    const res = await fetch(API + "/yandex/start");
+    if (!res.ok) throw new Error("Не удалось запустить вход через Яндекс");
+    const { url } = await res.json();
+    if (!url) throw new Error("Нет URL");
+    window.location.href = url;
+  }, []);
+
+  const clearYandexError = useCallback(() => setYandexError(null), []);
+
   const logout = useCallback(() => {
     localStorage.removeItem("mv_token");
     setToken(null);
@@ -84,7 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <Ctx.Provider value={{ customer, token, loading, sendCode, verifyCode, updateProfile, logout }}>
+    <Ctx.Provider value={{ customer, token, loading, yandexLoading, yandexError, sendCode, verifyCode, updateProfile, startYandexLogin, clearYandexError, logout }}>
       {children}
     </Ctx.Provider>
   );

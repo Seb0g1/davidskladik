@@ -4661,13 +4661,44 @@ textarea {
 }
 
 .side-user-card {
-  display: grid;
-  gap: 5px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: auto 4px 0;
   padding: 12px;
   border: 1px solid rgba(var(--accent-rgb), 0.14);
   border-radius: 8px;
   background: rgba(11, 25, 45, 0.78);
+}
+
+.side-user-avatar {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(var(--accent-rgb), 0.22);
+}
+
+.side-user-avatar-placeholder {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(var(--accent-rgb), 0.18);
+  border: 1px solid rgba(var(--accent-rgb), 0.22);
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.side-user-info {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
 }
 
 .side-user-card span,
@@ -4679,7 +4710,10 @@ textarea {
 
 .side-user-card strong {
   color: var(--text);
-  font-size: 15px;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .side-logout {

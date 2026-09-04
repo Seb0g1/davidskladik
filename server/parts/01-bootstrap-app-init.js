@@ -24,6 +24,7 @@ const { registerStaticAppRoutes } = require("./routes/static-app");
 const { registerSystemMediaRoutes } = require("./routes/system-media");
 const { registerUsersRoutes } = require("./routes/users");
 const { registerLegacyCatalogRoutes } = require("./routes/legacy-catalog");
+const { registerYandexAuthRoutes } = require("./routes/auth-yandex");
 const {
   postgresModeEnabled,
   jsonFallbackEnabled,

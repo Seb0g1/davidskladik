@@ -35,7 +35,7 @@ const BrandBansPage = lazy(() => import("./routes/BrandBansPage").then((m) => ({
 const BrandsTnvedPage = lazy(() => import("./routes/BrandsTnvedPage").then((m) => ({ default: m.BrandsTnvedPage })));
 
 type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans" | "brands-tnved";
-type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null };
+type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null; displayName?: string | null; avatarUrl?: string | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
   { route: "dashboard", href: "/app/dashboard", label: "Дашборд", icon: <Home size={16} /> },
@@ -266,8 +266,17 @@ function AppShell() {
           })}
         </nav>
         <div className="side-user-card">
-          <span>{roleLabel}</span>
-          <strong>{session?.username || "—"}</strong>
+          {session?.avatarUrl ? (
+            <img className="side-user-avatar" src={session.avatarUrl} alt="" width={32} height={32} />
+          ) : (
+            <span className="side-user-avatar-placeholder">
+              {(session?.displayName || session?.username || "?").charAt(0).toUpperCase()}
+            </span>
+          )}
+          <div className="side-user-info">
+            <span>{roleLabel}</span>
+            <strong>{session?.displayName || session?.username || "—"}</strong>
+          </div>
         </div>
         <button
           className="side-logout"

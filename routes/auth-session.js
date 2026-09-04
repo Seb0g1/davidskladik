@@ -60,6 +60,8 @@ app.get("/api/session", async (request, response) => {
     authenticated: Boolean(session),
     username: session?.username || null,
     role: session?.role || null,
+    displayName: session?.displayName || null,
+    avatarUrl: session?.avatarUrl || null,
     allowedPages,
     permissions: {
       admin: isAdminSession(session),

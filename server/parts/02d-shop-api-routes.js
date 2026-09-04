@@ -1467,6 +1467,117 @@ app.get("/api/shop/auth/orders", shopCors, requireShopAuth, async (request, resp
   } catch (error) { next(error); }
 });
 
+// ── Yandex ID OAuth ──────────────────────────────────────────────────────
+
+const _shopYandexOauthStates = new Map();
+const _SHOP_YANDEX_STATE_TTL = 10 * 60 * 1000;
+
+function _shopCleanYandexStates() {
+  const now = Date.now();
+  for (const [k, t] of _shopYandexOauthStates.entries()) {
+    if (now - t > _SHOP_YANDEX_STATE_TTL) _shopYandexOauthStates.delete(k);
+  }
+}
+
+app.get("/api/shop/auth/yandex/start", shopCors, (_request, response) => {
+  const clientId = process.env.YANDEX_OAUTH_CLIENT_ID;
+  if (!clientId) return response.status(503).json({ error: "Яндекс ID не настроен" });
+  _shopCleanYandexStates();
+  const state = _shopCrypto.randomBytes(20).toString("hex");
+  _shopYandexOauthStates.set(state, Date.now());
+  const url = new URL("https://oauth.yandex.ru/authorize");
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("client_id", clientId);
+  url.searchParams.set("redirect_uri", process.env.YANDEX_OAUTH_REDIRECT_URI || "https://magicvibes.ru/");
+  url.searchParams.set("state", state);
+  url.searchParams.set("force_confirm", "no");
+  response.json({ url: url.toString() });
+});
+
+app.post("/api/shop/auth/yandex/callback", shopCors, shopLoginLimiter, async (request, response, next) => {
+  const clientId = process.env.YANDEX_OAUTH_CLIENT_ID;
+  const clientSecret = process.env.YANDEX_OAUTH_CLIENT_SECRET;
+  if (!clientId || !clientSecret) return response.status(503).json({ error: "Яндекс ID не настроен" });
+
+  const { code, state } = request.body || {};
+  if (!code || !state) return response.status(400).json({ error: "Отсутствует code или state" });
+
+  _shopCleanYandexStates();
+  if (!_shopYandexOauthStates.has(state)) {
+    return response.status(400).json({ error: "Недействительный state. Попробуйте войти заново." });
+  }
+  _shopYandexOauthStates.delete(state);
+
+  try {
+    const tokenBody = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: process.env.YANDEX_OAUTH_REDIRECT_URI || "https://magicvibes.ru/",
+    }).toString();
+
+    const tokenRes = await fetch("https://oauth.yandex.ru/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: tokenBody,
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok || !tokenData.access_token) {
+      throw new Error(tokenData.error_description || tokenData.error || "Ошибка получения токена Яндекс");
+    }
+
+    const profileRes = await fetch("https://login.yandex.ru/info?format=json", {
+      headers: { Authorization: `OAuth ${tokenData.access_token}` },
+    });
+    const profile = await profileRes.json();
+    if (!profileRes.ok || !profile.id) throw new Error("Не удалось получить профиль Яндекс");
+
+    const email = profile.default_email || `yandex-${profile.id}@yandex.ru`;
+    const normalEmail = email.toLowerCase().trim();
+
+    let [firstName, ...lastParts] = (profile.real_name || profile.display_name || profile.login || "").split(" ");
+    const lastName = lastParts.join(" ") || null;
+
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "База данных недоступна" });
+
+    let customer = await prisma.shopCustomer.findUnique({ where: { email: normalEmail } });
+    if (!customer) {
+      customer = await prisma.shopCustomer.create({
+        data: {
+          id: _shopCrypto.randomBytes(12).toString("hex"),
+          email: normalEmail,
+          password: "",
+          firstName: firstName || null,
+          lastName: lastName || null,
+        },
+      });
+    }
+
+    const avatarUrl = (!profile.is_avatar_empty && profile.default_avatar_id)
+      ? `https://avatars.yandex.net/get-yapic/${profile.default_avatar_id}/islands-200`
+      : null;
+
+    const token = signShopToken({ customerId: customer.id, email: customer.email });
+    response.json({
+      ok: true,
+      token,
+      customer: {
+        id: customer.id,
+        email: customer.email,
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        phone: customer.phone,
+        avatarUrl,
+      },
+    });
+  } catch (error) {
+    logger.warn("shop yandex oauth callback error", { detail: error?.message || String(error) });
+    next(error);
+  }
+});
+
 // ── Admin routes ──────────────────────────────────────────────────────────
 
 // Banners

@@ -28,6 +28,7 @@ function requireAuth(request, response, next) {
   // CSV остатков для «Управления остатками» Авито — тоже по секретному токену.
   if (request.path.startsWith("/public/avito-stock/")) return next();
   if (request.path === "/api/login" || request.path === "/api/session") return next();
+  if (request.path === "/api/auth/yandex/start" || request.path === "/api/auth/yandex/callback") return next();
   // Bot API: authenticated via DAVIDSKLAD_API_SECRET query param, no session needed.
   if (request.path === "/api/consignment/partner-summary") return next();
   // Публичный API магазина — доступен без сессии, CORS проверяется в shopCors.
@@ -45,6 +46,15 @@ function requireAuth(request, response, next) {
 
   if (request.path.startsWith("/api/")) {
     return response.status(401).json({ error: "Требуется вход" });
+  }
+
+  // Yandex OAuth sends code to root URL — relay OAuth params to login page
+  if (request.path === "/" && request.query.code && request.query.state) {
+    const params = new URLSearchParams({
+      code: String(request.query.code).slice(0, 512),
+      state: String(request.query.state).slice(0, 128),
+    });
+    return response.redirect(`/login.html?${params.toString()}`);
   }
 
   return response.redirect("/login.html");

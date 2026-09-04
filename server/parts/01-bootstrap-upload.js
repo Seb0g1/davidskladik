@@ -1,13 +1,12 @@
 function createSessionToken(user) {
   const username = typeof user === "string" ? user : user.username;
   const role = typeof user === "string" ? process.env.APP_ROLE || "admin" : user.role || "manager";
-  const payload = base64Url(
-    JSON.stringify({
-      username,
-      role,
-      expiresAt: Date.now() + sessionTtlMs,
-    }),
-  );
+  const sessionData = { username, role, expiresAt: Date.now() + sessionTtlMs };
+  if (user && typeof user === "object") {
+    if (user.displayName) sessionData.displayName = String(user.displayName);
+    if (user.avatarUrl) sessionData.avatarUrl = String(user.avatarUrl);
+  }
+  const payload = base64Url(JSON.stringify(sessionData));
   return `${payload}.${sign(payload)}`;
 }
 
