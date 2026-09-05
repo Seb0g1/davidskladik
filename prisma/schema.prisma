@@ -566,6 +566,7 @@ model ShopCustomer {
   lastName       String?     @map("last_name")
   phone          String?
   loyaltyPoints  Int         @default(0) @map("loyalty_points")
+  referralCode   String?     @unique @map("referral_code")
   createdAt      DateTime    @default(now()) @map("created_at")
   updatedAt      DateTime    @updatedAt @map("updated_at")
 
@@ -610,6 +611,7 @@ model ShopOrder {
   delivery   Json
   totalRub   Int           @map("total_rub")
   comment    String?
+  refCode    String?       @map("ref_code")
   createdAt  DateTime      @default(now()) @map("created_at")
 
   customer ShopCustomer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
@@ -721,6 +723,19 @@ model StockAlert {
   @@index([notifiedAt])
   @@unique([offerId, email])
   @@map("stock_alerts")
+}
+
+model ShopEmailSubscriber {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  source        String    @default("popup")
+  quizCategory  String?   @map("quiz_category")
+  promoSent     Boolean   @default(false) @map("promo_sent")
+  unsubscribed  Boolean   @default(false)
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@map("shop_email_subscribers")
 }
 
 model PriceMasterSnapshotItem {

@@ -1,4 +1,5 @@
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, useSearchParams } from "react-router-dom";
+import { useEffect } from "react";
 import Layout from "./components/Layout";
 import HomePage from "./pages/HomePage";
 import CatalogPage from "./pages/CatalogPage";
@@ -21,10 +22,23 @@ import WomenGuide from "./pages/guides/WomenGuide";
 import MenGuide from "./pages/guides/MenGuide";
 import GiftGuide from "./pages/guides/GiftGuide";
 import OfficeGuide from "./pages/guides/OfficeGuide";
+import NotFoundPage from "./pages/NotFoundPage";
+
+function RefCapture() {
+  const [params] = useSearchParams();
+  useEffect(() => {
+    const ref = params.get("ref");
+    if (ref && /^[A-Z0-9]{8}$/i.test(ref)) {
+      localStorage.setItem("shopRefCode", ref.toUpperCase());
+    }
+  }, [params]);
+  return null;
+}
 
 export default function App() {
   return (
     <BrowserRouter>
+      <RefCapture />
       <Routes>
         <Route element={<Layout />}>
           <Route index element={<HomePage />} />
@@ -48,6 +62,7 @@ export default function App() {
           <Route path="/guide/men" element={<MenGuide />} />
           <Route path="/guide/gift" element={<GiftGuide />} />
           <Route path="/guide/office" element={<OfficeGuide />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>
       <SupportChatWidget />

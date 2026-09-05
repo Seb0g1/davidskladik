@@ -82,7 +82,9 @@ export default function CheckoutPage() {
   });
 
   const deliveryCost = 0;
-  const total = totalRub + deliveryCost;
+  const refCode = localStorage.getItem("shopRefCode") || undefined;
+  const refDiscount = refCode ? Math.round(totalRub * 0.07) : 0;
+  const total = totalRub + deliveryCost - refDiscount;
 
   const mutation = useMutation({
     mutationFn: () => api.createOrder({
@@ -98,6 +100,7 @@ export default function CheckoutPage() {
         pvzId: selectedPvz?.id,
       },
       comment: form.comment || undefined,
+      refCode,
     }, token ?? undefined),
     onSuccess: (order) => {
       clear();
@@ -244,6 +247,12 @@ export default function CheckoutPage() {
                   <span>Доставка</span>
                   <span style={{ color: "#4ade80", fontWeight: 600 }}>Бесплатно</span>
                 </div>
+                {refDiscount > 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+                    <span style={{ color: "#c9a25e" }}>Реферальная скидка −7%</span>
+                    <span style={{ color: "#4ade80", fontWeight: 600 }}>−{refDiscount.toLocaleString("ru-RU")} ₽</span>
+                  </div>
+                )}
                 <div style={{ display: "flex", justifyContent: "space-between", fontSize: 18, fontWeight: 700, color: S.text, paddingTop: 8, borderTop: `1px solid ${S.border}`, marginTop: 4 }}>
                   <span>Итого</span>
                   <span>{total.toLocaleString("ru-RU")} ₽</span>

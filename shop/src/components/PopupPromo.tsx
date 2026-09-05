@@ -32,9 +32,21 @@ export default function PopupPromo() {
     setVisible(false);
   }
 
-  function submit() {
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submit() {
+    if (!email || submitting) return;
+    setSubmitting(true);
+    try {
+      await fetch((import.meta.env.VITE_API_BASE ?? "") + "/api/shop/email-subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, source: "popup" }),
+      });
+    } catch { /* best-effort */ }
+    setSubmitting(false);
     setSent(true);
-    setTimeout(dismiss, 2800);
+    setTimeout(dismiss, 3000);
   }
 
   if (!visible) return null;
@@ -99,7 +111,7 @@ export default function PopupPromo() {
                 type="email"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && submit()}
+                onKeyDown={e => e.key === "Enter" && !submitting && submit()}
                 placeholder="your@email.com"
                 style={{
                   flex: 1, padding: "11px 0",
@@ -113,6 +125,7 @@ export default function PopupPromo() {
               />
               <button
                 onClick={submit}
+                disabled={!email || submitting}
                 style={{
                   padding: "11px 20px",
                   background: "#c9a25e", color: "#0b0b0b",
@@ -121,11 +134,12 @@ export default function PopupPromo() {
                   fontWeight: 600, cursor: "pointer",
                   whiteSpace: "nowrap",
                   transition: "background 0.3s ease",
+                  opacity: (!email || submitting) ? 0.6 : 1,
                 }}
-                onMouseEnter={e => (e.currentTarget.style.background = "#e8d5a3")}
+                onMouseEnter={e => { if (!submitting && email) e.currentTarget.style.background = "#e8d5a3"; }}
                 onMouseLeave={e => (e.currentTarget.style.background = "#c9a25e")}
               >
-                Получить
+                {submitting ? "…" : "Получить"}
               </button>
             </div>
             <p style={{ margin: "14px 0 0", fontSize: 11, color: "#3a3730" }}>

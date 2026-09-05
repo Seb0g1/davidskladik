@@ -252,6 +252,18 @@ export default function HomePage() {
   }
   function resetQuiz() { setQuizStep(0); setQuizAnswers([]); setQuizDone(false); setQuizEmail(""); setQuizEmailSent(false); }
 
+  async function submitQuizEmail() {
+    if (!quizEmail) return;
+    try {
+      await fetch((import.meta.env.VITE_API_BASE ?? "") + "/api/shop/email-subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: quizEmail, source: "quiz", quizCategory: quizResult?.title }),
+      });
+    } catch { /* best-effort */ }
+    setQuizEmailSent(true);
+  }
+
   const quizResult = useMemo(() => {
     if (!quizDone) return null;
     return QUIZ_RESULTS[quizAnswers[2] ?? 0];
@@ -284,14 +296,31 @@ export default function HomePage() {
   const [ubMediaUrl, setUbMediaUrl] = useState("");
   const [ubText, setUbText] = useState("");
   const [ubSuccess, setUbSuccess] = useState(false);
+  const [ubDragOver, setUbDragOver] = useState(false);
+  const [ubUploading, setUbUploading] = useState(false);
+  const [ubPreview, setUbPreview] = useState<{ url: string; isVideo: boolean } | null>(null);
+  const ubFileRef = useRef<HTMLInputElement>(null);
 
   const ubMutation = useMutation({
     mutationFn: (data: { name: string; mediaUrl: string; text: string }) => api.submitUnboxing(data),
     onSuccess: () => {
       setUbSuccess(true);
-      setUbName(""); setUbMediaUrl(""); setUbText("");
+      setUbName(""); setUbMediaUrl(""); setUbText(""); setUbPreview(null);
     },
   });
+
+  async function handleUbFile(file: File) {
+    if (!file) return;
+    setUbUploading(true);
+    try {
+      const res = await api.uploadMedia(file);
+      if (res.ok) {
+        setUbMediaUrl(res.url);
+        setUbPreview({ url: res.url, isVideo: res.isVideo });
+      }
+    } catch { /* best-effort */ }
+    setUbUploading(false);
+  }
 
   /* ── Cursor aura ──────────────────────────────────────────────── */
   useEffect(() => {
@@ -537,7 +566,7 @@ export default function HomePage() {
                         type="email"
                         value={quizEmail}
                         onChange={e => setQuizEmail(e.target.value)}
-                        onKeyDown={e => e.key === "Enter" && setQuizEmailSent(true)}
+                        onKeyDown={e => { if (e.key === "Enter" && quizEmail) submitQuizEmail(); }}
                         placeholder="your@email.com"
                         style={{
                           flex: 1, padding: "9px 0",
@@ -550,7 +579,8 @@ export default function HomePage() {
                         onBlur={e => (e.target.style.borderBottomColor = "rgba(255,255,255,0.12)")}
                       />
                       <button
-                        onClick={() => setQuizEmailSent(true)}
+                        onClick={submitQuizEmail}
+                        disabled={!quizEmail}
                         style={{
                           padding: "9px 18px", background: "transparent",
                           border: "1px solid rgba(201,162,94,0.4)", borderRadius: 2,
@@ -844,12 +874,51 @@ export default function HomePage() {
                 onFocus={e => (e.target.style.borderBottomColor = "rgba(201,162,94,0.55)")}
                 onBlur={e => (e.target.style.borderBottomColor = "rgba(255,255,255,0.12)")}
               />
+              {/* Media upload / URL */}
+              <input ref={ubFileRef} type="file" accept="image/jpeg,image/png,image/webp,video/mp4,video/webm" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) handleUbFile(f); }} />
+              {ubPreview ? (
+                <div style={{ position: "relative", borderRadius: 3, overflow: "hidden", border: "1px solid rgba(201,162,94,0.3)" }}>
+                  {ubPreview.isVideo
+                    ? <video src={ubPreview.url} controls style={{ width: "100%", maxHeight: 220, display: "block" }} />
+                    : <img src={ubPreview.url} alt="" style={{ width: "100%", maxHeight: 220, objectFit: "contain", display: "block", background: "#0a0a0a" }} />}
+                  <button onClick={() => { setUbPreview(null); setUbMediaUrl(""); }} style={{ position: "absolute", top: 6, right: 6, background: "rgba(0,0,0,0.7)", border: "none", borderRadius: 2, color: "#9a9690", fontSize: 12, padding: "3px 8px", cursor: "pointer" }}>✕</button>
+                </div>
+              ) : (
+                <div
+                  onClick={() => ubFileRef.current?.click()}
+                  onDragOver={e => { e.preventDefault(); setUbDragOver(true); }}
+                  onDragLeave={() => setUbDragOver(false)}
+                  onDrop={e => { e.preventDefault(); setUbDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleUbFile(f); }}
+                  style={{
+                    padding: "20px 16px", borderRadius: 3, cursor: "pointer", textAlign: "center",
+                    border: `1px dashed ${ubDragOver ? "rgba(201,162,94,0.7)" : "rgba(255,255,255,0.15)"}`,
+                    background: ubDragOver ? "rgba(201,162,94,0.05)" : "transparent",
+                    transition: "border-color 0.2s, background 0.2s",
+                  }}
+                >
+                  {ubUploading ? (
+                    <span style={{ fontSize: 12, color: "#c9a25e" }}>Загрузка…</span>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 22, marginBottom: 6, opacity: 0.4 }}>📎</div>
+                      <div style={{ fontSize: 12, color: "#6f6c66" }}>Перетащите фото/видео или нажмите для выбора</div>
+                      <div style={{ fontSize: 11, color: "#4a4740", marginTop: 4 }}>JPG, PNG, WEBP, MP4 · до 50 МБ</div>
+                    </>
+                  )}
+                </div>
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} />
+                <span style={{ fontSize: 10, color: "#4a4740", letterSpacing: "0.08em" }}>или</span>
+                <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} />
+              </div>
               <input
                 type="text"
-                value={ubMediaUrl}
-                onChange={e => setUbMediaUrl(e.target.value)}
-                placeholder="Ссылка на фото или видео"
-                style={{ width: "100%", padding: "9px 0", background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.12)", color: "#f5f4f0", fontSize: 13.5, outline: "none", boxSizing: "border-box", transition: "border-bottom-color 0.3s ease" }}
+                value={ubPreview ? "" : ubMediaUrl}
+                onChange={e => { setUbMediaUrl(e.target.value); setUbPreview(null); }}
+                placeholder="Ссылка на YouTube или фото"
+                disabled={!!ubPreview}
+                style={{ width: "100%", padding: "9px 0", background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.12)", color: "#f5f4f0", fontSize: 13.5, outline: "none", boxSizing: "border-box", transition: "border-bottom-color 0.3s ease", opacity: ubPreview ? 0.3 : 1 }}
                 onFocus={e => (e.target.style.borderBottomColor = "rgba(201,162,94,0.55)")}
                 onBlur={e => (e.target.style.borderBottomColor = "rgba(255,255,255,0.12)")}
               />

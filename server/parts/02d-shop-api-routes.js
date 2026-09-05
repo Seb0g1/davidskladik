@@ -767,6 +767,7 @@ app.get("/api/shop/marketplace-reviews", shopCors, async (request, response, nex
         createdAt: r.published_at || r.created_at || new Date().toISOString(),
         source: "ozon",
         photos: Array.isArray(r.photos) ? r.photos.map((ph) => ph.url || ph).filter(Boolean) : [],
+        videoUrl: r.video_review?.url || r.video?.url || r.video_url || null,
       }));
 
     const avgRating = reviews.length
@@ -796,6 +797,102 @@ app.get("/api/shop/marketplace-reviews", shopCors, async (request, response, nex
     }
 
     response.json({ ok: true, reviews, avgRating, reviewCount });
+  } catch (error) { next(error); }
+});
+
+// ─── Fragrance notes (public, shopCors) ──────────────────────────────────────
+app.get("/api/shop/product-notes", shopCors, async (request, response, next) => {
+  try {
+    const brand = cleanText(request.query.brand || "");
+    const name = cleanText(request.query.name || "");
+    if (!brand || !name) return response.json({ ok: true, data: null });
+    const data = await lookupFragranticaData(brand, name);
+    response.json({ ok: true, data: data || null });
+  } catch (error) { next(error); }
+});
+
+// ─── Product Q&A from Ozon ────────────────────────────────────────────────────
+const _qaCache = new Map();
+const _QA_TTL = 30 * 60 * 1000;
+
+app.get("/api/shop/product-qa", shopCors, async (request, response, next) => {
+  try {
+    const offerId = cleanText(request.query.offerId || "");
+    if (!offerId) return response.json({ ok: true, items: [] });
+
+    const cacheKey = `qa:${offerId}`;
+    const cached = _qaCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return response.json({ ok: true, items: cached.items });
+
+    const prisma = getPrisma();
+    let productId = null;
+    let wpId = null;
+    let wpState = {};
+
+    if (prisma) {
+      const wp = await prisma.warehouseProduct.findFirst({
+        where: { offerId: { equals: offerId, mode: "insensitive" }, marketplace: "ozon", archived: false },
+        select: { id: true, productId: true, marketplaceState: true },
+      });
+      if (wp) {
+        productId = wp.productId ? Number(wp.productId) : null;
+        wpId = wp.id;
+        wpState = wp.marketplaceState && typeof wp.marketplaceState === "object" ? wp.marketplaceState : {};
+        const cachedAt = wpState.ozonQACachedAt ? new Date(wpState.ozonQACachedAt).getTime() : 0;
+        if (Array.isArray(wpState.ozonQA) && wpState.ozonQA.length > 0 && cachedAt > Date.now() - _QA_TTL) {
+          _qaCache.set(cacheKey, { items: wpState.ozonQA, expiresAt: cachedAt + _QA_TTL });
+          return response.json({ ok: true, items: wpState.ozonQA });
+        }
+      }
+    }
+
+    const accounts = getOzonAccounts().filter((a) => a.clientId && a.apiKey);
+    if (!accounts.length) {
+      _qaCache.set(cacheKey, { items: [], expiresAt: Date.now() + _QA_TTL });
+      return response.json({ ok: true, items: [] });
+    }
+
+    let rawQuestions = [];
+    for (const account of accounts) {
+      try {
+        const data = await ozonRequest("/v1/question/list", {
+          filter: {},
+          ...(productId ? { sku: productId } : {}),
+        }, account);
+        const list = Array.isArray(data?.questions) ? data.questions
+          : Array.isArray(data?.result?.questions) ? data.result.questions : [];
+        const offerIdLower = offerId.toLowerCase();
+        const matched = list.filter((q) => {
+          const qOffer = cleanText(q.offer_id || "").toLowerCase();
+          const qSku = String(q.sku || "");
+          return qOffer === offerIdLower || (productId && (qSku === String(productId) || qSku === cleanText(q.sku)));
+        });
+        rawQuestions = matched.length ? matched : (productId ? list : []);
+        break;
+      } catch { /* try next */ }
+    }
+
+    const items = rawQuestions
+      .filter((q) => q.text && (Number(q.answers_count || 0) > 0 || q.answer?.text || q.answers?.[0]?.text))
+      .slice(0, 12)
+      .map((q) => ({
+        id: cleanText(String(q.id || q.question_id || Math.random())),
+        question: cleanText(q.text || ""),
+        answer: cleanText(q.answer?.text || q.answers?.[0]?.text || "Продавец ответил на этот вопрос"),
+        createdAt: q.published_at || q.created_at || new Date().toISOString(),
+      }))
+      .filter((q) => q.question);
+
+    _qaCache.set(cacheKey, { items, expiresAt: Date.now() + _QA_TTL });
+
+    if (prisma && wpId) {
+      prisma.warehouseProduct.update({
+        where: { id: wpId },
+        data: { marketplaceState: { ...wpState, ozonQA: items, ozonQACachedAt: new Date().toISOString() } },
+      }).catch(() => {});
+    }
+
+    response.json({ ok: true, items });
   } catch (error) { next(error); }
 });
 
@@ -1082,7 +1179,7 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       return response.status(400).json({ error: "Заполните обязательные поля" });
     }
 
-    const totalRub = items.reduce((s, i) => s + Number(i.priceRub || 0) * Number(i.quantity || 1), 0);
+    const baseTotal = items.reduce((s, i) => s + Number(i.priceRub || 0) * Number(i.quantity || 1), 0);
     const orderId = `MV-${Date.now().toString(36).toUpperCase()}`;
 
     // Resolve customer from Bearer token (optional — guest checkout also works)
@@ -1095,6 +1192,19 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       if (cust) customerId = cust.id;
     }
 
+    // Apply referral discount if valid code provided
+    const refCode = cleanText(body.refCode || "").toUpperCase() || null;
+    let refDiscountApplied = false;
+    let referrerId = null;
+    if (refCode && prisma) {
+      const referrer = await prisma.shopCustomer.findUnique({ where: { referralCode: refCode }, select: { id: true } });
+      if (referrer && referrer.id !== customerId) {
+        refDiscountApplied = true;
+        referrerId = referrer.id;
+      }
+    }
+    const totalRub = refDiscountApplied ? Math.round(baseTotal * (1 - _REFERRAL_DISCOUNT)) : Math.round(baseTotal);
+
     // Save order to DB
     if (prisma) {
       await prisma.shopOrder.create({
@@ -1104,10 +1214,21 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
           status: "pending",
           items: items,
           delivery: delivery,
-          totalRub: Math.round(totalRub),
+          totalRub,
           comment: body.comment ? cleanText(body.comment) : null,
+          refCode: refDiscountApplied ? refCode : null,
         },
       });
+      // Award points to referrer
+      if (refDiscountApplied && referrerId) {
+        prisma.shopPointTransaction.create({
+          data: { customerId: referrerId, points: _REFERRAL_POINTS_FOR_REFERRER, reason: `Реферальный заказ ${orderId}`, refId: orderId },
+        }).catch(() => {});
+        prisma.shopCustomer.update({
+          where: { id: referrerId },
+          data: { loyaltyPoints: { increment: _REFERRAL_POINTS_FOR_REFERRER } },
+        }).catch(() => {});
+      }
     }
 
     logger.info("shop order created", {
@@ -1133,7 +1254,7 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       await prisma.shopOrder.update({ where: { id: orderId }, data: { status: "payment_pending" } }).catch(() => {});
     }
 
-    response.json({ ok: true, id: orderId, status: paymentUrl ? "payment_pending" : "pending", totalRub, paymentUrl: paymentUrl || null });
+    response.json({ ok: true, id: orderId, status: paymentUrl ? "payment_pending" : "pending", totalRub, paymentUrl: paymentUrl || null, refDiscountApplied });
   } catch (error) {
     next(error);
   }
@@ -1475,6 +1596,62 @@ app.get("/api/shop/auth/orders", shopCors, requireShopAuth, async (request, resp
       take: 20,
     });
     response.json({ ok: true, orders });
+  } catch (error) { next(error); }
+});
+
+// ── Referral program ─────────────────────────────────────────────────────
+
+function _generateReferralCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+const _REFERRAL_DISCOUNT = 0.07;
+const _REFERRAL_POINTS_FOR_REFERRER = 100;
+const _SHOP_BASE_URL = process.env.SHOP_BASE_URL || "https://magicvibes.ru";
+
+app.get("/api/shop/auth/referral", shopCors, requireShopAuth, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.status(503).json({ error: "БД недоступна" });
+    const customerId = request.shopCustomer.customerId;
+
+    let customer = await prisma.shopCustomer.findUnique({
+      where: { id: customerId },
+      select: { referralCode: true },
+    });
+    if (!customer) return response.status(404).json({ error: "Не найден" });
+
+    if (!customer.referralCode) {
+      let code;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        code = _generateReferralCode();
+        const existing = await prisma.shopCustomer.findUnique({ where: { referralCode: code }, select: { id: true } });
+        if (!existing) break;
+      }
+      customer = await prisma.shopCustomer.update({
+        where: { id: customerId },
+        data: { referralCode: code },
+        select: { referralCode: true },
+      });
+    }
+
+    const code = customer.referralCode;
+    const ordersFromRef = await prisma.shopOrder.count({ where: { refCode: code } });
+    response.json({ ok: true, code, link: `${_SHOP_BASE_URL}/?ref=${code}`, ordersFromRef, discountPct: 7 });
+  } catch (error) { next(error); }
+});
+
+app.post("/api/shop/referral/validate", shopCors, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    const code = cleanText(request.body?.code || "").toUpperCase();
+    if (!code || code.length !== 8) return response.json({ ok: false, valid: false });
+    if (!prisma) return response.json({ ok: false, valid: false });
+    const owner = await prisma.shopCustomer.findUnique({ where: { referralCode: code }, select: { id: true } });
+    response.json({ ok: true, valid: Boolean(owner), discountPct: owner ? 7 : 0 });
   } catch (error) { next(error); }
 });
 

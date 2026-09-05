@@ -28,7 +28,7 @@ app.get("/api/shop/reviews", async (request, response, next) => {
         text: r.text,
         photoUrl: r.photoUrl || null,
         createdAt: r.createdAt,
-        author: [r.customer?.firstName, r.customer?.lastName].filter(Boolean).join(" ") || r.customer?.email?.split("@")[0] || "Покупатель",
+        author: [r.customer?.firstName, r.customer?.lastName].filter(Boolean).join(" ") || "Покупатель",
       })),
     });
   } catch (error) { next(error); }
@@ -42,6 +42,10 @@ app.post("/api/shop/reviews", requireShopAuth, async (request, response, next) =
     const text = cleanText(request.body?.text || "");
     const rating = Math.max(1, Math.min(5, Number(request.body?.rating || 5) || 5));
     if (!text || text.length < 10) return response.status(400).json({ error: "Текст отзыва минимум 10 символов." });
+
+    // Require a display name to protect customer privacy
+    const reviewer = await prisma.shopCustomer.findUnique({ where: { id: customerId }, select: { firstName: true } });
+    if (!reviewer?.firstName) return response.status(400).json({ error: "Укажите ваше имя в профиле, чтобы опубликовать отзыв.", code: "no_name" });
     if (text.length > 2000) return response.status(400).json({ error: "Текст отзыва максимум 2000 символов." });
 
     const offerId = cleanText(request.body?.offerId || "");

@@ -246,6 +246,66 @@ app.post("/api/reviews/reply", requireAdmin, async (request, response, next) => 
   }
 });
 
+// ─── AI draft reply ──────────────────────────────────────────────────────────
+app.post("/api/reviews/ai-draft", requireAdmin, async (request, response, next) => {
+  try {
+    const aiSettings = await readEffectiveAiSettings();
+    assertTextGenerationConfigured(aiSettings);
+
+    const rating = Number(request.body?.rating) || 0;
+    const reviewText = cleanText(request.body?.reviewText || "");
+    const advantages = cleanText(request.body?.advantages || "");
+    const disadvantages = cleanText(request.body?.disadvantages || "");
+    const productName = cleanText(request.body?.productName || "");
+    const marketplace = cleanText(request.body?.marketplace || "ozon");
+
+    const ratingLabel = rating >= 4 ? "положительный" : rating === 3 ? "нейтральный" : "отрицательный";
+    const productPart = productName ? `Товар: «${productName}».` : "";
+    const reviewBody = [
+      reviewText && `Текст: «${reviewText}»`,
+      advantages && `Плюсы: ${advantages}`,
+      disadvantages && `Минусы: ${disadvantages}`,
+    ].filter(Boolean).join(" ");
+
+    const systemPrompt = `Ты — представитель службы заботы о клиентах премиального магазина парфюмерии Magic Vibes (magicvibes.ru). Тебе нужно написать ответ на отзыв покупателя на маркетплейсе ${marketplace === "ozon" ? "Ozon" : marketplace === "wb" ? "Wildberries" : "Яндекс.Маркете"}.
+
+Правила:
+- Пиши только по-русски.
+- Тон: тёплый, профессиональный, ненавязчивый — как у сотрудника люксового бутика.
+- Длина: 2-4 предложения (70-150 слов).
+- Если отзыв положительный: поблагодари за доверие, порадуйся выбору.
+- Если нейтральный или отрицательный: признай проблему, принеси извинения, предложи написать в поддержку для решения.
+- Не упоминай конкурентов. Не обещай скидок. Не используй клише «Спасибо за обратную связь».
+- Если знаешь название товара — упомяни его естественно.
+- В конце можно добавить «Команда Magic Vibes» или аналог.
+- Не добавляй ничего лишнего — только текст ответа.`;
+
+    const userPrompt = `${productPart} Рейтинг: ${rating}/5 (${ratingLabel}). ${reviewBody || "Текст отзыва отсутствует."}`;
+
+    const client = getOpenAiClient(aiSettings);
+    const completion = await createOpenAiChatCompletionWithFallback(
+      client,
+      {
+        model: aiSettings.textModel,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        max_tokens: 400,
+        temperature: 0.7,
+      },
+      { preferCompatible: shouldPreferCompatibleOpenAiChatRequest(aiSettings) },
+    );
+
+    const draft = cleanText(completion.choices?.[0]?.message?.content || "");
+    if (!draft) return response.status(502).json({ error: "AI не вернул текст." });
+    response.json({ ok: true, draft });
+  } catch (error) {
+    if (error.statusCode) return response.status(error.statusCode).json({ error: error.message });
+    next(error);
+  }
+});
+
 app.get("/api/reviews/templates", requireAdmin, async (_request, response, next) => {
   try {
     response.json({ ok: true, templates: await readReviewTemplates() });

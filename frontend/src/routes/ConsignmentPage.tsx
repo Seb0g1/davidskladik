@@ -644,7 +644,7 @@ export function ConsignmentPage() {
         <div className="inline-success" style={{ marginBottom: 12 }}>
           Синк завершён: добавлено <strong>{pmSyncResult.created}</strong> продаж
           {(pmSyncResult.skippedBefore ?? 0) > 0 ? `, пропущено (до добавления в реализацию) ${pmSyncResult.skippedBefore}` : ""}
-          {pmSyncResult.skipped ? `, дублей ${pmSyncResult.skipped}` : ""}
+          {pmSyncResult.skipped ? `, не сопоставлено с реализацией ${pmSyncResult.skipped}` : ""}
           {pmSyncResult.itemsCreated ? `, создано товаров ${pmSyncResult.itemsCreated}` : ""}
           {pmSyncResult.itemsMatched ? `, сопоставлено товаров ${pmSyncResult.itemsMatched}` : ""}
           {" "}(всего в PM: {pmSyncResult.total}).
@@ -1184,7 +1184,7 @@ export function ConsignmentPage() {
             return (
               <span className="muted-note">
                 Профит{action.group ? " (оценка по средним ценам партий)" : ""}: {money(profit)}
-                {" "}(спонсору {money(profit / 2)}, мне {money(profit / 2)}).
+                {" "}(спонсору {money(Math.round(profit / 2 * 100) / 100)}, мне {money(profit - Math.round(profit / 2 * 100) / 100)}).
                 Закупочная часть {money(purchase * quantity)} уйдёт на общий баланс.
               </span>
             );
@@ -1302,7 +1302,14 @@ export function ConsignmentPage() {
           <button
             className="primary-action"
             type="button"
-            disabled={payout.isPending || !(Number(payoutForm.amount) > 0)}
+            disabled={payout.isPending || !(Number(payoutForm.amount) > 0) || (() => {
+              const available = payoutForm.kind === "sponsor_payout" ? Number(s?.balance || 0) : payoutForm.kind === "sponsor_profit_payout" ? Number(s?.sponsorProfit || 0) : Number(s?.myProfit || 0);
+              return Number(payoutForm.amount) > available;
+            })()}
+            title={(() => {
+              const available = payoutForm.kind === "sponsor_payout" ? Number(s?.balance || 0) : payoutForm.kind === "sponsor_profit_payout" ? Number(s?.sponsorProfit || 0) : Number(s?.myProfit || 0);
+              return Number(payoutForm.amount) > available ? `Недостаточно средств: доступно ${money(Math.max(0, available))}` : undefined;
+            })()}
             onClick={() => payout.mutate()}
           >
             {payout.isPending ? <Loader2 className="spin" size={16} /> : <Banknote size={16} />} Выплатить

@@ -77,6 +77,7 @@ export interface ShopOrderPayload {
   };
   comment?: string;
   paymentMethod?: PaymentMethod;
+  refCode?: string;
 }
 
 export interface ShopOrderItem {
@@ -140,6 +141,22 @@ export interface MarketplaceReview {
   createdAt: string;
   source: "ozon" | "yandex";
   photos?: string[];
+  videoUrl?: string | null;
+}
+
+export interface ProductQAItem {
+  id: string;
+  question: string;
+  answer: string;
+  createdAt: string;
+}
+
+export interface FragranceNotes {
+  topNotes: string[];
+  middleNotes: string[];
+  baseNotes: string[];
+  accords: string[];
+  gender?: string;
 }
 
 export interface CatalogResponse {

@@ -1,4 +1,4 @@
-import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse, AutoCategory, TelegramNewsPost, ShopReview, MarketplaceReview } from "./types";
+import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse, AutoCategory, TelegramNewsPost, ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes } from "./types";
 
 // В dev Vite-прокси перенаправляет /api/shop → davidsklad.ru.
 // В production установите VITE_API_BASE=https://davidsklad.ru
@@ -108,6 +108,31 @@ export const api = {
 
   marketplaceReviews(offerId: string): Promise<{ ok: boolean; reviews: MarketplaceReview[]; avgRating: number; reviewCount: number }> {
     return req<{ ok: boolean; reviews: MarketplaceReview[]; avgRating: number; reviewCount: number }>(`/marketplace-reviews?offerId=${encodeURIComponent(offerId)}`);
+  },
+
+  productQA(offerId: string): Promise<{ ok: boolean; items: ProductQAItem[] }> {
+    return req<{ ok: boolean; items: ProductQAItem[] }>(`/product-qa?offerId=${encodeURIComponent(offerId)}`);
+  },
+
+  productNotes(brand: string, name: string): Promise<{ ok: boolean; data: FragranceNotes | null }> {
+    return req<{ ok: boolean; data: FragranceNotes | null }>(`/product-notes?brand=${encodeURIComponent(brand)}&name=${encodeURIComponent(name)}`);
+  },
+
+  uploadMedia(file: File): Promise<{ ok: boolean; url: string; isVideo: boolean }> {
+    const formData = new FormData();
+    formData.append("file", file);
+    return fetch((import.meta.env.VITE_API_BASE ?? "") + "/api/shop/upload-media", {
+      method: "POST",
+      body: formData,
+    }).then((r) => r.json());
+  },
+
+  referral(token: string): Promise<{ ok: boolean; code: string; link: string; ordersFromRef: number; discountPct: number }> {
+    return req<{ ok: boolean; code: string; link: string; ordersFromRef: number; discountPct: number }>("/auth/referral", {}, token);
+  },
+
+  validateReferral(code: string): Promise<{ ok: boolean; valid: boolean; discountPct: number }> {
+    return req<{ ok: boolean; valid: boolean; discountPct: number }>("/referral/validate", { method: "POST", body: JSON.stringify({ code }) });
   },
 
   unboxings(): Promise<{ ok: boolean; unboxings: { id: string; name: string; mediaUrl: string; text: string; createdAt: string }[] }> {

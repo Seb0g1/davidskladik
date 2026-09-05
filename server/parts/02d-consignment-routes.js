@@ -711,7 +711,7 @@ app.post("/api/consignment/payouts", requireAdmin, async (request, response, nex
     const summary = await readConsignmentSummary();
     const available = kind === "sponsor_payout" ? summary.balance : (kind === "sponsor_profit_payout" ? summary.sponsorProfit : summary.myProfit);
     if (amount > available) {
-      return response.status(400).json({ error: `Недостаточно средств: доступно ${available} ₽.`, code: "consignment_payout_insufficient" });
+      return response.status(400).json({ error: `Недостаточно средств: доступно ${available} $.`, code: "consignment_payout_insufficient" });
     }
     const operation = await getPrisma().consignmentOperation.create({
       data: {

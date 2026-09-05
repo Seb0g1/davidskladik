@@ -19,6 +19,50 @@ const FALLBACK_BANNERS: ShopBanner[] = [
   },
 ];
 
+function CountdownTimer({ endDate }: { endDate: string }) {
+  const getTimeLeft = () => {
+    const diff = new Date(endDate).getTime() - Date.now();
+    if (diff <= 0) return null;
+    const d = Math.floor(diff / 86400000);
+    const h = Math.floor((diff % 86400000) / 3600000);
+    const m = Math.floor((diff % 3600000) / 60000);
+    const s = Math.floor((diff % 60000) / 1000);
+    return { d, h, m, s };
+  };
+
+  const [t, setT] = useState(getTimeLeft());
+  useEffect(() => {
+    const id = setInterval(() => setT(getTimeLeft()), 1000);
+    return () => clearInterval(id);
+  }, [endDate]);
+
+  if (!t) return null;
+
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const parts = t.d > 0
+    ? [{ val: t.d, label: "дн" }, { val: t.h, label: "ч" }, { val: t.m, label: "мин" }]
+    : [{ val: t.h, label: "ч" }, { val: t.m, label: "мин" }, { val: t.s, label: "сек" }];
+
+  return (
+    <div style={{
+      position: "absolute", bottom: 18, right: 18, zIndex: 10,
+      display: "flex", alignItems: "center", gap: 6,
+      background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)",
+      border: "1px solid rgba(201,162,94,0.35)", borderRadius: 4,
+      padding: "8px 14px",
+    }}>
+      <span style={{ fontSize: 9, letterSpacing: "0.18em", textTransform: "uppercase", color: "#c9a25e", marginRight: 4 }}>Осталось</span>
+      {parts.map(({ val, label }, i) => (
+        <span key={label} style={{ display: "flex", alignItems: "baseline", gap: 2 }}>
+          {i > 0 && <span style={{ color: "rgba(201,162,94,0.4)", marginRight: 2 }}>:</span>}
+          <span style={{ fontFamily: "Georgia,serif", fontStyle: "italic", fontSize: 22, color: "#f2ede6", lineHeight: 1, minWidth: 26, textAlign: "center" }}>{pad(val)}</span>
+          <span style={{ fontSize: 9, color: "#7d7a73", letterSpacing: "0.1em" }}>{label}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function GradientBanner({ banner }: { banner: ShopBanner }) {
   const GRADIENTS = [
     "from-violet-900 via-purple-800 to-pink-700",
@@ -116,6 +160,11 @@ export default function BannerSlider() {
             </Link>
           )}
         </div>
+      )}
+
+      {/* Countdown timer */}
+      {banner.endDate && new Date(banner.endDate).getTime() > Date.now() && (
+        <CountdownTimer endDate={banner.endDate} />
       )}
 
       {/* Controls */}

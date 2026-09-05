@@ -194,6 +194,57 @@ function LoyaltyPanel({ token }: { token: string }) {
   );
 }
 
+function ReferralPanel({ token }: { token: string }) {
+  const { data } = useQuery({
+    queryKey: ["shop-referral", token],
+    queryFn: () => api.referral(token),
+    staleTime: 5 * 60_000,
+    enabled: !!token,
+  });
+  const [copied, setCopied] = useState(false);
+
+  if (!data?.ok) return null;
+  const { link, code, ordersFromRef } = data;
+
+  function copyLink() {
+    navigator.clipboard.writeText(link).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+  }
+
+  return (
+    <div style={{ background: S.surface, borderRadius: 18, padding: "20px", border: "1px solid rgba(201,162,94,0.18)", marginTop: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 14 }}>🔗</span>
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.18em", color: S.subtle }}>Реферальная программа</span>
+      </div>
+      <p style={{ fontSize: 12, color: S.muted, lineHeight: 1.6, marginBottom: 14 }}>
+        Поделитесь своей ссылкой — друг получит скидку <span style={{ color: S.accent }}>−7%</span> на первый заказ,
+        а вы получите <span style={{ color: "#4ade80" }}>+100 баллов</span> на счёт.
+      </p>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <div style={{ flex: 1, background: "rgba(255,255,255,0.04)", border: `1px solid ${S.border}`, borderRadius: 10, padding: "10px 14px", fontSize: 12, color: S.muted, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {link}
+        </div>
+        <button
+          onClick={copyLink}
+          style={{ padding: "10px 18px", borderRadius: 10, background: copied ? "rgba(74,222,128,0.12)" : "rgba(201,162,94,0.1)", border: `1px solid ${copied ? "rgba(74,222,128,0.3)" : "rgba(201,162,94,0.25)"}`, color: copied ? "#4ade80" : S.accent, fontSize: 12, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", transition: "all 0.2s" }}
+        >
+          {copied ? "Скопировано!" : "Скопировать"}
+        </button>
+      </div>
+      <div style={{ display: "flex", gap: 14 }}>
+        <div style={{ flex: 1, background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: "12px", textAlign: "center" }}>
+          <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontStyle: "italic", fontSize: 28, color: S.accent, lineHeight: 1 }}>{ordersFromRef}</div>
+          <div style={{ fontSize: 10, color: S.subtle, marginTop: 4 }}>заказов по вашей ссылке</div>
+        </div>
+        <div style={{ flex: 1, background: "rgba(255,255,255,0.03)", borderRadius: 10, padding: "12px", textAlign: "center" }}>
+          <div style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontStyle: "italic", fontSize: 28, color: "#4ade80", lineHeight: 1 }}>{ordersFromRef * 100}</div>
+          <div style={{ fontSize: 10, color: S.subtle, marginTop: 4 }}>баллов заработано</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ProfileTab() {
   const { customer, updateProfile, token } = useAuth();
   const [form, setForm] = useState({
@@ -261,6 +312,8 @@ function ProfileTab() {
       </form>
       {/* Loyalty */}
       {token && <LoyaltyPanel token={token} />}
+      {/* Referral */}
+      {token && <ReferralPanel token={token} />}
     </div>
   );
 }

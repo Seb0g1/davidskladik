@@ -1,4 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="8" fill="#0E0D0B"/>
-  <text x="16" y="22" font-family="Georgia,serif" font-size="15" font-weight="700" font-style="italic" fill="#C9A96E" text-anchor="middle">MV</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e8d5a3"/>
+      <stop offset="50%" stop-color="#c9a25e"/>
+      <stop offset="100%" stop-color="#a07840"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1a1712"/>
+      <stop offset="100%" stop-color="#0e0d0b"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+  <rect width="64" height="64" rx="14" fill="none" stroke="url(#g)" stroke-width="1.5" opacity="0.35"/>
+  <text x="32" y="44" font-family="Georgia,'Times New Roman',serif" font-style="italic" font-size="30" font-weight="400" fill="url(#g)" text-anchor="middle" letter-spacing="-1">MV</text>
 </svg>

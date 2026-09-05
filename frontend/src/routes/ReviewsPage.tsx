@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, BookOpen, Loader2, MessageSquareReply, RefreshCw, Star } from "lucide-react";
+import { AlertCircle, BookOpen, BotMessageSquare, Loader2, MessageSquareReply, RefreshCw, Star } from "lucide-react";
 import { z } from "zod";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -54,6 +54,23 @@ function ReviewCard({ review, templates, onReplied }: { review: ReviewRow; templ
       onReplied();
     },
   });
+  const aiDraft = useMutation({
+    mutationFn: () => fetchJson("/api/reviews/ai-draft", z.unknown(), {
+      method: "POST",
+      body: JSON.stringify({
+        marketplace: review.marketplace,
+        rating: review.rating,
+        reviewText: review.text,
+        advantages: review.advantages,
+        disadvantages: review.disadvantages,
+        productName: review.productName,
+      }),
+    }) as Promise<{ ok: boolean; draft: string }>,
+    onSuccess: (data) => {
+      if (data.draft) setText(data.draft);
+      setOpen(true);
+    },
+  });
   return (
     <div className={`review-card${review.needsReply ? " needs-reply" : ""}`}>
       <div className="review-head">
@@ -71,6 +88,16 @@ function ReviewCard({ review, templates, onReplied }: { review: ReviewRow; templ
         <button className="secondary-action" type="button" onClick={() => setOpen((value) => !value)}>
           <MessageSquareReply size={15} /> {open ? "Скрыть" : "Ответить"}
         </button>
+        <button
+          className="secondary-action"
+          type="button"
+          disabled={aiDraft.isPending}
+          onClick={() => aiDraft.mutate()}
+          title="Сгенерировать ответ с помощью AI"
+        >
+          {aiDraft.isPending ? <Loader2 className="spin" size={15} /> : <BotMessageSquare size={15} />} AI-ответ
+        </button>
+        {aiDraft.error ? <span className="inline-error" style={{fontSize: 11}}>{String((aiDraft.error as Error).message)}</span> : null}
       </div>
       {open ? (
         <div className="review-reply-box">

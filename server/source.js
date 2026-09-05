@@ -266,6 +266,8 @@ const partFiles = [
   "02f-sweep-heartbeat.js",
   "02f-telegram-news.js",
   "02f-shop-reviews.js",
+  "02f-shop-email-subscribe.js",
+  "02f-shop-media-upload.js",
   "02f-shop-email-sequences.js",
   "02f-shop-push.js",
   "02f-shop-ratings-sync.js",

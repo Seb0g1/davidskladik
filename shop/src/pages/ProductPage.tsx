@@ -5,7 +5,7 @@ import { ShoppingBag, Check, ChevronLeft, Star, Shield, Truck, RefreshCw, Minus,
 import { api } from "../api";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
-import type { ShopReview, MarketplaceReview } from "../types";
+import type { ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes } from "../types";
 
 const S = {
   bg:      "#0E0D0B",
@@ -21,14 +21,12 @@ const S = {
   accent3: "#EDD9B0",
 };
 
-function viewerCount(offerId: string, rating: number | null | undefined): number {
+function baseViewerCount(offerId: string, rating: number | null | undefined): number {
   let h = 0;
   for (let i = 0; i < offerId.length; i++) h = (h * 31 + offerId.charCodeAt(i)) >>> 0;
-  const minute = Math.floor(Date.now() / 60000);
-  const base = (h + minute) % 7;
-  if ((rating ?? 0) >= 4.5) return base + 3;
-  if ((rating ?? 0) >= 4) return (base % 3) + 2;
-  return (base % 2) + 1;
+  if ((rating ?? 0) >= 4.5) return (h % 5) + 3;
+  if ((rating ?? 0) >= 4) return (h % 3) + 2;
+  return (h % 2) + 1;
 }
 
 export default function ProductPage() {
@@ -45,13 +43,22 @@ export default function ProductPage() {
   const [shareCopied, setShareCopied] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const shareRef = useRef<HTMLDivElement>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  const { customer, token } = useAuth();
+  const { customer, token, updateProfile } = useAuth();
   const [reviewText, setReviewText] = useState("");
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewHover, setReviewHover] = useState(0);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [reviewSent, setReviewSent] = useState(false);
+  const [namePromptOpen, setNamePromptOpen] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [nameSaving, setNameSaving] = useState(false);
+  const [nameError, setNameError] = useState("");
+  const [reviewPhotoUrl, setReviewPhotoUrl] = useState("");
+  const [reviewPhotoUploading, setReviewPhotoUploading] = useState(false);
+  const [reviewPhotoDragOver, setReviewPhotoDragOver] = useState(false);
+  const reviewPhotoInputRef = useRef<HTMLInputElement>(null);
 
   const { data: product, isLoading, error } = useQuery({
     queryKey: ["shop-product", offerId],
@@ -87,6 +94,33 @@ export default function ProductPage() {
   const mpAvgRating = mpReviewsQuery.data?.avgRating ?? 0;
   const mpReviewCount = mpReviewsQuery.data?.reviewCount ?? 0;
 
+  const qaQuery = useQuery({
+    queryKey: ["shop-product-qa", offerId],
+    queryFn: () => api.productQA(offerId!),
+    enabled: !!offerId,
+    staleTime: 30 * 60_000,
+  });
+  const qaItems: ProductQAItem[] = qaQuery.data?.items ?? [];
+  const [qaOpen, setQaOpen] = useState<Set<string>>(new Set());
+
+  const notesQuery = useQuery({
+    queryKey: ["shop-product-notes", product?.brand, product?.name],
+    queryFn: () => api.productNotes(product!.brand!, product!.name),
+    enabled: !!(product?.brand && product?.name),
+    staleTime: 24 * 60 * 60_000,
+  });
+  const notes = notesQuery.data?.data ?? null;
+
+  async function handleReviewPhotoFile(file: File) {
+    if (!file) return;
+    setReviewPhotoUploading(true);
+    try {
+      const res = await api.uploadMedia(file);
+      if (res.ok) setReviewPhotoUrl(res.url);
+    } catch { /* best-effort */ }
+    setReviewPhotoUploading(false);
+  }
+
   const reviewMutation = useMutation({
     mutationFn: () => api.postReview({
       offerId: offerId!,
@@ -94,8 +128,9 @@ export default function ProductPage() {
       productImg: product?.images[0],
       rating: reviewRating,
       text: reviewText,
+      photoUrl: reviewPhotoUrl || undefined,
     }, token!),
-    onSuccess: () => { setReviewSent(true); setReviewOpen(false); reviewsQuery.refetch(); },
+    onSuccess: () => { setReviewSent(true); setReviewOpen(false); setReviewPhotoUrl(""); reviewsQuery.refetch(); },
   });
 
   useEffect(() => {
@@ -146,9 +181,19 @@ export default function ProductPage() {
 
   useEffect(() => {
     if (!product) return;
-    setViewers(viewerCount(offerId!, product.rating));
-    const id = setInterval(() => setViewers(viewerCount(offerId!, product.rating)), 60_000);
-    return () => clearInterval(id);
+    const base = baseViewerCount(offerId!, product.rating);
+    setViewers(base);
+    function scheduleNext(current: number) {
+      const delay = 30_000 + Math.random() * 60_000;
+      return setTimeout(() => {
+        const delta = Math.random() < 0.5 ? 1 : -1;
+        const next = Math.max(1, current + delta);
+        setViewers(next);
+        timerRef.current = scheduleNext(next);
+      }, delay);
+    }
+    timerRef.current = scheduleNext(base);
+    return () => clearTimeout(timerRef.current);
   }, [offerId, product]);
 
   const alertMutation = useMutation({
@@ -524,6 +569,46 @@ export default function ProductPage() {
                   <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.7 }}>{product.description}</p>
                 </div>
               )}
+
+              {/* Fragrance pyramid */}
+              {notes && (notes.topNotes.length > 0 || notes.middleNotes.length > 0 || notes.baseNotes.length > 0) && (
+                <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 20 }}>
+                  <h3 style={{ fontSize: 13, fontWeight: 600, color: S.text, marginBottom: 16 }}>Пирамида аромата</h3>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 0, position: "relative" }}>
+                    {/* Vertical line */}
+                    <div style={{ position: "absolute", left: 15, top: 0, bottom: 0, width: 1, background: `linear-gradient(to bottom, transparent, rgba(201,169,110,0.2) 15%, rgba(201,169,110,0.2) 85%, transparent)` }} />
+                    {[
+                      { label: "Верхние", notes: notes.topNotes, color: "#e9d2a0", dot: "rgba(233,210,160,0.8)" },
+                      { label: "Сердце", notes: notes.middleNotes, color: S.accent3, dot: "rgba(201,169,110,0.8)" },
+                      { label: "База", notes: notes.baseNotes, color: S.muted, dot: "rgba(125,122,115,0.8)" },
+                    ].filter(row => row.notes.length > 0).map((row) => (
+                      <div key={row.label} style={{ display: "flex", gap: 14, paddingBottom: 14, paddingLeft: 2 }}>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
+                          <div style={{ width: 10, height: 10, borderRadius: "50%", background: row.dot, border: `2px solid ${row.color}`, flexShrink: 0, marginTop: 1, boxShadow: `0 0 8px ${row.dot}` }} />
+                        </div>
+                        <div style={{ paddingLeft: 8 }}>
+                          <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: row.color, fontWeight: 600, marginBottom: 6 }}>{row.label}</div>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: "5px 8px" }}>
+                            {row.notes.map((note) => (
+                              <span key={note} style={{ fontSize: 12, color: S.muted, background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.07)`, borderRadius: 2, padding: "3px 8px" }}>{note}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {notes.accords.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: S.subtle, fontWeight: 600, marginBottom: 8 }}>Аккорды</div>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                        {notes.accords.slice(0, 6).map((accord) => (
+                          <span key={accord} style={{ fontSize: 11, color: S.accent, background: "rgba(201,169,110,0.07)", border: "1px solid rgba(201,169,110,0.18)", borderRadius: 2, padding: "4px 10px" }}>{accord}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -558,11 +643,19 @@ export default function ProductPage() {
               })()}
             </div>
             {customer && !reviewSent && (
-              <button onClick={() => setReviewOpen((o) => !o)} style={{
+              <button onClick={() => {
+                if (customer.firstName) {
+                  setNamePromptOpen(false);
+                  setReviewOpen((o) => !o);
+                } else {
+                  setReviewOpen(false);
+                  setNamePromptOpen((o) => !o);
+                }
+              }} style={{
                 display: "flex", alignItems: "center", gap: 6, padding: "9px 16px",
-                background: reviewOpen ? "rgba(201,169,110,0.12)" : "rgba(255,255,255,0.06)",
-                border: `1px solid ${reviewOpen ? "rgba(201,169,110,0.3)" : S.border}`,
-                borderRadius: 12, fontSize: 13, fontWeight: 500, color: reviewOpen ? S.accent3 : S.muted,
+                background: (reviewOpen || namePromptOpen) ? "rgba(201,169,110,0.12)" : "rgba(255,255,255,0.06)",
+                border: `1px solid ${(reviewOpen || namePromptOpen) ? "rgba(201,169,110,0.3)" : S.border}`,
+                borderRadius: 12, fontSize: 13, fontWeight: 500, color: (reviewOpen || namePromptOpen) ? S.accent3 : S.muted,
                 cursor: "pointer", transition: "all 0.15s", fontFamily: "inherit",
               }}>
                 <MessageSquare size={14} /> Написать отзыв
@@ -570,9 +663,76 @@ export default function ProductPage() {
             )}
           </div>
 
+          {/* Name prompt — shown before review form when customer has no name */}
+          {namePromptOpen && customer && !reviewSent && (
+            <div style={{ background: S.surface, borderRadius: 18, padding: 24, border: `1px solid rgba(201,169,110,0.2)`, marginBottom: 20 }}>
+              <div style={{ fontSize: 13, color: S.accent3, fontWeight: 600, marginBottom: 6 }}>Укажите ваше имя</div>
+              <div style={{ fontSize: 12, color: S.muted, marginBottom: 16, lineHeight: 1.6 }}>
+                Для публикации отзыва нужно имя — оно будет показано вместо вашего email, чтобы защитить конфиденциальность.
+              </div>
+              <input
+                type="text"
+                value={nameInput}
+                onChange={(e) => { setNameInput(e.target.value); setNameError(""); }}
+                placeholder="Ваше имя (например: Анна)"
+                autoFocus
+                maxLength={50}
+                style={{
+                  width: "100%", padding: "12px 14px", background: S.surface2,
+                  border: `1.5px solid ${nameError ? "#f87171" : S.border}`, borderRadius: 12, fontSize: 13,
+                  color: S.text, fontFamily: "inherit", outline: "none", boxSizing: "border-box",
+                }}
+                onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.4)")}
+                onBlur={e => (e.target.style.borderColor = nameError ? "#f87171" : S.border)}
+                onKeyDown={async (e) => {
+                  if (e.key === "Enter") {
+                    const n = nameInput.trim();
+                    if (!n) { setNameError("Введите имя"); return; }
+                    setNameSaving(true);
+                    try { await updateProfile({ firstName: n }); setNamePromptOpen(false); setReviewOpen(true); }
+                    catch { setNameError("Не удалось сохранить имя"); }
+                    finally { setNameSaving(false); }
+                  }
+                }}
+              />
+              {nameError && <div style={{ fontSize: 12, color: "#f87171", marginTop: 6 }}>{nameError}</div>}
+              <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+                <button
+                  disabled={!nameInput.trim() || nameSaving}
+                  onClick={async () => {
+                    const n = nameInput.trim();
+                    if (!n) { setNameError("Введите имя"); return; }
+                    setNameSaving(true);
+                    try { await updateProfile({ firstName: n }); setNamePromptOpen(false); setReviewOpen(true); }
+                    catch { setNameError("Не удалось сохранить имя"); }
+                    finally { setNameSaving(false); }
+                  }}
+                  style={{
+                    flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+                    padding: "11px 20px", background: S.accent, color: "#0E0D0B",
+                    border: "none", borderRadius: 12, fontSize: 13, fontWeight: 700,
+                    cursor: "pointer", opacity: (!nameInput.trim() || nameSaving) ? 0.5 : 1, fontFamily: "inherit",
+                  }}>
+                  {nameSaving ? "Сохранение…" : "Сохранить и продолжить"}
+                </button>
+                <button onClick={() => { setNamePromptOpen(false); setNameError(""); }} style={{
+                  padding: "11px 14px", background: "none", border: `1px solid ${S.border}`,
+                  borderRadius: 12, color: S.muted, cursor: "pointer",
+                }}>
+                  <X size={14} />
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Write review form */}
           {reviewOpen && customer && !reviewSent && (
             <div style={{ background: S.surface, borderRadius: 18, padding: 24, border: `1px solid ${S.border}`, marginBottom: 20 }}>
+              {customer.firstName && (
+                <div style={{ fontSize: 12, color: S.muted, marginBottom: 16, padding: "8px 12px", background: "rgba(201,169,110,0.06)", borderRadius: 8, border: "1px solid rgba(201,169,110,0.1)" }}>
+                  Отзыв будет опубликован от имени <span style={{ color: S.accent3, fontWeight: 600 }}>{customer.firstName}{customer.lastName ? ` ${customer.lastName}` : ""}</span>
+                </div>
+              )}
               <div style={{ marginBottom: 16 }}>
                 <div style={{ fontSize: 12, color: S.muted, marginBottom: 8 }}>Ваша оценка</div>
                 <div style={{ display: "flex", gap: 6 }}>
@@ -605,6 +765,30 @@ export default function ProductPage() {
                 onFocus={e => (e.target.style.borderColor = "rgba(201,169,110,0.4)")}
                 onBlur={e => (e.target.style.borderColor = S.border)}
               />
+              {/* Photo upload */}
+              <input ref={reviewPhotoInputRef} type="file" accept="image/jpeg,image/png,image/webp" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) handleReviewPhotoFile(f); }} />
+              {reviewPhotoUrl ? (
+                <div style={{ position: "relative", display: "inline-block" }}>
+                  <img src={reviewPhotoUrl} alt="" style={{ height: 72, width: 72, objectFit: "cover", borderRadius: 10, border: `1px solid ${S.border}`, display: "block" }} />
+                  <button onClick={() => setReviewPhotoUrl("")} style={{ position: "absolute", top: -6, right: -6, width: 18, height: 18, background: "#2a2a2a", border: "none", borderRadius: "50%", color: S.muted, fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+                </div>
+              ) : (
+                <div
+                  onClick={() => reviewPhotoInputRef.current?.click()}
+                  onDragOver={e => { e.preventDefault(); setReviewPhotoDragOver(true); }}
+                  onDragLeave={() => setReviewPhotoDragOver(false)}
+                  onDrop={e => { e.preventDefault(); setReviewPhotoDragOver(false); const f = e.dataTransfer.files[0]; if (f) handleReviewPhotoFile(f); }}
+                  style={{
+                    padding: "10px 14px", borderRadius: 10, cursor: "pointer", display: "flex", alignItems: "center", gap: 8,
+                    border: `1px dashed ${reviewPhotoDragOver ? "rgba(201,169,110,0.6)" : S.border}`,
+                    background: reviewPhotoDragOver ? "rgba(201,169,110,0.04)" : "transparent",
+                    transition: "border-color 0.2s", color: S.muted, fontSize: 12,
+                  }}
+                >
+                  {reviewPhotoUploading ? <span>Загрузка…</span> : <><span>📷</span><span>Добавить фото</span></>}
+                </div>
+              )}
+
               {reviewMutation.error && (
                 <div style={{ fontSize: 12, color: "#f87171", marginTop: 6 }}>{(reviewMutation.error as Error).message}</div>
               )}
@@ -692,6 +876,14 @@ export default function ProductPage() {
                       ))}
                     </div>
                   )}
+                  {r.videoUrl && (
+                    <video
+                      controls
+                      preload="metadata"
+                      src={r.videoUrl}
+                      style={{ width: "100%", maxHeight: 320, borderRadius: 10, marginTop: 10, background: "#000", border: `1px solid ${S.border}` }}
+                    />
+                  )}
                 </div>
               ))}
             </div>
@@ -728,6 +920,48 @@ export default function ProductPage() {
             </div>
           )}
         </div>
+
+        {/* Q&A from Ozon */}
+        {qaItems.length > 0 && (
+          <div style={{ marginTop: 32 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, color: S.text, letterSpacing: "-0.03em", marginBottom: 16 }}>
+              Вопросы о товаре
+              <span style={{ fontSize: 13, color: S.muted, fontWeight: 400 }}> ({qaItems.length})</span>
+            </h2>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              {qaItems.map((item) => {
+                const isOpen = qaOpen.has(item.id);
+                return (
+                  <div key={item.id} style={{ background: S.surface, borderRadius: 14, border: `1px solid ${isOpen ? "rgba(201,169,110,0.2)" : S.border}`, overflow: "hidden", transition: "border-color 0.2s" }}>
+                    <button
+                      onClick={() => setQaOpen((prev) => {
+                        const next = new Set(prev);
+                        if (isOpen) next.delete(item.id); else next.add(item.id);
+                        return next;
+                      })}
+                      style={{
+                        width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                        padding: "14px 18px", background: "none", border: "none", cursor: "pointer", textAlign: "left",
+                        fontFamily: "inherit",
+                      }}
+                    >
+                      <span style={{ fontSize: 13, color: S.text, fontWeight: 500, lineHeight: 1.5, flex: 1 }}>{item.question}</span>
+                      <span style={{ color: S.accent, fontSize: 18, lineHeight: 1, flexShrink: 0, transform: isOpen ? "rotate(45deg)" : "none", transition: "transform 0.2s" }}>+</span>
+                    </button>
+                    {isOpen && (
+                      <div style={{ padding: "0 18px 16px", borderTop: `1px solid ${S.border}` }}>
+                        <div style={{ display: "flex", gap: 8, paddingTop: 12, alignItems: "flex-start" }}>
+                          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", color: "#60b3ff", background: "rgba(0,143,255,0.1)", borderRadius: 4, padding: "3px 7px", flexShrink: 0, marginTop: 1 }}>Ozon</span>
+                          <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.65, margin: 0 }}>{item.answer}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Related products */}
         {relatedItems.length > 0 && (
