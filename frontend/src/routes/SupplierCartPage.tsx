@@ -224,6 +224,7 @@ function ReadyToShipPanel() {
       setMpReplaceKey(null);
       void marketplaceQuery.refetch();
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
     },
   });
 
@@ -233,6 +234,7 @@ function ReadyToShipPanel() {
         lines: lines.map((l) => ({
           key: l.key,
           offerId: l.offerId,
+          productName: l.productName,
           quantity: l.quantity,
           marketplace: l.marketplace,
           orderId: l.orderId || l.postingNumber,
@@ -245,6 +247,7 @@ function ReadyToShipPanel() {
       void marketplaceQuery.refetch();
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-draft"] });
     },
   });
 
@@ -420,7 +423,7 @@ function ReadyToShipPanel() {
                 <button
                   className="secondary-action"
                   type="button"
-                  disabled={isMissingPending || isOrderPending}
+                  disabled={isMissingPending || isOrderPending || batchOrderMutation.isPending}
                   onClick={() => mpMissingMutation.mutate(line)}
                   title="Снузить привязку основного поставщика для этого SKU"
                 >
@@ -429,7 +432,7 @@ function ReadyToShipPanel() {
                 <button
                   className="secondary-action"
                   type="button"
-                  disabled={isOrderPending || isMissingPending}
+                  disabled={isOrderPending || isMissingPending || batchOrderMutation.isPending}
                   onClick={() => setMpReplaceKey(mpReplaceKey === line.key ? null : line.key)}
                 >
                   <Repeat2 size={14} /> Заменить поставщика

@@ -80,6 +80,24 @@ export default function BannerSlider() {
         )}
       </div>
 
+      {/* «Аромат месяца» badge */}
+      {(banner.title?.toLowerCase().includes('месяц') || banner.subtitle?.toLowerCase().includes('месяц')) && (
+        <div style={{
+          position: 'absolute', top: 18, left: 18, zIndex: 10,
+          background: 'rgba(201,162,94,0.12)',
+          border: '1px solid rgba(201,162,94,0.4)',
+          borderRadius: 3,
+          padding: '6px 14px',
+          fontFamily: "'Cormorant Garamond', Georgia, serif",
+          fontStyle: 'italic', fontSize: 13,
+          color: '#c9a25e', letterSpacing: '0.04em',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <span style={{ fontSize: 10 }}>✦</span>
+          Аромат месяца
+        </div>
+      )}
+
       {/* Overlay with text (when image exists) */}
       {banner.imageUrl && (banner.title || banner.linkUrl) && (
         <div className="absolute inset-0 bg-gradient-to-r from-black/60 via-black/30 to-transparent flex flex-col justify-end p-8 md:p-12">

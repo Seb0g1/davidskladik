@@ -150,3 +150,4 @@ async function getAvitoReportItemsById(account, reportId, { query = "", sections
 async function getAvitoReportItemsFeesById(account, reportId) {
   return avitoRequest(`/autoload/v2/reports/${encodeURIComponent(cleanText(reportId))}/items/fees`, { account });
 }
+

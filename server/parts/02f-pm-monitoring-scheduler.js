@@ -428,3 +428,68 @@ if (backgroundJobsEnabled && !isApiServer) {
   schedulePmPriceMonitor(Math.min(pmPriceMonitorIntervalMs, 5 * 60_000));
   schedulePmDisappearMonitor(Math.min(pmDisappearMonitorIntervalMs, 8 * 60_000));
 }
+
+// ─── Stale Row ID Auto-Fix ────────────────────────────────────────────────────
+// Periodically scans for selected_row product links whose pinned sourceRowId is
+// no longer active in the PM snapshot (supplier republished with a new RowId),
+// then automatically re-pins to the best available row for the same article+partner
+// and triggers stock recovery so the products show as in-stock again.
+
+const pmStaleRowFixEnabled = process.env.PM_STALE_ROW_FIX_ENABLED !== "false";
+const pmStaleRowFixIntervalMs = Math.max(
+  60 * 60_000,
+  Number(process.env.PM_STALE_ROW_FIX_INTERVAL_SECONDS || 6 * 3600) * 1000 || 6 * 3_600_000,
+);
+
+let pmStaleRowFixTimer = null;
+let pmStaleRowFixRunning = false;
+
+async function runPmStaleRowIdFix({ source = "schedule" } = {}) {
+  if (pmStaleRowFixRunning) return { status: "already_running" };
+  const prisma = getPrisma();
+  if (!prisma || !shouldUsePostgresStorage()) return { status: "postgres_disabled" };
+  pmStaleRowFixRunning = true;
+  try {
+    const result = await runBulkStaleRecoveryOperation({});
+    logger.info("pm_stale_row_fix_complete", {
+      source,
+      found: result.found || 0,
+      fixed: result.fixed || 0,
+      products: result.productCount || 0,
+    });
+    return { status: "ok", ...result };
+  } catch (error) {
+    logger.warn("pm stale row fix failed", { detail: error?.message || String(error) });
+    return { status: "error", error: error?.message || String(error) };
+  } finally {
+    pmStaleRowFixRunning = false;
+  }
+}
+
+function schedulePmStaleRowFix(delayMs = pmStaleRowFixIntervalMs) {
+  if (!pmStaleRowFixEnabled || !backgroundJobsEnabled || isApiServer) return;
+  if (pmStaleRowFixTimer) clearTimeout(pmStaleRowFixTimer);
+  const normalizedDelay = Math.max(60_000, Number(delayMs) || pmStaleRowFixIntervalMs);
+  pmStaleRowFixTimer = setTimeout(async () => {
+    let result = null;
+    try {
+      result = await runPmStaleRowIdFix({ source: "schedule" });
+    } catch (error) {
+      logger.warn("pm stale row fix tick failed", { detail: error?.message || String(error) });
+      result = { status: "error", error: error?.message || String(error) };
+    } finally {
+      await recordSweepHeartbeat("pm_stale_row_fix", {
+        status: result?.status || "unknown",
+        intervalMs: pmStaleRowFixIntervalMs,
+        detail: result || {},
+      }).catch(() => {});
+      schedulePmStaleRowFix(pmStaleRowFixIntervalMs);
+    }
+  }, normalizedDelay);
+  pmStaleRowFixTimer.unref?.();
+}
+
+if (backgroundJobsEnabled && !isApiServer) {
+  // Start after 15 min — well after the PM snapshot has been loaded and indexed.
+  schedulePmStaleRowFix(Math.min(pmStaleRowFixIntervalMs, 15 * 60_000));
+}

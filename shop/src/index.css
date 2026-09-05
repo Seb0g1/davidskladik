@@ -130,18 +130,21 @@
 .product-card {
   display: flex;
   flex-direction: column;
-  background: var(--surface);
+  background: rgba(17,17,19,0.75);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   border-radius: 3px;
   overflow: hidden;
   border: 1px solid var(--border);
-  transition: border-color 0.45s ease, transform 0.6s cubic-bezier(0.16,1,0.3,1), box-shadow 0.6s ease;
+  transition: border-color 0.45s ease, transform 0.6s cubic-bezier(0.16,1,0.3,1), box-shadow 0.6s ease, background 0.45s ease;
   position: relative;
   text-decoration: none;
 }
 .product-card:hover {
-  border-color: rgba(201,162,94,0.5);
+  border-color: rgba(201,162,94,0.45);
+  background: rgba(17,17,19,0.88);
   transform: translateY(-6px);
-  box-shadow: 0 26px 50px -30px rgba(0,0,0,0.9);
+  box-shadow: 0 26px 50px -30px rgba(0,0,0,0.9), 0 0 28px rgba(201,162,94,0.08), inset 0 1px 0 rgba(201,162,94,0.06);
 }
 
 .product-card-3d {

@@ -562,7 +562,9 @@ export const SupplierLedgerEntrySchema = z.object({
 export const SupplierLedgerSummarySchema = z.object({
   balance: z.number().optional().default(0),
   debtTotal: z.number().optional().default(0),
+  debtTotalUsd: z.number().optional().default(0),
   paidTotal: z.number().optional().default(0),
+  creditTotal: z.number().optional().default(0),
   entries: z.number().optional().default(0),
   lastPaymentAt: z.coerce.string().optional().nullable(),
   lastDebtAt: z.coerce.string().optional().nullable(),
@@ -571,7 +573,9 @@ export const SupplierLedgerSummarySchema = z.object({
 const emptySupplierLedgerSummary = {
   balance: 0,
   debtTotal: 0,
+  debtTotalUsd: 0,
   paidTotal: 0,
+  creditTotal: 0,
   entries: 0,
   lastPaymentAt: null,
   lastDebtAt: null,
@@ -1193,3 +1197,48 @@ export type Filters = {
   autoOnly: boolean;
   page: number;
 };
+
+export const OzonCardErrorItemSchema = z.object({
+  productId: z.coerce.string().optional().default(""),
+  offerId: z.coerce.string(),
+  name: z.coerce.string().optional().default(""),
+  description: z.coerce.string().optional().default(""),
+  primaryImage: z.coerce.string().optional().default(""),
+  visibility: z.coerce.string().optional().default(""),
+  state: z.coerce.string().optional().default(""),
+  stateName: z.coerce.string().optional().default(""),
+  stateDescription: z.coerce.string().optional().default(""),
+  validationState: z.coerce.string().optional().default(""),
+  errors: z.array(z.object({
+    code: z.coerce.string().optional().default(""),
+    field: z.coerce.string().optional().default(""),
+    description: z.coerce.string().optional().default(""),
+    level: z.coerce.string().optional().default("error"),
+  })).optional().default([]),
+  warehouseProductId: z.coerce.string().nullable().optional(),
+}).passthrough();
+
+export type OzonCardErrorItem = z.infer<typeof OzonCardErrorItemSchema>;
+
+export const OzonCardErrorsResponseSchema = z.object({
+  ok: z.boolean().optional(),
+  items: z.array(OzonCardErrorItemSchema).optional().default([]),
+  total: z.number().optional().default(0),
+  accountId: z.coerce.string().optional().default(""),
+}).passthrough();
+
+export const OzonCardAiFixResponseSchema = z.object({
+  ok: z.boolean(),
+  offerId: z.coerce.string(),
+  original: z.object({ name: z.string(), description: z.string() }),
+  fixed: z.object({ name: z.string(), description: z.string() }),
+  model: z.coerce.string().optional().default(""),
+}).passthrough();
+
+export const OzonCardApplyResponseSchema = z.object({
+  ok: z.boolean(),
+  offerId: z.coerce.string(),
+  warehouseProductId: z.coerce.string().optional().nullable(),
+  sentFields: z.array(z.string()).optional().default([]),
+  result: z.unknown().optional(),
+}).passthrough();

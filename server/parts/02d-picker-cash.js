@@ -99,6 +99,22 @@ app.delete("/api/picker-cash/:id", requireAdmin, async (request, response, next)
 
 // ─── Per-picker persistent balances ─────────────────────────────────────────
 
+// Simple per-username mutex: prevents concurrent load→modify→save from racing.
+// Node.js is single-threaded so this is safe (no real parallelism between awaits).
+const _pickerBalanceLocks = new Map();
+async function withPickerBalanceLock(username, fn) {
+  const key = cleanText(username);
+  while (_pickerBalanceLocks.has(key)) {
+    await new Promise((r) => setTimeout(r, 15));
+  }
+  _pickerBalanceLocks.set(key, true);
+  try {
+    return await fn();
+  } finally {
+    _pickerBalanceLocks.delete(key);
+  }
+}
+
 async function loadPickerBalance(username) {
   try {
     const key = `picker_balance:${cleanText(username)}`;
@@ -161,16 +177,19 @@ app.post("/api/picker-cash/balance", requireAdmin, async (request, response, nex
     if (!pickerUsername) return response.status(400).json({ error: "Укажите имя сборщика." });
     const amount = normalizeFinanceMoney(request.body?.amount, null);
     if (amount === null || amount === 0) return response.status(400).json({ error: "Укажите ненулевую сумму." });
-    const balance = await loadPickerBalance(pickerUsername);
-    balance.credits.push({
-      id: crypto.randomUUID(),
-      amount,
-      note: cleanText(request.body?.note || ""),
-      createdAt: new Date().toISOString(),
-      createdBy: requestUsername(request),
+    const result = await withPickerBalanceLock(pickerUsername, async () => {
+      const balance = await loadPickerBalance(pickerUsername);
+      balance.credits.push({
+        id: crypto.randomUUID(),
+        amount,
+        note: cleanText(request.body?.note || ""),
+        createdAt: new Date().toISOString(),
+        createdBy: requestUsername(request),
+      });
+      await savePickerBalance(pickerUsername, balance);
+      return balance;
     });
-    await savePickerBalance(pickerUsername, balance);
-    response.json(pickerBalanceBody(pickerUsername, balance));
+    response.json(pickerBalanceBody(pickerUsername, result));
   } catch (error) {
     next(error);
   }
@@ -209,20 +228,26 @@ app.patch("/api/picker-cash/balance/:username/:id", requireAdmin, async (request
   try {
     const pickerUsername = cleanText(request.params.username);
     if (!pickerUsername) return response.status(400).json({ error: "Укажите имя сборщика." });
-    const balance = await loadPickerBalance(pickerUsername);
-    const credit = balance.credits.find((c) => String(c.id) === request.params.id);
-    if (!credit) return response.status(404).json({ error: "Запись не найдена." });
-    if (request.body?.amount !== undefined) {
-      const amount = normalizeFinanceMoney(request.body.amount, 0);
-      if (!(amount > 0)) return response.status(400).json({ error: "Сумма должна быть больше нуля." });
-      credit.amount = amount;
-    }
-    if (request.body?.note !== undefined) credit.note = cleanText(request.body.note || "");
-    credit.updatedAt = new Date().toISOString();
-    credit.updatedBy = requestUsername(request);
-    await savePickerBalance(pickerUsername, balance);
-    response.json(pickerBalanceBody(pickerUsername, balance));
+    const entryId = cleanText(request.params.id || "");
+    const result = await withPickerBalanceLock(pickerUsername, async () => {
+      const balance = await loadPickerBalance(pickerUsername);
+      const credit = balance.credits.find((c) => String(c.id) === entryId);
+      if (!credit) return null;
+      if (request.body?.amount !== undefined) {
+        const amount = normalizeFinanceMoney(request.body.amount, 0);
+        if (!(amount > 0)) throw Object.assign(new Error("Сумма должна быть больше нуля."), { statusCode: 400 });
+        credit.amount = amount;
+      }
+      if (request.body?.note !== undefined) credit.note = cleanText(request.body.note || "");
+      credit.updatedAt = new Date().toISOString();
+      credit.updatedBy = requestUsername(request);
+      await savePickerBalance(pickerUsername, balance);
+      return balance;
+    });
+    if (!result) return response.status(404).json({ error: "Запись не найдена." });
+    response.json(pickerBalanceBody(pickerUsername, result));
   } catch (error) {
+    if (error.statusCode) return response.status(error.statusCode).json({ error: error.message });
     next(error);
   }
 });
@@ -231,10 +256,14 @@ app.delete("/api/picker-cash/balance/:username/:id", requireAdmin, async (reques
   try {
     const pickerUsername = cleanText(request.params.username);
     if (!pickerUsername) return response.status(400).json({ error: "Укажите имя сборщика." });
-    const balance = await loadPickerBalance(pickerUsername);
-    balance.credits = balance.credits.filter((c) => String(c.id) !== request.params.id);
-    await savePickerBalance(pickerUsername, balance);
-    response.json(pickerBalanceBody(pickerUsername, balance));
+    const entryId = cleanText(request.params.id || "");
+    const result = await withPickerBalanceLock(pickerUsername, async () => {
+      const balance = await loadPickerBalance(pickerUsername);
+      balance.credits = balance.credits.filter((c) => String(c.id) !== entryId);
+      await savePickerBalance(pickerUsername, balance);
+      return balance;
+    });
+    response.json(pickerBalanceBody(pickerUsername, result));
   } catch (error) {
     next(error);
   }

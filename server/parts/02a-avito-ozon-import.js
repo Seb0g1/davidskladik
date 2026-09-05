@@ -254,7 +254,7 @@ function evaluateAvitoImportCandidate(product = {}, rules = {}, pricing = {}) {
     ok: true,
     reasons: [],
     listing: {
-      adId: `oz-${cleanText(product.offerId) || cleanText(product.id)}-r1`,
+      adId: `oz-${cleanText(product.offerId) || cleanText(product.id)}`,
       sourceProductId: cleanText(product.id),
       sourceOfferId: cleanText(product.offerId),
       source: "ozon",
@@ -432,6 +432,24 @@ async function syncAvitoOzonListings({ rules = null } = {}) {
     if (description) listing.description = description;
   }
 
+  // One-time migration: strip -r1 suffix added 2026-08-09 that caused
+  // "Повторное размещение" (2015) conflicts with still-active Avito originals.
+  // Must run before readAvitoListingsFile() so toRemoveAdIds uses clean adIds.
+  {
+    const migState = await readAvitoListingsFile();
+    const r1Count = migState.items.filter((item) => item.adId?.endsWith("-r1")).length;
+    if (r1Count > 0) {
+      const byKey = new Map();
+      for (const item of migState.items) {
+        if (item.adId?.endsWith("-r1")) item.adId = item.adId.slice(0, -3);
+        const key = cleanText(item.sourceProductId) || item.adId;
+        if (key && !byKey.has(key)) byKey.set(key, item);
+      }
+      await writeAvitoListingsFile({ ...migState, items: [...byKey.values()] });
+      logger.info("avito: migrated listings from -r1 adId format", { count: r1Count });
+    }
+  }
+
   const currentState = await readAvitoListingsFile();
   // Временные причины пропуска — не повод снимать объявление:
   //  • no_price — таймаут PriceMaster, пустой/карантинный снапшот; фид
@@ -501,13 +519,25 @@ async function previewAvitoOzonImport({ rules = null, sampleLimit = 50 } = {}) {
 
 async function applyAvitoOzonImport({ rules = null } = {}) {
   const result = await collectAvitoImportCandidates(rules);
-  // Описания берём с Ozon: подставляем сохранённые в raw склада. Ключ не
-  // задаётся вовсе, если описания нет, — upsert тогда сохранит уже
-  // дозаполненное ранее описание существующего объявления.
   const descriptions = await loadStoredOzonDescriptionsMap(result.matched.map((listing) => listing.sourceProductId));
   for (const listing of result.matched) {
     const description = descriptions.get(cleanText(listing.sourceProductId));
     if (description) listing.description = description;
+  }
+  // One-time migration: strip -r1 suffix (same as in syncAvitoOzonListings)
+  {
+    const migState = await readAvitoListingsFile();
+    const r1Count = migState.items.filter((item) => item.adId?.endsWith("-r1")).length;
+    if (r1Count > 0) {
+      const byKey = new Map();
+      for (const item of migState.items) {
+        if (item.adId?.endsWith("-r1")) item.adId = item.adId.slice(0, -3);
+        const key = cleanText(item.sourceProductId) || item.adId;
+        if (key && !byKey.has(key)) byKey.set(key, item);
+      }
+      await writeAvitoListingsFile({ ...migState, items: [...byKey.values()] });
+      logger.info("avito: migrated listings from -r1 adId format", { count: r1Count });
+    }
   }
   const { created, updated, total } = await upsertAvitoListings(result.matched, { source: "ozon" });
   return {

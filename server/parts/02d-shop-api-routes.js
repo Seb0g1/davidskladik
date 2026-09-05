@@ -1116,6 +1116,17 @@ app.post("/api/shop/orders", shopCors, async (request, response, next) => {
       phone: cleanText(delivery.phone || "").replace(/\d{4}$/, "****"),
     });
 
+    // Fire Day 1 email (order confirmation + fragrance story)
+    if (typeof sendOrderSequenceEmail === "function") {
+      sendOrderSequenceEmail({
+        orderId,
+        email: cleanText(delivery.email || ""),
+        firstName: cleanText(delivery.firstName || ""),
+        items,
+        totalRub: Math.round(totalRub),
+      }).catch(() => {});
+    }
+
     const paymentMethod = ["ozon_pay", "sbp"].includes(body.paymentMethod) ? body.paymentMethod : "ozon_pay";
     const paymentUrl = await _ozonPayCreateOrder({ orderId, totalRub, email: cleanText(delivery.email || ""), paymentMethod });
     if (paymentUrl && prisma) {
@@ -1597,6 +1608,7 @@ app.post("/api/shop/admin/banners", requireAdmin, async (request, response, next
       subtitle: cleanText(request.body.subtitle || ""),
       linkUrl: cleanText(request.body.linkUrl || ""),
       linkText: cleanText(request.body.linkText || ""),
+      endDate: cleanText(request.body.endDate || ""),
       active: request.body.active !== false,
       order: banners.length,
     };
@@ -1809,4 +1821,62 @@ app.get("/api/shop/admin/stock-alerts", requireAdmin, async (request, response, 
     });
     response.json({ ok: true, alerts });
   } catch (error) { next(error); }
+});
+
+// ─── Unboxings ────────────────────────────────────────────────────────────────
+const SHOP_UNBOXINGS_KEY = "shop_unboxings";
+
+async function readUnboxings() {
+  const appSettings = await readAppSettings();
+  const data = appSettings[SHOP_UNBOXINGS_KEY];
+  return Array.isArray(data) ? data : [];
+}
+
+app.get("/api/shop/unboxings", shopCors, async (_req, res, next) => {
+  try {
+    const all = await readUnboxings();
+    res.json({ ok: true, unboxings: all.filter((u) => u.approved) });
+  } catch (e) { next(e); }
+});
+
+app.post("/api/shop/unboxings", shopCors, async (req, res, next) => {
+  try {
+    const all = await readUnboxings();
+    const entry = {
+      id: nanoid8(),
+      name: cleanText(req.body.name || "Аноним").slice(0, 100),
+      mediaUrl: cleanText(req.body.mediaUrl || "").slice(0, 500),
+      text: cleanText(req.body.text || "").slice(0, 1000),
+      approved: false,
+      createdAt: new Date().toISOString(),
+    };
+    all.unshift(entry);
+    await writeShopData(SHOP_UNBOXINGS_KEY, all);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+app.get("/api/shop/admin/unboxings", requireAdmin, async (_req, res, next) => {
+  try {
+    res.json({ ok: true, unboxings: await readUnboxings() });
+  } catch (e) { next(e); }
+});
+
+app.patch("/api/shop/admin/unboxings/:id", requireAdmin, async (req, res, next) => {
+  try {
+    const all = await readUnboxings();
+    const idx = all.findIndex((u) => u.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: "Not found" });
+    all[idx] = { ...all[idx], approved: req.body.approved !== false };
+    await writeShopData(SHOP_UNBOXINGS_KEY, all);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+app.delete("/api/shop/admin/unboxings/:id", requireAdmin, async (req, res, next) => {
+  try {
+    const all = (await readUnboxings()).filter((u) => u.id !== req.params.id);
+    await writeShopData(SHOP_UNBOXINGS_KEY, all);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
 });

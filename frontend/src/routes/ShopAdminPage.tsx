@@ -5,7 +5,7 @@ import {
   Plus, Trash2, Edit2, Save, X, Loader2, Image as ImageIcon,
   ChevronLeft, ChevronRight, Check, RefreshCw,
   LayoutDashboard, Settings, Tag, Image, ClipboardList, UserCheck,
-  ChevronDown, ChevronUp, Newspaper, Star, Eye, EyeOff, MessageSquare,
+  ChevronDown, ChevronUp, Newspaper, Star, Eye, EyeOff, MessageSquare, Bell, Video,
 } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
@@ -14,7 +14,7 @@ import { Stat } from "../components/Stat";
 
 interface ShopBanner {
   id: string; imageUrl: string; title?: string; subtitle?: string;
-  linkUrl?: string; linkText?: string; active: boolean; order: number;
+  linkUrl?: string; linkText?: string; endDate?: string; active: boolean; order: number;
 }
 interface ShopCategory {
   id: string; name: string; slug: string; imageUrl?: string; order: number; filterTag?: string;
@@ -329,7 +329,7 @@ function BannerForm({ banner, onSave, onCancel, saving }: {
   banner?: Partial<ShopBanner>; onSave: (d: Partial<ShopBanner>) => void; onCancel: () => void; saving?: boolean;
 }) {
   const [form, setForm] = useState<Partial<ShopBanner>>({
-    imageUrl: "", title: "", subtitle: "", linkUrl: "", linkText: "", active: true, ...banner,
+    imageUrl: "", title: "", subtitle: "", linkUrl: "", linkText: "", endDate: "", active: true, ...banner,
   });
   const set = (k: keyof ShopBanner) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
@@ -353,6 +353,14 @@ function BannerForm({ banner, onSave, onCancel, saving }: {
             <input value={(form[key] as string) ?? ""} onChange={set(key)} placeholder={placeholder} />
           </div>
         ))}
+        <div className="mv-field">
+          <label>Конец акции (необязательно)</label>
+          <input
+            type="datetime-local"
+            value={(form.endDate as string) ?? ""}
+            onChange={set("endDate")}
+          />
+        </div>
         <div className="mv-field" style={{ justifyContent: "flex-end" }}>
           <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <input type="checkbox" checked={form.active !== false} onChange={set("active")} />
@@ -856,9 +864,275 @@ function ReviewsTab() {
   );
 }
 
+// ── UnboxingsTab ─────────────────────────────────────────────────────────────
+
+interface Unboxing {
+  id: string; name: string; mediaUrl: string; text: string;
+  approved: boolean; createdAt: string;
+}
+
+function UnboxingsTab() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin-unboxings"],
+    queryFn: () => apiFetch<{ ok: boolean; unboxings: Unboxing[] }>("/api/shop/admin/unboxings"),
+  });
+
+  const toggleMut = useMutation({
+    mutationFn: ({ id, approved }: { id: string; approved: boolean }) =>
+      apiFetch<{ ok: boolean }>(`/api/shop/admin/unboxings/${id}`, { method: "PATCH", body: JSON.stringify({ approved }) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-unboxings"] }),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<{ ok: boolean }>(`/api/shop/admin/unboxings/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-unboxings"] }),
+  });
+
+  const unboxings = data?.unboxings ?? [];
+
+  return (
+    <div className="page-section" style={{ marginTop: 0 }}>
+      <p className="section-title">Распаковки покупателей</p>
+      {isLoading && <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Загрузка…</p>}
+      {!isLoading && !unboxings.length && (
+        <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Нет распаковок</p>
+      )}
+      <div className="table-panel" style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+        {unboxings.map((u) => (
+          <div key={u.id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto auto auto", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
+            <span style={{ fontSize: 13, color: "var(--text)" }}>{u.name}</span>
+            <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+              {new Date(u.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" })}
+            </span>
+            <span style={{ fontSize: 12, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {u.text ? u.text.slice(0, 80) + (u.text.length > 80 ? "…" : "") : "—"}
+            </span>
+            {u.mediaUrl ? (
+              <a href={u.mediaUrl} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: "var(--accent)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                Ссылка
+              </a>
+            ) : (
+              <span style={{ fontSize: 12, color: "var(--text-muted)" }}>—</span>
+            )}
+            <span><span className={`pill ${u.approved ? "success" : "warn"}`}>{u.approved ? "Показывается" : "На проверке"}</span></span>
+            <span style={{ display: "flex", gap: 6 }}>
+              <button
+                onClick={() => void toggleMut.mutate({ id: u.id, approved: !u.approved })}
+                disabled={toggleMut.isPending}
+                className="secondary-action icon-action"
+                type="button"
+                title={u.approved ? "Скрыть" : "Одобрить"}
+              >
+                {u.approved ? <EyeOff size={13} /> : <Eye size={13} />}
+              </button>
+              <button
+                onClick={() => { if (confirm("Удалить распаковку?")) void deleteMut.mutate(u.id); }}
+                disabled={deleteMut.isPending}
+                className="secondary-action icon-action danger"
+                type="button"
+              >
+                <Trash2 size={13} />
+              </button>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── EmailSequencesTab ─────────────────────────────────────────────────────────
+
+interface SeqStat { step: number; count: number; last_sent_at: string | null }
+
+function EmailSequencesTab() {
+  const qc = useQueryClient();
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin-email-seq-stats"],
+    queryFn: () => apiFetch<{ ok: boolean; stats: SeqStat[] }>("/api/shop/admin/email-sequences/stats"),
+  });
+  const runMut = useMutation({
+    mutationFn: () => apiFetch<{ ok: boolean; result: { sent7?: number; sent30?: number; errors?: number } }>("/api/shop/admin/email-sequences/run-scan", { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-email-seq-stats"] }),
+  });
+
+  const STEP_META: Record<number, { label: string; desc: string }> = {
+    1:  { label: "День 1 — подтверждение", desc: "Отправляется сразу после оформления заказа. История аромата." },
+    7:  { label: "День 7 — отзыв", desc: "Запрос отзыва + промокод REVIEW5 (−5%)." },
+    30: { label: "День 30 — новинки", desc: "Рассылка аромата месяца с актуальными новостями." },
+  };
+
+  const stats = data?.stats ?? [];
+  const byStep = Object.fromEntries(stats.map((s) => [s.step, s]));
+
+  return (
+    <div className="admin-tab-content">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <h3 style={{ margin: 0, fontSize: 15 }}>Email-цепочки после покупки</h3>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={() => void runMut.mutate()}
+          disabled={runMut.isPending}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
+          {runMut.isPending ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+          Запустить сканер
+        </button>
+      </div>
+
+      {runMut.isSuccess && runMut.data && (
+        <div style={{ background: "rgba(34,197,94,.08)", border: "1px solid rgba(34,197,94,.25)", borderRadius: 4, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#22c55e" }}>
+          Готово: День&nbsp;7 — {runMut.data.result.sent7 ?? 0} шт., День&nbsp;30 — {runMut.data.result.sent30 ?? 0} шт.
+          {(runMut.data.result.errors ?? 0) > 0 && <span style={{ color: "#f87171", marginLeft: 8 }}>ошибок: {runMut.data.result.errors}</span>}
+        </div>
+      )}
+
+      {isLoading ? (
+        <div style={{ padding: 32, textAlign: "center", color: "var(--text-muted)" }}><Loader2 size={20} className="spin" /></div>
+      ) : (
+        <div style={{ display: "grid", gap: 10 }}>
+          {[1, 7, 30].map((step) => {
+            const meta = STEP_META[step];
+            const stat = byStep[step];
+            return (
+              <div key={step} style={{ background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 6, padding: "14px 16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 3 }}>{meta.label}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{meta.desc}</div>
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0, marginLeft: 16 }}>
+                    <div style={{ fontSize: 22, fontWeight: 700, color: "var(--accent)" }}>{stat?.count ?? 0}</div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)" }}>отправлено</div>
+                    {stat?.last_sent_at && (
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 2 }}>
+                        последнее: {new Date(stat.last_sent_at).toLocaleDateString("ru-RU")}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div style={{ marginTop: 16, padding: "10px 14px", background: "var(--surface-raised)", borderRadius: 4, fontSize: 11, color: "var(--text-muted)", lineHeight: 1.6 }}>
+        Сканер автоматически запускается ежедневно в 10:30. Для ручного запуска нажмите «Запустить сканер» выше.<br />
+        Каждое письмо отправляется только один раз на заказ (защита от дублей).
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-type Tab = "dashboard" | "orders" | "customers" | "banners" | "categories" | "news" | "reviews" | "settings";
+// ── PushTab ───────────────────────────────────────────────────────────────────
+
+function PushTab() {
+  const qc = useQueryClient();
+  const { data: statsData } = useQuery({
+    queryKey: ["admin-push-stats"],
+    queryFn: () => apiFetch<{ ok: boolean; total: number; configured: boolean }>("/api/shop/admin/push/stats"),
+  });
+  const [form, setForm] = useState({ title: "", body: "", url: "https://magicvibes.ru" });
+  const sendMut = useMutation({
+    mutationFn: () => apiFetch<{ ok: boolean; sent: number; failed: number; total: number }>("/api/shop/admin/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(form),
+    }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-push-stats"] }),
+  });
+
+  const notConfigured = statsData && !statsData.configured;
+
+  return (
+    <div className="admin-tab-content">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+        <Bell size={18} style={{ color: "var(--accent)" }} />
+        <h3 style={{ margin: 0, fontSize: 15 }}>Web Push — рассылка уведомлений</h3>
+        <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-muted)", background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 20, padding: "2px 10px" }}>
+          {statsData?.total ?? "…"} подписчиков
+        </span>
+      </div>
+
+      {notConfigured && (
+        <div style={{ background: "rgba(251,191,36,.07)", border: "1px solid rgba(251,191,36,.3)", borderRadius: 4, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: "#fbbf24", lineHeight: 1.6 }}>
+          VAPID-ключи не заданы — push-уведомления отключены.<br />
+          Запустите <code style={{ fontFamily: "monospace" }}>node scripts/gen-vapid.cjs</code> и добавьте ключи в .env.
+        </div>
+      )}
+
+      {sendMut.isSuccess && sendMut.data && (
+        <div style={{ background: "rgba(34,197,94,.08)", border: "1px solid rgba(34,197,94,.25)", borderRadius: 4, padding: "8px 12px", marginBottom: 12, fontSize: 12, color: "#22c55e" }}>
+          Отправлено: {sendMut.data.sent} / {sendMut.data.total}
+          {sendMut.data.failed > 0 && <span style={{ color: "#f87171", marginLeft: 8 }}>ошибок: {sendMut.data.failed} (истёкшие подписки удалены)</span>}
+        </div>
+      )}
+
+      <div style={{ display: "grid", gap: 10, maxWidth: 540 }}>
+        <div>
+          <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Заголовок</label>
+          <input
+            className="input-base"
+            value={form.title}
+            onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+            placeholder="Новинки февраля — Chanel, Dior, Tom Ford"
+            maxLength={80}
+          />
+        </div>
+        <div>
+          <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Текст уведомления</label>
+          <textarea
+            className="input-base"
+            value={form.body}
+            onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
+            placeholder="Поступили долгожданные ароматы. Успей выбрать!"
+            rows={2}
+            maxLength={200}
+            style={{ resize: "vertical" }}
+          />
+        </div>
+        <div>
+          <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>URL (куда ведёт клик)</label>
+          <input
+            className="input-base"
+            value={form.url}
+            onChange={e => setForm(f => ({ ...f, url: e.target.value }))}
+            placeholder="https://magicvibes.ru/catalog"
+          />
+        </div>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={() => {
+            if (!form.title.trim() || !form.body.trim()) return;
+            if (!confirm(`Отправить push-уведомление ${statsData?.total ?? 0} подписчикам?`)) return;
+            void sendMut.mutate();
+          }}
+          disabled={sendMut.isPending || !form.title.trim() || !form.body.trim() || Boolean(notConfigured)}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, width: "fit-content" }}
+        >
+          {sendMut.isPending ? <Loader2 size={14} className="spin" /> : <Bell size={14} />}
+          Отправить всем подписчикам
+        </button>
+      </div>
+
+      <div style={{ marginTop: 20, padding: "10px 14px", background: "var(--surface-raised)", borderRadius: 4, fontSize: 11, color: "var(--text-muted)", lineHeight: 1.7 }}>
+        Колокольчик появляется в шапке сайта и предлагает разрешить уведомления.<br />
+        Истёкшие подписки (410 от браузера) автоматически удаляются при рассылке.
+      </div>
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+
+type Tab = "dashboard" | "orders" | "customers" | "banners" | "categories" | "news" | "reviews" | "unboxings" | "emails" | "push" | "settings";
 
 const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
   { id: "dashboard", label: "Обзор", icon: LayoutDashboard },
@@ -868,6 +1142,9 @@ const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number 
   { id: "categories", label: "Категории", icon: Tag },
   { id: "news", label: "Новости", icon: Newspaper },
   { id: "reviews", label: "Отзывы", icon: Star },
+  { id: "unboxings", label: "Анбоксинг", icon: Video },
+  { id: "emails", label: "Email-цепочки", icon: MessageSquare },
+  { id: "push", label: "Push", icon: Bell },
   { id: "settings", label: "Настройки", icon: Settings },
 ];
 
@@ -907,6 +1184,9 @@ export default function ShopAdminPage() {
       {tab === "categories" && <CategoriesTab />}
       {tab === "news" && <NewsTab />}
       {tab === "reviews" && <ReviewsTab />}
+      {tab === "unboxings" && <UnboxingsTab />}
+      {tab === "emails" && <EmailSequencesTab />}
+      {tab === "push" && <PushTab />}
       {tab === "settings" && <SettingsTab />}
     </section>
   );

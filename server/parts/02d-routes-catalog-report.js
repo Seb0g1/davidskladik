@@ -25,6 +25,8 @@ async function writeBrandsTnvedCache(data) {
 async function buildBrandsTnvedReport(account) {
   const brandCounts = new Map();
   const tnvedCounts = new Map();
+  // brand -> Map<code, {fullValue, count}>
+  const brandTnvedMap = new Map();
   let total = 0;
   let withBrand = 0;
   let withTnved = 0;
@@ -66,6 +68,14 @@ async function buildBrandsTnvedReport(account) {
           const entry = tnvedCounts.get(code);
           entry.count++;
           if (entry.sample.length < 3) entry.sample.push(offerId);
+
+          // Track brand → tnved link
+          if (brand) {
+            if (!brandTnvedMap.has(brand)) brandTnvedMap.set(brand, new Map());
+            const codesMap = brandTnvedMap.get(brand);
+            if (!codesMap.has(code)) codesMap.set(code, { code, fullValue: tnvedFull, count: 0 });
+            codesMap.get(code).count++;
+          }
         }
       }
 
@@ -76,6 +86,13 @@ async function buildBrandsTnvedReport(account) {
 
   const brands = [...brandCounts.values()].sort((a, b) => b.count - a.count);
   const tnveds = [...tnvedCounts.values()].sort((a, b) => b.count - a.count);
+  const brandTnveds = [...brandTnvedMap.entries()]
+    .map(([brand, codesMap]) => ({
+      brand,
+      totalCount: brandCounts.get(brand)?.count || 0,
+      tnvedCodes: [...codesMap.values()].sort((a, b) => b.count - a.count),
+    }))
+    .sort((a, b) => a.brand.localeCompare(b.brand, "ru"));
 
   return {
     summary: {
@@ -87,6 +104,7 @@ async function buildBrandsTnvedReport(account) {
     },
     brands,
     tnveds,
+    brandTnveds,
     cachedAt: new Date().toISOString(),
   };
 }
@@ -133,6 +151,92 @@ app.post("/api/catalog/brands-tnved/refresh", requireAdmin, async (req, res, nex
         brandsTnvedBuildRunning = false;
       }
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Excel export: brand → TN VED codes ──────────────────────────────────────
+
+app.get("/api/catalog/brands-tnved/export-excel", requireAdmin, async (req, res, next) => {
+  try {
+    const cached = await readBrandsTnvedCache();
+    if (!cached || !cached.brandTnveds) {
+      return res.status(404).json({ error: "Данные ещё не загружены. Нажмите «Обновить данные Ozon» на странице Бренды / ТН ВЭД." });
+    }
+
+    const ExcelJS = require("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Magic Vibes Склад";
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet("Бренды ТН ВЭД", {
+      views: [{ state: "frozen", ySplit: 1 }],
+    });
+
+    sheet.columns = [
+      { header: "Бренд", key: "brand", width: 36 },
+      { header: "Код ТН ВЭД", key: "code", width: 16 },
+      { header: "Описание категории", key: "description", width: 50 },
+      { header: "SKU с кодом", key: "count", width: 14 },
+    ];
+
+    // Bold header row
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD9E1F2" } };
+    headerRow.alignment = { vertical: "middle" };
+    headerRow.height = 18;
+
+    const brandTnveds = cached.brandTnveds;
+    for (const entry of brandTnveds) {
+      if (!entry.tnvedCodes || entry.tnvedCodes.length === 0) {
+        // Brand exists but no tnved code assigned
+        sheet.addRow({
+          brand: entry.brand,
+          code: "",
+          description: "— код не назначен —",
+          count: entry.totalCount,
+        });
+        continue;
+      }
+      for (let i = 0; i < entry.tnvedCodes.length; i++) {
+        const tc = entry.tnvedCodes[i];
+        const description = tc.fullValue.replace(/^\d+\s*[-–]\s*/, "");
+        sheet.addRow({
+          brand: i === 0 ? entry.brand : "",
+          code: tc.code,
+          description,
+          count: tc.count,
+        });
+      }
+    }
+
+    // Style data rows: alternate fill, monospace for code column
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const fill = rowNumber % 2 === 0
+        ? { type: "pattern", pattern: "solid", fgColor: { argb: "FFF7F7F7" } }
+        : undefined;
+      row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        if (fill) cell.fill = fill;
+        if (colNum === 2) cell.font = { name: "Courier New", size: 10 }; // ТН ВЭД code
+        if (colNum === 4) cell.alignment = { horizontal: "right" };
+        cell.border = {
+          bottom: { style: "thin", color: { argb: "FFE0E0E0" } },
+        };
+      });
+    });
+
+    // Autofilter on headers
+    sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 4 } };
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''tnved-brands-${dateStr}.xlsx`);
+
+    await workbook.xlsx.write(res);
+    res.end();
   } catch (err) {
     next(err);
   }

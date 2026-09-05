@@ -35,6 +35,10 @@ function supplierLedgerSummaryFromEntries(entries = []) {
   const paidTotal = active
     .filter((entry) => entry.amount > 0 && entry.entryType === "payment")
     .reduce((sum, entry) => sum + normalizeFinanceMoney(entry.amount, 0), 0);
+  // creditTotal includes payments, balance corrections, and supplier returns — used for balanceUsd display
+  const creditTotal = active
+    .filter((entry) => entry.amount > 0)
+    .reduce((sum, entry) => sum + normalizeFinanceMoney(entry.amount, 0), 0);
   const lastPayment = active
     .filter((entry) => entry.entryType === "payment")
     .sort((left, right) => String(right.occurredAt).localeCompare(String(left.occurredAt)))[0] || null;
@@ -57,6 +61,7 @@ function supplierLedgerSummaryFromEntries(entries = []) {
     balance: Math.round(balance),
     debtTotal: Math.round(debtTotal),
     paidTotal: Math.round(paidTotal),
+    creditTotal: Math.round(creditTotal),
     debtTotalUsd: normalizeFinanceMoney(debtTotalUsd, 0),
     entries: active.length,
     lastPaymentAt: lastPayment?.occurredAt || null,

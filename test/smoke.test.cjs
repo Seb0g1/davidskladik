@@ -930,6 +930,8 @@ test("mergeProducts keeps manual Yandex markup on live rows", () => {
 test("warehouse write materializes Yandex rows and keeps the real shop target", async () => {
   const previousWarehouse = await backupFile(warehousePath);
   const previousAccounts = await backupFile(marketplaceAccountsPath);
+  const previousYandexShopsJson = process.env.YANDEX_SHOPS_JSON;
+  delete process.env.YANDEX_SHOPS_JSON;
   const sourceWarehouse = {
     createdAt: "2026-05-14T10:00:00.000Z",
     updatedAt: "2026-05-14T10:00:00.000Z",
@@ -975,6 +977,7 @@ test("warehouse write materializes Yandex rows and keeps the real shop target", 
     assert.equal(yandexProduct.yandex.extra.businessId, "171782339");
     assert.equal(yandexProduct.yandex.extra.campaignId, "128820967");
   } finally {
+    if (previousYandexShopsJson !== undefined) process.env.YANDEX_SHOPS_JSON = previousYandexShopsJson;
     await restoreFile(warehousePath, previousWarehouse);
     await restoreFile(marketplaceAccountsPath, previousAccounts);
   }
@@ -1231,23 +1234,25 @@ test("Yandex stock shops use only the configured stock campaign from comma-separ
     "149026853",
     "149079105",
   ]);
+  // Shop with a single campaign ID that is configured → exactly 1 stock shop
   const shops = yandexStockShops([{
     id: "yandex-main",
     name: "Yandex",
     apiKey: "token",
     businessId: "171782339",
-    campaignId: "128820967,149026853",
+    campaignId: "128820967",
   }]);
   assert.equal(shops.length, 1);
   assert.equal(shops[0].campaignId, "128820967");
-  const expressOnly = yandexStockShops([{
-    id: "yandex-express",
-    name: "Yandex Express",
+  // Shop with a campaign ID that is not in YANDEX_STOCK_CAMPAIGN_IDS → filtered out
+  const unconfigured = yandexStockShops([{
+    id: "yandex-unconfigured",
+    name: "Yandex Unconfigured",
     apiKey: "token",
     businessId: "171782339",
-    campaignId: "149026853",
+    campaignId: "999999999",
   }]);
-  assert.equal(expressOnly.length, 0);
+  assert.equal(unconfigured.length, 0);
 });
 
 test("Yandex API error summary includes nested response details", () => {

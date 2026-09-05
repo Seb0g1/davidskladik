@@ -67,6 +67,7 @@ app.get("/api/supplier-picking-list", requireStaff, async (request, response, ne
         picked: allRows.filter((row) => row.status === "picked").length,
         missing: allRows.filter((row) => row.status === "missing").length,
         reordered: allRows.filter((row) => row.status === "reordered").length,
+        cancelled: allRows.filter((row) => row.status === "cancelled").length,
         suppliers: suppliers.length,
       },
     });
@@ -80,8 +81,11 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     const key = cleanText(request.params.key || "");
     const status = cleanText(request.body?.status).toLowerCase();
     const admin = isAdminSession(request.session);
-    if (!["open", "picked", "missing", "returned"].includes(status)) {
+    if (!["open", "picked", "missing", "returned", "cancelled"].includes(status)) {
       return response.status(400).json({ error: "Unsupported picking status.", code: "supplier_picking_status_invalid" });
+    }
+    if (status === "cancelled" && !admin) {
+      return response.status(403).json({ error: "Только администратор может отменить строку сборки.", code: "supplier_picking_cancel_admin_only" });
     }
     const state = await readSupplierPickingState();
     const current = state.rows[key] ? normalizeSupplierPickingRow(state.rows[key]) : null;
@@ -136,6 +140,7 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         nextRetryAt: null,
       } : {}),
       ...(status === "returned" ? { returnedBy: username, returnedAt: now.toISOString() } : {}),
+      ...(status === "cancelled" ? { cancelledBy: username, cancelledAt: now.toISOString() } : {}),
     });
 
     let linkSnooze = null;
@@ -184,6 +189,14 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     } else if (status === "open") {
       if (current.status === "missing") await deactivateSupplierBlockForPickingRow(current, request);
       if (current.requestRowId || current.requestDocId) await restoreSupplierCartProcessedForPickingRow(current, request);
+    } else if (status === "cancelled") {
+      const sourceCartKey = current.replacementFor || current.key.replace(/\|retry:.+$/, "");
+      if (cartState.processed?.[sourceCartKey]) delete cartState.processed[sourceCartKey];
+      await writeSupplierCartState(cartState);
+      try {
+        const rowDate = (current.createdAt || now.toISOString()).slice(0, 10);
+        await adjustDailyCartTotal(rowDate, -((Number(current.price) || 0) * Math.max(1, Math.round(Number(current.quantity || 1)))), -Math.max(1, Math.round(Number(current.quantity || 1))));
+      } catch (e) { logger.warn("daily_cart_total subtract (cancelled) failed", { key, detail: e?.message || String(e) }); }
     }
 
     // Ozon: подтвердить упаковку при физической сборке (и экспресс, и обычные).
@@ -212,19 +225,21 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         : 0;
       if (pickerDeductAmt > 0 && nextRow.pickedBy) {
         try {
-          const pickerBal = await loadPickerBalance(nextRow.pickedBy);
-          // Use picking key as deduction ID so we can reverse it on rollback
-          const debitId = `picking:${key}`;
-          if (!pickerBal.credits.some((c) => String(c.id) === debitId)) {
-            pickerBal.credits.push({
-              id: debitId,
-              amount: -pickerDeductAmt,
-              note: `Оплата: ${nextRow.productName || nextRow.offerId || key}`,
-              createdAt: now.toISOString(),
-              createdBy: "system",
-            });
-            await savePickerBalance(nextRow.pickedBy, pickerBal);
-          }
+          await withPickerBalanceLock(nextRow.pickedBy, async () => {
+            const pickerBal = await loadPickerBalance(nextRow.pickedBy);
+            // Use picking key as deduction ID so we can reverse it on rollback
+            const debitId = `picking:${key}`;
+            if (!pickerBal.credits.some((c) => String(c.id) === debitId)) {
+              pickerBal.credits.push({
+                id: debitId,
+                amount: -pickerDeductAmt,
+                note: `Оплата: ${nextRow.productName || nextRow.offerId || key}`,
+                createdAt: now.toISOString(),
+                createdBy: "system",
+              });
+              await savePickerBalance(nextRow.pickedBy, pickerBal);
+            }
+          });
         } catch (balanceError) {
           logger.warn("picker balance deduction failed", { key, detail: balanceError?.message || String(balanceError) });
         }
@@ -252,19 +267,21 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       await removeFinanceOrderForPickingRow(current);
       supplierLedgerEntry = await voidSupplierLedgerDebtForPickingRow(current, request);
       // Restore picker balance on rollback
-      if (current.pricePaidRub > 0 && current.pickedBy) {
+      if (current.pickedBy) {
         try {
-          const pickerBal = await loadPickerBalance(current.pickedBy);
-          const debitId = `picking:${key}`;
-          pickerBal.credits = pickerBal.credits.filter((c) => String(c.id) !== debitId);
-          await savePickerBalance(current.pickedBy, pickerBal);
+          await withPickerBalanceLock(current.pickedBy, async () => {
+            const pickerBal = await loadPickerBalance(current.pickedBy);
+            const debitId = `picking:${key}`;
+            pickerBal.credits = pickerBal.credits.filter((c) => String(c.id) !== debitId);
+            await savePickerBalance(current.pickedBy, pickerBal);
+          });
         } catch (balanceError) {
           logger.warn("picker balance rollback failed", { key, detail: balanceError?.message || String(balanceError) });
         }
       }
     }
 
-    await appendAudit(request, `supplier_picking.${status === "picked" ? "picked" : status === "missing" ? "missing" : status === "returned" ? "returned" : "status_update"}`, {
+    await appendAudit(request, `supplier_picking.${status === "picked" ? "picked" : status === "missing" ? "missing" : status === "returned" ? "returned" : status === "cancelled" ? "cancelled" : "status_update"}`, {
       entityType: "supplier_picking",
       entityId: key,
       oldValue: current,
@@ -343,6 +360,19 @@ app.post("/api/supplier-picking-list/:key/cancel-cart", requireAdmin, async (req
     if (current.status === "picked") {
       financeRemoval = await removeFinanceOrderForPickingRow(current);
       supplierLedgerEntry = await voidSupplierLedgerDebtForPickingRow(current, request);
+      // Restore picker balance (mirrors the un-pick rollback logic)
+      if (current.pickedBy) {
+        try {
+          await withPickerBalanceLock(current.pickedBy, async () => {
+            const pickerBal = await loadPickerBalance(current.pickedBy);
+            const debitId = `picking:${key}`;
+            pickerBal.credits = pickerBal.credits.filter((c) => String(c.id) !== debitId);
+            await savePickerBalance(current.pickedBy, pickerBal);
+          });
+        } catch (balanceError) {
+          logger.warn("picker balance restore (cancel-cart) failed", { key, detail: balanceError?.message || String(balanceError) });
+        }
+      }
     }
     if (current.status === "missing") await deactivateSupplierBlockForPickingRow(current, request);
 

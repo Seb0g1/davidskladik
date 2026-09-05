@@ -76,6 +76,8 @@ export function PickingListPage() {
   const [copied, setCopied] = useState(false);
   const [paymentDrafts, setPaymentDrafts] = useState<Record<string, string>>({});
   const [paymentNotes, setPaymentNotes] = useState<Record<string, string>>({});
+  const [paymentErrors, setPaymentErrors] = useState<Record<string, string>>({});
+  const [pendingPickKeys, setPendingPickKeys] = useState<Set<string>>(new Set());
   const [expandedSheets, setExpandedSheets] = useState<Set<string>>(new Set());
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [collapsedProductGroups, setCollapsedProductGroups] = useState<Set<string>>(new Set());
@@ -195,15 +197,18 @@ export function PickingListPage() {
   const [resetConfirm, setResetConfirm] = useState(false);
 
   const updateMutation = useMutation({
-    mutationFn: ({ key, nextStatus, snoozeDays, permanent, pickedQuantity, pricePaidRub }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean; pickedQuantity?: number; pricePaidRub?: number }) =>
-      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({
+    mutationFn: ({ key, nextStatus, snoozeDays, permanent, pickedQuantity, pricePaidRub }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean; pickedQuantity?: number; pricePaidRub?: number }) => {
+      setPendingPickKeys((prev) => new Set(prev).add(key));
+      return fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}`, SupplierPickingUpdateSchema, patchBody({
         status: nextStatus,
         ...(snoozeDays ? { snoozeDays } : {}),
         ...(permanent ? { permanent: true } : {}),
         ...(pickedQuantity != null ? { pickedQuantity } : {}),
         ...(pricePaidRub != null ? { pricePaidRub } : {}),
-      })),
+      }));
+    },
     onSuccess: (_data, variables) => {
+      setPendingPickKeys((prev) => { const next = new Set(prev); next.delete(variables.key); return next; });
       if (variables.nextStatus === "missing") {
         setMissingRow(null);
         setReplaceKey(variables.key);
@@ -215,6 +220,9 @@ export function PickingListPage() {
       void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+    onError: (_err, variables) => {
+      setPendingPickKeys((prev) => { const next = new Set(prev); next.delete(variables.key); return next; });
     },
   });
   const replaceMutation = useMutation({
@@ -251,9 +259,13 @@ export function PickingListPage() {
     onSuccess: (_data, variables) => {
       setPaymentDrafts((current) => ({ ...current, [variables.supplierName]: "" }));
       setPaymentNotes((current) => ({ ...current, [variables.supplierName]: "" }));
+      setPaymentErrors((current) => { const next = { ...current }; delete next[variables.supplierName]; return next; });
       void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
       void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+    onError: (error, variables) => {
+      setPaymentErrors((current) => ({ ...current, [variables.supplierName]: (error as Error).message || "Ошибка оплаты" }));
     },
   });
 
@@ -419,7 +431,8 @@ export function PickingListPage() {
     });
 
   const balanceTone = myBalance > 500 ? "success" : myBalance > 0 ? "warn" : myBalance < 0 ? "danger" : "";
-  const balanceStr = (n: number) => `₽${Math.round(n).toLocaleString("ru-RU")}`;
+  const balanceStr = (n: number) => `${Math.round(n / usdRate).toLocaleString("ru-RU")} $`;
+  const rubStr = (n: number) => `₽${Math.round(n).toLocaleString("ru-RU")}`;
   const dailyTotal = dailyTotalQuery.data?.total ?? 0;
   const dailyItems = dailyTotalQuery.data?.items ?? 0;
 
@@ -449,7 +462,7 @@ export function PickingListPage() {
             {(dailyTotal > 0 || dailyItems > 0) ? (
               <div className="picker-balance-chip picker-balance-chip--neutral" title={`Суммарный заказ сегодня: ${dailyItems} поз.`}>
                 <ClipboardList size={14} />
-                <span>{balanceStr(dailyTotal)}</span>
+                <span>{rubStr(dailyTotal)}</span>
                 {dailyItems > 0 ? <span style={{ opacity: 0.6, fontSize: "0.8em" }}>{dailyItems} поз.</span> : null}
               </div>
             ) : null}
@@ -551,7 +564,7 @@ export function PickingListPage() {
               {/* Amount + issue */}
               <div className="picker-issue-body">
                 <div className="picker-issue-amount-wrap">
-                  <span className="picker-issue-currency">₽</span>
+                  <span className="picker-issue-currency">$</span>
                   <input
                     type="number"
                     min="0"
@@ -572,7 +585,7 @@ export function PickingListPage() {
                   className="primary-action picker-issue-submit"
                   type="button"
                   disabled={issueBalanceMutation.isPending || !issuePickerDraft.trim() || !(Number(issueAmountDraft) > 0)}
-                  onClick={() => issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Number(issueAmountDraft), note: issueNoteDraft })}
+                  onClick={() => issueBalanceMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(Number(issueAmountDraft) * usdRate), note: issueNoteDraft })}
                 >
                   {issueBalanceMutation.isPending
                     ? <><Loader2 className="spin" size={15} /> Выдаю…</>
@@ -587,7 +600,7 @@ export function PickingListPage() {
                 <div className="picker-select-label" style={{ paddingTop: 0 }}>Принять возврат</div>
                 <div className="picker-issue-body">
                   <div className="picker-issue-amount-wrap">
-                    <span className="picker-issue-currency">₽</span>
+                    <span className="picker-issue-currency">$</span>
                     <input
                       type="number"
                       min="0"
@@ -608,7 +621,7 @@ export function PickingListPage() {
                     className="secondary-action picker-issue-submit"
                     type="button"
                     disabled={returnCashMutation.isPending || !issuePickerDraft.trim() || !(Number(returnDraftAmount) > 0)}
-                    onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Number(returnDraftAmount), note: returnDraftNote || "Возврат наличных" })}
+                    onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: Math.round(Number(returnDraftAmount) * usdRate), note: returnDraftNote || "Возврат наличных" })}
                   >
                     {returnCashMutation.isPending
                       ? <><Loader2 className="spin" size={15} /> Записываю…</>
@@ -697,7 +710,7 @@ export function PickingListPage() {
                   <div className="picker-select-label" style={{ paddingTop: 0 }}><ClipboardList size={13} /> Итог заказа сегодня</div>
                   <div className="picker-day-row">
                     <span className="muted-note">Заказано (накоплено)</span>
-                    <span className="tone-success">{balanceStr(dailyTotal)}</span>
+                    <span className="tone-success">{rubStr(dailyTotal)}</span>
                   </div>
                   {dailyItems > 0 ? (
                     <div className="picker-day-row">
@@ -788,6 +801,21 @@ export function PickingListPage() {
         </label>
       </div>
 
+      <details style={{ marginBottom: 8 }}>
+        <summary style={{ fontSize: 12, color: "var(--muted)", cursor: "pointer", userSelect: "none", padding: "4px 0" }}>
+          Как работает сборка — справка
+        </summary>
+        <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.8, padding: "6px 0 4px 12px", borderLeft: "2px solid var(--line)" }}>
+          <div><strong style={{ color: "var(--text)" }}>Собрал</strong> — взял товар у поставщика. Долг фиксируется автоматически по цене из PM.</div>
+          <div><strong style={{ color: "var(--text)" }}>Поле цены рядом с «Собрал»</strong> — заполнять только если реальная цена отличается от PM.</div>
+          <div><strong style={{ color: "var(--text)" }}>Наличные сейчас / Заплатил</strong> — если сразу отдали деньги поставщику. Иначе — долг копится в балансе.</div>
+          <div><strong style={{ color: "var(--text)" }}>Не было</strong> — товара нет, автокорзина попробует найти замену у другого поставщика.</div>
+          <div><strong style={{ color: "var(--text)" }}>Завтра</strong> — отложить позицию на следующий рабочий день.</div>
+          <div><strong style={{ color: "var(--text)" }}>Удалить</strong> (только админ) — полная отмена строки, долг аннулируется автоматически.</div>
+          <div style={{ marginTop: 4 }}><strong style={{ color: "var(--text)" }}>Долг в шапке поставщика</strong> — сколько мы должны ему всего (по всем заказам). <strong>Аванс</strong> — переплатили.</div>
+        </div>
+      </details>
+
       {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
       {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}
       {cancelCartMutation.error ? <div className="inline-error">{errorMessage(cancelCartMutation.error)}</div> : null}
@@ -797,7 +825,6 @@ export function PickingListPage() {
       ) : replaceMutation.data && replaceMutation.data.inserted === 0 ? (
         <div className="inline-error"><AlertTriangle size={14} /> Поставщик заменён в списке сборки, но заявка в PriceMaster не создана{replaceMutation.data.skippedDetails?.[0]?.skipReason ? ` (${replaceMutation.data.skippedDetails[0].skipReason})` : ""}. Создайте вручную через PM.</div>
       ) : null}
-      {paymentMutation.error ? <div className="inline-error">{errorMessage(paymentMutation.error)}</div> : null}
 
       {view === "sheets" ? (
         <section className="table-panel assembly-sheets">
@@ -952,6 +979,9 @@ export function PickingListPage() {
             ) : grouped.map(([supplierName, supplierRows]) => {
               const ledger = supplierLedger[supplierName] || {};
               const balance = Number(ledger.balance || 0);
+              const debtTotalUsd = Number(ledger.debtTotalUsd || 0);
+              const debtTotalRub = Number(ledger.debtTotal || 0);
+              const paidTotalRub = Number(ledger.paidTotal || 0);
               const draftAmount = paymentDrafts[supplierName] || "";
               const draftNote = paymentNotes[supplierName] || "";
               const total = currentGroupTotal(supplierRows);
@@ -976,11 +1006,15 @@ export function PickingListPage() {
                     </div>
                     <div className="supplier-ledger-row">
                       {supplierCurrency === "USD" ? (
-                        <DiagnosticValue label={balance < 0 ? "Долг" : "Аванс"} value={moneySigned(balance / usdRate, "USD")} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
+                        <DiagnosticValue label="Общий долг" value={debtTotalUsd > 0 ? moneyAmount(debtTotalUsd, "USD") : "—"} tone={debtTotalUsd > 0 ? "danger" : ""} />
                       ) : (
-                        <DiagnosticValue label={balance < 0 ? "Долг" : "Аванс"} value={moneySigned(balance, "RUB")} tone={balance < 0 ? "danger" : balance > 0 ? "success" : ""} />
+                        <DiagnosticValue label="Общий долг" value={debtTotalRub > 0 ? moneyAmount(debtTotalRub, "RUB") : "—"} tone={debtTotalRub > 0 ? "danger" : ""} />
                       )}
-                      <DiagnosticValue label="Оплачено" value={moneySigned(Number(ledger.paidTotal || 0), "RUB")} tone={Number(ledger.paidTotal || 0) ? "success" : ""} />
+                      {supplierCurrency === "USD" ? (
+                        <DiagnosticValue label="Оплачено" value={paidTotalRub > 0 ? moneyAmount(Math.round(paidTotalRub / usdRate), "USD") : "—"} tone={paidTotalRub > 0 ? "success" : ""} />
+                      ) : (
+                        <DiagnosticValue label="Оплачено" value={paidTotalRub > 0 ? moneyAmount(paidTotalRub, "RUB") : "—"} tone={paidTotalRub > 0 ? "success" : ""} />
+                      )}
                       <DiagnosticValue label="Сборка" value={supplierCurrency === "RUB" ? moneyAmount(total, "RUB") : `${moneyAmount(total, "USD")} / ≈${moneyAmount(totalRub, "RUB")}`} />
                     </div>
                   </div>
@@ -989,7 +1023,7 @@ export function PickingListPage() {
                       type="number"
                       min="0"
                       step="0.01"
-                      placeholder={supplierCurrency === "USD" ? "Оплата, $" : "Оплата, ₽"}
+                      placeholder={supplierCurrency === "USD" ? "Наличные сейчас, $" : "Наличные сейчас, ₽"}
                       value={draftAmount}
                       onChange={(event) => setPaymentDrafts((current) => ({ ...current, [supplierName]: event.target.value }))}
                     />
@@ -1008,6 +1042,12 @@ export function PickingListPage() {
                       {paymentMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Заплатил
                     </button>
                   </div>
+                  <p style={{ fontSize: 11, color: "var(--muted)", margin: "2px 0 4px", padding: "0 4px" }}>
+                    Долг фиксируется автоматически при нажатии «Собрал». Поле выше — только если платите наличными прямо сейчас.
+                  </p>
+                  {paymentErrors[supplierName] ? (
+                    <div className="inline-error" style={{ margin: "0 0 4px" }}>{paymentErrors[supplierName]}</div>
+                  ) : null}
                   <div className="picking-row-list">
                     {(() => {
                       // Group rows by offerId for visual consolidation (same product, different orders)
@@ -1057,8 +1097,8 @@ export function PickingListPage() {
                                       className="primary-action success-action"
                                       type="button"
                                       style={{ fontSize: "0.75rem", padding: "3px 10px", minHeight: 30 }}
-                                      disabled={updateMutation.isPending}
-                                      onClick={(e) => { e.stopPropagation(); openRows.forEach(r => updateMutation.mutate({ key: r.key, nextStatus: "picked" })); }}
+                                      disabled={openRows.some(r => pendingPickKeys.has(r.key))}
+                                      onClick={(e) => { e.stopPropagation(); openRows.forEach(r => { if (!pendingPickKeys.has(r.key)) updateMutation.mutate({ key: r.key, nextStatus: "picked" }); }); }}
                                     >
                                       <Check size={13} /> Все собрал
                                     </button>
@@ -1141,17 +1181,22 @@ export function PickingListPage() {
                                       <button
                                         className="primary-action success-action picking-action-main"
                                         type="button"
-                                        disabled={updateMutation.isPending || row.status !== "open"}
+                                        disabled={pendingPickKeys.has(row.key) || row.status !== "open"}
                                         onClick={() => {
                                           const qty = pickQtyDrafts[row.key] ? Math.min(row.quantity, Math.max(1, parseInt(pickQtyDrafts[row.key], 10) || 1)) : undefined;
-                                          const priceRaw = priceDrafts[row.key] ? Number(priceDrafts[row.key].replace(",", ".")) : undefined;
+                                          const priceRawStr = priceDrafts[row.key] ? priceDrafts[row.key].replace(",", ".").trim() : "";
+                                          const priceRaw = priceRawStr ? Number(priceRawStr) : undefined;
+                                          if (priceRawStr && (isNaN(priceRaw!) || priceRaw! < 0)) {
+                                            setPriceDrafts((p) => ({ ...p, [row.key]: "" }));
+                                            return;
+                                          }
                                           const pricePaidRub = priceRaw && priceRaw > 0
                                             ? (isUsd ? Math.round(priceRaw * usdRate) : priceRaw)
                                             : undefined;
                                           updateMutation.mutate({ key: row.key, nextStatus: "picked", pickedQuantity: qty, pricePaidRub });
                                         }}
                                       >
-                                        <Check size={16} /> Собрал
+                                        {pendingPickKeys.has(row.key) ? <Loader2 size={15} className="spin" /> : <Check size={16} />} Собрал
                                       </button>
                                       {row.status === "open" && row.quantity > 1 ? (
                                         <input

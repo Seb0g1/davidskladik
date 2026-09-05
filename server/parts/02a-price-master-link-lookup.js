@@ -118,6 +118,10 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
   const stoppedMap = stoppedSupplierMap(managedSuppliers);
   const supplierMaps = managedSupplierMaps(managedSuppliers);
   const queryTimeout = Math.max(250, Number(timeoutMs || process.env.WAREHOUSE_PAGE_PM_TIMEOUT_MS || 1500));
+  // Match the active-doc filter used by findPriceMasterRowsForLink so that rows from
+  // inactive/locked OfferDocs are excluded in both batch and individual paths.
+  await discoverOfferDocsActiveColumn();
+  const activeDocFilter = offerDocsActiveColumn ? ` AND d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}` : "";
   const rowsByArticle = new Map();
   for (const batch of chunkArray(articles, 500)) {
     const placeholders = batch.map(() => "?").join(",");
@@ -136,7 +140,7 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
     FROM OfferRows r
     JOIN OfferDocs d ON d.DocID = r.DocID
     LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
-    WHERE BINARY TRIM(r.NativeID) IN (${placeholders}) AND r.Ignored = 0
+    WHERE BINARY TRIM(r.NativeID) IN (${placeholders}) AND r.Ignored = 0${activeDocFilter}
     ORDER BY d.DocDate DESC, r.RowID DESC
     LIMIT 5000
     `,

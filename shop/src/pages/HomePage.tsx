@@ -1,9 +1,10 @@
 import { useRef, useEffect, useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Quote, Star } from "lucide-react";
 import { api } from "../api";
 import ProductCard from "../components/ProductCard";
+import HeroShader from "../components/HeroShader";
 
 /* ── Reveal on scroll ──────────────────────────────────────────── */
 function useReveal() {
@@ -37,12 +38,38 @@ function useCardReveal() {
 }
 
 const BRANDS = ["Chanel","Dior","Tom Ford","Hermès","Byredo","Jo Malone","Creed","Guerlain","Givenchy","Prada","Valentino","Burberry","Versace","Montale","Kilian","YSL","Bvlgari","Lancôme","Amouage","Xerjoff","Maison Margiela","Acqua di Parma"];
-const doubled = [...BRANDS, ...BRANDS];
+
+const BRAND_NOTES: Record<string, string> = {
+  "Chanel": "Chanel No. 5 — альдегиды, роза, жасмин",
+  "Dior": "Sauvage — бергамот, амброксан",
+  "Tom Ford": "Black Orchid — трюфель, чёрная орхидея",
+  "Hermès": "Terre d'Hermès — грейпфрут, кедр, кремний",
+  "Byredo": "Gypsy Water — сосна, ваниль, янтарь",
+  "Jo Malone": "Wood Sage & Sea Salt — морская соль, шалфей",
+  "Creed": "Aventus — ананас, берёза, мускус",
+  "Guerlain": "Shalimar — ваниль, ирис, бергамот",
+  "Givenchy": "L'Interdit — белые цветы, пачули",
+  "Prada": "La Femme — иланг, ирис, ладан",
+  "Valentino": "Valentina — белая трюфель, апельсин",
+  "Burberry": "Her — ягоды, пион, амброксан",
+  "Versace": "Eros — мята, зелёное яблоко, тонка",
+  "Montale": "Black Aoud — уд, роза, пачули",
+  "Kilian": "Angels' Share — коньяк, корица, миндаль",
+  "YSL": "Black Opium — кофе, ваниль, белые цветы",
+  "Bvlgari": "Man in Black — ром, ирис, гваяк",
+  "Lancôme": "La Vie est Belle — ирис, пачули, ваниль",
+  "Amouage": "Interlude — ладан, сосна, орхидея",
+  "Xerjoff": "Naxos — лаванда, мёд, табак",
+  "Maison Margiela": "Replica — в зависимости от аромата",
+  "Acqua di Parma": "Colonia — цитрус, лаванда, сандал",
+};
 
 const QUIZ = [
-  { q: "Для какого случая ищете аромат?",        opts: ["Повседневный образ", "Вечерний выход", "Особый повод", "В подарок"] },
+  { q: "Для какого случая ищете аромат?",          opts: ["Повседневный образ", "Вечерний выход", "Особый повод", "В подарок"] },
   { q: "Какое настроение должен передавать аромат?", opts: ["Свежий и лёгкий", "Тёплый и уютный", "Загадочный и глубокий", "Яркий и бодрящий"] },
-  { q: "Какие ноты вам ближе?",                  opts: ["Цветочные", "Восточные и пряные", "Древесные", "Морские и цитрусовые"] },
+  { q: "Какие ноты вам ближе?",                    opts: ["Цветочные", "Восточные и пряные", "Древесные", "Морские и цитрусовые"] },
+  { q: "Ваш бюджет?",                              opts: ["До 3 000 ₽", "3 000 – 7 000 ₽", "7 000 – 15 000 ₽", "Без ограничений"] },
+  { q: "Аромат для кого?",                          opts: ["Для себя", "В подарок близкому", "На особый случай", "Для коллекции"] },
 ];
 
 const QUIZ_RESULTS = [
@@ -51,6 +78,132 @@ const QUIZ_RESULTS = [
   { title: "Древесные ароматы",    text: "Уверенные, элегантные, вне времени. Образ силы и утончённости.",            cat: "edt" },
   { title: "Свежая парфюмерия",    text: "Лёгкая, бодрящая, универсальная. Для любого случая и сезона.",              cat: "edt" },
 ];
+
+function useMagneticHero(containerRef: React.RefObject<HTMLDivElement | null>) {
+  useEffect(() => {
+    const c = containerRef.current;
+    if (!c) return;
+    const btns = c.querySelectorAll<HTMLElement>(".btn-primary,.btn-ghost");
+    const cleanup: Array<() => void> = [];
+    btns.forEach((btn) => {
+      const onMove = (e: MouseEvent) => {
+        const r = btn.getBoundingClientRect();
+        const dx = e.clientX - (r.left + r.width / 2);
+        const dy = e.clientY - (r.top + r.height / 2);
+        const dist = Math.hypot(dx, dy);
+        if (dist < 110) {
+          btn.style.transition = "transform 0.12s ease";
+          btn.style.transform = `translate(${dx * 0.26}px, ${dy * 0.26}px)`;
+        } else if (btn.style.transform) {
+          btn.style.transition = "transform 0.65s cubic-bezier(0.16,1,0.3,1)";
+          btn.style.transform = "";
+        }
+      };
+      document.addEventListener("mousemove", onMove);
+      cleanup.push(() => document.removeEventListener("mousemove", onMove));
+    });
+    return () => cleanup.forEach((f) => f());
+  }, []);
+}
+
+function BrandGallery() {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const [hoveredBrand, setHoveredBrand] = useState<string | null>(null);
+  const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
+  const isDragging = useRef(false);
+  const startX = useRef(0);
+  const scrollLeft = useRef(0);
+
+  function onMouseDown(e: React.MouseEvent) {
+    if (!trackRef.current) return;
+    isDragging.current = true;
+    startX.current = e.pageX - trackRef.current.offsetLeft;
+    scrollLeft.current = trackRef.current.scrollLeft;
+    trackRef.current.style.cursor = "grabbing";
+  }
+  function onMouseMove(e: React.MouseEvent) {
+    if (!isDragging.current || !trackRef.current) return;
+    e.preventDefault();
+    const x = e.pageX - trackRef.current.offsetLeft;
+    trackRef.current.scrollLeft = scrollLeft.current - (x - startX.current) * 1.4;
+  }
+  function onMouseUp() {
+    isDragging.current = false;
+    if (trackRef.current) trackRef.current.style.cursor = "grab";
+  }
+
+  return (
+    <div style={{ position: "relative" }}>
+      {/* fade edges */}
+      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 80, background: "linear-gradient(to right, #0b0b0b, transparent)", zIndex: 10, pointerEvents: "none" }} />
+      <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 80, background: "linear-gradient(to left, #0b0b0b, transparent)", zIndex: 10, pointerEvents: "none" }} />
+
+      <div
+        ref={trackRef}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp}
+        onMouseLeave={() => { onMouseUp(); setHoveredBrand(null); }}
+        style={{
+          display: "flex", gap: 6, overflowX: "auto", cursor: "grab",
+          scrollbarWidth: "none", padding: "8px clamp(80px,8vw,120px)",
+          userSelect: "none",
+        }}
+      >
+        {BRANDS.map((brand) => (
+          <Link
+            key={brand}
+            to={`/catalog?brand=${encodeURIComponent(brand)}`}
+            draggable={false}
+            onMouseEnter={(e) => {
+              setHoveredBrand(brand);
+              setHoverPos({ x: e.clientX, y: e.clientY });
+            }}
+            onMouseLeave={() => setHoveredBrand(null)}
+            onMouseMove={(e) => setHoverPos({ x: e.clientX, y: e.clientY })}
+            style={{
+              flexShrink: 0,
+              padding: "12px 28px",
+              border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: 2,
+              background: hoveredBrand === brand ? "rgba(201,162,94,0.08)" : "transparent",
+              borderColor: hoveredBrand === brand ? "rgba(201,162,94,0.4)" : "rgba(255,255,255,0.07)",
+              fontFamily: "'Cormorant Garamond',Georgia,serif",
+              fontStyle: "italic",
+              fontSize: 18,
+              color: hoveredBrand === brand ? "#e8d5a3" : "#4a473f",
+              whiteSpace: "nowrap",
+              textDecoration: "none",
+              transition: "background 0.3s ease, border-color 0.3s ease, color 0.3s ease",
+            }}
+          >
+            {brand}
+          </Link>
+        ))}
+      </div>
+
+      {/* Hover tooltip */}
+      {hoveredBrand && BRAND_NOTES[hoveredBrand] && (
+        <div style={{
+          position: "fixed",
+          left: hoverPos.x + 14,
+          top: hoverPos.y - 48,
+          pointerEvents: "none",
+          zIndex: 1000,
+          background: "#0f0f0f",
+          border: "1px solid rgba(201,162,94,0.3)",
+          borderRadius: 3,
+          padding: "10px 16px",
+          maxWidth: 260,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
+        }}>
+          <p style={{ margin: "0 0 4px", fontFamily: "'Cormorant Garamond',Georgia,serif", fontStyle: "italic", fontSize: 15, color: "#f5f4f0" }}>{hoveredBrand}</p>
+          <p style={{ margin: 0, fontSize: 11.5, color: "#8b8880", lineHeight: 1.5 }}>{BRAND_NOTES[hoveredBrand]}</p>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function CardSkeleton() {
   return (
@@ -75,11 +228,17 @@ export default function HomePage() {
   const particlesRef = useRef<HTMLDivElement>(null);
   const tiltRef      = useRef<HTMLDivElement>(null);
   const glowRef      = useRef<HTMLDivElement>(null);
+  const heroBtnsRef  = useRef<HTMLDivElement>(null);
+  const heroGradRef  = useRef<HTMLDivElement>(null);
+
+  useMagneticHero(heroBtnsRef);
 
   /* quiz */
-  const [quizStep, setQuizStep]   = useState(0);
+  const [quizStep, setQuizStep]     = useState(0);
   const [quizAnswers, setQuizAnswers] = useState<number[]>([]);
-  const [quizDone, setQuizDone]   = useState(false);
+  const [quizDone, setQuizDone]     = useState(false);
+  const [quizEmail, setQuizEmail]   = useState("");
+  const [quizEmailSent, setQuizEmailSent] = useState(false);
 
   function pickQuizAnswer(idx: number) {
     const next = [...quizAnswers, idx];
@@ -91,7 +250,7 @@ export default function HomePage() {
       setQuizDone(true);
     }
   }
-  function resetQuiz() { setQuizStep(0); setQuizAnswers([]); setQuizDone(false); }
+  function resetQuiz() { setQuizStep(0); setQuizAnswers([]); setQuizDone(false); setQuizEmail(""); setQuizEmailSent(false); }
 
   const quizResult = useMemo(() => {
     if (!quizDone) return null;
@@ -113,6 +272,25 @@ export default function HomePage() {
     queryKey: ["shop-news"],
     queryFn: () => api.news(3),
     staleTime: 5 * 60_000,
+  });
+  const { data: unboxingsData } = useQuery({
+    queryKey: ["shop-unboxings"],
+    queryFn: () => api.unboxings(),
+    staleTime: 5 * 60_000,
+  });
+
+  /* unboxing form */
+  const [ubName, setUbName] = useState("");
+  const [ubMediaUrl, setUbMediaUrl] = useState("");
+  const [ubText, setUbText] = useState("");
+  const [ubSuccess, setUbSuccess] = useState(false);
+
+  const ubMutation = useMutation({
+    mutationFn: (data: { name: string; mediaUrl: string; text: string }) => api.submitUnboxing(data),
+    onSuccess: () => {
+      setUbSuccess(true);
+      setUbName(""); setUbMediaUrl(""); setUbText("");
+    },
   });
 
   /* ── Cursor aura ──────────────────────────────────────────────── */
@@ -179,6 +357,21 @@ export default function HomePage() {
     return () => { document.removeEventListener("mousemove", onMove); document.removeEventListener("mouseleave", onLeave); };
   }, []);
 
+  /* ── Hero gradient parallax ───────────────────────────────────── */
+  useEffect(() => {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const el = heroGradRef.current;
+    if (!el) return;
+    let raf = 0;
+    const onScroll = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        el.style.transform = `translateY(${window.scrollY * 0.28}px)`;
+      });
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => { window.removeEventListener("scroll", onScroll); cancelAnimationFrame(raf); };
+  }, []);
 
   return (
     <div style={{ background: "#0b0b0b", color: "var(--text)", minHeight: "100vh" }}>
@@ -188,7 +381,8 @@ export default function HomePage() {
 
       {/* ════════════════════ HERO ════════════════════ */}
       <section style={{ position: "relative", overflow: "hidden", minHeight: "84vh", display: "flex", alignItems: "center", justifyContent: "center", padding: "9vh clamp(18px,4vw,56px)" }}>
-        <div style={{ position: "absolute", inset: "-10%", pointerEvents: "none", background: "radial-gradient(44% 38% at 50% 44%, rgba(201,162,94,0.16) 0%, rgba(201,162,94,0.05) 40%, rgba(11,11,11,0) 72%)" }} />
+        <HeroShader />
+        <div ref={heroGradRef} style={{ position: "absolute", inset: "-10%", pointerEvents: "none", background: "radial-gradient(44% 38% at 50% 44%, rgba(201,162,94,0.16) 0%, rgba(201,162,94,0.05) 40%, rgba(11,11,11,0) 72%)", willChange: "transform" }} />
         <div ref={particlesRef} style={{ position: "absolute", inset: "-8%", pointerEvents: "none", willChange: "transform" }} />
 
         <div style={{ position: "relative", width: "100%", maxWidth: 1040, display: "flex", flexDirection: "column", alignItems: "center", gap: "clamp(20px,3vw,36px)", textAlign: "center" }}>
@@ -243,7 +437,7 @@ export default function HomePage() {
             Мировые ароматы с доставкой по России через Ozon
           </p>
 
-          <div className="anim-slide-up" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "center", gap: 14, animationDelay: "0.45s" }}>
+          <div ref={heroBtnsRef} className="anim-slide-up" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "center", gap: 14, animationDelay: "0.45s" }}>
             <Link to="/catalog" className="btn-primary">Каталог ароматов</Link>
             <Link to="/brands" className="btn-ghost">Все бренды →</Link>
           </div>
@@ -332,9 +526,72 @@ export default function HomePage() {
                   Пройти заново
                 </button>
               </div>
+
+              {/* Email capture */}
+              <div style={{ marginTop: 28, paddingTop: 24, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                {!quizEmailSent ? (
+                  <>
+                    <p style={{ margin: "0 0 14px", fontSize: 12, color: "#6f6c66" }}>Получить подборку на почту</p>
+                    <div style={{ display: "flex", gap: 10, alignItems: "flex-end", maxWidth: 400, margin: "0 auto" }}>
+                      <input
+                        type="email"
+                        value={quizEmail}
+                        onChange={e => setQuizEmail(e.target.value)}
+                        onKeyDown={e => e.key === "Enter" && setQuizEmailSent(true)}
+                        placeholder="your@email.com"
+                        style={{
+                          flex: 1, padding: "9px 0",
+                          background: "transparent", border: "none",
+                          borderBottom: "1px solid rgba(255,255,255,0.12)",
+                          color: "#f5f4f0", fontSize: 13.5, outline: "none",
+                          transition: "border-bottom-color 0.3s ease",
+                        }}
+                        onFocus={e => (e.target.style.borderBottomColor = "rgba(201,162,94,0.55)")}
+                        onBlur={e => (e.target.style.borderBottomColor = "rgba(255,255,255,0.12)")}
+                      />
+                      <button
+                        onClick={() => setQuizEmailSent(true)}
+                        style={{
+                          padding: "9px 18px", background: "transparent",
+                          border: "1px solid rgba(201,162,94,0.4)", borderRadius: 2,
+                          color: "#c9a25e", fontSize: 11,
+                          letterSpacing: "0.12em", cursor: "pointer",
+                          transition: "background 0.3s, color 0.3s",
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.background = "rgba(201,162,94,0.12)"; e.currentTarget.style.color = "#e8d5a3"; }}
+                        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#c9a25e"; }}
+                      >
+                        Отправить
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <p style={{ margin: 0, fontSize: 12.5, color: "#5dd876" }}>
+                    Подборка отправлена — проверьте почту
+                  </p>
+                )}
+              </div>
             </div>
           )}
         </div>
+      </section>
+
+      {/* ════════════════════ GIFT CTA ════════════════════ */}
+      <section style={{ margin: "clamp(40px,6vw,80px) 0", padding: "0 clamp(18px,4vw,56px)" }}>
+        <Link
+          to="/gift"
+          style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "clamp(20px,3vw,36px) clamp(24px,4vw,48px)", background: "linear-gradient(135deg, #1a1408 0%, #111113 60%)", border: "1px solid rgba(201,162,94,0.3)", borderRadius: 3, textDecoration: "none", gap: 16, flexWrap: "wrap", transition: "border-color 0.3s ease" }}
+          onMouseEnter={e => ((e.currentTarget as HTMLElement).style.borderColor = "rgba(201,162,94,0.6)")}
+          onMouseLeave={e => ((e.currentTarget as HTMLElement).style.borderColor = "rgba(201,162,94,0.3)")}
+        >
+          <div>
+            <p style={{ fontSize: 10, letterSpacing: "0.26em", textTransform: "uppercase", color: "#c9a25e", margin: "0 0 6px" }}>Идеальный подарок</p>
+            <p className="serif" style={{ fontSize: "clamp(22px,3vw,34px)", fontStyle: "italic", fontWeight: 300, color: "#f5f4f0", margin: 0, lineHeight: 1.15 }}>Собери подарочный набор</p>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+            <span style={{ fontSize: 13, color: "#c9a25e", letterSpacing: "0.08em" }}>Выбрать аромат →</span>
+          </div>
+        </Link>
       </section>
 
       {/* ════════════════════ HOW IT WORKS ════════════════════ */}
@@ -432,27 +689,10 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ════════════════════ BRAND MARQUEE ════════════════════ */}
-      <section className="reveal-section" style={{ marginTop: "clamp(56px,8vw,104px)", padding: "30px 0", borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)", overflow: "hidden" }}>
-        <p style={{ margin: "0 0 22px", textAlign: "center", fontSize: 10, letterSpacing: "0.34em", textTransform: "uppercase", color: "#5d5a54" }}>Мировые парфюмерные дома</p>
-        <div style={{ position: "relative" }}>
-          <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 80, background: "linear-gradient(to right,#0b0b0b,transparent)", zIndex: 10, pointerEvents: "none" }} />
-          <div style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 80, background: "linear-gradient(to left,#0b0b0b,transparent)", zIndex: 10, pointerEvents: "none" }} />
-          <div className="animate-marquee">
-            {doubled.map((brand, i) => (
-              <Link
-                key={i}
-                to={`/catalog?brand=${encodeURIComponent(brand)}`}
-                className="serif"
-                style={{ padding: "0 30px", fontSize: 20, letterSpacing: "0.04em", color: "#4a473f", whiteSpace: "nowrap", transition: "color 0.3s ease" }}
-                onMouseEnter={e => (e.currentTarget.style.color = "#c9a25e")}
-                onMouseLeave={e => (e.currentTarget.style.color = "#4a473f")}
-              >
-                {brand}
-              </Link>
-            ))}
-          </div>
-        </div>
+      {/* ════════════════════ BRAND GALLERY ════════════════════ */}
+      <section className="reveal-section" style={{ marginTop: "clamp(56px,8vw,104px)", padding: "clamp(32px,4vw,52px) 0", borderTop: "1px solid rgba(255,255,255,0.06)", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+        <p style={{ margin: "0 0 28px", textAlign: "center", fontSize: 10, letterSpacing: "0.34em", textTransform: "uppercase", color: "#5d5a54" }}>Мировые парфюмерные дома</p>
+        <BrandGallery />
       </section>
 
       {/* ════════════════════ REVIEWS ════════════════════ */}
@@ -532,6 +772,109 @@ export default function HomePage() {
           </div>
         </section>
       )}
+
+      {/* ════════════════════ UNBOXING ════════════════════ */}
+      <section className="reveal-section" style={{ padding: "clamp(56px,8vw,96px) clamp(18px,4vw,56px) clamp(56px,8vw,96px)" }}>
+        <p className="eyebrow" style={{ marginBottom: 10 }}>Наши покупатели</p>
+        <h2 className="serif" style={{ margin: "0 0 34px", fontStyle: "italic", fontWeight: 400, fontSize: "clamp(34px,4.4vw,56px)", lineHeight: 1, color: "#f5f4f0" }}>Распаковки</h2>
+
+        {unboxingsData && unboxingsData.unboxings.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 18, marginBottom: 48 }}>
+            {unboxingsData.unboxings.map((u) => {
+              const isYoutube = /youtube\.com|youtu\.be/.test(u.mediaUrl);
+              let embedUrl = "";
+              if (isYoutube) {
+                const m = u.mediaUrl.match(/(?:v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+                if (m) embedUrl = `https://www.youtube.com/embed/${m[1]}`;
+              }
+              return (
+                <div key={u.id} style={{ padding: 20, border: "1px solid rgba(255,255,255,0.07)", borderRadius: 3, background: "#0e0e0e", display: "flex", flexDirection: "column", gap: 12 }}>
+                  {isYoutube && embedUrl ? (
+                    <iframe
+                      src={embedUrl}
+                      style={{ width: "100%", height: 180, border: "none", borderRadius: 2 }}
+                      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                      allowFullScreen
+                      loading="lazy"
+                      title={`Распаковка от ${u.name}`}
+                    />
+                  ) : u.mediaUrl ? (
+                    <a
+                      href={u.mediaUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ fontSize: 12, letterSpacing: "0.1em", textTransform: "uppercase", color: "var(--accent)" }}
+                    >
+                      Смотреть →
+                    </a>
+                  ) : null}
+                  {u.text && (
+                    <p style={{ margin: 0, fontSize: 13, color: "#8b8880", lineHeight: 1.7 }}>
+                      {u.text.length > 220 ? u.text.slice(0, 220) + "…" : u.text}
+                    </p>
+                  )}
+                  <div>
+                    <p style={{ margin: 0, fontSize: 12, color: "var(--text)" }}>{u.name}</p>
+                    <p style={{ margin: "3px 0 0", fontSize: 10, color: "#6f6c66" }}>
+                      {new Date(u.createdAt).toLocaleDateString("ru-RU", { day: "numeric", month: "long", year: "numeric" })}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Submission form */}
+        <div style={{ maxWidth: 560, padding: "clamp(24px,3vw,40px)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 3, background: "#0e0e0e" }}>
+          <p style={{ margin: "0 0 20px", fontSize: 13, color: "#6f6c66", letterSpacing: "0.06em" }}>Поделитесь своей распаковкой</p>
+          {ubSuccess ? (
+            <div>
+              <p style={{ margin: "0 0 8px", fontSize: 13.5, color: "#5dd876" }}>Спасибо! Ваша распаковка отправлена на проверку.</p>
+              <p style={{ margin: 0, fontSize: 12.5, color: "#6f6c66" }}>За публикацию вы получите промокод <span style={{ color: "#c9a25e", fontWeight: 600 }}>UNBOX7</span> на скидку 7%</p>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+              <input
+                type="text"
+                value={ubName}
+                onChange={e => setUbName(e.target.value)}
+                placeholder="Ваше имя"
+                style={{ width: "100%", padding: "9px 0", background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.12)", color: "#f5f4f0", fontSize: 13.5, outline: "none", boxSizing: "border-box", transition: "border-bottom-color 0.3s ease" }}
+                onFocus={e => (e.target.style.borderBottomColor = "rgba(201,162,94,0.55)")}
+                onBlur={e => (e.target.style.borderBottomColor = "rgba(255,255,255,0.12)")}
+              />
+              <input
+                type="text"
+                value={ubMediaUrl}
+                onChange={e => setUbMediaUrl(e.target.value)}
+                placeholder="Ссылка на фото или видео"
+                style={{ width: "100%", padding: "9px 0", background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.12)", color: "#f5f4f0", fontSize: 13.5, outline: "none", boxSizing: "border-box", transition: "border-bottom-color 0.3s ease" }}
+                onFocus={e => (e.target.style.borderBottomColor = "rgba(201,162,94,0.55)")}
+                onBlur={e => (e.target.style.borderBottomColor = "rgba(255,255,255,0.12)")}
+              />
+              <textarea
+                value={ubText}
+                onChange={e => setUbText(e.target.value)}
+                placeholder="Расскажите о вашей покупке..."
+                rows={2}
+                style={{ width: "100%", padding: "9px 0", background: "transparent", border: "none", borderBottom: "1px solid rgba(255,255,255,0.12)", color: "#f5f4f0", fontSize: 13.5, outline: "none", resize: "none", boxSizing: "border-box", transition: "border-bottom-color 0.3s ease", fontFamily: "inherit" }}
+                onFocus={e => (e.target.style.borderBottomColor = "rgba(201,162,94,0.55)")}
+                onBlur={e => (e.target.style.borderBottomColor = "rgba(255,255,255,0.12)")}
+              />
+              <button
+                onClick={() => ubMutation.mutate({ name: ubName, mediaUrl: ubMediaUrl, text: ubText })}
+                disabled={ubMutation.isPending || (!ubName.trim() && !ubMediaUrl.trim() && !ubText.trim())}
+                style={{ alignSelf: "flex-start", padding: "11px 28px", background: "transparent", border: "1px solid rgba(201,162,94,0.4)", borderRadius: 2, color: "#c9a25e", fontSize: 12, letterSpacing: "0.12em", textTransform: "uppercase", cursor: "pointer", transition: "background 0.3s, color 0.3s", opacity: ubMutation.isPending ? 0.6 : 1 }}
+                onMouseEnter={e => { if (!ubMutation.isPending) { e.currentTarget.style.background = "rgba(201,162,94,0.12)"; e.currentTarget.style.color = "#e8d5a3"; } }}
+                onMouseLeave={e => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = "#c9a25e"; }}
+              >
+                {ubMutation.isPending ? "Отправка…" : "Отправить"}
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
 
     </div>
   );

@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { Search, X, LayoutGrid, Home, Newspaper, ShoppingBag, LogOut, Package, Settings } from "lucide-react";
+import { Search, X, LayoutGrid, Home, Newspaper, ShoppingBag, LogOut, Package, Settings, Bell, BellOff } from "lucide-react";
 import clsx from "clsx";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
 import AuthModal from "./AuthModal";
+import { usePush } from "../hooks/usePush";
 
 const BOT_NAV = [
   { label: "Главная",  to: "/",       icon: Home },
@@ -16,6 +17,7 @@ const BOT_NAV = [
 export default function Header() {
   const { totalItems } = useCart();
   const { customer, logout, yandexLoading, yandexError, clearYandexError } = useAuth();
+  const push = usePush();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -92,10 +94,11 @@ export default function Header() {
         {/* Desktop nav */}
         <nav className="hidden md:flex" style={{ flex: "1 1 240px", minWidth: 0, flexWrap: "wrap", alignItems: "center", gap: "10px 22px" }}>
           {[
-            { label: "Каталог", to: "/catalog" },
-            { label: "Бренды",  to: "/brands" },
-            { label: "Новинки", to: "/new" },
-            { label: "Новости", to: "/news" },
+            { label: "Каталог",  to: "/catalog" },
+            { label: "Бренды",   to: "/brands" },
+            { label: "Новинки",  to: "/new" },
+            { label: "Подарки",  to: "/gift" },
+            { label: "Новости",  to: "/news" },
           ].map((link) => (
             <Link
               key={link.to}
@@ -136,6 +139,41 @@ export default function Header() {
             <Search size={14} strokeWidth={1.5} />
             Поиск
           </button>
+
+          {/* Push notifications bell */}
+          {push.isSupported && push.permission !== "denied" && (
+            <button
+              onClick={() => {
+                if (push.isSubscribed) push.unsubscribe();
+                else push.subscribe(null);
+              }}
+              disabled={push.isLoading}
+              title={push.isSubscribed ? "Отключить уведомления" : "Включить уведомления"}
+              style={{
+                height: 38, width: 38,
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 2,
+                background: "transparent",
+                color: push.isSubscribed ? "#c9a25e" : "#6b6760",
+                display: "flex", alignItems: "center", justifyContent: "center",
+                transition: "border-color 0.3s ease, color 0.3s ease",
+                cursor: "pointer",
+              }}
+              onMouseEnter={e => {
+                (e.currentTarget as HTMLElement).style.borderColor = "rgba(201,162,94,0.5)";
+                (e.currentTarget as HTMLElement).style.color = push.isSubscribed ? "#e8d5a3" : "#c9a25e";
+              }}
+              onMouseLeave={e => {
+                (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.1)";
+                (e.currentTarget as HTMLElement).style.color = push.isSubscribed ? "#c9a25e" : "#6b6760";
+              }}
+            >
+              {push.isSubscribed
+                ? <Bell size={16} strokeWidth={1.5} />
+                : <BellOff size={16} strokeWidth={1.5} />
+              }
+            </button>
+          )}
 
           {/* Account */}
           <div ref={userMenuRef} style={{ position: "relative" }}>

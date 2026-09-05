@@ -488,14 +488,27 @@ export function TnvedPage() {
             <div>3305100000 — Шампуни</div>
             <div>3305200000 — Средства для перманентной завивки</div>
             <div>3305300000 — Лак для волос</div>
-            <div>3305900000 — Прочие: кондиционеры, маски</div>
+            <div>3305900001 — Бальзамы, кондиционеры для волос</div>
+            <div>3305900009 — Прочие: маски, масла, несмываемые средства</div>
+          </div>
+          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+            <strong>Гигиена полости рта (3306)</strong>
+          </div>
+          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
+            <div>3306100000 — Зубная паста</div>
           </div>
           <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
             <strong>Прочая парфюмерия (3307)</strong>
           </div>
-          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2 }}>
+          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
             <div>3307200000 — Дезодоранты и антиперспиранты</div>
             <div>3307900000 — Прочие косметические товары</div>
+          </div>
+          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+            <strong>Свечи (3406)</strong>
+          </div>
+          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2 }}>
+            <div>3406000000 — Свечи, свечки, факелы и аналогичные изделия</div>
           </div>
 
           {/* Яндекс.Маркет */}

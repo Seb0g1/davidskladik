@@ -805,6 +805,11 @@ app.get("/api/consignment/pm-search", requireAdmin, async (request, response, ne
     } else {
       and.push({ OR: [{ article: { contains: q, mode: "insensitive" } }, { nativeName: { contains: q, mode: "insensitive" } }] });
     }
+    const managedPartnerIds = (await getPrisma().managedSupplier.findMany({
+      where: { active: true },
+      select: { partnerId: true },
+    })).map((s) => cleanText(s.partnerId)).filter(Boolean);
+    if (managedPartnerIds.length) and.push({ partnerId: { in: managedPartnerIds } });
     let rows = await getPrisma().priceMasterSnapshotItem.findMany({
       where: { AND: and },
       orderBy: { updatedAt: "desc" },

@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, ChevronDown, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Store, Truck, Star, HelpCircle, MessageCircle, MessageCircleHeart, Tag, UserCircle, Upload } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, BadgeDollarSign, Ban, BarChart3, BookOpen, ChevronDown, CirclePlay, ClipboardList, DollarSign, Download, HandCoins, Home, Loader2, LogOut, Menu, PackageCheck, PackagePlus, RefreshCcw, Settings, ShoppingCart, Sparkles, Store, Truck, Star, HelpCircle, MessageCircle, MessageCircleHeart, Tag, UserCircle, Upload, Wrench } from "lucide-react";
 import { lazy, ReactNode, Suspense, useEffect, useRef, useState } from "react";
 import { NotificationsBell } from "./components/NotificationsBell";
 import { SystemHealthIndicator } from "./components/SystemHealthIndicator";
@@ -33,8 +33,9 @@ const TnvedPage = lazy(() => import("./routes/TnvedPage").then((m) => ({ default
 const SupportChatsPage = lazy(() => import("./routes/SupportChatsPage").then((m) => ({ default: m.SupportChatsPage })));
 const BrandBansPage = lazy(() => import("./routes/BrandBansPage").then((m) => ({ default: m.BrandBansPage })));
 const BrandsTnvedPage = lazy(() => import("./routes/BrandsTnvedPage").then((m) => ({ default: m.BrandsTnvedPage })));
+const OzonCardFixPage = lazy(() => import("./routes/OzonCardFixPage").then((m) => ({ default: m.OzonCardFixPage })));
 
-type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans" | "brands-tnved";
+type AppRoute = "dashboard" | "import" | "avito" | "shop" | "chats" | "questions" | "reviews" | "warehouse" | "picking-list" | "suppliers" | "operations" | "supplier-cart" | "recovery-queue" | "prices" | "problem-products" | "finance" | "consignment" | "statistics" | "settings" | "system" | "ai-drafts" | "no-supplier" | "new-products" | "tnved" | "support" | "brand-bans" | "brands-tnved" | "ozon-card-fix";
 type SessionState = { authenticated?: boolean; role?: string | null; username?: string | null; allowedPages?: string[] | null; displayName?: string | null; avatarUrl?: string | null };
 
 const navItems: Array<{ route: AppRoute; href: string; label: string; icon: ReactNode }> = [
@@ -65,6 +66,7 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
   { route: "tnved", href: "/app/tnved", label: "Коды ТН ВЭД", icon: <Tag size={16} /> },
   { route: "brand-bans", href: "/app/brand-bans", label: "Запрет брендов", icon: <Ban size={16} /> },
   { route: "brands-tnved", href: "/app/brands-tnved", label: "Бренды / ТН ВЭД", icon: <BookOpen size={16} /> },
+  { route: "ozon-card-fix", href: "/app/ozon-card-fix", label: "Карточки Ozon", icon: <Wrench size={16} /> },
 ];
 
 // Сайдбар: первые пять пунктов — без заголовка, дальше сворачиваемые группы.
@@ -72,7 +74,7 @@ const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = 
   { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
   { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions", "support"] },
   { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "no-supplier", "operations", "recovery-queue"] },
-  { id: "extra", title: "Дополнительное", routes: ["suppliers", "shop", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products", "tnved", "brand-bans", "brands-tnved"] },
+  { id: "extra", title: "Дополнительное", routes: ["suppliers", "shop", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products", "tnved", "brand-bans", "brands-tnved", "ozon-card-fix"] },
 ];
 
 function currentRoute(): AppRoute {
@@ -103,6 +105,7 @@ function currentRoute(): AppRoute {
   if (path.startsWith("/app/tnved")) return "tnved";
   if (path.startsWith("/app/brand-bans")) return "brand-bans";
   if (path.startsWith("/app/brands-tnved")) return "brands-tnved";
+  if (path.startsWith("/app/ozon-card-fix")) return "ozon-card-fix";
   return "warehouse";
 }
 
@@ -356,6 +359,7 @@ function AppShell() {
       {sessionReady && !accessDenied && route === "tnved" ? <TnvedPage /> : null}
       {sessionReady && !accessDenied && route === "brand-bans" ? <BrandBansPage /> : null}
       {sessionReady && !accessDenied && route === "brands-tnved" ? <BrandsTnvedPage /> : null}
+      {sessionReady && !accessDenied && route === "ozon-card-fix" ? <OzonCardFixPage /> : null}
       {sessionReady && !accessDenied && route === "warehouse" ? <WarehousePage isAdmin={isAdmin} /> : null}
       </Suspense>
       </div>

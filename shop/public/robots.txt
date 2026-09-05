@@ -1,0 +1,15 @@
+User-agent: *
+Allow: /
+Disallow: /account
+Disallow: /orders
+Disallow: /cart
+Disallow: /checkout
+Disallow: /order-success
+Disallow: /order-failed
+
+# Sitemap
+Sitemap: https://magicvibes.ru/sitemap.xml
+
+# Crawl-delay for Yandex
+User-agent: Yandex
+Crawl-delay: 1

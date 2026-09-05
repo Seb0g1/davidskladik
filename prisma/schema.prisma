@@ -559,19 +559,47 @@ model ConsignmentOperation {
 }
 
 model ShopCustomer {
-  id        String      @id @default(cuid())
-  email     String      @unique
-  password  String
-  firstName String?     @map("first_name")
-  lastName  String?     @map("last_name")
-  phone     String?
-  createdAt DateTime    @default(now()) @map("created_at")
-  updatedAt DateTime    @updatedAt @map("updated_at")
+  id             String      @id @default(cuid())
+  email          String      @unique
+  password       String
+  firstName      String?     @map("first_name")
+  lastName       String?     @map("last_name")
+  phone          String?
+  loyaltyPoints  Int         @default(0) @map("loyalty_points")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
 
   orders  ShopOrder[]
   reviews ShopReview[]
+  pointTransactions ShopPointTransaction[]
 
   @@map("shop_customers")
+}
+
+model ShopPointTransaction {
+  id         String   @id @default(cuid())
+  customerId String   @map("customer_id")
+  points     Int
+  reason     String
+  refId      String?  @map("ref_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  customer ShopCustomer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, createdAt])
+  @@map("shop_point_transactions")
+}
+
+model ShopEmailSequenceLog {
+  id      String   @id @default(cuid())
+  orderId String   @map("order_id")
+  email   String
+  step    Int
+  sentAt  DateTime @default(now()) @map("sent_at")
+
+  @@unique([orderId, step])
+  @@index([step, sentAt])
+  @@map("shop_email_sequence_logs")
 }
 
 model ShopOrder {
@@ -627,6 +655,7 @@ model ShopReview {
   productImg  String?   @map("product_img")
   rating      Int       @default(5)
   text        String
+  photoUrl    String?   @map("photo_url")
   approved    Boolean   @default(true)
   createdAt   DateTime  @default(now()) @map("created_at")
 
@@ -635,6 +664,18 @@ model ShopReview {
   @@index([approved, createdAt])
   @@index([customerId])
   @@map("shop_reviews")
+}
+
+model ShopPushSubscription {
+  id         String   @id @default(cuid())
+  endpoint   String   @unique
+  p256dh     String
+  auth       String
+  customerId String?  @map("customer_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([customerId])
+  @@map("shop_push_subscriptions")
 }
 
 model SupportChat {

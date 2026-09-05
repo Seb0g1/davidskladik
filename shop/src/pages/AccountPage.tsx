@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { Package, User, Loader2, CheckCircle, Clock, Truck, LogOut, Save, ChevronRight } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Package, User, Loader2, CheckCircle, Clock, Truck, LogOut, Save, ChevronRight, Star } from "lucide-react";
 import { useAuth } from "../AuthContext";
 import { api } from "../api";
 import type { ShopOrder } from "../types";
@@ -134,8 +135,67 @@ function DarkInput({ label, ...props }: { label: string } & React.InputHTMLAttri
   );
 }
 
+const TIER_META = {
+  silver:   { label: "Серебро",  color: "#9ca3af", bg: "rgba(156,163,175,0.1)", next: 100 },
+  gold:     { label: "Золото",   color: "#c9a25e", bg: "rgba(201,162,94,0.1)",  next: 300 },
+  platinum: { label: "Платина",  color: "#a78bfa", bg: "rgba(167,139,250,0.1)", next: null },
+} as const;
+
+function LoyaltyPanel({ token }: { token: string }) {
+  const { data } = useQuery({
+    queryKey: ["shop-loyalty", token],
+    queryFn: () => api.loyalty(token),
+    staleTime: 2 * 60_000,
+    enabled: !!token,
+  });
+  if (!data) return null;
+  const { points, tier, nextTier, transactions } = data;
+  const meta = TIER_META[tier];
+  const progress = nextTier ? Math.min(100, Math.round((points / nextTier) * 100)) : 100;
+  return (
+    <div style={{ background: `linear-gradient(135deg, #1a1408 0%, ${S.surface} 70%)`, borderRadius: 18, padding: "20px", border: "1px solid rgba(201,162,94,0.25)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14 }}>
+        <Star size={14} style={{ color: meta.color }} />
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.18em", color: S.subtle }}>Золото Magic Vibes</span>
+      </div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontStyle: "italic", fontSize: 42, color: meta.color, lineHeight: 1 }}>{points}</span>
+        <span style={{ fontSize: 12, color: S.muted }}>баллов</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, fontWeight: 600, padding: "3px 10px", borderRadius: 100, background: meta.bg, color: meta.color, border: `1px solid ${meta.color}40` }}>{meta.label}</span>
+      </div>
+      {nextTier && (
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: S.subtle, marginBottom: 5 }}>
+            <span>{points} / {nextTier} до следующего уровня</span>
+            <span>{progress}%</span>
+          </div>
+          <div style={{ height: 4, background: "rgba(255,255,255,0.07)", borderRadius: 2, overflow: "hidden" }}>
+            <div style={{ height: "100%", width: `${progress}%`, background: `linear-gradient(90deg, ${meta.color}88, ${meta.color})`, borderRadius: 2, transition: "width 0.8s ease" }} />
+          </div>
+        </div>
+      )}
+      {transactions.length > 0 && (
+        <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 12 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.12em", color: S.subtle, marginBottom: 8 }}>Последние начисления</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {transactions.slice(0, 5).map((t) => (
+              <div key={t.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                <span style={{ color: S.muted }}>{t.reason}</span>
+                <span style={{ color: "#4ade80", fontWeight: 600 }}>+{t.points}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <p style={{ fontSize: 11, color: S.subtle, marginTop: 12, lineHeight: 1.6 }}>
+        Баллы начисляются за отзывы (+20), отзывы с фото (+50) и одобренные анбоксинги.
+      </p>
+    </div>
+  );
+}
+
 function ProfileTab() {
-  const { customer, updateProfile } = useAuth();
+  const { customer, updateProfile, token } = useAuth();
   const [form, setForm] = useState({
     firstName: customer?.firstName || "",
     lastName: customer?.lastName || "",
@@ -199,6 +259,8 @@ function ProfileTab() {
           {saving ? "Сохраняем..." : saved ? "Сохранено" : "Сохранить"}
         </button>
       </form>
+      {/* Loyalty */}
+      {token && <LoyaltyPanel token={token} />}
     </div>
   );
 }

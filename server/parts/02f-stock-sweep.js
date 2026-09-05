@@ -147,6 +147,10 @@ function scheduleStockSweep(delayMs = stockSweepIntervalMs) {
     let result = null;
     try {
       result = await runStockSweep({ source: "schedule" });
+      // After the regular sweep, push Sorin express-warehouse stock in parallel.
+      syncSorinExpressStocks().catch((error) =>
+        logger.warn("sorin express sync failed in sweep", { detail: error?.message || String(error) }),
+      );
     } catch (error) {
       logger.warn("stock sweep tick failed", { detail: error?.message || String(error) });
       result = { status: "error", error: error?.message || String(error) };

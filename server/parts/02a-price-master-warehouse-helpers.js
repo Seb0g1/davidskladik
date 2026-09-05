@@ -123,10 +123,10 @@ function pickWarehouseSupplier(matches) {
     return compareWarehouseSupplierPrices(a, b);
   });
   if (!eligible.length) return null;
-  // If the operator pinned a specific PM row (selected_row link with matched sourceRowId),
-  // restrict the pool to pinned candidates so the explicit choice beats cheaper alternatives.
-  const pinned = eligible.filter((m) => m.pinnedRow);
-  const pool = pinned.length ? pinned : eligible;
+  // filterSelectedRowMatchesToBestPin already restricts each selected_row link to its
+  // exact pinned row before candidates reach here. No cross-link pool restriction is
+  // needed — cheaper suppliers from other links must compete on price like any other.
+  const pool = eligible;
   // Priority suppliers (Sorin, Inna) are trusted — skip outlier check.
   if (getSupplierSelectionPriority(pool[0]) < 99) return pool[0];
   const { ratio, minPeers } = supplierPriceOutlierConfig();

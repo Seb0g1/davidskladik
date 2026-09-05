@@ -12,8 +12,15 @@ import BrandsPage from "./pages/BrandsPage";
 import NewProductsPage from "./pages/NewProductsPage";
 import NewsPage from "./pages/NewsPage";
 import SupportChatWidget from "./components/SupportChatWidget";
+import PopupPromo from "./components/PopupPromo";
 import DeliveryPage from "./pages/DeliveryPage";
 import WarrantyPage from "./pages/WarrantyPage";
+import GiftPage from "./pages/GiftPage";
+import FAQPage from "./pages/FAQPage";
+import WomenGuide from "./pages/guides/WomenGuide";
+import MenGuide from "./pages/guides/MenGuide";
+import GiftGuide from "./pages/guides/GiftGuide";
+import OfficeGuide from "./pages/guides/OfficeGuide";
 
 export default function App() {
   return (
@@ -35,9 +42,16 @@ export default function App() {
           <Route path="/news" element={<NewsPage />} />
           <Route path="/delivery" element={<DeliveryPage />} />
           <Route path="/warranty" element={<WarrantyPage />} />
+          <Route path="/gift" element={<GiftPage />} />
+          <Route path="/faq" element={<FAQPage />} />
+          <Route path="/guide/women" element={<WomenGuide />} />
+          <Route path="/guide/men" element={<MenGuide />} />
+          <Route path="/guide/gift" element={<GiftGuide />} />
+          <Route path="/guide/office" element={<OfficeGuide />} />
         </Route>
       </Routes>
       <SupportChatWidget />
+      <PopupPromo />
     </BrowserRouter>
   );
 }

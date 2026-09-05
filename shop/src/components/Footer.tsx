@@ -54,6 +54,27 @@ export default function Footer() {
                 { label: "Доставка и оплата", to: "/delivery" },
                 { label: "Возврат товара",    to: "/delivery#returns" },
                 { label: "Гарантия оригинала", to: "/warranty" },
+                { label: "FAQ",               to: "/faq" },
+              ].map(item => (
+                <li key={item.to}>
+                  <Link to={item.to} style={{ fontSize: 13, color: "#7d7a73", textDecoration: "none", letterSpacing: "0.02em", transition: "color 0.3s" }}
+                    onMouseEnter={e => (e.currentTarget.style.color = "#f5f4f0")}
+                    onMouseLeave={e => (e.currentTarget.style.color = "#7d7a73")}
+                  >{item.label}</Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          {/* Guides */}
+          <div>
+            <h4 style={{ fontSize: 10, fontWeight: 400, letterSpacing: "0.24em", textTransform: "uppercase", color: "#6f6c66", marginBottom: 18 }}>Гиды</h4>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: 11 }}>
+              {[
+                { label: "Женские ароматы", to: "/guide/women" },
+                { label: "Мужские ароматы", to: "/guide/men" },
+                { label: "Парфюм в подарок", to: "/guide/gift" },
+                { label: "Ароматы для офиса", to: "/guide/office" },
               ].map(item => (
                 <li key={item.to}>
                   <Link to={item.to} style={{ fontSize: 13, color: "#7d7a73", textDecoration: "none", letterSpacing: "0.02em", transition: "color 0.3s" }}

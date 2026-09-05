@@ -86,8 +86,12 @@ export const api = {
     return req<{ ok: boolean; reviews: import("./types").ShopReview[] }>(`/reviews?${qs}`);
   },
 
-  postReview(data: { offerId?: string; productName?: string; productImg?: string; rating: number; text: string }, token: string): Promise<{ ok: boolean; review: import("./types").ShopReview }> {
-    return req<{ ok: boolean; review: import("./types").ShopReview }>("/reviews", { method: "POST", body: JSON.stringify(data) }, token);
+  postReview(data: { offerId?: string; productName?: string; productImg?: string; rating: number; text: string; photoUrl?: string }, token: string): Promise<{ ok: boolean; review: import("./types").ShopReview; pointsEarned?: number }> {
+    return req<{ ok: boolean; review: import("./types").ShopReview; pointsEarned?: number }>("/reviews", { method: "POST", body: JSON.stringify(data) }, token);
+  },
+
+  loyalty(token: string): Promise<import("./types").LoyaltyData & { ok: boolean }> {
+    return req<import("./types").LoyaltyData & { ok: boolean }>("/loyalty", {}, token);
   },
 
   stockAlert(offerId: string, email: string): Promise<{ ok: boolean }> {
@@ -104,6 +108,14 @@ export const api = {
 
   marketplaceReviews(offerId: string): Promise<{ ok: boolean; reviews: MarketplaceReview[]; avgRating: number; reviewCount: number }> {
     return req<{ ok: boolean; reviews: MarketplaceReview[]; avgRating: number; reviewCount: number }>(`/marketplace-reviews?offerId=${encodeURIComponent(offerId)}`);
+  },
+
+  unboxings(): Promise<{ ok: boolean; unboxings: { id: string; name: string; mediaUrl: string; text: string; createdAt: string }[] }> {
+    return req<{ ok: boolean; unboxings: { id: string; name: string; mediaUrl: string; text: string; createdAt: string }[] }>("/unboxings");
+  },
+
+  submitUnboxing(data: { name: string; mediaUrl: string; text: string }): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>("/unboxings", { method: "POST", body: JSON.stringify(data) });
   },
 };
 

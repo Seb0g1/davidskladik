@@ -830,7 +830,7 @@ app.post("/api/ready-to-ship/batch-order", requireStaff, async (request, respons
       const product = findSupplierCartWarehouseProduct(warehouse, { offerId, marketplace, accountId });
       if (!product) { failed.push({ key: lineKey, offerId, reason: "product_not_found" }); continue; }
 
-      const normalizedLine = normalizeSupplierCartLine({ marketplace, accountId, orderId, offerId, quantity });
+      const normalizedLine = normalizeSupplierCartLine({ marketplace, accountId, orderId, offerId, quantity, productName: cleanText(line.productName || "") });
       const row = await resolveSupplierCartRow(warehouse, normalizedLine, state);
       if (!row.ready) { failed.push({ key: lineKey, offerId, reason: row.skipReason || "no_supplier" }); continue; }
 

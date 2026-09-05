@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BarChart2, Loader2, RefreshCw, Tag } from "lucide-react";
+import { BarChart2, Download, Loader2, RefreshCw, Tag } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 
@@ -153,7 +153,15 @@ function OzonTab() {
 
   return (
     <>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 12 }}>
+        <a
+          href="/api/catalog/brands-tnved/export-excel"
+          className="secondary-action"
+          style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
+          title="Скачать Excel: бренд → коды ТН ВЭД"
+        >
+          <Download size={15} /> Скачать Excel
+        </a>
         <button
           className="secondary-action"
           onClick={() => refresh.mutate()}

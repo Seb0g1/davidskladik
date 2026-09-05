@@ -26,6 +26,7 @@ app.get("/api/shop/reviews", async (request, response, next) => {
         productImg: r.productImg,
         rating: r.rating,
         text: r.text,
+        photoUrl: r.photoUrl || null,
         createdAt: r.createdAt,
         author: [r.customer?.firstName, r.customer?.lastName].filter(Boolean).join(" ") || r.customer?.email?.split("@")[0] || "Покупатель",
       })),
@@ -46,6 +47,7 @@ app.post("/api/shop/reviews", requireShopAuth, async (request, response, next) =
     const offerId = cleanText(request.body?.offerId || "");
     const productName = cleanText(request.body?.productName || "").slice(0, 200);
     const productImg = cleanText(request.body?.productImg || "").slice(0, 500);
+    const photoUrl = cleanText(request.body?.photoUrl || "").slice(0, 1000) || null;
 
     const prisma = getPrisma();
 
@@ -56,9 +58,17 @@ app.post("/api/shop/reviews", requireShopAuth, async (request, response, next) =
     }
 
     const review = await prisma.shopReview.create({
-      data: { customerId, offerId: offerId || null, productName: productName || null, productImg: productImg || null, rating, text, approved: true },
+      data: { customerId, offerId: offerId || null, productName: productName || null, productImg: productImg || null, rating, text, photoUrl, approved: true },
     });
-    response.json({ ok: true, review: { id: review.id, rating: review.rating, text: review.text, createdAt: review.createdAt } });
+
+    // Award loyalty points
+    const pts = photoUrl ? 50 : 20;
+    await prisma.$transaction([
+      prisma.shopCustomer.update({ where: { id: customerId }, data: { loyaltyPoints: { increment: pts } } }),
+      prisma.shopPointTransaction.create({ data: { customerId, points: pts, reason: photoUrl ? "Отзыв с фото" : "Отзыв", refId: review.id } }),
+    ]);
+
+    response.json({ ok: true, review: { id: review.id, rating: review.rating, text: review.text, createdAt: review.createdAt }, pointsEarned: pts });
   } catch (error) { next(error); }
 });
 
@@ -106,5 +116,27 @@ app.delete("/api/shop/admin/reviews/:id", requireAdmin, async (request, response
     const prisma = getPrisma();
     await prisma.shopReview.delete({ where: { id: request.params.id } });
     response.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
+// ─── Loyalty: get balance + tier ─────────────────────────────────────────────
+app.get("/api/shop/loyalty", requireShopAuth, async (request, response, next) => {
+  try {
+    const customerId = request.shopCustomer?.customerId;
+    if (!customerId) return response.status(401).json({ error: "Требуется авторизация" });
+    const prisma = getPrisma();
+    const customer = await prisma.shopCustomer.findUnique({
+      where: { id: customerId },
+      select: { loyaltyPoints: true },
+    });
+    const pts = customer?.loyaltyPoints ?? 0;
+    const transactions = await prisma.shopPointTransaction.findMany({
+      where: { customerId },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+    });
+    const tier = pts >= 300 ? "platinum" : pts >= 100 ? "gold" : "silver";
+    const nextTier = tier === "platinum" ? null : tier === "gold" ? 300 : 100;
+    response.json({ ok: true, points: pts, tier, nextTier, transactions });
   } catch (error) { next(error); }
 });

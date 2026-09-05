@@ -39,6 +39,7 @@ const deployFiles = [
   "package.json",
   "package-lock.json",
   "routes/auth-session.js",
+  "routes/auth-yandex.js",
   "routes/marketplaces.js",
   "routes/operations.js",
   "routes/settings.js",

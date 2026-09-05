@@ -30,6 +30,7 @@ export interface ShopBanner {
   subtitle?: string;
   linkUrl?: string;
   linkText?: string;
+  endDate?: string;
   active: boolean;
   order: number;
 }
@@ -117,8 +118,16 @@ export interface ShopReview {
   productImg?: string | null;
   rating: number;
   text: string;
+  photoUrl?: string | null;
   createdAt: string;
   author?: string;
+}
+
+export interface LoyaltyData {
+  points: number;
+  tier: "silver" | "gold" | "platinum";
+  nextTier: number | null;
+  transactions: { id: string; points: number; reason: string; createdAt: string }[];
 }
 
 export interface MarketplaceReview {

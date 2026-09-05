@@ -99,6 +99,43 @@ export default function ProductPage() {
   });
 
   useEffect(() => {
+    if (!product) return;
+    const ld: Record<string, unknown> = {
+      "@context": "https://schema.org/",
+      "@type": "Product",
+      name: product.name,
+      brand: { "@type": "Brand", name: product.brand },
+      description: product.description ? product.description.slice(0, 200) : undefined,
+      image: product.images,
+      offers: {
+        "@type": "Offer",
+        priceCurrency: "RUB",
+        price: product.priceRub,
+        availability: product.inStock
+          ? "https://schema.org/InStock"
+          : "https://schema.org/OutOfStock",
+        url: `https://magicvibes.ru/product/${product.offerId}`,
+      },
+    };
+    if (product.rating && product.reviewCount) {
+      ld.aggregateRating = {
+        "@type": "AggregateRating",
+        ratingValue: product.rating,
+        reviewCount: product.reviewCount,
+      };
+    }
+    const script = document.createElement("script");
+    script.type = "application/ld+json";
+    script.id = "product-ld-json";
+    script.textContent = JSON.stringify(ld);
+    document.head.appendChild(script);
+    return () => {
+      const existing = document.getElementById("product-ld-json");
+      if (existing) existing.remove();
+    };
+  }, [product]);
+
+  useEffect(() => {
     if (!shareOpen) return;
     const fn = (e: MouseEvent) => {
       if (shareRef.current && !shareRef.current.contains(e.target as Node)) setShareOpen(false);

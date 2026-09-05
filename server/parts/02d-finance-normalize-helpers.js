@@ -167,7 +167,7 @@ function supplierLedgerSourceKeyForPicking(row = {}) {
 
 function normalizeSupplierLedgerType(value = "") {
   const type = cleanText(value).toLowerCase();
-  return ["purchase_debt", "payment", "adjustment", "supplier_return"].includes(type) ? type : "adjustment";
+  return ["purchase_debt", "payment", "adjustment", "supplier_return", "balance_correction"].includes(type) ? type : "adjustment";
 }
 
 function normalizeSupplierLedgerEntry(input = {}) {
