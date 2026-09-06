@@ -160,7 +160,7 @@ const YANDEX_WRONG_CATEGORY_PATTERNS = [
   /сумк/i, /костюм/i, /юбк/i, /худи/i, /игрушк/i, /(^|\s)вина(\s|$)/i, /аквариум/i,
   /автомобильн/i, /диффузор/i, /одежд/i, /обув/i, /плать/i, /футболк/i,
   /брюк/i, /куртк/i, /носк/i, /детск/i, /спортивн/i, /канцеляр/i, /посуд/i,
-  /водород/i, /интимн/i,
+  /водород/i, /интимн/i, /съедобн/i,
 ];
 
 function isWrongYandexBeautyCategory(categoryName = "") {
@@ -180,6 +180,7 @@ function resolveYandexTargetCategoryName(productName = "") {
   if (/шампунь|shampoo/.test(text)) return "Шампуни";
   if (/для душа|shower gel|body cleanser/.test(text)) return "Для душа";
   if (/парфюм|духи|туалетн|eau de|edp|edt|parfum|аромат|discovery/.test(text)) return "Парфюмерия";
+  if (/спрей для тела|body spray|лосьон для тела|body lotion/.test(text)) return "Парфюмерия";
   return "";
 }
 
