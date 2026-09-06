@@ -77,8 +77,10 @@ async function runTnvedSweep({ source = "schedule" } = {}) {
         }
         if (!offerIds.length) continue;
 
-        // 2. Найти товары без TNVED атрибута
+        // 2. Найти товары без TNVED атрибута ИЛИ с неверным кодом
+        // wrongCodeMap: offerId → currentCode (не пустой, но не совпадает с ожидаемым)
         const noTnvedIds = [];
+        const wrongCodeMap = new Map(); // offerId → текущий код
         for (const chunk of chunkArray(offerIds, 100)) {
           try {
             const data = await ozonRequest("/v4/product/info/attributes", {
@@ -87,21 +89,27 @@ async function runTnvedSweep({ source = "schedule" } = {}) {
             }, account);
             for (const item of (data.result || [])) {
               const tnved = (item.attributes || []).find((a) => a.id === TNVED_ATTR_ID);
-              if (!tnved || !tnved.values?.[0]?.value) {
-                noTnvedIds.push(cleanText(item.offer_id));
+              const currentCode = cleanText(tnved?.values?.[0]?.value || "").match(/^(\d{7,10})/)?.[1] || "";
+              const offerId = cleanText(item.offer_id);
+              if (!currentCode) {
+                noTnvedIds.push(offerId);
+              } else {
+                // Пока не знаем категорию — собираем всех с кодами для проверки ниже
+                wrongCodeMap.set(offerId, currentCode);
               }
             }
           } catch {}
         }
 
-        if (!noTnvedIds.length) {
+        const needsCatCheck = [...noTnvedIds, ...wrongCodeMap.keys()];
+        if (!needsCatCheck.length) {
           logger.info("tnved_sweep: account ok", { account: account.id, total: offerIds.length, missing: 0 });
           continue;
         }
 
-        // 3. Получить категорию для каждого товара без TNVED
+        // 3. Получить категорию для товаров без TNVED (+ с потенциально неверным кодом)
         const catMap = new Map(); // offerId → { descCatId, typeId }
-        for (const chunk of chunkArray(noTnvedIds, 100)) {
+        for (const chunk of chunkArray(needsCatCheck, 100)) {
           try {
             const data = await ozonRequest("/v3/product/info/list", { offer_id: chunk }, account);
             for (const item of (data.items || [])) {
@@ -116,14 +124,18 @@ async function runTnvedSweep({ source = "schedule" } = {}) {
           } catch {}
         }
 
-        // 4. Сформировать обновления
+        // 4. Сформировать обновления: без кода + с неверным кодом
         const updateItems = [];
-        for (const offerId of noTnvedIds) {
+        const allToCheck = [...noTnvedIds, ...wrongCodeMap.keys()];
+        for (const offerId of allToCheck) {
           const cat = catMap.get(offerId);
           if (!cat) { totalSkipped++; continue; }
           const { descCatId, typeId } = cat;
-          const tnvedCode = TNVED_BY_CAT_ID[descCatId] || TNVED_DEFAULT;
-          const dictEntry = await tnvedFetchDictEntry(account, descCatId, typeId, tnvedCode);
+          const expectedCode = TNVED_BY_CAT_ID[descCatId] || TNVED_DEFAULT;
+          const currentCode = wrongCodeMap.get(offerId) || "";
+          // Пропускаем если код уже правильный
+          if (currentCode && currentCode === expectedCode) continue;
+          const dictEntry = await tnvedFetchDictEntry(account, descCatId, typeId, expectedCode);
           if (!dictEntry) { totalSkipped++; continue; }
           updateItems.push({
             offer_id: offerId,
@@ -150,6 +162,7 @@ async function runTnvedSweep({ source = "schedule" } = {}) {
           account: account.id,
           total: offerIds.length,
           missing: noTnvedIds.length,
+          wrongCode: wrongCodeMap.size,
           updated: accountUpdated,
         });
       } catch (err) {
@@ -166,6 +179,22 @@ async function runTnvedSweep({ source = "schedule" } = {}) {
     tnvedSweepRunning = false;
   }
 }
+
+// Ручной запуск sweep из UI или скрипта — доступен и на api-процессе.
+app.post("/api/ozon/tnved/sweep/run", requireAdmin, async (req, res, next) => {
+  try {
+    if (tnvedSweepRunning) {
+      return res.status(409).json({ error: "Sweep уже выполняется" });
+    }
+    // Запускаем асинхронно, чтобы HTTP-запрос не зависал на 5+ минут
+    res.status(202).json({ ok: true, message: "Sweep запущен в фоне — проверьте логи для результата" });
+    runTnvedSweep({ source: "manual" }).catch((err) => {
+      logger.warn("tnved_sweep manual run failed", { detail: err?.message });
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 function scheduleTnvedSweep(delayMs = TNVED_SWEEP_INTERVAL_MS) {
   if (!tnvedSweepEnabled || !backgroundJobsEnabled || isApiServer) return;

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Loader2, RefreshCw, Save, Send, Tag, XCircle } from "lucide-react";
+import { CheckCircle2, Loader2, RefreshCw, Save, Send, Tag, Wrench, XCircle } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 
 type TnvedCategory = {
@@ -208,6 +208,16 @@ export function TnvedPage() {
       setYandexPreview(null);
       void queryClient.invalidateQueries({ queryKey: ["tnved-report"] });
     },
+  });
+
+  const [sweepResult, setSweepResult] = useState<string | null>(null);
+
+  const sweepMutation = useMutation({
+    mutationFn: () => apiJson<{ ok: boolean; message?: string; error?: string }>("/api/ozon/tnved/sweep/run", {
+      method: "POST",
+    }),
+    onSuccess: (data) => setSweepResult(data.message || (data.ok ? "Sweep запущен" : (data.error ?? "Ошибка"))),
+    onError: (err: Error) => setSweepResult(`Ошибка: ${err.message}`),
   });
 
   const saveDefaultCodeMutation = useMutation({
@@ -434,7 +444,7 @@ export function TnvedPage() {
                             <input
                               type="text"
                               className="field-input"
-                              placeholder="например 3303009000"
+                              placeholder="например 3303001000"
                               value={code}
                               maxLength={20}
                               style={{ width: "100%", fontFamily: "monospace" }}
@@ -467,9 +477,9 @@ export function TnvedPage() {
           </div>
           <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
             <div style={{ background: "var(--highlight, rgba(0,180,80,.08))", borderRadius: 4, padding: "2px 6px", display: "inline-block" }}>
-              <strong>3303009000</strong> — Туалетная и парфюмерная вода
+              <strong>3303001000</strong> — Духи (parfums, &gt;20% масла)
             </div>
-            <div>3303001000 — Духи (parfums, &gt;20% масла)</div>
+            <div>3303009000 — Туалетная и парфюмерная вода</div>
           </div>
           <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
             <strong>Косметика и макияж (3304)</strong>
@@ -523,7 +533,7 @@ export function TnvedPage() {
             <input
               type="text"
               className="field-input"
-              placeholder="3303009000"
+              placeholder="3303001000"
               value={defaultCode}
               maxLength={20}
               style={{ fontFamily: "monospace", width: 160, flexShrink: 0 }}
@@ -566,6 +576,31 @@ export function TnvedPage() {
           </div>
           {renderApplyResult(yandexPreview, yandexPreviewMutation.error as Error | null)}
           {renderApplyResult(yandexApplyMutation.data ?? null, yandexApplyMutation.error as Error | null)}
+
+          {/* Sweep: исправить пустые и неверные коды */}
+          <div className="section-title compact-title" style={{ marginTop: 20 }}>
+            <div><span>Sweep</span><h3>Исправить коды на Ozon</h3></div>
+          </div>
+          <p className="form-hint">
+            Автосвип (каждые 2 ч) проставляет правильный код по категории: пустые и неверные
+            (напр. 3303009000 вместо 3303001000 для Парфюмерии). Запустить вручную:
+          </p>
+          <button
+            className="primary-action"
+            type="button"
+            disabled={sweepMutation.isPending}
+            onClick={() => {
+              setSweepResult(null);
+              sweepMutation.mutate();
+            }}
+          >
+            {sweepMutation.isPending ? <Loader2 className="spin" size={14} /> : <Wrench size={14} />} Запустить исправление
+          </button>
+          {sweepResult ? (
+            <div className={`info-strip ${sweepMutation.isError ? "warn" : "success"} compact`} style={{ marginTop: 8 }}>
+              {sweepResult}
+            </div>
+          ) : null}
         </section>
       </div>
     </section>
