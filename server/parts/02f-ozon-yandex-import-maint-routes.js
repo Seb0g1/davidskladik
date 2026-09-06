@@ -160,6 +160,7 @@ const YANDEX_WRONG_CATEGORY_PATTERNS = [
   /сумк/i, /костюм/i, /юбк/i, /худи/i, /игрушк/i, /(^|\s)вина(\s|$)/i, /аквариум/i,
   /автомобильн/i, /диффузор/i, /одежд/i, /обув/i, /плать/i, /футболк/i,
   /брюк/i, /куртк/i, /носк/i, /детск/i, /спортивн/i, /канцеляр/i, /посуд/i,
+  /водород/i, /интимн/i,
 ];
 
 function isWrongYandexBeautyCategory(categoryName = "") {
