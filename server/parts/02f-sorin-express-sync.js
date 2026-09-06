@@ -1,6 +1,6 @@
 // Sorin express-warehouse sync.
 // Products that have an ACTIVE link to supplier Сорин in PriceMaster are stocked at exactly
-// SORIN_EXPRESS_STOCK (default 2) units on:
+// SORIN_EXPRESS_STOCK (default 2) units regardless of price (Sorin is always priority) on:
 //   - Ozon  express warehouse SORIN_EXPRESS_OZON_WAREHOUSE_ID  (default 1020005000398404)
 //   - Yandex express campaign  SORIN_EXPRESS_YANDEX_CAMPAIGN_ID (default 216697459)
 // Products whose Sorin rows are inactive/stopped in PM receive stock=0 to prevent
@@ -58,7 +58,6 @@ async function fetchActiveSorinArticlesFromPm(articles) {
        FROM OfferRows r
        JOIN OfferDocs d ON d.ID = r.DocID
        WHERE BINARY TRIM(r.NativeID) IN (${placeholders})
-         AND r.Ignored = 0
          AND r.Active = 1
          AND (d.PartnerName LIKE '%Сорин%' OR d.PartnerName LIKE '%Sorin%')
          ${activeDocFilter}`,
