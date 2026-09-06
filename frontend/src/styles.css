@@ -216,6 +216,15 @@ button:disabled {
   align-items: center;
 }
 
+@media (max-width: 1060px) {
+  .toolbar {
+    grid-template-columns: 1fr 1fr;
+  }
+  .toolbar .search-box {
+    grid-column: 1 / -1;
+  }
+}
+
 .page-heading {
   display: flex;
   justify-content: space-between;
@@ -521,6 +530,8 @@ button:disabled {
 
 .product-title-line strong {
   font-size: 16px;
+  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 .product-name {
@@ -5589,6 +5600,7 @@ textarea {
     grid-template-rows: auto auto auto auto;
     height: 260px;
     min-height: 260px;
+    min-width: 0;
     align-items: start;
   }
 
@@ -5612,6 +5624,21 @@ textarea {
   .statistics-table .table-head,
   .statistics-table .table-row {
     grid-template-columns: 1fr;
+  }
+
+  .statistics-table .table-row > span {
+    display: grid;
+    grid-template-columns: 118px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+  }
+
+  .statistics-table .table-row > span::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
   }
 
   .stat-card {
@@ -6372,6 +6399,45 @@ label.settings-toggle {
 
   .app-content > .page-heading {
     margin-top: 0;
+  }
+
+  /* Wide tables that overflow between 760-980px — convert to card layout */
+  .price-status-table .table-head,
+  .finance-orders-table .table-head,
+  .finance-expenses-table .table-head,
+  .problem-products-page .price-table .table-head {
+    display: none;
+  }
+
+  .price-status-table .table-row,
+  .finance-orders-table .table-row,
+  .finance-expenses-table .table-row,
+  .problem-products-page .price-table .table-row {
+    min-width: 0;
+    grid-template-columns: 1fr;
+    gap: 7px;
+    padding: 12px;
+  }
+
+  .price-status-table .table-row > span,
+  .finance-orders-table .table-row > span,
+  .finance-expenses-table .table-row > span,
+  .problem-products-page .price-table .table-row > span {
+    display: grid;
+    grid-template-columns: 118px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+  }
+
+  .price-status-table .table-row > span::before,
+  .finance-orders-table .table-row > span::before,
+  .finance-expenses-table .table-row > span::before,
+  .problem-products-page .price-table .table-row > span::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
   }
 }
 
@@ -7494,6 +7560,25 @@ textarea:focus-visible,
   .consignment-operations-table .table-row {
     grid-template-columns: 1fr;
     min-width: 0;
+    gap: 7px;
+    padding: 12px;
+  }
+
+  .consignment-items-table .table-row > span,
+  .consignment-operations-table .table-row > span {
+    display: grid;
+    grid-template-columns: 118px minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+  }
+
+  .consignment-items-table .table-row > span::before,
+  .consignment-operations-table .table-row > span::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
   }
 
   .consignment-items-table,
