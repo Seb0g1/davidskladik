@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Loader2, MoreHorizontal, PackageX, Pencil, RefreshCw, Repeat2, RotateCcw, Trash2, Users, Wallet, X, Zap } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Info, Loader2, MoreHorizontal, PackageX, Pencil, RefreshCw, Repeat2, RotateCcw, ShoppingBag, Trash2, Users, Wallet, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -194,11 +194,13 @@ export function PickingListPage() {
     },
   });
 
+  const [helpOpen, setHelpOpen] = useState(false);
   const [resetConfirm, setResetConfirm] = useState(false);
   const [openActionMenu, setOpenActionMenu] = useState<string | null>(null);
   const [hintFocusedSupplier, setHintFocusedSupplier] = useState<string | null>(null);
   const [deferredDateFilter, setDeferredDateFilter] = useState<string | null>(null);
   const balancePanelRef = useRef<HTMLDivElement>(null);
+  const currentSupplierRef = useRef<string | null>(null);
 
   const updateMutation = useMutation({
     mutationFn: ({ key, nextStatus, snoozeDays, permanent, pickedQuantity, pricePaidRub }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean; pickedQuantity?: number; pricePaidRub?: number }) => {
@@ -311,13 +313,13 @@ export function PickingListPage() {
 
   const viewersQuery = useQuery({
     queryKey: ["picking-list-viewers"],
-    queryFn: () => fetchJson("/api/supplier-picking-list/viewers", z.object({ ok: z.boolean(), viewers: z.array(z.object({ username: z.string() })) }).passthrough()),
+    queryFn: () => fetchJson("/api/supplier-picking-list/viewers", z.object({ ok: z.boolean(), viewers: z.array(z.object({ username: z.string(), currentSupplier: z.string().nullable().optional() })) }).passthrough()),
     refetchInterval: 30_000,
   });
 
   useEffect(() => {
     const beat = () => {
-      void fetchJson("/api/supplier-picking-list/heartbeat", z.object({ ok: z.boolean() }).passthrough(), { method: "PUT", headers: { "Content-Type": "application/json" }, body: "{}" }).catch(() => {});
+      void fetchJson("/api/supplier-picking-list/heartbeat", z.object({ ok: z.boolean() }).passthrough(), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ currentSupplier: currentSupplierRef.current }) }).catch(() => {});
     };
     beat();
     const id = setInterval(beat, 30_000);
@@ -348,6 +350,12 @@ export function PickingListPage() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [openActionMenu]);
+
+  useEffect(() => {
+    setPickQtyDrafts({});
+    setPriceDrafts({});
+    setOpenActionMenu(null);
+  }, [status, supplier]);
 
   const filteredRows = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -547,9 +555,11 @@ export function PickingListPage() {
         }
       />
 
-      {/* Balance flyout panel */}
+      {/* Balance flyout / bottom sheet panel */}
       {balancePanelOpen ? (
-        <div className="picker-balance-panel" ref={balancePanelRef}>
+        <>
+          <div className="picker-balance-overlay" onClick={() => setBalancePanelOpen(false)} />
+          <div className="picker-balance-panel" ref={balancePanelRef}>
           {/* My balance */}
           <div className="picker-balance-panel-my">
             <div className="picker-balance-panel-label"><Wallet size={14} /> Мой баланс · {myUsername || "—"}</div>
@@ -810,6 +820,7 @@ export function PickingListPage() {
             </div>
           ) : null}
         </div>
+        </>
       ) : null}
 
       <div className="page-tabs">
@@ -836,12 +847,33 @@ export function PickingListPage() {
         </div>
       </section>
 
+      {/* Mobile: status chips row */}
+      <div className="picking-status-chips">
+        {[
+          { value: "open", label: "К сборке", count: summary.open ?? 0 },
+          { value: "picked", label: "Собрано", count: summary.picked ?? 0 },
+          { value: "missing", label: "Не было", count: summary.missing ?? 0 },
+          { value: "all", label: "Все" },
+        ].map(opt => (
+          <button
+            key={opt.value}
+            type="button"
+            className={`picking-status-chip${status === opt.value ? " active" : ""}`}
+            onClick={() => { setStatus(opt.value); setDeferredDateFilter(null); }}
+          >
+            {opt.label}
+            {"count" in opt && Number(opt.count) > 0 ? <span className="picking-status-chip-count">{String(opt.count)}</span> : null}
+          </button>
+        ))}
+      </div>
+
+      {/* Desktop: full filter row */}
       <div className="control-grid compact-controls picking-filters">
         <label>Статус
           <SelectField
             ariaLabel="Статус сборки"
             value={status}
-            onChange={setStatus}
+            onChange={(v) => { setStatus(v); setDeferredDateFilter(null); }}
             options={[
               { value: "open", label: "К сборке" },
               { value: "picked", label: "Собрано" },
@@ -868,20 +900,29 @@ export function PickingListPage() {
         </label>
       </div>
 
-      <details style={{ marginBottom: 8 }}>
-        <summary style={{ fontSize: 12, color: "var(--muted)", cursor: "pointer", userSelect: "none", padding: "4px 0" }}>
-          Как работает сборка — справка
-        </summary>
-        <div style={{ fontSize: 12, color: "var(--muted)", lineHeight: 1.8, padding: "6px 0 4px 12px", borderLeft: "2px solid var(--line)" }}>
-          <div><strong style={{ color: "var(--text)" }}>Собрал</strong> — взял товар у поставщика. Долг фиксируется автоматически по цене из PM.</div>
-          <div><strong style={{ color: "var(--text)" }}>Поле цены рядом с «Собрал»</strong> — заполнять только если реальная цена отличается от PM.</div>
-          <div><strong style={{ color: "var(--text)" }}>Наличные сейчас / Заплатил</strong> — если сразу отдали деньги поставщику. Иначе — долг копится в балансе.</div>
-          <div><strong style={{ color: "var(--text)" }}>Не было</strong> — товара нет, автокорзина попробует найти замену у другого поставщика.</div>
-          <div><strong style={{ color: "var(--text)" }}>Завтра</strong> — отложить позицию на следующий рабочий день.</div>
-          <div><strong style={{ color: "var(--text)" }}>Удалить</strong> (только админ) — полная отмена строки, долг аннулируется автоматически.</div>
-          <div style={{ marginTop: 4 }}><strong style={{ color: "var(--text)" }}>Долг в шапке поставщика</strong> — сколько мы должны ему всего (по всем заказам). <strong>Аванс</strong> — переплатили.</div>
-        </div>
-      </details>
+      <div className="picking-help-collapsible">
+        <button
+          type="button"
+          className="picking-help-toggle"
+          onClick={() => setHelpOpen(v => !v)}
+          aria-expanded={helpOpen}
+        >
+          <Info size={13} />
+          <span>Как работает сборка</span>
+          <ChevronDown size={13} style={{ marginLeft: "auto", transform: helpOpen ? "rotate(180deg)" : "none", transition: "transform .2s", opacity: 0.5 }} />
+        </button>
+        {helpOpen ? (
+          <div className="picking-help-body">
+            <div><strong>Собрал</strong> — взял товар у поставщика. Долг фиксируется автоматически по цене из PM.</div>
+            <div><strong>Поле цены рядом с «Собрал»</strong> — заполнять только если реальная цена отличается от PM.</div>
+            <div><strong>Наличные сейчас / Заплатил</strong> — если сразу отдали деньги поставщику. Иначе — долг копится в балансе.</div>
+            <div><strong>Не было</strong> — товара нет, автокорзина попробует найти замену у другого поставщика.</div>
+            <div><strong>Завтра</strong> — отложить позицию на следующий рабочий день.</div>
+            <div><strong>Удалить</strong> (только админ) — полная отмена строки, долг аннулируется автоматически.</div>
+            <div><strong>Долг / Аванс в шапке</strong> — сколько мы должны поставщику всего. Аванс — переплатили.</div>
+          </div>
+        ) : null}
+      </div>
 
       {listQuery.error ? <div className="inline-error">{errorMessage(listQuery.error)}</div> : null}
       {updateMutation.error ? <div className="inline-error">{errorMessage(updateMutation.error)}</div> : null}
@@ -1065,16 +1106,47 @@ export function PickingListPage() {
               const totalRub = currentGroupTotalRub(supplierRows, usdRate);
               const supplierCurrency = String(supplierRows[0]?.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
               const totalQtyAll = supplierRows.reduce((s, r) => s + (r.quantity || 1), 0);
+              const hasReseller = supplierRows.some(r => r.reseller);
+              const balanceUsd = supplierCurrency === "USD" ? balance / usdRate : balance;
+              const isOverpaid = balance < 0;
+              const isInDebt = balance > 0;
               return (
                 <article className="picking-supplier-card" key={supplierName}>
                   <div className="picking-supplier-toolbar">
                     <div className="picking-supplier-head">
                       <div className="picking-supplier-name-block">
                         <span>Поставщик</span>
-                        <h3>{supplierName}</h3>
+                        <h3>
+                          {supplierName}
+                          {hasReseller ? (
+                            <span className="supplier-reseller-badge" title="Перекупщик — возможно завышенные цены">
+                              <ShoppingBag size={12} />
+                            </span>
+                          ) : null}
+                        </h3>
                       </div>
                       <div className="picking-supplier-head-meta">
                         <span className="picking-supplier-count">{supplierRows.length} поз.{totalQtyAll !== supplierRows.length ? ` · ${totalQtyAll} шт.` : ""}</span>
+                        {(isInDebt || isOverpaid) ? (
+                          <span className={`picking-supplier-balance-badge${isOverpaid ? " overpaid" : " in-debt"}`}>
+                            {isOverpaid
+                              ? `Аванс ${supplierCurrency === "USD" ? moneyAmount(Math.abs(balanceUsd), "USD") : moneyAmount(Math.abs(balance), "RUB")}`
+                              : `Долг ${supplierCurrency === "USD" ? moneyAmount(balanceUsd, "USD") : moneyAmount(balance, "RUB")}`}
+                          </span>
+                        ) : null}
+                        {(() => {
+                          const here = (viewersQuery.data?.viewers ?? []).filter(v => v.currentSupplier === supplierName && v.username !== myUsername);
+                          if (!here.length) return null;
+                          return (
+                            <span className="picking-supplier-viewers">
+                              {here.map(v => (
+                                <span key={v.username} className="picking-viewer-chip" title={v.username}>
+                                  {v.username.slice(0, 2).toUpperCase()}
+                                </span>
+                              ))}
+                            </span>
+                          );
+                        })()}
                         {supplierCurrency === "RUB"
                           ? <span className={`picking-supplier-total-price${total > 0 ? " tone-warn" : ""}`}>{moneyAmount(total, "RUB")}</span>
                           : <span className={`picking-supplier-total-price${total > 0 ? " tone-warn" : ""}`}>{moneyAmount(total, "USD")} <span style={{ fontSize: "0.8em", opacity: 0.7 }}>≈{moneyAmount(totalRub, "RUB")}</span></span>
@@ -1096,26 +1168,30 @@ export function PickingListPage() {
                     </div>
                   </div>
                   <div className="supplier-payment-row">
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder={supplierCurrency === "USD" ? "Наличные сейчас, $" : "Наличные сейчас, ₽"}
-                      value={draftAmount}
-                      onChange={(event) => setPaymentDrafts((current) => ({ ...current, [supplierName]: event.target.value }))}
-                      onFocus={() => setHintFocusedSupplier(supplierName)}
-                      onBlur={() => setHintFocusedSupplier(null)}
-                    />
+                    <div className="payment-amount-field">
+                      <span className="payment-currency-prefix">{supplierCurrency === "USD" ? "$" : "₽"}</span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        pattern="[0-9]*[.,]?[0-9]*"
+                        placeholder="0"
+                        autoComplete="off"
+                        value={draftAmount}
+                        onChange={(event) => setPaymentDrafts((current) => ({ ...current, [supplierName]: event.target.value }))}
+                        onFocus={() => { setHintFocusedSupplier(supplierName); currentSupplierRef.current = supplierName; }}
+                        onBlur={() => setHintFocusedSupplier(null)}
+                      />
+                    </div>
                     <input
                       className="supplier-payment-note"
-                      placeholder="Комментарий"
+                      placeholder="Комментарий (необязательно)"
                       value={draftNote}
                       onChange={(event) => setPaymentNotes((current) => ({ ...current, [supplierName]: event.target.value }))}
                       onFocus={() => setHintFocusedSupplier(supplierName)}
                       onBlur={() => setHintFocusedSupplier(null)}
                     />
                     <button
-                      className="primary-action"
+                      className="primary-action payment-submit-btn"
                       type="button"
                       disabled={paymentMutation.isPending || !(Number(String(draftAmount || "0").replace(",", ".")) > 0)}
                       onClick={() => {
@@ -1218,9 +1294,8 @@ export function PickingListPage() {
                                         <Copy size={12} />
                                       </button>
                                       <span className="picking-row-sub">
-                                        {isMulti
-                                          ? `${row.orderId || row.postingNumber || row.offerId} · ${row.marketplace.toUpperCase()}`
-                                          : row.marketplace.toUpperCase()}
+                                        <span className={`marketplace-dot marketplace-dot--${row.marketplace}`}>{row.marketplace.slice(0, 1).toUpperCase()}</span>
+                                        {isMulti ? ` · ${row.orderId || row.postingNumber || row.offerId}` : null}
                                       </span>
                                     </div>
                                     <div className="picking-row-header-right">
@@ -1288,6 +1363,7 @@ export function PickingListPage() {
                                             ? (isUsd ? Math.round(priceRaw * usdRate) : priceRaw)
                                             : undefined;
                                           navigator.vibrate?.(80);
+                                          currentSupplierRef.current = row.supplierName || null;
                                           updateMutation.mutate({ key: row.key, nextStatus: "picked", pickedQuantity: qty, pricePaidRub });
                                         }}
                                       >

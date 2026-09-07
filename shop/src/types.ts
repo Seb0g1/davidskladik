@@ -159,6 +159,9 @@ export interface FragranceNotes {
   baseNotes: string[];
   accords: string[];
   gender?: string;
+  seasons?: string[];
+  source?: string;
+  generatedAt?: string;
 }
 
 export interface CatalogResponse {

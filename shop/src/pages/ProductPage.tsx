@@ -23,6 +23,111 @@ const S = {
   accent3: "#EDD9B0",
 };
 
+// ── Fragrance pyramid visual component ───────────────────────────────────────
+const PYRAMID_LAYERS = [
+  { key: "top",   label: "Верхние",  field: "topNotes"    as const, color: "#f0dfa0", rgb: "240,223,160", widthPct: 38 },
+  { key: "heart", label: "Сердце",   field: "middleNotes" as const, color: "#c9a25e", rgb: "201,162,94",  widthPct: 62 },
+  { key: "base",  label: "База",     field: "baseNotes"   as const, color: "#8c7251", rgb: "140,114,81",  widthPct: 88 },
+];
+
+function FragrancePyramid({ notes }: { notes: FragranceNotes }) {
+  const [hovered, setHovered] = useState<string | null>(null);
+
+  const activeLayers = PYRAMID_LAYERS.filter(l => (notes[l.field] as string[]).length > 0);
+
+  return (
+    <div>
+      {/* Pyramid layers */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 0, alignItems: "center" }}>
+        {activeLayers.map((layer, i) => {
+          const items = notes[layer.field] as string[];
+          const isFirst = i === 0;
+          const isLast = i === activeLayers.length - 1;
+          const isHov = hovered === layer.key;
+          return (
+            <div
+              key={layer.key}
+              style={{
+                width: `${layer.widthPct}%`,
+                minWidth: 100,
+                position: "relative",
+                clipPath: isFirst && activeLayers.length > 1
+                  ? "polygon(6% 0%, 94% 0%, 100% 100%, 0% 100%)"
+                  : isLast && activeLayers.length > 1
+                  ? "polygon(0% 0%, 100% 0%, 94% 100%, 6% 100%)"
+                  : undefined,
+              }}
+              onMouseEnter={() => setHovered(layer.key)}
+              onMouseLeave={() => setHovered(null)}
+            >
+              <div style={{
+                background: isHov
+                  ? `rgba(${layer.rgb},0.15)`
+                  : `rgba(${layer.rgb},0.07)`,
+                borderTop: isFirst ? `1px solid rgba(${layer.rgb},0.35)` : "none",
+                borderLeft: `1px solid rgba(${layer.rgb},0.25)`,
+                borderRight: `1px solid rgba(${layer.rgb},0.25)`,
+                borderBottom: isLast ? `1px solid rgba(${layer.rgb},0.35)` : `1px solid rgba(${layer.rgb},0.12)`,
+                padding: isFirst ? "12px 14px 10px" : isLast ? "10px 14px 14px" : "10px 14px",
+                transition: "background 0.2s",
+              }}>
+                <div style={{ fontSize: 9, letterSpacing: "0.2em", textTransform: "uppercase", color: `rgba(${layer.rgb},0.9)`, fontWeight: 700, marginBottom: 7, textAlign: "center" }}>
+                  {layer.label}
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 6px", justifyContent: "center" }}>
+                  {items.map(note => (
+                    <span key={note} style={{
+                      fontSize: 11,
+                      color: isHov ? `rgba(${layer.rgb},0.95)` : "rgba(242,237,230,0.65)",
+                      background: `rgba(${layer.rgb},0.06)`,
+                      border: `1px solid rgba(${layer.rgb},${isHov ? "0.35" : "0.18"})`,
+                      borderRadius: 3, padding: "2px 8px",
+                      whiteSpace: "nowrap",
+                      transition: "color 0.15s, border-color 0.15s",
+                    }}>{note}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Accords row */}
+      {notes.accords.length > 0 && (
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: "rgba(242,237,230,0.3)", fontWeight: 600, marginBottom: 8, textAlign: "center" }}>Аккорды</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center" }}>
+            {notes.accords.slice(0, 6).map(accord => (
+              <span key={accord} style={{
+                fontSize: 11, color: "#c9a25e",
+                background: "rgba(201,162,94,0.07)",
+                border: "1px solid rgba(201,162,94,0.2)",
+                borderRadius: 12, padding: "4px 12px",
+              }}>{accord}</span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Gender + seasons */}
+      {(notes.gender || (notes.seasons && notes.seasons.length > 0)) && (
+        <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center" }}>
+          {notes.gender && notes.gender !== "unisex" && (
+            <span style={{ fontSize: 10, color: "rgba(242,237,230,0.35)", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+              {notes.gender === "male" ? "♂ Мужской" : "♀ Женский"}
+            </span>
+          )}
+          {notes.seasons?.map(s => {
+            const M: Record<string, string> = { spring: "Весна 🌸", summer: "Лето ☀️", fall: "Осень 🍂", winter: "Зима ❄️" };
+            return M[s] ? <span key={s} style={{ fontSize: 10, color: "rgba(242,237,230,0.35)" }}>{M[s]}</span> : null;
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function baseViewerCount(offerId: string, rating: number | null | undefined): number {
   let h = 0;
   for (let i = 0; i < offerId.length; i++) h = (h * 31 + offerId.charCodeAt(i)) >>> 0;
@@ -621,39 +726,7 @@ export default function ProductPage() {
               {notes && (notes.topNotes.length > 0 || notes.middleNotes.length > 0 || notes.baseNotes.length > 0) && (
                 <div style={{ borderTop: `1px solid ${S.border}`, paddingTop: 20 }}>
                   <h3 style={{ fontSize: 13, fontWeight: 600, color: S.text, marginBottom: 16 }}>Пирамида аромата</h3>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 0, position: "relative" }}>
-                    {/* Vertical line */}
-                    <div style={{ position: "absolute", left: 15, top: 0, bottom: 0, width: 1, background: `linear-gradient(to bottom, transparent, rgba(201,169,110,0.2) 15%, rgba(201,169,110,0.2) 85%, transparent)` }} />
-                    {[
-                      { label: "Верхние", notes: notes.topNotes, color: "#e9d2a0", dot: "rgba(233,210,160,0.8)" },
-                      { label: "Сердце", notes: notes.middleNotes, color: S.accent3, dot: "rgba(201,169,110,0.8)" },
-                      { label: "База", notes: notes.baseNotes, color: S.muted, dot: "rgba(125,122,115,0.8)" },
-                    ].filter(row => row.notes.length > 0).map((row) => (
-                      <div key={row.label} style={{ display: "flex", gap: 14, paddingBottom: 14, paddingLeft: 2 }}>
-                        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flexShrink: 0 }}>
-                          <div style={{ width: 10, height: 10, borderRadius: "50%", background: row.dot, border: `2px solid ${row.color}`, flexShrink: 0, marginTop: 1, boxShadow: `0 0 8px ${row.dot}` }} />
-                        </div>
-                        <div style={{ paddingLeft: 8 }}>
-                          <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: row.color, fontWeight: 600, marginBottom: 6 }}>{row.label}</div>
-                          <div style={{ display: "flex", flexWrap: "wrap", gap: "5px 8px" }}>
-                            {row.notes.map((note) => (
-                              <span key={note} style={{ fontSize: 12, color: S.muted, background: "rgba(255,255,255,0.04)", border: `1px solid rgba(255,255,255,0.07)`, borderRadius: 2, padding: "3px 8px" }}>{note}</span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  {notes.accords.length > 0 && (
-                    <div style={{ marginTop: 8 }}>
-                      <div style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: S.subtle, fontWeight: 600, marginBottom: 8 }}>Аккорды</div>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                        {notes.accords.slice(0, 6).map((accord) => (
-                          <span key={accord} style={{ fontSize: 11, color: S.accent, background: "rgba(201,169,110,0.07)", border: "1px solid rgba(201,169,110,0.18)", borderRadius: 2, padding: "4px 10px" }}>{accord}</span>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+                  <FragrancePyramid notes={notes} />
                 </div>
               )}
             </div>

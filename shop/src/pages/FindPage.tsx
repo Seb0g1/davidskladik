@@ -32,6 +32,8 @@ export default function FindPage() {
   const [results, setResults] = useState<Result[] | null>(null);
   const [label, setLabel] = useState("");
   const [terms, setTerms] = useState<string[]>([]);
+  const [matchedNotes, setMatchedNotes] = useState<string[]>([]);
+  const [matchedAccords, setMatchedAccords] = useState<string[]>([]);
   const [error, setError] = useState("");
   const { add } = useCart();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -43,12 +45,16 @@ export default function FindPage() {
     setError("");
     setResults(null);
     setTerms([]);
+    setMatchedNotes([]);
+    setMatchedAccords([]);
     setLabel("");
     try {
       const data = await api.aiSearch(trimmed);
       setResults(data.products);
       setLabel(data.label);
       setTerms(data.terms);
+      setMatchedNotes(data.notes ?? []);
+      setMatchedAccords(data.accords ?? []);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Ошибка поиска");
     } finally {
@@ -189,6 +195,25 @@ export default function FindPage() {
             }}>
               {label || "Подобранные ароматы"}
             </h2>
+            {(matchedNotes.length > 0 || matchedAccords.length > 0) && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: terms.length > 0 ? 8 : 0 }}>
+                <span style={{ fontSize: 12, color: S.muted, marginRight: 4, alignSelf: "center" }}>Ноты:</span>
+                {matchedNotes.map(n => (
+                  <span key={n} style={{
+                    fontSize: 11, padding: "3px 10px", borderRadius: 12,
+                    background: "rgba(201,162,94,0.1)", border: "1px solid rgba(201,162,94,0.3)",
+                    color: S.accent, letterSpacing: "0.04em",
+                  }}>✦ {n}</span>
+                ))}
+                {matchedAccords.map(a => (
+                  <span key={a} style={{
+                    fontSize: 11, padding: "3px 10px", borderRadius: 12,
+                    background: "rgba(139,92,246,0.08)", border: "1px solid rgba(139,92,246,0.25)",
+                    color: "#a78bfa", letterSpacing: "0.04em",
+                  }}>{a}</span>
+                ))}
+              </div>
+            )}
             {terms.length > 0 && (
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 <span style={{ fontSize: 12, color: S.muted, marginRight: 4 }}>По запросам:</span>

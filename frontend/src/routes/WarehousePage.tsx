@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, BarChart2, Bot, Check, Clock, Copy, EyeOff, ImagePlus, Link2, Loader2, Package, PackageCheck, RefreshCw, Save, Search, SearchX, Sparkles, Star, Trash2, Users, X } from "lucide-react";
+import { AlertTriangle, BarChart2, Bot, Check, Clock, Copy, EyeOff, ImagePlus, Link2, Loader2, Package, PackageCheck, RefreshCw, Save, Search, SearchX, SlidersHorizontal, Sparkles, Star, Trash2, Users, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceHistorySchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -212,11 +212,6 @@ function productSupplierName(product: Product, group: ProductGroup): string {
 function supplierPmRowName(product: Product): string {
   const selected = asRecord(product.selectedSupplier);
   return String(selected.name || "").trim();
-}
-
-function supplierText(s: unknown): string {
-  const r = asRecord(s);
-  return String(r.partnerName || r.supplierName || r.name || "—").trim();
 }
 
 function hasPmNameMismatch(product: Product): boolean {
@@ -482,6 +477,7 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
   const [linkKind, setLinkKind] = useState<"all" | "normal" | "stock_only">("all");
   const [manualPrices, setManualPrices] = useState<Record<string, string | number>>(() => stockOnlyManualPricesFromProducts(products));
   const [selectedLinkIds, setSelectedLinkIds] = useState<string[]>([]);
+  const [expandedLinkKeys, setExpandedLinkKeys] = useState<Set<string>>(new Set());
   const debouncedSearch = useDebounced(search, 250);
   const draftIsFilled = Boolean(draft.article.trim() || draft.keyword.trim());
   const pendingDrafts = draftIsFilled ? [...drafts, draft] : drafts;
@@ -790,14 +786,33 @@ function LinksPanel({ products, onSaved, readOnly = false }: { products: Product
                   <span className="pm-source-pill">{linkMatchText(link)}</span>
                   {isStockOnlyLink(link) && <span className="pm-source-pill stock-only">не берет цену</span>}
                 </div>
-                <div className="pm-link-grid">
-                  <span><b>Row ID</b>{linkSourceId(link) || "не сохранен"}</span>
-                  <span><b>Partner ID</b>{link.partnerId || "не указан"}</span>
-                  <span><b>Название/ключ</b>{linkTitleText(link)}</span>
-                  <span><b>Валюта</b>{link.priceCurrency || "USD"}</span>
-                  <span><b>Обновлено</b>{compactDate(link.updatedAt || link.createdAt)}</span>
-                  <span><b>Кто изменил</b>{link.updatedBy || link.createdBy || "system"}</span>
-                </div>
+                {(() => {
+                  const linkKey = linkPrimarySignature(link);
+                  const expanded = expandedLinkKeys.has(linkKey);
+                  return (
+                    <div className="pm-link-grid">
+                      <span><b>Row ID</b>{linkSourceId(link) || "не сохранен"}</span>
+                      <span><b>Название/ключ</b>{linkTitleText(link)}</span>
+                      {expanded && <>
+                        <span><b>Partner ID</b>{link.partnerId || "не указан"}</span>
+                        <span><b>Валюта</b>{link.priceCurrency || "USD"}</span>
+                        <span><b>Обновлено</b>{compactDate(link.updatedAt || link.createdAt)}</span>
+                        <span><b>Кто изменил</b>{link.updatedBy || link.createdBy || "system"}</span>
+                      </>}
+                      <button
+                        className="pm-link-expand-btn"
+                        type="button"
+                        onClick={() => setExpandedLinkKeys((prev) => {
+                          const next = new Set(prev);
+                          expanded ? next.delete(linkKey) : next.add(linkKey);
+                          return next;
+                        })}
+                      >
+                        {expanded ? "Свернуть ↑" : "Подробнее ↓"}
+                      </button>
+                    </div>
+                  );
+                })()}
                 <div className="pm-route-list">
                   <span className="pm-route-chip">
                     Группа: {(link.productMarketplaces || [link.productMarketplace]).filter(Boolean).join(" + ") || "marketplace"}
@@ -1885,7 +1900,7 @@ function MarketplaceRows({ products, breakdown = [], canEdit = false, withExtern
                 {rowBreakdown?.changed && <span>Цена изменилась</span>}
                 {rowBreakdown?.ready && <span>Готов к продаже</span>}
                 {rowBreakdown?.stockOnlyFallback && <span>Складской fallback</span>}
-                {formulaParts.length ? formulaParts.map((part) => <span className="formula-chip" key={part}>{part}</span>) : <span className="formula-chip">PriceMaster не выбран</span>}
+                {formulaParts.length ? <FormulaChipList parts={formulaParts} /> : <span className="formula-chip">PriceMaster не выбран</span>}
                 <span className="formula-chip muted">общие привязки, отдельный расчет цены</span>
                 {product.archived && <span>Архив</span>}
                 {changed && <span>Цена ждет</span>}
@@ -2394,8 +2409,58 @@ function SnoozeLink({ productId, link, onDone }: { productId: string; link: Prod
 
 const RecoverStocksSchema = z.object({ ok: z.boolean().optional(), fresh: z.number().optional().default(0), recovery: z.record(z.string(), z.unknown()).optional().default({}) }).passthrough();
 
-function QuickActions({ products, onDone }: { primary: Product; products: Product[]; onDone: () => void }) {
+// Сворачиваемый список технических чипов формулы цены.
+// Первые 3 чипа показываются всегда, остальные — под «ещё N».
+function FormulaChipList({ parts }: { parts: string[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const VISIBLE = 3;
+  const visible = expanded ? parts : parts.slice(0, VISIBLE);
+  const hidden = parts.length - VISIBLE;
+  return (
+    <>
+      {visible.map((part) => <span className="formula-chip" key={part}>{part}</span>)}
+      {!expanded && hidden > 0 && (
+        <button className="formula-more-btn" type="button" onClick={() => setExpanded(true)}>
+          +{hidden} ещё
+        </button>
+      )}
+      {expanded && hidden > 0 && (
+        <button className="formula-more-btn" type="button" onClick={() => setExpanded(false)}>
+          Свернуть
+        </button>
+      )}
+    </>
+  );
+}
+
+// Мини-спарклайн истории цен (SVG, 5 точек).
+function PriceSparkline({ items }: { items: Array<Record<string, unknown>> }) {
+  if (items.length < 2) return null;
+  const prices = items.map((item) => Number(item.newPrice || item.price || 0)).filter(Boolean).reverse();
+  if (prices.length < 2) return null;
+  const min = Math.min(...prices);
+  const max = Math.max(...prices);
+  const range = max - min || 1;
+  const W = 48; const H = 18;
+  const pts = prices.map((p, i) => {
+    const x = (i / (prices.length - 1)) * W;
+    const y = H - ((p - min) / range) * H;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  const last = prices[prices.length - 1];
+  const prev = prices[prices.length - 2];
+  const color = last >= prev ? "#4ade80" : "#f87171";
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="price-sparkline" aria-hidden="true">
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function QuickActions({ primary, products, onDone }: { primary: Product; products: Product[]; onDone: () => void }) {
   const productIds = products.map((item) => item.id).filter(Boolean);
+  const [open, setOpen] = useState(false);
+  const [lastSentAt, setLastSentAt] = useState<string | undefined>(primary.lastPriceSendAt as string | undefined);
   const recover = useMutation({
     mutationFn: () => fetchJson("/api/warehouse/links/recover-stale-stocks", RecoverStocksSchema, mutationBody({ productIds })),
     onSuccess: onDone,
@@ -2406,7 +2471,7 @@ function QuickActions({ products, onDone }: { primary: Product; products: Produc
       productIds,
       force: true,
     })),
-    onSuccess: onDone,
+    onSuccess: () => { setLastSentAt(new Date().toISOString()); onDone(); },
   });
   const anyBusy = recover.isPending || sendPrices.isPending;
   return (
@@ -2416,23 +2481,31 @@ function QuickActions({ products, onDone }: { primary: Product; products: Produc
           <span>Быстрые действия</span>
           <h3>Остаток, цена, восстановление</h3>
         </div>
-      </div>
-      <div className="quick-actions">
-        <button className="primary-action" type="button" onClick={() => recover.mutate()} disabled={anyBusy} title="Проверяет остатки у поставщика и синхронизирует на Ozon/Yandex">
-          {recover.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Синхронизировать остатки
-        </button>
-        <button className="secondary-action" type="button" onClick={() => sendPrices.mutate()} disabled={anyBusy} title="Принудительно отправляет текущие расчётные цены на маркетплейсы">
-          {sendPrices.isPending ? <Loader2 className="spin" size={16} /> : null} Отправить цену сейчас
+        <button className="secondary-action" type="button" onClick={() => setOpen((v) => !v)}>
+          {open ? "Свернуть" : "Открыть"}
         </button>
       </div>
-      {recover.data ? (
-        <div className="success-strip compact">
-          {`Обновлено: ${recover.data.fresh ?? 0} · восстановлено: ${Number(asRecord(recover.data.recovery).recovered ?? 0)} · остатков: ${Number(asRecord(recover.data.recovery).restoredStocks ?? 0)}`}
+      {open && <>
+        <div className="quick-actions">
+          <button className="primary-action" type="button" onClick={() => recover.mutate()} disabled={anyBusy} title="Проверяет остатки у поставщика и синхронизирует на Ozon/Yandex">
+            {recover.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Синхронизировать остатки
+          </button>
+          <div className="quick-action-col">
+            <button className="secondary-action" type="button" onClick={() => sendPrices.mutate()} disabled={anyBusy} title="Принудительно отправляет текущие расчётные цены на маркетплейсы">
+              {sendPrices.isPending ? <Loader2 className="spin" size={16} /> : null} Отправить цену сейчас
+            </button>
+            {lastSentAt && <span className="quick-action-hint">последний раз: {compactDate(lastSentAt)}</span>}
+          </div>
         </div>
-      ) : null}
-      {sendPrices.data ? <div className="success-strip compact">Цены отправлены</div> : null}
-      {recover.error && <div className="inline-error">{errorMessage(recover.error)}</div>}
-      {sendPrices.error && <div className="inline-error">{errorMessage(sendPrices.error)}</div>}
+        {recover.data ? (
+          <div className="success-strip compact">
+            {`Обновлено: ${recover.data.fresh ?? 0} · восстановлено: ${Number(asRecord(recover.data.recovery).recovered ?? 0)} · остатков: ${Number(asRecord(recover.data.recovery).restoredStocks ?? 0)}`}
+          </div>
+        ) : null}
+        {sendPrices.data ? <div className="success-strip compact">Цены отправлены</div> : null}
+        {recover.error && <div className="inline-error">{errorMessage(recover.error)}</div>}
+        {sendPrices.error && <div className="inline-error">{errorMessage(sendPrices.error)}</div>}
+      </>}
     </section>
   );
 }
@@ -2532,7 +2605,10 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
       {priceHistoryQuery.data?.items?.length ? (
         <div className="price-history-mini">
           <div className="price-history-header">
-            <span className="section-label">История цен</span>
+            <span className="section-label">
+              История цен
+              <PriceSparkline items={priceHistoryQuery.data.items as Array<Record<string, unknown>>} />
+            </span>
             <button type="button" className="link-action" onClick={() => setPriceHistoryExpanded((e) => !e)}>
               {priceHistoryExpanded ? `Свернуть (${priceHistoryQuery.data.items.length})` : `Все (${priceHistoryQuery.data.items.length < 5 ? priceHistoryQuery.data.items.length : "30+"})`}
             </button>
@@ -2614,6 +2690,7 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const [statsVisible, setStatsVisible] = useState<boolean>(() => {
     try { return window.localStorage.getItem("warehouse-stats-visible") !== "false"; } catch { return true; }
   });
+  const [filtersDrawerOpen, setFiltersDrawerOpen] = useState(false);
   const debouncedQ = useDebounced(filters.q, 450);
   const effectiveFilters = { ...filters, q: debouncedQ };
   const parentRef = useRef<HTMLDivElement>(null);
@@ -2834,99 +2911,132 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
           <button className="secondary-action" type="button" onClick={() => pageQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
         </>}
       />
-      <section className="toolbar">
-        <label className="search-box">
-          <Search size={18} />
-          <input ref={searchInputRef} value={filters.q} onChange={(event) => setFilter("q", event.target.value)} placeholder="Поиск: 41059, CC-AASH5001, НФ-00004538" />
-        </label>
-        <SelectField
-          ariaLabel="Маркетплейс"
-          value={filters.marketplace}
-          onChange={(next) => setFilter("marketplace", next)}
-          options={[
-            { value: "all", label: "Все маркетплейсы" },
-            { value: "ozon", label: "Ozon" },
-            { value: "yandex", label: "Yandex" },
-          ]}
-        />
-        <SelectField
-          ariaLabel="Привязки"
-          value={filters.linked}
-          onChange={(next) => setFilter("linked", next)}
-          options={[
-            { value: "all", label: "Все привязки" },
-            { value: "linked", label: "С привязками" },
-            { value: "unlinked", label: "Без привязок" },
-            { value: "changed", label: "Цена изменилась" },
-            { value: "linked_archived", label: "Привязанные в архиве" },
-          ]}
-        />
-        <SelectField
-          ariaLabel="Статус"
-          value={filters.state}
-          onChange={(next) => setFilter("state", next)}
-          options={[
-            { value: "all", label: "Все статусы" },
-            { value: "archived", label: "Архив" },
-            { value: "inactive", label: "Неактивные" },
-            { value: "out_of_stock", label: "Нет остатка" },
-          ]}
-        />
-        <SelectField
-          className="sort-select"
-          title="Сортировка"
-          ariaLabel="Сортировка"
-          value={filters.sort}
-          onChange={(next) => setFilter("sort", next)}
-          options={[
-            { value: "", label: "По умолчанию" },
-            { value: "recent", label: "Недавнее изменение" },
-            { value: "alpha", label: "По алфавиту" },
-            { value: "price_desc", label: "Цена: дороже" },
-            { value: "price_asc", label: "Цена: дешевле" },
-          ]}
-        />
-        <BrandPicker
-          value={filters.brand}
-          options={brandOptions}
-          loading={brandsQuery.isLoading}
-          onChange={(brand) => setFilter("brand", brand)}
-          onRefresh={() => refreshBrands.mutate()}
-          refreshing={refreshBrands.isPending}
-          canRefresh={isAdmin}
-        />
-        <label className="toggle-filter">
-          <input type="checkbox" checked={filters.autoOnly} onChange={(event) => setFilter("autoOnly", event.target.checked)} />
-          Только автопрайс
-        </label>
-        <select
-          className="page-size-select"
-          value={pageSize}
-          aria-label="Товаров на странице"
-          onChange={(e) => {
-            const v = Number(e.target.value) || DEFAULT_PAGE_SIZE;
-            setPageSize(v);
-            try { window.localStorage.setItem("warehouse-page-size", String(v)); } catch { /* ignore */ }
-            setFilters((f) => ({ ...f, page: 1 }));
-          }}
-        >
-          {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} / стр.</option>)}
-        </select>
-        <button
-          className="stats-toggle-btn"
-          type="button"
-          title={statsVisible ? "Скрыть статистику" : "Показать статистику"}
-          onClick={() => {
-            setStatsVisible((v) => {
-              try { window.localStorage.setItem("warehouse-stats-visible", String(!v)); } catch { /* ignore */ }
-              return !v;
-            });
-          }}
-        >
-          {statsVisible ? <EyeOff size={15} /> : <BarChart2 size={15} />}
-          <span>{statsVisible ? "Скрыть стат." : "Статистика"}</span>
-        </button>
-      </section>
+      {(() => {
+        const activeFilterCount = [
+          filters.marketplace !== "all",
+          filters.linked !== "all",
+          filters.state !== "all",
+          !!filters.brand,
+          !!filters.sort,
+          filters.autoOnly,
+        ].filter(Boolean).length;
+        const filterControls = <>
+          <SelectField
+            ariaLabel="Маркетплейс"
+            value={filters.marketplace}
+            onChange={(next) => setFilter("marketplace", next)}
+            options={[
+              { value: "all", label: "Все маркетплейсы" },
+              { value: "ozon", label: "Ozon" },
+              { value: "yandex", label: "Yandex" },
+            ]}
+          />
+          <SelectField
+            ariaLabel="Привязки"
+            value={filters.linked}
+            onChange={(next) => setFilter("linked", next)}
+            options={[
+              { value: "all", label: "Все привязки" },
+              { value: "linked", label: "С привязками" },
+              { value: "unlinked", label: "Без привязок" },
+              { value: "changed", label: "Цена изменилась" },
+              { value: "linked_archived", label: "Привязанные в архиве" },
+            ]}
+          />
+          <SelectField
+            ariaLabel="Статус"
+            value={filters.state}
+            onChange={(next) => setFilter("state", next)}
+            options={[
+              { value: "all", label: "Все статусы" },
+              { value: "archived", label: "Архив" },
+              { value: "inactive", label: "Неактивные" },
+              { value: "out_of_stock", label: "Нет остатка" },
+            ]}
+          />
+          <SelectField
+            className="sort-select"
+            title="Сортировка"
+            ariaLabel="Сортировка"
+            value={filters.sort}
+            onChange={(next) => setFilter("sort", next)}
+            options={[
+              { value: "", label: "По умолчанию" },
+              { value: "recent", label: "Недавнее изменение" },
+              { value: "alpha", label: "По алфавиту" },
+              { value: "price_desc", label: "Цена: дороже" },
+              { value: "price_asc", label: "Цена: дешевле" },
+            ]}
+          />
+          <BrandPicker
+            value={filters.brand}
+            options={brandOptions}
+            loading={brandsQuery.isLoading}
+            onChange={(brand) => setFilter("brand", brand)}
+            onRefresh={() => refreshBrands.mutate()}
+            refreshing={refreshBrands.isPending}
+            canRefresh={isAdmin}
+          />
+          <label className="toggle-filter">
+            <input type="checkbox" checked={filters.autoOnly} onChange={(event) => setFilter("autoOnly", event.target.checked)} />
+            Только автопрайс
+          </label>
+          <select
+            className="page-size-select"
+            value={pageSize}
+            aria-label="Товаров на странице"
+            onChange={(e) => {
+              const v = Number(e.target.value) || DEFAULT_PAGE_SIZE;
+              setPageSize(v);
+              try { window.localStorage.setItem("warehouse-page-size", String(v)); } catch { /* ignore */ }
+              setFilters((f) => ({ ...f, page: 1 }));
+            }}
+          >
+            {PAGE_SIZE_OPTIONS.map((n) => <option key={n} value={n}>{n} / стр.</option>)}
+          </select>
+          <button
+            className="stats-toggle-btn"
+            type="button"
+            title={statsVisible ? "Скрыть статистику" : "Показать статистику"}
+            onClick={() => {
+              setStatsVisible((v) => {
+                try { window.localStorage.setItem("warehouse-stats-visible", String(!v)); } catch { /* ignore */ }
+                return !v;
+              });
+            }}
+          >
+            {statsVisible ? <EyeOff size={15} /> : <BarChart2 size={15} />}
+            <span>{statsVisible ? "Скрыть стат." : "Статистика"}</span>
+          </button>
+        </>;
+        return <>
+          <section className="toolbar">
+            <label className="search-box">
+              <Search size={18} />
+              <input ref={searchInputRef} value={filters.q} onChange={(event) => setFilter("q", event.target.value)} placeholder="Поиск: 41059, CC-AASH5001, НФ-00004538" />
+            </label>
+            {isMobileList ? (
+              <button className={`filters-drawer-btn${activeFilterCount ? " has-active" : ""}`} type="button" onClick={() => setFiltersDrawerOpen(true)}>
+                <SlidersHorizontal size={15} />
+                Фильтры{activeFilterCount ? <span className="filters-drawer-count">{activeFilterCount}</span> : null}
+              </button>
+            ) : filterControls}
+          </section>
+          {filtersDrawerOpen && isMobileList && (
+            <div className="filters-drawer-overlay" onClick={() => setFiltersDrawerOpen(false)}>
+              <div className="filters-drawer" onClick={(e) => e.stopPropagation()}>
+                <div className="filters-drawer-head">
+                  <span>Фильтры</span>
+                  <button className="secondary-action" type="button" onClick={() => setFiltersDrawerOpen(false)}>Готово</button>
+                </div>
+                <div className="filters-drawer-body">
+                  {filterControls}
+                </div>
+              </div>
+            </div>
+          )}
+        </>;
+      })()}
       {pageQuery.isFetching ? (
         <div className="catalog-loading-bar" role="status" aria-label="Каталог обновляется">
           <div className="catalog-loading-bar-fill" />

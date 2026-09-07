@@ -48,7 +48,7 @@ export const api = {
     return req<ShopBanner[]>("/banners");
   },
 
-  aiSearch(query: string): Promise<{ ok: boolean; label: string; terms: string[]; products: (ShopProduct & { _matchTerm?: string })[] }> {
+  aiSearch(query: string): Promise<{ ok: boolean; label: string; terms: string[]; notes: string[]; accords: string[]; products: (ShopProduct & { _matchTerm?: string })[] }> {
     return req("/ai-search", { method: "POST", body: JSON.stringify({ query }) });
   },
 

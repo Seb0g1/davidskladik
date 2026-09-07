@@ -435,13 +435,14 @@ app.post("/api/supplier-picking-list/:key/defer", requireStaff, async (request, 
 });
 
 // ── Picking list viewers (coordination heartbeat) ────────────────────────────
-// Stores {username, viewedAt} in Redis with 45s TTL. GET returns all active viewers.
+// Stores {username, viewedAt, currentSupplier} in Redis with 45s TTL. GET returns all active viewers.
 app.put("/api/supplier-picking-list/heartbeat", requireStaff, async (request, response, next) => {
   try {
     const username = requestUsername(request) || "неизвестно";
+    const currentSupplier = cleanText(request.body?.currentSupplier || "");
     const redis = pickingRedis();
     if (!redis) return response.json({ ok: true });
-    await redis.set(`picking:viewer:${username}`, JSON.stringify({ username, viewedAt: new Date().toISOString() }), "EX", 45);
+    await redis.set(`picking:viewer:${username}`, JSON.stringify({ username, viewedAt: new Date().toISOString(), currentSupplier: currentSupplier || null }), "EX", 45);
     response.json({ ok: true });
   } catch (error) { next(error); }
 });
