@@ -87,6 +87,7 @@ type WbSyncLastResult = {
   zeroed: number;
   skippedManual: number;
   pricesError?: string;
+  enrich?: { updated?: number; descriptionsFetched?: number; alreadyComplete?: number; error?: string } | null;
   at: string;
 };
 
@@ -341,6 +342,8 @@ export function WbPage() {
                     {" · "}цен отправлено: {lastSyncResult.pricesSent}
                     {lastSyncResult.skippedManual > 0 ? ` · ручных (пропущено): ${lastSyncResult.skippedManual}` : ""}
                     {lastSyncResult.pricesError ? ` · ошибка: ${lastSyncResult.pricesError.slice(0, 80)}` : ""}
+                    {lastSyncResult.enrich && !lastSyncResult.enrich.error ? ` · обогащено: ${lastSyncResult.enrich.updated ?? 0} (описаний: ${lastSyncResult.enrich.descriptionsFetched ?? 0})` : ""}
+                    {lastSyncResult.enrich?.error ? ` · enrich: ${lastSyncResult.enrich.error.slice(0, 60)}` : ""}
                     {" · "}{new Date(lastSyncResult.at).toLocaleTimeString("ru-RU")}
                   </span>
                 </div>

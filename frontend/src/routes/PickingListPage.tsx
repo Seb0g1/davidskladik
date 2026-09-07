@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Loader2, RefreshCw, Repeat2, RotateCcw, Trash2, Truck, Users, Wallet, X, Zap } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Loader2, MoreHorizontal, PackageX, Pencil, RefreshCw, Repeat2, RotateCcw, Trash2, Users, Wallet, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -195,6 +195,10 @@ export function PickingListPage() {
   });
 
   const [resetConfirm, setResetConfirm] = useState(false);
+  const [openActionMenu, setOpenActionMenu] = useState<string | null>(null);
+  const [hintFocusedSupplier, setHintFocusedSupplier] = useState<string | null>(null);
+  const [deferredDateFilter, setDeferredDateFilter] = useState<string | null>(null);
+  const balancePanelRef = useRef<HTMLDivElement>(null);
 
   const updateMutation = useMutation({
     mutationFn: ({ key, nextStatus, snoozeDays, permanent, pickedQuantity, pricePaidRub }: { key: string; nextStatus: string; snoozeDays?: number; permanent?: boolean; pickedQuantity?: number; pricePaidRub?: number }) => {
@@ -319,6 +323,32 @@ export function PickingListPage() {
     const id = setInterval(beat, 30_000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (!balancePanelOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (balancePanelRef.current && !balancePanelRef.current.contains(e.target as Node)) {
+        setBalancePanelOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [balancePanelOpen]);
+
+  useEffect(() => {
+    if (!missingRow) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") setMissingRow(null); };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [missingRow]);
+
+  useEffect(() => {
+    if (!openActionMenu) return;
+    const handler = () => setOpenActionMenu(null);
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [openActionMenu]);
+
   const filteredRows = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (!words.length) return rows;
@@ -328,14 +358,19 @@ export function PickingListPage() {
     });
   }, [q, rows]);
   const grouped = useMemo(() => {
+    const now = new Date();
     const groups = new Map<string, PickingRow[]>();
     for (const row of filteredRows) {
+      if (status === "open" && row.deferredUntil && new Date(row.deferredUntil) > now) {
+        if (!deferredDateFilter) continue;
+        if (String(row.deferredUntil).slice(0, 10) !== deferredDateFilter) continue;
+      }
       const key = row.supplierName || "Без поставщика";
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key)?.push(row);
     }
     return Array.from(groups.entries()).sort((left, right) => left[0].localeCompare(right[0], "ru", { sensitivity: "base" }));
-  }, [filteredRows]);
+  }, [filteredRows, status, deferredDateFilter]);
 
   // When status=picked: group by date descending, then by supplier within each date
   const groupedByDay = useMemo(() => {
@@ -436,6 +471,25 @@ export function PickingListPage() {
   const dailyTotal = dailyTotalQuery.data?.total ?? 0;
   const dailyItems = dailyTotalQuery.data?.items ?? 0;
 
+  const getExpressUrgency = (row: PickingRow): { label: string; urgent: boolean } | null => {
+    if (!row.isExpress && !row.orderCutoffTime) return null;
+    if (!row.orderCutoffTime) return { label: "Экспресс", urgent: false };
+    let cutoff = new Date(row.orderCutoffTime);
+    if (isNaN(cutoff.getTime())) {
+      const match = String(row.orderCutoffTime).match(/^(\d{1,2}):(\d{2})$/);
+      if (match) {
+        const now = new Date();
+        cutoff = new Date(now.getFullYear(), now.getMonth(), now.getDate(), Number(match[1]), Number(match[2]));
+      } else {
+        return { label: String(row.orderCutoffTime), urgent: false };
+      }
+    }
+    const diffMin = Math.round((cutoff.getTime() - Date.now()) / 60000);
+    if (diffMin < 0) return { label: "Просрочен", urgent: true };
+    if (diffMin < 60) return { label: `${diffMin} мин`, urgent: true };
+    return { label: "Экспресс", urgent: false };
+  };
+
   return (
     <section className="page-section picking-page">
       <PageHeader
@@ -495,7 +549,7 @@ export function PickingListPage() {
 
       {/* Balance flyout panel */}
       {balancePanelOpen ? (
-        <div className="picker-balance-panel">
+        <div className="picker-balance-panel" ref={balancePanelRef}>
           {/* My balance */}
           <div className="picker-balance-panel-my">
             <div className="picker-balance-panel-label"><Wallet size={14} /> Мой баланс · {myUsername || "—"}</div>
@@ -690,7 +744,7 @@ export function PickingListPage() {
                             title="Редактировать"
                             onClick={() => setEditCredit({ username: issuePickerDraft, id: c.id, amount: String(c.amount ?? ""), note: c.note ?? "" })}
                           >
-                            <Clock size={11} />
+                            <Pencil size={11} />
                           </button>
                           <button
                             className="icon-action danger-action"
@@ -768,10 +822,18 @@ export function PickingListPage() {
       </div>
 
       <section className="dashboard-metrics">
-        <Stat label="К сборке" value={numberValue(summary.open)} tone={numberValue(summary.open) ? "warn" : "success"} icon={<ClipboardList size={18} />} />
-        <Stat label="Собрано" value={numberValue(summary.picked)} tone="success" icon={<CheckCircle2 size={18} />} />
-        <Stat label="Не было" value={numberValue(summary.missing)} tone={numberValue(summary.missing) ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
-        <Stat label="На завтра" value={numberValue((summary as Record<string, number>).deferred ?? 0)} tone={(summary as Record<string, number>).deferred ? "accent" : ""} icon={<CalendarDays size={18} />} />
+        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => { setStatus("open"); setDeferredDateFilter(null); }} onKeyDown={(e) => e.key === "Enter" && (setStatus("open"), setDeferredDateFilter(null))}>
+          <Stat label="К сборке" value={numberValue(summary.open)} tone={numberValue(summary.open) ? "warn" : "success"} icon={<ClipboardList size={18} />} />
+        </div>
+        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => { setStatus("picked"); setDeferredDateFilter(null); }} onKeyDown={(e) => e.key === "Enter" && (setStatus("picked"), setDeferredDateFilter(null))}>
+          <Stat label="Собрано" value={numberValue(summary.picked)} tone="success" icon={<CheckCircle2 size={18} />} />
+        </div>
+        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => { setStatus("missing"); setDeferredDateFilter(null); }} onKeyDown={(e) => e.key === "Enter" && (setStatus("missing"), setDeferredDateFilter(null))}>
+          <Stat label="Не было" value={numberValue(summary.missing)} tone={numberValue(summary.missing) ? "warn" : "success"} icon={<AlertTriangle size={18} />} />
+        </div>
+        <div role="button" tabIndex={0} className="stat-filter-btn" onClick={() => { setStatus("open"); setDeferredDateFilter(null); }} onKeyDown={(e) => e.key === "Enter" && (setStatus("open"), setDeferredDateFilter(null))}>
+          <Stat label="На завтра" value={numberValue((summary as Record<string, number>).deferred ?? 0)} tone={(summary as Record<string, number>).deferred ? "accent" : ""} icon={<CalendarDays size={18} />} />
+        </div>
       </section>
 
       <div className="control-grid compact-controls picking-filters">
@@ -897,11 +959,21 @@ export function PickingListPage() {
             <div className="deferred-calendar-row">
               <span className="deferred-calendar-label"><CalendarDays size={13} /> На ближайшие дни:</span>
               {deferredByDay.map(({ dateKey, label, rows: dRows }) => (
-                <span key={dateKey} className="deferred-calendar-chip">
+                <button
+                  key={dateKey}
+                  type="button"
+                  className={`deferred-calendar-chip${deferredDateFilter === dateKey ? " deferred-calendar-chip--active" : ""}`}
+                  onClick={() => setDeferredDateFilter(deferredDateFilter === dateKey ? null : dateKey)}
+                >
                   <strong>{label}</strong>
                   <span>{dRows.length} поз.</span>
-                </span>
+                </button>
               ))}
+              {deferredDateFilter ? (
+                <button type="button" className="deferred-calendar-chip deferred-calendar-chip--clear" onClick={() => setDeferredDateFilter(null)}>
+                  <X size={12} /> Все
+                </button>
+              ) : null}
             </div>
           ) : null}
           <div className="picking-groups">
@@ -959,7 +1031,7 @@ export function PickingListPage() {
                                 {row.status === "picked" ? (
                                   <>
                                     <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "returned" })}>
-                                      <RotateCcw size={14} /> Возврат
+                                      <PackageX size={14} /> Возврат
                                     </button>
                                     <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
                                       <RotateCcw size={14} /> К сборке
@@ -1031,25 +1103,34 @@ export function PickingListPage() {
                       placeholder={supplierCurrency === "USD" ? "Наличные сейчас, $" : "Наличные сейчас, ₽"}
                       value={draftAmount}
                       onChange={(event) => setPaymentDrafts((current) => ({ ...current, [supplierName]: event.target.value }))}
+                      onFocus={() => setHintFocusedSupplier(supplierName)}
+                      onBlur={() => setHintFocusedSupplier(null)}
                     />
                     <input
                       className="supplier-payment-note"
                       placeholder="Комментарий"
                       value={draftNote}
                       onChange={(event) => setPaymentNotes((current) => ({ ...current, [supplierName]: event.target.value }))}
+                      onFocus={() => setHintFocusedSupplier(supplierName)}
+                      onBlur={() => setHintFocusedSupplier(null)}
                     />
                     <button
                       className="primary-action"
                       type="button"
-                      disabled={paymentMutation.isPending || !(Number(draftAmount) > 0)}
-                      onClick={() => paymentMutation.mutate({ supplierName, partnerId: supplierRows[0]?.partnerId || "", amount: supplierCurrency === "USD" ? Math.round(Number(draftAmount || 0) * usdRate) : Number(draftAmount || 0), note: draftNote })}
+                      disabled={paymentMutation.isPending || !(Number(String(draftAmount || "0").replace(",", ".")) > 0)}
+                      onClick={() => {
+                        const rawAmount = Number(String(draftAmount || "0").replace(",", ".")) || 0;
+                        paymentMutation.mutate({ supplierName, partnerId: supplierRows[0]?.partnerId || "", amount: supplierCurrency === "USD" ? Math.round(rawAmount * usdRate) : rawAmount, note: draftNote });
+                      }}
                     >
                       {paymentMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Заплатил
                     </button>
                   </div>
-                  <p style={{ fontSize: 11, color: "var(--muted)", margin: "2px 0 4px", padding: "0 4px" }}>
-                    Долг фиксируется автоматически при нажатии «Собрал». Поле выше — только если платите наличными прямо сейчас.
-                  </p>
+                  {hintFocusedSupplier === supplierName ? (
+                    <p style={{ fontSize: 11, color: "var(--muted)", margin: "2px 0 4px", padding: "0 4px" }}>
+                      Долг фиксируется автоматически при нажатии «Собрал». Поле выше — только если платите наличными прямо сейчас.
+                    </p>
+                  ) : null}
                   {paymentErrors[supplierName] ? (
                     <div className="inline-error" style={{ margin: "0 0 4px" }}>{paymentErrors[supplierName]}</div>
                   ) : null}
@@ -1073,52 +1154,56 @@ export function PickingListPage() {
                         return (
                           <div key={groupId} className={isMulti ? "picking-product-group" : undefined}>
                             {isMulti ? (
-                              <div
-                                className="picking-group-header"
-                                onClick={() => setCollapsedProductGroups(prev => {
-                                  const n = new Set(prev);
-                                  n.has(groupId) ? n.delete(groupId) : n.add(groupId);
-                                  return n;
-                                })}
-                              >
-                                <div className="picking-group-header-left">
-                                  <strong>{pRows[0].productName || pKey}</strong>
-                                  <span className="picking-row-sub">{pKey} · {pRows[0].marketplace.toUpperCase()} · {pRows.length} заказа</span>
-                                </div>
-                                <button
-                                  type="button"
-                                  className="icon-action picking-copy-btn"
-                                  title="Копировать название"
-                                  onClick={(e) => { e.stopPropagation(); void copyPlainText(pRows[0].productName || pKey); }}
+                              <>
+                                <div
+                                  className="picking-group-header"
+                                  onClick={() => setCollapsedProductGroups(prev => {
+                                    const n = new Set(prev);
+                                    n.has(groupId) ? n.delete(groupId) : n.add(groupId);
+                                    return n;
+                                  })}
                                 >
-                                  <Copy size={13} />
-                                </button>
-                                <div className="picking-group-header-right">
-                                  <span className="picking-row-qty">×{totalQty}</span>
-                                  {pickedCount > 0 && pickedCount < pRows.length ? <span className="picking-row-status-badge status-picked">{pickedCount}/{pRows.length} собрано</span> : null}
-                                  {pickedCount === pRows.length ? <span className="picking-row-status-badge status-picked">все собраны</span> : null}
-                                  {openRows.length > 0 ? (
+                                  <div className="picking-group-header-left">
+                                    <strong>{pRows[0].productName || pKey}</strong>
+                                    <span className="picking-row-sub">{pKey} · {pRows[0].marketplace.toUpperCase()} · {pRows.length} заказа</span>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="icon-action picking-copy-btn"
+                                    title="Копировать название"
+                                    onClick={(e) => { e.stopPropagation(); void copyPlainText(pRows[0].productName || pKey); }}
+                                  >
+                                    <Copy size={13} />
+                                  </button>
+                                  <div className="picking-group-header-right">
+                                    <span className="picking-row-qty">×{totalQty}</span>
+                                    {pickedCount > 0 && pickedCount < pRows.length ? <span className="picking-row-status-badge status-picked">{pickedCount}/{pRows.length} собрано</span> : null}
+                                    {pickedCount === pRows.length ? <span className="picking-row-status-badge status-picked">все собраны</span> : null}
+                                    <ChevronDown size={14} style={{ transform: isCollapsed ? "none" : "rotate(180deg)", transition: "transform .2s", opacity: 0.5, flexShrink: 0 }} />
+                                  </div>
+                                </div>
+                                {openRows.length > 0 ? (
+                                  <div className="picking-group-pick-all">
                                     <button
                                       className="primary-action success-action"
                                       type="button"
-                                      style={{ fontSize: "0.75rem", padding: "3px 10px", minHeight: 30 }}
                                       disabled={openRows.some(r => pendingPickKeys.has(r.key))}
-                                      onClick={(e) => { e.stopPropagation(); openRows.forEach(r => { if (!pendingPickKeys.has(r.key)) updateMutation.mutate({ key: r.key, nextStatus: "picked" }); }); }}
+                                      onClick={() => { openRows.forEach(r => { if (!pendingPickKeys.has(r.key)) updateMutation.mutate({ key: r.key, nextStatus: "picked" }); }); }}
                                     >
-                                      <Check size={13} /> Все собрал
+                                      <Check size={13} /> Все собрал ({openRows.length})
                                     </button>
-                                  ) : null}
-                                  <ChevronDown size={14} style={{ transform: isCollapsed ? "none" : "rotate(180deg)", transition: "transform .2s", opacity: 0.5, flexShrink: 0 }} />
-                                </div>
-                              </div>
+                                  </div>
+                                ) : null}
+                              </>
                             ) : null}
                             {rowsToShow.map((row) => {
                               const rowExpanded = expandedRows.has(row.key);
                               const rowQty = row.pickedQuantity && row.pickedQuantity !== row.quantity ? `${row.pickedQuantity}/${row.quantity}` : String(row.quantity);
                               const isUsd = String(row.priceCurrency || "").toUpperCase() !== "RUB";
                               const priceRub = row.price && isUsd ? Math.round(row.price * usdRate) : null;
+                              const expressUrgency = getExpressUrgency(row);
                               return (
-                                <div className={`picking-row status-${row.status}${isMulti ? " in-group" : ""}`} key={row.key}>
+                                <div className={`picking-row status-${row.status}${isMulti ? " in-group" : ""}${expressUrgency?.urgent ? " express-urgent" : expressUrgency ? " express-row" : ""}`} key={row.key}>
                                   <div className="picking-row-header" onClick={() => toggleRowExpand(row.key)}>
                                     <div className="picking-row-header-left">
                                       <strong className="picking-row-name">
@@ -1139,7 +1224,11 @@ export function PickingListPage() {
                                       </span>
                                     </div>
                                     <div className="picking-row-header-right">
-                                      {row.isExpress ? <span className="express-badge picking-express-inline"><Zap size={11} /></span> : null}
+                                      {expressUrgency ? (
+                                        <span className={`express-badge picking-express-inline${expressUrgency.urgent ? " express-badge--urgent" : ""}`}>
+                                          <Zap size={11} />{expressUrgency.urgent || expressUrgency.label !== "Экспресс" ? ` ${expressUrgency.label}` : ""}
+                                        </span>
+                                      ) : null}
                                       <span className={`picking-row-qty${row.quantity > 1 ? " picking-row-qty--multi" : ""}`}>×{rowQty}</span>
                                       {row.saleAmount ? <span className="picking-row-sale">{moneyAmount(row.saleAmount, supplierCurrency)}</span> : null}
                                       {row.price ? (
@@ -1181,7 +1270,7 @@ export function PickingListPage() {
                                     </small>
                                   ) : null}
                                   {row.status === "reordered" && row.replacementKey ? <small>Перезаказано у другого поставщика.</small> : null}
-                                  <div className="picking-actions">
+                                  <div className="picking-actions" style={{ position: "relative" }}>
                                     <div className="picking-action-pick-group">
                                       <button
                                         className="primary-action success-action picking-action-main"
@@ -1198,6 +1287,7 @@ export function PickingListPage() {
                                           const pricePaidRub = priceRaw && priceRaw > 0
                                             ? (isUsd ? Math.round(priceRaw * usdRate) : priceRaw)
                                             : undefined;
+                                          navigator.vibrate?.(80);
                                           updateMutation.mutate({ key: row.key, nextStatus: "picked", pickedQuantity: qty, pricePaidRub });
                                         }}
                                       >
@@ -1238,50 +1328,62 @@ export function PickingListPage() {
                                         />
                                       </div>
                                     ) : null}
-                                    <button
-                                      className="secondary-action danger-action"
-                                      type="button"
-                                      disabled={updateMutation.isPending || row.status !== "open"}
-                                      onClick={() => setMissingRow(row)}
-                                    >
-                                      <X size={16} /> Не было
-                                    </button>
-                                    {["open", "missing"].includes(row.status) && !row.replacementKey ? (
-                                      <button className="secondary-action" type="button" disabled={replaceMutation.isPending} onClick={() => setReplaceKey(replaceKey === row.key ? null : row.key)}>
-                                        <Repeat2 size={15} /> Замена
-                                      </button>
-                                    ) : null}
-                                    {row.status === "picked" ? (
-                                      <>
-                                        <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "returned" })}>
-                                          <RotateCcw size={14} /> Возврат
-                                        </button>
-                                        <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
-                                          <RotateCcw size={14} /> К сборке
-                                        </button>
-                                      </>
-                                    ) : null}
-                                    {row.status !== "open" && row.status !== "picked" ? (
-                                      <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => updateMutation.mutate({ key: row.key, nextStatus: "open" })}>
-                                        <RotateCcw size={14} /> Вернуть
-                                      </button>
-                                    ) : null}
                                     {row.status === "open" ? (
-                                      row.deferredUntil && new Date(row.deferredUntil) > new Date() ? (
-                                        <button className="secondary-action" type="button" disabled={deferMutation.isPending} onClick={() => deferMutation.mutate({ key: row.key, clear: true })} title="Снять перенос">
-                                          <CalendarDays size={14} /> Сегодня
-                                        </button>
-                                      ) : (
-                                        <button className="secondary-action" type="button" disabled={deferMutation.isPending} onClick={() => deferMutation.mutate({ key: row.key })} title="Перенести в завтрашний лист">
-                                          <CalendarDays size={14} /> Завтра
-                                        </button>
-                                      )
-                                    ) : null}
-                                    {isAdmin ? (
-                                      <button className="secondary-action danger-action" type="button" disabled={cancelCartMutation.isPending} onClick={() => cancelCartMutation.mutate(row.key)}>
-                                        <Trash2 size={14} /> Удалить
+                                      <button
+                                        className="secondary-action danger-action"
+                                        type="button"
+                                        disabled={updateMutation.isPending}
+                                        onClick={() => setMissingRow(row)}
+                                      >
+                                        <X size={16} /> Не было
                                       </button>
                                     ) : null}
+                                    <div className={`picking-secondary-actions${openActionMenu === row.key ? " is-open" : ""}`} onMouseDown={(e) => e.stopPropagation()}>
+                                      {["open", "missing"].includes(row.status) && !row.replacementKey ? (
+                                        <button className="secondary-action" type="button" disabled={replaceMutation.isPending} onClick={() => { setReplaceKey(replaceKey === row.key ? null : row.key); setOpenActionMenu(null); }}>
+                                          <Repeat2 size={15} /> Замена
+                                        </button>
+                                      ) : null}
+                                      {row.status === "picked" ? (
+                                        <>
+                                          <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => { updateMutation.mutate({ key: row.key, nextStatus: "returned" }); setOpenActionMenu(null); }}>
+                                            <PackageX size={14} /> Возврат
+                                          </button>
+                                          <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => { updateMutation.mutate({ key: row.key, nextStatus: "open" }); setOpenActionMenu(null); }}>
+                                            <RotateCcw size={14} /> К сборке
+                                          </button>
+                                        </>
+                                      ) : null}
+                                      {row.status !== "open" && row.status !== "picked" ? (
+                                        <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => { updateMutation.mutate({ key: row.key, nextStatus: "open" }); setOpenActionMenu(null); }}>
+                                          <RotateCcw size={14} /> Вернуть
+                                        </button>
+                                      ) : null}
+                                      {row.status === "open" ? (
+                                        row.deferredUntil && new Date(row.deferredUntil) > new Date() ? (
+                                          <button className="secondary-action" type="button" disabled={deferMutation.isPending} onClick={() => { deferMutation.mutate({ key: row.key, clear: true }); setOpenActionMenu(null); }} title="Снять перенос">
+                                            <CalendarDays size={14} /> Сегодня
+                                          </button>
+                                        ) : (
+                                          <button className="secondary-action" type="button" disabled={deferMutation.isPending} onClick={() => { deferMutation.mutate({ key: row.key }); setOpenActionMenu(null); }} title="Перенести в завтрашний лист">
+                                            <CalendarDays size={14} /> Завтра
+                                          </button>
+                                        )
+                                      ) : null}
+                                      {isAdmin ? (
+                                        <button className="secondary-action danger-action" type="button" disabled={cancelCartMutation.isPending} onClick={() => { cancelCartMutation.mutate(row.key); setOpenActionMenu(null); }}>
+                                          <Trash2 size={14} /> Удалить
+                                        </button>
+                                      ) : null}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      className="secondary-action picking-more-btn"
+                                      onClick={(e) => { e.stopPropagation(); setOpenActionMenu(openActionMenu === row.key ? null : row.key); }}
+                                      title="Ещё действия"
+                                    >
+                                      <MoreHorizontal size={16} />
+                                    </button>
                                   </div>
                                   {replaceKey === row.key ? (
                                     <SupplierAltPicker
@@ -1308,6 +1410,11 @@ export function PickingListPage() {
             {!grouped.length && !groupedByDay?.length && !listQuery.isLoading ? <div className="empty-state">Строк для выбранного фильтра нет.</div> : null}
           </div>
 
+          {rows.length >= 500 ? (
+            <div className="inline-warning" style={{ margin: "8px 0" }}>
+              <AlertTriangle size={14} /> Показаны первые 500 позиций — уточните фильтр чтобы увидеть остальные.
+            </div>
+          ) : null}
           <section className="table-panel picking-invoices" key="invoices">
             <button
               type="button"

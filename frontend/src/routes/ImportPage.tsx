@@ -318,7 +318,7 @@ export function ImportPage() {
   });
   const refreshStatus = useQuery({
     queryKey: ["import-refresh-status"],
-    queryFn: () => apiJson<{ running: boolean; lastResult?: { at?: string; imported?: number; error?: string } }>("/api/ozon-yandex-import/refresh/status"),
+    queryFn: () => apiJson<{ running: boolean; progress?: { percent?: number; stage?: string; meta?: string | null; processed?: number; total?: number } | null; lastResult?: { at?: string; imported?: number; error?: string } }>("/api/ozon-yandex-import/refresh/status"),
     refetchInterval: (q) => (q.state.data?.running ? 4000 : false),
   });
 
@@ -439,6 +439,21 @@ export function ImportPage() {
       {candidatesQuery.data?.scanCapped ? (
         <div className="info-strip warn compact">
           Показаны первые 50 000 товаров. Используй поиск, чтобы найти конкретный артикул.
+        </div>
+      ) : null}
+      {refreshing && refreshStatus.data?.progress ? (
+        <div className="settings-panel" style={{ marginBottom: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+            <Loader2 className="spin" size={14} />
+            <strong style={{ fontSize: 13 }}>Загрузка каталога Ozon…</strong>
+            {refreshStatus.data.progress.stage ? <span className="muted" style={{ fontSize: 12 }}>{refreshStatus.data.progress.stage}</span> : null}
+          </div>
+          <div className="progress-line">
+            <span style={{ width: `${Math.min(100, refreshStatus.data.progress.percent ?? 0)}%` }} />
+            <span style={{ position: "relative", zIndex: 1, fontSize: 12 }}>
+              {refreshStatus.data.progress.meta || `${refreshStatus.data.progress.percent ?? 0}%`}
+            </span>
+          </div>
         </div>
       ) : null}
       {refreshStatus.data?.lastResult?.at ? (

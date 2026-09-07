@@ -8,6 +8,7 @@
 
 let ozonImportRefreshRunning = false;
 let ozonImportRefreshLastResult = null;
+let ozonImportRefreshProgress = null;
 
 // Refresh: pull the fresh Ozon catalog (names/prices/stocks) into Postgres in the
 // background, so the candidate list reflects what's actually in the Ozon cabinet now.
@@ -18,14 +19,17 @@ app.post("/api/ozon-yandex-import/refresh", requireAdmin, async (request, respon
     }
     const limit = Math.max(1, Math.min(50000, Number(request.body?.limit || 30000) || 30000));
     ozonImportRefreshRunning = true;
+    ozonImportRefreshProgress = { percent: 0, stage: "Запуск", meta: null, processed: 0, total: 0 };
     const startedAt = Date.now();
     void (async () => {
       try {
         const warehouse = await readWarehouse().catch(() => ({ products: [] }));
         const imported = await importOzonWarehouseProducts(limit, warehouse.products || [], {
           detailRefreshLimit: Math.min(limit, Number(process.env.OZON_YANDEX_IMPORT_DETAIL_LIMIT || 25000) || 25000),
+          onProgress: (progress) => { ozonImportRefreshProgress = progress; },
         });
         if (Array.isArray(imported.imported) && imported.imported.length) {
+          ozonImportRefreshProgress = { percent: 95, stage: "Сохранение", meta: `Сохраняю ${imported.imported.length} товаров…`, processed: imported.imported.length, total: imported.imported.length };
           await writeWarehouseProductPatch(imported.imported, { reason: "ozon_import_page_refresh", writeLinks: false })
             .catch((error) => logger.warn("ozon import refresh persist failed", { detail: error?.message || String(error) }));
         }
@@ -35,10 +39,11 @@ app.post("/api/ozon-yandex-import/refresh", requireAdmin, async (request, respon
           warnings: imported.warnings || [],
           elapsedMs: Date.now() - startedAt,
         };
+        ozonImportRefreshProgress = { percent: 100, stage: "Готово", meta: `Импортировано ${ozonImportRefreshLastResult.imported} товаров`, processed: ozonImportRefreshLastResult.imported, total: ozonImportRefreshLastResult.imported };
         logger.info("ozon_import_page_refresh_complete", ozonImportRefreshLastResult);
       } catch (error) {
         ozonImportRefreshLastResult = { at: new Date().toISOString(), error: error?.message || String(error) };
-        logger.warn("ozon import page refresh failed", { detail: error?.message || String(error) });
+        logger.warn("ozon import page refresh failed", { detail: ozonImportRefreshLastResult.error });
       } finally {
         ozonImportRefreshRunning = false;
       }
@@ -51,7 +56,7 @@ app.post("/api/ozon-yandex-import/refresh", requireAdmin, async (request, respon
 
 app.get("/api/ozon-yandex-import/refresh/status", requireAdmin, async (_request, response, next) => {
   try {
-    response.json({ ok: true, running: ozonImportRefreshRunning, lastResult: ozonImportRefreshLastResult });
+    response.json({ ok: true, running: ozonImportRefreshRunning, progress: ozonImportRefreshProgress, lastResult: ozonImportRefreshLastResult });
   } catch (error) {
     next(error);
   }
