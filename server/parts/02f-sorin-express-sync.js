@@ -181,14 +181,17 @@ async function syncSorinExpressStocks() {
 
   // ── Yandex ────────────────────────────────────────────────────────────────
   if (sorinExpressYandexCampaignId && (yandexActive.length || yandexInactive.length)) {
-    const baseShop = getYandexShops({ includeSyncDisabled: true })[0];
+    const allShops = getYandexShops({ includeSyncDisabled: true });
+    // Ищем shop с нужным campaignId — у него уже правильный apiKey.
+    const matchedShop = allShops.find((s) => String(s.campaignId) === String(sorinExpressYandexCampaignId));
+    const baseShop = matchedShop || allShops[0];
     if (baseShop) {
       const expressShop = {
         ...baseShop,
         id: `yandex-express-${sorinExpressYandexCampaignId}`,
         name: "Яндекс Экспресс",
         campaignId: sorinExpressYandexCampaignId,
-        // Если задан отдельный ключ для Экспресс — используем его.
+        // SORIN_EXPRESS_YANDEX_API_KEY имеет приоритет; иначе берём ключ найденного shop.
         apiKey: sorinExpressYandexApiKey || baseShop.apiKey,
       };
 
