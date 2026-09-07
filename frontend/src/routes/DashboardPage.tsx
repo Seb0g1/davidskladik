@@ -17,21 +17,27 @@ const MP_LABELS: Record<string, string> = { ozon: "Ozon", yandex: "Яндекс"
 function SalesBarChart({ days, metric }: { days: DayStat[]; metric: "income" | "profit" }) {
   const values = days.map((d) => d[metric]);
   const maxVal = Math.max(...values, 1);
-  const barW = Math.max(4, Math.min(18, Math.floor(540 / Math.max(days.length, 1)) - 2));
-  const chartW = days.length * (barW + 2);
+  const color = metric === "income" ? "var(--accent)" : "var(--success, #10b981)";
   return (
-    <svg className="sales-bar-chart" viewBox={`0 0 ${chartW} 60`} preserveAspectRatio="none" aria-label="График продаж по дням">
-      {days.map((d, i) => {
-        const h = Math.max(2, Math.round((d[metric] / maxVal) * 52));
-        const x = i * (barW + 2);
-        return (
-          <g key={d.date}>
-            <title>{d.date}: {Math.round(d[metric]).toLocaleString("ru-RU")} ₽ ({d.orders} заказ.)</title>
-            <rect x={x} y={60 - h} width={barW} height={h} className={`bar-${metric}`} rx={2} />
-          </g>
-        );
-      })}
-    </svg>
+    <div
+      aria-label="График продаж по дням"
+      style={{ display: "flex", alignItems: "flex-end", gap: 2, height: 60, width: "100%" }}
+    >
+      {days.map((d) => (
+        <div
+          key={d.date}
+          title={`${d.date}: ${Math.round(d[metric]).toLocaleString("ru-RU")} ₽ (${d.orders} заказ.)`}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            height: `${Math.max(3, Math.round((d[metric] / maxVal) * 100))}%`,
+            background: color,
+            opacity: 0.72,
+            borderRadius: "2px 2px 0 0",
+          }}
+        />
+      ))}
+    </div>
   );
 }
 

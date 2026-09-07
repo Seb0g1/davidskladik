@@ -70,7 +70,7 @@ export function PricesPage() {
   const itemsQuery = useQuery({
     queryKey: ["sales-automation", "items", marketplace, reason, applyStatus],
     queryFn: () => {
-      const params = new URLSearchParams({ marketplace, limit: "500" });
+      const params = new URLSearchParams({ marketplace, limit: "2000" });
       if (reason !== "all") params.set("reason", reason);
       if (applyStatus !== "all") params.set("status", applyStatus);
       return fetchJson(`/api/sales-automation/items?${params.toString()}`, SalesAutomationItemsSchema);

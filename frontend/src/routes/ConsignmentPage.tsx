@@ -1184,7 +1184,7 @@ export function ConsignmentPage() {
             return (
               <span className="muted-note">
                 Профит{action.group ? " (оценка по средним ценам партий)" : ""}: {money(profit)}
-                {" "}(спонсору {money(Math.round(profit / 2 * 100) / 100)}, мне {money(profit - Math.round(profit / 2 * 100) / 100)}).
+                {" "}(спонсору {money(Math.round(profit / 2 * 100) / 100)}, мне {money(profit - Math.round(profit / 2 * 100) / 100)} — <span style={{ opacity: 0.65 }}>оценка 50/50</span>).
                 Закупочная часть {money(purchase * quantity)} уйдёт на общий баланс.
               </span>
             );

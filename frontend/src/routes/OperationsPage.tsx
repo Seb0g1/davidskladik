@@ -54,7 +54,7 @@ function operationIssues(job: Record<string, unknown>) {
     const row = asRecord(item);
     return row.ok === false || row.error || row.status === "failed";
   });
-  const items = [...directErrors, ...failedRows, ...warnings].slice(0, 80);
+  const items = [...directErrors, ...failedRows, ...warnings].slice(0, 500);
   if (job.error) items.unshift({ error: job.error });
   return items.map((item, index) => {
     const row = asRecord(item);
@@ -157,14 +157,14 @@ function OperationDetailPanel({ jobId }: { jobId: string }) {
                 <div><span>Ошибки и предупреждения</span><h3>{issues.length}</h3></div>
                 <button className="secondary-action" type="button" onClick={copyIssues}><Copy size={16} /> {copied ? "Скопировано" : "Скопировать"}</button>
               </div>
-              {issues.slice(0, 80).map((item) => (
+              {issues.map((item) => (
                 <div className={`operation-issue ${item.type.replaceAll(" ", "-")}`} key={item.key}>
                   <strong>{item.type}</strong>
                   <span>{item.offerId}</span>
                   <small>{item.detail}</small>
                 </div>
               ))}
-              {issues.length > 80 && <div className="soft-empty compact">Показаны первые 80 записей. Полный список можно скопировать кнопкой выше.</div>}
+              {issues.length >= 500 && <div className="soft-empty compact">Показаны первые 500 записей. Полный список можно скопировать кнопкой выше.</div>}
             </div>
           ) : <div className="success-strip">Критичных ошибок в результате операции не найдено.</div>}
           {issues.length ? <div className="soft-empty compact">Повтор только ошибок будет доступен после того, как backend начнет сохранять точный список SKU для безопасного повторного запуска.</div> : null}
