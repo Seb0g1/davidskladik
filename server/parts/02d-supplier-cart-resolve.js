@@ -89,6 +89,8 @@ function normalizeSupplierCartPreviewRow(input = {}) {
     requestDocId: cleanText(input.requestDocId || input.docId),
     requestRowId: cleanText(input.requestRowId || input.rowId),
     manualNote: cleanText(input.manualNote || ""),
+    pmName: cleanText(input.pmName || ""),
+    pmNameMismatch: Boolean(input.pmNameMismatch),
   };
 }
 
@@ -637,6 +639,22 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
       requestRowId: processed?.requestRowId,
     });
   }
+  const pmName = cleanText(selected.name || "");
+  // Flag a mismatch when the PM row's product name has zero token overlap with the ordered
+  // product name. This catches cases where a supplier link points to a wrong PM row
+  // (e.g. a shared article code for a completely different product).
+  const pmNameMismatch = Boolean(pmName) && Boolean(disambigName)
+    && priceMasterArticleCandidateScore({ name: pmName }, { name: disambigName }) === 0;
+  if (pmNameMismatch) {
+    logger.warn("supplier_cart_pm_name_mismatch", {
+      offerId: normalizedLine.offerId,
+      orderName: disambigName,
+      pmName,
+      supplierName: selected.partnerName,
+      partnerId: selected.partnerId,
+      rowId: selected.rowId,
+    });
+  }
   return normalizeSupplierCartPreviewRow({
     ...normalizedLine,
     warehouseProductId: product.id,
@@ -661,5 +679,7 @@ async function resolveSupplierCartRow(warehouse = {}, line = {}, state = {}, { p
     alreadyCommitted: Boolean(processed) || alreadyPicked || coveredByManual,
     requestDocId: processed?.requestDocId,
     requestRowId: processed?.requestRowId,
+    pmName,
+    pmNameMismatch,
   });
 }

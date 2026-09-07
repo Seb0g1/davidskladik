@@ -867,6 +867,20 @@ export function PickingListPage() {
         ))}
       </div>
 
+      {/* Mobile: supplier filter (shown only on mobile, desktop uses picking-filters below) */}
+      {suppliers.length > 0 ? (
+        <div className="picking-supplier-mobile-filter">
+          <select
+            className="picking-supplier-mobile-select"
+            value={supplier}
+            onChange={(e) => setSupplier(e.target.value)}
+          >
+            <option value="">Все поставщики</option>
+            {suppliers.map((s) => <option key={String(s)} value={String(s)}>{String(s)}</option>)}
+          </select>
+        </div>
+      ) : null}
+
       {/* Desktop: full filter row */}
       <div className="control-grid compact-controls picking-filters">
         <label>Статус

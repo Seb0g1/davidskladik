@@ -504,6 +504,7 @@ export function SupplierCartPanel() {
                     {row.saleAmount ? <span className="tone-success">Продажа: {money(row.saleAmount)}</span> : null}
                     <span>Поставщик: {row.supplierName || "-"}</span>
                     <span>PM row: {row.offerRowId || "-"}</span>
+                    {row.pmName ? <span style={row.pmNameMismatch ? { color: "var(--danger)", fontWeight: 600 } : undefined}>PM: {row.pmName}</span> : null}
                     <span>Цена PM: {row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
                     <span>Доверие: {row.trustFactor ?? 100}/100</span>
                     <span>{row.orderCutoffTime ? `Заказы до ${row.orderCutoffTime}` : "Без дедлайна"}</span>
@@ -511,6 +512,11 @@ export function SupplierCartPanel() {
                     {row.stockOnlyFallback ? <span>Складской fallback</span> : null}
                     {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс — подтверждение Ozon после «Собрал»</span> : null}
                   </div>
+                  {row.pmNameMismatch ? (
+                    <div className="inline-warning" style={{ marginTop: 4 }}>
+                      ⚠ Название в PM не совпадает с заказом — возможно неверная привязка поставщика. PM: «{row.pmName}» vs заказ: «{row.productName}»
+                    </div>
+                  ) : null}
                   {row.alreadyCommitted ? (
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <small>Уже в заявке PriceMaster: Doc {row.requestDocId}, Row {row.requestRowId}</small>

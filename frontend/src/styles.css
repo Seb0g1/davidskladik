@@ -9670,6 +9670,9 @@ textarea:focus-visible,
 .picking-status-chips {
   display: none;
 }
+.picking-supplier-mobile-filter {
+  display: none;
+}
 @media (max-width: 640px) {
   .picking-status-chips {
     display: flex;
@@ -9678,6 +9681,21 @@ textarea:focus-visible,
     margin-bottom: 8px;
   }
   .picking-filters { display: none; }
+  .picking-supplier-mobile-filter {
+    display: block;
+    margin-bottom: 8px;
+  }
+  .picking-supplier-mobile-select {
+    width: 100%;
+    background: var(--surface2, #1e2635);
+    border: 1px solid var(--border, #2d3748);
+    border-radius: 10px;
+    padding: 9px 12px;
+    color: var(--text, #e2e8f0);
+    font-size: 14px;
+    cursor: pointer;
+    appearance: auto;
+  }
 }
 .picking-status-chip {
   display: inline-flex;

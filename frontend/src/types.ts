@@ -692,6 +692,8 @@ export const SupplierCartRowSchema = z.object({
   skipReason: z.coerce.string().optional().default(""),
   requestDocId: z.coerce.string().optional().default(""),
   requestRowId: z.coerce.string().optional().default(""),
+  pmName: z.coerce.string().optional().default(""),
+  pmNameMismatch: z.boolean().optional().default(false),
 }).passthrough();
 
 export const SupplierCartPreviewSchema = z.object({
