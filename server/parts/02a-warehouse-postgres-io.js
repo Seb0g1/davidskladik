@@ -48,7 +48,7 @@ async function readWarehouseGroupSiblingsFromPostgres(seedProducts = []) {
   const offerIds = Array.from(new Set(seeds.map((product) => cleanText(product.offerId)).filter(Boolean)));
   const manualGroupIds = Array.from(new Set(seeds.map((product) => {
     const raw = product?.raw && typeof product.raw === "object" && !Array.isArray(product.raw) ? product.raw : {};
-    return cleanText(raw.manualGroupId || raw.manual_group_id);
+    return cleanText(raw.manualGroupId || raw.manual_group_id || product.manualGroupId);
   }).filter(Boolean)));
   const pairOzonIds = Array.from(new Set(seeds.map((product) => resolveWarehouseProductPairOzonId(product)).filter(Boolean)));
   for (const seed of seeds) {

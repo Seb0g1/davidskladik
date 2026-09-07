@@ -23,6 +23,10 @@ import MenGuide from "./pages/guides/MenGuide";
 import GiftGuide from "./pages/guides/GiftGuide";
 import OfficeGuide from "./pages/guides/OfficeGuide";
 import NotFoundPage from "./pages/NotFoundPage";
+import BlogPage from "./pages/BlogPage";
+import BlogPostPage from "./pages/BlogPostPage";
+import FindPage from "./pages/FindPage";
+import WorldMapPage from "./pages/WorldMapPage";
 
 function RefCapture() {
   const [params] = useSearchParams();
@@ -62,6 +66,10 @@ export default function App() {
           <Route path="/guide/men" element={<MenGuide />} />
           <Route path="/guide/gift" element={<GiftGuide />} />
           <Route path="/guide/office" element={<OfficeGuide />} />
+          <Route path="/blog" element={<BlogPage />} />
+          <Route path="/blog/:slug" element={<BlogPostPage />} />
+          <Route path="/find" element={<FindPage />} />
+          <Route path="/world" element={<WorldMapPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>

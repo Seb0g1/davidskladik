@@ -35,6 +35,9 @@ export default function Footer() {
                 { label: "Все товары", to: "/catalog" },
                 { label: "Новинки",   to: "/new" },
                 { label: "Бренды",    to: "/brands" },
+                { label: "Блог",      to: "/blog" },
+                { label: "AI-подбор", to: "/find" },
+                { label: "Карта ароматов", to: "/world" },
               ].map(l => (
                 <li key={l.to}>
                   <Link to={l.to} style={{ fontSize: 13, color: "#7d7a73", textDecoration: "none", letterSpacing: "0.02em", transition: "color 0.3s" }}

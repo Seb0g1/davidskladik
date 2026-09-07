@@ -4,7 +4,7 @@ import { ApiError } from "../api";
 import type { Product, WarehousePage } from "../types";
 
 export type MutationPayload = {
-  product?: Product;
+  product?: Product | null;
   products?: Product[];
 };
 

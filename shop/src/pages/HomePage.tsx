@@ -3,8 +3,22 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Quote, Star } from "lucide-react";
 import { api } from "../api";
+import type { ShopProduct } from "../types";
 import ProductCard from "../components/ProductCard";
 import HeroShader from "../components/HeroShader";
+
+/* ── Hero parallax ──────────────────────────────────────────────── */
+function useHeroParallax() {
+  useEffect(() => {
+    const hero = document.getElementById("hero-parallax-inner");
+    if (!hero) return;
+    function onScroll() {
+      (hero as HTMLElement).style.transform = `translateY(${window.scrollY * 0.22}px)`;
+    }
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+}
 
 /* ── Reveal on scroll ──────────────────────────────────────────── */
 function useReveal() {
@@ -205,6 +219,199 @@ function BrandGallery() {
   );
 }
 
+function AromaMesyatsaSection({ product, note, validUntil }: { product: ShopProduct; note: string; validUntil: string | null }) {
+  const monthName = new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" }).format(new Date());
+  const hasUntil = validUntil && new Date(validUntil) > new Date();
+  const daysLeft = hasUntil ? Math.ceil((new Date(validUntil!).getTime() - Date.now()) / 86400000) : 0;
+
+  return (
+    <section className="reveal-section" style={{ padding: "clamp(56px,8vw,96px) clamp(18px,4vw,56px) 0" }}>
+      {/* Label */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 28 }}>
+        <div style={{ flex: 1, height: 1, background: "linear-gradient(90deg, transparent, rgba(201,162,94,0.4))" }} />
+        <span style={{ fontSize: 10, letterSpacing: "0.32em", textTransform: "uppercase", color: "#c9a25e" }}>Аромат месяца</span>
+        <div style={{ flex: 1, height: 1, background: "linear-gradient(270deg, transparent, rgba(201,162,94,0.4))" }} />
+      </div>
+
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+        gap: "clamp(24px,4vw,56px)",
+        alignItems: "center",
+        background: "linear-gradient(135deg, rgba(20,16,8,0.7) 0%, rgba(14,13,11,0.6) 100%)",
+        border: "1px solid rgba(201,162,94,0.2)",
+        borderRadius: 4,
+        padding: "clamp(28px,4vw,52px)",
+        position: "relative",
+        overflow: "hidden",
+      }}>
+        {/* Glow */}
+        <div style={{ position: "absolute", top: -40, left: -40, width: 200, height: 200, borderRadius: "50%", background: "radial-gradient(circle, rgba(201,162,94,0.1) 0%, transparent 70%)", pointerEvents: "none" }} />
+
+        {/* Image */}
+        <div style={{ display: "flex", justifyContent: "center" }}>
+          <div style={{
+            width: "clamp(180px,30vw,280px)", height: "clamp(180px,30vw,280px)",
+            background: "#141210", borderRadius: 2,
+            border: "1px solid rgba(201,162,94,0.1)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 20,
+            boxShadow: "0 24px 64px rgba(0,0,0,0.6), 0 0 40px rgba(201,162,94,0.08)",
+          }}>
+            {product.images[0]
+              ? <img src={product.images[0]} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+              : <span style={{ fontSize: 48, color: "rgba(201,162,94,0.1)", fontFamily: "serif", fontStyle: "italic" }}>{(product.brand || "?")[0]}</span>
+            }
+          </div>
+        </div>
+
+        {/* Info */}
+        <div>
+          <p className="eyebrow" style={{ marginBottom: 10 }}>
+            {monthName.charAt(0).toUpperCase() + monthName.slice(1)}
+          </p>
+          {product.brand && (
+            <p style={{ margin: "0 0 6px", fontSize: 11, letterSpacing: "0.22em", textTransform: "uppercase", color: "#c9a25e" }}>{product.brand}</p>
+          )}
+          <h2 className="serif" style={{ margin: "0 0 16px", fontStyle: "italic", fontWeight: 300, fontSize: "clamp(28px,3.6vw,48px)", lineHeight: 1.05, color: "#f5f4f0" }}>
+            {product.name}
+          </h2>
+          {note && (
+            <p style={{ margin: "0 0 20px", fontSize: "clamp(13px,1.4vw,15px)", color: "rgba(242,237,230,0.6)", lineHeight: 1.8, maxWidth: "42ch" }}>
+              {note}
+            </p>
+          )}
+          <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 14, marginBottom: 24 }}>
+            {(product.priceRub ?? 0) > 0 && (
+              <span style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontStyle: "italic", fontSize: 32, color: "#f5f4f0" }}>
+                {product.priceRub.toLocaleString("ru-RU")} ₽
+              </span>
+            )}
+            {daysLeft > 0 && (
+              <span style={{ fontSize: 11, color: "#c9a25e", background: "rgba(201,162,94,0.08)", border: "1px solid rgba(201,162,94,0.2)", borderRadius: 2, padding: "4px 10px", letterSpacing: "0.08em" }}>
+                ещё {daysLeft} {daysLeft === 1 ? "день" : daysLeft < 5 ? "дня" : "дней"}
+              </span>
+            )}
+          </div>
+          <a
+            href={`/product/${encodeURIComponent(product.offerId)}`}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 10,
+              padding: "13px 28px", borderRadius: 2,
+              background: "linear-gradient(135deg, rgba(201,162,94,0.18), rgba(201,162,94,0.08))",
+              border: "1px solid rgba(201,162,94,0.4)", color: "#c9a25e",
+              fontSize: 13, fontWeight: 600, letterSpacing: "0.06em", textDecoration: "none",
+              textTransform: "uppercase",
+              transition: "all 0.3s ease",
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(201,162,94,0.25)"; (e.currentTarget as HTMLElement).style.borderColor = "rgba(201,162,94,0.65)"; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "linear-gradient(135deg, rgba(201,162,94,0.18), rgba(201,162,94,0.08))"; (e.currentTarget as HTMLElement).style.borderColor = "rgba(201,162,94,0.4)"; }}
+          >
+            Открыть аромат
+          </a>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+const CITY_FALLBACK = [
+  { city: "Москве",           brand: "Tom Ford",  name: "Tobacco Vanille" },
+  { city: "Санкт-Петербурге", brand: "Chanel",    name: "Chance Eau Tendre" },
+  { city: "Краснодаре",       brand: "Dior",      name: "Sauvage" },
+  { city: "Екатеринбурге",    brand: "Jo Malone", name: "Peony & Blush Suede" },
+  { city: "Казани",           brand: "Byredo",    name: "Gypsy Water" },
+  { city: "Новосибирске",     brand: "YSL",       name: "Black Opium" },
+];
+
+function CityTopsTicker({ entries }: { entries: { city: string; brand: string; name: string; offerId?: string }[] }) {
+  const items = entries.length >= 4 ? entries : CITY_FALLBACK;
+  const doubled = [...items, ...items]; // loop
+
+  return (
+    <div style={{ overflow: "hidden", borderTop: "1px solid rgba(255,255,255,0.05)", borderBottom: "1px solid rgba(255,255,255,0.05)", padding: "12px 0", background: "rgba(201,162,94,0.02)" }}>
+      <style>{`
+        @keyframes ticker-scroll {
+          from { transform: translateX(0); }
+          to   { transform: translateX(-50%); }
+        }
+        .city-ticker-track { display: flex; animation: ticker-scroll 32s linear infinite; width: max-content; }
+        .city-ticker-track:hover { animation-play-state: paused; }
+      `}</style>
+      <div className="city-ticker-track">
+        {doubled.map((e, i) => (
+          <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "0 32px", flexShrink: 0, fontSize: 12, color: "rgba(242,237,230,0.55)", letterSpacing: "0.04em", whiteSpace: "nowrap" }}>
+            <span style={{ color: "rgba(201,162,94,0.7)", fontSize: 10, fontWeight: 700, letterSpacing: "0.16em", textTransform: "uppercase" }}>в {e.city}</span>
+            <span style={{ color: "rgba(255,255,255,0.12)" }}>·</span>
+            {e.brand && <span style={{ color: "rgba(201,162,94,0.55)" }}>{e.brand}</span>}
+            <span>{e.name}</span>
+            <span style={{ color: "rgba(255,255,255,0.08)", margin: "0 8px" }}>✦</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ContestSection() {
+  const month = new Intl.DateTimeFormat("ru-RU", { month: "long" }).format(new Date());
+  const capitalizedMonth = month.charAt(0).toUpperCase() + month.slice(1);
+
+  return (
+    <section className="reveal-section" style={{ padding: "clamp(56px,8vw,96px) clamp(18px,4vw,56px) 0" }}>
+      <div style={{
+        background: "linear-gradient(135deg, rgba(14,12,8,0.9) 0%, rgba(18,14,10,0.8) 100%)",
+        border: "1px solid rgba(201,162,94,0.18)",
+        borderRadius: 4, padding: "clamp(28px,4vw,52px)",
+        display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))", gap: "clamp(24px,4vw,48px)",
+        alignItems: "center",
+        position: "relative", overflow: "hidden",
+      }}>
+        {/* Corner decoration */}
+        <div style={{ position: "absolute", top: 0, right: 0, width: 120, height: 120, background: "radial-gradient(circle at 100% 0%, rgba(201,162,94,0.08) 0%, transparent 65%)", pointerEvents: "none" }} />
+
+        <div>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "rgba(201,162,94,0.07)", border: "1px solid rgba(201,162,94,0.2)", borderRadius: 2, padding: "4px 12px", marginBottom: 18 }}>
+            <span style={{ fontSize: 14 }}>🏅</span>
+            <span style={{ fontSize: 10, letterSpacing: "0.2em", textTransform: "uppercase", color: "#c9a25e" }}>Конкурс {capitalizedMonth}</span>
+          </div>
+          <h2 className="serif reveal-heading" style={{ margin: "0 0 14px", fontStyle: "italic", fontWeight: 300, fontSize: "clamp(26px,3.5vw,44px)", lineHeight: 1.05, color: "#f5f4f0" }}>
+            #МойАромат
+          </h2>
+          <p style={{ fontSize: "clamp(13px,1.4vw,15px)", color: "rgba(242,237,230,0.55)", lineHeight: 1.8, maxWidth: "38ch", margin: "0 0 24px" }}>
+            Опубликуйте фото с вашим ароматом в Instagram или Telegram с тегом <span style={{ color: "#c9a25e" }}>#МойАромат</span>. Победитель с наибольшим числом реакций получит флакон на выбор.
+          </p>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            <a href="https://t.me/magicvibes_ru" target="_blank" rel="noopener noreferrer"
+              style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "10px 22px", borderRadius: 2, background: "rgba(201,162,94,0.1)", border: "1px solid rgba(201,162,94,0.3)", color: "#c9a25e", fontSize: 13, fontWeight: 600, textDecoration: "none", letterSpacing: "0.04em", transition: "all 0.2s" }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = "rgba(201,162,94,0.2)"; }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = "rgba(201,162,94,0.1)"; }}>
+              Участвовать в Telegram
+            </a>
+          </div>
+        </div>
+
+        {/* Prize info */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          {[
+            { num: "01", title: "Сфотографируйтесь", desc: "с любым ароматом из нашего каталога" },
+            { num: "02", title: "Опубликуйте", desc: "фото с тегом #МойАромат в Instagram или Telegram" },
+            { num: "03", title: "Победитель", desc: "получает флакон на выбор — объявляем в конце месяца" },
+          ].map(step => (
+            <div key={step.num} style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+              <span style={{ fontFamily: "'Cormorant Garamond', Georgia, serif", fontStyle: "italic", fontSize: 26, color: "rgba(201,162,94,0.3)", lineHeight: 1, flexShrink: 0, minWidth: 28 }}>{step.num}</span>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#f2ede6", marginBottom: 2 }}>{step.title}</div>
+                <div style={{ fontSize: 12, color: "rgba(242,237,230,0.45)", lineHeight: 1.55 }}>{step.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function CardSkeleton() {
   return (
     <div className="product-card" style={{ width: 200, flexShrink: 0 }}>
@@ -222,6 +429,7 @@ function CardSkeleton() {
 export default function HomePage() {
   useReveal();
   useCardReveal();
+  useHeroParallax();
 
   /* refs */
   const auraRef      = useRef<HTMLDivElement>(null);
@@ -289,6 +497,11 @@ export default function HomePage() {
     queryKey: ["shop-unboxings"],
     queryFn: () => api.unboxings(),
     staleTime: 5 * 60_000,
+  });
+  const { data: aromaMesyatsaData } = useQuery({
+    queryKey: ["shop-aroma-mesyatsa"],
+    queryFn: () => api.getAromaMesyatsa(),
+    staleTime: 30 * 60_000,
   });
 
   /* unboxing form */
@@ -414,7 +627,7 @@ export default function HomePage() {
         <div ref={heroGradRef} style={{ position: "absolute", inset: "-10%", pointerEvents: "none", background: "radial-gradient(44% 38% at 50% 44%, rgba(201,162,94,0.16) 0%, rgba(201,162,94,0.05) 40%, rgba(11,11,11,0) 72%)", willChange: "transform" }} />
         <div ref={particlesRef} style={{ position: "absolute", inset: "-8%", pointerEvents: "none", willChange: "transform" }} />
 
-        <div style={{ position: "relative", width: "100%", maxWidth: 1040, display: "flex", flexDirection: "column", alignItems: "center", gap: "clamp(20px,3vw,36px)", textAlign: "center" }}>
+        <div id="hero-parallax-inner" style={{ position: "relative", width: "100%", maxWidth: 1040, display: "flex", flexDirection: "column", alignItems: "center", gap: "clamp(20px,3vw,36px)", textAlign: "center", willChange: "transform" }}>
           <p className="eyebrow anim-fade-in" style={{ animationDelay: "0.1s" }}>Оригинальная парфюмерия</p>
 
           {/* 3D tilt title */}
@@ -662,7 +875,7 @@ export default function HomePage() {
         <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 24, flexWrap: "wrap", marginBottom: 34 }}>
           <div>
             <p className="eyebrow" style={{ marginBottom: 10 }}>Популярное</p>
-            <h2 className="serif" style={{ margin: 0, fontStyle: "italic", fontWeight: 400, fontSize: "clamp(34px,4.4vw,56px)", lineHeight: 1, color: "#f5f4f0" }}>Хиты сезона</h2>
+            <span className="reveal-heading-wrap"><h2 className="serif reveal-heading" style={{ margin: 0, fontStyle: "italic", fontWeight: 400, fontSize: "clamp(34px,4.4vw,56px)", lineHeight: 1, color: "#f5f4f0" }}>Хиты сезона</h2></span>
           </div>
           <Link to="/catalog" className="btn-ghost">Смотреть всё →</Link>
         </div>
@@ -725,11 +938,16 @@ export default function HomePage() {
         <BrandGallery />
       </section>
 
+      {/* ════════════════════ АРОМАТ МЕСЯЦА ════════════════════ */}
+      {aromaMesyatsaData?.product && (
+        <AromaMesyatsaSection product={aromaMesyatsaData.product} note={aromaMesyatsaData.note} validUntil={aromaMesyatsaData.validUntil} />
+      )}
+
       {/* ════════════════════ REVIEWS ════════════════════ */}
       {reviewsData && reviewsData.reviews.length > 0 && (
         <section className="reveal-section" style={{ padding: "clamp(56px,8vw,96px) clamp(18px,4vw,56px) 0" }}>
           <p className="eyebrow" style={{ marginBottom: 10 }}>Отзывы покупателей</p>
-          <h2 className="serif" style={{ margin: "0 0 34px", fontStyle: "italic", fontWeight: 400, fontSize: "clamp(34px,4.4vw,56px)", lineHeight: 1, color: "#f5f4f0" }}>Что говорят клиенты</h2>
+          <span className="reveal-heading-wrap"><h2 className="serif reveal-heading" style={{ margin: "0 0 34px", fontStyle: "italic", fontWeight: 400, fontSize: "clamp(34px,4.4vw,56px)", lineHeight: 1, color: "#f5f4f0" }}>Что говорят клиенты</h2></span>
           <div className="scroll-x">
             <div style={{ display: "flex", gap: 18, width: "max-content", paddingBottom: 4 }}>
               {reviewsData.reviews.map((r) => (
@@ -806,7 +1024,7 @@ export default function HomePage() {
       {/* ════════════════════ UNBOXING ════════════════════ */}
       <section className="reveal-section" style={{ padding: "clamp(56px,8vw,96px) clamp(18px,4vw,56px) clamp(56px,8vw,96px)" }}>
         <p className="eyebrow" style={{ marginBottom: 10 }}>Наши покупатели</p>
-        <h2 className="serif" style={{ margin: "0 0 34px", fontStyle: "italic", fontWeight: 400, fontSize: "clamp(34px,4.4vw,56px)", lineHeight: 1, color: "#f5f4f0" }}>Распаковки</h2>
+        <span className="reveal-heading-wrap"><h2 className="serif reveal-heading" style={{ margin: "0 0 34px", fontStyle: "italic", fontWeight: 400, fontSize: "clamp(34px,4.4vw,56px)", lineHeight: 1, color: "#f5f4f0" }}>Распаковки</h2></span>
 
         {unboxingsData && unboxingsData.unboxings.length > 0 && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))", gap: 18, marginBottom: 48 }}>

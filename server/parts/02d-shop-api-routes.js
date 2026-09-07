@@ -80,6 +80,153 @@ function extractImages(p) {
 const SHOP_SETTINGS_KEY = "shopSettings";
 const SHOP_BANNERS_KEY = "shopBanners";
 const SHOP_CATEGORIES_KEY = "shopCategories";
+const SHOP_HOLIDAY_KEY = "shopHolidayBanners";
+
+// Canonical holiday presets — the source of truth for all holiday banners.
+// Admin settings only store overrides (active/promoCode per key).
+const HOLIDAY_PRESETS = [
+  {
+    key: "halloween",
+    name: "Хэллоуин",
+    emoji: "🎃",
+    defaultTitle: "Тёмная магия ароматов",
+    defaultSubtitle: "Мистические и восточные парфюмы для особой ночи",
+    defaultPromoCode: "HALLOWEEN20",
+    defaultLinkUrl: "/catalog",
+    defaultLinkText: "Тёмная коллекция",
+    windowStart: [10, 26],
+    windowEnd: [11, 1],
+  },
+  {
+    key: "black_friday",
+    name: "Чёрная пятница",
+    emoji: "🛒",
+    defaultTitle: "Чёрная пятница",
+    defaultSubtitle: "Самые большие скидки года — только несколько дней",
+    defaultPromoCode: "BLACKFRIDAY",
+    defaultLinkUrl: "/catalog",
+    defaultLinkText: "Все скидки",
+    windowStart: [11, 22],
+    windowEnd: [11, 30],
+  },
+  {
+    key: "new_year",
+    name: "Новый год",
+    emoji: "🎄",
+    defaultTitle: "Новогодние ароматы",
+    defaultSubtitle: "Подарите незабываемый парфюм к праздничному столу",
+    defaultPromoCode: "NEWYEAR25",
+    defaultLinkUrl: "/catalog",
+    defaultLinkText: "Праздничная коллекция",
+    windowStart: [12, 20],
+    windowEnd: [1, 9],
+  },
+  {
+    key: "valentine",
+    name: "День влюблённых",
+    emoji: "💝",
+    defaultTitle: "День влюблённых",
+    defaultSubtitle: "Романтичный аромат — лучший подарок для двоих",
+    defaultPromoCode: "LOVE14",
+    defaultLinkUrl: "/catalog",
+    defaultLinkText: "Романтичная коллекция",
+    windowStart: [2, 10],
+    windowEnd: [2, 14],
+  },
+  {
+    key: "defender_day",
+    name: "23 февраля",
+    emoji: "🛡️",
+    defaultTitle: "Подарок защитнику",
+    defaultSubtitle: "Брутальные и стойкие мужские ароматы к 23 февраля",
+    defaultPromoCode: "MEN23",
+    defaultLinkUrl: "/catalog",
+    defaultLinkText: "Мужские ароматы",
+    windowStart: [2, 18],
+    windowEnd: [2, 23],
+  },
+  {
+    key: "womens_day",
+    name: "8 марта",
+    emoji: "🌷",
+    defaultTitle: "С 8 марта!",
+    defaultSubtitle: "Цветочные и нежные ароматы для самых любимых",
+    defaultPromoCode: "MARCH8",
+    defaultLinkUrl: "/catalog",
+    defaultLinkText: "Женские ароматы",
+    windowStart: [3, 4],
+    windowEnd: [3, 8],
+  },
+  {
+    key: "may_day",
+    name: "Майские праздники",
+    emoji: "🌸",
+    defaultTitle: "Весна и праздники",
+    defaultSubtitle: "Свежие и зелёные ароматы — символ нового сезона",
+    defaultPromoCode: "MAY10",
+    defaultLinkUrl: "/catalog",
+    defaultLinkText: "Весенняя коллекция",
+    windowStart: [4, 28],
+    windowEnd: [5, 9],
+  },
+  {
+    key: "11_11",
+    name: "11.11 Распродажа",
+    emoji: "🔥",
+    defaultTitle: "11.11 — Мегараспродажа",
+    defaultSubtitle: "Один день, лучшие цены года на все ароматы",
+    defaultPromoCode: "1111",
+    defaultLinkUrl: "/catalog",
+    defaultLinkText: "Смотреть все скидки",
+    windowStart: [11, 9],
+    windowEnd: [11, 11],
+  },
+];
+
+function _isHolidayInWindow(preset) {
+  const now = new Date();
+  const [sm, sd] = preset.windowStart;
+  const [em, ed] = preset.windowEnd;
+  const month = now.getMonth() + 1;
+  const day = now.getDate();
+  // Handles cross-year windows (e.g. Dec 20 – Jan 9)
+  if (sm <= em) {
+    return (month > sm || (month === sm && day >= sd)) &&
+           (month < em || (month === em && day <= ed));
+  }
+  return (month > sm || (month === sm && day >= sd)) ||
+         (month < em || (month === em && day <= ed));
+}
+
+async function readHolidaySettings() {
+  const appSettings = await readAppSettings();
+  return appSettings[SHOP_HOLIDAY_KEY] || {};
+}
+
+async function buildHolidayBanners() {
+  const overrides = await readHolidaySettings();
+  const result = [];
+  for (const preset of HOLIDAY_PRESETS) {
+    const ov = overrides[preset.key] || {};
+    const inWindow = _isHolidayInWindow(preset);
+    // Show if manually enabled OR auto-active (in window and not explicitly disabled)
+    const isActive = ov.active === true || (inWindow && ov.active !== false);
+    if (!isActive) continue;
+    result.push({
+      id: `holiday-${preset.key}`,
+      holidayKey: preset.key,
+      imageUrl: "",
+      title: ov.title || preset.defaultTitle,
+      subtitle: ov.subtitle || preset.defaultSubtitle,
+      promoCode: ov.promoCode || preset.defaultPromoCode,
+      linkUrl: ov.linkUrl || preset.defaultLinkUrl,
+      linkText: ov.linkText || preset.defaultLinkText,
+      active: true,
+      order: -1,
+    });
+  }
+  return result;
+}
 
 // Разрешённые Origins для CORS (сам магазин + localhost для разработки)
 const SHOP_CORS_ORIGINS = (process.env.SHOP_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -112,6 +259,7 @@ function defaultShopSettings() {
     contactPhone: process.env.SHOP_CONTACT_PHONE || "",
     deliveryDays: 3,
     freeDeliveryFrom: 3000,
+    vipTelegramLink: "",
   };
 }
 
@@ -468,10 +616,147 @@ app.get("/api/shop/product/:offerId", shopCors, async (request, response, next) 
   }
 });
 
+// AI semantic search for fragrances
+app.post("/api/shop/ai-search", shopCors, async (request, response, next) => {
+  try {
+    const query = cleanText(request.body?.query || "").slice(0, 400);
+    if (!query) return response.status(400).json({ error: "query is required" });
+
+    const aiSettings = await readEffectiveAiSettings();
+    if (!isOpenAiDirectConfigured(aiSettings)) {
+      return response.status(503).json({ error: "AI не настроен", ok: false });
+    }
+
+    const client = getOpenAiClient(aiSettings);
+
+    // Step 1: LLM extracts fragrance notes + keyword terms from user query
+    const systemPrompt = `Ты эксперт парфюмерии. Пользователь описывает желаемый аромат на русском.
+Извлеки из описания структурированные данные для семантического поиска парфюмов.
+Верни JSON:
+{
+  "terms": [...],
+  "notes": [...],
+  "accords": [...],
+  "gender": "male|female|unisex|any",
+  "label": "..."
+}
+- terms: 3-5 поисковых фраз (бренды, названия, характер) на русском/латинице
+- notes: 3-6 конкретных нот аромата на английском (e.g. "Vanilla","Amber","Musk","Bergamot","Sandalwood")
+- accords: 2-4 общих аккорда на английском (e.g. "Oriental","Woody","Aromatic","Floral")
+- gender: если явно указан пол — "male"/"female", иначе "any"
+- label: одна фраза описания итогового аромата, до 60 символов
+Примеры нот: Vanilla, Musk, Amber, Sandalwood, Rose, Jasmine, Bergamot, Lemon, Cedar, Oud, Patchouli, Iris, Vetiver
+Примеры аккордов: Oriental, Woody, Aromatic, Floral, Fresh, Citrus, Powdery, Spicy, Gourmand`;
+
+    let terms = [];
+    let notes = [];
+    let accords = [];
+    let gender = "any";
+    let label = query.slice(0, 60);
+    try {
+      const completion = await createOpenAiChatCompletionWithFallback(client, {
+        model: aiSettings.textModel || "gpt-4o-mini",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: query },
+        ],
+        max_tokens: 400,
+        temperature: 0.2,
+        response_format: { type: "json_object" },
+      });
+      const parsed = extractJsonObjectFromText(completion.choices[0]?.message?.content || "{}");
+      if (Array.isArray(parsed.terms)) terms = parsed.terms.filter((t) => typeof t === "string" && t.length > 0).slice(0, 5);
+      if (Array.isArray(parsed.notes)) notes = parsed.notes.filter((t) => typeof t === "string").slice(0, 8);
+      if (Array.isArray(parsed.accords)) accords = parsed.accords.filter((t) => typeof t === "string").slice(0, 5);
+      if (parsed.gender && ["male", "female", "unisex"].includes(parsed.gender)) gender = parsed.gender;
+      if (parsed.label && typeof parsed.label === "string") label = cleanText(parsed.label).slice(0, 80);
+    } catch (_aiErr) {
+      terms = [query];
+    }
+
+    if (!terms.length) terms = [query];
+
+    const seenIds = new Set();
+    const results = [];
+
+    // Step 2a: Notes-based search via JSONB — exact semantic match (runs if DB has notes data)
+    if ((notes.length > 0 || accords.length > 0) && results.length < 12) {
+      try {
+        const prisma = getPrisma();
+        if (prisma) {
+          // Build a broad OR query matching any note or accord
+          const noteConditions = [
+            ...notes.map((n) => ({ fragranceNotes: { path: ["topNotes"], array_contains: n } })),
+            ...notes.map((n) => ({ fragranceNotes: { path: ["middleNotes"], array_contains: n } })),
+            ...notes.map((n) => ({ fragranceNotes: { path: ["baseNotes"], array_contains: n } })),
+            ...accords.map((a) => ({ fragranceNotes: { path: ["accords"], array_contains: a } })),
+          ];
+          const genderFilter = gender !== "any" ? { fragranceNotes: { path: ["gender"], equals: gender } } : {};
+
+          const where = {
+            archived: false,
+            targetStock: { gt: 0 },
+            fragranceNotes: { not: null },
+            OR: noteConditions,
+            ...genderFilter,
+          };
+
+          const dbResults = await prisma.warehouseProduct.findMany({
+            where,
+            select: { id: true, offerId: true, name: true, brand: true, images: true, marketplaceState: true, currentPrice: true },
+            take: 12,
+            orderBy: { updatedAt: "desc" },
+          });
+
+          for (const wp of dbResults) {
+            if (seenIds.has(wp.id)) continue;
+            const priceRub = wp.currentPrice || (wp.marketplaceState?.priceRub) || 0;
+            if (!priceRub) continue;
+            const images = Array.isArray(wp.images) ? wp.images : [];
+            seenIds.add(wp.id);
+            results.push({
+              id: wp.id,
+              offerId: wp.offerId,
+              name: wp.name,
+              brand: wp.brand || "",
+              description: "",
+              images,
+              priceRub,
+              inStock: true,
+              stockQty: 1,
+              _matchTerm: notes[0] || accords[0] || "notes",
+            });
+            if (results.length >= 12) break;
+          }
+        }
+      } catch (_dbErr) { /* non-fatal */ }
+    }
+
+    // Step 2b: Keyword search in product name/description (original behaviour, fills remaining slots)
+    for (const term of terms) {
+      if (results.length >= 12) break;
+      const { products } = await buildShopProductsFromDb({
+        q: term, page: 1, pageSize: 6, inStock: true, sort: "rating",
+      });
+      for (const p of products) {
+        if (!seenIds.has(p.id)) {
+          seenIds.add(p.id);
+          results.push({ ...p, _matchTerm: term });
+          if (results.length >= 12) break;
+        }
+      }
+    }
+
+    response.json({ ok: true, label, terms, notes, accords, products: results.slice(0, 10) });
+  } catch (error) { next(error); }
+});
+
 app.get("/api/shop/banners", shopCors, async (_request, response, next) => {
   try {
-    const banners = await readShopBanners();
-    response.json(banners.filter((b) => b.active).sort((a, b) => a.order - b.order));
+    const [banners, holidayBanners] = await Promise.all([readShopBanners(), buildHolidayBanners()]);
+    const active = banners.filter((b) => b.active).sort((a, b) => a.order - b.order);
+    // Holiday banners appear first (order -1), regular banners follow
+    response.json([...holidayBanners, ...active]);
   } catch (error) {
     next(error);
   }
@@ -801,12 +1086,38 @@ app.get("/api/shop/marketplace-reviews", shopCors, async (request, response, nex
 });
 
 // ─── Fragrance notes (public, shopCors) ──────────────────────────────────────
+// Check DB first (LLM-generated or manual), then fall back to Fragrantica scraper.
 app.get("/api/shop/product-notes", shopCors, async (request, response, next) => {
   try {
     const brand = cleanText(request.query.brand || "");
     const name = cleanText(request.query.name || "");
+    const offerId = cleanText(request.query.offerId || "");
     if (!brand || !name) return response.json({ ok: true, data: null });
+
+    // 1. Try DB (fast, always available)
+    const prisma = getPrisma();
+    if (prisma) {
+      const where = offerId
+        ? { offerId: { equals: offerId, mode: "insensitive" }, marketplace: "ozon", archived: false }
+        : { brand: { equals: brand, mode: "insensitive" }, name: { contains: name.split(" ").slice(0, 3).join(" "), mode: "insensitive" }, archived: false };
+      const wp = await prisma.warehouseProduct.findFirst({ where, select: { fragranceNotes: true } });
+      if (wp?.fragranceNotes) {
+        return response.json({ ok: true, data: wp.fragranceNotes, source: "db" });
+      }
+    }
+
+    // 2. Try Fragrantica scraper (may be blocked by Cloudflare)
     const data = await lookupFragranticaData(brand, name);
+    if (data) {
+      // Persist to DB for future requests
+      if (prisma) {
+        await prisma.warehouseProduct.updateMany({
+          where: { brand: { equals: brand, mode: "insensitive" }, archived: false },
+          data: { fragranceNotes: { ...data, source: "fragrantica" } },
+        }).catch(() => {});
+      }
+    }
+
     response.json({ ok: true, data: data || null });
   } catch (error) { next(error); }
 });
@@ -929,6 +1240,82 @@ app.get("/api/shop/settings", shopCors, async (_request, response, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// ── Аромат месяца ─────────────────────────────────────────────────────────
+app.get("/api/shop/aroma-mesyatsa", shopCors, async (_request, response, next) => {
+  try {
+    const settings = await readShopSettings();
+    const am = settings.aromaMesyatsa;
+    if (!am || !am.offerId) return response.json({ ok: true, product: null });
+    const product = await findShopProductByOfferId(am.offerId);
+    if (!product) return response.json({ ok: true, product: null });
+    response.json({ ok: true, product, note: cleanText(am.note || ""), validUntil: am.validUntil || null });
+  } catch (error) { next(error); }
+});
+
+// ── Топ по городам ────────────────────────────────────────────────────────
+let _cityTopsCache = null;
+let _cityTopsCacheAt = 0;
+const _CITY_TOPS_TTL = 4 * 60 * 60 * 1000; // 4 h
+
+app.get("/api/shop/city-tops", shopCors, async (_request, response, next) => {
+  try {
+    if (_cityTopsCache && Date.now() - _cityTopsCacheAt < _CITY_TOPS_TTL) {
+      return response.json(_cityTopsCache);
+    }
+    const prisma = getPrisma();
+    if (!prisma) return response.json({ ok: true, entries: [] });
+
+    const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000); // 60 days
+    const orders = await prisma.shopOrder.findMany({
+      where: { createdAt: { gte: since }, status: { in: ["delivered", "shipped", "completed", "paid", "confirmed"] } },
+      select: { delivery: true, items: true },
+    });
+
+    // Aggregate: city → { productKey → { name, brand, count } }
+    const cityMap = new Map();
+    for (const order of orders) {
+      const delivery = typeof order.delivery === "object" ? order.delivery : {};
+      const city = cleanText((delivery.city || "")).split(" ")[0];
+      if (!city || city.length < 2) continue;
+      const items = Array.isArray(order.items) ? order.items : [];
+      for (const item of items.slice(0, 3)) {
+        const offerId = item.offerId || "";
+        const name = cleanText(item.name || offerId).slice(0, 60);
+        const brand = cleanText(item.brand || "").slice(0, 30);
+        if (!offerId) continue;
+        if (!cityMap.has(city)) cityMap.set(city, new Map());
+        const products = cityMap.get(city);
+        if (!products.has(offerId)) products.set(offerId, { name, brand, offerId, count: 0 });
+        products.get(offerId).count++;
+      }
+    }
+
+    // For each city pick the top product
+    const entries = [];
+    for (const [city, products] of cityMap.entries()) {
+      if (products.size === 0) continue;
+      const top = [...products.values()].sort((a, b) => b.count - a.count)[0];
+      entries.push({ city, name: top.name, brand: top.brand, offerId: top.offerId });
+    }
+
+    // Sort by city popularity (descending), take top 8
+    const CITY_ORDER = ["Москва","Санкт-Петербург","Краснодар","Екатеринбург","Казань","Новосибирск","Ростов-на-Дону","Нижний Новгород","Воронеж","Сочи"];
+    entries.sort((a, b) => {
+      const ia = CITY_ORDER.indexOf(a.city);
+      const ib = CITY_ORDER.indexOf(b.city);
+      if (ia === -1 && ib === -1) return 0;
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    });
+
+    const result = { ok: true, entries: entries.slice(0, 8) };
+    _cityTopsCache = result;
+    _cityTopsCacheAt = Date.now();
+    response.json(result);
+  } catch (error) { next(error); }
 });
 
 // Ozon PVZ — кэш полного списка точек (~93K, только координаты), TTL 24 ч
@@ -1655,6 +2042,24 @@ app.post("/api/shop/referral/validate", shopCors, async (request, response, next
   } catch (error) { next(error); }
 });
 
+// ── VIP-клуб ─────────────────────────────────────────────────────────────
+
+const _VIP_ORDER_THRESHOLD = 3;
+
+app.get("/api/shop/auth/vip", shopCors, requireShopAuth, async (request, response, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return response.json({ ok: true, eligible: false, ordersCount: 0, vipLink: null });
+    const customerId = request.shopCustomer.id;
+    const ordersCount = await prisma.shopOrder.count({
+      where: { customerId, status: { in: ["completed", "delivered", "shipped"] } },
+    });
+    const settings = await readShopSettings();
+    const vipLink = cleanText(settings.vipTelegramLink || "") || null;
+    response.json({ ok: true, eligible: ordersCount >= _VIP_ORDER_THRESHOLD, ordersCount, vipLink });
+  } catch (error) { next(error); }
+});
+
 // ── Yandex ID OAuth ──────────────────────────────────────────────────────
 
 const _shopYandexOauthStates = new Map();
@@ -1815,6 +2220,52 @@ app.delete("/api/shop/admin/banners/:id", requireAdmin, async (request, response
   } catch (error) { next(error); }
 });
 
+// Holiday banners
+app.get("/api/shop/admin/holiday-banners", requireAdmin, async (_request, response, next) => {
+  try {
+    const overrides = await readHolidaySettings();
+    const result = HOLIDAY_PRESETS.map((p) => {
+      const ov = overrides[p.key] || {};
+      const inWindow = _isHolidayInWindow(p);
+      return {
+        key: p.key,
+        name: p.name,
+        emoji: p.emoji,
+        defaultPromoCode: p.defaultPromoCode,
+        defaultTitle: p.defaultTitle,
+        defaultSubtitle: p.defaultSubtitle,
+        windowStart: p.windowStart,
+        windowEnd: p.windowEnd,
+        inWindow,
+        active: ov.active === true || (inWindow && ov.active !== false),
+        promoCode: ov.promoCode || p.defaultPromoCode,
+        title: ov.title || p.defaultTitle,
+        subtitle: ov.subtitle || p.defaultSubtitle,
+        manualOverride: typeof ov.active === "boolean",
+      };
+    });
+    response.json(result);
+  } catch (error) { next(error); }
+});
+
+app.patch("/api/shop/admin/holiday-banners/:key", requireAdmin, async (request, response, next) => {
+  try {
+    const { key } = request.params;
+    if (!HOLIDAY_PRESETS.find((p) => p.key === key))
+      return response.status(404).json({ error: "Holiday preset not found" });
+    const overrides = await readHolidaySettings();
+    const existing = overrides[key] || {};
+    const updated = { ...existing };
+    if (typeof request.body.active === "boolean") updated.active = request.body.active;
+    if (typeof request.body.promoCode === "string") updated.promoCode = cleanText(request.body.promoCode);
+    if (typeof request.body.title === "string") updated.title = cleanText(request.body.title);
+    if (typeof request.body.subtitle === "string") updated.subtitle = cleanText(request.body.subtitle);
+    const appSettings = await readAppSettings();
+    await writeAppSettings({ ...appSettings, [SHOP_HOLIDAY_KEY]: { ...overrides, [key]: updated } });
+    response.json({ ok: true });
+  } catch (error) { next(error); }
+});
+
 // Categories
 app.get("/api/shop/admin/categories", requireAdmin, async (_request, response, next) => {
   try {
@@ -1868,7 +2319,7 @@ app.get("/api/shop/admin/settings", requireAdmin, async (_request, response, nex
 app.patch("/api/shop/admin/settings", requireAdmin, async (request, response, next) => {
   try {
     const current = await readShopSettings();
-    const allowed = ["markup", "markupRules", "shopName", "shopDescription", "contactEmail", "contactPhone", "deliveryDays", "freeDeliveryFrom"];
+    const allowed = ["markup", "markupRules", "shopName", "shopDescription", "contactEmail", "contactPhone", "deliveryDays", "freeDeliveryFrom", "vipTelegramLink", "aromaMesyatsa", "contest"];
     const updates = {};
     for (const k of allowed) {
       if (request.body[k] !== undefined) updates[k] = request.body[k];
@@ -2054,6 +2505,126 @@ app.delete("/api/shop/admin/unboxings/:id", requireAdmin, async (req, res, next)
   try {
     const all = (await readUnboxings()).filter((u) => u.id !== req.params.id);
     await writeShopData(SHOP_UNBOXINGS_KEY, all);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+// ─── Blog ─────────────────────────────────────────────────────────────────────
+
+function _blogSlugify(title) {
+  return title
+    .toLowerCase()
+    .replace(/[а-яёa-z0-9]+/gi, (m) => m)
+    .replace(/[^a-z0-9а-яё]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80) || `post-${Date.now()}`;
+}
+
+// Public: list published posts
+app.get("/api/shop/blog", shopCors, async (req, res, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return res.json({ ok: true, posts: [] });
+    const tag = cleanText(req.query.tag || "");
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const pageSize = Math.min(20, Math.max(1, Number(req.query.pageSize) || 10));
+    const where = { published: true, ...(tag ? { tags: { has: tag } } : {}) };
+    const [posts, total] = await Promise.all([
+      prisma.blogPost.findMany({
+        where, orderBy: { publishedAt: "desc" }, skip: (page - 1) * pageSize, take: pageSize,
+        select: { id: true, slug: true, title: true, excerpt: true, coverUrl: true, tags: true, publishedAt: true },
+      }),
+      prisma.blogPost.count({ where }),
+    ]);
+    res.json({ ok: true, posts, total, page, pageSize });
+  } catch (e) { next(e); }
+});
+
+// Public: single post by slug
+app.get("/api/shop/blog/:slug", shopCors, async (req, res, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return res.status(503).json({ error: "БД недоступна" });
+    const slug = cleanText(req.params.slug);
+    const post = await prisma.blogPost.findFirst({ where: { slug, published: true } });
+    if (!post) return res.status(404).json({ error: "Статья не найдена" });
+    res.json({ ok: true, post });
+  } catch (e) { next(e); }
+});
+
+// Admin: list all posts (including drafts)
+app.get("/api/shop/admin/blog", requireAdmin, async (_req, res, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return res.json({ ok: true, posts: [] });
+    const posts = await prisma.blogPost.findMany({
+      orderBy: { createdAt: "desc" },
+      select: { id: true, slug: true, title: true, excerpt: true, coverUrl: true, tags: true, published: true, publishedAt: true, createdAt: true },
+    });
+    res.json({ ok: true, posts });
+  } catch (e) { next(e); }
+});
+
+// Admin: create post
+app.post("/api/shop/admin/blog", requireAdmin, async (req, res, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return res.status(503).json({ error: "БД недоступна" });
+    const title = cleanText(req.body?.title || "");
+    if (!title) return res.status(400).json({ error: "Нужен title" });
+    const slug = cleanText(req.body?.slug || "") || _blogSlugify(title);
+    const published = Boolean(req.body?.published);
+    const post = await prisma.blogPost.create({
+      data: {
+        slug,
+        title,
+        excerpt: cleanText(req.body?.excerpt || "") || null,
+        content: cleanText(req.body?.content || ""),
+        coverUrl: cleanText(req.body?.coverUrl || "") || null,
+        tags: Array.isArray(req.body?.tags) ? req.body.tags.map(cleanText).filter(Boolean) : [],
+        published,
+        publishedAt: published ? new Date() : null,
+      },
+    });
+    res.json({ ok: true, post });
+  } catch (e) {
+    if (e.code === "P2002") return res.status(409).json({ error: "Slug уже занят" });
+    next(e);
+  }
+});
+
+// Admin: update post
+app.put("/api/shop/admin/blog/:id", requireAdmin, async (req, res, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return res.status(503).json({ error: "БД недоступна" });
+    const existing = await prisma.blogPost.findUnique({ where: { id: req.params.id }, select: { published: true, publishedAt: true } });
+    if (!existing) return res.status(404).json({ error: "Не найдено" });
+    const published = Boolean(req.body?.published);
+    const wasPublished = existing.published;
+    const data = {};
+    if (req.body.title !== undefined) data.title = cleanText(req.body.title);
+    if (req.body.slug !== undefined) data.slug = cleanText(req.body.slug);
+    if (req.body.excerpt !== undefined) data.excerpt = cleanText(req.body.excerpt) || null;
+    if (req.body.content !== undefined) data.content = cleanText(req.body.content);
+    if (req.body.coverUrl !== undefined) data.coverUrl = cleanText(req.body.coverUrl) || null;
+    if (req.body.tags !== undefined) data.tags = Array.isArray(req.body.tags) ? req.body.tags.map(cleanText).filter(Boolean) : [];
+    data.published = published;
+    if (published && !wasPublished) data.publishedAt = new Date();
+    const post = await prisma.blogPost.update({ where: { id: req.params.id }, data });
+    res.json({ ok: true, post });
+  } catch (e) {
+    if (e.code === "P2002") return res.status(409).json({ error: "Slug уже занят" });
+    next(e);
+  }
+});
+
+// Admin: delete post
+app.delete("/api/shop/admin/blog/:id", requireAdmin, async (req, res, next) => {
+  try {
+    const prisma = getPrisma();
+    if (!prisma) return res.status(503).json({ error: "БД недоступна" });
+    await prisma.blogPost.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
   } catch (e) { next(e); }
 });

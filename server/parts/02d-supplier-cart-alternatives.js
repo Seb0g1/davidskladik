@@ -67,10 +67,11 @@ async function listSupplierCartSupplierOptions(offerIdInput = "", { now = new Da
     const p = Number(opt.price || Number.POSITIVE_INFINITY);
     return opt.priceCurrency === "RUB" ? p / usdRate : p;
   };
-  // Rank: 0=active+orderable, 1=active+blocked/cutoff, 2=inactive PM, 3=stopped/no_price
+  // Rank: -1=«Наш склад», 0=active+orderable, 1=active+blocked/cutoff, 2=inactive PM, 3=stopped/no_price
   const usableRank = (option) => {
+    if (option.stockOnly && !option.blocked) return -1;
     if (option.inactivePm) return 2;
-    return option.orderable && !option.blocked && !option.cutoffPassed && !option.stockOnly ? 0 : (option.orderable && !option.blocked ? 1 : 3);
+    return option.orderable && !option.blocked && !option.cutoffPassed ? 0 : (option.orderable && !option.blocked ? 1 : 3);
   };
   const priorityRank = (option) => {
     const name = cleanText(option.supplierName || "");

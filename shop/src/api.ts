@@ -1,4 +1,4 @@
-import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse, AutoCategory, TelegramNewsPost, ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes } from "./types";
+import type { ShopProduct, ShopBanner, ShopCategory, ShopSettings, ShopOrderPayload, ShopOrder, CatalogResponse, AutoCategory, TelegramNewsPost, ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes, BlogPost } from "./types";
 
 // В dev Vite-прокси перенаправляет /api/shop → davidsklad.ru.
 // В production установите VITE_API_BASE=https://davidsklad.ru
@@ -46,6 +46,10 @@ export const api = {
 
   banners(): Promise<ShopBanner[]> {
     return req<ShopBanner[]>("/banners");
+  },
+
+  aiSearch(query: string): Promise<{ ok: boolean; label: string; terms: string[]; products: (ShopProduct & { _matchTerm?: string })[] }> {
+    return req("/ai-search", { method: "POST", body: JSON.stringify({ query }) });
   },
 
   categories(): Promise<ShopCategory[]> {
@@ -114,8 +118,10 @@ export const api = {
     return req<{ ok: boolean; items: ProductQAItem[] }>(`/product-qa?offerId=${encodeURIComponent(offerId)}`);
   },
 
-  productNotes(brand: string, name: string): Promise<{ ok: boolean; data: FragranceNotes | null }> {
-    return req<{ ok: boolean; data: FragranceNotes | null }>(`/product-notes?brand=${encodeURIComponent(brand)}&name=${encodeURIComponent(name)}`);
+  productNotes(brand: string, name: string, offerId?: string): Promise<{ ok: boolean; data: FragranceNotes | null }> {
+    const params = new URLSearchParams({ brand, name });
+    if (offerId) params.set("offerId", offerId);
+    return req<{ ok: boolean; data: FragranceNotes | null }>(`/product-notes?${params.toString()}`);
   },
 
   uploadMedia(file: File): Promise<{ ok: boolean; url: string; isVideo: boolean }> {
@@ -127,12 +133,36 @@ export const api = {
     }).then((r) => r.json());
   },
 
+  blog(params?: { page?: number; pageSize?: number; tag?: string }): Promise<{ ok: boolean; posts: BlogPost[]; total: number }> {
+    const qs = new URLSearchParams();
+    if (params?.page) qs.set("page", String(params.page));
+    if (params?.pageSize) qs.set("pageSize", String(params.pageSize));
+    if (params?.tag) qs.set("tag", params.tag);
+    return req<{ ok: boolean; posts: BlogPost[]; total: number }>(`/blog?${qs}`);
+  },
+
+  blogPost(slug: string): Promise<{ ok: boolean; post: BlogPost }> {
+    return req<{ ok: boolean; post: BlogPost }>(`/blog/${encodeURIComponent(slug)}`);
+  },
+
   referral(token: string): Promise<{ ok: boolean; code: string; link: string; ordersFromRef: number; discountPct: number }> {
     return req<{ ok: boolean; code: string; link: string; ordersFromRef: number; discountPct: number }>("/auth/referral", {}, token);
   },
 
   validateReferral(code: string): Promise<{ ok: boolean; valid: boolean; discountPct: number }> {
     return req<{ ok: boolean; valid: boolean; discountPct: number }>("/referral/validate", { method: "POST", body: JSON.stringify({ code }) });
+  },
+
+  vip(token: string): Promise<{ ok: boolean; eligible: boolean; ordersCount: number; vipLink: string | null }> {
+    return req<{ ok: boolean; eligible: boolean; ordersCount: number; vipLink: string | null }>("/auth/vip", {}, token);
+  },
+
+  getAromaMesyatsa(): Promise<{ ok: boolean; product: ShopProduct | null; note: string; validUntil: string | null }> {
+    return req<{ ok: boolean; product: ShopProduct | null; note: string; validUntil: string | null }>("/aroma-mesyatsa");
+  },
+
+  getCityTops(): Promise<{ ok: boolean; entries: { city: string; name: string; brand: string; offerId: string }[] }> {
+    return req<{ ok: boolean; entries: { city: string; name: string; brand: string; offerId: string }[] }>("/city-tops");
   },
 
   unboxings(): Promise<{ ok: boolean; unboxings: { id: string; name: string; mediaUrl: string; text: string; createdAt: string }[] }> {
@@ -181,6 +211,10 @@ export const adminApi = {
 
   saveSettings(s: Partial<ShopSettings>): Promise<ShopSettings> {
     return req<ShopSettings>("/admin/settings", { method: "PATCH", body: JSON.stringify(s) });
+  },
+
+  setAromaMesyatsa(data: { offerId: string; note: string; validUntil?: string } | null): Promise<{ ok: boolean }> {
+    return req<{ ok: boolean }>("/admin/settings", { method: "PATCH", body: JSON.stringify({ aromaMesyatsa: data }) });
   },
 
   getNews(): Promise<{ ok: boolean; posts: (import("./types").TelegramNewsPost & { active: boolean })[] }> {

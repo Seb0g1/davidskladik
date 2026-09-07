@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { ShoppingBag, Check, ChevronLeft, Star, Shield, Truck, RefreshCw, Minus, Plus, ChevronRight, Share2, Link2, Users, X, Bell, MessageSquare, ThumbsUp, Send } from "lucide-react";
@@ -6,6 +6,8 @@ import { api } from "../api";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
 import type { ShopReview, MarketplaceReview, ProductQAItem, FragranceNotes } from "../types";
+
+const BottleViewer = lazy(() => import("../components/BottleViewer"));
 
 const S = {
   bg:      "#0E0D0B",
@@ -37,6 +39,7 @@ export default function ProductPage() {
   const [added, setAdded] = useState(false);
   const [cartPopup, setCartPopup] = useState(false);
   const [imgErrors, setImgErrors] = useState<Set<number>>(new Set());
+  const [view3d, setView3d] = useState(false);
   const [viewers, setViewers] = useState(0);
   const [alertEmail, setAlertEmail] = useState("");
   const [alertSent, setAlertSent] = useState(false);
@@ -105,7 +108,7 @@ export default function ProductPage() {
 
   const notesQuery = useQuery({
     queryKey: ["shop-product-notes", product?.brand, product?.name],
-    queryFn: () => api.productNotes(product!.brand!, product!.name),
+    queryFn: () => api.productNotes(product!.brand!, product!.name, product!.offerId),
     enabled: !!(product?.brand && product?.name),
     staleTime: 24 * 60 * 60_000,
   });
@@ -287,18 +290,62 @@ export default function ProductPage() {
 
             {/* Images */}
             <div style={{ background: S.surface2, padding: "clamp(24px,4vw,48px)", display: "flex", flexDirection: "column", gap: 16, borderRight: `1px solid ${S.border}` }}>
+              {/* View mode toggle */}
+              <div style={{ display: "flex", gap: 6, alignSelf: "flex-end" }}>
+                {[
+                  { key: false, label: "Фото" },
+                  { key: true, label: "3D" },
+                ].map(({ key, label }) => (
+                  <button
+                    key={String(key)}
+                    onClick={() => setView3d(key)}
+                    style={{
+                      padding: "5px 14px", borderRadius: 20, border: "none", cursor: "pointer",
+                      fontSize: 11, fontWeight: 600, letterSpacing: "0.08em",
+                      background: view3d === key ? S.accent : "rgba(255,255,255,0.07)",
+                      color: view3d === key ? "#09090b" : S.muted,
+                      transition: "all 0.2s",
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Main viewer */}
               <div style={{
                 aspectRatio: "1", borderRadius: 18, overflow: "hidden", background: S.bg,
                 display: "flex", alignItems: "center", justifyContent: "center",
-                border: `1px solid ${S.border}`,
+                border: `1px solid ${view3d ? S.accent + "44" : S.border}`,
+                transition: "border-color 0.3s",
+                position: "relative",
               }}>
-                {activeValidImg
-                  ? <img src={activeValidImg} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 24 }}
-                      onError={() => setImgErrors((s) => new Set(s).add(activeImg))} />
-                  : <span style={{ fontSize: 80, fontWeight: 800, color: S.subtle, opacity: 0.2 }}>{product.brand?.[0] ?? "?"}</span>
-                }
+                {view3d ? (
+                  <Suspense fallback={
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, color: S.muted }}>
+                      <div style={{ width: 32, height: 32, border: `2px solid ${S.accent}`, borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                      <span style={{ fontSize: 12 }}>Загружаю 3D…</span>
+                    </div>
+                  }>
+                    <BottleViewer tint={S.accent} />
+                  </Suspense>
+                ) : (
+                  activeValidImg
+                    ? <img src={activeValidImg} alt={product.name} style={{ width: "100%", height: "100%", objectFit: "contain", padding: 24 }}
+                        onError={() => setImgErrors((s) => new Set(s).add(activeImg))} />
+                    : <span style={{ fontSize: 80, fontWeight: 800, color: S.subtle, opacity: 0.2 }}>{product.brand?.[0] ?? "?"}</span>
+                )}
               </div>
-              {validImages.length > 1 && (
+
+              {/* 3D hint */}
+              {view3d && (
+                <p style={{ fontSize: 11, color: S.muted, textAlign: "center", marginTop: -8 }}>
+                  Наведите мышь для поворота · Кликните для вращения
+                </p>
+              )}
+
+              {/* Thumbnails (hidden in 3D mode) */}
+              {!view3d && validImages.length > 1 && (
                 <div style={{ display: "flex", gap: 8, overflowX: "auto", paddingBottom: 4 }}>
                   {product.images.map((img, i) => !imgErrors.has(i) && (
                     <button key={i} onClick={() => setActiveImg(i)} style={{

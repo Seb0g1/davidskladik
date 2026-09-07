@@ -245,6 +245,83 @@ function ReferralPanel({ token }: { token: string }) {
   );
 }
 
+function VipPanel({ token }: { token: string }) {
+  const { data } = useQuery({
+    queryKey: ["shop-vip", token],
+    queryFn: () => api.vip(token),
+    staleTime: 5 * 60_000,
+    enabled: !!token,
+  });
+
+  if (!data?.ok) return null;
+  const { eligible, ordersCount, vipLink } = data;
+  const needed = Math.max(0, 3 - ordersCount);
+
+  return (
+    <div style={{
+      background: eligible
+        ? "linear-gradient(135deg, rgba(201,162,94,0.06) 0%, rgba(22,20,14,0.9) 100%)"
+        : S.surface,
+      borderRadius: 18, padding: "20px",
+      border: `1px solid ${eligible ? "rgba(201,162,94,0.3)" : S.border}`,
+      marginTop: 16,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+        <span style={{ fontSize: 18 }}>👑</span>
+        <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.18em", color: eligible ? S.accent : S.subtle }}>
+          VIP-клуб Magic Vibes
+        </span>
+      </div>
+
+      {eligible && vipLink ? (
+        <>
+          <p style={{ fontSize: 13, color: S.muted, lineHeight: 1.65, marginBottom: 14 }}>
+            Вы — наш постоянный покупатель. Вступайте в закрытый Telegram-клуб:<br />
+            ранний доступ к новинкам, эксклюзивные промокоды, голосование за «аромат месяца».
+          </p>
+          <a
+            href={vipLink}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 8, padding: "11px 22px",
+              borderRadius: 12, fontSize: 13, fontWeight: 700, textDecoration: "none",
+              background: "linear-gradient(135deg, rgba(201,162,94,0.2), rgba(201,162,94,0.1))",
+              border: "1px solid rgba(201,162,94,0.35)", color: S.accent,
+              transition: "all 0.2s",
+            }}
+          >
+            <span>✈</span> Вступить в VIP-клуб
+          </a>
+        </>
+      ) : eligible && !vipLink ? (
+        <p style={{ fontSize: 12, color: S.muted, lineHeight: 1.6 }}>
+          Вы получили VIP-статус! Ссылка на клуб скоро будет добавлена.
+        </p>
+      ) : (
+        <>
+          <p style={{ fontSize: 12, color: S.muted, lineHeight: 1.6, marginBottom: 14 }}>
+            После <span style={{ color: S.text }}>3 завершённых заказов</span> откроется закрытый VIP-клуб с ранним доступом, эксклюзивными промокодами и подарками.
+          </p>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {[0, 1, 2].map((i) => (
+              <div key={i} style={{
+                width: 10, height: 10, borderRadius: "50%",
+                background: i < ordersCount ? S.accent : "rgba(255,255,255,0.08)",
+                border: `1px solid ${i < ordersCount ? S.accent : "rgba(255,255,255,0.12)"}`,
+                transition: "all 0.3s",
+              }} />
+            ))}
+            <span style={{ fontSize: 11, color: S.subtle, marginLeft: 6 }}>
+              {ordersCount}/3 заказов{needed > 0 && ` — ещё ${needed}`}
+            </span>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function ProfileTab() {
   const { customer, updateProfile, token } = useAuth();
   const [form, setForm] = useState({
@@ -314,6 +391,8 @@ function ProfileTab() {
       {token && <LoyaltyPanel token={token} />}
       {/* Referral */}
       {token && <ReferralPanel token={token} />}
+      {/* VIP club */}
+      {token && <VipPanel token={token} />}
     </div>
   );
 }

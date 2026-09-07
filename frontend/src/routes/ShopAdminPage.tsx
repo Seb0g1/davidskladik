@@ -5,7 +5,7 @@ import {
   Plus, Trash2, Edit2, Save, X, Loader2, Image as ImageIcon,
   ChevronLeft, ChevronRight, Check, RefreshCw,
   LayoutDashboard, Settings, Tag, Image, ClipboardList, UserCheck,
-  ChevronDown, ChevronUp, Newspaper, Star, Eye, EyeOff, MessageSquare, Bell, Video,
+  ChevronDown, ChevronUp, Newspaper, Star, Eye, EyeOff, MessageSquare, Bell, Video, BookOpen,
 } from "lucide-react";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
@@ -16,6 +16,13 @@ interface ShopBanner {
   id: string; imageUrl: string; title?: string; subtitle?: string;
   linkUrl?: string; linkText?: string; endDate?: string; active: boolean; order: number;
 }
+interface HolidayPreset {
+  key: string; name: string; emoji: string;
+  defaultPromoCode: string; defaultTitle: string; defaultSubtitle: string;
+  windowStart: [number, number]; windowEnd: [number, number];
+  inWindow: boolean; active: boolean; promoCode: string;
+  title: string; subtitle: string; manualOverride: boolean;
+}
 interface ShopCategory {
   id: string; name: string; slug: string; imageUrl?: string; order: number; filterTag?: string;
 }
@@ -24,6 +31,8 @@ interface ShopSettings {
   markup: number; markupRules: ShopMarkupRule[];
   shopName: string; shopDescription: string;
   contactEmail?: string; contactPhone?: string; deliveryDays?: number; freeDeliveryFrom?: number;
+  vipTelegramLink?: string;
+  aromaMesyatsa?: { offerId: string; note: string; validUntil?: string } | null;
 }
 interface ShopCustomer {
   id: string; email: string; firstName?: string; lastName?: string;
@@ -121,24 +130,26 @@ function DashboardTab() {
       {!ordersData?.orders.length ? (
         <div className="soft-empty"><Package size={18} /> Заказов пока нет</div>
       ) : (
-        <div className="table-panel">
-          <div className="table-head" style={{ display: "grid", gridTemplateColumns: "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)", gap: 10 }}>
-            <span>Заказ / Дата</span><span>Покупатель</span><span>Товары</span><span>Сумма</span><span>Статус</span>
-          </div>
-          {ordersData.orders.map((o) => (
-            <div key={o.id} className="table-row" style={{ display: "grid", gridTemplateColumns: "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)", gap: 10 }}>
-              <span>
-                <div style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{o.id}</div>
-                <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{fmtDate(o.createdAt)}</div>
-              </span>
-              <span style={{ fontSize: 13 }}>{customerName(o.customer ?? undefined, o.delivery)}</span>
-              <span style={{ color: "var(--muted)", fontSize: 12 }}>{Array.isArray(o.items) ? `${o.items.length} поз.` : "—"}</span>
-              <span style={{ fontWeight: 600 }}>{fmt(o.totalRub)} ₽</span>
-              <span>
-                <span className={`pill ${STATUS_TONE[o.status] ?? ""}`}>{STATUS_LABELS[o.status] ?? o.status}</span>
-              </span>
+        <div style={{ overflowX: "auto" }}>
+          <div className="table-panel" style={{ minWidth: 560 }}>
+            <div className="table-head" style={{ display: "grid", gridTemplateColumns: "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)", gap: 10 }}>
+              <span>Заказ / Дата</span><span>Покупатель</span><span>Товары</span><span>Сумма</span><span>Статус</span>
             </div>
-          ))}
+            {ordersData.orders.map((o) => (
+              <div key={o.id} className="table-row" style={{ display: "grid", gridTemplateColumns: "minmax(130px,1.2fr) minmax(130px,1fr) minmax(70px,.4fr) minmax(100px,.7fr) minmax(130px,.9fr)", gap: 10 }}>
+                <span>
+                  <div style={{ fontFamily: "monospace", fontSize: 12, fontWeight: 700 }}>{o.id}</div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{fmtDate(o.createdAt)}</div>
+                </span>
+                <span style={{ fontSize: 13 }}>{customerName(o.customer ?? undefined, o.delivery)}</span>
+                <span style={{ color: "var(--muted)", fontSize: 12 }}>{Array.isArray(o.items) ? `${o.items.length} поз.` : "—"}</span>
+                <span style={{ fontWeight: 600 }}>{fmt(o.totalRub)} ₽</span>
+                <span>
+                  <span className={`pill ${STATUS_TONE[o.status] ?? ""}`}>{STATUS_LABELS[o.status] ?? o.status}</span>
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -193,7 +204,8 @@ function OrdersTab() {
       ) : !data?.orders.length ? (
         <div className="soft-empty"><ShoppingBag size={18} /> Заказов нет</div>
       ) : (
-        <div className="table-panel orders-table">
+        <div style={{ overflowX: "auto" }}>
+        <div className="table-panel orders-table" style={{ minWidth: 560 }}>
           <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
             <span>Заказ / Дата</span><span>Покупатель</span><span>Позиций</span><span>Сумма</span><span>Статус</span>
           </div>
@@ -276,6 +288,7 @@ function OrdersTab() {
 
           <Pagination page={page} total={data.total} pageSize={20} onChange={setPage} />
         </div>
+        </div>
       )}
     </div>
   );
@@ -301,24 +314,170 @@ function CustomersTab() {
       ) : !data?.customers.length ? (
         <div className="soft-empty"><Users size={18} /> Зарегистрированных покупателей нет</div>
       ) : (
-        <div className="table-panel customers-table">
-          <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
-            <span>Имя</span><span>Email</span><span>Телефон</span><span>Заказов</span><span>Регистрация</span>
-          </div>
-          {data.customers.map((c) => (
-            <div key={c.id} className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
-              <span style={{ fontWeight: 600 }}>{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
-              <span style={{ fontSize: 13, color: "var(--muted-soft)" }}>{c.email}</span>
-              <span style={{ fontSize: 13 }}>{c.phone || "—"}</span>
-              <span>
-                <span className="section-count">{c._count.orders}</span>
-              </span>
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(c.createdAt)}</span>
+        <div style={{ overflowX: "auto" }}>
+          <div className="table-panel customers-table" style={{ minWidth: 580 }}>
+            <div className="table-head" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+              <span>Имя</span><span>Email</span><span>Телефон</span><span>Заказов</span><span>Регистрация</span>
             </div>
-          ))}
-          <Pagination page={page} total={data.total} pageSize={20} onChange={setPage} />
+            {data.customers.map((c) => (
+              <div key={c.id} className="table-row" style={{ display: "grid", gridTemplateColumns: COL, gap: 10 }}>
+                <span style={{ fontWeight: 600 }}>{[c.firstName, c.lastName].filter(Boolean).join(" ") || "—"}</span>
+                <span style={{ fontSize: 13, color: "var(--muted-soft)" }}>{c.email}</span>
+                <span style={{ fontSize: 13 }}>{c.phone || "—"}</span>
+                <span>
+                  <span className="section-count">{c._count.orders}</span>
+                </span>
+                <span style={{ fontSize: 12, color: "var(--muted)" }}>{fmtDate(c.createdAt)}</span>
+              </div>
+            ))}
+            <Pagination page={page} total={data.total} pageSize={20} onChange={setPage} />
+          </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Holiday Banners ───────────────────────────────────────────────────────────
+
+const MONTH_NAMES = ["янв","фев","мар","апр","май","июн","июл","авг","сен","окт","ноя","дек"];
+
+function HolidayBannersSection() {
+  const qc = useQueryClient();
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{ promoCode: string; title: string; subtitle: string }>({ promoCode: "", title: "", subtitle: "" });
+
+  const { data: holidays = [], isLoading } = useQuery<HolidayPreset[]>({
+    queryKey: ["shop-admin-holiday-banners"],
+    queryFn: () => apiFetch<HolidayPreset[]>("/api/shop/admin/holiday-banners"),
+    refetchInterval: 60_000,
+  });
+
+  const patchMut = useMutation({
+    mutationFn: ({ key, patch }: { key: string; patch: object }) =>
+      apiFetch<{ ok: boolean }>(`/api/shop/admin/holiday-banners/${key}`, { method: "PATCH", body: JSON.stringify(patch) }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["shop-admin-holiday-banners"] });
+      setEditingKey(null);
+    },
+  });
+
+  const toggleActive = (h: HolidayPreset) => {
+    const nextActive = !h.active;
+    patchMut.mutate({ key: h.key, patch: { active: nextActive } });
+  };
+
+  const formatWindow = (start: [number, number], end: [number, number]) => {
+    const [sm, sd] = start; const [em, ed] = end;
+    return `${sd} ${MONTH_NAMES[sm - 1]} — ${ed} ${MONTH_NAMES[em - 1]}`;
+  };
+
+  if (isLoading) return <div className="list-loading"><Loader2 size={14} className="spin" /> Загружаю…</div>;
+
+  return (
+    <div style={{ marginBottom: 32 }}>
+      <div className="section-title" style={{ marginBottom: 16 }}>
+        <div><h2>Праздничные баннеры</h2><p style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>Автоматически включаются в сезон. Можно включить/выключить вручную.</p></div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
+        {holidays.map((h) => (
+          <div key={h.key} style={{
+            border: `1px solid ${h.active ? "rgba(201,162,94,0.35)" : "rgba(255,255,255,0.07)"}`,
+            borderRadius: 6, background: h.active ? "rgba(201,162,94,0.04)" : "var(--surface)",
+            padding: "16px 18px", transition: "border-color 0.3s",
+          }}>
+            {editingKey === h.key ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                  <span style={{ fontSize: 20 }}>{h.emoji}</span>
+                  <strong style={{ fontSize: 14 }}>{h.name}</strong>
+                </div>
+                <div className="mv-field">
+                  <label>Промокод</label>
+                  <input value={editForm.promoCode} onChange={e => setEditForm(f => ({ ...f, promoCode: e.target.value }))} placeholder={h.defaultPromoCode} />
+                </div>
+                <div className="mv-field">
+                  <label>Заголовок баннера</label>
+                  <input value={editForm.title} onChange={e => setEditForm(f => ({ ...f, title: e.target.value }))} placeholder={h.defaultTitle} />
+                </div>
+                <div className="mv-field">
+                  <label>Подзаголовок</label>
+                  <input value={editForm.subtitle} onChange={e => setEditForm(f => ({ ...f, subtitle: e.target.value }))} placeholder={h.defaultSubtitle} />
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <button
+                    onClick={() => patchMut.mutate({ key: h.key, patch: { promoCode: editForm.promoCode, title: editForm.title, subtitle: editForm.subtitle } })}
+                    disabled={patchMut.isPending}
+                    className="primary-action" style={{ flex: 1 }}
+                  >
+                    {patchMut.isPending ? <Loader2 size={13} className="spin" /> : <Save size={13} />} Сохранить
+                  </button>
+                  <button onClick={() => setEditingKey(null)} className="secondary-action"><X size={13} /></button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10, marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 24 }}>{h.emoji}</span>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 14 }}>{h.name}</div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                        {formatWindow(h.windowStart, h.windowEnd)}
+                        {h.inWindow && <span style={{ marginLeft: 6, color: "#4ade80", fontSize: 10, letterSpacing: "0.1em" }}>● сейчас</span>}
+                      </div>
+                    </div>
+                  </div>
+                  {/* Toggle switch */}
+                  <button
+                    onClick={() => toggleActive(h)}
+                    disabled={patchMut.isPending}
+                    title={h.active ? "Выключить" : "Включить"}
+                    style={{
+                      width: 42, height: 24, borderRadius: 12, border: "none", cursor: "pointer",
+                      background: h.active ? "#c9a25e" : "rgba(255,255,255,0.12)",
+                      position: "relative", transition: "background 0.25s", flexShrink: 0,
+                    }}
+                  >
+                    <span style={{
+                      position: "absolute", top: 3, left: h.active ? 21 : 3,
+                      width: 18, height: 18, borderRadius: "50%",
+                      background: "#fff", transition: "left 0.25s",
+                    }} />
+                  </button>
+                </div>
+
+                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8, lineHeight: 1.5, minHeight: 36 }}>
+                  {h.title}
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <div style={{
+                    display: "inline-flex", alignItems: "center", gap: 6,
+                    background: "rgba(0,0,0,0.3)", border: "1px solid rgba(201,162,94,0.25)",
+                    borderRadius: 3, padding: "4px 10px",
+                  }}>
+                    <span style={{ fontSize: 9, letterSpacing: "0.15em", color: "#c9a25e", textTransform: "uppercase" }}>Промокод</span>
+                    <span style={{ fontFamily: "monospace", fontSize: 13, fontWeight: 700, color: "#f2ede6" }}>{h.promoCode}</span>
+                  </div>
+                  <button
+                    onClick={() => { setEditingKey(h.key); setEditForm({ promoCode: h.promoCode, title: h.title, subtitle: h.subtitle }); }}
+                    className="secondary-action" style={{ padding: "4px 10px", fontSize: 12 }}
+                  >
+                    <Edit2 size={12} /> Изменить
+                  </button>
+                </div>
+
+                {h.manualOverride && !h.inWindow && (
+                  <div style={{ marginTop: 8, fontSize: 11, color: h.active ? "#c9a25e" : "var(--muted)" }}>
+                    {h.active ? "⚡ Включён вручную (вне сезона)" : "✗ Выключен вручную"}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -403,8 +562,10 @@ function BannersTab() {
 
   return (
     <div className="page-section">
+      <HolidayBannersSection />
+
       <div className="section-title">
-        <div><h2>Баннеры главной страницы</h2></div>
+        <div><h2>Кастомные баннеры</h2></div>
         <button onClick={() => setEditing("new")} className="primary-action">
           <Plus size={16} /> Добавить баннер
         </button>
@@ -551,6 +712,71 @@ function CategoriesTab() {
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
+interface AromaMesyatsaValue { offerId: string; note: string; validUntil?: string }
+
+function AromaMesyatsaEditor({ value, onChange }: {
+  value: AromaMesyatsaValue | null;
+  onChange: (v: AromaMesyatsaValue | null) => void;
+}) {
+  const [enabled, setEnabled] = useState(!!value?.offerId);
+  const [offerId, setOfferId] = useState(value?.offerId ?? "");
+  const [note, setNote] = useState(value?.note ?? "");
+  const [validUntil, setValidUntil] = useState(value?.validUntil ? value.validUntil.slice(0, 10) : "");
+
+  useEffect(() => {
+    if (value) { setEnabled(true); setOfferId(value.offerId ?? ""); setNote(value.note ?? ""); setValidUntil(value.validUntil ? value.validUntil.slice(0, 10) : ""); }
+    else setEnabled(false);
+  }, [value]);
+
+  function update(o: string, n: string, vu: string) {
+    if (!o.trim()) { onChange(null); return; }
+    onChange({ offerId: o.trim(), note: n.trim(), validUntil: vu || undefined });
+  }
+
+  return (
+    <div>
+      <label style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, cursor: "pointer" }}>
+        <input type="checkbox" checked={enabled} onChange={e => {
+          setEnabled(e.target.checked);
+          if (!e.target.checked) onChange(null);
+        }} />
+        <span style={{ fontSize: 13, color: "var(--text)" }}>Показывать «Аромат месяца» на главной</span>
+      </label>
+      {enabled && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: "14px 16px", background: "var(--surface)", borderRadius: 8, border: "1px solid var(--border)" }}>
+          <div className="mv-field">
+            <label>OfferId товара</label>
+            <input
+              value={offerId}
+              onChange={e => { setOfferId(e.target.value); update(e.target.value, note, validUntil); }}
+              placeholder="Например: 1234567890"
+            />
+            <span style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>Найдите в каталоге товаров и скопируйте Ozon offerId</span>
+          </div>
+          <div className="mv-field">
+            <label>Описание / история аромата</label>
+            <textarea
+              value={note}
+              onChange={e => { setNote(e.target.value); update(offerId, e.target.value, validUntil); }}
+              placeholder="Расскажите историю аромата, его характер, настроение…"
+              rows={3}
+            />
+          </div>
+          <div className="mv-field">
+            <label>Актуален до (необязательно)</label>
+            <input
+              type="date"
+              value={validUntil}
+              onChange={e => { setValidUntil(e.target.value); update(offerId, note, e.target.value); }}
+            />
+            <span style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>Если указана — покажем таймер «ещё N дней»</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingsTab() {
   const qc = useQueryClient();
   const { data: settings, isLoading } = useQuery<ShopSettings>({
@@ -636,6 +862,24 @@ function SettingsTab() {
             <label>Срок доставки (дней)</label>
             <input type="number" min="1" max="30" value={form.deliveryDays ?? 3} onChange={setF("deliveryDays")} />
           </div>
+        </div>
+
+        {/* VIP club */}
+        <div className="mv-field" style={{ marginTop: 12 }}>
+          <label>VIP-клуб — ссылка на Telegram-группу</label>
+          <input value={(form as ShopSettings).vipTelegramLink ?? ""} onChange={setF("vipTelegramLink")} placeholder="https://t.me/+..." />
+          <p style={{ color: "var(--muted)", fontSize: 11, marginTop: 4 }}>
+            Ссылка отображается в кабинете покупателей с 3+ завершёнными заказами.
+          </p>
+        </div>
+
+        {/* Аромат месяца */}
+        <div className="mv-form-section" style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--border)" }}>
+          <h3 style={{ marginBottom: 12 }}>🌸 Аромат месяца</h3>
+          <p style={{ color: "var(--muted)", fontSize: 12, marginBottom: 14, lineHeight: 1.6 }}>
+            Выделенный аромат отображается на главной странице magicvibes.ru в отдельной секции. Обновляйте ежемесячно для создания повода возвращаться на сайт.
+          </p>
+          <AromaMesyatsaEditor value={(form as ShopSettings).aromaMesyatsa ?? null} onChange={(am) => setForm((f) => ({ ...f, aromaMesyatsa: am }))} />
         </div>
 
         {/* Flexible markup rules */}
@@ -821,7 +1065,8 @@ function ReviewsTab() {
         <div className="soft-empty"><MessageSquare size={18} /> Отзывов пока нет</div>
       )}
 
-      <div className="table-panel">
+      <div style={{ overflowX: "auto" }}>
+      <div className="table-panel" style={{ minWidth: 560 }}>
         {data?.reviews.map((r) => (
           <div key={r.id} className="table-row" style={{ display: "grid", gridTemplateColumns: "minmax(120px,.8fr) minmax(80px,.5fr) minmax(200px,2fr) minmax(120px,.7fr) auto", gap: 12, alignItems: "center" }}>
             <span>
@@ -859,6 +1104,7 @@ function ReviewsTab() {
             </span>
           </div>
         ))}
+      </div>
       </div>
     </div>
   );
@@ -936,6 +1182,186 @@ function UnboxingsTab() {
                 <Trash2 size={13} />
               </button>
             </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── BlogTab ───────────────────────────────────────────────────────────────────
+
+interface BlogPost {
+  id: string; slug: string; title: string; excerpt?: string;
+  content?: string; coverUrl?: string; tags: string[];
+  published: boolean; publishedAt?: string; createdAt: string;
+}
+
+const EMPTY_POST: Omit<BlogPost, "id" | "slug" | "createdAt"> = {
+  title: "", excerpt: "", content: "", coverUrl: "", tags: [], published: false,
+};
+
+function BlogTab() {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState<Partial<BlogPost> & { id?: string } | null>(null);
+  const [tagInput, setTagInput] = useState("");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["admin-blog"],
+    queryFn: () => apiFetch<{ ok: boolean; posts: BlogPost[] }>("/api/shop/admin/blog"),
+  });
+
+  const saveMut = useMutation({
+    mutationFn: (post: Partial<BlogPost> & { id?: string }) => {
+      if (post.id) {
+        return apiFetch<{ ok: boolean }>(`/api/shop/admin/blog/${post.id}`, { method: "PUT", body: JSON.stringify(post) });
+      }
+      return apiFetch<{ ok: boolean }>("/api/shop/admin/blog", { method: "POST", body: JSON.stringify(post) });
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin-blog"] }); setEditing(null); },
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => apiFetch<{ ok: boolean }>(`/api/shop/admin/blog/${id}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin-blog"] }),
+  });
+
+  const posts = data?.posts ?? [];
+
+  if (editing !== null) {
+    return (
+      <div className="admin-tab-content">
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+          <button type="button" className="secondary-action icon-action" onClick={() => setEditing(null)}>
+            <ChevronLeft size={15} />
+          </button>
+          <h3 style={{ margin: 0, fontSize: 15 }}>{editing.id ? "Редактировать статью" : "Новая статья"}</h3>
+        </div>
+
+        <div style={{ display: "grid", gap: 12, maxWidth: 700 }}>
+          <div>
+            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Заголовок</label>
+            <input className="input-base" value={editing.title ?? ""} onChange={e => setEditing(s => ({ ...s!, title: e.target.value }))} placeholder="Топ-10 ароматов весны 2027" maxLength={200} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>URL-slug (оставьте пустым для авто)</label>
+            <input className="input-base" value={editing.slug ?? ""} onChange={e => setEditing(s => ({ ...s!, slug: e.target.value }))} placeholder="top-10-vesna-2027" maxLength={120} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Обложка (URL изображения)</label>
+            <input className="input-base" value={editing.coverUrl ?? ""} onChange={e => setEditing(s => ({ ...s!, coverUrl: e.target.value }))} placeholder="https://..." />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Краткое описание</label>
+            <textarea className="input-base" value={editing.excerpt ?? ""} onChange={e => setEditing(s => ({ ...s!, excerpt: e.target.value }))} rows={2} maxLength={500} style={{ resize: "vertical" }} />
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Теги (через запятую)</label>
+            <input
+              className="input-base"
+              value={tagInput}
+              onChange={e => setTagInput(e.target.value)}
+              onBlur={() => {
+                const tags = tagInput.split(",").map(t => t.trim()).filter(Boolean);
+                setEditing(s => ({ ...s!, tags }));
+              }}
+              placeholder="парфюмерия, новинки, гид"
+            />
+            {(editing.tags?.length ?? 0) > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 }}>
+                {editing.tags!.map(t => (
+                  <span key={t} style={{ fontSize: 11, padding: "2px 8px", border: "1px solid var(--border)", borderRadius: 2, color: "var(--text-muted)" }}>{t}</span>
+                ))}
+              </div>
+            )}
+          </div>
+          <div>
+            <label style={{ fontSize: 11, color: "var(--text-muted)", display: "block", marginBottom: 4 }}>Содержание (HTML)</label>
+            <textarea className="input-base" value={editing.content ?? ""} onChange={e => setEditing(s => ({ ...s!, content: e.target.value }))} rows={12} style={{ resize: "vertical", fontFamily: "monospace", fontSize: 12 }} placeholder="<h2>Заголовок</h2><p>Текст статьи...</p>" />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <label style={{ fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+              <input type="checkbox" checked={editing.published ?? false} onChange={e => setEditing(s => ({ ...s!, published: e.target.checked }))} />
+              Опубликовать
+            </label>
+          </div>
+
+          {saveMut.isError && (
+            <p style={{ fontSize: 12, color: "#f87171" }}>{(saveMut.error as Error).message}</p>
+          )}
+
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={() => {
+                if (!editing.title?.trim()) return;
+                void saveMut.mutate(editing);
+              }}
+              disabled={saveMut.isPending || !editing.title?.trim()}
+              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            >
+              {saveMut.isPending ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+              Сохранить
+            </button>
+            <button type="button" className="secondary-action" onClick={() => setEditing(null)}>Отмена</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="admin-tab-content">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+        <h3 style={{ margin: 0, fontSize: 15 }}>Блог «Мир ароматов»</h3>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={() => { setEditing({ ...EMPTY_POST }); setTagInput(""); }}
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
+          <Plus size={14} /> Новая статья
+        </button>
+      </div>
+
+      {isLoading && <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Загрузка…</p>}
+      {!isLoading && posts.length === 0 && (
+        <p style={{ color: "var(--text-muted)", fontSize: 13 }}>Статей нет. Создайте первую!</p>
+      )}
+
+      <div className="table-panel" style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+        {posts.map((p) => (
+          <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr auto auto auto auto", alignItems: "center", gap: 10, padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
+            <div>
+              <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>{p.title}</div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                /{p.slug}
+                {p.tags?.length > 0 && <span style={{ marginLeft: 8 }}>{p.tags.join(", ")}</span>}
+              </div>
+            </div>
+            <span style={{ fontSize: 11, padding: "3px 8px", borderRadius: 2, border: "1px solid var(--border)", color: p.published ? "#22c55e" : "var(--text-muted)" }}>
+              {p.published ? "Опубл." : "Черновик"}
+            </span>
+            <span style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+              {new Date(p.createdAt).toLocaleDateString("ru-RU")}
+            </span>
+            <button
+              type="button"
+              className="secondary-action icon-action"
+              onClick={() => { setEditing({ ...p }); setTagInput(p.tags?.join(", ") ?? ""); }}
+              title="Редактировать"
+            >
+              <Edit2 size={13} />
+            </button>
+            <button
+              type="button"
+              className="secondary-action icon-action danger"
+              onClick={() => { if (confirm(`Удалить «${p.title}»?`)) void deleteMut.mutate(p.id); }}
+              disabled={deleteMut.isPending}
+            >
+              <Trash2 size={13} />
+            </button>
           </div>
         ))}
       </div>
@@ -1132,7 +1558,7 @@ function PushTab() {
 
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
-type Tab = "dashboard" | "orders" | "customers" | "banners" | "categories" | "news" | "reviews" | "unboxings" | "emails" | "push" | "settings";
+type Tab = "dashboard" | "orders" | "customers" | "banners" | "categories" | "news" | "reviews" | "unboxings" | "blog" | "emails" | "push" | "settings";
 
 const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number }> }[] = [
   { id: "dashboard", label: "Обзор", icon: LayoutDashboard },
@@ -1143,6 +1569,7 @@ const TABS: { id: Tab; label: string; icon: React.ComponentType<{ size?: number 
   { id: "news", label: "Новости", icon: Newspaper },
   { id: "reviews", label: "Отзывы", icon: Star },
   { id: "unboxings", label: "Анбоксинг", icon: Video },
+  { id: "blog", label: "Блог", icon: BookOpen },
   { id: "emails", label: "Email-цепочки", icon: MessageSquare },
   { id: "push", label: "Push", icon: Bell },
   { id: "settings", label: "Настройки", icon: Settings },
@@ -1185,6 +1612,7 @@ export default function ShopAdminPage() {
       {tab === "news" && <NewsTab />}
       {tab === "reviews" && <ReviewsTab />}
       {tab === "unboxings" && <UnboxingsTab />}
+      {tab === "blog" && <BlogTab />}
       {tab === "emails" && <EmailSequencesTab />}
       {tab === "push" && <PushTab />}
       {tab === "settings" && <SettingsTab />}

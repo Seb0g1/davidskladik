@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { AlertTriangle, BarChart2, Bot, Check, Clock, Copy, EyeOff, ImagePlus, Link2, Loader2, Package, PackageCheck, RefreshCw, Save, Search, Sparkles, Star, Trash2, Users, X } from "lucide-react";
+import { AlertTriangle, BarChart2, Bot, Check, Clock, Copy, EyeOff, ImagePlus, Link2, Loader2, Package, PackageCheck, RefreshCw, Save, Search, SearchX, Sparkles, Star, Trash2, Users, X } from "lucide-react";
 import { fetchJson, mutationBody, patchBody } from "../api";
 import { AiAssistantResponseSchema, AiImageJobResponseSchema, BrandIndexStatusSchema, DiagnosticsSchema, Filters, GroupDetailSchema, isProductGroupPageItem, isProductPageItem, LiveRefreshSchema, MutationProductResponseSchema, OperationCreateSchema, PriceHistorySchema, PriceMasterSearchRow, PriceMasterSearchSchema, Product, ProductGroupPageItem, ProductLink, ProductRepairSchema, WarehouseBrandsSchema, WarehousePageSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
@@ -19,7 +19,7 @@ import { demoWarehouseProducts, isDemoWarehouseProduct } from "../demoWarehouse"
 import { AiCardImagePanel } from "../components/AiCardImagePanel";
 
 const DEFAULT_PAGE_SIZE = 40;
-const PAGE_SIZE_OPTIONS = [20, 50, 100];
+const PAGE_SIZE_OPTIONS = [20, 40, 100];
 const mobileListMedia = "(max-width: 640px)";
 const studioPhotoPresets = [
   { id: "white-packshot", label: "White", prompt: "Clean white marketplace packshot, full perfume bottle visible from cap to base, centered, upright, not cropped, 10-15% margin on every side, remove any box or packaging." },
@@ -214,6 +214,11 @@ function supplierPmRowName(product: Product): string {
   return String(selected.name || "").trim();
 }
 
+function supplierText(s: unknown): string {
+  const r = asRecord(s);
+  return String(r.partnerName || r.supplierName || r.name || "—").trim();
+}
+
 function hasPmNameMismatch(product: Product): boolean {
   const pmName = supplierPmRowName(product).toLowerCase();
   const productName = String(product.name || "").trim().toLowerCase();
@@ -235,8 +240,7 @@ function ProductGroupRow({ group, selected, onSelect, bulkChecked, onBulkToggle 
         <input
           type="checkbox"
           checked={bulkChecked ?? false}
-          onChange={() => {}}
-          onClick={(e) => { e.stopPropagation(); onBulkToggle?.(e as unknown as React.MouseEvent); }}
+          onChange={(e) => { e.stopPropagation(); onBulkToggle?.(e as unknown as React.MouseEvent); }}
           style={{ cursor: "pointer", width: 15, height: 15 }}
         />
       </span>
@@ -952,6 +956,175 @@ function aiJobProgressPercent(jobInput: unknown) {
   const total = Number(job.variantTotal || 5) || 5;
   const done = Array.isArray(job.draftIds) ? job.draftIds.length : 0;
   return Math.max(4, Math.min(100, Math.round((done / total) * 100)));
+}
+
+// ── Fragrance Notes Panel ─────────────────────────────────────────────────────
+
+type FragranceNotesData = {
+  topNotes: string[];
+  middleNotes: string[];
+  baseNotes: string[];
+  accords: string[];
+  gender: string;
+  seasons: string[];
+  source?: string;
+  generatedAt?: string;
+};
+
+function TagInput({ label, tags, onChange }: { label: string; tags: string[]; onChange: (tags: string[]) => void }) {
+  const [input, setInput] = useState("");
+
+  function addTag(val: string) {
+    const trimmed = val.trim();
+    if (trimmed && !tags.includes(trimmed)) onChange([...tags, trimmed]);
+    setInput("");
+  }
+
+  return (
+    <div className="fn-tag-group">
+      <span className="fn-tag-label">{label}</span>
+      <div className="fn-tags">
+        {tags.map((t) => (
+          <span key={t} className="fn-tag">
+            {t}
+            <button type="button" onClick={() => onChange(tags.filter((x) => x !== t))}><X size={10} /></button>
+          </span>
+        ))}
+        <input
+          className="fn-tag-input"
+          value={input}
+          placeholder="+ добавить"
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addTag(input); } }}
+          onBlur={() => { if (input.trim()) addTag(input); }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function FragranceNotesPanel({ product, onSaved }: { product: Product; onSaved: () => void }) {
+  const queryClient = useQueryClient();
+
+  const existing = product.fragranceNotes as FragranceNotesData | null | undefined;
+
+  const empty: FragranceNotesData = { topNotes: [], middleNotes: [], baseNotes: [], accords: [], gender: "unisex", seasons: [] };
+  const [notes, setNotes] = useState<FragranceNotesData>(existing || empty);
+  const [generating, setSaving] = useState(false);
+  const [saveErr, setSaveErr] = useState("");
+
+  const savedKey = JSON.stringify(existing || null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setNotes(existing || empty); }, [product.id, savedKey]);
+
+  const hasNotes = notes.topNotes.length > 0 || notes.middleNotes.length > 0 || notes.baseNotes.length > 0;
+
+  const saveMutation = useMutation({
+    mutationFn: (n: FragranceNotesData) =>
+      fetch(`/api/warehouse/fragrance-notes/${encodeURIComponent(product.id)}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(n),
+      }).then(async (r) => {
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        return data;
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+      onSaved();
+      setSaveErr("");
+    },
+    onError: (err) => setSaveErr(errorMessage(err)),
+  });
+
+  async function handleGenerate() {
+    setSaving(true);
+    setSaveErr("");
+    try {
+      const res = await fetch("/api/warehouse/fragrance-notes/generate", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: product.id, brand: product.brand, name: product.name }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      if (data.notes) {
+        setNotes(data.notes as FragranceNotesData);
+        void queryClient.invalidateQueries({ queryKey: ["warehouse"] });
+        onSaved();
+      }
+    } catch (err) {
+      setSaveErr(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const busy = generating || saveMutation.isPending;
+
+  return (
+    <section className="detail-section">
+      <div className="section-title">
+        <div>
+          <span>AI</span>
+          <h3>Пирамида аромата</h3>
+        </div>
+        <button
+          type="button"
+          className="secondary-action"
+          onClick={handleGenerate}
+          disabled={busy}
+          title="Сгенерировать ноты через AI"
+        >
+          {generating ? <Loader2 className="spin" size={14} /> : <Sparkles size={14} />}
+          {" "}Заполнить AI
+        </button>
+      </div>
+
+      {existing?.generatedAt && (
+        <p className="fn-meta">
+          {existing.source === "manual" ? "Вручную" : "AI"} · {new Date(existing.generatedAt).toLocaleDateString("ru-RU")}
+          {existing.gender ? ` · ${existing.gender}` : ""}
+        </p>
+      )}
+
+      <div className="fn-editor">
+        <TagInput label="Верхние" tags={notes.topNotes} onChange={(v) => setNotes({ ...notes, topNotes: v })} />
+        <TagInput label="Сердце" tags={notes.middleNotes} onChange={(v) => setNotes({ ...notes, middleNotes: v })} />
+        <TagInput label="База" tags={notes.baseNotes} onChange={(v) => setNotes({ ...notes, baseNotes: v })} />
+        <TagInput label="Аккорды" tags={notes.accords} onChange={(v) => setNotes({ ...notes, accords: v })} />
+        <div className="fn-tag-group">
+          <span className="fn-tag-label">Пол</span>
+          <select
+            className="fn-select"
+            value={notes.gender}
+            onChange={(e) => setNotes({ ...notes, gender: e.target.value })}
+          >
+            <option value="unisex">Унисекс</option>
+            <option value="male">Мужской</option>
+            <option value="female">Женский</option>
+          </select>
+        </div>
+      </div>
+
+      {saveErr && <p className="fn-error">{saveErr}</p>}
+
+      {hasNotes && (
+        <button
+          type="button"
+          className="avito-apply-btn"
+          onClick={() => saveMutation.mutate(notes)}
+          disabled={busy}
+        >
+          {saveMutation.isPending ? <Loader2 className="spin" size={15} /> : <Check size={15} />}
+          Сохранить
+        </button>
+      )}
+    </section>
+  );
 }
 
 function AvitoImagesPanel({ product, onSaved }: { product: Product; onSaved: () => void }) {
@@ -2245,14 +2418,11 @@ function QuickActions({ products, onDone }: { primary: Product; products: Produc
         </div>
       </div>
       <div className="quick-actions">
-        <button className="primary-action" type="button" onClick={() => recover.mutate()} disabled={anyBusy}>
-          {recover.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Проверить и починить товар
+        <button className="primary-action" type="button" onClick={() => recover.mutate()} disabled={anyBusy} title="Проверяет остатки у поставщика и синхронизирует на Ozon/Yandex">
+          {recover.isPending ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />} Синхронизировать остатки
         </button>
-        <button className="secondary-action" type="button" onClick={() => recover.mutate()} disabled={anyBusy}>
-          {recover.isPending ? <Loader2 className="spin" size={16} /> : null} Отправить остаток
-        </button>
-        <button className="secondary-action" type="button" onClick={() => sendPrices.mutate()} disabled={anyBusy}>
-          {sendPrices.isPending ? <Loader2 className="spin" size={16} /> : null} Отправить цену
+        <button className="secondary-action" type="button" onClick={() => sendPrices.mutate()} disabled={anyBusy} title="Принудительно отправляет текущие расчётные цены на маркетплейсы">
+          {sendPrices.isPending ? <Loader2 className="spin" size={16} /> : null} Отправить цену сейчас
         </button>
       </div>
       {recover.data ? (
@@ -2364,7 +2534,7 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
           <div className="price-history-header">
             <span className="section-label">История цен</span>
             <button type="button" className="link-action" onClick={() => setPriceHistoryExpanded((e) => !e)}>
-              {priceHistoryExpanded ? "Свернуть" : `Все (${priceHistoryQuery.data.items.length < 5 ? priceHistoryQuery.data.items.length : "30+"})`}
+              {priceHistoryExpanded ? `Свернуть (${priceHistoryQuery.data.items.length})` : `Все (${priceHistoryQuery.data.items.length < 5 ? priceHistoryQuery.data.items.length : "30+"})`}
             </button>
           </div>
           {priceHistoryQuery.data.items.map((item, i, arr) => {
@@ -2407,6 +2577,7 @@ function DetailPanel({ selectedGroup, products, breakdown = [], onClose, isAdmin
       <LinksPanel key={products.map((item) => item.id).sort().join("|")} products={products} onSaved={refreshDetail} readOnly={demoMode} />
       <MarketplaceRows products={products} breakdown={breakdown} canEdit={isAdmin && !demoMode} withExternal={!demoMode} />
       {isAdmin && !demoMode ? <QuickActions primary={primary} products={products} onDone={refreshDetail} /> : null}
+      {isAdmin && !demoMode ? <FragranceNotesPanel product={primary} onSaved={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <AvitoImagesPanel product={primary} onSaved={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <AiCardImagePanel product={primary} onSaved={refreshDetail} /> : null}
       {isAdmin && !demoMode ? <section className="detail-section">
@@ -2640,18 +2811,19 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
   const virtualizer = useVirtualizer({
     count: groups.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => (isMobileList ? 272 : 78),
+    estimateSize: () => (isMobileList ? 160 : 72),
     overscan: 8,
   });
   const setFilter = (key: keyof Filters, value: string | boolean | number) => {
     setFilters((current) => ({ ...current, [key]: value, page: key === "page" ? Number(value) : 1 }));
     if (key === "linked") setSelectedGroup("");
+    if (key !== "page") setSelectedGroupKeys(new Set());
   };
 
   return (
     <>
       <PageHeader
-        title="Новый каталог"
+        title="Каталог"
         subtitle="Быстрый поиск, привязки PriceMaster, остатки, цены, AI-фото и диагностика в одном рабочем экране."
         action={<>
           {activeOrdersCount !== null ? (
@@ -2814,7 +2986,20 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
               })}
             </div>
             {pageQuery.isLoading && <CatalogSkeleton rows={8} />}
-            {!pageQuery.isLoading && !groups.length && <div className="list-loading">Ничего не найдено.</div>}
+            {!pageQuery.isLoading && !groups.length && (
+              <div className="empty-search-state">
+                <SearchX size={32} />
+                <strong>Ничего не найдено</strong>
+                {(filters.q || filters.marketplace !== "all" || filters.linked !== "all" || filters.state !== "all" || filters.brand) ? (
+                  <>
+                    <span>По заданным фильтрам товары не найдены.</span>
+                    <button className="secondary-action" type="button" onClick={() => { setFilters({ q: "", marketplace: "all", linked: "all", state: "all", brand: "", sort: "", autoOnly: false, page: 1 }); setSelectedGroupKeys(new Set()); }}>
+                      Сбросить фильтры
+                    </button>
+                  </>
+                ) : <span>Каталог пуст. Импортируйте товары с маркетплейса.</span>}
+              </div>
+            )}
           </div>
           <div className="pager">
             <button disabled={filters.page <= 1} onClick={() => setFilter("page", Math.max(1, filters.page - 1))}>Назад</button>
@@ -2835,34 +3020,27 @@ export function WarehousePage({ isAdmin = true }: { isAdmin?: boolean }) {
         />
       </section>
       {selectedGroupKeys.size > 0 && (
-        <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)", zIndex: 100, display: "flex", alignItems: "center", gap: 8, background: "white", border: "1px solid #e5e7eb", borderRadius: 12, boxShadow: "0 4px 24px rgba(0,0,0,0.13)", padding: "10px 16px", whiteSpace: "nowrap" }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: "#374151", marginRight: 4 }}>
-            Выбрано: {selectedGroupKeys.size}
-          </span>
-          <button
+        <div className="bulk-action-bar">
+          <span className="bulk-action-count">Выбрано: {selectedGroupKeys.size}</span>
+          <button className="primary-action" type="button"
             onClick={() => { if (selectedProductIds.length) bulkPriceMutation.mutate(selectedProductIds); }}
             disabled={bulkPriceMutation.isPending || bulkStockMutation.isPending}
-            style={{ padding: "6px 14px", fontSize: 13, background: "#2563eb", color: "white", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 500 }}
           >
-            {bulkPriceMutation.isPending ? "Отправка…" : "Переотправить цену"}
+            {bulkPriceMutation.isPending ? <Loader2 className="spin" size={14} /> : null} Переотправить цену
           </button>
-          <button
+          <button className="secondary-action" type="button"
             onClick={() => { if (selectedProductIds.length) bulkStockMutation.mutate(selectedProductIds.slice(0, 200)); }}
             disabled={bulkPriceMutation.isPending || bulkStockMutation.isPending}
-            style={{ padding: "6px 14px", fontSize: 13, background: "#16a34a", color: "white", border: "none", borderRadius: 8, cursor: "pointer", fontWeight: 500 }}
           >
-            {bulkStockMutation.isPending ? "Отправка…" : "Переотправить остаток"}
+            {bulkStockMutation.isPending ? <Loader2 className="spin" size={14} /> : null} Переотправить остаток
           </button>
-          <button
-            onClick={() => setSelectedGroupKeys(new Set())}
-            style={{ padding: "6px 10px", fontSize: 13, background: "transparent", color: "#6b7280", border: "1px solid #e5e7eb", borderRadius: 8, cursor: "pointer" }}
-          >
-            Снять выделение
+          <button className="icon-action" type="button" onClick={() => setSelectedGroupKeys(new Set())} title="Снять выделение">
+            <X size={15} />
           </button>
         </div>
       )}
       {bulkResult && (
-        <div style={{ position: "fixed", bottom: selectedGroupKeys.size > 0 ? 88 : 24, left: "50%", transform: "translateX(-50%)", zIndex: 101, background: "#1f2937", color: "white", borderRadius: 8, padding: "8px 18px", fontSize: 13, fontWeight: 500, boxShadow: "0 2px 12px rgba(0,0,0,0.2)", whiteSpace: "nowrap" }}>
+        <div className={`bulk-result-toast${selectedGroupKeys.size > 0 ? " bulk-result-toast--offset" : ""}`}>
           {bulkResult}
         </div>
       )}

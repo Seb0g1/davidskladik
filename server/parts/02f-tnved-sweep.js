@@ -79,8 +79,10 @@ async function runTnvedSweep({ source = "schedule" } = {}) {
 
         // 2. Найти товары без TNVED атрибута ИЛИ с неверным кодом
         // wrongCodeMap: offerId → currentCode (не пустой, но не совпадает с ожидаемым)
+        // hashtagMap: offerId → текущее значение хэштега (23171) — нужно для фикса BR_hashtag ошибок
         const noTnvedIds = [];
         const wrongCodeMap = new Map(); // offerId → текущий код
+        const hashtagMap = new Map(); // offerId → текущий хэштег (может быть пустым)
         for (const chunk of chunkArray(offerIds, 100)) {
           try {
             const data = await ozonRequest("/v4/product/info/attributes", {
@@ -89,8 +91,11 @@ async function runTnvedSweep({ source = "schedule" } = {}) {
             }, account);
             for (const item of (data.result || [])) {
               const tnved = (item.attributes || []).find((a) => a.id === TNVED_ATTR_ID);
+              const hashtag = (item.attributes || []).find((a) => a.id === 23171);
               const currentCode = cleanText(tnved?.values?.[0]?.value || "").match(/^(\d{7,10})/)?.[1] || "";
+              const currentHashtag = cleanText(hashtag?.values?.[0]?.value || "");
               const offerId = cleanText(item.offer_id);
+              if (currentHashtag) hashtagMap.set(offerId, currentHashtag);
               if (!currentCode) {
                 noTnvedIds.push(offerId);
               } else {
@@ -137,13 +142,17 @@ async function runTnvedSweep({ source = "schedule" } = {}) {
           if (currentCode && currentCode === expectedCode) continue;
           const dictEntry = await tnvedFetchDictEntry(account, descCatId, typeId, expectedCode);
           if (!dictEntry) { totalSkipped++; continue; }
-          updateItems.push({
-            offer_id: offerId,
-            attributes: [
-              { id: TNVED_ATTR_ID, values: [{ value: dictEntry.value, dictionary_value_id: dictEntry.dictionary_value_id }] },
-              { id: TNVED_SWEEP_MARKING_ATTR_ID, values: [{ value: "false" }] },
-            ],
-          });
+          const attrs = [
+            { id: TNVED_ATTR_ID, values: [{ value: dictEntry.value, dictionary_value_id: dictEntry.dictionary_value_id }] },
+            { id: TNVED_SWEEP_MARKING_ATTR_ID, values: [{ value: "false" }] },
+          ];
+          // Продукты с BR_hashtag ошибками блокируют любое обновление атрибутов.
+          // Если у товара есть хэштег — заменяем его безопасным значением в том же вызове,
+          // чтобы снять блокировку и позволить TNVED сохраниться.
+          if (hashtagMap.has(offerId)) {
+            attrs.push({ id: 23171, values: [{ value: "#косметика #уход" }] });
+          }
+          updateItems.push({ offer_id: offerId, attributes: attrs });
         }
 
         // 5. Отправить
@@ -179,6 +188,229 @@ async function runTnvedSweep({ source = "schedule" } = {}) {
     tnvedSweepRunning = false;
   }
 }
+
+// Точечный фикс по product_id (SKU) — принимает [{sku, cat}] и обновляет по всем аккаунтам.
+const TNVED_BY_CAT_NAME = {
+  "Парфюмерия": "3303001000",
+  "Косметика для ухода за волосами": "3305900009",
+  "Декоративная косметика": "3304990000",
+  "Косметика для ухода": "3304990000",
+  "Ароматы для дома": "3307490000",
+  "Средства для гигиены тела": "3401300000",
+  "Средства для гигиены полости рта": "3306100000",
+  "Моющие и чистящие средства": "3402909000",
+  "Личная гигиена": "3307200000",
+  "Маска косметическая": "3304990000",
+  "Средства для депиляции": "3307900009",
+  "Средства для бритья и груминг": "3307900009",
+};
+
+app.post("/api/ozon/tnved/fix-by-sku", requireAdmin, async (req, res, next) => {
+  try {
+    // items: [{sku: number, cat: string}]
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) return res.status(400).json({ error: "items required" });
+
+    const accounts = getOzonAccounts({ includeSyncDisabled: true });
+    let totalUpdated = 0;
+    let totalSkipped = 0;
+    const errors = [];
+
+    for (const account of accounts) {
+      // Resolve SKU → offer_id + descCatId + typeId
+      const allSkus = items.map((i) => Number(i.sku)).filter(Boolean);
+      const skuInfo = new Map(); // sku → { offerId, descCatId, typeId }
+
+      for (const chunk of chunkArray(allSkus, 100)) {
+        try {
+          const data = await ozonRequest("/v3/product/info/list", { sku: chunk }, account);
+          for (const item of (data.items || [])) {
+            const itemSku = item.sku || item.id;
+            if (itemSku && item.offer_id) {
+              skuInfo.set(Number(itemSku), {
+                offerId: cleanText(item.offer_id || ""),
+                descCatId: Number(item.description_category_id || 0),
+                typeId: Number(item.type_id || 0),
+              });
+            }
+          }
+        } catch (err) {
+          errors.push(`account ${account.id} info chunk: ${err?.message}`);
+        }
+      }
+
+      if (!skuInfo.size) continue;
+
+      // Build updates
+      const updateItems = [];
+      for (const { sku, cat } of items) {
+        const info = skuInfo.get(Number(sku));
+        if (!info) continue;
+        const { offerId, descCatId, typeId } = info;
+        if (!offerId || !descCatId) { totalSkipped++; continue; }
+        const expectedCode = TNVED_BY_CAT_NAME[cat] || TNVED_DEFAULT;
+        const dictEntry = await tnvedFetchDictEntry(account, descCatId, typeId, expectedCode);
+        if (!dictEntry) { totalSkipped++; errors.push(`no dict entry: sku=${sku} cat=${cat} code=${expectedCode} descCatId=${descCatId}`); continue; }
+        updateItems.push({
+          offer_id: offerId,
+          attributes: [
+            { id: TNVED_ATTR_ID, values: [{ value: dictEntry.value, dictionary_value_id: dictEntry.dictionary_value_id }] },
+            { id: TNVED_SWEEP_MARKING_ATTR_ID, values: [{ value: "false" }] },
+          ],
+        });
+      }
+
+      for (const chunk of chunkArray(updateItems, 100)) {
+        try {
+          const result = await ozonRequest("/v1/product/attributes/update", { items: chunk }, account);
+          const chunkErrors = result.errors || [];
+          totalUpdated += chunk.length - chunkErrors.length;
+          if (chunkErrors.length) errors.push(...chunkErrors.map((e) => `sku update: ${JSON.stringify(e)}`));
+        } catch (err) {
+          totalSkipped += chunk.length;
+          errors.push(`account ${account.id} update chunk: ${err?.message}`);
+        }
+      }
+
+      logger.info("tnved_fix_by_sku: account done", { account: account.id, found: skuInfo.size, updated: updateItems.length });
+    }
+
+    logger.info("tnved_fix_by_sku: complete", { totalUpdated, totalSkipped, errorCount: errors.length });
+    res.json({ ok: true, totalUpdated, totalSkipped, errors: errors.slice(0, 20) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Безопасные хештеги по категории для замены проблемных
+const SAFE_HASHTAG_BY_CAT = {
+  "Парфюмерия": "#парфюм #аромат",
+  "Косметика для ухода за волосами": "#уход #волосы",
+  "Декоративная косметика": "#косметика #макияж",
+  "Косметика для ухода": "#уход #косметика",
+  "Ароматы для дома": "#аромат #дом",
+  "Средства для гигиены тела": "#гигиена #уход",
+  "Средства для гигиены полости рта": "#гигиена #уход",
+  "Личная гигиена": "#гигиена",
+  "Маска косметическая": "#маска #уход",
+  "Средства для депиляции": "#депиляция #уход",
+  "Средства для бритья и груминг": "#бритьё #уход",
+  "Моющие и чистящие средства": "#чистка",
+};
+
+// Точечный фикс с очисткой хештегов: одним вызовом убираем проблемный attr 23171 и ставим TNVED.
+// Принимает [{sku, cat}], запускает асинхронно, возвращает 202.
+let tnvedFixCleanRunning = false;
+app.post("/api/ozon/tnved/fix-with-clean", requireAdmin, async (req, res, next) => {
+  try {
+    if (tnvedFixCleanRunning) return res.status(409).json({ error: "Уже выполняется" });
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) return res.status(400).json({ error: "items required" });
+    res.status(202).json({ ok: true, message: `Запущено в фоне для ${items.length} товаров — следите за логами` });
+
+    tnvedFixCleanRunning = true;
+    (async () => {
+      try {
+        const accounts = getOzonAccounts({ includeSyncDisabled: true });
+        let totalUpdated = 0, totalSkipped = 0, totalFailed = 0;
+        const errors = [];
+
+        for (const account of accounts) {
+          const allSkus = items.map((i) => Number(i.sku)).filter(Boolean);
+          const skuInfo = new Map(); // sku → { offerId, descCatId, typeId, cat }
+
+          for (const chunk of chunkArray(allSkus, 100)) {
+            try {
+              const data = await ozonRequest("/v3/product/info/list", { sku: chunk }, account);
+              for (const item of (data.items || [])) {
+                const itemSku = item.sku || item.id;
+                if (itemSku && item.offer_id) {
+                  skuInfo.set(Number(itemSku), {
+                    offerId: cleanText(item.offer_id || ""),
+                    descCatId: Number(item.description_category_id || 0),
+                    typeId: Number(item.type_id || 0),
+                  });
+                }
+              }
+            } catch (err) { errors.push(`info chunk: ${err?.message}`); }
+          }
+          if (!skuInfo.size) continue;
+
+          // Получаем текущие хештеги (attr 23171) для всех найденных товаров
+          const offerIds = [...skuInfo.values()].map((v) => v.offerId);
+          const hashtagMap = new Map(); // offerId → currentHashtagValue|null
+          for (const chunk of chunkArray(offerIds, 100)) {
+            try {
+              const data = await ozonRequest("/v4/product/info/attributes", {
+                filter: { offer_id: chunk, visibility: "ALL" }, limit: 100, sort_by: "id", sort_dir: "asc",
+              }, account);
+              for (const it of (data.result || [])) {
+                const h = (it.attributes || []).find((a) => a.id === 23171);
+                hashtagMap.set(cleanText(it.offer_id), h?.values?.[0]?.value || null);
+              }
+            } catch (err) { errors.push(`attrs chunk: ${err?.message}`); }
+          }
+
+          const updateItems = [];
+          for (const { sku, cat } of items) {
+            const info = skuInfo.get(Number(sku));
+            if (!info) continue;
+            const { offerId, descCatId, typeId } = info;
+            if (!offerId || !descCatId) { totalSkipped++; continue; }
+
+            const expectedCode = TNVED_BY_CAT_NAME[cat] || TNVED_DEFAULT;
+            const dictEntry = await tnvedFetchDictEntry(account, descCatId, typeId, expectedCode);
+            if (!dictEntry) { totalSkipped++; errors.push(`no dict entry: sku=${sku} cat=${cat}`); continue; }
+
+            const currentHashtag = hashtagMap.get(offerId);
+            const safeHashtag = SAFE_HASHTAG_BY_CAT[cat] || "#косметика";
+
+            const attrs = [
+              { id: TNVED_ATTR_ID, values: [{ value: dictEntry.value, dictionary_value_id: dictEntry.dictionary_value_id }] },
+            ];
+            // Добавляем замену хештега только если он непустой (иначе ошибка в аннотации — не хештег)
+            if (currentHashtag) {
+              attrs.push({ id: 23171, values: [{ value: safeHashtag }] });
+            }
+            updateItems.push({ offer_id: offerId, attributes: attrs });
+          }
+
+          // Отправляем батчами по 100
+          for (const chunk of chunkArray(updateItems, 100)) {
+            try {
+              const result = await ozonRequest("/v1/product/attributes/update", { items: chunk }, account);
+              const chunkErrors = result.errors || [];
+              totalUpdated += chunk.length - chunkErrors.length;
+              if (chunkErrors.length) {
+                totalFailed += chunkErrors.length;
+                errors.push(...chunkErrors.map((e) => `update error: ${JSON.stringify(e)}`));
+              }
+            } catch (err) {
+              totalFailed += chunk.length;
+              errors.push(`update chunk: ${err?.message}`);
+            }
+          }
+
+          logger.info("tnved_fix_clean: account done", {
+            account: account.id, found: skuInfo.size, updatesSent: updateItems.length,
+          });
+        }
+
+        logger.info("tnved_fix_clean: complete", { totalUpdated, totalSkipped, totalFailed, errorCount: errors.length });
+        if (errors.length) {
+          logger.warn("tnved_fix_clean: errors sample", { errors: errors.slice(0, 10) });
+        }
+      } finally {
+        tnvedFixCleanRunning = false;
+      }
+    })().catch((err) => {
+      tnvedFixCleanRunning = false;
+      logger.warn("tnved_fix_clean: fatal", { detail: err?.message });
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Ручной запуск sweep из UI или скрипта — доступен и на api-процессе.
 app.post("/api/ozon/tnved/sweep/run", requireAdmin, async (req, res, next) => {

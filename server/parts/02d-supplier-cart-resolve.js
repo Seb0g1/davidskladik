@@ -96,9 +96,27 @@ function selectSupplierCartSupplierFromMatches(matches = new Map(), blockedPartn
   const isSorinSupplier = (row) => /сорин/i.test(cleanText(row.partnerName || row.supplierName || ""));
   const isInnaSupplier = (row) => /инна/i.test(cleanText(row.partnerName || row.supplierName || ""));
 
-  // Priority overrides: Сорин → Инна. Each is picked first if available and has a price.
-  // Requires available=true so out-of-stock items fall through to other suppliers.
-  for (const isPriority of [isSorinSupplier, isInnaSupplier]) {
+  // Priority 1: «Наш склад» (stockOnly) — if available, always wins.
+  // stockOnlyFallback: true bypasses live PM validation (их строки могут быть Active=0 намеренно).
+  // skipReason: "" — выбор основной, не fallback, чтобы UI показывал как готово.
+  for (const [linkId, rows] of matches.entries()) {
+    for (const row of rows || []) {
+      if (!supplierUsesStockOnlyPricing(null, row)) continue;
+      const partnerId = cleanText(row.partnerId).toLowerCase();
+      if (blockedPartnerIds.has(partnerId)) continue;
+      return {
+        selected: { ...row, linkId },
+        stockOnlyFallback: true,
+        skipReason: "",
+        blockedAvailable: 0,
+        cutoffPassedAvailable: 0,
+      };
+    }
+  }
+
+  // Priority override: Сорин only. Инна competes on price (her RUB rows are correctly
+  // converted to USD in toUsd/supplierCartOrderScore — she wins only when cheapest).
+  for (const isPriority of [isSorinSupplier]) {
     for (const [linkId, rows] of matches.entries()) {
       for (const row of rows || []) {
         if (!isPriority(row)) continue;
@@ -274,7 +292,12 @@ function normalizeYandexSupplierCartOrders(data = {}, shop = {}) {
   const lines = [];
   for (const order of orders) {
     const items = Array.isArray(order.items) ? order.items : [];
-    const isExpress = cleanText(order.delivery?.type || order.deliveryType || "").toUpperCase() === "EXPRESS";
+    // Express detection: check multiple possible field names in the Yandex API response.
+    const deliveryTypeStr = cleanText(
+      order.delivery?.type || order.delivery?.deliveryType || order.deliveryType || order.type || "",
+    ).toUpperCase();
+    const isExpress = deliveryTypeStr === "EXPRESS" || deliveryTypeStr.includes("EXPRESS")
+      || cleanText(order.delivery?.partnerType || order.delivery?.partnerInfo?.type || "").toUpperCase().includes("EXPRESS");
     // Skip orders already confirmed ready-to-ship or further along — the Yandex API
     // substatus filter is best-effort and sometimes returns READY_TO_SHIP orders anyway.
     // Exception: express orders arrive with READY_TO_SHIP as the initial working substatus —
@@ -356,7 +379,19 @@ async function fetchOzonSupplierCartLines({ from, to, limit, statuses } = {}) {
 }
 
 async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substatuses } = {}) {
-  const shops = uniqueYandexShopsByBusiness();
+  // Group all Yandex shops by businessId and collect all their campaignIds.
+  // uniqueYandexShopsByBusiness() drops all but one shop per businessId, which means
+  // orders from secondary campaigns (e.g. express warehouse) are never fetched.
+  // We use the business API with ALL campaignIds so every campaign's orders are included.
+  const allShops = getYandexShops();
+  const byBusiness = new Map();
+  for (const shop of allShops) {
+    const businessId = cleanText(shop.businessId || "");
+    if (!businessId || !shop.apiKey) continue;
+    if (!byBusiness.has(businessId)) byBusiness.set(businessId, { shop, campaignIds: [] });
+    const ids = parseYandexCampaignIds(shop.campaignId).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+    byBusiness.get(businessId).campaignIds.push(...ids);
+  }
   const lines = [];
   const statusList = (Array.isArray(statuses) && statuses.length ? statuses : ["PROCESSING"])
     .map((item) => cleanText(item).toUpperCase())
@@ -364,14 +399,14 @@ async function fetchYandexSupplierCartLines({ from, to, limit, statuses, substat
   const substatusList = (Array.isArray(substatuses) && substatuses.length ? substatuses : ["STARTED"])
     .map((item) => cleanText(item).toUpperCase())
     .filter(Boolean);
-  for (const shop of shops) {
+  for (const { shop, campaignIds } of byBusiness.values()) {
     let pageToken = "";
     while (lines.length < limit) {
-      const campaignIds = parseYandexCampaignIds(shop.campaignId).map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+      const uniqueCampaignIds = Array.from(new Set(campaignIds));
       const query = new URLSearchParams({ limit: String(Math.min(50, Math.max(1, limit - lines.length))) });
       if (pageToken) query.set("pageToken", pageToken);
       const data = await yandexRequest(shop, "POST", `/v1/businesses/${shop.businessId}/orders?${query.toString()}`, {
-        ...(campaignIds.length ? { campaignIds } : {}),
+        ...(uniqueCampaignIds.length ? { campaignIds: uniqueCampaignIds } : {}),
         statuses: statusList,
         substatuses: substatusList,
         dates: {

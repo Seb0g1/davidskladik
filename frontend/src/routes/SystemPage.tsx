@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, AlertCircle, AlertTriangle, CheckCircle, Database, HeartPulse, ListChecks, RefreshCcw, RotateCcw } from "lucide-react";
+import { Activity, AlertCircle, AlertTriangle, CheckCircle, Database, HeartPulse, ListChecks, RefreshCcw, RotateCcw, Sparkles } from "lucide-react";
 import { useState } from "react";
 import { fetchJson } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -146,8 +146,85 @@ export function SystemPage() {
         </div>
       ) : null}
 
+      <FragranceNotesBatch />
       <AppErrorJournal />
     </section>
+  );
+}
+
+function FragranceNotesBatch() {
+  const [batchStatus, setBatchStatus] = useState<{ running: boolean; total: number; done: number; errors: number; startedAt: string | null } | null>(null);
+  const [pollEnabled, setPollEnabled] = useState(false);
+
+  useQuery({
+    queryKey: ["fragrance-batch-status"],
+    queryFn: () =>
+      fetch("/api/warehouse/fragrance-notes/batch/status", { credentials: "same-origin" })
+        .then((r) => r.json())
+        .then((d) => { setBatchStatus(d); if (!d.running) setPollEnabled(false); return d; }),
+    enabled: pollEnabled,
+    refetchInterval: 2000,
+  });
+
+  const startMutation = useMutation({
+    mutationFn: () =>
+      fetch("/api/warehouse/fragrance-notes/batch", {
+        method: "POST",
+        credentials: "same-origin",
+      }).then(async (r) => {
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        return d;
+      }),
+    onSuccess: (data) => {
+      setBatchStatus(data);
+      if (data.total > 0) setPollEnabled(true);
+    },
+  });
+
+  const pct = batchStatus && batchStatus.total > 0
+    ? Math.round((batchStatus.done / batchStatus.total) * 100)
+    : 0;
+
+  return (
+    <div className="card" style={{ marginTop: 12 }}>
+      <div className="section-title">
+        <div>
+          <h3 style={{ display: "flex", alignItems: "center", gap: 6 }}><Sparkles size={16} /> Пирамида аромата — пакетная генерация</h3>
+        </div>
+        <button
+          className="secondary-action"
+          type="button"
+          onClick={() => startMutation.mutate()}
+          disabled={startMutation.isPending || !!batchStatus?.running}
+        >
+          {startMutation.isPending ? "Запуск…" : batchStatus?.running ? "Работает…" : "Запустить AI-генерацию"}
+        </button>
+      </div>
+      {startMutation.error ? (
+        <p style={{ color: "var(--danger, #e55)", fontSize: 13 }}>{(startMutation.error as Error).message}</p>
+      ) : null}
+      {batchStatus ? (
+        <div style={{ marginTop: 8 }}>
+          {batchStatus.total === 0 ? (
+            <p style={{ fontSize: 13, color: "var(--muted)" }}>Все товары уже имеют ноты аромата.</p>
+          ) : (
+            <>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, marginBottom: 4 }}>
+                <span>{batchStatus.done} / {batchStatus.total} товаров</span>
+                <span style={{ color: "var(--muted)" }}>{batchStatus.errors > 0 ? `ошибок: ${batchStatus.errors}` : ""} {pct}%</span>
+              </div>
+              <div style={{ height: 6, background: "var(--field-bg)", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${pct}%`, background: "var(--accent)", transition: "width 0.3s" }} />
+              </div>
+              {!batchStatus.running && batchStatus.done > 0 && (
+                <p style={{ fontSize: 13, color: "var(--muted)", marginTop: 6 }}>Завершено · {batchStatus.errors} ошибок</p>
+              )}
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

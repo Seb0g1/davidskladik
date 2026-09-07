@@ -73,6 +73,7 @@ model WarehouseProduct {
   archived         Boolean     @default(false)
   everHadLinks     Boolean     @default(false) @map("ever_had_links")
   raw              Json?
+  fragranceNotes   Json?       @map("fragrance_notes")
   createdAt        DateTime    @default(now()) @map("created_at")
   updatedAt        DateTime    @updatedAt @map("updated_at")
 
@@ -736,6 +737,24 @@ model ShopEmailSubscriber {
 
   @@index([createdAt])
   @@map("shop_email_subscribers")
+}
+
+model BlogPost {
+  id          String    @id @default(cuid())
+  slug        String    @unique
+  title       String
+  excerpt     String?
+  content     String
+  coverUrl    String?   @map("cover_url")
+  tags        String[]  @default([])
+  published   Boolean   @default(false)
+  publishedAt DateTime? @map("published_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@index([published, publishedAt])
+  @@index([slug])
+  @@map("blog_posts")
 }
 
 model PriceMasterSnapshotItem {

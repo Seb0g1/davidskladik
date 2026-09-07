@@ -31,6 +31,8 @@ export interface ShopBanner {
   linkUrl?: string;
   linkText?: string;
   endDate?: string;
+  promoCode?: string;
+  holidayKey?: string;
   active: boolean;
   order: number;
 }
@@ -165,4 +167,17 @@ export interface CatalogResponse {
   page: number;
   pageSize: number;
   brands: string[];
+}
+
+export interface BlogPost {
+  id: string;
+  slug: string;
+  title: string;
+  excerpt?: string;
+  content?: string;
+  coverUrl?: string;
+  tags: string[];
+  publishedAt?: string;
+  createdAt?: string;
+  published?: boolean;
 }

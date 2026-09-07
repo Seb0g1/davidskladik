@@ -21,6 +21,9 @@ float noise(vec2 p) {
   return mix(mix(hash(i), hash(i+vec2(1,0)), f.x),
              mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
 }
+// Ridge noise: flips valleys into bright crests — the core of the metallic sheen
+float ridge(vec2 p) { return 1.0 - abs(noise(p) * 2.0 - 1.0); }
+
 float fbm(vec2 p) {
   float v = 0.0; float a = 0.5;
   for (int i = 0; i < 5; i++) {
@@ -30,20 +33,47 @@ float fbm(vec2 p) {
   }
   return v;
 }
+// Ridge-fBm: layered ridge octaves for flowing specular streaks
+float rfbm(vec2 p) {
+  float v = 0.0; float a = 0.5;
+  for (int i = 0; i < 4; i++) {
+    v += a * ridge(p);
+    p = p * 2.3 - vec2(sin(u_time*0.09+float(i)*0.71), cos(u_time*0.06+float(i)*1.13)) * 0.45;
+    a *= 0.46;
+  }
+  return v;
+}
 void main() {
   vec2 uv = gl_FragCoord.xy / u_res;
-  float t = u_time * 0.22;
-  vec2 p = (uv - 0.5) * 2.8;
-  p += vec2(sin(t*0.6)*0.4, cos(t*0.45)*0.3);
-  float n = fbm(p + fbm(p + fbm(p)));
-  vec3 dark   = vec3(0.05, 0.035, 0.01);
-  vec3 mid    = vec3(0.49, 0.39, 0.22);
-  vec3 bright = vec3(0.81, 0.69, 0.43);
-  vec3 col    = mix(dark, mid, smoothstep(0.3, 0.6, n));
-  col         = mix(col, bright, smoothstep(0.6, 0.85, n) * 0.7);
-  float edge  = smoothstep(0.0, 0.38, uv.x) * smoothstep(1.0, 0.62, uv.x)
-              * smoothstep(0.0, 0.55, uv.y) * smoothstep(1.0, 0.38, uv.y);
-  float alpha = clamp(n * 0.52 * edge, 0.0, 1.0);
+  float t  = u_time * 0.14;
+  vec2 p   = (uv - 0.5) * 3.0;
+
+  // Two-level domain warp (Quilez technique) — gives the "molten pour" motion
+  vec2 q = vec2(fbm(p),
+                fbm(p + vec2(5.2, 1.3)));
+  vec2 r = vec2(fbm(p + 4.0*q + vec2(1.7, 9.2) + t*0.20),
+                fbm(p + 4.0*q + vec2(8.3, 2.8) + t*0.16));
+  float n = fbm(p + 4.0*r);
+
+  // Metallic specular layer driven by ridge noise
+  float m   = rfbm(p * 0.75 + q * 1.8 + vec2(t * 0.28));
+  float spec = pow(m, 2.8) * smoothstep(0.48, 0.82, n + m * 0.28);
+
+  // 5-stop palette: void → charcoal gold → warm gold → bright gold → white-hot spec
+  vec3 c0 = vec3(0.04, 0.028, 0.007);
+  vec3 c1 = vec3(0.32, 0.23, 0.09);
+  vec3 c2 = vec3(0.62, 0.49, 0.22);
+  vec3 c3 = vec3(0.88, 0.74, 0.42);
+  vec3 c4 = vec3(1.00, 0.96, 0.80);
+  vec3 col = c0;
+  col = mix(col, c1, smoothstep(0.18, 0.42, n));
+  col = mix(col, c2, smoothstep(0.40, 0.60, n));
+  col = mix(col, c3, smoothstep(0.58, 0.78, n) * 0.88);
+  col = mix(col, c4, spec * 0.82);
+
+  float edge  = smoothstep(0.0, 0.36, uv.x) * smoothstep(1.0, 0.64, uv.x)
+              * smoothstep(0.0, 0.52, uv.y) * smoothstep(1.0, 0.40, uv.y);
+  float alpha = clamp((n * 0.54 + spec * 0.22) * edge, 0.0, 1.0);
   fragColor   = vec4(col, alpha);
 }
 `;

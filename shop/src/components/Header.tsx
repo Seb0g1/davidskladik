@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { Search, X, LayoutGrid, Home, Newspaper, ShoppingBag, LogOut, Package, Settings, Bell, BellOff } from "lucide-react";
+import { Search, X, LayoutGrid, Home, Newspaper, ShoppingBag, LogOut, Package, Settings, Bell, BellOff, Sparkles } from "lucide-react";
 import clsx from "clsx";
 import { useCart } from "../CartContext";
 import { useAuth } from "../AuthContext";
@@ -10,7 +10,7 @@ import { usePush } from "../hooks/usePush";
 const BOT_NAV = [
   { label: "Главная",  to: "/",       icon: Home },
   { label: "Каталог",  to: "/catalog", icon: LayoutGrid },
-  { label: "Новости",  to: "/news",   icon: Newspaper },
+  { label: "AI-подбор", to: "/find",  icon: Sparkles },
   { label: "Корзина",  to: "/cart",    icon: ShoppingBag, cart: true },
 ];
 
@@ -99,6 +99,9 @@ export default function Header() {
             { label: "Новинки",  to: "/new" },
             { label: "Подарки",  to: "/gift" },
             { label: "Новости",  to: "/news" },
+            { label: "Блог",     to: "/blog" },
+            { label: "✦ AI-подбор", to: "/find" },
+            { label: "🌍 Карта ароматов", to: "/world" },
           ].map((link) => (
             <Link
               key={link.to}

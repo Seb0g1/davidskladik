@@ -96,6 +96,16 @@ export const ProductSchema = z.object({
   hasSnoozedLinks: z.boolean().optional().default(false),
   aiImages: z.array(AiImageSchema).optional().default([]),
   avitoImages: z.array(z.string()).optional().default([]),
+  fragranceNotes: z.object({
+    topNotes: z.array(z.string()).default([]),
+    middleNotes: z.array(z.string()).default([]),
+    baseNotes: z.array(z.string()).default([]),
+    accords: z.array(z.string()).default([]),
+    gender: z.string().optional(),
+    seasons: z.array(z.string()).optional().default([]),
+    source: z.string().optional(),
+    generatedAt: z.string().optional(),
+  }).optional().nullable(),
 }).passthrough();
 
 export const ProductGroupPageItemSchema = z.object({

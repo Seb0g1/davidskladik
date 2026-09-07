@@ -101,7 +101,7 @@ const MAP_CSS = `
 .pvz-dark-popup .leaflet-popup-close-button:hover { color: #F4EFE6 !important; }
 `;
 
-function PvzItem({ pvz, selected, onClick }: { pvz: PvzPoint; selected: boolean; onClick: () => void }) {
+function PvzItem({ pvz, selected, onClick, onConfirm }: { pvz: PvzPoint; selected: boolean; onClick: () => void; onConfirm: () => void }) {
   return (
     <button
       type="button"
@@ -149,7 +149,7 @@ function PvzItem({ pvz, selected, onClick }: { pvz: PvzPoint; selected: boolean;
         <div style={{ marginTop: 12, paddingLeft: 48 }}>
           <button
             type="button"
-            onClick={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); onConfirm(); }}
             style={{
               width: "100%", padding: "10px", borderRadius: 12, fontSize: 13, fontWeight: 700,
               color: "#0E0D0B", border: "none", cursor: "pointer",
@@ -620,6 +620,7 @@ export default function OzonPickupMap({ open, onClose, onSelect, defaultCity = "
                       highlightPvz(pvz);
                       if (selectedId === pvz.id) { onSelect(pvz); onClose(); }
                     }}
+                    onConfirm={() => { onSelect(pvz); onClose(); }}
                   />
                 ))}
                 <div style={{ height: 40 }} />

@@ -3593,6 +3593,21 @@ button:disabled {
     transform: translateX(0);
   }
 
+  /* Sticky header в карточке на мобильном — кнопка × всегда видна */
+  .detail-head {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--panel);
+    margin: -14px -14px 0;
+    padding: 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .warehouse-table-head {
+    display: none;
+  }
+
   .empty-panel {
     display: none;
   }
@@ -3793,35 +3808,74 @@ button:disabled {
 
   .virtual-list {
     height: calc(100vh - 330px);
-    min-height: 380px;
-    padding: 8px;
+    min-height: min(380px, 40vh);
+    padding: 4px 0;
+  }
+
+  .virtual-list > div {
+    min-width: 0;
   }
 
   .product-row {
-    grid-template-columns: 72px minmax(0, 1fr);
-    grid-template-rows: auto auto auto;
-    align-items: start;
-    gap: 8px 12px;
-    min-height: 260px;
-    height: 260px;
-    padding: 12px;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    grid-template-rows: 1fr 1fr;
+    align-items: center;
+    gap: 0 10px;
+    min-height: 148px;
+    height: 148px;
+    padding: 10px 12px;
     overflow: hidden;
   }
 
   .product-row.group-row {
-    grid-template-columns: 72px minmax(0, 1fr);
-    min-height: 260px;
-    height: 260px;
+    grid-template-columns: 48px minmax(0, 1fr) auto;
+    min-height: 148px;
+    height: 148px;
+  }
+
+  /* На мобильном скрываем второстепенные колонки */
+  .warehouse-sku,
+  .warehouse-supplier,
+  .warehouse-marketplaces,
+  .row-check {
+    display: none;
+  }
+
+  .product-cell {
+    grid-column: 1 / 3;
+    grid-row: 1;
+  }
+
+  .warehouse-stock {
+    grid-column: 2;
+    grid-row: 2;
+    font-size: 12px;
+  }
+
+  .warehouse-price {
+    grid-column: 2;
+    grid-row: 2;
+    text-align: right;
+    font-size: 14px;
+  }
+
+  .warehouse-status {
+    grid-column: 3;
+    grid-row: 1 / 3;
+    align-self: center;
   }
 
   .product-thumb {
-    width: 72px;
-    height: 72px;
-    grid-row: 1;
+    width: 48px;
+    height: 48px;
+    grid-row: 1 / 3;
+    grid-column: 1;
+    align-self: center;
   }
 
   .product-main {
     grid-column: 2;
+    grid-row: 1;
     min-height: 0;
   }
 
@@ -5020,7 +5074,7 @@ textarea {
 }
 
 .workspace {
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 430px);
+  grid-template-columns: minmax(0, 1fr) minmax(480px, 560px);
   gap: 14px;
 }
 
@@ -5063,7 +5117,7 @@ textarea {
 }
 
 .virtual-list > div {
-  min-width: 640px;
+  min-width: 600px;
 }
 
 .product-row.group-row {
@@ -9753,5 +9807,86 @@ textarea:focus-visible,
   max-height: 90vh;
   overflow-y: auto;
   width: 100%;
+}
+
+/* ── Bulk action bar (warehouse multi-select) ── */
+.bulk-action-bar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(10, 20, 38, 0.92);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(var(--accent-rgb), 0.28);
+  border-radius: 14px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  padding: 10px 14px;
+  white-space: nowrap;
+}
+
+.bulk-action-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-right: 4px;
+}
+
+.bulk-result-toast {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 101;
+  background: rgba(10, 20, 38, 0.95);
+  color: var(--text);
+  border: 1px solid rgba(var(--accent-rgb), 0.22);
+  border-radius: 8px;
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 500;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  white-space: nowrap;
+}
+
+.bulk-result-toast--offset {
+  bottom: 80px;
+}
+
+/* ── Empty search state ── */
+.empty-search-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 60px 24px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.empty-search-state svg {
+  color: rgba(var(--accent-rgb), 0.35);
+  margin-bottom: 4px;
+}
+
+.empty-search-state strong {
+  font-size: 16px;
+  color: var(--text-secondary, #7d91af);
+}
+
+.empty-search-state span {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* ── Pager tap targets ── */
+.pager button {
+  min-height: 44px;
+  min-width: 80px;
+  padding: 0 16px;
 }
 

@@ -130,6 +130,14 @@ export default function SupportChatWidget() {
   }
 
   const btnSize = 56;
+  const [isMobileW, setIsMobileW] = useState(() => typeof window !== "undefined" && window.innerWidth < 768);
+  useEffect(() => {
+    const fn = () => setIsMobileW(window.innerWidth < 768);
+    window.addEventListener("resize", fn, { passive: true });
+    return () => window.removeEventListener("resize", fn);
+  }, []);
+  const fabBottom = isMobileW ? 80 : 24;
+  const fabRight  = isMobileW ? 16 : 24;
 
   return (
     <>
@@ -140,7 +148,7 @@ export default function SupportChatWidget() {
           onClick={openWidget}
           aria-label="Открыть поддержку"
           style={{
-            position: "fixed", bottom: 24, right: 24, zIndex: 9999,
+            position: "fixed", bottom: fabBottom, right: fabRight, zIndex: 9999,
             width: btnSize, height: btnSize, borderRadius: "50%",
             background: "linear-gradient(135deg, #C9A96E, #B89050)",
             boxShadow: "0 8px 32px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.3)",
@@ -165,9 +173,9 @@ export default function SupportChatWidget() {
       {/* Chat panel */}
       {phase !== "closed" && (
         <div style={{
-          position: "fixed", bottom: 24, right: 24, zIndex: 9999,
-          width: 360, maxWidth: "calc(100vw - 32px)",
-          maxHeight: "min(600px, calc(100vh - 48px))",
+          position: "fixed", bottom: fabBottom, right: fabRight, zIndex: 9999,
+          width: 360, maxWidth: `calc(100vw - ${fabRight * 2}px)`,
+          maxHeight: `min(600px, calc(100vh - ${fabBottom + 16}px))`,
           display: "flex", flexDirection: "column",
           background: S.surface, borderRadius: 20,
           border: `1px solid ${S.borderMd}`,

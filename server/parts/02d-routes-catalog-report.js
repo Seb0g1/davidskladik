@@ -35,11 +35,18 @@ async function buildBrandsTnvedReport(account) {
   for (const visibility of ["ALL", "ARCHIVED"]) {
     let lastId = "";
     for (;;) {
-      const data = await ozonRequest("/v4/product/info/attributes", {
-        filter: { visibility },
-        last_id: lastId,
-        limit: 100,
-      }, account);
+      let data;
+      try {
+        data = await ozonRequest("/v4/product/info/attributes", {
+          filter: { visibility },
+          last_id: lastId,
+          limit: 100,
+        }, account);
+      } catch (err) {
+        // Ozon returns "item not found" when last_id cursor is stale — stop pagination
+        logger.warn("brands-tnved pagination interrupted", { visibility, lastId, detail: err?.message });
+        break;
+      }
 
       const items = Array.isArray(data.result) ? data.result : [];
       for (const item of items) {
