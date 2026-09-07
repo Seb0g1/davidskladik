@@ -8146,6 +8146,19 @@ textarea:focus-visible,
 .avito-image-card--ozon { opacity: 0.8; }
 .avito-ozon-label { font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; margin: 12px 0 0; }
 .avito-images-empty { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+/* ── Fragrance Notes Panel ── */
+.fn-meta { font-size: 11px; color: var(--muted); margin: 2px 0 10px; }
+.fn-editor { display: flex; flex-direction: column; gap: 8px; }
+.fn-tag-group { display: flex; align-items: flex-start; gap: 8px; }
+.fn-tag-label { flex-shrink: 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); min-width: 60px; margin-top: 6px; }
+.fn-tags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; flex: 1; }
+.fn-tag { display: inline-flex; align-items: center; gap: 3px; padding: 3px 7px 3px 8px; background: var(--field-bg); border: 1px solid var(--line); border-radius: 20px; font-size: 12px; color: var(--text); }
+.fn-tag button { display: flex; align-items: center; background: none; border: none; cursor: pointer; color: var(--muted); padding: 0; line-height: 1; }
+.fn-tag button:hover { color: var(--danger, #e55); }
+.fn-tag-input { border: none; outline: none; background: transparent; font-size: 12px; color: var(--text); min-width: 80px; max-width: 120px; padding: 3px 4px; }
+.fn-tag-input::placeholder { color: var(--muted); }
+.fn-select { border: 1px solid var(--line); background: var(--field-bg); color: var(--text); border-radius: 6px; font-size: 12px; padding: 3px 6px; }
+.fn-error { font-size: 12px; color: var(--danger, #e55); margin: 6px 0 0; }
 .avito-profile-strip { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: var(--field-bg); border: 1px solid var(--line); border-radius: 8px; font-size: 13px; flex-wrap: wrap; }
 .avito-profile-avatar { width: 32px; height: 32px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .avito-profile-name { font-weight: 600; color: var(--text); }
@@ -9719,5 +9732,26 @@ textarea:focus-visible,
   .diff-columns { grid-template-columns: 1fr; }
   .card-fix-header { gap: 8px; }
   .card-fix-actions { width: 100%; justify-content: flex-end; }
+  .page-access-body { grid-template-columns: 1fr; }
+}
+
+/* Generic modal overlay / panel — used by ConsignmentPage and other route modals */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(2, 8, 18, 0.72);
+}
+.modal-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px;
+  max-height: 90vh;
+  overflow-y: auto;
+  width: 100%;
 }
 

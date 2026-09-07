@@ -199,7 +199,7 @@ function OzonTab() {
             <Stat label="Без ТН ВЭД" value={`${data.summary.missingTnved.toLocaleString("ru")} (${pct(data.summary.missingTnved, data.summary.total)})`} icon={<Tag size={18} />} tone={data.summary.missingTnved > 0 ? "warn" : "success"} />
           </section>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(360px, 100%), 1fr))", gap: 20, alignItems: "start" }}>
             <BrandsTable brands={data.brands} total={data.summary.total} label="Бренды" />
 
             <section className="table-panel">
@@ -320,7 +320,7 @@ function YandexTab() {
             )}
           </section>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20, alignItems: "start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(360px, 100%), 1fr))", gap: 20, alignItems: "start" }}>
             <BrandsTable brands={data.brands} total={data.summary.total} label="Бренды" />
 
             <section className="table-panel">
