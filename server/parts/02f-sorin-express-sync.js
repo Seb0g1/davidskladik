@@ -65,7 +65,7 @@ async function fetchActiveSorinArticlesFromPm(articles) {
        JOIN OfferDocs d ON d.DocID = r.DocID
        JOIN Partners p ON p.PartnerID = d.PartnerID
        WHERE BINARY TRIM(r.NativeID) IN (${placeholders})
-         AND r.Active = 1
+         AND r.Ignored = 0
          AND (p.PartnerName LIKE '%Сорин%' OR p.PartnerName LIKE '%Sorin%')
          ${activeDocFilter}`,
       articles,
