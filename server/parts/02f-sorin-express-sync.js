@@ -10,9 +10,15 @@
 const sorinExpressOzonWarehouseId = cleanText(
   process.env.SORIN_EXPRESS_OZON_WAREHOUSE_ID || "1020005000398404",
 );
+// Если задан — используем только этот Ozon-аккаунт для экспресс-склада (остальные игнорируем).
+// Нужно когда экспресс-склад принадлежит только одному кабинету.
+const sorinExpressOzonAccountId = cleanText(process.env.SORIN_EXPRESS_OZON_ACCOUNT_ID || "");
 const sorinExpressYandexCampaignId = cleanText(
   process.env.SORIN_EXPRESS_YANDEX_CAMPAIGN_ID || "216697459",
 );
+// Опциональный отдельный API-ключ для Яндекс Экспресс кампании.
+// Если не задан — используем ключ первого Яндекс-магазина.
+const sorinExpressYandexApiKey = cleanText(process.env.SORIN_EXPRESS_YANDEX_API_KEY || "");
 const sorinExpressStock = Math.max(1, Number(process.env.SORIN_EXPRESS_STOCK || 2) || 2);
 const sorinExpressSyncEnabled = process.env.SORIN_EXPRESS_SYNC_ENABLED !== "false";
 
@@ -56,10 +62,11 @@ async function fetchActiveSorinArticlesFromPm(articles) {
     const [rows] = await pool.query(
       `SELECT DISTINCT BINARY TRIM(r.NativeID) AS article
        FROM OfferRows r
-       JOIN OfferDocs d ON d.ID = r.DocID
+       JOIN OfferDocs d ON d.DocID = r.DocID
+       JOIN Partners p ON p.PartnerID = d.PartnerID
        WHERE BINARY TRIM(r.NativeID) IN (${placeholders})
          AND r.Active = 1
-         AND (d.PartnerName LIKE '%Сорин%' OR d.PartnerName LIKE '%Sorin%')
+         AND (p.PartnerName LIKE '%Сорин%' OR p.PartnerName LIKE '%Sorin%')
          ${activeDocFilter}`,
       articles,
     );
@@ -122,7 +129,10 @@ async function syncSorinExpressStocks() {
 
   // ── Ozon ──────────────────────────────────────────────────────────────────
   if (sorinExpressOzonWarehouseId && (ozonActive.length || ozonInactive.length)) {
-    for (const account of getOzonAccounts()) {
+    const ozonAccounts = sorinExpressOzonAccountId
+      ? getOzonAccounts().filter((a) => a.id === sorinExpressOzonAccountId)
+      : getOzonAccounts();
+    for (const account of ozonAccounts) {
       const activeForAccount = ozonActive.filter((r) =>
         matchesOzonTarget(String(r.target || "ozon"), account.id),
       );
@@ -178,6 +188,8 @@ async function syncSorinExpressStocks() {
         id: `yandex-express-${sorinExpressYandexCampaignId}`,
         name: "Яндекс Экспресс",
         campaignId: sorinExpressYandexCampaignId,
+        // Если задан отдельный ключ для Экспресс — используем его.
+        apiKey: sorinExpressYandexApiKey || baseShop.apiKey,
       };
 
       const stockRows = [
