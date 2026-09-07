@@ -720,7 +720,10 @@ function AuditSettingsPanel() {
   return (
     <section className="settings-panel settings-panel-wide">
       <div className="section-title">
-        <div><span>Журнал</span><h3>Аудит действий</h3></div>
+        <div>
+          <span>Журнал</span>
+          <h3>Аудит действий{audit.length > 0 ? <span style={{ fontSize: 13, fontWeight: 400, color: "var(--muted)", marginLeft: 6 }}>({audit.length}{audit.length >= 500 ? "+" : ""})</span> : null}</h3>
+        </div>
         <button className="secondary-action" type="button" onClick={() => auditQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
       </div>
       <div className="search-box compact-search"><Search size={16} /><input placeholder="Поиск по пользователю, SKU, действию" value={q} onChange={(event) => setQ(event.target.value)} /></div>

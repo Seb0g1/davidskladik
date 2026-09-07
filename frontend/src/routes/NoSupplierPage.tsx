@@ -1,10 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, PackageSearch, RefreshCw } from "lucide-react";
+import { AlertTriangle, Download, Loader2, PackageSearch, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { fetchJson } from "../api";
 import { NoSupplierSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
+
+function exportCsv(rows: Record<string, unknown>[], filename: string, headers: string[], fields: string[]) {
+  const lines = [headers, ...rows.map(r => fields.map(f => `"${String(r[f] ?? "").replace(/"/g, '""')}"`))]
+    .map(r => r.join(",")).join("\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + lines], { type: "text/csv;charset=utf-8" }));
+  a.download = filename; a.click();
+}
 
 export function NoSupplierPage() {
   const [mpFilter, setMpFilter] = useState("");
@@ -13,7 +21,12 @@ export function NoSupplierPage() {
   const alerts = (data?.alerts || []).filter(a => !mpFilter || (a as Record<string, unknown>).marketplace === mpFilter);
   return (
     <section className="page-section no-supplier-page">
-      <PageHeader title="Ошибки наличия" subtitle="Товары с привязками, у которых сейчас нет активного поставщика или есть риск некорректного остатка." action={<button className="secondary-action" onClick={() => query.refetch()}><RefreshCw size={16} /> Обновить</button>} />
+      <PageHeader title="Ошибки наличия" subtitle="Товары с привязками, у которых сейчас нет активного поставщика или есть риск некорректного остатка." action={(
+        <div className="row-actions">
+          <button className="secondary-action" onClick={() => query.refetch()}><RefreshCw size={16} /> Обновить</button>
+          {alerts.length > 0 && <button className="secondary-action" onClick={() => exportCsv(alerts as Record<string, unknown>[], "no-supplier.csv", ["offerId", "Название", "Маркетплейс", "Привязок", "Активных"], ["offerId", "name", "marketplace", "supplierCount", "availableSupplierCount"])}><Download size={16} /> CSV</button>}
+        </div>
+      )} />
       <section className="dashboard-metrics">
         <Stat label="Всего товаров" value={data?.total || 0} tone="accent" icon={<PackageSearch size={18} />} />
         <Stat label="Без поставщика" value={data?.withoutSupplier || 0} tone={data?.withoutSupplier ? "warn" : "success"} icon={<AlertTriangle size={18} />} />

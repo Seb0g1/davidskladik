@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, RefreshCcw, Wrench } from "lucide-react";
+import { AlertTriangle, Download, Loader2, RefreshCcw, Wrench } from "lucide-react";
 import { useMemo, useState } from "react";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -67,9 +67,23 @@ export function ProblemProductsPage() {
         title="Проблемные товары"
         subtitle="Единая диагностика SKU: отсутствие поставщика, цены, фото, бренда и ошибки автоматизации."
         action={(
-          <button className="secondary-action" type="button" onClick={() => query.refetch()} disabled={query.isFetching}>
-            {query.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Обновить
-          </button>
+          <div className="row-actions">
+            <button className="secondary-action" type="button" onClick={() => query.refetch()} disabled={query.isFetching}>
+              {query.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCcw size={16} />} Обновить
+            </button>
+            {items.length > 0 && (
+              <button className="secondary-action" type="button" onClick={() => {
+                const rows = items.map(i => ({ marketplace: String(i.marketplace ?? ""), offerId: String(i.offerId ?? ""), category: String(i.category ?? ""), reason: String(i.reason ?? ""), lastError: String(i.lastError ?? "") }));
+                const lines = [["Маркетплейс", "Артикул", "Категория", "Причина", "Ошибка"], ...rows.map(r => [r.marketplace, r.offerId, r.category, r.reason, r.lastError].map(v => `"${v.replace(/"/g, '""')}"`))]
+                  .map(r => r.join(",")).join("\n");
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(new Blob(["﻿" + lines], { type: "text/csv;charset=utf-8" }));
+                a.download = "problem-products.csv"; a.click();
+              }}>
+                <Download size={16} /> CSV
+              </button>
+            )}
+          </div>
         )}
       />
 

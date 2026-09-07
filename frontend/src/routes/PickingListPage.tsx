@@ -484,6 +484,11 @@ export function PickingListPage() {
               {listQuery.isFetching ? <Loader2 className="spin" size={16} /> : <RefreshCw size={16} />}
               <span className="hide-xs">Обновить</span>
             </button>
+            {listQuery.dataUpdatedAt ? (
+              <span style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                {new Date(listQuery.dataUpdatedAt).toLocaleTimeString("ru", { hour: "2-digit", minute: "2-digit" })}
+              </span>
+            ) : null}
           </div>
         }
       />
