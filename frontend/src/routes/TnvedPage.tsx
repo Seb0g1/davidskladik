@@ -57,12 +57,31 @@ type TnvedReport = {
   yandex: {
     totalProducts: number;
     defaultCode: string;
+    lastApplied: string | null;
+    withCategory: number | null;
+    withFallback: number | null;
+    skipped: number | null;
+    updatedCount: number | null;
   };
   wb: {
     tnvedCode: string;
     subjectId: number;
     subjectName: string;
   };
+};
+
+type YandexTnvedProgress = {
+  running: boolean;
+  totalProducts: number | null;
+  candidates: number | null;
+  updated: number | null;
+  failed: number | null;
+  withCategory: number | null;
+  withFallback: number | null;
+  skipped: number | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
 };
 
 async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -86,6 +105,7 @@ function phaseLabel(phase: TnvedProgress["phase"]) {
 function renderApplyResult(result: ApplyResult | null, error: Error | null) {
   if (error) return <div className="inline-error">{error.message}</div>;
   if (!result) return null;
+  if (result.async) return null;
   if (!result.ok && result.error) return <div className="inline-error">{result.error}</div>;
   if (result.dryRun) {
     return (
@@ -100,7 +120,7 @@ function renderApplyResult(result: ApplyResult | null, error: Error | null) {
   }
   return (
     <div className={`info-strip ${result.ok ? "success" : "warn"} compact`}>
-      {result.ok ? "✓ Применено" : "Завершено с ошибками"}: {result.updated ?? 0} из {result.total} товаров.
+      {result.ok ? "✓ Применено" : "Завершено с ошибками"}: {result.updated ?? 0} из {result.candidates ?? result.total} товаров.
       {result.withCategory != null ? ` По категории: ${result.withCategory}` : ""}
       {result.withFallback != null ? ` · По умолчанию: ${result.withFallback}` : ""}
       {result.failed != null && result.failed > 0 ? ` · Ошибок: ${result.failed}` : ""}
@@ -129,6 +149,12 @@ export function TnvedPage() {
     refetchInterval: (query) => (query.state.data?.running ? 2000 : 0),
   });
 
+  const yandexProgressQuery = useQuery({
+    queryKey: ["yandex-tnved-progress"],
+    queryFn: () => apiJson<YandexTnvedProgress>("/api/yandex/tnved/progress"),
+    refetchInterval: (query) => (query.state.data?.running ? 2000 : 0),
+  });
+
   const reportQuery = useQuery({
     queryKey: ["tnved-report"],
     queryFn: () => apiJson<TnvedReport>("/api/tnved/report"),
@@ -138,6 +164,7 @@ export function TnvedPage() {
   const categories = categoriesQuery.data?.categories || [];
   const totalProducts = categoriesQuery.data?.totalProducts ?? 0;
   const progress = progressQuery.data;
+  const yandexProgress = yandexProgressQuery.data;
   const report = reportQuery.data;
 
   useEffect(() => {
@@ -207,6 +234,7 @@ export function TnvedPage() {
     onSuccess: () => {
       setYandexPreview(null);
       void queryClient.invalidateQueries({ queryKey: ["tnved-report"] });
+      void queryClient.invalidateQueries({ queryKey: ["yandex-tnved-progress"] });
     },
   });
 
@@ -234,6 +262,7 @@ export function TnvedPage() {
 
   const hasAssignments = categories.some((cat) => (localCodes[`${cat.descCatId}:${cat.typeId}`] || "").trim());
   const isApplying = progress?.running || applyMutation.isPending;
+  const isYandexApplying = yandexProgress?.running || yandexApplyMutation.isPending;
 
   const progressPct = progress?.running && progress.totalProducts && progress.processed != null
     ? Math.round((progress.processed / progress.totalProducts) * 100)
@@ -302,9 +331,25 @@ export function TnvedPage() {
               </span>
               <span className="muted" style={{ fontSize: 12 }}>· {report.yandex.totalProducts} товаров</span>
             </div>
-            <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-              Устанавливается по категориям Ozon + код по умолчанию
-            </div>
+            {report.yandex.lastApplied ? (
+              <>
+                <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                  Последнее применение: {new Date(report.yandex.lastApplied).toLocaleString("ru-RU")}
+                  {report.yandex.updatedCount != null ? ` · Отправлено: ${report.yandex.updatedCount}` : ""}
+                </div>
+                {(report.yandex.withCategory != null || report.yandex.withFallback != null) ? (
+                  <div className="muted" style={{ fontSize: 11, marginTop: 1 }}>
+                    {report.yandex.withCategory != null ? `По категории: ${report.yandex.withCategory}` : ""}
+                    {report.yandex.withFallback != null ? ` · По умолчанию: ${report.yandex.withFallback}` : ""}
+                    {report.yandex.skipped != null && report.yandex.skipped > 0 ? ` · Без кода: ${report.yandex.skipped}` : ""}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                Устанавливается по категориям Ozon + код по умолчанию · Ещё не применялось
+              </div>
+            )}
           </div>
           <div className="settings-panel" style={{ padding: "12px 16px" }}>
             <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 4 }}>Wildberries</div>
@@ -472,14 +517,14 @@ export function TnvedPage() {
           <div className="section-title compact-title">
             <div><span>Справочник</span><h3>Актуальные коды ЕАЭС 2025</h3></div>
           </div>
-          <div className="form-hint" style={{ marginBottom: 12, lineHeight: 1.7 }}>
-            <strong>Парфюмерия (3303)</strong>
+          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+            <strong>Парфюмерия (3303) — Духи и туалетная вода</strong>
           </div>
           <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
             <div style={{ background: "var(--highlight, rgba(0,180,80,.08))", borderRadius: 4, padding: "2px 6px", display: "inline-block" }}>
-              <strong>3303001000</strong> — Духи (parfums, &gt;20% масла)
+              <strong>3303001000</strong> — Духи и туалетная вода: — духи (parfums)
             </div>
-            <div>3303009000 — Туалетная и парфюмерная вода</div>
+            <div>3303009000 — Духи и туалетная вода: — туалетная вода</div>
           </div>
           <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
             <strong>Косметика и макияж (3304)</strong>
@@ -487,38 +532,53 @@ export function TnvedPage() {
           <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
             <div>3304100000 — Средства для макияжа губ</div>
             <div>3304200000 — Средства для макияжа глаз</div>
-            <div>3304300000 — Лаки для ногтей</div>
-            <div>3304910000 — Пудры (компактные и рассыпчатые)</div>
+            <div>3304300000 — Средства для маникюра или педикюра</div>
+            <div>3304910000 — Средства для макияжа и ухода за кожей: — — пудра, включая компактную</div>
             <div>3304990000 — Прочие: кремы, лосьоны, тональный</div>
           </div>
           <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
             <strong>Средства для волос (3305)</strong>
           </div>
           <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
-            <div>3305100000 — Шампуни</div>
-            <div>3305200000 — Средства для перманентной завивки</div>
-            <div>3305300000 — Лак для волос</div>
-            <div>3305900001 — Бальзамы, кондиционеры для волос</div>
-            <div>3305900009 — Прочие: маски, масла, несмываемые средства</div>
+            <div>3305100000 — Средства для волос: — шампуни</div>
+            <div>3305200000 — Средства для волос: — средства для перманентной завивки или распрямления волос</div>
+            <div>3305300000 — Средства для волос: — лаки для волос</div>
+            <div>3305900001 — Средства для волос: — прочие: — — лосьоны для волос</div>
+            <div>3305900009 — Средства для волос: — прочие: — — прочие</div>
           </div>
           <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
             <strong>Гигиена полости рта (3306)</strong>
           </div>
           <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
-            <div>3306100000 — Зубная паста</div>
+            <div>3306100000 — Средства для гигиены полости рта: — средства для чистки зубов</div>
           </div>
           <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
-            <strong>Прочая парфюмерия (3307)</strong>
+            <strong>Прочие туалетные средства (3307)</strong>
           </div>
           <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
-            <div>3307200000 — Дезодоранты и антиперспиранты</div>
-            <div>3307900000 — Прочие косметические товары</div>
+            <div>3307100000 — Средства до, во время или после бритья</div>
+            <div>3307200000 — Дезодоранты и антиперспиранты индивидуального назначения</div>
+            <div>3307300000 — Соли и прочие средства для ванн</div>
+            <div>3307490000 — Прочие: — — прочие (ароматические палочки, диффузоры)</div>
+            <div>3307900008 — Прочие туалетные средства: — прочие: — — прочие (дезодоранты для помещений)</div>
+          </div>
+          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+            <strong>Мыло и средства для мытья кожи (3401)</strong>
+          </div>
+          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
+            <div>3401300000 — Поверхностно-активные средства для мытья кожи в виде жидкости или крема (гели для душа, жидкое мыло)</div>
+          </div>
+          <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
+            <strong>Моющие и чистящие средства (3402)</strong>
+          </div>
+          <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2, marginBottom: 12 }}>
+            <div>3402909000 — Прочие поверхностно-активные средства: — — моющие средства и чистящие средства</div>
           </div>
           <div className="form-hint" style={{ marginBottom: 4, lineHeight: 1.7 }}>
             <strong>Свечи (3406)</strong>
           </div>
           <div className="form-hint" style={{ fontFamily: "monospace", lineHeight: 2 }}>
-            <div>3406000000 — Свечи, свечки, факелы и аналогичные изделия</div>
+            <div>3406000000 — Свечи, тонкие восковые свечки и аналогичные изделия</div>
           </div>
 
           {/* Яндекс.Маркет */}
@@ -556,7 +616,7 @@ export function TnvedPage() {
             <button
               className="secondary-action"
               type="button"
-              disabled={yandexPreviewMutation.isPending || yandexApplyMutation.isPending}
+              disabled={yandexPreviewMutation.isPending || isYandexApplying}
               onClick={() => yandexPreviewMutation.mutate()}
             >
               {yandexPreviewMutation.isPending ? <Loader2 className="spin" size={14} /> : <Tag size={14} />} Предпросмотр
@@ -564,18 +624,48 @@ export function TnvedPage() {
             <button
               className="primary-action"
               type="button"
-              disabled={yandexApplyMutation.isPending || yandexPreviewMutation.isPending}
+              disabled={isYandexApplying || yandexPreviewMutation.isPending}
               onClick={() => {
                 if (window.confirm(`Отправить коды ТН ВЭД на ${report?.yandex.totalProducts ?? "все"} товаров Яндекс.Маркет?`)) {
                   yandexApplyMutation.mutate();
                 }
               }}
             >
-              {yandexApplyMutation.isPending ? <Loader2 className="spin" size={14} /> : <Send size={14} />} Отправить на Яндекс
+              {isYandexApplying ? <Loader2 className="spin" size={14} /> : <Send size={14} />}
+              {isYandexApplying ? "Отправляется…" : "Отправить на Яндекс"}
             </button>
           </div>
           {renderApplyResult(yandexPreview, yandexPreviewMutation.error as Error | null)}
-          {renderApplyResult(yandexApplyMutation.data ?? null, yandexApplyMutation.error as Error | null)}
+          {yandexApplyMutation.error ? <div className="inline-error">{String((yandexApplyMutation.error as Error).message)}</div> : null}
+
+          {/* Прогресс применения Яндекс */}
+          {(yandexProgress?.running || yandexProgress?.completedAt) ? (
+            <div className="settings-panel" style={{ marginTop: 8, padding: "10px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                {yandexProgress.running ? <Loader2 className="spin" size={13} /> : null}
+                <strong style={{ fontSize: 12 }}>
+                  {yandexProgress.running
+                    ? "Отправка ТН ВЭД на Яндекс.Маркет…"
+                    : yandexProgress.error
+                      ? `Ошибка: ${yandexProgress.error}`
+                      : yandexProgress.failed
+                        ? "Завершено с ошибками"
+                        : "Успешно применено на Яндекс"}
+                </strong>
+                {yandexProgress.completedAt ? (
+                  <span className="muted" style={{ fontSize: 11 }}>в {new Date(yandexProgress.completedAt).toLocaleTimeString("ru-RU")}</span>
+                ) : null}
+              </div>
+              <div className="progress-line">
+                <span style={{ width: yandexProgress.running ? "100%" : `${yandexProgress.candidates && yandexProgress.updated != null ? Math.round((yandexProgress.updated / yandexProgress.candidates) * 100) : 100}%`, animation: yandexProgress.running ? "pulse 1.5s ease-in-out infinite" : undefined }} />
+                <span style={{ position: "relative", zIndex: 1, fontSize: 11 }}>
+                  {yandexProgress.running
+                    ? `${yandexProgress.candidates ?? "…"} товаров в очереди`
+                    : `Отправлено: ${yandexProgress.updated ?? 0}${yandexProgress.failed ? ` · Ошибок: ${yandexProgress.failed}` : ""}${yandexProgress.withCategory != null ? ` · По категории: ${yandexProgress.withCategory}` : ""}${yandexProgress.withFallback != null ? ` · По умолчанию: ${yandexProgress.withFallback}` : ""}`}
+                </span>
+              </div>
+            </div>
+          ) : null}
 
           {/* Sweep: исправить пустые и неверные коды */}
           <div className="section-title compact-title" style={{ marginTop: 20 }}>
