@@ -353,6 +353,103 @@ app.post("/api/supplier-ledger/fix-rub-amounts", requireAdmin, async (request, r
   }
 });
 
+// Конвертация старых RUB-платежей USD-поставщиков обратно в USD.
+// Платежи хранились как Math.round(usd × rate) — делим на текущий курс и округляем до 2 знаков.
+// Поддерживает пересчёт ранее мигрированных записей (raw._migratedFromRub) при смене курса.
+// Параметр rate в body/query переопределяет getUsdRate().
+app.post("/api/supplier-ledger/migrate-usd-payments", requireAdmin, async (request, response, next) => {
+  try {
+    if (!shouldUsePostgresStorage()) {
+      return response.status(503).json({ error: "Supplier ledger requires PostgreSQL.", code: "supplier_ledger_postgres_required" });
+    }
+    const prisma = getPrisma();
+    const dryRun = String(request.query.dry || request.body?.dry || "").toLowerCase() === "true";
+    const rateOverride = Number(request.body?.rate || request.query.rate || 0) || 0;
+    let usdRate;
+    if (rateOverride > 0) {
+      usdRate = rateOverride;
+    } else {
+      const ratePayload = await getUsdRate().catch(() => null);
+      usdRate = Number(ratePayload?.rate || process.env.DEFAULT_USD_RATE || 95) || 95;
+    }
+    // Build set of USD supplier IDs and names
+    const usdSuppliers = await prisma.managedSupplier.findMany({ where: { defaultCurrency: "USD" } });
+    const usdPartnerIds = new Set(usdSuppliers.map((s) => cleanText(s.partnerId || "")).filter(Boolean));
+    const usdNames = new Set(usdSuppliers.map((s) => cleanText(s.name).toLowerCase()).filter(Boolean));
+
+    // Phase 1: новые RUB-записи USD-поставщиков → конвертировать в USD
+    const rubEntries = await prisma.supplierLedgerEntry.findMany({
+      where: { currency: "RUB", amount: { gt: 0 }, status: "active" },
+    });
+    let migrated = 0;
+    let remigrated = 0;
+    let skipped = 0;
+    const details = [];
+    for (const entry of rubEntries) {
+      const pid = cleanText(entry.partnerId || "");
+      const sname = cleanText(entry.supplierName || "").toLowerCase();
+      const isUsd = (pid && usdPartnerIds.has(pid)) || (sname && usdNames.has(sname));
+      if (!isUsd) { skipped++; continue; }
+      const amountRub = Number(entry.amount);
+      let amountUsd = Math.round((amountRub / usdRate) * 100) / 100;
+      if (Math.abs(amountUsd - Math.round(amountUsd)) < 0.5) amountUsd = Math.round(amountUsd);
+      if (!dryRun) {
+        await prisma.supplierLedgerEntry.update({
+          where: { id: entry.id },
+          data: {
+            amount: amountUsd,
+            currency: "USD",
+            raw: { ...(entry.raw && typeof entry.raw === "object" ? entry.raw : {}), _migratedFromRub: amountRub, _migratedAt: new Date().toISOString(), _migratedRate: usdRate },
+          },
+        });
+      }
+      details.push({ id: entry.id, supplierName: entry.supplierName, entryType: entry.entryType, amountRub, amountUsd, rate: usdRate, phase: "new" });
+      migrated++;
+    }
+
+    // Phase 2: уже мигрированные USD-записи с _migratedFromRub → пересчитать по новому курсу
+    const usdEntries = await prisma.supplierLedgerEntry.findMany({
+      where: { currency: "USD", amount: { gt: 0 }, status: "active" },
+    });
+    for (const entry of usdEntries) {
+      const raw = entry.raw && typeof entry.raw === "object" ? entry.raw : {};
+      const migratedFromRub = Number(raw._migratedFromRub || 0);
+      if (!(migratedFromRub > 0)) continue;
+      const pid = cleanText(entry.partnerId || "");
+      const sname = cleanText(entry.supplierName || "").toLowerCase();
+      const isUsd = (pid && usdPartnerIds.has(pid)) || (sname && usdNames.has(sname));
+      if (!isUsd) continue;
+      const oldUsd = Number(entry.amount);
+      let amountUsd = Math.round((migratedFromRub / usdRate) * 100) / 100;
+      if (Math.abs(amountUsd - Math.round(amountUsd)) < 0.5) amountUsd = Math.round(amountUsd);
+      if (Math.abs(amountUsd - oldUsd) < 0.01) continue; // уже верно
+      if (!dryRun) {
+        await prisma.supplierLedgerEntry.update({
+          where: { id: entry.id },
+          data: {
+            amount: amountUsd,
+            raw: { ...raw, _migratedAt: new Date().toISOString(), _migratedRate: usdRate, _prevUsd: oldUsd },
+          },
+        });
+      }
+      details.push({ id: entry.id, supplierName: entry.supplierName, entryType: entry.entryType, amountRub: migratedFromRub, amountUsd, oldUsd, rate: usdRate, phase: "remigrate" });
+      remigrated++;
+    }
+
+    suppliersListCache = null;
+    if (!dryRun) {
+      await appendAudit(request, "supplier_ledger.migrate_usd_payments", {
+        entityType: "supplier_ledger", entityId: "bulk",
+        newValue: { migrated, remigrated, skipped, rate: usdRate },
+      }).catch(() => {});
+      logger.info("supplier ledger migrate-usd-payments", { migrated, remigrated, skipped, rate: usdRate, by: request.session?.username });
+    }
+    response.json({ ok: true, dryRun, migrated, remigrated, skipped, rate: usdRate, details });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete("/api/supplier-ledger/reset-all", requireAdmin, async (request, response, next) => {
   try {
     if (!shouldUsePostgresStorage()) {

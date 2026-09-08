@@ -229,11 +229,12 @@ export function SuppliersPage() {
   });
 
   const paySupplier = useMutation({
-    mutationFn: ({ supplier, amount, note }: { supplier: Supplier; amount: number; note: string }) =>
+    mutationFn: ({ supplier, amount, currency, note }: { supplier: Supplier; amount: number; currency: string; note: string }) =>
       fetchJson("/api/supplier-ledger/payments", SupplierLedgerPaymentSchema, mutationBody({
         supplierName: supplier.name || "",
         partnerId: supplier.partnerId || "",
         amount,
+        currency,
         note,
       })),
     onSuccess: (_data, variables) => {
@@ -364,9 +365,15 @@ export function SuppliersPage() {
     const debtTotalUsdDrawer = Number((ledger as Record<string, unknown>).debtTotalUsd || 0);
     const debtTotalRubDrawer = Number((ledger as Record<string, unknown>).debtTotal || 0);
     const paidTotalRubDrawer = Number(ledger.paidTotal || 0);
-    // creditTotal includes payments + balance corrections + returns — use for balance formula so corrections are reflected
-    const creditTotalRubDrawer = Number((ledger as Record<string, unknown>).creditTotal || paidTotalRubDrawer);
-    const balanceUsd = supplierCurrency === "USD" ? -debtTotalUsdDrawer + creditTotalRubDrawer / usdRate : balance / usdRate;
+    // Split credits by currency: USD payments stored as USD, old RUB payments stored as RUB.
+    const creditTotalUsdDrawer = Number((ledger as Record<string, unknown>).creditTotalUsd || 0);
+    const creditTotalRubDrawer = Number((ledger as Record<string, unknown>).creditTotalRub || 0);
+    const paidTotalUsdDrawer = Number((ledger as Record<string, unknown>).paidTotalUsd || 0);
+    const paidTotalRubOnlyDrawer = Number((ledger as Record<string, unknown>).paidTotalRubOnly || paidTotalRubDrawer);
+    // Balance: debtUsd − (creditsUsd + creditsRub/rate). No rate-drift because each amount is in its native currency.
+    const balanceUsd = supplierCurrency === "USD"
+      ? -debtTotalUsdDrawer + creditTotalUsdDrawer + creditTotalRubDrawer / usdRate
+      : balance / usdRate;
     const paymentAmount = paymentDrafts[id] || "";
     const paymentNote = paymentNotes[id] || "";
     const active = supplierIsActive(supplier);
@@ -389,7 +396,7 @@ export function SuppliersPage() {
       if (cutoff && !r.pickedAt) return false;
       return true;
     });
-    return { id, supplier, raw, articles, draft, ledger, balance, balanceUsd, supplierCurrency, paymentAmount, paymentNote, active, stockOnly, profile, ledgerEntries, returnedKeys, debtByKey, pickedRows, debtTotalUsdDrawer, debtTotalRubDrawer, paymentEntries };
+    return { id, supplier, raw, articles, draft, ledger, balance, balanceUsd, supplierCurrency, paymentAmount, paymentNote, active, stockOnly, profile, ledgerEntries, returnedKeys, debtByKey, pickedRows, debtTotalUsdDrawer, debtTotalRubDrawer, paymentEntries, creditTotalUsdDrawer, creditTotalRubDrawer, paidTotalUsdDrawer, paidTotalRubOnlyDrawer };
   })() : null;
 
   return (
@@ -514,10 +521,12 @@ export function SuppliersPage() {
               const supplierCurrency = String(raw.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
               const paidTotal = Number(ledger.paidTotal || 0);
               const debtTotalUsdList = Number((ledger as Record<string, unknown>).debtTotalUsd || 0);
-              const creditTotalList = Number((ledger as Record<string, unknown>).creditTotal || paidTotal);
-              // Use original USD prices to avoid drift when the rate changes between purchase and display.
-              const balanceDisplay = supplierCurrency === "USD" ? -debtTotalUsdList + creditTotalList / usdRate : balance;
-              const paidDisplay = supplierCurrency === "USD" ? paidTotal / usdRate : paidTotal;
+              const creditTotalUsdList = Number((ledger as Record<string, unknown>).creditTotalUsd || 0);
+              const creditTotalRubList = Number((ledger as Record<string, unknown>).creditTotalRub || 0);
+              const paidTotalUsdList = Number((ledger as Record<string, unknown>).paidTotalUsd || 0);
+              const paidTotalRubList = Number((ledger as Record<string, unknown>).paidTotalRubOnly || paidTotal);
+              const balanceDisplay = supplierCurrency === "USD" ? -debtTotalUsdList + creditTotalUsdList + creditTotalRubList / usdRate : balance;
+              const paidDisplay = supplierCurrency === "USD" ? paidTotalUsdList + paidTotalRubList / usdRate : paidTotalRubList;
               const active = supplierIsActive(supplier);
               const isOpen = drawerSupplier && supplierId(drawerSupplier) === id;
               return (
@@ -619,7 +628,7 @@ export function SuppliersPage() {
                 <DiagnosticValue label={drawerData.balance < 0 ? "Долг поставщику" : "Аванс / баланс"} value={moneySigned(drawerData.balance, "RUB")} tone={drawerData.balance < 0 ? "danger" : drawerData.balance > 0 ? "success" : ""} />
               )}
               <DiagnosticValue label="Собрано в долг" value={drawerData.supplierCurrency === "USD" ? moneyAmount(drawerData.debtTotalUsdDrawer, "USD") : moneyAmount(drawerData.debtTotalRubDrawer, "RUB")} />
-              <DiagnosticValue label="Оплачено" value={drawerData.supplierCurrency === "USD" ? moneySigned(Number(drawerData.ledger.paidTotal || 0) / usdRate, "USD") : moneySigned(Number(drawerData.ledger.paidTotal || 0), "RUB")} tone={Number(drawerData.ledger.paidTotal || 0) ? "success" : ""} />
+              <DiagnosticValue label="Оплачено" value={drawerData.supplierCurrency === "USD" ? moneySigned(drawerData.paidTotalUsdDrawer + drawerData.paidTotalRubOnlyDrawer / usdRate, "USD") : moneySigned(drawerData.paidTotalRubOnlyDrawer, "RUB")} tone={(drawerData.paidTotalUsdDrawer + drawerData.paidTotalRubOnlyDrawer) > 0 ? "success" : ""} />
               <DiagnosticValue label="Последняя оплата" value={drawerData.ledger.lastPaymentAt ? compactDate(String(drawerData.ledger.lastPaymentAt)) : "—"} />
             </div>
 
@@ -663,7 +672,8 @@ export function SuppliersPage() {
                   disabled={paySupplier.isPending || !(Number(drawerData.paymentAmount) > 0)}
                   onClick={() => paySupplier.mutate({
                     supplier: drawerData.supplier,
-                    amount: drawerData.supplierCurrency === "USD" ? Math.round(Number(drawerData.paymentAmount || 0) * usdRate) : Number(drawerData.paymentAmount || 0),
+                    amount: Number(drawerData.paymentAmount || 0),
+                    currency: drawerData.supplierCurrency,
                     note: drawerData.paymentNote,
                   })}
                 >
@@ -737,7 +747,9 @@ export function SuppliersPage() {
                     <span>Тип</span><span>Сумма</span><span>Дата</span><span>Заметка</span>
                   </div>
                   {drawerData.paymentEntries.map((entry) => {
-                    const amountUsd = drawerData.supplierCurrency === "USD" ? entry.amount / usdRate : null;
+                    const amountUsd = drawerData.supplierCurrency === "USD"
+                      ? (String(entry.currency || "RUB").toUpperCase() === "USD" ? entry.amount : entry.amount / usdRate)
+                      : null;
                     const typeLabel = entry.entryType === "payment" ? "Оплата"
                       : entry.entryType === "balance_correction" ? "Корректировка"
                       : entry.entryType === "supplier_return" ? "Возврат"
