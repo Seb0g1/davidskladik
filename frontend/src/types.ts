@@ -892,10 +892,20 @@ export const PickerReportPickerSchema = z.object({
   items: z.array(PickerReportItemSchema).default([]),
 });
 
+export const PickerReportSummarySchema = z.object({
+  totalPickedRub: z.number().default(0),
+  totalPickedUsd: z.number().default(0),
+  totalPickedCount: z.number().default(0),
+  totalReturnedRub: z.number().default(0),
+  totalReturnedCount: z.number().default(0),
+  usdRate: z.number().default(95),
+});
+
 export const PickerReportSchema = z.object({
   ok: z.boolean().optional(),
   date: z.coerce.string().default(""),
   pickers: z.array(PickerReportPickerSchema).default([]),
+  summary: PickerReportSummarySchema.nullable().optional(),
 }).passthrough();
 
 export const SettingsResponseSchema = z.object({

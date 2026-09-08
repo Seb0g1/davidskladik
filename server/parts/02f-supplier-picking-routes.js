@@ -600,11 +600,23 @@ function buildPickerReportSheet(ws, dateStr, pickers, usdRate) {
   const rate = Number(usdRate) || 95;
   const dateLabel = new Date(`${dateStr}T12:00:00Z`).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
 
+  // Items collapse under supplier rows — summary above detail rows
+  ws.properties.outlineProperties = { summaryBelow: false };
+
   const titleRow = ws.addRow([`Отчёт сотрудников за ${dateLabel}  (курс ${rate} ₽/$)`]);
   titleRow.getCell(1).font = { bold: true, size: 14 };
   ws.addRow([]);
 
-  // Track Ирина totals across all sections (case-insensitive match)
+  // cols: Поставщик | Товар | Маркетплейс | Заказ | Цена ₽ | Цена $ | Кол-во | Время
+  const COL_SUPPLIER = 1;
+  const COL_PRODUCT  = 2;
+  const COL_MP       = 3;
+  const COL_ORDER    = 4;
+  const COL_RUB      = 5;
+  const COL_USD      = 6;
+  const COL_QTY      = 7;
+  const COL_TIME     = 8;
+
   let irinaTotalRub = 0;
   let irinaTotalUsd = 0;
   let irinaCount = 0;
@@ -614,50 +626,85 @@ function buildPickerReportSheet(ws, dateStr, pickers, usdRate) {
     const pickerHeaderRow = ws.addRow([`Сотрудник: ${picker.username}`]);
     pickerHeaderRow.getCell(1).font = { bold: true, size: 12 };
     pickerHeaderRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD6E4FF" } };
+    pickerHeaderRow.outlineLevel = 0;
 
-    const colHeaderRow = ws.addRow(["Время", "Товар", "Поставщик", "Маркетплейс", "Заказ / Отправление", "Цена ₽", "Цена $", "Кол-во"]);
+    const colHeaderRow = ws.addRow(["Поставщик", "Товар", "Маркетплейс", "Заказ / Отправление", "Итого ₽", "Итого $", "Кол-во", "Время"]);
     colHeaderRow.eachCell((cell) => {
       cell.font = { bold: true };
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEEF3FF" } };
       cell.border = { bottom: { style: "thin", color: { argb: "FFADC6FF" } } };
     });
 
-    let sumRub = 0;
-    let sumUsd = 0;
+    // Group items by supplier
+    const supplierMap = new Map();
     for (const item of picker.items) {
-      const time = item.pickedAt
-        ? new Date(item.pickedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
-        : "—";
+      const sName = item.supplierName || "— поставщик не указан —";
+      if (!supplierMap.has(sName)) supplierMap.set(sName, { name: sName, items: [], totalRub: 0, totalUsd: 0, count: 0 });
+      const se = supplierMap.get(sName);
       let priceRub = 0;
       let priceUsd = 0;
       if (item.price > 0) {
-        if (item.priceCurrency === "RUB") {
-          priceRub = item.price;
-          priceUsd = Math.round((item.price / rate) * 100) / 100;
-        } else {
-          priceUsd = item.price;
-          priceRub = Math.round(item.price * rate);
-        }
+        if (item.priceCurrency === "RUB") { priceRub = item.price; priceUsd = item.price / rate; }
+        else { priceUsd = item.price; priceRub = item.price * rate; }
       } else if (item.pricePaidRub) {
-        priceRub = item.pricePaidRub;
-        priceUsd = Math.round((item.pricePaidRub / rate) * 100) / 100;
+        priceRub = item.pricePaidRub; priceUsd = item.pricePaidRub / rate;
       }
-      sumRub += priceRub * item.quantity;
-      sumUsd += priceUsd * item.quantity;
-      const rubStr = priceRub ? `${Math.round(priceRub).toLocaleString("ru-RU")} ₽` : "—";
-      const usdStr = priceUsd ? `${priceUsd.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $` : "—";
-      const orderRef = item.postingNumber || item.orderId || "—";
-      ws.addRow([time, item.productName, item.supplierName, item.marketplace.toUpperCase(), orderRef, rubStr, usdStr, item.quantity]);
+      se.totalRub += priceRub * item.quantity;
+      se.totalUsd += priceUsd * item.quantity;
+      se.count += item.quantity;
+      se.items.push({ ...item, priceRub, priceUsd });
+    }
+
+    const suppliers = [...supplierMap.values()].sort((a, b) => b.totalRub - a.totalRub);
+    let sumRub = 0;
+    let sumUsd = 0;
+
+    for (const se of suppliers) {
+      sumRub += se.totalRub;
+      sumUsd += se.totalUsd;
+
+      // Supplier summary row (visible, outlineLevel=0 — has +/- expand button)
+      const supRow = ws.addRow([
+        se.name, "", "", "",
+        `${Math.round(se.totalRub).toLocaleString("ru-RU")} ₽`,
+        `${(Math.round(se.totalUsd * 100) / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $`,
+        se.count, "",
+      ]);
+      supRow.outlineLevel = 0;
+      supRow.getCell(COL_SUPPLIER).font = { bold: true };
+      supRow.getCell(COL_RUB).font = { bold: true };
+      supRow.getCell(COL_USD).font = { bold: true };
+      supRow.eachCell({ includeEmpty: true }, (cell) => {
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF0F4FF" } };
+      });
+
+      // Item detail rows (outlineLevel=1, hidden=true → collapsed by default)
+      for (const item of se.items) {
+        const time = item.pickedAt
+          ? new Date(item.pickedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+          : "—";
+        const rubStr = item.priceRub ? `${Math.round(item.priceRub).toLocaleString("ru-RU")} ₽` : "—";
+        const usdStr = item.priceUsd ? `${(Math.round(item.priceUsd * 100) / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $` : "—";
+        const orderRef = item.postingNumber || item.orderId || "—";
+        const itemRow = ws.addRow(["", item.productName, item.marketplace.toUpperCase(), orderRef, rubStr, usdStr, item.quantity, time]);
+        itemRow.outlineLevel = 1;
+        itemRow.hidden = true;
+        itemRow.eachCell({ includeEmpty: true }, (cell) => {
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFAFBFF" } };
+          cell.font = { size: 11 };
+        });
+      }
     }
 
     const totalRow = ws.addRow([
-      "", "ИТОГО:", "", "", "",
+      "ИТОГО", "", "", "",
       `${Math.round(sumRub).toLocaleString("ru-RU")} ₽`,
       `${(Math.round(sumUsd * 100) / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $`,
-      picker.count,
+      picker.count, "",
     ]);
+    totalRow.outlineLevel = 0;
     totalRow.eachCell((cell, col) => {
-      if (col >= 2) cell.font = { bold: true };
+      if (col >= 1) cell.font = { bold: true };
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFAF0FF" } };
     });
     ws.addRow([]);
@@ -670,31 +717,30 @@ function buildPickerReportSheet(ws, dateStr, pickers, usdRate) {
     }
   }
 
-  // Separate Ирина summary block
   if (irinaFound) {
     const irinaHeaderRow = ws.addRow([`★ Итого ИРИНА за ${dateLabel}:`]);
     irinaHeaderRow.getCell(1).font = { bold: true, size: 12, color: { argb: "FF1A3A8F" } };
     irinaHeaderRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCFE2FF" } };
     const irinaTotalRow = ws.addRow([
-      "", "ИТОГО:", "", "", "",
+      "ИТОГО", "", "", "",
       `${Math.round(irinaTotalRub).toLocaleString("ru-RU")} ₽`,
       `${(Math.round(irinaTotalUsd * 100) / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $`,
-      irinaCount,
+      irinaCount, "",
     ]);
     irinaTotalRow.eachCell((cell, col) => {
-      if (col >= 2) cell.font = { bold: true };
+      if (col >= 1) cell.font = { bold: true };
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCFE2FF" } };
     });
   }
 
-  ws.getColumn(1).width = 7;
-  ws.getColumn(2).width = 44;
-  ws.getColumn(3).width = 20;
-  ws.getColumn(4).width = 13;
-  ws.getColumn(5).width = 22;
-  ws.getColumn(6).width = 14;
-  ws.getColumn(7).width = 10;
-  ws.getColumn(8).width = 8;
+  ws.getColumn(COL_SUPPLIER).width = 28;
+  ws.getColumn(COL_PRODUCT).width = 40;
+  ws.getColumn(COL_MP).width = 14;
+  ws.getColumn(COL_ORDER).width = 22;
+  ws.getColumn(COL_RUB).width = 14;
+  ws.getColumn(COL_USD).width = 12;
+  ws.getColumn(COL_QTY).width = 8;
+  ws.getColumn(COL_TIME).width = 7;
 }
 
 async function buildPickerExcel(dateRows) {
@@ -773,25 +819,31 @@ app.get("/api/picker-report", requireAdmin, async (request, response, next) => {
     const start = new Date(`${dateStr}T00:00:00.000Z`);
     const end = new Date(`${dateStr}T23:59:59.999Z`);
     const prisma = getPrisma();
-    if (!prisma) return response.json({ ok: true, date: dateStr, pickers: [] });
+    if (!prisma) return response.json({ ok: true, date: dateStr, pickers: [], summary: null });
+
+    const ratePayload = await getUsdRate().catch(() => null);
+    const usdRate = Number(ratePayload?.rate || process.env.DEFAULT_USD_RATE || 95) || 95;
+
     const rows = await prisma.supplierPickingRow.findMany({
       where: { status: "picked", pickedAt: { gte: start, lte: end } },
       orderBy: { pickedAt: "asc" },
     });
     const byPicker = {};
+    let totalPickedRub = 0;
     for (const row of rows) {
       const picker = row.pickedBy || "неизвестно";
       if (!byPicker[picker]) byPicker[picker] = { username: picker, items: [], totalUsd: 0, count: 0 };
       const price = Number(row.price || 0);
       const qty = Math.max(1, Number(row.quantity || 1));
       const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
+      const pricePaidRub = raw.pricePaidRub != null ? Number(raw.pricePaidRub) || null : null;
       byPicker[picker].items.push({
         key: row.pickingKey,
         productName: row.productName || "",
         supplierName: row.supplierName || "",
         price,
         priceCurrency: row.priceCurrency || "USD",
-        pricePaidRub: raw.pricePaidRub != null ? Number(raw.pricePaidRub) || null : null,
+        pricePaidRub,
         quantity: qty,
         pickedAt: row.pickedAt?.toISOString() || null,
         marketplace: row.marketplace || "",
@@ -800,11 +852,50 @@ app.get("/api/picker-report", requireAdmin, async (request, response, next) => {
       });
       byPicker[picker].totalUsd += price * qty;
       byPicker[picker].count += qty;
+      if (pricePaidRub) {
+        totalPickedRub += pricePaidRub * qty;
+      } else if (price > 0) {
+        totalPickedRub += ((row.priceCurrency || "USD") === "RUB" ? price : price * usdRate) * qty;
+      }
     }
     const pickers = Object.values(byPicker)
       .map((p) => ({ ...p, totalUsd: Math.round(p.totalUsd * 100) / 100 }))
       .sort((a, b) => b.count - a.count);
-    response.json({ ok: true, date: dateStr, pickers });
+
+    const totalPickedUsd = pickers.reduce((s, p) => s + p.totalUsd, 0);
+    const totalPickedCount = pickers.reduce((s, p) => s + p.count, 0);
+
+    // Supplier returns for the day (supplierReturnedAt stored in raw JSON field)
+    let totalReturnedRub = 0;
+    let totalReturnedCount = 0;
+    try {
+      const returnRows = await prisma.$queryRawUnsafe(`
+        SELECT COALESCE(CAST(raw->>'supplierReturnAmountRub' AS NUMERIC), 0) AS amount_rub
+        FROM supplier_picking_rows
+        WHERE status = 'return_used'
+          AND raw->>'supplierReturnedAt' IS NOT NULL
+          AND raw->>'supplierReturnedAt' >= $1
+          AND raw->>'supplierReturnedAt' <= $2
+      `, start.toISOString(), end.toISOString());
+      for (const r of returnRows) {
+        totalReturnedRub += Number(r.amount_rub) || 0;
+        totalReturnedCount++;
+      }
+    } catch {
+      // summary is optional — don't fail the whole report
+    }
+
+    response.json({
+      ok: true, date: dateStr, pickers,
+      summary: {
+        totalPickedRub: Math.round(totalPickedRub),
+        totalPickedUsd: Math.round(totalPickedUsd * 100) / 100,
+        totalPickedCount,
+        totalReturnedRub: Math.round(totalReturnedRub),
+        totalReturnedCount,
+        usdRate,
+      },
+    });
   } catch (error) {
     next(error);
   }
