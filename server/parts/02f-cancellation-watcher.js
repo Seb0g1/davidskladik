@@ -16,11 +16,15 @@ async function getPickingRowPartnerEmail(partnerId) {
   }
 }
 
+function escHtml(str) {
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
 function cancellationEmailHtml(row) {
-  const productName = row.productName || row.offerId || "Неизвестный товар";
-  const quantity = row.quantity || 1;
-  const marketplaceLabel = { ozon: "Ozon", yandex: "Яндекс Маркет", wb: "Wildberries" }[row.marketplace] || row.marketplace || "маркетплейс";
-  const orderId = row.postingNumber || row.orderId || "";
+  const productName = escHtml(row.productName || row.offerId || "Неизвестный товар");
+  const quantity = escHtml(row.quantity || 1);
+  const marketplaceLabel = escHtml({ ozon: "Ozon", yandex: "Яндекс Маркет", wb: "Wildberries" }[row.marketplace] || row.marketplace || "маркетплейс");
+  const orderId = escHtml(row.postingNumber || row.orderId || "");
   return `
 <html><body style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">
 <p>Здравствуйте!</p>
@@ -42,16 +46,9 @@ async function markPickingRowCancelledBySystem(key, { cancelledBy = "system", no
   const row = state.rows[key];
   if (!row || row.status !== "open") return null;
   const now = new Date().toISOString();
-  const nextRow = normalizeSupplierPickingRow({
-    ...row,
-    status: "cancelled",
-    cancelledBy,
-    cancelledAt: now,
-    cancelledNotifiedEmail: notifiedEmail,
-  });
-  state.rows[key] = nextRow;
-  await writeSupplierPickingState(state);
 
+  // Cart cleanup before picking write: if this fails we haven't committed the
+  // cancellation yet, so the next watcher tick can retry both cleanly.
   try {
     const cartState = await readSupplierCartState();
     const sourceCartKey = row.replacementFor || row.key.replace(/\|retry:.+$/, "");
@@ -62,6 +59,16 @@ async function markPickingRowCancelledBySystem(key, { cancelledBy = "system", no
   } catch (e) {
     logger.warn("cancellation watcher: cart state cleanup failed", { key, detail: e?.message || String(e) });
   }
+
+  const nextRow = normalizeSupplierPickingRow({
+    ...row,
+    status: "cancelled",
+    cancelledBy,
+    cancelledAt: now,
+    cancelledNotifiedEmail: notifiedEmail,
+  });
+  state.rows[key] = nextRow;
+  await writeSupplierPickingState(state);
 
   try {
     const rowDate = (row.createdAt || now).slice(0, 10);
