@@ -247,6 +247,38 @@ function normalizedBrandIndexKey(value = "") {
   return normalizeSearchText(value).replace(/\s+/g, " ").trim();
 }
 
+const BRAND_GARBAGE_EXACT = new Set([
+  "без бренда", "нет бренда", "no brand", "no name", "noname", "нет", "none",
+  "не указан", "не указано", "не указана", "б н", "б/н", "б/у",
+  "бренд", "brand", "unknown", "неизвестно", "другое", "прочее",
+]);
+const BRAND_GARBAGE_PREFIXES = ["без ", "для ", "нет ", "не ", "из ", "на "];
+const BRAND_GARBAGE_PRODUCT_WORDS = new Set([
+  "лосьон", "бальзам", "шампунь", "кондиционер", "сыворотка", "крем", "гель",
+  "масло", "тоник", "спрей", "скраб", "пилинг", "маска", "мыло", "пена",
+  "дезодорант", "тушь", "помада", "тени", "пудра", "средство", "сливки",
+  "набор", "подарочный", "комплект", "набора", "мусс", "флюид",
+  "отшелушивающий", "увлажняющий", "питательный", "очищающий",
+]);
+
+function isBrandGarbageValue(value) {
+  if (!value) return true;
+  const text = cleanText(value);
+  if (!text || text.length < 2) return true;
+  const lower = text.toLowerCase();
+  if (BRAND_GARBAGE_EXACT.has(lower)) return true;
+  for (const prefix of BRAND_GARBAGE_PREFIXES) {
+    if (lower.startsWith(prefix)) return true;
+  }
+  const normalized = normalizeSearchText(text);
+  const words = normalized.split(" ").filter(Boolean);
+  // Reject single product-type words or phrases containing them as the primary word
+  if (words.some((w) => BRAND_GARBAGE_PRODUCT_WORDS.has(w))) return true;
+  // Reject single Cyrillic letter or garbage like "НФ-", "Ъ-", "ЮК"
+  if (words.length === 1 && /^[а-яёА-ЯЁ]{1,2}$/.test(words[0])) return true;
+  return false;
+}
+
 function warehouseBrandIndexRowsForProduct(product = {}) {
   const normalized = normalizeWarehouseProduct(product);
   const candidates = [];
@@ -254,6 +286,7 @@ function warehouseBrandIndexRowsForProduct(product = {}) {
     const displayBrand = cleanText(value);
     const normalizedBrand = normalizedBrandIndexKey(displayBrand);
     if (!displayBrand || !normalizedBrand || normalizedBrand.length < 2) return;
+    if (isBrandGarbageValue(displayBrand)) return;
     candidates.push({
       normalizedBrand,
       displayBrand,

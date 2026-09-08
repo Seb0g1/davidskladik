@@ -13,7 +13,7 @@ async function getWarehouseBrandListFromPostgres(prisma) {
         orderBy: { displayBrand: "asc" },
       });
       if (rows.length) {
-        const brands = rows.map((row) => cleanText(row.displayBrand)).filter(Boolean).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
+        const brands = rows.map((row) => cleanText(row.displayBrand)).filter((b) => b && !isBrandGarbageValue(b)).sort((a, b) => a.localeCompare(b, "ru", { sensitivity: "base" }));
         warehouseBrandListCache = { at: Date.now(), value: brands };
         return brands.slice();
       }
@@ -39,7 +39,7 @@ async function getWarehouseBrandListFromPostgres(prisma) {
   const unique = new Map();
   for (const row of rows) {
     const brand = cleanText(row.brand);
-    if (!brand) continue;
+    if (!brand || isBrandGarbageValue(brand)) continue;
     const key = brand.toLowerCase();
     if (!unique.has(key)) unique.set(key, brand);
   }
@@ -92,7 +92,7 @@ async function ensureWarehousePostgresBrandsBackfilled(prisma, { force = false }
     const updates = [];
     for (const row of rows) {
       const brand = cleanText(resolveWarehouseBrandFromPostgresRow(row));
-      if (!brand) continue;
+      if (!brand || isBrandGarbageValue(brand)) continue;
       if (cleanText(row.brand).toLowerCase() === brand.toLowerCase()) continue;
       updates.push({ id: row.id, brand });
     }

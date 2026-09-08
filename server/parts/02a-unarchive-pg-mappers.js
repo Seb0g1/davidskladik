@@ -30,7 +30,7 @@ function productToPostgresData(product = {}) {
     offerId: stripNullBytes(normalized.offerId || normalized.sku || normalized.id),
     productId: stripNullBytes(normalized.productId || null),
     name: stripNullBytes(normalized.name || normalized.offerId || normalized.id),
-    brand: stripNullBytes(resolveWarehouseBrand(normalized) || null),
+    brand: stripNullBytes((() => { const b = resolveWarehouseBrand(normalized); return b && !isBrandGarbageValue(b) ? b : null; })()),
     // Без cloneAuditValue (JSON.parse(JSON.stringify())): Prisma сериализует
     // Json-поля сам при вызове, а тройной JSON-клон каждого товара (raw —
     // десятки КБ) на дельтах в тысячи строк блокировал event loop на ~10 с
