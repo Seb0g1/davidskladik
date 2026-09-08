@@ -107,12 +107,48 @@ async function buildBrandsTnvedReport(accounts) {
     }
   }
 
-  const brands = [...brandCounts.values()].sort((a, b) => b.count - a.count);
+  // Normalise sub-brands: "Dr.Vranjes Aria" → "Dr.Vranjes" when the shorter name exists.
+  // Sorted ascending by length so we always process parents before children.
+  const allBrandNames = [...brandCounts.keys()].sort((a, b) => a.length - b.length);
+  const brandParent = new Map(); // child → parent
+  for (const name of allBrandNames) {
+    const lower = name.toLowerCase();
+    let parent = name;
+    for (const candidate of allBrandNames) {
+      if (candidate.length >= name.length) break; // shorter-first: once same length, done
+      if (lower.startsWith(candidate.toLowerCase() + " ") && candidate.length < parent.length) {
+        parent = candidate;
+      }
+    }
+    brandParent.set(name, parent);
+  }
+  // Merge counts into parent
+  const mergedBrandCounts = new Map();
+  const mergedBrandTnvedMap = new Map();
+  for (const [name, parent] of brandParent) {
+    const entry = brandCounts.get(name);
+    if (!mergedBrandCounts.has(parent)) mergedBrandCounts.set(parent, { brand: parent, count: 0, sample: [] });
+    const m = mergedBrandCounts.get(parent);
+    m.count += entry.count;
+    if (m.sample.length < 3) m.sample.push(...entry.sample.slice(0, 3 - m.sample.length));
+
+    const codesMap = brandTnvedMap.get(name);
+    if (codesMap) {
+      if (!mergedBrandTnvedMap.has(parent)) mergedBrandTnvedMap.set(parent, new Map());
+      const pMap = mergedBrandTnvedMap.get(parent);
+      for (const [code, tc] of codesMap) {
+        if (!pMap.has(code)) pMap.set(code, { code, fullValue: tc.fullValue, count: 0 });
+        pMap.get(code).count += tc.count;
+      }
+    }
+  }
+
+  const brands = [...mergedBrandCounts.values()].sort((a, b) => b.count - a.count);
   const tnveds = [...tnvedCounts.values()].sort((a, b) => b.count - a.count);
-  const brandTnveds = [...brandTnvedMap.entries()]
+  const brandTnveds = [...mergedBrandTnvedMap.entries()]
     .map(([brand, codesMap]) => ({
       brand,
-      totalCount: brandCounts.get(brand)?.count || 0,
+      totalCount: mergedBrandCounts.get(brand)?.count || 0,
       tnvedCodes: [...codesMap.values()].sort((a, b) => b.count - a.count),
     }))
     .sort((a, b) => a.brand.localeCompare(b.brand, "ru"));
