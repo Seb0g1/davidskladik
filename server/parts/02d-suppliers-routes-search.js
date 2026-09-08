@@ -38,7 +38,7 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
 
     try {
       const params = [];
-      const conditions = ["r.Ignored = 0"];
+      const conditions = ["r.Ignored = 0", "r.Active != 0"];
       if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`);
       if (q) {
         if (tokenGroups && tokenGroups.length) {
@@ -174,6 +174,7 @@ app.get("/api/pricemaster/search", async (request, response, next) => {
            JOIN OfferDocs d ON d.DocID = r.DocID
            LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
            WHERE r.Ignored = 0
+             AND r.Active != 0
              AND (r.NativeID LIKE ? OR r.NativeName LIKE ?)
              ${supplier ? "AND p.PartnerName LIKE ?" : ""}
            ORDER BY d.DocDate DESC, r.RowID DESC

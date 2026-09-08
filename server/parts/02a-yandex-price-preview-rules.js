@@ -21,7 +21,7 @@ async function getPriceMasterOffersByArticle(offerIds, usdRate) {
       FROM OfferRows r
       JOIN OfferDocs d ON d.DocID = r.DocID
       LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
-      WHERE r.NativeID IN (${placeholders}) AND r.Ignored = 0
+      WHERE r.NativeID IN (${placeholders}) AND r.Ignored = 0 AND r.Active != 0
       ORDER BY r.NativeID, d.DocDate DESC, r.RowID DESC
       `,
       chunk,

@@ -46,7 +46,7 @@ async function listPriceMasterPartners() {
         FROM OfferDocs d
         JOIN OfferRows r ON r.DocID = d.DocID
         LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
-        WHERE d.PartnerID IS NOT NULL AND r.Ignored = 0
+        WHERE d.PartnerID IS NOT NULL AND r.Ignored = 0 AND r.Active != 0
         ORDER BY name
       `,
       allowEmpty: true,

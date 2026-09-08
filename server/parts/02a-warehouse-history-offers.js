@@ -133,6 +133,7 @@ async function getCurrentOffers(connection) {
     JOIN OfferRows r ON r.DocID = d.DocID
     LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
     WHERE r.Ignored = 0
+      AND r.Active != 0
     ORDER BY d.DocDate DESC, p.PartnerName, r.NativeName, r.RowID DESC
   `);
 

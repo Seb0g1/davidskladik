@@ -140,7 +140,7 @@ async function getBatchPriceMasterMatchesForLinks(links, managedSuppliers = [], 
     FROM OfferRows r
     JOIN OfferDocs d ON d.DocID = r.DocID
     LEFT JOIN Partners p ON p.PartnerID = d.PartnerID
-    WHERE BINARY TRIM(r.NativeID) IN (${placeholders}) AND r.Ignored = 0${activeDocFilter}
+    WHERE BINARY TRIM(r.NativeID) IN (${placeholders}) AND r.Ignored = 0 AND r.Active != 0${activeDocFilter}
     ORDER BY d.DocDate DESC, r.RowID DESC
     LIMIT 5000
     `,

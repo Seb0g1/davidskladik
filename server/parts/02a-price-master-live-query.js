@@ -53,6 +53,7 @@ async function getLivePMRowsForArticle(article) {
       `${livePMBuildSelect()}
        WHERE BINARY TRIM(r.NativeID) = BINARY ?
          AND r.Ignored = 0
+         AND r.Active != 0
        ORDER BY d.DocDate DESC, r.RowID DESC
        LIMIT 50`,
       [key],

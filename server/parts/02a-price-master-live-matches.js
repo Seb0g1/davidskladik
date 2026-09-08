@@ -77,7 +77,7 @@ async function findPriceMasterRowsForLink(linkInput, usdRate, managedSuppliers =
   const link = normalizeWarehouseLink(linkInput);
   if (!link.article && !link.exactName && !link.sourceRowId) return [];
   const supplierMaps = managedSupplierMaps(managedSuppliers);
-  const conditions = ["r.Ignored = 0"];
+  const conditions = ["r.Ignored = 0", "r.Active != 0"];
   if (offerDocsActiveColumn) conditions.push(`d.${offerDocsActiveColumn}${offerDocsActiveFilterSuffix}`);
   const params = [];
   if (link.matchType === "selected_row" && link.article) {

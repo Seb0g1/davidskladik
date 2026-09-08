@@ -171,7 +171,7 @@ async function runRestoreYandexMarkupsOperation(payload = {}) {
         const [pmRows] = await pool.query({
           sql: `SELECT BINARY TRIM(r.NativeID) AS article, MIN(r.NativePrice) AS price
                 FROM OfferRows r
-                WHERE BINARY TRIM(r.NativeID) IN (${placeholders}) AND r.Ignored = 0
+                WHERE BINARY TRIM(r.NativeID) IN (${placeholders}) AND r.Ignored = 0 AND r.Active != 0
                 GROUP BY BINARY TRIM(r.NativeID)`,
           values: batch,
           timeout: queryTimeout,
