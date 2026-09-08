@@ -78,7 +78,7 @@ async function buildBrandsTnvedReport(accounts) {
 
         const brandAttr = attrs.find((a) => Number(a.attribute_id || a.id) === BRAND_ATTR_ID);
         const brand = cleanText(brandAttr?.values?.[0]?.value || "");
-        if (brand) {
+        if (brand && !isBrandGarbageValue(brand)) {
           withBrand++;
           if (!brandCounts.has(brand)) brandCounts.set(brand, { brand, count: 0, sample: [] });
           const entry = brandCounts.get(brand);
@@ -96,7 +96,7 @@ async function buildBrandsTnvedReport(accounts) {
           entry.count++;
           if (entry.sample.length < 3) entry.sample.push(offerId);
 
-          if (brand) {
+          if (brand && !isBrandGarbageValue(brand)) {
             if (!brandTnvedMap.has(brand)) brandTnvedMap.set(brand, new Map());
             const codesMap = brandTnvedMap.get(brand);
             if (!codesMap.has(code)) codesMap.set(code, { code, fullValue: tnvedFull, count: 0 });
@@ -301,7 +301,7 @@ async function buildBrandsYandexReport() {
     prisma.warehouseProduct.count({ where: { marketplace: "yandex" } }),
   ]);
 
-  const withVendor = brandRows.filter((r) => r.vendor).reduce((s, r) => s + Number(r.count), 0);
+  const withVendor = brandRows.filter((r) => r.vendor && !isBrandGarbageValue(r.vendor)).reduce((s, r) => s + Number(r.count), 0);
 
   const settings = await readAppSettings().catch(() => null);
   const tnvedCodeConfigured = cleanText(settings?.tnved?.code || "");
@@ -348,7 +348,7 @@ async function buildBrandsYandexReport() {
   // Build brand → categories map for Excel export
   const brandCatMap = new Map();
   for (const row of brandCatRows) {
-    if (!row.vendor || !row.cat_id) continue;
+    if (!row.vendor || !row.cat_id || isBrandGarbageValue(row.vendor)) continue;
     if (!brandCatMap.has(row.vendor)) brandCatMap.set(row.vendor, []);
     brandCatMap.get(row.vendor).push({ catId: String(row.cat_id), catName: catNameMap.get(row.cat_id) || "", count: Number(row.count) });
   }
@@ -370,7 +370,7 @@ async function buildBrandsYandexReport() {
       withTnved,
       missingTnved: totalNum - withTnved,
     },
-    brands: brandRows.filter((r) => r.vendor).map((r) => ({ brand: String(r.vendor), count: Number(r.count) })),
+    brands: brandRows.filter((r) => r.vendor && !isBrandGarbageValue(r.vendor)).map((r) => ({ brand: String(r.vendor), count: Number(r.count) })),
     categories: catRows.filter((r) => r.cat_id).map((r) => ({
       catId: String(r.cat_id),
       count: Number(r.count),
@@ -499,6 +499,7 @@ app.get("/api/catalog/brands-tnved/combined/export-excel", requireAdmin, async (
     const rows = [];
 
     for (const entry of ozonCached.brandTnveds) {
+      if (isBrandGarbageValue(entry.brand)) continue;
       const key = entry.brand.toLowerCase().trim();
       const yandexCount = yandexMap.get(key) || 0;
       if (yandexCount > 0) matchedYandexKeys.add(key);
@@ -513,6 +514,7 @@ app.get("/api/catalog/brands-tnved/combined/export-excel", requireAdmin, async (
 
     // Yandex-only brands (not in Ozon)
     for (const b of yandexCached.brands) {
+      if (isBrandGarbageValue(b.brand)) continue;
       if (!matchedYandexKeys.has(b.brand.toLowerCase().trim())) {
         rows.push({ brand: b.brand, code: "", description: "— только Яндекс —", ozonCount: 0, yandexCount: Number(b.count) });
       }
