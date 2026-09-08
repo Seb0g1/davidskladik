@@ -280,6 +280,37 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
           mergedByOfferId.set(key, { ...row, totalQuantity: qty, sourceRows: [{ ...row, quantity: qty }] });
         }
       }
+      // Pre-fetch 1: all open RequestRows for this partner with their PM article (NativeID).
+      // Catches the crash-loop double-commit case where state.processed was lost but the PM
+      // insert succeeded — the second commit resolves to a different OfferRowID for the same
+      // article and the per-row OfferRowID check misses it.
+      const [openPartnerRows] = await connection.query(
+        `SELECT rr.RowID, rr.OfferRowID AS existingOfferRowId, rd.DocID, rd.Sended, ore.NativeID
+         FROM RequestRows rr
+         JOIN RequestDocs rd ON rd.DocID = rr.DocID
+         JOIN OfferRows ore ON ore.RowID = rr.OfferRowID
+         WHERE rd.PartnerID = ? AND rd.Recieved = 0 AND ore.NativeID != ''`,
+        [Number(partnerId)],
+      );
+      const existingByNativeId = new Map();
+      for (const pr of openPartnerRows || []) {
+        const nid = cleanText(pr.NativeID || "").toLowerCase();
+        if (nid && !existingByNativeId.has(nid)) existingByNativeId.set(nid, pr);
+      }
+      // Pre-fetch 2: NativeIDs for all OfferRowIDs in this commit batch (one query, not N).
+      const batchOfferRowIds = [...mergedByOfferId.values()].map((e) => Number(e.offerRowId)).filter((id) => id > 0);
+      const nativeIdByOfferRowId = new Map();
+      if (batchOfferRowIds.length && existingByNativeId.size) {
+        const [nativeRows] = await connection.query(
+          "SELECT RowID, NativeID FROM OfferRows WHERE RowID IN (?) AND NativeID != ''",
+          [batchOfferRowIds],
+        );
+        for (const nr of nativeRows || []) {
+          const nid = cleanText(nr.NativeID || "").toLowerCase();
+          if (nid) nativeIdByOfferRowId.set(Number(nr.RowID), nid);
+        }
+      }
+
       for (const entry of mergedByOfferId.values()) {
         // Dedup: check if this OfferRowID already has an undelivered (Recieved=0) RequestRows entry.
         const [[existingRow]] = await connection.query(
@@ -305,6 +336,28 @@ async function insertSupplierCartRowsIntoPriceMaster(rows = [], request = null, 
           // Sended=1: in-transit, but a NEW marketplace order has come in for the same product.
           // Insert a fresh PM row — the supplier will fulfil both requests separately.
           logger.info("supplier_cart_insert_new_despite_transit", { offerRowId: entry.offerRowId, partnerId, existingRowId: existingRow.RowID, existingDocId: existingRow.DocID });
+        }
+        // Secondary dedup by NativeID (article): catches the case where the same product
+        // resolved to a different OfferRowID in a previous commit (e.g., after a crash).
+        if (!existingRow?.RowID) {
+          const entryNativeId = nativeIdByOfferRowId.get(Number(entry.offerRowId));
+          if (entryNativeId && existingByNativeId.has(entryNativeId)) {
+            const dup = existingByNativeId.get(entryNativeId);
+            if (Number(dup.Sended) === 0) {
+              await connection.query(
+                "UPDATE RequestRows SET RequestQuant = RequestQuant + ? WHERE RowID = ?",
+                [entry.totalQuantity, Number(dup.RowID)],
+              );
+              logger.warn("supplier_cart_insert_dedup_by_native_id", { offerRowId: entry.offerRowId, existingOfferRowId: dup.existingOfferRowId, partnerId, nativeId: entryNativeId, existingRowId: dup.RowID, existingDocId: dup.DocID, addedQty: entry.totalQuantity });
+              const committedAt = new Date().toISOString();
+              for (const sourceRow of entry.sourceRows) {
+                inserted.push({ ...sourceRow, requestDocId: String(dup.DocID), requestRowId: String(dup.RowID), committedAt });
+              }
+              continue;
+            }
+            // Sended=1: in transit by NativeID — log but still insert (genuinely new order).
+            logger.info("supplier_cart_insert_new_despite_transit_native_id", { offerRowId: entry.offerRowId, partnerId, nativeId: entryNativeId, existingRowId: dup.RowID });
+          }
         }
         const requestRowId = nextRowId++;
         const manualNote = cleanText(entry.manualNote || "");
