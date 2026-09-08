@@ -1,4 +1,4 @@
-app.patch("/api/warehouse/products/:id", async (request, response, next) => {
+app.patch("/api/warehouse/products/:id", requireAdmin, async (request, response, next) => {
   try {
     const warehouse = await readWarehouse();
     const product = warehouse.products.find((item) => item.id === request.params.id);
@@ -53,7 +53,7 @@ app.patch("/api/warehouse/products/:id", async (request, response, next) => {
   }
 });
 
-app.patch("/api/warehouse/products/markups/bulk", async (request, response, next) => {
+app.patch("/api/warehouse/products/markups/bulk", requireAdmin, async (request, response, next) => {
   try {
     const ids = new Set((Array.isArray(request.body.productIds) ? request.body.productIds : []).map(String));
     const optimisticLocks = new Map(
@@ -112,7 +112,7 @@ app.patch("/api/warehouse/products/markups/bulk", async (request, response, next
   }
 });
 
-app.patch("/api/warehouse/products/auto-price/bulk", async (request, response, next) => {
+app.patch("/api/warehouse/products/auto-price/bulk", requireAdmin, async (request, response, next) => {
   try {
     const ids = new Set((Array.isArray(request.body.productIds) ? request.body.productIds : []).map(String));
     if (!ids.size) return response.status(400).json({ error: "Выберите товары для изменения AUTO-режима." });

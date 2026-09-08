@@ -22,7 +22,7 @@ async function buildSupplierCartPreview(params = {}) {
     try {
       lines.push(...await fetchYandexSupplierCartLines({
         ...range,
-        limit,
+        limit: Math.max(1, limit - lines.length),
         statuses: settings.includeYandexStatuses,
         substatuses: settings.includeYandexSubstatuses,
       }));
@@ -34,7 +34,7 @@ async function buildSupplierCartPreview(params = {}) {
     try {
       lines.push(...await fetchWbSupplierCartLines({
         ...range,
-        limit,
+        limit: Math.max(1, limit - lines.length),
       }));
     } catch (error) {
       warnings.push({ marketplace: "wb", error: error?.message || String(error) });

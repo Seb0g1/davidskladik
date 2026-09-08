@@ -1,4 +1,4 @@
-app.post("/api/warehouse/products/links/bulk", async (request, response, next) => {
+app.post("/api/warehouse/products/links/bulk", requireAdmin, async (request, response, next) => {
   try {
     const ids = new Set((Array.isArray(request.body.productIds) ? request.body.productIds : [])
       .map((id) => String(id || "").trim())
@@ -41,7 +41,7 @@ app.post("/api/warehouse/products/links/bulk", async (request, response, next) =
     const seedProducts = (warehouse.products || []).filter((product) => ids.has(String(product.id)));
     const targetProducts = expandWarehouseProductsToGroups(warehouse.products || [], seedProducts);
     const expandedIds = new Set(targetProducts.map((product) => String(product.id)));
-    if (!targetProducts.length) return response.status(404).json({ error: "РўРѕРІР°СЂС‹ СЃРєР»Р°РґР° РЅРµ РЅР°Р№РґРµРЅС‹." });
+    if (!targetProducts.length) return response.status(404).json({ error: "Товары склада не найдены." });
     const productContext = targetProducts[0] || seedProducts[0] || {};
     const resolvedLinks = [];
     const resolveFailures = [];

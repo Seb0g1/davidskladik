@@ -473,8 +473,8 @@ async function runScanAndFixZeroStockOperation(payload = {}) {
       AND p.target_stock > 0
       AND COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) < p.target_stock
     ORDER BY p.updated_at ASC
-    LIMIT ${batchLimit * 3}
-  `);
+    LIMIT $1
+  `, batchLimit * 3);
 
   if (!rows.length) {
     return { ok: true, scanned: 0, candidates: 0, sent: 0, dryRun, summary: "Все остатки в норме — нет товаров с нулевым остатком." };

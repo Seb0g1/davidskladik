@@ -22,36 +22,56 @@ async function writeBrandsTnvedCache(data) {
   await fs.writeFile(brandsTnvedCachePath, JSON.stringify(data));
 }
 
-async function buildBrandsTnvedReport(account) {
+async function buildBrandsTnvedReport(accounts) {
   const brandCounts = new Map();
   const tnvedCounts = new Map();
-  // brand -> Map<code, {fullValue, count}>
   const brandTnvedMap = new Map();
   let total = 0;
   let withBrand = 0;
   let withTnved = 0;
-
   const seenOfferIds = new Set();
-  for (const visibility of ["ALL", "ARCHIVED"]) {
-    let lastId = "";
-    for (;;) {
+
+  for (const account of accounts) {
+    // Step 1: collect all offer_ids via /v3/product/list (reliable cursor pagination)
+    const allOfferIds = [];
+    for (const visibility of ["ALL", "ARCHIVED"]) {
+      let lastId = "";
+      for (;;) {
+        let data;
+        try {
+          data = await ozonRequest("/v3/product/list", {
+            filter: { visibility }, last_id: lastId, limit: 1000,
+          }, account);
+        } catch (err) {
+          logger.warn("brands-tnved list interrupted", { account: account.id, visibility, detail: err?.message });
+          break;
+        }
+        const items = (data.result && data.result.items) || [];
+        for (const i of items) {
+          const oid = cleanText(i.offer_id || "");
+          if (oid) allOfferIds.push(oid);
+        }
+        lastId = cleanText((data.result && data.result.last_id) || "");
+        if (items.length < 1000 || !lastId) break;
+      }
+    }
+    logger.info("brands-tnved offer_ids collected", { account: account.id, count: allOfferIds.length });
+
+    // Step 2: fetch attributes by offer_id chunks (no cursor = no stale-cursor bug)
+    for (const chunk of chunkArray(allOfferIds, 100)) {
       let data;
       try {
         data = await ozonRequest("/v4/product/info/attributes", {
-          filter: { visibility },
-          last_id: lastId,
-          limit: 100,
+          filter: { offer_id: chunk, visibility: "ALL" },
+          limit: 100, sort_by: "id", sort_dir: "asc",
         }, account);
       } catch (err) {
-        // Ozon returns "item not found" when last_id cursor is stale — stop pagination
-        logger.warn("brands-tnved pagination interrupted", { visibility, lastId, detail: err?.message });
-        break;
+        logger.warn("brands-tnved attrs chunk error", { account: account.id, detail: err?.message });
+        continue;
       }
-
-      const items = Array.isArray(data.result) ? data.result : [];
-      for (const item of items) {
-        const offerId = cleanText(item.offer_id || item.offerId || String(item.id || ""));
-        if (seenOfferIds.has(offerId)) continue;
+      for (const item of (data.result || [])) {
+        const offerId = cleanText(item.offer_id || String(item.id || ""));
+        if (!offerId || seenOfferIds.has(offerId)) continue;
         seenOfferIds.add(offerId);
         total++;
         const attrs = Array.isArray(item.attributes) ? item.attributes : [];
@@ -76,7 +96,6 @@ async function buildBrandsTnvedReport(account) {
           entry.count++;
           if (entry.sample.length < 3) entry.sample.push(offerId);
 
-          // Track brand → tnved link
           if (brand) {
             if (!brandTnvedMap.has(brand)) brandTnvedMap.set(brand, new Map());
             const codesMap = brandTnvedMap.get(brand);
@@ -85,9 +104,6 @@ async function buildBrandsTnvedReport(account) {
           }
         }
       }
-
-      lastId = cleanText(data.last_id || "");
-      if (items.length < 100 || !lastId) break;
     }
   }
 
@@ -102,13 +118,7 @@ async function buildBrandsTnvedReport(account) {
     .sort((a, b) => a.brand.localeCompare(b.brand, "ru"));
 
   return {
-    summary: {
-      total,
-      withBrand,
-      missingBrand: total - withBrand,
-      withTnved,
-      missingTnved: total - withTnved,
-    },
+    summary: { total, withBrand, missingBrand: total - withBrand, withTnved, missingTnved: total - withTnved },
     brands,
     tnveds,
     brandTnveds,
@@ -137,15 +147,15 @@ app.post("/api/catalog/brands-tnved/refresh", requireAdmin, async (req, res, nex
     if (brandsTnvedBuildRunning) {
       return res.json({ ok: true, building: true, alreadyRunning: true });
     }
-    const [account] = getOzonAccounts();
-    if (!account) return res.status(503).json({ error: "Ozon аккаунт не настроен" });
+    const accounts = getOzonAccounts({ includeSyncDisabled: true });
+    if (!accounts.length) return res.status(503).json({ error: "Ozon аккаунт не настроен" });
 
     brandsTnvedBuildRunning = true;
     res.json({ ok: true, building: true });
 
     setImmediate(async () => {
       try {
-        const report = await buildBrandsTnvedReport(account);
+        const report = await buildBrandsTnvedReport(accounts);
         await writeBrandsTnvedCache(report);
         logger.info("brands-tnved report built", {
           total: report.summary.total,
@@ -266,7 +276,7 @@ async function buildBrandsYandexReport() {
   const prisma = getPrisma();
   if (!prisma) throw new Error("БД недоступна");
 
-  const [brandRows, catRows, total] = await Promise.all([
+  const [brandRows, catRows, brandCatRows, total] = await Promise.all([
     prisma.$queryRawUnsafe(`
       SELECT NULLIF(TRIM(raw->'yandex'->>'vendor'), '') AS vendor, COUNT(*)::int AS count
       FROM warehouse_products WHERE marketplace = 'yandex'
@@ -280,51 +290,77 @@ async function buildBrandsYandexReport() {
       FROM warehouse_products WHERE marketplace = 'yandex'
       GROUP BY cat_id, cat_name ORDER BY count DESC
     `),
+    prisma.$queryRawUnsafe(`
+      SELECT
+        NULLIF(TRIM(raw->'yandex'->>'vendor'), '') AS vendor,
+        NULLIF(TRIM(raw->'yandex'->>'marketCategoryId'), '') AS cat_id,
+        COUNT(*)::int AS count
+      FROM warehouse_products WHERE marketplace = 'yandex'
+      GROUP BY vendor, cat_id ORDER BY count DESC
+    `),
     prisma.warehouseProduct.count({ where: { marketplace: "yandex" } }),
   ]);
 
   const withVendor = brandRows.filter((r) => r.vendor).reduce((s, r) => s + Number(r.count), 0);
 
-  // TN VED: бэкфилл ЯМ отправляет код в Yandex API без сохранения локально.
-  // Используем настройки: если код задан — он применён ко всем товарам.
   const settings = await readAppSettings().catch(() => null);
   const tnvedCodeConfigured = cleanText(settings?.tnved?.code || "");
   const totalNum = Number(total);
   const withTnved = tnvedCodeConfigured ? totalNum : 0;
 
-  // Имена категорий: сначала из raw.yandex.marketCategoryName (если сохранено),
-  // затем добираем недостающие через API пакетами по 5 с задержкой.
+  // Category names: first from stored raw.yandex.marketCategoryName,
+  // then resolve missing via offer-mappings pagination (stops early when all resolved).
+  // The /v2/categories/{id} endpoint is not available in the Partner API.
   const catNameMap = new Map();
-  const catIdsToFetch = [];
+  const catIdsToFetch = new Set();
   for (const row of catRows) {
     if (!row.cat_id) continue;
     const storedName = cleanText(row.cat_name || "");
-    if (storedName) {
-      catNameMap.set(row.cat_id, storedName);
-    } else {
-      catIdsToFetch.push(row.cat_id);
-    }
+    if (storedName) catNameMap.set(row.cat_id, storedName);
+    else catIdsToFetch.add(row.cat_id);
   }
 
   const [shop] = getYandexShops();
-  if (shop && catIdsToFetch.length) {
-    const BATCH = 5;
-    for (let i = 0; i < catIdsToFetch.length; i += BATCH) {
-      const chunk = catIdsToFetch.slice(i, i + BATCH);
-      await Promise.allSettled(
-        chunk.map(async (catId) => {
-          try {
-            const data = await yandexRequest(shop, "GET", `/v2/categories/${catId}`, undefined);
-            const name = cleanText(data?.result?.name || data?.category?.name || data?.name || "");
-            if (name) catNameMap.set(catId, name);
-          } catch {
-            // category name is optional — don't fail the report
+  if (shop && catIdsToFetch.size > 0) {
+    try {
+      const remaining = new Set(catIdsToFetch);
+      let pageToken = "";
+      do {
+        const params = new URLSearchParams({ limit: "100" });
+        if (pageToken) params.set("pageToken", pageToken);
+        const data = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/offer-mappings?${params}`, undefined);
+        for (const item of (data.result?.offerMappings || [])) {
+          const catId = String(item.mapping?.marketCategoryId || "");
+          const catName = cleanText(item.mapping?.marketCategoryName || "");
+          if (catId && catName && remaining.has(catId)) {
+            catNameMap.set(catId, catName);
+            remaining.delete(catId);
           }
-        }),
-      );
-      if (i + BATCH < catIdsToFetch.length) await sleep(300);
+        }
+        pageToken = data.result?.paging?.nextPageToken || "";
+        if (remaining.size === 0) break;
+      } while (pageToken);
+    } catch {
+      // category names are optional
     }
   }
+
+  // Build brand → categories map for Excel export
+  const brandCatMap = new Map();
+  for (const row of brandCatRows) {
+    if (!row.vendor || !row.cat_id) continue;
+    if (!brandCatMap.has(row.vendor)) brandCatMap.set(row.vendor, []);
+    brandCatMap.get(row.vendor).push({ catId: String(row.cat_id), catName: catNameMap.get(row.cat_id) || "", count: Number(row.count) });
+  }
+
+  const brandCountMap = new Map(brandRows.filter((r) => r.vendor).map((r) => [String(r.vendor), Number(r.count)]));
+  const brandCategories = [...brandCatMap.entries()]
+    .map(([brand, cats]) => ({
+      brand,
+      totalCount: brandCountMap.get(brand) || 0,
+      categories: cats.sort((a, b) => b.count - a.count),
+    }))
+    .sort((a, b) => a.brand.localeCompare(b.brand, "ru"));
 
   return {
     summary: {
@@ -340,6 +376,7 @@ async function buildBrandsYandexReport() {
       count: Number(r.count),
       catName: catNameMap.get(r.cat_id) || "",
     })),
+    brandCategories,
     cachedAt: new Date().toISOString(),
   };
 }
@@ -364,6 +401,170 @@ app.post("/api/catalog/brands-tnved/yandex/refresh", requireAdmin, async (req, r
     const report = await buildBrandsYandexReport();
     await fs.writeFile(brandsYandexCachePath, JSON.stringify(report));
     res.json({ ok: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Excel export: Yandex brands → categories ────────────────────────────────
+
+app.get("/api/catalog/brands-tnved/yandex/export-excel", requireAdmin, async (req, res, next) => {
+  try {
+    const cached = await readBrandsYandexCache();
+    if (!cached?.brandCategories) {
+      return res.status(404).json({ error: "Данные ещё не загружены или устарели. Нажмите «Обновить данные Яндекс»." });
+    }
+
+    const ExcelJS = require("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Magic Vibes Склад";
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet("Бренды Яндекс", { views: [{ state: "frozen", ySplit: 1 }] });
+
+    sheet.columns = [
+      { header: "Бренд", key: "brand", width: 36 },
+      { header: "Категория ЯМ", key: "catName", width: 44 },
+      { header: "ID категории", key: "catId", width: 14 },
+      { header: "SKU", key: "count", width: 10 },
+    ];
+
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE2EFDA" } };
+    headerRow.alignment = { vertical: "middle" };
+    headerRow.height = 18;
+
+    for (const entry of cached.brandCategories) {
+      if (!entry.categories || entry.categories.length === 0) {
+        sheet.addRow({ brand: entry.brand, catName: "— категория не определена —", catId: "", count: entry.totalCount });
+        continue;
+      }
+      for (let i = 0; i < entry.categories.length; i++) {
+        const cat = entry.categories[i];
+        sheet.addRow({
+          brand: i === 0 ? entry.brand : "",
+          catName: cat.catName || `— ID: ${cat.catId} —`,
+          catId: cat.catId,
+          count: cat.count,
+        });
+      }
+    }
+
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const fill = rowNumber % 2 === 0
+        ? { type: "pattern", pattern: "solid", fgColor: { argb: "FFF7F7F7" } }
+        : undefined;
+      row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        if (fill) cell.fill = fill;
+        if (colNum === 3) cell.font = { name: "Courier New", size: 10 };
+        if (colNum === 4) cell.alignment = { horizontal: "right" };
+        cell.border = { bottom: { style: "thin", color: { argb: "FFE0E0E0" } } };
+      });
+    });
+
+    sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 4 } };
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''yandex-brands-${dateStr}.xlsx`);
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ─── Excel export: combined Ozon + Yandex brands ─────────────────────────────
+
+app.get("/api/catalog/brands-tnved/combined/export-excel", requireAdmin, async (req, res, next) => {
+  try {
+    const [ozonCached, yandexCached] = await Promise.all([readBrandsTnvedCache(), readBrandsYandexCache()]);
+
+    if (!ozonCached?.brandTnveds) {
+      return res.status(404).json({ error: "Нет данных Ozon. Нажмите «Обновить данные Ozon» на вкладке Ozon." });
+    }
+    if (!yandexCached?.brands) {
+      return res.status(404).json({ error: "Нет данных Яндекс. Нажмите «Обновить данные Яндекс» на вкладке Яндекс." });
+    }
+
+    // Build Yandex brand count map (lowercase key for case-insensitive join)
+    const yandexMap = new Map();
+    for (const b of yandexCached.brands) {
+      yandexMap.set(b.brand.toLowerCase().trim(), Number(b.count));
+    }
+
+    const matchedYandexKeys = new Set();
+    const rows = [];
+
+    for (const entry of ozonCached.brandTnveds) {
+      const key = entry.brand.toLowerCase().trim();
+      const yandexCount = yandexMap.get(key) || 0;
+      if (yandexCount > 0) matchedYandexKeys.add(key);
+
+      if (!entry.tnvedCodes || entry.tnvedCodes.length === 0) {
+        rows.push({ brand: entry.brand, code: "", description: "— код не назначен —", ozonCount: entry.totalCount, yandexCount });
+      } else {
+        const tc = entry.tnvedCodes[0]; // primary (most common) ТН ВЭД code
+        rows.push({ brand: entry.brand, code: tc.code, description: tc.fullValue.replace(/^\d+\s*[-–]\s*/, ""), ozonCount: entry.totalCount, yandexCount });
+      }
+    }
+
+    // Yandex-only brands (not in Ozon)
+    for (const b of yandexCached.brands) {
+      if (!matchedYandexKeys.has(b.brand.toLowerCase().trim())) {
+        rows.push({ brand: b.brand, code: "", description: "— только Яндекс —", ozonCount: 0, yandexCount: Number(b.count) });
+      }
+    }
+
+    rows.sort((a, b) => a.brand.localeCompare(b.brand, "ru"));
+
+    const ExcelJS = require("exceljs");
+    const workbook = new ExcelJS.Workbook();
+    workbook.creator = "Magic Vibes Склад";
+    workbook.created = new Date();
+
+    const sheet = workbook.addWorksheet("Бренды Ozon+Яндекс", { views: [{ state: "frozen", ySplit: 1 }] });
+
+    sheet.columns = [
+      { header: "Бренд", key: "brand", width: 36 },
+      { header: "Код ТН ВЭД", key: "code", width: 16 },
+      { header: "Описание ТН ВЭД", key: "description", width: 46 },
+      { header: "SKU Ozon", key: "ozonCount", width: 12 },
+      { header: "SKU Яндекс", key: "yandexCount", width: 12 },
+    ];
+
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFCE4D6" } };
+    headerRow.alignment = { vertical: "middle" };
+    headerRow.height = 18;
+
+    for (const row of rows) {
+      sheet.addRow(row);
+    }
+
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      const fill = rowNumber % 2 === 0
+        ? { type: "pattern", pattern: "solid", fgColor: { argb: "FFF7F7F7" } }
+        : undefined;
+      row.eachCell({ includeEmpty: true }, (cell, colNum) => {
+        if (fill) cell.fill = fill;
+        if (colNum === 2) cell.font = { name: "Courier New", size: 10 };
+        if (colNum === 4 || colNum === 5) cell.alignment = { horizontal: "right" };
+        cell.border = { bottom: { style: "thin", color: { argb: "FFE0E0E0" } } };
+      });
+    });
+
+    sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: 5 } };
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''combined-brands-${dateStr}.xlsx`);
+    await workbook.xlsx.write(res);
+    res.end();
   } catch (err) {
     next(err);
   }

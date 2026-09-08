@@ -1,4 +1,4 @@
-app.post("/api/warehouse/products/enrich", async (request, response, next) => {
+app.post("/api/warehouse/products/enrich", requireAdmin, async (request, response, next) => {
   try {
     const products = await enrichWarehouseProducts(request.body.productIds || request.body.ids || []);
     response.json({ ok: true, products });

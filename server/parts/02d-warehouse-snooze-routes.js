@@ -9,6 +9,10 @@ const SNOOZE_DEFAULT_DAYS = 5;
 const SNOOZE_MAX_DAYS = 60;
 
 async function applyWarehouseLinkSnooze(productId, linkId, days, { reason = "snooze_link" } = {}) {
+  return await withWarehouseProductMutationLock([productId], () => _applyWarehouseLinkSnoozeInner(productId, linkId, days, { reason }));
+}
+
+async function _applyWarehouseLinkSnoozeInner(productId, linkId, days, { reason = "snooze_link" } = {}) {
   const [product] = await readWarehouseProductsFromPostgresByIds([productId]);
   if (!product) {
     const error = new Error("Товар склада не найден.");
@@ -70,7 +74,7 @@ async function applyWarehouseLinkSnooze(productId, linkId, days, { reason = "sno
   return { product: target, snoozedUntil, days };
 }
 
-app.post("/api/warehouse/products/:id/links/:linkId/snooze", async (request, response, next) => {
+app.post("/api/warehouse/products/:id/links/:linkId/snooze", requireAdmin, async (request, response, next) => {
   try {
     const productId = cleanText(request.params.id);
     const linkId = cleanText(request.params.linkId);
@@ -87,6 +91,10 @@ app.post("/api/warehouse/products/:id/links/:linkId/snooze", async (request, res
 });
 
 async function cancelWarehouseLinkSnooze(productId, linkId, request) {
+  return await withWarehouseProductMutationLock([productId], () => _cancelWarehouseLinkSnoozeInner(productId, linkId, request));
+}
+
+async function _cancelWarehouseLinkSnoozeInner(productId, linkId, request) {
     const [product] = await readWarehouseProductsFromPostgresByIds([productId]);
     if (!product) {
       const error = new Error("Товар склада не найден.");
@@ -190,7 +198,7 @@ async function cancelWarehouseLinkSnooze(productId, linkId, request) {
     return { product: updatedProduct };
 }
 
-app.delete("/api/warehouse/products/:id/links/:linkId/snooze", async (request, response, next) => {
+app.delete("/api/warehouse/products/:id/links/:linkId/snooze", requireAdmin, async (request, response, next) => {
   try {
     const productId = cleanText(request.params.id);
     const linkId = cleanText(request.params.linkId);

@@ -1516,23 +1516,29 @@ app.post("/api/consignment/sponsor-report/send", requireAdmin, async (request, r
 // Used by @davidskladrealizarsuya_bot running on external server.
 app.get("/api/consignment/partner-summary", async (request, response, next) => {
   try {
-    const secret = cleanText(request.query.secret || "");
+    // Accept secret via Authorization: Bearer <secret> header (preferred) or
+    // ?secret= query param (legacy, kept for backwards compat with existing bot).
+    // Query params are logged by nginx/proxies and can leak into browser history.
+    const authHeader = cleanText(request.headers.authorization || "");
+    const headerSecret = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+    const querySecret = cleanText(request.query.secret || "");
+    const secret = headerSecret || querySecret;
     const expectedSecret = process.env.DAVIDSKLAD_API_SECRET || "";
     if (!expectedSecret || secret !== expectedSecret) {
       return response.status(401).json({ error: "Unauthorized", code: "invalid_secret" });
     }
     if (consignmentStorageUnavailable(response)) return;
     const partnerId = cleanText(request.query.partnerId || "");
-    const [itemRows, operationRows] = await Promise.all([
-      getPrisma().consignmentItem.findMany({
-        where: partnerId ? { partnerId, archived: false } : { archived: false },
-        orderBy: { createdAt: "desc" },
-        take: 2000,
-      }),
-      getPrisma().consignmentOperation.findMany({
-        take: 50000,
-      }),
-    ]);
+    const itemRows = await getPrisma().consignmentItem.findMany({
+      where: partnerId ? { partnerId, archived: false } : { archived: false },
+      orderBy: { createdAt: "desc" },
+      take: 2000,
+    });
+    const itemIds = itemRows.map((r) => r.id);
+    const operationRows = await getPrisma().consignmentOperation.findMany({
+      where: partnerId && itemIds.length ? { itemId: { in: itemIds } } : undefined,
+      take: 50000,
+    });
     const items = itemRows.map(consignmentItemFromPostgres);
     const ops = operationRows.map(consignmentOperationFromPostgres);
     const summary = consignmentSummaryFromRows(items, ops);

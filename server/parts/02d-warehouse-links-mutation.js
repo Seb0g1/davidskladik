@@ -119,7 +119,6 @@ async function deleteWarehouseGroupLinkRefs(request, response, refsInput = []) {
       // "удалить поставщика" reported success while the link stayed. Always key off the
       // matched link's own server target key.
       deleteKeys.add(warehouseLinkTargetKey(link));
-      if (ref.linkTargetKey) deleteKeys.add(ref.linkTargetKey);
       deletedRefs.push(ref);
     }
 

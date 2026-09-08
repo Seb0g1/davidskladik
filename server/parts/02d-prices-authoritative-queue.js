@@ -12,9 +12,14 @@ function enqueueMarketplaceJobAccepted(name, data = {}, { priority = QUEUE_PRIOR
       if (isApiServer) {
         return { accepted: false, inlineBackground: false, queueError, queueUnavailable: true };
       }
+      // BullMQ unavailable on worker — run inline without retry or persistence.
+      // This is a best-effort fallback; if the job fails it won't be retried.
+      logger.warn("queue unavailable on worker, running job inline (no retry)", { name, queueError });
+      recordAppError?.("queue_fallback_inline", "02d-prices-authoritative-queue", queueError, { name });
       setTimeout(() => {
         processMarketplaceJob(name, data).catch((jobError) => {
-          logger.warn("background marketplace job failed", { name, detail: jobError?.message || String(jobError) });
+          logger.warn("inline background marketplace job failed", { name, detail: jobError?.message || String(jobError) });
+          recordAppError?.("inline_job_failed", "02d-prices-authoritative-queue", jobError?.message || String(jobError), { name });
         });
       }, 0).unref?.();
       return { accepted: true, inlineBackground: true, queueError };

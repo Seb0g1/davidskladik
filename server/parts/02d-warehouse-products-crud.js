@@ -44,7 +44,7 @@ app.post("/api/warehouse/products", async (request, response, next) => {
       oldValue: before,
       newValue: product,
     });
-    response.json({ ok: true, product: freshProduct || normalizeWarehouseProduct(product), warehouse });
+    response.json({ ok: true, product: freshProduct || normalizeWarehouseProduct(product) });
   } catch (error) {
     next(error);
   }

@@ -12,7 +12,7 @@ function resolveAvitoAccountOr404(request, response) {
 
 // --- Профиль продавца + баланс + статистика ---
 
-app.get("/api/avito/me", async (request, response, next) => {
+app.get("/api/avito/me", requireAdmin, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -32,7 +32,7 @@ app.get("/api/avito/me", async (request, response, next) => {
   }
 });
 
-app.get("/api/avito/balance", async (request, response, next) => {
+app.get("/api/avito/balance", requireAdmin, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -42,7 +42,7 @@ app.get("/api/avito/balance", async (request, response, next) => {
   }
 });
 
-app.post("/api/avito/stats", async (request, response, next) => {
+app.post("/api/avito/stats", requireAdmin, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -58,7 +58,7 @@ app.post("/api/avito/stats", async (request, response, next) => {
 
 // --- Профиль автозагрузки ---
 
-app.get("/api/avito/profile", async (request, response, next) => {
+app.get("/api/avito/profile", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -98,7 +98,7 @@ app.post("/api/avito/upload", requireAdmin, async (request, response, next) => {
 
 // --- Загрузки v4 ---
 
-app.get("/api/avito/uploads", async (request, response, next) => {
+app.get("/api/avito/uploads", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -113,7 +113,7 @@ app.get("/api/avito/uploads", async (request, response, next) => {
   }
 });
 
-app.get("/api/avito/uploads/current", async (request, response, next) => {
+app.get("/api/avito/uploads/current", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -124,7 +124,7 @@ app.get("/api/avito/uploads/current", async (request, response, next) => {
   }
 });
 
-app.get("/api/avito/uploads/last-successful", async (request, response, next) => {
+app.get("/api/avito/uploads/last-successful", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -135,7 +135,7 @@ app.get("/api/avito/uploads/last-successful", async (request, response, next) =>
   }
 });
 
-app.get("/api/avito/uploads/current/items", async (request, response, next) => {
+app.get("/api/avito/uploads/current/items", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -150,7 +150,7 @@ app.get("/api/avito/uploads/current/items", async (request, response, next) => {
   }
 });
 
-app.get("/api/avito/uploads/last-successful/items", async (request, response, next) => {
+app.get("/api/avito/uploads/last-successful/items", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -167,7 +167,7 @@ app.get("/api/avito/uploads/last-successful/items", async (request, response, ne
 
 // --- Соответствие ID объявлений ---
 
-app.get("/api/avito/items/ad-ids", async (request, response, next) => {
+app.get("/api/avito/items/ad-ids", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -177,7 +177,7 @@ app.get("/api/avito/items/ad-ids", async (request, response, next) => {
   }
 });
 
-app.get("/api/avito/items/avito-ids", async (request, response, next) => {
+app.get("/api/avito/items/avito-ids", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -189,7 +189,7 @@ app.get("/api/avito/items/avito-ids", async (request, response, next) => {
 
 // --- Категории ---
 
-app.get("/api/avito/categories/tree", async (request, response, next) => {
+app.get("/api/avito/categories/tree", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -199,7 +199,7 @@ app.get("/api/avito/categories/tree", async (request, response, next) => {
   }
 });
 
-app.get("/api/avito/categories/:slug/fields", async (request, response, next) => {
+app.get("/api/avito/categories/:slug/fields", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -209,7 +209,7 @@ app.get("/api/avito/categories/:slug/fields", async (request, response, next) =>
   }
 });
 
-app.get("/api/avito/categories/:slug/fields/:tag/values", async (request, response, next) => {
+app.get("/api/avito/categories/:slug/fields/:tag/values", requireStaff, async (request, response, next) => {
   try {
     const account = resolveAvitoAccountOr404(request, response);
     if (!account) return;
@@ -225,7 +225,7 @@ app.get("/api/avito/categories/:slug/fields/:tag/values", async (request, respon
 
 // --- Правила импорта Ozon → Avito ---
 
-app.get("/api/avito/import/rules", async (_request, response, next) => {
+app.get("/api/avito/import/rules", requireStaff, async (_request, response, next) => {
   try {
     response.json(await readAvitoImportRules());
   } catch (error) {
@@ -246,7 +246,7 @@ app.put("/api/avito/import/rules", requireAdmin, async (request, response, next)
 
 // Предпросмотр: что попадёт в фид и почему остальные пропущены. Правила можно
 // передать в body для проверки без сохранения.
-app.post("/api/avito/import/preview", async (request, response, next) => {
+app.post("/api/avito/import/preview", requireStaff, async (request, response, next) => {
   try {
     const rules = request.body && Object.keys(request.body).length ? request.body : null;
     response.json(await previewAvitoOzonImport({ rules }));
@@ -268,7 +268,7 @@ app.post("/api/avito/import/apply", requireAdmin, async (request, response, next
 
 // --- Объявления фида ---
 
-app.get("/api/avito/listings", async (request, response, next) => {
+app.get("/api/avito/listings", requireStaff, async (request, response, next) => {
   try {
     const state = await readAvitoListingsFile();
     // Полный дамп на 11k+ объявлений весил ~19 МБ и подвешивал страницу.
