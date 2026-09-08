@@ -23,14 +23,21 @@ app.get("/api/supplier-picking-list", requireStaff, async (request, response, ne
     const limit = cleanLimit(request.query.limit, 500);
     const showDeferred = cleanText(request.query.deferred || "").toLowerCase() === "1";
     let rows = Object.values(state.rows || {}).map(normalizeSupplierPickingRow);
-    if (status && status !== "all") rows = rows.filter((row) => row.status === status);
+    if (status && status !== "all") {
+      // "open" view also shows cancelled rows so pickers see what was cancelled
+      if (status === "open") {
+        rows = rows.filter((row) => row.status === "open" || row.status === "cancelled");
+      } else {
+        rows = rows.filter((row) => row.status === status);
+      }
+    }
     // By default hide open rows that are deferred until a future date; pass deferred=1 to show only deferred rows
     if (status === "open" || !status) {
       const now = new Date();
       if (showDeferred) {
-        rows = rows.filter((row) => row.deferredUntil && new Date(row.deferredUntil) > now);
+        rows = rows.filter((row) => row.status === "open" && row.deferredUntil && new Date(row.deferredUntil) > now);
       } else {
-        rows = rows.filter((row) => !row.deferredUntil || new Date(row.deferredUntil) <= now);
+        rows = rows.filter((row) => row.status === "cancelled" || !row.deferredUntil || new Date(row.deferredUntil) <= now);
       }
     }
     if (supplier) rows = rows.filter((row) => cleanText(row.supplierName).toLowerCase().includes(supplier));
@@ -197,6 +204,46 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
         const rowDate = (current.createdAt || now.toISOString()).slice(0, 10);
         await adjustDailyCartTotal(rowDate, -((Number(current.price) || 0) * Math.max(1, Math.round(Number(current.quantity || 1)))), -Math.max(1, Math.round(Number(current.quantity || 1))));
       } catch (e) { logger.warn("daily_cart_total subtract (cancelled) failed", { key, detail: e?.message || String(e) }); }
+      // Notify supplier by email
+      if (current.partnerId) {
+        try {
+          const numericPartnerId = Number(current.partnerId);
+          const [emailRows] = await pool.query(
+            "SELECT Email FROM Partners WHERE PartnerID = ? LIMIT 1",
+            [Number.isFinite(numericPartnerId) && numericPartnerId > 0 ? numericPartnerId : current.partnerId],
+          );
+          const partnerEmail = cleanText(emailRows?.[0]?.Email || "");
+          if (partnerEmail) {
+            const marketplaceLabel = { ozon: "Ozon", yandex: "Яндекс Маркет", wb: "Wildberries" }[nextRow.marketplace] || nextRow.marketplace || "маркетплейс";
+            const escH = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+            const orderId = escH(nextRow.postingNumber || nextRow.orderId || "");
+            const cancelEmailHtml = `<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#333;line-height:1.6">
+<p>Здравствуйте!</p>
+<p>Заказ на маркетплейсе <strong>${escH(marketplaceLabel)}</strong> был отменён.</p>
+<p>Пожалуйста, <strong>не собирайте и не отправляйте</strong> следующую позицию:</p>
+<table style="border-collapse:collapse;margin:12px 0">
+  <tr><td style="padding:4px 12px 4px 0;color:#666">Товар:</td><td style="padding:4px 0"><strong>${escH(nextRow.productName || nextRow.offerId || "Неизвестный товар")}</strong></td></tr>
+  <tr><td style="padding:4px 12px 4px 0;color:#666">Количество:</td><td style="padding:4px 0">${escH(nextRow.quantity || 1)} шт.</td></tr>
+  ${orderId ? `<tr><td style="padding:4px 12px 4px 0;color:#666">Номер заказа:</td><td style="padding:4px 0">${orderId}</td></tr>` : ""}
+</table>
+<p>Заявка аннулирована оператором в системе Magic Vibes Склад.</p>
+<p>Если у вас возникли вопросы, свяжитесь с нами.</p>
+<p style="color:#999;font-size:12px">— Magic Vibes Склад</p>
+</body></html>`;
+            await shopSendEmail({
+              to: partnerEmail,
+              subject: `Отмена заказа: ${nextRow.productName || nextRow.offerId || ""}`,
+              html: cancelEmailHtml,
+            });
+            nextRow.cancelledNotifiedEmail = partnerEmail;
+            state.rows[key] = nextRow;
+            await writeSupplierPickingState(state);
+            logger.info("manual cancellation email sent", { key, to: partnerEmail, offerId: nextRow.offerId });
+          }
+        } catch (emailError) {
+          logger.warn("manual cancellation email failed", { key, detail: emailError?.message || String(emailError) });
+        }
+      }
     }
 
     // Ozon: подтвердить упаковку при физической сборке (и экспресс, и обычные).

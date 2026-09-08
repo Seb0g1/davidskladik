@@ -2874,6 +2874,12 @@ button:disabled {
   border-left-color: rgba(255, 92, 122, 0.7);
 }
 
+.picking-row.status-cancelled {
+  background: rgba(156, 163, 175, 0.05);
+  border-left-color: rgba(156, 163, 175, 0.4);
+  opacity: 0.72;
+}
+
 .picking-main {
   display: grid;
   gap: 4px;
@@ -6045,6 +6051,11 @@ textarea {
 .picking-row.status-missing {
   border-color: rgba(245, 96, 111, 0.4);
   box-shadow: inset 3px 0 0 rgba(245, 96, 111, 0.72);
+}
+
+.picking-row.status-cancelled {
+  border-color: rgba(156, 163, 175, 0.3);
+  box-shadow: inset 3px 0 0 rgba(156, 163, 175, 0.5);
 }
 
 .supplier-cart-row.ready {
@@ -9302,6 +9313,7 @@ textarea:focus-visible,
 .picking-row-status-badge.status-open    { background: rgba(251,191,36,.12); color: #fbbf24; }
 .picking-row-status-badge.status-reordered { background: rgba(121,184,255,.12); color: #79b8ff; }
 .picking-row-status-badge.status-returned  { background: rgba(160,130,200,.15); color: #c4b5fd; }
+.picking-row-status-badge.status-cancelled { background: rgba(156,163,175,.15); color: #9ca3af; }
 
 .picking-row-meta {
   display: flex;

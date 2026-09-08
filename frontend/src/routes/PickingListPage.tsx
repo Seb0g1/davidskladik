@@ -23,6 +23,7 @@ const statusLabel = (status: string) => {
     reordered: "перезаказано",
     returned: "возврат из ПВЗ",
     return_used: "возврат использован",
+    cancelled: "отменён",
     all: "все",
   };
   return labels[status] || status || "-";
@@ -1686,9 +1687,14 @@ export function PickingListPage() {
                                       {" "}Замените кнопкой ниже или автокорзина попробует сама.
                                     </small>
                                   ) : null}
+                                  {row.status === "cancelled" ? (
+                                    <small className="danger-text" style={{ paddingTop: 4, fontWeight: 600 }}>
+                                      Заказ отменён — товар не собирать и не брать у поставщика.
+                                    </small>
+                                  ) : null}
                                   {row.status === "reordered" && row.replacementKey ? <small>Перезаказано у другого поставщика.</small> : null}
                                   <div className="picking-actions" style={{ position: "relative" }}>
-                                    <div className="picking-action-pick-group">
+                                    {row.status !== "cancelled" ? <div className="picking-action-pick-group">
                                       <button
                                         className="primary-action success-action picking-action-main"
                                         type="button"
@@ -1724,7 +1730,7 @@ export function PickingListPage() {
                                           title={`Частичная сборка: введите количество из ${row.quantity}`}
                                         />
                                       ) : null}
-                                    </div>
+                                    </div> : null}
                                     {row.status === "open" ? (
                                       <div className="picking-price-wrap" onClick={(e) => e.stopPropagation()}>
                                         {row.price ? (
