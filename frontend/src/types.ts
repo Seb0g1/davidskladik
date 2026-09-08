@@ -889,6 +889,8 @@ export const PickerReportPickerSchema = z.object({
   username: z.coerce.string(),
   count: z.number().default(0),
   totalUsd: z.number().default(0),
+  paidTotalRub: z.number().default(0),
+  unpaidCount: z.number().default(0),
   items: z.array(PickerReportItemSchema).default([]),
 });
 
@@ -896,6 +898,8 @@ export const PickerReportSummarySchema = z.object({
   totalPickedRub: z.number().default(0),
   totalPickedUsd: z.number().default(0),
   totalPickedCount: z.number().default(0),
+  totalPaidRub: z.number().default(0),
+  totalUnpaidCount: z.number().default(0),
   totalReturnedRub: z.number().default(0),
   totalReturnedCount: z.number().default(0),
   usdRate: z.number().default(95),

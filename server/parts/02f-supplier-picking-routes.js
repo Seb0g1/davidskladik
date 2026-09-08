@@ -877,9 +877,11 @@ app.get("/api/picker-report", requireAdmin, async (request, response, next) => {
     });
     const byPicker = {};
     let totalPickedRub = 0;
+    let totalPaidRub = 0;
+    let totalUnpaidCount = 0;
     for (const row of rows) {
       const picker = row.pickedBy || "неизвестно";
-      if (!byPicker[picker]) byPicker[picker] = { username: picker, items: [], totalUsd: 0, count: 0 };
+      if (!byPicker[picker]) byPicker[picker] = { username: picker, items: [], totalUsd: 0, count: 0, paidTotalRub: 0, unpaidCount: 0 };
       const price = Number(row.price || 0);
       const qty = Math.max(1, Number(row.quantity || 1));
       const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
@@ -901,12 +903,18 @@ app.get("/api/picker-report", requireAdmin, async (request, response, next) => {
       byPicker[picker].count += qty;
       if (pricePaidRub) {
         totalPickedRub += pricePaidRub * qty;
-      } else if (price > 0) {
-        totalPickedRub += ((row.priceCurrency || "USD") === "RUB" ? price : price * usdRate) * qty;
+        totalPaidRub += pricePaidRub * qty;
+        byPicker[picker].paidTotalRub += pricePaidRub * qty;
+      } else {
+        if (price > 0) {
+          totalPickedRub += ((row.priceCurrency || "USD") === "RUB" ? price : price * usdRate) * qty;
+        }
+        totalUnpaidCount += qty;
+        byPicker[picker].unpaidCount += qty;
       }
     }
     const pickers = Object.values(byPicker)
-      .map((p) => ({ ...p, totalUsd: Math.round(p.totalUsd * 100) / 100 }))
+      .map((p) => ({ ...p, totalUsd: Math.round(p.totalUsd * 100) / 100, paidTotalRub: Math.round(p.paidTotalRub) }))
       .sort((a, b) => b.count - a.count);
 
     const totalPickedUsd = pickers.reduce((s, p) => s + p.totalUsd, 0);
@@ -938,6 +946,8 @@ app.get("/api/picker-report", requireAdmin, async (request, response, next) => {
         totalPickedRub: Math.round(totalPickedRub),
         totalPickedUsd: Math.round(totalPickedUsd * 100) / 100,
         totalPickedCount,
+        totalPaidRub: Math.round(totalPaidRub),
+        totalUnpaidCount,
         totalReturnedRub: Math.round(totalReturnedRub),
         totalReturnedCount,
         usdRate,

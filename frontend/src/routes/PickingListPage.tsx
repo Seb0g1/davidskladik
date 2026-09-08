@@ -1141,9 +1141,14 @@ export function PickingListPage() {
           {reportQuery.data?.summary && (reportQuery.data.summary.totalPickedCount > 0 || reportQuery.data.summary.totalReturnedCount > 0) ? (
             <div className="picker-report-summary-bar">
               <div className="picker-report-summary-chip">
-                <span className="picker-report-summary-label">Начислено</span>
-                <span className="picker-report-summary-amount">{reportQuery.data.summary.totalPickedRub.toLocaleString("ru-RU")} ₽</span>
-                <span className="picker-report-summary-sub">{reportQuery.data.summary.totalPickedUsd.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $ · {reportQuery.data.summary.totalPickedCount} поз.</span>
+                <span className="picker-report-summary-label">Оплачено поставщикам</span>
+                <span className="picker-report-summary-amount">{(reportQuery.data.summary.totalPaidRub ?? 0).toLocaleString("ru-RU")} ₽</span>
+                <span className="picker-report-summary-sub">
+                  {reportQuery.data.summary.totalPickedCount - (reportQuery.data.summary.totalUnpaidCount ?? 0)} поз. с суммой
+                  {(reportQuery.data.summary.totalUnpaidCount ?? 0) > 0
+                    ? ` · ${reportQuery.data.summary.totalUnpaidCount} без суммы`
+                    : null}
+                </span>
               </div>
               {reportQuery.data.summary.totalReturnedCount > 0 ? (
                 <>
@@ -1156,7 +1161,7 @@ export function PickingListPage() {
                   <span className="picker-report-summary-sep">=</span>
                   <div className="picker-report-summary-chip picker-report-summary-chip--net">
                     <span className="picker-report-summary-label">Нетто</span>
-                    <span className="picker-report-summary-amount">{(reportQuery.data.summary.totalPickedRub - reportQuery.data.summary.totalReturnedRub).toLocaleString("ru-RU")} ₽</span>
+                    <span className="picker-report-summary-amount">{((reportQuery.data.summary.totalPaidRub ?? 0) - reportQuery.data.summary.totalReturnedRub).toLocaleString("ru-RU")} ₽</span>
                   </div>
                 </>
               ) : null}
@@ -1172,28 +1177,25 @@ export function PickingListPage() {
                 const expanded = expandedPickers.has(picker.username);
                 const usdRate = reportQuery.data?.summary?.usdRate ?? 95;
 
-                // Aggregate items by supplier
-                const supplierMap = new Map<string, { name: string; count: number; totalRub: number; totalUsd: number }>();
+                // Aggregate payment items by supplier (only items with pricePaidRub)
+                const supplierMap = new Map<string, { name: string; paidCount: number; paidRub: number; unpaidCount: number }>();
                 for (const item of picker.items) {
                   const name = item.supplierName || "— поставщик не указан —";
-                  if (!supplierMap.has(name)) supplierMap.set(name, { name, count: 0, totalRub: 0, totalUsd: 0 });
+                  if (!supplierMap.has(name)) supplierMap.set(name, { name, paidCount: 0, paidRub: 0, unpaidCount: 0 });
                   const entry = supplierMap.get(name)!;
                   const qty = item.quantity || 1;
-                  entry.count += qty;
                   if (item.pricePaidRub) {
-                    entry.totalRub += item.pricePaidRub * qty;
-                    entry.totalUsd += (item.pricePaidRub / usdRate) * qty;
-                  } else if (item.price > 0) {
-                    if (item.priceCurrency === "RUB") {
-                      entry.totalRub += item.price * qty;
-                      entry.totalUsd += (item.price / usdRate) * qty;
-                    } else {
-                      entry.totalUsd += item.price * qty;
-                      entry.totalRub += item.price * usdRate * qty;
-                    }
+                    entry.paidCount += qty;
+                    entry.paidRub += item.pricePaidRub * qty;
+                  } else {
+                    entry.unpaidCount += qty;
                   }
                 }
-                const suppliers = [...supplierMap.values()].sort((a, b) => b.totalRub - a.totalRub);
+                const suppliers = [...supplierMap.values()]
+                  .filter((s) => s.paidCount > 0 || s.unpaidCount > 0)
+                  .sort((a, b) => b.paidRub - a.paidRub);
+                const paidTotalRub = picker.paidTotalRub ?? 0;
+                const unpaidCount = picker.unpaidCount ?? 0;
 
                 return (
                   <article className="picker-report-card" key={picker.username}>
@@ -1210,26 +1212,32 @@ export function PickingListPage() {
                       <div className="picker-report-header-left">
                         <span className="picker-report-name">{picker.username}</span>
                         <span className="picker-report-meta">
-                          {picker.count} позиций · {suppliers.length} поставщ. · {picker.totalUsd.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $
+                          {picker.count - unpaidCount} поз. оплачено · {suppliers.length} поставщ.
+                          {unpaidCount > 0 ? <span style={{ color: "var(--warn, #f59e0b)", marginLeft: 6 }}>· {unpaidCount} без суммы</span> : null}
                         </span>
                       </div>
-                      <ChevronDown size={15} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform .2s", opacity: 0.6, flexShrink: 0 }} />
+                      <div style={{ display: "flex", alignItems: "center", gap: 12, flexShrink: 0 }}>
+                        <strong style={{ fontSize: "0.95rem" }}>{paidTotalRub.toLocaleString("ru-RU")} ₽</strong>
+                        <ChevronDown size={15} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform .2s", opacity: 0.6 }} />
+                      </div>
                     </button>
                     {expanded ? (
                       <div className="picker-report-items">
                         {suppliers.map((s) => (
                           <div className="picker-report-supplier-row" key={s.name}>
                             <span className="picker-report-supplier-name">{s.name}</span>
-                            <span className="picker-report-supplier-count">{s.count} поз.</span>
+                            <span className="picker-report-supplier-count">
+                              {s.paidCount > 0 ? `${s.paidCount} оплач.` : null}
+                              {s.unpaidCount > 0 ? <span style={{ color: "var(--warn, #f59e0b)", marginLeft: 4 }}>{s.unpaidCount} без суммы</span> : null}
+                            </span>
                             <span className="picker-report-supplier-cost">
-                              {Math.round(s.totalRub).toLocaleString("ru-RU")} ₽
-                              <span className="picker-report-supplier-usd"> / {s.totalUsd.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $</span>
+                              {s.paidRub > 0 ? `${Math.round(s.paidRub).toLocaleString("ru-RU")} ₽` : <span style={{ color: "var(--muted)" }}>—</span>}
                             </span>
                           </div>
                         ))}
                         <div className="picker-report-total">
-                          Итого: <strong>{picker.totalUsd.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $</strong>
-                          {" "}за {picker.count} поз.
+                          Итого оплачено: <strong>{paidTotalRub.toLocaleString("ru-RU")} ₽</strong>
+                          {unpaidCount > 0 ? <span style={{ color: "var(--warn, #f59e0b)", marginLeft: 8, fontWeight: 400 }}>· {unpaidCount} позиций без суммы</span> : null}
                         </div>
                       </div>
                     ) : null}
