@@ -650,8 +650,10 @@ function buildPickerReportSheet(ws, dateStr, pickers, usdRate) {
   // Items collapse under supplier rows — summary above detail rows
   ws.properties.outlineProperties = { summaryBelow: false };
 
-  const titleRow = ws.addRow([`Отчёт сотрудников за ${dateLabel}  (курс ${rate} ₽/$)`]);
+  const titleRow = ws.addRow([`Отчёт оплат за ${dateLabel}  (курс ${rate} ₽/$)`]);
   titleRow.getCell(1).font = { bold: true, size: 14 };
+  const noteRow = ws.addRow(["* — сумма оплаты не введена, указана расчётная цена PM"]);
+  noteRow.getCell(1).font = { italic: true, color: { argb: "FF999999" }, size: 10 };
   ws.addRow([]);
 
   // cols: Поставщик | Товар | Маркетплейс | Заказ | Цена ₽ | Цена $ | Кол-во | Время
@@ -675,31 +677,37 @@ function buildPickerReportSheet(ws, dateStr, pickers, usdRate) {
     pickerHeaderRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD6E4FF" } };
     pickerHeaderRow.outlineLevel = 0;
 
-    const colHeaderRow = ws.addRow(["Поставщик", "Товар", "Маркетплейс", "Заказ / Отправление", "Итого ₽", "Итого $", "Кол-во", "Время"]);
+    const colHeaderRow = ws.addRow(["Поставщик", "Товар", "Маркетплейс", "Заказ / Отправление", "Оплата ₽", "Оплата $", "Кол-во", "Время"]);
     colHeaderRow.eachCell((cell) => {
       cell.font = { bold: true };
       cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEEF3FF" } };
       cell.border = { bottom: { style: "thin", color: { argb: "FFADC6FF" } } };
     });
 
-    // Group items by supplier
+    // Group items by supplier — pricePaidRub (actual payment) takes priority over PM price
     const supplierMap = new Map();
     for (const item of picker.items) {
       const sName = item.supplierName || "— поставщик не указан —";
-      if (!supplierMap.has(sName)) supplierMap.set(sName, { name: sName, items: [], totalRub: 0, totalUsd: 0, count: 0 });
+      const currency = String(item.priceCurrency || "USD").toUpperCase();
+      if (!supplierMap.has(sName)) supplierMap.set(sName, { name: sName, currency, items: [], totalRub: 0, totalUsd: 0, count: 0 });
       const se = supplierMap.get(sName);
       let priceRub = 0;
       let priceUsd = 0;
-      if (item.price > 0) {
-        if (item.priceCurrency === "RUB") { priceRub = item.price; priceUsd = item.price / rate; }
+      let isPaid = false;
+      if (item.pricePaidRub) {
+        // Actual payment entered by employee — primary source
+        priceRub = item.pricePaidRub;
+        priceUsd = item.pricePaidRub / rate;
+        isPaid = true;
+      } else if (item.price > 0) {
+        // Fallback to PM price when no payment was entered
+        if (currency === "RUB") { priceRub = item.price; priceUsd = item.price / rate; }
         else { priceUsd = item.price; priceRub = item.price * rate; }
-      } else if (item.pricePaidRub) {
-        priceRub = item.pricePaidRub; priceUsd = item.pricePaidRub / rate;
       }
       se.totalRub += priceRub * item.quantity;
       se.totalUsd += priceUsd * item.quantity;
       se.count += item.quantity;
-      se.items.push({ ...item, priceRub, priceUsd });
+      se.items.push({ ...item, priceRub, priceUsd, isPaid });
     }
 
     const suppliers = [...supplierMap.values()].sort((a, b) => b.totalRub - a.totalRub);
@@ -730,15 +738,15 @@ function buildPickerReportSheet(ws, dateStr, pickers, usdRate) {
         const time = item.pickedAt
           ? new Date(item.pickedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
           : "—";
-        const rubStr = item.priceRub ? `${Math.round(item.priceRub).toLocaleString("ru-RU")} ₽` : "—";
-        const usdStr = item.priceUsd ? `${(Math.round(item.priceUsd * 100) / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $` : "—";
+        const rubStr = item.priceRub ? `${Math.round(item.priceRub).toLocaleString("ru-RU")} ₽${item.isPaid ? "" : " *"}` : "—";
+        const usdStr = item.priceUsd ? `${(Math.round(item.priceUsd * 100) / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $${item.isPaid ? "" : " *"}` : "—";
         const orderRef = item.postingNumber || item.orderId || "—";
         const itemRow = ws.addRow(["", item.productName, item.marketplace.toUpperCase(), orderRef, rubStr, usdStr, item.quantity, time]);
         itemRow.outlineLevel = 1;
         itemRow.hidden = true;
         itemRow.eachCell({ includeEmpty: true }, (cell) => {
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFAFBFF" } };
-          cell.font = { size: 11 };
+          cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: item.isPaid ? "FFFAFBFF" : "FFFFF8F0" } };
+          cell.font = { size: 11, italic: !item.isPaid, color: item.isPaid ? undefined : { argb: "FF999999" } };
         });
       }
     }
