@@ -11,6 +11,31 @@ async function runSync() {
     try {
       currentOffers = await getCurrentOffers(connection);
       closeDumpMarker();
+      // Guard: if PM returned 0 rows (or suspiciously few) while the existing snapshot
+      // has data, treat it as a MySQL disruption (import lock, reboot, Active-flag sweep)
+      // and refuse to overwrite. A legitimate "all rows gone" event is extremely rare;
+      // a silent stock-wipe of 267k products is catastrophic.
+      const previousItemCount = Object.keys(previous.items || {}).length;
+      const currentCount = currentOffers.length;
+      const suspiciouslyFew = previousItemCount > 50 && currentCount < previousItemCount * 0.05;
+      if (suspiciouslyFew) {
+        logger.warn("pm_snapshot_suspicious_result_guard", { previousItems: previousItemCount, currentItems: currentCount });
+        if (typeof sendHealthAlertTelegram === "function") {
+          sendHealthAlertTelegram(
+            `⚠️ DavidSklad: PM MySQL вернул ${currentCount} строк при синке (в снапшоте ${previousItemCount}). Снапшот не перезаписан — проверьте PriceMaster.`
+          ).catch(() => {});
+        }
+        const guardResult = {
+          syncId: previous.syncId,
+          createdAt: previous.createdAt,
+          items: previousItemCount,
+          changes: 0,
+          changeCounts: {},
+          unchanged: true,
+        };
+        Object.defineProperty(guardResult, "changedRows", { value: [], enumerable: false, configurable: false });
+        return guardResult;
+      }
       const closeCompareMarker = setEventLoopBlockMarker("pricemaster_compare_snapshots");
       try {
         compared = await compareSnapshots(previous.items || {}, currentOffers);

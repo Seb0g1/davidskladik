@@ -1,3 +1,5 @@
+let lastUsdFallbackAlertAt = 0;
+
 function cloneAuditValue(value) {
   return value == null ? null : JSON.parse(JSON.stringify(value));
 }
@@ -209,6 +211,18 @@ function apiPayloadHasErrors(data = {}) {
 }
 
 async function getUsdRate({ force = false } = {}) {
+  // Manual rate from site settings takes priority over CBR API.
+  // Only skip this when force=true (admin refresh).
+  if (!force) {
+    try {
+      const appSettings = await readAppSettings();
+      const manualRate = Number(appSettings?.fixedUsdRate || 0);
+      if (manualRate > 0) {
+        return { rate: manualRate, source: "manual", fetchedAt: new Date().toISOString(), validForHours: Infinity, cached: false };
+      }
+    } catch { /* fall through to CBR */ }
+  }
+
   const cached = await readCachedExchangeRate();
   if (!force && cached?.rate && Date.now() - new Date(cached.fetchedAt).getTime() < exchangeRateTtlMs) {
     return { ...cached, cached: true };
@@ -234,6 +248,17 @@ async function getUsdRate({ force = false } = {}) {
     return { ...payload, cached: false };
   } catch (error) {
     if (cached?.rate) return { ...cached, cached: true, warning: error.message };
+    // No cache AND CBR failed — using hardcoded fallback. Alert once per hour to avoid spam.
+    const nowMs = Date.now();
+    if (nowMs - lastUsdFallbackAlertAt > 60 * 60 * 1000) {
+      lastUsdFallbackAlertAt = nowMs;
+      logger.warn("usd_rate_fallback_used", { defaultRate: process.env.DEFAULT_USD_RATE || 95, detail: error.message });
+      if (typeof sendHealthAlertTelegram === "function") {
+        sendHealthAlertTelegram(
+          `⚠️ DavidSklad: курс USD недоступен (CBR: ${error.message || "ошибка"}, кэш пуст). Все цены рассчитываются по DEFAULT_USD_RATE=${process.env.DEFAULT_USD_RATE || 95} ₽.`
+        ).catch(() => {});
+      }
+    }
     return {
       rate: Number(process.env.DEFAULT_USD_RATE || 95),
       source: "fallback",
