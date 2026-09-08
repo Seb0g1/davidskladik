@@ -219,12 +219,15 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     if (status === "picked") {
       financeOrder = await upsertFinanceOrderFromPickingRow(nextRow, request);
       supplierLedgerEntry = await upsertSupplierLedgerDebtFromPickingRow(nextRow, financeOrder, request);
-      // Deduct from picker's persistent balance (tracked in supplier native currency, usually USD)
-      const pickerDeductAmt = nextRow.price > 0
+      // Deduct from picker's persistent balance (stored in RUB, same as issued credits)
+      const pickerDeductUsd = nextRow.price > 0
         ? nextRow.price * Math.max(1, Math.round(Number(nextRow.quantity || 1)))
         : 0;
-      if (pickerDeductAmt > 0 && nextRow.pickedBy) {
+      if (pickerDeductUsd > 0 && nextRow.pickedBy) {
         try {
+          const rateForDeduction = await getUsdRate().catch(() => null);
+          const deductionRate = Number(rateForDeduction?.rate || process.env.DEFAULT_USD_RATE || 95) || 95;
+          const pickerDeductRub = Math.round(pickerDeductUsd * deductionRate);
           await withPickerBalanceLock(nextRow.pickedBy, async () => {
             const pickerBal = await loadPickerBalance(nextRow.pickedBy);
             // Use picking key as deduction ID so we can reverse it on rollback
@@ -232,7 +235,8 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
             if (!pickerBal.credits.some((c) => String(c.id) === debitId)) {
               pickerBal.credits.push({
                 id: debitId,
-                amount: -pickerDeductAmt,
+                amount: -pickerDeductRub,
+                currency: "RUB",
                 note: `Оплата: ${nextRow.productName || nextRow.offerId || key}`,
                 createdAt: now.toISOString(),
                 createdBy: "system",
@@ -429,6 +433,378 @@ app.post("/api/supplier-picking-list/:key/defer", requireStaff, async (request, 
       newValue: { deferredUntil },
     });
     response.json({ ok: true, row: nextRow, deferredUntil });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Record that a returned item was physically sent back to the supplier and credit the ledger.
+app.post("/api/supplier-picking-list/:key/supplier-return", requireStaff, async (request, response, next) => {
+  try {
+    const key = cleanText(request.params.key || "");
+    const state = await readSupplierPickingState();
+    const current = state.rows[key] ? normalizeSupplierPickingRow(state.rows[key]) : null;
+    if (!current) return response.status(404).json({ error: "Picking row not found.", code: "supplier_picking_not_found" });
+    if (current.status !== "returned") {
+      return response.status(409).json({ error: "Только строки в статусе «Возврат из ПВЗ» можно вернуть поставщику.", code: "supplier_picking_not_returned", row: current });
+    }
+    if (current.supplierReturnedAt) {
+      return response.status(409).json({ error: "Возврат поставщику уже зафиксирован.", code: "supplier_return_already_exists", row: current });
+    }
+
+    const now = new Date();
+    const username = requestUsername(request);
+    const rawAmount = request.body?.amountRub;
+    const amountRub = rawAmount != null ? (normalizeFinanceMoney(rawAmount, 0) || null) : null;
+    const note = cleanText(request.body?.note || "Возврат товара поставщику");
+
+    // Create supplier_return ledger entry (credit) if ledger available
+    let ledgerEntry = null;
+    if (shouldUsePostgresStorage() && current.supplierName) {
+      const debtEntry = await getPrisma().supplierLedgerEntry.findFirst({
+        where: { pickingKey: key, entryType: "purchase_debt", status: "active" },
+      });
+      const creditAmount = amountRub != null ? Math.abs(amountRub) : (debtEntry ? Math.abs(Number(debtEntry.amount)) : 0);
+      if (creditAmount > 0) {
+        const entry = normalizeSupplierLedgerEntry({
+          sourceKey: `supplier_return:picking:${key}`,
+          entryType: "supplier_return",
+          supplierName: current.supplierName,
+          partnerId: current.partnerId,
+          amount: creditAmount,
+          currency: "RUB",
+          pickingKey: key,
+          financeOrderId: debtEntry?.financeOrderId || null,
+          orderId: current.orderId || current.postingNumber || key,
+          postingNumber: current.postingNumber,
+          offerId: current.offerId,
+          productName: current.productName,
+          quantity: current.quantity,
+          note,
+          occurredAt: now.toISOString(),
+          createdBy: username,
+          raw: { source: "supplier_return_picking", pickingKey: key, debtEntryId: debtEntry?.id || null },
+        });
+        try {
+          const saved = await getPrisma().supplierLedgerEntry.create({
+            data: {
+              id: entry.id,
+              sourceKey: entry.sourceKey,
+              entryType: entry.entryType,
+              supplierName: entry.supplierName || null,
+              partnerId: entry.partnerId || null,
+              amount: entry.amount,
+              currency: entry.currency,
+              pickingKey: entry.pickingKey || null,
+              financeOrderId: entry.financeOrderId || null,
+              orderId: entry.orderId || null,
+              postingNumber: entry.postingNumber || null,
+              offerId: entry.offerId || null,
+              productName: entry.productName || null,
+              quantity: entry.quantity,
+              note: entry.note || null,
+              status: "active",
+              occurredAt: toDateOrNull(entry.occurredAt) || new Date(),
+              createdBy: entry.createdBy || null,
+              raw: entry.raw,
+            },
+          });
+          suppliersListCache = null;
+          ledgerEntry = supplierLedgerEntryFromPostgres(saved);
+          await appendAudit(request, "supplier_ledger.supplier_return", {
+            entityType: "supplier_ledger",
+            entityId: saved.id,
+            newValue: ledgerEntry,
+          }).catch((e) => logger.warn("supplier return ledger audit failed", { detail: e?.message }));
+        } catch (ledgerError) {
+          if (ledgerError?.code !== "P2002") throw ledgerError;
+          // Already exists — idempotent
+          const existing = await getPrisma().supplierLedgerEntry.findUnique({ where: { sourceKey: entry.sourceKey } });
+          if (existing) ledgerEntry = supplierLedgerEntryFromPostgres(existing);
+        }
+      }
+    }
+
+    const nextRow = normalizeSupplierPickingRow({
+      ...current,
+      status: "return_used",
+      supplierReturnedBy: username,
+      supplierReturnedAt: now.toISOString(),
+      supplierReturnAmountRub: amountRub,
+    });
+    state.rows[key] = nextRow;
+    await writeSupplierPickingState(state);
+
+    await appendAudit(request, "supplier_picking.supplier_return", {
+      entityType: "supplier_picking",
+      entityId: key,
+      oldValue: current,
+      newValue: nextRow,
+      ledgerEntryId: ledgerEntry?.id || null,
+    });
+    response.json({ ok: true, row: nextRow, ledgerEntry });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ── Employee picking report ──────────────────────────────────────────────────
+
+async function fetchPickerRowsForRange(fromDate, toDate) {
+  const prisma = getPrisma();
+  if (!prisma) return [];
+  const start = new Date(`${fromDate}T00:00:00.000Z`);
+  const end = new Date(`${toDate}T23:59:59.999Z`);
+  return prisma.supplierPickingRow.findMany({
+    where: { status: "picked", pickedAt: { gte: start, lte: end } },
+    orderBy: { pickedAt: "asc" },
+  });
+}
+
+function groupPickerRowsByDate(rows) {
+  const byDate = {};
+  for (const row of rows) {
+    const dateKey = row.pickedAt?.toISOString()?.slice(0, 10) || new Date().toISOString().slice(0, 10);
+    if (!byDate[dateKey]) byDate[dateKey] = {};
+    const picker = row.pickedBy || "неизвестно";
+    if (!byDate[dateKey][picker]) byDate[dateKey][picker] = { username: picker, items: [], totalUsd: 0, count: 0 };
+    const price = Number(row.price || 0);
+    const qty = Math.max(1, Number(row.quantity || 1));
+    const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
+    byDate[dateKey][picker].items.push({
+      productName: row.productName || "",
+      supplierName: row.supplierName || "",
+      price,
+      priceCurrency: row.priceCurrency || "USD",
+      pricePaidRub: raw.pricePaidRub != null ? Number(raw.pricePaidRub) || null : null,
+      quantity: qty,
+      pickedAt: row.pickedAt?.toISOString() || null,
+      marketplace: row.marketplace || "",
+      orderId: row.orderId || "",
+      postingNumber: row.postingNumber || "",
+    });
+    byDate[dateKey][picker].totalUsd += price * qty;
+    byDate[dateKey][picker].count += qty;
+  }
+  return Object.entries(byDate)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, pickerMap]) => ({
+      date,
+      pickers: Object.values(pickerMap)
+        .map((p) => ({ ...p, totalUsd: Math.round(p.totalUsd * 100) / 100 }))
+        .sort((a, b) => b.count - a.count),
+    }));
+}
+
+function buildPickerReportSheet(ws, dateStr, pickers, usdRate) {
+  const rate = Number(usdRate) || 95;
+  const dateLabel = new Date(`${dateStr}T12:00:00Z`).toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+  const titleRow = ws.addRow([`Отчёт сотрудников за ${dateLabel}  (курс ${rate} ₽/$)`]);
+  titleRow.getCell(1).font = { bold: true, size: 14 };
+  ws.addRow([]);
+
+  // Track Ирина totals across all sections (case-insensitive match)
+  let irinaTotalRub = 0;
+  let irinaTotalUsd = 0;
+  let irinaCount = 0;
+  let irinaFound = false;
+
+  for (const picker of pickers) {
+    const pickerHeaderRow = ws.addRow([`Сотрудник: ${picker.username}`]);
+    pickerHeaderRow.getCell(1).font = { bold: true, size: 12 };
+    pickerHeaderRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFD6E4FF" } };
+
+    const colHeaderRow = ws.addRow(["Время", "Товар", "Поставщик", "Маркетплейс", "Заказ / Отправление", "Цена ₽", "Цена $", "Кол-во"]);
+    colHeaderRow.eachCell((cell) => {
+      cell.font = { bold: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEEF3FF" } };
+      cell.border = { bottom: { style: "thin", color: { argb: "FFADC6FF" } } };
+    });
+
+    let sumRub = 0;
+    let sumUsd = 0;
+    for (const item of picker.items) {
+      const time = item.pickedAt
+        ? new Date(item.pickedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+        : "—";
+      let priceRub = 0;
+      let priceUsd = 0;
+      if (item.price > 0) {
+        if (item.priceCurrency === "RUB") {
+          priceRub = item.price;
+          priceUsd = Math.round((item.price / rate) * 100) / 100;
+        } else {
+          priceUsd = item.price;
+          priceRub = Math.round(item.price * rate);
+        }
+      } else if (item.pricePaidRub) {
+        priceRub = item.pricePaidRub;
+        priceUsd = Math.round((item.pricePaidRub / rate) * 100) / 100;
+      }
+      sumRub += priceRub * item.quantity;
+      sumUsd += priceUsd * item.quantity;
+      const rubStr = priceRub ? `${Math.round(priceRub).toLocaleString("ru-RU")} ₽` : "—";
+      const usdStr = priceUsd ? `${priceUsd.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $` : "—";
+      const orderRef = item.postingNumber || item.orderId || "—";
+      ws.addRow([time, item.productName, item.supplierName, item.marketplace.toUpperCase(), orderRef, rubStr, usdStr, item.quantity]);
+    }
+
+    const totalRow = ws.addRow([
+      "", "ИТОГО:", "", "", "",
+      `${Math.round(sumRub).toLocaleString("ru-RU")} ₽`,
+      `${(Math.round(sumUsd * 100) / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $`,
+      picker.count,
+    ]);
+    totalRow.eachCell((cell, col) => {
+      if (col >= 2) cell.font = { bold: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFAF0FF" } };
+    });
+    ws.addRow([]);
+
+    if (picker.username.toLowerCase().includes("ирин")) {
+      irinaTotalRub += sumRub;
+      irinaTotalUsd += sumUsd;
+      irinaCount += picker.count;
+      irinaFound = true;
+    }
+  }
+
+  // Separate Ирина summary block
+  if (irinaFound) {
+    const irinaHeaderRow = ws.addRow([`★ Итого ИРИНА за ${dateLabel}:`]);
+    irinaHeaderRow.getCell(1).font = { bold: true, size: 12, color: { argb: "FF1A3A8F" } };
+    irinaHeaderRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCFE2FF" } };
+    const irinaTotalRow = ws.addRow([
+      "", "ИТОГО:", "", "", "",
+      `${Math.round(irinaTotalRub).toLocaleString("ru-RU")} ₽`,
+      `${(Math.round(irinaTotalUsd * 100) / 100).toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $`,
+      irinaCount,
+    ]);
+    irinaTotalRow.eachCell((cell, col) => {
+      if (col >= 2) cell.font = { bold: true };
+      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFCFE2FF" } };
+    });
+  }
+
+  ws.getColumn(1).width = 7;
+  ws.getColumn(2).width = 44;
+  ws.getColumn(3).width = 20;
+  ws.getColumn(4).width = 13;
+  ws.getColumn(5).width = 22;
+  ws.getColumn(6).width = 14;
+  ws.getColumn(7).width = 10;
+  ws.getColumn(8).width = 8;
+}
+
+async function buildPickerExcel(dateRows) {
+  const ExcelJS = require("exceljs");
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "DavidSklad";
+  wb.created = new Date();
+
+  const ratePayload = await getUsdRate().catch(() => null);
+  const usdRate = Number(ratePayload?.rate || process.env.DEFAULT_USD_RATE || 95) || 95;
+
+  for (const { date, pickers } of dateRows) {
+    if (!pickers.length) continue;
+    // Sheet name: "07.09.26" (8 chars, Excel limit 31)
+    const d = new Date(`${date}T12:00:00Z`);
+    const sheetName = d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "2-digit" });
+    const ws = wb.addWorksheet(sheetName);
+    buildPickerReportSheet(ws, date, pickers, usdRate);
+  }
+
+  if (!wb.worksheets.length) {
+    const ws = wb.addWorksheet("Нет данных");
+    ws.addRow(["Нет собранных позиций за выбранный период."]);
+  }
+
+  return wb;
+}
+
+// Single-day export
+app.get("/api/picker-report/export", requireAdmin, async (request, response, next) => {
+  try {
+    const rawDate = cleanText(request.query.date || "");
+    const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : new Date().toISOString().slice(0, 10);
+    const rows = await fetchPickerRowsForRange(dateStr, dateStr);
+    const dateRows = groupPickerRowsByDate(rows);
+    const wb = await buildPickerExcel(dateRows.length ? dateRows : [{ date: dateStr, pickers: [] }]);
+    const d = new Date(`${dateStr}T12:00:00Z`);
+    const dateLabel = d.toLocaleDateString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric" }).replace(/\./g, "-");
+    response.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    response.setHeader("Content-Disposition", `attachment; filename="picker-report-${dateLabel}.xlsx"`);
+    await wb.xlsx.write(response);
+    response.end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Multi-sheet export (one sheet per date)
+app.get("/api/picker-report/export/full", requireAdmin, async (request, response, next) => {
+  try {
+    const rawFrom = cleanText(request.query.from || "");
+    const rawTo = cleanText(request.query.to || "");
+    const today = new Date().toISOString().slice(0, 10);
+    const toDate = /^\d{4}-\d{2}-\d{2}$/.test(rawTo) ? rawTo : today;
+    // Default: last 30 days
+    const defaultFrom = new Date(Date.now() - 29 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const fromDate = /^\d{4}-\d{2}-\d{2}$/.test(rawFrom) ? rawFrom : defaultFrom;
+    const rows = await fetchPickerRowsForRange(fromDate, toDate);
+    const dateRows = groupPickerRowsByDate(rows);
+    const wb = await buildPickerExcel(dateRows);
+    const fromLabel = fromDate.replace(/-/g, "");
+    const toLabel = toDate.replace(/-/g, "");
+    response.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    response.setHeader("Content-Disposition", `attachment; filename="picker-report-${fromLabel}-${toLabel}.xlsx"`);
+    await wb.xlsx.write(response);
+    response.end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/picker-report", requireAdmin, async (request, response, next) => {
+  try {
+    const rawDate = cleanText(request.query.date || "");
+    const dateStr = /^\d{4}-\d{2}-\d{2}$/.test(rawDate) ? rawDate : new Date().toISOString().slice(0, 10);
+    const start = new Date(`${dateStr}T00:00:00.000Z`);
+    const end = new Date(`${dateStr}T23:59:59.999Z`);
+    const prisma = getPrisma();
+    if (!prisma) return response.json({ ok: true, date: dateStr, pickers: [] });
+    const rows = await prisma.supplierPickingRow.findMany({
+      where: { status: "picked", pickedAt: { gte: start, lte: end } },
+      orderBy: { pickedAt: "asc" },
+    });
+    const byPicker = {};
+    for (const row of rows) {
+      const picker = row.pickedBy || "неизвестно";
+      if (!byPicker[picker]) byPicker[picker] = { username: picker, items: [], totalUsd: 0, count: 0 };
+      const price = Number(row.price || 0);
+      const qty = Math.max(1, Number(row.quantity || 1));
+      const raw = row.raw && typeof row.raw === "object" ? row.raw : {};
+      byPicker[picker].items.push({
+        key: row.pickingKey,
+        productName: row.productName || "",
+        supplierName: row.supplierName || "",
+        price,
+        priceCurrency: row.priceCurrency || "USD",
+        pricePaidRub: raw.pricePaidRub != null ? Number(raw.pricePaidRub) || null : null,
+        quantity: qty,
+        pickedAt: row.pickedAt?.toISOString() || null,
+        marketplace: row.marketplace || "",
+        orderId: row.orderId || "",
+        postingNumber: row.postingNumber || "",
+      });
+      byPicker[picker].totalUsd += price * qty;
+      byPicker[picker].count += qty;
+    }
+    const pickers = Object.values(byPicker)
+      .map((p) => ({ ...p, totalUsd: Math.round(p.totalUsd * 100) / 100 }))
+      .sort((a, b) => b.count - a.count);
+    response.json({ ok: true, date: dateStr, pickers });
   } catch (error) {
     next(error);
   }

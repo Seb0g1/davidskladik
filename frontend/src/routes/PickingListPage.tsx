@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Info, Loader2, MoreHorizontal, PackageX, Pencil, RefreshCw, Repeat2, RotateCcw, ShoppingBag, Trash2, Users, Wallet, X, Zap } from "lucide-react";
+import { AlertTriangle, CalendarDays, Check, CheckCircle2, ChevronDown, ClipboardList, Clock, Copy, Database, Download, Info, Loader2, MoreHorizontal, PackageX, Pencil, RefreshCw, Repeat2, RotateCcw, ShoppingBag, Trash2, Users, Wallet, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import { fetchJson, mutationBody, patchBody } from "../api";
@@ -9,7 +9,7 @@ import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { SupplierAltPicker } from "../components/SupplierAltPicker";
-import { DailyCartTotalSchema, PickerBalanceSchema, PickerBalancesSchema, PickerMyDaySchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
+import { DailyCartTotalSchema, PickerBalanceSchema, PickerBalancesSchema, PickerMyDaySchema, PickerReportSchema, SupplierCartCancelSchema, SupplierLedgerPaymentSchema, SupplierPickingInvoiceSchema, SupplierPickingListSchema, SupplierPickingRowSchema, SupplierPickingUpdateSchema, SupplierReplaceResponseSchema } from "../types";
 import { PmSearchPanel } from "./SupplierCartPage";
 import { compactDate, copyPlainText, errorMessage, money, numberValue } from "../lib/common";
 
@@ -66,12 +66,19 @@ const currentGroupTotalRub = (rows: PickingRow[], rate: number) => rows.reduce((
 }, 0);
 
 export function PickingListPage() {
-  const [view, setView] = useState<"list" | "sheets">("list");
+  const [view, setView] = useState<"list" | "sheets" | "report">("list");
+  const [reportDate, setReportDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [expandedPickers, setExpandedPickers] = useState<Set<string>>(new Set());
+  const [fullExportFrom, setFullExportFrom] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() - 29); return d.toISOString().slice(0, 10);
+  });
+  const [fullExportTo, setFullExportTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [status, setStatus] = useState("open");
   const [supplier, setSupplier] = useState("");
   const [q, setQ] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-  const [period, setPeriod] = useState("1d");
+  const [period, setPeriod] = useState("7d");
+  const [invoiceQ, setInvoiceQ] = useState("");
   const [invoicesOpen, setInvoicesOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [paymentDrafts, setPaymentDrafts] = useState<Record<string, string>>({});
@@ -134,6 +141,13 @@ export function PickingListPage() {
     staleTime: 120_000,
   });
 
+  const reportQuery = useQuery({
+    queryKey: ["picker-report", reportDate],
+    queryFn: () => fetchJson(`/api/picker-report?date=${encodeURIComponent(reportDate)}`, PickerReportSchema),
+    enabled: isAdmin && view === "report",
+    staleTime: 30_000,
+  });
+
   const [replaceKey, setReplaceKey] = useState<string | null>(null);
   const [editCredit, setEditCredit] = useState<{ username: string; id: string; amount: string; note: string } | null>(null);
   const [missingRow, setMissingRow] = useState<PickingRow | null>(null);
@@ -168,9 +182,24 @@ export function PickingListPage() {
   });
   const [pickQtyDrafts, setPickQtyDrafts] = useState<Record<string, string>>({});
   const [priceDrafts, setPriceDrafts] = useState<Record<string, string>>({});
+  const [pickAllConfirm, setPickAllConfirm] = useState<{
+    groupId: string;
+    pmPrice: number | null;
+    isUsd: boolean;
+    productName: string;
+    openRowKeys: string[];
+    discountDraft: string;
+  } | null>(null);
   const [returnDraftAmount, setReturnDraftAmount] = useState<string>("");
   const [returnDraftNote, setReturnDraftNote] = useState<string>("");
   const [returnTargetUser, setReturnTargetUser] = useState<string>("");
+  const [supplierReturnConfirm, setSupplierReturnConfirm] = useState<{
+    key: string;
+    amountDraft: string;
+    supplierName: string;
+    productName: string;
+    defaultAmount: number;
+  } | null>(null);
 
   const myDayQuery = useQuery({
     queryKey: ["picker-my-day"],
@@ -252,6 +281,29 @@ export function PickingListPage() {
       void queryClient.invalidateQueries({ queryKey: ["finance"] });
     },
   });
+  const pickAllMutation = useMutation({
+    mutationFn: async (rows: Array<{ key: string; pricePaidRub?: number }>) => {
+      for (const { key, pricePaidRub } of rows) {
+        setPendingPickKeys((prev) => new Set(prev).add(key));
+        await fetchJson(
+          `/api/supplier-picking-list/${encodeURIComponent(key)}`,
+          SupplierPickingUpdateSchema,
+          patchBody({ status: "picked", ...(pricePaidRub != null ? { pricePaidRub } : {}) })
+        );
+        setPendingPickKeys((prev) => { const next = new Set(prev); next.delete(key); return next; });
+      }
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["supplier-cart-history"] });
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
+    },
+    onError: (_err, rows) => {
+      rows.forEach(({ key }) => setPendingPickKeys((prev) => { const next = new Set(prev); next.delete(key); return next; }));
+    },
+  });
+
   const deferMutation = useMutation({
     mutationFn: ({ key, clear }: { key: string; clear?: boolean }) =>
       fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/defer`, z.object({ ok: z.boolean(), deferredUntil: z.string().nullable().optional() }).passthrough(), mutationBody({ clear: clear ?? false })),
@@ -285,6 +337,17 @@ export function PickingListPage() {
       void queryClient.invalidateQueries({ queryKey: ["picker-balances"] });
       void queryClient.invalidateQueries({ queryKey: ["picker-balance", vars.pickerUsername] });
       void queryClient.invalidateQueries({ queryKey: ["picker-my-day"] });
+    },
+  });
+
+  const supplierReturnMutation = useMutation({
+    mutationFn: ({ key, amountRub }: { key: string; amountRub?: number }) =>
+      fetchJson(`/api/supplier-picking-list/${encodeURIComponent(key)}/supplier-return`, SupplierPickingUpdateSchema, mutationBody({ amountRub })),
+    onSuccess: () => {
+      setSupplierReturnConfirm(null);
+      void queryClient.invalidateQueries({ queryKey: ["supplier-picking-list"] });
+      void queryClient.invalidateQueries({ queryKey: ["suppliers"] });
+      void queryClient.invalidateQueries({ queryKey: ["finance"] });
     },
   });
 
@@ -354,6 +417,7 @@ export function PickingListPage() {
   useEffect(() => {
     setPickQtyDrafts({});
     setPriceDrafts({});
+    setPickAllConfirm(null);
     setOpenActionMenu(null);
   }, [status, supplier]);
 
@@ -830,6 +894,11 @@ export function PickingListPage() {
         <button className={`page-tab-btn${view === "sheets" ? " active" : ""}`} type="button" onClick={() => setView("sheets")}>
           <CalendarDays size={15} /> Листы сборки
         </button>
+        {isAdmin ? (
+          <button className={`page-tab-btn${view === "report" ? " active" : ""}`} type="button" onClick={() => setView("report")}>
+            <Users size={15} /> Отчёт сотрудников
+          </button>
+        ) : null}
       </div>
 
       <section className="dashboard-metrics">
@@ -867,7 +936,7 @@ export function PickingListPage() {
         ))}
       </div>
 
-      {/* Mobile: supplier filter (shown only on mobile, desktop uses picking-filters below) */}
+      {/* Mobile: supplier filter + search (shown only on mobile, desktop uses picking-filters below) */}
       {suppliers.length > 0 ? (
         <div className="picking-supplier-mobile-filter">
           <select
@@ -880,6 +949,20 @@ export function PickingListPage() {
           </select>
         </div>
       ) : null}
+      <div className="picking-mobile-search">
+        <input
+          ref={searchRef}
+          className="picking-mobile-search-input"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Поиск: товар, SKU, заказ"
+        />
+        {q ? (
+          <button type="button" className="picking-mobile-search-clear" onClick={() => setQ("")}>
+            <X size={16} />
+          </button>
+        ) : null}
+      </div>
 
       {/* Desktop: full filter row */}
       <div className="control-grid compact-controls picking-filters">
@@ -1008,6 +1091,118 @@ export function PickingListPage() {
         </section>
       ) : null}
 
+      {view === "report" && isAdmin ? (
+        <section className="table-panel">
+          <div className="picker-report-toolbar">
+            <label className="picker-report-date-label">
+              Дата:
+              <input
+                type="date"
+                className="picker-report-date-input"
+                value={reportDate}
+                onChange={(e) => { if (e.target.value) setReportDate(e.target.value); }}
+              />
+            </label>
+            {reportQuery.isFetching ? <Loader2 className="spin" size={15} style={{ opacity: 0.5 }} /> : null}
+            <a
+              className="secondary-action picker-report-export-btn"
+              href={`/api/picker-report/export?date=${encodeURIComponent(reportDate)}`}
+              download
+              title="Скачать Excel за выбранный день"
+            >
+              <Download size={14} /> Excel за день
+            </a>
+            <div className="picker-report-full-export">
+              <span className="picker-report-date-label">Полный экспорт:</span>
+              <input
+                type="date"
+                className="picker-report-date-input"
+                value={fullExportFrom}
+                onChange={(e) => { if (e.target.value) setFullExportFrom(e.target.value); }}
+              />
+              <span className="picker-report-date-label" style={{ padding: "0 2px" }}>—</span>
+              <input
+                type="date"
+                className="picker-report-date-input"
+                value={fullExportTo}
+                onChange={(e) => { if (e.target.value) setFullExportTo(e.target.value); }}
+              />
+              <a
+                className="secondary-action picker-report-export-btn"
+                href={`/api/picker-report/export/full?from=${encodeURIComponent(fullExportFrom)}&to=${encodeURIComponent(fullExportTo)}`}
+                download
+                title="Скачать Excel с листами по датам"
+              >
+                <Download size={14} /> Excel полный
+              </a>
+            </div>
+          </div>
+          {reportQuery.isLoading ? (
+            <div className="soft-empty"><Loader2 className="spin" size={16} /> Загружаю отчёт...</div>
+          ) : reportQuery.data?.pickers.length === 0 ? (
+            <div className="soft-empty">За этот день нет собранных позиций.</div>
+          ) : (
+            <div className="picker-report-list">
+              {(reportQuery.data?.pickers ?? []).map((picker) => {
+                const expanded = expandedPickers.has(picker.username);
+                return (
+                  <article className="picker-report-card" key={picker.username}>
+                    <button
+                      className="picker-report-header"
+                      type="button"
+                      onClick={() => setExpandedPickers((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(picker.username)) next.delete(picker.username);
+                        else next.add(picker.username);
+                        return next;
+                      })}
+                    >
+                      <div className="picker-report-header-left">
+                        <span className="picker-report-name">{picker.username}</span>
+                        <span className="picker-report-meta">
+                          {picker.count} позиций · {picker.totalUsd.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $
+                        </span>
+                      </div>
+                      <ChevronDown size={15} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform .2s", opacity: 0.6, flexShrink: 0 }} />
+                    </button>
+                    {expanded ? (
+                      <div className="picker-report-items">
+                        {picker.items.map((item, idx) => {
+                          const timeLabel = item.pickedAt
+                            ? new Date(item.pickedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })
+                            : "-";
+                          const costLabel = item.price > 0
+                            ? `${item.price} ${item.priceCurrency === "RUB" ? "₽" : "$"}`
+                            : item.pricePaidRub
+                            ? `${item.pricePaidRub} ₽`
+                            : "−";
+                          return (
+                            <div className="picker-report-item" key={item.key || idx}>
+                              <span className="picker-report-item-time">{timeLabel}</span>
+                              <span className="picker-report-item-name">{item.productName || item.key}</span>
+                              <span className="picker-report-item-meta">
+                                {item.supplierName ? `${item.supplierName} · ` : ""}
+                                {item.marketplace ? `${item.marketplace.toUpperCase()} · ` : ""}
+                                {item.orderId || item.postingNumber || ""}
+                              </span>
+                              <span className="picker-report-item-cost">{costLabel}</span>
+                            </div>
+                          );
+                        })}
+                        <div className="picker-report-total">
+                          Итого: <strong>{picker.totalUsd.toLocaleString("ru-RU", { maximumFractionDigits: 2 })} $</strong>
+                          {" "}за {picker.count} поз.
+                        </div>
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
+            </div>
+          )}
+        </section>
+      ) : null}
+
       {view === "list" ? (
         <>
           {deferredByDay.length > 0 ? (
@@ -1114,6 +1309,10 @@ export function PickingListPage() {
               const debtTotalUsd = Number(ledger.debtTotalUsd || 0);
               const debtTotalRub = Number(ledger.debtTotal || 0);
               const paidTotalRub = Number(ledger.paidTotal || 0);
+              const paidTotalUsdPick = Number((ledger as Record<string, unknown>).paidTotalUsd ?? paidTotalRub);
+              const paidTotalRubOnlyPick = Number((ledger as Record<string, unknown>).paidTotalRubOnly || 0);
+              const creditTotalUsdPick = Number((ledger as Record<string, unknown>).creditTotalUsd || 0);
+              const creditTotalRubPick = Number((ledger as Record<string, unknown>).creditTotalRub || 0);
               const draftAmount = paymentDrafts[supplierName] || "";
               const draftNote = paymentNotes[supplierName] || "";
               const total = currentGroupTotal(supplierRows);
@@ -1121,9 +1320,11 @@ export function PickingListPage() {
               const supplierCurrency = String(supplierRows[0]?.priceCurrency || "USD").toUpperCase() === "RUB" ? "RUB" : "USD";
               const totalQtyAll = supplierRows.reduce((s, r) => s + (r.quantity || 1), 0);
               const hasReseller = supplierRows.some(r => r.reseller);
-              const balanceUsd = supplierCurrency === "USD" ? balance / usdRate : balance;
-              const isOverpaid = balance < 0;
-              const isInDebt = balance > 0;
+              const balanceUsd = supplierCurrency === "USD"
+                ? -debtTotalUsd + creditTotalUsdPick + creditTotalRubPick / usdRate
+                : balance;
+              const isOverpaid = balanceUsd < 0;
+              const isInDebt = balanceUsd > 0;
               return (
                 <article className="picking-supplier-card" key={supplierName}>
                   <div className="picking-supplier-toolbar">
@@ -1174,9 +1375,9 @@ export function PickingListPage() {
                         <DiagnosticValue label="Общий долг" value={debtTotalRub > 0 ? moneyAmount(debtTotalRub, "RUB") : "—"} tone={debtTotalRub > 0 ? "danger" : ""} />
                       )}
                       {supplierCurrency === "USD" ? (
-                        <DiagnosticValue label="Оплачено" value={paidTotalRub > 0 ? moneyAmount(Math.round(paidTotalRub / usdRate), "USD") : "—"} tone={paidTotalRub > 0 ? "success" : ""} />
+                        <DiagnosticValue label="Оплачено" value={(paidTotalUsdPick + paidTotalRubOnlyPick / usdRate) > 0 ? moneyAmount(Math.round(paidTotalUsdPick + paidTotalRubOnlyPick / usdRate), "USD") : "—"} tone={(paidTotalUsdPick + paidTotalRubOnlyPick) > 0 ? "success" : ""} />
                       ) : (
-                        <DiagnosticValue label="Оплачено" value={paidTotalRub > 0 ? moneyAmount(paidTotalRub, "RUB") : "—"} tone={paidTotalRub > 0 ? "success" : ""} />
+                        <DiagnosticValue label="Оплачено" value={paidTotalRubOnlyPick > 0 ? moneyAmount(paidTotalRubOnlyPick, "RUB") : "—"} tone={paidTotalRubOnlyPick > 0 ? "success" : ""} />
                       )}
                       <DiagnosticValue label="Сборка" value={supplierCurrency === "RUB" ? moneyAmount(total, "RUB") : `${moneyAmount(total, "USD")} / ≈${moneyAmount(totalRub, "RUB")}`} />
                     </div>
@@ -1273,15 +1474,105 @@ export function PickingListPage() {
                                   </div>
                                 </div>
                                 {openRows.length > 0 ? (
-                                  <div className="picking-group-pick-all">
-                                    <button
-                                      className="primary-action success-action"
-                                      type="button"
-                                      disabled={openRows.some(r => pendingPickKeys.has(r.key))}
-                                      onClick={() => { openRows.forEach(r => { if (!pendingPickKeys.has(r.key)) updateMutation.mutate({ key: r.key, nextStatus: "picked" }); }); }}
-                                    >
-                                      <Check size={13} /> Все собрал ({openRows.length})
-                                    </button>
+                                  <div className="picking-group-pick-all" onClick={(e) => e.stopPropagation()}>
+                                    {pickAllConfirm?.groupId === groupId ? (() => {
+                                      const discount = Number((pickAllConfirm.discountDraft || "0").replace(",", ".")) || 0;
+                                      const hasPm = pickAllConfirm.pmPrice != null && pickAllConfirm.pmPrice > 0;
+                                      const finalPrice = hasPm ? Math.max(0, pickAllConfirm.pmPrice! - discount) : null;
+                                      const finalRub = finalPrice != null && pickAllConfirm.isUsd ? Math.round(finalPrice * usdRate) : null;
+                                      const sym = pickAllConfirm.isUsd ? "$" : "₽";
+                                      const groupIsPending = openRows.some(r => pendingPickKeys.has(r.key));
+                                      return (
+                                        <div className="pick-all-confirm">
+                                          <div className="pick-all-confirm-title">
+                                            <Check size={13} />
+                                            <span>{pickAllConfirm.productName}</span>
+                                            <span className="pick-all-confirm-count">× {openRows.length}</span>
+                                          </div>
+                                          <div className="pick-all-confirm-fields">
+                                            {hasPm ? (
+                                              <div className="pick-all-confirm-pm">
+                                                <span className="pick-all-confirm-label">Цена PM</span>
+                                                <span className="pick-all-confirm-pm-val">{pickAllConfirm.pmPrice} {sym}</span>
+                                              </div>
+                                            ) : null}
+                                            <div className="pick-all-confirm-discount-row">
+                                              <span className="pick-all-confirm-label">Скидка</span>
+                                              <div className="pick-all-confirm-input-wrap">
+                                                <input
+                                                  className="pick-all-confirm-input"
+                                                  type="number"
+                                                  min={0}
+                                                  step={0.01}
+                                                  autoFocus
+                                                  placeholder="0"
+                                                  value={pickAllConfirm.discountDraft}
+                                                  onChange={(e) => setPickAllConfirm(p => p ? { ...p, discountDraft: e.target.value } : p)}
+                                                  onKeyDown={(e) => {
+                                                    if (e.key === "Escape") { setPickAllConfirm(null); }
+                                                    if (e.key === "Enter" && !groupIsPending) {
+                                                      const pricePaidRub = finalPrice != null && finalPrice > 0
+                                                        ? (pickAllConfirm.isUsd ? Math.round(finalPrice * usdRate) : finalPrice)
+                                                        : undefined;
+                                                      const toPickRows = openRows.filter(r => !pendingPickKeys.has(r.key)).map(r => ({ key: r.key, pricePaidRub }));
+                                                      if (toPickRows.length) { pickAllMutation.mutate(toPickRows); setPickAllConfirm(null); }
+                                                    }
+                                                  }}
+                                                />
+                                                <span className="pick-all-confirm-sym">{sym}</span>
+                                              </div>
+                                              {finalPrice != null ? (
+                                                <div className="pick-all-confirm-result">
+                                                  <span className="pick-all-confirm-label">Итого</span>
+                                                  <span className="pick-all-confirm-final tone-warn">
+                                                    {finalPrice} {sym}
+                                                    {finalRub ? <span className="pick-all-confirm-rub">≈ {finalRub.toLocaleString("ru-RU")} ₽</span> : null}
+                                                  </span>
+                                                </div>
+                                              ) : null}
+                                            </div>
+                                          </div>
+                                          <div className="pick-all-confirm-actions">
+                                            <button
+                                              className="primary-action success-action"
+                                              type="button"
+                                              disabled={groupIsPending}
+                                              onClick={() => {
+                                                const pricePaidRub = finalPrice != null && finalPrice > 0
+                                                  ? (pickAllConfirm.isUsd ? Math.round(finalPrice * usdRate) : finalPrice)
+                                                  : undefined;
+                                                const toPickRows = openRows.filter(r => !pendingPickKeys.has(r.key)).map(r => ({ key: r.key, pricePaidRub }));
+                                                if (toPickRows.length === 0) return;
+                                                pickAllMutation.mutate(toPickRows);
+                                                setPickAllConfirm(null);
+                                              }}
+                                            >
+                                              {groupIsPending ? <Loader2 size={13} className="spin" /> : <Check size={13} />} Собрать все ({openRows.length})
+                                            </button>
+                                            <button className="secondary-action" type="button" onClick={() => setPickAllConfirm(null)}>
+                                              <X size={13} /> Отмена
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })() : (
+                                      <button
+                                        className="primary-action success-action"
+                                        type="button"
+                                        disabled={openRows.some(r => pendingPickKeys.has(r.key))}
+                                        onClick={() => setPickAllConfirm({
+                                          groupId,
+                                          pmPrice: pRows[0]?.price ?? null,
+                                          isUsd: supplierCurrency !== "RUB",
+                                          productName: pRows[0]?.productName || pKey,
+                                          openRowKeys: openRows.map(r => r.key),
+                                          discountDraft: "",
+                                        })}
+                                      >
+                                        {openRows.some(r => pendingPickKeys.has(r.key)) ? <Loader2 size={13} className="spin" /> : <Check size={13} />}
+                                        {" "}Все собрал ({openRows.length})
+                                      </button>
+                                    )}
                                   </div>
                                 ) : null}
                               </>
@@ -1428,6 +1719,19 @@ export function PickingListPage() {
                                         <X size={16} /> Не было
                                       </button>
                                     ) : null}
+                                    {row.status === "returned" && !row.supplierReturnedAt ? (
+                                      <button
+                                        className="primary-action"
+                                        type="button"
+                                        disabled={supplierReturnMutation.isPending}
+                                        onClick={() => {
+                                          const defaultAmount = row.pricePaidRub ?? (row.price > 0 ? Math.round(row.price * usdRate) : 0);
+                                          setSupplierReturnConfirm({ key: row.key, amountDraft: defaultAmount > 0 ? String(defaultAmount) : "", supplierName: row.supplierName, productName: row.productName || row.offerId, defaultAmount });
+                                        }}
+                                      >
+                                        <RotateCcw size={14} /> Вернул поставщику
+                                      </button>
+                                    ) : null}
                                     <div className={`picking-secondary-actions${openActionMenu === row.key ? " is-open" : ""}`} onMouseDown={(e) => e.stopPropagation()}>
                                       {["open", "missing"].includes(row.status) && !row.replacementKey ? (
                                         <button className="secondary-action" type="button" disabled={replaceMutation.isPending} onClick={() => { setReplaceKey(replaceKey === row.key ? null : row.key); setOpenActionMenu(null); }}>
@@ -1443,6 +1747,15 @@ export function PickingListPage() {
                                             <RotateCcw size={14} /> К сборке
                                           </button>
                                         </>
+                                      ) : null}
+                                      {row.status === "returned" && !row.supplierReturnedAt ? (
+                                        <button className="secondary-action" type="button" disabled={supplierReturnMutation.isPending} onClick={() => {
+                                          const defaultAmount = row.pricePaidRub ?? (row.price > 0 ? Math.round(row.price * usdRate) : 0);
+                                          setSupplierReturnConfirm({ key: row.key, amountDraft: defaultAmount > 0 ? String(defaultAmount) : "", supplierName: row.supplierName, productName: row.productName || row.offerId, defaultAmount });
+                                          setOpenActionMenu(null);
+                                        }}>
+                                          <RotateCcw size={14} /> Вернул поставщику
+                                        </button>
                                       ) : null}
                                       {row.status !== "open" && row.status !== "picked" ? (
                                         <button className="secondary-action" type="button" disabled={updateMutation.isPending} onClick={() => { updateMutation.mutate({ key: row.key, nextStatus: "open" }); setOpenActionMenu(null); }}>
@@ -1485,6 +1798,48 @@ export function PickingListPage() {
                                       onClose={() => setReplaceKey(null)}
                                     />
                                   ) : null}
+                                  {supplierReturnConfirm?.key === row.key ? (() => {
+                                    const amt = Number(supplierReturnConfirm.amountDraft.replace(",", ".")) || 0;
+                                    return (
+                                      <div className="supplier-return-confirm">
+                                        <div className="supplier-return-confirm-title">
+                                          <RotateCcw size={14} /> Возврат поставщику: {supplierReturnConfirm.productName}
+                                        </div>
+                                        <div className="supplier-return-confirm-row">
+                                          <label className="supplier-return-confirm-label">Сумма возврата, ₽</label>
+                                          <input
+                                            className="supplier-return-confirm-input"
+                                            type="number"
+                                            min={0}
+                                            step={1}
+                                            placeholder="0"
+                                            value={supplierReturnConfirm.amountDraft}
+                                            autoFocus
+                                            onChange={(e) => setSupplierReturnConfirm((p) => p ? { ...p, amountDraft: e.target.value } : p)}
+                                            onKeyDown={(e) => {
+                                              if (e.key === "Enter" && amt > 0) supplierReturnMutation.mutate({ key: row.key, amountRub: amt });
+                                              if (e.key === "Escape") setSupplierReturnConfirm(null);
+                                            }}
+                                          />
+                                        </div>
+                                        {amt > 0 ? <div className="supplier-return-confirm-result">Кредит поставщику: +{amt.toLocaleString("ru-RU")} ₽</div> : null}
+                                        <div className="supplier-return-confirm-actions">
+                                          <button
+                                            className="primary-action"
+                                            type="button"
+                                            disabled={supplierReturnMutation.isPending || !(amt > 0)}
+                                            onClick={() => supplierReturnMutation.mutate({ key: row.key, amountRub: amt })}
+                                          >
+                                            {supplierReturnMutation.isPending ? <><Loader2 className="spin" size={14} /> Сохраняю…</> : <><Check size={14} /> Записать возврат</>}
+                                          </button>
+                                          <button className="secondary-action" type="button" onClick={() => setSupplierReturnConfirm(null)}>
+                                            <X size={14} /> Отмена
+                                          </button>
+                                        </div>
+                                        {supplierReturnMutation.error ? <div className="inline-error">{errorMessage(supplierReturnMutation.error)}</div> : null}
+                                      </div>
+                                    );
+                                  })() : null}
                                 </div>
                               );
                             })}
@@ -1538,21 +1893,50 @@ export function PickingListPage() {
                     </button>
                   </div>
                 </div>
+                <div className="picking-invoice-search-wrap">
+                  <input
+                    className="picking-invoice-search"
+                    placeholder="Поиск по названию или поставщику…"
+                    value={invoiceQ}
+                    onChange={(e) => setInvoiceQ(e.target.value)}
+                  />
+                  {invoiceQ ? (
+                    <button type="button" className="picking-invoice-search-clear" onClick={() => setInvoiceQ("")}>
+                      <X size={14} />
+                    </button>
+                  ) : null}
+                </div>
                 <div className="picking-invoice-list">
-                  {invoiceRows.length > 80 && (
-                    <div className="inline-warning" style={{ marginTop: 4 }}>Показаны первые 80 строк из {invoiceRows.length}</div>
-                  )}
-                  {invoiceRows.slice(0, 80).map((row) => (
-                    <div className="picking-invoice-row" key={`${row.key}-${row.pickedAt || ""}`}>
-                      <span>{compactDate(row.pickedAt)}</span>
-                      <strong>{row.supplierName}</strong>
-                      <span>{row.productName}</span>
-                      <span>x{row.quantity}</span>
-                      <span>{row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
-                    </div>
-                  ))}
-                  {!invoiceRows.length && !invoiceQuery.isFetching ? <div className="soft-empty">Собранных строк за период нет.</div> : null}
-                  {invoiceQuery.isFetching ? <div className="soft-empty"><Loader2 className="spin" size={14} /> Загружаю…</div> : null}
+                  {(() => {
+                    const words = invoiceQ.trim().toLowerCase().split(/\s+/).filter(Boolean);
+                    const filtered = words.length
+                      ? invoiceRows.filter((r) => {
+                          const txt = `${r.productName || ""} ${r.supplierName || ""} ${r.offerId || ""}`.toLowerCase();
+                          return words.every((w) => txt.includes(w));
+                        })
+                      : invoiceRows;
+                    const shown = filtered.slice(0, 80);
+                    return (
+                      <>
+                        {filtered.length > 80 && (
+                          <div className="inline-warning" style={{ marginTop: 4 }}>Показаны первые 80 из {filtered.length}</div>
+                        )}
+                        {shown.map((row) => (
+                          <div className="picking-invoice-row" key={`${row.key}-${row.pickedAt || ""}`}>
+                            <span>{compactDate(row.pickedAt)}</span>
+                            <strong className="picking-invoice-supplier">{row.supplierName}</strong>
+                            <span>{row.productName}</span>
+                            <span>x{row.quantity}</span>
+                            <span>{row.price ? `${row.price} ${row.priceCurrency}` : "-"}</span>
+                          </div>
+                        ))}
+                        {!filtered.length && !invoiceQuery.isFetching ? (
+                          <div className="soft-empty">{invoiceQ ? `По запросу «${invoiceQ}» ничего не найдено.` : "Собранных строк за период нет."}</div>
+                        ) : null}
+                        {invoiceQuery.isFetching ? <div className="soft-empty"><Loader2 className="spin" size={14} /> Загружаю…</div> : null}
+                      </>
+                    );
+                  })()}
                 </div>
               </>
             ) : null}

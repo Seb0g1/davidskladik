@@ -574,7 +574,11 @@ export const SupplierLedgerSummarySchema = z.object({
   debtTotal: z.number().optional().default(0),
   debtTotalUsd: z.number().optional().default(0),
   paidTotal: z.number().optional().default(0),
+  paidTotalUsd: z.number().optional().default(0),
+  paidTotalRubOnly: z.number().optional().default(0),
   creditTotal: z.number().optional().default(0),
+  creditTotalUsd: z.number().optional().default(0),
+  creditTotalRub: z.number().optional().default(0),
   entries: z.number().optional().default(0),
   lastPaymentAt: z.coerce.string().optional().nullable(),
   lastDebtAt: z.coerce.string().optional().nullable(),
@@ -585,7 +589,11 @@ const emptySupplierLedgerSummary = {
   debtTotal: 0,
   debtTotalUsd: 0,
   paidTotal: 0,
+  paidTotalUsd: 0,
+  paidTotalRubOnly: 0,
   creditTotal: 0,
+  creditTotalUsd: 0,
+  creditTotalRub: 0,
   entries: 0,
   lastPaymentAt: null,
   lastDebtAt: null,
@@ -804,6 +812,9 @@ export const SupplierPickingRowSchema = z.object({
   replacementKey: z.coerce.string().optional().default(""),
   returnedBy: z.coerce.string().optional().default(""),
   returnedAt: z.coerce.string().optional().nullable(),
+  supplierReturnedBy: z.coerce.string().optional().default(""),
+  supplierReturnedAt: z.coerce.string().optional().nullable(),
+  supplierReturnAmountRub: z.number().nullable().optional(),
   wbSupplyId: z.coerce.string().optional().default(""),
   deferredUntil: z.coerce.string().optional().nullable(),
 }).passthrough();
@@ -858,6 +869,33 @@ export const SupplierProfileResponseSchema = z.object({
     error: z.coerce.string().optional().default(""),
   }).optional(),
   history: z.array(SupplierPickingRowSchema).optional().default([]),
+}).passthrough();
+
+export const PickerReportItemSchema = z.object({
+  key: z.coerce.string(),
+  productName: z.coerce.string().default(""),
+  supplierName: z.coerce.string().default(""),
+  price: z.number().default(0),
+  priceCurrency: z.coerce.string().default("USD"),
+  pricePaidRub: z.number().nullable().optional(),
+  quantity: z.number().default(1),
+  pickedAt: z.coerce.string().nullable().optional(),
+  marketplace: z.coerce.string().default(""),
+  orderId: z.coerce.string().default(""),
+  postingNumber: z.coerce.string().default(""),
+});
+
+export const PickerReportPickerSchema = z.object({
+  username: z.coerce.string(),
+  count: z.number().default(0),
+  totalUsd: z.number().default(0),
+  items: z.array(PickerReportItemSchema).default([]),
+});
+
+export const PickerReportSchema = z.object({
+  ok: z.boolean().optional(),
+  date: z.coerce.string().default(""),
+  pickers: z.array(PickerReportPickerSchema).default([]),
 }).passthrough();
 
 export const SettingsResponseSchema = z.object({

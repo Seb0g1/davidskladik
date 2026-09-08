@@ -120,7 +120,19 @@ async function loadPickerBalance(username) {
     const key = `picker_balance:${cleanText(username)}`;
     const setting = await getPrisma().appSetting.findUnique({ where: { key } });
     const raw = setting?.value;
-    return { credits: Array.isArray(raw?.credits) ? raw.credits : [] };
+    const credits = Array.isArray(raw?.credits) ? raw.credits : [];
+    // One-time migration: old picking deductions were stored in USD; new ones have currency:"RUB"
+    const migrationRate = Number(process.env.DEFAULT_USD_RATE || 95) || 95;
+    let migrated = false;
+    for (const credit of credits) {
+      if (credit.id?.startsWith?.("picking:") && !credit.currency) {
+        credit.amount = Math.round(Number(credit.amount || 0) * migrationRate);
+        credit.currency = "RUB";
+        migrated = true;
+      }
+    }
+    if (migrated) savePickerBalance(username, { credits }).catch(() => {});
+    return { credits };
   } catch {
     return { credits: [] };
   }
