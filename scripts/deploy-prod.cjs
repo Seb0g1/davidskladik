@@ -55,6 +55,7 @@ const deployFiles = [
   "public/styles.css",
   "scripts/prod-post-deploy-check.cjs",
   "scripts/prod-alert-on-failure.cjs",
+  "scripts/run-fragrance-notes-batch.cjs",
   // Цепочка WB: её запускает ежедневный cron (лимит WB — 1000 карточек/сутки)
   "scripts/prod-wb-chain.cjs",
   "scripts/wb-chain-cron.sh",

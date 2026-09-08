@@ -269,6 +269,19 @@ let ozonTnvedApplyProgress = {
   completedAt: null,
   categoryStats: null,
 };
+let yandexTnvedApplyProgress = {
+  running: false,
+  totalProducts: null,
+  candidates: null,
+  updated: null,
+  failed: null,
+  withCategory: null,
+  withFallback: null,
+  skipped: null,
+  startedAt: null,
+  completedAt: null,
+  error: null,
+};
 
 async function readOzonTnvedAssignments() {
   try {
@@ -704,6 +717,20 @@ async function yandexBackfillTnvedFromAssignments({ dryRun = true } = {}) {
     || getYandexShops().filter((s) => s.apiKey && s.businessId);
   if (!shops.length) return { ok: false, error: "yandex_not_configured" };
 
+  yandexTnvedApplyProgress = {
+    running: true,
+    totalProducts: total,
+    candidates,
+    updated: 0,
+    failed: 0,
+    withCategory,
+    withFallback,
+    skipped,
+    startedAt: new Date().toISOString(),
+    completedAt: null,
+    error: null,
+  };
+
   const results = [];
   for (const shop of shops) {
     const shopResults = await sendYandexOfferMappings(shop, offers);
@@ -711,6 +738,12 @@ async function yandexBackfillTnvedFromAssignments({ dryRun = true } = {}) {
   }
 
   const failed = results.filter((r) => !r.ok).length;
+
+  yandexTnvedApplyProgress.running = false;
+  yandexTnvedApplyProgress.updated = results.filter((r) => r.ok).length;
+  yandexTnvedApplyProgress.failed = failed;
+  yandexTnvedApplyProgress.completedAt = new Date().toISOString();
+
   logger.info("yandex backfill tnved from assignments", {
     total, candidates, withCategory, withFallback, skipped, failed,
     shops: shops.map((s) => s.id),
@@ -729,17 +762,33 @@ async function yandexBackfillTnvedFromAssignments({ dryRun = true } = {}) {
   };
 }
 
+// Прогресс применения ТН ВЭД на Яндекс (публичный, как ozon/tnved/progress — для polling).
+app.get("/api/yandex/tnved/progress", (_request, response) => {
+  response.json({ ...yandexTnvedApplyProgress });
+});
+
 // Применить ТН ВЭД на Яндекс.Маркет (per-product, из Ozon-категорий).
+// dryRun: true — синхронный предпросмотр. dryRun: false — запуск в фоне, возвращает 202.
 app.post("/api/yandex/tnved/apply", requireAdmin, async (request, response, next) => {
   try {
     const dryRun = request.body?.dryRun === true;
-    const result = await yandexBackfillTnvedFromAssignments({ dryRun });
-    if (!dryRun && result.ok) {
-      void appendAudit(request, "yandex.tnved.apply", {
-        newValue: { updated: result.updated, withCategory: result.withCategory, withFallback: result.withFallback },
-      });
+    if (dryRun) {
+      const result = await yandexBackfillTnvedFromAssignments({ dryRun: true });
+      return response.json(result);
     }
-    response.json(result);
+    if (yandexTnvedApplyProgress.running) {
+      return response.status(409).json({ error: "Уже выполняется", progress: yandexTnvedApplyProgress });
+    }
+    void appendAudit(request, "yandex.tnved.apply", { newValue: { async: true } });
+    response.status(202).json({ ok: true, async: true, message: "Отправка ТН ВЭД на Яндекс запущена в фоне" });
+    setImmediate(() => {
+      yandexBackfillTnvedFromAssignments({ dryRun: false }).catch((error) => {
+        yandexTnvedApplyProgress.running = false;
+        yandexTnvedApplyProgress.error = error?.message || String(error);
+        yandexTnvedApplyProgress.completedAt = new Date().toISOString();
+        logger.error("yandex tnved apply background failed", { detail: error?.message || String(error) });
+      });
+    });
   } catch (error) {
     next(error);
   }
@@ -798,6 +847,11 @@ app.get("/api/tnved/report", requireAdmin, async (request, response, next) => {
       yandex: {
         totalProducts: yandexTotal,
         defaultCode: cleanText(settings?.tnved?.code || ""),
+        lastApplied: yandexTnvedApplyProgress.completedAt,
+        withCategory: yandexTnvedApplyProgress.withCategory,
+        withFallback: yandexTnvedApplyProgress.withFallback,
+        skipped: yandexTnvedApplyProgress.skipped,
+        updatedCount: yandexTnvedApplyProgress.updated,
       },
       wb: {
         tnvedCode: cleanText(wbRules?.tnved || ""),

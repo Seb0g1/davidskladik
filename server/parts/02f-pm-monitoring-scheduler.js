@@ -60,8 +60,8 @@ async function runPmPriceChangeMonitor({ source = "schedule" } = {}) {
         AND COALESCE(pl.source_row_id, pl.raw->>'sourceRowId') IS NOT NULL
         AND pl.raw->'resolvedPriceMasterRow'->>'price' IS NOT NULL
       ORDER BY pl.updated_at DESC
-      LIMIT ${pmPriceMonitorBatchLimit}
-    `);
+      LIMIT $1
+    `, pmPriceMonitorBatchLimit);
 
     if (!rows.length) return { status: "ok", checked: 0, changed: 0 };
 
@@ -151,6 +151,7 @@ async function runPmPriceChangeMonitor({ source = "schedule" } = {}) {
     }
 
     // Compare stored prices against live MySQL results.
+    const changedProductIds = new Set();
     for (const [sourceRowId, linkEntries] of rowIdToLinks) {
       const liveRow = liveByRowId.get(sourceRowId);
       if (!liveRow) {
@@ -163,6 +164,7 @@ async function runPmPriceChangeMonitor({ source = "schedule" } = {}) {
         const delta = Math.abs(currentPrice - storedPrice) / storedPrice;
         if (delta >= pmPriceMonitorChangeThreshold) {
           changed += 1;
+          changedProductIds.add(String(row.product_id));
           logger.warn("pm_price_changed", {
             offerId: cleanText(row.offer_id || ""),
             marketplace: cleanText(row.marketplace || ""),
@@ -176,6 +178,21 @@ async function runPmPriceChangeMonitor({ source = "schedule" } = {}) {
           });
         }
       }
+    }
+
+    // Trigger reprice for products whose PM price changed — so the new price reaches
+    // the marketplace within the next sweep cycle instead of waiting up to 6 hours.
+    if (changedProductIds.size) {
+      queueAuthoritativePriceReprice({
+        productIds: Array.from(changedProductIds),
+        marketplace: "all",
+        reason: "pm_price_monitor_change",
+        sourceEvent: "pm_price_monitor",
+        force: false,
+        onlyChanged: true,
+        livePriceMaster: true,
+        priority: QUEUE_PRIORITY.PRICE_IMMEDIATE,
+      }).catch((err) => logger.warn("pm_price_monitor reprice queue failed", { detail: err?.message || String(err) }));
     }
 
     logger.info("pm_price_monitor_complete", {
@@ -219,8 +236,8 @@ async function runPmDisappearanceMonitor({ source = "schedule" } = {}) {
         AND pl.raw->>'matchType' = 'selected_row'
         AND COALESCE(pl.source_row_id, pl.raw->>'sourceRowId') IS NOT NULL
       ORDER BY pl.updated_at DESC
-      LIMIT ${pmDisappearMonitorBatchLimit}
-    `);
+      LIMIT $1
+    `, pmDisappearMonitorBatchLimit);
 
     if (!rows.length) return { status: "ok", checked: 0, disappeared: 0 };
 

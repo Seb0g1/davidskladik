@@ -38,8 +38,8 @@ async function runMarketplaceVerify({ source = "schedule" } = {}) {
         AND p.offer_id IS NOT NULL AND p.offer_id <> ''
         AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
       ORDER BY p.updated_at ASC
-      LIMIT ${marketplaceVerifyBatchLimit}
-    `);
+      LIMIT $1
+    `, marketplaceVerifyBatchLimit);
 
     if (!rows.length) return { status: "ok", checked: 0, mismatches: 0, corrected: 0 };
 

@@ -62,7 +62,8 @@ app.get("/api/notifications", requireStaff, async (request, response, next) => {
     const rows = await prisma.$queryRawUnsafe(
       `SELECT id::text, type, marketplace, title, body, external_id AS "externalId", url,
               read_at AS "readAt", created_at AS "createdAt"
-       FROM app_notifications ORDER BY created_at DESC, id DESC LIMIT ${limit}`,
+       FROM app_notifications ORDER BY created_at DESC, id DESC LIMIT $1`,
+      limit,
     );
     const unreadRows = await prisma.$queryRawUnsafe(
       "SELECT COUNT(*)::int AS n FROM app_notifications WHERE read_at IS NULL",
@@ -87,8 +88,10 @@ app.post("/api/notifications/read", requireStaff, async (request, response, next
         .map((id) => Number(id))
         .filter((id) => Number.isFinite(id) && id > 0);
       if (ids.length) {
+        const placeholders = ids.map((_, i) => `$${i + 1}`).join(",");
         updated = await prisma.$executeRawUnsafe(
-          `UPDATE app_notifications SET read_at = now() WHERE read_at IS NULL AND id IN (${ids.join(",")})`,
+          `UPDATE app_notifications SET read_at = now() WHERE read_at IS NULL AND id IN (${placeholders})`,
+          ...ids,
         );
       }
     }
@@ -123,7 +126,8 @@ app.get("/api/notifications/stream", requireStaff, async (request, response) => 
     try {
       const rows = await prisma.$queryRawUnsafe(
         `SELECT id::text, type, marketplace, title, body, url, created_at AS "createdAt"
-         FROM app_notifications WHERE id > ${cursor} ORDER BY id ASC LIMIT 50`,
+         FROM app_notifications WHERE id > $1 ORDER BY id ASC LIMIT 50`,
+        cursor,
       );
       for (const row of rows) {
         cursor = Math.max(cursor, Number(row.id));

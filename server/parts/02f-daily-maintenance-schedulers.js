@@ -116,6 +116,14 @@ async function runDailyRefresh(trigger = "manual") {
       runStalePriceTargetScan().catch((err) =>
         logger.warn("stale price target scan failed in daily refresh", { detail: err?.message || String(err) }),
       );
+      // Persist RUB supplier ledger corrections daily so display-layer corrections don't
+      // become inconsistent when supplier currency classification changes.
+      const prismaForLedger = getPrisma();
+      if (prismaForLedger) {
+        fixRubSupplierLedgerAmounts(prismaForLedger).catch((err) =>
+          logger.warn("rub_supplier_ledger_fix failed in daily refresh", { detail: err?.message || String(err) }),
+        );
+      }
       // New PM nomenclature check: log if PM has products not yet in реализация.
       if (typeof checkNewPmNomenclatureItems === "function") {
         checkNewPmNomenclatureItems().catch((err) =>

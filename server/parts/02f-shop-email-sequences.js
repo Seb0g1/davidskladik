@@ -23,7 +23,7 @@ function seqSendMail({ to, subject, html }) {
     let buf = "";
     let done = false;
 
-    const sock = tls.connect({ host, port, rejectUnauthorized: false }, () => {});
+    const sock = tls.connect({ host, port, rejectUnauthorized: true }, () => {});
     sock.setTimeout(20000);
     sock.on("timeout", () => sock.destroy(new Error("SMTP timeout")));
 
@@ -75,7 +75,7 @@ function seqSendMail({ to, subject, html }) {
       }
     });
     sock.on("error", (err) => { if (!done) { done = true; reject(err); } });
-    sock.on("close", () => { if (!done) { done = true; resolve(); } });
+    sock.on("close", () => { if (!done) { done = true; reject(new Error("SMTP: connection closed before send completed")); } });
   });
 }
 
@@ -375,6 +375,8 @@ async function runEmailSequenceScanner() {
         logger.warn("email_seq_step30_failed", { orderId: order.id, detail: err?.message || String(err) });
       }
     }
+    if (orders7.length >= 100) logger.warn("email_seq_backlog_step7", { fetched: orders7.length, sent: sent7, hint: "LIMIT 100 hit — backlog may be larger" });
+    if (orders30.length >= 100) logger.warn("email_seq_backlog_step30", { fetched: orders30.length, sent: sent30, hint: "LIMIT 100 hit — backlog may be larger" });
   } catch (err) {
     logger.warn("email_seq_scanner_failed", { detail: err?.message || String(err) });
     return { ok: false, error: err?.message };

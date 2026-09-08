@@ -51,8 +51,8 @@ async function runZeroStockSweep({ source = "schedule" } = {}) {
           OR (p.raw -> 'noSupplierAutomation' ->> 'stockZeroAt') IS NULL
         )
       ORDER BY p.updated_at DESC
-      LIMIT ${zeroStockSweepBatchLimit * 4}
-    `);
+      LIMIT $1
+    `, zeroStockSweepBatchLimit * 4);
     if (!rows.length) return { status: "ok", candidates: 0, zeroed: 0 };
 
     const nowMs = Date.now();

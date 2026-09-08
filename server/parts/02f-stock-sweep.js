@@ -44,8 +44,8 @@ async function runStockSweep({ source = "schedule" } = {}) {
           OR COALESCE(NULLIF(p.raw -> 'marketplaceState' ->> 'stock', '')::numeric, 0) < p.target_stock
         )
       ORDER BY p.updated_at DESC
-      LIMIT ${stockSweepBatchLimit * 3}
-    `);
+      LIMIT $1
+    `, stockSweepBatchLimit * 3);
     if (!rows.length) return { status: "ok", candidates: 0, sent: 0 };
 
     const nowMs = Date.now();

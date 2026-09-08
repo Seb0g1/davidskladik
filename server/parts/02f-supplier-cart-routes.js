@@ -475,10 +475,12 @@ app.get("/api/supplier-cart/pm-search", requireStaff, async (request, response, 
           params,
         );
 
-        // De-duplicate: keep only the newest row per partner+article combination.
+        // De-duplicate: keep only the newest row per partner+article+name combination.
+        // Key must include name so that rows without NativeID (article="") from the same
+        // partner are not all collapsed into a single entry.
         const seenOffer = new Set();
         for (const row of liveRows) {
-          const offerKey = `${cleanText(row.partnerId)}|${cleanText(row.article || "").toLowerCase()}`;
+          const offerKey = `${cleanText(row.partnerId)}|${cleanText(row.article || "").toLowerCase()}|${cleanText(row.nativeName || "").toLowerCase()}`;
           if (seenOffer.has(offerKey)) continue;
           seenOffer.add(offerKey);
           items.push({

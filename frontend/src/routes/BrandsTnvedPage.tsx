@@ -16,10 +16,14 @@ type OzonReport =
   | { noData: true; building: false }
   | { summary: OzonSummary; brands: BrandEntry[]; tnveds: TnvedEntry[]; cachedAt: string; fromCache: boolean; stale: boolean };
 
+type BrandCategoryEntry = { catId: string; catName: string; count: number };
+type BrandCategoriesEntry = { brand: string; totalCount: number; categories: BrandCategoryEntry[] };
+
 type YandexReport = {
   summary: YandexSummary;
   brands: BrandEntry[];
   categories: CatEntry[];
+  brandCategories?: BrandCategoriesEntry[];
   cachedAt: string;
   fromCache: boolean;
   stale: boolean;
@@ -288,7 +292,23 @@ function YandexTab() {
 
   return (
     <>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 12 }}>
+        <a
+          href="/api/catalog/brands-tnved/combined/export-excel"
+          className="secondary-action"
+          style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
+          title="Объединённый Excel: Ozon + Яндекс по брендам с кодами ТН ВЭД"
+        >
+          <Download size={15} /> Объединённый Excel
+        </a>
+        <a
+          href="/api/catalog/brands-tnved/yandex/export-excel"
+          className="secondary-action"
+          style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
+          title="Скачать Excel: бренды Яндекс по категориям"
+        >
+          <Download size={15} /> Скачать Excel
+        </a>
         <button
           className="secondary-action"
           onClick={() => refresh.mutate()}

@@ -39,6 +39,7 @@ app.post("/api/shop/reviews", requireShopAuth, async (request, response, next) =
   try {
     const customerId = request.shopCustomer?.customerId;
     if (!customerId) return response.status(401).json({ error: "Требуется авторизация" });
+    const prisma = getPrisma();
     const text = cleanText(request.body?.text || "");
     const rating = Math.max(1, Math.min(5, Number(request.body?.rating || 5) || 5));
     if (!text || text.length < 10) return response.status(400).json({ error: "Текст отзыва минимум 10 символов." });
@@ -51,9 +52,8 @@ app.post("/api/shop/reviews", requireShopAuth, async (request, response, next) =
     const offerId = cleanText(request.body?.offerId || "");
     const productName = cleanText(request.body?.productName || "").slice(0, 200);
     const productImg = cleanText(request.body?.productImg || "").slice(0, 500);
-    const photoUrl = cleanText(request.body?.photoUrl || "").slice(0, 1000) || null;
-
-    const prisma = getPrisma();
+    const rawPhotoUrl = cleanText(request.body?.photoUrl || "").slice(0, 1000);
+    const photoUrl = rawPhotoUrl && /^https?:\/\//i.test(rawPhotoUrl) ? rawPhotoUrl : null;
 
     // Prevent duplicate reviews for same product
     if (offerId) {

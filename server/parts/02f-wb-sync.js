@@ -76,7 +76,14 @@ async function runWbMarketplaceSync({ source = "auto" } = {}) {
 
     // stocks до prices: лимитеры WB независимы — если prices даст 429,
     // остатки должны обновиться (зеро-аут проданных / добавление новых).
-    const stocksResult = stocks.length ? await wbUpdateStocks(account, warehouseId, stocks) : { ok: true, sent: 0 };
+    let stocksResult = { ok: true, sent: 0 };
+    let stocksError = null;
+    try {
+      stocksResult = stocks.length ? await wbUpdateStocks(account, warehouseId, stocks) : { ok: true, sent: 0 };
+    } catch (error) {
+      stocksError = error?.message || String(error);
+      logger.warn("wb sync stocks failed", { detail: stocksError });
+    }
 
     let pricesResult = { ok: true, sent: 0, tasks: [] };
     let pricesError = null;
@@ -107,7 +114,7 @@ async function runWbMarketplaceSync({ source = "auto" } = {}) {
     }
 
     const result = {
-      status: pricesError ? "prices_failed" : "ok",
+      status: pricesError && stocksError ? "failed" : pricesError ? "prices_failed" : stocksError ? "stocks_failed" : "ok",
       source,
       warehouseId,
       cards: cards.length,
@@ -119,6 +126,7 @@ async function runWbMarketplaceSync({ source = "auto" } = {}) {
       minSupplierPriceRub: rules.minSupplierPriceRub,
       tasks: pricesResult.tasks || [],
       pricesError: pricesError || undefined,
+      stocksError: stocksError || undefined,
       stocksSent: stocksResult.sent,
       enrich: enrichSummary,
       elapsedMs: Date.now() - startedAt,

@@ -86,12 +86,12 @@ async function readErrorReport({ days = 7, limit = 15 } = {}) {
       SELECT class, COUNT(*)::int AS count, MAX(created_at) AS "lastAt",
              (ARRAY_AGG(DISTINCT source))[1:3] AS sources
       FROM error_events
-      WHERE created_at > now() - interval '${windowDays} days'
+      WHERE created_at > now() - ($1 * interval '1 day')
       GROUP BY class
       ORDER BY count DESC
-      LIMIT ${topLimit}
-    `);
-    const totalRow = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM error_events WHERE created_at > now() - interval '${windowDays} days'`);
+      LIMIT $2
+    `, windowDays, topLimit);
+    const totalRow = await prisma.$queryRawUnsafe(`SELECT COUNT(*)::int AS n FROM error_events WHERE created_at > now() - ($1 * interval '1 day')`, windowDays);
     return {
       days: windowDays,
       total: Number(totalRow?.[0]?.n || 0),
@@ -121,12 +121,12 @@ async function readErrorSpikes({ windowMinutes = errorSpikeWindowMinutes, thresh
     const rows = await prisma.$queryRawUnsafe(`
       SELECT class, COUNT(*)::int AS count
       FROM error_events
-      WHERE created_at > now() - interval '${windowMins} minutes'
+      WHERE created_at > now() - ($1 * interval '1 minute')
       GROUP BY class
-      HAVING COUNT(*) > ${minCount}
+      HAVING COUNT(*) > $2
       ORDER BY count DESC
-      LIMIT ${topLimit}
-    `);
+      LIMIT $3
+    `, windowMins, minCount, topLimit);
     return (rows || []).map((row) => ({ class: row.class, count: Number(row.count || 0), windowMinutes: windowMins }));
   } catch (error) {
     logger.warn("error spike read failed", { detail: error?.message || String(error) });
@@ -149,7 +149,7 @@ async function runErrorAuditDigest({ source = "schedule" } = {}) {
   try {
     if (!(await ensureErrorEventsTable())) return { status: "no_table" };
     // Prune old rows first so the table stays bounded.
-    await prisma.$executeRawUnsafe(`DELETE FROM error_events WHERE created_at < now() - interval '${errorAuditRetentionDays} days'`).catch(() => null);
+    await prisma.$executeRawUnsafe(`DELETE FROM error_events WHERE created_at < now() - ($1 * interval '1 day')`, errorAuditRetentionDays).catch(() => null);
     const report = await readErrorReport({ days: 7, limit: 10 });
     logger.info("error_audit_digest", { source, total: report.total, top: report.classes.slice(0, 5).map((c) => `${c.class}=${c.count}`) });
     if (report.total > 0 && typeof healthAlertTelegramConfigured === "function" && healthAlertTelegramConfigured()) {

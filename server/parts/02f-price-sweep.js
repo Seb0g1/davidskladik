@@ -20,7 +20,7 @@ const priceSweepRequeueCooldownMs = Math.max(5 * 60_000, Number(process.env.PRIC
 // target_price cosmetically diverge again before the next reconciler pass — without this,
 // a SKU whose live recompute oscillates between two nextPrice values gets re-queued by
 // every sweep tick forever (see priceVerifiedAt write in 02d-prices-send-warehouse-select.js).
-const priceSweepVerifiedCooldownHours = Math.max(0, Number(process.env.PRICE_SWEEP_VERIFIED_COOLDOWN_HOURS || 6) || 6);
+const priceSweepVerifiedCooldownHours = Math.max(1, Number(process.env.PRICE_SWEEP_VERIFIED_COOLDOWN_HOURS || 6) || 6);
 
 async function runChangedPriceSweep({ source = "schedule" } = {}) {
   if (priceSweepRunning) return { status: "already_running" };
@@ -36,13 +36,13 @@ async function runChangedPriceSweep({ source = "schedule" } = {}) {
         AND (p.current_price IS NULL OR p.current_price <> p.target_price)
         AND (
           p.raw->>'priceVerifiedAt' IS NULL
-          OR (p.raw->>'priceVerifiedAt')::timestamptz < now() - interval '${priceSweepVerifiedCooldownHours} hours'
+          OR (p.raw->>'priceVerifiedAt')::timestamptz < now() - ($1 * interval '1 hour')
         )
         AND ${duplicateNameSqlExclusion("p")}
         AND EXISTS (SELECT 1 FROM product_links l WHERE l.product_id = p.id)
       ORDER BY p.updated_at DESC
-      LIMIT ${priceSweepBatchLimit * 3}
-    `);
+      LIMIT $2
+    `, priceSweepVerifiedCooldownHours, priceSweepBatchLimit * 3);
     const nowMs = Date.now();
     for (const [id, entry] of priceSweepRecentlyQueued.entries()) {
       if (nowMs - entry.at > priceSweepRequeueCooldownMs) priceSweepRecentlyQueued.delete(id);
