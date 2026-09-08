@@ -32,11 +32,10 @@ async function appendPriceHistoryRows(rows = []) {
   if (!normalizedRows.length) return 0;
   try {
     const windowMs = priceHistoryDedupeWindowMs();
-    const dedupedRows = [];
     const seenRows = new Set();
+    const candidateRows = [];
     for (const row of normalizedRows) {
       const createdAt = row.createdAt || new Date();
-      const recentSince = new Date(createdAt.getTime() - windowMs);
       const rowKey = [
         row.productId || "",
         row.marketplace,
@@ -50,25 +49,33 @@ async function appendPriceHistoryRows(rows = []) {
       ].join("|");
       if (seenRows.has(rowKey)) continue;
       seenRows.add(rowKey);
-      const existing = await getPrisma().priceHistory.findFirst({
-        where: {
-          productId: row.productId || null,
-          marketplace: row.marketplace,
-          target: row.target || null,
-          offerId: row.offerId,
-          oldPrice: row.oldPrice === undefined ? null : row.oldPrice,
-          newPrice: row.newPrice,
-          status: row.status,
-          OR: [{ error: row.error || "" }, { error: null }],
-          createdAt: {
-            gte: recentSince,
-            lte: new Date(createdAt.getTime() + windowMs),
-          },
-        },
-        select: { id: true },
-      });
-      if (!existing) dedupedRows.push(row);
+      candidateRows.push({ row, createdAt });
     }
+    if (!candidateRows.length) return 0;
+
+    // Single batch query: find any existing rows within dedup window for all candidates.
+    const windowStart = new Date(Math.min(...candidateRows.map(({ createdAt }) => createdAt.getTime())) - windowMs);
+    const windowEnd = new Date(Math.max(...candidateRows.map(({ createdAt }) => createdAt.getTime())) + windowMs);
+    const offerIds = [...new Set(candidateRows.map(({ row }) => row.offerId))];
+    const existingRows = await getPrisma().priceHistory.findMany({
+      where: {
+        offerId: { in: offerIds },
+        createdAt: { gte: windowStart, lte: windowEnd },
+      },
+      select: { productId: true, marketplace: true, target: true, offerId: true, oldPrice: true, newPrice: true, status: true, error: true, createdAt: true },
+    });
+    const existingKeys = new Set(
+      existingRows.map((r) => {
+        const t = r.createdAt ? r.createdAt.getTime() : 0;
+        return [r.productId || "", r.marketplace, r.target || "", r.offerId, r.oldPrice ?? "", r.newPrice, r.status, r.error || "", Math.floor(t / windowMs)].join("|");
+      }),
+    );
+    const dedupedRows = candidateRows
+      .filter(({ row, createdAt }) => {
+        const key = [row.productId || "", row.marketplace, row.target || "", row.offerId, row.oldPrice ?? "", row.newPrice, row.status, row.error || "", Math.floor(createdAt.getTime() / windowMs)].join("|");
+        return !existingKeys.has(key);
+      })
+      .map(({ row }) => row);
     if (!dedupedRows.length) return 0;
     const result = await getPrisma().priceHistory.createMany({
       data: dedupedRows,

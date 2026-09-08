@@ -11,6 +11,10 @@ async function readDailySyncState() {
         nextRunAt: dailySyncNextRunAt,
       };
     }
+    if (error instanceof SyntaxError) {
+      logger.warn("daily sync state corrupted, resetting", { detail: error.message });
+      return { status: "idle", enabled: dailySyncEnabled, time: dailySyncTime, lastRunAt: null, nextRunAt: dailySyncNextRunAt };
+    }
     throw error;
   }
 }
@@ -29,7 +33,9 @@ async function writeDailySyncState(state) {
   if (Array.isArray(state.logs)) {
     payload.logs = [...state.logs, ...(Array.isArray(current.logs) ? current.logs : [])].slice(0, 30);
   }
-  await fs.writeFile(dailySyncPath, JSON.stringify(payload, null, 2), "utf8");
+  const tmpPath = `${dailySyncPath}.${process.pid}.${Date.now()}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(payload, null, 2), "utf8");
+  await fs.rename(tmpPath, dailySyncPath);
   return payload;
 }
 

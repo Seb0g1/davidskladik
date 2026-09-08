@@ -11,14 +11,17 @@ async function findWarehouseProductById(productId = "") {
   const warehouse = await readWarehouse();
   const cached = (warehouse.products || []).find((item) => String(item.id) === id);
   if (cached) return cached;
+  logger.debug("findWarehouseProductById: cache miss, reading from postgres", { id });
   let [fromPostgres] = await readWarehouseProductsFromPostgresByIds([id], { includeDisabledTargets: true });
   if (!fromPostgres) {
+    logger.debug("findWarehouseProductById: not found with enabled targets, retrying without filter", { id });
     [fromPostgres] = await readWarehouseProductsFromPostgresByIds([id]);
   }
   if (fromPostgres) {
     mergeWarehouseProductsIntoMemory([fromPostgres]);
     return fromPostgres;
   }
+  logger.debug("findWarehouseProductById: product not found in any source", { id });
   return null;
 }
 

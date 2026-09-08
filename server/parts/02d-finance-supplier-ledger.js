@@ -32,13 +32,27 @@ function supplierLedgerSummaryFromEntries(entries = []) {
   const debtTotal = active
     .filter((entry) => entry.amount < 0)
     .reduce((sum, entry) => sum + Math.abs(normalizeFinanceMoney(correctEntryAmountForRubSupplier(entry), 0)), 0);
+  const isEntryUsd = (e) => String(e.currency || "RUB").toUpperCase() === "USD";
   const paidTotal = active
     .filter((entry) => entry.amount > 0 && entry.entryType === "payment")
     .reduce((sum, entry) => sum + normalizeFinanceMoney(entry.amount, 0), 0);
+  // Split payments by currency so the UI can compute exact USD balance without rate drift.
+  const paidTotalUsd = active
+    .filter((e) => e.amount > 0 && e.entryType === "payment" && isEntryUsd(e))
+    .reduce((sum, e) => sum + normalizeFinanceMoney(e.amount, 0), 0);
+  const paidTotalRubOnly = active
+    .filter((e) => e.amount > 0 && e.entryType === "payment" && !isEntryUsd(e))
+    .reduce((sum, e) => sum + normalizeFinanceMoney(e.amount, 0), 0);
   // creditTotal includes payments, balance corrections, and supplier returns — used for balanceUsd display
   const creditTotal = active
     .filter((entry) => entry.amount > 0)
     .reduce((sum, entry) => sum + normalizeFinanceMoney(entry.amount, 0), 0);
+  const creditTotalUsd = active
+    .filter((e) => e.amount > 0 && isEntryUsd(e))
+    .reduce((sum, e) => sum + normalizeFinanceMoney(e.amount, 0), 0);
+  const creditTotalRub = active
+    .filter((e) => e.amount > 0 && !isEntryUsd(e))
+    .reduce((sum, e) => sum + normalizeFinanceMoney(e.amount, 0), 0);
   const lastPayment = active
     .filter((entry) => entry.entryType === "payment")
     .sort((left, right) => String(right.occurredAt).localeCompare(String(left.occurredAt)))[0] || null;
@@ -61,7 +75,11 @@ function supplierLedgerSummaryFromEntries(entries = []) {
     balance: Math.round(balance),
     debtTotal: Math.round(debtTotal),
     paidTotal: Math.round(paidTotal),
+    paidTotalUsd: normalizeFinanceMoney(paidTotalUsd, 0),
+    paidTotalRubOnly: Math.round(paidTotalRubOnly),
     creditTotal: Math.round(creditTotal),
+    creditTotalUsd: normalizeFinanceMoney(creditTotalUsd, 0),
+    creditTotalRub: Math.round(creditTotalRub),
     debtTotalUsd: normalizeFinanceMoney(debtTotalUsd, 0),
     entries: active.length,
     lastPaymentAt: lastPayment?.occurredAt || null,
@@ -100,11 +118,22 @@ async function supplierLedgerSummaryMapForSuppliers(suppliers = []) {
   const empty = new Map();
   if (!shouldUsePostgresStorage() || !Array.isArray(suppliers) || !suppliers.length) return empty;
   try {
-    const rows = await getPrisma().supplierLedgerEntry.findMany({
-      where: { status: "active" },
-      orderBy: { occurredAt: "desc" },
-      take: 20000,
-    });
+    const LEDGER_SUMMARY_LIMIT = 50000;
+    const [totalCount, rows] = await Promise.all([
+      getPrisma().supplierLedgerEntry.count({ where: { status: "active" } }),
+      getPrisma().supplierLedgerEntry.findMany({
+        where: { status: "active" },
+        orderBy: { occurredAt: "desc" },
+        take: LEDGER_SUMMARY_LIMIT,
+      }),
+    ]);
+    if (totalCount > LEDGER_SUMMARY_LIMIT) {
+      logger.warn("supplier ledger summary truncated — balance may be understated", {
+        total: totalCount,
+        fetched: rows.length,
+        limit: LEDGER_SUMMARY_LIMIT,
+      });
+    }
     const byKey = new Map();
     for (const entry of rows.map(supplierLedgerEntryFromPostgres)) {
       const keys = [

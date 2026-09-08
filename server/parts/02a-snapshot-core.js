@@ -167,10 +167,12 @@ async function writePriceMasterSnapshotToPostgres(snapshot = {}) {
   const normalizedRows = rows
     .map((row) => normalizePriceMasterSnapshotItemForPostgres(row, updatedAt))
     .filter(Boolean);
-  await prisma.priceMasterSnapshotItem.deleteMany({});
-  for (const chunk of chunkArray(normalizedRows, 2000)) {
-    await prisma.priceMasterSnapshotItem.createMany({ data: chunk, skipDuplicates: true });
-  }
+  await prisma.$transaction(async (tx) => {
+    await tx.priceMasterSnapshotItem.deleteMany({});
+    for (const chunk of chunkArray(normalizedRows, 2000)) {
+      await tx.priceMasterSnapshotItem.createMany({ data: chunk, skipDuplicates: true });
+    }
+  }, { timeout: 120000 });
 
   // Detect partners that lost a significant number of active rows.
   if (partnerCountsBefore.length) {

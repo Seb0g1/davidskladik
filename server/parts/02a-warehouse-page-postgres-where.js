@@ -36,11 +36,12 @@ function duplicateNameExclusionWhere() {
 // Raw-SQL fragment for the same exclusion, for the sweeps that query warehouse_products directly.
 function duplicateNameSqlExclusion(alias = "p") {
   if (!duplicateCatalogExcludeEnabled) return "TRUE";
-  // No parens around the ILIKE chain: AND binds tighter than OR in SQL.
+  const safeAlias = alias.replace(/[^a-z0-9_]/gi, "");
+  if (!safeAlias) return "TRUE";
   const clauses = DUPLICATE_MARKER_NAMES
-    .map((marker) => `${alias}.name NOT ILIKE '${marker.replace(/'/g, "''")}%'`)
+    .map((marker) => `${safeAlias}.name NOT ILIKE '${marker.replace(/'/g, "''")}%'`)
     .join(" AND ");
-  return `(${alias}.name IS NULL OR ${clauses})`;
+  return `(${safeAlias}.name IS NULL OR ${clauses})`;
 }
 
 function collectYandexWarehouseTargetAliases() {

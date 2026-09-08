@@ -93,7 +93,8 @@ async function sendYandexOfferMappings(shop, offers = []) {
         { offerMappings: chunk.map((offer) => ({ offer })) },
       );
       const withPictures = chunk.filter((o) => Array.isArray(o.pictures) && o.pictures.length > 0).length;
-      if (withPictures < chunk.length) {
+      const withContent = chunk.some((o) => o.name || o.vendor || o.description);
+      if (withPictures < chunk.length && withContent) {
         logger.warn("yandex offer mappings: some offers sent without pictures", {
           shop: shop.id,
           total: chunk.length,
