@@ -69,6 +69,24 @@ async function buildBrandsTnvedReport(accounts) {
       } catch {}
     }
 
+    // Step 1.5: fetch description_category_id + type_id from /v2/product/info/list
+    // (these fields are NOT available in /v4/product/info/attributes)
+    const offerIdToTypeKey = new Map(); // offerId → "descCatId:typeId"
+    for (const chunk of chunkArray(allOfferIds, 1000)) {
+      try {
+        const infoData = await ozonRequest("/v2/product/info/list", { offer_id: chunk }, account);
+        for (const item of (infoData.result?.items || [])) {
+          const oid = cleanText(item.offer_id || "");
+          const descCatId = Number(item.description_category_id || 0);
+          const typeId = Number(item.type_id || 0);
+          if (oid && descCatId && typeId) offerIdToTypeKey.set(oid, `${descCatId}:${typeId}`);
+        }
+      } catch (err) {
+        logger.warn("brands-tnved type-info chunk error", { account: account.id, detail: err?.message });
+      }
+    }
+    logger.info("brands-tnved type-info collected", { account: account.id, count: offerIdToTypeKey.size });
+
     // Step 2: fetch attributes by offer_id chunks (no cursor = no stale-cursor bug)
     for (const chunk of chunkArray(allOfferIds, 100)) {
       let data;
@@ -116,12 +134,10 @@ async function buildBrandsTnvedReport(accounts) {
           }
         }
 
-        // Collect product type (descCatId:typeId) per brand for cosmetics subcategory
-        const descCatId = Number(item.description_category_id || 0);
-        const typeId = Number(item.type_id || 0);
-        if (brand && !isBrandGarbageValue(brand) && descCatId && typeId) {
+        // Collect product type per brand using type key from step 1.5
+        const typeKey = offerIdToTypeKey.get(offerId);
+        if (brand && !isBrandGarbageValue(brand) && typeKey) {
           if (!brandTypeMap.has(brand)) brandTypeMap.set(brand, new Map());
-          const typeKey = `${descCatId}:${typeId}`;
           const tm = brandTypeMap.get(brand);
           tm.set(typeKey, (tm.get(typeKey) || 0) + 1);
         }
