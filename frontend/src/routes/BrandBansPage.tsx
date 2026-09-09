@@ -74,17 +74,7 @@ function mpLabel(marketplace: string) {
 function MpBadge({ marketplace }: { marketplace: string }) {
   const isYandex = marketplace === "yandex";
   return (
-    <span
-      style={{
-        fontSize: 10,
-        fontWeight: 700,
-        padding: "1px 5px",
-        borderRadius: 4,
-        background: isYandex ? "rgba(255,211,0,0.18)" : "rgba(0,130,255,0.15)",
-        color: isYandex ? "#b8920a" : "#0068cc",
-        letterSpacing: "0.02em",
-      }}
-    >
+    <span className={`brand-mp-badge${isYandex ? " brand-mp-badge--ym" : " brand-mp-badge--ozon"}`}>
       {isYandex ? "ЯМ" : "Ozon"}
     </span>
   );
@@ -113,42 +103,28 @@ function OfferIdsPanel({ ban, onUpdated }: { ban: BrandBan; onUpdated: () => voi
   };
 
   return (
-    <div style={{ borderTop: "1px solid var(--border-subtle, rgba(255,255,255,0.05))" }}>
-      <button
-        style={{ display: "flex", alignItems: "center", gap: 5, padding: "6px 16px", fontSize: 12, color: "var(--muted)", background: "none", border: "none", cursor: "pointer", width: "100%" }}
-        onClick={() => setOpen((v) => !v)}
-      >
+    <div className="brand-offer-panel">
+      <button className="brand-offer-toggle" onClick={() => setOpen((v) => !v)}>
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         Артикулы
-        {currentIds.length > 0 && (
-          <span style={{ background: "rgba(255,255,255,0.1)", borderRadius: 10, padding: "0 6px", fontSize: 11 }}>
-            {currentIds.length}
-          </span>
-        )}
+        {currentIds.length > 0 && <span className="brand-offer-count">{currentIds.length}</span>}
       </button>
       {open && (
-        <div style={{ padding: "4px 16px 12px", display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div className="brand-offer-body">
+          <div className="brand-offer-chips">
             {currentIds.map((id) => (
-              <span key={id} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12, background: "rgba(255,255,255,0.08)", borderRadius: 6, padding: "2px 8px" }}>
+              <span key={id} className="brand-offer-chip">
                 {id}
-                <button
-                  style={{ background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex", color: "var(--muted)" }}
-                  onClick={() => removeId(id)}
-                  disabled={updateMutation.isPending}
-                >
+                <button className="brand-offer-chip-remove" onClick={() => removeId(id)} disabled={updateMutation.isPending}>
                   <X size={11} />
                 </button>
               </span>
             ))}
-            {currentIds.length === 0 && (
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>Нет запрещённых артикулов</span>
-            )}
+            {currentIds.length === 0 && <span className="muted-note" style={{ fontSize: 12 }}>Нет запрещённых артикулов</span>}
           </div>
-          <div style={{ display: "flex", gap: 6, marginTop: 2 }}>
+          <div className="brand-offer-add">
             <input
-              className="pm-chip-input"
-              style={{ flex: "1 1 180px", maxWidth: 260, fontSize: 12 }}
+              className="pm-chip-input brand-offer-input"
               placeholder="Артикул (offer_id)"
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -220,10 +196,9 @@ function BrandAutocomplete({
   };
 
   return (
-    <div ref={wrapRef} style={{ position: "relative", flex: "1 1 220px", minWidth: 180, maxWidth: 360 }}>
+    <div ref={wrapRef} className="brand-autocomplete">
       <input
-        className="pm-chip-input"
-        style={{ width: "100%" }}
+        className="pm-chip-input brand-autocomplete-input"
         placeholder="Название бренда (напр. Chanel)"
         value={value}
         onChange={(e) => { onChange(e.target.value); setOpen(true); }}
@@ -237,43 +212,21 @@ function BrandAutocomplete({
         }}
       />
       {isFetching && (
-        <span style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)" }}>
-          <Loader2 size={12} className="spin" style={{ color: "var(--muted)" }} />
+        <span className="brand-autocomplete-spinner">
+          <Loader2 size={12} className="spin" />
         </span>
       )}
       {open && brands.length > 0 && (
-        <div
-          style={{
-            position: "absolute",
-            top: "calc(100% + 4px)",
-            left: 0,
-            right: 0,
-            background: "var(--bg-card)",
-            border: "1px solid var(--border)",
-            borderRadius: 8,
-            boxShadow: "0 4px 16px rgba(0,0,0,0.18)",
-            zIndex: 200,
-            maxHeight: 260,
-            overflowY: "auto",
-          }}
-        >
+        <div className="brand-autocomplete-dropdown">
           {brands.map((b, i) => (
             <div
               key={b.normalizedBrand}
               onMouseDown={() => handleSelect(b)}
               onMouseEnter={() => setActiveIdx(i)}
-              style={{
-                padding: "7px 12px",
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                cursor: "pointer",
-                background: i === activeIdx ? "var(--bg-hover, rgba(255,255,255,0.06))" : "transparent",
-                borderBottom: i < brands.length - 1 ? "1px solid var(--border-subtle, rgba(255,255,255,0.05))" : "none",
-              }}
+              className={`brand-autocomplete-item${i === activeIdx ? " is-active" : ""}`}
             >
-              <span style={{ flex: 1, fontSize: 13 }}>{b.displayBrand}</span>
-              <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+              <span className="brand-autocomplete-name">{b.displayBrand}</span>
+              <span className="brand-autocomplete-badges">
                 {b.marketplaces.map((mp) => (
                   <MpBadge key={mp} marketplace={mp} />
                 ))}
@@ -351,7 +304,7 @@ export function BrandBansPage() {
             <h3>Добавить бренд в запрет</h3>
           </div>
         </div>
-        <div style={{ padding: "12px 16px", display: "flex", gap: 8, alignItems: "flex-start", flexWrap: "wrap" }}>
+        <div className="brand-add-row">
           <BrandAutocomplete
             value={brandInput}
             onChange={setBrandInput}
@@ -360,8 +313,7 @@ export function BrandBansPage() {
             }}
           />
           <input
-            className="pm-chip-input"
-            style={{ flex: "1 1 160px", minWidth: 140, maxWidth: 240 }}
+            className="pm-chip-input brand-note-input"
             placeholder="Причина (необязательно)"
             value={noteInput}
             onChange={(e) => setNoteInput(e.target.value)}
@@ -376,7 +328,7 @@ export function BrandBansPage() {
           </button>
         </div>
         {addMutation.isError && (
-          <div className="inline-error" style={{ margin: "0 16px 12px" }}>
+          <div className="inline-error brand-add-error">
             {String((addMutation.error as Error)?.message || "Ошибка добавления")}
           </div>
         )}
@@ -408,8 +360,8 @@ export function BrandBansPage() {
             const deleteLoading = deleteMutation.isPending && deleteMutation.variables === ban.id;
 
             return (
-              <div key={ban.id} style={{ borderBottom: "1px solid var(--border-subtle, rgba(255,255,255,0.05))" }}>
-                <article className="job-row" style={{ minHeight: 56, borderBottom: "none" }}>
+              <div key={ban.id} className="brand-ban-item">
+                <article className="job-row brand-ban-row">
                   <div>
                     <strong>{ban.displayBrand}</strong>
                     <span>
@@ -417,7 +369,7 @@ export function BrandBansPage() {
                       {ban.note ? ` · ${ban.note}` : ""}
                     </span>
                   </div>
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <div className="brand-ban-actions">
                     <button
                       className="secondary-action compact"
                       title="Посмотреть какие товары попадут под запрет"
@@ -464,7 +416,7 @@ export function BrandBansPage() {
                 <OfferIdsPanel ban={ban} onUpdated={() => void qc.invalidateQueries({ queryKey: ["brand-bans"] })} />
 
                 {result && (
-                  <div style={{ padding: "0 16px 10px" }}>
+                  <div className="brand-result-wrap">
                     <div className={`info-strip compact ${result.ok ? "success" : ""}`}>
                       {result.ok
                         ? `Готово: заархивировано ${result.archived} из ${result.total} товаров (Ozon/ЯМ).`
@@ -480,8 +432,8 @@ export function BrandBansPage() {
                 )}
 
                 {isPreviewOpen && preview && (
-                  <div style={{ padding: "0 16px 12px" }}>
-                    <div className="info-strip" style={{ flexDirection: "column", gap: 8 }}>
+                  <div className="brand-preview-wrap">
+                    <div className="info-strip brand-preview-strip">
                       <strong>
                         {preview.total === 0 && (preview.wbCount ?? 0) === 0
                           ? `Нет точных совпадений для бренда «${ban.displayBrand}».`
@@ -489,23 +441,21 @@ export function BrandBansPage() {
                         {preview.wbCount === -1 ? " (WB недоступен)" : null}
                       </strong>
                       {((preview.suggestions?.length ?? 0) > 0 || (preview.wbSuggestions?.length ?? 0) > 0) && (
-                        <div style={{ fontSize: 12 }}>
-                          <span style={{ color: "var(--muted)" }}>Похожие бренды в системе: </span>
+                        <div className="brand-preview-similar">
+                          <span className="muted-note">Похожие бренды в системе: </span>
                           {[...(preview.suggestions ?? []), ...(preview.wbSuggestions ?? []).map((s) => `WB: ${s}`)].join(" · ")}
                         </div>
                       )}
                       {preview.products.length > 0 && (
-                        <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                        <div className="brand-preview-products">
                           {preview.products.slice(0, 60).map((p) => (
-                            <div key={p.id} style={{ fontSize: 12, color: "var(--muted)", padding: "2px 0" }}>
-                              <span style={{ opacity: 0.7, marginRight: 6 }}>[{mpLabel(p.marketplace)}]</span>
+                            <div key={p.id} className="brand-preview-product">
+                              <span className="brand-preview-mp">[{mpLabel(p.marketplace)}]</span>
                               {p.name || p.offerId}
                             </div>
                           ))}
                           {preview.total > 60 && (
-                            <div style={{ fontSize: 12, color: "var(--muted)", padding: "2px 0" }}>
-                              …и ещё {preview.total - 60}
-                            </div>
+                            <div className="brand-preview-product muted-note">…и ещё {preview.total - 60}</div>
                           )}
                         </div>
                       )}

@@ -6319,6 +6319,40 @@ textarea {
   grid-template-columns: 42px minmax(82px, 0.55fr) minmax(130px, 0.8fr) minmax(170px, 1fr) minmax(170px, 1fr) minmax(280px, 1.45fr);
   min-width: 940px;
 }
+.price-table--virtual {
+  height: 560px;
+  overflow-y: auto;
+}
+.price-table--virtual .table-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface2);
+}
+.price-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.price-search-icon {
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.price-search-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  color: var(--text);
+  outline: none;
+}
+.price-search-input:focus {
+  border-color: var(--accent, #3b6dff);
+}
 
 .finance-orders-table .table-head,
 .finance-orders-table .table-row {
@@ -10790,3 +10824,100 @@ textarea:focus-visible,
 }
 .pm-link-expand-btn:hover { color: var(--blue); }
 
+/* ===== BrandBansPage ===== */
+.brand-mp-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+}
+.brand-mp-badge--ym { background: rgba(255,211,0,0.18); color: #b8920a; }
+.brand-mp-badge--ozon { background: rgba(0,130,255,0.15); color: #0068cc; }
+
+.brand-autocomplete { position: relative; flex: 1 1 220px; min-width: 180px; max-width: 360px; }
+.brand-autocomplete-input { width: 100%; }
+.brand-autocomplete-spinner {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  display: flex;
+}
+.brand-autocomplete-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--bg-card, var(--surface2));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.18);
+  z-index: 200;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.brand-autocomplete-item {
+  padding: 7px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+.brand-autocomplete-item:last-child { border-bottom: none; }
+.brand-autocomplete-item:hover,
+.brand-autocomplete-item.is-active { background: rgba(255,255,255,0.06); }
+.brand-autocomplete-name { flex: 1; font-size: 13px; }
+.brand-autocomplete-badges { display: flex; gap: 4px; flex-shrink: 0; }
+
+.brand-add-row { padding: 12px 16px; display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+.brand-note-input { flex: 1 1 160px; min-width: 140px; max-width: 240px; }
+.brand-add-error { margin: 0 16px 12px; }
+
+.brand-ban-item { border-bottom: 1px solid rgba(255,255,255,0.05); }
+.brand-ban-row { min-height: 56px; border-bottom: none !important; }
+.brand-ban-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.brand-offer-panel { border-top: 1px solid rgba(255,255,255,0.05); }
+.brand-offer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  width: 100%;
+}
+.brand-offer-count {
+  background: rgba(255,255,255,0.1);
+  border-radius: 10px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+.brand-offer-body { padding: 4px 16px 12px; display: flex; flex-direction: column; gap: 6px; }
+.brand-offer-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.brand-offer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  background: rgba(255,255,255,0.08);
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+.brand-offer-chip-remove { background: none; border: none; cursor: pointer; padding: 0; display: flex; color: var(--muted); }
+.brand-offer-add { display: flex; gap: 6px; margin-top: 2px; }
+.brand-offer-input { flex: 1 1 180px; max-width: 260px; font-size: 12px; }
+
+.brand-result-wrap { padding: 0 16px 10px; }
+.brand-preview-wrap { padding: 0 16px 12px; }
+.brand-preview-strip { flex-direction: column; gap: 8px; }
+.brand-preview-similar { font-size: 12px; }
+.brand-preview-products { max-height: 220px; overflow-y: auto; }
+.brand-preview-product { font-size: 12px; color: var(--muted); padding: 2px 0; }
+.brand-preview-mp { opacity: 0.7; margin-right: 6px; }

@@ -1,5 +1,6 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, BadgeDollarSign, CheckCircle2, Loader2, RefreshCcw, Send, Zap } from "lucide-react";
+import { AlertTriangle, BadgeDollarSign, CheckCircle2, Loader2, RefreshCcw, Search, Send, Zap } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { fetchJson, mutationBody } from "../api";
 import { PageHeader } from "../components/PageHeader";
@@ -7,6 +8,7 @@ import { SelectField } from "../components/SelectField";
 import { ListSkeleton } from "../components/Skeleton";
 import { Stat } from "../components/Stat";
 import { MutationProductResponseSchema, SalesAutomationItemsSchema, SalesAutomationSummarySchema } from "../types";
+import { useDebounced } from "../lib/common";
 
 const text = (value: unknown) => String(value ?? "").trim();
 const numberValue = (value: unknown) => Number(value || 0) || 0;
@@ -58,9 +60,12 @@ export function PricesPage() {
   const [marketplace, setMarketplace] = useState("all");
   const [reason, setReason] = useState("all");
   const [applyStatus, setApplyStatus] = useState("all");
+  const [q, setQ] = useState("");
+  const debouncedQ = useDebounced(q, 200);
   const [runResult, setRunResult] = useState<Record<string, unknown> | null>(null);
   const runResultTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queryClient = useQueryClient();
+  const tableRef = useRef<HTMLDivElement>(null);
 
   const summary = useQuery({
     queryKey: ["sales-automation", "summary"],
@@ -108,8 +113,22 @@ export function PricesPage() {
     { label: "нет PM-привязки", reason: "no_pricemaster_link", status: "all" },
     { label: "verified", reason: "all", status: "verified" },
   ];
-  const items = itemsQuery.data?.items || [];
+  const rawItems = itemsQuery.data?.items || [];
   const okReasons = ["ok", "unchanged", "unchanged_verified", "verified"];
+  const items = useMemo(() => {
+    const words = debouncedQ.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) return rawItems;
+    return rawItems.filter((item) => {
+      const haystack = [text(item.offerId), text(item.marketplace), supplierName(item)].join(" ").toLowerCase();
+      return words.every((w) => haystack.includes(w));
+    });
+  }, [rawItems, debouncedQ]);
+  const rowVirtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => tableRef.current,
+    estimateSize: () => 44,
+    overscan: 8,
+  });
   const { ozonIssues, yandexIssues } = useMemo(() => {
     let ozon = 0;
     let yandex = 0;
@@ -225,6 +244,21 @@ export function PricesPage() {
         </div>
       ) : null}
 
+      <div className="price-search-row">
+        <Search size={15} className="price-search-icon" />
+        <input
+          className="price-search-input"
+          placeholder="Поиск по артикулу или поставщику…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        {items.length !== rawItems.length ? (
+          <span className="muted-note" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{items.length} из {rawItems.length}</span>
+        ) : (
+          <span className="muted-note" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{rawItems.length} строк</span>
+        )}
+      </div>
+
       <div className="price-reason-grid">
         {quickFilters.map((filter) => (
           <button
@@ -249,27 +283,38 @@ export function PricesPage() {
         )) : <span className="muted-text">Причин пропуска пока нет.</span>}
       </div>
 
-      <div className="table-panel price-table price-status-table">
+      <div className="table-panel price-table price-status-table price-table--virtual" ref={tableRef}>
         <div className="table-head">
           <span>Маркет</span><span>Артикул</span><span>Поставщик</span><span>Закупка</span><span>Расчет</span><span>Запрос</span><span>Verified</span><span>Apply</span><span>Intent</span><span>Ошибка</span><span>Проверено</span>
         </div>
-        {items.map((item) => (
-          <div className="table-row" key={`${text(item.marketplace)}-${text(item.productId || item.offerId)}-${text(item.target)}`}>
-            <span data-label="Маркет"><Zap size={14} /> {text(item.marketplace)}</span>
-            <span data-label="Артикул">{text(item.offerId)}</span>
-            <span data-label="Поставщик">{supplierName(item)}</span>
-            <span data-label="Закупка">{money(itemValue(item, "supplierPurchasePrice"))}</span>
-            <span data-label="Расчет"><strong>{money(item.targetPrice ?? item.price)}</strong></span>
-            <span data-label="Запрос">{money(itemValue(item, "lastRequestedPrice"))}</span>
-            <span data-label="Verified">{money(itemValue(item, "lastVerifiedPrice"))}</span>
-            <span data-label="Apply">{reasonLabel(itemValue(item, "priceApplyStatus"))}</span>
-            <span data-label="Intent">{text(itemValue(item, "priceIntentId")).slice(0, 8) || "-"}</span>
-            <span data-label="Ошибка">{text(item.lastError) || reasonLabel(item.reason)}</span>
-            <span data-label="Проверено">{formatDate(itemValue(item, "lastPriceVerifiedAt") || item.updatedAt || item.lastCalculatedAt)}</span>
-          </div>
-        ))}
         {itemsQuery.isLoading && !items.length ? <ListSkeleton rows={8} /> : null}
         {!items.length && !itemsQuery.isLoading ? <div className="empty-state">Сейчас нет строк по выбранному фильтру. Автоматизация продолжает работать в фоне.</div> : null}
+        {items.length > 0 ? (
+          <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
+            {rowVirtualizer.getVirtualItems().map((virtualItem) => {
+              const item = items[virtualItem.index];
+              return (
+                <div
+                  className="table-row"
+                  key={`${text(item.marketplace)}-${text(item.productId || item.offerId)}-${text(item.target)}`}
+                  style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${virtualItem.start}px)` }}
+                >
+                  <span data-label="Маркет"><Zap size={14} /> {text(item.marketplace)}</span>
+                  <span data-label="Артикул">{text(item.offerId)}</span>
+                  <span data-label="Поставщик">{supplierName(item)}</span>
+                  <span data-label="Закупка">{money(itemValue(item, "supplierPurchasePrice"))}</span>
+                  <span data-label="Расчет"><strong>{money(item.targetPrice ?? item.price)}</strong></span>
+                  <span data-label="Запрос">{money(itemValue(item, "lastRequestedPrice"))}</span>
+                  <span data-label="Verified">{money(itemValue(item, "lastVerifiedPrice"))}</span>
+                  <span data-label="Apply">{reasonLabel(itemValue(item, "priceApplyStatus"))}</span>
+                  <span data-label="Intent">{text(itemValue(item, "priceIntentId")).slice(0, 8) || "-"}</span>
+                  <span data-label="Ошибка">{text(item.lastError) || reasonLabel(item.reason)}</span>
+                  <span data-label="Проверено">{formatDate(itemValue(item, "lastPriceVerifiedAt") || item.updatedAt || item.lastCalculatedAt)}</span>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
       </div>
     </section>
   );
