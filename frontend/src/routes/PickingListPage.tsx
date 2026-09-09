@@ -313,8 +313,8 @@ export function PickingListPage() {
     },
   });
   const paymentMutation = useMutation({
-    mutationFn: ({ supplierName, partnerId, amount, note }: { supplierName: string; partnerId?: string; amount: number; note: string }) =>
-      fetchJson("/api/supplier-ledger/payments", SupplierLedgerPaymentSchema, mutationBody({ supplierName, partnerId, amount, note })),
+    mutationFn: ({ supplierName, partnerId, amount, note, currency }: { supplierName: string; partnerId?: string; amount: number; note: string; currency?: string }) =>
+      fetchJson("/api/supplier-ledger/payments", SupplierLedgerPaymentSchema, mutationBody({ supplierName, partnerId, amount, note, currency })),
     onSuccess: (_data, variables) => {
       setPaymentDrafts((current) => ({ ...current, [variables.supplierName]: "" }));
       setPaymentNotes((current) => ({ ...current, [variables.supplierName]: "" }));
@@ -509,6 +509,12 @@ export function PickingListPage() {
   const invoiceRows = invoiceQuery.data?.rows || [];
   const myBalance = myBalanceQuery.data?.total ?? 0;
   const allBalances = allBalancesQuery.data?.balances ?? [];
+  // Lifetime breakdown: issued = all positive credits, spent = all negative credits (absolute).
+  // Using the full credits array from myBalanceQuery so Выдано/Потрачено/Остаток are always
+  // consistent with the main myBalance figure (not filtered to today only).
+  const allMyCredits = myBalanceQuery.data?.credits ?? [];
+  const issuedLifetime = allMyCredits.filter((c) => Number(c.amount) > 0).reduce((sum, c) => sum + Number(c.amount), 0);
+  const spentLifetime = allMyCredits.filter((c) => Number(c.amount) < 0).reduce((sum, c) => sum + Math.abs(Number(c.amount)), 0);
   // All non-admin active accounts, for populating the picker datalist
   const knownPickerUsernames = useMemo(() => {
     const fromUsers = (allUsersQuery.data?.users ?? [])
@@ -629,28 +635,23 @@ export function PickingListPage() {
           <div className="picker-balance-panel-my">
             <div className="picker-balance-panel-label"><Wallet size={14} /> Мой баланс · {myUsername || "—"}</div>
             <div className={`picker-balance-panel-total${balanceTone ? ` tone-${balanceTone}` : ""}`}>{balanceStr(myBalance)}</div>
-            {/* End-of-day summary */}
-            {myDayQuery.data ? (() => {
-              const d = myDayQuery.data;
-              const hasActivity = d.issuedToday > 0 || d.spentToday > 0;
-              return (
-                <div className="picker-day-summary">
-                  {hasActivity ? <div className="picker-select-label" style={{ paddingTop: 0, marginBottom: 4 }}>Отчёт за сегодня</div> : null}
-                  <div className="picker-day-row">
-                    <span className="muted-note">Выдано</span>
-                    <span className="tone-success">{balanceStr(d.issuedToday)}</span>
-                  </div>
-                  <div className="picker-day-row">
-                    <span className="muted-note">Потрачено</span>
-                    <span className="tone-warn">{balanceStr(d.spentToday)}</span>
-                  </div>
-                  <div className="picker-day-row" style={{ fontWeight: 600 }}>
-                    <span>Остаток</span>
-                    <span className={d.returnAmount > 0 ? "tone-danger" : d.returnAmount < 0 ? "tone-success" : ""}>{balanceStr(d.returnAmount)}</span>
-                  </div>
+            {/* Balance breakdown: computed from full credits so it matches the main total */}
+            {allMyCredits.length > 0 ? (
+              <div className="picker-day-summary">
+                <div className="picker-day-row">
+                  <span className="muted-note">Выдано</span>
+                  <span className="tone-success">{balanceStr(issuedLifetime)}</span>
                 </div>
-              );
-            })() : null}
+                <div className="picker-day-row">
+                  <span className="muted-note">Потрачено</span>
+                  <span className="tone-warn">{balanceStr(spentLifetime)}</span>
+                </div>
+                <div className="picker-day-row" style={{ fontWeight: 600 }}>
+                  <span>Остаток</span>
+                  <span className={myBalance > 0 ? "tone-danger" : myBalance < 0 ? "tone-success" : ""}>{balanceStr(myBalance)}</span>
+                </div>
+              </div>
+            ) : null}
             {(myBalanceQuery.data?.credits ?? []).length > 0 ? (
               <div className="picker-balance-history">
                 {(myBalanceQuery.data?.credits ?? []).slice(-8).reverse().map((c) => (
@@ -762,6 +763,22 @@ export function PickingListPage() {
                       : <><RotateCcw size={15} /> Возврат {issuePickerDraft ? `← ${issuePickerDraft}` : ""}</>}
                   </button>
                 </div>
+                {/* "Принять всё" — records exact RUB balance to bring picker to zero without rounding drift */}
+                {issuePickerDraft ? (() => {
+                  const pickerBal = allBalances.find((b) => b.username === issuePickerDraft)?.total ?? 0;
+                  if (pickerBal <= 0) return null;
+                  return (
+                    <button
+                      className="secondary-action picker-issue-submit"
+                      type="button"
+                      style={{ marginTop: 4 }}
+                      disabled={returnCashMutation.isPending}
+                      onClick={() => returnCashMutation.mutate({ pickerUsername: issuePickerDraft.trim(), amount: pickerBal, note: returnDraftNote || "Возврат всего остатка" })}
+                    >
+                      <RotateCcw size={15} /> Принять весь остаток ({balanceStr(pickerBal)})
+                    </button>
+                  );
+                })() : null}
                 {returnCashMutation.error ? <div className="inline-error" style={{ margin: "6px 0 0" }}>{errorMessage(returnCashMutation.error)}</div> : null}
               </div>
 
@@ -1486,7 +1503,7 @@ export function PickingListPage() {
                       disabled={paymentMutation.isPending || !(Number(String(draftAmount || "0").replace(",", ".")) > 0)}
                       onClick={() => {
                         const rawAmount = Number(String(draftAmount || "0").replace(",", ".")) || 0;
-                        paymentMutation.mutate({ supplierName, partnerId: supplierRows[0]?.partnerId || "", amount: supplierCurrency === "USD" ? Math.round(rawAmount * usdRate) : rawAmount, note: draftNote });
+                        paymentMutation.mutate({ supplierName, partnerId: supplierRows[0]?.partnerId || "", amount: rawAmount, note: draftNote, currency: supplierCurrency });
                       }}
                     >
                       {paymentMutation.isPending ? <Loader2 className="spin" size={16} /> : <Check size={16} />} Заплатил
