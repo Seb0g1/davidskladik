@@ -73,25 +73,20 @@ app.post("/api/ozon-yandex-import/repair-yandex-content", requireAdmin, async (r
 
     // Photo fallback: yandex rows created from exports often have no images of their own —
     // borrow them from the Ozon sibling with the same offerId (images is a light column).
+    // Only load Ozon rows for the specific offerIds we need (not the full catalog).
+    const candidateOfferIds = [...new Set(
+      candidates.map((p) => cleanText(normalizeWarehouseProduct(p).offerId)).filter(Boolean)
+    )];
     const ozonImagesByOfferId = new Map();
-    {
-      let ozonCursor = null;
-      while (true) {
-        const page = await prisma.warehouseProduct.findMany({
-          where: { marketplace: "ozon" },
-          select: { id: true, offerId: true, images: true },
-          orderBy: { id: "asc" },
-          take: 2000,
-          ...(ozonCursor ? { cursor: { id: ozonCursor }, skip: 1 } : {}),
-        });
-        if (!page.length) break;
-        ozonCursor = page[page.length - 1].id;
-        for (const row of page) {
-          const key = cleanText(row.offerId).toLowerCase();
-          const images = Array.isArray(row.images) ? row.images.filter(Boolean) : [];
-          if (key && images.length && !ozonImagesByOfferId.has(key)) ozonImagesByOfferId.set(key, images);
-        }
-        if (page.length < 2000) break;
+    if (candidateOfferIds.length > 0) {
+      const ozonRows = await prisma.warehouseProduct.findMany({
+        where: { marketplace: "ozon", offerId: { in: candidateOfferIds } },
+        select: { offerId: true, images: true },
+      });
+      for (const row of ozonRows) {
+        const key = cleanText(row.offerId).toLowerCase();
+        const images = Array.isArray(row.images) ? row.images.filter(Boolean) : [];
+        if (key && images.length && !ozonImagesByOfferId.has(key)) ozonImagesByOfferId.set(key, images);
       }
     }
 
