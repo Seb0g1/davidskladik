@@ -674,11 +674,13 @@ app.post("/api/ozon-yandex-import/archive-blocked", requireAdmin, async (request
 // ──────────────────────────────────────────────────────────────────────────────
 
 async function getYandexPriceQuarantine(shop) {
+  if (!shop?.campaignId) return [];
   const items = [];
   let pageToken = "";
   for (;;) {
-    const body = { limit: 200, ...(pageToken ? { page_token: pageToken } : {}) };
-    const data = await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/price-quarantine`, body);
+    const qs = new URLSearchParams({ limit: "200" });
+    if (pageToken) qs.set("page_token", pageToken);
+    const data = await yandexRequest(shop, "GET", `/v2/campaigns/${shop.campaignId}/price-quarantine?${qs}`);
     const page = data?.result?.offerPrices || data?.offerPrices || [];
     items.push(...page);
     pageToken = data?.result?.paging?.nextPageToken || data?.paging?.nextPageToken || "";
@@ -688,11 +690,12 @@ async function getYandexPriceQuarantine(shop) {
 }
 
 async function confirmYandexPriceQuarantine(shop, offerIds) {
+  if (!shop?.campaignId) return { confirmed: 0 };
   const ids = [...new Set((Array.isArray(offerIds) ? offerIds : []).map(cleanText).filter(Boolean))];
   if (!ids.length) return { confirmed: 0 };
   let confirmed = 0;
   for (const chunk of chunkArray(ids, 200)) {
-    await yandexRequest(shop, "POST", `/v2/businesses/${shop.businessId}/price-quarantine/confirm`, { offerIds: chunk });
+    await yandexRequest(shop, "POST", `/v2/campaigns/${shop.campaignId}/price-quarantine/confirm`, { offerIds: chunk });
     confirmed += chunk.length;
   }
   return { confirmed };
@@ -700,9 +703,7 @@ async function confirmYandexPriceQuarantine(shop, offerIds) {
 
 app.get("/api/yandex/price-quarantine", requireAdmin, async (_request, response, next) => {
   try {
-    const shops = uniqueYandexShopsByBusiness
-      ? uniqueYandexShopsByBusiness()
-      : getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+    const shops = getYandexShops().filter((shop) => shop.apiKey && shop.campaignId);
     if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
     const byShop = [];
     for (const shop of shops) {
@@ -718,9 +719,7 @@ app.get("/api/yandex/price-quarantine", requireAdmin, async (_request, response,
 
 app.post("/api/yandex/price-quarantine/confirm", requireAdmin, async (request, response, next) => {
   try {
-    const shops = uniqueYandexShopsByBusiness
-      ? uniqueYandexShopsByBusiness()
-      : getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+    const shops = getYandexShops().filter((shop) => shop.apiKey && shop.campaignId);
     if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
     const results = [];
     for (const shop of shops) {
@@ -744,9 +743,7 @@ app.post("/api/yandex/price-quarantine/confirm", requireAdmin, async (request, r
 // to the price-quarantine/confirm endpoint for those specific offerIds.
 app.post("/api/yandex/price-quarantine/confirm-price-drop-errors", requireAdmin, async (request, response, next) => {
   try {
-    const shops = uniqueYandexShopsByBusiness
-      ? uniqueYandexShopsByBusiness()
-      : getYandexShops().filter((shop) => shop.apiKey && shop.businessId);
+    const shops = getYandexShops().filter((shop) => shop.apiKey && shop.campaignId);
     if (!shops.length) return response.status(400).json({ error: "Yandex Market не настроен." });
     const PRICE_DROP_ERROR = /цена сильно снизилась|price.*decreased|price.*low/i;
     const results = [];
