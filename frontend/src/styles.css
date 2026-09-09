@@ -11213,3 +11213,25 @@ span + .bt-cat-id { margin-left: 6px; }
 .sp-details-mt-lg { margin-top: 10px; }
 .sp-summary-plain { cursor: pointer; padding: 4px 0; }
 .sp-actions-mt { margin-top: 8px; }
+
+/* ── SettingsPage ── */
+.stg-card-mb { margin-bottom: 12px; }
+.stg-full-width { width: 100%; }
+.stg-preview-rel { position: relative; }
+.stg-preview-del-btn { position: absolute; top: 0; right: 0; background: rgba(0,0,0,0.5); color: #fff; border: none; cursor: pointer; border-radius: 50%; width: 20px; height: 20px; font-size: 12px; }
+.stg-file-label { display: flex; align-items: center; gap: 8px; }
+.stg-audit-count { font-size: 13px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+.stg-check-label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.stg-input-md { max-width: 220px; }
+.stg-input-sm { max-width: 90px; }
+
+/* ── OperationsPage ── */
+.op-loader-ml { margin-left: 6px; }
+.op-hint-sm { font-size: 12px; }
+.op-warning-mt { margin-top: 4px; }
+.op-already-row { display: flex; align-items: center; gap: 8px; }
+.op-reopen-btn { padding: 1px 6px; font-size: 11px; }
+.op-warning-my { margin: 4px 0; }
+.op-actions-row { display: flex; gap: 8px; margin: 4px 0; flex-wrap: wrap; }
+.op-result-ok { font-size: 13px; align-self: center; }
+.op-result-warn { font-size: 13px; align-self: center; }

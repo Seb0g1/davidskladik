@@ -400,7 +400,7 @@ export function SupplierCartPanel() {
           </div>
           {debouncedManualOfferId.length >= 2 && (
             <label>
-              Поставщик{manualSuppliersQuery.isFetching ? <Loader2 className="spin" size={13} style={{ marginLeft: 6 }} /> : null}
+              Поставщик{manualSuppliersQuery.isFetching ? <Loader2 className="spin op-loader-ml" size={13} /> : null}
               <select
                 value={manualPartnerId ? `${manualPartnerId}|${manualRowId}` : ""}
                 onChange={(e) => {
@@ -422,7 +422,7 @@ export function SupplierCartPanel() {
                 })}
               </select>
               {manualOptions.length === 0 && !manualSuppliersQuery.isFetching && (
-                <span className="muted-hint" style={{ fontSize: 12 }}>{manualSuppliersQuery.data?.skipReason || "Нет поставщиков для этого артикула"}</span>
+                <span className="muted-hint op-hint-sm">{manualSuppliersQuery.data?.skipReason || "Нет поставщиков для этого артикула"}</span>
               )}
             </label>
           )}
@@ -513,14 +513,14 @@ export function SupplierCartPanel() {
                     {row.isExpress ? <span className="express-badge"><Zap size={12} /> Экспресс — подтверждение Ozon после «Собрал»</span> : null}
                   </div>
                   {row.pmNameMismatch ? (
-                    <div className="inline-warning" style={{ marginTop: 4 }}>
+                    <div className="inline-warning op-warning-mt">
                       ⚠ Название в PM не совпадает с заказом — возможно неверная привязка поставщика. PM: «{row.pmName}» vs заказ: «{row.productName}»
                     </div>
                   ) : null}
                   {row.alreadyCommitted ? (
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div className="op-already-row">
                       <small>Уже в заявке PriceMaster: Doc {row.requestDocId}, Row {row.requestRowId}</small>
-                      <button className="secondary-action" type="button" style={{ padding: "1px 6px", fontSize: 11 }} disabled={clearProcessedMutation.isPending} onClick={() => clearProcessedMutation.mutate([row.key])} title="Снять пометку «уже в заявке» — если PM-строка была удалена или заказ устарел">
+                      <button className="secondary-action op-reopen-btn" type="button" disabled={clearProcessedMutation.isPending} onClick={() => clearProcessedMutation.mutate([row.key])} title="Снять пометку «уже в заявке» — если PM-строка была удалена или заказ устарел">
                         Открыть снова
                       </button>
                     </div>
@@ -555,7 +555,7 @@ export function SupplierCartPanel() {
         <>
           <div className="success-strip">Добавлено в PriceMaster: {commitMutation.data.inserted}. Проверено в PM: {commitMutation.data.verifiedRows}. База: {commitMutation.data.priceMasterDb || "-"}. Документы: {commitMutation.data.docIds.join(", ") || "-"}</div>
           {(commitMutation.data.pmBlocked?.length ?? 0) > 0 && (
-            <div className="inline-warning" style={{ margin: "4px 0" }}>
+            <div className="inline-warning op-warning-my">
               <strong>Не добавлено (уже в заявке PM):</strong> {commitMutation.data.pmBlocked!.length} шт. — заказ у поставщика уже открыт, товар ещё не получен (Recieved=0).{" "}
               Документы: {[...new Set(commitMutation.data.pmBlocked!.map((b) => b.existingDocId).filter(Boolean))].join(", ")}.{" "}
               {commitMutation.data.pmBlocked!.slice(0, 3).map((b) => b.offerId || b.productName).filter(Boolean).join(", ")}
@@ -564,13 +564,13 @@ export function SupplierCartPanel() {
           )}
         </>
       ) : null}
-      <div style={{ display: "flex", gap: 8, margin: "4px 0", flexWrap: "wrap" }}>
+      <div className="op-actions-row">
         <button className="secondary-action" type="button" disabled={reconfirmMutation.isPending} onClick={() => reconfirmMutation.mutate()} title="Повторно отправить подтверждение отгрузки на Ozon/Yandex для товаров, синхронизированных из PM">
           {reconfirmMutation.isPending ? <Loader2 className="spin" size={14} /> : null}
           Переотправить подтверждения отгрузки
         </button>
-        {reconfirmMutation.data && <span className="tone-success" style={{ fontSize: 13, alignSelf: "center" }}>Подтверждено: {reconfirmMutation.data.confirmed}</span>}
-        {reconfirmMutation.error && <span className="tone-warn" style={{ fontSize: 13, alignSelf: "center" }}>{errorMessage(reconfirmMutation.error)}</span>}
+        {reconfirmMutation.data && <span className="tone-success op-result-ok">Подтверждено: {reconfirmMutation.data.confirmed}</span>}
+        {reconfirmMutation.error && <span className="tone-warn op-result-warn">{errorMessage(reconfirmMutation.error)}</span>}
       </div>
       {generateMutation.error && <div className="inline-error">{errorMessage(generateMutation.error)}</div>}
       {commitMutation.error && <div className="inline-error">{errorMessage(commitMutation.error)}</div>}

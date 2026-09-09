@@ -431,8 +431,8 @@ function ShopStubsPanel() {
         const entry: ShopStubEntry = (stubs && (stubs as Record<string, ShopStubEntry>)[key]) || { enabled: false, stubUrls: [], position: "end" };
         const file = uploadFiles[key] || null;
         return (
-          <div key={key} className="branding-card" style={{ marginBottom: "12px" }}>
-            <div className="branding-fields" style={{ width: "100%" }}>
+          <div key={key} className="branding-card stg-card-mb">
+            <div className="branding-fields stg-full-width">
               <div className="section-title compact-title"><div><span>{note}</span><h3>{label}</h3></div></div>
               <label className="settings-toggle">
                 <input
@@ -445,12 +445,11 @@ function ShopStubsPanel() {
               {entry.stubUrls.length > 0 && (
                 <div className="extra-card-preview-row">
                   {entry.stubUrls.map((url, index) => (
-                    <span className="extra-card-preview" key={url + index} style={{ position: "relative" }}>
+                    <span className="extra-card-preview stg-preview-rel" key={url + index}>
                       <img src={url} alt={`Заглушка ${index + 1}`} />
                       <button
                         type="button"
-                        className="icon-button"
-                        style={{ position: "absolute", top: 0, right: 0, background: "rgba(0,0,0,0.5)", color: "#fff", border: "none", cursor: "pointer", borderRadius: "50%", width: 20, height: 20, fontSize: 12 }}
+                        className="icon-button stg-preview-del-btn"
                         onClick={() => removeStub.mutate({ shopKey: key, url })}
                         title="Удалить"
                       >×</button>
@@ -462,7 +461,7 @@ function ShopStubsPanel() {
               {entry.stubUrls.length === 0 && <div className="soft-empty compact">Заглушки не загружены для {label}.</div>}
               {entry.stubUrls.length < 5 && (
                 <div className="draft-actions">
-                  <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <label className="stg-file-label">
                     <input
                       type="file"
                       accept="image/png,image/jpeg,image/webp"
@@ -722,7 +721,7 @@ function AuditSettingsPanel() {
       <div className="section-title">
         <div>
           <span>Журнал</span>
-          <h3>Аудит действий{audit.length > 0 ? <span style={{ fontSize: 13, fontWeight: 400, color: "var(--muted)", marginLeft: 6 }}>({audit.length}{audit.length >= 500 ? "+" : ""})</span> : null}</h3>
+          <h3>Аудит действий{audit.length > 0 ? <span className="stg-audit-count">({audit.length}{audit.length >= 500 ? "+" : ""})</span> : null}</h3>
         </div>
         <button className="secondary-action" type="button" onClick={() => auditQuery.refetch()}><RefreshCw size={16} /> Обновить</button>
       </div>
@@ -1202,7 +1201,7 @@ export function SettingsPage() {
             Каждый день в указанный час спонсор получит в Telegram сводку: продажи за день, доля прибыли, текущий баланс.
           </p>
           <div className="settings-form-row">
-            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+            <label className="stg-check-label">
               <input
                 type="checkbox"
                 checked={Boolean(draft.sponsorDailyReportEnabled)}
@@ -1219,7 +1218,7 @@ export function SettingsPage() {
                 placeholder="-100123456789"
                 value={String(draft.sponsorTelegramChatId ?? "")}
                 onChange={(event) => update({ sponsorTelegramChatId: event.target.value })}
-                style={{ maxWidth: 220 }}
+                className="stg-input-md"
               />
             </label>
             <label>
@@ -1230,7 +1229,7 @@ export function SettingsPage() {
                 max={23}
                 value={String(draft.sponsorDailyReportHour ?? 20)}
                 onChange={(event) => update({ sponsorDailyReportHour: Number(event.target.value) })}
-                style={{ maxWidth: 90 }}
+                className="stg-input-sm"
               />
             </label>
           </div>
