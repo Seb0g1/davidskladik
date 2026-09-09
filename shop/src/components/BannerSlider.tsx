@@ -267,7 +267,7 @@ export default function BannerSlider() {
   const { data } = useQuery({
     queryKey: ["shop-banners"],
     queryFn: () => api.banners(),
-    staleTime: 5 * 60 * 1000,
+    staleTime: 30_000,
   });
 
   const banners = (data ?? FALLBACK_BANNERS).filter((b) => b.active);
