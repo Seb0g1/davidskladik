@@ -27,6 +27,7 @@ async function buildBrandsTnvedReport(accounts) {
   const tnvedCounts = new Map();
   const brandTnvedMap = new Map();
   const brandTypeMap = new Map(); // brand → Map<"descCatId:typeId", count>
+  const brandTnvedTypeMap = new Map(); // brand → Map<tnvedCode, Map<typeKey, count>>
   const catTypeNames = new Map(); // "descCatId:typeId" → human-readable type name
   let total = 0;
   let withBrand = 0;
@@ -140,6 +141,16 @@ async function buildBrandsTnvedReport(accounts) {
           if (!brandTypeMap.has(brand)) brandTypeMap.set(brand, new Map());
           const tm = brandTypeMap.get(brand);
           tm.set(typeKey, (tm.get(typeKey) || 0) + 1);
+
+          // Also map tnvedCode → typeKey so cosmetics can be split by subcode
+          if (tnvedFull) {
+            const codeLocal = tnvedFull.match(/^(\d{7,10})/)?.[1] || tnvedFull.slice(0, 10);
+            if (!brandTnvedTypeMap.has(brand)) brandTnvedTypeMap.set(brand, new Map());
+            const ttmap = brandTnvedTypeMap.get(brand);
+            if (!ttmap.has(codeLocal)) ttmap.set(codeLocal, new Map());
+            const ctm = ttmap.get(codeLocal);
+            ctm.set(typeKey, (ctm.get(typeKey) || 0) + 1);
+          }
         }
       }
     }
@@ -164,6 +175,7 @@ async function buildBrandsTnvedReport(accounts) {
   const mergedBrandCounts = new Map();
   const mergedBrandTnvedMap = new Map();
   const mergedBrandTypeMap = new Map();
+  const mergedBrandTnvedTypeMap = new Map(); // brand → Map<tnvedCode, Map<typeKey, count>>
   for (const [name, parent] of brandParent) {
     const entry = brandCounts.get(name);
     if (!mergedBrandCounts.has(parent)) mergedBrandCounts.set(parent, { brand: parent, count: 0, sample: [] });
@@ -189,6 +201,17 @@ async function buildBrandsTnvedReport(accounts) {
         pTypeMap.set(typeKey, (pTypeMap.get(typeKey) || 0) + count);
       }
     }
+
+    const tnvedTypeMap = brandTnvedTypeMap.get(name);
+    if (tnvedTypeMap) {
+      if (!mergedBrandTnvedTypeMap.has(parent)) mergedBrandTnvedTypeMap.set(parent, new Map());
+      const pMap = mergedBrandTnvedTypeMap.get(parent);
+      for (const [code, ctm] of tnvedTypeMap) {
+        if (!pMap.has(code)) pMap.set(code, new Map());
+        const pCtm = pMap.get(code);
+        for (const [typeKey, count] of ctm) pCtm.set(typeKey, (pCtm.get(typeKey) || 0) + count);
+      }
+    }
   }
 
   const brands = [...mergedBrandCounts.values()].sort((a, b) => b.count - a.count);
@@ -204,11 +227,25 @@ async function buildBrandsTnvedReport(accounts) {
             .slice(0, 6)
             .map((t) => t.name)
         : [];
+      // Per-tnvedCode type breakdown (for cosmetics 3304* subcodes)
+      const tnvedTypeMap = mergedBrandTnvedTypeMap.get(brand);
+      const tnvedCodeTypes = tnvedTypeMap
+        ? [...tnvedTypeMap.entries()].map(([code, ctm]) => ({
+            code,
+            types: [...ctm.entries()]
+              .map(([k, cnt]) => ({ name: catTypeNames.get(k) || "", count: cnt }))
+              .filter((t) => t.name)
+              .sort((a, b) => b.count - a.count)
+              .slice(0, 5)
+              .map((t) => t.name),
+          })).filter((e) => e.types.length)
+        : [];
       return {
         brand,
         totalCount: mergedBrandCounts.get(brand)?.count || 0,
         tnvedCodes: [...codesMap.values()].sort((a, b) => b.count - a.count),
         topTypes,
+        tnvedCodeTypes,
       };
     })
     .sort((a, b) => a.brand.localeCompare(b.brand, "ru"));
