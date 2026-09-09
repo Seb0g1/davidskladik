@@ -96,8 +96,11 @@ export function StatisticsPage() {
             <span>Последнее</span>
           </div>
           {sortedRows.map((row) => (
-            <div className="table-row" key={row.username}>
-              <span data-label="Сотрудник"><strong>{row.username}</strong>{row.deletedAt && <span className="muted" style={{fontSize:11}}> (удалён)</span>}</span>
+            <div className="table-row" key={row.username} style={row.deletedAt ? { opacity: 0.45 } : undefined}>
+              <span data-label="Сотрудник" style={row.deletedAt ? { textDecoration: "line-through", color: "var(--muted)" } : undefined}>
+                <strong>{row.username}</strong>
+                {row.deletedAt && <span style={{ fontSize: 10, fontWeight: 600, marginLeft: 6, padding: "1px 5px", borderRadius: 4, background: "rgba(239,68,68,.12)", color: "#f87171", border: "1px solid rgba(239,68,68,.2)" }}>удалён</span>}
+              </span>
               <span data-label="Роль">{row.role || "-"}</span>
               <span data-label="Действий">{row.actionsTotal}</span>
               <span data-label="Добавил">{row.linksAdded}</span>

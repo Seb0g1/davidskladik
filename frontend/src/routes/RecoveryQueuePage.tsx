@@ -5,6 +5,7 @@ import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
 import { OzonUnarchiveQueueSchema } from "../types";
 import { useState } from "react";
+import { useDebounced } from "../lib/common";
 import { z } from "zod";
 
 type YandexFastStatus = {
@@ -144,6 +145,7 @@ function YandexFastBlock({ status, error }: { status: YandexFastStatus | null; e
 export function RecoveryQueuePage() {
   const queryClient = useQueryClient();
   const [queueSearch, setQueueSearch] = useState("");
+  const debouncedSearch = useDebounced(queueSearch, 300);
   const queue = useQuery({
     queryKey: ["ozon", "unarchive-queue"],
     queryFn: () => fetchJson("/api/ozon/unarchive-queue?limit=1000", OzonUnarchiveQueueSchema),
@@ -168,7 +170,7 @@ export function RecoveryQueuePage() {
   const yandexFastError = yandexFastQuery.error ? String((yandexFastQuery.error as Error)?.message || yandexFastQuery.error) : "";
   const data = queue.data;
   const items = data?.items || [];
-  const visibleItems = (items ?? []).filter(i => !queueSearch || String((i as Record<string, unknown>).offerId ?? "").includes(queueSearch) || String((i as Record<string, unknown>).sku ?? "").includes(queueSearch)).slice(0, 200);
+  const visibleItems = (items ?? []).filter(i => !debouncedSearch || String((i as Record<string, unknown>).offerId ?? "").includes(debouncedSearch) || String((i as Record<string, unknown>).sku ?? "").includes(debouncedSearch)).slice(0, 200);
   return (
     <section className="page-section">
       <PageHeader

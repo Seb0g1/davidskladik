@@ -260,8 +260,17 @@ export function TnvedPage() {
     },
   });
 
+  const [showOnlyWithoutCode, setShowOnlyWithoutCode] = useState(false);
+
   const hasAssignments = categories.some((cat) => (localCodes[`${cat.descCatId}:${cat.typeId}`] || "").trim());
   const isApplying = progress?.running || applyMutation.isPending;
+
+  const withCodeProducts = categories.filter((c) => (localCodes[`${c.descCatId}:${c.typeId}`] || "").trim()).reduce((s, c) => s + c.count, 0);
+  const withoutCodeProducts = totalProducts - withCodeProducts;
+  const coveragePct = totalProducts > 0 ? Math.round((withCodeProducts / totalProducts) * 100) : 0;
+  const visibleCategories = showOnlyWithoutCode
+    ? [...categories].filter((c) => !(localCodes[`${c.descCatId}:${c.typeId}`] || "").trim()).sort((a, b) => b.count - a.count)
+    : [...categories].sort((a, b) => b.count - a.count);
   const isYandexApplying = yandexProgress?.running || yandexApplyMutation.isPending;
 
   const progressPct = progress?.running && progress.totalProducts && progress.processed != null
@@ -457,10 +466,35 @@ export function TnvedPage() {
             <div className="table-note">Категории не найдены. Настройте Ozon API в кабинетах.</div>
           ) : (
             <>
+              {/* Прогресс покрытия кодами */}
+              <div style={{ marginBottom: 12, padding: "10px 14px", background: "rgba(255,255,255,.03)", border: "1px solid var(--border)", borderRadius: 8 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>
+                    Покрытие: <span style={{ color: withoutCodeProducts === 0 ? "var(--success)" : "var(--warn)" }}>{withCodeProducts}</span> из {totalProducts} товаров с кодом ({coveragePct}%)
+                  </span>
+                  {withoutCodeProducts > 0 && (
+                    <button
+                      type="button"
+                      className={showOnlyWithoutCode ? "primary-action" : "secondary-action"}
+                      style={{ fontSize: 11, padding: "3px 10px" }}
+                      onClick={() => setShowOnlyWithoutCode((v) => !v)}
+                    >
+                      {showOnlyWithoutCode ? "Показать все" : `Только без кода (${withoutCodeProducts} тов.)`}
+                    </button>
+                  )}
+                </div>
+                <div style={{ height: 6, background: "var(--border)", borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${coveragePct}%`, background: withoutCodeProducts === 0 ? "var(--success)" : "var(--primary)", borderRadius: 3, transition: "width .3s" }} />
+                </div>
+                {withoutCodeProducts > 0 && (
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>
+                    Без кода: {withoutCodeProducts} товаров в {categories.filter((c) => !(localCodes[`${c.descCatId}:${c.typeId}`] || "").trim()).length} категориях
+                  </div>
+                )}
+              </div>
               <p className="form-hint">
-                Всего товаров: {totalProducts} в {categories.length} категориях/типах.
                 Введите коды ТН ВЭД и нажмите «Сохранить коды», затем «Отправить на Ozon».
-                Сохранённые коды также используются при отправке на Яндекс.Маркет.
+                Сохранённые коды также используются при отправке на Яндекс.Маркет. Таблица отсортирована по количеству товаров.
               </p>
               <div style={{ overflowX: "auto" }}>
                 <table className="data-table" style={{ minWidth: 600 }}>
@@ -472,7 +506,7 @@ export function TnvedPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {categories.map((cat) => {
+                    {visibleCategories.map((cat) => {
                       const key = `${cat.descCatId}:${cat.typeId}`;
                       const code = localCodes[key] ?? "";
                       return (

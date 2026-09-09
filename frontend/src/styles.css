@@ -726,6 +726,11 @@ button:disabled {
   display: grid;
   gap: 12px;
   min-width: 0;
+  animation: pageFadeIn 120ms ease-out both;
+}
+@keyframes pageFadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
 }
 
 .section-title {

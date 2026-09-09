@@ -73,8 +73,9 @@ const navItems: Array<{ route: AppRoute; href: string; label: string; icon: Reac
 const NAV_SECTIONS: Array<{ id: string; title?: string; routes: AppRoute[] }> = [
   { id: "main", routes: ["dashboard", "warehouse", "picking-list", "supplier-cart", "consignment"] },
   { id: "clients", title: "Работа с клиентами", routes: ["reviews", "chats", "questions", "support"] },
-  { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "no-supplier", "operations", "recovery-queue"] },
-  { id: "extra", title: "Дополнительное", routes: ["suppliers", "shop", "import", "avito", "prices", "statistics", "problem-products", "finance", "new-products", "tnved", "brand-bans", "brands-tnved", "ozon-card-fix"] },
+  { id: "marketplace", title: "Маркетплейсы", routes: ["suppliers", "avito", "import", "prices", "finance", "statistics"] },
+  { id: "admin", title: "Настройки", routes: ["settings", "system", "ai-drafts", "operations"] },
+  { id: "tools", title: "Инструменты", routes: ["tnved", "brand-bans", "brands-tnved", "ozon-card-fix", "no-supplier", "recovery-queue", "new-products", "problem-products", "shop"] },
 ];
 
 function currentRoute(): AppRoute {
@@ -122,7 +123,7 @@ function AppShell() {
       const stored = JSON.parse(window.localStorage.getItem("nav-collapsed-sections") || "");
       if (stored && typeof stored === "object") return stored;
     } catch { /* дефолт ниже */ }
-    return { extra: true };
+    return { tools: true, admin: true };
   });
   const toggleNavSection = (id: string) => {
     setCollapsedSections((current) => {

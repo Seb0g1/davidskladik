@@ -5,6 +5,7 @@ import { fetchJson } from "../api";
 import { NoSupplierSchema } from "../types";
 import { PageHeader } from "../components/PageHeader";
 import { Stat } from "../components/Stat";
+import { EmptyState } from "../components/EmptyState";
 
 function exportCsv(rows: Record<string, unknown>[], filename: string, headers: string[], fields: string[]) {
   const lines = [headers, ...rows.map(r => fields.map(f => `"${String(r[f] ?? "").replace(/"/g, '""')}"`))]
@@ -57,7 +58,7 @@ export function NoSupplierPage() {
             <button className="secondary-action" type="button" onClick={() => { const url = `/app/warehouse/${encodeURIComponent(`offer:${String(item.offerId || "").toLowerCase()}`)}?q=${encodeURIComponent(String(item.offerId || ""))}`; window.history.pushState(null, "", url); window.dispatchEvent(new PopStateEvent("popstate")); }}>Открыть</button>
           </article>
         ))}
-        {!query.isLoading && !alerts.length && <div className="soft-empty">Ошибок наличия нет.</div>}
+        {!query.isLoading && !alerts.length && <EmptyState icon={<PackageSearch size={36} />} title="Ошибок наличия нет" description="Все товары привязаны к поставщикам" />}
       </section>
     </section>
   );
