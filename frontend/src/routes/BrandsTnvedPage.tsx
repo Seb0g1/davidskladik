@@ -47,22 +47,12 @@ const TAB_LABELS: Record<Tab, string> = { ozon: "Ozon", yandex: "Яндекс" }
 
 function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
   return (
-    <div style={{ display: "flex", gap: 2, marginBottom: 18, borderBottom: "1px solid var(--line)", paddingBottom: 0 }}>
+    <div className="bt-tabs">
       {(["ozon", "yandex"] as Tab[]).map((t) => (
         <button
           key={t}
           onClick={() => onChange(t)}
-          style={{
-            padding: "7px 18px",
-            fontSize: 13,
-            fontWeight: active === t ? 600 : 400,
-            background: "none",
-            border: "none",
-            borderBottom: active === t ? "2px solid var(--accent)" : "2px solid transparent",
-            color: active === t ? "var(--text)" : "var(--muted)",
-            cursor: "pointer",
-            marginBottom: -1,
-          }}
+          className={`bt-tab${active === t ? " is-active" : ""}`}
         >
           {TAB_LABELS[t]}
         </button>
@@ -71,50 +61,41 @@ function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void 
   );
 }
 
-function BrandsTable({
-  brands,
-  total,
-  label,
-}: {
-  brands: BrandEntry[];
-  total: number;
-  label: string;
-}) {
+function BrandsTable({ brands, total, label }: { brands: BrandEntry[]; total: number; label: string }) {
   const [search, setSearch] = useState("");
   const filtered = search ? brands.filter((b) => b.brand.toLowerCase().includes(search.toLowerCase())) : brands;
   return (
     <section className="table-panel">
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 6px", borderBottom: "1px solid var(--line)" }}>
-        <BarChart2 size={15} style={{ opacity: 0.6 }} />
-        <span style={{ fontWeight: 600, fontSize: 14 }}>{label} ({brands.length})</span>
+      <div className="bt-panel-head">
+        <BarChart2 size={15} className="bt-panel-icon" />
+        <span className="bt-panel-title">{label} ({brands.length})</span>
       </div>
-      <div style={{ padding: "8px 16px 4px" }}>
+      <div className="bt-panel-search">
         <input
           className="pm-chip-input"
-          style={{ width: "100%" }}
           placeholder="Поиск бренда…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
-      <div style={{ overflowY: "auto", maxHeight: 480 }}>
+      <div className="bt-panel-scroll bt-panel-scroll--md">
         {filtered.length === 0 ? (
-          <div className="soft-empty" style={{ padding: "16px" }}>Ничего не найдено</div>
+          <div className="soft-empty bt-soft-empty-pad">Ничего не найдено</div>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <table className="bt-data-table">
             <thead>
-              <tr style={{ borderBottom: "1px solid var(--line)", background: "var(--panel-2)" }}>
-                <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>Бренд</th>
-                <th style={{ textAlign: "right", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>SKU</th>
-                <th style={{ textAlign: "right", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>%</th>
+              <tr>
+                <th>Бренд</th>
+                <th className="right">SKU</th>
+                <th className="right">%</th>
               </tr>
             </thead>
             <tbody>
               {filtered.slice(0, 200).map((b) => (
-                <tr key={b.brand} style={{ borderBottom: "1px solid var(--line)" }}>
-                  <td style={{ padding: "6px 16px" }}>{b.brand}</td>
-                  <td style={{ padding: "6px 16px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{b.count.toLocaleString("ru")}</td>
-                  <td style={{ padding: "6px 16px", textAlign: "right", color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>{pct(b.count, total)}</td>
+                <tr key={b.brand}>
+                  <td>{b.brand}</td>
+                  <td className="bt-td-right bt-td-num">{b.count.toLocaleString("ru")}</td>
+                  <td className="bt-td-right bt-td-num bt-td-muted">{pct(b.count, total)}</td>
                 </tr>
               ))}
             </tbody>
@@ -138,51 +119,50 @@ function BrandTnvedTypesTable({ entries }: { entries: BrandTnvedEntry[] }) {
   const hasTypes = entries.some((e) => e.topTypes && e.topTypes.length > 0);
 
   return (
-    <section className="table-panel" style={{ marginTop: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 6px", borderBottom: "1px solid var(--line)" }}>
-        <Tag size={15} style={{ opacity: 0.6 }} />
-        <span style={{ fontWeight: 600, fontSize: 14 }}>Бренд · ТН ВЭД · Тип товара ({entries.length})</span>
+    <section className="table-panel bt-brand-section">
+      <div className="bt-panel-head">
+        <Tag size={15} className="bt-panel-icon" />
+        <span className="bt-panel-title">Бренд · ТН ВЭД · Тип товара ({entries.length})</span>
         {!hasTypes && (
-          <span style={{ fontSize: 11, color: "var(--muted)", marginLeft: 8 }}>
+          <span className="bt-panel-hint">
             Типы появятся после следующего обновления данных Ozon
           </span>
         )}
       </div>
-      <div style={{ padding: "8px 16px 4px" }}>
+      <div className="bt-panel-search">
         <input
           className="pm-chip-input"
-          style={{ width: "100%" }}
           placeholder="Поиск бренда или типа товара…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
       </div>
-      <div style={{ overflowY: "auto", maxHeight: 520 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+      <div className="bt-panel-scroll bt-panel-scroll--lg">
+        <table className="bt-data-table">
           <thead>
-            <tr style={{ borderBottom: "1px solid var(--line)", background: "var(--panel-2)" }}>
-              <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)", width: "28%" }}>Бренд</th>
-              <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)", width: "20%" }}>Код ТН ВЭД</th>
-              <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>Тип товара</th>
-              <th style={{ textAlign: "right", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)", width: "8%" }}>SKU</th>
+            <tr>
+              <th style={{ width: "28%" }}>Бренд</th>
+              <th style={{ width: "20%" }}>Код ТН ВЭД</th>
+              <th>Тип товара</th>
+              <th className="right" style={{ width: "8%" }}>SKU</th>
             </tr>
           </thead>
           <tbody>
             {filtered.slice(0, 300).map((entry) =>
               entry.tnvedCodes.map((tc, i) => (
-                <tr key={`${entry.brand}:${tc.code}`} style={{ borderBottom: "1px solid var(--line)" }}>
-                  <td style={{ padding: "5px 16px", fontWeight: i === 0 ? 500 : 400, color: i === 0 ? "var(--text)" : "transparent" }}>
+                <tr key={`${entry.brand}:${tc.code}`}>
+                  <td className={`bt-td-dense${i !== 0 ? " bt-td-ghost" : ""}`} style={i === 0 ? { fontWeight: 500 } : undefined}>
                     {i === 0 ? entry.brand : ""}
                   </td>
-                  <td style={{ padding: "5px 16px", fontFamily: "monospace", whiteSpace: "nowrap", color: "var(--muted)" }}>{tc.code}</td>
-                  <td style={{ padding: "5px 16px", color: "var(--muted)", fontSize: 12 }}>
+                  <td className="bt-td-dense bt-td-mono bt-td-muted">{tc.code}</td>
+                  <td className="bt-td-dense bt-td-muted bt-td-sm">
                     {i === 0 && entry.topTypes && entry.topTypes.length > 0
                       ? entry.topTypes.map((t) => (
-                          <span key={t} style={{ display: "inline-block", background: "var(--panel-2)", borderRadius: 4, padding: "1px 7px", marginRight: 4, marginBottom: 2, border: "1px solid var(--line)", whiteSpace: "nowrap" }}>{t}</span>
+                          <span key={t} className="bt-type-chip">{t}</span>
                         ))
                       : null}
                   </td>
-                  <td style={{ padding: "5px 16px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{tc.count.toLocaleString("ru")}</td>
+                  <td className="bt-td-dense bt-td-right bt-td-num">{tc.count.toLocaleString("ru")}</td>
                 </tr>
               ))
             )}
@@ -232,11 +212,10 @@ function OzonTab() {
 
   return (
     <>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 12 }}>
+      <div className="bt-actions-row">
         <a
           href="/api/catalog/brands-tnved/export-excel"
-          className="secondary-action"
-          style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
+          className="secondary-action bt-download-link"
           title="Скачать Excel: бренд → коды ТН ВЭД"
         >
           <Download size={15} /> Скачать Excel
@@ -278,43 +257,42 @@ function OzonTab() {
             <Stat label="Без ТН ВЭД" value={`${data.summary.missingTnved.toLocaleString("ru")} (${pct(data.summary.missingTnved, data.summary.total)})`} icon={<Tag size={18} />} tone={data.summary.missingTnved > 0 ? "warn" : "success"} />
           </section>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(360px, 100%), 1fr))", gap: 20, alignItems: "start" }}>
+          <div className="bt-report-grid">
             <BrandsTable brands={data.brands} total={data.summary.total} label="Бренды" />
 
             <section className="table-panel">
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 6px", borderBottom: "1px solid var(--line)" }}>
-                <Tag size={15} style={{ opacity: 0.6 }} />
-                <span style={{ fontWeight: 600, fontSize: 14 }}>Коды ТН ВЭД ({data.tnveds.length})</span>
+              <div className="bt-panel-head">
+                <Tag size={15} className="bt-panel-icon" />
+                <span className="bt-panel-title">Коды ТН ВЭД ({data.tnveds.length})</span>
               </div>
-              <div style={{ padding: "8px 16px 4px" }}>
+              <div className="bt-panel-search">
                 <input
                   className="pm-chip-input"
-                  style={{ width: "100%" }}
                   placeholder="Поиск кода или названия…"
                   value={tnvedSearch}
                   onChange={(e) => setTnvedSearch(e.target.value)}
                 />
               </div>
-              <div style={{ overflowY: "auto", maxHeight: 480 }}>
+              <div className="bt-panel-scroll bt-panel-scroll--md">
                 {filteredTnved.length === 0 ? (
-                  <div className="soft-empty" style={{ padding: "16px" }}>Ничего не найдено</div>
+                  <div className="soft-empty bt-soft-empty-pad">Ничего не найдено</div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <table className="bt-data-table">
                     <thead>
-                      <tr style={{ borderBottom: "1px solid var(--line)", background: "var(--panel-2)" }}>
-                        <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>Код</th>
-                        <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>Категория</th>
-                        <th style={{ textAlign: "right", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>SKU</th>
+                      <tr>
+                        <th>Код</th>
+                        <th>Категория</th>
+                        <th className="right">SKU</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredTnved.slice(0, 200).map((t) => (
-                        <tr key={t.code} style={{ borderBottom: "1px solid var(--line)" }}>
-                          <td style={{ padding: "6px 16px", fontFamily: "monospace", whiteSpace: "nowrap" }}>{t.code}</td>
-                          <td style={{ padding: "6px 16px", color: "var(--muted)", maxWidth: 220, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={t.fullValue}>
+                        <tr key={t.code}>
+                          <td className="bt-td-mono">{t.code}</td>
+                          <td className="bt-td-muted bt-td-ellipsis" title={t.fullValue}>
                             {t.fullValue.replace(/^\d+\s*[-–]\s*/, "")}
                           </td>
-                          <td style={{ padding: "6px 16px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{t.count.toLocaleString("ru")}</td>
+                          <td className="bt-td-right bt-td-num">{t.count.toLocaleString("ru")}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -328,7 +306,7 @@ function OzonTab() {
             <BrandTnvedTypesTable entries={data.brandTnveds} />
           )}
 
-          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+          <div className="bt-data-note">
             Данные от {new Date(data.cachedAt).toLocaleString("ru")}{data.stale ? " · устарели" : ""}
           </div>
         </>
@@ -372,19 +350,17 @@ function YandexTab() {
 
   return (
     <>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 12 }}>
+      <div className="bt-actions-row">
         <a
           href="/api/catalog/brands-tnved/combined/export-excel"
-          className="secondary-action"
-          style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
+          className="secondary-action bt-download-link"
           title="Объединённый Excel: Ozon + Яндекс по брендам с кодами ТН ВЭД"
         >
           <Download size={15} /> Объединённый Excel
         </a>
         <a
           href="/api/catalog/brands-tnved/yandex/export-excel"
-          className="secondary-action"
-          style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}
+          className="secondary-action bt-download-link"
           title="Скачать Excel: бренды Яндекс по категориям"
         >
           <Download size={15} /> Скачать Excel
@@ -420,50 +396,49 @@ function YandexTab() {
             )}
           </section>
 
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(360px, 100%), 1fr))", gap: 20, alignItems: "start" }}>
+          <div className="bt-report-grid">
             <BrandsTable brands={data.brands} total={data.summary.total} label="Бренды" />
 
             <section className="table-panel">
-              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px 6px", borderBottom: "1px solid var(--line)" }}>
-                <BarChart2 size={15} style={{ opacity: 0.6 }} />
-                <span style={{ fontWeight: 600, fontSize: 14 }}>Категории ЯМ ({data.categories.length})</span>
+              <div className="bt-panel-head">
+                <BarChart2 size={15} className="bt-panel-icon" />
+                <span className="bt-panel-title">Категории ЯМ ({data.categories.length})</span>
               </div>
-              <div style={{ padding: "8px 16px 4px" }}>
+              <div className="bt-panel-search">
                 <input
                   className="pm-chip-input"
-                  style={{ width: "100%" }}
                   placeholder="ID или название категории…"
                   value={catSearch}
                   onChange={(e) => setCatSearch(e.target.value)}
                 />
               </div>
-              <div style={{ overflowY: "auto", maxHeight: 480 }}>
+              <div className="bt-panel-scroll bt-panel-scroll--md">
                 {filteredCats.length === 0 ? (
-                  <div className="soft-empty" style={{ padding: "16px" }}>Ничего не найдено</div>
+                  <div className="soft-empty bt-soft-empty-pad">Ничего не найдено</div>
                 ) : (
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <table className="bt-data-table">
                     <thead>
-                      <tr style={{ borderBottom: "1px solid var(--line)", background: "var(--panel-2)" }}>
-                        <th style={{ textAlign: "left", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>Категория</th>
-                        <th style={{ textAlign: "right", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>SKU</th>
-                        <th style={{ textAlign: "right", padding: "6px 16px", fontWeight: 600, fontSize: 12, color: "var(--muted)" }}>%</th>
+                      <tr>
+                        <th>Категория</th>
+                        <th className="right">SKU</th>
+                        <th className="right">%</th>
                       </tr>
                     </thead>
                     <tbody>
                       {filteredCats.slice(0, 200).map((c) => (
-                        <tr key={c.catId} style={{ borderBottom: "1px solid var(--line)" }}>
-                          <td style={{ padding: "6px 16px" }}>
+                        <tr key={c.catId}>
+                          <td>
                             {c.catName ? (
                               <>
                                 <span>{c.catName}</span>
-                                <span style={{ marginLeft: 6, fontSize: 11, color: "var(--muted)", fontFamily: "monospace" }}>{c.catId}</span>
+                                <span className="bt-cat-id">{c.catId}</span>
                               </>
                             ) : (
-                              <span style={{ fontFamily: "monospace" }}>{c.catId}</span>
+                              <span className="bt-td-mono">{c.catId}</span>
                             )}
                           </td>
-                          <td style={{ padding: "6px 16px", textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{c.count.toLocaleString("ru")}</td>
-                          <td style={{ padding: "6px 16px", textAlign: "right", color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>{pct(c.count, data.summary.total)}</td>
+                          <td className="bt-td-right bt-td-num">{c.count.toLocaleString("ru")}</td>
+                          <td className="bt-td-right bt-td-num bt-td-muted">{pct(c.count, data.summary.total)}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -472,7 +447,7 @@ function YandexTab() {
               </div>
             </section>
           </div>
-          <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 8 }}>
+          <div className="bt-data-note">
             Данные от {new Date(data.cachedAt).toLocaleString("ru")}{data.stale ? " · устарели" : ""}
           </div>
         </>
