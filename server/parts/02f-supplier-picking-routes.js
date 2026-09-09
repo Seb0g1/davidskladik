@@ -266,35 +266,6 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
     if (status === "picked") {
       financeOrder = await upsertFinanceOrderFromPickingRow(nextRow, request);
       supplierLedgerEntry = await upsertSupplierLedgerDebtFromPickingRow(nextRow, financeOrder, request);
-      // Deduct from picker's persistent balance (stored in RUB, same as issued credits)
-      const pickerDeductUsd = nextRow.price > 0
-        ? nextRow.price * Math.max(1, Math.round(Number(nextRow.quantity || 1)))
-        : 0;
-      if (pickerDeductUsd > 0 && nextRow.pickedBy) {
-        try {
-          const rateForDeduction = await getUsdRate().catch(() => null);
-          const deductionRate = Number(rateForDeduction?.rate || process.env.DEFAULT_USD_RATE || 95) || 95;
-          const pickerDeductRub = Math.round(pickerDeductUsd * deductionRate);
-          await withPickerBalanceLock(nextRow.pickedBy, async () => {
-            const pickerBal = await loadPickerBalance(nextRow.pickedBy);
-            // Use picking key as deduction ID so we can reverse it on rollback
-            const debitId = `picking:${key}`;
-            if (!pickerBal.credits.some((c) => String(c.id) === debitId)) {
-              pickerBal.credits.push({
-                id: debitId,
-                amount: -pickerDeductRub,
-                currency: "RUB",
-                note: `Оплата: ${nextRow.productName || nextRow.offerId || key}`,
-                createdAt: now.toISOString(),
-                createdBy: "system",
-              });
-              await savePickerBalance(nextRow.pickedBy, pickerBal);
-            }
-          });
-        } catch (balanceError) {
-          logger.warn("picker balance deduction failed", { key, detail: balanceError?.message || String(balanceError) });
-        }
-      }
       // PM MySQL: отметить заказ «Получен» когда все строки документа собраны
       if (nextRow.requestDocId) {
         const pmDocId = cleanText(nextRow.requestDocId);
@@ -317,19 +288,6 @@ app.patch("/api/supplier-picking-list/:key", requireStaff, async (request, respo
       // Keep finance order when item returns from ПВЗ — the sale will be re-attempted
       await removeFinanceOrderForPickingRow(current);
       supplierLedgerEntry = await voidSupplierLedgerDebtForPickingRow(current, request);
-      // Restore picker balance on rollback
-      if (current.pickedBy) {
-        try {
-          await withPickerBalanceLock(current.pickedBy, async () => {
-            const pickerBal = await loadPickerBalance(current.pickedBy);
-            const debitId = `picking:${key}`;
-            pickerBal.credits = pickerBal.credits.filter((c) => String(c.id) !== debitId);
-            await savePickerBalance(current.pickedBy, pickerBal);
-          });
-        } catch (balanceError) {
-          logger.warn("picker balance rollback failed", { key, detail: balanceError?.message || String(balanceError) });
-        }
-      }
     }
 
     await appendAudit(request, `supplier_picking.${status === "picked" ? "picked" : status === "missing" ? "missing" : status === "returned" ? "returned" : status === "cancelled" ? "cancelled" : "status_update"}`, {
@@ -411,19 +369,6 @@ app.post("/api/supplier-picking-list/:key/cancel-cart", requireAdmin, async (req
     if (current.status === "picked") {
       financeRemoval = await removeFinanceOrderForPickingRow(current);
       supplierLedgerEntry = await voidSupplierLedgerDebtForPickingRow(current, request);
-      // Restore picker balance (mirrors the un-pick rollback logic)
-      if (current.pickedBy) {
-        try {
-          await withPickerBalanceLock(current.pickedBy, async () => {
-            const pickerBal = await loadPickerBalance(current.pickedBy);
-            const debitId = `picking:${key}`;
-            pickerBal.credits = pickerBal.credits.filter((c) => String(c.id) !== debitId);
-            await savePickerBalance(current.pickedBy, pickerBal);
-          });
-        } catch (balanceError) {
-          logger.warn("picker balance restore (cancel-cart) failed", { key, detail: balanceError?.message || String(balanceError) });
-        }
-      }
     }
     if (current.status === "missing") await deactivateSupplierBlockForPickingRow(current, request);
 
